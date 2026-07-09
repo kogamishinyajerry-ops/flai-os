@@ -40,4 +40,11 @@ uv run --no-project --with playwright --with uvicorn --with fastapi \
 
 覆盖 §12.3 六条 + 历史页/SPA 深链刷新 + waiting_review 人工放行全链；
 截图产物 `docs/reviews/m2-acceptance-shots/`（重跑覆盖，与代码同步）。
-最终走查结果与测试计数见 M2 收口 commit message。
+
+## 收口结论
+
+处置 commit = M2-R2（388d4ff）。反方审查员对两条 P1 做**独立复核**（自行重跑
+验收脚本 8/8、自行重跑后端 208 绿、逐项 diff 抽查 P2/P3 处置）后转 **APPROVE**；
+86gs 治理审 P2×2 已修（分页三测+提交时上传）。M2 三方审查全部闭合。
+已知边界以 README「V0.1 已知限制」七条为准（含 M3 债：inputs 结构化表单、
+上传孤儿 GC）。
