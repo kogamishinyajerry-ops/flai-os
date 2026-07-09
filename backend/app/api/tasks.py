@@ -9,8 +9,9 @@ import uuid
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from ..core.errors import IllegalTransitionError
 from ..storage import repos
 
 router = APIRouter(prefix="/api", tags=["tasks"])
@@ -31,6 +32,16 @@ class ReviewTaskRequest(BaseModel):
     action: Literal["approve", "reject"]
     reviewer: str = Field(min_length=1)
     comment: str | None = None
+
+    @field_validator("reviewer")
+    @classmethod
+    def reviewer_must_not_be_blank(cls, v: str) -> str:
+        """全空白 reviewer = 事实匿名签发（R1 复审 P3）：strip 后为空一律 422。
+        入库/入事件统一存 strip 后的名字。"""
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("reviewer 不得为空白字符——人工放行必须有具名签发者")
+        return stripped
 
 
 def _get_agent_or_none(registry: Any, agent_id: str) -> dict[str, Any] | None:
@@ -166,8 +177,25 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             )
 
         payload = {"reviewer": body.reviewer, "comment": body.comment}
+        try:
+            if body.action == "approve":
+                task = repos.set_task_status(conn, task_id, "completed")
+            else:
+                # action == "reject"（Literal 已锁定只有两值）
+                reject_reason = f"人工拒绝（reviewer={body.reviewer}）" + (
+                    f"：{body.comment}" if body.comment else ""
+                )
+                task = repos.set_task_status(conn, task_id, "failed", error_message=reject_reason)
+        except IllegalTransitionError as exc:
+            # R1 复审 P2：两个 review 请求并发命中同一 waiting_review 任务时，
+            # 后到者可通过预检但在状态机层被拒——这是正常并发竞态，
+            # 与预检失败同口径返回 409，绝不让 500 逃逸。
+            raise HTTPException(
+                status_code=409,
+                detail=f"任务已被并发的人工审核动作转出 waiting_review，本次不生效：{exc}",
+            ) from exc
+
         if body.action == "approve":
-            task = repos.set_task_status(conn, task_id, "completed")
             repos.append_event(
                 conn,
                 task_id=task_id,
@@ -179,11 +207,6 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             )
             return task
 
-        # action == "reject"（Literal 已锁定只有两值）
-        reject_reason = f"人工拒绝（reviewer={body.reviewer}）" + (
-            f"：{body.comment}" if body.comment else ""
-        )
-        task = repos.set_task_status(conn, task_id, "failed", error_message=reject_reason)
         repos.append_event(
             conn,
             task_id=task_id,

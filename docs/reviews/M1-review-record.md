@@ -48,4 +48,21 @@
 | 5 | P2 | `registry.py:136-138` entrypoint 写错时 import 抛在 `_record()` 之前，tool_runs 缺行——违背 call() 成败皆落库承诺 | 修 |
 | 6 | P2 | `gateway.py:134-140` 上游 200 但 body 畸形时异常逃逸出捕获集，model_calls 无记录 | 修 |
 
-处置 commit 与复审结论见后续追记。
+处置 commit = M1-R3（fcf5983，测试 162→177，P1 两处 tamper 自证）。
+
+## 86gs 治理复审 R1（`codex review --commit fcf5983`，2026-07-09）
+
+**P1 清零**。余两条，均按 verbatim 例外逐字落地（不再走一轮）：
+
+| # | 级别 | 发现 | 处置 |
+|---|------|------|------|
+| 1 | P2 | `tasks.py:162-170` 两个 review 并发命中同一 waiting_review：后到者过预检后在状态机层抛 IllegalTransitionError 逃逸为 500 | 修：折叠 409 与预检同口径+注入式竞态回归测试（语义 tamper 实证：改回原样上抛即红） |
+| 2 | P3 | `tasks.py:31-32` `min_length=1` 放行全空白 reviewer=事实匿名签发 | 修：field_validator strip 后空即 422，入库统一存 strip 后签名+回归测试 |
+
+## 收口结论
+
+三方审查全部闭合：R1 反方审查（8 findings 全修）→ loop-auditor 17/20（2 gap 补
+witness 后按其裁定转 APPROVE）→ 86gs 治理审 R0（6 findings 全修）+ 复审 R1
+（P1 清零，P2/P3 verbatim 落地）。最终测试 **179 passed**；真进程冒烟 7/7。
+已知结构性残差（V0.1 声明范围收缩，非缺陷）：无 CI/测试结果签名机制；
+工具超时线程不可强杀（诚实标注）；running 中不可取消（M3 增强项）。

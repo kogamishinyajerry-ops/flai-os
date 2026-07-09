@@ -319,6 +319,57 @@ def test_review_missing_or_empty_reviewer_422(review_app_env) -> None:
     assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
 
 
+def test_review_whitespace_only_reviewer_422_and_stored_stripped(review_app_env) -> None:
+    """R1 复审 P3：全空白 reviewer = 事实匿名签发，必须 422；合法 reviewer
+    两端空白 strip 后入事件（审计账面上是具名的干净签名）。
+    """
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+
+    blank = client.post(
+        f"/api/tasks/{task_id}/review", json={"action": "approve", "reviewer": "   "}
+    )
+    assert blank.status_code == 422
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
+
+    padded = client.post(
+        f"/api/tasks/{task_id}/review", json={"action": "approve", "reviewer": "  王工  "}
+    )
+    assert padded.status_code == 200
+    events = client.get(f"/api/tasks/{task_id}/events").json()
+    approved = [e for e in events if e["event_type"] == "review_approved"]
+    assert approved[0]["payload"]["reviewer"] == "王工"
+
+
+def test_review_concurrent_race_returns_409_not_500(review_app_env, monkeypatch) -> None:
+    """R1 复审 P2：两个 review 并发命中同一 waiting_review 任务，后到者通过预检
+    但被状态机层拒绝（IllegalTransitionError）——必须折叠为 409 与预检同口径，
+    绝不 500 逃逸。用注入状态机拒绝精确复现「预检已过、转移被拒」的竞态窗口。
+    """
+    from backend.app.core.errors import IllegalTransitionError
+    from backend.app.storage import repos as repos_mod
+
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+
+    def _concurrent_reject(*args, **kwargs):
+        raise IllegalTransitionError("非法转移：completed -> completed（已被并发放行）")
+
+    monkeypatch.setattr(repos_mod, "set_task_status", _concurrent_reject)
+    resp = client.post(
+        f"/api/tasks/{task_id}/review", json={"action": "approve", "reviewer": "张工"}
+    )
+    assert resp.status_code == 409
+    assert "并发" in resp.json()["detail"]
+
+    monkeypatch.undo()
+    # 竞态被拒后任务未被本次请求触碰，仍可正常人工放行。
+    ok = client.post(
+        f"/api/tasks/{task_id}/review", json={"action": "approve", "reviewer": "张工"}
+    )
+    assert ok.status_code == 200
+
+
 # ── files: upload -> download 往返 ───────────────────────────────────────
 
 
