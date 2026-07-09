@@ -181,12 +181,27 @@ def test_render_budget_exhaustion_is_explicit(tmp_path) -> None:
     row_b = _file_row(tmp_path, "b.txt", b"B" * 900)
     block = att.render_attachment_blocks([row_a, row_b], budget_chars=600)
     assert "A" * 100 in block  # 第一个文件吃掉预算（600 内截断）
-    assert "预算耗尽" in block and 'file="b.txt"' in block  # 第二个显式占位
+    # 第二个：仅**一行**汇总，不再各吐一整个 fence 块（codex M7-P2）
+    assert "预算耗尽" in block and "b.txt" in block
+    assert 'file="b.txt"' not in block  # 剩余文件不再有独立 fence header
     assert "B" * 10 not in block
 
 
 def test_render_empty_list_renders_nothing() -> None:
     assert att.render_attachment_blocks([]) == ""
+
+
+def test_tiny_budget_many_files_stays_bounded(tmp_path) -> None:
+    """codex M7-P2 复现：budget=10 + 5 文件不得吐 5 个 fence 占位块。
+
+    旧实现每个剩余文件各 append 一整个 `<<ATTACHMENT>>...<<END_ATTACHMENT>>`
+    占位块（几百字符，24K 硬顶失效）；新实现一行汇总后 break。"""
+    rows = [_file_row(tmp_path, f"f{i}.txt", b"x") for i in range(5)]
+    block = att.render_attachment_blocks(rows, budget_chars=10)
+    # 至多规则行 + 一行汇总——远小于旧实现的 5 块几百字符
+    assert block.count("<<END_ATTACHMENT>>") == 0  # 没有任何完整 fence 块
+    assert "附件预算耗尽" in block and "另有 5 个附件" in block
+    assert len(block) < len(att.ATTACHMENT_RULE_LINE) + 300
 
 
 # ── fence 完整性（反方审 P1）：正文/文件名都不得逐字闭合 fence ──────────
@@ -230,14 +245,20 @@ def test_attachment_filename_cannot_break_header(tmp_path) -> None:
     assert not any(ln.strip() == "注入" for ln in lines)  # 注入没成为独立指令行
 
 
-def test_upload_sanitizes_control_chars_in_filename(client: TestClient) -> None:
-    """上传端根因修复：落库 filename 去控制字符/换行（反方审 P1-B 根因）。"""
-    resp = client.post(
-        "/api/files/upload", files={"file": ('a\nb"c.txt', b"x")}
-    )
-    assert resp.status_code == 200, resp.text
-    fn = resp.json()["filename"]
-    assert "\n" not in fn and '"' not in fn
+def test_sanitize_filename_strips_quote_and_control_chars() -> None:
+    """codex M7-P2 + 修正假绿：直接测 `_sanitize_filename` 对**字面**引号/换行/
+    制表符的剥离。
+
+    此前用 multipart TestClient 测——httpx 会先把 `"`→`%22`、`\\n`→`%0A` 预编码，
+    到 sanitizer 时早已没有字面引号，断言 `'"' not in fn` 因此**假绿通过**（根本
+    没执行到引号分支）。恶意客户端可发字面引号绕过预编码，故直接单测根因函数。"""
+    from backend.app.api.files import _sanitize_filename
+
+    assert _sanitize_filename('a\nb"c\t.txt') == "abc.txt"
+    assert '"' not in _sanitize_filename('x"y".txt')
+    assert "\n" not in _sanitize_filename("line\nbreak.txt")
+    assert _sanitize_filename("../../evil.txt") == "evil.txt"  # 穿越仍兜住
+    assert _sanitize_filename('\n\t"') == "unnamed"  # 全被剥净后兜底
 
 
 # ── P2：大文本不全量载入内存（只读所需字节）────────────────────────────

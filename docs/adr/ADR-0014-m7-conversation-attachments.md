@@ -117,5 +117,24 @@ vendor 目录被清空，ENOENT）暂不可用——**异源交叉审查悬置�
 - 「24K 硬顶」在修订一已改为含结构开销的近似上界（非仅正文软顶）。
 
 处置验证：pytest 317 绿（+4）· M6 e2e 10/10 · M2 e2e 8/8 · xlsx 预算 + file_ids
-去重前两处新 tamper 咬合。**异源 Codex 治理审**：codex 二进制此前缺失，现已重装
-0.144.0 恢复（relay 通），M7 严格异源 Codex 审在本修订提交后补跑。
+去重前两处新 tamper 咬合。
+
+## 修订三：异源 Codex 治理审处置（2026-07-09，codex 0.144.0 恢复后补跑）
+
+codex 二进制此前被清空，重装 0.144.0 恢复后对整个 M7 面（07d61ff..HEAD）跑
+`codex review --base`。**P1 零**；2 P2 + 1 P3，全 grounded 复核坐实后处置：
+
+1. **[P2] 预算耗尽仍逐文件吐 fence 占位块**：`budget_chars=10` + 5 文件吐出几百
+   字符（codex 实跑复现），24K 硬顶失效。修复：预算耗尽改**一行汇总剩余文件名
+   后 break**，总量有界；补 `test_tiny_budget_many_files_stays_bounded` 复现 codex
+   场景，tamper 咬红。
+2. **[P2] `_sanitize_filename` 未去引号 + 我的测试假绿**：`isprintable()` 留 `"`，
+   字面引号原样落库。**且原上传级测试假绿**——httpx multipart 客户端预编码
+   `"`→`%22`，断言 `'"' not in fn` 根本没执行到引号分支就通过了。修复：sanitizer
+   加 `ch != '"'`；测试改为**直接单测 `_sanitize_filename`**（字面引号），tamper
+   去引号即红（不再假绿）。
+3. **[P3] 导引先传附件再落轮次 → 弃置即孤儿**：与 README 限制 #5 同类（上传-引用
+   无 GC）；已把导引流并入 #5 显式记录，会话级附件 GC 随 V0.2 孤儿回收统一做。
+
+处置验证：pytest 318 绿（+1）· 两处新 tamper 咬合（含修正的假绿测试）。至此 M7
+异源 Codex 审 P1 零、P2/P3 全处置，审查环收口。

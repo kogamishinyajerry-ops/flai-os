@@ -27,7 +27,11 @@ def _sanitize_filename(raw: str | None) -> str:
     filename 恒为可打印单行。渲染器仍会二次中和（防御纵深，不赖单点）。
     """
     name = Path((raw or "").strip()).name
-    name = "".join(ch for ch in name if ch.isprintable())
+    # 去控制字符/换行**和引号**（codex M7-P2）：`"` 是可打印字符，isprintable()
+    # 留不住它；恶意客户端可发字面引号污染 Content-Disposition 头与会话附件
+    # fence header——根因层必须真剥（httpx 等客户端会预编码引号，故上传级测试
+    # 测不到这条分支，直接单测 _sanitize_filename 才咬得住）。
+    name = "".join(ch for ch in name if ch.isprintable() and ch != '"')
     if not name or name in (".", ".."):
         return "unnamed"
     return name

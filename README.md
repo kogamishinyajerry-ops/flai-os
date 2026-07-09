@@ -90,7 +90,9 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 4. **feedback.message 无长度上限**：追加式日志表，事件 payload 摘要已截 200，
    落库全文不限长。
 5. **孤儿文件/任务产物残留窗口**：附件已改为提交任务时才上传（选中/移除不产生
-   服务端残留），但「附件上传成功后 createTask 失败」仍会留下无主文件；同理，
+   服务端残留），但「附件上传成功后 createTask 失败」仍会留下无主文件；导引会话
+   附件同理（上传成功但 postMessage 502/网络断/弃页 → 无主文件，无清理路径，
+   codex M7-P3）；重试不重复上传（前端记 fileId），但弃置即孤儿。同理，
    批量任务 `samples.jsonl` 写出后若汇总表写出失败（任务判 failed），已写的
    产物残留在 `task_runs_dir` 内且不被注册为输出文件。两类残留的 GC 是 M4 项。
 6. **TaskDetail 轮询无退避**：固定间隔轮询，`waiting_review` 等长驻状态停止轮询

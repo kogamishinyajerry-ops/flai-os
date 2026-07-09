@@ -187,15 +187,22 @@ def render_attachment_blocks(
     _FOOTER = "<<END_ATTACHMENT>>"
     parts = [ATTACHMENT_RULE_LINE]
     remaining = budget_chars - len(ATTACHMENT_RULE_LINE)  # 规则行计入预算
-    for row in file_rows:
+    for i, row in enumerate(file_rows):
         filename = _safe_filename_for_header(row.get("filename") or "unnamed")
         size = row.get("size_bytes")
         header = f'<<ATTACHMENT file="{filename}" id="{_safe_filename_for_header(str(row.get("id", "")))}" size_bytes={size}>>'
         overhead = len(header) + len(_FOOTER) + 2  # 两个换行
         if remaining - overhead <= 0:
-            parts.append(f"{header}\n[预算耗尽：本批附件渲染总预算 {budget_chars} 字符已用完，内容未展示]\n{_FOOTER}")
-            remaining = 0
-            continue
+            # 预算耗尽：**不**再为每个剩余文件各吐一整个 fence 块——那本身就把总量
+            # 顶越过 budget（codex M7-P2：5 文件 × 占位块 = 几百字符，24K 硬顶失效）。
+            # 改为**一行**汇总剩余文件名后 break，总量有界（≤ 规则行 + 已渲染块 +
+            # 一行汇总）。
+            leftover = [
+                _safe_filename_for_header(r.get("filename") or "unnamed") for r in file_rows[i:]
+            ]
+            summary = "、".join(leftover)[:200]
+            parts.append(f"[附件预算耗尽：另有 {len(leftover)} 个附件未展示：{summary}]")
+            break
         body = _neutralize_sentinels(render_one(row, limit=min(_PER_FILE_CHARS, remaining - overhead)))
         block = f"{header}\n{body}\n{_FOOTER}"
         remaining -= len(block)
