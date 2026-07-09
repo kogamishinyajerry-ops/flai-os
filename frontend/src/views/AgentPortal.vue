@@ -52,7 +52,20 @@
           </el-collapse>
 
             <div class="agent-actions">
-              <el-button type="primary" :disabled="agent.status === 'disabled'" @click="createTaskFor(agent)">
+              <el-button
+                v-if="agent.mode === 'interactive'"
+                type="primary"
+                :disabled="agent.status === 'disabled'"
+                @click="startConversationFor(agent)"
+              >
+                开始对话
+              </el-button>
+              <el-button
+                v-else
+                type="primary"
+                :disabled="agent.status === 'disabled'"
+                @click="createTaskFor(agent)"
+              >
                 创建任务
               </el-button>
             </div>
@@ -88,6 +101,11 @@ async function load() {
 
 function createTaskFor(agent) {
   router.push({ path: "/tasks/new", query: { agent_id: agent.id } });
+}
+
+// interactive 型（导引）不是一次性任务——引到对话入口（M6/ADR-0012）。
+function startConversationFor() {
+  router.push({ path: "/" });
 }
 
 onMounted(load);

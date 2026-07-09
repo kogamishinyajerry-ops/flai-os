@@ -21,7 +21,7 @@
           @change="handleAgentChange"
         >
           <el-option
-            v-for="agent in agents"
+            v-for="agent in selectableAgents"
             :key="agent.id"
             :label="`${agent.name}（${agent.id}）`"
             :value="agent.id"
@@ -119,7 +119,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, onMounted } from "vue";
+import { reactive, ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { listAgents, getAgent } from "../api/agents";
@@ -131,6 +131,9 @@ const route = useRoute();
 const router = useRouter();
 
 const agents = ref([]);
+// interactive 型（导引）不作为一次性任务运行——从创建任务选择器剔除，避免用户
+// 选中后只撞后端 409 死路（Codex P2 / ADR-0012）。
+const selectableAgents = computed(() => agents.value.filter((a) => a.mode !== "interactive"));
 const selectedAgent = ref(null);
 const agentLoadError = ref("");
 const agentsListError = ref("");

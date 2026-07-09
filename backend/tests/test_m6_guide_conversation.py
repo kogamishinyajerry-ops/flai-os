@@ -260,7 +260,9 @@ def test_guide_never_creates_task_and_human_signs(app_env) -> None:
 # ── 诚实失败：无内网 key → 本轮 502，用户消息留档不伪造 ───────────────────
 
 
-def test_gateway_failure_502_and_user_message_persisted(app_env) -> None:
+def test_gateway_failure_502_transactional_no_partial_write(app_env) -> None:
+    """无内网 key → 本轮 502；且是**事务性**的：失败一条消息都不落库，重试同一句
+    不会在历史里堆重复 user 行（Codex P2：可重试路径必须幂等）。"""
     client, app = app_env
     # 不注入 stub：走真实 gateway，FLAI_LLM_* 已清空 → fail-closed（不触网络）
     conv_id = _open_conversation(client)
@@ -269,11 +271,120 @@ def test_gateway_failure_502_and_user_message_persisted(app_env) -> None:
     assert resp.status_code == 502
     assert "可重试" in resp.json()["detail"]
 
-    # 用户消息如实留档（问过但这轮失败），且没有伪造的 assistant 回复
+    # 失败：零消息落库（不伪造 assistant，也不留孤儿 user）
     got = client.get(f"/api/conversations/{conv_id}").json()
-    roles = [m["role"] for m in got["messages"]]
-    assert roles == ["user"], "上游失败绝不伪造 assistant 回复"
+    assert [m["role"] for m in got["messages"]] == [], "瞬态失败必须零落库（可幂等重试）"
     assert got["recommendation"] is None
+
+    # 重试同一句仍 502，历史仍为空——不累积重复 user 行
+    resp2 = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "帮我分析"})
+    assert resp2.status_code == 502
+    got2 = client.get(f"/api/conversations/{conv_id}").json()
+    assert [m["role"] for m in got2["messages"]] == [], "重试不得堆出重复 user 行"
+
+
+# ── 推荐撤回轮清空会话级 recommendation（反方 P3-1）──────────────────────
+
+
+def test_recommendation_cleared_on_followup_without_reco(app_env) -> None:
+    client, app = app_env
+    conv_id = _open_conversation(client)
+
+    # 第一轮：给推荐 → 会话级 recommendation 落地
+    payload = {"agent_id": "fta_agent", "rationale": "r", "prefilled_inputs": {"top_event": "X"}}
+    app.state.conversation_service.model_gateway = _CannedStub(_reco_reply("推荐", payload))
+    client.post(f"/api/conversations/{conv_id}/messages", json={"content": "做故障树"})
+    assert client.get(f"/api/conversations/{conv_id}").json()["recommendation"]["agent_id"] == "fta_agent"
+
+    # 第二轮：只追问无推荐 → 会话级 recommendation 必须清回 None（不留陈旧草案）
+    app.state.conversation_service.model_gateway = _CannedStub("还有别的组件吗？")
+    client.post(f"/api/conversations/{conv_id}/messages", json={"content": "嗯"})
+    assert client.get(f"/api/conversations/{conv_id}").json()["recommendation"] is None
+
+
+# ── 预填字段校验对 $ref schema 也 fail-closed 不 500（反方 P2）──────────────
+
+
+def test_clean_prefilled_inputs_handles_ref_schema(tmp_path) -> None:
+    """目标 input_schema 用 $ref/$defs 时，逐字段校验必须能解析引用并正常剥离，
+    绝不逃逸成 500（反方 P2：孤立子 schema 遇 $ref 抛非 ValidationError 引用错误）。"""
+    import importlib.util
+
+    wf_path = REPO_ROOT / "agents" / "guide_agent" / "workflow.py"
+    spec = importlib.util.spec_from_file_location("guide_wf_under_test", wf_path)
+    wf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wf)
+
+    schema = {
+        "type": "object",
+        "properties": {"code": {"$ref": "#/$defs/NonEmpty"}, "n": {"type": "integer"}},
+        "$defs": {"NonEmpty": {"type": "string", "minLength": 1}},
+    }
+    schema_path = tmp_path / "input_schema.json"
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+
+    class _FakeRegistry:
+        def package_dir(self, agent_id):
+            return tmp_path
+
+    reg = _FakeRegistry()
+    # 合法 $ref 值保留；空串（违反 minLength）+ n 类型错 + 未声明字段全部剥离——不抛异常
+    kept, stripped = wf._clean_prefilled_inputs(reg, "target", {"code": "OK", "n": "notint", "code2": "x", "empty_code": ""})
+    # empty_code 未声明（schema 无此属性）→ 剥离；code 合法保留
+    assert kept == {"code": "OK"}
+    assert set(stripped) == {"n", "code2", "empty_code"}
+
+    # 再证「$ref 字段的非法值」也被剥离而非崩溃
+    kept2, stripped2 = wf._clean_prefilled_inputs(reg, "target", {"code": ""})  # 空串违反 minLength
+    assert kept2 == {} and stripped2 == ["code"]
+
+
+# ── 推荐产物是 output_schema 的 oracle（反方 P3-5）────────────────────────
+
+
+def test_recommendation_matches_output_schema(app_env) -> None:
+    """_validate_recommendation 的返回结构必须过 guide_agent/output_schema.json——
+    把 output_schema 从「文档」变成「oracle」，防结构漂移无人察觉。"""
+    from jsonschema import validate as _validate
+
+    client, app = app_env
+    payload = {"agent_id": "fta_agent", "rationale": "r", "prefilled_inputs": {"top_event": "X", "bad": 1}}
+    app.state.conversation_service.model_gateway = _CannedStub(_reco_reply("推荐", payload))
+    conv_id = _open_conversation(client)
+    resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "做故障树"})
+    reco = resp.json()["message"]["recommendation"]
+
+    out_schema = json.loads(
+        (REPO_ROOT / "agents" / "guide_agent" / "output_schema.json").read_text(encoding="utf-8")
+    )
+    _validate(reco, out_schema)  # 不抛即通过——结构与契约一致
+
+
+# ── 会话存续期 Agent 被下线 → 拒绝继续对话（反方 P3-4）────────────────────
+
+
+def test_post_message_rejected_if_agent_disabled_midway(app_env) -> None:
+    client, app = app_env
+    app.state.conversation_service.model_gateway = _CannedStub("你好")
+    conv_id = _open_conversation(client)
+
+    # 模拟会话存续期间 guide_agent 被下线（改内存注册表）
+    app.state.agent_registry.get("guide_agent")["status"] = "disabled"
+    try:
+        resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "继续"})
+        assert resp.status_code == 409
+        assert "不可用" in resp.json()["detail"]
+    finally:
+        app.state.agent_registry.get("guide_agent")["status"] = "draft"  # 还原，避免串扰
+
+
+# ── agents API 暴露 mode（前端路由信号，Codex P2）─────────────────────────
+
+
+def test_agents_api_exposes_mode(client: TestClient) -> None:
+    agents = {a["id"]: a for a in client.get("/api/agents").json()}
+    assert agents["guide_agent"]["mode"] == "interactive"
+    assert agents["fta_agent"]["mode"] == "job"
 
 
 # ── 会话已结束不再接受消息 ────────────────────────────────────────────────

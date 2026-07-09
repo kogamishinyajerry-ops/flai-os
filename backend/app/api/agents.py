@@ -1,7 +1,9 @@
 """Agent 只读查询接口（GET /api/agents、GET /api/agents/{id}）。
 
-投影字段：id/name/version/status/maturity/category/summary/limitations
-（门户卡片文案所需的最小字段集，不透出 owner/permissions 等治理细节）。
+投影字段：id/name/version/status/maturity/category/summary/limitations/mode
+（门户卡片文案所需的最小字段集，不透出 owner/permissions 等治理细节）。mode
+（job/interactive）是前端路由信号：interactive 型 Agent 走对话入口而非创建任务
+（M6/ADR-0012——否则用户在创建任务页选中导引只会撞 409 死路）。
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ def _project(agent: dict[str, Any]) -> dict[str, Any]:
         "category": agent.get("category"),
         "summary": agent.get("summary"),
         "limitations": agent.get("limitations", []),
+        "mode": (agent.get("workflow", {}) or {}).get("mode"),
     }
 
 

@@ -101,14 +101,22 @@ class ConversationService:
             if agent is None:
                 # 会话存续期间 Agent 被下架/删除——诚实拒绝，不硬跑
                 raise ConversationNotFoundError(f"会话所属 agent 已不可用：{agent_id}")
+            # 反方 P3-4：会话存续期间 Agent 若被 disabled 或改成非 interactive（重扫
+            # registry），不再以 interactive 形态硬跑——诚实拒绝，语义不错位。
+            if agent.get("status") == "disabled" or not is_interactive(agent):
+                raise ConversationClosedError(
+                    f"会话所属 agent {agent_id} 已不可用于对话（已下线或非 interactive）"
+                )
 
-            repos.append_message(
-                conn, conversation_id=conversation_id, role="user", content=content
-            )
+            # Codex P2：一轮对话是**事务性**的——先在内存里拼「历史 + 本轮用户消息」
+            # 喂给 workflow，只有成功才把 user + assistant 一起落库；失败则一条都不落。
+            # 否则「用户消息先落库、workflow 502」会让重试必须重发同一句 → 历史里堆出
+            # 重复 user 行，恰在端点声称「可重试」的瞬态失败场景下把历史弄脏。
             history = [
                 {"role": m["role"], "content": m["content"]}
                 for m in repos.list_messages(conn, conversation_id)
             ]
+            history.append({"role": "user", "content": content})
 
             pkg_dir = self.agent_registry.package_dir(agent_id)
             workflow = _load_workflow_module(agent_id, pkg_dir / "workflow.py")
@@ -118,7 +126,7 @@ class ConversationService:
                 "agent_registry": self.agent_registry,
                 "agent_config": agent,
             }
-            result = workflow.run(context)  # 抛异常即冒泡（不吞）
+            result = workflow.run(context)  # 抛异常即冒泡（不吞）；此前尚未落任何消息
 
             if not isinstance(result, dict):
                 raise ValueError("interactive workflow.run() 返回值必须是 dict")
@@ -127,6 +135,10 @@ class ConversationService:
                 raise ValueError("interactive workflow 未返回非空 assistant_message")
             recommendation = result.get("recommendation")  # 可能为 None
 
+            # 成功：user + assistant 按序原子落库（失败路径永不到达这里）。
+            repos.append_message(
+                conn, conversation_id=conversation_id, role="user", content=content
+            )
             msg = repos.append_message(
                 conn,
                 conversation_id=conversation_id,
@@ -134,10 +146,9 @@ class ConversationService:
                 content=assistant_message,
                 recommendation=recommendation,
             )
-            # 以最后一次推荐为准刷新会话级 recommendation（会话保持 active，
-            # 用户可继续追问细化；结束由前端「确认草案去创建任务」这一步隐式完成）。
-            if recommendation is not None:
-                repos.set_conversation_recommendation(conn, conversation_id, recommendation)
+            # 会话级 recommendation 反映**最后一轮**结果（反方 P3-1：含推荐被撤回
+            # 的轮——无推荐即写回 None，不留陈旧草案；会话保持 active 供继续细化）。
+            repos.set_conversation_recommendation(conn, conversation_id, recommendation)
 
             return {"message": msg, "conversation": repos.get_conversation(conn, conversation_id)}
         finally:

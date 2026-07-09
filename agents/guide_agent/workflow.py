@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from jsonschema import ValidationError, validate
+from jsonschema import validate
 
 _RECO_START = "<<RECOMMEND>>"
 _RECO_END = "<<END>>"
@@ -43,7 +43,8 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     chat_messages = [{"role": "system", "content": system_content}, *messages]
 
     # ModelUpstreamError 刻意不捕获：冒泡 → ConversationService 原样抛出，诚实失败。
-    result = model_gateway.chat(profile, chat_messages)
+    # 带上 agent_id 让 model_calls 落库可归因到导引（反方 P3-3：interactive 路径可观测性）。
+    result = model_gateway.chat(profile, chat_messages, agent_id=agent_config.get("id"))
     reply = result.get("content")
     if not isinstance(reply, str) or not reply.strip():
         raise ValueError("导引模型返回空内容，无法继续对话（诚实失败，不伪造对话）")
@@ -203,14 +204,33 @@ def _clean_prefilled_inputs(
     kept: dict[str, Any] = {}
     stripped: list[str] = []
     for name, value in raw_inputs.items():
-        prop_schema = props.get(name)
-        if prop_schema is None:
+        if name not in props:
             stripped.append(name)
             continue
-        try:
-            validate(value, prop_schema)
-        except ValidationError:
+        if _field_valid(schema, name, value):
+            kept[name] = value
+        else:
             stripped.append(name)
-            continue
-        kept[name] = value
     return kept, sorted(stripped)
+
+
+def _field_valid(schema: dict[str, Any], name: str, value: Any) -> bool:
+    """在「携带原 schema 的 $defs/definitions」的 mini-schema 上校验单个字段值。
+
+    反方 P2：直接对孤立子 schema 校验，字段里的 `#/$defs/..`、`#/definitions/..`
+    引用无法解析，jsonschema 抛的是引用错误（非 ValidationError 子类）而非校验失败，
+    会逃逸成未处理 500。这里把 $defs/definitions 一并放进 mini-schema 根，使引用
+    解析回文档根；且**任何**校验异常（非法值 / 无法评估的 schema）一律判不合法 →
+    剥离。剥离方向即安全方向，且预填字段在人提交后还会经 Runtime 对完整 schema
+    再校验一次（纵深防御），故此处保守剥离不放松边界。
+    """
+    mini: dict[str, Any] = {"type": "object", "properties": {name: schema["properties"][name]}}
+    for defs_key in ("$defs", "definitions"):
+        if defs_key in schema:
+            mini[defs_key] = schema[defs_key]
+    try:
+        validate({name: value}, mini)
+        return True
+    except Exception:
+        # ValidationError（非法值）或引用/schema 错误（无法评估）都判不合法——fail-closed。
+        return False
