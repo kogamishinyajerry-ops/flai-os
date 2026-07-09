@@ -1,6 +1,6 @@
 # FLAi-OS Kernel V0.1
 
-二所工程智能体运行底座。当前 **M0-M2 已收口**（审查存档见 `docs/reviews/`），下一里程碑 M3（Mock 性能盘 Agent）。
+二所工程智能体运行底座。当前 **M0-M3 已收口**（审查存档见 `docs/reviews/`），下一里程碑 M4（真实性能盘 Tool Adapter，内网）。
 
 ## 是什么 / 不是什么
 
@@ -73,7 +73,7 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 | M0 | 系统宪法与核心契约：任何人看完文档知道 FLAi-OS 是什么/怎么写 Agent/Tool | **完成** |
 | M1 | 最小后端核心底座：Hello Agent 可通过后端完整运行 | **完成** |
 | M2 | Web UI 原型：工程师可通过网页跑 Hello Agent | **完成** |
-| M3 | Mock 性能盘 Agent：上传 Excel→批量跑→汇总→样本沉淀（不接真实性能盘）| 待开始 |
+| M3 | Mock 性能盘 Agent：上传 Excel→批量跑→汇总→样本沉淀（不接真实性能盘）| **完成** |
 | M4 | 真实性能盘 Tool Adapter：替换 Mock，保持调用链不变 | 待开始 |
 | M5 | 平台泛化验证：接入 control_logic_agent、fta_agent 验证非性能盘专用 | 待开始 |
 

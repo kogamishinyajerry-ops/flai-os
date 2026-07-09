@@ -42,4 +42,10 @@ ModuleNotFoundError→tool_failed 事件→任务 failed 带真实原因）后�
 
 ## 收口结论
 
-（修复 commit 与最终计数见后续追记）
+处置 commit = M3-R2（cfc8ec1，测试 230→245）。反方审查员对 P1 做**独立复核**
+（自制攻击载荷直打修复后 adapter：`=HYPERLINK`/`+cmd|calc` 等回读全部
+data_type='s' 惰性；水印 sheet 顺序与 mock 列类型亲验；README 跑测命令原样
+复制重跑 245 绿）后转 **APPROVE**。复核中顺手发现的新 P2（前端事件 limit=2000
+截断合法大批量的 summary_generated → 批量计数标签在最需要时静默消失）已即时
+修复：前端 limit 对齐后端上限 5000（parser 行数上限 1000 使事件量有界 <5000）。
+M3 三方审查（反方十问+实测 / 86gs 治理审 / 主控真环境冒烟）全部闭合。

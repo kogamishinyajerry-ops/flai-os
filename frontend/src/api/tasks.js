@@ -23,9 +23,10 @@ export const listTasks = ({ status, agentId, limit, offset } = {}) => {
 };
 
 export const getTask = (taskId) => request(`/api/tasks/${taskId}`);
-// limit 显式传 2000（=后端默认值，行为不变）：分页口径显式化，超长时间轴
-// 的截断点在前端代码里可见，而不是隐在后端默认里。
-export const listTaskEvents = (taskId) => request(`/api/tasks/${taskId}/events?limit=2000`);
+// limit 对齐后端上限 5000（复核发现：合法上限内的大批量任务 ~4200 条事件，
+// 若截在 2000，队尾的 summary_generated 会被切掉，TaskDetail 的批量计数标签
+// 恰在最需要它的场景静默消失）。parser 行数上限 1000 → 事件量有界 <5000。
+export const listTaskEvents = (taskId) => request(`/api/tasks/${taskId}/events?limit=5000`);
 export const cancelTask = (taskId) =>
   request(`/api/tasks/${taskId}/cancel`, { method: "POST" });
 
