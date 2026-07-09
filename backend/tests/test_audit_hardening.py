@@ -1,0 +1,231 @@
+"""ADR-0013 审计硬化的跨切面回归。
+
+覆盖（对应审计 findings）：
+- 人工审核 gate fail-closed：字段缺失不再默认跳审（此前 truthiness fail-open，
+  安全依赖 agent.schema.json required 耦合而非 gate 自证）。
+- 失败样本沉淀（§18-Q7 最小落点）：collect_samples 型 Agent 的失败任务也落
+  samples 行（validation_status='failed'）。
+- 追溯读 API（§18-Q5 收口）：tool_runs / model_calls / samples 三只读端点。
+- inputs 大小上限（DoS 面）。
+- 工具契约：output_schema.required 缺 status 的 tool.yaml 注册期即拒（fail-open
+  潜伏路径的契约层封堵）。
+- M4 红线冻结：performance_disk_agent 换真实工具时 requires_human_review 必须
+  已显式 True——「真实工程数值必须人工签发」不能只活在注释里。
+- 上传入库失败清理已落盘 blob（孤儿文件）。
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Iterator
+
+import pytest
+import yaml
+from fastapi.testclient import TestClient
+
+from backend.app.jobs.runner import JobRunner
+from backend.app.main import create_app
+from backend.app.storage import repos
+from backend.app.tools.registry import ToolRegistry
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+_LLM_ENV_VARS = ("FLAI_LLM_BASE_URL", "FLAI_LLM_API_KEY", "FLAI_LLM_MODEL_REASONING", "FLAI_LLM_MODEL_FAST")
+
+
+@pytest.fixture(autouse=True)
+def _clean_llm_env(monkeypatch):
+    for var in _LLM_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture()
+def app_env(tmp_path):
+    app = create_app(
+        agents_dir=REPO_ROOT / "agents",
+        tools_dir=REPO_ROOT / "tools_impl",
+        contracts_dir=REPO_ROOT / "contracts",
+        db_path=tmp_path / "flai_os.db",
+        uploads_dir=tmp_path / "uploads",
+        task_runs_dir=tmp_path / "task_runs",
+    )
+    with TestClient(app) as client:
+        yield client, app
+
+
+@pytest.fixture()
+def client(app_env) -> Iterator[TestClient]:
+    c, _ = app_env
+    yield c
+
+
+def _create_and_run(client: TestClient, app, agent_id: str, inputs: dict[str, Any]) -> dict[str, Any]:
+    resp = client.post(
+        "/api/tasks", json={"agent_id": agent_id, "inputs": inputs, "created_by": "hardening_test"}
+    )
+    assert resp.status_code == 200, resp.text
+    task_id = resp.json()["id"]
+    runner = JobRunner(app.state.runtime, app.state.conn_factory)
+    assert runner.run_once() is True
+    return client.get(f"/api/tasks/{task_id}").json()
+
+
+# ── 人工审核 gate fail-closed（宪法「安全 gate 判定一律 is True/is False」）──
+
+
+def test_review_gate_fail_closed_when_flag_missing(app_env) -> None:
+    """requires_human_review 字段缺失（schema 之外的任何原因）→ 必须走
+    waiting_review 而非静默 completed——错误方向只能是「多审」不能是「漏审」。
+    此前 truthiness 判定下缺失即跳审（fail-open）。"""
+    client, app = app_env
+    agent = app.state.agent_registry.get("hello_agent")
+    assert agent["workflow"]["requires_human_review"] is False  # 前置：正常态显式 False
+    removed = agent["workflow"].pop("requires_human_review")
+    try:
+        task = _create_and_run(client, app, "hello_agent", {"name": "缺字段场景"})
+        assert task["status"] == "waiting_review", (
+            f"字段缺失必须 fail-closed 进 waiting_review，实得 {task['status']}"
+        )
+    finally:
+        agent["workflow"]["requires_human_review"] = removed  # 还原，避免串扰
+
+
+def test_review_gate_explicit_false_still_completes(app_env) -> None:
+    """显式 False 才跳审：hello_agent 正常路径仍直达 completed（gate 不多拦）。"""
+    client, app = app_env
+    task = _create_and_run(client, app, "hello_agent", {"name": "正常路径"})
+    assert task["status"] == "completed"
+
+
+# ── 失败样本沉淀（§18-Q7 最小落点，ADR-0013 决策 7）─────────────────────────
+
+
+def test_failure_sample_recorded_for_collect_samples_agent(app_env) -> None:
+    """fta（collect_samples=true）无 key 失败 → samples 落 1 行
+    validation_status='failed'，accepted_by_engineer 留 NULL（不冒充已定标）。"""
+    client, app = app_env
+    inputs = {
+        "top_event": "供电完全丧失",
+        "system_description": "双通道供电系统",
+        "components": ["发电机A", "发电机B"],
+    }
+    task = _create_and_run(client, app, "fta_agent", inputs)
+    assert task["status"] == "failed"
+
+    samples = client.get(f"/api/tasks/{task['id']}/samples").json()
+    assert len(samples) == 1
+    assert samples[0]["validation_status"] == "failed"
+    assert samples[0]["accepted_by_engineer"] is None
+    assert "ModelUpstreamError" in samples[0]["output"]["error_message"]
+    assert samples[0]["input"] == inputs, "失败输入必须原样沉淀（未来评测反例素材）"
+
+
+def test_validation_failure_also_records_sample(app_env) -> None:
+    """输入校验失败同样沉淀（表单填错本身就是高价值反例数据）。"""
+    client, app = app_env
+    task = _create_and_run(client, app, "fta_agent", {"top_event": "只有顶事件"})
+    assert task["status"] == "failed"
+    samples = client.get(f"/api/tasks/{task['id']}/samples").json()
+    assert len(samples) == 1 and samples[0]["validation_status"] == "failed"
+
+
+# ── 追溯读 API（§18-Q5 收口）───────────────────────────────────────────────
+
+
+def test_trace_read_apis_expose_versions(app_env) -> None:
+    client, app = app_env
+    task = _create_and_run(client, app, "hello_agent", {"name": "追溯"})
+    assert task["status"] == "completed"
+    task_id = task["id"]
+
+    runs = client.get(f"/api/tasks/{task_id}/tool_runs").json()
+    assert len(runs) >= 1
+    assert runs[0]["tool_id"] == "mock_echo"
+    assert runs[0]["tool_version"], "tool_runs 必须携带工具版本（Q5：输出可追溯到工具版本）"
+    assert runs[0]["mock"] is True
+
+    # hello 无 LLM：model_calls 为空数组（端点可用，不 404）
+    assert client.get(f"/api/tasks/{task_id}/model_calls").json() == []
+
+    # 未知任务三端点一律 404
+    for ep in ("tool_runs", "model_calls", "samples"):
+        assert client.get(f"/api/tasks/task_missing/{ep}").status_code == 404
+
+
+# ── inputs 大小上限（DoS 面）──────────────────────────────────────────────
+
+
+def test_task_inputs_size_cap_422(client: TestClient) -> None:
+    big = {"blob": "x" * (300 * 1024)}
+    resp = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": big})
+    assert resp.status_code == 422
+    assert "上限" in resp.text
+
+
+# ── 工具契约：缺 status 的 output_schema 注册期即拒 ────────────────────────
+
+
+def test_tool_registry_rejects_output_schema_missing_status(tmp_path) -> None:
+    """tool.schema.json（ADR-0013）强制 output_schema.required 含 status——
+    漏声明的工具包在 scan 期被软拒（errors 记录，不注册），封死「缺 status
+    默认 success」的 fail-open 潜伏路径的入口。"""
+    good = yaml.safe_load((REPO_ROOT / "tools_impl" / "mock_tools" / "tool.yaml").read_text(encoding="utf-8"))
+    bad = json.loads(json.dumps(good))  # 深拷贝
+    bad["id"] = "no_status_tool"
+    bad["output_schema"]["required"] = ["echoed"]  # 刻意去掉 status
+
+    pkg = tmp_path / "no_status_tool"
+    pkg.mkdir()
+    (pkg / "tool.yaml").write_text(yaml.safe_dump(bad, allow_unicode=True), encoding="utf-8")
+
+    registry = ToolRegistry(tmp_path, REPO_ROOT / "contracts" / "tool.schema.json")
+    registry.scan()
+    assert registry.get("no_status_tool") is None, "缺 status 契约的工具不得注册"
+    assert len(registry.errors) == 1
+    assert "status" in registry.errors[0]["error"]
+
+
+# ── M4 红线冻结（ADR-0013 决策 6）─────────────────────────────────────────
+
+# performance_disk_agent 当前（M3 mock 阶段）的已知工具白名单。M4 把 mock 换成
+# 真实性能盘工具时本集合必然变化——届时下方断言强制 requires_human_review 已
+# 显式 True，否则本测试红：真实工程数值绝不允许静默自动 completed。
+_PERF_DISK_MOCK_TOOLSET = frozenset({"excel_case_parser", "performance_disk_mock", "excel_summary_writer"})
+
+
+def test_m4_red_line_real_tools_require_human_review() -> None:
+    data = yaml.safe_load(
+        (REPO_ROOT / "agents" / "performance_disk_agent" / "agent.yaml").read_text(encoding="utf-8")
+    )
+    tools = frozenset(data.get("tools") or [])
+    requires_review = data["workflow"]["requires_human_review"]
+    if tools == _PERF_DISK_MOCK_TOOLSET:
+        # mock 阶段：false 是诚实的（输出五处标注无工程意义）
+        assert requires_review is False
+    else:
+        assert requires_review is True, (
+            "M4 红线：performance_disk_agent 工具白名单已偏离 mock 集合"
+            f"（现={sorted(tools)}），真实工程结论必须人工签发——"
+            "requires_human_review 必须显式 true（agent.yaml 描述第 14 行的承诺）"
+        )
+
+
+# ── 上传入库失败清理孤儿 blob ─────────────────────────────────────────────
+
+
+def test_upload_orphan_blob_cleaned_on_db_failure(app_env, monkeypatch, tmp_path) -> None:
+    client, app = app_env
+    uploads_dir = app.state.uploads_dir
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("模拟入库失败")
+
+    from backend.app.api import files as files_api
+
+    monkeypatch.setattr(files_api.repos, "create_file", boom)
+    with pytest.raises(RuntimeError):
+        client.post("/api/files/upload", files={"file": ("orphan.txt", b"data")})
+
+    leftovers = [p for p in Path(uploads_dir).rglob("*") if p.is_file()]
+    assert leftovers == [], f"入库失败必须回收已落盘 blob，实存 {leftovers}"

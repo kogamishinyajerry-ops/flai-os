@@ -8,7 +8,8 @@
 - LLM 边界（本里程碑核心）：推荐块经 workflow 确定性对账 Registry + 目标
   input_schema——合法推荐才外露，幻觉 agent_id / 自身 / 非法字段一律 fail-closed。
 - 人是唯一签发者红线：导引全程不创建任何任务；预填草案由人在 tasks 端点亲手提交。
-- 诚实失败：无内网 key（清空 FLAI_LLM_*）→ 本轮对话 502，用户消息留档不伪造回复。
+- 诚实失败（事务性单轮，ADR-0013）：无内网 key（清空 FLAI_LLM_*）→ 本轮 502 且
+  **零消息落库**（幂等重试）；并发轮冲突 → 409 且零落库。
 """
 
 from __future__ import annotations
@@ -405,3 +406,139 @@ def test_post_to_closed_conversation_409(app_env) -> None:
     resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "还能说话吗"})
     assert resp.status_code == 409
     assert "concluded" in resp.json()["detail"]
+
+
+# ── ADR-0013 审计硬化：conclude 生命周期 / 并发冲突 / 归因 / 上限 / 窗口 ────
+
+
+def test_conclude_lifecycle(app_env) -> None:
+    """conclude：active→concluded 唯一合法转出；重复 conclude 与后续消息均 409。"""
+    client, app = app_env
+    _inject(app, _CannedStub("你好"))
+    conv_id = _open_conversation(client)
+
+    resp = client.post(f"/api/conversations/{conv_id}/conclude")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "concluded"
+
+    again = client.post(f"/api/conversations/{conv_id}/conclude")
+    assert again.status_code == 409, "重复 conclude 必须如实 409，不幂等吞掉"
+
+    msg = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "还在吗"})
+    assert msg.status_code == 409
+
+    assert client.post("/api/conversations/conv_missing/conclude").status_code == 404
+
+
+class _InterloperStub(_CannedStub):
+    """模拟并发轮：在本轮 workflow 执行期间，另一请求往同一会话插了一条消息。"""
+
+    def __init__(self, reply: str, app, conv_id: str) -> None:
+        super().__init__(reply)
+        self._app = app
+        self._conv_id = conv_id
+
+    def chat(self, profile, messages, **kwargs):
+        from backend.app.storage import repos as _repos
+
+        conn = self._app.state.conn_factory()
+        try:
+            _repos.append_message(
+                conn, conversation_id=self._conv_id, role="user", content="并发插入的消息"
+            )
+        finally:
+            conn.close()
+        return super().chat(profile, messages, **kwargs)
+
+
+def test_concurrent_turn_conflict_409_and_zero_partial_write(app_env) -> None:
+    """乐观并发检查（审计 P2）：本轮生成期间历史被并发修改 → 409 且本轮零落库，
+    绝不把基于过期历史的回复交错写进历史；随后基于最新历史重试成功。"""
+    client, app = app_env
+    conv_id = _open_conversation(client)
+    _inject(app, _InterloperStub("基于过期历史的回复", app, conv_id))
+
+    resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "第一句"})
+    assert resp.status_code == 409
+    assert "并发" in resp.json()["detail"]
+
+    # 冲突轮零落库：历史里只有 interloper 那一条，无本轮 user/assistant
+    got = client.get(f"/api/conversations/{conv_id}").json()
+    contents = [m["content"] for m in got["messages"]]
+    assert contents == ["并发插入的消息"], f"冲突轮不得落任何行，实得 {contents}"
+
+    # 基于最新历史重试 → 正常成功
+    _inject(app, _CannedStub("这轮正常"))
+    retry = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "第一句"})
+    assert retry.status_code == 200
+    roles = [m["role"] for m in client.get(f"/api/conversations/{conv_id}").json()["messages"]]
+    assert roles == ["user", "user", "assistant"]
+
+
+def test_conversation_model_calls_attributed(app_env) -> None:
+    """归因（ADR-0013 / §18-Q5）：①wrapper 自动注入 conversation_id+agent_id；
+    ②真实 gateway 失败路径的 model_calls 行可经会话端点检索（成败全量）。"""
+    client, app = app_env
+
+    # ① stub 侧：wrapper 注入的 kwargs 可见
+    stub = _CannedStub("你好")
+    _inject(app, stub)
+    conv_id = _open_conversation(client)
+    client.post(f"/api/conversations/{conv_id}/messages", json={"content": "hi"})
+    assert stub.calls[0]["conversation_id"] == conv_id
+    assert stub.calls[0]["agent_id"] == "guide_agent"
+
+    # ② 真实 gateway（FLAI_LLM_* 已清空）：失败留痕可按会话检索
+    conv2 = client.post(
+        "/api/conversations", json={"agent_id": "guide_agent", "created_by": "m6_test"}
+    ).json()["id"]
+    app.state.conversation_service.model_gateway = app.state.model_gateway  # 还原真实 gateway
+    assert client.post(f"/api/conversations/{conv2}/messages", json={"content": "hi"}).status_code == 502
+
+    calls = client.get(f"/api/conversations/{conv2}/model_calls").json()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+    assert calls[0]["conversation_id"] == conv2
+    assert calls[0]["agent_id"] == "guide_agent"
+    assert client.get("/api/conversations/conv_missing/model_calls").status_code == 404
+
+
+def test_post_message_content_cap_422(app_env) -> None:
+    client, app = app_env
+    _inject(app, _CannedStub("你好"))
+    conv_id = _open_conversation(client)
+    resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "x" * 16001})
+    assert resp.status_code == 422
+
+
+def test_history_window_caps_messages_and_chars() -> None:
+    from backend.app.runtime.conversation import _HISTORY_MAX_MESSAGES, _window
+
+    many = [{"role": "user", "content": f"m{i}"} for i in range(100)]
+    w = _window(many)
+    assert len(w) == _HISTORY_MAX_MESSAGES
+    assert w[-1]["content"] == "m99", "窗口必须保住最新一条"
+
+    huge = [{"role": "user", "content": "x" * 50_000} for _ in range(5)]
+    w2 = _window(huge)
+    assert 1 <= len(w2) < 5, "字符预算必须截断，且至少保住最后一条"
+    assert w2[-1] is huge[-1]
+
+
+def test_split_recommendation_preserves_tail_text(app_env) -> None:
+    """审计 P3：推荐块之后的 assistant 文本此前被静默丢弃——现原样保留；
+    第二个推荐块整体丢弃（只认第一块，sentinel 不外露）。"""
+    client, app = app_env
+    payload = {"agent_id": "fta_agent", "rationale": "r", "prefilled_inputs": {"top_event": "X"}}
+    reply = (
+        "块前说明。\n" + _reco_reply("", payload).strip()
+        + "\n块后重要提醒：请补全组件清单。\n<<RECOMMEND>>\n{\"agent_id\":\"hello_agent\"}\n<<END>>"
+    )
+    _inject(app, _CannedStub(reply))
+    conv_id = _open_conversation(client)
+    resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "做故障树"})
+    body = resp.json()["message"]
+    assert "块前说明" in body["content"]
+    assert "块后重要提醒" in body["content"], "推荐块之后的文本不得静默丢弃"
+    assert "<<RECOMMEND>>" not in body["content"] and "<<END>>" not in body["content"]
+    assert body["recommendation"]["agent_id"] == "fta_agent", "只认第一块"

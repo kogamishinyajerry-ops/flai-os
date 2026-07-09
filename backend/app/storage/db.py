@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS tool_runs (
 CREATE TABLE IF NOT EXISTS model_calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT,
+    conversation_id TEXT,
     agent_id TEXT,
     model_profile TEXT NOT NULL,
     model_name TEXT,
@@ -158,18 +159,32 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
-    """打开一个 sqlite3 连接：Row 工厂 + WAL + 外键约束 + 手动事务模式。"""
+    """打开一个 sqlite3 连接：Row 工厂 + WAL + 外键约束 + 手动事务模式。
+
+    busy_timeout 显式设 5000ms：并发写的可用性此前隐式依赖 Python sqlite3
+    默认 timeout=5.0（审计 P3——若有人改 connect 参数或依赖漂移，BEGIN IMMEDIATE
+    竞争会立刻 database is locked）。显式声明使这一承载并发正确性的前提可见。
+    """
     conn = sqlite3.connect(str(db_path), isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
 def init_db(db_path: str | Path) -> None:
-    """幂等建表：CREATE TABLE IF NOT EXISTS，可重复调用。"""
+    """幂等建表：CREATE TABLE IF NOT EXISTS，可重复调用。
+
+    另含最小幂等列迁移：CREATE TABLE IF NOT EXISTS 不会给**已存在**的表补新列，
+    对存量库需 ALTER TABLE 补齐（V0.1 无迁移框架，此处按列探测，重复调用安全）。
+    """
     conn = get_conn(db_path)
     try:
         conn.executescript(_DDL)
+        # 迁移 #1（ADR-0013）：model_calls.conversation_id——导引会话的模型调用归因。
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(model_calls)")}
+        if "conversation_id" not in cols:
+            conn.execute("ALTER TABLE model_calls ADD COLUMN conversation_id TEXT")
     finally:
         conn.close()

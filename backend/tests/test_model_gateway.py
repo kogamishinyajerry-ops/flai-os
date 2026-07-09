@@ -238,3 +238,40 @@ def test_chat_upstream_200_choices_shape_drift_raises_and_records_failed(tmp_pat
     conn.close()
     assert len(calls) == 1
     assert calls[0]["status"] == "failed"
+
+
+# ── 上游 200 但 content 为空 → ModelUpstreamError（ADR-0013 fail-closed）────
+
+def test_chat_empty_content_200_raises_and_records_failed(tmp_path, monkeypatch) -> None:
+    """空回答绝不记 success：choices 结构合法但 content 为 null/空串的 200 响应，
+    此前被记 status=success（把「无回答」伪装成成功调用）——现折叠为
+    ModelUpstreamError 走统一 failed 留痕。"""
+    monkeypatch.setenv("FLAI_LLM_BASE_URL", "https://fake-llm.internal")
+    monkeypatch.setenv("FLAI_LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("FLAI_LLM_MODEL_REASONING", "glm-mock")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": None}, "finish_reason": "stop"}]},
+        )
+
+    def fake_post(url, *, json, headers, timeout):
+        transport = httpx.MockTransport(handler)
+        with httpx.Client(transport=transport) as client:
+            return client.post(url, json=json, headers=headers)
+
+    monkeypatch.setattr(gateway_mod.httpx, "post", fake_post)
+
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    with pytest.raises(ModelUpstreamError, match="content 为空"):
+        gateway.chat("reasoning", [{"role": "user", "content": "你好"}], task_id="task_empty")
+
+    conn = db_mod.get_conn(db_path)
+    calls = repos.list_model_calls(conn, "task_empty")
+    conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+    assert "content 为空" in calls[0]["error_message"]

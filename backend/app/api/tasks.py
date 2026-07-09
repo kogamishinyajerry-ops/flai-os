@@ -16,13 +16,29 @@ from ..storage import repos
 
 router = APIRouter(prefix="/api", tags=["tasks"])
 
+# 审计 P2（DoS 面）：inputs 此前无大小上限——超大 JSON 会被原样落库并进入
+# runtime/事件链路放大。256KB 对 params 型输入绰绰有余；大数据走文件上传通道。
+_INPUTS_MAX_BYTES = 256 * 1024
+
 
 class CreateTaskRequest(BaseModel):
     agent_id: str
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=200)
     inputs: dict[str, Any] = Field(default_factory=dict)
     input_file_ids: list[str] = Field(default_factory=list)
-    created_by: str = "anonymous"
+    created_by: str = Field(default="anonymous", max_length=100)
+
+    @field_validator("inputs")
+    @classmethod
+    def inputs_size_capped(cls, v: dict[str, Any]) -> dict[str, Any]:
+        import json as _json
+
+        size = len(_json.dumps(v, ensure_ascii=False).encode("utf-8"))
+        if size > _INPUTS_MAX_BYTES:
+            raise ValueError(
+                f"inputs 序列化后 {size} 字节，超过上限 {_INPUTS_MAX_BYTES}——大数据请走附件上传"
+            )
+        return v
 
 
 class ReviewTaskRequest(BaseModel):
@@ -252,5 +268,51 @@ def list_events(
         if task is None:
             raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
         return repos.list_events(conn, task_id, limit=limit, offset=offset)
+    finally:
+        conn.close()
+
+
+# ── 追溯读 API（ADR-0013，§18-Q5 收口）────────────────────────────────────
+# tool_runs/model_calls/samples 自 M1 起就成败全量落库，但此前无任何读端点——
+# 「输出可追溯到工具版本/模型版本」的数据存而不可达。三端点均为只读投影。
+
+
+def _get_task_or_404(conn: Any, task_id: str) -> dict[str, Any]:
+    task = repos.get_task(conn, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+    return task
+
+
+@router.get("/tasks/{task_id}/tool_runs")
+def list_task_tool_runs(task_id: str, request: Request) -> list[dict[str, Any]]:
+    """任务的工具调用留痕（含 tool_version/mock 标记/原始输入输出路径）。"""
+    conn = request.app.state.conn_factory()
+    try:
+        _get_task_or_404(conn, task_id)
+        return repos.list_tool_runs(conn, task_id)
+    finally:
+        conn.close()
+
+
+@router.get("/tasks/{task_id}/model_calls")
+def list_task_model_calls(task_id: str, request: Request) -> list[dict[str, Any]]:
+    """任务的模型调用留痕（含 model_profile/model_name/token 用量，成败全量）。"""
+    conn = request.app.state.conn_factory()
+    try:
+        _get_task_or_404(conn, task_id)
+        return repos.list_model_calls(conn, task_id)
+    finally:
+        conn.close()
+
+
+@router.get("/tasks/{task_id}/samples")
+def list_task_samples(task_id: str, request: Request) -> list[dict[str, Any]]:
+    """任务沉淀的数据样本（validation_status=success|failed；accepted_by_engineer
+    为人工审核结论回填，NULL=待定）。"""
+    conn = request.app.state.conn_factory()
+    try:
+        _get_task_or_404(conn, task_id)
+        return repos.list_samples(conn, task_id)
     finally:
         conn.close()

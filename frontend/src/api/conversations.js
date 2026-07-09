@@ -16,3 +16,7 @@ export const postMessage = (conversationId, content) =>
     method: "POST",
     json: { content },
   });
+
+// 结束会话（active→concluded）：「确认草案去创建任务」时归档会话（ADR-0013）。
+export const concludeConversation = (conversationId) =>
+  request(`/api/conversations/${conversationId}/conclude`, { method: "POST" });

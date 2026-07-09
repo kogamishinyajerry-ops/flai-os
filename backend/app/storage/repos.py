@@ -405,6 +405,7 @@ def record_model_call(
     conn: sqlite3.Connection,
     *,
     task_id: str | None = None,
+    conversation_id: str | None = None,
     agent_id: str | None = None,
     model_profile: str,
     model_name: str | None = None,
@@ -419,12 +420,12 @@ def record_model_call(
     cur = conn.execute(
         """
         INSERT INTO model_calls
-            (task_id, agent_id, model_profile, model_name, status,
+            (task_id, conversation_id, agent_id, model_profile, model_name, status,
              request_summary, response_summary, error_message, token_usage_json, created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
-            task_id, agent_id, model_profile, model_name, status,
+            task_id, conversation_id, agent_id, model_profile, model_name, status,
             request_summary, response_summary, error_message,
             json.dumps(token_usage_json, ensure_ascii=False) if token_usage_json is not None else None,
             created_at,
@@ -437,6 +438,17 @@ def record_model_call(
 def list_model_calls(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT * FROM model_calls WHERE task_id = ? ORDER BY id ASC", (task_id,)
+    ).fetchall()
+    return [_decode_model_call(r) for r in rows]
+
+
+def list_model_calls_for_conversation(
+    conn: sqlite3.Connection, conversation_id: str
+) -> list[dict[str, Any]]:
+    """导引会话的模型调用留痕（ADR-0013：会话路径的 Q5 可追溯性）。"""
+    rows = conn.execute(
+        "SELECT * FROM model_calls WHERE conversation_id = ? ORDER BY id ASC",
+        (conversation_id,),
     ).fetchall()
     return [_decode_model_call(r) for r in rows]
 
@@ -616,6 +628,15 @@ def list_messages(conn: sqlite3.Connection, conversation_id: str) -> list[dict[s
         (conversation_id,),
     ).fetchall()
     return [_decode_message(r) for r in rows]
+
+
+def count_messages(conn: sqlite3.Connection, conversation_id: str) -> int:
+    """会话消息计数——post_message 乐观并发检查用（ADR-0013）。"""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = ?",
+        (conversation_id,),
+    ).fetchone()
+    return int(row[0])
 
 
 def set_conversation_recommendation(

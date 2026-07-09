@@ -104,11 +104,14 @@ class ModelGateway:
         response_summary: str | None,
         error_message: str | None,
         token_usage: dict[str, Any] | None,
+        conversation_id: str | None = None,
     ) -> None:
         """无论成败都记一条 model_calls（docs/04 §7：存在调用未落 model_calls 即判违规）。
 
         conn_factory 为 None 时跳过落库（供库内自测使用）。connection 用后即关闭，
         遵循 ADR-0008「连接 per-operation」的存储层约定。
+        task_id / conversation_id 二选一携带（job 路径带 task_id，导引会话带
+        conversation_id）——两条运行时的模型调用都必须可归因（ADR-0013）。
         """
         if self.conn_factory is None:
             return
@@ -117,6 +120,7 @@ class ModelGateway:
             repos.record_model_call(
                 conn,
                 task_id=task_id,
+                conversation_id=conversation_id,
                 agent_id=agent_id,
                 model_profile=profile,
                 model_name=model_name,
@@ -160,6 +164,7 @@ class ModelGateway:
         messages: list[dict[str, Any]],
         *,
         task_id: str | None = None,
+        conversation_id: str | None = None,
         agent_id: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -188,16 +193,23 @@ class ModelGateway:
                 # P2-4：上游 200 但字段形状漂移（choices 元素非 object 等）——
                 # 折叠为 ModelUpstreamError 走下方统一留痕路径，绝不裸逃。
                 raise ModelUpstreamError(f"上游返回 200 但 chat 响应形状漂移：{exc}") from exc
+            if not isinstance(content, str) or not content.strip():
+                # 审计硬化（ADR-0013）：上游 200 但 content 为空/非文本——若记
+                # success 就是把「无回答」伪装成成功调用（fail-open）。按上游失败
+                # 处理，走统一 failed 留痕；上层各自的空内容防线保留作纵深。
+                raise ModelUpstreamError("上游返回 200 但 chat content 为空——按上游失败处理，不把空回答记 success")
         except (ProfileNotConfiguredError, ModelUpstreamError) as exc:
             self._record(
-                task_id=task_id, agent_id=agent_id, profile=profile, model_name=model_name,
+                task_id=task_id, conversation_id=conversation_id, agent_id=agent_id,
+                profile=profile, model_name=model_name,
                 status="failed", request_summary=request_summary, response_summary=None,
                 error_message=str(exc), token_usage=None,
             )
             raise
 
         self._record(
-            task_id=task_id, agent_id=agent_id, profile=profile, model_name=model_name,
+            task_id=task_id, conversation_id=conversation_id, agent_id=agent_id,
+            profile=profile, model_name=model_name,
             status="success", request_summary=request_summary,
             response_summary=_summarize(result["content"]), error_message=None,
             token_usage=result["token_usage"],
@@ -210,6 +222,7 @@ class ModelGateway:
         text: str,
         *,
         task_id: str | None = None,
+        conversation_id: str | None = None,
         agent_id: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -227,14 +240,16 @@ class ModelGateway:
                 raise ModelUpstreamError(f"上游返回 200 但 embed 响应形状漂移：{exc}") from exc
         except (ProfileNotConfiguredError, ModelUpstreamError) as exc:
             self._record(
-                task_id=task_id, agent_id=agent_id, profile=profile, model_name=model_name,
+                task_id=task_id, conversation_id=conversation_id, agent_id=agent_id,
+                profile=profile, model_name=model_name,
                 status="failed", request_summary=request_summary, response_summary=None,
                 error_message=str(exc), token_usage=None,
             )
             raise
 
         self._record(
-            task_id=task_id, agent_id=agent_id, profile=profile, model_name=model_name,
+            task_id=task_id, conversation_id=conversation_id, agent_id=agent_id,
+            profile=profile, model_name=model_name,
             status="success", request_summary=request_summary,
             response_summary=f"向量维度={len(result['vector'])}", error_message=None,
             token_usage=None,
@@ -248,6 +263,7 @@ class ModelGateway:
         prompt: str,
         *,
         task_id: str | None = None,
+        conversation_id: str | None = None,
         agent_id: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -280,14 +296,16 @@ class ModelGateway:
                 raise ModelUpstreamError(f"上游返回 200 但 vision 响应形状漂移：{exc}") from exc
         except (ProfileNotConfiguredError, ModelUpstreamError) as exc:
             self._record(
-                task_id=task_id, agent_id=agent_id, profile=profile, model_name=model_name,
+                task_id=task_id, conversation_id=conversation_id, agent_id=agent_id,
+                profile=profile, model_name=model_name,
                 status="failed", request_summary=request_summary, response_summary=None,
                 error_message=str(exc), token_usage=None,
             )
             raise
 
         self._record(
-            task_id=task_id, agent_id=agent_id, profile=profile, model_name=model_name,
+            task_id=task_id, conversation_id=conversation_id, agent_id=agent_id,
+            profile=profile, model_name=model_name,
             status="success", request_summary=request_summary,
             response_summary=_summarize(result["content"]), error_message=None,
             token_usage=result["token_usage"],

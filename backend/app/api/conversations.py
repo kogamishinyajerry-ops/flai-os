@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from ..core.errors import (
     ConversationClosedError,
+    ConversationConflictError,
     ConversationNotFoundError,
     ModelUpstreamError,
     NotInteractiveAgentError,
@@ -29,7 +30,7 @@ router = APIRouter(prefix="/api", tags=["conversations"])
 
 class CreateConversationRequest(BaseModel):
     agent_id: str
-    created_by: str = Field(min_length=1)
+    created_by: str = Field(min_length=1, max_length=100)
 
     @field_validator("created_by")
     @classmethod
@@ -41,7 +42,10 @@ class CreateConversationRequest(BaseModel):
 
 
 class PostMessageRequest(BaseModel):
-    content: str = Field(min_length=1)
+    # max_length：审计 P2（DoS 面）——content 此前无上限，超大文本会被落库并
+    # 全量转发模型。16000 字符对需求描述/追问回答绰绰有余；更大材料走附件通道
+    # （V0.1 会话不接附件，附件在创建任务页上传，见 guide_agent limitations）。
+    content: str = Field(min_length=1, max_length=16000)
 
     @field_validator("content")
     @classmethod
@@ -95,10 +99,36 @@ def post_message(
         return service.post_message(conversation_id=conversation_id, content=body.content)
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ConversationClosedError as exc:
+    except (ConversationClosedError, ConversationConflictError) as exc:
+        # 已结束 / 被并发轮抢先：如实 409。冲突轮零落库，可基于最新历史重试。
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (ModelUpstreamError, ValueError) as exc:
-        # 上游失败或 workflow 诚实抛错：本轮对话失败，用户消息已留档，可重试。
+        # 上游失败或 workflow 诚实抛错：本轮零落库（事务性单轮），可幂等重试。
         raise HTTPException(
             status_code=502, detail=f"导引本轮对话失败（可重试）：{exc}"
         ) from exc
+
+
+@router.post("/conversations/{conversation_id}/conclude")
+def conclude_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
+    """结束会话（active → concluded）。「确认草案去创建任务」时前端调用本端点
+    归档会话（ADR-0013：补上 V0.1 会话不落终态的债）。"""
+    service = request.app.state.conversation_service
+    try:
+        return service.conclude(conversation_id)
+    except ConversationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConversationClosedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/conversations/{conversation_id}/model_calls")
+def list_conversation_model_calls(conversation_id: str, request: Request) -> list[dict[str, Any]]:
+    """会话的模型调用留痕（ADR-0013：导引路径的 Q5 可追溯，成败全量）。"""
+    conn = request.app.state.conn_factory()
+    try:
+        if repos.get_conversation(conn, conversation_id) is None:
+            raise HTTPException(status_code=404, detail=f"会话不存在：{conversation_id}")
+        return repos.list_model_calls_for_conversation(conn, conversation_id)
+    finally:
+        conn.close()

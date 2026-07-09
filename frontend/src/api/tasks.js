@@ -23,10 +23,18 @@ export const listTasks = ({ status, agentId, limit, offset } = {}) => {
 };
 
 export const getTask = (taskId) => request(`/api/tasks/${taskId}`);
-// limit 对齐后端上限 5000（复核发现：合法上限内的大批量任务 ~4200 条事件，
-// 若截在 2000，队尾的 summary_generated 会被切掉，TaskDetail 的批量计数标签
-// 恰在最需要它的场景静默消失）。parser 行数上限 1000 → 事件量有界 <5000。
-export const listTaskEvents = (taskId) => request(`/api/tasks/${taskId}/events?limit=5000`);
+// 分页拉取到取尽（ADR-0013 审计修复）：此前单页 5000 封顶，但 parser 契约上限
+// max_rows=5000 时批量任务可产 ~2 万事件——尾部的 summary_generated/task_completed
+// 恰在最需要它的场景被静默截断。页大小 2000 对齐后端默认；短尾页即终止。
+export const listTaskEvents = async (taskId) => {
+  const pageSize = 2000;
+  const all = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await request(`/api/tasks/${taskId}/events?limit=${pageSize}&offset=${offset}`);
+    all.push(...page);
+    if (page.length < pageSize) return all;
+  }
+};
 export const cancelTask = (taskId) =>
   request(`/api/tasks/${taskId}/cancel`, { method: "POST" });
 

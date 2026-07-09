@@ -1,15 +1,16 @@
 id: guide_agent
 name: "导引 Agent（需求接待与 Agent 推荐）"
-version: 0.1.0
+version: 0.1.1
 status: draft
 maturity: L0
 category: reasoning_assist
 summary: "统一入口：多轮对话理解你的工程需求，从平台已上线的 specialist Agent 中推荐最合适的一个，并预填一份任务草案——草案交你确认后由你提交，导引本身不创建、不签发任务。"
 description: >
   M6 平台首个 interactive 型 Agent（ADR-0012）。它不产出工程产物，而是接住
-  用户的自然语言需求 + 上传附件，经 Model Gateway 多轮追问澄清后，读 Agent
-  Registry 里已注册的 specialist Agent，推荐一个并按其 input_schema 预填一份
-  任务草案。三条红线：①导引绝不自动创建/签发下游任务，只产出预填草案，由人在
+  用户的**纯文本**自然语言需求（V0.1 会话不接收附件——附件在人确认草案后的
+  创建任务页上传，由目标 Agent 处理），经 Model Gateway 多轮追问澄清后，读
+  Agent Registry 里已注册的 specialist Agent，推荐一个并按其 input_schema
+  预填一份任务草案。三条红线：①导引绝不自动创建/签发下游任务，只产出预填草案，由人在
   创建任务页确认后提交（人是唯一签发者，宪法第一/五条）；②LLM 只负责对话与提议，
   推荐的 agent_id 与预填字段一律由 workflow 确定性对账 Registry + 目标 input_schema
   后才算数（宪法铁律六）；③推荐面与任务创建门一致——只排除已下线（disabled）的
@@ -49,6 +50,8 @@ logging:
 data_asset:
   collect_samples: false
 limitations:
+  - "V0.1 会话不接收附件：导引只基于你的文本描述推荐，不读任何上传文件；附件在确认草案后的创建任务页上传，由目标 Agent 处理（会话级附件与知识检索是 V0.2 规划项）。"
+  - "导引的分析深度有限：它不接知识库、不调工具，推荐依据只有对话内容与平台 Agent 注册表——适配判断请自行复核。"
   - "导引只推荐、不执行：它不产出任何工程产物（性能盘/控制逻辑/故障树等），只把你导到合适的 specialist Agent 并预填草案。"
   - "导引不创建也不签发任务：预填草案必须由你在创建任务页确认后亲手提交，导引无权代你下单。"
   - "推荐面与任务创建门一致：只排除已下线（disabled）的 Agent 与导引自身，草案会如实带出目标 Agent 的成熟度（maturity/status）供你判断。"

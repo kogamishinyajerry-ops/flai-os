@@ -69,13 +69,21 @@
     },
     "output_schema": {
       "type": "object",
-      "description": "工具出参的 JSON Schema（内嵌）。必含 status 字段（success|failed）；解析类工具必含 raw_output_path 以保原始可追溯。",
+      "description": "工具出参的 JSON Schema（内嵌）。required 必含 status（success|failed）——契约层强制（ADR-0013）：漏声明 status 的工具在注册期即被拒，运行时另有缺 status 判 failed 的双层守卫；解析类工具必含 raw_output_path 以保原始可追溯。",
       "required": [
-        "type"
+        "type",
+        "required"
       ],
       "properties": {
         "type": {
           "const": "object"
+        },
+        "required": {
+          "type": "array",
+          "contains": {
+            "const": "status"
+          },
+          "description": "出参必填字段清单，必须包含 status（宪法 fail-closed：无 status 即契约违规）。"
         }
       }
     },

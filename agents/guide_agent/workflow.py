@@ -43,8 +43,9 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     chat_messages = [{"role": "system", "content": system_content}, *messages]
 
     # ModelUpstreamError 刻意不捕获：冒泡 → ConversationService 原样抛出，诚实失败。
-    # 带上 agent_id 让 model_calls 落库可归因到导引（反方 P3-3：interactive 路径可观测性）。
-    result = model_gateway.chat(profile, chat_messages, agent_id=agent_config.get("id"))
+    # conversation_id/agent_id 归因由运行时 _ConversationGatewayContext 自动注入
+    # （ADR-0013）——workflow 不手工传身份，与 job 路径 _ModelGatewayContext 对称。
+    result = model_gateway.chat(profile, chat_messages)
     reply = result.get("content")
     if not isinstance(reply, str) or not reply.strip():
         raise ValueError("导引模型返回空内容，无法继续对话（诚实失败，不伪造对话）")
@@ -130,8 +131,10 @@ def _render_candidates(candidates: list[dict[str, Any]]) -> str:
 # ── 推荐块解析 + 确定性校验（LLM 边界的咬合点）──────────────────────────
 
 def _split_recommendation(reply: str) -> tuple[str, str | None]:
-    """把 assistant 文本与推荐块拆开。无块 → (原文, None)；有块 → (块前文本, 块内 JSON 串)。
-    块前文本（推荐理由）永远原样展示给用户，绝不因块存在而丢。"""
+    """把 assistant 文本与推荐块拆开。无块 → (原文, None)；有块 → (块外文本, 块内 JSON 串)。
+
+    块前 + 块后的文本都原样保留展示（审计 P3：此前块后文本被静默丢弃）；块后若再
+    出现推荐块，只认第一块、后续整体丢弃（不把 sentinel 原文外露给用户当正文）。"""
     start = reply.find(_RECO_START)
     if start == -1:
         return reply.strip(), None
@@ -139,10 +142,13 @@ def _split_recommendation(reply: str) -> tuple[str, str | None]:
     if end == -1:
         # 有起始无结束：块不完整，当作纯文本（不冒险解析半个 JSON）
         return reply.strip(), None
-    message = reply[:start].strip()
     raw = reply[start + len(_RECO_START):end].strip()
-    if not message:
-        message = "已根据你的需求给出推荐草案，请在下方确认。"
+    tail = reply[end + len(_RECO_END):]
+    next_block = tail.find(_RECO_START)
+    if next_block != -1:
+        tail = tail[:next_block]
+    parts = [p for p in (reply[:start].strip(), tail.strip()) if p]
+    message = "\n".join(parts) if parts else "已根据你的需求给出推荐草案，请在下方确认。"
     return message, raw
 
 

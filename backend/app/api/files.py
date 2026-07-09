@@ -93,6 +93,15 @@ async def upload_file(
             size_bytes=size,
             sha256=digest.hexdigest(),
         )
+    except Exception:
+        # 审计 P3（孤儿 blob）：落盘成功但入库失败（如锁等待超时）——磁盘有文件、
+        # 库无记录，永远不可达也不可清。入库失败即回收本次落盘，同读循环失败口径。
+        dest_path.unlink(missing_ok=True)
+        try:
+            dest_dir.rmdir()
+        except OSError:
+            pass
+        raise
     finally:
         conn.close()
 

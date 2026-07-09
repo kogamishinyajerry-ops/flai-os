@@ -193,6 +193,14 @@ class ToolRegistry:
             )
             raise ToolOutputInvalidError(error_message) from exc
 
-        status = output.get("status", "success")
+        status = output.get("status")
+        if status not in ("success", "failed"):
+            # fail-closed（ADR-0013）：缺 status/非法 status 的输出绝不默认成功——
+            # 此前 `get("status", "success")` 是 fail-open：未来任何工具漏声明
+            # status，其输出会被静默判成功。契约层（tool.schema.json 已强制
+            # output_schema.required 含 status）+ 本运行时守卫双层兜底。
+            error_message = f"工具输出缺少合法 status（实得 {status!r}），按契约违规处理"
+            _record(status="failed", output=output, error_message=error_message, finished_at=finished_at)
+            raise ToolOutputInvalidError(error_message)
         _record(status=status, output=output, error_message=output.get("error_message"), finished_at=finished_at)
         return output

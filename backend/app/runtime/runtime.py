@@ -276,6 +276,7 @@ class AgentRuntime:
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
                 level="error", message=f"输入校验未通过：{exc}",
             )
+            self._record_failure_sample(conn, task, agent, f"输入校验未通过：{exc}")
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
         # 2) 进入 running，构建 context 并调用 workflow.run()
@@ -295,6 +296,7 @@ class AgentRuntime:
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
                 level="error", message=f"workflow 执行异常：{error_message}",
             )
+            self._record_failure_sample(conn, task, agent, error_message)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
         if not isinstance(result, dict) or result.get("status") != "success":
@@ -304,13 +306,14 @@ class AgentRuntime:
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
                 level="error", message=error_message,
             )
+            self._record_failure_sample(conn, task, agent, error_message)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
         # 3) 成功：注册产物 + 样本沉淀
         output_file_ids = self._register_outputs(conn, task_id, output_dir)
         repos.set_task_outputs(conn, task_id, output_file_ids)
 
-        if agent.get("data_asset", {}).get("collect_samples"):
+        if agent.get("data_asset", {}).get("collect_samples") is True:
             repos.record_sample(
                 conn,
                 task_id=task_id,
@@ -318,9 +321,16 @@ class AgentRuntime:
                 agent_version=task["agent_version"],
                 input_json=task["inputs"],
                 output_json=result,
+                validation_status="success",
             )
 
-        if agent.get("workflow", {}).get("requires_human_review"):
+        # 宪法「安全 gate 判定一律 is True/is False」+ fail-closed（审计 P2）：
+        # 仅当 agent.yaml **显式声明 False** 才跳过人工审核；缺失/畸形（schema 之外
+        # 的任何原因）一律走 waiting_review——错误方向必须是「多审」而非「漏审」。
+        # 此前的 truthiness 判定在字段缺失时默认跳审（fail-open），安全依赖了
+        # agent.schema.json 的 required 耦合而非 gate 自证。
+        requires_review = (agent.get("workflow") or {}).get("requires_human_review")
+        if requires_review is not False:
             repos.set_task_status(conn, task_id, "waiting_review")
             repos.append_event(
                 conn, task_id=task_id, agent_id=agent_id, event_type="review_requested",
@@ -336,6 +346,27 @@ class AgentRuntime:
             level="info", message="任务完成",
         )
         return {"status": "completed", "task": repos.get_task(conn, task_id)}
+
+    def _record_failure_sample(
+        self, conn: sqlite3.Connection, task: dict[str, Any], agent: dict[str, Any], error_message: str
+    ) -> None:
+        """失败任务的样本沉淀（ADR-0013，§18-Q7「每次失败能沉淀」的最小落点）。
+
+        collect_samples 型 Agent 的失败输入同样是数据资产——它们是未来评测集反例
+        的直接素材（validation_status='failed' 供下游筛选，accepted_by_engineer
+        留 NULL：失败任务不经人工放行，不冒充已定标数据）。此前只有成功路径沉淀，
+        失败即蒸发。完整 Memory 子系统仍是 V0.2 槽位，此处不冒充。
+        """
+        if agent.get("data_asset", {}).get("collect_samples") is True:
+            repos.record_sample(
+                conn,
+                task_id=task["id"],
+                agent_id=task["agent_id"],
+                agent_version=task["agent_version"],
+                input_json=task["inputs"],
+                output_json={"error_message": error_message},
+                validation_status="failed",
+            )
 
     def _validate_inputs(self, pkg_dir: Path, agent: dict[str, Any], inputs: dict[str, Any]) -> None:
         import json

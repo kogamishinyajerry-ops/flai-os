@@ -74,8 +74,9 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 | M1 | 最小后端核心底座：Hello Agent 可通过后端完整运行 | **完成** |
 | M2 | Web UI 原型：工程师可通过网页跑 Hello Agent | **完成** |
 | M3 | Mock 性能盘 Agent：上传 Excel→批量跑→汇总→样本沉淀（不接真实性能盘）| **完成** |
-| M4 | 真实性能盘 Tool Adapter：替换 Mock，保持调用链不变 | 待开始 |
+| M4 | 真实性能盘 Tool Adapter：替换 Mock，保持调用链不变 | 待开始（需内网环境） |
 | M5 | 平台泛化验证：接入 control_logic_agent、fta_agent 验证非性能盘专用 | **完成** |
+| M6（增补） | 导引 Agent：多轮对话推荐 specialist Agent + 预填任务草案（interactive 会话运行时，ADR-0012/0013） | **完成** |
 
 ## V0.1 已知限制（诚实清单，非缺陷否认）
 
@@ -97,11 +98,26 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
    「加载更多」append），不提供总数计数（无 COUNT 查询）。
 8. **报告纯模板化，无 LLM**：批量任务的 `task_report.md` 为纯 Python 字符串
    模板生成；LLM 摘要报告（失败归纳/修表建议）是 V0.2 项（ADR-0010）。
-9. **fta_agent 真实草案依赖内网模型 key**：`fta_agent`（reasoning_assist）需
+9. **fta_agent / guide_agent 真实模型调用依赖内网 key**：二者均需
    `FLAI_LLM_BASE_URL` / `FLAI_LLM_API_KEY` / `FLAI_LLM_MODEL_REASONING` 指向内网
-   模型服务才能真实生成故障树草案。本机/CI 无 key 时该 Agent 走 fail-closed→
-   `failed` 并留 `model_call` error 事件（磁盘零残留），只能桩测其调用链与
-   waiting_review 人工放行链，无法真实产出草案——这是环境依赖，非缺陷。
+   模型服务。本机/CI 无 key 时走 fail-closed（fta→任务 `failed`+`model_call`
+   error 事件；导引→本轮 502 且零落库可重试），只能桩测调用链，无法真实产出
+   ——这是环境依赖，非缺陷。**平台至今未跑过任何真实业务**（性能盘是 mock、
+   模型是桩），泛化能力已证，真实业务闭环待 M4+内网 key。
+10. **导引会话不接附件、分析深度有限**：会话只收纯文本（≤16000 字符/轮），不接
+    知识库、不调工具——推荐依据只有对话内容与 Agent 注册表；附件在确认草案后的
+    创建任务页上传。会话级附件+知识检索是 V0.2 规划项。
+11. **会话历史发模型前截窗**：最近 40 条/60K 字符（全量历史仍完整落库可查），
+    超窗信息对模型不可见；「超窗摘要」是 V0.2 项。
+12. **全局无鉴权**：所有 API（含文件下载、人工放行）不做身份认证，内网可信环境
+    权衡 + 任务书 §15「不要一开始做复杂权限系统」；具名字段（created_by/reviewer）
+    是留痕不是认证。权限体系是 V0.2+ 项。
+13. **无卡死任务回收**：worker 在 `validating`/`running` 中途崩溃，任务永卡该态
+    （单 worker 轮询无心跳/reaper）；V0.1 靠人工识别，reaper 是 V0.2 项。
+14. **Memory 子系统未实现**：docs/06 三类记忆（Knowledge/Engineering/Run）只有
+    标准文档与 `backend/app/knowledge|memory/` 空槽位；失败任务现已沉淀 samples
+    行（validation_status=failed，ADR-0013）作为最小落点，「失败→评测用例」的
+    自动管道是 V0.2 项。
 
 ## 开发口径
 

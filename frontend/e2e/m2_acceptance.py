@@ -111,7 +111,8 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1440, "height": 900})
 
     # ── ①②门户：连接后端 + Agent 列表（两个 agent 卡片）──
-    page.goto(BASE + "/", wait_until="networkidle")
+    # M6 起首页 "/" 是智能导引，Agent 门户移至 /portal（ADR-0012 前端路由）。
+    page.goto(BASE + "/portal", wait_until="networkidle")
     body = page.locator("body").inner_text()
     check("①前端连接 FastAPI + ②Agent 列表可见",
           "hello_agent" in body and "review_agent" in body and "不适用范围" in body,

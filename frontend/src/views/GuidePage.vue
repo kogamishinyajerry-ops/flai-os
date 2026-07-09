@@ -89,7 +89,7 @@
 import { ref, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { createConversation, postMessage } from "../api/conversations";
+import { createConversation, postMessage, concludeConversation } from "../api/conversations";
 import { categoryColor, categoryLabel } from "../utils/format";
 
 const router = useRouter();
@@ -160,6 +160,11 @@ function confirmAndGoCreate(reco) {
     "flai_prefill",
     JSON.stringify({ agent_id: reco.agent_id, inputs: reco.prefilled_inputs || {} })
   );
+  // 确认即归档会话（active→concluded，ADR-0013）。fire-and-forget：归档失败
+  // 不阻断人去创建任务——会话留 active 只是可观测性小瑕疵，不是流程阻塞点。
+  if (conversationId.value) {
+    concludeConversation(conversationId.value).catch(() => {});
+  }
   router.push({ path: "/tasks/new", query: { agent_id: reco.agent_id, from: "guide" } });
 }
 </script>

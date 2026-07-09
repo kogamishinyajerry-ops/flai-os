@@ -64,10 +64,9 @@
   - 推荐面 = 非 disabled 的 specialist Agent（与 create_task 门一致）；推荐草案
     如实携带目标 Agent 的 status/maturity，用户据此判断成熟度（V0.1 四个 Agent
     均为 draft，若排除 draft 则导引无人可推、失去意义——故对齐「可运行即可推荐」）。
-  - **V0.1 会话不落终态**：conversations.status 定义了 concluded/abandoned，但 V0.1
-    无 API 转出——「确认草案去创建任务」是前端导航，不回调后端结会话，故会话恒
-    停 active（用户可无限追问）。会话 GC 与终态转出留 V0.2。反方 P3-2 记录，不
-    伪装成已实现。
+  - ~~V0.1 会话不落终态~~（已还清，ADR-0013）：`POST /conversations/{id}/conclude`
+    提供 active→concluded 转出，前端「确认草案去创建任务」时调用归档会话；
+    会话 GC 仍留 V0.2。
   - 预填字段逐字段校验采用「携带 $defs 的 mini-schema」作用域（反方 P2）：目标
     input_schema 用 `$ref`/`$defs` 时引用能解析，且任何无法评估的 schema 一律保守
     剥离（fail-closed），预填字段在人提交后仍经 Runtime 对完整 schema 再校验。
