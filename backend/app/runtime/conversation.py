@@ -31,9 +31,11 @@ from ..core.errors import (
     ConversationClosedError,
     ConversationConflictError,
     ConversationNotFoundError,
+    FileNotFoundInStoreError,
     NotInteractiveAgentError,
 )
 from ..storage import repos
+from .attachments import render_attachment_blocks
 from .runtime import _load_workflow_module
 
 # 发给模型的历史窗口上限（条数 + 累计字符双限）：全量历史仍完整落库，只是
@@ -41,6 +43,11 @@ from .runtime import _load_workflow_module
 # （审计 P2；V0.2 若需要「超窗摘要」再演进，V0.1 先诚实截窗）。
 _HISTORY_MAX_MESSAGES = 40
 _HISTORY_MAX_CHARS = 60_000
+# 附件渲染总预算（M7/ADR-0014）：叠加在上面窗口之外、跨整个在窗历史共享，
+# **从最新消息往旧分配**——新附件优先拿满，旧附件预算耗尽即退化为占位行
+# （与截窗同哲学：诚实降级）。单消息附件数上限（防御纵深，API 层同限）。
+_ATTACHMENT_BUDGET_CHARS = 24_000
+_MAX_FILES_PER_MESSAGE = 5
 
 
 def is_interactive(agent: dict[str, Any]) -> bool:
@@ -127,7 +134,24 @@ class ConversationService:
             conv = repos.get_conversation(conn, conversation_id)
             if conv is None:
                 raise ConversationNotFoundError(f"会话不存在：{conversation_id}")
-            conv["messages"] = repos.list_messages(conn, conversation_id)
+            messages = repos.list_messages(conn, conversation_id)
+            # M7：给带附件的消息补元数据（文件名/大小），前端气泡直接可显——
+            # 文件行已被清理的 id 如实给占位名，不隐藏「曾传过附件」的事实。
+            all_ids = [fid for m in messages for fid in (m.get("file_ids") or [])]
+            if all_ids:
+                by_id = {r["id"]: r for r in repos.list_files_by_ids(conn, all_ids)}
+                for m in messages:
+                    ids = m.get("file_ids") or []
+                    if ids:
+                        m["attachments"] = [
+                            {
+                                "id": fid,
+                                "filename": by_id[fid]["filename"] if fid in by_id else f"(已不存在 {fid})",
+                                "size_bytes": by_id[fid]["size_bytes"] if fid in by_id else None,
+                            }
+                            for fid in ids
+                        ]
+            conv["messages"] = messages
             return conv
         finally:
             conn.close()
@@ -160,12 +184,48 @@ class ConversationService:
 
     # ── 单轮对话推进 ─────────────────────────────────────────────────────
 
-    def post_message(self, *, conversation_id: str, content: str) -> dict[str, Any]:
+    def _render_history_attachments(
+        self, conn: Any, history: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """把在窗消息的附件渲染进各自 content（M7）——返回纯 {role, content} 列表。
+
+        预算 _ATTACHMENT_BUDGET_CHARS 跨整个窗口共享、**从最新往旧**分配；
+        存量 content 从不改写（渲染只发生在喂模型的内存副本上）。file_ids 键
+        在此剥离——workflow 收到的消息形状与 M6 完全一致，附件对 Agent 透明。
+        """
+        rendered: list[dict[str, Any]] = []
+        remaining = _ATTACHMENT_BUDGET_CHARS
+        for msg in reversed(history):
+            body = msg["content"]
+            ids = msg.get("file_ids") or []
+            if ids:
+                # 历史消息的文件可能已被清理——缺位的补显式占位行（保持入参顺序），
+                # 由渲染器「读取失败」路径兜底，绝不静默当作没传过。
+                by_id = {r["id"]: r for r in repos.list_files_by_ids(conn, ids)}
+                rows = [
+                    by_id.get(fid, {"id": fid, "filename": f"(已不存在 {fid})", "path": ""})
+                    for fid in ids
+                ]
+                block = render_attachment_blocks(rows, budget_chars=max(0, remaining))
+                remaining -= len(block)
+                body = f"{body}\n\n{block}" if block else body
+            rendered.append({"role": msg["role"], "content": body})
+        rendered.reverse()
+        return rendered
+
+    def post_message(
+        self, *, conversation_id: str, content: str, file_ids: list[str] | None = None
+    ) -> dict[str, Any]:
         """推进一轮：读历史（不落库）→ 调导引 workflow → 单事务原子落库。
 
         LLM 上游失败时 `run()` 抛异常原样冒泡（诚实失败，不伪造 assistant 回复），
         此时**零消息落库**——重试同一句不会堆出重复 user 行（幂等重试，Codex P2）。
+        file_ids（M7 附件）：先校验存在性（缺文件在任何落库/LLM 调用前诚实失败），
+        入库存 id 列表；附件**内容**只进模型上下文（窗口内按预算渲染），不进消息文本。
         """
+        file_ids = list(dict.fromkeys(file_ids or []))  # 去重保序
+        if len(file_ids) > _MAX_FILES_PER_MESSAGE:
+            raise ValueError(f"单条消息附件数上限 {_MAX_FILES_PER_MESSAGE}，实收 {len(file_ids)}")
         conn = self.conn_factory()
         try:
             conv = repos.get_conversation(conn, conversation_id)
@@ -175,6 +235,13 @@ class ConversationService:
                 raise ConversationClosedError(
                     f"会话已 {conv['status']}，不再接受新消息：{conversation_id}"
                 )
+            if file_ids:
+                found = {f["id"] for f in repos.list_files_by_ids(conn, file_ids)}
+                missing = [fid for fid in file_ids if fid not in found]
+                if missing:
+                    raise FileNotFoundInStoreError(
+                        f"附件不存在（请先经 /api/files/upload 上传）：{missing}"
+                    )
 
             agent_id = conv["agent_id"]
             agent = self.agent_registry.get(agent_id)
@@ -192,9 +259,13 @@ class ConversationService:
             # 成功后才进事务落库。baseline 计数供提交前乐观并发检查。
             persisted = repos.list_messages(conn, conversation_id)
             baseline_count = len(persisted)
-            history = [{"role": m["role"], "content": m["content"]} for m in persisted]
-            history.append({"role": "user", "content": content})
+            history = [
+                {"role": m["role"], "content": m["content"], "file_ids": m.get("file_ids") or []}
+                for m in persisted
+            ]
+            history.append({"role": "user", "content": content, "file_ids": file_ids})
             history = _window(history)
+            history = self._render_history_attachments(conn, history)
 
             pkg_dir = self.agent_registry.package_dir(agent_id)
             workflow = _load_workflow_module(agent_id, pkg_dir / "workflow.py")
@@ -230,7 +301,11 @@ class ConversationService:
                         "会话在本轮生成期间被并发消息修改，本轮不落库——请基于最新历史重试"
                     )
                 repos.append_message(
-                    conn, conversation_id=conversation_id, role="user", content=content
+                    conn,
+                    conversation_id=conversation_id,
+                    role="user",
+                    content=content,
+                    file_ids=file_ids,
                 )
                 msg = repos.append_message(
                     conn,

@@ -303,6 +303,19 @@ def get_file(conn: sqlite3.Connection, file_id: str) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
+def list_files_by_ids(conn: sqlite3.Connection, file_ids: list[str]) -> list[dict[str, Any]]:
+    """按 id 列表批量取文件行，**保持入参顺序**；不存在的 id 静默缺位（调用方
+    自行对账缺失——会话附件校验/渲染都要求显式处理缺文件，不做兜底伪造）。"""
+    if not file_ids:
+        return []
+    placeholders = ",".join("?" for _ in file_ids)
+    rows = conn.execute(
+        f"SELECT * FROM files WHERE id IN ({placeholders})", tuple(file_ids)
+    ).fetchall()
+    by_id = {r["id"]: dict(r) for r in rows}
+    return [by_id[fid] for fid in file_ids if fid in by_id]
+
+
 # ── feedback ───────────────────────────────────────────────────────────
 
 def create_feedback(
@@ -539,6 +552,7 @@ def _decode_message(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d.pop("id", None)  # 自增主键仅内部排序用，对外不暴露
     _decode_json(d, "recommendation_json", "recommendation", default=None)
+    _decode_json(d, "file_ids", "file_ids", default=[])
     return d
 
 
@@ -597,21 +611,24 @@ def append_message(
     role: str,
     content: str,
     recommendation: dict[str, Any] | None = None,
+    file_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """追加一条会话消息（role∈user|assistant），并顺带把会话 updated_at 推进。
 
     recommendation 仅 assistant 轮可能非空（导引提议的预填任务草案）——原样存这一
     轮的推荐快照，便于回看「哪一轮给出了推荐」。
+    file_ids 仅 user 轮可能非空（M7 会话附件）：存 File Service 的文件 id 列表，
+    附件内容本身不进消息文本（渲染是运行时按窗口预算做的事，见 attachments.py）。
     """
     now = _now_iso()
     rec_json = json.dumps(recommendation, ensure_ascii=False) if recommendation is not None else None
     cur = conn.execute(
         """
         INSERT INTO conversation_messages
-            (conversation_id, role, content, recommendation_json, created_at)
-        VALUES (?,?,?,?,?)
+            (conversation_id, role, content, recommendation_json, file_ids, created_at)
+        VALUES (?,?,?,?,?,?)
         """,
-        (conversation_id, role, content, rec_json, now),
+        (conversation_id, role, content, rec_json, json.dumps(file_ids or [], ensure_ascii=False), now),
     )
     conn.execute(
         "UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conversation_id)

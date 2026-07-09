@@ -153,6 +153,8 @@ const form = reactive({
 
 // M6 人确认接缝：从智能导引带入的预填草案（sessionStorage 传递，不走 URL）。
 // 只带入 inputs，仍由人补全 + 亲手点「提交任务」——导引不代签（ADR-0012）。
+// M7：会话附件随草案带入——已是 File Service 真实文件，以「已上传」状态入
+// 附件列表（status:done + fileId），提交时直接进 input_file_ids；人可移除。
 if (route.query.from === "guide") {
   try {
     const raw = sessionStorage.getItem("flai_prefill");
@@ -161,6 +163,20 @@ if (route.query.from === "guide") {
       if (draft && draft.agent_id === form.agentId && draft.inputs) {
         form.inputsText = JSON.stringify(draft.inputs, null, 2);
         prefilledFromGuide.value = true;
+        for (const f of Array.isArray(draft.files) ? draft.files : []) {
+          if (f && f.id && f.name) {
+            uploadItems.value.push(
+              reactive({
+                uid: `guide_${f.id}`,
+                name: f.name,
+                status: "done",
+                raw: null,
+                fileId: f.id,
+                error: "",
+              })
+            );
+          }
+        }
       }
     }
   } catch {

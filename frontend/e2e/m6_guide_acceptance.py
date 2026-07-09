@@ -128,24 +128,32 @@ with sync_playwright() as p:
     check("①导引页可达且为统一入口", "智能导引" in body and "导引不会替你创建任务" in body, body[:200])
     page.screenshot(path=str(SHOTS / "1_guide_empty.png"), full_page=True)
 
-    # ② 失败轮 UI 契约（Codex R1-P2）：后端失败零落库，前端同样回滚乐观气泡
-    #    并还原草稿——不留服务端不存在的幽灵消息，重试不堆重复气泡。
-    REQUEST_TEXT = "我要对双通道供电系统做故障树分析，顶事件是供电完全丧失"
-    stub.fail_next = True
+    # ② 失败轮 UI 契约（Codex R1-P2 / M7 扩附件）：后端失败零落库，前端同样
+    #    回滚乐观气泡并还原草稿；附件 chips 留在待发区（已上传项重试不重传）。
+    REQUEST_TEXT = "我要对双通道供电系统做故障树分析，顶事件是供电完全丧失，工况见附件"
+    ATTACH_NAME = "工况数据.txt"
+    attach_path = WORK / ATTACH_NAME
+    attach_path.write_text("双通道供电，顶事件：供电完全丧失；工况共 3 组。", encoding="utf-8")
     page.get_by_placeholder("你的名字（对话需具名）").fill("王工")
+    page.locator(".composer input[type=file]").set_input_files(str(attach_path))
+    composer_chip = ATTACH_NAME in page.locator(".composer").inner_text()
+    check("②附件选中入待发区（chip 可见）", composer_chip, page.locator(".composer").inner_text()[:120])
+
+    stub.fail_next = True
     page.locator(".composer textarea").fill(REQUEST_TEXT)
     page.get_by_role("button", name="发送").click()
     expect(page.locator(".page-alert")).to_be_visible(timeout=8000)
     user_bubbles_after_fail = page.locator(".bubble-row.user").count()
     draft_restored = page.locator(".composer textarea").input_value()
+    chip_kept = ATTACH_NAME in page.locator(".composer").inner_text()
     check(
-        "②失败轮：乐观气泡回滚+草稿还原（与后端『失败零落库』对齐）",
-        user_bubbles_after_fail == 0 and draft_restored == REQUEST_TEXT,
-        f"user_bubbles={user_bubbles_after_fail} draft={draft_restored[:60]!r}",
+        "②失败轮：乐观气泡回滚+草稿还原+附件 chips 保留（与后端『失败零落库』对齐）",
+        user_bubbles_after_fail == 0 and draft_restored == REQUEST_TEXT and chip_kept,
+        f"user_bubbles={user_bubbles_after_fail} draft={draft_restored[:40]!r} chip_kept={chip_kept}",
     )
     page.screenshot(path=str(SHOTS / "1b_failed_turn_rollback.png"), full_page=True)
 
-    # ②' 重试同一句（草稿已还原，直接再点发送；stub 已恢复健康）
+    # ②' 重试同一句（草稿已还原、附件已在待发区，直接再点发送；stub 已恢复健康）
     page.get_by_role("button", name="发送").click()
 
     # ③ 导引返回推荐卡片
@@ -165,6 +173,11 @@ with sync_playwright() as p:
         page.locator(".bubble-row.user").count() == 1,
         f"count={page.locator('.bubble-row.user').count()}",
     )
+    check(
+        "③user 气泡带附件 chip（M7）",
+        ATTACH_NAME in page.locator(".bubble-row.user").first.inner_text(),
+        page.locator(".bubble-row.user").first.inner_text()[:120],
+    )
     check("③'导引不代签'红线文案在卡片可见", "签发权在你" in body, "")
     page.screenshot(path=str(SHOTS / "2_recommendation.png"), full_page=True)
 
@@ -183,6 +196,9 @@ with sync_playwright() as p:
         and "bogus" not in inputs_text  # 剥离字段不会带进创建页
     )
     check("④→⑤确认后预填草案带入创建任务页（仅合法字段）", prefill_ok, inputs_text[:200])
+    carried_ok = ATTACH_NAME in body and "已上传" in body
+    check("⑤会话附件随草案带入创建页（已上传状态，人可移除，M7）", carried_ok,
+          f"attach_in_body={ATTACH_NAME in body}")
     check("⑤签发仍由人完成（页面有『提交任务』按钮，导引未自动建任务）",
           "提交任务" in body, "")
     page.screenshot(path=str(SHOTS / "3_prefilled_create.png"), full_page=True)

@@ -20,6 +20,7 @@ from ..core.errors import (
     ConversationClosedError,
     ConversationConflictError,
     ConversationNotFoundError,
+    FileNotFoundInStoreError,
     ModelUpstreamError,
     NotInteractiveAgentError,
 )
@@ -43,9 +44,12 @@ class CreateConversationRequest(BaseModel):
 
 class PostMessageRequest(BaseModel):
     # max_length：审计 P2（DoS 面）——content 此前无上限，超大文本会被落库并
-    # 全量转发模型。16000 字符对需求描述/追问回答绰绰有余；更大材料走附件通道
-    # （V0.1 会话不接附件，附件在创建任务页上传，见 guide_agent limitations）。
+    # 全量转发模型。16000 字符对需求描述/追问回答绰绰有余；更大材料走附件通道。
     content: str = Field(min_length=1, max_length=16000)
+    # M7（ADR-0014）：会话附件——File Service 的文件 id 列表（先上传后引用）。
+    # 上限 5 个/条与运行时防御纵深同值；内容渲染进模型上下文由内核统一做
+    # （防注入规则行 + 预算硬顶），本层只收 id。
+    file_ids: list[str] = Field(default_factory=list, max_length=5)
 
     @field_validator("content")
     @classmethod
@@ -54,6 +58,14 @@ class PostMessageRequest(BaseModel):
         if not stripped:
             raise ValueError("content 不得为空白——请输入你的需求或对追问的回答")
         return stripped
+
+    @field_validator("file_ids")
+    @classmethod
+    def file_ids_must_be_sane(cls, v: list[str]) -> list[str]:
+        for fid in v:
+            if not fid.strip() or len(fid) > 64:
+                raise ValueError(f"非法附件 id：{fid!r}")
+        return v
 
 
 @router.post("/conversations")
@@ -96,8 +108,11 @@ def post_message(
 ) -> dict[str, Any]:
     service = request.app.state.conversation_service
     try:
-        return service.post_message(conversation_id=conversation_id, content=body.content)
-    except ConversationNotFoundError as exc:
+        return service.post_message(
+            conversation_id=conversation_id, content=body.content, file_ids=body.file_ids
+        )
+    except (ConversationNotFoundError, FileNotFoundInStoreError) as exc:
+        # 会话不存在 / 引用了不存在的附件 id：404，且本轮零落库。
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (ConversationClosedError, ConversationConflictError) as exc:
         # 已结束 / 被并发轮抢先：如实 409。冲突轮零落库，可基于最新历史重试。

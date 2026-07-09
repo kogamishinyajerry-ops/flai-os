@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     recommendation_json TEXT,
+    file_ids TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL
 );
 """
@@ -193,6 +194,13 @@ def init_db(db_path: str | Path) -> None:
             cols = {row[1] for row in conn.execute("PRAGMA table_info(model_calls)")}
             if "conversation_id" not in cols:
                 conn.execute("ALTER TABLE model_calls ADD COLUMN conversation_id TEXT")
+            # 迁移 #2（ADR-0014/M7）：conversation_messages.file_ids——会话消息附件。
+            # 同在写锁内探测补列，口径同迁移 #1。
+            msg_cols = {row[1] for row in conn.execute("PRAGMA table_info(conversation_messages)")}
+            if "file_ids" not in msg_cols:
+                conn.execute(
+                    "ALTER TABLE conversation_messages ADD COLUMN file_ids TEXT NOT NULL DEFAULT '[]'"
+                )
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

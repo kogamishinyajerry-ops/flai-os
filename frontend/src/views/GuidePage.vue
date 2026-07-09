@@ -27,6 +27,11 @@
         <div class="bubble">
           <div class="bubble-role">{{ m.role === "user" ? "你" : "导引" }}</div>
           <div class="bubble-text">{{ m.content }}</div>
+          <div v-if="m.attachments && m.attachments.length" class="bubble-files">
+            <el-tag v-for="a in m.attachments" :key="a.id" size="small" type="info" effect="plain">
+              📎 {{ a.filename }}
+            </el-tag>
+          </div>
 
           <div v-if="m.recommendation" class="reco-card">
             <div class="reco-bar" :style="{ background: categoryColor(m.recommendation.category) }"></div>
@@ -72,29 +77,49 @@
     </div>
 
     <div class="composer">
-      <el-input
-        v-model="draft"
-        type="textarea"
-        :rows="2"
-        :disabled="sending"
-        placeholder="描述你的工程需求，或回答导引的追问…（Enter 发送，Shift+Enter 换行）"
-        @keydown.enter.exact.prevent="send"
-      />
-      <el-button type="primary" :loading="sending" :disabled="!draft.trim()" @click="send">发送</el-button>
+      <div v-if="pendingFiles.length" class="composer-files">
+        <el-tag
+          v-for="f in pendingFiles"
+          :key="f.uid"
+          size="small"
+          closable
+          :type="f.status === 'error' ? 'danger' : 'info'"
+          :title="f.status === 'error' ? f.error : ''"
+          @close="removePendingFile(f)"
+        >
+          📎 {{ f.name }}{{ f.status === "error" ? "（上传失败）" : "" }}
+        </el-tag>
+      </div>
+      <div class="composer-row">
+        <el-upload :auto-upload="false" :show-file-list="false" multiple :on-change="handleFileSelect" :disabled="sending">
+          <el-button :disabled="sending" title="添加附件（≤5 个/条；文本类直读、xlsx 预览，详见导引说明）">📎</el-button>
+        </el-upload>
+        <el-input
+          v-model="draft"
+          type="textarea"
+          :rows="2"
+          :disabled="sending"
+          placeholder="描述你的工程需求，或回答导引的追问…（Enter 发送，Shift+Enter 换行；可用 📎 带附件）"
+          @keydown.enter.exact.prevent="send"
+        />
+        <el-button type="primary" :loading="sending" :disabled="!draft.trim()" @click="send">发送</el-button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, nextTick } from "vue";
+import { reactive, ref, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { createConversation, postMessage, concludeConversation } from "../api/conversations";
+import { uploadFile as apiUploadFile } from "../api/files";
 import { categoryColor, categoryLabel } from "../utils/format";
 
 const router = useRouter();
 
 const GUIDE_AGENT_ID = "guide_agent";
+const MAX_FILES_PER_MESSAGE = 5; // 与后端 PostMessageRequest / 运行时同值
 
 const createdBy = ref("");
 const started = ref(false);
@@ -104,6 +129,50 @@ const draft = ref("");
 const sending = ref(false);
 const pageError = ref("");
 const streamEl = ref(null);
+// 待发送附件（M7）：选中只入列（raw 留本地），发送时才上传——同 TaskCreate 的
+// P2-A 反孤儿纪律；已上传项记 fileId，失败重试不重复上传。
+const pendingFiles = ref([]);
+let fileSeq = 0;
+
+function handleFileSelect(uploadFile) {
+  if (pendingFiles.value.length >= MAX_FILES_PER_MESSAGE) {
+    ElMessage.error(`单条消息最多 ${MAX_FILES_PER_MESSAGE} 个附件`);
+    return;
+  }
+  pendingFiles.value.push(
+    reactive({
+      uid: uploadFile.uid ?? `gf_${++fileSeq}`,
+      name: uploadFile.name,
+      raw: uploadFile.raw,
+      status: "pending", // pending | done | error
+      fileId: null,
+      error: "",
+    })
+  );
+}
+
+function removePendingFile(item) {
+  pendingFiles.value = pendingFiles.value.filter((f) => f.uid !== item.uid);
+}
+
+async function uploadPendingFiles() {
+  // 顺序上传未完成项（含上一轮失败项）；任一失败即抛出，本轮消息不发送。
+  for (const item of pendingFiles.value) {
+    if (item.status === "done") continue;
+    item.status = "uploading";
+    item.error = "";
+    try {
+      const res = await apiUploadFile(item.raw);
+      item.status = "done";
+      item.fileId = res.id;
+    } catch (err) {
+      item.status = "error";
+      item.error = err.detail || err.message;
+      throw new Error(`附件「${item.name}」上传失败：${item.error}`);
+    }
+  }
+  return pendingFiles.value.map((f) => f.fileId);
+}
 
 function prettyInputs(inputs) {
   return JSON.stringify(inputs || {}, null, 2);
@@ -126,19 +195,32 @@ async function send() {
   }
   pageError.value = "";
 
-  // 乐观追加用户气泡
-  messages.value.push({ role: "user", content });
+  // 乐观追加用户气泡（附件 chips 一并显示；失败整体回滚）
+  const optimisticAttachments = pendingFiles.value.map((f) => ({ id: f.uid, filename: f.name }));
+  messages.value.push({
+    role: "user",
+    content,
+    attachments: optimisticAttachments.length ? optimisticAttachments : undefined,
+  });
   draft.value = "";
   await scrollToBottom();
 
   sending.value = true;
   try {
+    // 先传附件（已 done 的跳过，失败即中止——本轮消息不发送）
+    const fileIds = await uploadPendingFiles();
     if (!conversationId.value) {
       const conv = await createConversation({ agentId: GUIDE_AGENT_ID, createdBy: createdBy.value.trim() });
       conversationId.value = conv.id;
       started.value = true;
     }
-    const res = await postMessage(conversationId.value, content);
+    const res = await postMessage(conversationId.value, content, fileIds);
+    // 成功：附件已随消息落库，清空待发区；气泡 chips 换用真实文件 id
+    const sent = messages.value[messages.value.length - 1];
+    if (sent && sent.role === "user" && optimisticAttachments.length) {
+      sent.attachments = pendingFiles.value.map((f) => ({ id: f.fileId, filename: f.name }));
+    }
+    pendingFiles.value = [];
     messages.value.push({
       role: "assistant",
       content: res.message.content,
@@ -148,7 +230,8 @@ async function send() {
   } catch (err) {
     // 本轮失败：后端契约是「失败零落库」（幂等重试，ADR-0013），本地同样回滚
     // 乐观气泡并把原文还原到输入框——不在界面上留一条服务端不存在的幽灵消息，
-    // 重试也不会堆出重复 user 气泡（Codex R1-P2）。不伪造 assistant 回复。
+    // 重试也不会堆出重复 user 气泡（Codex R1-P2）。附件 chips 留在待发区
+    // （已上传项带 fileId，重试不重复上传）。不伪造 assistant 回复。
     const last = messages.value[messages.value.length - 1];
     if (last && last.role === "user" && last.content === content) {
       messages.value.pop();
@@ -163,9 +246,23 @@ async function send() {
 function confirmAndGoCreate(reco) {
   // 人确认接缝：把预填草案交给创建任务页，由人补全后亲手提交（导引绝不代签）。
   // 走 sessionStorage 而非 URL，避免工程数据进查询串。
+  // M7：会话里传过的附件（真实 fileId 的）随草案带走——创建页以「已上传」
+  // 状态入列，人可移除；是否随任务提交仍由人决定。
+  // 发送成功的气泡按构造只含真实 fileId（失败气泡已回滚、成功时 chips 已换真 id）
+  const carried = [];
+  const seen = new Set();
+  for (const m of messages.value) {
+    if (m.role !== "user" || !m.attachments) continue;
+    for (const a of m.attachments) {
+      if (a.id && !seen.has(a.id)) {
+        seen.add(a.id);
+        carried.push({ id: a.id, name: a.filename });
+      }
+    }
+  }
   sessionStorage.setItem(
     "flai_prefill",
-    JSON.stringify({ agent_id: reco.agent_id, inputs: reco.prefilled_inputs || {} })
+    JSON.stringify({ agent_id: reco.agent_id, inputs: reco.prefilled_inputs || {}, files: carried })
   );
   // 确认即归档会话（active→concluded，ADR-0013）。fire-and-forget：归档失败
   // 不阻断人去创建任务——会话留 active 只是可观测性小瑕疵，不是流程阻塞点。
@@ -320,11 +417,25 @@ function confirmAndGoCreate(reco) {
 }
 .composer {
   margin-top: 12px;
+}
+.composer-row {
   display: flex;
   gap: 10px;
   align-items: flex-end;
 }
-.composer .el-textarea {
+.composer-row .el-textarea {
   flex: 1;
+}
+.composer-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.bubble-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
 }
 </style>
