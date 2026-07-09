@@ -1,0 +1,57 @@
+id: fta_agent
+name: "故障树分析辅助 Agent（FTA 草案生成）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: reasoning_assist
+summary: "根据顶事件与系统描述，经 Model Gateway 调用推理模型生成故障树分析草案（中间/基本事件候选+割集建议），供工程师审阅——草案非结论，任务强制人工放行。"
+description: >
+  M5 平台泛化验证的「推理辅助型」样板，也是平台首个真实走通 Model Gateway
+  调用链与 waiting_review 人工放行链的 Agent。LLM 输出的自由文本原样存为
+  fta_draft.md 草案（文件头强制水印），workflow 绝不解析其内容当确定性真值、
+  绝不据此下任何工程结论——判定权在人（宪法铁律六 + §11.2「LLM 不判最终
+  工程结论」）。requires_human_review=true：任务停 waiting_review，
+  由工程师具名放行或拒绝。Gateway 上游失败时诚实 failed，绝不伪造草案。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: reasoning
+knowledge:
+  enabled: false
+  scopes: []
+tools: []
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats:
+    - .md
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: true
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: true
+  sample_fields:
+    - inputs.top_event
+    - outputs.draft_chars
+limitations:
+  - "LLM 生成的是辅助草案，不是最终故障树：事件划分与逻辑门关系仅为候选建议，未经审阅不得采信。"
+  - "所有割集与失效模式必须由工程师人工核实：模型可能遗漏、虚构或错误组合失效路径。"
+  - "不做定量概率计算：不产生失效率、不做重要度排序，任何数字出现在草案中均不可信。"
+  - "不替代安全性分析师判断：本 Agent 输出永远停在 waiting_review，由具名工程师放行或拒绝。"
+  - "对系统的理解完全来自输入文本描述：描述缺失/含糊之处模型只能猜测，草案质量上限由输入质量决定。"

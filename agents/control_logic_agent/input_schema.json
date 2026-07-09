@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "control_logic_agent 输入契约",
+  "description": "结构化控制需求：系统名 + 状态列表 + 转移规则列表。约定 states[0] 为初始态。语义级校验（from/to 必须在 states 内、状态不重名）由 workflow 负责，失败时任务诚实 failed 并列出全部问题。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["system_name", "states", "transitions"],
+  "properties": {
+    "system_name": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "states": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "状态名列表；首个元素约定为初始态。"
+    },
+    "transitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to", "condition"],
+        "properties": {
+          "from": { "type": "string", "minLength": 1 },
+          "to": { "type": "string", "minLength": 1 },
+          "condition": { "type": "string", "minLength": 1, "description": "转移触发条件（自由文本，本 Agent 不解释其语义）。" }
+        }
+      }
+    }
+  }
+}

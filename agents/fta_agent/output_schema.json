@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fta_agent 输出契约",
+  "description": "workflow.run() 成功返回的 outputs[0] 摘要对象；fta_draft.md 落任务 output_dir 由 Runtime 注册。注意：任务不会因 workflow 返回 success 而 completed——requires_human_review=true，Runtime 强制转 waiting_review 等人工放行。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["top_event", "draft_chars", "human_review_required", "artifacts"],
+  "properties": {
+    "top_event": { "type": "string" },
+    "draft_chars": { "type": "integer", "minimum": 1, "description": "LLM 草案正文字符数（原样存档，未删改）。" },
+    "human_review_required": { "type": "boolean", "const": true, "description": "恒为 true：草案必须人工放行（宪法铁律六）。" },
+    "artifacts": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  }
+}

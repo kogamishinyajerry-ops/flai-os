@@ -1,0 +1,22 @@
+{
+  "case_id": "case_001",
+  "description": "含 1 个不可达态的小状态机：maintenance 无任何入边，BFS 自 idle 不可达；任务应 completed 且 unreachable_states=[maintenance]。",
+  "inputs": {
+    "system_name": "示例运行状态逻辑",
+    "states": ["idle", "running", "stopped", "maintenance"],
+    "transitions": [
+      { "from": "idle", "to": "running", "condition": "start_cmd 有效" },
+      { "from": "running", "to": "stopped", "condition": "stop_cmd 有效" },
+      { "from": "stopped", "to": "idle", "condition": "reset_cmd 有效" },
+      { "from": "maintenance", "to": "idle", "condition": "维护完成确认" }
+    ]
+  },
+  "expected": {
+    "task_status": "completed",
+    "state_count": 4,
+    "transition_count": 4,
+    "unreachable_count": 1,
+    "unreachable_states": ["maintenance"],
+    "artifacts": ["control_logic.json", "control_logic.md"]
+  }
+}

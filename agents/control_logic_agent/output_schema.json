@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "control_logic_agent 输出契约",
+  "description": "workflow.run() 成功返回的 outputs[0] 摘要对象；产物 control_logic.json / control_logic.md 落任务 output_dir 由 Runtime 注册。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["system_name", "state_count", "transition_count", "unreachable_count", "artifacts"],
+  "properties": {
+    "system_name": { "type": "string" },
+    "state_count": { "type": "integer", "minimum": 1 },
+    "transition_count": { "type": "integer", "minimum": 0 },
+    "unreachable_count": { "type": "integer", "minimum": 0, "description": "自初始态（states[0]）经声明转移不可达的状态数（BFS）。" },
+    "artifacts": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  }
+}

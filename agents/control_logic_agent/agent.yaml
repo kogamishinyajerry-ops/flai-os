@@ -1,0 +1,56 @@
+id: control_logic_agent
+name: "控制逻辑结构生成 Agent"
+version: 0.1.0
+status: draft
+maturity: L0
+category: structured_gen
+summary: "把结构化控制需求（状态列表+转移规则）确定性展开为规范化控制逻辑描述（状态机 JSON + 人读转移表），含 BFS 不可达态分析。零 LLM 零工具。"
+description: >
+  M5 平台泛化验证的「纯结构化生成型」样板：证明平台可承载无工具、无模型的
+  纯确定性生成 Agent。输入状态/转移规则，输出规范化 control_logic.json
+  （含不可达态分析，纯图算法 BFS）与 control_logic.md（人读版状态转移表）。
+  语义校验（from/to 必须在 states 内等）失败时诚实 failed 并列出全部问题。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: none
+knowledge:
+  enabled: false
+  scopes: []
+tools: []
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats:
+    - .json
+    - .md
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: false
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: true
+  sample_fields:
+    - inputs.system_name
+    - outputs.state_count
+    - outputs.unreachable_count
+limitations:
+  - "不做真实控制系统设计：输出是输入规则的规范化结构展开与可达性分析，不产生任何新的控制策略或参数。"
+  - "生成物仅为结构骨架（状态机描述），不是可执行代码，不可直接部署到任何控制器。"
+  - "不替代控制专业判断：状态划分与转移条件的工程正确性由控制工程师负责，本 Agent 只检查结构一致性。"
+  - "不可达态分析基于「首个状态为初始态」的约定与显式声明的转移，不理解转移条件的物理语义（条件互斥/覆盖性不在检查范围）。"

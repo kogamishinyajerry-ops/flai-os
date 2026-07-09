@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fta_agent 输入契约",
+  "description": "FTA 辅助分析输入：顶事件描述 + 系统描述 + 组件列表（纯 params，无文件上传）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["top_event", "system_description", "components"],
+  "properties": {
+    "top_event": { "type": "string", "minLength": 1, "maxLength": 500, "description": "顶事件描述（如「供电完全丧失」）。" },
+    "system_description": { "type": "string", "minLength": 1, "maxLength": 5000, "description": "系统构成与工作原理的文字描述。" },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "组件名列表（通用词，供模型组织失效模式候选）。"
+    }
+  }
+}

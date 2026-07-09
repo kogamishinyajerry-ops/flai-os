@@ -55,6 +55,17 @@ def test_hello_agent_yaml_validates() -> None:
     validate(agent, _load_schema("agent.schema.json"))
 
 
+@pytest.mark.parametrize(
+    "agent_dir",
+    sorted(p.name for p in (REPO / "agents").iterdir() if (p / "agent.yaml").is_file()),
+)
+def test_every_agent_package_yaml_validates(agent_dir: str) -> None:
+    """遍历仓内全部 Agent 包过 agent.schema.json（M5 起多 Agent 并存，
+    新包漂移不许只靠 hello_agent 一个样本兜底）。"""
+    agent = _load_yaml(REPO / "agents" / agent_dir / "agent.yaml")
+    validate(agent, _load_schema("agent.schema.json"))
+
+
 def test_mock_tool_yaml_validates() -> None:
     tool = _load_yaml(REPO / "tools_impl/mock_tools/tool.yaml")
     validate(tool, _load_schema("tool.schema.json"))
