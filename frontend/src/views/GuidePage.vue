@@ -332,7 +332,13 @@ function createOneTask(agent, plan) {
   // M7：会话附件随草案带走，创建页以「已上传」状态入列，人可移除。
   sessionStorage.setItem(
     "flai_prefill",
-    JSON.stringify({ agent_id: agent.agent_id, inputs: agent.prefilled_inputs || {}, files: collectCarriedFiles() })
+    JSON.stringify({
+      agent_id: agent.agent_id,
+      inputs: agent.prefilled_inputs || {},
+      files: collectCarriedFiles(),
+      // M8：带上会话 id——创建的任务归到本次导引协作会话下（协作工作台按会话聚合）。
+      conversation_id: conversationId.value || null,
+    })
   );
   // 单 Agent 计划：确认即归档会话（保留 M6 行为，fire-and-forget，归档失败不阻断）。
   // 多 Agent 计划：可能还要为其它 Agent 逐个建任务，故本步不归档会话——会话

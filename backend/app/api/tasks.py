@@ -27,6 +27,9 @@ class CreateTaskRequest(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     input_file_ids: list[str] = Field(default_factory=list)
     created_by: str = Field(default="anonymous", max_length=100)
+    # M8/ADR-0016：可选归属——由导引协作会话产出的任务记会话 id，供协作工作台
+    # 按会话分组。仅分组归属，不改执行语义；门户直建任务不带此字段（留 None）。
+    conversation_id: str | None = Field(default=None, max_length=100)
 
     @field_validator("inputs")
     @classmethod
@@ -86,6 +89,13 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
 
     conn = request.app.state.conn_factory()
     try:
+        # 若声明归属某导引会话：该会话必须真实存在（防悬空引用）。不要求会话仍
+        # active——协作会话可能已 concluded，但其成员任务分组关系持续有效。
+        if body.conversation_id is not None:
+            if repos.get_conversation(conn, body.conversation_id) is None:
+                raise HTTPException(
+                    status_code=404, detail=f"归属的导引会话不存在：{body.conversation_id}"
+                )
         task_id = f"task_{uuid.uuid4().hex}"
         repos.create_task(
             conn,
@@ -97,6 +107,7 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             inputs=body.inputs,
             input_file_ids=body.input_file_ids,
             metadata={},
+            conversation_id=body.conversation_id,
         )
         # P2-4：created->queued 由本创建动作原子完成（docs/05 §6「两处文档化原子例外」
         # 之一）——先把状态迁到 queued，再发 task_created 事件，事件 payload 显式携带
@@ -121,12 +132,16 @@ def list_tasks(
     request: Request,
     status: str | None = None,
     agent_id: str | None = None,
+    conversation_id: str | None = None,
     limit: int = Query(default=100, ge=1, le=500, description="每页条数（1-500）"),
     offset: int = Query(default=0, ge=0, description="跳过条数（最近任务流分页语义，无总数计数）"),
 ) -> list[dict[str, Any]]:
     conn = request.app.state.conn_factory()
     try:
-        return repos.list_tasks(conn, agent_id=agent_id, status=status, limit=limit, offset=offset)
+        return repos.list_tasks(
+            conn, agent_id=agent_id, status=status, conversation_id=conversation_id,
+            limit=limit, offset=offset,
+        )
     finally:
         conn.close()
 

@@ -147,3 +147,19 @@ def list_conversation_model_calls(conversation_id: str, request: Request) -> lis
         return repos.list_model_calls_for_conversation(conn, conversation_id)
     finally:
         conn.close()
+
+
+@router.get("/conversations/{conversation_id}/tasks")
+def list_conversation_tasks(conversation_id: str, request: Request) -> list[dict[str, Any]]:
+    """协作会话的成员任务（M8/ADR-0016）：导引把一次会话的计划分流成 N 个人签发
+    任务，各任务记 conversation_id 归到此会话下；协作工作台据此聚合展示进度与产物。
+    仅读——每个任务仍由人在创建页亲手签发（人是唯一签发者，本端点不创建任何任务）。
+    """
+    conn = request.app.state.conn_factory()
+    try:
+        if repos.get_conversation(conn, conversation_id) is None:
+            raise HTTPException(status_code=404, detail=f"会话不存在：{conversation_id}")
+        # 会话成员任务通常远少于 500；取一页即可（分组语义，非无限流）。
+        return repos.list_tasks(conn, conversation_id=conversation_id, limit=500)
+    finally:
+        conn.close()

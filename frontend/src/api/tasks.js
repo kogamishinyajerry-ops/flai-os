@@ -1,6 +1,6 @@
 import { request } from "./client";
 
-export const createTask = ({ agentId, name, inputs, inputFileIds, createdBy }) =>
+export const createTask = ({ agentId, name, inputs, inputFileIds, createdBy, conversationId }) =>
   request("/api/tasks", {
     method: "POST",
     json: {
@@ -9,6 +9,8 @@ export const createTask = ({ agentId, name, inputs, inputFileIds, createdBy }) =
       inputs: inputs || {},
       input_file_ids: inputFileIds || [],
       created_by: createdBy || "web_user",
+      // M8：由导引协作会话产出的任务带上会话 id，归到协作工作台的同一次会话下。
+      conversation_id: conversationId || null,
     },
   });
 

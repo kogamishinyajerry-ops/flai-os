@@ -68,16 +68,22 @@ def create_task(
     inputs: dict[str, Any] | None = None,
     input_file_ids: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
+    conversation_id: str | None = None,
 ) -> dict[str, Any]:
-    """建任务：初始态永远是 created（未入队）。"""
+    """建任务：初始态永远是 created（未入队）。
+
+    conversation_id（M8/ADR-0016）：若本任务由导引协作会话产出，记会话 id 以便
+    协作工作台按会话分组；门户直建任务留 None。仅作分组归属，不改任何执行语义。
+    """
     now = _now_iso()
     conn.execute(
         """
         INSERT INTO tasks
             (id, agent_id, agent_version, name, status, created_by,
              created_at, updated_at, started_at, finished_at,
-             input_file_ids, output_file_ids, inputs_json, error_message, metadata_json)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             input_file_ids, output_file_ids, inputs_json, error_message, metadata_json,
+             conversation_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             task_id, agent_id, agent_version, name, "created", created_by,
@@ -87,6 +93,7 @@ def create_task(
             json.dumps(inputs or {}, ensure_ascii=False),
             None,
             json.dumps(metadata or {}, ensure_ascii=False),
+            conversation_id,
         ),
     )
     return get_task(conn, task_id)  # type: ignore[return-value]
@@ -102,11 +109,14 @@ def list_tasks(
     *,
     agent_id: str | None = None,
     status: str | None = None,
+    conversation_id: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
     """最近任务流（created_at 降序）分页切片；同刻并列以 id 降序稳定去歧，
     保证 limit/offset 翻页不重不漏（P2-B：此前硬 LIMIT 100 静默截断）。
+
+    conversation_id（M8）：按导引协作会话过滤——协作工作台取某次会话的成员任务。
     """
     clauses: list[str] = []
     params: list[Any] = []
@@ -116,6 +126,9 @@ def list_tasks(
     if status is not None:
         clauses.append("status = ?")
         params.append(status)
+    if conversation_id is not None:
+        clauses.append("conversation_id = ?")
+        params.append(conversation_id)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     params.extend([limit, offset])
     rows = conn.execute(

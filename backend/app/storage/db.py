@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     output_file_ids TEXT NOT NULL DEFAULT '[]',
     inputs_json TEXT NOT NULL DEFAULT '{}',
     error_message TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}'
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    conversation_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_events (
@@ -201,6 +202,12 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute(
                     "ALTER TABLE conversation_messages ADD COLUMN file_ids TEXT NOT NULL DEFAULT '[]'"
                 )
+            # 迁移 #3（ADR-0016/M8）：tasks.conversation_id——把导引协作会话产出的
+            # N 个任务归到同一次会话下（协作工作台按会话分组）。可空：非会话产出的
+            # 任务（门户直建）留 NULL。同在写锁内探测补列，口径同迁移 #1/#2。
+            task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+            if "conversation_id" not in task_cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN conversation_id TEXT")
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

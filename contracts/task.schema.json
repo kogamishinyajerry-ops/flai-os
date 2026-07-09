@@ -60,6 +60,10 @@
     "metadata": {
       "type": "object",
       "description": "扩展元数据（自由 key-value，如触发来源、优先级标签）。不得借此绕过契约字段——新增结构化字段须先修订本 schema。"
+    },
+    "conversation_id": {
+      "type": ["string", "null"],
+      "description": "归属的导引协作会话 id（M8/ADR-0016）：由导引编排官分流产出的任务记会话 id，供协作工作台按会话聚合；门户直建任务为 null。仅分组归属，不改执行语义。"
     }
   }
 }

@@ -143,6 +143,9 @@ const uploadingFiles = ref(false);
 const submitError = ref("");
 const uploadItems = ref([]);
 const prefilledFromGuide = ref(false);
+// M8：由导引协作会话带入的会话 id——提交任务时回填，使任务归到协作工作台的
+// 同一次会话下。门户直建（无 from=guide）时保持 null。
+const prefillConversationId = ref(null);
 
 const form = reactive({
   agentId: typeof route.query.agent_id === "string" ? route.query.agent_id : "",
@@ -163,6 +166,9 @@ if (route.query.from === "guide") {
       if (draft && draft.agent_id === form.agentId && draft.inputs) {
         form.inputsText = JSON.stringify(draft.inputs, null, 2);
         prefilledFromGuide.value = true;
+        if (typeof draft.conversation_id === "string") {
+          prefillConversationId.value = draft.conversation_id;
+        }
         for (const f of Array.isArray(draft.files) ? draft.files : []) {
           if (f && f.id && f.name) {
             uploadItems.value.push(
@@ -293,6 +299,7 @@ async function handleSubmit() {
       inputs,
       inputFileIds: uploadItems.value.filter((i) => i.status === "done").map((i) => i.fileId),
       createdBy: form.createdBy.trim(),
+      conversationId: prefillConversationId.value,
     });
     ElMessage.success("任务已创建");
     router.push(`/tasks/${task.id}`);
