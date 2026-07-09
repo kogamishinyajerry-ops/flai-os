@@ -79,3 +79,32 @@ class ConversationConflictError(FlaiError):
 class NotInteractiveAgentError(FlaiError):
     """对非 interactive 型 Agent 发起会话，或对 interactive 型 Agent 建一次性任务
     （ADR-0012：两条运行时语义正交，不允许混用）。"""
+
+
+class KnowledgeError(FlaiError):
+    """Knowledge 内核服务错误基类（ADR-0015）。"""
+
+
+class InvalidScopePackageError(RegistryError):
+    """Knowledge Scope 包不合格：scope.yaml 缺失/解析失败/schema 不过/
+    scope_id 与目录名不一致/path_or_uri 二选一违规/源路径逃逸 scope 目录。"""
+
+
+class KnowledgeScopeNotRegisteredError(KnowledgeError):
+    """查询了未在 Scope Registry 注册的 scope_id（default-deny：未注册即不存在）。"""
+
+
+class KnowledgeScopeDeniedError(KnowledgeError):
+    """scope 已注册但不在当前 Agent 的 agent.yaml knowledge.scopes 白名单内，
+    或密级静态门拒绝（default-deny，与工具白名单同构：不在清单即不可访问）。"""
+
+
+class KnowledgeSourceUnavailableError(KnowledgeError):
+    """scope 的知识源当前不可用：source=obsidian_vault/mcp 未接入、
+    kind≠document 未接入、path_or_uri_env 环境变量缺失、源目录不存在。
+    诚实"未接入"而非静默空结果（docs/06 §6）。"""
+
+
+class KnowledgeIngestError(KnowledgeError):
+    """语料摄取失败：不支持的格式/空语料/解析失败/可选依赖缺失。
+    fail-closed：部分可解析也不出部分语料（静默缺片比报错更毒）。"""

@@ -123,34 +123,33 @@ class JobRunner:
 
 
 def _build_default_runner() -> JobRunner:
-    """用 backend/app/config.py 默认路径装配一个 JobRunner（真实 data/ 目录）。"""
+    """用 backend/app/config.py 默认路径装配一个 JobRunner（真实 data/ 目录）。
+
+    装配走共享 bootstrap.assemble（ADR-0015 Finding 1）：与 API 进程同一条
+    「scan→scope scan→reconcile→sync」路径，本函数只剩取 config 默认值的薄壳。
+    """
     from .. import config
-    from ..model_gateway.gateway import ModelGateway
-    from ..runtime.registry import AgentRegistry
+    from ..bootstrap import assemble
     from ..runtime.runtime import AgentRuntime
     from ..storage.db import get_conn, init_db
-    from ..tools.registry import ToolRegistry
 
     config.ensure_dirs()
     init_db(config.DB_PATH)
 
-    agent_registry = AgentRegistry(config.AGENTS_DIR, config.CONTRACTS_DIR / "agent.schema.json")
-    agent_registry.scan()
-    tool_registry = ToolRegistry(config.TOOLS_DIR, config.CONTRACTS_DIR / "tool.schema.json")
-    tool_registry.scan()
-
     def conn_factory() -> sqlite3.Connection:
         return get_conn(config.DB_PATH)
 
-    conn = conn_factory()
-    try:
-        agent_registry.sync_to_db(conn)
-    finally:
-        conn.close()
-
-    profiles_path = config.REPO_ROOT / "backend" / "app" / "model_gateway" / "profiles.yaml"
-    model_gateway = ModelGateway(profiles_path, conn_factory=conn_factory)
-    runtime = AgentRuntime(agent_registry, tool_registry, model_gateway, conn_factory, config.TASK_RUNS_DIR)
+    asm = assemble(
+        agents_dir=config.AGENTS_DIR,
+        tools_dir=config.TOOLS_DIR,
+        contracts_dir=config.CONTRACTS_DIR,
+        knowledge_dir=config.KNOWLEDGE_DIR,
+        conn_factory=conn_factory,
+    )
+    runtime = AgentRuntime(
+        asm.agent_registry, asm.tool_registry, asm.model_gateway, conn_factory,
+        config.TASK_RUNS_DIR, knowledge_service=asm.knowledge_service,
+    )
     return JobRunner(runtime, conn_factory)
 
 

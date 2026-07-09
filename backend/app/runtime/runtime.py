@@ -16,11 +16,12 @@ import hashlib
 import importlib.util
 import sqlite3
 import uuid
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from ..core.errors import ToolNotAllowedError
+from ..core.errors import KnowledgeScopeDeniedError, ToolNotAllowedError
 from ..storage import repos
 
 # event.schema.json 的 event_type 枚举（供折叠判断参考；本文件不据此做「豁免」——
@@ -32,7 +33,7 @@ _EVENT_ENUM = frozenset(
         "tool_started", "tool_finished", "tool_failed", "model_call",
         "review_requested", "review_approved", "review_rejected", "summary_generated",
         "task_completed", "task_failed", "task_cancelled", "feedback_received",
-        "warning", "error", "agent_log",
+        "knowledge_search", "warning", "error", "agent_log",
     }
 )
 
@@ -217,6 +218,67 @@ def _load_workflow_module(agent_id: str, workflow_path: Path) -> Any:
     return module
 
 
+class _KnowledgeContext:
+    """context["knowledge"]：agent.yaml knowledge.enabled is True 时唯一的知识检索入口。
+
+    default-deny 白名单在本层（与 _ToolRegistryContext 同构，ADR-0015）：scope 不在
+    agent.yaml knowledge.scopes 白名单内一律拒绝并留 knowledge_search 事件——即使
+    该 scope 已在 Scope Registry 注册（新注册 scope 绝不自动扩大存量 Agent 的可见面）。
+    KnowledgeService 自身不做授权判定（信任边界见 service.py docstring），绕过本层
+    直调 service 无白名单保护。命中/未命中/拒绝/失败均落 knowledge_search 事件
+    （docs/06 §7：知识调用不得只在应用日志留痕）。
+    """
+
+    def __init__(
+        self,
+        knowledge_service: Any,
+        conn: sqlite3.Connection,
+        task_id: str,
+        agent_id: str,
+        allowed_scopes: frozenset[str],
+    ) -> None:
+        self._knowledge_service = knowledge_service
+        self._conn = conn
+        self._task_id = task_id
+        self._agent_id = agent_id
+        self._allowed_scopes = allowed_scopes
+
+    def search(self, scope_id: str, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+        if scope_id not in self._allowed_scopes:
+            message = (
+                f"scope {scope_id} 不在 Agent {self._agent_id} 的 agent.yaml "
+                "knowledge.scopes 白名单内，default-deny 拒绝检索"
+            )
+            repos.append_event(
+                self._conn, task_id=self._task_id, agent_id=self._agent_id,
+                event_type="knowledge_search", level="error", message=message,
+                payload={"scope_id": scope_id, "denied": "not_in_agent_scopes"},
+            )
+            raise KnowledgeScopeDeniedError(message)
+        try:
+            hits = self._knowledge_service.search(scope_id, query, top_k=top_k)
+        except Exception as exc:
+            repos.append_event(
+                self._conn, task_id=self._task_id, agent_id=self._agent_id,
+                event_type="knowledge_search", level="error",
+                message=f"知识检索失败（scope={scope_id}）：{exc}",
+                payload={"scope_id": scope_id, "query": query[:500], "error": str(exc)[:500]},
+            )
+            raise
+        repos.append_event(
+            self._conn, task_id=self._task_id, agent_id=self._agent_id,
+            event_type="knowledge_search", level="info",
+            message=f"知识检索完成（scope={scope_id}，命中 {len(hits)}）",
+            payload={
+                "scope_id": scope_id, "query": query[:500], "top_k": top_k,
+                "hit_count": len(hits), "hit_chunk_ids": [h.chunk_id for h in hits],
+            },
+        )
+        # KnowledgeHit(frozen dataclass) → dict：workflow 侧拿纯数据，出处字段
+        # （source/fingerprint）随行携带，展示层必须透出（docs/06 §4）。
+        return [asdict(h) for h in hits]
+
+
 class AgentRuntime:
     """驱动单个任务从 validating 走完整生命周期：校验 -> running -> (analyzing) -> 终态。"""
 
@@ -227,12 +289,17 @@ class AgentRuntime:
         model_gateway: Any,
         conn_factory: Callable[[], sqlite3.Connection],
         task_runs_dir: str | Path,
+        *,
+        knowledge_service: Any | None = None,
     ) -> None:
         self.agent_registry = agent_registry
         self.tool_registry = tool_registry
         self.model_gateway = model_gateway
         self.conn_factory = conn_factory
         self.task_runs_dir = Path(task_runs_dir)
+        # ADR-0015：可为 None（纯工具/结构化 Agent 场景不需要）；但 Agent 声明
+        # knowledge.enabled 而这里为 None 时任务必须诚实失败，见 _execute 1b。
+        self.knowledge_service = knowledge_service
 
     def execute(self, task_id: str) -> dict[str, Any]:
         """驱动任务 task_id（调用前须已处于 validating 态）走完生命周期，返回最终 task dict。"""
@@ -277,6 +344,26 @@ class AgentRuntime:
                 level="error", message=f"输入校验未通过：{exc}",
             )
             self._record_failure_sample(conn, task, agent, f"输入校验未通过：{exc}")
+            return {"status": "failed", "task": repos.get_task(conn, task_id)}
+
+        # 1b) knowledge 服务可用性（ADR-0015 fail-closed）：Agent 声明了
+        # knowledge.enabled 而 Runtime 未装配 KnowledgeService = 装配缺陷，
+        # 诚实失败——绝不静默给一个"查不到任何东西"的假 knowledge 入口。
+        if (agent.get("knowledge") or {}).get("enabled") is True and self.knowledge_service is None:
+            msg = (
+                f"Agent {agent_id} 声明 knowledge.enabled 但 Runtime 未装配 "
+                "KnowledgeService（装配缺陷，fail-closed 拒绝执行）"
+            )
+            repos.append_event(
+                conn, task_id=task_id, agent_id=agent_id, event_type="validation_failed",
+                level="error", message=msg,
+            )
+            repos.set_task_status(conn, task_id, "failed", error_message=msg)
+            repos.append_event(
+                conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
+                level="error", message=msg,
+            )
+            self._record_failure_sample(conn, task, agent, msg)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
         # 2) 进入 running，构建 context 并调用 workflow.run()
@@ -405,7 +492,7 @@ class AgentRuntime:
                 continue
             files.append(f)
         allowed_tools = frozenset(agent.get("tools") or [])
-        return {
+        context: dict[str, Any] = {
             "task": task,
             "inputs": task["inputs"],
             "files": files,
@@ -417,6 +504,15 @@ class AgentRuntime:
             "output_dir": str(output_dir),
             "agent_config": agent,
         }
+        # ADR-0015：knowledge 键仅在 enabled is True 时存在（default-deny：
+        # 未声明的 Agent 连入口都拿不到，而不是拿到一个"空"入口）。
+        # 服务未装配的情形已在 _execute 1b fail-closed，此处 service 必非 None。
+        if (agent.get("knowledge") or {}).get("enabled") is True:
+            context["knowledge"] = _KnowledgeContext(
+                self.knowledge_service, conn, task["id"], agent_id,
+                frozenset((agent.get("knowledge") or {}).get("scopes") or []),
+            )
+        return context
 
     def _register_outputs(self, conn: sqlite3.Connection, task_id: str, output_dir: Path) -> list[str]:
         file_ids: list[str] = []

@@ -1,4 +1,4 @@
-# FLAi-OS 知识与记忆标准 V0.1
+# FLAi-OS 知识与记忆标准 V0.1（ADR-0015 修订）
 
 > 依据：《FLAi-OS_Fable5_执行任务书》§4.6。本标准回答两件事：知识/记忆分几层、每层现在能不能查。
 > 违反本标准的直接后果：Agent 默认能看全部知识库——这是宪法明令禁止的行为。
@@ -7,13 +7,17 @@
 
 任何"知识/记忆"需求先落进下表某一行，落不进就先别做。
 
-| 层 | 回答什么问题 | 典型内容 | V0.1 落点 | 承载表/目录 |
+| 层 | 回答什么问题 | 典型内容 | 当前落点（ADR-0015 后） | 承载表/目录 |
 |---|---|---|---|---|
-| Knowledge Memory（文档知识） | "规定是什么？手册怎么写的？" | 标准、手册、报告、制度、流程文档 | **只立契约与目录，不做检索引擎**：约定存放路径与 scope 命名规则，检索通道待接入 | `data/vector_store/`（占位）+ 本文档 §3 Scope 清单 |
-| Engineering Memory（工程经验） | "上次为什么这么设计？踩过什么坑？" | 设计理由、历史决策、ADR、踩坑记录 | **只立契约与目录，不做检索引擎**：ADR 走 `docs/adr/`，踩坑记录待专用格式 | `docs/adr/`（已存在，V0.1 唯一真实承载） |
-| Run Memory（运行记忆） | "这个 Agent 上次跑了什么、错哪了、改没改？" | 任务、事件、错误、修复、反馈、采纳情况 | **V0.1 唯一有真实读写实现的一层**，其余两层此阶段是空壳契约 | `task_events` 表 + `samples` 表（§4.5/§8 已定义） |
+| Knowledge Memory（文档知识） | "规定是什么？手册怎么写的？" | 标准、手册、报告、制度、流程文档 | **file_dir×document 类 scope 的 BM25 检索已实现**（`backend/app/knowledge/`，jieba 分词离线检索）；obsidian_vault/mcp 来源与向量检索仍待内网侦察，调用即显式"未接入"错误 | `data/knowledge/<scope_id>/`（scope.yaml+源文件）；`data/vector_store/` 继续为未来向量检索占位 |
+| Engineering Memory（工程经验） | "上次为什么这么设计？踩过什么坑？" | 设计理由、历史决策、ADR、踩坑记录 | **只立契约与目录，不做检索引擎**：ADR 走 `docs/adr/`，踩坑记录待专用格式；kind=engineering_experience 的 scope 检索显式"未接入" | `docs/adr/`（唯一真实承载） |
+| Run Memory（运行记忆） | "这个 Agent 上次跑了什么、错哪了、改没改？" | 任务、事件、错误、修复、反馈、采纳情况 | 真实读写实现 | `task_events` 表 + `samples` 表（§4.5/§8 已定义） |
 
-**铁律**：Knowledge Memory 与 Engineering Memory 在 V0.1 没有检索服务——任何 Agent 若在这两层"查到了东西"，先怀疑是不是绕开了 Tool Registry/Model Gateway 私接的野路子，一律拒绝合并。
+**铁律（ADR-0015 修订版）**：Knowledge Memory 的**唯一合法检索通道**是 Runtime 注入的
+`context["knowledge"]`（仅 `knowledge.enabled is True` 的 Agent 拿得到，且只覆盖 job 模式；
+interactive 运行时无此挂载点，Wave 2 需先补挂载点并另立 ADR）。任何 Agent 绕开它——直接
+读文件、直接 import KnowledgeService、私接外部检索——一律拒绝合并。Engineering Memory
+仍无检索服务，"查到了东西"依旧按野路子处理。
 
 ## 2. Run Memory 的落地形态（V0.1 唯一实现）
 
@@ -38,13 +42,14 @@ knowledge:
 
 | 规则 | 说明 |
 |---|---|
-| default-deny | `enabled: false` 或 `scopes` 为空 → Agent 不可访问任何知识内容，无隐式兜底 |
+| default-deny | `enabled: false` 或 `scopes` 为空 → Agent 不可访问任何知识内容，无隐式兜底；enabled 非 True 时 `context["knowledge"]` 键不存在 |
 | 禁止通配 | `scopes` 每项必须是具体 scope id（`^[a-z][a-z0-9_]*$`），禁止 `*`、`all`、前缀匹配 |
 | enabled=true 时至少 1 项 | schema 已用 `if/then` 强制，Registry 加载时二次校验 |
-| scope 与工具白名单同构 | 参照 `tools` 字段的白名单模式：不在清单 = 不可用，不因为"看起来相关"放行 |
-| 新增 scope 需登记 | 每个 scope id 必须在某处有唯一权威定义（负责人、覆盖范围、更新方式）；V0.1 该登记表**待内网侦察**后与 RAG 服务一起定，本阶段允许 scope id 先在 `agent.yaml` 里声明、登记表暂缺，但不能反过来"先用后补" |
+| scope 与工具白名单同构 | 参照 `tools` 字段的白名单模式：不在清单 = 不可用，不因为"看起来相关"放行；运行时由 `_KnowledgeContext` 强制（与 `_ToolRegistryContext` 同构），新注册 scope 绝不自动扩大存量 Agent 可见面 |
+| 新增 scope 需登记 | **登记表已落地**（ADR-0015）：`data/knowledge/<scope_id>/scope.yaml`，由 ScopeRegistry 扫描校验。"先声明后登记"的过渡期规则作废——启动对账（reconcile）发现 `enabled is True` 的 Agent 引用未注册 scope → **整个 Agent 拒绝注册** |
+| 密级静态门 | restricted scope 仅 `visibility: admin_only` 的 Agent 可挂；department 需 admin_only/department_trial。**边界精确声明**：`permissions.visibility` 在 V0.1 运行时未被任何 API 端点强制——本门只约束注册期 scope↔agent 声明一致性，不约束调用期主体身份；真实 restricted 语料上内网前，用户鉴权层是硬前置（ADR-0015） |
 
-`contracts/knowledge_scope.schema.json`：Knowledge Scope 条目的权威契约（scope_id/name/kind/source/confidentiality/owner，敏感路径走 `path_or_uri_env` 环境变量）。Agent 侧的 `agent.yaml.knowledge.scopes[]` 只引用 scope_id；scope 本体定义以该 schema 为准，两者由 Registry 加载时对账（scope_id 不存在 → 拒绝注册）。
+`contracts/knowledge_scope.schema.json`：Knowledge Scope 条目的权威契约（scope_id/name/kind/source/confidentiality/owner，敏感路径走 `path_or_uri_env` 环境变量）。Agent 侧的 `agent.yaml.knowledge.scopes[]` 只引用 scope_id；scope 本体定义以该 schema 为准，两者由启动对账强制（scope_id 不存在 → Agent 拒绝注册，`backend/app/knowledge/scopes.py: reconcile_agent_scopes`）。
 
 ## 4. 检索结果必须带出处引用
 
@@ -76,6 +81,6 @@ knowledge:
 
 ## 7. 与其他标准的边界
 
-- Knowledge Scope 校验时机：Agent Registry 加载 `agent.yaml` 时（对照 §7.1）；
-- 知识调用产生的事件（如检索开始/结束、命中/未命中）必须走 `task_events`，不得只在应用日志里留痕；
+- Knowledge Scope 校验时机：启动装配对账（`reconcile_agent_scopes`，双进程共用同一 bootstrap）+ 运行时 `_KnowledgeContext` 白名单双层；
+- 知识调用产生的事件（命中/未命中/拒绝/失败）必须走 `task_events` 的 `knowledge_search` 事件类型（ADR-0015 扩枚举），由内核 `_KnowledgeContext` 发出，workflow 不得自发，不得只在应用日志里留痕；
 - 知识层永久资产化路径：Knowledge Memory → 待 RAG 服务上线后接入；Engineering Memory → 持续沉淀进 `docs/adr/`；Run Memory → 已随任务系统同步落地，无需额外动作。

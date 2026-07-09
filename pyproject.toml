@@ -14,6 +14,7 @@ dependencies = [
     "python-multipart",
     "httpx",
     "openpyxl",
+    "jieba",
 ]
 
 [project.optional-dependencies]

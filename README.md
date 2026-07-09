@@ -63,7 +63,7 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 | `evals/` | 各 Agent 的评测集，改动后跑回归 |
 | `backend/` | FastAPI 后端（app/ 分层见 M1 实现） |
 | `frontend/` | Vue 3 + Vite + Element Plus 前端 |
-| `data/` | uploads/outputs/task_runs/vector_store/memory_store/samples |
+| `data/` | uploads/outputs/task_runs/knowledge(检索 scope)/vector_store/memory_store/samples |
 | `scripts/` | dev/init/release 脚本，`.sh`（本机）+ `.ps1`（内网 Windows）成对 |
 
 ## 里程碑
@@ -132,10 +132,20 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
     是留痕不是认证。权限体系是 V0.2+ 项。
 15. **无卡死任务回收**：worker 在 `validating`/`running` 中途崩溃，任务永卡该态
     （单 worker 轮询无心跳/reaper）；V0.1 靠人工识别，reaper 是 V0.2 项。
-16. **Memory 子系统未实现**：docs/06 三类记忆（Knowledge/Engineering/Run）只有
-    标准文档与 `backend/app/knowledge|memory/` 空槽位；失败任务现已沉淀 samples
-    行（validation_status=failed，ADR-0013）作为最小落点，「失败→评测用例」的
-    自动管道是 V0.2 项。
+16. **Memory 子系统部分实现**（ADR-0015 后）：Knowledge Memory 已有真实 BM25
+    检索内核（`backend/app/knowledge/`，file_dir×document 类 scope），但
+    Engineering Memory 仍只有 `docs/adr/` 承载、`backend/app/memory/` 仍是空
+    槽位；失败任务沉淀 samples 行（validation_status=failed，ADR-0013）作为
+    最小落点，「失败→评测用例」的自动管道是 V0.2 项。
+17. **knowledge 检索的边界**（ADR-0015 诚实清单）：①只挂 job 模式
+    （`context["knowledge"]`），interactive 会话无挂载点（与工具同态，Wave 2
+    另立 ADR）；②密级静态门只约束**注册期** scope↔agent 声明一致性——V0.1 全局
+    无鉴权（见 #14），调用期不核对主体身份，真实 restricted 语料上内网前鉴权层
+    是硬前置；③source 仅 file_dir、kind 仅 document，obsidian/mcp/向量检索
+    待内网侦察，调用即显式"未接入"错误；④索引缓存 per-进程（API 与 worker 各建
+    各的，以文件指纹 manifest 失效，语料改动后两边下次检索各自重建，无跨进程
+    一致性保证——检索是无状态读，最坏后果是短暂读到旧语料版本）；⑤PDF/纯图片
+    语料不支持，scope 源目录含不支持格式会整 scope 拒检索（fail-closed）。
 
 ## 开发口径
 
@@ -166,7 +176,7 @@ bash scripts/dev_start_worker.sh
 ```bash
 uv run --no-project --with pytest --with jsonschema --with pyyaml \
   --with fastapi --with httpx --with python-multipart --with "pydantic>2" \
-  --with openpyxl python -m pytest -q
+  --with openpyxl --with jieba python -m pytest -q
 ```
 
 前端（M2）：

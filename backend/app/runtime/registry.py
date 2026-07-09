@@ -106,6 +106,21 @@ class AgentRegistry:
         """按 id 取已注册 Agent 的 agent.yaml 解析结果；未注册返回 None（不抛异常）。"""
         return self._agents.get(agent_id)
 
+    def deregister(self, agent_id: str, reason: str) -> None:
+        """把已注册 Agent 移出注册表并记录原因（ADR-0015 knowledge scope 启动对账用）。
+
+        fail-closed 出口：对账不过的 Agent 从此 get/list 均不可见，create_task 对其
+        404。只动内存注册表；装配顺序上 deregister 必须发生在 sync_to_db 之前，
+        使 DB agents 表不再 upsert 该 id（历史行保留，属审计痕迹非可调用入口）。
+        未注册 id 调用为 no-op（幂等，重扫场景安全）。
+        """
+        if agent_id not in self._agents:
+            return
+        entry = self._dirs.get(agent_id)
+        del self._agents[agent_id]
+        self._dirs.pop(agent_id, None)
+        self.errors.append({"path": str(entry) if entry else agent_id, "error": reason})
+
     def list(self) -> list[dict[str, Any]]:
         return list(self._agents.values())
 

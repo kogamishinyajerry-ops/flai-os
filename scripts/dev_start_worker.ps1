@@ -9,7 +9,7 @@ Write-Host "依赖缺失？先装：pip install fastapi jsonschema pyyaml httpx 
 
 if (Get-Command uv -ErrorAction SilentlyContinue) {
     uv run --no-project `
-        --with fastapi --with jsonschema --with pyyaml --with httpx --with openpyxl --with "pydantic>2" `
+        --with fastapi --with jsonschema --with pyyaml --with httpx --with openpyxl --with jieba --with "pydantic>2" `
         -- python -m backend.app.jobs.runner
 } else {
     python -m backend.app.jobs.runner

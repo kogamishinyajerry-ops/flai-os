@@ -48,11 +48,12 @@
         "task_failed",
         "task_cancelled",
         "feedback_received",
+        "knowledge_search",
         "warning",
         "error",
         "agent_log"
       ],
-      "description": "事件类型枚举，覆盖任务全生命周期节点。review_approved/review_rejected 是宪法要求的人工签发点——只能由真人角色触发，LLM 不得自签。"
+      "description": "事件类型枚举，覆盖任务全生命周期节点。review_approved/review_rejected 是宪法要求的人工签发点——只能由真人角色触发，LLM 不得自签。knowledge_search 由内核 KnowledgeContext 发出（ADR-0015，docs/06 §7：知识调用命中/未命中/拒绝均须走 task_events），workflow 不得自发。"
     },
     "level": {
       "type": "string",

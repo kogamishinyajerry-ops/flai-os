@@ -19,6 +19,9 @@ CONTRACTS_DIR = REPO_ROOT / "contracts"
 DATA_DIR = REPO_ROOT / "data"
 UPLOADS_DIR = DATA_DIR / "uploads"
 TASK_RUNS_DIR = DATA_DIR / "task_runs"
+# ADR-0015：Knowledge Scope 根目录（data/knowledge/<scope_id>/scope.yaml + 源文件）。
+# data/vector_store/ 保持占位不占用——BM25 file_dir scope 与未来向量检索分居。
+KNOWLEDGE_DIR = DATA_DIR / "knowledge"
 # M2：前端构建产物目录。存在则由 FastAPI 静态托管（内网 Windows 部署免 node），
 # 不存在（纯后端/开发期走 vite proxy）则静态路由整体不注册。
 FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
@@ -29,5 +32,5 @@ BACKEND_PORT = int(os.environ.get("FLAI_BACKEND_PORT", "8620"))
 
 def ensure_dirs() -> None:
     """确保运行期所需的真实目录存在（仅供 app 启动路径调用，测试不应调用本函数）。"""
-    for d in (DATA_DIR, UPLOADS_DIR, TASK_RUNS_DIR):
+    for d in (DATA_DIR, UPLOADS_DIR, TASK_RUNS_DIR, KNOWLEDGE_DIR):
         d.mkdir(parents=True, exist_ok=True)
