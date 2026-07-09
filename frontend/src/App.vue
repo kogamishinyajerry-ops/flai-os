@@ -8,12 +8,13 @@
           <span class="brand-sub">二所工程智能体运行底座 · V0.1</span>
         </span>
       </div>
+      <!-- M8 IA：顶导航收敛为三个真入口——导引(门面)/门户(浏览 Agent)/工作台
+           (协作会话)。创建任务从门户+导引进入、反馈在任务详情内、任务历史折入
+           工作台，都不再占顶导航（路由仍在，上下文内可达）。 -->
       <el-menu mode="horizontal" :default-active="activeMenu" router :ellipsis="false" class="nav-menu">
         <el-menu-item index="/">智能导引</el-menu-item>
         <el-menu-item index="/portal">Agent 门户</el-menu-item>
-        <el-menu-item index="/tasks/new">创建任务</el-menu-item>
-        <el-menu-item index="/tasks">任务历史</el-menu-item>
-        <el-menu-item index="/feedback">反馈</el-menu-item>
+        <el-menu-item index="/workbench">协作工作台</el-menu-item>
       </el-menu>
     </el-header>
     <el-main class="app-main">
@@ -27,22 +28,42 @@ import { computed } from "vue";
 import { useRoute } from "vue-router";
 
 const route = useRoute();
-// 任务详情页归属「任务历史」高亮
+// 任务相关页（历史/详情/创建）在 M8 IA 里归属「协作工作台」高亮。
 const activeMenu = computed(() =>
-  route.path.startsWith("/tasks/") && route.name === "task-detail" ? "/tasks" : route.path
+  route.path === "/tasks" || route.path.startsWith("/tasks/") ? "/workbench" : route.path
 );
 </script>
 
 <style>
-/* 全局设计变量：clay 暖橙作品牌与强调锚点，暖白背景，收敛的语义色。 */
+/* 全局设计变量：clay 暖橙作品牌与强调锚点，暖白背景，收敛的语义色。
+ *
+ * 信任色锁（M8，收编自 COMACAgentPlatform 协作面，焊死纪律）：语义色只表状态、
+ * 绝不被装饰借用——clay=工作/进行/选中（唯一彩色语法）· 绿=仅真实(REAL)数据/结果
+ * · teal=仅人签(改变工程状态的唯一合法通道) · 红=仅真失败/驳回 · amber=仅未核/降级。
+ * 装饰要用色一律走中性暖阶（--paper-* / --sand-*），不碰上面五个语义槽。
+ */
 :root {
   --clay: #c15f3c;
+  --clay-softer: #cc785c;
   --clay-soft: #f3e5de;
   --ink: #2b2622;
   --ink-soft: #6b6259;
+  --ink-faint: #a39d90;
   --page-bg: #faf7f2;
   --card-bg: #ffffff;
   --hairline: #ece5db;
+  --hairline-soft: #f0ece2;
+  /* 暖纸阶（协作工作台底色，收编自 team.css）*/
+  --paper-canvas-a: #fcfbf7;
+  --paper-canvas-b: #f1eee6;
+  --paper-surface: #fdfcf9;
+  --paper-rail: #f7f4ec;
+  --paper-cream: #fbf9f3;
+  /* 信任语义锁（只表状态，绝不装饰借用）*/
+  --trust-real: #2e8f50;   /* 绿：仅真实数据/结果 */
+  --trust-signed: #167d8b; /* teal：仅人签 */
+  --trust-fail: #be3a3a;   /* 红：仅真失败/驳回 */
+  --trust-pending: #a8761a;/* amber：仅未核/降级 */
   --el-color-primary: #c15f3c;
   --el-color-primary-light-3: #d08663;
   --el-color-primary-light-5: #dba489;
