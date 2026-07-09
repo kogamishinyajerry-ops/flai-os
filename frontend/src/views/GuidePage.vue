@@ -124,10 +124,15 @@
                 title="召集 Agent 数已达上限（5 个），后续提议已截断。"
               />
 
-              <p class="plan-note">
-                签发权在你——每个任务都在创建页由你补全并<strong>亲手提交</strong>。
-                多 Agent 一键召集进协作工作台正在建设中（M8 P3/P4）。
-              </p>
+              <div class="plan-foot">
+                <el-button type="primary" plain size="small" @click="openWorkbench">
+                  进入协作工作台 →
+                </el-button>
+                <span class="plan-note">
+                  在工作台里看分工架构、逐个召集 Agent、追进度——签发权始终在你，
+                  每个任务都由你补全并<strong>亲手提交</strong>。
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -324,6 +329,14 @@ function collectCarriedFiles() {
     }
   }
   return carried;
+}
+
+function openWorkbench() {
+  // 进入本次会话的协作工作台（分工架构 + 逐个召集 + 进度）。不归档会话——
+  // 工作台里还要继续从蓝图召集 Agent；会话作协作锚点保持存续。
+  if (conversationId.value) {
+    router.push(`/workbench/${conversationId.value}`);
+  }
 }
 
 function createOneTask(agent, plan) {
@@ -574,11 +587,23 @@ function createOneTask(agent, plan) {
 .plan-alert {
   margin-top: 8px;
 }
+.plan-foot {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 .plan-note {
   margin: 10px 0 0;
   color: var(--ink-soft);
   font-size: 12px;
   line-height: 1.6;
+}
+.plan-foot .plan-note {
+  margin: 0;
+  flex: 1;
+  min-width: 200px;
 }
 .composer {
   margin-top: 12px;

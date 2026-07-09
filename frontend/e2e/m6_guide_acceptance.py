@@ -189,7 +189,7 @@ with sync_playwright() as p:
         ATTACH_NAME in page.locator(".bubble-row.user").first.inner_text(),
         page.locator(".bubble-row.user").first.inner_text()[:120],
     )
-    check("③'导引不代签'红线文案在卡片可见", "签发权在你" in body, "")
+    check("③'导引不代签'红线文案在卡片可见", "签发权" in body and "亲手提交" in body, "")
     page.screenshot(path=str(SHOTS / "2_recommendation.png"), full_page=True)
 
     # ④ 点「去创建此任务」→ 落创建任务页

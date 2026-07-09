@@ -3,6 +3,12 @@
     <el-alert v-if="loadError" type="error" :title="loadError" show-icon :closable="false" />
 
     <template v-if="task">
+      <!-- M8：属于某协作会话的任务，提供返回工作台会话视图的入口（分组回溯）。 -->
+      <div v-if="task.conversation_id" class="sess-backlink">
+        <el-button text type="primary" @click="$router.push(`/workbench/${task.conversation_id}`)">
+          ← 返回协作会话
+        </el-button>
+      </div>
       <div class="page-header">
         <h2>任务详情</h2>
         <el-tag :type="statusTagType(task.status)">{{ statusLabel(task.status) }}</el-tag>

@@ -17,6 +17,22 @@ export const TASK_STATUS = {
 export const statusLabel = (s) => TASK_STATUS[s]?.label ?? s;
 export const statusTagType = (s) => TASK_STATUS[s]?.type ?? "info";
 
+// 任务状态 → 到席灯颜色（信任色锁，App.vue :root 注释；协作工作台/会话共用一处）：
+// - running/validating/parsing/analyzing = clay（工作态/live）
+// - waiting_review = amber（未核·待人签；teal 只留给「已签」动作本身，不预支）
+// - failed = 红（真失败）
+// - completed = 中性墨（**不给绿**——绿仅真实 REAL 结果；当前跑 mock，给绿即假
+//   REAL。等真实性能盘接入产出可核结果再解锁绿）
+// - 其余（created/queued/cancelled）= 淡墨（待命/终止）
+const _TASK_WORK_STATES = new Set(["running", "validating", "parsing", "analyzing"]);
+export const taskLampColor = (status) => {
+  if (_TASK_WORK_STATES.has(status)) return "var(--clay)";
+  if (status === "waiting_review") return "var(--trust-pending)";
+  if (status === "failed") return "var(--trust-fail)";
+  if (status === "completed") return "var(--ink-soft)";
+  return "var(--ink-faint)";
+};
+
 // 事件 level → timeline 颜色
 export const LEVEL_COLOR = { info: "#409EFF", warning: "#E6A23C", error: "#F56C6C" };
 

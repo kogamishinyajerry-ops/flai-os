@@ -15,8 +15,30 @@
       </div>
     </div>
 
-    <!-- P1 诚实占位：多 Agent「协作会话」的分组视图在 M8 P3/P4 落地；当前先把
-         最近任务总览折进工作台（旧「任务历史」页降级至此）。 -->
+    <!-- 协作会话（M8 P4）：导引召集成方案的会话，进入即见分工架构+进度。 -->
+    <div v-if="sessions.length" class="wb-section">
+      <div class="wb-section-head">
+        <h3>协作会话</h3>
+      </div>
+      <p class="wb-note">导引召集了合适 Agent 组成协作的会话——点开看分工架构、召集进度与产物。</p>
+      <div class="sess-grid">
+        <div v-for="c in sessions" :key="c.id" class="sess-card" @click="goSession(c)">
+          <div class="sess-card-bar"></div>
+          <div class="sess-card-inner">
+            <div class="sess-card-goal">{{ c.recommendation.goal || "协作会话" }}</div>
+            <div class="sess-card-meta">
+              <span class="sess-card-count">{{ (c.recommendation.agents || []).length }} 个 Agent</span>
+              <el-tag :type="c.status === 'active' ? 'primary' : 'info'" effect="plain" size="small">
+                {{ c.status === "active" ? "进行中" : "已归档" }}
+              </el-tag>
+            </div>
+            <div class="sess-card-by">{{ c.created_by }} · {{ formatTime(c.created_at) }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 最近任务台账（旧「任务历史」页降级折入此处）。 -->
     <div class="wb-section">
       <div class="wb-section-head">
         <h3>最近任务</h3>
@@ -54,7 +76,8 @@
 import { ref, reactive, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { listTasks } from "../api/tasks";
-import { statusLabel, formatTime, TASK_STATUS } from "../utils/format";
+import { listConversations } from "../api/conversations";
+import { statusLabel, formatTime, TASK_STATUS, taskLampColor } from "../utils/format";
 
 const router = useRouter();
 const tasks = ref([]);
@@ -65,21 +88,23 @@ const PAGE_SIZE = 100;
 const hasMore = ref(false);
 const filters = reactive({ status: "" });
 
-// 到席灯配色守信任色锁（App.vue :root 注释）：
-// - running/validating/parsing/analyzing = clay（工作态/live）
-// - waiting_review = amber（未核·待人签；teal 只留给「已签」这个动作本身，不预支）
-// - failed = 红（真失败）
-// - completed = 中性墨（**不给绿**——绿仅真实 REAL 结果，当前跑的是 mock，
-//   给绿即假 REAL；等真实性能盘接入产出可核结果再解锁绿）
-// - created/queued/cancelled = 淡墨（待命/终止）
-const _WORK_STATES = new Set(["running", "validating", "parsing", "analyzing"]);
-function lampColor(status) {
-  if (_WORK_STATES.has(status)) return "var(--clay)";
-  if (status === "waiting_review") return "var(--trust-pending)";
-  if (status === "failed") return "var(--trust-fail)";
-  if (status === "completed") return "var(--ink-soft)";
-  return "var(--ink-faint)";
+// 协作会话（M8 P4）：已形成召集方案（orchestrate）的导引会话——协作工作台的主对象。
+const sessions = ref([]);
+async function loadSessions() {
+  try {
+    const convs = await listConversations({ limit: 100 });
+    sessions.value = convs.filter((c) => c.recommendation && c.recommendation.decision === "orchestrate");
+  } catch {
+    sessions.value = []; // 会话列表失败不阻断任务台账；诚实留空
+  }
 }
+function goSession(c) {
+  router.push(`/workbench/${c.id}`);
+}
+
+// 到席灯配色守信任色锁：抽到 utils/format.js 的 taskLampColor 单处（协作会话共用），
+// 关键纪律——completed **不给绿**（跑 mock，给绿即假 REAL）。
+const lampColor = taskLampColor;
 
 function _query(offset) {
   return { status: filters.status || undefined, limit: PAGE_SIZE, offset };
@@ -117,7 +142,10 @@ function goDetail(t) {
   router.push(`/tasks/${t.id}`);
 }
 
-onMounted(load);
+onMounted(() => {
+  load();
+  loadSessions();
+});
 </script>
 
 <style scoped>
@@ -142,6 +170,55 @@ onMounted(load);
   display: flex;
   gap: 12px;
   align-items: center;
+}
+.sess-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.sess-card {
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--card-bg);
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.sess-card:hover {
+  border-color: var(--clay-softer);
+  box-shadow: 0 2px 12px rgba(72, 58, 44, 0.07);
+}
+.sess-card-bar {
+  height: 4px;
+  background: var(--clay);
+}
+.sess-card-inner {
+  padding: 14px 16px;
+}
+.sess-card-goal {
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.5;
+  margin-bottom: 10px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sess-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.sess-card-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--clay);
+}
+.sess-card-by {
+  font-size: 12px;
+  color: var(--ink-faint);
 }
 .wb-section-head {
   display: flex;

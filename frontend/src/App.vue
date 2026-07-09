@@ -28,10 +28,13 @@ import { computed } from "vue";
 import { useRoute } from "vue-router";
 
 const route = useRoute();
-// 任务相关页（历史/详情/创建）在 M8 IA 里归属「协作工作台」高亮。
-const activeMenu = computed(() =>
-  route.path === "/tasks" || route.path.startsWith("/tasks/") ? "/workbench" : route.path
-);
+// 任务相关页（历史/详情/创建）与协作会话子页在 M8 IA 里都归属「协作工作台」高亮。
+const activeMenu = computed(() => {
+  const p = route.path;
+  if (p === "/tasks" || p.startsWith("/tasks/")) return "/workbench";
+  if (p.startsWith("/workbench/")) return "/workbench";
+  return p;
+});
 </script>
 
 <style>
