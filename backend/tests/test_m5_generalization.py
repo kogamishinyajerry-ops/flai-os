@@ -111,6 +111,23 @@ def _outputs_by_name(client: TestClient, app, task: dict) -> dict[str, bytes]:
     return out
 
 
+def _samples(app, task_id: str) -> list[dict[str, Any]]:
+    conn = app.state.conn_factory()
+    try:
+        return repos.list_samples(conn, task_id)
+    finally:
+        conn.close()
+
+
+class _TruncatedStubGateway(_StubGateway):
+    """finish_reason=length：模拟上游因长度上限截断草案（Codex P2 回归）。"""
+
+    def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
+        out = super().chat(profile, messages, **kwargs)
+        out["finish_reason"] = "length"
+        return out
+
+
 # eval_cases/case_001.json 是期望口径的单一事实源
 _CL_CASE = json.loads(
     (REPO_ROOT / "agents" / "control_logic_agent" / "eval_cases" / "case_001.json").read_text(encoding="utf-8")
@@ -186,6 +203,33 @@ def test_control_logic_invalid_transition_failed_honestly(app_env) -> None:
     assert task["output_file_ids"] == []
 
 
+def test_control_logic_md_normalizes_newlines_in_cells(app_env) -> None:
+    """condition 含换行时 Markdown 表格不得断行（Codex P3）。
+
+    input_schema 允许 condition 为任意字符串（含 \\n），若不归一，一行表格会被
+    换行切成多行，整张状态转移表错位——换行必须折成空格后再写入单元格。
+    """
+    client, app = app_env
+    inputs = {
+        "system_name": "换行归一测试",
+        "states": ["idle", "active"],
+        "transitions": [
+            {"from": "idle", "to": "active", "condition": "温度过高\n且压力超限"},
+        ],
+    }
+    task = _create_and_run(client, app, "control_logic_agent", inputs)
+    assert task["status"] == "completed"
+
+    outputs = _outputs_by_name(client, app, task)
+    md = outputs["control_logic.md"].decode("utf-8")
+    assert "温度过高 且压力超限" in md, "换行必须归一为空格，表格保持单行"
+    assert "温度过高\n且压力超限" not in md, "原始换行不得进入表格单元格"
+
+    # 表格结构完整性：从表头到分隔线，每个数据行恰有 4 个 | 边界（防断行错位）
+    table_rows = [ln for ln in md.splitlines() if ln.startswith("| ") and "idle" in ln]
+    assert table_rows and all(ln.count("|") == 4 for ln in table_rows)
+
+
 # ── fta_agent：Gateway 调用链 + waiting_review 人工放行链（M5 核心）──────
 
 
@@ -216,6 +260,7 @@ def test_fta_e2e_waiting_review_then_approve(app_env) -> None:
     assert expected["watermark_substring"] in draft
     assert "不得用于任何" in draft and "安全性判断" in draft
     assert _STUB_DRAFT in draft, "模型草案必须原样存档"
+    assert "草案不完整" not in draft, "finish_reason=stop 时不得误报截断"
 
     # ④ model_call 事件落库（info）+ review_requested；tool_runs 为空（fta 不调工具）
     events = client.get(f"/api/tasks/{task_id}/events").json()
@@ -232,13 +277,22 @@ def test_fta_e2e_waiting_review_then_approve(app_env) -> None:
     finally:
         conn.close()
 
-    # ⑤ 具名人工放行 → completed + review_approved（M1 建成的放行链首次被真实 Agent 使用）
+    # ⑤ 执行阶段样本已落库但工程师确认标签未定（collect_samples=true，NULL 待审）
+    samples_before = _samples(app, task_id)
+    assert len(samples_before) == 1, "collect_samples=true 应恰落一条样本"
+    assert samples_before[0]["accepted_by_engineer"] is None, "放行前 accepted 必须为待定(None)"
+
+    # ⑥ 具名人工放行 → completed + review_approved（M1 建成的放行链首次被真实 Agent 使用）
     review = client.post(
         f"/api/tasks/{task_id}/review",
         json={"action": "approve", "reviewer": "安全性分析师_李工", "comment": "草案结构合理，割集候选已核"},
     )
     assert review.status_code == 200
     assert review.json()["status"] == "completed"
+
+    # ⑦ 放行即回填样本工程师确认标签（Codex P2：approve→True，供下游筛可复用数据）
+    samples_after = _samples(app, task_id)
+    assert samples_after[0]["accepted_by_engineer"] is True
 
     events_after = client.get(f"/api/tasks/{task_id}/events").json()
     approved = [e for e in events_after if e["event_type"] == "review_approved"]
@@ -275,6 +329,57 @@ def test_fta_gateway_upstream_failure_task_failed_honestly(app_env) -> None:
     assert len(calls) == 1
     assert calls[0]["status"] == "failed"
     assert calls[0]["model_profile"] == "reasoning"
+
+
+def test_fta_reject_marks_sample_not_accepted(app_env) -> None:
+    """人工拒绝 → 样本 accepted_by_engineer 回填为 False（Codex P2）。
+
+    被拒草案与被批准草案必须可区分，否则下游 eval/复用会把被拒草案当认可数据。
+    """
+    client, app = app_env
+    app.state.runtime.model_gateway = _StubGateway()
+
+    task = _create_and_run(client, app, "fta_agent", _FTA_CASE["inputs"])
+    task_id = task["id"]
+    assert task["status"] == "waiting_review"
+    assert _samples(app, task_id)[0]["accepted_by_engineer"] is None
+
+    review = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "reject", "reviewer": "安全性分析师_李工", "comment": "割集候选不完整，退回"},
+    )
+    assert review.status_code == 200
+    assert review.json()["status"] == "failed"
+
+    samples_after = _samples(app, task_id)
+    assert len(samples_after) == 1
+    assert samples_after[0]["accepted_by_engineer"] is False, "拒绝必须标记为未认可(False)"
+
+
+def test_fta_truncated_draft_flagged_not_silent(app_env) -> None:
+    """finish_reason=length：截断草案不得静默进入人工放行（Codex P2）。
+
+    草案仍存档（有部分价值）+ 停 waiting_review，但顶部横幅、事件、摘要三处
+    同步告警，审核员不会把不完整草案当完整草案批准。
+    """
+    client, app = app_env
+    app.state.runtime.model_gateway = _TruncatedStubGateway()
+
+    task = _create_and_run(client, app, "fta_agent", _FTA_CASE["inputs"])
+    task_id = task["id"]
+
+    # 截断草案仍走人工放行链（不是静默 completed，也不是伪造完整）
+    assert task["status"] == "waiting_review"
+
+    outputs = _outputs_by_name(client, app, task)
+    draft = outputs["fta_draft.md"].decode("utf-8")
+    assert "草案不完整" in draft, "截断草案必须在正文显著告警"
+    assert "finish_reason=length" in draft
+
+    # 事件层同步留痕：fta_draft_truncated
+    events = client.get(f"/api/tasks/{task_id}/events").json()
+    folded = [e["payload"].get("workflow_event_type") for e in events if e["event_type"] == "agent_log"]
+    assert "fta_draft_truncated" in folded, "截断必须落独立告警事件"
 
 
 # ── 注册对账：四 Agent 三类型同 Registry ─────────────────────────────────

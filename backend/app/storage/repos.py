@@ -495,3 +495,21 @@ def list_samples(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]
         "SELECT * FROM samples WHERE task_id = ? ORDER BY id ASC", (task_id,)
     ).fetchall()
     return [_decode_sample(r) for r in rows]
+
+
+def set_sample_review_outcome(
+    conn: sqlite3.Connection, task_id: str, accepted: bool
+) -> int:
+    """人工放行/拒绝时回填该任务全部样本的 accepted_by_engineer 标签。
+
+    requires_human_review 型 Agent 的样本在执行阶段落库时 accepted_by_engineer
+    留 NULL（结果未定），直到人工审核动作发生：approve→1、reject→0。这样下游
+    eval/复用管道能按「工程师确认」筛样本，而不会把待审/被拒草案混入已认可数据。
+    返回被回填的样本行数（无样本返回 0，不报错）。
+    """
+    accepted_int = int(bool(accepted))
+    cur = conn.execute(
+        "UPDATE samples SET accepted_by_engineer = ? WHERE task_id = ?",
+        (accepted_int, task_id),
+    )
+    return cur.rowcount

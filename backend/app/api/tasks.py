@@ -197,6 +197,13 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
                 detail=f"任务已被并发的人工审核动作转出 waiting_review，本次不生效：{exc}",
             ) from exc
 
+        # 回填该任务全部样本的工程师确认标签（approve→1 / reject→0）。
+        # collect_samples 型 Agent 执行时留 NULL（结果未定），此处按人工审核结论
+        # 定标，确保下游只把工程师认可的草案当作可复用数据。
+        sample_rows = repos.set_sample_review_outcome(
+            conn, task_id, accepted=(body.action == "approve")
+        )
+
         if body.action == "approve":
             repos.append_event(
                 conn,
@@ -204,7 +211,8 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
                 agent_id=task.get("agent_id"),
                 event_type="review_approved",
                 level="info",
-                message=f"人工批准放行（reviewer={body.reviewer}），任务转 completed",
+                message=f"人工批准放行（reviewer={body.reviewer}），任务转 completed"
+                + (f"；{sample_rows} 条样本标记为工程师认可" if sample_rows else ""),
                 payload=payload,
             )
             return task
@@ -215,7 +223,8 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             agent_id=task.get("agent_id"),
             event_type="review_rejected",
             level="warning",
-            message=f"人工拒绝（reviewer={body.reviewer}），任务转 failed",
+            message=f"人工拒绝（reviewer={body.reviewer}），任务转 failed"
+            + (f"；{sample_rows} 条样本标记为未认可" if sample_rows else ""),
             payload=payload,
         )
         return task

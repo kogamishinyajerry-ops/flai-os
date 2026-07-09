@@ -75,7 +75,7 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 | M2 | Web UI 原型：工程师可通过网页跑 Hello Agent | **完成** |
 | M3 | Mock 性能盘 Agent：上传 Excel→批量跑→汇总→样本沉淀（不接真实性能盘）| **完成** |
 | M4 | 真实性能盘 Tool Adapter：替换 Mock，保持调用链不变 | 待开始 |
-| M5 | 平台泛化验证：接入 control_logic_agent、fta_agent 验证非性能盘专用 | 待开始 |
+| M5 | 平台泛化验证：接入 control_logic_agent、fta_agent 验证非性能盘专用 | **完成** |
 
 ## V0.1 已知限制（诚实清单，非缺陷否认）
 
@@ -97,6 +97,11 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
    「加载更多」append），不提供总数计数（无 COUNT 查询）。
 8. **报告纯模板化，无 LLM**：批量任务的 `task_report.md` 为纯 Python 字符串
    模板生成；LLM 摘要报告（失败归纳/修表建议）是 V0.2 项（ADR-0010）。
+9. **fta_agent 真实草案依赖内网模型 key**：`fta_agent`（reasoning_assist）需
+   `FLAI_LLM_BASE_URL` / `FLAI_LLM_API_KEY` / `FLAI_LLM_MODEL_REASONING` 指向内网
+   模型服务才能真实生成故障树草案。本机/CI 无 key 时该 Agent 走 fail-closed→
+   `failed` 并留 `model_call` error 事件（磁盘零残留），只能桩测其调用链与
+   waiting_review 人工放行链，无法真实产出草案——这是环境依赖，非缺陷。
 
 ## 开发口径
 

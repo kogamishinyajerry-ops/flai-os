@@ -28,8 +28,13 @@ def _fail(message: str) -> dict[str, Any]:
 
 
 def _md_escape(value: Any) -> str:
-    """Markdown 表格单元格转义：状态名/条件为用户可控文本，`|` 破坏表格结构。"""
-    return str(value).replace("|", "\\|")
+    """Markdown 表格单元格转义：状态名/条件为用户可控文本。
+
+    `|` 会切断单元格，换行（\\n/\\r）会把一行表格断成多行导致整张表错位——schema
+    允许状态名/条件为任意字符串，故两者都要归一（换行折成空格）后才写入表格。
+    """
+    text = str(value).replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    return text.replace("|", "\\|")
 
 
 def _semantic_problems(states: list[str], transitions: list[dict[str, Any]]) -> list[str]:
