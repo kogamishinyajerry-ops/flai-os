@@ -76,6 +76,10 @@ def test_unknown_api_path_is_honest_404_not_index(spa_client: TestClient) -> Non
     assert resp.status_code == 404
     assert _INDEX_MARK not in resp.text
     assert "接口不存在" in resp.json()["detail"]
+    # 大小写变体同样不得被 index.html 掩盖（反审 P3-1）
+    upper = spa_client.get("/API/no_such_endpoint")
+    assert upper.status_code == 404
+    assert _INDEX_MARK not in upper.text
 
 
 def test_path_traversal_does_not_leak_files_outside_dist(spa_client: TestClient, tmp_path) -> None:

@@ -103,7 +103,11 @@ def list_tasks(
     agent_id: str | None = None,
     status: str | None = None,
     limit: int = 100,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
+    """最近任务流（created_at 降序）分页切片；同刻并列以 id 降序稳定去歧，
+    保证 limit/offset 翻页不重不漏（P2-B：此前硬 LIMIT 100 静默截断）。
+    """
     clauses: list[str] = []
     params: list[Any] = []
     if agent_id is not None:
@@ -113,9 +117,9 @@ def list_tasks(
         clauses.append("status = ?")
         params.append(status)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params.append(limit)
+    params.extend([limit, offset])
     rows = conn.execute(
-        f"SELECT * FROM tasks {where} ORDER BY created_at DESC LIMIT ?", params
+        f"SELECT * FROM tasks {where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", params
     ).fetchall()
     return [_decode_task(r) for r in rows]
 

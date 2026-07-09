@@ -2,6 +2,15 @@
   <div class="task-create">
     <h2>创建任务</h2>
 
+    <el-alert
+      v-if="agentsListError"
+      type="error"
+      :title="`Agent 列表加载失败：${agentsListError}`"
+      show-icon
+      :closable="false"
+      class="inline-alert"
+    />
+
     <el-form label-width="100px" class="create-form">
       <el-form-item label="Agent" required>
         <el-select
@@ -73,16 +82,29 @@
         <div v-if="uploadItems.length" class="upload-list">
           <div v-for="item in uploadItems" :key="item.uid" class="upload-item">
             <span class="upload-name">{{ item.name }}</span>
-            <el-tag v-if="item.status === 'uploading'" type="info" size="small">上传中…</el-tag>
+            <el-tag v-if="item.status === 'pending'" size="small">待上传</el-tag>
+            <el-tag v-else-if="item.status === 'uploading'" type="info" size="small">上传中…</el-tag>
             <el-tag v-else-if="item.status === 'done'" type="success" size="small">已上传</el-tag>
             <el-tag v-else type="danger" size="small">失败：{{ item.error }}</el-tag>
-            <el-button size="small" text @click="removeUploadItem(item)">移除</el-button>
+            <el-button size="small" text :disabled="submitting" @click="removeUploadItem(item)">移除</el-button>
           </div>
         </div>
+        <div class="field-hint">文件在提交任务时才上传；提交前移除不产生任何服务端残留。</div>
       </el-form-item>
 
+      <el-alert
+        v-if="submitError"
+        type="error"
+        :title="submitError"
+        show-icon
+        :closable="false"
+        class="inline-alert"
+      />
+
       <el-form-item>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">提交任务</el-button>
+        <el-button type="primary" :loading="submitting" @click="handleSubmit">
+          {{ uploadingFiles ? "上传附件中…" : "提交任务" }}
+        </el-button>
       </el-form-item>
     </el-form>
   </div>
@@ -103,8 +125,11 @@ const router = useRouter();
 const agents = ref([]);
 const selectedAgent = ref(null);
 const agentLoadError = ref("");
+const agentsListError = ref("");
 const inputsJsonError = ref("");
 const submitting = ref(false);
+const uploadingFiles = ref(false);
+const submitError = ref("");
 const uploadItems = ref([]);
 
 const form = reactive({
@@ -117,11 +142,14 @@ const form = reactive({
 async function loadAgents() {
   try {
     agents.value = await listAgents();
+    agentsListError.value = "";
     if (form.agentId) {
       await handleAgentChange(form.agentId);
     }
   } catch (err) {
-    ElMessage.error(err.detail || err.message);
+    // 持久 alert 而非瞬时 toast：toast 消失后空下拉框与「确实没有 Agent」
+    // 无法区分（反方审查 P2-2，与其余页面口径一致）。
+    agentsListError.value = err.detail || err.message;
   }
 }
 
@@ -139,29 +167,43 @@ async function handleAgentChange(agentId) {
   }
 }
 
+// P2-A：选中文件只入列（status:"pending"，raw File 留在本地），提交时才上传——
+// 杜绝「选中即上传」在移除/弃页/创建失败时留下的孤儿 blob。
 let uploadSeq = 0;
 function handleFileSelect(uploadFile) {
-  const item = reactive({
-    uid: uploadFile.uid ?? `up_${++uploadSeq}`,
-    name: uploadFile.name,
-    status: "uploading",
-    fileId: null,
-    error: "",
-  });
-  uploadItems.value.push(item);
-  apiUploadFile(uploadFile.raw)
-    .then((res) => {
-      item.status = "done";
-      item.fileId = res.id;
+  uploadItems.value.push(
+    reactive({
+      uid: uploadFile.uid ?? `up_${++uploadSeq}`,
+      name: uploadFile.name,
+      status: "pending",
+      raw: uploadFile.raw,
+      fileId: null,
+      error: "",
     })
-    .catch((err) => {
-      item.status = "error";
-      item.error = err.detail || err.message;
-    });
+  );
 }
 
 function removeUploadItem(item) {
   uploadItems.value = uploadItems.value.filter((i) => i.uid !== item.uid);
+}
+
+async function uploadPendingFiles() {
+  // 顺序上传全部未完成项（含上一轮失败重试项）；任一失败即中止并如实报错。
+  for (const item of uploadItems.value) {
+    if (item.status === "done") continue;
+    item.status = "uploading";
+    item.error = "";
+    try {
+      const res = await apiUploadFile(item.raw);
+      item.status = "done";
+      item.fileId = res.id;
+    } catch (err) {
+      item.status = "error";
+      item.error = err.detail || err.message;
+      return item;
+    }
+  }
+  return null;
 }
 
 async function handleSubmit() {
@@ -182,14 +224,22 @@ async function handleSubmit() {
     return;
   }
   inputsJsonError.value = "";
-
-  if (uploadItems.value.some((i) => i.status === "uploading")) {
-    ElMessage.warning("文件仍在上传中，请等待完成后再提交");
-    return;
-  }
+  submitError.value = "";
 
   submitting.value = true;
   try {
+    if (uploadItems.value.some((i) => i.status !== "done")) {
+      uploadingFiles.value = true;
+      const failed = await uploadPendingFiles();
+      uploadingFiles.value = false;
+      if (failed) {
+        // 持久错误提示（非瞬时 toast）：中止提交，已成的项保留 done 状态，
+        // 用户可修正后重试（重试只补传未完成项）。
+        submitError.value = `附件「${failed.name}」上传失败：${failed.error}，任务未创建`;
+        return;
+      }
+    }
+
     const task = await createTask({
       agentId: form.agentId,
       name: form.name.trim() || null,
@@ -202,6 +252,7 @@ async function handleSubmit() {
   } catch (err) {
     ElMessage.error(err.detail || err.message);
   } finally {
+    uploadingFiles.value = false;
     submitting.value = false;
   }
 }

@@ -18,6 +18,7 @@
             :value="t.id"
           />
         </el-select>
+        <div class="select-hint">仅显示最近 100 条任务，更早任务从任务历史页进入详情提交反馈</div>
       </el-form-item>
     </el-form>
 
@@ -153,6 +154,12 @@ onMounted(async () => {
 }
 .task-select-form {
   margin-bottom: 8px;
+}
+.select-hint {
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 4px;
 }
 .feedback-form {
   margin-top: 16px;

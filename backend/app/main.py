@@ -121,7 +121,8 @@ def create_app(
             """SPA catch-all：真实静态文件按文件回，其余路径回 index.html
             （vue-router history 模式深链刷新）。/api/* 未匹配到路由的一律
             如实 404 JSON，绝不用 index.html 掩盖接口不存在。"""
-            if full_path == "api" or full_path.startswith("api/"):
+            lowered = full_path.lower()
+            if lowered == "api" or lowered.startswith("api/"):
                 raise HTTPException(status_code=404, detail=f"接口不存在：/{full_path}")
             candidate = (frontend_dist_dir / full_path) if full_path else None
             if (

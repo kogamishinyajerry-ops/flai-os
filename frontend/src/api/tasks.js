@@ -12,10 +12,12 @@ export const createTask = ({ agentId, name, inputs, inputFileIds, createdBy }) =
     },
   });
 
-export const listTasks = ({ status, agentId } = {}) => {
+export const listTasks = ({ status, agentId, limit, offset } = {}) => {
   const params = new URLSearchParams();
   if (status) params.set("status", status);
   if (agentId) params.set("agent_id", agentId);
+  if (limit != null) params.set("limit", String(limit));
+  if (offset != null) params.set("offset", String(offset));
   const qs = params.toString();
   return request(`/api/tasks${qs ? `?${qs}` : ""}`);
 };

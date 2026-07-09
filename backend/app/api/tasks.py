@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
 from ..core.errors import IllegalTransitionError
@@ -98,10 +98,12 @@ def list_tasks(
     request: Request,
     status: str | None = None,
     agent_id: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500, description="每页条数（1-500）"),
+    offset: int = Query(default=0, ge=0, description="跳过条数（最近任务流分页语义，无总数计数）"),
 ) -> list[dict[str, Any]]:
     conn = request.app.state.conn_factory()
     try:
-        return repos.list_tasks(conn, agent_id=agent_id, status=status)
+        return repos.list_tasks(conn, agent_id=agent_id, status=status, limit=limit, offset=offset)
     finally:
         conn.close()
 

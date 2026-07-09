@@ -6,6 +6,9 @@
       <div class="page-header">
         <h2>任务详情</h2>
         <el-tag :type="statusTagType(task.status)">{{ statusLabel(task.status) }}</el-tag>
+        <!-- waiting_review 时轮询停止（避免无人值守页面永久空转），跨会话的
+             人工放行结果靠本按钮手动拉取（反方审查 P2-1）。 -->
+        <el-button text type="primary" class="refresh-btn" @click="loadTask()">刷新</el-button>
       </div>
 
       <el-descriptions :column="2" border class="task-descriptions">

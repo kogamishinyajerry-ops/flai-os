@@ -77,6 +77,24 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 | M4 | 真实性能盘 Tool Adapter：替换 Mock，保持调用链不变 | 待开始 |
 | M5 | 平台泛化验证：接入 control_logic_agent、fta_agent 验证非性能盘专用 | 待开始 |
 
+## V0.1 已知限制（诚实清单，非缺陷否认）
+
+1. **任务 inputs 为 JSON 直填**：创建任务页按 Agent 输入契约手写 JSON；按
+   `input_schema.json` 自动生成结构化表单是 M3 项。
+2. **前端 bundle ~1MB**：Element Plus 全量引入未做按需 tree-shaking；内网静态
+   托管场景（无公网带宽约束）接受此体积。
+3. **零前端单测**：前端验证靠 `frontend/e2e/m2_acceptance.py` 真浏览器走查 +
+   后端 200+ 项 API 契约测试兜底；组件级单测暂缺。
+4. **feedback.message 无长度上限**：追加式日志表，事件 payload 摘要已截 200，
+   落库全文不限长。
+5. **上传孤儿文件残余窗口**：附件已改为提交任务时才上传（选中/移除不产生服务端
+   残留），但「附件上传成功后 createTask 失败」仍会留下无主文件——孤儿 GC 是
+   M3 项。
+6. **TaskDetail 轮询无退避**：固定间隔轮询，`waiting_review` 等长驻状态停止轮询
+   后靠「刷新」按钮手动更新。
+7. **任务列表为「最近任务流」分页语义**：`limit/offset` 往回翻页（每页 100，
+   「加载更多」append），不提供总数计数（无 COUNT 查询）。
+
 ## 开发口径
 
 - 后端：Python 3.10+ / FastAPI / SQLite / Pydantic v2 / JSON Schema / pytest。

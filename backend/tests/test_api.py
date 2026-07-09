@@ -128,6 +128,62 @@ def test_create_task_success_then_run_once_completes(client: TestClient, app_env
     assert download_resp.status_code == 200
 
 
+# ── tasks: 列表分页（P2-B：拆掉硬 LIMIT 100 静默截断）─────────────────────
+
+
+def _create_n_tasks(client: TestClient, n: int) -> list[str]:
+    ids = []
+    for i in range(n):
+        resp = client.post(
+            "/api/tasks",
+            json={"agent_id": "hello_agent", "inputs": {"name": f"分页{i}"}, "name": f"page-{i}"},
+        )
+        assert resp.status_code == 200
+        ids.append(resp.json()["id"])
+    return ids
+
+
+def test_list_tasks_limit_offset_slice(client: TestClient) -> None:
+    """5 任务验 limit=2/offset=2 切片：最近任务流（created_at 降序）第二页
+    恰是第 3、4 新的两条，且与全量列表的对应切片逐条一致。
+    """
+    _create_n_tasks(client, 5)
+
+    full = client.get("/api/tasks", params={"limit": 500}).json()
+    assert len(full) == 5
+
+    page = client.get("/api/tasks", params={"limit": 2, "offset": 2}).json()
+    assert len(page) == 2
+    assert [t["id"] for t in page] == [t["id"] for t in full[2:4]]
+
+    # 末页不足一页：offset=4 只剩 1 条（前端「加载更多」按钮消失的判定依据）
+    last_page = client.get("/api/tasks", params={"limit": 2, "offset": 4}).json()
+    assert len(last_page) == 1
+    assert last_page[0]["id"] == full[4]["id"]
+
+
+def test_list_tasks_pagination_covers_all_without_dup_or_loss(client: TestClient) -> None:
+    """翻页不重不漏：limit=2 连续翻 3 页拼起来 == 全量 5 条。"""
+    _create_n_tasks(client, 5)
+    collected = []
+    for offset in (0, 2, 4):
+        collected += client.get("/api/tasks", params={"limit": 2, "offset": offset}).json()
+    full = client.get("/api/tasks", params={"limit": 500}).json()
+    assert [t["id"] for t in collected] == [t["id"] for t in full]
+
+
+@pytest.mark.parametrize("params", [
+    {"limit": 0},        # 下越界
+    {"limit": 501},      # 上越界
+    {"limit": -1},
+    {"offset": -1},
+    {"limit": "abc"},    # 非整数
+])
+def test_list_tasks_out_of_range_pagination_422(client: TestClient, params: dict) -> None:
+    resp = client.get("/api/tasks", params=params)
+    assert resp.status_code == 422
+
+
 # ── tasks: cancel 语义 ────────────────────────────────────────────────────
 
 

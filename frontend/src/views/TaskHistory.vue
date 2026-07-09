@@ -46,6 +46,10 @@
         <el-empty description="暂无任务" />
       </template>
     </el-table>
+
+    <div v-if="hasMore" class="load-more">
+      <el-button :loading="loadingMore" @click="loadMore">加载更多</el-button>
+    </div>
   </div>
 </template>
 
@@ -60,22 +64,49 @@ const router = useRouter();
 const tasks = ref([]);
 const agents = ref([]);
 const loading = ref(false);
+const loadingMore = ref(false);
 const loadError = ref("");
+// P2-B「最近任务流」分页：每页 100，append 式加载更多；返回不足一页即到底
+// （V0.1 不做总数 COUNT，语义就是往回翻的任务流）。
+const PAGE_SIZE = 100;
+const hasMore = ref(false);
 
 const filters = reactive({ status: "", agentId: "" });
+
+function _query(offset) {
+  return {
+    status: filters.status || undefined,
+    agentId: filters.agentId || undefined,
+    limit: PAGE_SIZE,
+    offset,
+  };
+}
 
 async function load() {
   loading.value = true;
   try {
-    tasks.value = await listTasks({
-      status: filters.status || undefined,
-      agentId: filters.agentId || undefined,
-    });
+    const page = await listTasks(_query(0));
+    tasks.value = page;
+    hasMore.value = page.length === PAGE_SIZE;
     loadError.value = "";
   } catch (err) {
     loadError.value = err.detail || err.message;
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadMore() {
+  loadingMore.value = true;
+  try {
+    const page = await listTasks(_query(tasks.value.length));
+    tasks.value = tasks.value.concat(page);
+    hasMore.value = page.length === PAGE_SIZE;
+    loadError.value = "";
+  } catch (err) {
+    loadError.value = err.detail || err.message;
+  } finally {
+    loadingMore.value = false;
   }
 }
 
@@ -110,5 +141,10 @@ onMounted(async () => {
 }
 .task-table :deep(.el-table__row) {
   cursor: pointer;
+}
+.load-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
 }
 </style>
