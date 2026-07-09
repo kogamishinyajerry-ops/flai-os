@@ -93,6 +93,7 @@ parsing analyzing completed failed cancelled
 | `feedback_received` | 用户提交任务反馈 | info |
 | `warning` | 不归属以上类型的告警（须在 message 写明来源） | warning |
 | `error` | 不归属以上类型的错误（须在 message 写明来源） | error |
+| `agent_log` | Agent workflow 自报的过程日志——workflow 内 event_logger 发出的**任何**自定义类型均由 Runtime 统一折叠为本类型，原始类型进 `payload.workflow_event_type`（枚举不因业务 Agent 膨胀，ADR-0008） | info |
 
 新增事件类型须先扩展 `event.schema.json` 枚举并记 ADR，禁止 Agent 私自使用未注册的 `event_type` 字符串。
 
@@ -101,6 +102,22 @@ parsing analyzing completed failed cancelled
 批量类 Agent（如性能盘）中，单个 case 失败只产生 `tool_failed` 事件并在该 case 的样本记录中标注失败，**不得**直接把整个任务判 `task_failed`。任务级失败仅在：输入校验失败、Agent Runtime 抛未捕获异常、或全部 case 均失败（由 Agent 自身业务规则判定并写明于 `agent.yaml.limitations`）时触发。
 
 ## 6. 违规判定（供架构审查用）
+
+### 两处文档化原子例外
+
+以下两处状态迁移由动作本身原子完成（迁移与见证同一次调用内发生），不要求
+迁移前后各配一条独立事件，但迁移必须被同批写入的事件显式见证，不判违规：
+
+1. **`created` → `queued`**：由 `POST /api/tasks` 创建动作原子完成（同一请求
+   内建任务后立即入队）。`task_created` 事件在状态已迁至 `queued` 之后写入，
+   `payload.status_from`/`payload.status_to` 显式携带 `created→queued` 双态
+   见证——事件本身既报告"任务已创建"也见证了紧随其后的入队动作。
+2. **`queued` → `validating`**：由 Job Runner `claim_next_queued` 原子完成
+   （sqlite `BEGIN IMMEDIATE` 事务内直接迁移，不经过 API 层单独一步）。紧随
+   其后写入的 `validation_started` 事件即是该次迁移的见证。
+
+除以上两处，任务状态变化若查不到对应事件，一律判违规——不得援引"迁移很快/
+由动作原子完成"为由绕过留痕。
 
 - 任务状态变化但查不到对应事件 → 判违规（无事件=没发生）。
 - `waiting_review` 被自动化逻辑直接转 `completed`（未经 `review_approved` 事件）→ 判严重违规，等同绕过人工判决红线。

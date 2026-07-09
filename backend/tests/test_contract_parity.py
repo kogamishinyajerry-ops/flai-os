@@ -1,0 +1,127 @@
+"""API 响应 <-> contracts/*.schema.json 常驻咬合测试（P1-2/P1-3 契约对账）。
+
+这是防未来漂移的常驻 gate：走真实 FastAPI TestClient 打 POST /api/tasks、
+GET /api/tasks/{id}、GET /api/tasks/{id}/events，把响应体逐条
+jsonschema.validate 对 contracts/task.schema.json 与 contracts/event.schema.json。
+两份契约都是 additionalProperties=false，任何一方（API 序列化字段 / schema
+声明）单方面漂移——多一个字段、少一个必填字段——都会被本测试咬住，而不是
+等到前端联调才发现契约说谎。
+
+反方审查发现的两处具体漂移，本测试即回归钉子：
+1. task 对象带 `inputs` 键，但 task.schema.json 未声明该属性
+   （additionalProperties=false 下会校验失败）——已在 contracts/task.schema.json
+   补充 `inputs` 属性。
+2. event 对象把 sqlite 自增主键 `id` 也带出来了，但 event.schema.json 只认
+   `event_id` 为对外唯一键——已在 repos._decode_event 里 `d.pop("id", None)`。
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Iterator
+
+import pytest
+from fastapi.testclient import TestClient
+from jsonschema import validate
+
+from backend.app.jobs.runner import JobRunner
+from backend.app.main import create_app
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CONTRACTS_DIR = REPO_ROOT / "contracts"
+
+
+def _load_schema(name: str) -> dict[str, Any]:
+    return json.loads((CONTRACTS_DIR / name).read_text(encoding="utf-8"))
+
+
+TASK_SCHEMA = _load_schema("task.schema.json")
+EVENT_SCHEMA = _load_schema("event.schema.json")
+
+
+@pytest.fixture()
+def app_env(tmp_path):
+    app = create_app(
+        agents_dir=REPO_ROOT / "agents",
+        tools_dir=REPO_ROOT / "tools_impl",
+        contracts_dir=REPO_ROOT / "contracts",
+        db_path=tmp_path / "flai_os.db",
+        uploads_dir=tmp_path / "uploads",
+        task_runs_dir=tmp_path / "task_runs",
+    )
+    with TestClient(app) as client:
+        yield client, app
+
+
+@pytest.fixture()
+def client(app_env) -> Iterator[TestClient]:
+    c, _ = app_env
+    yield c
+
+
+def test_create_task_response_matches_task_schema(client: TestClient) -> None:
+    resp = client.post(
+        "/api/tasks",
+        json={"agent_id": "hello_agent", "inputs": {"name": "契约对账"}, "created_by": "parity_test"},
+    )
+    assert resp.status_code == 200
+    validate(resp.json(), TASK_SCHEMA)
+
+
+def test_get_task_response_matches_task_schema(client: TestClient) -> None:
+    create_resp = client.post(
+        "/api/tasks",
+        json={"agent_id": "hello_agent", "inputs": {"name": "契约对账2"}, "created_by": "parity_test"},
+    )
+    task_id = create_resp.json()["id"]
+
+    resp = client.get(f"/api/tasks/{task_id}")
+    assert resp.status_code == 200
+    validate(resp.json(), TASK_SCHEMA)
+
+
+def test_completed_task_response_matches_task_schema(client: TestClient, app_env) -> None:
+    """跑完整生命周期到 completed，覆盖 started_at/finished_at/output_file_ids 均非空的分支。"""
+    _, app = app_env
+    create_resp = client.post(
+        "/api/tasks",
+        json={"agent_id": "hello_agent", "inputs": {"name": "契约对账3"}, "created_by": "parity_test"},
+    )
+    task_id = create_resp.json()["id"]
+
+    runner = JobRunner(app.state.runtime, app.state.conn_factory)
+    assert runner.run_once() is True
+
+    resp = client.get(f"/api/tasks/{task_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "completed"
+    validate(body, TASK_SCHEMA)
+
+
+def test_task_events_response_matches_event_schema_across_full_lifecycle(client: TestClient, app_env) -> None:
+    """跑到 completed 覆盖尽量多的 event_type（task_created/validation_started/
+    tool_started/tool_finished/agent_log/task_completed），逐条校验对 event.schema.json。
+    """
+    _, app = app_env
+    create_resp = client.post(
+        "/api/tasks",
+        json={"agent_id": "hello_agent", "inputs": {"name": "契约对账4"}, "created_by": "parity_test"},
+    )
+    task_id = create_resp.json()["id"]
+
+    runner = JobRunner(app.state.runtime, app.state.conn_factory)
+    assert runner.run_once() is True
+
+    events_resp = client.get(f"/api/tasks/{task_id}/events")
+    assert events_resp.status_code == 200
+    events = events_resp.json()
+    assert len(events) >= 5, "覆盖面太窄，未能跑出足够的事件类型用于契约抽检"
+
+    event_types = {e["event_type"] for e in events}
+    assert {"task_created", "validation_started", "tool_started", "tool_finished", "task_completed"} <= event_types
+
+    for event in events:
+        validate(event, EVENT_SCHEMA)
+        assert "id" not in event, "事件对外响应不得泄漏 sqlite 自增主键 id，唯一键=event_id"

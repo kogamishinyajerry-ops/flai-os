@@ -10,7 +10,12 @@
     "id": { "type": "string", "minLength": 1, "description": "任务全局唯一 ID（建议 UUID）。" },
     "agent_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$", "description": "对应 agent.yaml 的 id，Registry 中必须存在。" },
     "agent_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$", "description": "任务创建时锁定的 Agent semver；同一 Agent 升版不影响历史任务的可追溯口径。" },
-    "name": { "type": "string", "minLength": 1, "maxLength": 200, "description": "任务显示名（门户任务列表用），通常由发起人或前端默认填充。" },
+    "name": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "任务显示名（门户任务列表用），通常由发起人或前端默认填充；创建时未传则为 null（CreateTaskRequest.name 是可选字段），不得省略字段。"
+    },
     "status": {
       "type": "string",
       "enum": [
@@ -22,7 +27,11 @@
     "created_by": { "type": "string", "minLength": 1, "description": "发起用户/角色标识，对齐 agent.yaml permissions.allowed_roles 的鉴权主体。" },
     "created_at": { "type": "string", "format": "date-time", "description": "ISO 8601 时间戳。" },
     "updated_at": { "type": "string", "format": "date-time", "description": "状态最近一次变更时间；每次状态迁移必须同步刷新。" },
-    "started_at": { "type": "string", "format": "date-time", "description": "进入 running 的时间戳。" },
+    "started_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "进入 running 的时间戳；running 之前为 null，不得省略字段。"
+    },
     "finished_at": {
       "type": ["string", "null"],
       "format": "date-time",
@@ -43,6 +52,10 @@
     "error_message": {
       "type": ["string", "null"],
       "description": "失败原因摘要（status=failed 时必填非 null）；未失败时为 null。禁止塞入未脱敏的原始堆栈——脱敏后的可读摘要，原始堆栈走 Event 的 payload。"
+    },
+    "inputs": {
+      "type": "object",
+      "description": "params 型任务的结构化输入（经 agent input_schema.json 校验）；file_upload 型任务此字段可为空对象，输入走 input_file_ids。"
     },
     "metadata": {
       "type": "object",

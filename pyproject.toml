@@ -12,6 +12,7 @@ dependencies = [
     "jsonschema",
     "pyyaml",
     "python-multipart",
+    "httpx",
 ]
 
 [project.optional-dependencies]

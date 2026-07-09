@@ -1,0 +1,161 @@
+"""ModelGateway 测试（docs/04_Model_Gateway_Standard.md / ADR-0003）：画像制 + fail-closed + 全量留痕。
+
+覆盖：
+- profile 未在 profiles.yaml 声明 → ProfileNotConfiguredError；
+- 对应环境变量缺失 → ModelUpstreamError，且 model_calls 记 failed；
+- httpx.MockTransport 假 200 → 成功且 model_calls 记 success（绝无真网络）；
+- 上游 500 → ModelUpstreamError + model_calls 记 failed。
+
+真实 backend/app/model_gateway/profiles.yaml 声明的 reasoning/fast 两个画像共用
+FLAI_LLM_BASE_URL / FLAI_LLM_API_KEY / FLAI_LLM_MODEL_REASONING|FAST 三类环境变量，
+本文件直接用这份真实交付件做测试（而非另造一份 profiles.yaml），环境变量全靠
+monkeypatch 注入/清空，全程不触真实网络。
+"""
+
+from __future__ import annotations
+
+import httpx
+import pytest
+
+from backend.app.config import REPO_ROOT
+from backend.app.core.errors import ModelUpstreamError, ProfileNotConfiguredError
+from backend.app.model_gateway import gateway as gateway_mod
+from backend.app.model_gateway.gateway import ModelGateway
+from backend.app.storage import db as db_mod
+from backend.app.storage import repos
+
+PROFILES_PATH = REPO_ROOT / "backend" / "app" / "model_gateway" / "profiles.yaml"
+
+_ENV_VARS = ("FLAI_LLM_BASE_URL", "FLAI_LLM_API_KEY", "FLAI_LLM_MODEL_REASONING", "FLAI_LLM_MODEL_FAST")
+
+
+@pytest.fixture(autouse=True)
+def _clean_llm_env(monkeypatch):
+    """每个测试前清空 LLM 相关环境变量，避免宿主机真实设置串扰测试。"""
+    for var in _ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+def _make_conn_factory(tmp_path, name: str = "gw.db"):
+    db_path = tmp_path / name
+    db_mod.init_db(db_path)
+    return db_path, (lambda: db_mod.get_conn(db_path))
+
+
+# ── profile 未配置 ─────────────────────────────────────────────────────────
+
+def test_chat_profile_not_configured_raises() -> None:
+    gateway = ModelGateway(PROFILES_PATH)
+    with pytest.raises(ProfileNotConfiguredError):
+        gateway.chat("no_such_profile", [{"role": "user", "content": "hi"}])
+
+
+# ── env 缺失 → ModelUpstreamError + model_calls 记 failed ──────────────────
+
+def test_chat_missing_env_raises_model_upstream_error_and_records_failed(tmp_path) -> None:
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    with pytest.raises(ModelUpstreamError):
+        gateway.chat("reasoning", [{"role": "user", "content": "你好"}], task_id="task_a")
+
+    conn = db_mod.get_conn(db_path)
+    calls = repos.list_model_calls(conn, "task_a")
+    conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+    assert calls[0]["model_profile"] == "reasoning"
+    assert calls[0]["error_message"]
+
+
+def test_embed_missing_env_raises_and_records_failed(tmp_path) -> None:
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    with pytest.raises(ModelUpstreamError):
+        gateway.embed("reasoning", "待向量化文本", task_id="task_embed")
+
+    conn = db_mod.get_conn(db_path)
+    calls = repos.list_model_calls(conn, "task_embed")
+    conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+
+
+# ── httpx.MockTransport 假 200 → 成功且 model_calls 记 success ──────────────
+
+def test_chat_success_via_mock_transport_records_success(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("FLAI_LLM_BASE_URL", "https://fake-llm.internal")
+    monkeypatch.setenv("FLAI_LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("FLAI_LLM_MODEL_REASONING", "glm-mock")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/chat/completions"
+        assert request.headers.get("authorization") == "Bearer fake-key"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "你好，世界"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3},
+            },
+        )
+
+    def fake_post(url, *, json, headers, timeout):
+        transport = httpx.MockTransport(handler)
+        with httpx.Client(transport=transport) as client:
+            return client.post(url, json=json, headers=headers)
+
+    monkeypatch.setattr(gateway_mod.httpx, "post", fake_post)
+
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    result = gateway.chat("reasoning", [{"role": "user", "content": "你好"}], task_id="task_b")
+    assert result["content"] == "你好，世界"
+    assert result["model_name"] == "glm-mock"
+    assert result["token_usage"] == {"prompt_tokens": 5, "completion_tokens": 3}
+
+    conn = db_mod.get_conn(db_path)
+    calls = repos.list_model_calls(conn, "task_b")
+    conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "success"
+    assert calls[0]["model_name"] == "glm-mock"
+
+
+# ── 上游 500 → ModelUpstreamError + model_calls 记 failed ──────────────────
+
+def test_chat_upstream_500_raises_model_upstream_error_and_records_failed(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("FLAI_LLM_BASE_URL", "https://fake-llm.internal")
+    monkeypatch.setenv("FLAI_LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("FLAI_LLM_MODEL_REASONING", "glm-mock")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="内部服务错误")
+
+    def fake_post(url, *, json, headers, timeout):
+        transport = httpx.MockTransport(handler)
+        with httpx.Client(transport=transport) as client:
+            return client.post(url, json=json, headers=headers)
+
+    monkeypatch.setattr(gateway_mod.httpx, "post", fake_post)
+
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    with pytest.raises(ModelUpstreamError):
+        gateway.chat("reasoning", [{"role": "user", "content": "你好"}], task_id="task_c")
+
+    conn = db_mod.get_conn(db_path)
+    calls = repos.list_model_calls(conn, "task_c")
+    conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+    assert "500" in calls[0]["error_message"]
+
+
+def test_conn_factory_none_skips_db_write() -> None:
+    """conn_factory=None 时跳过落库（供库内自测），env 缺失仍应 fail-closed 抛错。"""
+    gateway = ModelGateway(PROFILES_PATH)
+    with pytest.raises(ModelUpstreamError):
+        gateway.chat("reasoning", [{"role": "user", "content": "hi"}])

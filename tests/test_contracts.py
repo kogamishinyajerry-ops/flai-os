@@ -151,6 +151,19 @@ def test_task_schema_has_ten_states() -> None:
     }, "任务十态与任务书 §4.5 口径漂移"
 
 
+def test_task_schema_accepts_inputs_property() -> None:
+    """P1-2：params 型任务的 inputs 字段是真实 API 响应携带的键，task.schema.json
+    必须声明它（additionalProperties=false 下缺声明 = 契约与实现互相说谎）。
+    """
+    schema = _load_schema("task.schema.json")
+    sample = {
+        "id": "task_001", "agent_id": "hello_agent", "agent_version": "0.1.0",
+        "status": "queued", "created_by": "tester", "created_at": "2026-07-08T00:00:00Z",
+        "inputs": {"name": "张三"},
+    }
+    validate(sample, schema)
+
+
 def test_event_schema_smoke() -> None:
     schema = _load_schema("event.schema.json")
     sample = {

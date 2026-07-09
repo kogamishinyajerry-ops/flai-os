@@ -85,15 +85,33 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 - 模型调用一律经 Model Gateway，禁止 Agent 直连具体模型。
 - 工具调用一律经 Tool Registry，禁止 Agent 绕过调用未注册工具。
 
-## 三条命令（占位，M1 完成后填真实命令）
+## 三条命令（M1 已实现）
 
 ```bash
-# 待 M1 实现：启动后端
-bash scripts/dev_start_backend.sh   # 当前为 NOT-IMPLEMENTED 占位
+# 1. 初始化数据库（幂等，可重复执行；首次启动前跑一次）
+bash scripts/init_db.sh
 
-# 待 M1 实现：跑测试
-pytest
+# 2. 启动后端（uvicorn backend.app.main:app，默认端口 8620，被占则设
+#    FLAI_BACKEND_PORT 换端口，绝不挤占已有进程）
+bash scripts/dev_start_backend.sh
 
+# 3. 启动 Job Runner（单独进程轮询 queued 任务并驱动 Agent 执行）
+bash scripts/dev_start_worker.sh
+```
+
+内网 Windows 部署用同目录下同名 `.ps1`（头注 DECLARED-NOT-VERIFIED，本机未测，行为与 `.sh` 保持一致）。
+
+跑测试：
+
+```bash
+uv run --no-project --with pytest --with jsonschema --with pyyaml \
+  --with fastapi --with httpx --with python-multipart --with "pydantic>2" \
+  python -m pytest -q
+```
+
+前端起法待 M2 实现：
+
+```bash
 # 待 M2 实现：起前端
 bash scripts/dev_start_frontend.sh  # 当前为 NOT-IMPLEMENTED 占位
 ```

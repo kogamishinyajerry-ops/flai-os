@@ -1,0 +1,21 @@
+# Model Gateway 画像 → 模型映射配置（docs/04_Model_Gateway_Standard.md）。
+#
+# 每条对 contracts/model_profile.schema.json 校验；真实内网端点/鉴权/模型名一律
+# 待内网侦察，此处只声明"存放这些值的环境变量名"，绝不在此文件里编造具体 URL/Key/模型名。
+# 升级模型（如 GLM-5.1 -> 5.2）只需改运行环境里对应环境变量的值，本文件与 Agent 代码零改动。
+
+- profile_id: reasoning
+  purpose: 复杂推理与长链条分析（如性能盘异常摘要、FTA 辅助推理），对应任务书能力槽位「推理档」
+  provider: openai_compatible
+  base_url_env: FLAI_LLM_BASE_URL
+  api_key_env: FLAI_LLM_API_KEY
+  model_env: FLAI_LLM_MODEL_REASONING
+  notes: "待内网侦察：内网端点形态/鉴权方式未知，V0.1 环境变量未设置时 fail-closed 抛 ModelUpstreamError"
+
+- profile_id: fast
+  purpose: 轻量任务（字段别名识别、简单提示等低复杂度调用），对应任务书能力槽位「快速档」
+  provider: openai_compatible
+  base_url_env: FLAI_LLM_BASE_URL
+  api_key_env: FLAI_LLM_API_KEY
+  model_env: FLAI_LLM_MODEL_FAST
+  notes: "待内网侦察：与 reasoning 画像共用网关端点，仅模型名环境变量不同"
