@@ -37,6 +37,26 @@ ATTACHMENT_RULE_LINE = (
 )
 
 
+def _neutralize_sentinels(text: str) -> str:
+    """拆开附件正文/文件名里的 `<<` `>>` 序列——杜绝 fence 逃逸（反方审 P1）。
+
+    附件正文若含 `<<END_ATTACHMENT>>` 会**提前闭合** fence，把其后的注入文字
+    踢到任何 `<<ATTACHMENT>>` 块之外，规则行（只声明「以下块是数据」）便管不到；
+    文件名含 `>>`/换行同理能断开 header。中和把每个 `<<`/`>>` 插一个空格
+    （`< <` / `> >`）——对 LLM 语义无损、人类可读，但字面上再也拼不出定界符，
+    附件内容因此**结构上永远无法伪装成 fence 或规则行**。安全 > 字面保真：
+    工程数据里真实的 `<<`（如 C++ 流运算符）会显示成 `< <`，是可接受代价。
+    """
+    return text.replace("<<", "< <").replace(">>", "> >")
+
+
+def _safe_filename_for_header(name: str) -> str:
+    """文件名安全化后放进 header 的 `file="..."`：去控制字符/换行/引号 + 中和
+    sentinel（反方审 P1-B：文件名换行/引号能断开 header 那一行）。"""
+    cleaned = "".join(ch for ch in (name or "") if ch.isprintable() and ch != '"')
+    return _neutralize_sentinels(cleaned) or "unnamed"
+
+
 def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
@@ -45,7 +65,12 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def _render_text_file(path: Path, limit: int) -> str:
-    raw = path.read_bytes()
+    # 只读渲染所需字节，不 read_bytes() 全量载入（反方审 P2：大文本每轮重渲染
+    # 的内存放大——xlsx 已 read_only 流式，文本路径此前却全量读，防御不对称）。
+    # UTF-8 最坏 4 字节/字符，读 limit*4 + 余量即保证够 limit 个字符可切。
+    max_bytes = limit * 4 + 64
+    with path.open("rb") as fh:
+        raw = fh.read(max_bytes)
     text = raw.decode("utf-8", errors="replace")
     return _truncate(text, limit)
 
@@ -83,20 +108,26 @@ def _render_xlsx_file(path: Path, limit: int) -> str:
 def render_one(file_row: dict[str, Any], limit: int = _PER_FILE_CHARS) -> str:
     """渲染单个文件行（files 表 row dict）→ 不含 fence 的内容文本。
 
+    返回内容**未做 sentinel 中和**——中和由批次层 `render_attachment_blocks`
+    统一负责（连同 fence 与 filename），确保任何进 fence 的正文都过中和。
     任何读取/解析失败都渲染为显式失败行——附件失败绝不让整轮对话崩，
     也绝不静默当作空文件。
     """
-    filename = file_row.get("filename") or "unnamed"
+    raw_name = file_row.get("filename") or "unnamed"
+    # 类型判断用原始后缀（功能正确），但**显示**用去控制字符版——绝不把
+    # 畸形文件名的换行/控制字符泄漏进正文（反方审 P1-B 的连带面）。
+    ext = Path(raw_name).suffix.lower()
+    display_name = "".join(ch for ch in raw_name if ch.isprintable()) or "unnamed"
+    display_ext = "".join(ch for ch in ext if ch.isprintable()) or "无后缀"
     path = Path(file_row.get("path") or "")
-    ext = Path(filename).suffix.lower()
     try:
         if not path.is_file():
-            return f"[读取失败：文件已不在磁盘（{filename}）——请重新上传]"
+            return f"[读取失败：文件已不在磁盘（{display_name}）——请重新上传]"
         if ext in _TEXT_EXTS:
             return _render_text_file(path, limit)
         if ext in _XLSX_EXTS:
             return _render_xlsx_file(path, limit)
-        return f"[未解析：{ext or '无后缀'} 类型 V0.2 不支持内容解析（仅文本类与 .xlsx 预览；docx/pdf 为 V0.3 规划）——文件名与大小仍可作为需求线索]"
+        return f"[未解析：{display_ext} 类型 V0.2 不支持内容解析（仅文本类与 .xlsx 预览；docx/pdf 为 V0.3 规划）——文件名与大小仍可作为需求线索]"
     except Exception as exc:  # noqa: BLE001 —— 附件级隔离：单文件失败不崩整轮
         return f"[读取失败：{type(exc).__name__}: {exc}]"
 
@@ -106,21 +137,31 @@ def render_attachment_blocks(
 ) -> str:
     """渲染一条消息的附件集合 → 规则行 + 逐文件 fence 块。
 
-    budget_chars 是本批次总预算：逐文件按序消费，预算耗尽后剩余文件退化为
-    仅文件名占位行（显式说明，不静默丢）。返回空串当且仅当 file_rows 为空。
+    budget_chars 是本批次总预算，**含结构开销**（规则行 + 各 header/footer +
+    截断横幅），非仅正文（反方审 P3：此前只减正文长度，宣称的「硬顶」实为
+    正文软顶）。逐文件按序消费，预算耗尽后剩余文件退化为占位行（显式，不
+    静默丢）。sentinel 中和统一在此层做（正文 + filename），杜绝 fence 逃逸
+    （反方审 P1）。返回空串当且仅当 file_rows 为空。
+
+    注：中和把 `<<`→`< <` 会引入个位数字符膨胀，故总量是「近似上界」而非
+    逐字节精确——但结构开销已真实计入，不再是 24K 之外无限叠加。
     """
     if not file_rows:
         return ""
+    _FOOTER = "<<END_ATTACHMENT>>"
     parts = [ATTACHMENT_RULE_LINE]
-    remaining = budget_chars
+    remaining = budget_chars - len(ATTACHMENT_RULE_LINE)  # 规则行计入预算
     for row in file_rows:
-        filename = row.get("filename") or "unnamed"
+        filename = _safe_filename_for_header(row.get("filename") or "unnamed")
         size = row.get("size_bytes")
-        header = f'<<ATTACHMENT file="{filename}" id="{row.get("id", "")}" size_bytes={size}>>'
-        if remaining <= 0:
-            parts.append(f"{header}\n[预算耗尽：本批附件渲染总预算 {budget_chars} 字符已用完，内容未展示]\n<<END_ATTACHMENT>>")
+        header = f'<<ATTACHMENT file="{filename}" id="{_safe_filename_for_header(str(row.get("id", "")))}" size_bytes={size}>>'
+        overhead = len(header) + len(_FOOTER) + 2  # 两个换行
+        if remaining - overhead <= 0:
+            parts.append(f"{header}\n[预算耗尽：本批附件渲染总预算 {budget_chars} 字符已用完，内容未展示]\n{_FOOTER}")
+            remaining = 0
             continue
-        body = render_one(row, limit=min(_PER_FILE_CHARS, remaining))
-        remaining -= len(body)
-        parts.append(f"{header}\n{body}\n<<END_ATTACHMENT>>")
+        body = _neutralize_sentinels(render_one(row, limit=min(_PER_FILE_CHARS, remaining - overhead)))
+        block = f"{header}\n{body}\n{_FOOTER}"
+        remaining -= len(block)
+        parts.append(block)
     return "\n\n".join(parts)

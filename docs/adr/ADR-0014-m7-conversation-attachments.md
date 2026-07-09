@@ -50,3 +50,31 @@
   （无主文件 GC 是 V0.2 项）；重试不重复上传（前端记 fileId）。
 - xlsx 仅预览首 sheet 前若干行——工程师若把关键工况放后排 sheet，导引看不到
   （limitation 已声明，块内亦列出全部 sheet 名供导引追问）。
+
+## 修订：反方 fresh-context 审查处置（2026-07-09，commit 待提交）
+
+异源 Codex 治理审因本机 codex 原生二进制缺失（`@openai/codex-darwin-arm64`
+vendor 目录被清空，ENOENT）暂不可用——**异源交叉审查悬置待 codex 恢复**；
+先以反方 fresh-context subagent 审查补偿（同家族，非严格异源，恢复后补跑
+`codex review --commit`）。反方判定 CHANGES_REQUIRED，1 P1 + 1 P2 + 2 P3，
+全部本地最小复现坐实后修复：
+
+1. **[P1] fence 逃逸（红线#1 结构隔离可破）**：附件正文含 `<<END_ATTACHMENT>>`
+   会提前闭合 fence，把注入文字踢出块外、规则行管不到；文件名含换行/引号能
+   断 header。**复现确认**（正文 payload 令 `<<END_ATTACHMENT>>` 出现 2 次）。
+   注：红线#2（人是唯一签发者）仍守住（推荐块 schema 对账），故非「注入直达
+   签发」，但「防注入双层」的第一层名不副实。修复：`_neutralize_sentinels`
+   把正文/文件名的 `<<`→`< <`、`>>`→`> >`（LLM 语义无损、人类可读，字面再
+   拼不出定界符）+ `_safe_filename_for_header` 去控制字符/引号 + 上传端
+   `_sanitize_filename` 根因去控制字符（连带消 Content-Disposition 换行隐患）。
+   补 3 条真咬合 fence 完整性的回归（tamper 拆中和→2 红实证）。
+2. **[P2] 文本全量 read_bytes() 内存放大**：大文本每轮重渲染全量载入，与
+   xlsx 的 read_only 流式防御不对称。修复：`_render_text_file` 只读
+   `limit*4+64` 字节（够 limit 字符可切）。tamper（回全量读）咬红。
+3. **[P3] 预算 body-only 软顶**：规则行/header/footer/横幅不计入 budget，
+   「硬顶」措辞不实。修复：预算计入结构开销（近似上界，中和引入个位数膨胀
+   已如实注明）；本决策第 4 条措辞校准。
+4. **[P3] 失败轮已上传附件跨轮残留**：保留为重试语义、chips 可见可移除——
+   如实标注为已知行为（GuidePage `uploadPendingFiles` 注释），不改行为。
+
+处置验证：pytest 313 绿（+5）· M6 e2e 10/10 · M2 e2e 8/8 · 三处新 tamper 咬合。

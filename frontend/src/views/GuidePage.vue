@@ -157,6 +157,10 @@ function removePendingFile(item) {
 
 async function uploadPendingFiles() {
   // 顺序上传未完成项（含上一轮失败项）；任一失败即抛出，本轮消息不发送。
+  // 已知行为（反方审 P3）：某轮失败但附件已上传成功（status:done）时，附件
+  // 保留在待发区——这是重试语义（重试同一句不重复上传）。若用户改发别的
+  // 内容，这些附件会一并带上，但 chips 始终可见、可逐个移除，故不隐藏、
+  // 不静默——是否带上由用户自己看着 chips 决定。
   for (const item of pendingFiles.value) {
     if (item.status === "done") continue;
     item.status = "uploading";

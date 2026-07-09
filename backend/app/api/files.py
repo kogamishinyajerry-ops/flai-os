@@ -21,8 +21,13 @@ _CHUNK_SIZE = 1024 * 1024
 def _sanitize_filename(raw: str | None) -> str:
     """落盘文件名净化（P1-1 路径穿越修复）：只取路径最后一段，杜绝 `../../evil.txt`
     这类穿越 payload 被直接拼进落盘路径；净化后为空或退化为 `.`/`..` 一律兜底 `unnamed`。
+
+    另去控制字符/换行（M7 反方审 P1-B 根因）：换行/引号能污染下游的
+    Content-Disposition 头与会话附件 fence header——从入库源头就剥掉，落库
+    filename 恒为可打印单行。渲染器仍会二次中和（防御纵深，不赖单点）。
     """
     name = Path((raw or "").strip()).name
+    name = "".join(ch for ch in name if ch.isprintable())
     if not name or name in (".", ".."):
         return "unnamed"
     return name
