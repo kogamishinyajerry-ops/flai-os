@@ -159,7 +159,19 @@ def list_conversation_tasks(conversation_id: str, request: Request) -> list[dict
     try:
         if repos.get_conversation(conn, conversation_id) is None:
             raise HTTPException(status_code=404, detail=f"会话不存在：{conversation_id}")
-        # 会话成员任务通常远少于 500；取一页即可（分组语义，非无限流）。
-        return repos.list_tasks(conn, conversation_id=conversation_id, limit=500)
+        # 会话成员是「完整分组视图」而非「最近流」——分页取尽，绝不静默截断
+        # （异源 Codex M8-P3：硬编码 limit=500 会让 >500 成员的会话丢最旧任务，
+        # 「完整成员视图」名不副实）。成员任务受人工逐个签发约束，实际远少于一页，
+        # 循环通常一次即止；边界正确性靠取尽保证。
+        _PAGE = 500
+        tasks: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            page = repos.list_tasks(conn, conversation_id=conversation_id, limit=_PAGE, offset=offset)
+            tasks.extend(page)
+            if len(page) < _PAGE:
+                break
+            offset += _PAGE
+        return tasks
     finally:
         conn.close()

@@ -200,6 +200,25 @@ def test_conversation_tasks_view_404_for_missing_conversation(client: TestClient
     assert client.get("/api/conversations/conv_missing/tasks").status_code == 404
 
 
+def test_conversation_tasks_view_paginates_beyond_500(app_env) -> None:
+    """成员视图是「完整分组」不是「最近流」——取尽不静默截断（异源 Codex M8-P3）：
+    >500 成员任务必须全部返回，不丢最旧那批。"""
+    client, app = app_env
+    conv_id = _open_conversation(client)
+    conn = app.state.conn_factory()
+    try:
+        for i in range(501):
+            repos.create_task(
+                conn, task_id=f"task_big_{i:04d}", agent_id="fta_agent", agent_version="0.1.0",
+                name=f"t{i}", created_by="王工", conversation_id=conv_id,
+            )
+    finally:
+        conn.close()
+    members = client.get(f"/api/conversations/{conv_id}/tasks").json()
+    assert len(members) == 501, f"完整成员视图必须取尽（不静默截断在 500），实得 {len(members)}"
+    assert len({t["id"] for t in members}) == 501, "取尽不得重复"
+
+
 def test_multiple_tasks_same_conversation_grouped(app_env) -> None:
     """一次会话分流出多个任务：全部归到同一会话视图下（协作工作台的分组基石）。"""
     client, _ = app_env
