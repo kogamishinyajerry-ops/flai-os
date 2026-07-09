@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,12 @@ _PER_FILE_CHARS = 16_000
 _TOTAL_CHARS = 24_000
 _XLSX_MAX_ROWS = 30
 _XLSX_MAX_COLS = 16
+# xlsx 解析预算（M7 敌意审 P1，实测坐实）：openpyxl(read_only) 对 sharedStrings.xml
+# 是**一次性整表解析**（openpyxl 文档化行为），行列硬顶只压展示量、不压解析成本；
+# 高压缩比 xlsx（zip bomb 手法）可小上传体积炸大解析内存（438KB→9.5MB 字符串实测）。
+# 开 openpyxl 前先 stdlib zipfile 探测解压后总量与压缩比，超预算即拒解析。
+_XLSX_MAX_UNCOMPRESSED_BYTES = 8 * 1024 * 1024
+_XLSX_MAX_COMPRESSION_RATIO = 200
 
 _TEXT_EXTS = {".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".log", ".xml", ".ini", ".py"}
 _XLSX_EXTS = {".xlsx"}
@@ -75,13 +82,42 @@ def _render_text_file(path: Path, limit: int) -> str:
     return _truncate(text, limit)
 
 
+def _xlsx_parse_budget_ok(path: Path) -> tuple[bool, str]:
+    """开 openpyxl 前用 stdlib zipfile 探测解析成本（M7 敌意审 P1）。
+
+    xlsx 即 zip：遍历成员累加解压后大小（`file_size`），超总量顶即拒——
+    这挡住的正是「上传体积小、sharedStrings 解压后巨大」的高压缩比样本
+    （openpyxl read_only 仍会整表解析 sharedStrings，行列硬顶救不了）。
+    另查整体压缩比作 zip bomb 辅助信号。任何 zip 层异常一律判不可解析
+    （fail-closed，绝不带着未知成本进 openpyxl）。
+    """
+    try:
+        with zipfile.ZipFile(path) as zf:
+            total_uncompressed = 0
+            total_compressed = 0
+            for info in zf.infolist():
+                total_uncompressed += info.file_size
+                total_compressed += info.compress_size
+                if total_uncompressed > _XLSX_MAX_UNCOMPRESSED_BYTES:
+                    return False, f"解压后总量超预算（>{_XLSX_MAX_UNCOMPRESSED_BYTES} 字节）"
+            if total_compressed > 0 and total_uncompressed / total_compressed > _XLSX_MAX_COMPRESSION_RATIO:
+                return False, f"压缩比 {total_uncompressed / total_compressed:.0f}x 异常（疑 zip bomb）"
+    except (zipfile.BadZipFile, OSError) as exc:
+        return False, f"zip 解析失败（{type(exc).__name__}）"
+    return True, ""
+
+
 def _render_xlsx_file(path: Path, limit: int) -> str:
     """xlsx 预览：仅活动 sheet 前 N 行 × M 列，制表符分隔；全 sheet 名单列出。
 
-    read_only + 硬顶行列：不把打开的工作簿全量载入内存（防炸弹表），
-    也不追求完整——预览的目的是让导引看懂「这是什么数据」，完整解析是
-    specialist Agent 用注册工具做的事。
+    read_only + 硬顶行列约束**展示量**；解析成本另由 `_xlsx_parse_budget_ok`
+    在开簿前把关（M7 敌意审 P1）——预览的目的是让导引看懂「这是什么数据」，
+    完整解析是 specialist Agent 用注册工具做的事。
     """
+    ok, reason = _xlsx_parse_budget_ok(path)
+    if not ok:
+        return f"[未解析：xlsx 超出解析预算（{reason}）——请拆分文件，或在创建任务页上传交目标 Agent 处理]"
+
     import openpyxl  # 项目既有依赖（M3 工具链引入）
 
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)

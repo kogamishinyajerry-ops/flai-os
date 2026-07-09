@@ -223,9 +223,14 @@ class ConversationService:
         file_ids（M7 附件）：先校验存在性（缺文件在任何落库/LLM 调用前诚实失败），
         入库存 id 列表；附件**内容**只进模型上下文（窗口内按预算渲染），不进消息文本。
         """
-        file_ids = list(dict.fromkeys(file_ids or []))  # 去重保序
-        if len(file_ids) > _MAX_FILES_PER_MESSAGE:
-            raise ValueError(f"单条消息附件数上限 {_MAX_FILES_PER_MESSAGE}，实收 {len(file_ids)}")
+        # 上限检查在**去重前**（M7 敌意审 P2）：pydantic max_length 查的也是去重前
+        # 原始列表，若这里查去重后长度，HTTP 入口下运行时层因去重只减不增而永不
+        # 触发——成死代码。查去重前即让「非 HTTP 直调 ConversationService」也受
+        # 同一上限约束，纵深名副其实。
+        raw_file_ids = file_ids or []
+        if len(raw_file_ids) > _MAX_FILES_PER_MESSAGE:
+            raise ValueError(f"单条消息附件数上限 {_MAX_FILES_PER_MESSAGE}，实收 {len(raw_file_ids)}")
+        file_ids = list(dict.fromkeys(raw_file_ids))  # 去重保序
         conn = self.conn_factory()
         try:
             conv = repos.get_conversation(conn, conversation_id)
