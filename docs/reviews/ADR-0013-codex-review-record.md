@@ -15,4 +15,13 @@
 处置 commit 验证链：pytest 293 绿（+2 竞态回归）· M2 e2e 8/8 · M6 e2e 7/7（+2 失败轮检查）
 · 三处 tamper 全部咬红后还原复绿。
 
-## R2：待处置 commit 复审
+## R2（2026-07-09，审 56c7aff）：P1 清零；1 P2 + 1 P3，坐实修复
+
+| # | 级别 | Finding | grounded 复核 | 处置 |
+|---|------|---------|----------------|------|
+| 1 | P2 | 增量轮询的 baseline 守卫只护 events：stale 轮仍写 `task.value`/清 `loadError`。放行/取消后的全量重载若先落地并停轮询，stale 轮可把状态钉回 waiting_review 且不再续轮——直到手动刷新 | **坐实且后果更重**：waiting_review 不满足 schedulePoll 续轮条件，钉死为持久态 | 交错即**整包作废**（task/events/loadError 都不动，early return；schedulePoll 依更新后状态决策）。UI 层在途竞态无确定性 e2e 手段，守卫以审查+推演验证——诚实残差 |
+| 2 | P3 | 竞态测试夹具用 `DROP COLUMN`（需 SQLite ≥3.35），超出仓声明环境下限 | **坐实**：仓只声明 Python 3.10+，旧 SQLite 链接的解释器上夹具先崩 | 夹具改 rebuild-rename（CREATE AS SELECT + DROP + RENAME，全版本支持）；新夹具下重做 tamper：拆锁齐红→还原复绿 |
+
+处置 commit 验证链：pytest 293 绿 · M2 e2e 8/8 · M6 e2e 7/7 · 迁移 tamper 咬合在新夹具下重取证。
+
+## R3：终轮复审（cap=R0+2 fix）

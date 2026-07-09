@@ -238,13 +238,25 @@ def test_upload_orphan_blob_cleaned_on_db_failure(app_env, monkeypatch, tmp_path
 
 
 def _make_legacy_db(db_path) -> None:
-    """造 pre-ADR-0013 老库：全量建表后删掉 conversation_id 列（无索引，可 DROP）。"""
+    """造 pre-ADR-0013 老库：重建 model_calls 为不含 conversation_id 的旧形状。
+
+    不用 `ALTER TABLE ... DROP COLUMN`（需 SQLite ≥3.35，超出仓声明的环境下限，
+    Codex R2-P3）——改用任何版本都支持的 rebuild-rename（AS SELECT 丢约束无妨，
+    迁移探测只看列名）。"""
     from backend.app.storage import db as db_mod
 
     db_mod.init_db(db_path)
     conn = db_mod.get_conn(db_path)
     try:
-        conn.execute("ALTER TABLE model_calls DROP COLUMN conversation_id")
+        legacy_cols = ", ".join(
+            r[1] for r in conn.execute("PRAGMA table_info(model_calls)")
+            if r[1] != "conversation_id"
+        )
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(f"CREATE TABLE model_calls_legacy AS SELECT {legacy_cols} FROM model_calls")
+        conn.execute("DROP TABLE model_calls")
+        conn.execute("ALTER TABLE model_calls_legacy RENAME TO model_calls")
+        conn.execute("COMMIT")
         cols = {r[1] for r in conn.execute("PRAGMA table_info(model_calls)")}
         assert "conversation_id" not in cols
     finally:
