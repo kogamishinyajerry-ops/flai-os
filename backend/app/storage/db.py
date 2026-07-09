@@ -132,6 +132,28 @@ CREATE TABLE IF NOT EXISTS samples (
     accepted_by_engineer INTEGER,
     created_at TEXT NOT NULL
 );
+
+-- M6 导引 Agent（interactive 会话运行时，ADR-0012）。会话是多轮对话状态，
+-- 与一次性 tasks 表正交：一次导引会话最终产出一份「预填任务草案」（recommendation），
+-- 交人确认后由人经 tasks 表提交——会话本身绝不签发任务。
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    recommendation_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    recommendation_json TEXT,
+    created_at TEXT NOT NULL
+);
 """
 
 

@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "导引 Agent 推荐（预填任务草案）",
+  "description": "导引在对话中给出的推荐——一份预填任务草案，供用户在创建任务页确认后提交。所有字段均由 workflow 对账 Registry + 目标 input_schema 后确定性生成，非 LLM 自由文本直出。导引绝不据此自动创建任务。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agent_id", "agent_name", "category", "status", "maturity", "rationale", "prefilled_inputs", "stripped_fields"],
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "description": "推荐的 specialist Agent id（已校验：Registry 真实注册、非 disabled、非 interactive、非导引自身）。"
+    },
+    "agent_name": { "type": "string", "description": "目标 Agent 显示名（取自 Registry）。" },
+    "category": { "type": "string", "description": "目标 Agent 类型（取自 Registry）。" },
+    "status": { "type": "string", "description": "目标 Agent 状态（draft/trial/released），供用户判断成熟度。" },
+    "maturity": { "type": "string", "description": "目标 Agent 成熟度（L0-L3）。" },
+    "rationale": { "type": "string", "description": "推荐理由（LLM 提供，仅作参考）。" },
+    "prefilled_inputs": {
+      "type": "object",
+      "description": "预填的任务输入草案——只含目标 input_schema 声明且逐字段校验通过的字段，可能不完整，用户需补全后提交。"
+    },
+    "stripped_fields": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "LLM 提议但被确定性校验剥离的字段名（未声明或违反字段 schema），如实记名不隐藏。"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "导引 Agent 单轮用户消息",
+  "description": "interactive 型 Agent 的输入是一轮用户消息（非一次性任务输入）：会话经 /api/conversations/{id}/messages 逐轮推进，每轮传一条 content。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["content"],
+  "properties": {
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "description": "用户本轮说的话（自然语言需求描述或对导引追问的回答）。"
+    }
+  }
+}

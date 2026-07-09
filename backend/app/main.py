@@ -18,10 +18,12 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config
 from .api import agents as agents_api
+from .api import conversations as conversations_api
 from .api import feedback as feedback_api
 from .api import files as files_api
 from .api import tasks as tasks_api
 from .model_gateway.gateway import ModelGateway
+from .runtime.conversation import ConversationService
 from .runtime.registry import AgentRegistry
 from .runtime.runtime import AgentRuntime
 from .storage.db import get_conn, init_db
@@ -72,11 +74,13 @@ def create_app(
 
         model_gateway = ModelGateway(_PROFILES_PATH, conn_factory=conn_factory)
         runtime = AgentRuntime(agent_registry, tool_registry, model_gateway, conn_factory, task_runs_dir)
+        conversation_service = ConversationService(agent_registry, model_gateway, conn_factory)
 
         app.state.agent_registry = agent_registry
         app.state.tool_registry = tool_registry
         app.state.model_gateway = model_gateway
         app.state.runtime = runtime
+        app.state.conversation_service = conversation_service
         app.state.conn_factory = conn_factory
         app.state.db_path = db_path
         app.state.uploads_dir = uploads_dir
@@ -107,6 +111,7 @@ def create_app(
     app.include_router(tasks_api.router)
     app.include_router(files_api.router)
     app.include_router(feedback_api.router)
+    app.include_router(conversations_api.router)
 
     # M2 静态托管：frontend/dist 存在才注册（内网 Windows 免 node 部署；
     # 开发期 vite proxy 场景 dist 不在，静态路由整体缺席，行为与 M1 一致）。

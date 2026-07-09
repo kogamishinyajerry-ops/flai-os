@@ -1,8 +1,9 @@
 import { createRouter, createWebHistory } from "vue-router";
 
-// 五页路由（任务书 §12.3）。组件懒加载保持首屏轻。
+// 路由（任务书 §12.3 + M6 导引页）。组件懒加载保持首屏轻。
 const routes = [
-  { path: "/", name: "portal", component: () => import("../views/AgentPortal.vue"), meta: { title: "Agent 门户" } },
+  { path: "/", name: "guide", component: () => import("../views/GuidePage.vue"), meta: { title: "智能导引" } },
+  { path: "/portal", name: "portal", component: () => import("../views/AgentPortal.vue"), meta: { title: "Agent 门户" } },
   { path: "/tasks/new", name: "task-create", component: () => import("../views/TaskCreate.vue"), meta: { title: "创建任务" } },
   { path: "/tasks", name: "task-history", component: () => import("../views/TaskHistory.vue"), meta: { title: "任务历史" } },
   { path: "/tasks/:taskId", name: "task-detail", component: () => import("../views/TaskDetail.vue"), meta: { title: "任务详情" } },

@@ -60,6 +60,13 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"agent 不存在：{body.agent_id}")
     if agent.get("status") == "disabled":
         raise HTTPException(status_code=409, detail=f"agent 已下线，禁止调用：{body.agent_id}")
+    if (agent.get("workflow", {}) or {}).get("mode") == "interactive":
+        # ADR-0012 决策 6：interactive 型 Agent（导引）不作为一次性任务运行，
+        # 两条运行时语义正交——请走 /api/conversations 对话，绝不混用。
+        raise HTTPException(
+            status_code=409,
+            detail=f"agent {body.agent_id} 是导引类（interactive）Agent，请走 /api/conversations 对话，不作为一次性任务运行",
+        )
 
     conn = request.app.state.conn_factory()
     try:

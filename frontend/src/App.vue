@@ -9,7 +9,8 @@
         </span>
       </div>
       <el-menu mode="horizontal" :default-active="activeMenu" router :ellipsis="false" class="nav-menu">
-        <el-menu-item index="/">Agent 门户</el-menu-item>
+        <el-menu-item index="/">智能导引</el-menu-item>
+        <el-menu-item index="/portal">Agent 门户</el-menu-item>
         <el-menu-item index="/tasks/new">创建任务</el-menu-item>
         <el-menu-item index="/tasks">任务历史</el-menu-item>
         <el-menu-item index="/feedback">反馈</el-menu-item>

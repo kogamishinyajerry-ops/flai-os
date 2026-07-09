@@ -62,6 +62,14 @@
 
       <el-form-item label="输入参数">
         <div class="inputs-field">
+          <el-alert
+            v-if="prefilledFromGuide"
+            type="success"
+            :closable="false"
+            show-icon
+            class="prefill-note"
+            title="已从智能导引带入预填草案，请核对并补全后再提交——签发权在你。"
+          />
           <el-input
             v-model="form.inputsText"
             type="textarea"
@@ -131,6 +139,7 @@ const submitting = ref(false);
 const uploadingFiles = ref(false);
 const submitError = ref("");
 const uploadItems = ref([]);
+const prefilledFromGuide = ref(false);
 
 const form = reactive({
   agentId: typeof route.query.agent_id === "string" ? route.query.agent_id : "",
@@ -138,6 +147,25 @@ const form = reactive({
   createdBy: "",
   inputsText: "{}",
 });
+
+// M6 人确认接缝：从智能导引带入的预填草案（sessionStorage 传递，不走 URL）。
+// 只带入 inputs，仍由人补全 + 亲手点「提交任务」——导引不代签（ADR-0012）。
+if (route.query.from === "guide") {
+  try {
+    const raw = sessionStorage.getItem("flai_prefill");
+    if (raw) {
+      const draft = JSON.parse(raw);
+      if (draft && draft.agent_id === form.agentId && draft.inputs) {
+        form.inputsText = JSON.stringify(draft.inputs, null, 2);
+        prefilledFromGuide.value = true;
+      }
+    }
+  } catch {
+    // 草案解析失败不阻断创建页——用户仍可手填
+  } finally {
+    sessionStorage.removeItem("flai_prefill");
+  }
+}
 
 async function loadAgents() {
   try {
@@ -288,6 +316,9 @@ onMounted(loadAgents);
 }
 .limits-label {
   font-weight: 600;
+}
+.prefill-note {
+  margin-bottom: 8px;
 }
 .field-error {
   color: #f56c6c;

@@ -1,0 +1,15 @@
+{
+  "case_id": "case_001",
+  "description": "导引会话期望口径：用户描述一个故障树需求 → 导引经多轮澄清后推荐 fta_agent 并预填 top_event → 推荐经确定性校验（agent_id 真实、字段过 input_schema）→ 作为预填草案返回，交人确认。导引本身不创建任务。",
+  "conversation": [
+    {"role": "user", "content": "我想对双通道供电系统做故障树分析，顶事件是供电完全丧失。"}
+  ],
+  "expected": {
+    "recommended_agent_id": "fta_agent",
+    "prefilled_inputs_contains": ["top_event"],
+    "recommendation_validated_against_target_schema": true,
+    "guide_creates_task": false,
+    "human_confirms_before_submit": true
+  },
+  "notes": "本 case 的真实对话质量需内网模型（FLAI_LLM_*）真跑验证；本机以 stub gateway 验证会话链 + 推荐确定性校验 + 人确认接缝。"
+}

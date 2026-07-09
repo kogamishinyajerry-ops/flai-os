@@ -62,3 +62,16 @@ class TaskNotFoundError(FlaiError):
 
 class FileNotFoundInStoreError(FlaiError):
     """按 id 查不到对应的 File Store 记录。"""
+
+
+class ConversationNotFoundError(FlaiError):
+    """按 id 查不到对应的导引会话（M6）。"""
+
+
+class ConversationClosedError(FlaiError):
+    """会话已结束（concluded/abandoned），不再接受新消息（M6）。"""
+
+
+class NotInteractiveAgentError(FlaiError):
+    """对非 interactive 型 Agent 发起会话，或对 interactive 型 Agent 建一次性任务
+    （ADR-0012：两条运行时语义正交，不允许混用）。"""

@@ -513,3 +513,144 @@ def set_sample_review_outcome(
         (accepted_int, task_id),
     )
     return cur.rowcount
+
+
+# ── conversations（M6 导引 Agent，interactive 会话运行时，ADR-0012）──────
+
+def _decode_conversation(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    _decode_json(d, "recommendation_json", "recommendation", default=None)
+    return d
+
+
+def _decode_message(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    d.pop("id", None)  # 自增主键仅内部排序用，对外不暴露
+    _decode_json(d, "recommendation_json", "recommendation", default=None)
+    return d
+
+
+def create_conversation(
+    conn: sqlite3.Connection,
+    *,
+    conversation_id: str,
+    agent_id: str,
+    created_by: str,
+) -> dict[str, Any]:
+    """建会话：初始态 active，无推荐（recommendation 留 NULL 待对话产出）。"""
+    now = _now_iso()
+    conn.execute(
+        """
+        INSERT INTO conversations
+            (id, agent_id, status, created_by, recommendation_json, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (conversation_id, agent_id, "active", created_by, None, now, now),
+    )
+    return get_conversation(conn, conversation_id)  # type: ignore[return-value]
+
+
+def get_conversation(conn: sqlite3.Connection, conversation_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+    ).fetchone()
+    return _decode_conversation(row) if row is not None else None
+
+
+def list_conversations(
+    conn: sqlite3.Connection,
+    *,
+    created_by: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if created_by is not None:
+        clauses.append("created_by = ?")
+        params.append(created_by)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.extend([limit, offset])
+    rows = conn.execute(
+        f"SELECT * FROM conversations {where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+        params,
+    ).fetchall()
+    return [_decode_conversation(r) for r in rows]
+
+
+def append_message(
+    conn: sqlite3.Connection,
+    *,
+    conversation_id: str,
+    role: str,
+    content: str,
+    recommendation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """追加一条会话消息（role∈user|assistant），并顺带把会话 updated_at 推进。
+
+    recommendation 仅 assistant 轮可能非空（导引提议的预填任务草案）——原样存这一
+    轮的推荐快照，便于回看「哪一轮给出了推荐」。
+    """
+    now = _now_iso()
+    rec_json = json.dumps(recommendation, ensure_ascii=False) if recommendation is not None else None
+    cur = conn.execute(
+        """
+        INSERT INTO conversation_messages
+            (conversation_id, role, content, recommendation_json, created_at)
+        VALUES (?,?,?,?,?)
+        """,
+        (conversation_id, role, content, rec_json, now),
+    )
+    conn.execute(
+        "UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conversation_id)
+    )
+    row = conn.execute(
+        "SELECT * FROM conversation_messages WHERE id = ?", (cur.lastrowid,)
+    ).fetchone()
+    return _decode_message(row)
+
+
+def list_messages(conn: sqlite3.Connection, conversation_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id ASC",
+        (conversation_id,),
+    ).fetchall()
+    return [_decode_message(r) for r in rows]
+
+
+def set_conversation_recommendation(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    recommendation: dict[str, Any] | None,
+    *,
+    status: str | None = None,
+) -> dict[str, Any]:
+    """回填会话的最新推荐（预填任务草案），可选同时推进 status（如 concluded）。
+
+    recommendation 是「导引当前给出的预填草案」快照——会话可多轮刷新推荐，
+    以最后一次为准；人确认提交任务的动作在 tasks 端点，与此处解耦。
+    """
+    now = _now_iso()
+    rec_json = json.dumps(recommendation, ensure_ascii=False) if recommendation is not None else None
+    if status is not None:
+        conn.execute(
+            "UPDATE conversations SET recommendation_json = ?, status = ?, updated_at = ? WHERE id = ?",
+            (rec_json, status, now, conversation_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE conversations SET recommendation_json = ?, updated_at = ? WHERE id = ?",
+            (rec_json, now, conversation_id),
+        )
+    return get_conversation(conn, conversation_id)  # type: ignore[return-value]
+
+
+def set_conversation_status(
+    conn: sqlite3.Connection, conversation_id: str, status: str
+) -> dict[str, Any]:
+    now = _now_iso()
+    conn.execute(
+        "UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?",
+        (status, now, conversation_id),
+    )
+    return get_conversation(conn, conversation_id)  # type: ignore[return-value]
