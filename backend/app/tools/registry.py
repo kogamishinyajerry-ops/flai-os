@@ -20,6 +20,7 @@ from jsonschema import validate
 
 from ..core.errors import (
     DuplicateAgentIdError,
+    ToolExecutionError,
     ToolInputInvalidError,
     ToolNotRegisteredError,
     ToolOutputInvalidError,
@@ -132,10 +133,20 @@ class ToolRegistry:
             _record(status="failed", output=None, error_message=error_message, finished_at=_now_iso())
             raise ToolInputInvalidError(error_message) from exc
 
-        # 2) 加载 entrypoint（形如 module.path:func）
+        # 2) 加载 entrypoint（形如 module.path:func）。P2-3：import/getattr 失败也是
+        #    一次失败的调用——必须先落 tool_runs failed 行（call() 成败皆落库的承诺）
+        #    再抛，不允许坏靶 entrypoint 在 tool_runs 里无痕。
         module_path, _, func_name = tool["entrypoint"].partition(":")
-        module = importlib.import_module(module_path)
-        func = getattr(module, func_name)
+        try:
+            module = importlib.import_module(module_path)
+            func = getattr(module, func_name)
+        except (ImportError, AttributeError) as exc:
+            error_message = (
+                f"entrypoint 解析失败（{tool['entrypoint']}）："
+                f"{exc.__class__.__name__}: {exc}（工具包配置错误，未执行任何工具逻辑）"
+            )
+            _record(status="failed", output=None, error_message=error_message, finished_at=_now_iso())
+            raise ToolExecutionError(error_message) from exc
 
         # 3) 线程 join 超时执行：Python 线程无法强杀，超时即放弃等待并诚实标注
         #    （ADR-0008 决策3：真隔离留给 M3 按需引入）。

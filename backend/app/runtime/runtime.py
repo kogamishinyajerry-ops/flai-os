@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from ..core.errors import ToolNotAllowedError
 from ..storage import repos
 
 # event.schema.json 的 event_type 枚举（供折叠判断参考；本文件不据此做「豁免」——
@@ -67,15 +68,42 @@ class _WorkflowEventLogger:
 
 
 class _ToolRegistryContext:
-    """context["tool_registry"]：包一层，自动带 conn/task_id，前后发 tool_started/finished|failed。"""
+    """context["tool_registry"]：包一层，自动带 conn/task_id，前后发 tool_started/finished|failed。
 
-    def __init__(self, tool_registry: Any, conn: sqlite3.Connection, task_id: str, agent_id: str) -> None:
+    P1-A default-deny：构造时锁定 agent.yaml.tools 白名单（frozenset），call()
+    第一步先查白名单——工具即使已在 Tool Registry 注册，不在本 Agent 白名单内
+    一律拒绝并留 tool_failed 事件（任务书铁律：新注册工具绝不自动扩大存量
+    Agent 的权限面）。
+    """
+
+    def __init__(
+        self,
+        tool_registry: Any,
+        conn: sqlite3.Connection,
+        task_id: str,
+        agent_id: str,
+        allowed_tools: frozenset[str],
+    ) -> None:
         self._tool_registry = tool_registry
         self._conn = conn
         self._task_id = task_id
         self._agent_id = agent_id
+        self._allowed_tools = allowed_tools
 
     def call(self, tool_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if tool_id not in self._allowed_tools:
+            message = (
+                f"工具 {tool_id} 不在 Agent {self._agent_id} 的 agent.yaml.tools 白名单内，"
+                "default-deny 拒绝调用"
+            )
+            repos.append_event(
+                self._conn, task_id=self._task_id, agent_id=self._agent_id,
+                event_type="tool_failed", level="error",
+                message=message,
+                payload={"tool_id": tool_id, "denied": "not_in_agent_whitelist"},
+            )
+            raise ToolNotAllowedError(message)
+
         repos.append_event(
             self._conn, task_id=self._task_id, agent_id=self._agent_id,
             event_type="tool_started", level="info",
@@ -90,6 +118,21 @@ class _ToolRegistryContext:
                 message=f"工具 {tool_id} 调用失败：{exc}", payload={"tool_id": tool_id, "error": str(exc)},
             )
             raise
+        # P2-2：工具契约的可恢复失败（status:"failed"，不抛异常）如实记 tool_failed，
+        # 不得误报 tool_finished 让时间轴显示成功。判定用 == 比较，不用 truthiness。
+        if result.get("status") == "failed":
+            error_summary = str(result.get("error_message") or "")[:200]
+            repos.append_event(
+                self._conn, task_id=self._task_id, agent_id=self._agent_id,
+                event_type="tool_failed", level="error",
+                message=f"工具 {tool_id} 返回失败态：{error_summary or '无 error_message'}",
+                payload={
+                    "tool_id": tool_id,
+                    "output_status": result.get("status"),
+                    "error": error_summary,
+                },
+            )
+            return result
         repos.append_event(
             self._conn, task_id=self._task_id, agent_id=self._agent_id,
             event_type="tool_finished", level="info",
@@ -99,22 +142,61 @@ class _ToolRegistryContext:
 
 
 class _ModelGatewayContext:
-    """context["model_gateway"]：包一层，自动带 task_id/agent_id（model_calls 落库由 Gateway 自身负责）。"""
+    """context["model_gateway"]：包一层，自动带 task_id/agent_id。
 
-    def __init__(self, model_gateway: Any, task_id: str, agent_id: str) -> None:
+    model_calls **表**落库由 Gateway 自身负责；但任务时间轴的 model_call **事件**
+    是本层职责（P2-1：「无事件=没发生」——模型调用成败必须在任务事件流可见，
+    不能只藏在 model_calls 表里）。成功发 info 级 model_call；上游抛异常发
+    error 级 model_call 后原样 re-raise，绝不吞异常。
+    """
+
+    def __init__(self, model_gateway: Any, conn: sqlite3.Connection, task_id: str, agent_id: str) -> None:
         self._model_gateway = model_gateway
+        self._conn = conn
         self._task_id = task_id
         self._agent_id = agent_id
 
+    def _call(self, kind: str, profile: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        try:
+            result = fn()
+        except Exception as exc:
+            repos.append_event(
+                self._conn, task_id=self._task_id, agent_id=self._agent_id,
+                event_type="model_call", level="error",
+                message=f"模型调用失败（{kind}，profile={profile}）：{exc}",
+                payload={"profile": profile, "kind": kind, "error": str(exc)[:500]},
+            )
+            raise
+        repos.append_event(
+            self._conn, task_id=self._task_id, agent_id=self._agent_id,
+            event_type="model_call", level="info",
+            message=f"模型调用完成（{kind}，profile={profile}）",
+            payload={"profile": profile, "kind": kind},
+        )
+        return result
+
     def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
-        return self._model_gateway.chat(profile, messages, task_id=self._task_id, agent_id=self._agent_id, **kwargs)
+        return self._call(
+            "chat", profile,
+            lambda: self._model_gateway.chat(
+                profile, messages, task_id=self._task_id, agent_id=self._agent_id, **kwargs
+            ),
+        )
 
     def embed(self, profile: str, text: str, **kwargs: Any) -> dict[str, Any]:
-        return self._model_gateway.embed(profile, text, task_id=self._task_id, agent_id=self._agent_id, **kwargs)
+        return self._call(
+            "embed", profile,
+            lambda: self._model_gateway.embed(
+                profile, text, task_id=self._task_id, agent_id=self._agent_id, **kwargs
+            ),
+        )
 
     def vision(self, profile: str, image_path: str, prompt: str, **kwargs: Any) -> dict[str, Any]:
-        return self._model_gateway.vision(
-            profile, image_path, prompt, task_id=self._task_id, agent_id=self._agent_id, **kwargs
+        return self._call(
+            "vision", profile,
+            lambda: self._model_gateway.vision(
+                profile, image_path, prompt, task_id=self._task_id, agent_id=self._agent_id, **kwargs
+            ),
         )
 
 
@@ -291,12 +373,15 @@ class AgentRuntime:
                 )
                 continue
             files.append(f)
+        allowed_tools = frozenset(agent.get("tools") or [])
         return {
             "task": task,
             "inputs": task["inputs"],
             "files": files,
-            "model_gateway": _ModelGatewayContext(self.model_gateway, task["id"], agent_id),
-            "tool_registry": _ToolRegistryContext(self.tool_registry, conn, task["id"], agent_id),
+            "model_gateway": _ModelGatewayContext(self.model_gateway, conn, task["id"], agent_id),
+            "tool_registry": _ToolRegistryContext(
+                self.tool_registry, conn, task["id"], agent_id, allowed_tools
+            ),
             "event_logger": _WorkflowEventLogger(conn, task["id"], agent_id),
             "output_dir": str(output_dir),
             "agent_config": agent,

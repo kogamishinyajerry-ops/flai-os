@@ -31,6 +31,15 @@ class ToolNotRegisteredError(FlaiError):
     """调用了未在 Tool Registry 注册的工具（宪法铁律二：先注册再调用）。"""
 
 
+class ToolNotAllowedError(FlaiError):
+    """工具已注册但不在当前 Agent 的 agent.yaml.tools 白名单内（default-deny：
+    不在白名单即不可调用——新注册工具绝不自动扩大存量 Agent 的权限面）。"""
+
+
+class ToolExecutionError(FlaiError):
+    """工具包 entrypoint 无法解析/加载（模块不存在、函数名写错等包配置错误）。"""
+
+
 class ToolInputInvalidError(FlaiError):
     """工具入参未通过 input_schema 校验。"""
 

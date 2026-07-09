@@ -18,7 +18,7 @@ parsing analyzing completed failed cancelled
 | `running` | `workflow.py` 执行中（通用执行态） | Agent Runtime |
 | `parsing` | 执行中的细分子态：解析输入文件/表格（Agent 按需使用） | Agent Runtime / workflow.py |
 | `analyzing` | 执行中的细分子态：结果分析/汇总产出（Agent 按需使用） | Agent Runtime / workflow.py |
-| `waiting_review` | 等待人工审核放行（`agent.yaml.workflow.requires_human_review=true` 时的强制关口） | Agent Runtime 置入；**只能人工动作转出** |
+| `waiting_review` | 等待人工审核放行（`agent.yaml.workflow.requires_human_review=true` 时的强制关口） | Agent Runtime 置入；**只能人工动作转出**（`POST /api/tasks/{id}/review`，body={action: approve\|reject, reviewer: 必填非空, comment?}） |
 | `completed` | 任务成功终态 | 见下方合法来源 |
 | `failed` | 任务失败终态 | 任一非终态均可转入 |
 | `cancelled` | 用户主动取消 | Task Center（`POST /api/tasks/{id}/cancel`） |
@@ -33,7 +33,7 @@ parsing analyzing completed failed cancelled
 | `running` | `parsing`, `analyzing`, `waiting_review`, `failed`, `cancelled` | workflow.py 按业务阶段推进 |
 | `parsing` | `analyzing`, `running`, `failed`, `cancelled` | 解析完成进入分析 / 无分析阶段回到通用执行 / 解析失败 |
 | `analyzing` | `waiting_review`, `completed`, `failed`, `cancelled` | 需人工判决 / 无需人工判决直接终 / 分析失败 |
-| `waiting_review` | `completed`, `failed` | **仅人工放行动作**（`review_approved` → completed；`review_rejected` → failed）。禁止任何自动化路径转出。 |
+| `waiting_review` | `completed`, `failed` | **仅人工放行动作**（`review_approved` → completed；`review_rejected` → failed），API 落点=`POST /api/tasks/{id}/review`。禁止任何自动化路径转出。 |
 | `completed` | — | 终态，禁止再转移 |
 | `failed` | — | 终态，禁止再转移 |
 | `cancelled` | — | 终态，禁止再转移 |

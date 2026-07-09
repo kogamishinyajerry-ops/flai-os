@@ -185,6 +185,140 @@ def test_double_cancel_second_call_409(client: TestClient) -> None:
     assert second.status_code == 409
 
 
+# ── tasks: P1-B 人工放行 API（waiting_review 的唯一合法出口）──────────────
+
+
+@pytest.fixture()
+def review_app_env(tmp_path):
+    """tmp agents 目录：hello_agent 复制为 review_agent（requires_human_review=true），
+    工具/契约用真实交付件；DB/uploads/task_runs 全落 tmp_path。
+    """
+    import shutil
+
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    review_dir = agents_dir / "review_agent"
+    shutil.copytree(REPO_ROOT / "agents" / "hello_agent", review_dir)
+    yaml_path = review_dir / "agent.yaml"
+    yaml_text = yaml_path.read_text(encoding="utf-8")
+    yaml_text = yaml_text.replace("id: hello_agent", "id: review_agent")
+    yaml_text = yaml_text.replace("requires_human_review: false", "requires_human_review: true")
+    yaml_path.write_text(yaml_text, encoding="utf-8")
+
+    app = create_app(
+        agents_dir=agents_dir,
+        tools_dir=REPO_ROOT / "tools_impl",
+        contracts_dir=REPO_ROOT / "contracts",
+        db_path=tmp_path / "flai_os.db",
+        uploads_dir=tmp_path / "uploads",
+        task_runs_dir=tmp_path / "task_runs",
+    )
+    with TestClient(app) as client:
+        yield client, app
+
+
+def _run_to_waiting_review(client: TestClient, app) -> str:
+    resp = client.post(
+        "/api/tasks",
+        json={"agent_id": "review_agent", "inputs": {"name": "待审"}, "created_by": "e2e_review"},
+    )
+    assert resp.status_code == 200
+    task_id = resp.json()["id"]
+    runner = JobRunner(app.state.runtime, app.state.conn_factory)
+    assert runner.run_once() is True
+    task = client.get(f"/api/tasks/{task_id}").json()
+    assert task["status"] == "waiting_review"
+    return task_id
+
+
+def test_review_approve_e2e_full_chain(review_app_env) -> None:
+    """E2E：requires_human_review=true 任务跑到 waiting_review → 人工 approve →
+    completed + review_approved 事件（payload 记 reviewer/comment）。
+    """
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+
+    review_resp = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "approve", "reviewer": "张工", "comment": "结果核对无误"},
+    )
+    assert review_resp.status_code == 200
+    approved = review_resp.json()
+    assert approved["status"] == "completed"
+    assert approved["finished_at"] is not None
+
+    events = client.get(f"/api/tasks/{task_id}/events").json()
+    event_types = [e["event_type"] for e in events]
+    assert "review_requested" in event_types
+    approved_events = [e for e in events if e["event_type"] == "review_approved"]
+    assert len(approved_events) == 1
+    assert approved_events[0]["payload"] == {"reviewer": "张工", "comment": "结果核对无误"}
+
+
+def test_review_reject_e2e_full_chain(review_app_env) -> None:
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+
+    review_resp = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "reject", "reviewer": "李工", "comment": "输出与图纸不符"},
+    )
+    assert review_resp.status_code == 200
+    rejected = review_resp.json()
+    assert rejected["status"] == "failed"
+    assert "人工拒绝" in rejected["error_message"]
+    assert "输出与图纸不符" in rejected["error_message"]
+
+    events = client.get(f"/api/tasks/{task_id}/events").json()
+    rejected_events = [e for e in events if e["event_type"] == "review_rejected"]
+    assert len(rejected_events) == 1
+    assert rejected_events[0]["payload"]["reviewer"] == "李工"
+    assert rejected_events[0]["level"] == "warning"
+
+
+def test_review_non_waiting_review_task_409(client: TestClient) -> None:
+    """任务不在 waiting_review（此处为 queued）→ 409 如实拒绝，不得静默转移。"""
+    resp = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "R"}})
+    task_id = resp.json()["id"]
+
+    review_resp = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "approve", "reviewer": "张工"},
+    )
+    assert review_resp.status_code == 409
+
+
+def test_review_unknown_task_404(client: TestClient) -> None:
+    resp = client.post(
+        "/api/tasks/no_such_task/review",
+        json={"action": "approve", "reviewer": "张工"},
+    )
+    assert resp.status_code == 404
+
+
+def test_review_missing_or_empty_reviewer_422(review_app_env) -> None:
+    """reviewer 缺失或空字符串 → 422（人是唯一签发者，匿名放行=没有签发者）。
+    422 被拒后任务必须仍停在 waiting_review，未被部分放行。
+    """
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+
+    missing = client.post(f"/api/tasks/{task_id}/review", json={"action": "approve"})
+    assert missing.status_code == 422
+
+    empty = client.post(
+        f"/api/tasks/{task_id}/review", json={"action": "approve", "reviewer": ""}
+    )
+    assert empty.status_code == 422
+
+    bad_action = client.post(
+        f"/api/tasks/{task_id}/review", json={"action": "自动放行", "reviewer": "张工"}
+    )
+    assert bad_action.status_code == 422
+
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
+
+
 # ── files: upload -> download 往返 ───────────────────────────────────────
 
 

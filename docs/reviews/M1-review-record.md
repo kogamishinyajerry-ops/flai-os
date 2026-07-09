@@ -35,6 +35,17 @@
 无 CI/测试结果签名机制，「全绿」防篡改依赖人工核验——TrustGate 类机制
 按 ADR-0007/0008 明确不入 V0.1。
 
-## 86gs 治理审（异源 Codex，命中即审：未受信外部输入解析）
+## 86gs 治理审 R0（异源 Codex gpt-5.4 xhigh，`codex review --commit 98d4a0a`，2026-07-09）
 
-结论见本文件后续追记或对应 commit message。
+结论 **CHANGES_REQUIRED**——P1×2+P2×4，主控逐条 grounded 复核全部成立：
+
+| # | 级别 | 发现（file:line 按审查原文） | 处置 |
+|---|------|------|------|
+| 1 | P1 | `runtime.py:78-85` `_ToolRegistryContext` 不校验 agent.yaml.tools 白名单，default-deny 边界被绕穿——新注册敏感工具即刻扩大所有存量 agent 权限 | 修 |
+| 2 | P1 | `runtime.py:241-247` requires_human_review 置 waiting_review 后**全平台无合法出口**（无 review_approved/rejected API），任务永久卡死 | 修（补人工放行 API，人是唯一签发者） |
+| 3 | P2 | `runtime.py:109-117` `_ModelGatewayContext` 从不发 model_call 事件，任务时间轴对模型调用成败双向静默——违「无事件=没发生」 | 修 |
+| 4 | P2 | `runtime.py:93-97` 工具契约的 `status:"failed"` 可恢复失败仍发 `tool_finished`，时间轴误报成功 | 修 |
+| 5 | P2 | `registry.py:136-138` entrypoint 写错时 import 抛在 `_record()` 之前，tool_runs 缺行——违背 call() 成败皆落库承诺 | 修 |
+| 6 | P2 | `gateway.py:134-140` 上游 200 但 body 畸形时异常逃逸出捕获集，model_calls 无记录 | 修 |
+
+处置 commit 与复审结论见后续追记。

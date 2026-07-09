@@ -24,6 +24,7 @@ import yaml
 from backend.app.config import CONTRACTS_DIR, TOOLS_DIR
 from backend.app.core.errors import (
     DuplicateAgentIdError,
+    ToolExecutionError,
     ToolInputInvalidError,
     ToolNotRegisteredError,
     ToolOutputInvalidError,
@@ -170,6 +171,55 @@ def test_call_output_schema_violation_is_fail_closed(tmp_path, monkeypatch, db_c
     assert len(runs) == 1
     assert runs[0]["status"] == "failed"
     assert runs[0]["error_message"]
+
+
+# ── call(): entrypoint 坏靶（P2-3）成败皆落库 ──────────────────────────────
+
+def test_call_broken_entrypoint_module_records_failed_tool_run_and_raises(tmp_path, db_conn) -> None:
+    """P2-3：entrypoint 指向不存在的模块——import 失败也是一次失败调用，
+    tool_runs 必须有 failed 行（此前 import 抛在 _record 之前，永远无痕）。
+    """
+    _write_tool_yaml(
+        tmp_path / "ghost_tool_pkg",
+        tool_id="ghost_tool",
+        entrypoint="no_such_module_xyz_flai.adapter:run",
+    )
+    registry = ToolRegistry(tmp_path, TOOL_SCHEMA_PATH)
+    registry.scan()
+    assert registry.get("ghost_tool") is not None  # yaml 合法，注册成功
+
+    task_id = f"task_{uuid.uuid4().hex[:8]}"
+    with pytest.raises(ToolExecutionError):
+        registry.call("ghost_tool", {"message": "hi"}, conn=db_conn, task_id=task_id)
+
+    runs = repos.list_tool_runs(db_conn, task_id)
+    assert len(runs) == 1
+    assert runs[0]["status"] == "failed"
+    assert "entrypoint 解析失败" in runs[0]["error_message"]
+
+
+def test_call_broken_entrypoint_func_records_failed_tool_run_and_raises(tmp_path, monkeypatch, db_conn) -> None:
+    """P2-3 变体：模块存在但函数名写错（getattr 抛 AttributeError）——同样落库+抛。"""
+    tool_dir = tmp_path / "typo_func_pkg"
+    tool_dir.mkdir()
+    (tool_dir / "adapter.py").write_text(
+        "def run(payload, context=None):\n    return {'status': 'success'}\n",
+        encoding="utf-8",
+    )
+    _write_tool_yaml(tool_dir, tool_id="typo_func_tool", entrypoint="typo_func_pkg.adapter:no_such_func")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    registry = ToolRegistry(tmp_path, TOOL_SCHEMA_PATH)
+    registry.scan()
+
+    task_id = f"task_{uuid.uuid4().hex[:8]}"
+    with pytest.raises(ToolExecutionError):
+        registry.call("typo_func_tool", {"message": "hi"}, conn=db_conn, task_id=task_id)
+
+    runs = repos.list_tool_runs(db_conn, task_id)
+    assert len(runs) == 1
+    assert runs[0]["status"] == "failed"
+    assert "entrypoint 解析失败" in runs[0]["error_message"]
 
 
 # ── call(): 成功调用 mock 字段如实入库 ─────────────────────────────────────

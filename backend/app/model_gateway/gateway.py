@@ -137,7 +137,20 @@ class ModelGateway:
             raise ModelUpstreamError(f"上游网络错误：{exc}") from exc
         if not (200 <= resp.status_code < 300):
             raise ModelUpstreamError(f"上游返回非 2xx（status={resp.status_code}）：{resp.text[:500]}")
-        return resp.json()
+        # P2-4：上游 200 但 body 畸形（HTML 错误页/非 JSON/顶层非 object）不得让
+        # 解析异常裸逃——统一折叠为 ModelUpstreamError，由调用方的 except 落
+        # model_calls failed 行（成败皆留痕）。
+        try:
+            data = resp.json()
+        except Exception as exc:
+            raise ModelUpstreamError(
+                f"上游返回 200 但响应不可解析为 JSON：{resp.text[:200]!r}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise ModelUpstreamError(
+                f"上游返回 200 但响应顶层不是 object（实得 {type(data).__name__}），响应形状漂移"
+            )
+        return data
 
     # ── 对外三方法（docs/04 §3）─────────────────────────────────────────
 
@@ -160,16 +173,21 @@ class ModelGateway:
                 if value is not None:
                     payload[key] = value
             data = self._post(base_url, "/chat/completions", payload, api_key)
-            choice = (data.get("choices") or [{}])[0]
-            message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
-            content = message.get("content")
-            token_usage = data.get("usage")
-            result = {
-                "content": content,
-                "token_usage": token_usage,
-                "model_name": model_name,
-                "finish_reason": choice.get("finish_reason"),
-            }
+            try:
+                choice = (data.get("choices") or [{}])[0]
+                message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+                content = message.get("content")
+                token_usage = data.get("usage")
+                result = {
+                    "content": content,
+                    "token_usage": token_usage,
+                    "model_name": model_name,
+                    "finish_reason": choice.get("finish_reason"),
+                }
+            except (AttributeError, IndexError, KeyError, TypeError) as exc:
+                # P2-4：上游 200 但字段形状漂移（choices 元素非 object 等）——
+                # 折叠为 ModelUpstreamError 走下方统一留痕路径，绝不裸逃。
+                raise ModelUpstreamError(f"上游返回 200 但 chat 响应形状漂移：{exc}") from exc
         except (ProfileNotConfiguredError, ModelUpstreamError) as exc:
             self._record(
                 task_id=task_id, agent_id=agent_id, profile=profile, model_name=model_name,
@@ -202,8 +220,11 @@ class ModelGateway:
             del cfg  # embed 暂无额外可覆盖参数
             payload = {"model": model_name, "input": text}
             data = self._post(base_url, "/embeddings", payload, api_key)
-            vector = (data.get("data") or [{}])[0].get("embedding", [])
-            result = {"vector": vector, "model_name": model_name}
+            try:
+                vector = (data.get("data") or [{}])[0].get("embedding", [])
+                result = {"vector": vector, "model_name": model_name}
+            except (AttributeError, IndexError, KeyError, TypeError) as exc:
+                raise ModelUpstreamError(f"上游返回 200 但 embed 响应形状漂移：{exc}") from exc
         except (ProfileNotConfiguredError, ModelUpstreamError) as exc:
             self._record(
                 task_id=task_id, agent_id=agent_id, profile=profile, model_name=model_name,
@@ -249,11 +270,14 @@ class ModelGateway:
                 ],
             }
             data = self._post(base_url, "/chat/completions", payload, api_key)
-            choice = (data.get("choices") or [{}])[0]
-            message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
-            content = message.get("content")
-            token_usage = data.get("usage")
-            result = {"content": content, "token_usage": token_usage, "model_name": model_name}
+            try:
+                choice = (data.get("choices") or [{}])[0]
+                message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+                content = message.get("content")
+                token_usage = data.get("usage")
+                result = {"content": content, "token_usage": token_usage, "model_name": model_name}
+            except (AttributeError, IndexError, KeyError, TypeError) as exc:
+                raise ModelUpstreamError(f"上游返回 200 但 vision 响应形状漂移：{exc}") from exc
         except (ProfileNotConfiguredError, ModelUpstreamError) as exc:
             self._record(
                 task_id=task_id, agent_id=agent_id, profile=profile, model_name=model_name,

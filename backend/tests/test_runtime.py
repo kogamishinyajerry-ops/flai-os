@@ -232,6 +232,170 @@ def test_execute_workflow_exception_does_not_crash(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_tool_call_outside_agent_whitelist_denied_with_event(tmp_path: Path) -> None:
+    """P1-A default-deny witness：mock_echo 已在 Tool Registry 注册，但 Agent 的
+    agent.yaml.tools 白名单为空——调用必须被拒（ToolNotAllowedError→任务 failed）、
+    留 tool_failed 事件（payload.denied 标注）、且绝不触达 Registry（无 tool_started、
+    无 tool_runs 行）。若拆掉 _ToolRegistryContext 的白名单校验，本测试变红。
+    """
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    greedy_dir = agents_dir / "greedy_agent"
+    shutil.copytree(AGENTS_DIR / "hello_agent", greedy_dir)
+
+    yaml_path = greedy_dir / "agent.yaml"
+    yaml_text = yaml_path.read_text(encoding="utf-8")
+    yaml_text = yaml_text.replace("id: hello_agent", "id: greedy_agent")
+    # 白名单清空：mock_echo 仍是已注册工具，但不在本 Agent 白名单内。
+    assert "tools:\n  - mock_echo" in yaml_text, "hello_agent 样板 tools 声明形态变了，测试前提失效"
+    yaml_text = yaml_text.replace("tools:\n  - mock_echo", "tools: []")
+    yaml_path.write_text(yaml_text, encoding="utf-8")
+
+    runtime, db_path = _make_runtime(agents_dir, tmp_path)
+    task_id = _create_and_queue_task(db_path, agent_id="greedy_agent", inputs={"name": "越权"})
+
+    result = runtime.execute(task_id)
+
+    assert result["status"] == "failed"
+    assert "ToolNotAllowedError" in result["task"]["error_message"]
+
+    conn = get_conn(db_path)
+    try:
+        events = repos.list_events(conn, task_id)
+        event_types = [e["event_type"] for e in events]
+        assert "tool_started" not in event_types, "白名单拒绝必须发生在触达 Registry 之前"
+        denied_events = [
+            e for e in events
+            if e["event_type"] == "tool_failed" and e["payload"].get("denied") == "not_in_agent_whitelist"
+        ]
+        assert len(denied_events) == 1
+        assert denied_events[0]["payload"]["tool_id"] == "mock_echo"
+        assert repos.list_tool_runs(conn, task_id) == [], "被拒调用不应产生 tool_runs 行"
+    finally:
+        conn.close()
+
+
+def test_tool_call_inside_whitelist_still_works(tmp_path: Path) -> None:
+    """P1-A 反面对照：白名单内的 mock_echo 正常路径回归不碎（真实 hello_agent 全链）。"""
+    runtime, db_path = _make_runtime(AGENTS_DIR, tmp_path)
+    task_id = _create_and_queue_task(db_path, agent_id="hello_agent", inputs={"name": "合法调用"})
+    result = runtime.execute(task_id)
+    assert result["status"] == "completed"
+
+
+# ── P2-1：model_call 事件（无事件=没发生）────────────────────────────────
+
+
+class _StubOkGateway:
+    def chat(self, profile, messages, **kwargs):
+        return {"content": "你好", "token_usage": None, "model_name": "stub"}
+
+    def embed(self, profile, text, **kwargs):
+        return {"vector": [0.1], "model_name": "stub"}
+
+
+class _StubBoomGateway:
+    def chat(self, profile, messages, **kwargs):
+        raise RuntimeError("上游炸了（测试注入）")
+
+
+def _make_conn(tmp_path: Path):
+    db_path = tmp_path / "ctx_test.db"
+    init_db(db_path)
+    return get_conn(db_path)
+
+
+def _make_task(conn, task_id: str) -> None:
+    repos.create_task(
+        conn, task_id=task_id, agent_id="hello_agent", agent_version="0.1.0",
+        name="ctx 测试", created_by="tester", inputs={}, input_file_ids=[], metadata={},
+    )
+
+
+def test_model_gateway_context_emits_model_call_event_on_success(tmp_path: Path) -> None:
+    from backend.app.runtime.runtime import _ModelGatewayContext
+
+    conn = _make_conn(tmp_path)
+    try:
+        _make_task(conn, "task_mc_ok")
+        ctx = _ModelGatewayContext(_StubOkGateway(), conn, "task_mc_ok", "hello_agent")
+
+        result = ctx.chat("reasoning", [{"role": "user", "content": "hi"}])
+        assert result["content"] == "你好"
+        ctx.embed("fast", "text")
+
+        events = repos.list_events(conn, "task_mc_ok")
+        mc = [e for e in events if e["event_type"] == "model_call"]
+        assert len(mc) == 2
+        assert mc[0]["level"] == "info"
+        assert mc[0]["payload"] == {"profile": "reasoning", "kind": "chat"}
+        assert mc[1]["payload"] == {"profile": "fast", "kind": "embed"}
+    finally:
+        conn.close()
+
+
+def test_model_gateway_context_emits_error_model_call_event_and_reraises(tmp_path: Path) -> None:
+    from backend.app.runtime.runtime import _ModelGatewayContext
+
+    conn = _make_conn(tmp_path)
+    try:
+        _make_task(conn, "task_mc_boom")
+        ctx = _ModelGatewayContext(_StubBoomGateway(), conn, "task_mc_boom", "hello_agent")
+
+        with pytest.raises(RuntimeError):
+            ctx.chat("reasoning", [{"role": "user", "content": "hi"}])
+
+        events = repos.list_events(conn, "task_mc_boom")
+        mc = [e for e in events if e["event_type"] == "model_call"]
+        assert len(mc) == 1
+        assert mc[0]["level"] == "error"
+        assert mc[0]["payload"]["profile"] == "reasoning"
+        assert mc[0]["payload"]["kind"] == "chat"
+        assert "上游炸了" in mc[0]["payload"]["error"]
+    finally:
+        conn.close()
+
+
+# ── P2-2：工具契约可恢复失败（status:"failed"）如实记 tool_failed ─────────
+
+
+class _FailedStatusToolRegistry:
+    """契约内可恢复失败：不抛异常，返回 status:"failed"。
+
+    说明：真实 mock_echo 的失败分支（message 缺失/非 object）会先被 Registry 的
+    input_schema 校验拦截、走异常路径，无法穿透到「契约内 failed 返回」这条路，
+    故此处用 stub 构造（返回形状对齐 ToolRegistry.call 的输出契约）。
+    """
+
+    def call(self, tool_id, payload, *, conn=None, task_id=None):
+        return {"status": "failed", "echoed": {}, "error_message": "case 级可恢复失败（测试注入）"}
+
+
+def test_tool_context_reports_tool_failed_on_failed_status(tmp_path: Path) -> None:
+    from backend.app.runtime.runtime import _ToolRegistryContext
+
+    conn = _make_conn(tmp_path)
+    try:
+        _make_task(conn, "task_tool_softfail")
+        ctx = _ToolRegistryContext(
+            _FailedStatusToolRegistry(), conn, "task_tool_softfail", "hello_agent",
+            frozenset({"soft_fail_tool"}),
+        )
+
+        result = ctx.call("soft_fail_tool", {"message": {"x": 1}})
+        assert result["status"] == "failed"  # 结果原样透传给 workflow，由其决定单 case 处置
+
+        events = repos.list_events(conn, "task_tool_softfail")
+        event_types = [e["event_type"] for e in events]
+        assert event_types == ["tool_started", "tool_failed"], "status:failed 不得误报 tool_finished"
+        failed = events[-1]
+        assert failed["level"] == "error"
+        assert failed["payload"]["output_status"] == "failed"
+        assert "case 级可恢复失败" in failed["payload"]["error"]
+    finally:
+        conn.close()
+
+
 def test_execute_skips_missing_input_file_id_with_warning_event(tmp_path: Path) -> None:
     """P3-4：input_file_ids 引用了不存在的 file_id——context.files 必须跳过该项，
     且不得静默消失，须发一条 warning 事件留痕（修此前 _build_context 的静默跳过）。

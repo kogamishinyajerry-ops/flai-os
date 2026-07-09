@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -22,6 +22,15 @@ class CreateTaskRequest(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     input_file_ids: list[str] = Field(default_factory=list)
     created_by: str = "anonymous"
+
+
+class ReviewTaskRequest(BaseModel):
+    """人工放行请求体（P1-B）。reviewer 必填非空——人是唯一的工程签发者
+    （宪法铁律六），匿名放行等于没有签发者，pydantic 层直接 422 拒收。"""
+
+    action: Literal["approve", "reject"]
+    reviewer: str = Field(min_length=1)
+    comment: str | None = None
 
 
 def _get_agent_or_none(registry: Any, agent_id: str) -> dict[str, Any] | None:
@@ -133,6 +142,58 @@ def cancel_task(task_id: str, request: Request) -> dict[str, Any]:
             status_code=409,
             detail=f"任务处于 {current}，不可取消",
         )
+    finally:
+        conn.close()
+
+
+@router.post("/tasks/{task_id}/review")
+def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict[str, Any]:
+    """人工放行/拒绝 waiting_review 任务（P1-B：waiting_review 的唯一合法出口）。
+
+    docs/05 §2：waiting_review 只能由人工放行动作转出——approve→completed
+    （review_approved 事件），reject→failed（review_rejected 事件）；本端点即
+    该「人工放行动作」的 API 落点。任务不处于 waiting_review 一律 409 如实拒绝。
+    """
+    conn = request.app.state.conn_factory()
+    try:
+        task = repos.get_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+        if task["status"] != "waiting_review":
+            raise HTTPException(
+                status_code=409,
+                detail=f"任务处于 {task['status']}，不在 waiting_review，无法人工放行/拒绝",
+            )
+
+        payload = {"reviewer": body.reviewer, "comment": body.comment}
+        if body.action == "approve":
+            task = repos.set_task_status(conn, task_id, "completed")
+            repos.append_event(
+                conn,
+                task_id=task_id,
+                agent_id=task.get("agent_id"),
+                event_type="review_approved",
+                level="info",
+                message=f"人工批准放行（reviewer={body.reviewer}），任务转 completed",
+                payload=payload,
+            )
+            return task
+
+        # action == "reject"（Literal 已锁定只有两值）
+        reject_reason = f"人工拒绝（reviewer={body.reviewer}）" + (
+            f"：{body.comment}" if body.comment else ""
+        )
+        task = repos.set_task_status(conn, task_id, "failed", error_message=reject_reason)
+        repos.append_event(
+            conn,
+            task_id=task_id,
+            agent_id=task.get("agent_id"),
+            event_type="review_rejected",
+            level="warning",
+            message=f"人工拒绝（reviewer={body.reviewer}），任务转 failed",
+            payload=payload,
+        )
+        return task
     finally:
         conn.close()
 

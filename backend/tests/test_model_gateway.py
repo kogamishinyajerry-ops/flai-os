@@ -159,3 +159,82 @@ def test_conn_factory_none_skips_db_write() -> None:
     gateway = ModelGateway(PROFILES_PATH)
     with pytest.raises(ModelUpstreamError):
         gateway.chat("reasoning", [{"role": "user", "content": "hi"}])
+
+
+# ── P2-4：上游 200 但 body 畸形 → ModelUpstreamError + model_calls 记 failed ──
+
+
+def _mock_env_and_post(monkeypatch, handler) -> None:
+    monkeypatch.setenv("FLAI_LLM_BASE_URL", "https://fake-llm.internal")
+    monkeypatch.setenv("FLAI_LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("FLAI_LLM_MODEL_REASONING", "glm-mock")
+
+    def fake_post(url, *, json, headers, timeout):
+        transport = httpx.MockTransport(handler)
+        with httpx.Client(transport=transport) as client:
+            return client.post(url, json=json, headers=headers)
+
+    monkeypatch.setattr(gateway_mod.httpx, "post", fake_post)
+
+
+def test_chat_upstream_200_non_json_raises_and_records_failed(tmp_path, monkeypatch) -> None:
+    """上游 200 但 body 是 HTML（如网关错误页）——此前 resp.json() 异常裸逃，
+    model_calls 无记录；修后必须折叠为 ModelUpstreamError 且 model_calls 记 failed。
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html><body>Bad Gateway impersonating 200</body></html>")
+
+    _mock_env_and_post(monkeypatch, handler)
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    with pytest.raises(ModelUpstreamError):
+        gateway.chat("reasoning", [{"role": "user", "content": "你好"}], task_id="task_html200")
+
+    conn = db_mod.get_conn(db_path)
+    calls = repos.list_model_calls(conn, "task_html200")
+    conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+    assert "不可解析" in calls[0]["error_message"]
+
+
+def test_chat_upstream_200_top_level_not_object_raises_and_records_failed(tmp_path, monkeypatch) -> None:
+    """上游 200 且是合法 JSON 但顶层不是 object（形状漂移）——同样 fail-closed 留痕。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=["not", "an", "object"])
+
+    _mock_env_and_post(monkeypatch, handler)
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    with pytest.raises(ModelUpstreamError):
+        gateway.chat("reasoning", [{"role": "user", "content": "你好"}], task_id="task_list200")
+
+    conn = db_mod.get_conn(db_path)
+    calls = repos.list_model_calls(conn, "task_list200")
+    conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+    assert "形状漂移" in calls[0]["error_message"]
+
+
+def test_chat_upstream_200_choices_shape_drift_raises_and_records_failed(tmp_path, monkeypatch) -> None:
+    """上游 200、顶层是 object，但 choices 元素非 object（字段级形状漂移）——
+    提取阶段异常不得裸逃，折叠为 ModelUpstreamError + model_calls 记 failed。
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": ["驴唇不对马嘴"]})
+
+    _mock_env_and_post(monkeypatch, handler)
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    with pytest.raises(ModelUpstreamError):
+        gateway.chat("reasoning", [{"role": "user", "content": "你好"}], task_id="task_drift200")
+
+    conn = db_mod.get_conn(db_path)
+    calls = repos.list_model_calls(conn, "task_drift200")
+    conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
