@@ -45,6 +45,7 @@ except ImportError:
 import httpx
 import uvicorn
 
+from backend.app.core.errors import ModelUpstreamError
 from backend.app.main import create_app
 
 WORK = Path(tempfile.mkdtemp(prefix="flai_m6_guide_"))
@@ -52,9 +53,19 @@ WORK = Path(tempfile.mkdtemp(prefix="flai_m6_guide_"))
 
 class _StubGateway:
     """确定文本 stub：导引首轮即返回一条针对 fta_agent 的推荐——top_event 合法预填，
-    外加一个非法字段 bogus 让确定性校验剥离（展示 stripped 告警）。"""
+    外加一个非法字段 bogus 让确定性校验剥离（展示 stripped 告警）。
+
+    fail_next=True 时下一次 chat 抛 ModelUpstreamError（→ API 502「本轮零落库」），
+    用于验收失败轮的 UI 契约：乐观 user 气泡回滚 + 草稿还原，重试不堆重复气泡
+    （Codex R1-P2）。"""
+
+    def __init__(self) -> None:
+        self.fail_next = False
 
     def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
+        if self.fail_next:
+            self.fail_next = False
+            raise ModelUpstreamError("stub 注入的上游失败（验收失败轮 UI 回滚）")
         payload = {
             "agent_id": "fta_agent",
             "rationale": "你的需求是对供电系统做故障树分析，fta_agent 正是做这个的。",
@@ -95,7 +106,8 @@ else:
     sys.exit("诚实失败：后端 5s 内未就绪")
 
 # 健康就绪后 app.state 已装配：注入 stub（本机无内网 key，用 stub 验 UI 全链）。
-app.state.conversation_service.model_gateway = _StubGateway()
+stub = _StubGateway()
+app.state.conversation_service.model_gateway = stub
 
 SHOTS.mkdir(parents=True, exist_ok=True)
 results: list[tuple[str, bool, str]] = []
@@ -116,9 +128,24 @@ with sync_playwright() as p:
     check("①导引页可达且为统一入口", "智能导引" in body and "导引不会替你创建任务" in body, body[:200])
     page.screenshot(path=str(SHOTS / "1_guide_empty.png"), full_page=True)
 
-    # ② 发一句需求
+    # ② 失败轮 UI 契约（Codex R1-P2）：后端失败零落库，前端同样回滚乐观气泡
+    #    并还原草稿——不留服务端不存在的幽灵消息，重试不堆重复气泡。
+    REQUEST_TEXT = "我要对双通道供电系统做故障树分析，顶事件是供电完全丧失"
+    stub.fail_next = True
     page.get_by_placeholder("你的名字（对话需具名）").fill("王工")
-    page.locator(".composer textarea").fill("我要对双通道供电系统做故障树分析，顶事件是供电完全丧失")
+    page.locator(".composer textarea").fill(REQUEST_TEXT)
+    page.get_by_role("button", name="发送").click()
+    expect(page.locator(".page-alert")).to_be_visible(timeout=8000)
+    user_bubbles_after_fail = page.locator(".bubble-row.user").count()
+    draft_restored = page.locator(".composer textarea").input_value()
+    check(
+        "②失败轮：乐观气泡回滚+草稿还原（与后端『失败零落库』对齐）",
+        user_bubbles_after_fail == 0 and draft_restored == REQUEST_TEXT,
+        f"user_bubbles={user_bubbles_after_fail} draft={draft_restored[:60]!r}",
+    )
+    page.screenshot(path=str(SHOTS / "1b_failed_turn_rollback.png"), full_page=True)
+
+    # ②' 重试同一句（草稿已还原，直接再点发送；stub 已恢复健康）
     page.get_by_role("button", name="发送").click()
 
     # ③ 导引返回推荐卡片
@@ -133,6 +160,11 @@ with sync_playwright() as p:
         and "bogus" in body
     )
     check("③推荐卡片：Agent+预填草案+非法字段剔除告警", reco_ok, body[-500:])
+    check(
+        "③重试后无重复 user 气泡（幂等重试全链）",
+        page.locator(".bubble-row.user").count() == 1,
+        f"count={page.locator('.bubble-row.user').count()}",
+    )
     check("③'导引不代签'红线文案在卡片可见", "签发权在你" in body, "")
     page.screenshot(path=str(SHOTS / "2_recommendation.png"), full_page=True)
 

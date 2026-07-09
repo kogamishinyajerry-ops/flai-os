@@ -146,7 +146,14 @@ async function send() {
     });
     await scrollToBottom();
   } catch (err) {
-    // 本轮失败：如实提示，用户消息保留（可重试）；不伪造 assistant 回复。
+    // 本轮失败：后端契约是「失败零落库」（幂等重试，ADR-0013），本地同样回滚
+    // 乐观气泡并把原文还原到输入框——不在界面上留一条服务端不存在的幽灵消息，
+    // 重试也不会堆出重复 user 气泡（Codex R1-P2）。不伪造 assistant 回复。
+    const last = messages.value[messages.value.length - 1];
+    if (last && last.role === "user" && last.content === content) {
+      messages.value.pop();
+    }
+    draft.value = content;
     pageError.value = err.detail || err.message;
   } finally {
     sending.value = false;

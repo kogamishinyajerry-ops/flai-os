@@ -26,11 +26,14 @@ export const getTask = (taskId) => request(`/api/tasks/${taskId}`);
 // 分页拉取到取尽（ADR-0013 审计修复）：此前单页 5000 封顶，但 parser 契约上限
 // max_rows=5000 时批量任务可产 ~2 万事件——尾部的 summary_generated/task_completed
 // 恰在最需要它的场景被静默截断。页大小 2000 对齐后端默认；短尾页即终止。
-export const listTaskEvents = async (taskId) => {
+// offset 起点（Codex R1-P2）：详情页 2s 轮询若每次从 0 全量重翻，事件越多轮询
+// 越重；事件表 append-only 且按 id ASC 排序，偏移稳定——轮询方传入已持有的
+// 条数，只拉自己没有的尾段。
+export const listTaskEvents = async (taskId, { offset = 0 } = {}) => {
   const pageSize = 2000;
   const all = [];
-  for (let offset = 0; ; offset += pageSize) {
-    const page = await request(`/api/tasks/${taskId}/events?limit=${pageSize}&offset=${offset}`);
+  for (let cursor = offset; ; cursor += pageSize) {
+    const page = await request(`/api/tasks/${taskId}/events?limit=${pageSize}&offset=${cursor}`);
     all.push(...page);
     if (page.length < pageSize) return all;
   }

@@ -183,8 +183,19 @@ def init_db(db_path: str | Path) -> None:
     try:
         conn.executescript(_DDL)
         # 迁移 #1（ADR-0013）：model_calls.conversation_id——导引会话的模型调用归因。
-        cols = {row[1] for row in conn.execute("PRAGMA table_info(model_calls)")}
-        if "conversation_id" not in cols:
-            conn.execute("ALTER TABLE model_calls ADD COLUMN conversation_id TEXT")
+        # 并发启动安全（Codex R1-P1）：API 进程与 Job Runner 进程都在启动时调
+        # init_db，对 pre-ADR-0013 存量库，无锁的 check-then-ALTER 会让双方同时
+        # 观察到「列缺失」，输家撞 duplicate column name 直接启动失败。改为先
+        # BEGIN IMMEDIATE 拿写锁、锁内复查——锁内读到的列集即权威，赢家先完成
+        # 迁移则此处如实跳过。
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(model_calls)")}
+            if "conversation_id" not in cols:
+                conn.execute("ALTER TABLE model_calls ADD COLUMN conversation_id TEXT")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     finally:
         conn.close()

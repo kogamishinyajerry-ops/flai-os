@@ -229,3 +229,134 @@ def test_upload_orphan_blob_cleaned_on_db_failure(app_env, monkeypatch, tmp_path
 
     leftovers = [p for p in Path(uploads_dir).rglob("*") if p.is_file()]
     assert leftovers == [], f"入库失败必须回收已落盘 blob，实存 {leftovers}"
+
+
+# ── 迁移并发启动安全（Codex R1-P1）────────────────────────────────────────
+# API 进程与 Job Runner 进程都在启动时调 init_db；对 pre-ADR-0013 存量库，
+# check-then-ALTER 若不持写锁，双方可同时观察到「列缺失」，输家撞
+# duplicate column name 启动失败。以下两测：一条确定性时序复现，一条真并发扫。
+
+
+def _make_legacy_db(db_path) -> None:
+    """造 pre-ADR-0013 老库：全量建表后删掉 conversation_id 列（无索引，可 DROP）。"""
+    from backend.app.storage import db as db_mod
+
+    db_mod.init_db(db_path)
+    conn = db_mod.get_conn(db_path)
+    try:
+        conn.execute("ALTER TABLE model_calls DROP COLUMN conversation_id")
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(model_calls)")}
+        assert "conversation_id" not in cols
+    finally:
+        conn.close()
+
+
+def _model_calls_columns(db_path) -> set[str]:
+    from backend.app.storage import db as db_mod
+
+    conn = db_mod.get_conn(db_path)
+    try:
+        return {r[1] for r in conn.execute("PRAGMA table_info(model_calls)")}
+    finally:
+        conn.close()
+
+
+def test_migration_survives_rival_process_altering_mid_flight(tmp_path, monkeypatch) -> None:
+    """确定性复现「另一进程在探测与 ALTER 之间抢先完成迁移」的时序。
+
+    编排（trace 卡点，严格 happens-before，无 flake）：
+    - loser 线程跑真 init_db；其连接挂 trace callback，走到本列的 ALTER 语句时
+      先放行 rival、再等 rival 结束才继续；
+    - rival（模拟另一进程）在该卡点直接对库 ALTER 加列并提交。
+    旧实现（锁外探测）：loser 恢复后 ALTER 撞 duplicate column name → init_db 崩。
+    新实现（BEGIN IMMEDIATE 锁内探测）：loser 卡点时已持写锁，rival 的 ALTER 被
+    锁拒之门外（短 timeout 快速失败），loser 独自完成迁移 → 无异常。
+    两种实现下本测均确定性终止；仅旧实现变红——即 tamper 必咬点。
+    """
+    import sqlite3
+    import threading
+
+    from backend.app.storage import db as db_mod
+
+    db_path = tmp_path / "legacy.db"
+    _make_legacy_db(db_path)
+
+    about_to_alter = threading.Event()
+    rival_done = threading.Event()
+    real_get_conn = db_mod.get_conn
+
+    def instrumented_get_conn(path):
+        conn = real_get_conn(path)
+
+        def trace(stmt: str) -> None:
+            if "ALTER TABLE model_calls" in stmt:
+                about_to_alter.set()
+                rival_done.wait(timeout=10)
+
+        conn.set_trace_callback(trace)
+        return conn
+
+    monkeypatch.setattr(db_mod, "get_conn", instrumented_get_conn)
+
+    loser_errors: list[Exception] = []
+
+    def loser() -> None:
+        try:
+            db_mod.init_db(db_path)
+        except Exception as exc:  # noqa: BLE001 —— 断言用，需捕获一切
+            loser_errors.append(exc)
+
+    t = threading.Thread(target=loser)
+    t.start()
+    assert about_to_alter.wait(timeout=10), "loser 未走到迁移 ALTER——测试前提失效"
+
+    # rival：模拟另一进程的迁移。短 timeout——新实现下 loser 正持写锁，这里
+    # 应当快速失败；旧实现下 loser 无锁，这里应当成功。两种结果都放行，
+    # 裁决交给 loser 是否幸存。
+    rival = sqlite3.connect(str(db_path), isolation_level=None, timeout=1.0)
+    try:
+        rival.execute("ALTER TABLE model_calls ADD COLUMN conversation_id TEXT")
+    except sqlite3.OperationalError:
+        pass  # 新实现：被 loser 的写锁挡住——这正是防御生效
+    finally:
+        rival.close()
+        rival_done.set()
+
+    t.join(timeout=15)
+    assert not t.is_alive(), "loser init_db 未终止"
+    assert loser_errors == [], (
+        f"并发迁移下 init_db 必须幸存（锁内复查/容错），实际崩了：{loser_errors!r}"
+    )
+    assert "conversation_id" in _model_calls_columns(db_path)
+
+
+def test_migration_concurrent_init_db_sweep(tmp_path) -> None:
+    """黑盒并发扫：多线程 barrier 同发真 init_db 于同一老库，全部必须幸存。
+
+    单轮竞态窗口窄（微秒级），固定 8 轮 × 3 线程作为常驻回归网——新实现下
+    确定性全绿（写锁串行化）；配合上面的确定性时序测互为表里。
+    """
+    import threading
+
+    from backend.app.storage import db as db_mod
+
+    for round_no in range(8):
+        db_path = tmp_path / f"legacy_{round_no}.db"
+        _make_legacy_db(db_path)
+        barrier = threading.Barrier(3)
+        errors: list[Exception] = []
+
+        def racer() -> None:
+            barrier.wait()
+            try:
+                db_mod.init_db(db_path)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=racer) for _ in range(3)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join(timeout=30)
+        assert errors == [], f"round {round_no}: 并发 init_db 崩溃 {errors!r}"
+        assert "conversation_id" in _model_calls_columns(db_path)
