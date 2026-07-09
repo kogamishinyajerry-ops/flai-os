@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "performance_disk_agent 输出契约",
+  "description": "workflow.run() 成功返回的 outputs[0] 摘要对象。三个文件产物（result_summary.xlsx / samples.jsonl / task_report.md）落任务 output_dir，由 Runtime 注册为输出文件，不在本对象内重复携带内容。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["total_cases", "ok_count", "failed_count", "row_errors", "mock", "artifacts"],
+  "properties": {
+    "total_cases": { "type": "integer", "minimum": 0, "description": "解析出的有效 case 数（不含行级错误被跳过的行）。" },
+    "ok_count": { "type": "integer", "minimum": 0, "description": "计算成功的 case 数。" },
+    "failed_count": { "type": "integer", "minimum": 0, "description": "计算失败的 case 数（含 mock 包线失败注入与单 case 异常折叠）。" },
+    "row_errors": { "type": "integer", "minimum": 0, "description": "解析阶段行级错误数（缺值/非数值/超范围等，已跳过）。" },
+    "mock": { "type": "boolean", "const": true, "description": "Mock 阶段恒为 true——结果无工程意义的诚实标注（宪法第五条）。" },
+    "artifacts": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "落盘产物文件名清单（相对 output_dir）。"
+    }
+  }
+}

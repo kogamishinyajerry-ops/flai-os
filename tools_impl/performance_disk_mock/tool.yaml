@@ -1,0 +1,81 @@
+id: performance_disk_mock
+name: "性能盘 Mock 计算工具"
+version: 0.1.0
+type: python_adapter
+mock: true
+description: >
+  单 case 性能计算的 Mock 实现：确定性纯虚构代数公式（同输入必同输出），
+  与任何真实性能盘程序无关，输出无任何工程意义，仅用于验证平台批量调用
+  链路（mock=true 诚实标注，docs/03 §3）。内置失败注入：altitude_m > 15000
+  返回 status=failed「超出 mock 包线」，供单 case 失败路径测试。M4 将由
+  mock=false 的真实工具包替换（新增包切换 id，绝不原地翻牌 mock 字段）。
+entrypoint: tools_impl.performance_disk_mock.adapter:run
+input_schema:
+  type: object
+  required:
+    - params
+  properties:
+    case_id:
+      type: string
+      minLength: 1
+      description: 可选，随痕迹透传
+    params:
+      type: object
+      required:
+        - altitude_m
+        - mach
+        - power_kw
+      properties:
+        altitude_m:
+          type: number
+        mach:
+          type: number
+        power_kw:
+          type: number
+        bleed_flow_kgps:
+          type: number
+      additionalProperties: false
+  additionalProperties: false
+output_schema:
+  type: object
+  required:
+    - status
+    - mock
+  properties:
+    status:
+      type: string
+      enum:
+        - success
+        - failed
+    mock:
+      type: boolean
+      const: true
+      description: 本工具输出永远如实自标 mock=true，绝不冒充真实结果（宪法第五条）
+    outputs:
+      type: object
+      required:
+        - shaft_power_kw
+        - fuel_flow_kgps
+        - egt_c
+      properties:
+        shaft_power_kw:
+          type: number
+        fuel_flow_kgps:
+          type: number
+        egt_c:
+          type: number
+      additionalProperties: false
+    error_message:
+      type: string
+  additionalProperties: false
+runtime:
+  timeout_seconds: 10
+  max_parallel_jobs: 4
+  retry: 0
+safety:
+  require_workspace_isolation: false
+  allow_shell_command: false
+  save_raw_files: false
+owner:
+  maintainer: TBD
+  business_owner: TBD

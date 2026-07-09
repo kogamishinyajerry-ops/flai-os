@@ -1,0 +1,76 @@
+id: excel_summary_writer
+name: "Excel 结果汇总写出工具"
+version: 0.1.0
+type: python_adapter
+mock: false
+description: >
+  用 openpyxl 把批量 case 结果写成 result_summary.xlsx（列：case_id/各参数/
+  各输出/status/error_message），返回 {status, file_path, ok_count, failed_count}。
+  只忠实写出调用方给的数据，不做任何计算或判断（mock=false：写文件是真实动作，
+  但数据是否 mock 由数据来源自己标注）。
+entrypoint: tools_impl.excel_summary_writer.adapter:run
+input_schema:
+  type: object
+  required:
+    - cases
+    - output_path
+  properties:
+    cases:
+      type: array
+      items:
+        type: object
+        required:
+          - case_id
+          - status
+        properties:
+          case_id:
+            type: string
+          status:
+            type: string
+            enum:
+              - success
+              - failed
+          params:
+            type: object
+          outputs:
+            type: [object, "null"]
+          error_message:
+            type: [string, "null"]
+        additionalProperties: false
+    output_path:
+      type: string
+      minLength: 1
+      description: 输出 .xlsx 的绝对路径（应位于任务 output_dir 内）
+  additionalProperties: false
+output_schema:
+  type: object
+  required:
+    - status
+  properties:
+    status:
+      type: string
+      enum:
+        - success
+        - failed
+    file_path:
+      type: string
+    ok_count:
+      type: integer
+      minimum: 0
+    failed_count:
+      type: integer
+      minimum: 0
+    error_message:
+      type: string
+  additionalProperties: false
+runtime:
+  timeout_seconds: 60
+  max_parallel_jobs: 2
+  retry: 0
+safety:
+  require_workspace_isolation: false
+  allow_shell_command: false
+  save_raw_files: false
+owner:
+  maintainer: TBD
+  business_owner: TBD

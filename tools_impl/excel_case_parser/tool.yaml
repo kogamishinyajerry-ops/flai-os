@@ -1,0 +1,78 @@
+id: excel_case_parser
+name: "Excel case 表解析工具"
+version: 0.1.0
+type: python_adapter
+mock: false
+description: >
+  用 openpyxl 解析批量计算 case 表（.xlsx）：首行为表头，必需列
+  case_id / altitude_m / mach / power_kw，可选列 bleed_flow_kgps。
+  行级问题（缺值/非数值/超合理范围/重复 case_id）不抛异常，记入 errors
+  并跳过该行；解析器自身失败（文件不存在/非 xlsx/缺必需列/零有效行）
+  才返回 status=failed。本工具只做真实文件解析，不生成任何数据（mock=false）。
+entrypoint: tools_impl.excel_case_parser.adapter:run
+input_schema:
+  type: object
+  required:
+    - file_path
+  properties:
+    file_path:
+      type: string
+      minLength: 1
+      description: 待解析 .xlsx 文件的绝对路径（平台 File Store 落盘路径）
+    sheet_name:
+      type: string
+      minLength: 1
+      description: 可选，指定 sheet 名；缺省解析首个 sheet
+  additionalProperties: false
+output_schema:
+  type: object
+  required:
+    - status
+  properties:
+    status:
+      type: string
+      enum:
+        - success
+        - failed
+    cases:
+      type: array
+      items:
+        type: object
+        required:
+          - case_id
+          - params
+        properties:
+          case_id:
+            type: string
+          params:
+            type: object
+        additionalProperties: false
+    errors:
+      type: array
+      items:
+        type: object
+        required:
+          - row
+          - error
+        properties:
+          row:
+            type: integer
+          case_id:
+            type: [string, "null"]
+          error:
+            type: string
+        additionalProperties: false
+    error_message:
+      type: string
+  additionalProperties: false
+runtime:
+  timeout_seconds: 60
+  max_parallel_jobs: 2
+  retry: 0
+safety:
+  require_workspace_isolation: false
+  allow_shell_command: false
+  save_raw_files: false
+owner:
+  maintainer: TBD
+  business_owner: TBD

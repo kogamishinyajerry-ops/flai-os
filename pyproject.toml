@@ -13,6 +13,7 @@ dependencies = [
     "pyyaml",
     "python-multipart",
     "httpx",
+    "openpyxl",
 ]
 
 [project.optional-dependencies]

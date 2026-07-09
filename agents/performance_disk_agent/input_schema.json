@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "performance_disk_agent 输入契约",
+  "description": "case 表文件经平台 File Store 上传后由 input_file_ids 注入（Runtime 在 context.files 提供文件记录，含落盘 path）；本 schema 只约束结构化 inputs——允许空对象，或可选指定 sheet_name。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "sheet_name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "可选：case 表所在 sheet 名；缺省解析首个 sheet。"
+    }
+  }
+}

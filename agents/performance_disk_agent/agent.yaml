@@ -1,0 +1,65 @@
+id: performance_disk_agent
+name: "性能盘批量计算 Agent（Mock 阶段）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: tool_automation
+summary: "上传 case 表(.xlsx)→逐 case 调用 mock 性能计算→写汇总表/样本/报告。当前为 Mock 阶段：计算是纯虚构公式，输出无任何工程意义。"
+description: >
+  M3 里程碑的批量作业样板 Agent：演示「文件上传→解析→逐 case 工具调用（单
+  case 失败不摧毁任务）→三产物落盘（result_summary.xlsx / samples.jsonl /
+  task_report.md）」的完整平台链路。V0.1 不调用任何 LLM（model.profile=none，
+  报告为模板化字符串；LLM 摘要是 V0.2 债）。M4 将以 mock=false 的真实工具包
+  替换 performance_disk_mock（切换 tools 白名单 id），届时
+  requires_human_review 必须转 true（工程结论需人工签发）。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: none
+knowledge:
+  enabled: false
+  scopes: []
+tools:
+  - excel_case_parser
+  - performance_disk_mock
+  - excel_summary_writer
+input:
+  type: file_upload
+  allowed_extensions:
+    - .xlsx
+  schema: input_schema.json
+output:
+  formats:
+    - .xlsx
+    - .jsonl
+    - .md
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: false
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: true
+  sample_fields:
+    - inputs.sheet_name
+    - outputs.total_cases
+    - outputs.ok_count
+    - outputs.failed_count
+limitations:
+  - "Mock 阶段：全部计算结果来自纯虚构公式（performance_disk_mock，mock=true），无任何工程意义，绝不可用于任何设计/校核/决策场景。"
+  - "不做全性能分析：只对表格中给定的离散 case 逐点计算，不做包线扫描、插值、趋势或裕度分析。"
+  - "不替代专业判断：产物（汇总表/报告）是原始计算的忠实转写，正确性与适用性判定权在工程师。"
+  - "输入仅支持 .xlsx 单 sheet case 表（必需列 case_id/altitude_m/mach/power_kw）；不支持 csv/多 sheet 合并/公式联动。"
