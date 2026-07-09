@@ -80,20 +80,23 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 ## V0.1 已知限制（诚实清单，非缺陷否认）
 
 1. **任务 inputs 为 JSON 直填**：创建任务页按 Agent 输入契约手写 JSON；按
-   `input_schema.json` 自动生成结构化表单是 M3 项。
+   `input_schema.json` 自动生成结构化表单是 M4 项。
 2. **前端 bundle ~1MB**：Element Plus 全量引入未做按需 tree-shaking；内网静态
    托管场景（无公网带宽约束）接受此体积。
 3. **零前端单测**：前端验证靠 `frontend/e2e/m2_acceptance.py` 真浏览器走查 +
    后端 200+ 项 API 契约测试兜底；组件级单测暂缺。
 4. **feedback.message 无长度上限**：追加式日志表，事件 payload 摘要已截 200，
    落库全文不限长。
-5. **上传孤儿文件残余窗口**：附件已改为提交任务时才上传（选中/移除不产生服务端
-   残留），但「附件上传成功后 createTask 失败」仍会留下无主文件——孤儿 GC 是
-   M3 项。
+5. **孤儿文件/任务产物残留窗口**：附件已改为提交任务时才上传（选中/移除不产生
+   服务端残留），但「附件上传成功后 createTask 失败」仍会留下无主文件；同理，
+   批量任务 `samples.jsonl` 写出后若汇总表写出失败（任务判 failed），已写的
+   产物残留在 `task_runs_dir` 内且不被注册为输出文件。两类残留的 GC 是 M4 项。
 6. **TaskDetail 轮询无退避**：固定间隔轮询，`waiting_review` 等长驻状态停止轮询
    后靠「刷新」按钮手动更新。
 7. **任务列表为「最近任务流」分页语义**：`limit/offset` 往回翻页（每页 100，
    「加载更多」append），不提供总数计数（无 COUNT 查询）。
+8. **报告纯模板化，无 LLM**：批量任务的 `task_report.md` 为纯 Python 字符串
+   模板生成；LLM 摘要报告（失败归纳/修表建议）是 V0.2 项（ADR-0010）。
 
 ## 开发口径
 
@@ -124,7 +127,7 @@ bash scripts/dev_start_worker.sh
 ```bash
 uv run --no-project --with pytest --with jsonschema --with pyyaml \
   --with fastapi --with httpx --with python-multipart --with "pydantic>2" \
-  python -m pytest -q
+  --with openpyxl python -m pytest -q
 ```
 
 前端（M2）：

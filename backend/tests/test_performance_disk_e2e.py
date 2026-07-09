@@ -126,20 +126,28 @@ def test_m3_e2e_full_chain_with_50_case_table(app_env) -> None:
     outputs = _outputs_by_name(client, app, task)
     assert set(outputs.keys()) == set(EXPECTED["artifacts"])
 
-    # ③ result_summary.xlsx 回读：行数与 status 分布对账
-    ws = openpyxl.load_workbook(io.BytesIO(outputs["result_summary.xlsx"]))["result_summary"]
+    # ③ result_summary.xlsx 回读：行数与 status 分布对账 + mock 水印（五落点之表格）
+    wb = openpyxl.load_workbook(io.BytesIO(outputs["result_summary.xlsx"]))
+    assert "声明" in wb.sheetnames, "表格产物必须带「声明」sheet（docs/03 §3 第五落点）"
+    assert wb.sheetnames[0] == "result_summary", "数据 sheet 必须保持第一"
+    notice_text = wb["声明"]["A1"].value
+    assert notice_text and "无任何工程意义" in notice_text
+
+    ws = wb["result_summary"]
     rows = list(ws.iter_rows(values_only=True))
     header = rows[0]
     data_rows = rows[1:]
     assert len(data_rows) == EXPECTED["total_cases"]
     status_col = header.index("status")
     error_col = header.index("error_message")
+    mock_col = header.index("mock")
     statuses = [r[status_col] for r in data_rows]
     assert statuses.count("success") == EXPECTED["ok_count"]
     assert statuses.count("failed") == EXPECTED["failed_count"]
     for r in data_rows:
         if r[status_col] == "failed":
             assert r[error_col] and "超出 mock 包线" in r[error_col]
+    assert all(r[mock_col] is True for r in data_rows), "数据行 mock 列必须全 True（逐行如实标注）"
 
     # ④ samples.jsonl：行数=有效 case 数；失败行有 error_message；每行 mock 如实
     sample_lines = [json.loads(l) for l in outputs["samples.jsonl"].decode("utf-8").splitlines()]
@@ -205,6 +213,46 @@ def test_all_cases_fail_task_still_completed(app_env) -> None:
     assert len(statuses) == 5
     assert statuses.count("failed") == 5
     assert statuses.count("success") == 0
+
+
+# ── 多附件（Codex P2-2：绝不盲取 files[0]）───────────────────────────────
+
+
+def test_txt_plus_xlsx_uses_the_xlsx(app_env) -> None:
+    """txt 在前 + xlsx 在后：必须按后缀选中 xlsx（旧实现盲取 files[0] 会拿 txt 炸解析）。"""
+    client, app = app_env
+    txt_resp = client.post(
+        "/api/files/upload",
+        files={"file": ("notes.txt", "这是一段无关说明".encode("utf-8"), "text/plain")},
+    )
+    assert txt_resp.status_code == 200
+    txt_id = txt_resp.json()["id"]
+
+    xlsx_id = _upload_xlsx(client, _build_xlsx([
+        ["case_001", 1000, 0.3, 800],
+        ["case_002", 2000, 0.4, 900],
+    ]), "small.xlsx")
+
+    # txt 在前：input_file_ids 顺序 = [txt, xlsx]
+    task = _create_and_run(client, app, [txt_id, xlsx_id])
+    assert task["status"] == "completed"
+
+    outputs = _outputs_by_name(client, app, task)
+    ws = openpyxl.load_workbook(io.BytesIO(outputs["result_summary.xlsx"]))["result_summary"]
+    data_rows = list(ws.iter_rows(values_only=True))[1:]
+    assert len(data_rows) == 2, "必须解析的是 xlsx（2 case），不是 txt"
+
+
+def test_two_xlsx_files_task_failed_honestly(app_env) -> None:
+    """双 xlsx：拒绝猜测用户想算哪张表，任务 failed 且信息写明数量。"""
+    client, app = app_env
+    id_a = _upload_xlsx(client, _build_xlsx([["case_001", 1000, 0.3, 800]]), "a.xlsx")
+    id_b = _upload_xlsx(client, _build_xlsx([["case_001", 1000, 0.3, 800]]), "b.xlsx")
+
+    task = _create_and_run(client, app, [id_a, id_b])
+    assert task["status"] == "failed"
+    assert "2 个 xlsx" in task["error_message"]
+    assert "只上传一个" in task["error_message"]
 
 
 # ── 空表 / 无输入文件：任务 failed 诚实 ───────────────────────────────────

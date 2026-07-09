@@ -224,12 +224,17 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
 
 
 @router.get("/tasks/{task_id}/events")
-def list_events(task_id: str, request: Request) -> list[dict[str, Any]]:
+def list_events(
+    task_id: str,
+    request: Request,
+    limit: int = Query(default=2000, ge=1, le=5000, description="每页事件条数（1-5000）"),
+    offset: int = Query(default=0, ge=0, description="跳过条数（id 升序写入序分页）"),
+) -> list[dict[str, Any]]:
     conn = request.app.state.conn_factory()
     try:
         task = repos.get_task(conn, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
-        return repos.list_events(conn, task_id)
+        return repos.list_events(conn, task_id, limit=limit, offset=offset)
     finally:
         conn.close()

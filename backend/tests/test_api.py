@@ -184,6 +184,48 @@ def test_list_tasks_out_of_range_pagination_422(client: TestClient, params: dict
     assert resp.status_code == 422
 
 
+# ── tasks: 事件时间轴分页（P2）────────────────────────────────────────────
+
+
+def test_list_events_limit_offset_slice(client: TestClient, app_env) -> None:
+    """跑完整生命周期攒出多条事件，验 limit/offset 切片与全量逐条一致（id 升序）。"""
+    _, app = app_env
+    resp = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "分页事件"}})
+    task_id = resp.json()["id"]
+    JobRunner(app.state.runtime, app.state.conn_factory).run_once()
+
+    full = client.get(f"/api/tasks/{task_id}/events").json()
+    assert len(full) >= 5, "hello_agent 全生命周期应产生 ≥5 条事件"
+
+    page = client.get(f"/api/tasks/{task_id}/events", params={"limit": 2, "offset": 2}).json()
+    assert len(page) == 2
+    assert [e["event_id"] for e in page] == [e["event_id"] for e in full[2:4]]
+
+    # 翻页拼接 == 全量（不重不漏）
+    collected = []
+    offset = 0
+    while True:
+        chunk = client.get(f"/api/tasks/{task_id}/events", params={"limit": 3, "offset": offset}).json()
+        collected += chunk
+        if len(chunk) < 3:
+            break
+        offset += 3
+    assert [e["event_id"] for e in collected] == [e["event_id"] for e in full]
+
+
+@pytest.mark.parametrize("params", [
+    {"limit": 0},
+    {"limit": 5001},
+    {"limit": -1},
+    {"offset": -1},
+    {"limit": "abc"},
+])
+def test_list_events_out_of_range_pagination_422(client: TestClient, params: dict) -> None:
+    resp = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "E"}})
+    task_id = resp.json()["id"]
+    assert client.get(f"/api/tasks/{task_id}/events", params=params).status_code == 422
+
+
 # ── tasks: cancel 语义 ────────────────────────────────────────────────────
 
 

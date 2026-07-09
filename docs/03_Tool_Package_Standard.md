@@ -46,7 +46,10 @@ Tool Registry 只认这个目录形态；`tool.yaml` 缺失或 schema 校验不�
   - `task_events` 的 `payload`；
   - `tool_runs` 表记录；
   - `samples.jsonl` 中每条样本；
-  - Agent 输出报告（如 `task_report.md`）中的显式声明。
+  - Agent 输出报告（如 `task_report.md`）中的显式声明；
+  - **对外分发的表格产物**（如 `result_summary.xlsx`）：数据 sheet 带 `mock`
+    末列（逐行如实转写）+ 追加「声明」sheet 写入 mock 声明文本——表格最容易
+    脱离任务上下文单独传播，水印必须随文件本体走（M3 反审新增第五落点）。
 - 里程碑4 用真实 Tool Adapter 替换 Mock 时，仅新增一个 `mock=false` 的工具包（如 `performance_disk`），Agent 的 `agent.yaml.tools` 改指向新 id；**不得原地把 Mock 工具的 `mock` 字段改为 false 冒充真实**——那是切换实现，不是翻牌一个字段。
 
 ## 4. safety 三开关

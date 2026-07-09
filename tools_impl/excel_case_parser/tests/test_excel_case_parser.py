@@ -125,6 +125,40 @@ def test_sheet_name_selection_and_missing_sheet(tmp_path: Path) -> None:
     assert missing["status"] == "failed"
 
 
+def test_boolean_cells_are_row_errors_not_numbers(tmp_path: Path) -> None:
+    """Codex 治理审 P2-1：Excel 布尔单元格（TRUE/FALSE）不是合法数值——
+    float(True)==1.0 会静默吞入，必须判行级错误进 errors 不进 cases。"""
+    p = _write_xlsx(tmp_path / "bool.xlsx", HEADER, [
+        ["case_001", True, 0.3, 800],     # altitude_m 布尔
+        ["case_002", 1000, False, 800],   # mach 布尔
+        ["case_003", 1000, 0.3, 800],     # 合法对照
+    ])
+    result = run({"file_path": str(p)})
+    assert result["status"] == "success"
+    assert [c["case_id"] for c in result["cases"]] == ["case_003"]
+    assert len(result["errors"]) == 2
+    assert all("布尔值不是合法数值" in e["error"] for e in result["errors"])
+
+
+def test_row_count_over_default_limit_rejected(tmp_path: Path) -> None:
+    """P2 行数上限：1001 数据行（默认上限 1000）→ 整表诚实拒绝，绝不静默截断。"""
+    rows = [[f"case_{i:04d}", 1000, 0.3, 800] for i in range(1, 1002)]
+    p = _write_xlsx(tmp_path / "big.xlsx", HEADER, rows)
+    result = run({"file_path": str(p)})
+    assert result["status"] == "failed"
+    assert "行数超上限" in result["error_message"] or "超上限" in result["error_message"]
+    assert "分表" in result["error_message"]
+
+
+def test_row_count_within_custom_max_rows_accepted(tmp_path: Path) -> None:
+    """同一 1001 行表在 max_rows=2000 下正常解析（上限可放宽，行为对称）。"""
+    rows = [[f"case_{i:04d}", 1000, 0.3, 800] for i in range(1, 1002)]
+    p = _write_xlsx(tmp_path / "big_ok.xlsx", HEADER, rows)
+    result = run({"file_path": str(p), "max_rows": 2000})
+    assert result["status"] == "success"
+    assert len(result["cases"]) == 1001
+
+
 def test_deterministic_same_input_same_output(tmp_path: Path) -> None:
     p = _write_xlsx(tmp_path / "det.xlsx", HEADER, [["case_001", 1000, 0.3, 800]])
     assert run({"file_path": str(p)}) == run({"file_path": str(p)})

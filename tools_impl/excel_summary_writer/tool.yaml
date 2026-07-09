@@ -5,9 +5,11 @@ type: python_adapter
 mock: false
 description: >
   用 openpyxl 把批量 case 结果写成 result_summary.xlsx（列：case_id/各参数/
-  各输出/status/error_message），返回 {status, file_path, ok_count, failed_count}。
+  各输出/status/error_message/mock），返回 {status, file_path, ok_count, failed_count}。
   只忠实写出调用方给的数据，不做任何计算或判断（mock=false：写文件是真实动作，
-  但数据是否 mock 由数据来源自己标注）。
+  数据是否 mock 由数据来源标注——每 case 的 mock 布尔逐行转写为末列）。
+  安全：所有字符串单元格强制惰性文本（data_type='s'），上游内容绝不会成为
+  活公式（CWE-1236 防注入）。可选 notice 文本写入数据 sheet 之后的「声明」sheet。
 entrypoint: tools_impl.excel_summary_writer.adapter:run
 input_schema:
   type: object
@@ -36,11 +38,18 @@ input_schema:
             type: [object, "null"]
           error_message:
             type: [string, "null"]
+          mock:
+            type: boolean
+            description: 该 case 结果是否来自 mock 工具；逐行转写为数据 sheet 末列（缺省按 false 写出）
         additionalProperties: false
     output_path:
       type: string
       minLength: 1
       description: 输出 .xlsx 的绝对路径（应位于任务 output_dir 内）
+    notice:
+      type: string
+      minLength: 1
+      description: 可选声明文本；有值时在数据 sheet（保持第一）之后追加「声明」sheet 写入
   additionalProperties: false
 output_schema:
   type: object

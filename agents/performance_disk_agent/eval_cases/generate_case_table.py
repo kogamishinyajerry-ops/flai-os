@@ -6,6 +6,11 @@
 
 用法（仓根）：
     python3 agents/performance_disk_agent/eval_cases/generate_case_table.py
+
+再生语义（P3 澄清）：重跑产出的表**语义一致但非 byte 一致**——openpyxl 的
+zip 容器携带生成时间戳等元数据，两次生成的文件 checksum 不同。防腐化的
+防线是 E2E 语义对账（test_performance_disk_e2e 以 case_001.json 口径回读
+校验 48/45/3/2 分布），不是文件 checksum 比对。
 """
 
 from __future__ import annotations

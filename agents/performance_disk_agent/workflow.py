@@ -10,7 +10,8 @@
 零有效 case/汇总写出失败才 failed。
 
 诚实标注：本 Agent 走 performance_disk_mock（mock=true），samples.jsonl 每行、
-task_report.md 头部均携带 mock 声明（docs/03 §3 四落点）。
+task_report.md 头部、result_summary.xlsx（末列 mock + 「声明」sheet 水印）
+均携带 mock 声明（docs/03 §3 五落点）。
 
 事件：本文件 event_logger 发出的自定义类型（parse_started/parse_finished/
 cases_generated/case_started/case_finished/case_failed/summary_generated）
@@ -31,9 +32,25 @@ _SUMMARY_XLSX = "result_summary.xlsx"
 _SAMPLES_JSONL = "samples.jsonl"
 _REPORT_MD = "task_report.md"
 
+# MOCK 声明单一文本源：task_report.md 头部与 result_summary.xlsx「声明」sheet
+# 共用同一段话（docs/03 §3 五落点之报告+表格两处）。
+_MOCK_NOTICE = (
+    "MOCK 声明：本文件全部计算结果由 performance_disk_mock（mock=true）"
+    "纯虚构公式产生，与任何真实性能盘无关，无任何工程意义，"
+    "不得用于设计/校核/决策（宪法第五条诚实标注）。"
+)
+
+_XLSX_SUFFIXES = (".xlsx", ".xlsm")
+
 
 def _fail(message: str) -> dict[str, Any]:
     return {"status": "failed", "outputs": [], "error_message": message}
+
+
+def _md_escape(value: Any) -> str:
+    """Markdown 表格单元格转义（P3）：case_id/error_message 来自用户可控内容，
+    `|` 会破坏表格结构，转义为 `\\|`。"""
+    return str(value).replace("|", "\\|")
 
 
 def run(context: dict[str, Any]) -> dict[str, Any]:
@@ -44,9 +61,20 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     output_dir = context["output_dir"]
 
     # ── 1) 输入文件（平台经 input_file_ids 注入 context.files，元素含落盘 path）──
+    # 多附件时绝不盲取 files[0]（Codex 治理审 P2-2）：按后缀过滤，恰一个才用，
+    # 零个/多个都诚实拒绝——拒绝猜测用户想算哪张表。
+    xlsx_files = [
+        f for f in files
+        if str(f.get("filename", "")).lower().endswith(_XLSX_SUFFIXES)
+    ]
     if not files:
         return _fail("无输入文件：请上传 case 表（.xlsx）后重试")
-    case_file = files[0]
+    if not xlsx_files:
+        return _fail("未找到 xlsx case 表：输入文件中没有 .xlsx/.xlsm 文件")
+    if len(xlsx_files) > 1:
+        names = ", ".join(str(f.get("filename")) for f in xlsx_files)
+        return _fail(f"检测到 {len(xlsx_files)} 个 xlsx（{names}），请只上传一个 case 表")
+    case_file = xlsx_files[0]
 
     # ── 2) 解析 ──────────────────────────────────────────────────────────
     event_logger.log("parse_started", {"filename": case_file.get("filename"), "file_id": case_file.get("id")})
@@ -75,6 +103,7 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
         record: dict[str, Any] = {
             "case_id": case_id, "params": params,
             "outputs": None, "status": "failed", "error_message": None,
+            "mock": True,  # 本 Agent 全部计算走 mock 工具——逐 case 如实标注，穿透进汇总表末列
         }
         try:
             calc = tool_registry.call(
@@ -118,7 +147,8 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     summary_path = os.path.join(output_dir, _SUMMARY_XLSX)
     try:
         write_result = tool_registry.call(
-            "excel_summary_writer", {"cases": results, "output_path": summary_path}
+            "excel_summary_writer",
+            {"cases": results, "output_path": summary_path, "notice": _MOCK_NOTICE},
         )
     except Exception as exc:  # noqa: BLE001
         return _fail(f"汇总表写出调用失败：{exc.__class__.__name__}: {exc}")
@@ -183,7 +213,7 @@ def _render_report(
         lines.append("| case_id | 失败原因 |")
         lines.append("|---|---|")
         for r in failed_cases:
-            lines.append(f"| {r['case_id']} | {r['error_message']} |")
+            lines.append(f"| {_md_escape(r['case_id'])} | {_md_escape(r['error_message'])} |")
         lines.append("")
 
     if row_errors:
@@ -192,7 +222,9 @@ def _render_report(
         lines.append("| Excel 行号 | case_id | 错误 |")
         lines.append("|---|---|---|")
         for e in row_errors:
-            lines.append(f"| {e.get('row')} | {e.get('case_id') or '—'} | {e.get('error')} |")
+            lines.append(
+                f"| {e.get('row')} | {_md_escape(e.get('case_id') or '—')} | {_md_escape(e.get('error'))} |"
+            )
         lines.append("")
 
     lines.append("## 产物")

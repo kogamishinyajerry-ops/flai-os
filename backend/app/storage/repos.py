@@ -258,9 +258,18 @@ def append_event(
     return _decode_event(row)
 
 
-def list_events(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
+def list_events(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    limit: int = 2000,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """任务事件时间轴分页切片（ORDER BY id ASC 不变——自增主键即写入序，
+    翻页天然不重不漏）。默认 limit=2000 覆盖 V0.1 全部正常任务。"""
     rows = conn.execute(
-        "SELECT * FROM task_events WHERE task_id = ? ORDER BY id ASC", (task_id,)
+        "SELECT * FROM task_events WHERE task_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+        (task_id, limit, offset),
     ).fetchall()
     return [_decode_event(r) for r in rows]
 

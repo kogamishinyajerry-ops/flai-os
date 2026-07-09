@@ -42,10 +42,14 @@ def _check_range(name: str, value: float) -> str | None:
     return None
 
 
+_DEFAULT_MAX_ROWS = 1000
+
+
 def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
     del context  # V0.1 未用；保留形参符合 Tool Registry 调用约定
     file_path = Path(payload["file_path"])
     sheet_name = payload.get("sheet_name")
+    max_rows = int(payload.get("max_rows", _DEFAULT_MAX_ROWS))
 
     if not file_path.is_file():
         return {"status": "failed", "error_message": f"文件不存在：{file_path}"}
@@ -85,10 +89,22 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
         cases: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         seen_case_ids: set[str] = set()
+        data_row_count = 0
 
         for excel_row, values in enumerate(rows, start=2):
             if values is None or all(v is None or str(v).strip() == "" for v in values):
                 continue  # 整行全空：静默跳过（不是数据行）
+
+            data_row_count += 1
+            if data_row_count > max_rows:
+                # 超上限=解析器自身失败，诚实拒绝整表——绝不静默截断冒充全量结果。
+                return {
+                    "status": "failed",
+                    "error_message": (
+                        f"数据行数超上限（>{max_rows} 行），请分表后重新提交"
+                        "（上限可经 max_rows 参数放宽，最大 5000）"
+                    ),
+                }
 
             def _cell(idx: int) -> Any:
                 return values[idx] if idx < len(values) else None
@@ -110,6 +126,10 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
                     if name in OPTIONAL_COLUMNS:
                         continue  # 可选列缺值 = 不提供该参数
                     row_error = f"{name} 缺值"
+                    break
+                if isinstance(raw, bool):
+                    # float(True)==1.0 会静默把 Excel 布尔单元格吞成数值（Codex 治理审 P2-1）
+                    row_error = f"{name} 布尔值不是合法数值：{raw}"
                     break
                 try:
                     value = float(raw)

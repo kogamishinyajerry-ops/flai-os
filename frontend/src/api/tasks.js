@@ -23,7 +23,9 @@ export const listTasks = ({ status, agentId, limit, offset } = {}) => {
 };
 
 export const getTask = (taskId) => request(`/api/tasks/${taskId}`);
-export const listTaskEvents = (taskId) => request(`/api/tasks/${taskId}/events`);
+// limit 显式传 2000（=后端默认值，行为不变）：分页口径显式化，超长时间轴
+// 的截断点在前端代码里可见，而不是隐在后端默认里。
+export const listTaskEvents = (taskId) => request(`/api/tasks/${taskId}/events?limit=2000`);
 export const cancelTask = (taskId) =>
   request(`/api/tasks/${taskId}/cancel`, { method: "POST" });
 

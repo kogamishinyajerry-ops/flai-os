@@ -6,6 +6,14 @@
       <div class="page-header">
         <h2>任务详情</h2>
         <el-tag :type="statusTagType(task.status)">{{ statusLabel(task.status) }}</el-tag>
+        <!-- 批量任务摘要（P2）：消解「全失败 case 仍显示绿色已完成」的误导——
+             ok/failed 计数取自最后一条 summary_generated 折叠事件，纯前端派生。 -->
+        <template v-if="batchSummary">
+          <el-tag size="small" type="success">成功 {{ batchSummary.ok }}</el-tag>
+          <el-tag size="small" :type="batchSummary.failed > 0 ? 'danger' : 'info'">
+            失败 {{ batchSummary.failed }}
+          </el-tag>
+        </template>
         <!-- waiting_review 时轮询停止（避免无人值守页面永久空转），跨会话的
              人工放行结果靠本按钮手动拉取（反方审查 P2-1）。 -->
         <el-button text type="primary" class="refresh-btn" @click="loadTask()">刷新</el-button>
@@ -155,6 +163,24 @@ const feedbackError = ref("");
 
 const CATEGORY_LABEL_MAP = Object.fromEntries(FEEDBACK_CATEGORIES.map((c) => [c.value, c.label]));
 const categoryLabel = (c) => CATEGORY_LABEL_MAP[c] ?? c;
+
+// 批量任务摘要：从已拉取 events 找最后一条 agent_log 且
+// workflow_event_type=='summary_generated'（性能盘类批量 Agent 发出）；
+// 无该事件的任务（如 hello_agent）返回 null，不显示，零影响。
+const batchSummary = computed(() => {
+  for (let i = events.value.length - 1; i >= 0; i--) {
+    const e = events.value[i];
+    if (
+      e.event_type === "agent_log" &&
+      e.payload?.workflow_event_type === "summary_generated" &&
+      e.payload.ok_count != null &&
+      e.payload.failed_count != null
+    ) {
+      return { ok: e.payload.ok_count, failed: e.payload.failed_count };
+    }
+  }
+  return null;
+});
 
 const canCancel = computed(() => ["created", "queued"].includes(task.value?.status));
 const isWaitingReview = computed(() => task.value?.status === "waiting_review");
