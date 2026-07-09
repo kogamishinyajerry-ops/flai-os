@@ -11,7 +11,8 @@
 | lane 自证 | 4 实现 lane | 各自 witness 全绿 + 单点 tamper | 主控逐一亲跑复验 + golden 反编造抽检 |
 | 收口 tamper（T1-T7） | 主控 | 全部咬合 | 下详 |
 | 异源反方审（fresh-context） | 敌意审查 agent | **APPROVE，P1/P2/P3 零 findings** | 观察 c（负 top_k）已顺手修复+witness |
-| 收口复测（Mode C） | loop-auditor | BLOCK→d5 未提交/审查缺档 | 本 commit + 本文件即处置 |
+| 收口复测（Mode C） | loop-auditor | BLOCK→d5 未提交/审查缺档 | commit 885d92f + 本文件处置 |
+| 复验（Mode C 终裁） | loop-auditor | **APPROVE 19/20 🟢闭环成熟** | d4 1→2（异源审有文件级证据）、d5 0→2（SHA 锚定+远程同步）；审计员独立 worktree 重跑验证计数链（58f8755=318 passed、4709d30 纯净=324+66=390）逐位自洽 |
 | Codex 异源治理审 | — | **悬置**：codex 二进制 2026-07-09 起损坏（M7 已记环境债） | 恢复后补跑 `codex review --commit <本次 SHA>` |
 
 ## Mode A findings 处置
