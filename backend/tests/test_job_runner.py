@@ -159,3 +159,53 @@ def test_run_once_survives_cancel_race_illegal_transition(runtime_env) -> None:
     # runner 存活：紧接着的下一次 run_once 仍能正常空跑，不受上次异常影响。
     runner2 = JobRunner(racing_runtime, conn_factory)
     assert runner2.run_once() is False
+
+
+class _ExplodingRuntime:
+    """runtime.execute 直接抛普通异常——模拟 AgentRuntime 内部兜底之外的
+    意外炸点（如 conn 故障），驱动 run_once 的通用 `except Exception` 分支。
+    """
+
+    def execute(self, task_id: str) -> dict[str, Any]:
+        raise RuntimeError("runtime 意外炸裂（测试注入）")
+
+
+def test_run_once_generic_exception_marks_task_failed(runtime_env) -> None:
+    """通用异常兜底 witness（loop-auditor 收口审计 gap-2）：run_once 绝不裸抛，
+    任务被尽力置 failed 且留 task_failed 事件——若删除 runner.py 的
+    `except Exception` 分支或 `_mark_failed_best_effort`，本测试变红。
+    """
+    conn_factory = runtime_env["conn_factory"]
+    conn = conn_factory()
+    try:
+        task = repos.create_task(
+            conn,
+            task_id="task_generic_boom",
+            agent_id="hello_agent",
+            agent_version="0.1.0",
+            name="通用异常兜底测试",
+            created_by="tester",
+            inputs={"name": "炸"},
+            input_file_ids=[],
+            metadata={},
+        )
+        repos.set_task_status(conn, task["id"], "queued")
+    finally:
+        conn.close()
+
+    runner = JobRunner(_ExplodingRuntime(), conn_factory)
+    did_work = runner.run_once()
+    assert did_work is True
+
+    conn = conn_factory()
+    try:
+        final_task = repos.get_task(conn, "task_generic_boom")
+        events = repos.list_events(conn, "task_generic_boom")
+    finally:
+        conn.close()
+
+    assert final_task["status"] == "failed"
+    assert "RuntimeError" in (final_task.get("error_message") or "")
+    failed_events = [e for e in events if e["event_type"] == "task_failed"]
+    assert len(failed_events) == 1
+    assert "兜底" in failed_events[0]["message"]

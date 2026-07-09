@@ -17,7 +17,10 @@
      防止未来任何一方（API 字段 / schema 声明）单方面漂移。
   4. **上传安全加固**：`files.py` 落盘文件名先 `Path(filename).name` 净化
      （空/`.`/`..` 一律兜底 `unnamed`），再断言落盘路径 `resolve()` 必须落在
-     `uploads_dir` 内，否则 400——防 `../../evil.txt` 路径穿越。同时加
+     `uploads_dir` 内，否则 400——防 `../../evil.txt` 路径穿越。诚实标注：
+     POSIX 上 `Path.name` 已压平一切分隔符，resolve 层为**纵深防御无独立自然
+     触发路径**，其咬合力由「模拟净化层失效」的 witness 测试单独证明
+     （loop-auditor 收口审计裁定后补）。同时加
      `FLAI_MAX_UPLOAD_MB`（默认 100）上传限额，分块累计超限即 413 并清理
      半成品文件/目录，不留残留。
   5. **`task_created` 事件语义**：改为 `created→queued` 状态迁移完成后再发，

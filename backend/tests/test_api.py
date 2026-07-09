@@ -268,6 +268,33 @@ def test_upload_filename_only_separators_falls_back_to_unnamed(client: TestClien
     assert upload_resp.json()["filename"] == "unnamed"
 
 
+def test_upload_resolve_guard_bites_when_sanitize_layer_fails(
+    client: TestClient, app_env, monkeypatch
+) -> None:
+    """二层防御独立咬合 witness（loop-auditor 收口审计 gap-1）。
+
+    `_sanitize_filename` 的 `Path.name` 在 POSIX 上已压平一切分隔符，正常路径
+    到不了 resolve 校验层——它是纵深防御。本测试模拟一层失效（净化函数被
+    monkeypatch 成恒等），穿越 payload 必须被 resolve 层以 400 拦下且
+    uploads 外零产物；若删除 files.py 的 resolve 校验块，本测试变红。
+    """
+    from backend.app.api import files as files_api
+
+    _, app = app_env
+    uploads_dir: Path = app.state.uploads_dir
+    monkeypatch.setattr(files_api, "_sanitize_filename", lambda raw: raw or "unnamed")
+
+    upload_resp = client.post(
+        "/api/files/upload",
+        files={"file": ("../../evil_layer2.txt", b"x", "text/plain")},
+    )
+    assert upload_resp.status_code == 400
+    assert "逃出 uploads 目录" in upload_resp.json()["detail"]
+    assert not (uploads_dir.parent / "evil_layer2.txt").exists()
+    # 校验在 mkdir/写盘之前：uploads 内也不许留下本次的半成品目录
+    assert not any(uploads_dir.rglob("evil_layer2.txt"))
+
+
 # ── files: P2-6 上传限额 ──────────────────────────────────────────────────
 
 
