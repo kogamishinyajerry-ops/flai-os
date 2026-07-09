@@ -190,15 +190,16 @@ let pollTimer = null;
 
 async function loadTask({ silent = false } = {}) {
   if (!silent) loading.value = true;
+  // 2s 轮询（silent）只增量拉尾段事件（事件表 append-only + id ASC，见
+  // api/tasks.js），避免事件越多轮询越重（Codex R1-P2）；首载/手动刷新仍
+  // 全量重拉，兼作自愈路径。baseline 身份守卫：若轮询在途期间发生过全量
+  // 重载（刷新/取消/放行后的 loadTask 已整体替换数组），本次轮询**整包
+  // 作废**——task/events/loadError 都不动（Codex R2-P2：只弃 events 而仍写
+  // task 会让 stale 快照倒灌，放行后可把状态钉回 waiting_review 且不再续
+  // 轮询）；失败同理（Codex R3-P3：被淘汰快照的错误横幅不得盖住更新的
+  // 状态）。finally 的 schedulePoll 依当前（更新的）状态决定是否续轮。
+  const baseline = silent ? events.value : null;
   try {
-    // 2s 轮询（silent）只增量拉尾段事件（事件表 append-only + id ASC，见
-    // api/tasks.js），避免事件越多轮询越重（Codex R1-P2）；首载/手动刷新仍
-    // 全量重拉，兼作自愈路径。baseline 身份守卫：若轮询在途期间发生过全量
-    // 重载（刷新/取消/放行后的 loadTask 已整体替换数组），本次轮询**整包
-    // 作废**——task/events/loadError 都不动（Codex R2-P2：只弃 events 而仍写
-    // task 会让 stale 快照倒灌，放行后可把状态钉回 waiting_review 且不再续
-    // 轮询）；finally 的 schedulePoll 依当前（更新的）状态决定是否续轮。
-    const baseline = silent ? events.value : null;
     const offset = baseline ? baseline.length : 0;
     const [t, ev] = await Promise.all([getTask(taskId), listTaskEvents(taskId, { offset })]);
     if (silent && events.value !== baseline) {
@@ -215,6 +216,9 @@ async function loadTask({ silent = false } = {}) {
       await loadFeedback();
     }
   } catch (err) {
+    if (silent && events.value !== baseline) {
+      return;
+    }
     loadError.value = err.detail || err.message;
   } finally {
     if (!silent) loading.value = false;

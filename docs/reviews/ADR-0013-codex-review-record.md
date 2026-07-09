@@ -24,4 +24,11 @@
 
 处置 commit 验证链：pytest 293 绿 · M2 e2e 8/8 · M6 e2e 7/7 · 迁移 tamper 咬合在新夹具下重取证。
 
-## R3：终轮复审（cap=R0+2 fix）
+## R3（2026-07-09，审 7532ca6）：P1/P2 清零；1 P3 按 verbatim 例外落地
+
+- [P3] stale 轮的**失败**路径漏守卫：catch 无条件写 `loadError`，被淘汰快照的
+  错误横幅可盖住更新状态且 waiting_review/终态下不再自愈。复核属实（baseline
+  守卫只在成功路径）。修复=逐字落地 Codex 建议（catch 加同款 baseline 守卫，
+  `baseline` 声明提至 try 外），宪法 verbatim 例外直接落地不再走 R4。
+- 收口判定：三轮 P1 全程为 1（R1 迁移竞态）且当轮即清；R2 起 P1=0；R3 P2=0。
+  验证链全绿（pytest 293 · M2 8/8 · M6 7/7），审查环终止于 cap 内。
