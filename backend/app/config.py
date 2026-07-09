@@ -19,6 +19,9 @@ CONTRACTS_DIR = REPO_ROOT / "contracts"
 DATA_DIR = REPO_ROOT / "data"
 UPLOADS_DIR = DATA_DIR / "uploads"
 TASK_RUNS_DIR = DATA_DIR / "task_runs"
+# M2：前端构建产物目录。存在则由 FastAPI 静态托管（内网 Windows 部署免 node），
+# 不存在（纯后端/开发期走 vite proxy）则静态路由整体不注册。
+FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
 
 DB_PATH = Path(os.environ.get("FLAI_DB_PATH", str(DATA_DIR / "flai_os.db")))
 BACKEND_PORT = int(os.environ.get("FLAI_BACKEND_PORT", "8620"))

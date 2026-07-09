@@ -1,6 +1,6 @@
 # FLAi-OS Kernel V0.1
 
-二所工程智能体运行底座。当前处于 **M0（系统宪法与核心契约）完成态**。
+二所工程智能体运行底座。当前处于 **M2（Web UI 原型）实现中**（M0/M1 已收口，审查存档见 `docs/reviews/`）。
 
 ## 是什么 / 不是什么
 
@@ -71,8 +71,8 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 | 里程碑 | 目标 | 状态 |
 |---|---|---|
 | M0 | 系统宪法与核心契约：任何人看完文档知道 FLAi-OS 是什么/怎么写 Agent/Tool | **完成** |
-| M1 | 最小后端核心底座：Hello Agent 可通过后端完整运行 | 待开始 |
-| M2 | Web UI 原型：工程师可通过网页跑 Hello Agent | 待开始 |
+| M1 | 最小后端核心底座：Hello Agent 可通过后端完整运行 | **完成** |
+| M2 | Web UI 原型：工程师可通过网页跑 Hello Agent | 进行中 |
 | M3 | Mock 性能盘 Agent：上传 Excel→批量跑→汇总→样本沉淀（不接真实性能盘）| 待开始 |
 | M4 | 真实性能盘 Tool Adapter：替换 Mock，保持调用链不变 | 待开始 |
 | M5 | 平台泛化验证：接入 control_logic_agent、fta_agent 验证非性能盘专用 | 待开始 |
@@ -109,11 +109,17 @@ uv run --no-project --with pytest --with jsonschema --with pyyaml \
   python -m pytest -q
 ```
 
-前端起法待 M2 实现：
+前端（M2）：
 
 ```bash
-# 待 M2 实现：起前端
-bash scripts/dev_start_frontend.sh  # 当前为 NOT-IMPLEMENTED 占位
+# 开发模式：vite dev server 端口 8621，/api 代理到 127.0.0.1:8620
+cd frontend && npm install        # 首次
+bash scripts/dev_start_frontend.sh
+
+# 内网部署模式（免 node）：构建产物由后端静态托管
+cd frontend && npm run build      # 产出 frontend/dist/（不入库）
+# 之后只需起后端——frontend/dist 存在时 FastAPI 自动托管 SPA，
+# 浏览器直接访问 http://127.0.0.1:8620/
 ```
 
 ## 参考

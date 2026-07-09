@@ -290,6 +290,45 @@ def get_file(conn: sqlite3.Connection, file_id: str) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
+# ── feedback ───────────────────────────────────────────────────────────
+
+def create_feedback(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    agent_id: str | None,
+    agent_version: str | None,
+    rating: str,
+    category: str,
+    message: str | None,
+    created_by: str,
+) -> dict[str, Any]:
+    """插一条任务反馈（任务书 §7.8）。rating/category 枚举由 API 层 Literal 锁定，
+    本层不重复校验（与 tasks 层"状态枚举在 statemachine 锁、repos 只执行"同一分层）。
+    """
+    now = _now_iso()
+    cur = conn.execute(
+        """
+        INSERT INTO feedback
+            (task_id, agent_id, agent_version, rating, category, message, created_by, created_at)
+        VALUES (?,?,?,?,?,?,?,?)
+        """,
+        (task_id, agent_id, agent_version, rating, category, message, created_by, now),
+    )
+    row = conn.execute("SELECT * FROM feedback WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def list_feedback(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
+    """按 created_at 升序返回任务的全部反馈；同刻并列以自增 id 升序稳定去歧
+    （id 单调递增与写入顺序一致，排序语义不变，只是消除同一微秒内的不确定序）。
+    """
+    rows = conn.execute(
+        "SELECT * FROM feedback WHERE task_id = ? ORDER BY created_at ASC, id ASC", (task_id,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── tool_runs ──────────────────────────────────────────────────────────
 
 def _decode_tool_run(row: sqlite3.Row) -> dict[str, Any]:

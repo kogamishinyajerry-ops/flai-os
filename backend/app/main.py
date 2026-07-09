@@ -11,11 +11,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import config
 from .api import agents as agents_api
+from .api import feedback as feedback_api
 from .api import files as files_api
 from .api import tasks as tasks_api
 from .model_gateway.gateway import ModelGateway
@@ -35,6 +38,7 @@ def create_app(
     db_path: Path | str | None = None,
     uploads_dir: Path | None = None,
     task_runs_dir: Path | None = None,
+    frontend_dist_dir: Path | None = None,
 ) -> FastAPI:
     agents_dir = Path(agents_dir) if agents_dir is not None else config.AGENTS_DIR
     tools_dir = Path(tools_dir) if tools_dir is not None else config.TOOLS_DIR
@@ -42,6 +46,9 @@ def create_app(
     db_path = Path(db_path) if db_path is not None else config.DB_PATH
     uploads_dir = Path(uploads_dir) if uploads_dir is not None else config.UPLOADS_DIR
     task_runs_dir = Path(task_runs_dir) if task_runs_dir is not None else config.TASK_RUNS_DIR
+    frontend_dist_dir = (
+        Path(frontend_dist_dir) if frontend_dist_dir is not None else config.FRONTEND_DIST_DIR
+    )
 
     def conn_factory() -> sqlite3.Connection:
         return get_conn(db_path)
@@ -99,6 +106,31 @@ def create_app(
     app.include_router(agents_api.router)
     app.include_router(tasks_api.router)
     app.include_router(files_api.router)
+    app.include_router(feedback_api.router)
+
+    # M2 静态托管：frontend/dist 存在才注册（内网 Windows 免 node 部署；
+    # 开发期 vite proxy 场景 dist 不在，静态路由整体缺席，行为与 M1 一致）。
+    index_html = frontend_dist_dir / "index.html"
+    if index_html.is_file():
+        assets_dir = frontend_dist_dir / "assets"
+        if assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        def spa_fallback(full_path: str) -> FileResponse:
+            """SPA catch-all：真实静态文件按文件回，其余路径回 index.html
+            （vue-router history 模式深链刷新）。/api/* 未匹配到路由的一律
+            如实 404 JSON，绝不用 index.html 掩盖接口不存在。"""
+            if full_path == "api" or full_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail=f"接口不存在：/{full_path}")
+            candidate = (frontend_dist_dir / full_path) if full_path else None
+            if (
+                candidate is not None
+                and candidate.is_file()
+                and candidate.resolve().is_relative_to(frontend_dist_dir.resolve())
+            ):
+                return FileResponse(candidate)
+            return FileResponse(index_html)
 
     return app
 

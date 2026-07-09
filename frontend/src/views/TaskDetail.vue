@@ -1,0 +1,342 @@
+<template>
+  <div class="task-detail" v-loading="loading">
+    <el-alert v-if="loadError" type="error" :title="loadError" show-icon :closable="false" />
+
+    <template v-if="task">
+      <div class="page-header">
+        <h2>任务详情</h2>
+        <el-tag :type="statusTagType(task.status)">{{ statusLabel(task.status) }}</el-tag>
+      </div>
+
+      <el-descriptions :column="2" border class="task-descriptions">
+        <el-descriptions-item label="ID">{{ task.id }}</el-descriptions-item>
+        <el-descriptions-item label="Agent ID">{{ task.agent_id }}</el-descriptions-item>
+        <el-descriptions-item label="Agent 版本">{{ task.agent_version }}</el-descriptions-item>
+        <el-descriptions-item label="任务名称">{{ task.name || "—" }}</el-descriptions-item>
+        <el-descriptions-item label="创建人">{{ task.created_by }}</el-descriptions-item>
+        <el-descriptions-item label="创建时间">{{ formatTime(task.created_at) }}</el-descriptions-item>
+        <el-descriptions-item label="开始时间">{{ formatTime(task.started_at) }}</el-descriptions-item>
+        <el-descriptions-item label="结束时间">{{ formatTime(task.finished_at) }}</el-descriptions-item>
+      </el-descriptions>
+
+      <el-alert
+        v-if="task.error_message"
+        type="error"
+        :title="task.error_message"
+        show-icon
+        :closable="false"
+        class="section"
+      />
+
+      <div class="section" v-if="canCancel || isWaitingReview">
+        <h3>动作</h3>
+        <el-button v-if="canCancel" type="danger" plain @click="handleCancel">取消任务</el-button>
+
+        <el-card v-if="isWaitingReview" shadow="never" class="review-card">
+          <el-form label-width="80px">
+            <el-form-item label="审核人" required>
+              <el-input v-model="reviewForm.reviewer" placeholder="你的名字" />
+            </el-form-item>
+            <el-form-item label="意见">
+              <el-input v-model="reviewForm.comment" type="textarea" :rows="2" placeholder="可选" />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="success" :loading="reviewing" @click="handleReview('approve')">批准放行</el-button>
+              <el-button type="danger" :loading="reviewing" @click="handleReview('reject')">拒绝</el-button>
+            </el-form-item>
+          </el-form>
+        </el-card>
+      </div>
+
+      <div class="section">
+        <h3>事件时间轴</h3>
+        <el-empty v-if="events.length === 0" description="暂无事件" />
+        <el-timeline v-else>
+          <el-timeline-item
+            v-for="e in events"
+            :key="e.event_id"
+            :timestamp="formatTime(e.created_at)"
+            :color="LEVEL_COLOR[e.level] || LEVEL_COLOR.info"
+          >
+            <div class="event-type">{{ e.event_type }}</div>
+            <div class="event-message">{{ e.message }}</div>
+            <el-collapse v-if="e.payload && Object.keys(e.payload).length">
+              <el-collapse-item title="payload">
+                <pre class="payload-json">{{ JSON.stringify(e.payload, null, 2) }}</pre>
+              </el-collapse-item>
+            </el-collapse>
+          </el-timeline-item>
+        </el-timeline>
+      </div>
+
+      <div class="section" v-if="task.output_file_ids && task.output_file_ids.length">
+        <h3>输出文件</h3>
+        <el-button
+          v-for="fid in task.output_file_ids"
+          :key="fid"
+          tag="a"
+          :href="downloadUrl(fid)"
+          download
+          class="output-file-btn"
+        >
+          下载 {{ fid.slice(0, 8) }}
+        </el-button>
+      </div>
+
+      <div class="section" v-if="isTerminal">
+        <h3>反馈</h3>
+        <el-alert v-if="feedbackError" type="warning" :title="feedbackError" show-icon :closable="false" />
+        <el-form label-width="80px" class="feedback-form">
+          <el-form-item label="评价">
+            <el-radio-group v-model="feedbackForm.rating">
+              <el-radio value="good">可用</el-radio>
+              <el-radio value="bad">不可用</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="分类">
+            <el-select v-model="feedbackForm.category" placeholder="请选择">
+              <el-option v-for="c in FEEDBACK_CATEGORIES" :key="c.value" :label="c.label" :value="c.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="说明">
+            <el-input v-model="feedbackForm.message" type="textarea" :rows="2" placeholder="可选" />
+          </el-form-item>
+          <el-form-item label="创建人" required>
+            <el-input v-model="feedbackForm.createdBy" placeholder="你的名字" />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" :loading="submittingFeedback" @click="handleSubmitFeedback">提交反馈</el-button>
+          </el-form-item>
+        </el-form>
+
+        <el-empty v-if="feedbackList.length === 0" description="暂无反馈" />
+        <ul v-else class="feedback-list">
+          <li v-for="f in feedbackList" :key="f.id">
+            <el-tag size="small" :type="f.rating === 'good' ? 'success' : 'danger'">
+              {{ f.rating === "good" ? "可用" : "不可用" }}
+            </el-tag>
+            <span class="feedback-category">{{ categoryLabel(f.category) }}</span>
+            <span class="feedback-message">{{ f.message }}</span>
+            <span class="feedback-meta">{{ f.created_by }} · {{ formatTime(f.created_at) }}</span>
+          </li>
+        </ul>
+      </div>
+    </template>
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive, computed, onMounted, onUnmounted } from "vue";
+import { useRoute } from "vue-router";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { getTask, listTaskEvents, cancelTask, reviewTask } from "../api/tasks";
+import { downloadUrl } from "../api/files";
+import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
+import { statusLabel, statusTagType, formatTime, LEVEL_COLOR } from "../utils/format";
+
+const route = useRoute();
+const taskId = route.params.taskId;
+
+const task = ref(null);
+const events = ref([]);
+const loading = ref(true);
+const loadError = ref("");
+
+const reviewForm = reactive({ reviewer: "", comment: "" });
+const reviewing = ref(false);
+
+const feedbackForm = reactive({ rating: "good", category: "", message: "", createdBy: "" });
+const submittingFeedback = ref(false);
+const feedbackList = ref([]);
+const feedbackError = ref("");
+
+const CATEGORY_LABEL_MAP = Object.fromEntries(FEEDBACK_CATEGORIES.map((c) => [c.value, c.label]));
+const categoryLabel = (c) => CATEGORY_LABEL_MAP[c] ?? c;
+
+const canCancel = computed(() => ["created", "queued"].includes(task.value?.status));
+const isWaitingReview = computed(() => task.value?.status === "waiting_review");
+const isTerminal = computed(() => ["completed", "failed", "cancelled"].includes(task.value?.status));
+
+let pollTimer = null;
+
+async function loadTask({ silent = false } = {}) {
+  if (!silent) loading.value = true;
+  try {
+    const [t, ev] = await Promise.all([getTask(taskId), listTaskEvents(taskId)]);
+    task.value = t;
+    events.value = ev;
+    loadError.value = "";
+    if (isTerminal.value) {
+      await loadFeedback();
+    }
+  } catch (err) {
+    loadError.value = err.detail || err.message;
+  } finally {
+    if (!silent) loading.value = false;
+    schedulePoll();
+  }
+}
+
+function schedulePoll() {
+  clearPoll();
+  if (task.value && !isTerminal.value && !isWaitingReview.value) {
+    pollTimer = setTimeout(() => loadTask({ silent: true }), 2000);
+  }
+}
+function clearPoll() {
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+}
+
+async function loadFeedback() {
+  try {
+    feedbackList.value = await listTaskFeedback(taskId);
+    feedbackError.value = "";
+  } catch (err) {
+    feedbackError.value = `反馈列表加载失败：${err.detail || err.message}`;
+  }
+}
+
+async function handleCancel() {
+  try {
+    await ElMessageBox.confirm("确认取消该任务？", "取消任务", { type: "warning" });
+  } catch {
+    return;
+  }
+  try {
+    await cancelTask(taskId);
+    ElMessage.success("任务已取消");
+    await loadTask();
+  } catch (err) {
+    ElMessage.error(err.detail || err.message);
+  }
+}
+
+async function handleReview(action) {
+  if (!reviewForm.reviewer.trim()) {
+    ElMessage.error("请填写审核人");
+    return;
+  }
+  const label = action === "approve" ? "批准放行" : "拒绝";
+  try {
+    await ElMessageBox.confirm(`确认${label}该任务？`, label, { type: "warning" });
+  } catch {
+    return;
+  }
+  reviewing.value = true;
+  try {
+    await reviewTask(taskId, { action, reviewer: reviewForm.reviewer.trim(), comment: reviewForm.comment || null });
+    ElMessage.success(`已${label}`);
+    await loadTask();
+  } catch (err) {
+    ElMessage.error(err.detail || err.message);
+  } finally {
+    reviewing.value = false;
+  }
+}
+
+async function handleSubmitFeedback() {
+  if (!feedbackForm.createdBy.trim()) {
+    ElMessage.error("请填写创建人");
+    return;
+  }
+  if (!feedbackForm.category) {
+    ElMessage.error("请选择分类");
+    return;
+  }
+  submittingFeedback.value = true;
+  try {
+    await submitFeedback({
+      taskId,
+      rating: feedbackForm.rating,
+      category: feedbackForm.category,
+      message: feedbackForm.message || null,
+      createdBy: feedbackForm.createdBy.trim(),
+    });
+    ElMessage.success("反馈已提交");
+    feedbackForm.message = "";
+    await loadFeedback();
+  } catch (err) {
+    ElMessage.error(err.detail || err.message);
+  } finally {
+    submittingFeedback.value = false;
+  }
+}
+
+onMounted(() => loadTask());
+onUnmounted(clearPoll);
+</script>
+
+<style scoped>
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.page-header h2 {
+  margin: 0;
+}
+.task-descriptions {
+  margin-bottom: 16px;
+}
+.section {
+  margin-top: 24px;
+}
+.section h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+.review-card {
+  margin-top: 12px;
+  max-width: 480px;
+  background: #f5f7fa;
+}
+.event-type {
+  font-weight: 600;
+  font-size: 13px;
+}
+.event-message {
+  color: #606266;
+  font-size: 13px;
+  margin: 2px 0 4px;
+}
+.payload-json {
+  background: #f5f7fa;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  overflow-x: auto;
+}
+.output-file-btn {
+  margin-right: 8px;
+  margin-bottom: 8px;
+}
+.feedback-form {
+  max-width: 480px;
+}
+.feedback-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.feedback-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #ebeef5;
+  font-size: 13px;
+}
+.feedback-message {
+  flex: 1;
+  color: #606266;
+}
+.feedback-meta {
+  color: #909399;
+  font-size: 12px;
+  white-space: nowrap;
+}
+</style>

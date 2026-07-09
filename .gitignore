@@ -1,6 +1,7 @@
 __pycache__/
 .venv/
 node_modules/
+frontend/dist/
 data/uploads/*
 data/outputs/*
 data/task_runs/*
