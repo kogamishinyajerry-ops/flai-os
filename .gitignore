@@ -1,0 +1,12 @@
+__pycache__/
+.venv/
+node_modules/
+data/uploads/*
+data/outputs/*
+data/task_runs/*
+data/vector_store/*
+data/memory_store/*
+logs/*
+!**/.gitkeep
+.env
+.pytest_cache/

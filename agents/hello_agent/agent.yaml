@@ -1,0 +1,53 @@
+id: hello_agent
+name: "Hello Agent（平台闭环验证示例）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: tool_automation
+summary: "0-LLM 示例 Agent：读取姓名、调用 mock_echo 工具、写出问候语，用于验证平台端到端闭环，无业务含义。"
+description: >
+  本 Agent 是 M0 阶段的标准包示例（Golden Sample），演示 Agent Package
+  的最小合法结构：无模型调用（model.profile=none）、单工具依赖、
+  标准 workflow.py 入口。新开发者复制本目录改字段即可起步写新 Agent。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: none
+knowledge:
+  enabled: false
+  scopes: []
+tools:
+  - mock_echo
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats:
+    - .json
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: false
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: true
+  sample_fields:
+    - inputs.name
+    - outputs.greeting
+limitations:
+  - "仅用于验证平台闭环（Registry 注册/Tool 调用/事件日志/产物落盘），无业务含义，不得用于生产业务场景。"
+  - "0-LLM 示例，不具备任何自然语言理解或推理能力，输入必须是结构化 params。"
+  - "依赖 mock_echo 工具（mock=true），其输出不代表任何真实工程结果。"

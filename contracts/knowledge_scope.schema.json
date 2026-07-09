@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/knowledge_scope.schema.json",
+  "title": "FLAi-OS 知识范围配置契约 (Knowledge Scope)",
+  "description": "知识库接入的白名单条目：agent.yaml knowledge.scopes 只能引用此处已注册的 scope_id（default-deny，禁止 Agent 私接未注册知识源）。敏感路径/凭证一律走环境变量，不入库入仓。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scope_id", "name", "kind", "confidentiality", "owner"],
+  "properties": {
+    "scope_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "知识范围唯一 ID，蛇形小写，与 agent.yaml knowledge.scopes 数组项一一对应。"
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80, "description": "知识范围显示名（治理清单/门户展示用）。" },
+    "kind": {
+      "type": "string",
+      "enum": ["document", "engineering_experience", "run_memory"],
+      "description": "知识类型：document=文档资料 / engineering_experience=工程经验沉淀 / run_memory=历史任务运行记忆。三类检索与脱敏策略不同，Kernel 按 kind 分流处理。"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["obsidian_vault", "file_dir", "mcp"],
+      "description": "知识来源接入方式：obsidian_vault=Obsidian 库 / file_dir=本地文件目录 / mcp=通过 MCP 资源接入。三项为已知槽位，内网侦察确认其余来源前不新增枚举值。"
+    },
+    "path_or_uri": {
+      "type": "string",
+      "description": "知识源具体路径或 URI（非敏感时可直填，如内部约定的相对目录）；涉密路径改用 path_or_uri_env 指向环境变量，不在本字段明写真实路径。"
+    },
+    "path_or_uri_env": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$",
+      "description": "存放敏感路径/URI 的环境变量名，与 path_or_uri 二选一使用；path_or_uri 涉密时必须改走此字段。"
+    },
+    "confidentiality": {
+      "type": "string",
+      "enum": ["public_internal", "department", "restricted"],
+      "description": "密级：public_internal=内部公开 / department=限本部门 / restricted=限定人员。knowledge.scopes 授权时必须核对调用方角色是否满足密级，越权拒绝。"
+    },
+    "owner": { "type": "string", "minLength": 1, "description": "该知识范围的责任人，负责内容准确性与密级维护。" },
+    "notes": { "type": "string", "description": "补充说明，如内网侦察状态、更新频率、已知数据缺口等。" }
+  }
+}

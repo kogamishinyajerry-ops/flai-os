@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/model_profile.schema.json",
+  "title": "FLAi-OS 模型画像配置契约 (Model Profile)",
+  "description": "Model Gateway 的模型画像配置条目：agent.yaml 只声明 profile 名（如 reasoning/fast/vision），具体 base_url/api_key/model 名一律通过环境变量注入，真实端点值绝不入库入仓（内网 GLM 端点等具体值均待内网侦察，此处只占位不编造）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile_id", "purpose", "provider"],
+  "oneOf": [
+    { "required": ["model_env"], "not": { "required": ["model"] } },
+    { "required": ["model"], "not": { "required": ["model_env"] } }
+  ],
+  "properties": {
+    "profile_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "画像名，蛇形小写（如 reasoning/fast/vision/code/embedding），与 agent.yaml model.profile 一一对应。"
+    },
+    "purpose": { "type": "string", "minLength": 4, "description": "该画像的用途说明（如'复杂推理与长链路分析'），供 Agent 开发者选型参考。" },
+    "provider": {
+      "type": "string",
+      "enum": ["openai_compatible"],
+      "description": "接入协议类型。V0.1 只落地 openai_compatible（走 OpenAI 兼容 Chat/Completions 接口）；其余供应商协议（如原生 GLM SDK）为长期演进槽位，占位不实现。"
+    },
+    "base_url_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "存放 base_url 的环境变量名（如 FLAIOS_REASONING_BASE_URL）。真实值待内网侦察，禁止在此填具体 URL。" },
+    "api_key_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "存放 API Key 的环境变量名。真实 Key 绝不入库入仓、绝不写入 agent.yaml/tool.yaml/日志。" },
+    "model_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "存放具体模型名的环境变量名，与 model 二选一：模型名走环境变量以便内网切换不改契约。" },
+    "model": { "type": "string", "minLength": 1, "description": "直接写死的模型名，与 model_env 二选一；仅用于模型名本身不敏感且长期稳定的画像。" },
+    "max_tokens": { "type": "integer", "minimum": 1, "description": "默认最大生成 token 数，Agent 可在调用时覆盖。" },
+    "temperature": { "type": "number", "minimum": 0, "maximum": 2, "description": "默认采样温度，Agent 可在调用时覆盖。" },
+    "notes": { "type": "string", "description": "补充说明，如内网侦察状态（例：'待内网侦察：GLM 端点形态未知'）、限流约束等。" }
+  }
+}

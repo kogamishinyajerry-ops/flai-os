@@ -1,0 +1,24 @@
+[project]
+name = "flai-os"
+version = "0.1.0"
+description = "FLAi-OS Kernel V0.1 — 二所工程智能体运行底座"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic>=2",
+    "jsonschema",
+    "pyyaml",
+    "python-multipart",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "httpx",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "tools_impl", "backend/tests"]

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/event.schema.json",
+  "title": "FLAi-OS 事件对象契约 (Event)",
+  "description": "任务执行全过程的可追溯事件流，是审计与前端时间轴的唯一数据源。任何工具调用/模型调用/人工评审动作都必须落一条 Event，禁止只更新 Task.status 而不留痕。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "task_id", "event_type", "level", "message", "created_at"],
+  "properties": {
+    "event_id": { "type": "string", "minLength": 1, "description": "事件全局唯一 ID（建议 UUID）。" },
+    "task_id": { "type": "string", "minLength": 1, "description": "所属 Task.id，Task Runner 写入前必须校验对应任务存在。" },
+    "agent_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$", "description": "触发该事件的 Agent id；无 Agent 上下文的系统事件可省略。" },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "task_created", "validation_started", "validation_failed", "case_generated",
+        "tool_started", "tool_finished", "tool_failed", "model_call",
+        "review_requested", "review_approved", "review_rejected", "summary_generated",
+        "task_completed", "task_failed", "task_cancelled",
+        "feedback_received", "warning", "error"
+      ],
+      "description": "事件类型枚举，覆盖任务全生命周期节点。review_approved/review_rejected 是宪法要求的人工签发点——只能由真人角色触发，LLM 不得自签。"
+    },
+    "level": {
+      "type": "string",
+      "enum": ["info", "warning", "error"],
+      "description": "日志级别，供前端时间轴着色与告警过滤。"
+    },
+    "message": { "type": "string", "minLength": 1, "description": "人类可读的一句话事件描述（门户时间轴直接展示）。" },
+    "payload": {
+      "type": "object",
+      "description": "结构化附加信息（如工具入参摘要、模型 profile 名、原始堆栈）。含敏感内容时必须脱敏；MOCK 工具产生的事件必须在 payload 中显式标注 mock=true，绝不冒充真实结果。"
+    },
+    "created_at": { "type": "string", "format": "date-time", "description": "ISO 8601 时间戳，事件写入即定，不可修改（只追加）。" }
+  }
+}

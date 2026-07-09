@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/tool.schema.json",
+  "title": "FLAi-OS Tool Package 契约 (tool.yaml)",
+  "description": "每个工具包的 tool.yaml 必须通过本 schema 校验后才能进 Tool Registry。字段语义见 docs/03_Tool_Package_Standard.md。工具必须先注册再调用；Agent 只能经 Tool Registry 调用已注册工具。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "version",
+    "type",
+    "description",
+    "entrypoint",
+    "input_schema",
+    "output_schema",
+    "runtime",
+    "safety",
+    "owner"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{2,63}$",
+      "description": "全局唯一工具 ID，Registry 主键，重复即拒。"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "semver。adapter/解析器任何行为改动必须升版本——tool_runs 表按版本追溯。"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "python_adapter",
+        "mcp_adapter"
+      ],
+      "description": "V0.1 只实现 python_adapter；mcp_adapter 是长期演进槽位（枚举先占住，实现后翻牌）。"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 10
+    },
+    "entrypoint": {
+      "type": "string",
+      "description": "工具调用点。python_adapter 强制 dotted-path 形态（if/then 锁定）；mcp_adapter 的寻址格式待 MCP 化时另定（见 docs/03 §7 与 ADR-0004）。"
+    },
+    "mock": {
+      "type": "boolean",
+      "default": false,
+      "description": "true = 本工具是 Mock 实现（不触真实工程程序）。Mock 工具的一切输出在事件与样本中如实标注 mock=true，绝不冒充真实结果。"
+    },
+    "input_schema": {
+      "type": "object",
+      "description": "工具入参的 JSON Schema（内嵌）。Registry 调用前强制校验，不合格拒调。",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "object"
+        }
+      }
+    },
+    "output_schema": {
+      "type": "object",
+      "description": "工具出参的 JSON Schema（内嵌）。必含 status 字段（success|failed）；解析类工具必含 raw_output_path 以保原始可追溯。",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "object"
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timeout_seconds",
+        "max_parallel_jobs",
+        "retry"
+      ],
+      "properties": {
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "max_parallel_jobs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "require_workspace_isolation",
+        "allow_shell_command",
+        "save_raw_files"
+      ],
+      "properties": {
+        "require_workspace_isolation": {
+          "type": "boolean",
+          "description": "true = 每次调用必须在独立工作目录内执行，禁止写共享路径。"
+        },
+        "allow_shell_command": {
+          "type": "boolean",
+          "description": "默认必须 false；true 需要 ADR 说明理由与边界。"
+        },
+        "save_raw_files": {
+          "type": "boolean",
+          "description": "true = 原始输入/输出文件必须落盘并入 tool_runs 追溯。"
+        }
+      }
+    },
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maintainer",
+        "business_owner"
+      ],
+      "properties": {
+        "maintainer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "business_owner": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "type": {
+        "const": "python_adapter"
+      }
+    }
+  },
+  "then": {
+    "properties": {
+      "entrypoint": {
+        "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*:[a-z][a-z0-9_]*$"
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/task.schema.json",
+  "title": "FLAi-OS 任务对象契约 (Task)",
+  "description": "内核 Task Runner 维护的任务记录必须符合本 schema。任务是 Agent 一次调用的生命周期载体，十态状态机是 Kernel 与前端共认的唯一真相源；不得在其外私设状态字段。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "agent_id", "agent_version", "status", "created_by", "created_at"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "description": "任务全局唯一 ID（建议 UUID）。" },
+    "agent_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$", "description": "对应 agent.yaml 的 id，Registry 中必须存在。" },
+    "agent_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$", "description": "任务创建时锁定的 Agent semver；同一 Agent 升版不影响历史任务的可追溯口径。" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 200, "description": "任务显示名（门户任务列表用），通常由发起人或前端默认填充。" },
+    "status": {
+      "type": "string",
+      "enum": [
+        "created", "queued", "validating", "running", "waiting_review",
+        "parsing", "analyzing", "completed", "failed", "cancelled"
+      ],
+      "description": "十态状态机，仅 Kernel Task Runner 可写。waiting_review 对应 agent.yaml workflow.requires_human_review=true 的强制人工放行点；completed 只能从 waiting_review 或 analyzing 迁入，不得跳过人工判决。"
+    },
+    "created_by": { "type": "string", "minLength": 1, "description": "发起用户/角色标识，对齐 agent.yaml permissions.allowed_roles 的鉴权主体。" },
+    "created_at": { "type": "string", "format": "date-time", "description": "ISO 8601 时间戳。" },
+    "updated_at": { "type": "string", "format": "date-time", "description": "状态最近一次变更时间；每次状态迁移必须同步刷新。" },
+    "started_at": { "type": "string", "format": "date-time", "description": "进入 running 的时间戳。" },
+    "finished_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "进入终态（completed/failed/cancelled）的时间戳；未结束为 null，绝不省略字段。"
+    },
+    "input_file_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "description": "输入文件 ID 列表（File Store 主键），对应 agent.yaml input.type=file_upload 场景。"
+    },
+    "output_file_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "description": "输出文件 ID 列表；未产出前为空数组，不得用 null 代替。"
+    },
+    "error_message": {
+      "type": ["string", "null"],
+      "description": "失败原因摘要（status=failed 时必填非 null）；未失败时为 null。禁止塞入未脱敏的原始堆栈——脱敏后的可读摘要，原始堆栈走 Event 的 payload。"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "扩展元数据（自由 key-value，如触发来源、优先级标签）。不得借此绕过契约字段——新增结构化字段须先修订本 schema。"
+    }
+  }
+}

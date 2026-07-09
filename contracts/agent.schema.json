@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/agent.schema.json",
+  "title": "FLAi-OS Agent Package 契约 (agent.yaml)",
+  "description": "每个 Agent Package 的 agent.yaml 必须通过本 schema 校验后才能注册。字段语义见 docs/02_Agent_Package_Standard.md。顶层禁止未声明字段（additionalProperties=false）：扩展字段必须先改本契约并记 ADR，防止各 Agent 私自长出方言。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "name", "version", "status", "maturity", "category", "summary",
+    "owner", "model", "knowledge", "tools", "input", "output", "workflow",
+    "permissions", "logging", "data_asset", "limitations"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{2,63}$",
+      "description": "全局唯一 Agent ID，蛇形小写。Registry 以此为主键，重复即拒。"
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "semver。任何 prompt/workflow/schema 改动都必须升版本并记 changelog.md。"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "trial", "released", "disabled"],
+      "description": "运行生命周期（门户可见性与可调用性）：draft=仅开发者可见 / trial=试用角色可见 / released=正式 / disabled=下线不可调用。"
+    },
+    "maturity": {
+      "type": "string",
+      "enum": ["L0", "L1", "L2", "L3"],
+      "description": "成熟度治理轴（L0 概念验证 / L1 内部试用 / L2 部门试运行 / L3 全所推广），准入条件见 docs/02。与 status 正交：status 管现在能不能用，maturity 管治理上走到哪级。"
+    },
+    "category": {
+      "type": "string",
+      "enum": ["tool_automation", "knowledge_qa", "structured_gen", "reasoning_assist"],
+      "description": "Agent 类型（任务书 §12.1 AI 适配性判断四型）。"
+    },
+    "summary": { "type": "string", "minLength": 10, "maxLength": 300, "description": "一段话说清本职（门户卡片文案）。" },
+    "description": { "type": "string", "description": "长描述：价值、边界、与其他 Agent 的关系（不强制串联要写明）。" },
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["department", "maintainer", "business_reviewer"],
+      "properties": {
+        "department": { "type": "string", "minLength": 1 },
+        "maintainer": { "type": "string", "minLength": 1, "description": "技术维护责任人；未定写 TBD，但 trial 及以上状态禁止 TBD（Registry 校验）。" },
+        "business_reviewer": { "type": "string", "minLength": 1, "description": "业务审核责任人；trial 及以上禁止 TBD。" }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile"],
+      "properties": {
+        "profile": {
+          "type": "string",
+          "pattern": "^(none|[a-z][a-z0-9_]*)$",
+          "description": "模型画像名（reasoning/fast/vision/code/embedding 等，见 contracts/model_profile.schema.json）或 none（0-LLM Agent）。禁止出现具体模型名——那是 Model Gateway 配置的事。"
+        },
+        "fallback_profile": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+      }
+    },
+    "knowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "scopes"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+          "uniqueItems": true,
+          "description": "可访问知识范围白名单（default-deny：不在清单即不可访问；禁止 * 通配）。enabled=true 时至少 1 项。"
+        }
+      },
+      "if": { "properties": { "enabled": { "const": true } } },
+      "then": { "properties": { "scopes": { "minItems": 1 } } }
+    },
+    "tools": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+      "uniqueItems": true,
+      "description": "工具白名单（default-deny）。每项必须是 Tool Registry 已注册的 tool id，Registry 加载时对账。"
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "enum": ["file_upload", "params", "none"] },
+        "allowed_extensions": { "type": "array", "items": { "type": "string", "pattern": "^\\.[a-z0-9]+$" } },
+        "schema": { "type": "string", "description": "包内输入校验文件名，通常 input_schema.json。" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "formats": { "type": "array", "items": { "type": "string", "pattern": "^\\.[a-z0-9]+$" } },
+        "schema": { "type": "string" }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entrypoint", "mode", "requires_human_review"],
+      "properties": {
+        "entrypoint": { "type": "string", "const": "workflow.py", "description": "V0.1 固定为包内 workflow.py（统一入口 run(context)）。" },
+        "mode": { "type": "string", "enum": ["job", "interactive"] },
+        "requires_human_review": {
+          "type": "boolean",
+          "description": "true = 任务进入 waiting_review 态，须人工放行才算 completed。工程结论类输出必须 true。"
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["visibility", "allowed_roles"],
+      "properties": {
+        "visibility": { "type": "string", "enum": ["admin_only", "department_trial", "all"] },
+        "allowed_roles": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["admin", "agent_developer", "business_user"] },
+          "uniqueItems": true
+        }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["save_inputs", "save_outputs", "save_tool_logs", "save_model_calls", "save_feedback"],
+      "properties": {
+        "save_inputs": { "type": "boolean" },
+        "save_outputs": { "type": "boolean" },
+        "save_tool_logs": { "type": "boolean" },
+        "save_model_calls": { "type": "boolean" },
+        "save_feedback": { "type": "boolean" }
+      }
+    },
+    "data_asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["collect_samples"],
+      "properties": {
+        "collect_samples": { "type": "boolean" },
+        "sample_fields": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 4 },
+      "description": "不适用范围，强制 ≥1 条（宪法条款：每个 Agent 必须声明自己不做什么）。"
+    }
+  }
+}

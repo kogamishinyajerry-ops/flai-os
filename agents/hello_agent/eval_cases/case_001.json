@@ -1,0 +1,6 @@
+{
+  "case_id": "case_001",
+  "description": "基本回显：输入姓名应原样出现在问候语中。",
+  "inputs": { "name": "世界" },
+  "expected": { "greeting_contains": "世界" }
+}

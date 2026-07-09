@@ -1,0 +1,46 @@
+id: mock_echo
+name: "Mock 回显工具（平台闭环验证示例）"
+version: 0.1.0
+type: python_adapter
+mock: true
+description: >
+  原样回显入参 message 的 Mock 工具，用于在不接任何真实工程程序的前提下
+  验证「先注册再调用」链路（Tool Registry → adapter → 标准化返回）。
+  mock=true：本工具一切输出仅用于平台验证，绝不代表真实工程结果。
+entrypoint: tools_impl.mock_tools.adapter:run
+input_schema:
+  type: object
+  required:
+    - message
+  properties:
+    message:
+      type: object
+      description: 任意待回显对象
+  additionalProperties: false
+output_schema:
+  type: object
+  required:
+    - status
+    - echoed
+  properties:
+    status:
+      type: string
+      enum:
+        - success
+        - failed
+    echoed:
+      type: object
+    error_message:
+      type: string
+  additionalProperties: false
+runtime:
+  timeout_seconds: 10
+  max_parallel_jobs: 4
+  retry: 0
+safety:
+  require_workspace_isolation: false
+  allow_shell_command: false
+  save_raw_files: false
+owner:
+  maintainer: TBD
+  business_owner: TBD

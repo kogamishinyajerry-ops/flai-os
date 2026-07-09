@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "hello_agent 输出契约",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["greeting", "echoed"],
+  "properties": {
+    "greeting": {
+      "type": "string",
+      "description": "拼装出的问候语，必须包含输入的 name。"
+    },
+    "echoed": {
+      "type": "object",
+      "description": "mock_echo 工具原样回显的载荷，用于证明工具调用真实发生。"
+    }
+  }
+}
