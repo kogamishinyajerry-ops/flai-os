@@ -3,8 +3,9 @@
     <div class="page-header">
       <h2>智能导引</h2>
       <p class="page-sub">
-        说说你要做什么，导引会帮你找到合适的 Agent 并预填一份任务草案——
-        <strong>草案由你确认后亲手提交，导引不会替你创建任务。</strong>
+        说说你要做的工程活儿（可带附件），导引会帮你分析、拆解，召集合适的一个或
+        多个 Agent 协作并预填草案；平台接不住时也会直说、并告诉你怎么重述才可行——
+        <strong>计划由你确认后亲手提交，导引不会替你创建或签发任务。</strong>
       </p>
     </div>
 
@@ -33,39 +34,100 @@
             </el-tag>
           </div>
 
-          <div v-if="m.recommendation" class="reco-card">
-            <div class="reco-bar" :style="{ background: categoryColor(m.recommendation.category) }"></div>
-            <div class="reco-inner">
-              <div class="reco-head">
-                <span class="reco-title">推荐：{{ m.recommendation.agent_name }}</span>
-                <span
-                  class="reco-pill"
-                  :style="{ color: categoryColor(m.recommendation.category), background: categoryColor(m.recommendation.category) + '18' }"
-                >{{ categoryLabel(m.recommendation.category) }}</span>
-                <el-tag size="small" type="info" effect="plain">{{ m.recommendation.maturity }} / {{ m.recommendation.status }}</el-tag>
+          <!-- 导引计划（M8 编排官）：refuse=显式拒绝 / orchestrate=召集协作 -->
+          <div v-if="m.recommendation && m.recommendation.decision === 'refuse'" class="plan-card">
+            <div class="plan-bar refuse"></div>
+            <div class="plan-inner">
+              <div class="plan-head">
+                <span class="plan-title">这个需求，平台暂时接不住</span>
+                <span class="plan-tag refuse">显式拒绝</span>
               </div>
-              <p v-if="m.recommendation.rationale" class="reco-rationale">{{ m.recommendation.rationale }}</p>
+              <p v-if="m.recommendation.reason" class="plan-reason">{{ m.recommendation.reason }}</p>
+              <div v-if="m.recommendation.residual_problems && m.recommendation.residual_problems.length" class="plan-block">
+                <div class="plan-block-label">你手上仍未解决的问题</div>
+                <ul class="plan-list">
+                  <li v-for="(p, i) in m.recommendation.residual_problems" :key="i">{{ p }}</li>
+                </ul>
+              </div>
+              <div v-if="m.recommendation.reframe && m.recommendation.reframe.length" class="plan-block">
+                <div class="plan-block-label">可以试试这样重述 / 拆解</div>
+                <ul class="plan-list">
+                  <li v-for="(r, i) in m.recommendation.reframe" :key="i">{{ r }}</li>
+                </ul>
+              </div>
+            </div>
+          </div>
 
-              <div class="reco-block">
-                <div class="reco-block-label">预填草案（{{ prefilledCount(m.recommendation) }} 个字段，未必完整）</div>
-                <pre class="reco-json">{{ prettyInputs(m.recommendation.prefilled_inputs) }}</pre>
+          <div v-else-if="m.recommendation && m.recommendation.decision === 'orchestrate'" class="plan-card">
+            <div class="plan-bar"></div>
+            <div class="plan-inner">
+              <div class="plan-head">
+                <span class="plan-title">协作方案</span>
+                <span class="plan-tag">{{ m.recommendation.agents.length }} 个 Agent 协作</span>
+              </div>
+              <p v-if="m.recommendation.goal" class="plan-goal"><strong>目标：</strong>{{ m.recommendation.goal }}</p>
+              <p v-if="m.recommendation.analysis" class="plan-analysis">{{ m.recommendation.analysis }}</p>
+              <div v-if="m.recommendation.workflow" class="plan-block">
+                <div class="plan-block-label">分工如何衔接</div>
+                <p class="plan-workflow">{{ m.recommendation.workflow }}</p>
+              </div>
+
+              <div class="agent-list">
+                <div v-for="(a, ai) in m.recommendation.agents" :key="ai" class="agent-card">
+                  <div class="agent-bar" :style="{ background: categoryColor(a.category) }"></div>
+                  <div class="agent-inner">
+                    <div class="agent-head">
+                      <span class="agent-name">{{ a.agent_name }}</span>
+                      <span
+                        class="agent-pill"
+                        :style="{ color: categoryColor(a.category), background: categoryColor(a.category) + '18' }"
+                      >{{ categoryLabel(a.category) }}</span>
+                      <el-tag size="small" type="info" effect="plain">{{ a.maturity }} / {{ a.status }}</el-tag>
+                    </div>
+                    <p v-if="a.role" class="agent-role"><strong>分工：</strong>{{ a.role }}</p>
+                    <p v-if="a.rationale" class="agent-rationale">{{ a.rationale }}</p>
+                    <div class="agent-block">
+                      <div class="plan-block-label">预填草案（{{ inputCount(a) }} 个字段，未必完整）</div>
+                      <pre class="plan-json">{{ prettyInputs(a.prefilled_inputs) }}</pre>
+                    </div>
+                    <el-alert
+                      v-if="a.stripped_fields && a.stripped_fields.length"
+                      type="warning"
+                      :closable="false"
+                      show-icon
+                      class="agent-stripped"
+                      :title="`已剔除不合法字段：${a.stripped_fields.join('、')}（未匹配该 Agent 的输入契约）`"
+                    />
+                    <div class="agent-actions">
+                      <el-button type="primary" size="small" @click="createOneTask(a, m.recommendation)">
+                        去创建此任务
+                      </el-button>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <el-alert
-                v-if="m.recommendation.stripped_fields && m.recommendation.stripped_fields.length"
+                v-if="m.recommendation.dropped_agents && m.recommendation.dropped_agents.length"
                 type="warning"
                 :closable="false"
                 show-icon
-                class="reco-stripped"
-                :title="`已剔除不合法字段：${m.recommendation.stripped_fields.join('、')}（未匹配该 Agent 的输入契约）`"
+                class="plan-alert"
+                :title="`已剔除无法召集的 Agent：${m.recommendation.dropped_agents.join('、')}（幻觉/已下线/不可召集/重复）`"
+              />
+              <el-alert
+                v-if="m.recommendation.capped"
+                type="info"
+                :closable="false"
+                show-icon
+                class="plan-alert"
+                title="召集 Agent 数已达上限（5 个），后续提议已截断。"
               />
 
-              <div class="reco-actions">
-                <el-button type="primary" @click="confirmAndGoCreate(m.recommendation)">
-                  确认草案，去创建任务
-                </el-button>
-                <span class="reco-note">你将进入创建任务页补全并<strong>亲手提交</strong>——签发权在你。</span>
-              </div>
+              <p class="plan-note">
+                签发权在你——每个任务都在创建页由你补全并<strong>亲手提交</strong>。
+                多 Agent 一键召集进协作工作台正在建设中（M8 P3/P4）。
+              </p>
             </div>
           </div>
         </div>
@@ -181,8 +243,8 @@ async function uploadPendingFiles() {
 function prettyInputs(inputs) {
   return JSON.stringify(inputs || {}, null, 2);
 }
-function prefilledCount(reco) {
-  return Object.keys(reco.prefilled_inputs || {}).length;
+function inputCount(agent) {
+  return Object.keys(agent.prefilled_inputs || {}).length;
 }
 
 async function scrollToBottom() {
@@ -247,12 +309,9 @@ async function send() {
   }
 }
 
-function confirmAndGoCreate(reco) {
-  // 人确认接缝：把预填草案交给创建任务页，由人补全后亲手提交（导引绝不代签）。
-  // 走 sessionStorage 而非 URL，避免工程数据进查询串。
-  // M7：会话里传过的附件（真实 fileId 的）随草案带走——创建页以「已上传」
-  // 状态入列，人可移除；是否随任务提交仍由人决定。
-  // 发送成功的气泡按构造只含真实 fileId（失败气泡已回滚、成功时 chips 已换真 id）
+function collectCarriedFiles() {
+  // 会话里发送成功的附件（真实 fileId）去重收集——随草案带入创建页。
+  // 成功气泡按构造只含真实 fileId（失败气泡已回滚、成功时 chips 已换真 id）。
   const carried = [];
   const seen = new Set();
   for (const m of messages.value) {
@@ -264,16 +323,24 @@ function confirmAndGoCreate(reco) {
       }
     }
   }
+  return carried;
+}
+
+function createOneTask(agent, plan) {
+  // 人确认接缝：把某个被召集 Agent 的预填草案交给创建任务页，由人补全后亲手
+  // 提交（导引绝不代签）。走 sessionStorage 而非 URL，避免工程数据进查询串。
+  // M7：会话附件随草案带走，创建页以「已上传」状态入列，人可移除。
   sessionStorage.setItem(
     "flai_prefill",
-    JSON.stringify({ agent_id: reco.agent_id, inputs: reco.prefilled_inputs || {}, files: carried })
+    JSON.stringify({ agent_id: agent.agent_id, inputs: agent.prefilled_inputs || {}, files: collectCarriedFiles() })
   );
-  // 确认即归档会话（active→concluded，ADR-0013）。fire-and-forget：归档失败
-  // 不阻断人去创建任务——会话留 active 只是可观测性小瑕疵，不是流程阻塞点。
-  if (conversationId.value) {
+  // 单 Agent 计划：确认即归档会话（保留 M6 行为，fire-and-forget，归档失败不阻断）。
+  // 多 Agent 计划：可能还要为其它 Agent 逐个建任务，故本步不归档会话——会话
+  // 生命周期与「一键召集进协作工作台」由 M8 P3/P4 统一接管。
+  if (plan && Array.isArray(plan.agents) && plan.agents.length === 1 && conversationId.value) {
     concludeConversation(conversationId.value).catch(() => {});
   }
-  router.push({ path: "/tasks/new", query: { agent_id: reco.agent_id, from: "guide" } });
+  router.push({ path: "/tasks/new", query: { agent_id: agent.agent_id, from: "guide" } });
 }
 </script>
 
@@ -350,50 +417,83 @@ function confirmAndGoCreate(reco) {
   font-size: 13px;
   font-style: italic;
 }
-.reco-card {
+.plan-card {
   margin-top: 12px;
   border: 1px solid var(--hairline);
   border-radius: 10px;
   overflow: hidden;
   background: #fff;
 }
-.reco-bar {
+.plan-bar {
   height: 4px;
   width: 100%;
+  background: var(--clay);
 }
-.reco-inner {
+.plan-bar.refuse {
+  background: var(--trust-pending);
+}
+.plan-inner {
   padding: 12px 14px;
 }
-.reco-head {
+.plan-head {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
-.reco-title {
+.plan-title {
   font-weight: 700;
   color: var(--ink);
   font-size: 14px;
 }
-.reco-pill {
+.plan-tag {
   font-size: 12px;
   font-weight: 600;
   padding: 2px 9px;
   border-radius: 999px;
+  color: var(--clay);
+  background: var(--clay-soft);
 }
-.reco-rationale {
+.plan-tag.refuse {
+  color: var(--trust-pending);
+  background: #f6edd8;
+}
+.plan-goal {
+  margin: 0 0 6px;
+  color: var(--ink);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.plan-analysis,
+.plan-reason {
   margin: 0 0 10px;
   color: #606266;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.6;
 }
-.reco-block-label {
+.plan-block {
+  margin: 0 0 10px;
+}
+.plan-block-label {
   font-size: 12px;
   color: var(--ink-soft);
   margin-bottom: 4px;
 }
-.reco-json {
+.plan-workflow {
+  margin: 0;
+  color: #4a443d;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.plan-list {
+  margin: 0;
+  padding-left: 20px;
+  color: #4a443d;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.plan-json {
   margin: 0;
   padding: 10px 12px;
   background: #faf7f2;
@@ -405,19 +505,74 @@ function confirmAndGoCreate(reco) {
   overflow-x: auto;
   white-space: pre;
 }
-.reco-stripped {
-  margin-top: 10px;
+.agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0;
 }
-.reco-actions {
-  margin-top: 12px;
+.agent-card {
+  border: 1px solid var(--hairline);
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--paper-cream);
+}
+.agent-bar {
+  height: 3px;
+  width: 100%;
+}
+.agent-inner {
+  padding: 10px 12px;
+}
+.agent-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
+  margin-bottom: 6px;
 }
-.reco-note {
+.agent-name {
+  font-weight: 700;
+  color: var(--ink);
+  font-size: 13.5px;
+}
+.agent-pill {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.agent-role {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.agent-rationale {
+  margin: 0 0 8px;
+  color: #606266;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.agent-block {
+  margin-bottom: 8px;
+}
+.agent-stripped {
+  margin-bottom: 8px;
+}
+.agent-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.plan-alert {
+  margin-top: 8px;
+}
+.plan-note {
+  margin: 10px 0 0;
   color: var(--ink-soft);
   font-size: 12px;
+  line-height: 1.6;
 }
 .composer {
   margin-top: 12px;

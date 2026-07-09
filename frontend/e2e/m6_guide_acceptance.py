@@ -52,8 +52,9 @@ WORK = Path(tempfile.mkdtemp(prefix="flai_m6_guide_"))
 
 
 class _StubGateway:
-    """确定文本 stub：导引首轮即返回一条针对 fta_agent 的推荐——top_event 合法预填，
-    外加一个非法字段 bogus 让确定性校验剥离（展示 stripped 告警）。
+    """确定文本 stub：导引首轮即返回一份 orchestrate 计划（M8 编排官），召集
+    fta_agent——top_event 合法预填 + 带分工 role，外加一个非法字段 bogus 让确定性
+    校验剥离（展示 stripped 告警）。
 
     fail_next=True 时下一次 chat 抛 ModelUpstreamError（→ API 502「本轮零落库」），
     用于验收失败轮的 UI 契约：乐观 user 气泡回滚 + 草稿还原，重试不堆重复气泡
@@ -66,14 +67,23 @@ class _StubGateway:
         if self.fail_next:
             self.fail_next = False
             raise ModelUpstreamError("stub 注入的上游失败（验收失败轮 UI 回滚）")
-        payload = {
-            "agent_id": "fta_agent",
-            "rationale": "你的需求是对供电系统做故障树分析，fta_agent 正是做这个的。",
-            "prefilled_inputs": {"top_event": "供电完全丧失", "bogus": "该字段不属于该 Agent"},
+        plan = {
+            "decision": "orchestrate",
+            "analysis": "你要对双通道供电系统做故障树分析。",
+            "goal": "对双通道供电系统完成故障树分析，定位供电完全丧失的根因。",
+            "workflow": "由故障树分析 Agent 独立完成。",
+            "agents": [
+                {
+                    "agent_id": "fta_agent",
+                    "role": "搭建并分析故障树",
+                    "rationale": "你的需求是对供电系统做故障树分析，fta_agent 正是做这个的。",
+                    "prefilled_inputs": {"top_event": "供电完全丧失", "bogus": "该字段不属于该 Agent"},
+                }
+            ],
         }
         reply = (
-            "明白了，你要对双通道供电系统做故障树分析。为你推荐故障树分析 Agent，并预填了顶事件。\n"
-            f"<<RECOMMEND>>\n{json.dumps(payload, ensure_ascii=False)}\n<<END>>"
+            "明白了，你要对双通道供电系统做故障树分析。为你召集故障树分析 Agent，并预填了顶事件。\n"
+            f"<<PLAN>>\n{json.dumps(plan, ensure_ascii=False)}\n<<END>>"
         )
         return {"content": reply, "token_usage": None, "model_name": "stub", "finish_reason": "stop"}
 
@@ -125,7 +135,7 @@ with sync_playwright() as p:
     # ① 导引页 = 统一入口（首页）
     page.goto(BASE + "/", wait_until="networkidle")
     body = page.locator("body").inner_text()
-    check("①导引页可达且为统一入口", "智能导引" in body and "导引不会替你创建任务" in body, body[:200])
+    check("①导引页可达且为统一入口", "智能导引" in body and "导引不会替你创建" in body, body[:200])
     page.screenshot(path=str(SHOTS / "1_guide_empty.png"), full_page=True)
 
     # ② 失败轮 UI 契约（Codex R1-P2 / M7 扩附件）：后端失败零落库，前端同样
@@ -156,18 +166,19 @@ with sync_playwright() as p:
     # ②' 重试同一句（草稿已还原、附件已在待发区，直接再点发送；stub 已恢复健康）
     page.get_by_role("button", name="发送").click()
 
-    # ③ 导引返回推荐卡片
-    expect(page.locator(".reco-card")).to_be_visible(timeout=8000)
+    # ③ 导引返回协作方案卡片（M8 orchestrate）
+    expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
     body = page.locator("body").inner_text()
     reco_ok = (
-        "推荐：" in body
+        "协作方案" in body
         and "故障树" in body
+        and "分工" in body          # 编排官给出的 role
         and "top_event" in body
         and "供电完全丧失" in body
         and "已剔除不合法字段" in body  # bogus 被确定性剥离并告警
         and "bogus" in body
     )
-    check("③推荐卡片：Agent+预填草案+非法字段剔除告警", reco_ok, body[-500:])
+    check("③协作方案卡片：召集 Agent+分工+预填草案+非法字段剔除告警", reco_ok, body[-500:])
     check(
         "③重试后无重复 user 气泡（幂等重试全链）",
         page.locator(".bubble-row.user").count() == 1,
@@ -181,8 +192,8 @@ with sync_playwright() as p:
     check("③'导引不代签'红线文案在卡片可见", "签发权在你" in body, "")
     page.screenshot(path=str(SHOTS / "2_recommendation.png"), full_page=True)
 
-    # ④ 点确认 → 落创建任务页
-    page.get_by_role("button", name="确认草案，去创建任务").click()
+    # ④ 点「去创建此任务」→ 落创建任务页
+    page.get_by_role("button", name="去创建此任务").click()
     page.wait_for_url(lambda url: "/tasks/new" in url, timeout=5000)
     expect(page.locator(".prefill-note")).to_be_visible(timeout=5000)
     body = page.locator("body").inner_text()

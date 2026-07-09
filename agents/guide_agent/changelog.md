@@ -1,5 +1,25 @@
 # guide_agent changelog
 
+## 0.3.0（2026-07-09，M8 编排官化，ADR-0012）
+
+- **从「单 Agent 推荐」升级为「编排官」**：导引成为真正的门面——听懂需求后做
+  分流裁决（`<<PLAN>>` 计划块，取代 `<<RECOMMEND>>`）：
+  - **orchestrate**：平台接得住 → 召集**一个或多个**真实 specialist Agent 协作，
+    给出最终分析、待用户确认的目标、各 Agent 的分工（role）与按其 input_schema
+    预填的草案、以及协作方式（workflow）。
+  - **refuse**：平台接不住（甚至不值得为此建专用 Agent）→ **显式拒绝**，说清
+    拒绝理由、用户手上仍未解决的问题、以及如何重述/拆解才可能被接住。
+- **确定性校验扩到每个 Agent**：orchestrate 里逐个 Agent 对账 Registry（真实/
+  非 disabled/interactive/自身）+ 目标 input_schema（逐字段剥离）；幻觉/重复
+  agent_id 记入 dropped_agents；**无任何合法 Agent 存活 → 整份计划作废
+  （fail-closed）**。召集上限 5 个（超出截断记 capped），自由文本字段做长度/
+  类型强制。传输/存储沿用 conversations.recommendation_json 列（形状变，免迁移）。
+- **人是唯一签发者不变**：计划里每个 Agent 都要人在创建页逐个确认提交；多 Agent
+  「一键召集进协作工作台」在 M8 P3/P4 接通。tamper 实证：移除 agent_id 白名单校验
+  → 幻觉召集/注入剥离/fail-closed 三测齐红。
+- output_schema.json 改为 oneOf（orchestrate | refuse），仍是 workflow 返回结构的
+  oracle（结构漂移即测试红）。
+
 ## 0.2.0（2026-07-09，M7 会话附件，ADR-0014）
 
 - **会话接收附件**（0.1.1 诚实降级的正式补实，owner 拍板立项）：消息可携带

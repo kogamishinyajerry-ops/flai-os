@@ -1,28 +1,52 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "导引 Agent 推荐（预填任务草案）",
-  "description": "导引在对话中给出的推荐——一份预填任务草案，供用户在创建任务页确认后提交。所有字段均由 workflow 对账 Registry + 目标 input_schema 后确定性生成，非 LLM 自由文本直出。导引绝不据此自动创建任务。",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["agent_id", "agent_name", "category", "status", "maturity", "rationale", "prefilled_inputs", "stripped_fields"],
-  "properties": {
-    "agent_id": {
-      "type": "string",
-      "description": "推荐的 specialist Agent id（已校验：Registry 真实注册、非 disabled、非 interactive、非导引自身）。"
-    },
-    "agent_name": { "type": "string", "description": "目标 Agent 显示名（取自 Registry）。" },
-    "category": { "type": "string", "description": "目标 Agent 类型（取自 Registry）。" },
-    "status": { "type": "string", "description": "目标 Agent 状态（draft/trial/released），供用户判断成熟度。" },
-    "maturity": { "type": "string", "description": "目标 Agent 成熟度（L0-L3）。" },
-    "rationale": { "type": "string", "description": "推荐理由（LLM 提供，仅作参考）。" },
-    "prefilled_inputs": {
+  "title": "导引 Agent 计划（编排官裁决）",
+  "description": "导引在对话中给出的结构化计划——两种裁决：orchestrate（召集一组合适 Agent 协作，每个 Agent 含分工与预填草案）或 refuse（无合适 Agent，显式拒绝并给出重述建议）。所有 Agent 字段均由 workflow 对账 Registry + 目标 input_schema 后确定性生成，非 LLM 自由文本直出；导引绝不据此自动创建/召集/签发任务，签发权在人。传输/存储沿用 conversations.recommendation_json 列（形状自 M8 起为本 schema）。",
+  "oneOf": [
+    {
       "type": "object",
-      "description": "预填的任务输入草案——只含目标 input_schema 声明且逐字段校验通过的字段，可能不完整，用户需补全后提交。"
+      "additionalProperties": false,
+      "required": ["decision", "analysis", "goal", "workflow", "agents", "dropped_agents", "capped"],
+      "properties": {
+        "decision": { "const": "orchestrate", "description": "裁决：平台有合适 Agent，召集协作。" },
+        "analysis": { "type": "string", "description": "导引对任务的最终分析（LLM 提供，供人核对）。" },
+        "goal": { "type": "string", "description": "待用户确认的目标陈述——人确认后才在下游逐个签发任务。" },
+        "workflow": { "type": "string", "description": "协作方式/分工如何衔接（LLM 提供，供人核对）。" },
+        "agents": {
+          "type": "array",
+          "description": "召集的 Agent（每个都已确定性对账：Registry 真实、非 disabled/interactive/自身；预填逐字段过 input_schema）。至少 1 个，至多 5 个（超出截断，见 capped）。",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["agent_id", "agent_name", "category", "status", "maturity", "role", "rationale", "prefilled_inputs", "stripped_fields"],
+            "properties": {
+              "agent_id": { "type": "string", "description": "召集的 specialist Agent id（已校验真实/可召集）。" },
+              "agent_name": { "type": "string", "description": "目标 Agent 显示名（取自 Registry）。" },
+              "category": { "type": "string", "description": "目标 Agent 类型（取自 Registry）。" },
+              "status": { "type": "string", "description": "目标 Agent 状态（draft/trial/released）。" },
+              "maturity": { "type": "string", "description": "目标 Agent 成熟度（L0-L3）。" },
+              "role": { "type": "string", "description": "该 Agent 在本次协作中的分工（LLM 提供）。" },
+              "rationale": { "type": "string", "description": "召集它的理由（LLM 提供，仅参考）。" },
+              "prefilled_inputs": { "type": "object", "description": "预填任务输入草案——只含目标 input_schema 声明且逐字段校验通过的字段，可能不完整，用户需补全后提交。" },
+              "stripped_fields": { "type": "array", "items": { "type": "string" }, "description": "LLM 提议但被剥离的字段名（未声明或违反字段 schema），如实记名。" }
+            }
+          }
+        },
+        "dropped_agents": { "type": "array", "items": { "type": "string" }, "description": "LLM 提议但被剥离的 agent_id（幻觉/disabled/interactive/自身/重复），如实记名不隐藏。" },
+        "capped": { "type": "boolean", "description": "是否因超过召集上限（5 个）而截断。" }
+      }
     },
-    "stripped_fields": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "LLM 提议但被确定性校验剥离的字段名（未声明或违反字段 schema），如实记名不隐藏。"
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "reason", "residual_problems", "reframe"],
+      "properties": {
+        "decision": { "const": "refuse", "description": "裁决：平台没有合适 Agent（甚至不值得为此建专用 Agent），显式拒绝。" },
+        "reason": { "type": "string", "description": "为何不适合（LLM 提供）。" },
+        "residual_problems": { "type": "array", "items": { "type": "string" }, "description": "即便拒绝后，用户手上仍未解决的问题（LLM 提供，供人另寻出路）。" },
+        "reframe": { "type": "array", "items": { "type": "string" }, "description": "如何重述/拆解需求才可能被平台接住（LLM 提供的建设性建议）。" }
+      }
     }
-  }
+  ]
 }
