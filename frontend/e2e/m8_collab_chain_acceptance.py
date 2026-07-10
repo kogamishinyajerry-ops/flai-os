@@ -173,12 +173,29 @@ with sync_playwright() as p:
           f"chips={page.locator('.task-chip').count()} body={body[-500:]}")
     page.screenshot(path=str(SHOTS / "3_session_after.png"), full_page=True)
 
-    # ⑥ 工作台首页出现该会话卡片
+    # ⑥ 结束协作 → 归档 + 召集入口消失（结束 = 真的结束；成员任务不受影响）
+    assert page.get_by_role("button", name="结束协作").count() == 1, "active 会话应有结束协作入口"
+    page.get_by_role("button", name="结束协作").click()
+    page.get_by_role("button", name="确定结束").click()  # ElMessageBox 二次确认
+    expect(page.locator(".sess-hero")).to_contain_text("已归档", timeout=6000)
+    body = page.locator("body").inner_text()
+    conclude_ok = (
+        "已归档" in body
+        and page.get_by_role("button", name="结束协作").count() == 0   # 归档后不再可结束
+        and page.get_by_role("button", name="去创建此任务").count() == 0  # 归档后不再召集
+        and "会话已归档" in body
+        and "已召集 · 1 个任务" in body                                  # 已建任务仍在
+    )
+    check("⑥结束协作→归档只读（召集入口消失，成员任务不受影响）", conclude_ok,
+          f"conclude_btn={page.get_by_role('button', name='结束协作').count()} summon={page.get_by_role('button', name='去创建此任务').count()} body={body[-400:]}")
+    page.screenshot(path=str(SHOTS / "4_session_concluded.png"), full_page=True)
+
+    # ⑦ 工作台首页出现该会话卡片（归档态仍列，标「已归档」）
     page.goto(BASE + "/workbench", wait_until="networkidle")
     page.wait_for_selector(".sess-card", timeout=5000)
     home_ok = "协作会话" in page.locator("body").inner_text() and page.locator(".sess-card").count() >= 1
-    check("⑥工作台首页罗列该协作会话", home_ok, f"cards={page.locator('.sess-card').count()}")
-    page.screenshot(path=str(SHOTS / "4_workbench_home.png"), full_page=True)
+    check("⑦工作台首页罗列该协作会话", home_ok, f"cards={page.locator('.sess-card').count()}")
+    page.screenshot(path=str(SHOTS / "5_workbench_home.png"), full_page=True)
 
     browser.close()
 

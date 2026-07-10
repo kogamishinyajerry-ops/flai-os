@@ -2,7 +2,14 @@
   <div class="wb-session">
     <div class="wb-back">
       <el-button text @click="$router.push('/workbench')">← 协作工作台</el-button>
-      <el-button text :loading="loading" @click="load">刷新</el-button>
+      <div class="wb-back-actions">
+        <el-button
+          v-if="conversation && conversation.status === 'active'"
+          text
+          @click="concludeSession"
+        >结束协作</el-button>
+        <el-button text :loading="loading" @click="load">刷新</el-button>
+      </div>
     </div>
 
     <!-- 三态降级：加载中 / 出错 / 就绪 -->
@@ -87,10 +94,14 @@
                 </div>
               </div>
 
-              <!-- 未召集：从蓝图预填草案去创建（人签发；导引不代召集） -->
-              <div v-else class="member-action">
+              <!-- 未召集：会话进行中才可从蓝图召集（人签发；导引不代召集）；
+                   会话已归档则只读，不再召集（结束协作 = 真的结束）。 -->
+              <div v-else-if="conversation.status === 'active'" class="member-action">
                 <el-button size="small" type="primary" plain @click="summon(a)">去创建此任务</el-button>
                 <span class="member-hint">用导引预填的草案创建任务，由你补全并亲手提交。</span>
+              </div>
+              <div v-else class="member-action">
+                <span class="member-hint">会话已归档，未召集——如需继续，请从智能导引开启新协作。</span>
               </div>
             </div>
           </div>
@@ -123,7 +134,8 @@
 <script setup>
 import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { getConversation, listConversationTasks } from "../api/conversations";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { getConversation, listConversationTasks, concludeConversation } from "../api/conversations";
 import { categoryColor, categoryLabel, statusLabel, taskLampColor } from "../utils/format";
 
 const route = useRoute();
@@ -168,6 +180,27 @@ function goTask(t) {
   router.push(`/tasks/${t.id}`);
 }
 
+async function concludeSession() {
+  // 结束协作：会话 active→concluded（归档）。已创建的成员任务不受影响、仍可查看；
+  // 归档后不再从蓝图召集新 Agent（结束 = 真的结束）。二次确认防误点。
+  try {
+    await ElMessageBox.confirm(
+      "结束后本次协作归档：已创建的任务不受影响、仍可查看，但不再从蓝图召集新的 Agent。确定结束？",
+      "结束协作",
+      { confirmButtonText: "确定结束", cancelButtonText: "再想想", type: "warning" }
+    );
+  } catch {
+    return; // 用户取消
+  }
+  try {
+    await concludeConversation(sessionId);
+    ElMessage.success("协作已归档");
+    await load();
+  } catch (err) {
+    ElMessage.error(err.detail || err.message || "结束协作失败");
+  }
+}
+
 function summon(agent) {
   // 从蓝图召集：把该 Agent 的预填草案交创建页（带会话 id，回到本会话分组），
   // 人补全后亲手提交。走 sessionStorage 与导引同一接缝，导引不代签、不代召集。
@@ -190,7 +223,13 @@ onMounted(load);
 .wb-back {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   margin-bottom: 12px;
+}
+.wb-back-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
 }
 .sess-hero {
   display: flex;
