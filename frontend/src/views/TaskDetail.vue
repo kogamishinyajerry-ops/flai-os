@@ -45,6 +45,28 @@
         class="section"
       />
 
+      <!-- 产物：签发前把要签的东西摆在眼前（不再只给 hash 命名的下载按钮）。
+           放在「动作」之前——先看产物，再决定放行（信任核心 P0-2）。 -->
+      <div class="section" v-if="artifacts.length">
+        <h3>产物<span v-if="isWaitingReview" class="artifact-review-hint">放行前请先审阅</span></h3>
+        <div v-for="a in artifacts" :key="a.fileId" class="artifact-card">
+          <div class="artifact-head">
+            <span class="artifact-name">{{ a.filename }}</span>
+            <span v-if="!a.loading && a.size" class="artifact-size">{{ formatSize(a.size) }}</span>
+            <a :href="downloadUrl(a.fileId)" download class="artifact-download">下载</a>
+          </div>
+          <div v-if="a.loading" class="artifact-body muted">加载中…</div>
+          <div v-else-if="a.error" class="artifact-body artifact-error">产物加载失败：{{ a.error }}</div>
+          <MarkdownLite
+            v-else-if="a.isText && (a.ext === 'md' || a.ext === 'markdown')"
+            :text="a.text"
+            class="artifact-body"
+          />
+          <pre v-else-if="a.isText" class="artifact-body artifact-pre">{{ a.text }}</pre>
+          <div v-else class="artifact-body muted">二进制文件，请下载后查看。</div>
+        </div>
+      </div>
+
       <div class="section" v-if="canCancel || isWaitingReview">
         <h3>动作</h3>
         <el-button v-if="canCancel" type="danger" plain @click="handleCancel">取消任务</el-button>
@@ -57,8 +79,12 @@
             <el-form-item label="意见">
               <el-input v-model="reviewForm.comment" type="textarea" :rows="2" placeholder="可选" />
             </el-form-item>
+            <div class="review-note">
+              批准即代表你作为工程师背书该产物——签发权在你，平台不代签。
+            </div>
             <el-form-item>
-              <el-button type="success" :loading="reviewing" @click="handleReview('approve')">批准放行</el-button>
+              <!-- 批准=人签，用信任锁的 teal（--trust-signed），绝不用绿（绿仅表真实结果）。 -->
+              <el-button class="approve-btn" :loading="reviewing" @click="handleReview('approve')">批准放行</el-button>
               <el-button type="danger" :loading="reviewing" @click="handleReview('reject')">拒绝</el-button>
             </el-form-item>
           </el-form>
@@ -84,20 +110,6 @@
             </el-collapse>
           </el-timeline-item>
         </el-timeline>
-      </div>
-
-      <div class="section" v-if="task.output_file_ids && task.output_file_ids.length">
-        <h3>输出文件</h3>
-        <el-button
-          v-for="fid in task.output_file_ids"
-          :key="fid"
-          tag="a"
-          :href="downloadUrl(fid)"
-          download
-          class="output-file-btn"
-        >
-          下载 {{ fid.slice(0, 8) }}
-        </el-button>
       </div>
 
       <div class="section" v-if="isTerminal">
@@ -147,9 +159,10 @@ import { ref, reactive, computed, onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { getTask, listTaskEvents, cancelTask, reviewTask } from "../api/tasks";
-import { downloadUrl } from "../api/files";
+import { downloadUrl, fetchOutputFile } from "../api/files";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
 import { statusLabel, statusTagType, formatTime, LEVEL_COLOR } from "../utils/format";
+import MarkdownLite from "../components/MarkdownLite.vue";
 
 const route = useRoute();
 const taskId = route.params.taskId;
@@ -161,6 +174,50 @@ const loadError = ref("");
 
 const reviewForm = reactive({ reviewer: "", comment: "" });
 const reviewing = ref(false);
+
+// 产物内联查看（P0-2）：按 task.output_file_ids 拉取文件名+内容，增量同步、集合未变不重拉。
+const artifacts = ref([]);
+
+async function syncArtifacts(ids) {
+  const list = Array.isArray(ids) ? ids : [];
+  const existing = new Map(artifacts.value.map((a) => [a.fileId, a]));
+  const next = [];
+  const toFetch = [];
+  for (const id of list) {
+    if (existing.has(id)) {
+      next.push(existing.get(id));
+    } else {
+      const ph = reactive({
+        fileId: id,
+        filename: id.slice(0, 8),
+        isText: false,
+        text: null,
+        ext: "",
+        size: 0,
+        loading: true,
+        error: "",
+      });
+      next.push(ph);
+      toFetch.push(ph);
+    }
+  }
+  artifacts.value = next;
+  for (const ph of toFetch) {
+    try {
+      Object.assign(ph, await fetchOutputFile(ph.fileId), { loading: false, error: "" });
+    } catch (err) {
+      ph.loading = false;
+      ph.error = err.detail || err.message || "加载失败";
+    }
+  }
+}
+
+function formatSize(bytes) {
+  if (!bytes) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 const feedbackForm = reactive({ rating: "good", category: "", message: "", createdBy: "" });
 const submittingFeedback = ref(false);
@@ -212,6 +269,7 @@ async function loadTask({ silent = false } = {}) {
       return;
     }
     task.value = t;
+    syncArtifacts(t.output_file_ids); // fire-and-forget，增量同步产物内容
     if (!silent) {
       events.value = ev;
     } else if (ev.length) {
@@ -369,9 +427,83 @@ onUnmounted(clearPoll);
   font-size: 12px;
   overflow-x: auto;
 }
-.output-file-btn {
-  margin-right: 8px;
-  margin-bottom: 8px;
+/* 批准=人签，用信任锁 teal（--trust-signed）覆盖 Element Plus 按钮变量；绝不用绿。 */
+.approve-btn {
+  --el-button-bg-color: var(--trust-signed);
+  --el-button-border-color: var(--trust-signed);
+  --el-button-text-color: #fff;
+  --el-button-hover-bg-color: #12707c;
+  --el-button-hover-border-color: #12707c;
+  --el-button-hover-text-color: #fff;
+  --el-button-active-bg-color: #0f626d;
+  --el-button-active-border-color: #0f626d;
+}
+.review-note {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  line-height: 1.6;
+  margin: 0 0 12px;
+  padding-left: 80px;
+}
+.artifact-review-hint {
+  margin-left: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--trust-pending);
+}
+.artifact-card {
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--card-bg, var(--paper-surface));
+  box-shadow: var(--shadow-card);
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.artifact-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--paper-rail);
+}
+.artifact-name {
+  font-family: var(--mono, monospace);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.artifact-size {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.artifact-download {
+  margin-left: auto;
+  font-size: 12.5px;
+  color: var(--clay);
+  text-decoration: none;
+}
+.artifact-download:hover {
+  text-decoration: underline;
+}
+.artifact-body {
+  padding: 16px;
+}
+.artifact-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono, monospace);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+.artifact-error {
+  color: var(--trust-fail);
+  font-size: 13px;
+}
+.muted {
+  color: var(--ink-faint);
 }
 .feedback-form {
   max-width: 480px;
