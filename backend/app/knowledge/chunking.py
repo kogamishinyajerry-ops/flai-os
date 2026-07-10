@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,23 +47,26 @@ class Chunk:
             raise ValueError("Chunk.fingerprint 出处指纹不得为空（docs/06 §4）")
 
 
-def _fingerprint(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
-
-
 def _merge(paras: list[str], doc_id: str, source: str, fp: str) -> list[Chunk]:
-    """段落贪心合并：strip 后非空段依序拼接至 ≤MAX_CHARS，超限另起新 chunk。"""
+    """段落贪心合并：strip 后非空段依序拼接至 ≤MAX_CHARS，超限另起新 chunk。
+
+    单段本身超 MAX_CHARS 先按 MAX_CHARS 硬切再进合并（codex Wave1-R1 P2）：
+    否则超长段（超长 CSV 行/无空行长文）会整段成 chunk，击穿宣称的 800 字符
+    上界，进而撑大检索命中与模型上下文。硬切可能落在词中间——检索按 jieba
+    分词计分，边界词项损失可接受；出处双钥不受影响。
+    """
     merged: list[str] = []
     buf = ""
     for p in paras:
         p = p.strip()
         if not p:
             continue
-        if buf and len(buf) + len(p) + 1 > MAX_CHARS:
-            merged.append(buf)
-            buf = p
-        else:
-            buf = f"{buf}\n{p}" if buf else p
+        for piece in (p[i : i + MAX_CHARS] for i in range(0, len(p), MAX_CHARS)):
+            if buf and len(buf) + len(piece) + 1 > MAX_CHARS:
+                merged.append(buf)
+                buf = piece
+            else:
+                buf = f"{buf}\n{piece}" if buf else piece
     if buf:
         merged.append(buf)
     return [Chunk(doc_id, f"{doc_id}#{i}", t, source, fp) for i, t in enumerate(merged)]
@@ -76,17 +80,22 @@ def ingest_path(path: Path, *, source: str) -> list[Chunk]:
     """
     path = Path(path)
     suffix = path.suffix.lower()
-    doc_id, fp = path.stem, _fingerprint(path)
+    doc_id = path.stem
+    # 指纹与解析绑定同一份字节快照（codex Wave1-R1 P2）：文件只读一次，指纹
+    # 从这份字节算、解析也从这份字节做——两次打开文件之间源文件被替换时，
+    # 出处指纹会与正文脱钩（引用指向的不再是产生该文字的那份文件）。
+    raw = path.read_bytes()
+    fp = hashlib.sha256(raw).hexdigest()[:12]
     if suffix in {".txt", ".md"}:
-        paras = path.read_text(encoding="utf-8").split("\n\n")
+        paras = raw.decode("utf-8").split("\n\n")
     elif suffix == ".csv":
         # utf-8-sig：带 BOM 时剥掉 ﻿，无 BOM 时与 utf-8 等价（FDE retro 教训）。
-        with path.open(encoding="utf-8-sig") as f:
-            paras = ["; ".join(f"{k}={v}" for k, v in row.items()) for row in csv.DictReader(f)]
+        text = raw.decode("utf-8-sig")
+        paras = ["; ".join(f"{k}={v}" for k, v in row.items()) for row in csv.DictReader(io.StringIO(text))]
     elif suffix == ".xlsx":
         from openpyxl import load_workbook
 
-        ws = load_workbook(path, read_only=True).active
+        ws = load_workbook(io.BytesIO(raw), read_only=True).active
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
             return []
@@ -99,7 +108,7 @@ def ingest_path(path: Path, *, source: str) -> list[Chunk]:
             raise KnowledgeIngestError(
                 "python-docx 未安装，docx 解析不可用（可选依赖，离线环境见 README）"
             ) from exc
-        paras = [p.text for p in docx.Document(str(path)).paragraphs]
+        paras = [p.text for p in docx.Document(io.BytesIO(raw)).paragraphs]
     elif suffix == ".pdf":
         raise KnowledgeIngestError("PDF 解析未接入（待内网侦察，诚实拒绝不静默跳过）")
     else:
@@ -117,6 +126,7 @@ def ingest_dir(dir_path: Path) -> list[Chunk]:
     - source = 相对 dir_path 的 POSIX 路径（Windows 反斜杠不进出处字段）。
     """
     dir_path = Path(dir_path)
+    dir_root = dir_path.resolve()
     rel_paths: list[Path] = []
     for p in dir_path.rglob("*"):
         if not p.is_file():
@@ -124,6 +134,16 @@ def ingest_dir(dir_path: Path) -> list[Chunk]:
         rel = p.relative_to(dir_path)
         if any(part.startswith(".") for part in rel.parts):
             continue
+        # 逐文件 resolve 收容（codex Wave1-R1 P1）：is_file() 会跟随符号链接，
+        # scope 内一个 `leak.md -> 仓外文件` 的 symlink 即可把源根目录校验
+        # （resolve_source_dir 只验根）整个绕过。resolve 后不在源根之内 →
+        # 硬拒整次摄取（fail-closed，不静默跳过——静默跳过会把越界文件
+        # 伪装成"语料里没有"）。
+        if p.resolve().is_relative_to(dir_root) is False:
+            raise KnowledgeIngestError(
+                f"源文件 {rel.as_posix()} resolve 后逃逸出源目录 {dir_root}"
+                "（symlink 越界，scope 源目录内不得链接仓外路径）"
+            )
         rel_paths.append(rel)
     chunks: list[Chunk] = []
     for rel in sorted(rel_paths, key=lambda r: r.as_posix()):

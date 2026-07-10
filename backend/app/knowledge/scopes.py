@@ -75,7 +75,13 @@ class ScopeRegistry:
         if not yaml_path.is_file():
             raise InvalidScopePackageError(f"{entry} 缺少 scope.yaml")
         try:
-            data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+            raw = yaml_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            # 读取/解码失败同样收容为单包软错误（codex Wave1-R1 P2）：一个不可读
+            # 或非 UTF-8 的 scope.yaml 不得炸穿 scan() 拖死整个 assemble() 启动。
+            raise InvalidScopePackageError(f"{entry} scope.yaml 读取失败：{exc}") from exc
+        try:
+            data = yaml.safe_load(raw)
         except yaml.YAMLError as exc:
             raise InvalidScopePackageError(f"{entry} scope.yaml 解析失败：{exc}") from exc
         if not isinstance(data, dict):

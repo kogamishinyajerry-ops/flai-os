@@ -55,6 +55,30 @@ V0.1「只立契约与目录，不做检索引擎」。COMAC_FDE 孵化仓第一
 8. **索引进程内惰性缓存**：per-scope manifest（文件相对路径+sha256[:12] 清单）
    变化即重建；不落派生盘缓存（语料量级小，YAGNI；语料增长后的持久化索引为已知债）。
 
+## 修订：codex 治理审 R1（2026-07-09，1 P1 + 3 P2 + 1 P3 全采纳）
+
+885d92f 收口后的 codex 补跑审（gpt-5.6-sol ultra）CHANGES_REQUIRED，五条
+finding 逐条 grounded 复核成立，全部落地（tamper T6-T9 咬合入测）：
+
+- **R1-P1 逐文件 symlink 收容**：`ingest_dir` 对每个候选文件 resolve 后要求
+  仍在源根之内，越界即 KnowledgeIngestError 硬拒整次摄取——此前
+  `resolve_source_dir` 只验根目录，scope 内一个 `leak.md -> 仓外文件` 的
+  symlink 即可整体绕过路径逃逸门（决策 4 的收口）。域内 symlink 不误伤。
+- **R1-P2 单包读取失败收容**：scope.yaml 的 `OSError`/`UnicodeError` 同
+  YAML 解析失败一样转 `InvalidScopePackageError` 软记录——此前一个非
+  UTF-8 的 scope.yaml 会炸穿 scan() 拖死整个 assemble()（API 与 worker
+  双双起不来），违背"单包不合格软记录继续"的自我承诺。
+- **R1-P2 指纹绑定字节快照**：文件只读一次，指纹与解析共用同一份字节——
+  此前指纹读一次、parser 再开一次文件，间隙内源文件被替换会产生「正文 A +
+  指纹 B」的出处脱钩（决策 6 出处双钥的完整性漏洞；活文件源是声明支持的场景）。
+- **R1-P2 超长单段硬切**：`_merge` 对单段超 MAX_CHARS 者先按 800 硬切再
+  合并——此前超长段（超长 CSV 行/无空行长文）整段成 chunk，击穿宣称的
+  chunk 上界并放大检索命中与模型上下文。硬切可能断词，检索按 jieba 分词
+  计分，边界词项损失可接受。
+- **R1-P3 pip fallback 配方补 jieba**：四个 dev 脚本的"依赖缺失？先装"
+  提示补上 jieba（uv 路径此前已同步，echo 的 pip 配方漏了——按提示装完
+  照样 ModuleNotFoundError）。
+
 ## 后果
 
 - **范围**：knowledge 挂载仅覆盖 job 模式（AgentRuntime._build_context）；

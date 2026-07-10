@@ -11,6 +11,11 @@
 7. ingest_dir 递归 + 跳过点前缀文件/目录 + 按相对 POSIX 路径排序稳定；
 8. fingerprint 内容寻址：同内容相同、改一字节即变；
 9. 边界 witness：全空白 txt → []（空文件≠坏文件，空语料由 service 层拒绝）。
+
+codex Wave1-R1 增补（一钥一门）：
+11. symlink 越界 → 硬拒整次摄取；域内 symlink 不误伤；
+12. 指纹与正文绑定同一字节快照（出处双钥不脱钩）；
+13. 超长单段先硬切再合并，chunk 上界 800 不被击穿且正文无损。
 """
 
 from __future__ import annotations
@@ -125,6 +130,61 @@ def test_blank_txt_returns_empty(tmp_path):
     f = tmp_path / "blank.txt"
     f.write_text("\n\n   \n\n\t\n", encoding="utf-8")
     assert ingest_path(f, source="blank.txt") == []
+
+
+def test_symlink_escape_rejected_inside_allowed(tmp_path):
+    """witness 11（codex Wave1-R1 P1）：源目录内 symlink 指向目录外文件 →
+    KnowledgeIngestError 硬拒整次摄取（fail-closed 不静默跳过——静默跳过会把
+    越界文件伪装成"语料里没有"）；指向目录内的 symlink 不受影响（收容不误伤）。"""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("仓外敏感内容", encoding="utf-8")
+    scope = tmp_path / "scope"
+    scope.mkdir()
+    (scope / "legit.md").write_text("合法语料段落", encoding="utf-8")
+    (scope / "leak.md").symlink_to(outside / "secret.md")
+
+    with pytest.raises(KnowledgeIngestError, match="逃逸出源目录"):
+        ingest_dir(scope)
+
+    # 收容不误伤：撤掉越界链接、放一个域内 symlink → 摄取正常且不含仓外内容
+    (scope / "leak.md").unlink()
+    (scope / "alias.md").symlink_to(scope / "legit.md")
+    chunks = ingest_dir(scope)
+    assert {c.source for c in chunks} == {"legit.md", "alias.md"}
+    assert all("仓外敏感内容" not in c.text for c in chunks)
+
+
+def test_fingerprint_bound_to_parsed_snapshot(tmp_path, monkeypatch):
+    """witness 12（codex Wave1-R1 P2）：指纹与正文出自同一字节快照——把
+    read_bytes 钉成固定快照后，正文与指纹都必须来自该快照。旧实现指纹读一次、
+    解析再开一次文件，间隙内源文件被替换会产生「正文 A + 指纹 B」的出处脱钩
+    （引用指向的不再是产生该正文的那份文件）。"""
+    import hashlib
+    from pathlib import Path
+
+    f = tmp_path / "live.md"
+    f.write_text("磁盘上的另一份内容", encoding="utf-8")
+    snapshot = "快照那一刻的正文".encode("utf-8")
+    monkeypatch.setattr(Path, "read_bytes", lambda self: snapshot)
+
+    chunks = ingest_path(f, source="live.md")
+    assert len(chunks) == 1
+    assert chunks[0].text == "快照那一刻的正文", "正文必须来自指纹所指的那份字节"
+    assert chunks[0].fingerprint == hashlib.sha256(snapshot).hexdigest()[:12]
+
+
+def test_oversized_single_paragraph_split(tmp_path):
+    """witness 13（codex Wave1-R1 P2）：无空行超长单段（2500 字符）→ 先按
+    MAX_CHARS 硬切再合并——所有 chunk ≤800 且正文无损可拼回。超长 CSV/xlsx
+    行与本例同走 _merge 共享路径。"""
+    body = "甲" * 2500
+    f = tmp_path / "long.md"
+    f.write_text(body, encoding="utf-8")
+    chunks = ingest_path(f, source="long.md")
+    assert len(chunks) == 4  # 800×3 + 100
+    assert all(len(c.text) <= MAX_CHARS for c in chunks)
+    assert "".join(c.text for c in chunks) == body, "硬切只分块不丢字"
 
 
 def test_chunk_empty_provenance_rejected():

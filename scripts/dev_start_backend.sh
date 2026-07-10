@@ -8,7 +8,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 PORT="${FLAI_BACKEND_PORT:-8620}"
 
 echo "启动 FLAi-OS 后端：uvicorn backend.app.main:app --port ${PORT}"
-echo "依赖缺失？先装：pip install fastapi uvicorn jsonschema pyyaml python-multipart httpx openpyxl 'pydantic>2'"
+echo "依赖缺失？先装：pip install fastapi uvicorn jsonschema pyyaml python-multipart httpx openpyxl jieba 'pydantic>2'"
 
 if command -v uv >/dev/null 2>&1; then
   exec uv run --no-project \

@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 echo "启动 FLAi-OS Job Runner：python -m backend.app.jobs.runner"
-echo "依赖缺失？先装：pip install fastapi jsonschema pyyaml httpx openpyxl 'pydantic>2'"
+echo "依赖缺失？先装：pip install fastapi jsonschema pyyaml httpx openpyxl jieba 'pydantic>2'"
 
 if command -v uv >/dev/null 2>&1; then
   exec uv run --no-project \

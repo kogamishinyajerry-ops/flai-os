@@ -168,6 +168,23 @@ def test_scan_non_dict_top_level_not_registered(tmp_path):
     assert "object" in registry.errors[0]["error"]
 
 
+def test_scan_undecodable_yaml_contained_others_registered(tmp_path):
+    """witness 2 附（codex Wave1-R1 P2）：scope.yaml 非 UTF-8 字节 → 读取失败
+    收容为单包软错误 + 跳过，**同目录其余合法 scope 照常注册**——一个坏包
+    绝不炸穿 scan() 拖死整个 assemble() 启动（API 与 worker 都过 assemble）。"""
+    knowledge_dir = tmp_path / "knowledge"
+    _write_scope(knowledge_dir, "good_scope")
+    bad = knowledge_dir / "undecodable_scope"
+    bad.mkdir(parents=True)
+    (bad / "scope.yaml").write_bytes(b"\xff\xfe\x00\x00 not utf-8")
+    registry = _scan(knowledge_dir)
+
+    assert registry.get("good_scope") is not None, "合法包不得被坏包连坐"
+    assert registry.get("undecodable_scope") is None
+    assert len(registry.errors) == 1
+    assert "读取失败" in registry.errors[0]["error"]
+
+
 def test_scan_schema_violation_not_registered(tmp_path):
     """witness 3：confidentiality 用枚举外乱写值 → schema 校验拒绝，不注册。"""
     knowledge_dir = tmp_path / "knowledge"
