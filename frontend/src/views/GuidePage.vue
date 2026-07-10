@@ -1,6 +1,6 @@
 <template>
-  <div class="guide-page">
-    <!-- 起手 hero（未开始且无消息）：衬线问候 + 具名。开始对话后隐去，让位于会话。 -->
+  <div class="guide-page" :class="{ 'is-empty': !started && messages.length === 0 }">
+    <!-- 起手 hero（未开始且无消息）：衬线问候 + 具名，随 composer 在视口垂直居中。 -->
     <div v-if="!started && messages.length === 0" class="guide-hero">
       <div class="hero-mark">导</div>
       <h1 class="hero-title">说说你要做的工程活儿</h1>
@@ -11,6 +11,9 @@
       <div class="hero-starter">
         <el-input v-model="createdBy" placeholder="你的名字（对话需具名）" class="name-input" />
         <span class="starter-hint">先留个名字，在下方描述你的需求开始对话。</span>
+      </div>
+      <div class="hero-examples">
+        <button v-for="(ex, i) in EXAMPLES" :key="i" class="ex-chip" @click="setExample(ex)">{{ ex }}</button>
       </div>
     </div>
 
@@ -153,8 +156,9 @@
       </div>
     </div>
 
-    <!-- 悬浮质感 composer -->
-    <div class="composer">
+    <!-- 悬浮质感 composer：会话开始后固定悬浮在视口底部（Claude 布局，始终可见） -->
+    <div class="composer" :class="{ 'composer-fixed': started || messages.length }">
+      <div class="composer-inner">
       <div v-if="pendingFiles.length" class="composer-files">
         <span
           v-for="f in pendingFiles"
@@ -199,6 +203,7 @@
         <span>导引不会替你创建或签发任务</span>
         <span class="keys"><kbd>Enter</kbd> 发送<span class="sep">·</span><kbd>⇧ Enter</kbd> 换行<span class="sep">·</span>📎 可带附件</span>
       </div>
+      </div>
     </div>
   </div>
 </template>
@@ -228,6 +233,16 @@ const streamEl = ref(null);
 // P2-A 反孤儿纪律；已上传项记 fileId，失败重试不重复上传。
 const pendingFiles = ref([]);
 let fileSeq = 0;
+
+// 空状态示例提示（Claude 起手 chips）：点一下把示例填进输入框，用户再改再发。
+const EXAMPLES = [
+  "做双通道供电系统的控制逻辑和故障树分析",
+  "给这批性能盘 case 做批量核算，出汇总",
+  "查一下供电系统适航规范的相关依据",
+];
+function setExample(text) {
+  draft.value = text;
+}
 
 function handleFileSelect(uploadFile) {
   if (pendingFiles.value.length >= MAX_FILES_PER_MESSAGE) {
@@ -400,7 +415,15 @@ function createOneTask(agent, plan) {
 .guide-page {
   max-width: 784px;
   margin: 0 auto;
-  padding-bottom: 8px;
+  padding-bottom: 152px; /* 让会话内容避开固定悬浮 composer */
+}
+/* 空状态：hero + composer 作为一组在视口垂直居中（Claude 起手布局）。*/
+.guide-page.is-empty {
+  padding-bottom: 0;
+  min-height: 72vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 /* ── 起手 hero ── */
@@ -453,6 +476,30 @@ function createOneTask(agent, plan) {
 .starter-hint {
   color: var(--ink-faint);
   font-size: 12.5px;
+}
+.hero-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 26px;
+}
+.ex-chip {
+  font-size: 13px;
+  color: var(--ink-soft);
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 8px 16px;
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+  transition: transform 0.16s var(--ease-lift), box-shadow 0.16s var(--ease-lift), border-color 0.16s var(--ease-lift), color 0.16s var(--ease-lift);
+}
+.ex-chip:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--clay-softer);
+  color: var(--clay);
 }
 
 .page-alert {
@@ -814,6 +861,23 @@ function createOneTask(agent, plan) {
 
 /* ── composer ── */
 .composer { margin-top: 18px; }
+/* 会话开始后：固定悬浮在视口底部，上缘渐隐让消息从下方穿过（Claude 布局）。 */
+.composer.composer-fixed {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 15;
+  margin-top: 0;
+  padding: 22px 24px 24px;
+  background: linear-gradient(180deg, rgba(250, 247, 242, 0) 0%, rgba(250, 247, 242, 0.88) 42%, var(--page-bg) 74%);
+  pointer-events: none;
+}
+.composer-inner {
+  max-width: 784px;
+  margin: 0 auto;
+}
+.composer.composer-fixed .composer-inner { pointer-events: auto; }
 .composer-files {
   display: flex;
   flex-wrap: wrap;
