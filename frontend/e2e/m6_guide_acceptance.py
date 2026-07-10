@@ -198,15 +198,15 @@ with sync_playwright() as p:
     expect(page.locator(".prefill-note")).to_be_visible(timeout=5000)
     body = page.locator("body").inner_text()
 
-    # ⑤ 预填带入 + 目标 Agent 选中；非法字段未随入（只带合法预填）
-    inputs_text = page.locator("textarea").first.input_value()
+    # ⑤ 预填带入 + 目标 Agent 选中；非法字段未随入（结构化表单：top_event 字段带值）
+    top_event_val = page.locator('input[placeholder="请填写顶事件"]').first.input_value()
     prefill_ok = (
         "已从智能导引带入预填草案" in body
-        and '"top_event"' in inputs_text
-        and "供电完全丧失" in inputs_text
-        and "bogus" not in inputs_text  # 剥离字段不会带进创建页
+        and "供电完全丧失" in top_event_val
+        and "bogus" not in body  # 剥离字段不属于该 Agent schema，结构化表单里根本不存在
     )
-    check("④→⑤确认后预填草案带入创建任务页（仅合法字段）", prefill_ok, inputs_text[:200])
+    check("④→⑤确认后预填草案带入创建任务页（仅合法字段）", prefill_ok,
+          f"top_event={top_event_val!r} bogus_in_body={'bogus' in body}")
     carried_ok = ATTACH_NAME in body and "已上传" in body
     check("⑤会话附件随草案带入创建页（已上传状态，人可移除，M7）", carried_ok,
           f"attach_in_body={ATTACH_NAME in body}")

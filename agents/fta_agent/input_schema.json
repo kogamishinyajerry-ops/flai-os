@@ -6,10 +6,11 @@
   "additionalProperties": false,
   "required": ["top_event", "system_description", "components"],
   "properties": {
-    "top_event": { "type": "string", "minLength": 1, "maxLength": 500, "description": "顶事件描述（如「供电完全丧失」）。" },
-    "system_description": { "type": "string", "minLength": 1, "maxLength": 5000, "description": "系统构成与工作原理的文字描述。" },
+    "top_event": { "type": "string", "title": "顶事件", "minLength": 1, "maxLength": 500, "description": "顶事件描述（如「供电完全丧失」）。" },
+    "system_description": { "type": "string", "title": "系统描述", "minLength": 1, "maxLength": 5000, "description": "系统构成与工作原理的文字描述。" },
     "components": {
       "type": "array",
+      "title": "组件列表",
       "minItems": 1,
       "items": { "type": "string", "minLength": 1 },
       "description": "组件名列表（通用词，供模型组织失效模式候选）。"

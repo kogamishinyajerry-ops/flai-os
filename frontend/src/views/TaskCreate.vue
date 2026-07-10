@@ -70,16 +70,45 @@
             class="prefill-note"
             title="已从智能导引带入预填草案，请核对并补全后再提交——签发权在你。"
           />
-          <el-input
-            v-model="form.inputsText"
-            type="textarea"
-            :rows="6"
-            placeholder='请按该 Agent 的输入契约手填 JSON，例如：{"name": "张三"}'
-          />
-          <div v-if="inputsJsonError" class="field-error">{{ inputsJsonError }}</div>
-          <div class="field-hint">
-            按所选 Agent 的输入说明（见其 README / input_schema）填写 JSON 参数；结构化表单待后续版本。
-          </div>
+
+          <!-- 表单模式：按 Agent input_schema 动态生成带标签+校验的字段 -->
+          <template v-if="selectedAgent && schemaRenderable && !jsonMode">
+            <SchemaForm :schema="selectedAgent.input_schema" :model="formInputs" :disabled="submitting" />
+            <div v-if="inputsErrors.length" class="field-error">
+              <div v-for="(e, i) in inputsErrors" :key="i">{{ e }}</div>
+            </div>
+            <div class="field-foot">
+              <el-button text size="small" class="mode-toggle" @click="toggleToJson">
+                高级：直接编辑 JSON
+              </el-button>
+            </div>
+          </template>
+
+          <!-- JSON 模式 / schema 不可渲染时降级 -->
+          <template v-else>
+            <div v-if="selectedAgent && !schemaRenderable" class="field-hint json-fallback-note">
+              该 Agent 的输入结构较复杂，请按其输入契约直接填写 JSON。
+            </div>
+            <el-input
+              v-model="form.inputsText"
+              type="textarea"
+              :rows="8"
+              placeholder='请按该 Agent 的输入契约填写 JSON，例如：{"name": "张三"}'
+            />
+            <div v-if="inputsJsonError" class="field-error">{{ inputsJsonError }}</div>
+            <div class="field-foot">
+              <el-button
+                v-if="selectedAgent && schemaRenderable"
+                text
+                size="small"
+                class="mode-toggle"
+                @click="toggleToForm"
+              >
+                ← 用表单填写
+              </el-button>
+              <span v-if="!selectedAgent" class="field-hint">请先在上方选择 Agent。</span>
+            </div>
+          </template>
         </div>
       </el-form-item>
 
@@ -127,6 +156,8 @@ import { createTask } from "../api/tasks";
 import { concludeConversation } from "../api/conversations";
 import { uploadFile as apiUploadFile } from "../api/files";
 import { statusLabel, statusTagType } from "../utils/format";
+import SchemaForm from "../components/SchemaForm.vue";
+import { parseSchema, blankInputs, collectInputs, validateInputs } from "../utils/schemaForm";
 
 const route = useRoute();
 const router = useRouter();
@@ -139,6 +170,12 @@ const selectedAgent = ref(null);
 const agentLoadError = ref("");
 const agentsListError = ref("");
 const inputsJsonError = ref("");
+// P0-1：schema 驱动的结构化表单状态。formInputs 是交给 SchemaForm 就地读写的
+// 响应式 values 对象；schemaRenderable=false 时降级回 JSON 手填（jsonMode）。
+const formInputs = reactive({});
+const schemaRenderable = ref(false);
+const jsonMode = ref(false);
+const inputsErrors = ref([]);
 const submitting = ref(false);
 const uploadingFiles = ref(false);
 const submitError = ref("");
@@ -162,6 +199,9 @@ const form = reactive({
 // 只带入 inputs，仍由人补全 + 亲手点「提交任务」——导引不代签（ADR-0012）。
 // M7：会话附件随草案带入——已是 File Service 真实文件，以「已上传」状态入
 // 附件列表（status:done + fileId），提交时直接进 input_file_ids；人可移除。
+// 导引草案的 inputs 种子：用于在 Agent schema 加载后灌进结构化表单（仅目标 Agent 匹配时）。
+let guidePrefill = null;
+
 if (route.query.from === "guide") {
   try {
     const raw = sessionStorage.getItem("flai_prefill");
@@ -169,6 +209,7 @@ if (route.query.from === "guide") {
       const draft = JSON.parse(raw);
       if (draft && draft.agent_id === form.agentId && draft.inputs) {
         form.inputsText = JSON.stringify(draft.inputs, null, 2);
+        guidePrefill = { agentId: draft.agent_id, inputs: draft.inputs };
         prefilledFromGuide.value = true;
         if (typeof draft.conversation_id === "string") {
           prefillConversationId.value = draft.conversation_id;
@@ -212,9 +253,18 @@ async function loadAgents() {
   }
 }
 
+// 就地替换响应式对象的全部键（保持同一引用，使 SchemaForm 的 :model 绑定不断开）。
+function replaceReactive(target, source) {
+  for (const k of Object.keys(target)) delete target[k];
+  Object.assign(target, source);
+}
+
 async function handleAgentChange(agentId) {
+  inputsErrors.value = [];
+  inputsJsonError.value = "";
   if (!agentId) {
     selectedAgent.value = null;
+    schemaRenderable.value = false;
     return;
   }
   agentLoadError.value = "";
@@ -222,8 +272,45 @@ async function handleAgentChange(agentId) {
     selectedAgent.value = await getAgent(agentId);
   } catch (err) {
     selectedAgent.value = null;
+    schemaRenderable.value = false;
     agentLoadError.value = err.detail || err.message;
+    return;
   }
+  const schema = selectedAgent.value ? selectedAgent.value.input_schema : null;
+  schemaRenderable.value = parseSchema(schema).renderable;
+  // 仅当草案目标 Agent 与当前一致时带入种子（一次性预填）。
+  const seed = guidePrefill && guidePrefill.agentId === agentId ? guidePrefill.inputs : null;
+  if (schemaRenderable.value) {
+    replaceReactive(formInputs, blankInputs(schema, seed));
+    jsonMode.value = false;
+  } else {
+    // schema 不可结构化 → JSON 模式；有种子则填入文本域。
+    jsonMode.value = true;
+    if (seed) form.inputsText = JSON.stringify(seed, null, 2);
+  }
+}
+
+// 表单 → JSON：把当前结构化 values 序列化进文本域，切到高级模式。
+function toggleToJson() {
+  if (schemaRenderable.value && selectedAgent.value) {
+    form.inputsText = JSON.stringify(collectInputs(selectedAgent.value.input_schema, formInputs), null, 2);
+  }
+  jsonMode.value = true;
+}
+
+// JSON → 表单：把文本域解析为种子回灌结构化表单；解析失败则留在 JSON 模式并报错。
+function toggleToForm() {
+  if (!schemaRenderable.value || !selectedAgent.value) return;
+  let seed = {};
+  try {
+    seed = form.inputsText.trim() ? JSON.parse(form.inputsText) : {};
+  } catch (err) {
+    inputsJsonError.value = `JSON 解析失败：${err.message}，无法切回表单`;
+    return;
+  }
+  inputsJsonError.value = "";
+  replaceReactive(formInputs, blankInputs(selectedAgent.value.input_schema, seed));
+  jsonMode.value = false;
 }
 
 // P2-A：选中文件只入列（status:"pending"，raw File 留在本地），提交时才上传——
@@ -276,13 +363,25 @@ async function handleSubmit() {
   }
 
   let inputs = {};
-  try {
-    inputs = form.inputsText.trim() ? JSON.parse(form.inputsText) : {};
-  } catch (err) {
-    inputsJsonError.value = `inputs 不是合法 JSON：${err.message}`;
-    return;
+  if (schemaRenderable.value && !jsonMode.value && selectedAgent.value) {
+    // 结构化表单模式：前端轻量校验兜前（真正判定仍由后端 fail-closed），再收集。
+    const errs = validateInputs(selectedAgent.value.input_schema, formInputs);
+    if (errs.length) {
+      inputsErrors.value = errs;
+      ElMessage.error(errs[0]);
+      return;
+    }
+    inputsErrors.value = [];
+    inputs = collectInputs(selectedAgent.value.input_schema, formInputs);
+  } else {
+    try {
+      inputs = form.inputsText.trim() ? JSON.parse(form.inputsText) : {};
+    } catch (err) {
+      inputsJsonError.value = `inputs 不是合法 JSON：${err.message}`;
+      return;
+    }
+    inputsJsonError.value = "";
   }
-  inputsJsonError.value = "";
   submitError.value = "";
 
   submitting.value = true;
@@ -374,6 +473,19 @@ onMounted(loadAgents);
   color: var(--ink-faint);
   font-size: 12px;
   margin-top: 4px;
+}
+.field-foot {
+  margin-top: 8px;
+}
+.mode-toggle {
+  color: var(--ink-faint);
+  padding: 0;
+}
+.mode-toggle:hover {
+  color: var(--clay);
+}
+.json-fallback-note {
+  margin-bottom: 8px;
 }
 .upload-list {
   margin-top: 8px;

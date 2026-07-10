@@ -171,9 +171,10 @@ with sync_playwright() as p:
     page.get_by_role("button", name="去创建此任务").nth(1).click()  # fta_agent（第二张）
     page.wait_for_url(lambda url: "/tasks/new" in url, timeout=5000)
     expect(page.locator(".prefill-note")).to_be_visible(timeout=5000)
-    inputs_text = page.locator("textarea").first.input_value()
-    create_ok = "供电完全丧失" in inputs_text and "提交任务" in page.locator("body").inner_text()
-    check("③点 Agent 的创建按钮→落创建页带该 Agent 预填（签发仍由人）", create_ok, inputs_text[:160])
+    top_event_val = page.locator('input[placeholder="请填写顶事件"]').first.input_value()
+    create_ok = "供电完全丧失" in top_event_val and "提交任务" in page.locator("body").inner_text()
+    check("③点 Agent 的创建按钮→落创建页带该 Agent 预填（签发仍由人）", create_ok,
+          f"top_event={top_event_val!r}")
     page.screenshot(path=str(SHOTS / "3_create_from_agent.png"), full_page=True)
 
     browser.close()

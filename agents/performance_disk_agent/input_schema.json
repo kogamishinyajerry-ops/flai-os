@@ -7,6 +7,7 @@
   "properties": {
     "sheet_name": {
       "type": "string",
+      "title": "Sheet 名称",
       "minLength": 1,
       "description": "可选：case 表所在 sheet 名；缺省解析首个 sheet。"
     }

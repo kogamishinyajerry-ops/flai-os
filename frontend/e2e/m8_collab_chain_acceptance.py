@@ -142,13 +142,13 @@ with sync_playwright() as p:
     page.locator(".member").nth(1).get_by_role("button", name="去创建此任务").click()
     page.wait_for_url(re.compile(r"/tasks/new"), timeout=5000)
     expect(page.locator(".prefill-note")).to_be_visible(timeout=5000)
-    inputs_text = page.locator("textarea").first.input_value()
-    check("③召集→落创建页带预填草案", "供电完全丧失" in inputs_text, inputs_text[:120])
+    # 结构化表单：预填落在 top_event 字段（非 JSON 文本域）
+    top_event_val = page.locator('input[placeholder="请填写顶事件"]').first.input_value()
+    check("③召集→落创建页带预填草案", "供电完全丧失" in top_event_val, f"top_event={top_event_val!r}")
 
-    # ④ 补全输入 + 亲手提交（人签发）
-    page.locator("textarea").first.fill(
-        json.dumps({"top_event": "供电完全丧失", "system_description": "双通道供电系统", "components": ["发电机A", "发电机B"]}, ensure_ascii=False)
-    )
+    # ④ 结构化表单补全剩余必填（系统描述 + 组件，无需手写 JSON）+ 亲手提交（人签发）
+    page.locator('textarea[placeholder="请填写系统描述"]').first.fill("双通道供电系统（发电机A/B + 汇流条 + 转换开关）")
+    page.locator('input[placeholder="组件列表 第 1 项"]').first.fill("发电机A")
     page.get_by_placeholder("你的名字").fill("王工")
     page.get_by_role("button", name="提交任务").click()
     page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)

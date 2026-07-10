@@ -6,23 +6,25 @@
   "additionalProperties": false,
   "required": ["system_name", "states", "transitions"],
   "properties": {
-    "system_name": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "system_name": { "type": "string", "title": "系统名称", "minLength": 1, "maxLength": 200 },
     "states": {
       "type": "array",
+      "title": "状态列表",
       "minItems": 1,
       "items": { "type": "string", "minLength": 1 },
       "description": "状态名列表；首个元素约定为初始态。"
     },
     "transitions": {
       "type": "array",
+      "title": "转移规则",
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["from", "to", "condition"],
         "properties": {
-          "from": { "type": "string", "minLength": 1 },
-          "to": { "type": "string", "minLength": 1 },
-          "condition": { "type": "string", "minLength": 1, "description": "转移触发条件（自由文本，本 Agent 不解释其语义）。" }
+          "from": { "type": "string", "title": "源状态", "minLength": 1 },
+          "to": { "type": "string", "title": "目标状态", "minLength": 1 },
+          "condition": { "type": "string", "title": "触发条件", "minLength": 1, "description": "转移触发条件（自由文本，本 Agent 不解释其语义）。" }
         }
       }
     }

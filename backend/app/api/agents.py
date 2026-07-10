@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -44,10 +45,29 @@ def list_agents(request: Request) -> list[dict[str, Any]]:
     return [_project(a) for a in registry.list()]
 
 
+def _read_input_schema(registry: Any, agent_id: str) -> dict[str, Any] | None:
+    """从 Agent 包目录读 input_schema.json，供前端按契约动态渲染创建表单。
+
+    只在详情端点读盘（列表端点不读，省带宽）；缺文件/解析失败一律返回 None，
+    前端据此降级回 JSON 手填模式，绝不因 schema 缺失阻断建任务。
+    """
+    package_dir = getattr(registry, "package_dir", lambda _id: None)(agent_id)
+    if package_dir is None:
+        return None
+    schema_path = package_dir / "input_schema.json"
+    try:
+        parsed = json.loads(schema_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 @router.get("/agents/{agent_id}")
 def get_agent(agent_id: str, request: Request) -> dict[str, Any]:
     registry = request.app.state.agent_registry
     agent = _get_agent_or_none(registry, agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"agent 不存在：{agent_id}")
-    return _project(agent)
+    projected = _project(agent)
+    projected["input_schema"] = _read_input_schema(registry, agent_id)
+    return projected

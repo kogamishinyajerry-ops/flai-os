@@ -75,6 +75,26 @@ def test_get_agent_found(client: TestClient) -> None:
     assert body["limitations"], "limitations 必须非空（宪法：每个 Agent 声明不做什么）"
 
 
+def test_get_agent_exposes_input_schema(client: TestClient) -> None:
+    """详情端点透出 input_schema，供前端按契约动态渲染创建表单（P0-1）。
+
+    列表端点不带（省带宽）；详情端点必带，且为该 Agent 真实 input_schema.json
+    的解析结果（hello_agent required=[name]）。schema 缺失时为 None 而非 500。
+    """
+    resp = client.get("/api/agents/hello_agent")
+    body = resp.json()
+    assert "input_schema" in body, "详情投影必须含 input_schema 键"
+    schema = body["input_schema"]
+    assert isinstance(schema, dict) and schema.get("type") == "object"
+    assert "name" in schema.get("properties", {})
+    assert schema.get("required") == ["name"]
+
+    # 列表端点不透出 input_schema（最小字段集，省带宽）
+    listed = client.get("/api/agents").json()
+    hello = next(a for a in listed if a["id"] == "hello_agent")
+    assert "input_schema" not in hello
+
+
 # ── tasks: create -> queued + task_created 事件 ──────────────────────────
 
 

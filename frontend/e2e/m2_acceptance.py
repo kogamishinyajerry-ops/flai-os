@@ -124,7 +124,8 @@ with sync_playwright() as p:
     page.wait_for_url(re.compile(r"/tasks/new"), timeout=5000)
     expect(page.locator(".agent-preview")).to_be_visible(timeout=5000)
     page.get_by_placeholder("你的名字").fill("验收工程师")
-    page.locator("textarea").first.fill('{"name": "M2验收"}')
+    # 结构化表单：hello_agent 的 name 字段（不再手写 JSON）
+    page.locator('input[placeholder="请填写姓名"]').first.fill("M2验收")
     page.screenshot(path=str(SHOTS / "2_create_filled.png"), full_page=True)
     page.get_by_role("button", name="提交任务").click()
     page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
@@ -172,7 +173,7 @@ with sync_playwright() as p:
     page.goto(BASE + "/tasks/new?agent_id=review_agent", wait_until="networkidle")
     expect(page.locator(".agent-preview")).to_be_visible(timeout=5000)
     page.get_by_placeholder("你的名字").fill("验收工程师")
-    page.locator("textarea").first.fill('{"name": "待人工审核"}')
+    page.locator('input[placeholder="请填写姓名"]').first.fill("待人工审核")
     page.get_by_role("button", name="提交任务").click()
     page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
     review_task_id = page.url.rsplit("/", 1)[-1]
