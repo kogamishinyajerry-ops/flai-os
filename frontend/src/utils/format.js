@@ -41,11 +41,15 @@ export const LEVEL_COLOR = { info: "#409EFF", warning: "#E6A23C", error: "#F56C6
 
 // Agent 类型（agent.schema category 枚举）→ 中文标签 + 主题色 + 一句话定位。
 // 分类色标是门户视觉重点：不同类型 Agent 一眼可辨（任务书 §12.6 泛化验证）。
+// 配色**刻意避开信任色锁的五个语义槽**（绿=REAL / teal=人签 / amber=待核 /
+// 红=失败 / clay=工作态）：分类是「类型」轴、信任是「状态」轴，两轴同屏不得撞色，
+// 否则绿药丸会被误读成「已验证」。故四类统一落在冷调 蓝/靛/紫/梅 弧段——
+// reasoning_assist 由旧琥珀(撞 amber)、knowledge_qa 由旧绿(撞 REAL) 迁出。
 export const AGENT_CATEGORY = {
   tool_automation: { label: "工具自动化型", color: "#2f6fb3", tip: "编排工具批量作业，如性能盘计算" },
+  knowledge_qa: { label: "知识问答型", color: "#4a6bb0", tip: "基于受控知识范围回答工程问题" },
   structured_gen: { label: "结构化生成型", color: "#7c5cbf", tip: "按规则生成结构化产物，如控制逻辑" },
-  reasoning_assist: { label: "推理辅助型", color: "#c1841f", tip: "LLM 辅助推理出草案，结论需人工确认" },
-  knowledge_qa: { label: "知识问答型", color: "#2c8a6f", tip: "基于受控知识范围回答工程问题" },
+  reasoning_assist: { label: "推理辅助型", color: "#b45a86", tip: "LLM 辅助推理出草案，结论需人工确认" },
 };
 
 export const categoryLabel = (c) => AGENT_CATEGORY[c]?.label ?? c ?? "未分类";

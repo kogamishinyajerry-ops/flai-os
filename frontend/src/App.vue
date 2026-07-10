@@ -72,7 +72,13 @@ const activeMenu = computed(() => {
   --shadow-card: 0 1px 2px rgba(43, 38, 34, 0.035), 0 4px 14px rgba(72, 58, 44, 0.05);
   --shadow-card-hover: 0 2px 6px rgba(43, 38, 34, 0.06), 0 12px 30px rgba(72, 58, 44, 0.10);
   --shadow-hero: 0 1px 3px rgba(43, 38, 34, 0.04), 0 10px 34px rgba(72, 58, 44, 0.06);
+  --shadow-composer: 0 1px 3px rgba(43, 38, 34, 0.05), 0 12px 32px rgba(72, 58, 44, 0.09);
   --ease-lift: 0.18s cubic-bezier(0.22, 0.61, 0.36, 1);
+  /* 衬线 display 字体（Claude 暖编辑语言）：只用于「大时刻」标题——目标句、hero 问候。
+   * CJK 走 Songti/宋体，Latin 走 Iowan/Palatino，营造克制的编辑质感，与无衬线 body 对位。*/
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "STSong", "Times New Roman", serif;
+  --clay-deep: #a54e2f;
+  --surface-raised: #ffffff;
   --el-color-primary: #c15f3c;
   --el-color-primary-light-3: #d08663;
   --el-color-primary-light-5: #dba489;

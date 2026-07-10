@@ -1,12 +1,17 @@
 <template>
   <div class="guide-page">
-    <div class="page-header">
-      <h2>智能导引</h2>
-      <p class="page-sub">
-        说说你要做的工程活儿（可带附件），导引会帮你分析、拆解，召集合适的一个或
-        多个 Agent 协作并预填草案；平台接不住时也会直说、并告诉你怎么重述才可行——
-        <strong>计划由你确认后亲手提交，导引不会替你创建或签发任务。</strong>
+    <!-- 起手 hero（未开始且无消息）：衬线问候 + 具名。开始对话后隐去，让位于会话。 -->
+    <div v-if="!started && messages.length === 0" class="guide-hero">
+      <div class="hero-mark">导</div>
+      <h1 class="hero-title">说说你要做的工程活儿</h1>
+      <p class="hero-sub">
+        导引会帮你分析、拆解，召集合适的一个或多个 Agent 协作并预填草案；平台接不住时也会直说、
+        并告诉你怎么重述才可行——<strong>计划由你确认后亲手提交，导引不会替你创建或签发任务。</strong>
       </p>
+      <div class="hero-starter">
+        <el-input v-model="createdBy" placeholder="你的名字（对话需具名）" class="name-input" />
+        <span class="starter-hint">先留个名字，在下方描述你的需求开始对话。</span>
+      </div>
     </div>
 
     <el-alert
@@ -18,76 +23,81 @@
       class="page-alert"
     />
 
-    <div v-if="!started" class="starter">
-      <el-input v-model="createdBy" placeholder="你的名字（对话需具名）" class="name-input" />
-      <p class="starter-hint">先留个名字，然后在下方描述你的需求开始对话。</p>
-    </div>
-
-    <div ref="streamEl" class="chat-stream">
+    <!-- 会话流 -->
+    <div v-if="messages.length || sending" ref="streamEl" class="thread">
       <div v-for="(m, idx) in messages" :key="idx" :class="['bubble-row', m.role]">
-        <div class="bubble">
-          <div class="bubble-role">{{ m.role === "user" ? "你" : "导引" }}</div>
-          <div class="bubble-text">{{ m.content }}</div>
-          <div v-if="m.attachments && m.attachments.length" class="bubble-files">
-            <el-tag v-for="a in m.attachments" :key="a.id" size="small" type="info" effect="plain">
-              📎 {{ a.filename }}
-            </el-tag>
-          </div>
 
-          <!-- 导引计划（M8 编排官）：refuse=显式拒绝 / orchestrate=召集协作 -->
-          <div v-if="m.recommendation && m.recommendation.decision === 'refuse'" class="plan-card">
-            <div class="plan-bar refuse"></div>
-            <div class="plan-inner">
-              <div class="plan-head">
-                <span class="plan-title">这个需求，平台暂时接不住</span>
-                <span class="plan-tag refuse">显式拒绝</span>
-              </div>
+        <!-- 用户消息：靠右暖气泡 -->
+        <div v-if="m.role === 'user'" class="user-bubble">
+          <div class="user-text">{{ m.content }}</div>
+          <div v-if="m.attachments && m.attachments.length" class="user-files">
+            <span v-for="a in m.attachments" :key="a.id" class="file-chip">📎 {{ a.filename }}</span>
+          </div>
+        </div>
+
+        <!-- 助手消息：小 mark + 流动排版，plan-card 内联渲染 -->
+        <template v-else>
+          <div class="ai-mark">导</div>
+          <div class="ai-body">
+            <div class="ai-name">智能导引</div>
+            <p v-if="m.content" class="ai-lead">{{ m.content }}</p>
+
+            <!-- 导引计划（M8 编排官）：refuse=显式拒绝 -->
+            <div v-if="m.recommendation && m.recommendation.decision === 'refuse'" class="plan-card refuse">
+              <div class="plan-kicker refuse">显式拒绝</div>
+              <h3 class="plan-goal-title small">这个需求，平台暂时接不住</h3>
               <p v-if="m.recommendation.reason" class="plan-reason">{{ m.recommendation.reason }}</p>
-              <div v-if="m.recommendation.residual_problems && m.recommendation.residual_problems.length" class="plan-block">
-                <div class="plan-block-label">你手上仍未解决的问题</div>
+              <div
+                v-if="m.recommendation.residual_problems && m.recommendation.residual_problems.length"
+                class="plan-section"
+              >
+                <div class="section-label">你手上仍未解决的问题</div>
                 <ul class="plan-list">
                   <li v-for="(p, i) in m.recommendation.residual_problems" :key="i">{{ p }}</li>
                 </ul>
               </div>
-              <div v-if="m.recommendation.reframe && m.recommendation.reframe.length" class="plan-block">
-                <div class="plan-block-label">可以试试这样重述 / 拆解</div>
+              <div v-if="m.recommendation.reframe && m.recommendation.reframe.length" class="plan-section">
+                <div class="section-label">可以试试这样重述 / 拆解</div>
                 <ul class="plan-list">
                   <li v-for="(r, i) in m.recommendation.reframe" :key="i">{{ r }}</li>
                 </ul>
               </div>
             </div>
-          </div>
 
-          <div v-else-if="m.recommendation && m.recommendation.decision === 'orchestrate'" class="plan-card">
-            <div class="plan-bar"></div>
-            <div class="plan-inner">
-              <div class="plan-head">
-                <span class="plan-title">协作方案</span>
-                <span class="plan-tag">{{ m.recommendation.agents.length }} 个 Agent 协作</span>
+            <!-- orchestrate=召集协作 -->
+            <div
+              v-else-if="m.recommendation && m.recommendation.decision === 'orchestrate'"
+              class="plan-card"
+            >
+              <div class="plan-topline">
+                <span class="plan-kicker">协作方案</span>
+                <span class="plan-count">{{ m.recommendation.agents.length }} 个 Agent 协作</span>
               </div>
-              <p v-if="m.recommendation.goal" class="plan-goal"><strong>目标：</strong>{{ m.recommendation.goal }}</p>
-              <p v-if="m.recommendation.analysis" class="plan-analysis">{{ m.recommendation.analysis }}</p>
-              <div v-if="m.recommendation.workflow" class="plan-block">
-                <div class="plan-block-label">分工如何衔接</div>
+              <h2 v-if="m.recommendation.goal" class="plan-goal-title">{{ m.recommendation.goal }}</h2>
+              <p v-if="m.recommendation.analysis" class="plan-reason">{{ m.recommendation.analysis }}</p>
+              <div v-if="m.recommendation.workflow" class="plan-section">
+                <div class="section-label">分工如何衔接</div>
                 <p class="plan-workflow">{{ m.recommendation.workflow }}</p>
               </div>
 
+              <div class="section-label roster-label">召集的 Agent · {{ m.recommendation.agents.length }}</div>
               <div class="agent-list">
                 <div v-for="(a, ai) in m.recommendation.agents" :key="ai" class="agent-card">
-                  <div class="agent-bar" :style="{ background: categoryColor(a.category) }"></div>
-                  <div class="agent-inner">
-                    <div class="agent-head">
+                  <div class="agent-accent" :style="{ background: categoryColor(a.category) }"></div>
+                  <div class="agent-main">
+                    <div class="agent-top">
+                      <span class="agent-step">{{ ai + 1 }}</span>
                       <span class="agent-name">{{ a.agent_name }}</span>
                       <span
                         class="agent-pill"
                         :style="{ color: categoryColor(a.category), background: categoryColor(a.category) + '18' }"
                       >{{ categoryLabel(a.category) }}</span>
-                      <el-tag size="small" type="info" effect="plain">{{ a.maturity }} / {{ a.status }}</el-tag>
+                      <span class="agent-maturity">{{ a.maturity }} / {{ a.status }}</span>
                     </div>
-                    <p v-if="a.role" class="agent-role"><strong>分工：</strong>{{ a.role }}</p>
+                    <p v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</p>
                     <p v-if="a.rationale" class="agent-rationale">{{ a.rationale }}</p>
-                    <div class="agent-block">
-                      <div class="plan-block-label">预填草案（{{ inputCount(a) }} 个字段，未必完整）</div>
+                    <div class="agent-draft">
+                      <div class="section-label">预填草案（{{ inputCount(a) }} 个字段，未必完整）</div>
                       <pre class="plan-json">{{ prettyInputs(a.prefilled_inputs) }}</pre>
                     </div>
                     <el-alert
@@ -99,9 +109,7 @@
                       :title="`已剔除不合法字段：${a.stripped_fields.join('、')}（未匹配该 Agent 的输入契约）`"
                     />
                     <div class="agent-actions">
-                      <el-button type="primary" size="small" @click="createOneTask(a, m.recommendation)">
-                        去创建此任务
-                      </el-button>
+                      <button class="agent-cta" @click="createOneTask(a, m.recommendation)">去创建此任务</button>
                     </div>
                   </div>
                 </div>
@@ -125,9 +133,7 @@
               />
 
               <div class="plan-foot">
-                <el-button type="primary" plain size="small" @click="openWorkbench">
-                  进入协作工作台 →
-                </el-button>
+                <button class="workbench-btn" @click="openWorkbench">进入协作工作台 →</button>
                 <span class="plan-note">
                   在工作台里看分工架构、逐个召集 Agent、追进度——签发权始终在你，
                   每个任务都由你补全并<strong>亲手提交</strong>。
@@ -135,41 +141,63 @@
               </div>
             </div>
           </div>
-        </div>
+        </template>
       </div>
 
       <div v-if="sending" class="bubble-row assistant">
-        <div class="bubble thinking">导引思考中…</div>
+        <div class="ai-mark">导</div>
+        <div class="ai-thinking">
+          <span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>
+          <span class="tlabel">导引思考中…</span>
+        </div>
       </div>
     </div>
 
+    <!-- 悬浮质感 composer -->
     <div class="composer">
       <div v-if="pendingFiles.length" class="composer-files">
-        <el-tag
+        <span
           v-for="f in pendingFiles"
           :key="f.uid"
-          size="small"
-          closable
-          :type="f.status === 'error' ? 'danger' : 'info'"
+          :class="['file-chip', 'closable', { error: f.status === 'error' }]"
           :title="f.status === 'error' ? f.error : ''"
-          @close="removePendingFile(f)"
         >
           📎 {{ f.name }}{{ f.status === "error" ? "（上传失败）" : "" }}
-        </el-tag>
+          <span class="chip-x" @click="removePendingFile(f)">×</span>
+        </span>
       </div>
-      <div class="composer-row">
-        <el-upload :auto-upload="false" :show-file-list="false" multiple :on-change="handleFileSelect" :disabled="sending">
-          <el-button :disabled="sending" title="添加附件（≤5 个/条；文本类直读、xlsx 预览，详见导引说明）">📎</el-button>
-        </el-upload>
-        <el-input
-          v-model="draft"
-          type="textarea"
-          :rows="2"
-          :disabled="sending"
-          placeholder="描述你的工程需求，或回答导引的追问…（Enter 发送，Shift+Enter 换行；可用 📎 带附件）"
-          @keydown.enter.exact.prevent="send"
-        />
-        <el-button type="primary" :loading="sending" :disabled="!draft.trim()" @click="send">发送</el-button>
+      <div class="composer-shell">
+        <div class="composer-row">
+          <el-upload
+            class="composer-attach"
+            :auto-upload="false"
+            :show-file-list="false"
+            multiple
+            :on-change="handleFileSelect"
+            :disabled="sending"
+          >
+            <button class="icon-btn" :disabled="sending" title="添加附件（≤5 个/条；文本类直读、xlsx 预览）" aria-label="添加附件">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.49"/></svg>
+            </button>
+          </el-upload>
+          <el-input
+            v-model="draft"
+            type="textarea"
+            :autosize="{ minRows: 1, maxRows: 6 }"
+            :disabled="sending"
+            placeholder="描述你的工程需求，或回答导引的追问…"
+            class="composer-input"
+            @keydown.enter.exact.prevent="send"
+          />
+          <button class="send-btn" :disabled="sending || !draft.trim()" aria-label="发送" @click="send">
+            <svg v-if="!sending" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
+            <span v-else class="send-spin"></span>
+          </button>
+        </div>
+      </div>
+      <div class="composer-hint">
+        <span>导引不会替你创建或签发任务</span>
+        <span class="keys"><kbd>Enter</kbd> 发送<span class="sep">·</span><kbd>⇧ Enter</kbd> 换行<span class="sep">·</span>📎 可带附件</span>
       </div>
     </div>
   </div>
@@ -253,8 +281,11 @@ function inputCount(agent) {
 }
 
 async function scrollToBottom() {
+  // 会话流走自然页面流（不再是内嵌定长滚动框）——把最新一条滚到视口顶部起读，
+  // 让高高的协作方案卡从「目标句」开始展开，而不是被塞进 62vh 的小盒里。
   await nextTick();
-  if (streamEl.value) streamEl.value.scrollTop = streamEl.value.scrollHeight;
+  const last = streamEl.value && streamEl.value.lastElementChild;
+  if (last) last.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function send() {
@@ -366,273 +397,527 @@ function createOneTask(agent, plan) {
 </script>
 
 <style scoped>
-.page-header {
-  margin-bottom: 16px;
+.guide-page {
+  max-width: 784px;
+  margin: 0 auto;
+  padding-bottom: 8px;
 }
-.page-header h2 {
-  margin: 0 0 4px;
+
+/* ── 起手 hero ── */
+.guide-hero {
+  text-align: center;
+  padding: 40px 12px 30px;
+  animation: rise 0.5s var(--ease-lift) both;
 }
-.page-sub {
-  margin: 0;
+.hero-mark {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  margin: 0 auto 20px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: 21px;
+  background: linear-gradient(150deg, var(--clay), var(--clay-deep));
+  box-shadow: 0 6px 18px rgba(193, 95, 60, 0.28);
+}
+.hero-title {
+  font-family: var(--serif);
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 14px;
+  letter-spacing: 0.3px;
+}
+.hero-sub {
+  max-width: 560px;
+  margin: 0 auto 24px;
   color: var(--ink-soft);
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 14.5px;
+  line-height: 1.72;
 }
-.page-alert {
-  margin-bottom: 12px;
+.hero-sub strong {
+  color: var(--ink);
+  font-weight: 600;
 }
-.starter {
-  margin-bottom: 12px;
-}
-.name-input {
-  max-width: 260px;
-}
-.starter-hint {
-  margin: 6px 0 0;
-  color: var(--ink-soft);
-  font-size: 12px;
-}
-.chat-stream {
-  min-height: 320px;
-  max-height: 56vh;
-  overflow-y: auto;
-  padding: 8px 4px 4px;
+.hero-starter {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-}
-.bubble-row {
-  display: flex;
-}
-.bubble-row.user {
-  justify-content: flex-end;
-}
-.bubble-row.assistant {
-  justify-content: flex-start;
-}
-.bubble {
-  max-width: 78%;
-  border-radius: 12px;
-  padding: 10px 14px;
-  border: 1px solid var(--hairline);
-  background: var(--card-bg);
-}
-.bubble-row.user .bubble {
-  background: var(--clay-soft);
-  border-color: #e9d3c7;
-}
-.bubble-role {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--ink-soft);
-  margin-bottom: 4px;
-}
-.bubble-text {
-  white-space: pre-wrap;
-  color: var(--ink);
-  font-size: 14px;
-  line-height: 1.6;
-}
-.thinking {
-  color: var(--ink-soft);
-  font-size: 13px;
-  font-style: italic;
-}
-.plan-card {
-  margin-top: 12px;
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  overflow: hidden;
-  background: #fff;
-  box-shadow: var(--shadow-card);
-}
-.plan-bar {
-  height: 4px;
-  width: 100%;
-  background: var(--clay);
-}
-.plan-bar.refuse {
-  background: var(--trust-pending);
-}
-.plan-inner {
-  padding: 12px 14px;
-}
-.plan-head {
-  display: flex;
   align-items: center;
   gap: 8px;
+}
+.name-input {
+  max-width: 280px;
+}
+.starter-hint {
+  color: var(--ink-faint);
+  font-size: 12.5px;
+}
+
+.page-alert {
+  margin-bottom: 14px;
+}
+
+/* ── 会话流 ── */
+.thread {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+  padding: 20px 2px 8px;
+}
+
+.bubble-row { display: flex; scroll-margin-top: 84px; }
+.bubble-row.user { justify-content: flex-end; }
+.bubble-row.assistant { justify-content: flex-start; }
+
+/* 用户气泡：靠右，暖 clay 淡底 */
+.user-bubble {
+  max-width: 76%;
+  background: linear-gradient(180deg, #fbeee7, #f7e6dc);
+  border: 1px solid #f0d8ca;
+  color: #5b3524;
+  padding: 12px 16px;
+  border-radius: 18px 18px 4px 18px;
+  box-shadow: 0 1px 2px rgba(140, 70, 40, 0.06);
+  animation: rise 0.4s var(--ease-lift) both;
+}
+.user-text {
+  white-space: pre-wrap;
+  font-size: 15px;
+  line-height: 1.55;
+}
+.user-files {
+  display: flex;
   flex-wrap: wrap;
-  margin-bottom: 8px;
+  gap: 6px;
+  margin-top: 8px;
 }
-.plan-title {
-  font-weight: 700;
-  color: var(--ink);
+
+/* 助手：小 mark + 流动排版 */
+.bubble-row.assistant { gap: 14px; }
+.ai-mark {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  margin-top: 2px;
+  display: grid;
+  place-items: center;
+  color: var(--clay);
+  font-weight: 800;
   font-size: 14px;
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-card);
 }
-.plan-tag {
+.ai-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: calc(100% - 44px);
+}
+.ai-name {
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  margin-bottom: 7px;
+}
+.ai-lead {
+  font-size: 15px;
+  line-height: 1.72;
+  color: var(--ink);
+  margin: 0 0 16px;
+  white-space: pre-wrap;
+}
+
+/* 思考指示 */
+.ai-thinking {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-faint);
+  font-size: 13.5px;
+}
+.ai-thinking .tdot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--clay);
+  opacity: 0.4; animation: blink 1.2s infinite both;
+}
+.ai-thinking .tdot:nth-child(2) { animation-delay: 0.2s; }
+.ai-thinking .tdot:nth-child(3) { animation-delay: 0.4s; }
+.ai-thinking .tlabel { margin-left: 6px; }
+@keyframes blink { 0%, 80%, 100% { opacity: 0.35; } 40% { opacity: 1; } }
+
+/* ── 协作方案 / 拒绝 卡片 ── */
+.plan-card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 18px;
+  padding: 22px 24px 20px;
+  box-shadow: var(--shadow-card);
+  animation: rise 0.5s var(--ease-lift) both;
+}
+.plan-card.refuse {
+  background: linear-gradient(180deg, #fdf8ef, var(--surface));
+  border-color: #efdcbb;
+}
+.plan-topline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.plan-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--clay);
+}
+.plan-kicker.refuse { color: var(--trust-pending); margin-bottom: 10px; display: inline-block; }
+.plan-count {
   font-size: 12px;
   font-weight: 600;
-  padding: 2px 9px;
+  color: var(--ink-soft);
+  background: var(--paper-rail);
+  border: 1px solid var(--hairline);
   border-radius: 999px;
-  color: var(--clay);
-  background: var(--clay-soft);
+  padding: 2px 10px;
 }
-.plan-tag.refuse {
-  color: var(--trust-pending);
-  background: #f6edd8;
-}
-.plan-goal {
-  margin: 0 0 6px;
+.plan-goal-title {
+  font-family: var(--serif);
+  font-size: 24px;
+  line-height: 1.36;
   color: var(--ink);
-  font-size: 13.5px;
-  line-height: 1.6;
+  font-weight: 600;
+  margin: 0 0 16px;
+  letter-spacing: 0.2px;
 }
-.plan-analysis,
+.plan-goal-title.small { font-size: 20px; margin-bottom: 12px; }
 .plan-reason {
-  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.7;
   color: var(--ink-soft);
-  font-size: 13px;
-  line-height: 1.6;
+  margin: 0 0 16px;
 }
-.plan-block {
-  margin: 0 0 10px;
+.plan-section { margin: 0 0 16px; }
+.section-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 8px;
 }
-.plan-block-label {
-  font-size: 12px;
-  color: var(--ink-soft);
-  margin-bottom: 4px;
-}
+.roster-label { margin-top: 4px; }
 .plan-workflow {
   margin: 0;
   color: #4a443d;
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 13.5px;
+  line-height: 1.65;
 }
 .plan-list {
   margin: 0;
   padding-left: 20px;
   color: #4a443d;
-  font-size: 13px;
-  line-height: 1.7;
+  font-size: 13.5px;
+  line-height: 1.75;
 }
+
+/* Agent roster 卡 */
+.agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.agent-card {
+  display: flex;
+  gap: 14px;
+  align-items: stretch;
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline-soft);
+  border-radius: 14px;
+  padding: 15px 16px;
+  transition: transform 0.22s var(--ease-lift), box-shadow 0.22s var(--ease-lift), border-color 0.22s var(--ease-lift);
+  animation: rise 0.55s var(--ease-lift) both;
+}
+.agent-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: #e4d8c8;
+}
+.agent-accent {
+  flex: 0 0 auto;
+  width: 3px;
+  border-radius: 3px;
+}
+.agent-main { flex: 1 1 auto; min-width: 0; }
+.agent-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.agent-step {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  background: var(--paper-rail);
+  border: 1px solid var(--hairline);
+}
+.agent-name {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--ink);
+}
+.agent-pill {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+.agent-maturity {
+  margin-left: auto;
+  font-size: 11.5px;
+  font-family: var(--mono, "SF Mono", ui-monospace, monospace);
+  color: var(--ink-faint);
+}
+.agent-role {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink);
+  margin: 0 0 6px;
+}
+.role-tag {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: var(--clay);
+  background: var(--clay-soft);
+  border-radius: 5px;
+  padding: 1px 7px;
+  margin-right: 8px;
+  vertical-align: 1px;
+}
+.agent-rationale {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  margin: 0 0 10px;
+}
+.agent-draft { margin-bottom: 10px; }
 .plan-json {
   margin: 0;
   padding: 10px 12px;
-  background: #faf7f2;
-  border: 1px solid var(--hairline);
-  border-radius: 8px;
+  background: var(--paper-rail);
+  border: 1px solid var(--hairline-soft);
+  border-radius: 9px;
   font-family: "SF Mono", ui-monospace, monospace;
-  font-size: 12.5px;
+  font-size: 12px;
   color: #4a443d;
   overflow-x: auto;
   white-space: pre;
 }
-.agent-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 10px 0;
-}
-.agent-card {
-  border: 1px solid var(--hairline-soft);
-  border-radius: 9px;
-  overflow: hidden;
-  background: var(--paper-cream);
-  transition: box-shadow var(--ease-lift);
-}
-.agent-card:hover {
-  box-shadow: var(--shadow-card);
-}
-.agent-bar {
-  height: 3px;
-  width: 100%;
-}
-.agent-inner {
-  padding: 10px 12px;
-}
-.agent-head {
-  display: flex;
+.agent-stripped { margin-bottom: 10px; }
+.agent-actions { display: flex; }
+.agent-cta {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
-}
-.agent-name {
-  font-weight: 700;
-  color: var(--ink);
-  font-size: 13.5px;
-}
-.agent-pill {
-  font-size: 11.5px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 999px;
-}
-.agent-role {
-  margin: 0 0 4px;
-  color: var(--ink);
   font-size: 13px;
-  line-height: 1.5;
+  font-weight: 600;
+  color: var(--clay);
+  background: transparent;
+  border: 1px solid #e6c9bb;
+  border-radius: 10px;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: all 0.18s var(--ease-lift);
 }
-.agent-rationale {
-  margin: 0 0 8px;
-  color: var(--ink-soft);
-  font-size: 12.5px;
-  line-height: 1.5;
+.agent-cta::after {
+  content: "→";
+  margin-left: 7px;
+  transition: transform 0.18s var(--ease-lift);
 }
-.agent-block {
-  margin-bottom: 8px;
+.agent-cta:hover {
+  background: var(--clay);
+  color: #fff;
+  border-color: var(--clay);
+  box-shadow: 0 4px 12px rgba(193, 95, 60, 0.22);
 }
-.agent-stripped {
-  margin-bottom: 8px;
-}
-.agent-actions {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-.plan-alert {
-  margin-top: 8px;
-}
+.agent-cta:hover::after { transform: translateX(2px); }
+
+.plan-alert { margin-top: 12px; }
+
 .plan-foot {
-  margin-top: 12px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   flex-wrap: wrap;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline-soft);
 }
+.workbench-btn {
+  flex: 0 0 auto;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(160deg, var(--clay), var(--clay-deep));
+  border: none;
+  border-radius: 10px;
+  padding: 9px 16px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(193, 95, 60, 0.24);
+  transition: transform 0.16s var(--ease-lift), box-shadow 0.16s var(--ease-lift);
+}
+.workbench-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(193, 95, 60, 0.3); }
 .plan-note {
-  margin: 10px 0 0;
-  color: var(--ink-soft);
-  font-size: 12px;
+  flex: 1;
+  min-width: 220px;
+  font-size: 12.5px;
   line-height: 1.6;
+  color: var(--ink-faint);
 }
-.plan-foot .plan-note {
-  margin: 0;
-  flex: 1;
-  min-width: 200px;
+.plan-note strong { color: var(--ink-soft); font-weight: 600; }
+
+/* 文件 chip */
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: var(--paper-rail);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 3px 9px;
 }
-.composer {
-  margin-top: 12px;
+.file-chip.error { color: var(--trust-fail); border-color: #e6bcbc; background: #faeeee; }
+.chip-x {
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-weight: 700;
+  line-height: 1;
+  padding: 0 2px;
 }
-.composer-row {
-  display: flex;
-  gap: 10px;
-  align-items: flex-end;
-}
-.composer-row .el-textarea {
-  flex: 1;
-}
+.chip-x:hover { color: var(--ink); }
+
+/* ── composer ── */
+.composer { margin-top: 18px; }
 .composer-files {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+  padding: 0 4px;
 }
-.bubble-files {
+.composer-shell {
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  border-radius: 22px;
+  box-shadow: var(--shadow-composer);
+  padding: 6px;
+  transition: border-color 0.2s var(--ease-lift), box-shadow 0.2s var(--ease-lift);
+}
+.composer-shell:focus-within {
+  border-color: #dcb6a4;
+  box-shadow: 0 2px 6px rgba(43, 38, 34, 0.06), 0 16px 40px rgba(72, 58, 44, 0.13), 0 0 0 4px rgba(193, 95, 60, 0.08);
+}
+.composer-row {
   display: flex;
-  flex-wrap: wrap;
+  align-items: flex-end;
   gap: 6px;
-  margin-top: 6px;
+}
+.composer-attach { flex: 0 0 auto; }
+.icon-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: all 0.18s var(--ease-lift);
+}
+.icon-btn:hover:not(:disabled) { background: var(--paper-rail); color: var(--ink-soft); }
+.icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.composer-input { flex: 1 1 auto; }
+.composer-input :deep(.el-textarea__inner) {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  resize: none;
+  padding: 10px 4px;
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+.composer-input :deep(.el-textarea__inner::placeholder) { color: var(--ink-faint); }
+.send-btn {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  background: linear-gradient(160deg, var(--clay), var(--clay-deep));
+  color: #fff;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 4px 12px rgba(193, 95, 60, 0.28);
+  transition: transform 0.16s var(--ease-lift), box-shadow 0.16s var(--ease-lift), opacity 0.16s;
+}
+.send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(193, 95, 60, 0.34); }
+.send-btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+.send-spin {
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.composer-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 14px 0;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.composer-hint .keys { display: flex; align-items: center; gap: 6px; }
+.composer-hint .sep { color: var(--hairline); }
+kbd {
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 10.5px;
+  background: var(--paper-rail);
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 1px 5px;
+  color: var(--ink-soft);
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (max-width: 640px) {
+  .ai-body { max-width: calc(100% - 44px); }
+  .plan-goal-title { font-size: 21px; }
+  .agent-maturity { display: none; }
 }
 </style>
