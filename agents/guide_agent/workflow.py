@@ -22,6 +22,7 @@ orchestrate 若无任何合法 Agent 存活 → 整份计划作废（fail-closed
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,15 @@ _SELF_ID = "guide_agent"
 _MAX_PLAN_AGENTS = 5          # 单份计划召集 Agent 数上限（超出截断并记 capped）
 _MAX_TEXT_CHARS = 2_000      # 单个自由文本字段上限（analysis/goal/reason/role…）
 _MAX_LIST_ITEMS = 8          # residual_problems / reframe 列表条数上限
+# 异源 Codex R1-#2：此前只有 _text 字段（analysis/goal/role…）受 2K 约束，prefill 值、
+# dropped_agents、stripped_fields 均只受"模型输出长度"隐式约束，无显式界——超长 prefill
+# 值或海量幻觉 agent_id 可把 recommendation_json 撑大。下列三顶把计划总量收成有界：
+_MAX_PLAN_BYTES = 50_000     # 计划块原始字节硬顶（先于 json.loads，兆级即判非法 fail-closed；
+                             # 50K 对 5-Agent 含预填计划绰绰有余）。此顶一立，其内的 prefill/
+                             # dropped/stripped 皆随之有界。
+_MAX_DROPPED = 20            # dropped_agents 记录条数上限（防海量幻觉 id 撑审计列表）
+_MAX_STRIPPED = 32           # 单 Agent stripped_fields 条数上限
+_MAX_ID_CHARS = 64           # 审计列表里单个 id/字段名的展示长度上限
 
 
 def _load_system_prompt() -> str:
@@ -178,8 +188,15 @@ def _validate_plan(
       Agent 存活 → 整份计划作废（None），不把「召集了但一个都不真」的空壳交给用户。
     """
     try:
+        # 按 **UTF-8 字节** 而非字符判上限（异源 Codex R1-#2 复审：CJK 计划 17K 字符
+        # ≈51K 字节会绕过字符顶；编码异常同样 fail-closed）。此闸先于 json.loads、不落库。
+        if len(raw.encode("utf-8")) > _MAX_PLAN_BYTES:
+            return None
         proposed = json.loads(raw)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError, ValueError):
+        # JSON 非法 / **深嵌套 RecursionError** / 编码异常一律作废（异源 Codex R1-#2 复审：
+        # 限额内的深嵌套 JSON 会抛未捕获 RecursionError 逃逸成 500）。ValueError 覆盖
+        # JSONDecodeError 与 UnicodeEncodeError。
         return None
     if not isinstance(proposed, dict):
         return None
@@ -256,7 +273,8 @@ def _validate_orchestrate(
         "goal": _text(proposed.get("goal")),
         "workflow": _text(proposed.get("workflow")),
         "agents": agents,
-        "dropped_agents": dropped,
+        # 审计列表收成有界：条数 ≤ _MAX_DROPPED、单条 ≤ _MAX_ID_CHARS（异源 Codex R1-#2）。
+        "dropped_agents": [d[:_MAX_ID_CHARS] for d in dropped[:_MAX_DROPPED]],
         "capped": capped,
     }
 
@@ -293,8 +311,10 @@ def _clean_prefilled_inputs(
     """
     schema = _load_input_schema(registry, agent_id)
     if not schema or not isinstance(schema.get("properties"), dict):
-        # 目标无结构化字段（如 file_upload/none 型）：不接受任何预填字段
-        return {}, sorted(raw_inputs.keys())
+        # 目标无结构化字段（如 file_upload/none 型）：不接受任何预填字段。
+        # stripped 同样收成有界（异源 Codex R1-#2 复审：此早退路径此前绕过条数/长度顶，
+        # 海量未知字段名可撑大审计列表）。
+        return {}, _bounded_stripped(raw_inputs.keys())
 
     props: dict[str, Any] = schema["properties"]
     kept: dict[str, Any] = {}
@@ -307,7 +327,36 @@ def _clean_prefilled_inputs(
             kept[name] = value
         else:
             stripped.append(name)
-    return kept, sorted(stripped)
+    # 交叉约束复验（异源 Codex R1-#1）：_field_valid 逐字段看，漏掉根层
+    # allOf/if-then/not/dependentSchemas 等**跨字段**约束——单看每个字段合法、组合起来
+    # 却违反根约束的预填会漏进草案。对已留字段整体按「完整 schema 去掉根 required」复验
+    # （预填是部分输入，不查齐全性）；失败即保守清空全部预填并记入 stripped（fail-closed，
+    # 剥离方向即安全方向；人在创建页仍会补全并经 Runtime 对完整 schema 再校验一次）。
+    if kept and not _partial_object_valid(schema, kept):
+        stripped.extend(kept.keys())
+        kept = {}
+    return kept, _bounded_stripped(stripped)
+
+
+def _bounded_stripped(names: Any) -> list[str]:
+    """stripped_fields 统一收界口（异源 Codex R1-#2 复审：两条返回路径共用，杜绝早退
+    路径绕过界）：单字段名 ≤ _MAX_ID_CHARS、去重排序、条数 ≤ _MAX_STRIPPED。"""
+    return sorted({n[:_MAX_ID_CHARS] for n in names})[:_MAX_STRIPPED]
+
+
+def _partial_object_valid(schema: dict[str, Any], obj: dict[str, Any]) -> bool:
+    """把完整 input_schema 去掉根 `required` 后校验 obj 整体，使根层
+    allOf/if-then/not/dependentSchemas 等**跨字段**约束真正生效（`_field_valid`
+    只逐字段看，评估不到这些）。预填是部分输入，故移除 required 不查齐全性，只查
+    「留下来这组字段的组合是否违反跨字段约束」。$ref 在完整 schema 内自然解析回根，
+    任何异常（非法组合 / 无法评估的 schema）一律判不合法——fail-closed。"""
+    probe = copy.deepcopy(schema)
+    probe.pop("required", None)
+    try:
+        validate(obj, probe)
+        return True
+    except Exception:
+        return False
 
 
 def _field_valid(schema: dict[str, Any], name: str, value: Any) -> bool:

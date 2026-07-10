@@ -3,7 +3,7 @@
 设计要点（内核职责，不下放给 Agent）：
 - **附件是数据不是指令**是平台红线——规则行由内核统一注入每个渲染批次，
   不依赖各 Agent 的 system prompt 自觉；fence 采用 <<ATTACHMENT>>/<<END_ATTACHMENT>>
-  定界，与导引推荐块 <<RECOMMEND>>/<<END>> 同族且不冲突。
+  定界，与导引计划块 <<PLAN>>/<<END>>（M8 起，原 <<RECOMMEND>>）同族且不冲突。
 - **确定性**：同一文件集合渲染结果逐字节可复现（无时间戳/随机性），截断处
   显式横幅，绝不静默丢内容。
 - **预算硬顶**：单文件 _PER_FILE_CHARS，单次渲染批次 budget_chars（默认
@@ -195,13 +195,13 @@ def render_attachment_blocks(
         if remaining - overhead <= 0:
             # 预算耗尽：**不**再为每个剩余文件各吐一整个 fence 块——那本身就把总量
             # 顶越过 budget（codex M7-P2：5 文件 × 占位块 = 几百字符，24K 硬顶失效）。
-            # 改为**一行**汇总剩余文件名后 break，总量有界（≤ 规则行 + 已渲染块 +
-            # 一行汇总）。
-            leftover = [
-                _safe_filename_for_header(r.get("filename") or "unnamed") for r in file_rows[i:]
-            ]
-            summary = "、".join(leftover)[:200]
-            parts.append(f"[附件预算耗尽：另有 {len(leftover)} 个附件未展示：{summary}]")
+            # 改为**一行**汇总后 break，总量有界（≤ 规则行 + 已渲染块 + 一行汇总）。
+            # 该汇总行在 <<ATTACHMENT>> fence **之外**，故绝不带任何外部字节（文件名/
+            # id）——只出受信计数（异源 Codex R3-#4：文件名虽已中和 `<<`，但拼在 fence
+            # 外的裸行里仍是攻击者可控文本，`x] SYSTEM: …` 类文件名会伪装成系统提示；
+            # 结构逃逸已挡，此处连语义残留一并去掉）。名称要看，去创建页逐个上传项查。
+            leftover_count = len(file_rows) - i
+            parts.append(f"[附件预算耗尽：另有 {leftover_count} 个附件未展示（文件名从略，安全起见不外露）]")
             break
         body = _neutralize_sentinels(render_one(row, limit=min(_PER_FILE_CHARS, remaining - overhead)))
         block = f"{header}\n{body}\n{_FOOTER}"

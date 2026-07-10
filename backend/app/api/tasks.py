@@ -43,6 +43,43 @@ class CreateTaskRequest(BaseModel):
             )
         return v
 
+    @field_validator("name")
+    @classmethod
+    def name_non_blank_if_present(cls, v: str | None) -> str | None:
+        # task.schema.json: name 是 ["string","null"] 且 minLength=1——给了就不能空/纯空白
+        # （异源 Codex R6-#7：空串 name 会落库并使 GET 响应违契约）。不命名请省略（留 null）。
+        if v is None:
+            return None
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("name 若提供则不得为空白——不命名请省略该字段（留 null）")
+        return stripped
+
+    @field_validator("created_by")
+    @classmethod
+    def created_by_non_blank(cls, v: str) -> str:
+        # task.schema.json: created_by minLength=1（异源 Codex R6-#7）。默认 anonymous；
+        # 显式传空/空白一律拒——发起人标识不得为空。入库统一存 strip 后的名字。
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("created_by 不得为空白——发起人必须具名（不传则默认 anonymous）")
+        return stripped
+
+    @field_validator("input_file_ids")
+    @classmethod
+    def input_file_ids_sane_and_unique(cls, v: list[str]) -> list[str]:
+        # task.schema.json: input_file_ids.items.minLength=1 且 uniqueItems=true
+        # （异源 Codex R6-#7：空串/重复 id 会落库并使响应违契约）。与会话附件 id 同口径
+        # （非空白、长度 ≤64），另强制唯一——重复即如实拒，不静默去重。
+        seen: set[str] = set()
+        for fid in v:
+            if not fid.strip() or len(fid) > 64:
+                raise ValueError(f"非法输入文件 id：{fid!r}")
+            if fid in seen:
+                raise ValueError(f"输入文件 id 重复：{fid!r}（契约要求 uniqueItems）")
+            seen.add(fid)
+        return v
+
 
 class ReviewTaskRequest(BaseModel):
     """人工放行请求体（P1-B）。reviewer 必填非空——人是唯一的工程签发者
@@ -89,16 +126,8 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
 
     conn = request.app.state.conn_factory()
     try:
-        # 若声明归属某导引会话：该会话必须真实存在（防悬空引用）。不要求会话仍
-        # active——协作会话可能已 concluded，但其成员任务分组关系持续有效。
-        if body.conversation_id is not None:
-            if repos.get_conversation(conn, body.conversation_id) is None:
-                raise HTTPException(
-                    status_code=404, detail=f"归属的导引会话不存在：{body.conversation_id}"
-                )
         task_id = f"task_{uuid.uuid4().hex}"
-        repos.create_task(
-            conn,
+        create_kwargs = dict(
             task_id=task_id,
             agent_id=body.agent_id,
             agent_version=agent.get("version"),
@@ -109,6 +138,35 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             metadata={},
             conversation_id=body.conversation_id,
         )
+        if body.conversation_id is not None:
+            # 归属某导引会话：会话须真实存在（防悬空引用）**且仍 active**——归档后真只读
+            # （异源 Codex R2-#3：「结束协作」= 真结束，不再接受新成员任务）。**复查状态与
+            # INSERT 必须原子**（Codex R1 复审 #3：check-then-insert 非原子时，并发 conclude
+            # 可抢在二者之间提交、仍把任务挂进已归档会话）→ BEGIN IMMEDIATE 写锁内复查真实
+            # 状态再 INSERT，与 conclude 的 BEGIN IMMEDIATE 串行化。set_task_status 自带
+            # BEGIN IMMEDIATE，故本事务只包「复查 + create_task」，提交后再迁 queued。
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conv = repos.get_conversation(conn, body.conversation_id)
+                if conv is None:
+                    raise HTTPException(
+                        status_code=404, detail=f"归属的导引会话不存在：{body.conversation_id}"
+                    )
+                if conv["status"] != "active":
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"归属的导引会话已 {conv['status']}，不再接受新任务"
+                            f"（结束协作=真只读）：{body.conversation_id}"
+                        ),
+                    )
+                repos.create_task(conn, **create_kwargs)
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        else:
+            repos.create_task(conn, **create_kwargs)
         # P2-4：created->queued 由本创建动作原子完成（docs/05 §6「两处文档化原子例外」
         # 之一）——先把状态迁到 queued，再发 task_created 事件，事件 payload 显式携带
         # status_from/status_to 双态见证，而不是只见证 created 这一态就消失。

@@ -455,6 +455,82 @@ def test_clean_prefilled_inputs_handles_ref_schema(tmp_path) -> None:
     assert kept2 == {} and stripped2 == ["code"]
 
 
+def test_clean_prefilled_inputs_strips_root_combinator_violation(tmp_path) -> None:
+    """异源 Codex R1-#1：input_schema 用**根层** allOf 施加更严/跨字段约束时，逐字段
+    _field_valid 看不到根 allOf——单字段合法但违反根 allOf 的预填必须经整体复验剥离
+    （fail-closed），而非漏进草案（否则完整 schema 校验会在人提交时才失败）。"""
+    wf = _load_wf()
+    # properties.x 只声明 type=string；根层 allOf 另把 x 限成 maxLength=3（跨"子 schema"约束）。
+    schema = {
+        "type": "object",
+        "properties": {"x": {"type": "string"}},
+        "allOf": [{"properties": {"x": {"maxLength": 3}}}],
+    }
+    (tmp_path / "input_schema.json").write_text(json.dumps(schema), encoding="utf-8")
+
+    class _FakeRegistry:
+        def package_dir(self, agent_id):
+            return tmp_path
+
+    reg = _FakeRegistry()
+    # x="AAAA" 逐字段过 properties.x（是字符串），却违反根 allOf 的 maxLength=3 → 必剥离。
+    kept, stripped = wf._clean_prefilled_inputs(reg, "target", {"x": "AAAA"})
+    assert kept == {}, "违反根 allOf 的预填必须被剥离，不得漏进草案"
+    assert "x" in stripped
+    # 对照：合法长度值仍保留（证明只咬跨字段违规，不是一刀切拒绝）。
+    kept_ok, _ = wf._clean_prefilled_inputs(reg, "target", {"x": "AA"})
+    assert kept_ok == {"x": "AA"}
+
+
+def test_plan_oversized_raw_failclosed() -> None:
+    """异源 Codex R1-#2：计划块原始字节超 _MAX_PLAN_BYTES → 整份作废（fail-closed），
+    先于 json.loads、不落库——防超大 prefill 值/审计列表撑爆 recommendation_json。"""
+    wf = _load_wf()
+    raw_huge = json.dumps(_refuse(reason="X" * (wf._MAX_PLAN_BYTES + 100)), ensure_ascii=False)
+    assert len(raw_huge) > wf._MAX_PLAN_BYTES
+    assert wf._validate_plan(raw_huge, None, []) is None, "超字节顶的计划块必须整份作废"
+    # 对照：同结构在字节顶内 → 正常产出（证明是字节顶在起作用；refuse 不碰 registry）。
+    raw_ok = json.dumps(_refuse(reason="就绪"), ensure_ascii=False)
+    assert wf._validate_plan(raw_ok, None, [])["decision"] == "refuse"
+
+
+def test_plan_cjk_bytes_over_cap_failclosed() -> None:
+    """异源 Codex R1-#2 复审：上限按 **UTF-8 字节** 非字符——CJK 计划字符数在顶内、字节数
+    超顶仍须作废（否则 3 字节/字的中文可绕过字符顶塞进 ~3× 存储）。"""
+    wf = _load_wf()
+    reason = "漢" * (wf._MAX_PLAN_BYTES // 3 + 500)  # 每字 3 字节：字符 < 顶、字节 > 顶
+    raw = json.dumps(_refuse(reason=reason), ensure_ascii=False)
+    assert len(raw) < wf._MAX_PLAN_BYTES, "字符数须在顶内（证明字符顶会漏）"
+    assert len(raw.encode("utf-8")) > wf._MAX_PLAN_BYTES, "字节数须超顶"
+    assert wf._validate_plan(raw, None, []) is None, "按字节超顶必作废"
+
+
+def test_plan_deeply_nested_json_failclosed() -> None:
+    """异源 Codex R1-#2 复审：限额内的深嵌套 JSON 会让 json.loads 抛 RecursionError——
+    须捕获作废，绝不逃逸成未处理 500。"""
+    wf = _load_wf()
+    depth = 20_000
+    raw = "[" * depth + "]" * depth  # 合法但深嵌套；字节数远小于顶（不被字节闸拦）
+    assert len(raw.encode("utf-8")) < wf._MAX_PLAN_BYTES
+    assert wf._validate_plan(raw, None, []) is None  # 不崩，作废
+
+
+def test_clean_prefilled_early_path_bounds_stripped() -> None:
+    """异源 Codex R1-#2 复审：目标无 input_schema 的早退路径也须收界 stripped——海量
+    未知字段名不得原样撑大审计列表（此前早退绕过条数/长度顶）。"""
+    wf = _load_wf()
+
+    class _NoSchemaRegistry:
+        def package_dir(self, agent_id):
+            return None  # 无 schema → 早退路径
+
+    many = {f"field_{i}_{'x' * 80}": i for i in range(100)}  # 100 个超长未知字段名
+    kept, stripped = wf._clean_prefilled_inputs(_NoSchemaRegistry(), "t", many)
+    assert kept == {}
+    assert len(stripped) <= wf._MAX_STRIPPED, "早退路径 stripped 条数须收界"
+    assert all(len(n) <= wf._MAX_ID_CHARS for n in stripped), "单字段名须截断"
+
+
 # ── 计划产物是 output_schema 的 oracle（反方 P3-5）────────────────────────
 
 

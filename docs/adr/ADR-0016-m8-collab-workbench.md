@@ -45,8 +45,12 @@
   免建新表：tasks 加 `conversation_id`（迁移 #3，与 #1/#2 同 BEGIN IMMEDIATE 写锁
   块内探测补列，并发启动安全；base DDL 同步带列）。
 - 导引编排官把一次会话的计划分流成 **N 个人签发任务**，各任务记 conversation_id 归
-  到同一会话下。创建前校验会话真实存在（防悬空引用，先于副作用 404），但不要求
-  active（会话可 concluded 仍分组）。GET /conversations/{id}/tasks 会话成员视图。
+  到同一会话下。创建前校验会话真实存在（防悬空引用，先于副作用 404）**且仍 active**
+  （会话 concluded 后拒新任务 409）。**注（异源 Codex R2-#3 修订，超越初版）**：初版
+  为"不要求 active，concluded 仍分组"，与后续「结束协作=真只读」增补自相矛盾——已
+  统一为**归档即真只读**：conclude 后不再接受新成员任务，单 Agent 流程相应改为「先建
+  任务成功、后归档会话」（原先 fire-and-forget 先归档会与本校验死锁）。GET
+  /conversations/{id}/tasks 会话成员视图（对 concluded 会话只读展示既有成员，不再新增）。
 - contracts/task.schema.json 补 conversation_id（契约 parity gate 要求）。
 
 ### P4 协作工作台 UI

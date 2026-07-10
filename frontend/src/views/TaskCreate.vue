@@ -124,6 +124,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { listAgents, getAgent } from "../api/agents";
 import { createTask } from "../api/tasks";
+import { concludeConversation } from "../api/conversations";
 import { uploadFile as apiUploadFile } from "../api/files";
 import { statusLabel, statusTagType } from "../utils/format";
 
@@ -146,6 +147,9 @@ const prefilledFromGuide = ref(false);
 // M8：由导引协作会话带入的会话 id——提交任务时回填，使任务归到协作工作台的
 // 同一次会话下。门户直建（无 from=guide）时保持 null。
 const prefillConversationId = ref(null);
+// 单 Agent 导引流程：任务创建成功后再归档本会话（异源 Codex R2-#3：会话 concluded 后
+// API 真只读拒新任务，故归档必须后于创建，不能像旧流程那样先归档再跳创建页）。
+const prefillConcludeAfter = ref(false);
 
 const form = reactive({
   agentId: typeof route.query.agent_id === "string" ? route.query.agent_id : "",
@@ -168,6 +172,8 @@ if (route.query.from === "guide") {
         prefilledFromGuide.value = true;
         if (typeof draft.conversation_id === "string") {
           prefillConversationId.value = draft.conversation_id;
+          // 单 Agent 草案带 conclude_after：提交成功后归档本会话（后于创建，见下）。
+          prefillConcludeAfter.value = draft.conclude_after === true;
         }
         for (const f of Array.isArray(draft.files) ? draft.files : []) {
           if (f && f.id && f.name) {
@@ -301,6 +307,12 @@ async function handleSubmit() {
       createdBy: form.createdBy.trim(),
       conversationId: prefillConversationId.value,
     });
+    // 单 Agent 导引流程：任务已创建成功，此刻再归档本会话（fire-and-forget，归档失败
+    // 不影响已建任务；多 Agent 由工作台「结束协作」显式归档）。必须后于 createTask——
+    // 会话须在创建时仍 active（异源 Codex R2-#3：结束协作=真只读）。
+    if (prefillConcludeAfter.value && prefillConversationId.value) {
+      concludeConversation(prefillConversationId.value).catch(() => {});
+    }
     ElMessage.success("任务已创建");
     router.push(`/tasks/${task.id}`);
   } catch (err) {

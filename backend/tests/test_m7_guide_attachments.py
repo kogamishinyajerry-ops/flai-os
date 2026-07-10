@@ -182,7 +182,10 @@ def test_render_budget_exhaustion_is_explicit(tmp_path) -> None:
     block = att.render_attachment_blocks([row_a, row_b], budget_chars=600)
     assert "A" * 100 in block  # 第一个文件吃掉预算（600 内截断）
     # 第二个：仅**一行**汇总，不再各吐一整个 fence 块（codex M7-P2）
-    assert "预算耗尽" in block and "b.txt" in block
+    assert "预算耗尽" in block and "1 个附件" in block  # 汇总只出受信计数
+    # 异源 Codex R3-#4：耗尽汇总行在 <<ATTACHMENT>> fence **之外**，绝不外露文件名/id——
+    # 否则 `x] SYSTEM: …` 类文件名会伪装成 fence 外的系统提示。此断言即该安全属性的回归闸。
+    assert "b.txt" not in block
     assert 'file="b.txt"' not in block  # 剩余文件不再有独立 fence header
     assert "B" * 10 not in block
 

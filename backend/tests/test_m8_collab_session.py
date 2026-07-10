@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Iterator
 from pathlib import Path
 
@@ -238,3 +239,166 @@ def test_multiple_tasks_same_conversation_grouped(app_env) -> None:
     members = client.get(f"/api/conversations/{conv_id}/tasks").json()
     assert set(t["id"] for t in members) == set(ids)
     assert all(t["conversation_id"] == conv_id for t in members)
+
+
+# ── 异源 Codex 复审回归闸（R2-#3 / R6-#7 / R6-#8）────────────────────────
+
+
+def test_create_task_on_concluded_conversation_rejected(client: TestClient) -> None:
+    """异源 Codex R2-#3：会话 concluded 后 API 真只读——不再接受新成员任务
+    （「结束协作」= 真结束）。关闭陈旧创建页 / 直连 API 在归档后挂任务的旁路。"""
+    conv_id = _open_conversation(client)
+    assert client.post(f"/api/conversations/{conv_id}/conclude").status_code == 200
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "agent_id": "fta_agent",
+            "inputs": {"top_event": "X", "system_description": "S", "components": ["A"]},
+            "created_by": "王工",
+            "conversation_id": conv_id,
+        },
+    )
+    assert resp.status_code == 409, resp.text
+    assert "concluded" in resp.json()["detail"] or "只读" in resp.json()["detail"]
+    # 归档会话零副作用：不得多出成员任务
+    assert client.get(f"/api/conversations/{conv_id}/tasks").json() == []
+
+
+def test_create_task_rejects_contract_violating_fields(client: TestClient) -> None:
+    """异源 Codex R6-#7：请求校验必须与 task.schema 对齐——空/纯空白 name、空 created_by、
+    重复 input_file_ids 一律 422，绝不落库产出违契约（minLength/uniqueItems）的响应。"""
+    base = {
+        "agent_id": "fta_agent",
+        "inputs": {"top_event": "X", "system_description": "S", "components": ["A"]},
+    }
+    assert client.post("/api/tasks", json={**base, "name": "  ", "created_by": "王工"}).status_code == 422
+    assert client.post("/api/tasks", json={**base, "created_by": "  "}).status_code == 422
+    assert client.post("/api/tasks", json={**base, "created_by": "王工", "input_file_ids": ["d", "d"]}).status_code == 422
+    # 对照：合法输入 200（证明只咬违约输入，不误伤正常创建）
+    ok = client.post("/api/tasks", json={**base, "name": "正常名", "created_by": "王工"})
+    assert ok.status_code == 200, ok.text
+
+
+def test_agentless_event_omits_agent_id_not_null(app_env) -> None:
+    """异源 Codex R6-#8：无 Agent 上下文的系统事件以 NULL 存 agent_id；读出口必须
+    **省略** agent_id（而非还原成 null）——event.schema 的 agent_id 只许 string 或省略，
+    不许 null。把该读路径钉成契约回归闸。"""
+    from jsonschema import validate as _validate
+
+    client, app = app_env
+    resp = client.post(
+        "/api/tasks",
+        json={
+            "agent_id": "fta_agent",
+            "inputs": {"top_event": "X", "system_description": "S", "components": ["A"]},
+            "created_by": "王工",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    task_id = resp.json()["id"]
+    # 直接写一条**不带 agent_id** 的系统事件（模拟 Job Runner 兜底 task_failed）
+    conn = app.state.conn_factory()
+    try:
+        repos.append_event(
+            conn, task_id=task_id, event_type="task_failed", level="error",
+            message="兜底：无 agent 上下文的系统事件",
+        )
+    finally:
+        conn.close()
+    event_schema = json.loads((REPO_ROOT / "contracts" / "event.schema.json").read_text(encoding="utf-8"))
+    events = client.get(f"/api/tasks/{task_id}/events").json()
+    agentless = [e for e in events if e.get("message", "").startswith("兜底")]
+    assert agentless, "应有那条兜底事件"
+    for e in agentless:
+        assert "agent_id" not in e, "无 Agent 上下文事件必须省略 agent_id，不得为 null"
+    for e in events:
+        _validate(e, event_schema)  # 整列表都过契约（含那条兜底）
+
+
+def test_create_task_concluded_race_is_atomic(app_env, tmp_path) -> None:
+    """异源 Codex R1 复审 #3：会话归属创建的『复查 active + INSERT』必须**原子**。确定性
+    竞态（仿迁移竞态测）：victim 的 create 连接挂 SQL trace，走到 `INSERT INTO tasks` 时
+    放行 rival 并等待；rival（模拟并发 conclude）用短 timeout 直连抢 BEGIN IMMEDIATE 归档。
+
+    修好（BEGIN IMMEDIATE 锁内复查 + INSERT）：victim 此刻持写锁 → rival 被锁拒（1s 快速
+    失败）→ 会话仍 active、任务落 active 会话，不变量守住。未修（锁外 check-then-insert）：
+    rival 抢先归档 → victim 仍 INSERT → 任务被挂进**已归档**会话（不变量破）。两种实现均
+    确定性终止；仅未修变红 = tamper 必咬点。"""
+    import sqlite3
+    import threading
+
+    client, app = app_env
+    conv_id = _open_conversation(client)
+    db_path = tmp_path / "flai_os.db"
+
+    about_to_insert = threading.Event()
+    rival_done = threading.Event()
+    real_factory = app.state.conn_factory
+    fired = {"n": 0}
+
+    def traced_factory():
+        conn = real_factory()
+
+        def trace(stmt: str) -> None:
+            if "INSERT INTO tasks" in stmt and fired["n"] == 0:
+                fired["n"] += 1
+                about_to_insert.set()
+                rival_done.wait(timeout=10)
+
+        conn.set_trace_callback(trace)
+        return conn
+
+    app.state.conn_factory = traced_factory
+    resp_box: dict[str, Any] = {}
+
+    def victim() -> None:
+        try:
+            resp_box["resp"] = client.post(
+                "/api/tasks",
+                json={
+                    "agent_id": "fta_agent",
+                    "inputs": {"top_event": "X", "system_description": "S", "components": ["A"]},
+                    "created_by": "王工",
+                    "conversation_id": conv_id,
+                },
+            )
+        finally:
+            app.state.conn_factory = real_factory
+
+    t = threading.Thread(target=victim)
+    t.start()
+    assert about_to_insert.wait(timeout=10), "victim 未走到 INSERT——测试前提失效"
+
+    # rival：短 timeout 直连抢锁归档。修好时 victim 持写锁 → 这里被拒快速失败；
+    # 未修时 victim 无锁 → 这里成功归档。两种结果都放行，裁决交给不变量。
+    rival = sqlite3.connect(str(db_path), isolation_level=None, timeout=1.0)
+    try:
+        rival.execute("BEGIN IMMEDIATE")
+        rival.execute("UPDATE conversations SET status='concluded' WHERE id=?", (conv_id,))
+        rival.execute("COMMIT")
+    except sqlite3.OperationalError:
+        pass  # 修好：被 victim 写锁挡住——防御生效
+    finally:
+        rival.close()
+        rival_done.set()
+
+    t.join(timeout=15)
+    assert not t.is_alive(), "victim 未终止"
+
+    # 安全不变量：绝不出现「会话已 concluded 且该竞态任务仍落进该会话」。
+    conn = real_factory()
+    try:
+        conv = repos.get_conversation(conn, conv_id)
+        members = repos.list_tasks(conn, conversation_id=conv_id)
+    finally:
+        conn.close()
+    resp = resp_box.get("resp")
+    assert resp is not None, "victim 请求未完成"
+    if conv["status"] == "active":
+        # 修好：rival 被写锁拒 → 会话仍 active → victim 正常创建（200）且任务归本会话
+        # （正向诊断断言，异源 Codex R2 建议：证明不是靠"两边都没发生"空过）。
+        assert resp.status_code == 200, resp.text
+        assert [t["id"] for t in members] == [resp.json()["id"]]
+    else:
+        # 会话已 concluded（仅未修实现会走到）：绝不应再有任务落进已归档会话
+        assert members == [], "并发 conclude 抢先后，任务不得落进已归档会话（check-then-insert 非原子 = 破）"

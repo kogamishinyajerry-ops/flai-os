@@ -220,6 +220,12 @@ def set_task_outputs(conn: sqlite3.Connection, task_id: str, output_file_ids: li
 def _decode_event(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d.pop("id", None)  # sqlite 自增主键仅内部用；对外唯一键=event_id（P1-2/P1-3 契约对账）。
+    # 无 Agent 上下文的系统事件（如 Job Runner 兜底 task_failed）以 NULL 存 agent_id；
+    # event.schema.json 的 agent_id 只允许 string 或**省略**，绝不允许 null——写入口
+    # 校验的是"省略 agent_id 的对象"（append_event 仅 agent_id 非空才入 event_obj），
+    # 读出口却把 NULL 列还原成 null 会破契约。此处对齐：NULL → 省略（异源 Codex R6-#8）。
+    if d.get("agent_id") is None:
+        d.pop("agent_id", None)
     _decode_json(d, "payload_json", "payload", default={})
     return d
 

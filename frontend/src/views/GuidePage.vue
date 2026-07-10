@@ -179,7 +179,7 @@
 import { reactive, ref, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { createConversation, postMessage, concludeConversation } from "../api/conversations";
+import { createConversation, postMessage } from "../api/conversations";
 import { uploadFile as apiUploadFile } from "../api/files";
 import { categoryColor, categoryLabel } from "../utils/format";
 
@@ -343,6 +343,12 @@ function createOneTask(agent, plan) {
   // 人确认接缝：把某个被召集 Agent 的预填草案交给创建任务页，由人补全后亲手
   // 提交（导引绝不代签）。走 sessionStorage 而非 URL，避免工程数据进查询串。
   // M7：会话附件随草案带走，创建页以「已上传」状态入列，人可移除。
+  // 单 Agent 计划：确认后应归档会话（保留 M6「一次会话=一个任务」语义）。但归档必须
+  // **后于任务创建成功**——异源 Codex R2-#3：会话 concluded 后 API 真只读拒新任务，若
+  // 沿用旧的「先 fire-and-forget 归档、再跳创建页」，创建时会话已 concluded → 创建被 409
+  // 打回。故这里不再先归档，只在草案里带 conclude_after 标记，由创建页在提交成功后归档。
+  const isSingleAgent =
+    plan && Array.isArray(plan.agents) && plan.agents.length === 1 && !!conversationId.value;
   sessionStorage.setItem(
     "flai_prefill",
     JSON.stringify({
@@ -351,14 +357,10 @@ function createOneTask(agent, plan) {
       files: collectCarriedFiles(),
       // M8：带上会话 id——创建的任务归到本次导引协作会话下（协作工作台按会话聚合）。
       conversation_id: conversationId.value || null,
+      // 单 Agent：创建页提交成功后再归档本会话（多 Agent 由工作台「结束协作」显式归档）。
+      conclude_after: isSingleAgent,
     })
   );
-  // 单 Agent 计划：确认即归档会话（保留 M6 行为，fire-and-forget，归档失败不阻断）。
-  // 多 Agent 计划：可能还要为其它 Agent 逐个建任务，故本步不归档会话——会话
-  // 生命周期与「一键召集进协作工作台」由 M8 P3/P4 统一接管。
-  if (plan && Array.isArray(plan.agents) && plan.agents.length === 1 && conversationId.value) {
-    concludeConversation(conversationId.value).catch(() => {});
-  }
   router.push({ path: "/tasks/new", query: { agent_id: agent.agent_id, from: "guide" } });
 }
 </script>
