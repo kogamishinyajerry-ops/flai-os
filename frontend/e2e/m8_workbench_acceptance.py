@@ -127,9 +127,9 @@ with sync_playwright() as p:
     lamp_visible = row.locator(".wb-lamp").is_visible()
     check("②工作台 hero + 最近任务列表 + 到席灯可见", hero_ok and row.is_visible() and lamp_visible,
           f"hero={hero_ok} row={row.is_visible()} lamp={lamp_visible}")
-    # ⑤ 诚实占位：协作会话视图在建设中
-    placeholder_ok = "协作会话" in body and "建设中" in body
-    check("⑤多Agent协作会话视图诚实占位文案可见", placeholder_ok, body[:400])
+    # ⑤ 协作会话区常驻呈现，且不再有过期假占位（M8 会话视图已交，删除「建设中」谎言，P1-5）
+    placeholder_ok = "协作会话" in body and "建设中" not in body
+    check("⑤协作会话区常驻且无过期占位（删除『建设中』假占位，P1-5）", placeholder_ok, body[:400])
     page.screenshot(path=str(SHOTS / "2_workbench.png"), full_page=True)
 
     # 工作台页顶导航高亮 = 协作工作台

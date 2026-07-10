@@ -163,6 +163,7 @@ import { downloadUrl, fetchOutputFile } from "../api/files";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
 import { statusLabel, statusTagType, formatTime, LEVEL_COLOR } from "../utils/format";
 import MarkdownLite from "../components/MarkdownLite.vue";
+import { getSavedName, saveName } from "../utils/identity";
 
 const route = useRoute();
 const taskId = route.params.taskId;
@@ -172,7 +173,7 @@ const events = ref([]);
 const loading = ref(true);
 const loadError = ref("");
 
-const reviewForm = reactive({ reviewer: "", comment: "" });
+const reviewForm = reactive({ reviewer: getSavedName(), comment: "" });
 const reviewing = ref(false);
 
 // 产物内联查看（P0-2）：按 task.output_file_ids 拉取文件名+内容，增量同步、集合未变不重拉。
@@ -219,7 +220,7 @@ function formatSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-const feedbackForm = reactive({ rating: "good", category: "", message: "", createdBy: "" });
+const feedbackForm = reactive({ rating: "good", category: "", message: "", createdBy: getSavedName() });
 const submittingFeedback = ref(false);
 const feedbackList = ref([]);
 const feedbackError = ref("");
@@ -341,6 +342,7 @@ async function handleReview(action) {
   reviewing.value = true;
   try {
     await reviewTask(taskId, { action, reviewer: reviewForm.reviewer.trim(), comment: reviewForm.comment || null });
+    saveName(reviewForm.reviewer); // 记住名字，全站免重填
     ElMessage.success(`已${label}`);
     await loadTask();
   } catch (err) {
@@ -368,6 +370,7 @@ async function handleSubmitFeedback() {
       message: feedbackForm.message || null,
       createdBy: feedbackForm.createdBy.trim(),
     });
+    saveName(feedbackForm.createdBy); // 记住名字，全站免重填
     ElMessage.success("反馈已提交");
     feedbackForm.message = "";
     await loadFeedback();

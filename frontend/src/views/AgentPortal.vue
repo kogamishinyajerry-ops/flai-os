@@ -3,6 +3,10 @@
     <div class="page-header">
       <h2>Agent 门户</h2>
       <p class="page-sub">选择一个 Agent 创建任务</p>
+      <p class="portal-legend">
+        卡片左侧色条 = Agent 类型；<b>状态</b>标签（草案态/试运行/已发布）表示发布程度；<b>成熟度</b>
+        L0→L3 表示可信程度（L0 为原型，勿依赖其结论）。悬停任一徽章可看释义。
+      </p>
     </div>
 
     <el-alert
@@ -25,7 +29,12 @@
           <div class="card-inner">
             <div class="agent-card-header">
               <span class="agent-name">{{ agent.name }}</span>
-              <el-tag :type="statusTagType(agent.status)" size="small" effect="light">{{ statusLabel(agent.status) }}</el-tag>
+              <el-tag
+                :type="statusTagType(agent.status)"
+                size="small"
+                effect="light"
+                :title="agentStatusTip(agent.status)"
+              >{{ agentStatusLabel(agent.status) }}</el-tag>
             </div>
 
             <div class="agent-tags">
@@ -34,7 +43,13 @@
                 :style="{ color: categoryColor(agent.category), background: categoryColor(agent.category) + '18' }"
                 :title="categoryTip(agent.category)"
               >{{ categoryLabel(agent.category) }}</span>
-              <el-tag v-if="agent.maturity" type="info" effect="plain" size="small">{{ agent.maturity }}</el-tag>
+              <el-tag
+                v-if="agent.maturity"
+                type="info"
+                effect="plain"
+                size="small"
+                :title="maturityTip(agent.maturity)"
+              >{{ agent.maturity }}</el-tag>
             </div>
             <div class="agent-meta">
               <span>{{ agent.id }}</span>
@@ -80,7 +95,15 @@
 import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { listAgents } from "../api/agents";
-import { statusLabel, statusTagType, categoryLabel, categoryColor, categoryTip } from "../utils/format";
+import {
+  statusTagType,
+  agentStatusLabel,
+  agentStatusTip,
+  maturityTip,
+  categoryLabel,
+  categoryColor,
+  categoryTip,
+} from "../utils/format";
 
 const router = useRouter();
 const agents = ref([]);
@@ -126,6 +149,20 @@ onMounted(load);
   margin: 0;
   color: var(--ink-faint);
   font-size: 13px;
+}
+.portal-legend {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background: var(--paper-rail);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  line-height: 1.6;
+  max-width: 760px;
+}
+.portal-legend b {
+  color: var(--ink);
 }
 .page-alert {
   margin-bottom: 16px;

@@ -215,13 +215,14 @@ import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation } from "../api/conversations";
 import { uploadFile as apiUploadFile } from "../api/files";
 import { categoryColor, categoryLabel } from "../utils/format";
+import { getSavedName, saveName } from "../utils/identity";
 
 const router = useRouter();
 
 const GUIDE_AGENT_ID = "guide_agent";
 const MAX_FILES_PER_MESSAGE = 5; // 与后端 PostMessageRequest / 运行时同值
 
-const createdBy = ref("");
+const createdBy = ref(getSavedName());
 const started = ref(false);
 const conversationId = ref("");
 const messages = ref([]);
@@ -328,6 +329,7 @@ async function send() {
     const fileIds = await uploadPendingFiles();
     if (!conversationId.value) {
       const conv = await createConversation({ agentId: GUIDE_AGENT_ID, createdBy: createdBy.value.trim() });
+      saveName(createdBy.value); // 记住名字，全站免重填
       conversationId.value = conv.id;
       started.value = true;
       // URL 反映当前会话（可刷新/分享/回退），并让左栏历史即时收录这条新会话。

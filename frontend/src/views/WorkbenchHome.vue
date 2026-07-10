@@ -15,13 +15,36 @@
       </div>
     </div>
 
+    <!-- 待我签发（P1-5）：waiting_review 任务前置，工程师一进来先看「要我处理的」。 -->
+    <div v-if="reviewTasks.length" class="wb-section wb-review">
+      <div class="wb-section-head">
+        <h3>待你签发 <span class="wb-review-badge">{{ reviewTasks.length }}</span></h3>
+      </div>
+      <p class="wb-note">这些任务已产出草案，等你审阅后放行或拒绝——签发权在你。</p>
+      <div class="wb-list">
+        <div v-for="t in reviewTasks" :key="t.id" class="wb-row wb-row--review" @click="goDetail(t)">
+          <span class="wb-lamp" :style="{ background: lampColor(t.status) }" :title="statusLabel(t.status)"></span>
+          <span class="wb-name">{{ t.name || t.id.slice(0, 12) }}</span>
+          <span class="wb-agent">{{ t.agent_id }}</span>
+          <span class="wb-status" :style="{ color: lampColor(t.status) }">{{ statusLabel(t.status) }}</span>
+          <span class="wb-by">{{ t.created_by }}</span>
+          <span class="wb-time">{{ formatTime(t.created_at) }}</span>
+        </div>
+      </div>
+    </div>
+
     <!-- 协作会话（M8 P4）：导引召集成方案的会话，进入即见分工架构+进度。 -->
-    <div v-if="sessions.length" class="wb-section">
+    <div class="wb-section">
       <div class="wb-section-head">
         <h3>协作会话</h3>
       </div>
       <p class="wb-note">导引召集了合适 Agent 组成协作的会话——点开看分工架构、召集进度与产物。</p>
-      <div class="sess-grid">
+      <el-empty
+        v-if="!sessions.length"
+        description="还没有协作会话——从上方「从导引开始一个协作」发起"
+        :image-size="60"
+      />
+      <div v-else class="sess-grid">
         <div v-for="c in sessions" :key="c.id" class="sess-card" @click="goSession(c)">
           <div class="sess-card-bar"></div>
           <div class="sess-card-inner">
@@ -49,7 +72,7 @@
           <el-button size="small" text @click="load">刷新</el-button>
         </div>
       </div>
-      <p class="wb-note">协作会话（一个任务召集多个 Agent 协同）视图正在 M8 建设中；现在这里是单个任务的台账。</p>
+      <p class="wb-note">最近的单个任务台账；多 Agent 协作会话见上方「协作会话」。</p>
 
       <el-alert v-if="loadError" type="error" :title="loadError" show-icon :closable="false" class="wb-alert" />
 
@@ -102,6 +125,16 @@ function goSession(c) {
   router.push(`/workbench/${c.id}`);
 }
 
+// 待我签发（P1-5）：waiting_review 任务前置，驱动日常回访——工程师一进来就看到「要我处理的」。
+const reviewTasks = ref([]);
+async function loadReviewTasks() {
+  try {
+    reviewTasks.value = await listTasks({ status: "waiting_review", limit: 20 });
+  } catch {
+    reviewTasks.value = []; // 失败不阻断台账；诚实留空
+  }
+}
+
 // 到席灯配色守信任色锁：抽到 utils/format.js 的 taskLampColor 单处（协作会话共用），
 // 关键纪律——completed **不给绿**（跑 mock，给绿即假 REAL）。
 const lampColor = taskLampColor;
@@ -145,6 +178,7 @@ function goDetail(t) {
 onMounted(() => {
   load();
   loadSessions();
+  loadReviewTasks();
 });
 </script>
 
@@ -247,6 +281,25 @@ onMounted(() => {
 }
 .wb-alert {
   margin-bottom: 12px;
+}
+/* 待我签发：amber（待人签）左描边 + 徽章，凸显「要我处理的」，但不抢主色。 */
+.wb-review-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: var(--trust-pending);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.wb-row--review {
+  border-left: 3px solid var(--trust-pending);
 }
 .wb-row {
   display: grid;

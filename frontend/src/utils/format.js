@@ -56,6 +56,25 @@ export const categoryLabel = (c) => AGENT_CATEGORY[c]?.label ?? c ?? "未分类"
 export const categoryColor = (c) => AGENT_CATEGORY[c]?.color ?? "#8a8f99";
 export const categoryTip = (c) => AGENT_CATEGORY[c]?.tip ?? "";
 
+// Agent 发布状态（agent.schema status）→ 中文标签 + 释义（门户不再直显英文 draft）。
+export const AGENT_STATUS = {
+  draft: { label: "草案态", tip: "开发中的草案版本：功能可用于验证，尚未正式发布。" },
+  trial: { label: "试运行", tip: "试运行阶段：可用，但仍在打磨中。" },
+  released: { label: "已发布", tip: "正式发布版本。" },
+  disabled: { label: "已停用", tip: "已停用，不可创建任务。" },
+};
+export const agentStatusLabel = (s) => AGENT_STATUS[s]?.label ?? s;
+export const agentStatusTip = (s) => AGENT_STATUS[s]?.tip ?? "";
+
+// 成熟度（agent.schema maturity L0-L3）→ 释义（门户 L0 徽章加 tooltip + 图例）。
+export const MATURITY = {
+  L0: { label: "L0 · 原型", tip: "L0 原型：能力验证阶段，勿依赖其结论。" },
+  L1: { label: "L1 · 试用", tip: "L1 试用：小范围试用。" },
+  L2: { label: "L2 · 稳定", tip: "L2 稳定：可日常使用。" },
+  L3: { label: "L3 · 成熟", tip: "L3 成熟：充分验证。" },
+};
+export const maturityTip = (m) => MATURITY[m]?.tip ?? m;
+
 export const formatTime = (iso) => {
   if (!iso) return "—";
   const d = new Date(iso);

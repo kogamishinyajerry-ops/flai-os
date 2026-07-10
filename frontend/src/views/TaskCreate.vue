@@ -158,6 +158,7 @@ import { uploadFile as apiUploadFile } from "../api/files";
 import { statusLabel, statusTagType } from "../utils/format";
 import SchemaForm from "../components/SchemaForm.vue";
 import { parseSchema, blankInputs, collectInputs, validateInputs } from "../utils/schemaForm";
+import { getSavedName, saveName } from "../utils/identity";
 
 const route = useRoute();
 const router = useRouter();
@@ -191,7 +192,7 @@ const prefillConcludeAfter = ref(false);
 const form = reactive({
   agentId: typeof route.query.agent_id === "string" ? route.query.agent_id : "",
   name: "",
-  createdBy: "",
+  createdBy: getSavedName(),
   inputsText: "{}",
 });
 
@@ -412,6 +413,7 @@ async function handleSubmit() {
     if (prefillConcludeAfter.value && prefillConversationId.value) {
       concludeConversation(prefillConversationId.value).catch(() => {});
     }
+    saveName(form.createdBy); // 记住名字，全站免重填
     ElMessage.success("任务已创建");
     router.push(`/tasks/${task.id}`);
   } catch (err) {
