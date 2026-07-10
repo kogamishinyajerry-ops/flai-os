@@ -9,7 +9,10 @@ export const TASK_STATUS = {
   waiting_review: { label: "等待人工审核", type: "warning" },
   parsing: { label: "解析中", type: "primary" },
   analyzing: { label: "分析中", type: "primary" },
-  completed: { label: "已完成", type: "success" },
+  // completed 用中性 info（**不给 success 绿**）：与到席灯 taskLampColor 同一诚实口径——
+  // 绿仅真实 REAL 结果，当前跑 mock，给绿即假 REAL。此前 el-tag 路径漏了这条锁，
+  // 任务历史/详情里 completed 显绿而到席灯却中性，同一任务两套矛盾诚实信号；此处收口。
+  completed: { label: "已完成", type: "info" },
   failed: { label: "失败", type: "danger" },
   cancelled: { label: "已取消", type: "info" },
 };

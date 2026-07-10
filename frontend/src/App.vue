@@ -80,6 +80,18 @@ const activeMenu = computed(() => {
   --el-color-primary-light-8: #f0d9cc;
   --el-color-primary-light-9: #f6e7de;
   --el-color-primary-dark-2: #a54e2f;
+  /* Element Plus 框架中性层暖化：EP 默认冷灰边框/填充（#dcdfe6/#ebeef5/#f5f7fa）与
+   * 暖白基调撞色，统一映到暖 hairline/paper 阶（明度对齐 EP 原值，纯中性、绝不碰
+   * 语义槽）。一处覆盖，全站 el-table/el-descriptions/el-input/el-timeline/el-collapse
+   * 的冷灰线与填充随之转暖。*/
+  --el-border-color: #e4ddd2;
+  --el-border-color-light: #ece5db;
+  --el-border-color-lighter: #f0ece2;
+  --el-border-color-extra-light: #f5f1ea;
+  --el-fill-color: #f2eee6;
+  --el-fill-color-light: #faf7f2;
+  --el-fill-color-lighter: #fbf9f3;
+  --el-fill-color-blank: #ffffff;
 }
 body {
   margin: 0;
@@ -151,5 +163,18 @@ body {
   width: 100%;
   box-sizing: border-box;
   padding: 24px 20px 48px;
+}
+/* 中性 info 标签（draft / L0 / 已归档 / 未分类 等非语义标签）暖化：EP 默认冷灰
+ * (#f4f4f5/#909399) → 暖沙+暖墨。只动 info 变体；success/warning/danger/primary
+ * 是诚实语义槽（真实/待核/失败/工作态），一律保持原色不碰。*/
+.el-tag.el-tag--info {
+  --el-tag-bg-color: var(--paper-rail);
+  --el-tag-border-color: var(--hairline);
+  --el-tag-text-color: var(--ink-soft);
+}
+.el-tag.el-tag--info.is-plain {
+  --el-tag-bg-color: transparent;
+  --el-tag-border-color: var(--hairline);
+  --el-tag-text-color: var(--ink-soft);
 }
 </style>
