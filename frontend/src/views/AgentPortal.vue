@@ -113,10 +113,14 @@ onMounted(load);
 
 <style scoped>
 .page-header {
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 .page-header h2 {
-  margin: 0 0 4px;
+  font-family: var(--serif);
+  font-size: 27px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  margin: 0 0 6px;
 }
 .page-sub {
   margin: 0;

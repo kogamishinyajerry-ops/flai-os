@@ -33,7 +33,8 @@
               {{ conversation.status === "active" ? "进行中" : "已归档" }}
             </el-tag>
           </div>
-          <p v-if="goal" class="sess-goal"><strong>目标：</strong>{{ goal }}</p>
+          <div v-if="goal" class="sess-goal-kicker">协作目标</div>
+          <p v-if="goal" class="sess-goal">{{ goal }}</p>
           <p v-else class="sess-goal muted">本次会话尚未形成明确的协作目标。</p>
           <div class="sess-meta">
             <span>发起人：{{ conversation.created_by }}</span>
@@ -252,11 +253,28 @@ onMounted(load);
   margin: 0;
   font-size: 20px;
 }
+.sess-goal-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--clay);
+  margin-bottom: 4px;
+}
 .sess-goal {
-  margin: 0 0 8px;
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0 0 10px;
   color: var(--ink);
-  line-height: 1.6;
+  line-height: 1.38;
+  letter-spacing: 0.2px;
   max-width: 640px;
+}
+.sess-goal.muted {
+  font-family: var(--sans, inherit);
+  font-size: 15px;
+  font-weight: 400;
 }
 .sess-goal.muted,
 .muted {
@@ -324,22 +342,27 @@ onMounted(load);
   margin-bottom: 16px;
 }
 .member {
+  display: flex;
+  align-items: stretch;
   border: 1px solid var(--hairline);
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
   background: var(--card-bg);
   box-shadow: var(--shadow-card);
-  transition: box-shadow var(--ease-lift);
+  transition: box-shadow var(--ease-lift), transform var(--ease-lift);
 }
 .member:hover {
   box-shadow: var(--shadow-card-hover);
+  transform: translateY(-1px);
 }
 .member-bar {
-  height: 3px;
-  width: 100%;
+  flex: 0 0 4px;
+  width: 4px;
+  align-self: stretch;
 }
 .member-inner {
-  padding: 12px 14px;
+  flex: 1;
+  padding: 14px 16px;
 }
 .member-head {
   display: flex;

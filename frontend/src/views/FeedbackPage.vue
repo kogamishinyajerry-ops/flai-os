@@ -152,6 +152,13 @@ onMounted(async () => {
 .feedback-page {
   max-width: 640px;
 }
+.feedback-page > h2 {
+  font-family: var(--serif);
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  margin: 0 0 16px;
+}
 .task-select-form {
   margin-bottom: 8px;
 }

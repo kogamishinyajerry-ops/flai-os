@@ -330,6 +330,13 @@ onMounted(loadAgents);
 .task-create {
   max-width: 640px;
 }
+.task-create > h2 {
+  font-family: var(--serif);
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  margin: 0 0 16px;
+}
 .inline-alert {
   margin-bottom: 16px;
 }

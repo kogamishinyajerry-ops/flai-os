@@ -158,8 +158,11 @@ onMounted(() => {
   box-shadow: var(--shadow-hero);
 }
 .wb-hero h2 {
-  margin: 0 0 8px;
-  font-size: 22px;
+  font-family: var(--serif);
+  margin: 0 0 10px;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
 }
 .wb-sub {
   margin: 0 0 18px;

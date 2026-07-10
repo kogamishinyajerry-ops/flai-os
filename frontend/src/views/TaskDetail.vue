@@ -332,6 +332,10 @@ onUnmounted(clearPoll);
   margin-bottom: 16px;
 }
 .page-header h2 {
+  font-family: var(--serif);
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
   margin: 0;
 }
 .task-descriptions {
