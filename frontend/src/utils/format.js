@@ -39,6 +39,29 @@ export const taskLampColor = (status) => {
 // 事件 level → timeline 颜色
 export const LEVEL_COLOR = { info: "#409EFF", warning: "#E6A23C", error: "#F56C6C" };
 
+// 事件类型 → 人话标签（详情页时间轴不再直显开发术语；未知类型回退原串）。
+export const EVENT_TYPE_LABEL = {
+  task_created: "任务已创建",
+  validation_started: "开始校验输入",
+  validation_failed: "输入校验未通过",
+  running_started: "开始运行",
+  parsing_started: "开始解析",
+  analyzing_started: "开始分析",
+  agent_log: "Agent 运行日志",
+  model_call: "模型调用",
+  tool_started: "工具开始",
+  tool_finished: "工具完成",
+  knowledge_search: "知识检索",
+  summary_generated: "生成汇总",
+  review_requested: "请求人工审核",
+  review_approved: "人工已批准",
+  review_rejected: "人工已拒绝",
+  task_completed: "任务完成",
+  task_failed: "任务失败",
+  task_cancelled: "任务已取消",
+};
+export const eventTypeLabel = (t) => EVENT_TYPE_LABEL[t] ?? t;
+
 // Agent 类型（agent.schema category 枚举）→ 中文标签 + 主题色 + 一句话定位。
 // 分类色标是门户视觉重点：不同类型 Agent 一眼可辨（任务书 §12.6 泛化验证）。
 // 配色**刻意避开信任色锁的五个语义槽**（绿=REAL / teal=人签 / amber=待核 /

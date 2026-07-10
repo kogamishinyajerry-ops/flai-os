@@ -25,16 +25,29 @@
         <el-button text type="primary" class="refresh-btn" @click="loadTask()">刷新</el-button>
       </div>
 
-      <el-descriptions :column="2" border class="task-descriptions">
-        <el-descriptions-item label="ID">{{ task.id }}</el-descriptions-item>
-        <el-descriptions-item label="Agent ID">{{ task.agent_id }}</el-descriptions-item>
-        <el-descriptions-item label="Agent 版本">{{ task.agent_version }}</el-descriptions-item>
-        <el-descriptions-item label="任务名称">{{ task.name || "—" }}</el-descriptions-item>
-        <el-descriptions-item label="创建人">{{ task.created_by }}</el-descriptions-item>
-        <el-descriptions-item label="创建时间">{{ formatTime(task.created_at) }}</el-descriptions-item>
-        <el-descriptions-item label="开始时间">{{ formatTime(task.started_at) }}</el-descriptions-item>
-        <el-descriptions-item label="结束时间">{{ formatTime(task.finished_at) }}</el-descriptions-item>
-      </el-descriptions>
+      <!-- 首屏只留一行轻量上下文；完整元数据（ID/版本/时间）折叠为次要，让产物与决策优先。 -->
+      <div class="task-context">
+        <span>Agent <b>{{ task.agent_id }}</b></span>
+        <span class="ctx-dot">·</span>
+        <span>创建人 {{ task.created_by }}</span>
+        <span class="ctx-dot">·</span>
+        <span>{{ formatTime(task.created_at) }}</span>
+      </div>
+
+      <el-collapse class="task-meta-collapse">
+        <el-collapse-item title="任务信息（ID · 版本 · 时间）">
+          <el-descriptions :column="2" border class="task-descriptions">
+            <el-descriptions-item label="ID">{{ task.id }}</el-descriptions-item>
+            <el-descriptions-item label="Agent ID">{{ task.agent_id }}</el-descriptions-item>
+            <el-descriptions-item label="Agent 版本">{{ task.agent_version }}</el-descriptions-item>
+            <el-descriptions-item label="任务名称">{{ task.name || "—" }}</el-descriptions-item>
+            <el-descriptions-item label="创建人">{{ task.created_by }}</el-descriptions-item>
+            <el-descriptions-item label="创建时间">{{ formatTime(task.created_at) }}</el-descriptions-item>
+            <el-descriptions-item label="开始时间">{{ formatTime(task.started_at) }}</el-descriptions-item>
+            <el-descriptions-item label="结束时间">{{ formatTime(task.finished_at) }}</el-descriptions-item>
+          </el-descriptions>
+        </el-collapse-item>
+      </el-collapse>
 
       <el-alert
         v-if="task.error_message"
@@ -101,10 +114,13 @@
             :timestamp="formatTime(e.created_at)"
             :color="LEVEL_COLOR[e.level] || LEVEL_COLOR.info"
           >
-            <div class="event-type">{{ e.event_type }}</div>
+            <div class="event-type">
+              {{ eventTypeLabel(e.event_type) }}
+              <span class="event-type-raw">{{ e.event_type }}</span>
+            </div>
             <div class="event-message">{{ e.message }}</div>
             <el-collapse v-if="e.payload && Object.keys(e.payload).length">
-              <el-collapse-item title="payload">
+              <el-collapse-item title="详细数据">
                 <pre class="payload-json">{{ JSON.stringify(e.payload, null, 2) }}</pre>
               </el-collapse-item>
             </el-collapse>
@@ -161,7 +177,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { getTask, listTaskEvents, cancelTask, reviewTask } from "../api/tasks";
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
-import { statusLabel, statusTagType, formatTime, LEVEL_COLOR } from "../utils/format";
+import { statusLabel, statusTagType, formatTime, LEVEL_COLOR, eventTypeLabel } from "../utils/format";
 import MarkdownLite from "../components/MarkdownLite.vue";
 import { getSavedName, saveName } from "../utils/identity";
 
@@ -399,8 +415,36 @@ onUnmounted(clearPoll);
   letter-spacing: 0.2px;
   margin: 0;
 }
-.task-descriptions {
+.task-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  margin-bottom: 10px;
+}
+.task-context b {
+  color: var(--ink);
+  font-family: var(--mono, monospace);
+  font-weight: 600;
+}
+.ctx-dot {
+  color: var(--ink-faint);
+}
+.task-meta-collapse {
   margin-bottom: 16px;
+  border-top: none;
+}
+.task-descriptions {
+  margin-top: 4px;
+}
+.event-type-raw {
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-left: 8px;
+  font-weight: 400;
 }
 .section {
   margin-top: 24px;
