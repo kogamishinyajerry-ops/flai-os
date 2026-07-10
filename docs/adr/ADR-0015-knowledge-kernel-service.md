@@ -79,6 +79,14 @@ finding 逐条 grounded 复核成立，全部落地（tamper T6-T9 咬合入测�
   提示补上 jieba（uv 路径此前已同步，echo 的 pip 配方漏了——按提示装完
   照样 ModuleNotFoundError）。
 
+R2 复审（同日）追加 2 P1 + 2 P2，全采纳：①收容校验绑定到已打开的 fd——
+open 持住 inode → resolve 校验在根内 → resolve 目标与 fd inode 一致性校验
+→ 从同一 fd 读（R1 的收集期预检与真实读取之间存在第二次打开，检查/使用
+间隙可被替换）；②字节快照解码后统一换行（\r\n、\r → \n），等价旧
+text-mode universal newlines——\r\n 语料段落边界与 CR-only CSV 解析不回归
+（R1 快照化引入）；③symlink witness 在无 symlink 权限的平台（内网 Windows
+无开发者模式）诚实 skip 而非炸测试。
+
 ## 后果
 
 - **范围**：knowledge 挂载仅覆盖 job 模式（AgentRuntime._build_context）；

@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,6 +48,16 @@ class Chunk:
             raise ValueError("Chunk.fingerprint 出处指纹不得为空（docs/06 §4）")
 
 
+def _decode_text(raw: bytes, encoding: str) -> str:
+    """bytes 快照 → str + 统一换行（\\r\\n、\\r → \\n）。
+
+    等价快照化之前 text-mode（newline=None）打开的 universal newlines 语义
+    （codex Wave1-R2 P1/P2）：\\r\\n 语料的段落边界（\\n\\n 切分）与 CR-only
+    CSV 的解析行为都与旧实现一致——字节快照只改打开次数，不改解析语义。
+    """
+    return raw.decode(encoding).replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _merge(paras: list[str], doc_id: str, source: str, fp: str) -> list[Chunk]:
     """段落贪心合并：strip 后非空段依序拼接至 ≤MAX_CHARS，超限另起新 chunk。
 
@@ -72,25 +83,46 @@ def _merge(paras: list[str], doc_id: str, source: str, fp: str) -> list[Chunk]:
     return [Chunk(doc_id, f"{doc_id}#{i}", t, source, fp) for i, t in enumerate(merged)]
 
 
-def ingest_path(path: Path, *, source: str) -> list[Chunk]:
+def ingest_path(path: Path, *, source: str, containment_root: Path | None = None) -> list[Chunk]:
     """单文件 → list[Chunk]。source 由调用方显式传入（服务层给相对路径作出处）。
 
     空内容文件（全空白 txt、无行 xlsx）返回 []——空文件≠坏文件，空语料由
     service 层统一拒绝；格式不支持/可选依赖缺失则抛 KnowledgeIngestError。
+    containment_root 非 None 时做 symlink 收容校验（ingest_dir 传源根目录）。
     """
     path = Path(path)
     suffix = path.suffix.lower()
     doc_id = path.stem
-    # 指纹与解析绑定同一份字节快照（codex Wave1-R1 P2）：文件只读一次，指纹
-    # 从这份字节算、解析也从这份字节做——两次打开文件之间源文件被替换时，
-    # 出处指纹会与正文脱钩（引用指向的不再是产生该文字的那份文件）。
-    raw = path.read_bytes()
+    # 指纹与解析绑定同一份字节快照（codex Wave1-R1 P2）：文件只打开一次，指纹
+    # 从这份字节算、解析也从这份字节做——两次打开之间源文件被替换时，出处
+    # 指纹会与正文脱钩（引用指向的不再是产生该文字的那份文件）。
+    # 收容校验绑定到同一个 fd（codex Wave1-R2 P1）：先 open 持住 inode，再校验
+    # resolve 后仍在根内、且 resolve 目标的 inode == 持有 fd 的 inode，然后从
+    # 这个 fd 读——校验与读取之间不存在第二次打开，TOCTOU 替换要么发生在
+    # open 前（被 resolve 收容拒），要么改变 inode（被一致性校验拒）。
+    with path.open("rb") as f:
+        if containment_root is not None:
+            root = Path(containment_root).resolve()
+            resolved = path.resolve()
+            if resolved.is_relative_to(root) is False:
+                raise KnowledgeIngestError(
+                    f"源文件 {source} resolve 后逃逸出源目录 {root}"
+                    "（symlink 越界，scope 源目录内不得链接仓外路径）"
+                )
+            st_fd = os.fstat(f.fileno())
+            st_resolved = resolved.stat()
+            if (st_fd.st_dev, st_fd.st_ino) != (st_resolved.st_dev, st_resolved.st_ino):
+                raise KnowledgeIngestError(
+                    f"源文件 {source} 在收容校验与读取之间被替换"
+                    "（持有 fd 与 resolve 目标 inode 不一致，摄取中止）"
+                )
+        raw = f.read()
     fp = hashlib.sha256(raw).hexdigest()[:12]
     if suffix in {".txt", ".md"}:
-        paras = raw.decode("utf-8").split("\n\n")
+        paras = _decode_text(raw, "utf-8").split("\n\n")
     elif suffix == ".csv":
         # utf-8-sig：带 BOM 时剥掉 ﻿，无 BOM 时与 utf-8 等价（FDE retro 教训）。
-        text = raw.decode("utf-8-sig")
+        text = _decode_text(raw, "utf-8-sig")
         paras = ["; ".join(f"{k}={v}" for k, v in row.items()) for row in csv.DictReader(io.StringIO(text))]
     elif suffix == ".xlsx":
         from openpyxl import load_workbook
@@ -126,7 +158,6 @@ def ingest_dir(dir_path: Path) -> list[Chunk]:
     - source = 相对 dir_path 的 POSIX 路径（Windows 反斜杠不进出处字段）。
     """
     dir_path = Path(dir_path)
-    dir_root = dir_path.resolve()
     rel_paths: list[Path] = []
     for p in dir_path.rglob("*"):
         if not p.is_file():
@@ -134,18 +165,16 @@ def ingest_dir(dir_path: Path) -> list[Chunk]:
         rel = p.relative_to(dir_path)
         if any(part.startswith(".") for part in rel.parts):
             continue
-        # 逐文件 resolve 收容（codex Wave1-R1 P1）：is_file() 会跟随符号链接，
-        # scope 内一个 `leak.md -> 仓外文件` 的 symlink 即可把源根目录校验
-        # （resolve_source_dir 只验根）整个绕过。resolve 后不在源根之内 →
-        # 硬拒整次摄取（fail-closed，不静默跳过——静默跳过会把越界文件
-        # 伪装成"语料里没有"）。
-        if p.resolve().is_relative_to(dir_root) is False:
-            raise KnowledgeIngestError(
-                f"源文件 {rel.as_posix()} resolve 后逃逸出源目录 {dir_root}"
-                "（symlink 越界，scope 源目录内不得链接仓外路径）"
-            )
         rel_paths.append(rel)
+    # symlink 收容（codex Wave1-R1 P1）单点收在 ingest_path 的 fd 绑定校验里
+    # （codex Wave1-R2 P1）：收集期不预检——预检与真正读取之间存在第二次
+    # 打开，检查/使用间隙可被替换。is_file() 会跟随符号链接，scope 内一个
+    # `leak.md -> 仓外文件` 即可绕过 resolve_source_dir 的根校验，越界 →
+    # 硬拒整次摄取（fail-closed，不静默跳过——静默跳过会把越界文件伪装成
+    # "语料里没有"）。
     chunks: list[Chunk] = []
     for rel in sorted(rel_paths, key=lambda r: r.as_posix()):
-        chunks.extend(ingest_path(dir_path / rel, source=rel.as_posix()))
+        chunks.extend(
+            ingest_path(dir_path / rel, source=rel.as_posix(), containment_root=dir_path)
+        )
     return chunks

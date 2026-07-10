@@ -12,10 +12,14 @@
 8. fingerprint 内容寻址：同内容相同、改一字节即变；
 9. 边界 witness：全空白 txt → []（空文件≠坏文件，空语料由 service 层拒绝）。
 
-codex Wave1-R1 增补（一钥一门）：
-11. symlink 越界 → 硬拒整次摄取；域内 symlink 不误伤；
-12. 指纹与正文绑定同一字节快照（出处双钥不脱钩）；
-13. 超长单段先硬切再合并，chunk 上界 800 不被击穿且正文无损。
+codex Wave1-R1/R2 增补（一钥一门）：
+11. symlink 越界 → 硬拒整次摄取；域内 symlink 不误伤（无 symlink 权限平台 skip）；
+11b. 收容校验绑定已打开的 fd：resolve 目标与持有 fd inode 不一致（TOCTOU
+     替换特征）→ 硬拒；
+12. 摄取全程只打开文件一次（指纹与正文必然出自同一字节快照，出处双钥不脱钩）；
+13. 超长单段先硬切再合并，chunk 上界 800 不被击穿且正文无损；
+14. \\r\\n 文本段落边界照常切分（统一换行等价旧 text-mode 语义）；
+15. CR-only CSV 照常解析（内存流前统一换行）。
 """
 
 from __future__ import annotations
@@ -142,7 +146,10 @@ def test_symlink_escape_rejected_inside_allowed(tmp_path):
     scope = tmp_path / "scope"
     scope.mkdir()
     (scope / "legit.md").write_text("合法语料段落", encoding="utf-8")
-    (scope / "leak.md").symlink_to(outside / "secret.md")
+    try:
+        (scope / "leak.md").symlink_to(outside / "secret.md")
+    except OSError:  # codex Wave1-R2 P2：内网 Windows 无 symlink 权限时诚实 skip
+        pytest.skip("当前平台/权限不支持创建 symlink（Windows 需开发者模式或对应特权）")
 
     with pytest.raises(KnowledgeIngestError, match="逃逸出源目录"):
         ingest_dir(scope)
@@ -155,23 +162,78 @@ def test_symlink_escape_rejected_inside_allowed(tmp_path):
     assert all("仓外敏感内容" not in c.text for c in chunks)
 
 
-def test_fingerprint_bound_to_parsed_snapshot(tmp_path, monkeypatch):
-    """witness 12（codex Wave1-R1 P2）：指纹与正文出自同一字节快照——把
-    read_bytes 钉成固定快照后，正文与指纹都必须来自该快照。旧实现指纹读一次、
-    解析再开一次文件，间隙内源文件被替换会产生「正文 A + 指纹 B」的出处脱钩
-    （引用指向的不再是产生该正文的那份文件）。"""
+def test_symlink_check_bound_to_open_fd(tmp_path, monkeypatch):
+    """witness 11b（codex Wave1-R2 P1）：收容校验绑定到已打开的 fd——校验时
+    path resolve 到的 inode 与实际持有的 fd inode 不一致（检查/使用间隙被
+    替换的特征）→ 硬拒摄取。用 resolve 重定向到域内替身模拟 TOCTOU 替换
+    （替身在根内，故此钥咬的是 inode 一致性门而非越界门）。"""
+    from pathlib import Path
+
+    scope = tmp_path / "scope"
+    scope.mkdir()
+    victim = scope / "victim.md"
+    victim.write_text("原始内容", encoding="utf-8")
+    decoy = scope / "decoy.md"
+    decoy.write_text("替换后的内容", encoding="utf-8")
+
+    real_resolve = Path.resolve
+
+    def swapped_resolve(self, *args, **kwargs):
+        if self == victim:
+            return real_resolve(decoy, *args, **kwargs)
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", swapped_resolve)
+    with pytest.raises(KnowledgeIngestError, match="被替换"):
+        ingest_path(victim, source="victim.md", containment_root=scope)
+
+
+def test_ingest_opens_file_exactly_once(tmp_path, monkeypatch):
+    """witness 12（codex Wave1-R1 P2）：整个摄取只打开文件一次——指纹与正文
+    必然出自同一份字节快照。两次打开=两个时点，间隙内源文件被替换会产生
+    「正文 A + 指纹 B」的出处脱钩；单次打开是结构性保证（fd 绑定校验见 11b）。"""
     import hashlib
     from pathlib import Path
 
     f = tmp_path / "live.md"
-    f.write_text("磁盘上的另一份内容", encoding="utf-8")
-    snapshot = "快照那一刻的正文".encode("utf-8")
-    monkeypatch.setattr(Path, "read_bytes", lambda self: snapshot)
+    body = "同一份快照内容"
+    f.write_text(body, encoding="utf-8")
 
+    opens: list[tuple] = []
+    real_open = Path.open
+
+    def counting_open(self, *args, **kwargs):
+        if self == f:
+            opens.append(args)
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counting_open)
     chunks = ingest_path(f, source="live.md")
+    assert len(opens) == 1, "指纹+解析必须共用同一次打开的字节快照"
+    assert chunks[0].text == body
+    assert chunks[0].fingerprint == hashlib.sha256(body.encode("utf-8")).hexdigest()[:12]
+
+
+def test_crlf_paragraph_boundaries_preserved(tmp_path):
+    """witness 14（codex Wave1-R2 P1）：Windows \\r\\n 文本的段落边界照常切分
+    ——字节快照解码后统一换行，等价旧 text-mode universal newlines 语义
+    （回归方向：\\r\\n\\r\\n 永不匹配 split("\\n\\n")，段落边界消失）。"""
+    f = tmp_path / "win.md"
+    f.write_bytes("第一段内容\r\n\r\n第二段内容".encode("utf-8"))
+    chunks = ingest_path(f, source="win.md")
+    assert len(chunks) == 1  # 两小段贪心合并为一 chunk
+    assert chunks[0].text == "第一段内容\n第二段内容", "段落边界必须被识别且不残留 \\r"
+
+
+def test_cr_only_csv_accepted(tmp_path):
+    """witness 15（codex Wave1-R2 P2）：CR-only 换行的 CSV（旧 Mac 风格，
+    快照化前经 newline=None 翻译可正常解析）照常解析不抛 _csv.Error。"""
+    f = tmp_path / "cr.csv"
+    f.write_bytes("部件,故障\rAPU,排液孔堵塞\r".encode("utf-8"))
+    chunks = ingest_path(f, source="cr.csv")
     assert len(chunks) == 1
-    assert chunks[0].text == "快照那一刻的正文", "正文必须来自指纹所指的那份字节"
-    assert chunks[0].fingerprint == hashlib.sha256(snapshot).hexdigest()[:12]
+    assert "部件=APU" in chunks[0].text
+    assert "故障=排液孔堵塞" in chunks[0].text
 
 
 def test_oversized_single_paragraph_split(tmp_path):
