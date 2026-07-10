@@ -217,8 +217,13 @@ def _answer_one(
     # finish_reason 白名单判定（codex R1-P2）：不在 _NORMAL_FINISH_REASONS 且
     # 非 None（桩/部分网关不回传，缺省按正常）一律视为未正常收尾——length 截断、
     # content_filter 过滤等都不能让审核员当完整草案放行。原始值忠实入 answers.json。
+    # 非字符串先挡（codex R2-P2）：畸形上游可回传 JSON 数组/对象，unhashable 值
+    # 直接进 frozenset 成员测试会 TypeError 炸任务且不亮 banner——非 str 即异常收尾。
     finish_reason = chat_result.get("finish_reason")
-    abnormal_finish = finish_reason is not None and finish_reason not in _NORMAL_FINISH_REASONS
+    abnormal_finish = finish_reason is not None and (
+        isinstance(finish_reason, str) is False
+        or finish_reason not in _NORMAL_FINISH_REASONS
+    )
 
     return {
         "question": question,

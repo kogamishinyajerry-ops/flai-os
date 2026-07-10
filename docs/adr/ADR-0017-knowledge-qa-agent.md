@@ -67,6 +67,12 @@ grounded 复核成立，全部落地：
   content_filter / 供应商私有值）都触发"草案不完整"banner 并透出原始
   finish_reason——只盯 length 会让 content_filter 部分输出静默过审。
 
+R2 复审（同日）追加 2 P2，全采纳：①finish_reason 非字符串先挡再进白名单
+——畸形上游可回传 JSON 数组/对象，unhashable 值进 frozenset 成员测试会
+TypeError 炸任务且不亮承诺的 banner，非 str 一律判异常收尾；②changelog.md
+补 0.1.1 强制条目（02 标准 §6：版本变更必记日期/新旧版本/摘要/改动类型，
+0.1.1 版本号先行落仓时漏记）。
+
 ## 后果
 
 - knowledge_qa 类别落位，四类别全占。

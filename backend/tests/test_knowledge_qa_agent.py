@@ -576,6 +576,25 @@ def test_content_filter_finish_flagged_incomplete(app_env) -> None:
     assert answers["questions"][0]["finish_reason"] == "content_filter"
 
 
+def test_non_scalar_finish_reason_flagged_not_crash(app_env) -> None:
+    """R2-P2：畸形上游回传 JSON 数组 finish_reason（JSON 合法但非标量）→ 不炸
+    TypeError（unhashable 进 frozenset 成员测试），按异常收尾亮 banner，任务
+    照常走 waiting_review——非字符串即异常，白名单只对 str 生效。"""
+    client, app = app_env
+    app.state.runtime.model_gateway = _AbnormalFinishStubGateway(["content_filter"])
+
+    task = _create_and_run(client, app, "knowledge_qa_agent", _QA_CASE["inputs"])
+    assert task["status"] == "waiting_review", "畸形 finish_reason 绝不该炸掉任务"
+
+    outputs = _outputs_by_name(client, app, task)
+    draft = outputs["knowledge_qa_draft.md"].decode("utf-8")
+    assert "本节草案不完整" in draft
+
+    answers = json.loads(outputs["answers.json"].decode("utf-8"))
+    assert answers["questions"][0]["truncated"] is True
+    assert answers["questions"][0]["finish_reason"] == ["content_filter"]
+
+
 def test_per_hit_prompt_budget_truncates() -> None:
     """R1-P2（prompt 预算）：单命中正文超 4000 字符 → 进 prompt 的该块被截到
     预算并带显式截断标记，超预算尾部绝不进 prompt——agent 侧独立防线，不把
