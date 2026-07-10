@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "knowledge_qa_agent 输出契约",
+  "description": "workflow.run() 成功返回的 outputs[0] 摘要对象；knowledge_qa_draft.md 与 answers.json 落任务 output_dir 由 Runtime 注册。注意：任务不会因 workflow 返回 success 而 completed——requires_human_review=true，Runtime 强制转 waiting_review 等人工放行。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "questions_total": { "type": "integer", "description": "本次任务的问题总数。" },
+    "answered": { "type": "integer", "description": "生成了 AI 归纳草案的问题数（≥1，否则任务整体诚实 failed，不产出本对象）。" },
+    "uncovered": { "type": "integer", "description": "语料零命中、未调用模型的问题数。" },
+    "failed": { "type": "integer", "description": "模型返回空内容、无草案的问题数。" },
+    "draft_chars": { "type": "integer", "description": "knowledge_qa_draft.md 全文字符数。" }
+  }
+}

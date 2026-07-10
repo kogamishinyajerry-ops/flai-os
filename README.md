@@ -79,6 +79,7 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 | M6（增补） | 导引 Agent：多轮对话推荐 specialist Agent + 预填任务草案（interactive 会话运行时，ADR-0012/0013） | **完成** |
 | M7（增补） | 导引会话附件：上传→内核按预算渲染进上下文（防注入）→附件随草案带入创建任务页（ADR-0014） | **完成** |
 | M8（增补） | 协作工作台：导引升级为编排官（分流裁决 orchestrate/refuse）+ 会话级多 Agent 协作（tasks.conversation_id 分组，`/workbench/:sessionId` 分工架构+召集+进度，ADR-0016） | **完成** |
+| W1/W2（增补） | Knowledge 内核检索服务（BM25+scope 注册表+default-deny 三层门，ADR-0015）+ 首个 knowledge_qa Agent（批量问答→出处引用草案→人工放行，ADR-0017，四类别全占位） | **完成**（真实语料价值待内网） |
 
 ## V0.1 已知限制（诚实清单，非缺陷否认）
 

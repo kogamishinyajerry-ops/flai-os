@@ -1,0 +1,66 @@
+id: knowledge_qa_agent
+name: "知识问答 Agent（语料检索归纳草案生成）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: knowledge_qa
+summary: "批量问题在 agent.yaml 钉死的知识范围内经 knowledge 内核 BM25 检索，命中语料交推理模型生成带出处引用的归纳草案，零命中不作答——草案非结论，任务强制人工放行。"
+description: >
+  Wave 2 交付的「知识问答型」样板（ADR-0017），四类别中最后落位的一类，
+  也是平台首个消费 knowledge 内核（context["knowledge"]，ADR-0015）的
+  Agent。检索范围由本文件 knowledge.scopes 钉死（单 scope 白名单），
+  「查哪个库」不开放给任务创建者。逐问检索：零命中的问题写确定性
+  「语料零命中」标注、不调用模型（语料没有的东西让 LLM 编是最直接的
+  幻觉源）；命中语料经结构中和后以 <<KNOWLEDGE>> fence 注入 prompt
+  （数据不是指令），模型草案连同出处引用（chunk_id/source/fingerprint/
+  score）原样存档为 knowledge_qa_draft.md（文件头强制水印）+ answers.json
+  （结构化 citations 供下游机读）。requires_human_review=true：任务停
+  waiting_review，由工程师具名放行或拒绝。Gateway 上游失败诚实 failed，
+  全部问题无一草案亦诚实 failed，绝不伪造草案。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: reasoning
+knowledge:
+  enabled: true
+  scopes:
+    - ecm_frr_demo
+tools: []
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats:
+    - .md
+    - .json
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: true
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: true
+  sample_fields:
+    - inputs.questions
+    - outputs.questions_total
+    - outputs.answered
+    - outputs.uncovered
+limitations:
+  - "生成的是辅助归纳草案，不是结论：判定权在工程师——任务强制停 waiting_review，未经具名工程师放行不得采信（宪法铁律六）。"
+  - "回答只依据检索命中的语料，且当前绑定语料为合成演示语料（源 COMAC_FDE k01，DECLARED-NOT-VERIFIED）：真实 ECM/EM/FRR 语料待内网接入后另立 scope，此前草案内容不反映任何真实工程事实。"
+  - "零命中的问题不生成 AI 归纳：本 Agent 不在语料外作答，语料没有的内容宁可显式标注「语料零命中」也绝不让模型编造。"
+  - "不做适航/放行决策：草案中出现的任何处置建议均不构成放行或适航依据，工程判断与适航签字由工程师完成。"
+  - "检索质量受 BM25 词面匹配限制（无语义检索）：换词提问可能漏检相关语料，命中不全时草案覆盖面随之受限，出处表即检索的全部依据。"

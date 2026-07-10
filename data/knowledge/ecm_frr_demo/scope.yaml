@@ -1,0 +1,8 @@
+scope_id: ecm_frr_demo
+name: "ECM/FRR 合成演示语料（源 COMAC_FDE k01）"
+kind: document
+source: file_dir
+path_or_uri: docs
+confidentiality: public_internal
+owner: "二所（合成演示语料）"
+notes: "全部文件显式标注合成非真实；真实 ECM/EM/FRR 语料待内网侦察后另立 scope（DECLARED-NOT-VERIFIED 纪律）"
