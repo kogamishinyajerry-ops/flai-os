@@ -13,7 +13,7 @@
 | 异源反方审（fresh-context） | 敌意审查 agent | **APPROVE，P1/P2/P3 零 findings** | 观察 c（负 top_k）已顺手修复+witness |
 | 收口复测（Mode C） | loop-auditor | BLOCK→d5 未提交/审查缺档 | commit 885d92f + 本文件处置 |
 | 复验（Mode C 终裁） | loop-auditor | **APPROVE 19/20 🟢闭环成熟** | d4 1→2（异源审有文件级证据）、d5 0→2（SHA 锚定+远程同步）；审计员独立 worktree 重跑验证计数链（58f8755=318 passed、4709d30 纯净=324+66=390）逐位自洽 |
-| Codex 异源治理审 | — | **悬置**：codex 二进制 2026-07-09 起损坏（M7 已记环境债） | 恢复后补跑 `codex review --commit <本次 SHA>` |
+| Codex 异源治理审（补跑） | codex（gpt-5.6-sol ultra） | R0 **CHANGES_REQUIRED**（1 P1+3 P2+1 P3）→ R2 **CHANGES_REQUIRED**（2 P1+2 P2）→ R3 **剩 1 P1** | R1 修复 3655f34、R2 修复 14baf26；R3 P1 于 cap 末轮交用户裁决（见「Codex 补跑审」节） |
 
 ## Mode A findings 处置
 
@@ -69,9 +69,35 @@ lane 侧另有 4 组自证 tamper（utf-8-sig 剥离/epsilon 地板/逃逸门/�
   （纯 HEAD 绿 / HEAD+M8 未提交 guide 文件恰 6 红 / HEAD+仅本次改动全绿）证明
   属 M8 编排官化在途改动（后随 4709d30 提交自愈），与本次改动无关。
 
+## Codex 补跑审（2026-07-09，三轮全程）
+
+R0（对 885d92f）1 P1 + 3 P2 + 1 P3，grounded 复核全成立 → **3655f34**：
+① P1 symlink 越界（is_file 跟随链接绕过根校验）→ 逐文件 resolve 收容硬拒；
+② P2 scope.yaml OSError/UnicodeError 炸穿 assemble → 单包软错误收容；
+③ P2 指纹/解析两次打开文件出处脱钩 → 绑定同一字节快照；
+④ P2 超长单段击穿 800 上界 → 硬切再合并；⑤ P3 pip fallback 配方补 jieba。
+
+R2（对 3655f34）2 P1 + 2 P2，全成立 → **14baf26**：
+① P1 R1 预检与读取间第二次打开可被替换 → 收容校验绑定已打开 fd（inode 一致性）；
+② P1 字节快照 decode 丢 universal newlines（\r\n 段落边界消失）→ 统一换行；
+③ P2 CR-only CSV 回归 → 同统一换行；④ P2 symlink witness 无权限平台 skip。
+
+R3（对 14baf26）**剩 1 P1**：fd/inode 一致性校验仍可被 open→resolve→stat 间
+双换 symlink 竞态绕过（基于可变路径名的事后校验存在本质 TOCTOU；race-free
+需 no-follow 逐组件遍历或整体拒绝 symlink，由 open 本身收容）。**cap（R0+2
+fix）用尽，按宪法交用户裁决**，处置前不 push。
+
+tamper 增补（脚本 tamper_r1/r2.py，逐条注伤→红→还原绿）：T6 撤 symlink 收容、
+T7 解析改第二次读、T8 撤超长硬切、T9 撤读取失败收容、T11 撤 fd-inode 校验、
+T12/T13 撤统一换行（文本/CSV）、T14 重引第二次打开——8/8 咬合。
+
 ## 残差（显式标注）
 
-- Codex 异源治理审悬置（二进制损坏），恢复后补跑；反方 fresh-context 审为补偿。
+- **[待用户裁决] symlink TOCTOU P1**（上节 R3）：现防线拦截静态 symlink 越界
+  与单次替换，但可被精确计时的双换竞态绕过；利用前提=攻击者对 scope 源目录
+  有并发写权限。候选处置：(a) POSIX dirfd+O_NOFOLLOW 逐组件遍历（Windows 无
+  dir_fd 需降级）；(b) 拒绝一切 symlink（O_NOFOLLOW + lstat，弃域内链接支持）；
+  (c) 记录为受控残差（内网语料目录由平台运维独占写）。
 - 真实语料/业务价值未验证：本地仅合成语料，DECLARED-NOT-VERIFIED 纪律不变，
   卡 EAR/M4 内网闸门。
 - 调用期主体鉴权不存在（V0.1 全局无鉴权，README #14/#17②）；restricted 真语料
