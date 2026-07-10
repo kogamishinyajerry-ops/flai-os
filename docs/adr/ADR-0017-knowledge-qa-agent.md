@@ -42,6 +42,31 @@ waiting_review 人工放行。语义收编自 COMAC_FDE workflows/knowledge/pipe
    confidentiality=public_internal。使 Agent 开箱可注册——否则 Wave 1 的
    reconcile 门会在启动时把引用不存在 scope 的本 Agent 整包拒掉。
 
+## 修订：codex 治理审 R1（2026-07-09，1 P1 + 4 P2 全采纳）
+
+Wave 2 首轮 codex 审查（gpt-5.6-sol ultra）CHANGES_REQUIRED，五条 finding 逐条
+grounded 复核成立，全部落地：
+
+- **R1-P1 问题文本必过中和**（决策 3 增强）：question 与语料正文同待遇过
+  `_neutralize_sentinels`——否则任务创建者在 questions[] 里伪造
+  `<<KNOWLEDGE>>` 块即可让模型把自带文本当"平台检索的语料"采信，绕过
+  scope-only 保证。fence 语义必须构造上不可伪造：**凡非本 workflow 拼装的
+  字节一律中和**，不区分来源信任级。
+- **R1-P2 合成数据检索命中级标记**（决策 7 增强）：两份演示 CSV 每行增首列
+  「数据性质=合成演示数据（非真实记录）」——CSV 逐行转 `k=v` 入 chunk，标记
+  随每个检索命中进 prompt 与出处回查；草案头部另增 scope 声明行。文件级
+  声明 + 通用 AI 水印不够：BM25 命中的是行，不是文件头。
+- **R1-P2 复合引用键**（决策 5 增强）：行内引用改 `[source · chunk]`——
+  内核显式只把 source+fingerprint 当唯一键，同名文件 chunk 编号相同，
+  单独 chunk 无法唯一定位出处。
+- **R1-P2 prompt 预算**：单命中正文 >4000 字符截断并显式标记（聚合上界
+  ≈ top_k 10 × 4KB + 问题 2KB ≈ 42KB，任何主流模型上下文内）；questions
+  单条上限 2000 字符进 input_schema——任务 API 的 256KB inputs 此前可整体
+  灌入单问撑爆上下文。
+- **R1-P2 finish_reason 白名单**：`stop` 之外的一切收尾原因（length /
+  content_filter / 供应商私有值）都触发"草案不完整"banner 并透出原始
+  finish_reason——只盯 length 会让 content_filter 部分输出静默过审。
+
 ## 后果
 
 - knowledge_qa 类别落位，四类别全占。

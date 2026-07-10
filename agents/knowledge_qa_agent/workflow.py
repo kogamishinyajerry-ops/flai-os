@@ -39,12 +39,25 @@ _WATERMARK = (
     "工程决策/放行/适航依据**（宪法铁律六：判定权在人）。"
 )
 
-# 上游因达到长度上限截断时，该问归纳很可能缺失要点——不能让审核员当完整草案批准
-# （fta_agent _TRUNCATION_BANNER 同款措辞适配到逐问粒度）。
-_TRUNCATION_BANNER = (
-    "> 🚨 **本节草案不完整：模型输出因达到长度上限被截断（finish_reason=length），"
-    "归纳可能缺失要点或结论未收尾。审核前务必核对完整性，切勿按「完整草案」放行。**"
+# 模型未正常收尾（finish_reason 不在正常完成白名单）时，该问归纳可能缺失要点/被
+# 上游过滤——不能让审核员当完整草案批准（codex R1-P2：只盯 length 会漏掉
+# content_filter 等异常收尾；白名单化，异常一律亮横幅）。
+_INCOMPLETE_BANNER_TMPL = (
+    "> 🚨 **本节草案不完整：模型输出未正常收尾（finish_reason={reason}），"
+    "归纳可能缺失要点、被截断或被上游过滤。审核前务必核对完整性，"
+    "切勿按「完整草案」放行。**"
 )
+
+# 正常完成的 finish_reason 白名单：不在此集合（且非 None——桩/部分网关不回传该
+# 字段，缺省视为正常）一律按异常收尾处理。判定用显式 in/is，不用 truthiness。
+_NORMAL_FINISH_REASONS = frozenset({"stop"})
+
+# 单命中块进 prompt 的正文预算（字符，codex R1-P2）。内核 chunking 自身有
+# MAX_CHARS=800 上界（超长单段已硬切），本预算是 agent 侧的**独立防线**：
+# 不把 prompt 尺寸安全押在内核实现细节上（Agent 包自足纪律，防线各自咬合）。
+# 聚合上界确定：≤ top_k(10)×4000 + 问题(schema ≤2000) + 结构开销 ≈ 42K 字符。
+_PER_HIT_CHARS = 4_000
+_HIT_TRUNCATED_MARK = "\n[……本块正文超出单块预算 4000 字符，已截断；全文以出处表回查原文]"
 
 # 防注入规则行（ADR-0017 决策 3 钉死原文）：随用户消息注入，声明语料是数据不是指令。
 _KNOWLEDGE_RULE_LINE = (
@@ -129,7 +142,7 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
             "无一草案可供人工审阅，任务诚实失败"
         )
 
-    draft_doc = _render_draft(results)
+    draft_doc = _render_draft(results, scope_id)
     with open(os.path.join(output_dir, _DRAFT_MD), "w", encoding="utf-8") as f:
         f.write(draft_doc)
     with open(os.path.join(output_dir, _ANSWERS_JSON), "w", encoding="utf-8") as f:
@@ -167,6 +180,7 @@ def _answer_one(
             "draft": _UNCOVERED_TEXT,
             "citations": [],
             "truncated": False,
+            "finish_reason": None,
         }
 
     messages = [
@@ -197,16 +211,22 @@ def _answer_one(
             "draft": _EMPTY_CONTENT_TEXT,
             "citations": citations,
             "truncated": False,
+            "finish_reason": None,
         }
+
+    # finish_reason 白名单判定（codex R1-P2）：不在 _NORMAL_FINISH_REASONS 且
+    # 非 None（桩/部分网关不回传，缺省按正常）一律视为未正常收尾——length 截断、
+    # content_filter 过滤等都不能让审核员当完整草案放行。原始值忠实入 answers.json。
+    finish_reason = chat_result.get("finish_reason")
+    abnormal_finish = finish_reason is not None and finish_reason not in _NORMAL_FINISH_REASONS
 
     return {
         "question": question,
         "status": "answered",
         "draft": draft,
         "citations": citations,
-        # finish_reason=length 表示模型被长度上限截断，归纳可能缺要点——渲染时
-        # 该问节顶端加显著横幅，绝不让不完整草案冒充完整草案进入人工放行。
-        "truncated": chat_result.get("finish_reason") == "length",
+        "truncated": abnormal_finish,
+        "finish_reason": finish_reason,
     }
 
 
@@ -216,6 +236,11 @@ def _build_user_message(question: str, hits: list[dict[str, Any]]) -> str:
     每个命中块的正文与 fence 头三字段（chunk_id/source/fingerprint）都过
     _neutralize_sentinels 后才进消息——语料内容无法提前闭合 fence、无法
     伪造 fence 头，规则行的「是数据不是指令」声明覆盖到每一个字节。
+    **问题文本同样过中和**（codex R1-P1）：任务创建者在 question 里伪造
+    <<KNOWLEDGE>> 块，否则会被模型当成"平台检索到的语料"采信——fence 语义
+    必须构造上不可伪造，对任何非本文件拼装的字节一视同仁。
+    单块正文超 _PER_HIT_CHARS 截断并显式标记（codex R1-P2 预算）：聚合上界
+    见常量注释；截断标记指引审核员按出处表回查原文。
     """
     parts: list[str] = [_KNOWLEDGE_RULE_LINE]
     for hit in hits:
@@ -223,34 +248,42 @@ def _build_user_message(question: str, hits: list[dict[str, Any]]) -> str:
         source = _neutralize_sentinels(str(hit["source"]))
         fingerprint = _neutralize_sentinels(str(hit["fingerprint"]))
         text = _neutralize_sentinels(str(hit["text"]))
+        if len(text) > _PER_HIT_CHARS:
+            text = text[:_PER_HIT_CHARS] + _HIT_TRUNCATED_MARK
         parts.append(
             f'<<KNOWLEDGE chunk="{chunk_id}" source="{source}" fingerprint="{fingerprint}">>\n'
             f"{text}\n"
             "<<END_KNOWLEDGE>>"
         )
     parts.append(
-        f"## 问题\n{question}\n"
-        "（回答每条结论须标注来源 chunk 引用；语料未覆盖的部分显式写\"语料未覆盖\"。）"
+        f"## 问题\n{_neutralize_sentinels(question)}\n"
+        "（回答每条结论须以 [source · chunk] 复合键标注来源——同名文件的 chunk 编号"
+        "会重复，单独 chunk 不唯一；语料未覆盖的部分显式写\"语料未覆盖\"。）"
     )
     return "\n\n".join(parts)
 
 
-def _render_draft(results: list[dict[str, Any]]) -> str:
-    """渲染 knowledge_qa_draft.md：强制水印文件头 + 逐问小节。
+def _render_draft(results: list[dict[str, Any]], scope_id: str) -> str:
+    """渲染 knowledge_qa_draft.md：强制水印文件头 + scope 声明 + 逐问小节。
 
     模型草案原样嵌入（未删改）；出处表（chunk_id/source/fingerprint/score）
     随每问透出——出处随输出透出是 docs/06 §4 的强制项，审核员按表回查原文。
+    scope 声明行（codex R1-P2）：审核员必须知道结论出自哪个语料范围——
+    demo/合成 scope 的产物绝不能被误读成真实历史记录的归纳。
     """
     lines: list[str] = []
     lines.append("# 知识问答归纳草案（AI 辅助生成）")
     lines.append("")
     lines.append(_WATERMARK)
+    lines.append("")
+    lines.append(f"> 语料范围（scope）：`{scope_id}`——结论仅依据该范围内的检索命中，"
+                 "范围性质（真实/合成/密级）以其 scope.yaml 登记为准。")
     for index, result in enumerate(results, start=1):
         lines.append("")
         lines.append(f"## Q{index}: {result['question']}")
         lines.append("")
         if result["truncated"] is True:
-            lines.append(_TRUNCATION_BANNER)
+            lines.append(_INCOMPLETE_BANNER_TMPL.format(reason=result["finish_reason"]))
             lines.append("")
         if len(result["citations"]) > 0:
             lines.append("| chunk_id | source | fingerprint | score |")

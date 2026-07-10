@@ -5,4 +5,4 @@ source: file_dir
 path_or_uri: docs
 confidentiality: public_internal
 owner: "二所（合成演示语料）"
-notes: "全部文件显式标注合成非真实；真实 ECM/EM/FRR 语料待内网侦察后另立 scope（DECLARED-NOT-VERIFIED 纪律）"
+notes: "全部文件显式标注合成非真实——两份 CSV 每行首列「数据性质=合成演示数据（非真实记录）」随行入 chunk（codex Wave2-R1：检索命中级标记，防合成记录被当真实历史采信）；真实 ECM/EM/FRR 语料待内网侦察后另立 scope（DECLARED-NOT-VERIFIED 纪律）"

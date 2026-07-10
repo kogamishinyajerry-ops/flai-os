@@ -10,8 +10,8 @@
       "type": "array",
       "minItems": 1,
       "maxItems": 8,
-      "items": { "type": "string", "minLength": 1 },
-      "description": "待归纳的问题列表，逐问独立检索与作答。"
+      "items": { "type": "string", "minLength": 1, "maxLength": 2000 },
+      "description": "待归纳的问题列表，逐问独立检索与作答。单问上限 2000 字符——问题文本会拼进 LLM prompt，无上限时任务 API 的 256KB inputs 预算可整体灌入单问撑爆模型上下文（codex R1 预算门）。"
     },
     "top_k": {
       "type": "integer",
