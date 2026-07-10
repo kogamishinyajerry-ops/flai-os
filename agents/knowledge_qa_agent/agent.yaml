@@ -1,6 +1,6 @@
 id: knowledge_qa_agent
 name: "知识问答 Agent（语料检索归纳草案生成）"
-version: 0.1.1  # 0.1.1：codex Wave2-R1——prompt.md 复合引用键 + 问题中和 + prompt 预算 + finish_reason 白名单
+version: 0.1.2  # 版本史见 changelog.md（0.1.1=R1 修复；0.1.2=R2 finish_reason 非标量防线）
 status: draft
 maturity: L0
 category: knowledge_qa
