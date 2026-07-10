@@ -87,6 +87,15 @@ text-mode universal newlines——\r\n 语料段落边界与 CR-only CSV 解析�
 （R1 快照化引入）；③symlink witness 在无 symlink 权限的平台（内网 Windows
 无开发者模式）诚实 skip 而非炸测试。
 
+R3 复审（同日）判 R2 的 fd/inode 对照仍可被 open→resolve→stat 间双换
+symlink 的竞态绕过——基于可变路径名的事后校验存在本质 TOCTOU。cap 用尽
+交 owner 裁决，**owner 拍板方案 b（2026-07-09）：scope 语料内 symlink 一律
+拒绝，无"域内豁免"**——收容由打开动作本身原子完成：最终组件 O_NOFOLLOW
+拒开（内核判定无检查/使用间隙；Windows 无此位退化 lstat 预检，诚实降级，
+该平台建 symlink 需特权）+ 目录组件逐级预检纵深（O_NOFOLLOW 不管目录
+组件）。代价：语料目录不能再用 symlink 组织内容——运维独占目录无此用例，
+"越界才拒"的区分本身就是竞态面。
+
 ## 后果
 
 - **范围**：knowledge 挂载仅覆盖 job 模式（AgentRuntime._build_context）；

@@ -84,20 +84,28 @@ R2（对 3655f34）2 P1 + 2 P2，全成立 → **14baf26**：
 
 R3（对 14baf26）**剩 1 P1**：fd/inode 一致性校验仍可被 open→resolve→stat 间
 双换 symlink 竞态绕过（基于可变路径名的事后校验存在本质 TOCTOU；race-free
-需 no-follow 逐组件遍历或整体拒绝 symlink，由 open 本身收容）。**cap（R0+2
-fix）用尽，按宪法交用户裁决**，处置前不 push。
+需 no-follow 逐组件遍历或整体拒绝 symlink，由 open 本身收容）。cap（R0+2
+fix）用尽，按宪法交 owner 裁决。
 
-tamper 增补（脚本 tamper_r1/r2.py，逐条注伤→红→还原绿）：T6 撤 symlink 收容、
-T7 解析改第二次读、T8 撤超长硬切、T9 撤读取失败收容、T11 撤 fd-inode 校验、
-T12/T13 撤统一换行（文本/CSV）、T14 重引第二次打开——8/8 咬合。
+**Owner 裁决（2026-07-09）：方案 b——symlink 一律拒绝**（codex R3 建议
+选项之一，verbatim 例外落地）：最终组件 O_NOFOLLOW 原子拒开 + 目录组件
+逐级预检 + Windows lstat 兜底（诚实降级）；域内 symlink 同罪，witness 11
+政策口径同步（"域内不误伤"豁免撤销）。结构钥匙 11b（os.open flags 必含
+O_NOFOLLOW）防退回"先检后读"形态；11c 咬目录组件层。
+
+tamper 增补（脚本 tamper_r1/r2/r3.py，逐条注伤→红→还原绿）：T6 撤 symlink
+收容、T7 解析改第二次读、T8 撤超长硬切、T9 撤读取失败收容、T11 撤 fd-inode
+校验、T12/T13 撤统一换行（文本/CSV）、T14 重引第二次打开、T15 拆
+O_NOFOLLOW 位、T16 拆目录组件预检、T17 重引第二次打开（新形态）、T18 双拆
+两层（证行为钥匙非恒真——分层防线单拆一层时行为仍被另一层兜住是特性，
+各层由结构钥匙独立咬合）——12/12 咬合。
 
 ## 残差（显式标注）
 
-- **[待用户裁决] symlink TOCTOU P1**（上节 R3）：现防线拦截静态 symlink 越界
-  与单次替换，但可被精确计时的双换竞态绕过；利用前提=攻击者对 scope 源目录
-  有并发写权限。候选处置：(a) POSIX dirfd+O_NOFOLLOW 逐组件遍历（Windows 无
-  dir_fd 需降级）；(b) 拒绝一切 symlink（O_NOFOLLOW + lstat，弃域内链接支持）；
-  (c) 记录为受控残差（内网语料目录由平台运维独占写）。
+- ~~symlink TOCTOU P1~~ **已按 owner 裁决方案 b 收口**（symlink 一律拒，
+  O_NOFOLLOW 由 open 原子收容）。残留声明：Windows 无 O_NOFOLLOW 走 lstat
+  预检=非原子（该平台建 symlink 需特权，威胁面小，诚实降级已注释入代码）；
+  目录组件预检为路径名校验（非原子），配合 rglob 不穿越目录 symlink 为纵深。
 - 真实语料/业务价值未验证：本地仅合成语料，DECLARED-NOT-VERIFIED 纪律不变，
   卡 EAR/M4 内网闸门。
 - 调用期主体鉴权不存在（V0.1 全局无鉴权，README #14/#17②）；restricted 真语料

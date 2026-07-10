@@ -12,10 +12,11 @@
 8. fingerprint 内容寻址：同内容相同、改一字节即变；
 9. 边界 witness：全空白 txt → []（空文件≠坏文件，空语料由 service 层拒绝）。
 
-codex Wave1-R1/R2 增补（一钥一门）：
-11. symlink 越界 → 硬拒整次摄取；域内 symlink 不误伤（无 symlink 权限平台 skip）；
-11b. 收容校验绑定已打开的 fd：resolve 目标与持有 fd inode 不一致（TOCTOU
-     替换特征）→ 硬拒；
+codex Wave1-R1/R2/R3 增补（一钥一门；R3 P1 owner 裁决方案 b=symlink 一律拒）：
+11. scope 语料内一切 symlink 一律拒（越界/域内同罪；无 symlink 权限平台 skip）；
+11b. 收容由打开动作本身完成：os.open flags 必含 O_NOFOLLOW（结构钥匙，
+     防退回"先检后读"的 TOCTOU 形态）；
+11c. 目录组件是 symlink 同拒（O_NOFOLLOW 只管最终组件，逐组件预检纵深）；
 12. 摄取全程只打开文件一次（指纹与正文必然出自同一字节快照，出处双钥不脱钩）；
 13. 超长单段先硬切再合并，chunk 上界 800 不被击穿且正文无损；
 14. \\r\\n 文本段落边界照常切分（统一换行等价旧 text-mode 语义）；
@@ -24,6 +25,7 @@ codex Wave1-R1/R2 增补（一钥一门）：
 
 from __future__ import annotations
 
+import os
 import sys
 
 import pytest
@@ -136,10 +138,11 @@ def test_blank_txt_returns_empty(tmp_path):
     assert ingest_path(f, source="blank.txt") == []
 
 
-def test_symlink_escape_rejected_inside_allowed(tmp_path):
-    """witness 11（codex Wave1-R1 P1）：源目录内 symlink 指向目录外文件 →
-    KnowledgeIngestError 硬拒整次摄取（fail-closed 不静默跳过——静默跳过会把
-    越界文件伪装成"语料里没有"）；指向目录内的 symlink 不受影响（收容不误伤）。"""
+def test_symlink_rejected_regardless_of_target(tmp_path):
+    """witness 11（codex Wave1-R3 P1，owner 裁决方案 b）：scope 语料内一切
+    symlink 一律硬拒——越界目标与域内目标同罪。"越界才拒"的区分依赖可变
+    路径名的事后校验，本身就是 TOCTOU 竞态面；政策收紧为 symlink 无豁免
+    （fail-closed 不静默跳过）。"""
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret.md").write_text("仓外敏感内容", encoding="utf-8")
@@ -151,47 +154,68 @@ def test_symlink_escape_rejected_inside_allowed(tmp_path):
     except OSError:  # codex Wave1-R2 P2：内网 Windows 无 symlink 权限时诚实 skip
         pytest.skip("当前平台/权限不支持创建 symlink（Windows 需开发者模式或对应特权）")
 
-    with pytest.raises(KnowledgeIngestError, match="逃逸出源目录"):
+    with pytest.raises(KnowledgeIngestError, match="symlink"):
         ingest_dir(scope)
 
-    # 收容不误伤：撤掉越界链接、放一个域内 symlink → 摄取正常且不含仓外内容
+    # 域内 symlink 同罪（方案 b：不再有"域内不误伤"豁免）
     (scope / "leak.md").unlink()
     (scope / "alias.md").symlink_to(scope / "legit.md")
+    with pytest.raises(KnowledgeIngestError, match="symlink"):
+        ingest_dir(scope)
+
+    # 撤掉全部 symlink → 摄取正常（证明拒绝确由 symlink 触发，非其他原因）
+    (scope / "alias.md").unlink()
     chunks = ingest_dir(scope)
-    assert {c.source for c in chunks} == {"legit.md", "alias.md"}
+    assert [c.source for c in chunks] == ["legit.md"]
     assert all("仓外敏感内容" not in c.text for c in chunks)
 
 
-def test_symlink_check_bound_to_open_fd(tmp_path, monkeypatch):
-    """witness 11b（codex Wave1-R2 P1）：收容校验绑定到已打开的 fd——校验时
-    path resolve 到的 inode 与实际持有的 fd inode 不一致（检查/使用间隙被
-    替换的特征）→ 硬拒摄取。用 resolve 重定向到域内替身模拟 TOCTOU 替换
-    （替身在根内，故此钥咬的是 inode 一致性门而非越界门）。"""
-    from pathlib import Path
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="平台无 O_NOFOLLOW（Windows 走 lstat 兜底）")
+def test_open_enforces_no_follow_flag(tmp_path, monkeypatch):
+    """witness 11b（codex Wave1-R3 P1）：收容由打开动作本身完成——摄取打开
+    源文件的 os.open flags 必含 O_NOFOLLOW（内核原子拒 symlink，无检查/使用
+    间隙）。结构钥匙：拆掉该位即红，防未来改动静默退回"先检后读"形态。"""
+    f = tmp_path / "doc.md"
+    f.write_text("正文", encoding="utf-8")
 
+    captured: list[int] = []
+    real_os_open = os.open
+
+    def capturing_open(p, flags, *args, **kwargs):
+        try:
+            if os.fspath(p) == str(f):
+                captured.append(flags)
+        except TypeError:
+            pass
+        return real_os_open(p, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", capturing_open)
+    ingest_path(f, source="doc.md")
+    assert len(captured) == 1
+    assert captured[0] & os.O_NOFOLLOW == os.O_NOFOLLOW, "打开源文件必须带 O_NOFOLLOW"
+
+
+def test_dir_symlink_component_rejected(tmp_path):
+    """witness 11c（codex Wave1-R3 P1）：目录组件是 symlink 同拒——O_NOFOLLOW
+    只约束最终组件，目录 symlink 可把整棵子树指到根外；逐组件预检纵深。"""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("仓外敏感内容", encoding="utf-8")
     scope = tmp_path / "scope"
     scope.mkdir()
-    victim = scope / "victim.md"
-    victim.write_text("原始内容", encoding="utf-8")
-    decoy = scope / "decoy.md"
-    decoy.write_text("替换后的内容", encoding="utf-8")
+    try:
+        (scope / "sub").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("当前平台/权限不支持创建 symlink（Windows 需开发者模式或对应特权）")
 
-    real_resolve = Path.resolve
-
-    def swapped_resolve(self, *args, **kwargs):
-        if self == victim:
-            return real_resolve(decoy, *args, **kwargs)
-        return real_resolve(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "resolve", swapped_resolve)
-    with pytest.raises(KnowledgeIngestError, match="被替换"):
-        ingest_path(victim, source="victim.md", containment_root=scope)
+    with pytest.raises(KnowledgeIngestError, match="symlink"):
+        ingest_path(scope / "sub" / "secret.md", source="sub/secret.md", containment_root=scope)
 
 
 def test_ingest_opens_file_exactly_once(tmp_path, monkeypatch):
-    """witness 12（codex Wave1-R1 P2）：整个摄取只打开文件一次——指纹与正文
-    必然出自同一份字节快照。两次打开=两个时点，间隙内源文件被替换会产生
-    「正文 A + 指纹 B」的出处脱钩；单次打开是结构性保证（fd 绑定校验见 11b）。"""
+    """witness 12（codex Wave1-R1 P2）：整个摄取只打开文件一次（os.open 与
+    Path.open 两个入口合计）——指纹与正文必然出自同一份字节快照。两次打开=
+    两个时点，间隙内源文件被替换会产生「正文 A + 指纹 B」的出处脱钩。"""
     import hashlib
     from pathlib import Path
 
@@ -199,17 +223,27 @@ def test_ingest_opens_file_exactly_once(tmp_path, monkeypatch):
     body = "同一份快照内容"
     f.write_text(body, encoding="utf-8")
 
-    opens: list[tuple] = []
-    real_open = Path.open
+    opens: list[str] = []
+    real_os_open = os.open
+    real_path_open = Path.open
 
-    def counting_open(self, *args, **kwargs):
+    def counting_os_open(p, flags, *args, **kwargs):
+        try:
+            if os.fspath(p) == str(f):
+                opens.append("os.open")
+        except TypeError:
+            pass
+        return real_os_open(p, flags, *args, **kwargs)
+
+    def counting_path_open(self, *args, **kwargs):
         if self == f:
-            opens.append(args)
-        return real_open(self, *args, **kwargs)
+            opens.append("Path.open")
+        return real_path_open(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "open", counting_open)
+    monkeypatch.setattr(os, "open", counting_os_open)
+    monkeypatch.setattr(Path, "open", counting_path_open)
     chunks = ingest_path(f, source="live.md")
-    assert len(opens) == 1, "指纹+解析必须共用同一次打开的字节快照"
+    assert len(opens) == 1, f"指纹+解析必须共用同一次打开的字节快照，实际 {opens}"
     assert chunks[0].text == body
     assert chunks[0].fingerprint == hashlib.sha256(body.encode("utf-8")).hexdigest()[:12]
 

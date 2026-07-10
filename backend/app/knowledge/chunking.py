@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import csv
+import errno
 import hashlib
 import io
 import os
@@ -46,6 +47,71 @@ class Chunk:
             raise ValueError("Chunk.source 出处不得为空（docs/06 §4）")
         if not (isinstance(self.fingerprint, str) and self.fingerprint.strip()):
             raise ValueError("Chunk.fingerprint 出处指纹不得为空（docs/06 §4）")
+
+
+# Windows 无 O_NOFOLLOW（位=0 退化普通打开，由 lstat 预检兜底——该平台创建
+# symlink 需特权，威胁面显著小，诚实降级）。O_NOFOLLOW 拒开 symlink 的 errno
+# 因平台而异：Linux/macOS=ELOOP，FreeBSD=EMLINK，NetBSD=EFTYPE。
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_SYMLINK_ERRNOS = {
+    e for e in (errno.ELOOP, getattr(errno, "EMLINK", None), getattr(errno, "EFTYPE", None))
+    if e is not None
+}
+
+
+def _read_snapshot_no_follow(path: Path, source: str) -> bytes:
+    """单次 no-follow 打开并整读字节快照（指纹与解析共用这一份，无第二次打开）。
+
+    codex Wave1-R3 P1 + owner 裁决方案 b（2026-07-09）：语料摄取一律拒绝
+    symlink——基于可变路径名的事后校验（resolve/stat 对照）存在本质 TOCTOU，
+    open→resolve→stat 之间双换 symlink 即可绕过；收容必须由打开动作本身原子
+    完成：O_NOFOLLOW 下最终组件是 symlink 直接拒开（内核判定，不存在
+    检查/使用间隙）。域内 symlink 同罪：scope 语料目录由运维独占管理，
+    symlink 无正当用例，"越界才拒"的区分本身就是竞态面。
+    """
+    if _O_NOFOLLOW == 0 and path.is_symlink() is True:
+        raise KnowledgeIngestError(
+            f"源文件 {source} 是 symlink（scope 源目录内不得有任何 symlink）"
+        )
+    try:
+        fd = os.open(str(path), os.O_RDONLY | _O_NOFOLLOW)
+    except OSError as exc:
+        if exc.errno in _SYMLINK_ERRNOS:
+            raise KnowledgeIngestError(
+                f"源文件 {source} 是 symlink，已被 O_NOFOLLOW 原子拒开"
+                "（scope 源目录内不得有任何 symlink）"
+            ) from exc
+        raise
+    try:
+        f = os.fdopen(fd, "rb")
+    except Exception:
+        os.close(fd)
+        raise
+    with f:
+        return f.read()
+
+
+def _reject_symlink_components(path: Path, root: Path, source: str) -> None:
+    """root → 文件之间每个路径组件都不得是 symlink（方案 b 纵深防线）。
+
+    O_NOFOLLOW 只约束最终组件；目录组件是 symlink 时整棵子树可指向根外。
+    relative_to 用 lexical 比较不 resolve（resolve 会跟随 symlink，恰好抹掉
+    待检对象）；不在根内直接拒。ingest_dir 的 rglob 本就不穿越目录 symlink，
+    此检查覆盖直接调用 ingest_path 的路径与遍历后目录被替换的静态形态。
+    """
+    root = Path(root).absolute()
+    try:
+        rel_parts = Path(path).absolute().relative_to(root).parts
+    except ValueError:
+        raise KnowledgeIngestError(f"源文件 {source} 不在源目录 {root} 内") from None
+    probe = root
+    for part in rel_parts:
+        probe = probe / part
+        if probe.is_symlink() is True:
+            raise KnowledgeIngestError(
+                f"源文件 {source} 的路径组件 {part!r} 是 symlink"
+                "（scope 源目录内不得有任何 symlink）"
+            )
 
 
 def _decode_text(raw: bytes, encoding: str) -> str:
@@ -95,28 +161,11 @@ def ingest_path(path: Path, *, source: str, containment_root: Path | None = None
     doc_id = path.stem
     # 指纹与解析绑定同一份字节快照（codex Wave1-R1 P2）：文件只打开一次，指纹
     # 从这份字节算、解析也从这份字节做——两次打开之间源文件被替换时，出处
-    # 指纹会与正文脱钩（引用指向的不再是产生该文字的那份文件）。
-    # 收容校验绑定到同一个 fd（codex Wave1-R2 P1）：先 open 持住 inode，再校验
-    # resolve 后仍在根内、且 resolve 目标的 inode == 持有 fd 的 inode，然后从
-    # 这个 fd 读——校验与读取之间不存在第二次打开，TOCTOU 替换要么发生在
-    # open 前（被 resolve 收容拒），要么改变 inode（被一致性校验拒）。
-    with path.open("rb") as f:
-        if containment_root is not None:
-            root = Path(containment_root).resolve()
-            resolved = path.resolve()
-            if resolved.is_relative_to(root) is False:
-                raise KnowledgeIngestError(
-                    f"源文件 {source} resolve 后逃逸出源目录 {root}"
-                    "（symlink 越界，scope 源目录内不得链接仓外路径）"
-                )
-            st_fd = os.fstat(f.fileno())
-            st_resolved = resolved.stat()
-            if (st_fd.st_dev, st_fd.st_ino) != (st_resolved.st_dev, st_resolved.st_ino):
-                raise KnowledgeIngestError(
-                    f"源文件 {source} 在收容校验与读取之间被替换"
-                    "（持有 fd 与 resolve 目标 inode 不一致，摄取中止）"
-                )
-        raw = f.read()
+    # 指纹会与正文脱钩。symlink 收容（codex Wave1-R3 P1，owner 裁决方案 b）：
+    # 目录组件逐级预检 + 最终组件由 O_NOFOLLOW 在打开动作上原子拒绝。
+    if containment_root is not None:
+        _reject_symlink_components(path, containment_root, source)
+    raw = _read_snapshot_no_follow(path, source)
     fp = hashlib.sha256(raw).hexdigest()[:12]
     if suffix in {".txt", ".md"}:
         paras = _decode_text(raw, "utf-8").split("\n\n")
@@ -166,12 +215,12 @@ def ingest_dir(dir_path: Path) -> list[Chunk]:
         if any(part.startswith(".") for part in rel.parts):
             continue
         rel_paths.append(rel)
-    # symlink 收容（codex Wave1-R1 P1）单点收在 ingest_path 的 fd 绑定校验里
-    # （codex Wave1-R2 P1）：收集期不预检——预检与真正读取之间存在第二次
-    # 打开，检查/使用间隙可被替换。is_file() 会跟随符号链接，scope 内一个
-    # `leak.md -> 仓外文件` 即可绕过 resolve_source_dir 的根校验，越界 →
-    # 硬拒整次摄取（fail-closed，不静默跳过——静默跳过会把越界文件伪装成
-    # "语料里没有"）。
+    # symlink 收容（codex Wave1-R1 P1 → R3 P1 终态，owner 裁决方案 b）单点
+    # 收在 ingest_path：目录组件逐级预检 + 最终组件 O_NOFOLLOW 原子拒开。
+    # 收集期不做预检——任何"先检后读"的路径名校验都有检查/使用间隙。
+    # is_file() 会跟随符号链接，scope 内一个 `leak.md -> 仓外文件` 即可绕过
+    # resolve_source_dir 的根校验，故 symlink 一律硬拒整次摄取（fail-closed，
+    # 不静默跳过——静默跳过会把越界文件伪装成"语料里没有"）。
     chunks: list[Chunk] = []
     for rel in sorted(rel_paths, key=lambda r: r.as_posix()):
         chunks.extend(
