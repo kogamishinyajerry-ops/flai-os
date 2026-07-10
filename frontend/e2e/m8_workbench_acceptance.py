@@ -112,10 +112,10 @@ with sync_playwright() as p:
 
     # ── ① 顶导航恰三个真入口 ──
     page.goto(BASE + "/", wait_until="networkidle")
-    nav_items = page.locator(".nav-menu .el-menu-item")
+    nav_items = page.locator(".sidebar-nav .nav-link")
     nav_texts = [t.strip() for t in nav_items.all_inner_texts()]
     nav_ok = nav_texts == ["智能导引", "Agent 门户", "协作工作台"]
-    check("①顶导航收敛为恰三入口（旧三页已撤出导航）", nav_ok, f"实际={nav_texts}")
+    check("①左栏导航收敛为恰三入口（旧三页已撤出导航）", nav_ok, f"实际={nav_texts}")
     page.screenshot(path=str(SHOTS / "1_nav_three.png"))
 
     # ── ② /workbench 渲染 hero + 任务列表 + 到席灯 ──
@@ -133,7 +133,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(SHOTS / "2_workbench.png"), full_page=True)
 
     # 工作台页顶导航高亮 = 协作工作台
-    active_wb = page.locator(".nav-menu .el-menu-item.is-active").inner_text().strip()
+    active_wb = page.locator(".sidebar-nav .nav-link.is-active").inner_text().strip()
     check("②'工作台页高亮归属协作工作台", active_wb == "协作工作台", f"active={active_wb}")
 
     # ── ③ 点任务行 → 落详情页 ──（SPA 客户端跳转，异步渲染需显式等标题出现）
@@ -144,7 +144,7 @@ with sync_playwright() as p:
     check("③点任务行→落任务详情页", landed_ok, f"url={page.url} seed={SEED_TASK_ID}")
 
     # ── ④ 详情页顶导航高亮仍归属协作工作台（activeMenu 把 /tasks/* 映射过去）──
-    active_detail = page.locator(".nav-menu .el-menu-item.is-active").inner_text().strip()
+    active_detail = page.locator(".sidebar-nav .nav-link.is-active").inner_text().strip()
     check("④任务详情页高亮仍归属协作工作台", active_detail == "协作工作台", f"active={active_detail}")
     page.screenshot(path=str(SHOTS / "3_detail_highlight.png"))
 

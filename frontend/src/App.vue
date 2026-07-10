@@ -1,33 +1,69 @@
 <template>
-  <el-container class="app-shell">
-    <el-header class="app-header">
-      <div class="brand" @click="$router.push('/')">
+  <div class="app-shell">
+    <!-- 左侧栏（Claude 布局）：品牌 + 新对话 + 三入口导航 + 最近对话历史。 -->
+    <aside class="sidebar">
+      <div class="sb-brand" @click="newConversation">
         <span class="brand-mark">F</span>
         <span class="brand-text">
           <span class="brand-name">FLAi-OS</span>
-          <span class="brand-sub">二所工程智能体运行底座 · V0.1</span>
+          <span class="brand-sub">二所工程智能体运行底座</span>
         </span>
       </div>
-      <!-- M8 IA：顶导航收敛为三个真入口——导引(门面)/门户(浏览 Agent)/工作台
-           (协作会话)。创建任务从门户+导引进入、反馈在任务详情内、任务历史折入
-           工作台，都不再占顶导航（路由仍在，上下文内可达）。 -->
-      <el-menu mode="horizontal" :default-active="activeMenu" router :ellipsis="false" class="nav-menu">
-        <el-menu-item index="/">智能导引</el-menu-item>
-        <el-menu-item index="/portal">Agent 门户</el-menu-item>
-        <el-menu-item index="/workbench">协作工作台</el-menu-item>
-      </el-menu>
-    </el-header>
-    <el-main class="app-main">
+
+      <button class="sb-new" @click="newConversation">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        新对话
+      </button>
+
+      <nav class="sidebar-nav">
+        <a
+          v-for="item in NAV"
+          :key="item.path"
+          class="nav-link"
+          :class="{ 'is-active': activeMenu === item.path }"
+          @click="$router.push(item.path)"
+        >{{ item.label }}</a>
+      </nav>
+
+      <div class="sb-history">
+        <div class="sb-section-label">最近对话</div>
+        <div class="sb-convos">
+          <a
+            v-for="c in convos"
+            :key="c.id"
+            class="convo-item"
+            :class="{ 'is-active': activeConvoId === c.id }"
+            :title="convoTitle(c)"
+            @click="openConvo(c)"
+          >
+            <span class="convo-dot" :class="c.recommendation && c.recommendation.decision === 'refuse' ? 'refuse' : (c.recommendation ? 'plan' : 'talk')"></span>
+            <span class="convo-title">{{ convoTitle(c) }}</span>
+          </a>
+          <div v-if="!convos.length" class="convo-empty">还没有对话——从上方「新对话」开始</div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="app-main">
       <router-view />
-    </el-main>
-  </el-container>
+    </main>
+  </div>
 </template>
 
 <script setup>
-import { computed } from "vue";
-import { useRoute } from "vue-router";
+import { ref, computed, watch, onMounted } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { listConversations } from "./api/conversations";
 
 const route = useRoute();
+const router = useRouter();
+
+const NAV = [
+  { path: "/", label: "智能导引" },
+  { path: "/portal", label: "Agent 门户" },
+  { path: "/workbench", label: "协作工作台" },
+];
+
 // 任务相关页（历史/详情/创建）与协作会话子页在 M8 IA 里都归属「协作工作台」高亮。
 const activeMenu = computed(() => {
   const p = route.path;
@@ -35,6 +71,37 @@ const activeMenu = computed(() => {
   if (p.startsWith("/workbench/")) return "/workbench";
   return p;
 });
+
+// 当前恢复中的会话 id（导引页 /?c=<id>），用于左栏高亮。
+const activeConvoId = computed(() => (typeof route.query.c === "string" ? route.query.c : ""));
+
+const convos = ref([]);
+async function loadConvos() {
+  try {
+    const list = await listConversations({ limit: 30 });
+    convos.value = list;
+  } catch {
+    convos.value = []; // 左栏历史失败不阻断主区
+  }
+}
+function convoTitle(c) {
+  const r = c.recommendation;
+  if (r && r.decision === "orchestrate" && r.goal) return r.goal;
+  if (r && r.decision === "refuse" && r.reason) return "（未接住）" + r.reason;
+  return `与 ${c.created_by || "你"} 的对话`;
+}
+function openConvo(c) {
+  router.push({ path: "/", query: { c: c.id } });
+}
+function newConversation() {
+  // 清掉 ?c 回到全新导引；若已在 /?c=x，query 变化会触发导引页重置。
+  if (route.path === "/" && !route.query.c) return;
+  router.push({ path: "/" });
+}
+
+// 路由变化后刷新左栏历史（导引创建新会话会把 URL 改成 /?c=<id>，据此让新会话即时入列）。
+watch(() => route.fullPath, loadConvos);
+onMounted(loadConvos);
 </script>
 
 <style>
@@ -79,6 +146,7 @@ const activeMenu = computed(() => {
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "STSong", "Times New Roman", serif;
   --clay-deep: #a54e2f;
   --surface-raised: #ffffff;
+  --sidebar-w: 264px;
   --el-color-primary: #c15f3c;
   --el-color-primary-light-3: #d08663;
   --el-color-primary-light-5: #dba489;
@@ -108,22 +176,29 @@ body {
 .app-shell {
   min-height: 100vh;
 }
-.app-header {
+
+/* ── 左侧栏 ── */
+.sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--sidebar-w);
+  box-sizing: border-box;
   display: flex;
-  align-items: center;
-  gap: 40px;
-  background: var(--card-bg);
-  border-bottom: 1px solid var(--hairline);
-  height: 60px !important;
-  padding: 0 28px;
-  box-shadow: 0 1px 3px rgba(43, 38, 34, 0.04);
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 12px;
+  background: linear-gradient(180deg, var(--paper-cream), var(--paper-rail));
+  border-right: 1px solid var(--hairline);
+  z-index: 30;
 }
-.brand {
-  cursor: pointer;
-  white-space: nowrap;
+.sb-brand {
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 6px 8px 10px;
+  cursor: pointer;
 }
 .brand-mark {
   display: inline-flex;
@@ -131,56 +206,102 @@ body {
   justify-content: center;
   width: 30px;
   height: 30px;
-  border-radius: 8px;
-  background: var(--clay);
+  border-radius: 9px;
+  background: linear-gradient(150deg, var(--clay), var(--clay-deep));
   color: #fff;
   font-weight: 800;
-  font-size: 17px;
-  box-shadow: 0 2px 6px rgba(193, 95, 60, 0.32);
+  font-size: 16px;
+  box-shadow: 0 3px 10px rgba(193, 95, 60, 0.3);
 }
-.brand-text {
+.brand-text { display: flex; flex-direction: column; line-height: 1.2; }
+.brand-name { font-size: 16px; font-weight: 700; color: var(--ink); letter-spacing: 0.2px; }
+.brand-sub { font-size: 10.5px; color: var(--ink-faint); margin-top: 1px; }
+
+.sb-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 8px;
+  padding: 9px 12px;
+  border: 1px solid #e6cabc;
+  border-radius: 11px;
+  background: var(--surface-raised);
+  color: var(--clay);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+  transition: all 0.16s var(--ease-lift);
+}
+.sb-new:hover { background: var(--clay); color: #fff; border-color: var(--clay); box-shadow: 0 4px 12px rgba(193, 95, 60, 0.22); }
+
+.sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
+.nav-link {
+  display: block;
+  padding: 8px 12px;
+  border-radius: 9px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background 0.14s var(--ease-lift), color 0.14s var(--ease-lift);
+}
+.nav-link:hover { background: rgba(193, 95, 60, 0.07); color: var(--ink); }
+.nav-link.is-active { background: var(--clay-soft); color: var(--clay); font-weight: 600; }
+
+.sb-history {
+  margin-top: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  line-height: 1.2;
 }
-.brand-name {
-  font-size: 17px;
+.sb-section-label {
+  font-size: 10.5px;
   font-weight: 700;
-  color: var(--ink);
-  letter-spacing: 0.3px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 4px 12px 6px;
 }
-.brand-sub {
-  font-size: 11px;
+.sb-convos { overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.sb-convos::-webkit-scrollbar { width: 6px; }
+.sb-convos::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 6px; }
+.convo-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.14s var(--ease-lift);
+}
+.convo-item:hover { background: rgba(43, 38, 34, 0.05); }
+.convo-item.is-active { background: rgba(193, 95, 60, 0.1); }
+.convo-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-faint); }
+.convo-dot.plan { background: var(--clay); }
+.convo-dot.refuse { background: var(--trust-pending); }
+.convo-title {
+  font-size: 12.5px;
   color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.nav-menu {
-  flex: 1;
-  border-bottom: none !important;
-  background: transparent !important;
-}
-.nav-menu .el-menu-item.is-active {
-  color: var(--clay) !important;
-  border-bottom-color: var(--clay) !important;
-  font-weight: 600;
-}
+.convo-item.is-active .convo-title { color: var(--ink); font-weight: 600; }
+.convo-empty { font-size: 12px; color: var(--ink-faint); padding: 8px 12px; line-height: 1.5; }
+
+/* ── 主区 ── */
 .app-main {
-  max-width: 1080px;
-  margin: 0 auto;
-  width: 100%;
+  margin-left: var(--sidebar-w);
+  width: calc(100% - var(--sidebar-w));
   box-sizing: border-box;
-  padding: 24px 20px 48px;
+  padding: 28px 32px 48px;
+  min-height: 100vh;
 }
-/* 中性 info 标签（draft / L0 / 已归档 / 未分类 等非语义标签）暖化：EP 默认冷灰
- * (#f4f4f5/#909399) → 暖沙+暖墨。只动 info 变体；success/warning/danger/primary
- * 是诚实语义槽（真实/待核/失败/工作态），一律保持原色不碰。*/
-.el-tag.el-tag--info {
-  --el-tag-bg-color: var(--paper-rail);
-  --el-tag-border-color: var(--hairline);
-  --el-tag-text-color: var(--ink-soft);
-}
-.el-tag.el-tag--info.is-plain {
-  --el-tag-bg-color: transparent;
-  --el-tag-border-color: var(--hairline);
-  --el-tag-text-color: var(--ink-soft);
+
+@media (max-width: 860px) {
+  .sidebar { transform: translateX(-100%); transition: transform 0.2s; }
+  .app-main { margin-left: 0; width: 100%; padding: 20px 16px 40px; }
 }
 </style>

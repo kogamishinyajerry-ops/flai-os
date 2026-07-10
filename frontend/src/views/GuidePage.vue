@@ -209,10 +209,10 @@
 </template>
 
 <script setup>
-import { reactive, ref, nextTick } from "vue";
-import { useRouter } from "vue-router";
+import { reactive, ref, nextTick, watch, onMounted } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { createConversation, postMessage } from "../api/conversations";
+import { createConversation, postMessage, getConversation } from "../api/conversations";
 import { uploadFile as apiUploadFile } from "../api/files";
 import { categoryColor, categoryLabel } from "../utils/format";
 
@@ -330,6 +330,8 @@ async function send() {
       const conv = await createConversation({ agentId: GUIDE_AGENT_ID, createdBy: createdBy.value.trim() });
       conversationId.value = conv.id;
       started.value = true;
+      // URL 反映当前会话（可刷新/分享/回退），并让左栏历史即时收录这条新会话。
+      router.replace({ path: "/", query: { c: conv.id } });
     }
     const res = await postMessage(conversationId.value, content, fileIds);
     // 成功：附件已随消息落库，清空待发区；气泡 chips 换用真实文件 id
@@ -409,6 +411,55 @@ function createOneTask(agent, plan) {
   );
   router.push({ path: "/tasks/new", query: { agent_id: agent.agent_id, from: "guide" } });
 }
+
+// ── 会话恢复（左栏历史点击 / 刷新 /?c=<id>）──
+const route = useRoute();
+
+function resetToFresh(clearError = true) {
+  messages.value = [];
+  started.value = false;
+  conversationId.value = "";
+  draft.value = "";
+  pendingFiles.value = [];
+  if (clearError) pageError.value = "";
+}
+
+async function loadConversation(id) {
+  resetToFresh();
+  try {
+    const conv = await getConversation(id);
+    conversationId.value = conv.id;
+    started.value = true;
+    // 具名沿用会话发起人——恢复后继续发言仍需具名，但 hero 的名字框已隐去。
+    createdBy.value = conv.created_by || createdBy.value;
+    messages.value = (conv.messages || []).map((m) => ({
+      role: m.role,
+      content: m.content,
+      recommendation: m.recommendation || null,
+      attachments: m.attachments && m.attachments.length ? m.attachments : undefined,
+    }));
+    await scrollToBottom();
+  } catch (err) {
+    pageError.value = err.detail || err.message || "会话加载失败";
+  }
+}
+
+onMounted(() => {
+  const c = route.query.c;
+  if (typeof c === "string" && c) loadConversation(c);
+});
+
+// 左栏切换会话 / 点「新对话」→ 据 ?c 变化恢复或重置（跳过刚创建的本会话，避免回灌）。
+watch(
+  () => route.query.c,
+  (c) => {
+    if (typeof c === "string" && c) {
+      if (c !== conversationId.value) loadConversation(c);
+    } else if (started.value || messages.value.length) {
+      resetToFresh();
+    }
+  }
+);
 </script>
 
 <style scoped>
@@ -864,7 +915,7 @@ function createOneTask(agent, plan) {
 /* 会话开始后：固定悬浮在视口底部，上缘渐隐让消息从下方穿过（Claude 布局）。 */
 .composer.composer-fixed {
   position: fixed;
-  left: 0;
+  left: var(--sidebar-w);
   right: 0;
   bottom: 0;
   z-index: 15;
@@ -872,6 +923,9 @@ function createOneTask(agent, plan) {
   padding: 22px 24px 24px;
   background: linear-gradient(180deg, rgba(250, 247, 242, 0) 0%, rgba(250, 247, 242, 0.88) 42%, var(--page-bg) 74%);
   pointer-events: none;
+}
+@media (max-width: 860px) {
+  .composer.composer-fixed { left: 0; }
 }
 .composer-inner {
   max-width: 784px;
