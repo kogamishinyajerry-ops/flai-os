@@ -1,7 +1,13 @@
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'sidebar-open': sidebarOpen }">
+    <!-- 窄屏汉堡：<860px 侧栏收起，靠它唤出抽屉（P2-7：不再让导航凭空消失）。 -->
+    <button class="sb-hamburger" aria-label="打开菜单" @click="toggleSidebar">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <div class="sb-backdrop" @click="closeSidebar"></div>
+
     <!-- 左侧栏（Claude 布局）：品牌 + 新对话 + 三入口导航 + 最近对话历史。 -->
-    <aside class="sidebar">
+    <aside class="sidebar" :class="{ 'is-open': sidebarOpen }">
       <div class="sb-brand" @click="newConversation">
         <span class="brand-mark">F</span>
         <span class="brand-text">
@@ -75,6 +81,11 @@ const activeMenu = computed(() => {
 // 当前恢复中的会话 id（导引页 /?c=<id>），用于左栏高亮。
 const activeConvoId = computed(() => (typeof route.query.c === "string" ? route.query.c : ""));
 
+// 窄屏抽屉开合（P2-7）；宽屏 CSS 让侧栏常驻，此状态不生效。
+const sidebarOpen = ref(false);
+function toggleSidebar() { sidebarOpen.value = !sidebarOpen.value; }
+function closeSidebar() { sidebarOpen.value = false; }
+
 const convos = ref([]);
 async function loadConvos() {
   try {
@@ -99,8 +110,12 @@ function newConversation() {
   router.push({ path: "/" });
 }
 
-// 路由变化后刷新左栏历史（导引创建新会话会把 URL 改成 /?c=<id>，据此让新会话即时入列）。
-watch(() => route.fullPath, loadConvos);
+// 路由变化后刷新左栏历史（导引创建新会话会把 URL 改成 /?c=<id>，据此让新会话即时入列），
+// 并收起窄屏抽屉（点导航/会话跳转后自动关闭）。
+watch(() => route.fullPath, () => {
+  loadConvos();
+  closeSidebar();
+});
 onMounted(loadConvos);
 </script>
 
@@ -300,8 +315,47 @@ body {
   min-height: 100vh;
 }
 
+/* ── 窄屏汉堡 + 抽屉背板（宽屏隐藏；侧栏常驻） ── */
+.sb-hamburger { display: none; }
+.sb-backdrop { display: none; }
+
 @media (max-width: 860px) {
-  .sidebar { transform: translateX(-100%); transition: transform 0.2s; }
-  .app-main { margin-left: 0; width: 100%; padding: 20px 16px 40px; }
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform 0.22s var(--ease-lift);
+    box-shadow: none;
+  }
+  .sidebar.is-open {
+    transform: translateX(0);
+    box-shadow: 0 0 0 1px var(--hairline), 12px 0 36px rgba(43, 38, 34, 0.16);
+  }
+  .app-main { margin-left: 0; width: 100%; padding: 60px 16px 40px; }
+
+  .sb-hamburger {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 40;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    background: var(--surface-raised);
+    color: var(--ink-soft);
+    cursor: pointer;
+    box-shadow: var(--shadow-card);
+  }
+  .sb-hamburger:hover { color: var(--clay); border-color: var(--clay-softer); }
+
+  .sidebar-open .sb-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 25;
+    background: rgba(43, 38, 34, 0.32);
+  }
 }
 </style>

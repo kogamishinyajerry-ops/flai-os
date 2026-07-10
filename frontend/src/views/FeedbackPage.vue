@@ -63,6 +63,8 @@
         </li>
       </ul>
     </template>
+
+    <el-empty v-else description="先在上方选择一个任务，再填写反馈" :image-size="80" />
   </div>
 </template>
 
@@ -73,6 +75,7 @@ import { ElMessage } from "element-plus";
 import { listTasks } from "../api/tasks";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
 import { statusLabel, formatTime } from "../utils/format";
+import { getSavedName, saveName } from "../utils/identity";
 
 const route = useRoute();
 
@@ -80,7 +83,7 @@ const tasks = ref([]);
 const tasksLoadError = ref("");
 const taskId = ref(typeof route.query.task_id === "string" ? route.query.task_id : "");
 
-const feedbackForm = reactive({ rating: "good", category: "", message: "", createdBy: "" });
+const feedbackForm = reactive({ rating: "good", category: "", message: "", createdBy: getSavedName() });
 const submitting = ref(false);
 const feedbackList = ref([]);
 const feedbackError = ref("");
@@ -130,6 +133,7 @@ async function handleSubmit() {
       message: feedbackForm.message || null,
       createdBy: feedbackForm.createdBy.trim(),
     });
+    saveName(feedbackForm.createdBy); // 记住名字，全站免重填
     ElMessage.success("反馈已提交");
     feedbackForm.message = "";
     await loadFeedback();
