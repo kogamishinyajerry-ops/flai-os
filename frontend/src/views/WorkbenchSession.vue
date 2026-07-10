@@ -240,6 +240,7 @@ onMounted(load);
   border-radius: 14px;
   padding: 22px 24px;
   margin-bottom: 18px;
+  box-shadow: var(--shadow-hero);
 }
 .sess-title-row {
   display: flex;
@@ -327,6 +328,11 @@ onMounted(load);
   border-radius: 10px;
   overflow: hidden;
   background: var(--card-bg);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow var(--ease-lift);
+}
+.member:hover {
+  box-shadow: var(--shadow-card-hover);
 }
 .member-bar {
   height: 3px;

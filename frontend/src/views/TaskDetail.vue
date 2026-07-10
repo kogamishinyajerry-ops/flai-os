@@ -347,19 +347,19 @@ onUnmounted(clearPoll);
 .review-card {
   margin-top: 12px;
   max-width: 480px;
-  background: #f5f7fa;
+  background: var(--paper-rail);
 }
 .event-type {
   font-weight: 600;
   font-size: 13px;
 }
 .event-message {
-  color: #606266;
+  color: var(--ink-soft);
   font-size: 13px;
   margin: 2px 0 4px;
 }
 .payload-json {
-  background: #f5f7fa;
+  background: var(--paper-rail);
   padding: 8px;
   border-radius: 4px;
   font-size: 12px;
@@ -382,15 +382,15 @@ onUnmounted(clearPoll);
   align-items: center;
   gap: 8px;
   padding: 8px 0;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--hairline);
   font-size: 13px;
 }
 .feedback-message {
   flex: 1;
-  color: #606266;
+  color: var(--ink-soft);
 }
 .feedback-meta {
-  color: #909399;
+  color: var(--ink-faint);
   font-size: 12px;
   white-space: nowrap;
 }

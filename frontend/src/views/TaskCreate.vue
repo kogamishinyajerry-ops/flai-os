@@ -335,7 +335,7 @@ onMounted(loadAgents);
 }
 .agent-preview {
   margin-bottom: 16px;
-  background: #f5f7fa;
+  background: var(--paper-rail);
 }
 .agent-preview-header {
   display: flex;
@@ -345,12 +345,12 @@ onMounted(loadAgents);
 }
 .agent-preview-summary {
   margin: 0 0 6px;
-  color: #606266;
+  color: var(--ink-soft);
   font-size: 13px;
 }
 .agent-preview-limits {
   font-size: 12px;
-  color: #909399;
+  color: var(--ink-faint);
 }
 .limits-label {
   font-weight: 600;
@@ -364,7 +364,7 @@ onMounted(loadAgents);
   margin-top: 4px;
 }
 .field-hint {
-  color: #909399;
+  color: var(--ink-faint);
   font-size: 12px;
   margin-top: 4px;
 }

@@ -155,6 +155,7 @@ onMounted(() => {
   border-radius: 14px;
   padding: 28px 30px;
   margin-bottom: 24px;
+  box-shadow: var(--shadow-hero);
 }
 .wb-hero h2 {
   margin: 0 0 8px;
@@ -182,11 +183,13 @@ onMounted(() => {
   overflow: hidden;
   background: var(--card-bg);
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  box-shadow: var(--shadow-card);
+  transition: border-color var(--ease-lift), box-shadow var(--ease-lift), transform var(--ease-lift);
 }
 .sess-card:hover {
   border-color: var(--clay-softer);
-  box-shadow: 0 2px 12px rgba(72, 58, 44, 0.07);
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-2px);
 }
 .sess-card-bar {
   height: 4px;
@@ -253,11 +256,12 @@ onMounted(() => {
   margin-bottom: 8px;
   background: var(--card-bg);
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color var(--ease-lift), box-shadow var(--ease-lift), transform var(--ease-lift);
 }
 .wb-row:hover {
   border-color: var(--clay-softer);
-  box-shadow: 0 2px 10px rgba(72, 58, 44, 0.06);
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-1px);
 }
 .wb-lamp {
   width: 10px;

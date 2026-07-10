@@ -156,7 +156,7 @@ onMounted(async () => {
   margin-bottom: 8px;
 }
 .select-hint {
-  color: #909399;
+  color: var(--ink-faint);
   font-size: 12px;
   line-height: 1.5;
   margin-top: 4px;
@@ -174,15 +174,15 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   padding: 8px 0;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--hairline);
   font-size: 13px;
 }
 .feedback-message {
   flex: 1;
-  color: #606266;
+  color: var(--ink-soft);
 }
 .feedback-meta {
-  color: #909399;
+  color: var(--ink-faint);
   font-size: 12px;
   white-space: nowrap;
 }

@@ -20,7 +20,7 @@
 
     <el-row v-else :gutter="16">
       <el-col v-for="agent in agents" :key="agent.id" :span="8" class="agent-col">
-        <el-card class="agent-card" shadow="hover" :body-style="{ padding: '0' }">
+        <el-card class="agent-card" shadow="never" :body-style="{ padding: '0' }">
           <div class="cat-bar" :style="{ background: categoryColor(agent.category) }"></div>
           <div class="card-inner">
             <div class="agent-card-header">
@@ -120,7 +120,7 @@ onMounted(load);
 }
 .page-sub {
   margin: 0;
-  color: #909399;
+  color: var(--ink-faint);
   font-size: 13px;
 }
 .page-alert {
@@ -134,9 +134,12 @@ onMounted(load);
   border: 1px solid var(--hairline);
   border-radius: 12px;
   overflow: hidden;
-  transition: transform 0.15s ease;
+  box-shadow: var(--shadow-card);
+  transition: border-color var(--ease-lift), box-shadow var(--ease-lift), transform var(--ease-lift);
 }
 .agent-card:hover {
+  border-color: var(--clay-softer);
+  box-shadow: var(--shadow-card-hover);
   transform: translateY(-2px);
 }
 .cat-bar {
@@ -184,7 +187,7 @@ onMounted(load);
   border-radius: 999px;
 }
 .agent-summary {
-  color: #606266;
+  color: var(--ink-soft);
   font-size: 13px;
   line-height: 1.5;
   min-height: 40px;
@@ -193,7 +196,7 @@ onMounted(load);
   margin: 0;
   padding-left: 18px;
   font-size: 13px;
-  color: #606266;
+  color: var(--ink-soft);
 }
 .agent-actions {
   margin-top: auto;

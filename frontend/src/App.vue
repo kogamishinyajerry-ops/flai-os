@@ -67,6 +67,12 @@ const activeMenu = computed(() => {
   --trust-signed: #167d8b; /* teal：仅人签 */
   --trust-fail: #be3a3a;   /* 红：仅真失败/驳回 */
   --trust-pending: #a8761a;/* amber：仅未核/降级 */
+  /* elevation：暖调柔阴影（纯工艺层，中性 ink 色不碰语义槽）——静止态极轻、hover 抬升。
+   * 卡片从"只有边框的扁平"升为"有纸感的浮起"，是本轮 UI 抬升的主手段。*/
+  --shadow-card: 0 1px 2px rgba(43, 38, 34, 0.035), 0 4px 14px rgba(72, 58, 44, 0.05);
+  --shadow-card-hover: 0 2px 6px rgba(43, 38, 34, 0.06), 0 12px 30px rgba(72, 58, 44, 0.10);
+  --shadow-hero: 0 1px 3px rgba(43, 38, 34, 0.04), 0 10px 34px rgba(72, 58, 44, 0.06);
+  --ease-lift: 0.18s cubic-bezier(0.22, 0.61, 0.36, 1);
   --el-color-primary: #c15f3c;
   --el-color-primary-light-3: #d08663;
   --el-color-primary-light-5: #dba489;

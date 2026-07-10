@@ -444,6 +444,7 @@ function createOneTask(agent, plan) {
   border-radius: 10px;
   overflow: hidden;
   background: #fff;
+  box-shadow: var(--shadow-card);
 }
 .plan-bar {
   height: 4px;
@@ -489,7 +490,7 @@ function createOneTask(agent, plan) {
 .plan-analysis,
 .plan-reason {
   margin: 0 0 10px;
-  color: #606266;
+  color: var(--ink-soft);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -533,10 +534,14 @@ function createOneTask(agent, plan) {
   margin: 10px 0;
 }
 .agent-card {
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--hairline-soft);
   border-radius: 9px;
   overflow: hidden;
   background: var(--paper-cream);
+  transition: box-shadow var(--ease-lift);
+}
+.agent-card:hover {
+  box-shadow: var(--shadow-card);
 }
 .agent-bar {
   height: 3px;
@@ -571,7 +576,7 @@ function createOneTask(agent, plan) {
 }
 .agent-rationale {
   margin: 0 0 8px;
-  color: #606266;
+  color: var(--ink-soft);
   font-size: 12.5px;
   line-height: 1.5;
 }
