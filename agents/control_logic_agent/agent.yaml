@@ -4,7 +4,7 @@ version: 0.1.0
 status: draft
 maturity: L0
 category: structured_gen
-summary: "把结构化控制需求（状态列表+转移规则）确定性展开为规范化控制逻辑描述（状态机 JSON + 人读转移表），含 BFS 不可达态分析。零 LLM 零工具。"
+summary: "把结构化控制需求（状态列表+转移规则）确定性展开为规范化控制逻辑描述（状态机 JSON + 人读转移表），并自动排查无法到达的状态。全程确定性计算，不调用大模型、不依赖外部工具（结果可复现）。"
 description: >
   M5 平台泛化验证的「纯结构化生成型」样板：证明平台可承载无工具、无模型的
   纯确定性生成 Agent。输入状态/转移规则，输出规范化 control_logic.json

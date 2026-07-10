@@ -1,10 +1,10 @@
 id: performance_disk_agent
-name: "性能盘批量计算 Agent（Mock 阶段）"
+name: "性能盘批量计算 Agent（模拟阶段）"
 version: 0.1.0
 status: draft
 maturity: L0
 category: tool_automation
-summary: "上传 case 表(.xlsx)→逐 case 调用 mock 性能计算→写汇总表/样本/报告。当前为 Mock 阶段：计算是纯虚构公式，输出无任何工程意义。"
+summary: "上传算例表(.xlsx)→逐算例调用性能计算→写汇总表/样本/报告。当前为模拟阶段：计算用占位公式（纯属虚构），输出无任何工程意义。"
 description: >
   M3 里程碑的批量作业样板 Agent：演示「文件上传→解析→逐 case 工具调用（单
   case 失败不摧毁任务）→三产物落盘（result_summary.xlsx / samples.jsonl /
@@ -59,7 +59,7 @@ data_asset:
     - outputs.ok_count
     - outputs.failed_count
 limitations:
-  - "Mock 阶段：全部计算结果来自纯虚构公式（performance_disk_mock，mock=true），无任何工程意义，绝不可用于任何设计/校核/决策场景。"
-  - "不做全性能分析：只对表格中给定的离散 case 逐点计算，不做包线扫描、插值、趋势或裕度分析。"
+  - "模拟阶段：全部计算结果来自占位公式（模拟工具 performance_disk_mock），纯属虚构、无任何工程意义，绝不可用于任何设计/校核/决策场景。"
+  - "不做全性能分析：只对表格中给定的离散算例逐点计算，不做包线扫描、插值、趋势或裕度分析。"
   - "不替代专业判断：产物（汇总表/报告）是原始计算的忠实转写，正确性与适用性判定权在工程师。"
-  - "输入仅支持 .xlsx 单 sheet case 表（必需列 case_id/altitude_m/mach/power_kw）；不支持 csv/多 sheet 合并/公式联动。"
+  - "输入仅支持 .xlsx 单工作表算例表（必需列 case_id/altitude_m/mach/power_kw）；不支持 csv/多工作表合并/公式联动。"
