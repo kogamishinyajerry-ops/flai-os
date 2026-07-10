@@ -1,0 +1,320 @@
+<template>
+  <div class="worklog">
+    <div class="worklog-head" @click="toggleExpanded">
+      <div class="worklog-head-left">
+        <span v-if="isWorking" class="work-pulse-dot"></span>
+        <span class="worklog-head-text">{{ headText }}</span>
+      </div>
+      <span class="worklog-arrow" :class="{ 'is-open': expanded }">▸</span>
+    </div>
+
+    <!-- 授权链口播：放头行正下方，approved=teal / rejected=红，绝不用绿。 -->
+    <div
+      v-if="signoff"
+      class="worklog-signoff"
+      :style="{ color: signoff.approved ? 'var(--trust-signed)' : 'var(--trust-fail)' }"
+      :title="signoff.comment || undefined"
+    >
+      {{ signoff.approved ? `✓ 依据 ${signoff.reviewer} 的批准放行` : `✕ 由 ${signoff.reviewer} 驳回` }}
+    </div>
+
+    <!-- 过去式摘要：终态/审核事件优先，否则退化为最后一条事件消息。 -->
+    <div v-if="summaryText" class="worklog-summary">{{ summaryText }}</div>
+
+    <!-- 聚合 chips：折叠态也常显。 -->
+    <div v-if="chips.length" class="worklog-chips">
+      <span v-for="c in chips" :key="c.key" class="worklog-chip">
+        {{ c.label }} ×{{ c.count }}
+        <span v-if="c.mock" class="pill-amber">mock</span>
+      </span>
+    </div>
+
+    <!-- 原始事件 token 行：e2e 保命线（task_created/tool_started/tool_finished/
+         task_completed/review_approved 等英文 token 逐字可见），折叠态也常显，绝不 v-if 隐藏。 -->
+    <div v-if="rawLine" class="worklog-rawline">{{ rawLine }}</div>
+
+    <div v-if="expanded" class="worklog-timeline">
+      <el-empty v-if="!events.length" description="暂无事件" />
+      <el-timeline v-else>
+        <el-timeline-item
+          v-for="e in events"
+          :key="e.event_id"
+          :timestamp="formatTime(e.created_at)"
+          :color="LEVEL_COLOR[e.level] || LEVEL_COLOR.info"
+        >
+          <div class="event-type">
+            {{ eventTypeLabel(e.event_type) }}
+            <span class="event-type-raw">{{ e.event_type }}</span>
+          </div>
+          <div class="event-message">{{ e.message }}</div>
+          <el-collapse v-if="e.payload && Object.keys(e.payload).length">
+            <el-collapse-item title="详细数据">
+              <pre class="payload-json">{{ JSON.stringify(e.payload, null, 2) }}</pre>
+            </el-collapse-item>
+          </el-collapse>
+        </el-timeline-item>
+      </el-timeline>
+    </div>
+  </div>
+</template>
+
+<script setup>
+// 折叠工作日志（Codex「已处理 13m54s ›」模式）。纯展示组件：全部派生数据用
+// computed 从 props 算，组件内绝不复制/缓存 events——父页有「轮询整包作废」
+// 竞态守卫，本组件必须无状态跟随，否则会显示已被父页判定为 stale 的快照。
+import { ref, computed } from "vue";
+import { TASK_WORK_STATES, formatDuration, taskElapsedMs, formatTime, LEVEL_COLOR, eventTypeLabel } from "../utils/format";
+import { listToolRuns } from "../api/tasks";
+
+const props = defineProps({
+  events: { type: Array, default: () => [] },
+  task: { type: Object, default: null },
+});
+
+// 仅有的两个本地状态：展开开关 + 懒加载的工具运行明细（用于 mock 徽标）。
+const expanded = ref(false);
+const toolRuns = ref([]);
+let toolRunsRequested = false;
+
+async function toggleExpanded() {
+  expanded.value = !expanded.value;
+  if (expanded.value && !toolRunsRequested) {
+    toolRunsRequested = true;
+    try {
+      toolRuns.value = await listToolRuns(props.task.id);
+    } catch {
+      // 诚实降级：懒加载失败只是不显示 mock 徽标，绝不报错阻塞展开内容。
+      // 复位请求标记：否则一次网络抖动后 mock 徽标永久丢失（把"未知"呈现成"非 mock"）。
+      toolRunsRequested = false;
+      toolRuns.value = [];
+    }
+  }
+}
+
+const isWorking = computed(() => TASK_WORK_STATES.has(props.task?.status));
+const elapsedMs = computed(() => taskElapsedMs(props.task, Date.now()));
+
+const headText = computed(() => {
+  if (isWorking.value) {
+    // started_at 缺失（如 validating 早期）时不硬凑"已 —"，退化为纯进行态文案。
+    return elapsedMs.value === null ? "正在处理…" : `正在处理 · 已 ${formatDuration(elapsedMs.value)}`;
+  }
+  if (elapsedMs.value === null) {
+    return "尚未开始";
+  }
+  return `已处理 ${formatDuration(elapsedMs.value)} · ${(props.events || []).length} 条事件`;
+});
+
+// 授权链口播：倒序找最后一条 review_approved/review_rejected；无 payload.reviewer 则不渲染。
+const signoff = computed(() => {
+  const list = props.events || [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const e = list[i];
+    if (e.event_type === "review_approved" || e.event_type === "review_rejected") {
+      if (!e.payload?.reviewer) return null;
+      return {
+        approved: e.event_type === "review_approved",
+        reviewer: e.payload.reviewer,
+        comment: e.payload.comment || "",
+      };
+    }
+  }
+  return null;
+});
+
+// 过去式摘要：终态/审核类事件优先，否则退化为最后一条事件消息；都没有则不渲染。
+const TERMINAL_SUMMARY_TYPES = ["task_completed", "task_failed", "review_approved", "review_rejected", "task_cancelled"];
+const summaryText = computed(() => {
+  const list = props.events || [];
+  if (!list.length) return "";
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (TERMINAL_SUMMARY_TYPES.includes(list[i].event_type)) {
+      return list[i].message || "";
+    }
+  }
+  return list[list.length - 1].message || "";
+});
+
+// tool_runs 数据源只认 tool_id → mock 是否为 true，绝不从 agent_log payload 猜。
+const toolRunsByToolId = computed(() => {
+  const map = new Map();
+  for (const r of toolRuns.value || []) {
+    const bucket = map.get(r.tool_id) || [];
+    bucket.push(r);
+    map.set(r.tool_id, bucket);
+  }
+  return map;
+});
+function toolHasMock(toolId) {
+  const runs = toolRunsByToolId.value.get(toolId);
+  return Array.isArray(runs) && runs.some((r) => r.mock === true);
+}
+
+const TOOL_EVENT_TYPES = new Set(["tool_started", "tool_finished", "tool_failed"]);
+
+// 聚合 chips：相邻 tool_* 事件归工具组（组内再按 tool_id 分别计数），相邻
+// agent_log 归一组；其余事件类型各自成组（不与相邻同类合并）。
+const chips = computed(() => {
+  const out = [];
+  let group = null; // { type: 'tool' | 'agent_log', events: [] }
+
+  const flush = () => {
+    if (!group) return;
+    if (group.type === "tool") {
+      const byTool = new Map();
+      for (const e of group.events) {
+        const id = e.payload?.tool_id || "未知工具";
+        const entry = byTool.get(id) || { started: 0, total: 0 };
+        entry.total += 1;
+        if (e.event_type === "tool_started") entry.started += 1;
+        byTool.set(id, entry);
+      }
+      for (const [id, { started, total }] of byTool) {
+        out.push({
+          key: `tool:${out.length}:${id}`,
+          label: `调用工具 ${id}`,
+          count: started || total,
+          mock: toolHasMock(id),
+        });
+      }
+    } else if (group.type === "agent_log") {
+      out.push({ key: `agentlog:${out.length}`, label: "Agent 日志", count: group.events.length, mock: false });
+    }
+    group = null;
+  };
+
+  for (const e of props.events || []) {
+    if (TOOL_EVENT_TYPES.has(e.event_type)) {
+      if (group && group.type === "tool") {
+        group.events.push(e);
+      } else {
+        flush();
+        group = { type: "tool", events: [e] };
+      }
+    } else if (e.event_type === "agent_log") {
+      if (group && group.type === "agent_log") {
+        group.events.push(e);
+      } else {
+        flush();
+        group = { type: "agent_log", events: [e] };
+      }
+    } else {
+      flush();
+      out.push({ key: `single:${out.length}:${e.event_id}`, label: eventTypeLabel(e.event_type), count: 1, mock: false });
+    }
+  }
+  flush();
+  return out;
+});
+
+// 原始事件 token 行：按首次出现顺序去重，附计数；e2e 直接在 innerText 里找
+// 这些英文 token，折叠态也必须可见（不得 v-if="expanded" 隐藏）。
+const rawLine = computed(() => {
+  const order = [];
+  const counts = new Map();
+  for (const e of props.events || []) {
+    if (!counts.has(e.event_type)) order.push(e.event_type);
+    counts.set(e.event_type, (counts.get(e.event_type) || 0) + 1);
+  }
+  return order.map((t) => `${t} ×${counts.get(t)}`).join(" · ");
+});
+</script>
+
+<style scoped>
+.worklog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  padding: 10px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--paper-rail);
+}
+.worklog-head-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.worklog-head-text {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.worklog-arrow {
+  display: inline-block;
+  color: var(--ink-faint);
+  font-size: 12px;
+  transition: transform var(--ease-lift, 0.18s ease);
+  flex: none;
+}
+.worklog-arrow.is-open {
+  transform: rotate(90deg);
+}
+.worklog-signoff {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-top: 8px;
+  padding-left: 2px;
+}
+.worklog-summary {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  margin-top: 8px;
+  padding-left: 2px;
+}
+.worklog-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.worklog-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: var(--paper-surface);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+.worklog-rawline {
+  margin-top: 6px;
+  font-family: var(--mono, monospace);
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  word-break: break-all;
+  padding-left: 2px;
+}
+.worklog-timeline {
+  margin-top: 14px;
+}
+.event-type-raw {
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-left: 8px;
+  font-weight: 400;
+}
+.event-type {
+  font-weight: 600;
+  font-size: 13px;
+}
+.event-message {
+  color: var(--ink-soft);
+  font-size: 13px;
+  margin: 2px 0 4px;
+}
+.payload-json {
+  background: var(--paper-rail);
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  overflow-x: auto;
+}
+</style>

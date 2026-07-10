@@ -45,6 +45,7 @@
           <div class="prog-num">{{ summonedCount }} / {{ rosterAgents.length }}</div>
           <div class="prog-label">已召集 Agent</div>
           <div class="prog-sub">{{ completedCount }} 个任务已完成 · 共 {{ memberTasks.length }} 个任务</div>
+          <span v-if="waitingReviewCount > 0" class="pill-amber">待你签发 {{ waitingReviewCount }}</span>
         </div>
       </div>
 
@@ -88,10 +89,11 @@
                   :class="['task-chip', { review: t.status === 'waiting_review' }]"
                   @click="goTask(t)"
                 >
-                  <span class="chip-lamp" :style="{ background: taskLampColor(t.status) }"></span>
+                  <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
                   <span class="chip-name">{{ t.name || t.id.slice(0, 12) }}</span>
                   <span class="chip-status" :style="{ color: taskLampColor(t.status) }">{{ statusLabel(t.status) }}</span>
                   <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
+                  <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
                 </div>
               </div>
 
@@ -118,9 +120,11 @@
         <div class="block-label">其它归属本会话的任务</div>
         <div class="task-chips">
           <div v-for="t in otherTasks" :key="t.id" :class="['task-chip', { review: t.status === 'waiting_review' }]" @click="goTask(t)">
-            <span class="chip-lamp" :style="{ background: taskLampColor(t.status) }"></span>
+            <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
             <span class="chip-name">{{ t.name || t.agent_id }}</span>
             <span class="chip-status" :style="{ color: taskLampColor(t.status) }">{{ statusLabel(t.status) }}</span>
+            <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
+            <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
           </div>
         </div>
       </div>
@@ -137,7 +141,7 @@ import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { getConversation, listConversationTasks, concludeConversation } from "../api/conversations";
-import { categoryColor, categoryLabel, statusLabel, taskLampColor } from "../utils/format";
+import { categoryColor, categoryLabel, statusLabel, taskLampColor, TASK_WORK_STATES } from "../utils/format";
 
 const route = useRoute();
 const router = useRouter();
@@ -159,6 +163,19 @@ function tasksFor(agent) {
 const summonedCount = computed(() => rosterAgents.value.filter((a) => tasksFor(a).length > 0).length);
 const completedCount = computed(() => memberTasks.value.filter((t) => t.status === "completed").length);
 const otherTasks = computed(() => memberTasks.value.filter((t) => !rosterAgentIds.value.has(t.agent_id)));
+// 待签发常驻 pill：waiting_review 任务数（文案刻意避开"尚未召集"/"待人工放行"既有词，不占用锚点断言位）。
+const waitingReviewCount = computed(() => memberTasks.value.filter((t) => t.status === "waiting_review").length);
+
+// 锚点卡：色点工作态脉动 + 单一直达动作词，口径统一取自 utils/format 的 TASK_WORK_STATES/taskLampColor。
+function isWorkState(status) {
+  return TASK_WORK_STATES.has(status);
+}
+function chipActionLabel(status) {
+  if (TASK_WORK_STATES.has(status)) return "查看进度 →";
+  if (status === "completed") return "查看产物 →";
+  if (status === "failed") return "查看失败详情 →";
+  return "";
+}
 
 async function load() {
   loading.value = true;
@@ -304,6 +321,9 @@ onMounted(load);
   color: var(--ink-faint);
   margin-top: 6px;
 }
+.sess-progress .pill-amber {
+  margin-top: 10px;
+}
 .sess-block {
   margin-bottom: 16px;
 }
@@ -436,6 +456,10 @@ onMounted(load);
   width: 9px;
   height: 9px;
   border-radius: 50%;
+  flex: none;
+}
+.chip-lamp.is-pulsing {
+  animation: flai-work-pulse var(--pulse-duration) ease-in-out infinite;
 }
 .chip-name {
   font-size: 13px;
@@ -450,6 +474,16 @@ onMounted(load);
   font-size: 12px;
   font-weight: 700;
   color: var(--trust-pending);
+  margin-left: auto;
+}
+.chip-action {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--clay);
+  margin-left: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chip-lamp.is-pulsing { animation: none; }
 }
 .sess-foot {
   margin-top: 18px;

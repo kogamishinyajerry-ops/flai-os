@@ -149,6 +149,7 @@ onMounted(loadConvos);
   --trust-signed: #167d8b; /* teal：仅人签 */
   --trust-fail: #be3a3a;   /* 红：仅真失败/驳回 */
   --trust-pending: #a8761a;/* amber：仅未核/降级 */
+  --pulse-duration: 1.8s;
   /* elevation：暖调柔阴影（纯工艺层，中性 ink 色不碰语义槽）——静止态极轻、hover 抬升。
    * 卡片从"只有边框的扁平"升为"有纸感的浮起"，是本轮 UI 抬升的主手段。*/
   --shadow-card: 0 1px 2px rgba(43, 38, 34, 0.035), 0 4px 14px rgba(72, 58, 44, 0.05);
@@ -182,6 +183,36 @@ onMounted(loadConvos);
   --el-fill-color-lighter: #fbf9f3;
   --el-fill-color-blank: #ffffff;
 }
+/* ── 工作态氛围（全局复用）── */
+@keyframes flai-work-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .45; transform: scale(.82); }
+}
+.work-pulse-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--clay);
+  animation: flai-work-pulse var(--pulse-duration) ease-in-out infinite;
+  flex: none;
+}
+.pill-amber {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--trust-pending);
+  border: 1px solid rgba(168, 118, 26, .35);
+  background: rgba(168, 118, 26, .08);
+  white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .work-pulse-dot { animation: none; }
+}
+
 body {
   margin: 0;
   background: var(--page-bg);

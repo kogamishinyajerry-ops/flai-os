@@ -28,6 +28,8 @@ export const statusTagType = (s) => TASK_STATUS[s]?.type ?? "info";
 //   REAL。等真实性能盘接入产出可核结果再解锁绿）
 // - 其余（created/queued/cancelled）= 淡墨（待命/终止）
 const _TASK_WORK_STATES = new Set(["running", "validating", "parsing", "analyzing"]);
+// 同一份工作态集合对外导出（勿重复定义第二份，避免两处口径漂移）。
+export const TASK_WORK_STATES = _TASK_WORK_STATES;
 export const taskLampColor = (status) => {
   if (_TASK_WORK_STATES.has(status)) return "var(--clay)";
   if (status === "waiting_review") return "var(--trust-pending)";
@@ -102,4 +104,27 @@ export const formatTime = (iso) => {
   if (!iso) return "—";
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString("zh-CN", { hour12: false });
+};
+
+// 毫秒 → 人话时长（工作态氛围展示用；非法/负值一律诚实降级为「—」，不编造）。
+export const formatDuration = (ms) => {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "—";
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours} 小时 ${String(minutes).padStart(2, "0")} 分`;
+  if (minutes > 0) return `${minutes} 分 ${seconds} 秒`;
+  return `${seconds} 秒`;
+};
+
+// 任务已耗时（毫秒）：无 started_at 诚实返回 null（不编造耗时）；
+// 有 started_at 则用 (finished_at 或 nowMs) - started_at；解析失败同样返回 null。
+export const taskElapsedMs = (task, nowMs) => {
+  if (!task || !task.started_at) return null;
+  const startMs = Date.parse(task.started_at);
+  if (Number.isNaN(startMs)) return null;
+  const endMs = task.finished_at ? Date.parse(task.finished_at) : nowMs;
+  if (Number.isNaN(endMs)) return null;
+  return endMs - startMs;
 };

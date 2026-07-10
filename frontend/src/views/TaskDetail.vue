@@ -11,6 +11,7 @@
       </div>
       <div class="page-header">
         <h2>任务详情</h2>
+        <span v-if="isTaskWorking" class="work-pulse-dot"></span>
         <el-tag :type="statusTagType(task.status)">{{ statusLabel(task.status) }}</el-tag>
         <!-- 批量任务摘要（P2）：消解「全失败 case 仍显示绿色已完成」的误导——
              ok/failed 计数取自最后一条 summary_generated 折叠事件，纯前端派生。 -->
@@ -58,25 +59,60 @@
         class="section"
       />
 
-      <!-- 产物：签发前把要签的东西摆在眼前（不再只给 hash 命名的下载按钮）。
-           放在「动作」之前——先看产物，再决定放行（信任核心 P0-2）。 -->
-      <div class="section" v-if="artifacts.length">
-        <h3>产物<span v-if="isWaitingReview" class="artifact-review-hint">放行前请先审阅</span></h3>
-        <div v-for="a in artifacts" :key="a.fileId" class="artifact-card">
-          <div class="artifact-head">
-            <span class="artifact-name">{{ a.filename }}</span>
-            <span v-if="!a.loading && a.size" class="artifact-size">{{ formatSize(a.size) }}</span>
-            <a :href="downloadUrl(a.fileId)" download class="artifact-download">下载</a>
+      <!-- 双面板：左栏=产物（签发前把要签的东西摆在眼前，放在「动作」之前——先看
+           产物，再决定放行，信任核心 P0-2），右栏=来源（输入文件/参数/执行方，
+           全部真实字段，无则显示"—"，诚实降级不编造）。左栏必须先于右栏出现在
+           DOM 中——e2e 取 a[href*='/download'] 的 .first 仍须指向产物下载链接。 -->
+      <div class="section">
+        <div class="io-panel">
+          <div class="section" v-if="artifacts.length">
+            <h3>产物<span v-if="isWaitingReview" class="artifact-review-hint">放行前请先审阅</span></h3>
+            <div v-for="a in artifacts" :key="a.fileId" class="artifact-card">
+              <div class="artifact-head">
+                <span class="artifact-name">{{ a.filename }}</span>
+                <span v-if="a.ext" class="artifact-ext-badge">.{{ a.ext }}</span>
+                <span v-if="!a.loading && a.size" class="artifact-size">{{ formatSize(a.size) }}</span>
+                <a :href="downloadUrl(a.fileId)" download class="artifact-download">下载</a>
+              </div>
+              <div v-if="a.loading" class="artifact-body muted">加载中…</div>
+              <div v-else-if="a.error" class="artifact-body artifact-error">产物加载失败：{{ a.error }}</div>
+              <MarkdownLite
+                v-else-if="a.isText && (a.ext === 'md' || a.ext === 'markdown')"
+                :text="a.text"
+                class="artifact-body"
+              />
+              <pre v-else-if="a.isText" class="artifact-body artifact-pre">{{ a.text }}</pre>
+              <div v-else class="artifact-body muted">二进制文件，请下载后查看。</div>
+            </div>
           </div>
-          <div v-if="a.loading" class="artifact-body muted">加载中…</div>
-          <div v-else-if="a.error" class="artifact-body artifact-error">产物加载失败：{{ a.error }}</div>
-          <MarkdownLite
-            v-else-if="a.isText && (a.ext === 'md' || a.ext === 'markdown')"
-            :text="a.text"
-            class="artifact-body"
-          />
-          <pre v-else-if="a.isText" class="artifact-body artifact-pre">{{ a.text }}</pre>
-          <div v-else class="artifact-body muted">二进制文件，请下载后查看。</div>
+
+          <div class="source-panel">
+            <h3>来源</h3>
+            <div class="source-block">
+              <div class="source-label">输入文件</div>
+              <template v-if="task.input_file_ids && task.input_file_ids.length">
+                <div v-for="(fid, idx) in task.input_file_ids" :key="fid" class="source-row">
+                  <span>输入文件 {{ idx + 1 }}</span>
+                  <a :href="downloadUrl(fid)" download class="source-download">下载</a>
+                </div>
+              </template>
+              <div v-else class="muted">无输入文件</div>
+            </div>
+            <div class="source-block">
+              <div class="source-label">输入参数</div>
+              <template v-if="inputEntries.length">
+                <div v-for="[k, v] in inputEntries" :key="k" class="source-row">
+                  <span class="source-param-key">{{ k }}</span>
+                  <span class="source-param-val">{{ v }}</span>
+                </div>
+              </template>
+              <div v-else class="muted">无参数</div>
+            </div>
+            <div class="source-block">
+              <div class="source-label">执行方</div>
+              <div>{{ task.agent_id || "—" }} · {{ task.agent_version || "—" }}</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -106,26 +142,7 @@
 
       <div class="section">
         <h3>事件时间轴</h3>
-        <el-empty v-if="events.length === 0" description="暂无事件" />
-        <el-timeline v-else>
-          <el-timeline-item
-            v-for="e in events"
-            :key="e.event_id"
-            :timestamp="formatTime(e.created_at)"
-            :color="LEVEL_COLOR[e.level] || LEVEL_COLOR.info"
-          >
-            <div class="event-type">
-              {{ eventTypeLabel(e.event_type) }}
-              <span class="event-type-raw">{{ e.event_type }}</span>
-            </div>
-            <div class="event-message">{{ e.message }}</div>
-            <el-collapse v-if="e.payload && Object.keys(e.payload).length">
-              <el-collapse-item title="详细数据">
-                <pre class="payload-json">{{ JSON.stringify(e.payload, null, 2) }}</pre>
-              </el-collapse-item>
-            </el-collapse>
-          </el-timeline-item>
-        </el-timeline>
+        <WorkLog :events="events" :task="task" />
       </div>
 
       <div class="section" v-if="isTerminal">
@@ -177,8 +194,9 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { getTask, listTaskEvents, cancelTask, reviewTask } from "../api/tasks";
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
-import { statusLabel, statusTagType, formatTime, LEVEL_COLOR, eventTypeLabel } from "../utils/format";
+import { statusLabel, statusTagType, formatTime, TASK_WORK_STATES } from "../utils/format";
 import MarkdownLite from "../components/MarkdownLite.vue";
+import WorkLog from "../components/WorkLog.vue";
 import { getSavedName, saveName } from "../utils/identity";
 
 const route = useRoute();
@@ -265,6 +283,26 @@ const batchSummary = computed(() => {
 const canCancel = computed(() => ["created", "queued"].includes(task.value?.status));
 const isWaitingReview = computed(() => task.value?.status === "waiting_review");
 const isTerminal = computed(() => ["completed", "failed", "cancelled"].includes(task.value?.status));
+// 页头到席点：与 WorkLog 内部同一口径（TASK_WORK_STATES），紧邻状态 tag 左侧。
+const isTaskWorking = computed(() => TASK_WORK_STATES.has(task.value?.status));
+
+// 来源面板「输入参数」：task.inputs 的 key→值摘要（值 JSON.stringify 截 80 字符），
+// 纯展示派生，不改任何签发/预填逻辑。
+function summarizeInputValue(v) {
+  let s;
+  try {
+    s = JSON.stringify(v);
+  } catch {
+    s = String(v);
+  }
+  if (s == null) return "—";
+  return s.length > 80 ? `${s.slice(0, 80)}…` : s;
+}
+const inputEntries = computed(() => {
+  const inputs = task.value?.inputs;
+  if (!inputs || typeof inputs !== "object") return [];
+  return Object.entries(inputs).map(([k, v]) => [k, summarizeInputValue(v)]);
+});
 
 let pollTimer = null;
 
@@ -439,13 +477,6 @@ onUnmounted(clearPoll);
 .task-descriptions {
   margin-top: 4px;
 }
-.event-type-raw {
-  font-family: var(--mono, monospace);
-  font-size: 11px;
-  color: var(--ink-faint);
-  margin-left: 8px;
-  font-weight: 400;
-}
 .section {
   margin-top: 24px;
 }
@@ -457,22 +488,6 @@ onUnmounted(clearPoll);
   margin-top: 12px;
   max-width: 480px;
   background: var(--paper-rail);
-}
-.event-type {
-  font-weight: 600;
-  font-size: 13px;
-}
-.event-message {
-  color: var(--ink-soft);
-  font-size: 13px;
-  margin: 2px 0 4px;
-}
-.payload-json {
-  background: var(--paper-rail);
-  padding: 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  overflow-x: auto;
 }
 /* 批准=人签，用信任锁 teal（--trust-signed）覆盖 Element Plus 按钮变量；绝不用绿。 */
 .approve-btn {
@@ -532,6 +547,75 @@ onUnmounted(clearPoll);
 }
 .artifact-download:hover {
   text-decoration: underline;
+}
+.artifact-ext-badge {
+  font-size: 11px;
+  color: var(--ink-faint);
+  background: var(--paper-canvas-b, var(--paper-rail));
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-family: var(--mono, monospace);
+}
+/* 双面板：左产物/右来源，宽屏两栏、窄屏单列自适应。 */
+.io-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 760px) {
+  .io-panel {
+    grid-template-columns: 1fr;
+  }
+}
+.source-panel {
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--card-bg, var(--paper-surface));
+  box-shadow: var(--shadow-card);
+  padding: 16px;
+}
+.source-panel h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+.source-block {
+  margin-bottom: 14px;
+}
+.source-block:last-child {
+  margin-bottom: 0;
+}
+.source-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  margin-bottom: 6px;
+}
+.source-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  padding: 3px 0;
+}
+.source-download {
+  margin-left: auto;
+  color: var(--clay);
+  font-size: 12.5px;
+  text-decoration: none;
+}
+.source-download:hover {
+  text-decoration: underline;
+}
+.source-param-key {
+  font-family: var(--mono, monospace);
+  font-weight: 600;
+  color: var(--ink);
+}
+.source-param-val {
+  color: var(--ink-soft);
+  word-break: break-all;
 }
 .artifact-body {
   padding: 16px;

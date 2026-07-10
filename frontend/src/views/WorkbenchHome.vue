@@ -23,12 +23,13 @@
       <p class="wb-note">这些任务已产出草案，等你审阅后放行或拒绝——签发权在你。</p>
       <div class="wb-list">
         <div v-for="t in reviewTasks" :key="t.id" class="wb-row wb-row--review" @click="goDetail(t)">
-          <span class="wb-lamp" :style="{ background: lampColor(t.status) }" :title="statusLabel(t.status)"></span>
+          <span class="wb-lamp" :class="{ 'is-pulsing': isWorkState(t.status) }" :style="{ background: lampColor(t.status) }" :title="statusLabel(t.status)"></span>
           <span class="wb-name">{{ t.name || t.id.slice(0, 12) }}</span>
           <span class="wb-agent">{{ t.agent_id }}</span>
           <span class="wb-status" :style="{ color: lampColor(t.status) }">{{ statusLabel(t.status) }}</span>
           <span class="wb-by">{{ t.created_by }}</span>
           <span class="wb-time">{{ formatTime(t.created_at) }}</span>
+          <span v-if="rowActionLabel(t.status)" class="row-action">{{ rowActionLabel(t.status) }}</span>
         </div>
       </div>
     </div>
@@ -78,12 +79,13 @@
 
       <div v-loading="loading" class="wb-list">
         <div v-for="t in tasks" :key="t.id" class="wb-row" @click="goDetail(t)">
-          <span class="wb-lamp" :style="{ background: lampColor(t.status) }" :title="statusLabel(t.status)"></span>
+          <span class="wb-lamp" :class="{ 'is-pulsing': isWorkState(t.status) }" :style="{ background: lampColor(t.status) }" :title="statusLabel(t.status)"></span>
           <span class="wb-name">{{ t.name || t.id.slice(0, 12) }}</span>
           <span class="wb-agent">{{ t.agent_id }}</span>
           <span class="wb-status" :style="{ color: lampColor(t.status) }">{{ statusLabel(t.status) }}</span>
           <span class="wb-by">{{ t.created_by }}</span>
           <span class="wb-time">{{ formatTime(t.created_at) }}</span>
+          <span v-if="rowActionLabel(t.status)" class="row-action">{{ rowActionLabel(t.status) }}</span>
         </div>
         <el-empty v-if="!loading && tasks.length === 0" description="还没有任务——从导引开始一个协作吧" />
       </div>
@@ -100,7 +102,7 @@ import { ref, reactive, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { listTasks } from "../api/tasks";
 import { listConversations } from "../api/conversations";
-import { statusLabel, formatTime, TASK_STATUS, taskLampColor } from "../utils/format";
+import { statusLabel, formatTime, TASK_STATUS, taskLampColor, TASK_WORK_STATES } from "../utils/format";
 
 const router = useRouter();
 const tasks = ref([]);
@@ -138,6 +140,19 @@ async function loadReviewTasks() {
 // 到席灯配色守信任色锁：抽到 utils/format.js 的 taskLampColor 单处（协作会话共用），
 // 关键纪律——completed **不给绿**（跑 mock，给绿即假 REAL）。
 const lampColor = taskLampColor;
+
+// 锚点卡同款：行内状态点工作态脉动 + 单一直达动作词（口径与 WorkbenchSession 一致，
+// 取自 utils/format 的 TASK_WORK_STATES；waiting_review 行走「去签发」而非 chip 的「待人工放行」）。
+function isWorkState(status) {
+  return TASK_WORK_STATES.has(status);
+}
+function rowActionLabel(status) {
+  if (TASK_WORK_STATES.has(status)) return "查看进度 →";
+  if (status === "completed") return "查看产物 →";
+  if (status === "failed") return "查看失败详情 →";
+  if (status === "waiting_review") return "去签发 →";
+  return "";
+}
 
 function _query(offset) {
   return { status: filters.status || undefined, limit: PAGE_SIZE, offset };
@@ -226,7 +241,7 @@ onMounted(() => {
 .sess-card:hover {
   border-color: var(--clay-softer);
   box-shadow: var(--shadow-card-hover);
-  transform: translateY(-2px);
+  transform: translateY(-3px);
 }
 .sess-card-bar {
   height: 4px;
@@ -236,7 +251,7 @@ onMounted(() => {
   padding: 14px 16px;
 }
 .sess-card-goal {
-  font-weight: 600;
+  font-weight: 700;
   color: var(--ink);
   line-height: 1.5;
   margin-bottom: 10px;
@@ -303,7 +318,7 @@ onMounted(() => {
 }
 .wb-row {
   display: grid;
-  grid-template-columns: 16px 1fr 160px 96px 96px 160px;
+  grid-template-columns: 16px 1fr 160px 96px 96px 160px 112px;
   gap: 12px;
   align-items: center;
   padding: 12px 14px;
@@ -324,6 +339,19 @@ onMounted(() => {
   height: 10px;
   border-radius: 50%;
   display: inline-block;
+}
+.wb-lamp.is-pulsing {
+  animation: flai-work-pulse var(--pulse-duration) ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wb-lamp.is-pulsing { animation: none; }
+}
+.row-action {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--clay);
+  text-align: right;
+  white-space: nowrap;
 }
 .wb-name {
   font-weight: 600;
@@ -356,7 +384,8 @@ onMounted(() => {
   }
   .wb-agent,
   .wb-by,
-  .wb-time {
+  .wb-time,
+  .row-action {
     display: none;
   }
 }

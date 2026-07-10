@@ -97,11 +97,19 @@
                       >{{ categoryLabel(a.category) }}</span>
                       <span class="agent-maturity">{{ a.maturity }} / {{ a.status }}</span>
                     </div>
-                    <p v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</p>
                     <p v-if="a.rationale" class="agent-rationale">{{ a.rationale }}</p>
+                    <p v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</p>
                     <div class="agent-draft">
-                      <div class="section-label">预填草案（{{ inputCount(a) }} 个字段，未必完整）</div>
-                      <pre class="plan-json">{{ prettyInputs(a.prefilled_inputs) }}</pre>
+                      <button
+                        type="button"
+                        class="draft-toggle"
+                        :class="{ open: isDraftOpen(draftKey(idx, ai)) }"
+                        @click="toggleDraft(draftKey(idx, ai))"
+                      >
+                        预填草案 · {{ inputCount(a) }} 个字段
+                        <span class="draft-chevron">›</span>
+                      </button>
+                      <pre v-show="isDraftOpen(draftKey(idx, ai))" class="plan-json">{{ prettyInputs(a.prefilled_inputs) }}</pre>
                     </div>
                     <el-alert
                       v-if="a.stripped_fields && a.stripped_fields.length"
@@ -137,6 +145,7 @@
 
               <div class="plan-foot">
                 <button class="workbench-btn" @click="openWorkbench">进入协作工作台 →</button>
+                <button type="button" class="plan-escape" @click="focusComposer">想调整方案？直接告诉导引 ↓</button>
                 <span class="plan-note">
                   在工作台里看分工架构、逐个召集 Agent、追进度——签发权始终在你，
                   每个任务都由你补全并<strong>亲手提交</strong>。
@@ -294,6 +303,31 @@ function prettyInputs(inputs) {
 }
 function inputCount(agent) {
   return Object.keys(agent.prefilled_inputs || {}).length;
+}
+
+// 提问卡：预填 JSON 默认展开（与既有 e2e 契约对齐——协作方案卡片一出现，
+// 预填字段/值需直接在 body 文本流可见，不依赖点击）；按「消息序号_Agent序号」
+// 记"用户手动收起"状态，供想要降低视觉负担的人自行折叠（纯 UI 态，不影响
+// prefilled_inputs 本身/不影响创建任务的调用签名）。
+const collapsedDrafts = reactive(new Set());
+function draftKey(msgIdx, agentIdx) {
+  return `${msgIdx}_${agentIdx}`;
+}
+function isDraftOpen(key) {
+  return !collapsedDrafts.has(key);
+}
+function toggleDraft(key) {
+  if (collapsedDrafts.has(key)) collapsedDrafts.delete(key);
+  else collapsedDrafts.add(key);
+}
+
+function focusComposer() {
+  // 逃生行：只聚焦并滚到既有输入框，绝不读写 draft——调整方案仍由用户在
+  // composer 里亲手打字表达，导引不代写。
+  const el = document.querySelector(".composer-input textarea");
+  if (!el) return;
+  el.focus();
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 async function scrollToBottom() {
@@ -762,16 +796,16 @@ watch(
 }
 .agent-step {
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
+  width: 27px;
+  height: 27px;
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--ink-soft);
-  background: var(--paper-rail);
-  border: 1px solid var(--hairline);
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--clay);
+  background: var(--clay-soft);
+  border: 1.75px solid var(--clay);
 }
 .agent-name {
   font-weight: 700;
@@ -810,14 +844,36 @@ watch(
   vertical-align: 1px;
 }
 .agent-rationale {
-  font-size: 12.5px;
+  font-size: 13.5px;
+  font-weight: 600;
   line-height: 1.5;
-  color: var(--ink-soft);
-  margin: 0 0 10px;
+  color: var(--ink);
+  margin: 0 0 6px;
 }
 .agent-draft { margin-bottom: 10px; }
+.draft-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-faint);
+  background: var(--paper-rail);
+  border: 1px solid var(--hairline-soft);
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: color 0.16s var(--ease-lift), border-color 0.16s var(--ease-lift), background 0.16s var(--ease-lift);
+}
+.draft-toggle:hover { color: var(--ink-soft); border-color: var(--hairline); }
+.draft-toggle.open { color: var(--ink-soft); }
+.draft-chevron {
+  display: inline-block;
+  transition: transform 0.18s var(--ease-lift);
+}
+.draft-toggle.open .draft-chevron { transform: rotate(90deg); }
 .plan-json {
-  margin: 0;
+  margin: 8px 0 0;
   padding: 10px 12px;
   background: var(--paper-rail);
   border: 1px solid var(--hairline-soft);
@@ -881,7 +937,25 @@ watch(
   transition: transform 0.16s var(--ease-lift), box-shadow 0.16s var(--ease-lift);
 }
 .workbench-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(193, 95, 60, 0.3); }
+.plan-escape {
+  flex: 0 0 100%;
+  order: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--clay);
+  cursor: pointer;
+  transition: color 0.16s var(--ease-lift), transform 0.16s var(--ease-lift);
+}
+.plan-escape:hover { color: var(--clay-deep); transform: translateX(2px); }
 .plan-note {
+  order: 2;
   flex: 1;
   min-width: 220px;
   font-size: 12.5px;

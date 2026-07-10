@@ -49,3 +49,6 @@ export const reviewTask = (taskId, { action, reviewer, comment }) =>
     method: "POST",
     json: { action, reviewer, comment: comment || null },
   });
+
+// 工具调用明细（只读端点，工作态氛围展示用）。
+export const listToolRuns = (taskId) => request(`/api/tasks/${taskId}/tool_runs`);
