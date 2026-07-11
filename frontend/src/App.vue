@@ -63,6 +63,11 @@
 
   <!-- ⌘K 快速切换面板（B3）：热键监听与数据/跳转逻辑全封在组件内，这里只挂载。 -->
   <QuickSwitcher />
+
+  <!-- 状态坞 + 状态中心（UI-PARADIGM Phase 1「状态来找人」）：轮询/数据/签发
+       逻辑全封在组件与 stores/statusCenter 单例内，这里只挂载。 -->
+  <StatusDock />
+  <StatusCenter />
 </template>
 
 <script setup>
@@ -70,6 +75,8 @@ import { ref, computed, watch, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { listConversations } from "./api/conversations";
 import QuickSwitcher from "./components/QuickSwitcher.vue";
+import StatusDock from "./components/StatusDock.vue";
+import StatusCenter from "./components/StatusCenter.vue";
 
 const route = useRoute();
 const router = useRouter();

@@ -61,6 +61,7 @@ import { listConversations } from "../api/conversations";
 import { listTasks } from "../api/tasks";
 import { listAgents } from "../api/agents";
 import { statusLabel, taskLampColor } from "../utils/format";
+import { statusCenter, closeCenter } from "../stores/statusCenter";
 
 const router = useRouter();
 
@@ -156,6 +157,9 @@ async function fetchAll() {
 }
 
 async function open() {
+  // 状态中心抽屉（el-drawer z-index 2000+）开着时先关掉——否则 ⌘K 面板(200)
+  // 被抽屉遮罩盖住而焦点已被偷进不可见输入框。任意时刻只留一个顶层模态。
+  if (statusCenter.open) closeCenter();
   isOpen.value = true;
   selectedIndex.value = 0;
   await nextTick();

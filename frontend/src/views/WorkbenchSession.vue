@@ -96,6 +96,8 @@
                     <span class="chip-status" :style="{ color: taskLampColor(t.status) }">{{ statusLabel(t.status) }}</span>
                     <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
                     <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
+                    <!-- B2 速览接入（additive）：chip 本体点击仍走 goTask 跳详情；速览用 @click.stop 独立打开。 -->
+                    <button type="button" class="chip-peek-btn" @click.stop="openTaskPeek(t.id)">速览</button>
                   </div>
                   <div v-if="taskLastWord[t.id]" class="chip-lastword">{{ taskLastWord[t.id] }}</div>
                 </div>
@@ -148,6 +150,7 @@ import { getConversation, listConversationTasks, concludeConversation } from "..
 import { listTaskEvents } from "../api/tasks";
 import { categoryColor, categoryLabel, statusLabel, taskLampColor, TASK_WORK_STATES } from "../utils/format";
 import { markSeen } from "../utils/lastSeen";
+import { openTaskPeek } from "../stores/statusCenter";
 
 const route = useRoute();
 const router = useRouter();
@@ -585,6 +588,25 @@ onUnmounted(clearPoll);
   font-weight: 700;
   color: var(--clay);
   margin-left: auto;
+}
+/* B2：chip 内速览微动作——不占用 chip-review/chip-action 的 margin-left:auto
+   靠右位；两者都不存在时（如 completed/failed 且已有专属动作词）也保持贴右。 */
+.chip-peek-btn {
+  flex: none;
+  margin-left: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
+}
+.chip-peek-btn:hover {
+  border-color: var(--clay-softer);
+  color: var(--clay);
 }
 @media (prefers-reduced-motion: reduce) {
   .chip-lamp.is-pulsing { animation: none; }

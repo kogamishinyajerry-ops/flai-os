@@ -103,6 +103,30 @@
                       >{{ categoryLabel(a.category) }}</span>
                       <span class="agent-maturity">{{ a.maturity }} / {{ a.status }}</span>
                     </div>
+
+                    <!-- B1 对话轴督战：该会话已为此 Agent 召集过任务才显示（诚实地板，
+                         未召集零占位）；点击直开任务速览，不逼人跳页看进度。 -->
+                    <div
+                      v-if="agentTaskInfo(a)"
+                      class="agent-status"
+                      role="button"
+                      tabindex="0"
+                      @click.stop="openTaskPeek(agentTaskInfo(a).latest.id)"
+                      @keydown.enter.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
+                      @keydown.space.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
+                    >
+                      <span
+                        class="status-lamp"
+                        :class="{ 'is-pulsing': isWorkState(agentTaskInfo(a).latest.status) }"
+                        :style="{ background: taskLampColor(agentTaskInfo(a).latest.status) }"
+                      ></span>
+                      <span class="status-word" :style="{ color: taskLampColor(agentTaskInfo(a).latest.status) }">
+                        {{ statusLabel(agentTaskInfo(a).latest.status) }}
+                      </span>
+                      <span v-if="agentTaskInfo(a).extra > 0" class="status-extra">+{{ agentTaskInfo(a).extra }}</span>
+                      <span class="status-peek">速览 →</span>
+                    </div>
+
                     <p v-if="a.rationale" class="agent-rationale">{{ a.rationale }}</p>
                     <p v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</p>
                     <div class="agent-draft">
@@ -224,13 +248,14 @@
 </template>
 
 <script setup>
-import { reactive, ref, nextTick, watch, onMounted } from "vue";
+import { reactive, ref, nextTick, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { createConversation, postMessage, getConversation } from "../api/conversations";
+import { createConversation, postMessage, getConversation, listConversationTasks } from "../api/conversations";
 import { uploadFile as apiUploadFile } from "../api/files";
-import { categoryColor, categoryLabel } from "../utils/format";
+import { categoryColor, categoryLabel, statusLabel, taskLampColor, TASK_WORK_STATES } from "../utils/format";
 import { getSavedName, saveName } from "../utils/identity";
+import { openTaskPeek } from "../stores/statusCenter";
 import ThinkingInk from "../components/artwork/ThinkingInk.vue";
 
 const router = useRouter();
@@ -393,6 +418,7 @@ async function send() {
       fresh: true,
     });
     await scrollToBottom();
+    maybeStartTaskPoll(); // 本轮若刚给出 orchestrate 方案，开始为其召集状态保鲜
   } catch (err) {
     // 本轮失败：后端契约是「失败零落库」（幂等重试，ADR-0013），本地同样回滚
     // 乐观气泡并把原文还原到输入框——不在界面上留一条服务端不存在的幽灵消息，
@@ -459,6 +485,70 @@ function createOneTask(agent, plan) {
   router.push({ path: "/tasks/new", query: { agent_id: agent.agent_id, from: "guide" } });
 }
 
+// ── B1 对话轴督战（UI-PARADIGM.md 祈使句①）──────────────────────────────
+// orchestrate 方案卡的每个 agent-card 内联该会话真实任务状态：只在本会话已为
+// 该 agent_id 召集过任务时渲染 chip（诚实地板，未召集零占位）；点「速览 →」
+// 直开任务速览（openTaskPeek），渐进披露不逼人跳页。只在会话真出现 orchestrate
+// 方案时才拉取，5s 链式轮询保鲜（TaskDetail/WorkbenchSession 同款纪律）。
+const conversationTasks = ref([]);
+let taskPollTimer = null;
+let taskPollDisposed = false; // 卸载后 in-flight finally 不再续排（clearTaskPoll 拦不住已入 await 的那轮）
+
+function hasOrchestratePlan() {
+  return messages.value.some(
+    (m) => m.role === "assistant" && m.recommendation && m.recommendation.decision === "orchestrate"
+  );
+}
+
+function isWorkState(status) {
+  return TASK_WORK_STATES.has(status);
+}
+
+// agent_id 匹配：后端按 created_at DESC, id DESC 返回，同一 agent 多任务时
+// 第一条即最新一次召集；其余只计数，不逐条铺开（roster 卡片寸土寸金）。
+function agentTaskInfo(agent) {
+  const list = conversationTasks.value.filter((t) => t.agent_id === agent.agent_id);
+  if (!list.length) return null;
+  return { latest: list[0], extra: list.length - 1 };
+}
+
+async function refreshConversationTasks(convId) {
+  if (!convId) return;
+  try {
+    const tasks = await listConversationTasks(convId);
+    // 轮询在途期间会话可能已切换：陈旧响应作废，绝不倒灌覆盖新会话的状态。
+    if (convId !== conversationId.value) return;
+    conversationTasks.value = tasks;
+  } catch {
+    // 轮询失败：诚实不覆盖已展示的上一次成功结果，下一 tick 自愈（非关键展示）。
+  }
+}
+
+function clearTaskPoll() {
+  if (taskPollTimer) {
+    clearTimeout(taskPollTimer);
+    taskPollTimer = null;
+  }
+}
+
+function scheduleTaskPoll() {
+  clearTaskPoll();
+  taskPollTimer = setTimeout(async () => {
+    try {
+      if (!document.hidden) await refreshConversationTasks(conversationId.value);
+    } finally {
+      if (!taskPollDisposed) scheduleTaskPoll();
+    }
+  }, 5000);
+}
+
+// 只在真出现 orchestrate 方案时启动（幂等：已有轮询在跑则不重复起）。
+function maybeStartTaskPoll() {
+  if (taskPollTimer || !conversationId.value || !hasOrchestratePlan()) return;
+  refreshConversationTasks(conversationId.value);
+  scheduleTaskPoll();
+}
+
 // ── 会话恢复（左栏历史点击 / 刷新 /?c=<id>）──
 const route = useRoute();
 
@@ -468,6 +558,8 @@ function resetToFresh(clearError = true) {
   conversationId.value = "";
   draft.value = "";
   pendingFiles.value = [];
+  conversationTasks.value = [];
+  clearTaskPoll();
   if (clearError) pageError.value = "";
 }
 
@@ -486,6 +578,7 @@ async function loadConversation(id) {
       attachments: m.attachments && m.attachments.length ? m.attachments : undefined,
     }));
     await scrollToBottom();
+    maybeStartTaskPoll(); // 恢复的历史会话若已带 orchestrate 方案，立即接上轮询
   } catch (err) {
     pageError.value = err.detail || err.message || "会话加载失败";
   }
@@ -494,6 +587,10 @@ async function loadConversation(id) {
 onMounted(() => {
   const c = route.query.c;
   if (typeof c === "string" && c) loadConversation(c);
+});
+onUnmounted(() => {
+  taskPollDisposed = true;
+  clearTaskPoll();
 });
 
 // 左栏切换会话 / 点「新对话」→ 据 ?c 变化恢复或重置（跳过刚创建的本会话，避免回灌）。
@@ -832,6 +929,45 @@ watch(
   font-size: 11.5px;
   font-family: var(--mono, "SF Mono", ui-monospace, monospace);
   color: var(--ink-faint);
+}
+/* B1 对话轴督战：该会话已召集时的内联状态 chip（只在有真任务时渲染）。 */
+.agent-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  cursor: pointer;
+}
+.status-lamp {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.status-lamp.is-pulsing {
+  animation: flai-work-pulse var(--pulse-duration) ease-in-out infinite;
+}
+.status-word {
+  font-size: 12px;
+  font-weight: 600;
+}
+.status-extra {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-faint);
+}
+.status-peek {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--clay);
+  margin-left: 2px;
+  transition: color 0.16s var(--ease-lift);
+}
+.agent-status:hover .status-peek {
+  color: var(--clay-deep);
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-lamp.is-pulsing { animation: none; }
 }
 .agent-role {
   font-size: 13.5px;

@@ -34,6 +34,9 @@
 5. **性能**：单页 ≤1 个 rAF 循环；`document.hidden` 暂停；DPR 上限 2；
    粒子上限 120；**零第三方依赖**（禁 three.js/GSAP——内网低配 Windows +
    bundle 纪律）；CSS 动画只用 transform/opacity（不触发 layout）。
+   **瞬时迸发例外**（范式 Phase 1 审定）：burstSigned/burstNeutral 的一次性
+   rAF（<1s 自清理、reduced-motion no-op）允许与页面 ambient rAF 短暂并发
+   ——签发迸发自全局状态中心触发，无法预知宿主页面；常驻循环仍严格 ≤1。
 6. **可整体拆除**：`src/effects/` 删目录 + 移除调用点即回到纯静态平台；
    tokens 留在 :root 无副作用。
 

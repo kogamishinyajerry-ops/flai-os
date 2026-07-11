@@ -37,6 +37,8 @@
           <span class="wb-by">{{ t.created_by }}</span>
           <span class="wb-time">{{ formatTime(t.created_at) }}</span>
           <span v-if="rowActionLabel(t.status)" class="row-action">{{ rowActionLabel(t.status) }}</span>
+          <!-- B2 速览接入（additive）：不参与既有整行点击（goDetail），@click.stop 独立打开任务速览。 -->
+          <el-button size="small" text class="wb-peek-btn" @click.stop="openTaskPeek(t.id)">速览</el-button>
         </div>
       </div>
     </div>
@@ -97,6 +99,8 @@
           <span class="wb-by">{{ t.created_by }}</span>
           <span class="wb-time">{{ formatTime(t.created_at) }}</span>
           <span v-if="rowActionLabel(t.status)" class="row-action">{{ rowActionLabel(t.status) }}</span>
+          <!-- B2 速览接入（additive）：不参与既有整行点击（goDetail），@click.stop 独立打开任务速览。 -->
+          <el-button size="small" text class="wb-peek-btn" @click.stop="openTaskPeek(t.id)">速览</el-button>
         </div>
         <EmptyState v-if="!loading && tasks.length === 0" description="还没有任务——从导引开始一个协作吧" />
       </div>
@@ -118,6 +122,7 @@ import DraftingScene from "../components/artwork/DraftingScene.vue";
 import { createParticleField } from "../effects/particleField";
 import { statusLabel, formatTime, TASK_STATUS, taskLampColor, TASK_WORK_STATES } from "../utils/format";
 import { hasUnseen } from "../utils/lastSeen";
+import { openTaskPeek } from "../stores/statusCenter";
 
 const router = useRouter();
 const tasks = ref([]);
@@ -446,7 +451,9 @@ onUnmounted(() => {
 }
 .wb-row {
   display: grid;
-  grid-template-columns: 16px 1fr 160px 96px 96px 160px 112px;
+  /* B2：末尾追加 76px 专列承载「速览」按钮，grid-column:8 显式定位——row-action
+     的 v-if 存在与否不影响速览列位置（不依赖 DOM 序自动分配轨道）。 */
+  grid-template-columns: 16px 1fr 160px 96px 96px 160px 112px 76px;
   gap: 12px;
   align-items: center;
   padding: 12px 14px;
@@ -481,6 +488,14 @@ onUnmounted(() => {
   text-align: right;
   white-space: nowrap;
 }
+/* B2：速览次级动作——固定占第 8 轨道、右对齐，与 row-action 是否渲染无关。 */
+.wb-peek-btn {
+  grid-column: 8;
+  justify-self: end;
+  padding: 0 6px !important;
+  font-size: 12px;
+  white-space: nowrap;
+}
 .wb-name {
   font-weight: 600;
   color: var(--ink);
@@ -513,7 +528,8 @@ onUnmounted(() => {
   .wb-agent,
   .wb-by,
   .wb-time,
-  .row-action {
+  .row-action,
+  .wb-peek-btn {
     display: none;
   }
 }
