@@ -116,9 +116,13 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 9. **fta_agent / guide_agent 真实模型调用依赖内网 key**：二者均需
    `FLAI_LLM_BASE_URL` / `FLAI_LLM_API_KEY` / `FLAI_LLM_MODEL_REASONING` 指向内网
    模型服务。本机/CI 无 key 时走 fail-closed（fta→任务 `failed`+`model_call`
-   error 事件；导引→本轮 502 且零落库可重试），只能桩测调用链，无法真实产出
-   ——这是环境依赖，非缺陷。**平台至今未跑过任何真实业务**（性能盘是 mock、
-   模型是桩），泛化能力已证，真实业务闭环待 M4+内网 key。
+   error 事件；导引→本轮 502 且零落库可重试），只能桩测调用链。
+   **2026-07-11 已经公网 GLM（glm-5.1，OpenAI 兼容端点）跑通首个真实模型业务
+   闭环**：导引真实对话（含对 mock Agent 的诚实拒绝）+ fta 全链
+   （running→waiting_review 水印草案→人签放行→completed，model_calls 真实
+   token 留痕）——零代码改动、只设 FLAI_LLM_* 环境变量，证据存档
+   docs/reviews/GLM-real-fire-record.md。**内网 GLM 接入与真实性能盘业务仍待
+   M4 现场**（公网≠内网，鉴权/模型名/限流形态可能不同）。
 10. **导引会话附件有类型与预算边界、分析深度有限**（M7/ADR-0014）：会话可带附件
     （≤5 个/条），但只解析文本类（直读）与 .xlsx（活动 sheet 30 行×16 列预览，
     开簿前有解压总量/压缩比预算探测挡 zip bomb），docx/pdf 等只列文件名（V0.3）；

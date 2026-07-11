@@ -17,6 +17,10 @@
 
 ## ① LLM 端点协议与鉴权（最高优先——阻塞 fta/guide/knowledge_qa 三个 Agent 真实点火）
 
+> 公网参照证据（2026-07-11）：本机经公网 GLM（glm-5.1）已验证 1-1/1-3/1-4 的
+> **协议链路侧**（探针全绿 + 导引/fta 真实业务闭环），存档
+> `docs/reviews/GLM-real-fire-record.md`。内网形态可能不同，现场列保持空白照填。
+
 | # | 待验证假设 | 来源 | 验证方法 | 验证结果（现场填） |
 |---|---|---|---|---|
 | 1-1 | 内网 GLM 端点是 OpenAI 兼容协议（`POST {base}/chat/completions`） | `backend/app/model_gateway/gateway.py:10,289`、`docs/04:63` | `export FLAI_LLM_*` 后跑 `python scripts/probe_llm_gateway.py`，逐层看原始观测 | |
