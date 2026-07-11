@@ -54,12 +54,16 @@
       <router-view />
     </main>
   </div>
+
+  <!-- ⌘K 快速切换面板（B3）：热键监听与数据/跳转逻辑全封在组件内，这里只挂载。 -->
+  <QuickSwitcher />
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { listConversations } from "./api/conversations";
+import QuickSwitcher from "./components/QuickSwitcher.vue";
 
 const route = useRoute();
 const router = useRouter();

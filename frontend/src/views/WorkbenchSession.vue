@@ -81,19 +81,23 @@
               </div>
               <p v-if="a.role" class="member-role"><strong>分工：</strong>{{ a.role }}</p>
 
-              <!-- 已召集：成员任务（到席灯 + 状态 + 详情链接；waiting_review 醒目提示放行） -->
+              <!-- 已召集：成员任务（到席灯 + 状态 + 详情链接；waiting_review 醒目提示放行）；
+                   chip-lastword（B2）：该任务的「最近动态」=最后一条事件的 message 原文
+                   （可能是机械上报文案，不承诺第一人称叙事；仅前 5 个已召集成员取，
+                   见 lastWordTargets）。 -->
               <div v-if="tasksFor(a).length" class="task-chips">
-                <div
-                  v-for="t in tasksFor(a)"
-                  :key="t.id"
-                  :class="['task-chip', { review: t.status === 'waiting_review' }]"
-                  @click="goTask(t)"
-                >
-                  <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
-                  <span class="chip-name">{{ t.name || t.id.slice(0, 12) }}</span>
-                  <span class="chip-status" :style="{ color: taskLampColor(t.status) }">{{ statusLabel(t.status) }}</span>
-                  <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
-                  <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
+                <div v-for="t in tasksFor(a)" :key="t.id" class="chip-group">
+                  <div
+                    :class="['task-chip', { review: t.status === 'waiting_review' }]"
+                    @click="goTask(t)"
+                  >
+                    <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
+                    <span class="chip-name">{{ t.name || t.id.slice(0, 12) }}</span>
+                    <span class="chip-status" :style="{ color: taskLampColor(t.status) }">{{ statusLabel(t.status) }}</span>
+                    <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
+                    <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
+                  </div>
+                  <div v-if="taskLastWord[t.id]" class="chip-lastword">{{ taskLastWord[t.id] }}</div>
                 </div>
               </div>
 
@@ -137,11 +141,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { getConversation, listConversationTasks, concludeConversation } from "../api/conversations";
+import { listTaskEvents } from "../api/tasks";
 import { categoryColor, categoryLabel, statusLabel, taskLampColor, TASK_WORK_STATES } from "../utils/format";
+import { markSeen } from "../utils/lastSeen";
 
 const route = useRoute();
 const router = useRouter();
@@ -177,21 +183,74 @@ function chipActionLabel(status) {
   return "";
 }
 
-async function load() {
-  loading.value = true;
+// 轻量轮询（B2）：silent=true 时不切 loading 态、失败不覆盖已展示数据/错误横幅
+// （瞬时抖动不该把一个好端端的页面闪成空态或错误态，下一 tick 自愈）；沿用
+// TaskDetail.vue 同款「轮询整包作废」守卫——baseline 身份比对，轮询在途期间
+// 若发生过手动刷新/结束协作等整包重载，本次轮询结果整包作废，绝不用 stale
+// 快照倒灌覆盖更新的状态。opts 用 ?. 兼容 @click="load" 时 Vue 透传的原生
+// 事件对象（MouseEvent 没有 .silent，安全落到默认 false）。
+async function load(opts) {
+  const silent = opts?.silent === true;
+  if (!silent) loading.value = true;
+  const baseline = silent ? memberTasks.value : null;
   try {
     const [conv, tasks] = await Promise.all([
       getConversation(sessionId),
       listConversationTasks(sessionId),
     ]);
+    if (silent && memberTasks.value !== baseline) return;
     conversation.value = conv;
     memberTasks.value = tasks;
     loadError.value = "";
+    refreshLastWords(); // fire-and-forget：≤5 个补充请求，不阻塞主数据 loading 态
   } catch (err) {
-    loadError.value = err.detail || err.message || "加载协作会话失败";
+    if (silent && memberTasks.value !== baseline) return;
+    if (!silent) loadError.value = err.detail || err.message || "加载协作会话失败";
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
+}
+
+// 成员任务「最近动态」（Codex 子智能体面板同款定位，B2）：taskId → 该任务最后
+// 一条事件的 message 原文（截 60 字）——是"最新一条留痕"而非承诺第一人称叙事。
+// 无事件/message 为空则不记 key（对应行不渲染——绝不编造展示内容）。
+const taskLastWord = ref({});
+// taskId → 请求序号（非响应式）：手动刷新可与在途轮询重叠，只让「最新一次发起」
+// 的结果落盘，迟到的旧响应作废，避免动态被 stale 快照倒灌回退。
+const lastWordSeq = {};
+
+async function fetchLastWord(taskId) {
+  const seq = (lastWordSeq[taskId] = (lastWordSeq[taskId] || 0) + 1);
+  try {
+    const events = await listTaskEvents(taskId, { offset: 0 });
+    if (seq !== lastWordSeq[taskId]) return;
+    const msg = events.length ? events[events.length - 1].message || "" : "";
+    if (msg) {
+      taskLastWord.value[taskId] = msg.length > 60 ? `${msg.slice(0, 60)}…` : msg;
+    } else {
+      delete taskLastWord.value[taskId];
+    }
+  } catch {
+    // 拉取失败：诚实降级为不显示该行，不阻断其它成员或主数据（非关键展示）
+  }
+}
+
+// 上限 5 个已召集成员（按 roster 顺序截断，一并控住请求数——常态 1 任务/成员，
+// ≤5 个请求）。
+function lastWordTargets() {
+  const members = rosterAgents.value.filter((a) => tasksFor(a).length > 0).slice(0, 5);
+  const out = [];
+  for (const a of members) {
+    for (const t of tasksFor(a)) out.push(t);
+  }
+  return out;
+}
+
+// 每 tick 无条件重取（不做「状态未变跳过」节流）：长任务在同一状态下事件持续
+// 追加，按状态节流会让「最近动态」冻结在该状态的第一条——诚实优先于省请求；
+// 代价可控（≤5 个请求/5s，task_events 有 task_id 索引，内网可承受）。
+async function refreshLastWords() {
+  await Promise.all(lastWordTargets().map((t) => fetchLastWord(t.id)));
 }
 
 function goTask(t) {
@@ -234,7 +293,33 @@ function summon(agent) {
   router.push({ path: "/tasks/new", query: { agent_id: agent.agent_id, from: "guide" } });
 }
 
-onMounted(load);
+// 轻量轮询（B2）：链式 setTimeout（TaskDetail 同款纪律）——下一个 tick 只在
+// 上一次 load 完全落地后才排队，慢网/慢后端下绝不会堆积并发请求（setInterval
+// 会）。document.hidden 时本 tick 跳过但仍续轮；手动「刷新」按钮保留不动
+// （仍直调非 silent 的 load()）。
+let pollTimer = null;
+function schedulePoll() {
+  clearPoll();
+  pollTimer = setTimeout(async () => {
+    try {
+      if (!document.hidden) await load({ silent: true });
+    } finally {
+      schedulePoll();
+    }
+  }, 5000);
+}
+function clearPoll() {
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+}
+onMounted(() => {
+  markSeen(sessionId); // 进入会话即视为「已看过」，驱动首页未读徽章
+  load();
+  schedulePoll();
+});
+onUnmounted(clearPoll);
 </script>
 
 <style scoped>
@@ -433,6 +518,23 @@ onMounted(load);
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+/* chip-group（B2）：chip + 其下第一人称一行汇报的纵向包裹，task-chips 仍按
+   flex-wrap 逐组排布，task-chip 自身样式不变。 */
+.chip-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 100%;
+}
+.chip-lastword {
+  font-size: 11px;
+  color: var(--ink-faint);
+  padding-left: 4px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .task-chip {
   display: flex;

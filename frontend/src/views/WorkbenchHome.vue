@@ -48,6 +48,9 @@
       />
       <div v-else class="sess-grid">
         <div v-for="c in sessions" :key="c.id" class="sess-card" @click="goSession(c)">
+          <!-- 完成未读徽章（B2）：clay 圆点=刻意用法——语义是"有新进展待你去看"的行动
+               召唤，而非真实性(REAL)/签署/失败/待审四个信任色槽，不违反信任色锁。 -->
+          <span v-if="sessionHasUnseen(c)" class="sess-unread-dot" title="有新进展"></span>
           <div class="sess-card-bar"></div>
           <div class="sess-card-inner">
             <div class="sess-card-goal">{{ c.recommendation.goal || "协作会话" }}</div>
@@ -99,12 +102,13 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from "vue";
+import { ref, reactive, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { listTasks } from "../api/tasks";
 import { listConversations } from "../api/conversations";
 import EmptyState from "../components/EmptyState.vue";
 import { statusLabel, formatTime, TASK_STATUS, taskLampColor, TASK_WORK_STATES } from "../utils/format";
+import { hasUnseen } from "../utils/lastSeen";
 
 const router = useRouter();
 const tasks = ref([]);
@@ -117,12 +121,14 @@ const filters = reactive({ status: "" });
 
 // 协作会话（M8 P4）：已形成召集方案（orchestrate）的导引会话——协作工作台的主对象。
 const sessions = ref([]);
-async function loadSessions() {
+// silent=true（轮询 tick）：失败保留上次已知数据，不因瞬时抖动清空已渲染好的卡片；
+// 首载/手动场景仍保留原「诚实留空」降级（无错误横幅承载会话区，留空即最诚实的呈现）。
+async function loadSessions(silent = false) {
   try {
     const convs = await listConversations({ limit: 100 });
     sessions.value = convs.filter((c) => c.recommendation && c.recommendation.decision === "orchestrate");
   } catch {
-    sessions.value = []; // 会话列表失败不阻断任务台账；诚实留空
+    if (!silent) sessions.value = []; // 会话列表失败不阻断任务台账；诚实留空
   }
 }
 function goSession(c) {
@@ -131,12 +137,23 @@ function goSession(c) {
 
 // 待我签发（P1-5）：waiting_review 任务前置，驱动日常回访——工程师一进来就看到「要我处理的」。
 const reviewTasks = ref([]);
-async function loadReviewTasks() {
+async function loadReviewTasks(silent = false) {
   try {
     reviewTasks.value = await listTasks({ status: "waiting_review", limit: 20 });
   } catch {
-    reviewTasks.value = []; // 失败不阻断台账；诚实留空
+    if (!silent) reviewTasks.value = []; // 失败不阻断台账；诚实留空
   }
+}
+
+// 完成未读徽章（B2）：复用「最近任务」列表（tasks.value，随轮询保鲜，带 conversation_id）
+// 按会话过滤，不为每张会话卡片单开请求（省内网带宽）。已知边界：只覆盖出现在这批
+// 「最近任务」窗口内的成员任务——若某会话的任务因足够久远被更多新任务顶出窗口，未读
+// 判定会诚实地不亮（宁可漏判，也不为徽章准确度而放大请求量）。
+function sessionTasks(sessionId) {
+  return tasks.value.filter((t) => t.conversation_id === sessionId);
+}
+function sessionHasUnseen(c) {
+  return hasUnseen(c.id, sessionTasks(c.id));
 }
 
 // 到席灯配色守信任色锁：抽到 utils/format.js 的 taskLampColor 单处（协作会话共用），
@@ -160,17 +177,27 @@ function _query(offset) {
   return { status: filters.status || undefined, limit: PAGE_SIZE, offset };
 }
 
-async function load() {
-  loading.value = true;
+// 轻量轮询（B2）：opts?.silent 时不切 loading 态、失败不覆盖已展示数据/错误横幅
+// （瞬时抖动不该把好端端的列表闪成空态，下一 tick 自愈）；沿用 TaskDetail.vue
+// 同款「轮询整包作废」守卫——baseline 身份比对，轮询在途期间若发生过手动刷新/
+// 「加载更多」等整包重载，本次轮询结果整包作废。opts?. 兼容 @click="load"/
+// @change="load" 时 Vue 透传的原生事件对象或选中值（都没有 .silent，安全落到
+// 默认 false）。
+async function load(opts) {
+  const silent = opts?.silent === true;
+  if (!silent) loading.value = true;
+  const baseline = silent ? tasks.value : null;
   try {
     const page = await listTasks(_query(0));
+    if (silent && tasks.value !== baseline) return;
     tasks.value = page;
     hasMore.value = page.length === PAGE_SIZE;
     loadError.value = "";
   } catch (err) {
-    loadError.value = err.detail || err.message;
+    if (silent && tasks.value !== baseline) return;
+    if (!silent) loadError.value = err.detail || err.message;
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 
@@ -192,11 +219,37 @@ function goDetail(t) {
   router.push(`/tasks/${t.id}`);
 }
 
+// 轻量轮询（B2）：5s 一次同刷「最近任务/协作会话/待你签发」三处既有数据源。
+// 链式 setTimeout（TaskDetail 同款纪律）——下一个 tick 只在上一轮三个请求全部
+// 落地后才排队，慢网/慢后端下绝不会堆积并发请求（setInterval 会）；三个 load
+// 各自内部兜错，Promise.all 不会 reject。document.hidden 时本 tick 跳过但仍
+// 续轮；手动「刷新」按钮保留不动。
+let pollTimer = null;
+function schedulePoll() {
+  clearPoll();
+  pollTimer = setTimeout(async () => {
+    try {
+      if (!document.hidden) {
+        await Promise.all([load({ silent: true }), loadSessions(true), loadReviewTasks(true)]);
+      }
+    } finally {
+      schedulePoll();
+    }
+  }, 5000);
+}
+function clearPoll() {
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+}
 onMounted(() => {
   load();
   loadSessions();
   loadReviewTasks();
+  schedulePoll();
 });
+onUnmounted(clearPoll);
 </script>
 
 <style scoped>
@@ -232,6 +285,7 @@ onMounted(() => {
   gap: 12px;
 }
 .sess-card {
+  position: relative; /* B2：承载右上角未读圆点的定位上下文 */
   border: 1px solid var(--hairline);
   border-radius: 12px;
   overflow: hidden;
@@ -239,6 +293,17 @@ onMounted(() => {
   cursor: pointer;
   box-shadow: var(--shadow-card);
   transition: border-color var(--ease-lift), box-shadow var(--ease-lift), transform var(--ease-lift);
+}
+.sess-unread-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--clay);
+  box-shadow: 0 0 0 2px var(--card-bg);
+  z-index: 1;
 }
 .sess-card:hover {
   border-color: var(--clay-softer);

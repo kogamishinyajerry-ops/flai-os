@@ -112,6 +112,33 @@
               <div class="source-label">执行方</div>
               <div>{{ task.agent_id || "—" }} · {{ task.agent_version || "—" }}</div>
             </div>
+            <!-- B1：模型调用消耗诚实披露——零调用（hello 等无 LLM Agent）显示中性
+                 灰字；token 合计只对能折算出总数的行求和，凑不出来一律「未知」，
+                 绝不记 0（假绿死罪）。块内无 /download 链接，不干扰 m2 e2e 的
+                 a[href*='/download'] DOM 顺序取值。 -->
+            <div class="source-block model-usage">
+              <div class="source-label">模型调用</div>
+              <div v-if="modelCallsError" class="muted">模型调用加载失败：{{ modelCallsError }}</div>
+              <div v-else-if="modelCallStats.total === 0" class="muted">无模型调用</div>
+              <template v-else>
+                <div class="source-row model-usage-summary">
+                  <span>
+                    {{ modelCallStats.total }} 次调用（成功 {{ modelCallStats.ok }} · 失败
+                    <span :class="modelCallStats.failed > 0 ? 'model-usage-fail-count' : ''">{{ modelCallStats.failed }}</span>）
+                  </span>
+                </div>
+                <div class="source-row">
+                  <span>模型：{{ modelCallStats.names.length ? modelCallStats.names.join("、") : "未知" }}</span>
+                </div>
+                <div class="source-row">
+                  <span v-if="modelCallStats.tokenKnownCount > 0">tokens 合计 {{ modelCallStats.tokenSum.toLocaleString() }}</span>
+                  <span v-else class="muted">token 用量：未知</span>
+                </div>
+                <div v-if="modelCallStats.tokenKnownCount > 0 && modelCallStats.tokenMissingCount > 0" class="model-usage-note">
+                  部分调用上游未回报 token，合计为下界
+                </div>
+              </template>
+            </div>
           </div>
         </div>
       </div>
@@ -191,7 +218,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { getTask, listTaskEvents, cancelTask, reviewTask } from "../api/tasks";
+import { getTask, listTaskEvents, cancelTask, reviewTask, listModelCalls } from "../api/tasks";
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import EmptyState from "../components/EmptyState.vue";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
@@ -247,6 +274,68 @@ async function syncArtifacts(ids) {
     }
   }
 }
+
+// 模型调用消耗披露（B1）：只读追溯端点，页面每次 loadTask（含 silent 轮询）都
+// 整包重拉——数据量小、无 offset 语义，不存在 events 那种 stale-merge 问题。
+const modelCalls = ref([]);
+const modelCallsError = ref("");
+// 请求序号（非响应式）：fire-and-forget 下手动刷新可与在途轮询重叠，只让「最新
+// 一次发起」的结果落盘，迟到的旧响应（含旧错误）整包作废——与 loadTask 的
+// baseline 守卫同一防 stale 倒灌纪律。
+let modelCallsSeq = 0;
+
+async function syncModelCalls() {
+  const seq = ++modelCallsSeq;
+  try {
+    const calls = await listModelCalls(taskId);
+    if (seq !== modelCallsSeq) return;
+    modelCalls.value = calls;
+    modelCallsError.value = "";
+  } catch (err) {
+    if (seq !== modelCallsSeq) return;
+    modelCallsError.value = err.detail || err.message || "加载失败";
+  }
+}
+
+// token_usage 是上游 chat/completions 原样透传的 usage 对象，形状不保证含
+// total_tokens（后端测试用例里就只有 prompt_tokens+completion_tokens）——能
+// 折算出总数才计入合计，折算不出来一律算「未知」，绝不当 0。
+function modelCallTokenTotal(call) {
+  const usage = call.token_usage;
+  if (!usage || typeof usage !== "object") return null;
+  if (typeof usage.total_tokens === "number") return usage.total_tokens;
+  const { prompt_tokens: p, completion_tokens: c } = usage;
+  if (typeof p === "number" && typeof c === "number") return p + c;
+  return null;
+}
+
+const modelCallStats = computed(() => {
+  const calls = modelCalls.value;
+  const names = new Set();
+  let ok = 0;
+  let failed = 0;
+  let tokenSum = 0;
+  let tokenKnownCount = 0;
+  for (const c of calls) {
+    if (c.status === "success") ok++;
+    else if (c.status === "failed") failed++;
+    if (c.model_name) names.add(c.model_name);
+    const t = modelCallTokenTotal(c);
+    if (t != null) {
+      tokenSum += t;
+      tokenKnownCount++;
+    }
+  }
+  return {
+    total: calls.length,
+    ok,
+    failed,
+    names: Array.from(names),
+    tokenSum,
+    tokenKnownCount,
+    tokenMissingCount: calls.length - tokenKnownCount,
+  };
+});
 
 function formatSize(bytes) {
   if (!bytes) return "";
@@ -326,6 +415,7 @@ async function loadTask({ silent = false } = {}) {
     }
     task.value = t;
     syncArtifacts(t.output_file_ids); // fire-and-forget，增量同步产物内容
+    syncModelCalls(); // fire-and-forget，全量重拉模型调用留痕（消耗诚实披露）
     if (!silent) {
       events.value = ev;
     } else if (ev.length) {
@@ -617,6 +707,20 @@ onUnmounted(clearPoll);
 .source-param-val {
   color: var(--ink-soft);
   word-break: break-all;
+}
+/* B1：模型调用消耗披露——成功数中性色（信任色锁：completed/success 永远中性，
+   绿仅表真实实证结果，不外推到「调用没报错」这种弱信号）；失败数>0 才标红。 */
+.model-usage-summary {
+  font-weight: 500;
+}
+.model-usage-fail-count {
+  color: var(--trust-fail);
+  font-weight: 600;
+}
+.model-usage-note {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  margin-top: 2px;
 }
 .artifact-body {
   padding: 16px;
