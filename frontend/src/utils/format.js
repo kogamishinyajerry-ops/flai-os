@@ -128,3 +128,14 @@ export const taskElapsedMs = (task, nowMs) => {
   if (Number.isNaN(endMs)) return null;
   return endMs - startMs;
 };
+
+// 文件尺寸 → 人话（B/KB/MB/GB 四档）；非法/非正值返回空串由调用方 v-if 省略。
+// SSOT：StatusCenter 与 TaskDetail 共用此份——绝不各自再造（设计哲学批教训：
+// 自建第二套 formatter 会在同屏打脸）。
+export const formatFileSize = (bytes) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+};

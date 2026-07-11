@@ -1,7 +1,7 @@
 <template>
   <div class="guide-page" :class="{ 'is-empty': !started && messages.length === 0 }">
     <!-- 起手 hero（未开始且无消息）：衬线问候 + 具名，随 composer 在视口垂直居中。 -->
-    <div v-if="!started && messages.length === 0" class="guide-hero fx-rise">
+    <div v-if="!started && messages.length === 0 && !restoring" class="guide-hero fx-rise">
       <div class="hero-mark">导</div>
       <p class="hero-greeting">{{ greeting }}</p>
       <h1 class="hero-title">说说你要做的工程活儿</h1>
@@ -139,7 +139,25 @@
                         {{ statusLabel(agentTaskInfo(a).latest.status) }}
                       </span>
                       <span v-if="agentTaskInfo(a).extra > 0" class="status-extra">+{{ agentTaskInfo(a).extra }}</span>
-                      <span class="status-peek">速览 →</span>
+                      <!-- 行动召唤按态分级：待签发=amber 强 CTA（签发来找人）；其余=速览 -->
+                      <span v-if="agentTaskInfo(a).latest.status === 'waiting_review'" class="status-peek is-review">审阅签发 →</span>
+                      <span v-else class="status-peek">速览 →</span>
+                    </div>
+
+                    <!-- 产物锚点行（Claude Artifact 卡片锚点哲学）：任务完成且真有产物
+                         才长出——点击同样直开速览（产物预览+签发同面板），零跳页。 -->
+                    <div
+                      v-if="agentTaskInfo(a) && agentTaskInfo(a).latest.status === 'completed' && (agentTaskInfo(a).latest.output_file_ids || []).length"
+                      class="status-artifact"
+                      role="button"
+                      tabindex="0"
+                      @click.stop="openTaskPeek(agentTaskInfo(a).latest.id)"
+                      @keydown.enter.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
+                      @keydown.space.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
+                    >
+                      <svg class="artifact-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+                      <span class="artifact-count">{{ (agentTaskInfo(a).latest.output_file_ids || []).length }} 件产物</span>
+                      <span class="artifact-open">查看 ↗</span>
                     </div>
 
                     <p v-if="a.rationale" class="agent-rationale">{{ a.rationale }}</p>
@@ -409,6 +427,7 @@ async function scrollToBottom() {
 }
 
 async function send() {
+  if (restoring.value) return; // 会话恢复在途不收发言——防止意外新建会话
   const content = draft.value.trim();
   if (!content) return;
   if (!createdBy.value.trim()) {
@@ -520,7 +539,10 @@ function createOneTask(agent, plan) {
       conclude_after: isSingleAgent,
     })
   );
-  router.push({ path: "/tasks/new", query: { agent_id: agent.agent_id, from: "guide" } });
+  // back=chat（范式 2a 对话轴闭环）：从导引来的创建，提交成功后回流本会话——
+  // 任务卡在对话流里原地亮起，不再把人甩到详情页（跳页=范式失败标志）。
+  // WorkbenchSession 的召集不带此参数，保持跳详情（m8_collab_chain e2e 契约不动）。
+  router.push({ path: "/tasks/new", query: { agent_id: agent.agent_id, from: "guide", back: "chat" } });
 }
 
 // ── B1 对话轴督战（UI-PARADIGM.md 祈使句①）──────────────────────────────
@@ -601,8 +623,14 @@ function resetToFresh(clearError = true) {
   if (clearError) pageError.value = "";
 }
 
+// 恢复在途标记：?c 深链（含 2a 回流）落地时 getConversation 在途的窗口里，
+// 不渲染可交互的空态 hero（「假起手」）、send 早退——否则此刻发消息会因
+// conversationId 尚空而意外新建会话（双镜头 P2 实审咬出的竞态）。
+const restoring = ref(false);
+
 async function loadConversation(id) {
   resetToFresh();
+  restoring.value = true;
   try {
     const conv = await getConversation(id);
     conversationId.value = conv.id;
@@ -619,6 +647,8 @@ async function loadConversation(id) {
     maybeStartTaskPoll(); // 恢复的历史会话若已带 orchestrate 方案，立即接上轮询
   } catch (err) {
     pageError.value = err.detail || err.message || "会话加载失败";
+  } finally {
+    restoring.value = false;
   }
 }
 
@@ -1080,6 +1110,40 @@ watch(
 }
 .agent-status:hover .status-peek {
   color: var(--clay-deep);
+}
+/* amber=待人签强 CTA（信任色锁：amber 仅待审语义）——签发来找人 */
+.status-peek.is-review {
+  color: var(--trust-pending);
+}
+/* 产物锚点行：完成任务的产物直达（Claude Artifact 卡片锚点） */
+.status-artifact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--paper-rail, var(--card-bg));
+  cursor: pointer;
+  color: var(--ink-soft);
+  font-size: 12px;
+  transition: border-color 0.16s var(--ease-lift), color 0.16s var(--ease-lift);
+}
+.status-artifact:hover {
+  border-color: var(--clay-softer);
+  color: var(--clay);
+}
+.artifact-icon {
+  flex: none;
+}
+.artifact-count {
+  font-weight: 600;
+}
+.artifact-open {
+  font-weight: 700;
+  color: var(--clay);
+  font-size: 11.5px;
 }
 @media (prefers-reduced-motion: reduce) {
   .status-lamp.is-pulsing { animation: none; }

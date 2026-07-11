@@ -108,8 +108,11 @@
             <div v-if="artifactsLoading" class="peek-artifact-muted">产物预览加载中……</div>
             <template v-else>
               <div v-for="a in peekArtifacts" :key="a.fileId" class="peek-artifact">
+                <!-- Artifact 容器头（Claude 哲学）：名 + 类型徽 + 尺寸 + 动作——产物是一等公民 -->
                 <div class="peek-artifact-head">
                   <span class="peek-artifact-name">{{ a.filename }}</span>
+                  <span v-if="a.ext" class="peek-artifact-ext">.{{ a.ext }}</span>
+                  <span v-if="a.size" class="peek-artifact-size">{{ formatFileSize(a.size) }}</span>
                   <a :href="downloadUrl(a.fileId)" download class="peek-artifact-dl">下载</a>
                 </div>
                 <div v-if="a.error" class="peek-artifact-err">产物加载失败：{{ a.error }}</div>
@@ -169,7 +172,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { statusCenter, openTaskPeek, backToInbox, closeCenter } from "../stores/statusCenter";
 import { listTasks, getTask, listTaskEvents, reviewTask, listModelCalls } from "../api/tasks";
 import { downloadUrl, fetchOutputFile } from "../api/files";
-import { statusLabel, statusTagType, taskLampColor, formatTime, TASK_WORK_STATES } from "../utils/format";
+import { statusLabel, statusTagType, taskLampColor, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
 import { getSavedName, saveName } from "../utils/identity";
 import { burstSigned } from "../effects/burst";
 import WorkLog from "./WorkLog.vue";
@@ -696,6 +699,21 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.peek-artifact-ext {
+  flex: none;
+  font-family: var(--mono, "SF Mono", ui-monospace, monospace);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ink-faint);
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 0 5px;
+}
+.peek-artifact-size {
+  flex: none;
+  font-size: 11px;
+  color: var(--ink-faint);
 }
 .peek-artifact-dl {
   flex: none;

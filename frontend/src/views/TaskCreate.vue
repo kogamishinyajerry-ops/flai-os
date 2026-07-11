@@ -431,7 +431,15 @@ async function handleSubmit() {
     }
     saveName(form.createdBy); // 记住名字，全站免重填
     ElMessage.success("任务已创建");
-    router.push(`/tasks/${task.id}`);
+    // 范式 2a 对话轴闭环：从导引来（back=chat）且会话仍活跃 → 回流对话，任务卡
+    // 在流里原地亮起（Claude 式零跳页）。单 Agent conclude_after 已归档会话，
+    // 回一个刚被归档的会话反而突兀——仍走详情页；工作台来的召集同样走详情页
+    // （m8_collab_chain e2e 断言④=提交后落详情，该路径不带 back=chat）。
+    if (route.query.back === "chat" && prefillConversationId.value && !prefillConcludeAfter.value) {
+      router.push({ path: "/", query: { c: prefillConversationId.value } });
+    } else {
+      router.push(`/tasks/${task.id}`);
+    }
   } catch (err) {
     ElMessage.error(err.detail || err.message);
   } finally {

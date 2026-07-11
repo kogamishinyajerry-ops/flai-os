@@ -34,11 +34,31 @@
 | 工作台接入 | `WorkbenchHome/Session.vue` | 既有导航点击零改动（e2e 锚点），additive 增「速览」次级入口 |
 | 空态插画 | `artwork/InboxZero.vue` | Codex 绘制：清空的收件盘（漫画墨线） |
 
-## Phase 2（待 owner 验收 Phase 1 后单独批次）
+## Phase 2a（已交付）——对话轴内闭环（owner 拍板双 Surface 方向后第一刀）
 
-- 三入口导航塌缩为「对话 + 状态坞」双轴；工作台会话视图并入对话轴；
-- 任务行点击默认速览、完整页退为速览内跳转——**涉及 e2e 契约重立**
-  （m8 断言「点任务行→落详情页」等），必须与 e2e 更新同批原子交付；
+Owner 判定 Phase 1 装饰层不改变骨架认知，拍板重构方向：**双 Surface**
+（对话轴=Claude Desktop 式零跳页 / 任务台=Codex 式三栏），分批推进。
+方案示意图=`paradigm-phase2-sketches/`（骨架对比/对话轴/任务台三栏）。
+
+- **召集回流（零跳页核心）**：GuidePage 召集带 `back=chat`，创建页提交成功
+  回流 `/?c=<conv>`——任务卡在对话流里原地亮起，不再甩去详情页。
+  WorkbenchSession 召集不带此参数（m8_collab_chain 详情页契约不动）；
+  conclude_after（单 Agent 归档）仍走详情页。
+- **督战条升格活任务条**：waiting_review 露 amber「审阅签发 →」强 CTA；
+  completed 且真有产物长「N 件产物 · 查看 ↗」锚点行（Claude Artifact
+  卡片锚点哲学）——点击直开速览（产物+签发同面板）。
+- **restoring 门控**：?c 深链落地时 getConversation 在途窗口不渲染可交互
+  空态 hero、send 早退（防「假起手」误建新会话——双镜头 P2 咬出）。
+- **回归网**：新增 e2e `m9_guide_loop_acceptance.py`（9 断言：回流 URL/
+  hero 不闪/督战条/锚点行/速览直达/back=chat 不越界），入 verify_all。
+
+## Phase 2b（待批）——骨架手术
+
+- 三入口导航塌缩为「对话 + 任务台」双 Surface；工作台/任务历史/任务详情
+  三页合并为任务台三栏（任务列表 | 任务叙事流 | 输出/来源面板坞）；
+- Agent 门户降级为 composer 选择器（owner 已拍板），门户页退为深链；
+- **涉及 e2e 契约重立**（m8 断言「点任务行→落详情页」等），必须与 e2e
+  更新同批原子交付；
 - 任务 MRU 切换（^Tab）、完成未读蓝点入侧栏（R3 落点②）。
 
 ## 红线继承
