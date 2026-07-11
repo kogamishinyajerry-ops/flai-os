@@ -11,7 +11,7 @@
       class="inline-alert"
     />
 
-    <el-form label-width="100px" class="create-form">
+    <el-form label-width="100px" class="create-form fx-rise">
       <el-form-item label="Agent" required>
         <el-select
           v-model="form.agentId"
@@ -73,7 +73,14 @@
 
           <!-- 表单模式：按 Agent input_schema 动态生成带标签+校验的字段 -->
           <template v-if="selectedAgent && schemaRenderable && !jsonMode">
-            <SchemaForm :schema="selectedAgent.input_schema" :model="formInputs" :disabled="submitting" />
+            <!-- 入场动效只在「刚选中 Agent」时播（modeToggled 门控）：表单/JSON
+                 来回切换是同一份数据换展示形态，不重播「刚落地」视觉（信任审 P2）。 -->
+            <SchemaForm
+              :schema="selectedAgent.input_schema"
+              :model="formInputs"
+              :disabled="submitting"
+              :class="{ 'fx-stagger': !modeToggled }"
+            />
             <div v-if="inputsErrors.length" class="field-error">
               <div v-for="(e, i) in inputsErrors" :key="i">{{ e }}</div>
             </div>
@@ -84,29 +91,32 @@
             </div>
           </template>
 
-          <!-- JSON 模式 / schema 不可渲染时降级 -->
+          <!-- JSON 模式 / schema 不可渲染时降级：入场只在刚选中 Agent 时播一次
+               （modeToggled 门控同上）；不用 max-height 过渡。 -->
           <template v-else>
-            <div v-if="selectedAgent && !schemaRenderable" class="field-hint json-fallback-note">
-              该 Agent 的输入结构较复杂，请按其输入契约直接填写 JSON。
-            </div>
-            <el-input
-              v-model="form.inputsText"
-              type="textarea"
-              :rows="8"
-              placeholder='请按该 Agent 的输入契约填写 JSON，例如：{"name": "张三"}'
-            />
-            <div v-if="inputsJsonError" class="field-error">{{ inputsJsonError }}</div>
-            <div class="field-foot">
-              <el-button
-                v-if="selectedAgent && schemaRenderable"
-                text
-                size="small"
-                class="mode-toggle"
-                @click="toggleToForm"
-              >
-                ← 用表单填写
-              </el-button>
-              <span v-if="!selectedAgent" class="field-hint">请先在上方选择 Agent。</span>
+            <div :class="{ 'fx-rise': !modeToggled }">
+              <div v-if="selectedAgent && !schemaRenderable" class="field-hint json-fallback-note">
+                该 Agent 的输入结构较复杂，请按其输入契约直接填写 JSON。
+              </div>
+              <el-input
+                v-model="form.inputsText"
+                type="textarea"
+                :rows="8"
+                placeholder='请按该 Agent 的输入契约填写 JSON，例如：{"name": "张三"}'
+              />
+              <div v-if="inputsJsonError" class="field-error">{{ inputsJsonError }}</div>
+              <div class="field-foot">
+                <el-button
+                  v-if="selectedAgent && schemaRenderable"
+                  text
+                  size="small"
+                  class="mode-toggle"
+                  @click="toggleToForm"
+                >
+                  ← 用表单填写
+                </el-button>
+                <span v-if="!selectedAgent" class="field-hint">请先在上方选择 Agent。</span>
+              </div>
             </div>
           </template>
         </div>
@@ -176,6 +186,9 @@ const inputsJsonError = ref("");
 const formInputs = reactive({});
 const schemaRenderable = ref(false);
 const jsonMode = ref(false);
+// 动效门控：刚选中 Agent=字段真「刚落地」播入场；此后表单/JSON 手动切换不重播
+// （换展示形态≠新内容，诚实地板）。选中新 Agent 时复位。
+const modeToggled = ref(false);
 const inputsErrors = ref([]);
 const submitting = ref(false);
 const uploadingFiles = ref(false);
@@ -263,6 +276,7 @@ function replaceReactive(target, source) {
 async function handleAgentChange(agentId) {
   inputsErrors.value = [];
   inputsJsonError.value = "";
+  modeToggled.value = false; // 新 Agent 的字段区=真「刚落地」，恢复入场动效
   if (!agentId) {
     selectedAgent.value = null;
     schemaRenderable.value = false;
@@ -296,6 +310,7 @@ function toggleToJson() {
   if (schemaRenderable.value && selectedAgent.value) {
     form.inputsText = JSON.stringify(collectInputs(selectedAgent.value.input_schema, formInputs), null, 2);
   }
+  modeToggled.value = true; // 手动切换视图≠新内容，入场动效不再重播
   jsonMode.value = true;
 }
 
@@ -311,6 +326,7 @@ function toggleToForm() {
   }
   inputsJsonError.value = "";
   replaceReactive(formInputs, blankInputs(selectedAgent.value.input_schema, seed));
+  modeToggled.value = true;
   jsonMode.value = false;
 }
 
@@ -498,11 +514,21 @@ onMounted(loadAgents);
   gap: 8px;
   padding: 4px 0;
   font-size: 13px;
+  /* 文件 chip hover 微反馈：transform-only，不改布局属性。 */
+  transition: transform var(--motion-fast) var(--ease-out-soft);
+}
+.upload-item:hover {
+  transform: translateX(3px);
 }
 .upload-name {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .upload-item:hover {
+    transform: none;
+  }
 }
 </style>

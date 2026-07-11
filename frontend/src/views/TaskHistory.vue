@@ -23,29 +23,35 @@
 
     <el-alert v-if="loadError" type="error" :title="loadError" show-icon :closable="false" class="page-alert" />
 
-    <el-table :data="tasks" v-loading="loading" class="task-table" @row-click="goDetail">
-      <el-table-column label="ID" width="140">
-        <template #default="{ row }">
-          <el-link type="primary" :underline="false">{{ row.id.slice(0, 12) }}</el-link>
+    <!-- el-table 内部行由组件自身虚拟 DOM 管理，.fx-stagger 对其直接子元素不生效
+         （硬约束②不 hack el-table 内部结构）；改为外层容器整体 fx-rise 入场——
+         容器本身只在页面挂载时创建一次，筛选器 @change="load" 只替换 tasks
+         数据不重挂载容器，天然不重播（诚实地板④）。 -->
+    <div class="table-card fx-rise">
+      <el-table :data="tasks" v-loading="loading" class="task-table" @row-click="goDetail">
+        <el-table-column label="ID" width="140">
+          <template #default="{ row }">
+            <el-link type="primary" :underline="false">{{ row.id.slice(0, 12) }}</el-link>
+          </template>
+        </el-table-column>
+        <el-table-column label="名称">
+          <template #default="{ row }">{{ row.name || "—" }}</template>
+        </el-table-column>
+        <el-table-column prop="agent_id" label="Agent" />
+        <el-table-column label="状态" width="140">
+          <template #default="{ row }">
+            <el-tag :type="statusTagType(row.status)">{{ statusLabel(row.status) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="created_by" label="创建人" width="120" />
+        <el-table-column label="创建时间" width="180">
+          <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+        </el-table-column>
+        <template #empty>
+          <EmptyState description="暂无任务" :image-size="84" />
         </template>
-      </el-table-column>
-      <el-table-column label="名称">
-        <template #default="{ row }">{{ row.name || "—" }}</template>
-      </el-table-column>
-      <el-table-column prop="agent_id" label="Agent" />
-      <el-table-column label="状态" width="140">
-        <template #default="{ row }">
-          <el-tag :type="statusTagType(row.status)">{{ statusLabel(row.status) }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="created_by" label="创建人" width="120" />
-      <el-table-column label="创建时间" width="180">
-        <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
-      </el-table-column>
-      <template #empty>
-        <EmptyState description="暂无任务" :image-size="84" />
-      </template>
-    </el-table>
+      </el-table>
+    </div>
 
     <div v-if="hasMore" class="load-more">
       <el-button :loading="loadingMore" @click="loadMore">加载更多</el-button>
@@ -146,6 +152,11 @@ onMounted(async () => {
 }
 .task-table :deep(.el-table__row) {
   cursor: pointer;
+}
+/* 行 hover 底色已由 Element Plus 内建（--el-table-row-hover-bg-color，中性暖阶，
+   见 App.vue 全局映射）；这里只对齐动效系统的过渡节奏，不新增颜色/新增动效。 */
+.task-table :deep(.el-table__body td.el-table__cell) {
+  transition: background-color var(--motion-fast) var(--ease-out-soft);
 }
 .load-more {
   display: flex;

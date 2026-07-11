@@ -2,7 +2,7 @@
   <div class="feedback-page">
     <h2>提交反馈</h2>
 
-    <el-form label-width="80px" class="task-select-form">
+    <el-form label-width="80px" class="task-select-form fx-rise">
       <el-form-item label="任务" required>
         <el-select
           v-model="taskId"
@@ -24,7 +24,11 @@
 
     <el-alert v-if="tasksLoadError" type="error" :title="tasksLoadError" show-icon :closable="false" />
 
-    <template v-if="taskId">
+    <!-- 反馈区块整体只在 taskId 首次从空变为有值时挂载一次（用户刚选定任务，
+         内容确属「本次刚落地」）；切换到另一个任务时该 div 不重挂载（v-if 恒真、
+         只是内部数据换了），fx-stagger 不重播——不对 .feedback-list 逐行加动效，
+         避免任务切换时列表重刷被误当「新事件」重播入场（诚实地板④）。 -->
+    <div v-if="taskId" class="fx-stagger">
       <el-form label-width="80px" class="feedback-form">
         <el-form-item label="评价">
           <el-radio-group v-model="feedbackForm.rating">
@@ -62,7 +66,7 @@
           <span class="feedback-meta">{{ f.created_by }} · {{ formatTime(f.created_at) }}</span>
         </li>
       </ul>
-    </template>
+    </div>
 
     <EmptyState v-else variant="action" description="先在上方选择一个任务，再填写反馈" :image-size="96" />
   </div>

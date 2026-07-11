@@ -1,7 +1,7 @@
 <template>
   <div class="guide-page" :class="{ 'is-empty': !started && messages.length === 0 }">
     <!-- 起手 hero（未开始且无消息）：衬线问候 + 具名，随 composer 在视口垂直居中。 -->
-    <div v-if="!started && messages.length === 0" class="guide-hero">
+    <div v-if="!started && messages.length === 0" class="guide-hero fx-rise">
       <div class="hero-mark">导</div>
       <h1 class="hero-title">说说你要做的工程活儿</h1>
       <p class="hero-sub">
@@ -86,7 +86,12 @@
 
               <div class="section-label roster-label">召集的 Agent · {{ m.recommendation.agents.length }}</div>
               <div class="agent-list">
-                <div v-for="(a, ai) in m.recommendation.agents" :key="ai" class="agent-card">
+                <div
+                  v-for="(a, ai) in m.recommendation.agents"
+                  :key="ai"
+                  class="agent-card"
+                  :class="{ 'fx-rise': m.fresh }"
+                >
                   <div class="agent-accent" :style="{ background: categoryColor(a.category) }"></div>
                   <div class="agent-main">
                     <div class="agent-top">
@@ -523,7 +528,9 @@ watch(
 .guide-hero {
   text-align: center;
   padding: 40px 12px 30px;
-  animation: rise 0.5s var(--ease-lift) both;
+  /* 入场动效走全局 .fx-rise（模板上加类）：起手 hero 只在「零消息」落地态渲染
+   * 一次=真「刚落地」无需门控；用全局类天然继承 App.vue 的 reduced-motion
+   * 降级（双镜头审合流 finding——本地 animation 没有降级覆盖，已迁移根治）。 */
 }
 .hero-mark {
   width: 46px;
@@ -774,7 +781,8 @@ watch(
   border-radius: 14px;
   padding: 15px 16px;
   transition: transform 0.22s var(--ease-lift), box-shadow 0.22s var(--ease-lift), border-color 0.22s var(--ease-lift);
-  animation: rise 0.55s var(--ease-lift) both;
+  /* 入场动效交给全局 .fx-rise（m.fresh 门控，见 template）——历史会话加载
+   * 路径重挂载不重播「刚发生」视觉，理由同 .plan-card/.user-bubble。 */
 }
 .agent-card:hover {
   transform: translateY(-2px);
@@ -1102,11 +1110,6 @@ kbd {
   border-radius: 5px;
   padding: 1px 5px;
   color: var(--ink-soft);
-}
-
-@keyframes rise {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: none; }
 }
 
 @media (max-width: 640px) {

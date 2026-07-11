@@ -19,14 +19,18 @@
 2. **诚实地板**：动效强度不得暗示不存在的活动。常驻 ambient 必须低速低密度、
    无随机爆发（装饰性明示）；「增强档」只绑真实信号（work-state 任务数、
    请求真实在途）；信号消失动效必须回落。**入场动效（fx-ink-in/fx-rise）只给
-   「本次会话刚落地」的内容**——历史批量加载/折叠展开重挂载不得重播「刚发生」
-   视觉（GuidePage 用 m.fresh 标记门控、WorkLog 用 isWorking 门控，双镜头审
-   R1 实证的两条 P2）。
+   「本次会话刚落地」的内容**——历史批量加载/折叠展开重挂载/用户手动切换视图
+   形态（如表单↔JSON 模式）都不得重播「刚发生」视觉（GuidePage 用 m.fresh、
+   WorkLog 用 isWorking、TaskCreate 用 modeToggled 门控——三案例均为双镜头审
+   实证后落修）。
 3. **e2e 契约零触碰**：选择器/DOM 序/文案锚点不改；所有效果 additive。
    canvas/装饰元素一律 `pointer-events: none` + `aria-hidden="true"`，
    绝不遮挡交互与文本。
-4. **reduced-motion 全覆盖**：每个动效必须有 `prefers-reduced-motion: reduce`
-   降级（rAF 引擎直接不启动，CSS 动画 `animation: none`）。
+4. **reduced-motion 全覆盖**：每个**位移/缩放类**动效必须有
+   `prefers-reduced-motion: reduce` 降级（rAF 引擎直接不启动，CSS 动画
+   `animation: none`；优先用全局 fx-* 类天然继承降级，本地 @keyframes 必须
+   自带降级块）。裁决口径：纯颜色过渡（background-color/border-color fade）
+   不属于前庭运动，不强制降级（v1.1 审定）。
 5. **性能**：单页 ≤1 个 rAF 循环；`document.hidden` 暂停；DPR 上限 2；
    粒子上限 120；**零第三方依赖**（禁 three.js/GSAP——内网低配 Windows +
    bundle 纪律）；CSS 动画只用 transform/opacity（不触发 layout）。

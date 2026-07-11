@@ -27,3 +27,25 @@ const DEFAULT_SIZE = { data: 96, action: 104, log: 72 };
 const img = computed(() => IMG[props.variant] || imgData);
 const size = computed(() => props.imageSize || DEFAULT_SIZE[props.variant] || 96);
 </script>
+
+<style scoped>
+/* 极轻缓浮动 loop：纯装饰（明示，非信号绑定）——transform-only，不动 el-empty
+ * 自身的 width/尺寸样式（那是内联 style，不受此覆盖）。三张插画共用同一节奏。 */
+@keyframes empty-illustration-float {
+  0%,
+  100% {
+    transform: translateY(-3px);
+  }
+  50% {
+    transform: translateY(3px);
+  }
+}
+:deep(.el-empty__image img) {
+  animation: empty-illustration-float 5.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  :deep(.el-empty__image img) {
+    animation: none;
+  }
+}
+</style>
