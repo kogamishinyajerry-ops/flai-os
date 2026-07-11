@@ -52,14 +52,28 @@ Owner 判定 Phase 1 装饰层不改变骨架认知，拍板重构方向：**双
 - **回归网**：新增 e2e `m9_guide_loop_acceptance.py`（9 断言：回流 URL/
   hero 不闪/督战条/锚点行/速览直达/back=chat 不越界），入 verify_all。
 
-## Phase 2b（待批）——骨架手术
+## Phase 2b（已交付）——骨架手术
 
-- 三入口导航塌缩为「对话 + 任务台」双 Surface；工作台/任务历史/任务详情
-  三页合并为任务台三栏（任务列表 | 任务叙事流 | 输出/来源面板坞）；
-- Agent 门户降级为 composer 选择器（owner 已拍板），门户页退为深链；
-- **涉及 e2e 契约重立**（m8 断言「点任务行→落详情页」等），必须与 e2e
-  更新同批原子交付；
-- 任务 MRU 切换（^Tab）、完成未读蓝点入侧栏（R3 落点②）。
+- **导航塌缩**：三入口 → 「对话 | 任务台」双 Surface（App.vue NAV）；
+  /workbench 重定向 /tasks 保深链；WorkbenchHome/TaskHistory 退役删除。
+- **任务台三栏**（views/TaskConsole.vue）：左=任务列表（待签发 amber 组
+  置顶 + 状态徽章随 5s 轮询原地切换 + 诚实脚注）；中+右=TaskDetail 完整
+  复用（它自身的「主列+来源栏」嵌入后合成 Codex 三栏）。/tasks/:taskId
+  旧深链全兼容；page-turn 靠 meta.pageKey 免整页重挂，中栏 :key=taskId
+  重建（TaskDetail 补 disposed 守卫防 :key 重建竞态下的僵尸轮询）。
+- **门户降级**：Agent 门户退出一级导航，降为 composer 内选择器 popover
+  （点选只填草稿绝不代发；错误/零态语义分离；/portal 深链保留，hero
+  提示行给出可发现性线索）。
+- **e2e 契约重立**（与骨架同批原子交付）：m8_workbench 重写为双 Surface
+  契约（含 completed 到席灯=中性墨的信任色锁**颜色级**真咬合断言——旧断言
+  只查可见性=声明超出证据）；m8_collab_chain ⑦ 改 redirect+侧栏断言；
+  m6 ①锚改 hero 主标题。八步门（6 套 e2e）全绿。
+
+## Phase 2c（递延）——活性细节
+
+- 任务 MRU 切换（^Tab）、完成未读蓝点入侧栏（R3 落点②）；
+- 中断-恢复=时间线一等条目+常驻 continue（R4 落点②）；
+- StatusDock 与页面轮询共享缓存；任务台列表徽章切换微动效。
 
 ## 红线继承
 

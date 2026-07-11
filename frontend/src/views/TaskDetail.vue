@@ -231,7 +231,7 @@ import { getTask, listTaskEvents, cancelTask, reviewTask, listModelCalls } from 
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import EmptyState from "../components/EmptyState.vue";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
-import { statusLabel, statusTagType, formatTime, TASK_WORK_STATES } from "../utils/format";
+import { statusLabel, statusTagType, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
 import MarkdownLite from "../components/MarkdownLite.vue";
 import WorkLog from "../components/WorkLog.vue";
 import CompletionSeal from "../components/CompletionSeal.vue";
@@ -351,12 +351,8 @@ const modelCallStats = computed(() => {
   };
 });
 
-function formatSize(bytes) {
-  if (!bytes) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+// 尺寸格式化走 utils/format 的 formatFileSize SSOT（含 GB 档）——本地副本已删。
+const formatSize = formatFileSize;
 
 const feedbackForm = reactive({ rating: "good", category: "", message: "", createdBy: getSavedName() });
 const submittingFeedback = ref(false);
@@ -450,9 +446,13 @@ async function loadTask({ silent = false } = {}) {
   }
 }
 
+// disposed 守卫（2b 双镜头 P2）：任务台把「切任务」变成同页高频交互——
+// :key 重建卸载旧实例时，若 loadTask 正 await 在途，finally 的 schedulePoll
+// 会在死实例闭包上武装新 timer 且无人再清（onUnmounted 只触发一次）。
+let disposed = false;
 function schedulePoll() {
   clearPoll();
-  if (task.value && !isTerminal.value && !isWaitingReview.value) {
+  if (!disposed && task.value && !isTerminal.value && !isWaitingReview.value) {
     pollTimer = setTimeout(() => loadTask({ silent: true }), 2000);
   }
 }
@@ -546,7 +546,10 @@ async function handleSubmitFeedback() {
 }
 
 onMounted(() => loadTask());
-onUnmounted(clearPoll);
+onUnmounted(() => {
+  disposed = true;
+  clearPoll();
+});
 </script>
 
 <style scoped>

@@ -11,7 +11,7 @@
       </p>
       <div class="hero-starter">
         <el-input v-model="createdBy" placeholder="你的名字（对话需具名）" class="name-input" />
-        <span class="starter-hint">先留个名字，在下方描述你的需求开始对话。</span>
+        <span class="starter-hint">先留个名字，在下方描述你的需求开始对话；输入框左侧 ◎ 可浏览全部可用 Agent。</span>
       </div>
       <div class="hero-examples">
         <button v-for="(ex, i) in EXAMPLES" :key="i" class="ex-chip" @click="setExample(ex)">{{ ex }}</button>
@@ -256,6 +256,40 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.49"/></svg>
             </button>
           </el-upload>
+          <!-- Agent 选择器（范式 2b：门户降级为 composer 内浏览）：点选只把
+               Agent 名填进草稿并聚焦——问导引怎么用它，绝不代发（人是唯一发起者）。 -->
+          <el-popover placement="top-start" :width="320" trigger="click" popper-class="agent-pick-pop">
+            <template #reference>
+              <button class="icon-btn" :disabled="sending" title="浏览可用 Agent" aria-label="浏览可用 Agent">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>
+              </button>
+            </template>
+            <div class="agent-pick">
+              <!-- 错误态只显示错误行（「· 0」会被误读成平台真没有 Agent——
+                   AgentPortal 同款语义区分）；真零态如实显示空态文案。 -->
+              <div v-if="pickAgentsError" class="ap-error">{{ pickAgentsError }}</div>
+              <template v-else>
+                <div class="ap-title">可用 Agent · {{ pickAgents.length }}</div>
+                <div v-if="!pickAgents.length" class="ap-zero">暂无可用 Agent</div>
+              </template>
+              <div
+                v-for="a in pickAgents"
+                :key="a.id"
+                class="ap-item"
+                role="button"
+                tabindex="0"
+                @click="pickAgent(a)"
+                @keydown.enter.prevent="pickAgent(a)"
+              >
+                <span class="ap-dot" :style="{ background: categoryColor(a.category) }"></span>
+                <span class="ap-main">
+                  <span class="ap-name">{{ a.name }}</span>
+                  <span class="ap-sub">{{ a.summary }}</span>
+                </span>
+              </div>
+              <a class="ap-portal-link" @click="$router.push('/portal')">浏览完整门户 →</a>
+            </div>
+          </el-popover>
           <el-input
             v-model="draft"
             type="textarea"
@@ -289,6 +323,7 @@ import { reactive, ref, nextTick, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation, listConversationTasks } from "../api/conversations";
+import { listAgents } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
 import { categoryColor, categoryLabel, statusLabel, taskLampColor, TASK_WORK_STATES } from "../utils/format";
 import { getSavedName, saveName } from "../utils/identity";
@@ -409,6 +444,24 @@ function focusComposer() {
   if (!el) return;
   el.focus();
   el.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+// ── Agent 选择器（范式 2b：门户降级为 composer 内浏览）──
+// 只列可被召集的执行型 Agent（过滤 disabled 与 interactive——导引自己不列
+// 自己）；点选只填草稿+聚焦，人自己描述需求再发送。
+const pickAgents = ref([]);
+const pickAgentsError = ref("");
+onMounted(async () => {
+  try {
+    const list = await listAgents();
+    pickAgents.value = (list || []).filter((a) => a.status !== "disabled" && a.mode !== "interactive");
+  } catch (err) {
+    pickAgentsError.value = err.detail || err.message || "Agent 列表加载失败";
+  }
+});
+function pickAgent(a) {
+  draft.value = `我想用「${a.name}」做：`;
+  focusComposer();
 }
 
 function adoptReframe(text) {
@@ -1447,4 +1500,48 @@ kbd {
   .plan-goal-title { font-size: 21px; }
   .agent-maturity { display: none; }
 }
+</style>
+
+<style>
+/* Agent 选择器 popover（EP popper 渲染在 body，需全局作用域）。 */
+.agent-pick-pop { padding: 10px 0 !important; }
+.agent-pick .ap-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--ink-faint);
+  padding: 2px 14px 8px;
+}
+.agent-pick .ap-error { color: var(--trust-fail); font-size: 12px; padding: 4px 14px; }
+.agent-pick .ap-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.agent-pick .ap-item:hover { background: var(--paper-rail); }
+.agent-pick .ap-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.agent-pick .ap-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.agent-pick .ap-name { font-size: 13px; font-weight: 600; color: var(--ink); }
+.agent-pick .ap-sub {
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-pick .ap-portal-link {
+  display: block;
+  padding: 8px 14px 2px;
+  margin-top: 4px;
+  border-top: 1px solid var(--hairline-soft);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--clay);
+  cursor: pointer;
+}
+</style>
+<style>
+.agent-pick .ap-zero { font-size: 12px; color: var(--ink-faint); padding: 4px 14px 8px; }
 </style>

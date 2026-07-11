@@ -1,7 +1,7 @@
 <template>
   <div class="wb-session">
     <div class="wb-back">
-      <el-button text @click="$router.push('/workbench')">← 协作工作台</el-button>
+      <el-button text @click="$router.push('/workbench')">← 任务台</el-button>
       <div class="wb-back-actions">
         <el-button
           v-if="conversation && conversation.status === 'active'"

@@ -6,7 +6,7 @@
     </button>
     <div class="sb-backdrop" @click="closeSidebar"></div>
 
-    <!-- 左侧栏（Claude 布局）：品牌 + 新对话 + 三入口导航 + 最近对话历史。 -->
+    <!-- 左侧栏（Claude 布局）：品牌 + 新对话 + 双入口导航（双 Surface）+ 最近对话历史。 -->
     <aside class="sidebar" :class="{ 'is-open': sidebarOpen }">
       <div class="sb-brand" @click="newConversation">
         <span class="brand-mark">F</span>
@@ -55,7 +55,9 @@
            并触发入场动画（副作用修正：TaskDetail/WorkbenchSession 在 setup 捕获
            params，实例复用会读到旧 id，重挂载天然修正）；query 变化不重挂载
            （GuidePage 靠自身 watch 处理 ?c 重置，保持既有行为）。 -->
-      <div :key="route.path" class="page-turn">
+      <!-- key 优先 meta.pageKey：任务台 /tasks ↔ /tasks/:id 选中切换不整页
+           重挂（中栏 TaskDetail 靠 :key=taskId 自行重建，保留参数修正语义）。 -->
+      <div :key="route.meta.pageKey || route.path" class="page-turn">
         <router-view />
       </div>
     </main>
@@ -81,17 +83,21 @@ import StatusCenter from "./components/StatusCenter.vue";
 const route = useRoute();
 const router = useRouter();
 
+// 范式 2b 双 Surface：应用只剩两个一级入口——对话（发起与跟进一切的家）
+// 与任务台（Codex 三栏：列表|叙事流|面板坞）。Agent 门户降级为 composer 内
+// 选择器 + /portal 深链（owner 拍板）；协作会话视图从对话/任务流深链进入。
 const NAV = [
-  { path: "/", label: "智能导引" },
-  { path: "/portal", label: "Agent 门户" },
-  { path: "/workbench", label: "协作工作台" },
+  { path: "/", label: "对话" },
+  { path: "/tasks", label: "任务台" },
 ];
 
-// 任务相关页（历史/详情/创建）与协作会话子页在 M8 IA 里都归属「协作工作台」高亮。
+// 任务相关页（详情/创建）与协作会话子页归「任务台」高亮；门户归「对话」
+// （Agent 是对话的弹药库）。
 const activeMenu = computed(() => {
   const p = route.path;
-  if (p === "/tasks" || p.startsWith("/tasks/")) return "/workbench";
-  if (p.startsWith("/workbench/")) return "/workbench";
+  if (p === "/tasks" || p.startsWith("/tasks/")) return "/tasks";
+  if (p.startsWith("/workbench")) return "/tasks";
+  if (p === "/portal") return "/";
   return p;
 });
 

@@ -135,7 +135,9 @@ with sync_playwright() as p:
     # ① 导引页 = 统一入口（首页）
     page.goto(BASE + "/", wait_until="networkidle")
     body = page.locator("body").inner_text()
-    check("①导引页可达且为统一入口", "智能导引" in body and "导引不会替你创建" in body, body[:200])
+    # 2b 契约重立：「智能导引」原命中侧栏导航项，双 Surface 后导航收敛为
+    # 「对话/任务台」——改锚 hero 主标题（导引页身份的稳定语义锚）。
+    check("①导引页可达且为统一入口", "说说你要做的工程活儿" in body and "导引不会替你创建" in body, body[:200])
     page.screenshot(path=str(SHOTS / "1_guide_empty.png"), full_page=True)
 
     # ② 失败轮 UI 契约（Codex R1-P2 / M7 扩附件）：后端失败零落库，前端同样

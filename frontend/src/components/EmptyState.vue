@@ -8,7 +8,7 @@
 // 品牌化空态：收敛全站 8 处裸 el-empty 为三个语义变体，各配一张漫画线稿插画
 // （AI 生成，暖白+clay 单强调色，透明底 PNG）。description 文案与既有调用方
 // 逐字一致（不动断言面）；插画比默认灰线框图信息密度高，显式尺寸整体上调
-// （FeedbackPage 80→96、WorkbenchHome 60→76）为刻意设计，非等价替换。
+// （如 FeedbackPage 80→96）为刻意设计，非等价替换。
 import { computed } from "vue";
 import imgData from "../assets/illustrations/empty-data.png";
 import imgAction from "../assets/illustrations/empty-action.png";

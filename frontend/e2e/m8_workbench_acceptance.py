@@ -1,16 +1,17 @@
-"""M8 协作工作台验收走查（P1 切片起，随 P2-P5 长大）。
+"""任务台（范式 2b 双 Surface）验收走查——原 M8 工作台契约在 2b 骨架手术后重立。
 
 自包含：脚本自起后端（tmp 目录，绝不碰真实 data/）+ Job Runner + 真 chromium。
 除 frontend/dist 构建产物外无外部前置。
 
-P1 覆盖（视觉地基 + IA 骨架）：
-  ① 顶导航收敛为恰三个真入口（智能导引 / Agent 门户 / 协作工作台），旧的
-     创建任务/任务历史/反馈**已从导航撤出**（路由仍在，上下文内可达）；
-  ② /workbench 渲染协作工作台 hero + 最近任务列表（API 预置一个任务），
-     到席灯（信任色锁：completed **不给绿**）可见；
-  ③ 点任务行 → 落 /tasks/:id 详情；
-  ④ 任务详情页顶导航高亮仍归属「协作工作台」（activeMenu 把 /tasks/* 映射过去）；
-  ⑤ 诚实占位文案在页面可见（多 Agent 协作会话视图在建设中，不假装已有）。
+2b 覆盖（双 Surface IA + 任务台三栏）：
+  ① 左栏导航收敛为恰两个一级入口（对话 / 任务台）——门户/工作台已撤出导航；
+  ② /workbench 深链重定向到 /tasks（旧链接不断）+ 任务台左栏列表渲染
+     （API 预置一个任务），到席灯（信任色锁：completed **不给绿**）可见，
+     诚实脚注（100 条窗口口径）常驻；
+  ③ 点任务行 → URL /tasks/:id + 中栏「任务详情」叙事流（TaskDetail 复用，
+     m2 全部详情契约由 m2_acceptance 继续把守）；
+  ④ 任务视图导航高亮归属「任务台」；
+  ⑤ /portal 深链仍可达（门户降级为 composer 选择器后不失联）。
 
 运行（仓根）：
   cd frontend && npm run build && cd ..
@@ -87,7 +88,7 @@ else:
 runner = JobRunner(app.state.runtime, app.state.conn_factory, poll_interval=0.2)
 threading.Thread(target=runner.run_forever, daemon=True).start()
 
-# 预置一个任务喂工作台列表（走真实 API，非直插库）。
+# 预置一个任务喂任务台列表（走真实 API，非直插库）。
 _created = httpx.post(
     BASE + "/api/tasks",
     json={"agent_id": "hello_agent", "name": "工作台验收样例任务", "inputs": {"name": "M8"}, "created_by": "验收工程师"},
@@ -110,46 +111,63 @@ with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900})
 
-    # ── ① 顶导航恰三个真入口 ──
+    # ── ① 左栏导航恰两个一级入口（双 Surface）──
     page.goto(BASE + "/", wait_until="networkidle")
     nav_items = page.locator(".sidebar-nav .nav-link")
     nav_texts = [t.strip() for t in nav_items.all_inner_texts()]
-    nav_ok = nav_texts == ["智能导引", "Agent 门户", "协作工作台"]
-    check("①左栏导航收敛为恰三入口（旧三页已撤出导航）", nav_ok, f"实际={nav_texts}")
-    page.screenshot(path=str(SHOTS / "1_nav_three.png"))
+    nav_ok = nav_texts == ["对话", "任务台"]
+    check("①左栏导航收敛为双 Surface（对话/任务台）", nav_ok, f"实际={nav_texts}")
+    page.screenshot(path=str(SHOTS / "1_nav_two.png"))
 
-    # ── ② /workbench 渲染 hero + 任务列表 + 到席灯 ──
+    # ── ② /workbench 旧深链重定向 /tasks + 任务台左栏列表 + 到席灯 + 诚实脚注 ──
     page.goto(BASE + "/workbench", wait_until="networkidle")
-    page.wait_for_selector(".wb-row", timeout=5000)
+    page.wait_for_url(re.compile(r"/tasks$"), timeout=5000)
+    page.wait_for_selector(".cl-item", timeout=5000)
     body = page.locator("body").inner_text()
-    hero_ok = "协作工作台" in body and "从导引开始一个协作" in body
-    row = page.locator(".wb-row", has_text="工作台验收样例任务").first
-    lamp_visible = row.locator(".wb-lamp").is_visible()
-    check("②工作台 hero + 最近任务列表 + 到席灯可见", hero_ok and row.is_visible() and lamp_visible,
-          f"hero={hero_ok} row={row.is_visible()} lamp={lamp_visible}")
-    # ⑤ 协作会话区常驻呈现，且不再有过期假占位（M8 会话视图已交，删除「建设中」谎言，P1-5）
-    placeholder_ok = "协作会话" in body and "建设中" not in body
-    check("⑤协作会话区常驻且无过期占位（删除『建设中』假占位，P1-5）", placeholder_ok, body[:400])
-    page.screenshot(path=str(SHOTS / "2_workbench.png"), full_page=True)
+    row = page.locator(".cl-item", has_text="工作台验收样例任务").first
+    lamp_visible = row.locator(".cl-lamp").is_visible()
+    foot_ok = "最近任务窗口" in body  # 诚实脚注：窗口外不虚报
+    check("②/workbench→/tasks 重定向 + 任务台列表 + 到席灯 + 诚实脚注",
+          row.is_visible() and lamp_visible and foot_ok,
+          f"row={row.is_visible()} lamp={lamp_visible} foot={foot_ok}")
+    page.screenshot(path=str(SHOTS / "2_console.png"), full_page=True)
 
-    # 工作台页顶导航高亮 = 协作工作台
-    active_wb = page.locator(".sidebar-nav .nav-link.is-active").inner_text().strip()
-    check("②'工作台页高亮归属协作工作台", active_wb == "协作工作台", f"active={active_wb}")
+    # 任务台页导航高亮 = 任务台
+    active_console = page.locator(".sidebar-nav .nav-link.is-active").inner_text().strip()
+    check("②'任务台页高亮归属任务台", active_console == "任务台", f"active={active_console}")
 
-    # ── ③ 点任务行 → 落详情页 ──（SPA 客户端跳转，异步渲染需显式等标题出现）
+    # 信任色锁真咬合（2b 双镜头指出旧断言只查可见性=声明超出证据）：
+    # 等 hello_agent 跑到 completed，到席灯必须中性墨 --ink-soft #6b6259——
+    # completed 永远不给绿（绿仅真实 REAL 结果）。
+    for _ in range(60):
+        if httpx.get(BASE + f"/api/tasks/{SEED_TASK_ID}", timeout=2).json()["status"] == "completed":
+            break
+        time.sleep(0.2)
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".cl-item", timeout=5000)
+    row = page.locator(".cl-item", has_text="工作台验收样例任务").first
+    expect(row.locator(".cl-lamp")).to_have_css("background-color", "rgb(107, 98, 89)", timeout=8000)
+    check("②''completed 到席灯=中性墨非绿（信任色锁真咬合）", True)
+
+    # ── ③ 点任务行 → /tasks/:id 中栏叙事流（TaskDetail 复用）──
     row.click()
     page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=5000)
     expect(page.get_by_role("heading", name="任务详情")).to_be_visible(timeout=5000)
     landed_ok = page.url.endswith(SEED_TASK_ID)
-    check("③点任务行→落任务详情页", landed_ok, f"url={page.url} seed={SEED_TASK_ID}")
+    check("③点任务行→中栏任务叙事流（URL /tasks/:id）", landed_ok, f"url={page.url} seed={SEED_TASK_ID}")
 
-    # ── ④ 详情页顶导航高亮仍归属协作工作台（activeMenu 把 /tasks/* 映射过去）──
+    # ── ④ 任务视图高亮仍归属任务台 ──
     active_detail = page.locator(".sidebar-nav .nav-link.is-active").inner_text().strip()
-    check("④任务详情页高亮仍归属协作工作台", active_detail == "协作工作台", f"active={active_detail}")
-    page.screenshot(path=str(SHOTS / "3_detail_highlight.png"))
+    check("④任务视图高亮归属任务台", active_detail == "任务台", f"active={active_detail}")
+    page.screenshot(path=str(SHOTS / "3_detail_in_console.png"), full_page=True)
+
+    # ── ⑤ /portal 深链仍可达（门户降级不失联）──
+    page.goto(BASE + "/portal", wait_until="networkidle")
+    portal_ok = "Agent" in page.locator("body").inner_text()
+    check("⑤/portal 深链仍可达（门户降级不失联）", portal_ok)
 
     browser.close()
 
 failed = [r for r in results if r[1] is not True]
-print(f"\n{'M8 WORKBENCH P1 ALL GREEN' if not failed else 'M8 WORKBENCH P1 FAILED'} ({len(results) - len(failed)}/{len(results)})")
+print(f"\n{'TASK CONSOLE 2B ALL GREEN' if not failed else 'TASK CONSOLE 2B FAILED'} ({len(results) - len(failed)}/{len(results)})")
 sys.exit(0 if not failed else 1)

@@ -190,12 +190,20 @@ with sync_playwright() as p:
           f"conclude_btn={page.get_by_role('button', name='结束协作').count()} summon={page.get_by_role('button', name='去创建此任务').count()} body={body[-400:]}")
     page.screenshot(path=str(SHOTS / "4_session_concluded.png"), full_page=True)
 
-    # ⑦ 工作台首页出现该会话卡片（归档态仍列，标「已归档」）
+    # ⑦（2b 契约重立）：/workbench 旧深链重定向任务台，且左栏「最近对话」
+    # 罗列该协作会话（会话列表随双 Surface 收敛进对话侧栏——WorkbenchHome
+    # 一级页面已退役）；任务台列表含本链创建的成员任务。
     page.goto(BASE + "/workbench", wait_until="networkidle")
-    page.wait_for_selector(".sess-card", timeout=5000)
-    home_ok = "协作会话" in page.locator("body").inner_text() and page.locator(".sess-card").count() >= 1
-    check("⑦工作台首页罗列该协作会话", home_ok, f"cards={page.locator('.sess-card').count()}")
-    page.screenshot(path=str(SHOTS / "5_workbench_home.png"), full_page=True)
+    page.wait_for_url(re.compile(r"/tasks$"), timeout=5000)
+    page.wait_for_selector(".cl-item", timeout=5000)
+    sidebar = page.locator(".sb-convos").inner_text()
+    home_ok = (
+        "完成双通道供电的控制逻辑与故障树分析" in sidebar  # 会话在对话侧栏（goal 作标题）
+        and page.locator(".cl-item").count() >= 1          # 成员任务在任务台列表
+    )
+    check("⑦/workbench→任务台重定向 + 会话入对话侧栏 + 成员任务入列", home_ok,
+          f"convos={sidebar[:200]} items={page.locator('.cl-item').count()}")
+    page.screenshot(path=str(SHOTS / "5_console_home.png"), full_page=True)
 
     browser.close()
 
