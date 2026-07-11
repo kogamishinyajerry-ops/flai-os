@@ -209,3 +209,70 @@ def test_run_once_generic_exception_marks_task_failed(runtime_env) -> None:
     failed_events = [e for e in events if e["event_type"] == "task_failed"]
     assert len(failed_events) == 1
     assert "兜底" in failed_events[0]["message"]
+
+
+def _create_task_at_status(conn_factory, task_id: str, statuses: tuple[str, ...]) -> None:
+    conn = conn_factory()
+    try:
+        repos.create_task(
+            conn,
+            task_id=task_id,
+            agent_id="hello_agent",
+            agent_version="0.1.0",
+            name="Runner 状态兜底测试",
+            created_by="tester",
+            inputs={"name": "状态守卫"},
+            input_file_ids=[],
+            metadata={},
+        )
+        for status in statuses:
+            repos.set_task_status(conn, task_id, status)
+    finally:
+        conn.close()
+
+
+def test_mark_failed_best_effort_refuses_waiting_review(runtime_env) -> None:
+    conn_factory = runtime_env["conn_factory"]
+    task_id = "task_waiting_review_guard"
+    _create_task_at_status(
+        conn_factory,
+        task_id,
+        ("queued", "validating", "running", "waiting_review"),
+    )
+
+    runner = JobRunner(object(), conn_factory)
+    runner._mark_failed_best_effort(task_id, RuntimeError("审核事件展示失败"))
+
+    conn = conn_factory()
+    try:
+        task = repos.get_task(conn, task_id)
+        events = repos.list_events(conn, task_id)
+    finally:
+        conn.close()
+
+    assert task["status"] == "waiting_review"
+    assert not any(event["event_type"] == "task_failed" for event in events)
+    warnings = [event for event in events if event["event_type"] == "warning"]
+    assert len(warnings) == 1
+    assert warnings[0]["level"] == "error"
+
+
+def test_mark_failed_best_effort_still_fails_running_task(runtime_env) -> None:
+    conn_factory = runtime_env["conn_factory"]
+    task_id = "task_running_failure_fallback"
+    _create_task_at_status(conn_factory, task_id, ("queued", "validating", "running"))
+
+    runner = JobRunner(object(), conn_factory)
+    runner._mark_failed_best_effort(task_id, RuntimeError("执行阶段炸裂"))
+
+    conn = conn_factory()
+    try:
+        task = repos.get_task(conn, task_id)
+        events = repos.list_events(conn, task_id)
+    finally:
+        conn.close()
+
+    assert task["status"] == "failed"
+    assert "RuntimeError" in task["error_message"]
+    failed_events = [event for event in events if event["event_type"] == "task_failed"]
+    assert len(failed_events) == 1

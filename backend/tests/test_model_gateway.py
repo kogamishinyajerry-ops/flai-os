@@ -14,6 +14,8 @@ monkeypatch 注入/清空，全程不触真实网络。
 
 from __future__ import annotations
 
+import time
+
 import httpx
 import pytest
 
@@ -275,3 +277,108 @@ def test_chat_empty_content_200_raises_and_records_failed(tmp_path, monkeypatch)
     assert len(calls) == 1
     assert calls[0]["status"] == "failed"
     assert "content 为空" in calls[0]["error_message"]
+
+
+# ── 可恢复上游故障有限重试（总尝试次数固定为 2）──────────────────────────
+
+@pytest.mark.parametrize("first_failure", ["503", "transport"])
+def test_chat_retryable_first_failure_then_success_records_one_success(
+    tmp_path, monkeypatch, first_failure: str
+) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            if first_failure == "503":
+                return httpx.Response(503, text="上游暂不可用")
+            raise httpx.ConnectError("模拟传输中断", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "重试成功"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 2},
+            },
+        )
+
+    _mock_env_and_post(monkeypatch, handler)
+    sleeps: list[float] = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    result = gateway.chat(
+        "reasoning", [{"role": "user", "content": "请重试"}], task_id="task_retry_success"
+    )
+
+    assert result["content"] == "重试成功"
+    assert attempts == 2
+    assert sleeps == [0.5]
+    conn = db_mod.get_conn(db_path)
+    try:
+        calls = repos.list_model_calls(conn, "task_retry_success")
+    finally:
+        conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "success"
+
+
+def test_chat_continuous_503_retries_once_and_records_one_failed(tmp_path, monkeypatch) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(503, text="持续不可用")
+
+    _mock_env_and_post(monkeypatch, handler)
+    sleeps: list[float] = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    with pytest.raises(ModelUpstreamError, match="status=503"):
+        gateway.chat(
+            "reasoning", [{"role": "user", "content": "请重试"}], task_id="task_retry_failed"
+        )
+
+    assert attempts == 2
+    assert sleeps == [0.5]
+    conn = db_mod.get_conn(db_path)
+    try:
+        calls = repos.list_model_calls(conn, "task_retry_failed")
+    finally:
+        conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+
+
+def test_chat_401_does_not_retry_and_records_one_failed(tmp_path, monkeypatch) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(401, text="未授权")
+
+    _mock_env_and_post(monkeypatch, handler)
+    sleeps: list[float] = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    with pytest.raises(ModelUpstreamError, match="status=401"):
+        gateway.chat(
+            "reasoning", [{"role": "user", "content": "不要重试"}], task_id="task_401"
+        )
+
+    assert attempts == 1
+    assert sleeps == []
+    conn = db_mod.get_conn(db_path)
+    try:
+        calls = repos.list_model_calls(conn, "task_401")
+    finally:
+        conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"

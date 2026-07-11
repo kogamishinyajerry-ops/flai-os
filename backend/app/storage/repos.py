@@ -176,6 +176,44 @@ def set_task_status(
     return get_task(conn, task_id)  # type: ignore[return-value]
 
 
+def fail_task_from_execution(
+    conn: sqlite3.Connection,
+    task_id: str,
+    error_message: str,
+) -> dict[str, Any] | None:
+    """仅允许 Runner 从执行态把任务置 failed，审核态与终态一律拒绝自动迁移。
+
+    状态读取、执行态白名单判断与更新全部位于同一个 BEGIN IMMEDIATE 事务内，
+    防止检查后到更新前任务已被并发推进到 waiting_review 的 TOCTOU 旁路。
+    """
+    execution_states = frozenset({"validating", "running", "parsing", "analyzing"})
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        task = get_task(conn, task_id)
+        if task is None or task["status"] not in execution_states:
+            conn.execute("COMMIT")
+            return None
+
+        assert_transition(task["status"], "failed")
+        now = _now_iso()
+        updates: dict[str, Any] = {"status": "failed", "updated_at": now}
+        if is_terminal("failed"):
+            updates["finished_at"] = now
+        if error_message is not None:
+            updates["error_message"] = error_message
+
+        set_clause = ", ".join(f"{key} = ?" for key in updates)
+        conn.execute(
+            f"UPDATE tasks SET {set_clause} WHERE id = ?",
+            (*updates.values(), task_id),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id)
+
+
 def claim_next_queued(conn: sqlite3.Connection) -> dict[str, Any] | None:
     """原子拾取一条 queued 任务并转 validating（BEGIN IMMEDIATE 独占写锁，先来先服务）。
 
@@ -184,6 +222,11 @@ def claim_next_queued(conn: sqlite3.Connection) -> dict[str, Any] | None:
     已被更新前的状态，要么被阻塞到第一次提交后重新读到 validating 而非
     queued，从而拿不到同一任务）。
     """
+    # 空队列是高频空跑路径：先做普通读，只有探测到候选才申请写锁。探测结果
+    # 绝不参与拾取裁决；拿锁后仍须重新 SELECT，以锁内读到的状态为唯一真相。
+    if conn.execute("SELECT 1 FROM tasks WHERE status = 'queued' LIMIT 1").fetchone() is None:
+        return None
+
     conn.execute("BEGIN IMMEDIATE")
     try:
         row = conn.execute(

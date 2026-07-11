@@ -8,8 +8,9 @@ P2-5 兜底纪律：run_once() 对单任务执行绝不裸抛——
   （如取消），`AgentRuntime.execute` 内部的 `assert_transition` 会炸出
   `IllegalTransitionError`；这是良性竞态而非 bug，记一条 warning 事件后
   runner 照常存活、继续轮询。
-- 其他任何未预期异常同样不许上抛炸掉 worker 进程：尽力把该任务标记
-  failed 并留痕，标记本身失败（如任务已处于终态）也只记日志、绝不上抛。
+- 其他任何未预期异常同样不许上抛炸掉 worker 进程：仅当任务仍在执行态时
+  尽力标记 failed 并留痕；若已进入 waiting_review/终态则拒绝自动迁移，
+  记错误日志并尽力追加 warning 事件，留痕失败也只记日志、绝不上抛。
 run_forever() 循环体再兜一层，防御 run_once 之外的意外（如 conn_factory
 自身故障）；KeyboardInterrupt 照旧干净退出，不被这层兜底吞掉。
 """
@@ -85,21 +86,53 @@ class JobRunner:
         error_message = f"{exc.__class__.__name__}: {exc}"
         conn = self._conn_factory()
         try:
-            repos.set_task_status(conn, task_id, "failed", error_message=error_message)
-            repos.append_event(
-                conn,
-                task_id=task_id,
-                event_type="task_failed",
-                level="error",
-                message=f"Job Runner 兜底：任务执行异常，已强制置 failed：{error_message}",
-            )
-        except Exception:
-            # 兜底本身也可能失败（如任务已处于终态、非法转移再次被拒）——只记日志，
-            # 绝不上抛：run_once 的唯一契约是「不炸 worker 进程」。
-            logger.exception(
-                "run_once 兜底失败：任务 %s 无法置 failed（可能已处于终态），原始异常：%s",
-                task_id, error_message,
-            )
+            try:
+                failed_task = repos.fail_task_from_execution(conn, task_id, error_message)
+            except Exception:
+                logger.exception(
+                    "run_once 兜底失败：任务 %s 无法检查或置 failed，原始异常：%s",
+                    task_id, error_message,
+                )
+                return
+
+            if failed_task is None:
+                refusal_message = (
+                    "任务处于非执行态（如 waiting_review/终态），Runner 拒绝自动置 failed"
+                    "——waiting_review 只能由人工放行转出"
+                )
+                logger.error(
+                    "run_once：任务 %s %s；原始异常：%s",
+                    task_id, refusal_message, error_message,
+                )
+                try:
+                    repos.append_event(
+                        conn,
+                        task_id=task_id,
+                        event_type="warning",
+                        level="error",
+                        message=refusal_message,
+                        payload={"runner_action": "auto_fail_refused", "error": error_message},
+                    )
+                except Exception:
+                    logger.exception(
+                        "run_once：任务 %s 的拒绝自动失败 warning 事件写入失败，状态未被改动",
+                        task_id,
+                    )
+                return
+
+            try:
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    event_type="task_failed",
+                    level="error",
+                    message=f"Job Runner 兜底：任务执行异常，已强制置 failed：{error_message}",
+                )
+            except Exception:
+                logger.exception(
+                    "run_once：任务 %s 已置 failed，但 task_failed 事件写入失败",
+                    task_id,
+                )
         finally:
             conn.close()
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import logging
 import sqlite3
 import uuid
 from dataclasses import asdict
@@ -23,6 +24,8 @@ from typing import Any, Callable
 
 from ..core.errors import KnowledgeScopeDeniedError, ToolNotAllowedError
 from ..storage import repos
+
+logger = logging.getLogger(__name__)
 
 # event.schema.json 的 event_type 枚举（供折叠判断参考；本文件不据此做「豁免」——
 # ADR-0008 原文「workflow 自定义事件统一折叠为 agent_log」是无条件折叠，见
@@ -419,10 +422,17 @@ class AgentRuntime:
         requires_review = (agent.get("workflow") or {}).get("requires_human_review")
         if requires_review is not False:
             repos.set_task_status(conn, task_id, "waiting_review")
-            repos.append_event(
-                conn, task_id=task_id, agent_id=agent_id, event_type="review_requested",
-                level="info", message="任务需要人工审核放行",
-            )
+            try:
+                repos.append_event(
+                    conn, task_id=task_id, agent_id=agent_id, event_type="review_requested",
+                    level="info", message="任务需要人工审核放行",
+                )
+            except Exception:
+                logger.exception(
+                    "任务 %s 已安全落在 waiting_review；仅缺少展示性 review_requested 事件，"
+                    "继续正常返回等待人工放行",
+                    task_id,
+                )
             return {"status": "waiting_review", "task": repos.get_task(conn, task_id)}
 
         # docs/05 §2 强制规则：running 不得跳过 analyzing 直接进 completed。

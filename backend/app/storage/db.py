@@ -159,6 +159,20 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 );
 """
 
+_INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tool_runs_task_id ON tool_runs(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_model_calls_task_id ON model_calls(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_model_calls_conversation_id ON model_calls(conversation_id)",
+    "CREATE INDEX IF NOT EXISTS idx_samples_task_id ON samples(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_feedback_task_id ON feedback(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_id "
+    "ON conversation_messages(conversation_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_conversation_id ON tasks(conversation_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_status_created_at ON tasks(status, created_at)",
+)
+
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
     """打开一个 sqlite3 连接：Row 工厂 + WAL + 外键约束 + 手动事务模式。
@@ -208,6 +222,10 @@ def init_db(db_path: str | Path) -> None:
             task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
             if "conversation_id" not in task_cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN conversation_id TEXT")
+            # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
+            # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
+            for statement in _INDEX_DDL:
+                conn.execute(statement)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

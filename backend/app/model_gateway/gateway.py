@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -135,10 +136,23 @@ class ModelGateway:
 
     def _post(self, base_url: str, path: str, payload: dict[str, Any], api_key: str | None) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        try:
-            resp = httpx.post(f"{base_url}{path}", json=payload, headers=headers, timeout=60)
-        except httpx.HTTPError as exc:
-            raise ModelUpstreamError(f"上游网络错误：{exc}") from exc
+        for attempt in range(2):
+            try:
+                resp = httpx.post(f"{base_url}{path}", json=payload, headers=headers, timeout=60)
+            except httpx.TransportError as exc:
+                if attempt == 0:
+                    time.sleep(0.5)
+                    continue
+                raise ModelUpstreamError(f"上游网络错误：{exc}") from exc
+            except httpx.HTTPError as exc:
+                # 非传输类 HTTPError 保持原有错误映射，但不属于可重试范围。
+                raise ModelUpstreamError(f"上游网络错误：{exc}") from exc
+
+            if resp.status_code in {502, 503, 504} and attempt == 0:
+                time.sleep(0.5)
+                continue
+            break
+
         if not (200 <= resp.status_code < 300):
             raise ModelUpstreamError(f"上游返回非 2xx（status={resp.status_code}）：{resp.text[:500]}")
         # P2-4：上游 200 但 body 畸形（HTML 错误页/非 JSON/顶层非 object）不得让

@@ -61,6 +61,24 @@ def test_init_db_is_idempotent(tmp_path) -> None:
     db_mod.init_db(db_path)  # 第二次调用不应报错
 
 
+def test_init_db_creates_required_indexes(conn) -> None:
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'").fetchall()
+    names = {row["name"] for row in rows}
+    expected = {
+        "idx_task_events_task_id",
+        "idx_tool_runs_task_id",
+        "idx_model_calls_task_id",
+        "idx_model_calls_conversation_id",
+        "idx_samples_task_id",
+        "idx_feedback_task_id",
+        "idx_conversation_messages_conversation_id",
+        "idx_tasks_conversation_id",
+        "idx_tasks_agent_id",
+        "idx_tasks_status_created_at",
+    }
+    assert expected <= names, f"缺索引：{expected - names}"
+
+
 # ── tasks ──────────────────────────────────────────────────────────────
 
 def test_create_task_defaults_to_created_status(conn) -> None:
@@ -139,7 +157,19 @@ def test_set_task_outputs(conn) -> None:
 # ── claim_next_queued 原子性 ─────────────────────────────────────────
 
 def test_claim_next_queued_returns_none_when_empty(conn) -> None:
-    assert repos.claim_next_queued(conn) is None
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        assert repos.claim_next_queued(conn) is None
+    finally:
+        conn.set_trace_callback(None)
+
+    normalized = [" ".join(statement.upper().split()) for statement in statements]
+    assert any(
+        statement.startswith("SELECT 1 FROM TASKS WHERE STATUS = 'QUEUED' LIMIT 1")
+        for statement in normalized
+    )
+    assert not any(statement.startswith("BEGIN IMMEDIATE") for statement in normalized)
 
 
 def test_claim_next_queued_picks_fifo_and_transitions_to_validating(conn) -> None:
@@ -150,6 +180,48 @@ def test_claim_next_queued_picks_fifo_and_transitions_to_validating(conn) -> Non
     assert claimed is not None
     assert claimed["id"] == t1["id"]
     assert claimed["status"] == "validating"
+
+
+def test_claim_probe_hit_but_rival_claims_before_lock_returns_none(conn) -> None:
+    """前置探测只用于避锁；探测后被对手抢先时，锁内复查仍是唯一裁决。"""
+    task = _new_task(conn)
+    repos.set_task_status(conn, task["id"], "queued")
+
+    db_path = conn.execute("PRAGMA database_list").fetchone()["file"]
+    rival = db_mod.get_conn(db_path)
+    probe_seen = False
+    interposed = False
+    callback_errors: list[Exception] = []
+    rival_claims: list[dict | None] = []
+
+    def trace(statement: str) -> None:
+        nonlocal probe_seen, interposed
+        normalized = " ".join(statement.upper().split())
+        if normalized.startswith("SELECT 1 FROM TASKS WHERE STATUS = 'QUEUED' LIMIT 1"):
+            probe_seen = True
+        elif normalized.startswith("BEGIN IMMEDIATE") and probe_seen and not interposed:
+            # victim 尚未真正执行 BEGIN；此刻让 rival 完整拾取并提交，确定性复现
+            # “探测命中、拿锁前已被抢先”的竞态窗口。
+            interposed = True
+            try:
+                rival_claims.append(repos.claim_next_queued(rival))
+            except Exception as exc:  # noqa: BLE001 - trace 回调异常会被 sqlite 吞掉，显式留待断言
+                callback_errors.append(exc)
+
+    conn.set_trace_callback(trace)
+    try:
+        claimed = repos.claim_next_queued(conn)
+    finally:
+        conn.set_trace_callback(None)
+        rival.close()
+
+    assert probe_seen is True
+    assert interposed is True
+    assert callback_errors == []
+    assert len(rival_claims) == 1
+    assert rival_claims[0] is not None and rival_claims[0]["id"] == task["id"]
+    assert claimed is None
+    assert repos.get_task(conn, task["id"])["status"] == "validating"
 
 
 def test_second_claim_does_not_get_same_task(conn) -> None:

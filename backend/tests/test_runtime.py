@@ -463,3 +463,43 @@ def test_execute_requires_human_review(tmp_path: Path) -> None:
         assert len(repos.list_samples(conn, task_id)) == 1
     finally:
         conn.close()
+
+
+def test_review_requested_event_failure_keeps_waiting_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """展示性 review_requested 写失败时，已提交的人工审核态仍须安全返回。"""
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    review_dir = agents_dir / "review_agent"
+    shutil.copytree(AGENTS_DIR / "hello_agent", review_dir)
+
+    yaml_path = review_dir / "agent.yaml"
+    yaml_text = yaml_path.read_text(encoding="utf-8")
+    yaml_text = yaml_text.replace("id: hello_agent", "id: review_agent")
+    yaml_text = yaml_text.replace("requires_human_review: false", "requires_human_review: true")
+    yaml_path.write_text(yaml_text, encoding="utf-8")
+
+    runtime, db_path = _make_runtime(agents_dir, tmp_path)
+    task_id = _create_and_queue_task(db_path, agent_id="review_agent", inputs={"name": "世界"})
+    real_append_event = repos.append_event
+
+    def fail_review_requested(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        if kwargs.get("event_type") == "review_requested":
+            raise RuntimeError("模拟 review_requested 入库失败")
+        return real_append_event(*args, **kwargs)
+
+    monkeypatch.setattr(repos, "append_event", fail_review_requested)
+    result = runtime.execute(task_id)
+
+    assert result["status"] == "waiting_review"
+    assert result["task"]["status"] == "waiting_review"
+    conn = get_conn(db_path)
+    try:
+        task = repos.get_task(conn, task_id)
+        event_types = [event["event_type"] for event in repos.list_events(conn, task_id)]
+    finally:
+        conn.close()
+    assert task["status"] == "waiting_review"
+    assert "review_requested" not in event_types
+    assert "task_failed" not in event_types
