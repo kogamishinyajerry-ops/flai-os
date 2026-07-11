@@ -7,7 +7,8 @@
   ① 左栏导航收敛为恰两个一级入口（对话 / 任务台）——门户/工作台已撤出导航；
   ② /workbench 深链重定向到 /tasks（旧链接不断）+ 任务台左栏列表渲染
      （API 预置一个任务），到席灯（信任色锁：completed **不给绿**）可见，
-     诚实脚注（100 条窗口口径）常驻；
+     诚实脚注（100 条窗口口径）常驻；②''到席灯颜色级真咬合；
+     ②'''/②''''完成未读点（2c）：baseline 后新完成任务亮 clay 点、点开即灭；
   ③ 点任务行 → URL /tasks/:id + 中栏「任务详情」叙事流（TaskDetail 复用，
      m2 全部详情契约由 m2_acceptance 继续把守）；
   ④ 任务视图导航高亮归属「任务台」；
@@ -149,9 +150,34 @@ with sync_playwright() as p:
     expect(row.locator(".cl-lamp")).to_have_css("background-color", "rgb(107, 98, 89)", timeout=8000)
     check("②''completed 到席灯=中性墨非绿（信任色锁真咬合）", True)
 
+    # ── ②''' 完成未读点（2c）：baseline 之后新完成且没打开过 → clay 点；点开即灭 ──
+    # baseline 已在首次进任务台时锚定（上方 goto /workbench），此后创建的任务
+    # 完成时刻必然晚于 baseline——不依赖 SEED_TASK 的完成/首访时序。
+    _t2 = httpx.post(
+        BASE + "/api/tasks",
+        json={"agent_id": "hello_agent", "name": "未读点样例任务", "inputs": {"name": "unseen"}, "created_by": "验收工程师"},
+        timeout=5,
+    )
+    if _t2.status_code not in (200, 201):
+        sys.exit(f"诚实失败：未读点样例任务创建失败 {_t2.status_code}")
+    T2_ID = _t2.json()["id"]
+    for _ in range(60):
+        if httpx.get(BASE + f"/api/tasks/{T2_ID}", timeout=2).json()["status"] == "completed":
+            break
+        time.sleep(0.2)
+    row2 = page.locator(".cl-item", has_text="未读点样例任务").first
+    expect(row2.locator(".cl-unseen-dot")).to_be_visible(timeout=9000)  # 等 5s 轮询翻面
+    check("②'''baseline 后新完成任务亮未读点", True)
+    row2.click()
+    page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=5000)
+    expect(row2.locator(".cl-unseen-dot")).to_have_count(0)  # select 即 markSeen，当行立即熄灭
+    check("②''''点开任务未读点即灭", True)
+    page.screenshot(path=str(SHOTS / "2b_unseen_dot_cleared.png"))
+
     # ── ③ 点任务行 → /tasks/:id 中栏叙事流（TaskDetail 复用）──
     row.click()
-    page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=5000)
+    # 精确等 SEED 的 URL——②''' 已把 URL 带到 /tasks/:T2，宽 regex 会立即误过
+    page.wait_for_url(re.compile(rf"/tasks/{SEED_TASK_ID}$"), timeout=5000)
     expect(page.get_by_role("heading", name="任务详情")).to_be_visible(timeout=5000)
     landed_ok = page.url.endswith(SEED_TASK_ID)
     check("③点任务行→中栏任务叙事流（URL /tasks/:id）", landed_ok, f"url={page.url} seed={SEED_TASK_ID}")

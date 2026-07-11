@@ -16,53 +16,19 @@
 </template>
 
 <script setup>
-// 5s 链式轮询（TaskDetail 同款纪律：上一轮落地才排下一轮，hidden 跳过仍续轮）；
-// 一次 listTasks(limit=100) 客户端派生两计数——与工作台到席灯同一「最近窗口」
-// 诚实口径（窗口外任务不计入，宁可少报不虚报）。失败保留上次已知计数，下一
-// tick 自愈；从未成功过则不显示 pill（无数据不装有数据）。
-import { ref, onMounted, onUnmounted } from "vue";
-import { listTasks } from "../api/tasks";
+// 计数派生自 taskFeed 共享轮询源（范式 2c：与任务台左栏同一条链同一份数据）；
+// 「最近窗口 100 条」诚实口径、失败保留上次计数下 tick 自愈、从未成功不显示
+// pill（无数据不装有数据）全部由 store 层承袭。
+import { computed, onMounted, onUnmounted } from "vue";
 import { TASK_WORK_STATES } from "../utils/format";
 import { openInbox } from "../stores/statusCenter";
+import { feedTasks, acquireTaskFeed, releaseTaskFeed } from "../stores/taskFeed";
 
-const workingCount = ref(0);
-const waitingCount = ref(0);
+const workingCount = computed(() => feedTasks.value.filter((t) => TASK_WORK_STATES.has(t.status)).length);
+const waitingCount = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review").length);
 
-let pollTimer = null;
-let disposed = false; // 卸载后 in-flight finally 不再续排（clearPoll 拦不住已入 await 的那一轮）
-async function refreshCounts() {
-  try {
-    const tasks = await listTasks({ limit: 100 });
-    workingCount.value = tasks.filter((t) => TASK_WORK_STATES.has(t.status)).length;
-    waitingCount.value = tasks.filter((t) => t.status === "waiting_review").length;
-  } catch {
-    // 瞬时抖动保留上次计数，下一 tick 自愈
-  }
-}
-function schedulePoll() {
-  clearPoll();
-  pollTimer = setTimeout(async () => {
-    try {
-      if (!document.hidden) await refreshCounts();
-    } finally {
-      if (!disposed) schedulePoll();
-    }
-  }, 5000);
-}
-function clearPoll() {
-  if (pollTimer) {
-    clearTimeout(pollTimer);
-    pollTimer = null;
-  }
-}
-onMounted(async () => {
-  await refreshCounts(); // 初载落地后再排轮询，不与首 tick 并行双拉
-  if (!disposed) schedulePoll();
-});
-onUnmounted(() => {
-  disposed = true;
-  clearPoll();
-});
+onMounted(acquireTaskFeed);
+onUnmounted(releaseTaskFeed);
 </script>
 
 <style scoped>

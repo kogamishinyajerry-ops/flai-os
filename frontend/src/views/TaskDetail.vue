@@ -236,6 +236,7 @@ import MarkdownLite from "../components/MarkdownLite.vue";
 import WorkLog from "../components/WorkLog.vue";
 import CompletionSeal from "../components/CompletionSeal.vue";
 import { getSavedName, saveName } from "../utils/identity";
+import { markTaskSeen } from "../utils/lastSeen";
 import { burstSigned } from "../effects/burst";
 
 const route = useRoute();
@@ -424,6 +425,7 @@ async function loadTask({ silent = false } = {}) {
       return;
     }
     task.value = t;
+    markTaskSeen(taskId); // 详情页开着=正在看：轮询期间状态翻终态不得回头亮未读
     syncArtifacts(t.output_file_ids); // fire-and-forget，增量同步产物内容
     syncModelCalls(); // fire-and-forget，全量重拉模型调用留痕（消耗诚实披露）
     if (!silent) {
@@ -501,6 +503,7 @@ async function handleReview(action) {
   reviewing.value = true;
   try {
     await reviewTask(taskId, { action, reviewer: reviewForm.reviewer.trim(), comment: reviewForm.comment || null });
+    markTaskSeen(taskId); // 亲手签发=已看过：其后完成不得对签发者亮未读
     saveName(reviewForm.reviewer); // 记住名字，全站免重填
     // 人签放行成功时刻（唯一 teal 许可点，动效系统硬约束）：仅 approve 分支触发；
     // 驳回/失败绝不放庆祝动效。元素取不到（ref 未挂载等）burstSigned 自兜 null。
@@ -545,7 +548,10 @@ async function handleSubmitFeedback() {
   }
 }
 
-onMounted(() => loadTask());
+onMounted(() => {
+  markTaskSeen(taskId); // 打开详情即视为「已看过」，驱动任务台未读点
+  loadTask();
+});
 onUnmounted(() => {
   disposed = true;
   clearPoll();

@@ -9,7 +9,7 @@
         <el-button size="small" text type="primary" @click="$router.push('/tasks/new')">+ 新任务</el-button>
       </div>
 
-      <div v-if="listError" class="cl-error">{{ listError }}</div>
+      <div v-if="feedError" class="cl-error">{{ feedError }}</div>
 
       <!-- 待你签发：amber 组置顶（行动召唤最高优先） -->
       <template v-if="waitingTasks.length">
@@ -48,11 +48,12 @@
       >
         <span class="cl-lamp" :class="{ 'is-pulsing': isWork(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
         <span class="cl-main">
-          <span class="cl-name">{{ t.name || t.id.slice(0, 12) }}</span>
+          <span class="cl-name" :class="{ 'is-unread': unseen(t) }">{{ t.name || t.id.slice(0, 12) }}</span>
           <span class="cl-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }}</span>
         </span>
+        <span v-if="unseen(t)" class="cl-unseen-dot" title="完成后你还没看过"></span>
       </div>
-      <div v-if="!loadingList && !tasks.length" class="cl-zero">还没有任务——从对话召集，或点上方「+ 新任务」。</div>
+      <div v-if="feedLoaded && !feedTasks.length" class="cl-zero">还没有任务——从对话召集，或点上方「+ 新任务」。</div>
 
       <div class="cl-foot-note">清单来自最近任务窗口（100 条）真实轮询——窗口外不虚报。</div>
     </aside>
@@ -71,13 +72,14 @@
 </template>
 
 <script setup>
-// 左栏列表：5s 链式轮询（上轮落地才排下轮，hidden 跳过仍续轮，disposed 防
-// 越过卸载）——与 StatusDock/工作台同一纪律；徽章颜色走 taskLampColor 信任
-// 色锁 SSOT。选中=路由（/tasks/:taskId），深链/刷新/回退天然可用。
+// 左栏列表订阅 taskFeed 共享轮询源（范式 2c：与 StatusDock 同一条 5s 链同一
+// 份数据，页面不再各拉各的）；徽章颜色走 taskLampColor 信任色锁 SSOT。
+// 选中=路由（/tasks/:taskId），深链/刷新/回退天然可用。
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { listTasks } from "../api/tasks";
 import { statusLabel, taskLampColor, TASK_WORK_STATES } from "../utils/format";
+import { ensureTaskBaseline, markTaskSeen, taskHasUnseen } from "../utils/lastSeen";
+import { feedTasks, feedLoaded, feedError, acquireTaskFeed, releaseTaskFeed } from "../stores/taskFeed";
 import TaskDetail from "./TaskDetail.vue";
 import EmptyState from "../components/EmptyState.vue";
 
@@ -86,59 +88,32 @@ const router = useRouter();
 
 const selectedId = computed(() => (typeof route.params.taskId === "string" ? route.params.taskId : ""));
 
-const tasks = ref([]);
-const listError = ref("");
-const loadingList = ref(true);
-
-const waitingTasks = computed(() => tasks.value.filter((t) => t.status === "waiting_review"));
-const otherTasks = computed(() => tasks.value.filter((t) => t.status !== "waiting_review"));
+const waitingTasks = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review"));
+const otherTasks = computed(() => feedTasks.value.filter((t) => t.status !== "waiting_review"));
 
 function isWork(status) {
   return TASK_WORK_STATES.has(status);
 }
 
+// 完成未读点（localStorage 非响应式）：seenVersion 在点选时自增，让当行点
+// 立即熄灭，不用等下一轮 feed 更新重渲。
+const seenVersion = ref(0);
+function unseen(t) {
+  seenVersion.value; // 建立响应依赖
+  return taskHasUnseen(t);
+}
+
 function select(t) {
+  markTaskSeen(t.id);
+  seenVersion.value += 1;
   if (t.id !== selectedId.value) router.push(`/tasks/${t.id}`);
 }
 
-async function refreshList() {
-  try {
-    tasks.value = await listTasks({ limit: 100 });
-    listError.value = "";
-  } catch (err) {
-    // 首载失败如实报错；轮询失败保留上次清单下 tick 自愈
-    if (!tasks.value.length) listError.value = err.detail || err.message || "加载失败";
-  } finally {
-    loadingList.value = false;
-  }
-}
-
-let pollTimer = null;
-let disposed = false;
-function schedulePoll() {
-  clearPoll();
-  pollTimer = setTimeout(async () => {
-    try {
-      if (!document.hidden) await refreshList();
-    } finally {
-      if (!disposed) schedulePoll();
-    }
-  }, 5000);
-}
-function clearPoll() {
-  if (pollTimer) {
-    clearTimeout(pollTimer);
-    pollTimer = null;
-  }
-}
-onMounted(async () => {
-  await refreshList();
-  if (!disposed) schedulePoll();
+onMounted(() => {
+  ensureTaskBaseline(); // 首次进任务台锚定未读基线（幂等）
+  acquireTaskFeed();
 });
-onUnmounted(() => {
-  disposed = true;
-  clearPoll();
-});
+onUnmounted(releaseTaskFeed);
 </script>
 
 <style scoped>
@@ -209,9 +184,25 @@ onUnmounted(() => {
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  /* 徽章切换微动效（2c）：轮询把状态原地翻面时颜色渐变过渡，不硬跳 */
+  transition: background var(--motion-med) var(--ease-out-soft);
 }
 .cl-lamp.is-pulsing {
   animation: flai-work-pulse var(--pulse-duration) ease-in-out infinite;
+}
+/* 完成未读（2c）：注意力信号≠信任信号，不占信任色锁五槽（clay 许可范围
+ * 仅工作/进行/选中）——用形状（空心环）+字重（名字加粗）双通道承载，零新色。 */
+.cl-unseen-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink);
+  background: transparent;
+}
+.cl-name.is-unread {
+  font-weight: 700;
+  color: var(--ink);
 }
 .cl-main {
   flex: 1 1 auto;
@@ -255,6 +246,7 @@ onUnmounted(() => {
   .cl-lamp.is-pulsing {
     animation: none;
   }
+  .cl-lamp,
   .cl-item {
     transition: none;
   }

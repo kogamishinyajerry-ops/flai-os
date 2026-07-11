@@ -174,6 +174,7 @@ import { listTasks, getTask, listTaskEvents, reviewTask, listModelCalls } from "
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import { statusLabel, statusTagType, taskLampColor, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
 import { getSavedName, saveName } from "../utils/identity";
+import { markTaskSeen } from "../utils/lastSeen";
 import { burstSigned } from "../effects/burst";
 import WorkLog from "./WorkLog.vue";
 import MarkdownLite from "./MarkdownLite.vue";
@@ -291,6 +292,7 @@ async function loadPeek(taskId, { initial = false } = {}) {
     ]);
     if (epoch !== peekEpoch) return;
     peekTask.value = t;
+    markTaskSeen(taskId); // 速览开着=正在看：轮询期间翻终态不得回头亮未读
     peekEvents.value = initial ? ev : peekEvents.value.concat(ev);
     peekModelCalls.value = calls;
     peekError.value = "";
@@ -335,6 +337,7 @@ async function doReview(action) {
       comment: reviewComment.value || null,
     });
     saveName(reviewer.value);
+    markTaskSeen(taskId); // 亲手签发=已看过：其后完成不得对签发者亮未读
     reviewComment.value = ""; // 签发落定即清，绝不残留到下一个任务
     ElMessage.success(action === "approve" ? "已批准放行" : "已驳回");
     // 续体绑定：await 期间抽屉可能已关/任务已切——只有还在看同一任务时才迸发+刷新
@@ -420,6 +423,7 @@ function ensurePeekLoaded() {
   if (statusCenter.open && statusCenter.view === "peek" && id && peekLoadedFor !== id) {
     peekLoadedFor = id;
     reviewComment.value = ""; // 切任务清草稿，绝不把上个任务的意见签到这个任务
+    markTaskSeen(id); // 速览含产物+签发，等价「看过」，驱动任务台未读点
     loadPeek(id, { initial: true });
   }
 }

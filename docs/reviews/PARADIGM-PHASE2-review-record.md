@@ -40,9 +40,31 @@
 - m2/m8_orchestrator/m9 零改动存活（TaskDetail 复用保全部详情契约；m2 附加
   断言 /tasks 页 hello_agent 由任务台左栏天然满足）。
 
+## Phase 2c（活性细节）审查
+
+范围裁决（用户指令「完成所有改进」）：交付三（完成未读/轮询共享 taskFeed/
+徽章微动效）、撤一（MRU ^Tab——浏览器保留键+⌘K 已覆盖）、递延一（中断-恢复
+continue——后端无 retry/resume 端点，重跑语义牵动审计链须先立后端契约）。
+
+Codex MCP 连续第二批 1800s 超时 → 2a/2b/2c 三批全入 post-merge 补审队列。
+本批双镜头（fresh-context）：regression APPROVE（1P3）/ trust
+CHANGES_REQUIRED（1P1+2P2+1P3），**全落修**：
+
+| 级 | Finding | 修法 |
+|----|---------|------|
+| P1（信任） | 未读点用 clay 越权——色锁许可仅「工作/进行/选中」，注意力不在锁内；且与同行 completed 中性墨到席灯互相打脸 | 改墨色空心环+名字加粗双通道（形状+字重承载语义，零新色）；扩锁权在 owner，不自扩 |
+| P2（信任） | 签发后自亮未读：seen 记在打开时刻，签发把 updated_at 推到其后 → 对「刚亲手签发」的任务回头亮未读 | 四挂接点补齐：loadTask/loadPeek 成功分支（开着=在看）+ 两处签发成功后即 seen；e2e 缺口（waiting_review→签发→completed 不复亮）如实记录——hello_agent 直落 completed 造不出该链 |
+| P2（文档） | UI-PARADIGM 2c 段把「蓝点→clay 点」的静默改动呈现为既成事实，未与自身色锁条款对账 | 段落改写：披露两案均否的理由与最终双通道方案 |
+| P3×2 | cl-error 从「列表空」收窄为「从未成功过」（regression 镜头，判定=有意收紧：已知为空不误报失败）；容量淘汰 sort 对被篡改的非法日期条目位置不定 | 前者 commit message 写明意图；后者代码注释标注已知边界（读路径已 fail 向「不标」） |
+
+regression 镜头另确认：StatusDock 四语义全承袭；taskFeed 竞态在 StatusDock
+常驻 App 根布局（refCount 永≥1）下「理论可达、实际不可达」；lastSeen 参数化
+会话版逐字节等价；既有 e2e 选择器零影响；新断言无 flaky 窗口（baseline 跨
+reload 由 localStorage 持久保证）。
+
 ## 收口验证
 
 - `bash scripts/verify_all.sh` 八步全绿（build + 全量 pytest + 6 套 e2e，
-  m8_workbench 7 断言 + m9 9 断言），失败（无）。
+  m8_workbench 9 断言含未读亮/灭真咬合 + m9 9 断言），失败（无）。
 - 实机目检截图：双入口侧栏 / 任务台空态 / 三栏选中态（左列表+中叙事流含
   盖章与产物+右来源面板）。
