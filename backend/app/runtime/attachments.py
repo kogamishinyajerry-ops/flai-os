@@ -19,7 +19,10 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
+
+from ..core.errors import FileIntegrityError
+from ..storage.file_integrity import open_verified_file
 
 # 每个文件渲染上限（字符）与单批次总预算——附件文本叠加在会话截窗
 # （40 条/60K 字符）之外，预算刻意保守，避免长会话上下文膨胀失控。
@@ -71,18 +74,17 @@ def _truncate(text: str, limit: int) -> str:
     return kept + f"\n……[截断：原文 {len(text)} 字符，仅展示前 {limit} 字符]"
 
 
-def _render_text_file(path: Path, limit: int) -> str:
+def _render_text_file(handle: BinaryIO, limit: int) -> str:
     # 只读渲染所需字节，不 read_bytes() 全量载入（反方审 P2：大文本每轮重渲染
     # 的内存放大——xlsx 已 read_only 流式，文本路径此前却全量读，防御不对称）。
     # UTF-8 最坏 4 字节/字符，读 limit*4 + 余量即保证够 limit 个字符可切。
     max_bytes = limit * 4 + 64
-    with path.open("rb") as fh:
-        raw = fh.read(max_bytes)
+    raw = handle.read(max_bytes)
     text = raw.decode("utf-8", errors="replace")
     return _truncate(text, limit)
 
 
-def _xlsx_parse_budget_ok(path: Path) -> tuple[bool, str]:
+def _xlsx_parse_budget_ok(handle: BinaryIO) -> tuple[bool, str]:
     """开 openpyxl 前用 stdlib zipfile 探测解析成本（M7 敌意审 P1）。
 
     xlsx 即 zip：遍历成员累加解压后大小（`file_size`），超总量顶即拒——
@@ -92,7 +94,8 @@ def _xlsx_parse_budget_ok(path: Path) -> tuple[bool, str]:
     （fail-closed，绝不带着未知成本进 openpyxl）。
     """
     try:
-        with zipfile.ZipFile(path) as zf:
+        handle.seek(0)
+        with zipfile.ZipFile(handle) as zf:
             total_uncompressed = 0
             total_compressed = 0
             for info in zf.infolist():
@@ -104,23 +107,26 @@ def _xlsx_parse_budget_ok(path: Path) -> tuple[bool, str]:
                 return False, f"压缩比 {total_uncompressed / total_compressed:.0f}x 异常（疑 zip bomb）"
     except (zipfile.BadZipFile, OSError) as exc:
         return False, f"zip 解析失败（{type(exc).__name__}）"
+    finally:
+        handle.seek(0)
     return True, ""
 
 
-def _render_xlsx_file(path: Path, limit: int) -> str:
+def _render_xlsx_file(handle: BinaryIO, limit: int) -> str:
     """xlsx 预览：仅活动 sheet 前 N 行 × M 列，制表符分隔；全 sheet 名单列出。
 
     read_only + 硬顶行列约束**展示量**；解析成本另由 `_xlsx_parse_budget_ok`
     在开簿前把关（M7 敌意审 P1）——预览的目的是让导引看懂「这是什么数据」，
     完整解析是 specialist Agent 用注册工具做的事。
     """
-    ok, reason = _xlsx_parse_budget_ok(path)
+    ok, reason = _xlsx_parse_budget_ok(handle)
     if not ok:
         return f"[未解析：xlsx 超出解析预算（{reason}）——请拆分文件，或在创建任务页上传交目标 Agent 处理]"
 
     import openpyxl  # 项目既有依赖（M3 工具链引入）
 
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    handle.seek(0)
+    wb = openpyxl.load_workbook(handle, read_only=True, data_only=True)
     try:
         sheet_names = list(wb.sheetnames)
         ws = wb.active
@@ -141,7 +147,12 @@ def _render_xlsx_file(path: Path, limit: int) -> str:
         wb.close()
 
 
-def render_one(file_row: dict[str, Any], limit: int = _PER_FILE_CHARS) -> str:
+def render_one(
+    file_row: dict[str, Any],
+    limit: int = _PER_FILE_CHARS,
+    *,
+    uploads_root: str | Path,
+) -> str:
     """渲染单个文件行（files 表 row dict）→ 不含 fence 的内容文本。
 
     返回内容**未做 sentinel 中和**——中和由批次层 `render_attachment_blocks`
@@ -155,21 +166,31 @@ def render_one(file_row: dict[str, Any], limit: int = _PER_FILE_CHARS) -> str:
     ext = Path(raw_name).suffix.lower()
     display_name = "".join(ch for ch in raw_name if ch.isprintable()) or "unnamed"
     display_ext = "".join(ch for ch in ext if ch.isprintable()) or "无后缀"
-    path = Path(file_row.get("path") or "")
     try:
-        if not path.is_file():
-            return f"[读取失败：文件已不在磁盘（{display_name}）——请重新上传]"
-        if ext in _TEXT_EXTS:
-            return _render_text_file(path, limit)
-        if ext in _XLSX_EXTS:
-            return _render_xlsx_file(path, limit)
-        return f"[未解析：{display_ext} 类型 V0.2 不支持内容解析（仅文本类与 .xlsx 预览；docx/pdf 为 V0.3 规划）——文件名与大小仍可作为需求线索]"
+        with open_verified_file(
+            file_row.get("path") or "",
+            allowed_root=uploads_root,
+            expected_size=file_row.get("size_bytes"),
+            expected_sha256=file_row.get("sha256"),
+        ) as handle:
+            if ext in _TEXT_EXTS:
+                return _render_text_file(handle, limit)
+            if ext in _XLSX_EXTS:
+                return _render_xlsx_file(handle, limit)
+            return f"[未解析：{display_ext} 类型 V0.2 不支持内容解析（仅文本类与 .xlsx 预览；docx/pdf 为 V0.3 规划）——文件名与大小仍可作为需求线索]"
+    except FileNotFoundError:
+        return f"[读取失败：文件已不在磁盘（{display_name}）——请重新上传]"
+    except FileIntegrityError:
+        return f"[附件完整性校验失败，已拒绝注入（{display_name}）]"
     except Exception as exc:  # noqa: BLE001 —— 附件级隔离：单文件失败不崩整轮
         return f"[读取失败：{type(exc).__name__}: {exc}]"
 
 
 def render_attachment_blocks(
-    file_rows: list[dict[str, Any]], *, budget_chars: int = _TOTAL_CHARS
+    file_rows: list[dict[str, Any]],
+    *,
+    budget_chars: int = _TOTAL_CHARS,
+    uploads_root: str | Path,
 ) -> str:
     """渲染一条消息的附件集合 → 规则行 + 逐文件 fence 块。
 
@@ -203,7 +224,13 @@ def render_attachment_blocks(
             leftover_count = len(file_rows) - i
             parts.append(f"[附件预算耗尽：另有 {leftover_count} 个附件未展示（文件名从略，安全起见不外露）]")
             break
-        body = _neutralize_sentinels(render_one(row, limit=min(_PER_FILE_CHARS, remaining - overhead)))
+        body = _neutralize_sentinels(
+            render_one(
+                row,
+                limit=min(_PER_FILE_CHARS, remaining - overhead),
+                uploads_root=uploads_root,
+            )
+        )
         block = f"{header}\n{body}\n{_FOOTER}"
         remaining -= len(block)
         parts.append(block)

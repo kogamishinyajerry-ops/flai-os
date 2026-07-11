@@ -70,9 +70,11 @@ def create_app(
         )
         runtime = AgentRuntime(
             asm.agent_registry, asm.tool_registry, asm.model_gateway, conn_factory,
-            task_runs_dir, knowledge_service=asm.knowledge_service,
+            task_runs_dir, knowledge_service=asm.knowledge_service, uploads_dir=uploads_dir,
         )
-        conversation_service = ConversationService(asm.agent_registry, asm.model_gateway, conn_factory)
+        conversation_service = ConversationService(
+            asm.agent_registry, asm.model_gateway, conn_factory, uploads_dir=uploads_dir,
+        )
 
         app.state.agent_registry = asm.agent_registry
         app.state.tool_registry = asm.tool_registry

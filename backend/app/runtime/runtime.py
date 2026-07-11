@@ -20,10 +20,11 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, BinaryIO, Callable
 
-from ..core.errors import KnowledgeScopeDeniedError, ToolNotAllowedError
+from ..core.errors import FileIntegrityError, KnowledgeScopeDeniedError, ToolNotAllowedError
 from ..storage import repos
+from ..storage.file_integrity import open_verified_file
 
 logger = logging.getLogger(__name__)
 
@@ -294,12 +295,18 @@ class AgentRuntime:
         task_runs_dir: str | Path,
         *,
         knowledge_service: Any | None = None,
+        uploads_dir: str | Path | None = None,
     ) -> None:
         self.agent_registry = agent_registry
         self.tool_registry = tool_registry
         self.model_gateway = model_gateway
         self.conn_factory = conn_factory
         self.task_runs_dir = Path(task_runs_dir)
+        # 由 create_app 注入权威 uploads 根；默认值仅保留旧直构调用的兼容性，
+        # 按项目既有 data/{task_runs,uploads} 兄弟目录布局推导。
+        self.uploads_dir = (
+            Path(uploads_dir) if uploads_dir is not None else self.task_runs_dir.parent / "uploads"
+        )
         # ADR-0015：可为 None（纯工具/结构化 Agent 场景不需要）；但 Agent 声明
         # knowledge.enabled 而这里为 None 时任务必须诚实失败，见 _execute 1b。
         self.knowledge_service = knowledge_service
@@ -334,8 +341,10 @@ class AgentRuntime:
             conn, task_id=task_id, agent_id=agent_id, event_type="validation_started",
             level="info", message="开始校验输入",
         )
+        verified_files: list[tuple[dict[str, Any], BinaryIO]] = []
         try:
             self._validate_inputs(pkg_dir, agent, task["inputs"])
+            verified_files = self._open_input_files(conn, task)
         except Exception as exc:
             repos.append_event(
                 conn, task_id=task_id, agent_id=agent_id, event_type="validation_failed",
@@ -353,6 +362,7 @@ class AgentRuntime:
         # knowledge.enabled 而 Runtime 未装配 KnowledgeService = 装配缺陷，
         # 诚实失败——绝不静默给一个"查不到任何东西"的假 knowledge 入口。
         if (agent.get("knowledge") or {}).get("enabled") is True and self.knowledge_service is None:
+            self._close_verified_files(verified_files)
             msg = (
                 f"Agent {agent_id} 声明 knowledge.enabled 但 Runtime 未装配 "
                 "KnowledgeService（装配缺陷，fail-closed 拒绝执行）"
@@ -370,13 +380,25 @@ class AgentRuntime:
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
         # 2) 进入 running，构建 context 并调用 workflow.run()
-        repos.set_task_status(conn, task_id, "running")
         output_dir = self.task_runs_dir / task_id / "output"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        context = self._build_context(conn, task, agent, pkg_dir, output_dir)
+        try:
+            repos.set_task_status(conn, task_id, "running")
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except BaseException:
+            # workflow try/finally 尚未开始；状态迁移/建目录任一失败也必须释放
+            # 已验输入句柄，不能让 worker 长跑时逐任务泄漏 fd。
+            self._close_verified_files(verified_files)
+            raise
 
         try:
+            context = self._build_context(
+                conn,
+                task,
+                agent,
+                pkg_dir,
+                output_dir,
+                [row for row, _handle in verified_files],
+            )
             workflow_module = _load_workflow_module(agent_id, pkg_dir / "workflow.py")
             result = workflow_module.run(context)
         except Exception as exc:
@@ -388,6 +410,8 @@ class AgentRuntime:
             )
             self._record_failure_sample(conn, task, agent, error_message)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
+        finally:
+            self._close_verified_files(verified_files)
 
         if not isinstance(result, dict) or result.get("status") != "success":
             error_message = (result or {}).get("error_message", "workflow 返回失败态") if isinstance(result, dict) else "workflow 返回值非法"
@@ -477,6 +501,45 @@ class AgentRuntime:
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         jsonschema_validate(inputs, schema)
 
+    def _open_input_files(
+        self, conn: sqlite3.Connection, task: dict[str, Any]
+    ) -> list[tuple[dict[str, Any], BinaryIO]]:
+        """校验所有签发输入并持有句柄至 workflow 返回；任一失败即整体拒绝执行。"""
+        verified: list[tuple[dict[str, Any], BinaryIO]] = []
+        try:
+            for file_id in task.get("input_file_ids", []):
+                record = repos.get_file(conn, file_id)
+                if record is None:
+                    raise FileIntegrityError(
+                        f"输入文件完整性校验失败：file_id={file_id}，File Store 无登记记录"
+                    )
+                try:
+                    handle = open_verified_file(
+                        record["path"],
+                        allowed_root=self.uploads_dir,
+                        expected_size=record["size_bytes"],
+                        expected_sha256=record["sha256"],
+                    )
+                except (FileNotFoundError, FileIntegrityError) as exc:
+                    raise FileIntegrityError(
+                        f"输入文件完整性校验失败：file_id={file_id}，{exc}"
+                    ) from exc
+
+                # 既有工具公共契约只接收带真实后缀的 path（例如 openpyxl 会按
+                # `.xlsx` 后缀预检），不能替换成 `/dev/fd/N`。句柄仍持有到 workflow
+                # 结束，保证本层校验对象稳定；path 型工具二次打开的残余窗口需在
+                # 后续工具契约升级为流/句柄时彻底消除，本批不改公共接口。
+                verified.append((dict(record), handle))
+            return verified
+        except BaseException:
+            self._close_verified_files(verified)
+            raise
+
+    @staticmethod
+    def _close_verified_files(files: list[tuple[dict[str, Any], BinaryIO]]) -> None:
+        for _record, handle in files:
+            handle.close()
+
     def _build_context(
         self,
         conn: sqlite3.Connection,
@@ -484,23 +547,9 @@ class AgentRuntime:
         agent: dict[str, Any],
         pkg_dir: Path,
         output_dir: Path,
+        files: list[dict[str, Any]],
     ) -> dict[str, Any]:
         agent_id = task["agent_id"]
-        files: list[dict[str, Any]] = []
-        for fid in task.get("input_file_ids", []):
-            f = repos.get_file(conn, fid)
-            if f is None:
-                # P3-4：引用不存在的 file_id 不得静默消失——发 warning 事件留痕，
-                # 再跳过该项（无事件=没发生的另一面：数据缺失也要留痕，不能只是
-                # context.files 悄悄变短）。
-                repos.append_event(
-                    conn, task_id=task["id"], agent_id=agent_id, event_type="warning",
-                    level="warning",
-                    message=f"输入文件引用不存在，已跳过：file_id={fid}",
-                    payload={"missing_file_id": fid},
-                )
-                continue
-            files.append(f)
         allowed_tools = frozenset(agent.get("tools") or [])
         context: dict[str, Any] = {
             "task": task,

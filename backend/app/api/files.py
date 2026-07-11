@@ -6,16 +6,147 @@ import hashlib
 import os
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
+import anyio
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
+from starlette.datastructures import MutableHeaders
 
+from ..core.errors import FileIntegrityError
 from ..storage import repos
+from ..storage.file_integrity import open_verified_file
 
 router = APIRouter(prefix="/api", tags=["files"])
 
 _CHUNK_SIZE = 1024 * 1024
+
+# Starlette 私有覆写哨兵：_VerifiedFileResponse 靠覆写 FileResponse._handle_* 三个
+# 私有挂点保证正文只从已验句柄流出。若升级 Starlette 后挂点改名/拆分，覆写会被
+# **静默绕过**——基类将重开 self.path 直出未验内容，完整性闸形同虚设。fail-closed：
+# 导入期断言挂点存在，升级破坏在启动/CI 即炸，绝不静默降级为未验直出。
+for _hook in ("_handle_simple", "_handle_single_range", "_handle_multiple_ranges"):
+    if not callable(getattr(FileResponse, _hook, None)):
+        raise RuntimeError(
+            f"Starlette FileResponse 缺少 {_hook}：完整性下载覆写失效，拒绝启动"
+        )
+
+
+class _VerifiedFileResponse(FileResponse):
+    """保留 FileResponse 的响应头/Range 语义，但正文只读完整性校验后的句柄。"""
+
+    def __init__(self, handle: BinaryIO, *, path: str, filename: str) -> None:
+        self._verified_handle = handle
+        super().__init__(
+            path,
+            filename=filename,
+            stat_result=os.fstat(handle.fileno()),
+        )
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # 覆盖正常结束、Range、HEAD、客户端断连及 send 异常，句柄不会泄漏。
+            self._verified_handle.close()
+
+    async def _handle_simple(
+        self, send: Any, send_header_only: bool, send_pathsend: bool
+    ) -> None:
+        del send_pathsend  # 已验句柄必须自己流出，绝不回退 http.response.pathsend 重开 path。
+        await send(
+            {"type": "http.response.start", "status": self.status_code, "headers": self.raw_headers}
+        )
+        if send_header_only:
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
+            return
+
+        more_body = True
+        while more_body:
+            chunk = await anyio.to_thread.run_sync(
+                self._verified_handle.read, self.chunk_size
+            )
+            more_body = len(chunk) == self.chunk_size
+            await send({"type": "http.response.body", "body": chunk, "more_body": more_body})
+
+    async def _handle_single_range(
+        self,
+        send: Any,
+        start: int,
+        end: int,
+        file_size: int,
+        send_header_only: bool,
+    ) -> None:
+        headers = MutableHeaders(raw=list(self.raw_headers))
+        headers["content-range"] = f"bytes {start}-{end - 1}/{file_size}"
+        headers["content-length"] = str(end - start)
+        await send(
+            {"type": "http.response.start", "status": 206, "headers": headers.raw}
+        )
+        if send_header_only:
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
+            return
+
+        await anyio.to_thread.run_sync(self._verified_handle.seek, start)
+        more_body = True
+        while more_body:
+            chunk = await anyio.to_thread.run_sync(
+                self._verified_handle.read, min(self.chunk_size, end - start)
+            )
+            start += len(chunk)
+            more_body = len(chunk) == self.chunk_size and start < end
+            await send({"type": "http.response.body", "body": chunk, "more_body": more_body})
+
+    async def _handle_multiple_ranges(
+        self,
+        send: Any,
+        ranges: list[tuple[int, int]],
+        file_size: int,
+        send_header_only: bool,
+    ) -> None:
+        from secrets import token_hex
+
+        boundary = token_hex(13)
+        content_length, header_generator = self.generate_multipart(
+            ranges, boundary, file_size, self.headers["content-type"]
+        )
+        headers = MutableHeaders(raw=list(self.raw_headers))
+        headers["content-type"] = f"multipart/byteranges; boundary={boundary}"
+        headers["content-length"] = str(content_length)
+        await send(
+            {"type": "http.response.start", "status": 206, "headers": headers.raw}
+        )
+        if send_header_only:
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
+            return
+
+        for start, end in ranges:
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": header_generator(start, end),
+                    "more_body": True,
+                }
+            )
+            await anyio.to_thread.run_sync(self._verified_handle.seek, start)
+            while start < end:
+                chunk = await anyio.to_thread.run_sync(
+                    self._verified_handle.read, min(self.chunk_size, end - start)
+                )
+                start += len(chunk)
+                await send(
+                    {"type": "http.response.body", "body": chunk, "more_body": True}
+                )
+            await send(
+                {"type": "http.response.body", "body": b"\r\n", "more_body": True}
+            )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": f"--{boundary}--".encode("latin-1"),
+                "more_body": False,
+            }
+        )
 
 
 def _sanitize_filename(raw: str | None) -> str:
@@ -116,7 +247,7 @@ async def upload_file(
 
 
 @router.get("/files/{file_id}/download")
-def download_file(file_id: str, request: Request) -> FileResponse:
+def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
     conn = request.app.state.conn_factory()
     try:
         record = repos.get_file(conn, file_id)
@@ -124,7 +255,40 @@ def download_file(file_id: str, request: Request) -> FileResponse:
         conn.close()
     if record is None:
         raise HTTPException(status_code=404, detail=f"文件不存在：{file_id}")
-    path = Path(record["path"])
-    if not path.exists():
+
+    # input 与 output 分属两个权威根：根由应用装配给出，绝不从待校验 path 自推。
+    # 未知 kind 没有可信根，按完整性失败 fail-closed。
+    if record["kind"] == "input":
+        allowed_root = request.app.state.uploads_dir
+    elif record["kind"] == "output":
+        allowed_root = request.app.state.task_runs_dir
+    else:
+        raise HTTPException(
+            status_code=409,
+            detail="文件完整性校验失败：磁盘内容与登记指纹不符",
+        )
+
+    try:
+        handle = open_verified_file(
+            record["path"],
+            allowed_root=allowed_root,
+            expected_size=record["size_bytes"],
+            expected_sha256=record["sha256"],
+        )
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"文件记录存在但磁盘缺失：{file_id}")
-    return FileResponse(path, filename=record["filename"])
+    except FileIntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="文件完整性校验失败：磁盘内容与登记指纹不符",
+        ) from exc
+
+    try:
+        return _VerifiedFileResponse(
+            handle,
+            path=record["path"],
+            filename=record["filename"],
+        )
+    except BaseException:
+        handle.close()
+        raise

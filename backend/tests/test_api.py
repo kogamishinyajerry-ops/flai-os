@@ -495,6 +495,61 @@ def test_upload_then_download_sha256_roundtrip(client: TestClient) -> None:
     download_resp = client.get(f"/api/files/{record['id']}/download")
     assert download_resp.status_code == 200
     assert download_resp.content == content
+    assert download_resp.headers["content-length"] == str(len(content))
+    assert download_resp.headers["accept-ranges"] == "bytes"
+    assert "sample.txt" in download_resp.headers["content-disposition"]
+    assert "last-modified" in download_resp.headers
+    assert "etag" in download_resp.headers
+
+    range_resp = client.get(
+        f"/api/files/{record['id']}/download", headers={"Range": "bytes=6-12"}
+    )
+    assert range_resp.status_code == 206
+    assert range_resp.content == content[6:13]
+    assert range_resp.headers["content-range"] == f"bytes 6-12/{len(content)}"
+
+
+def test_download_same_size_tamper_returns_409(client: TestClient) -> None:
+    """CDX-4 tamper 自证：只改内容不改大小，下载也必须 fail-closed。"""
+    original = b"signed-A"
+    tampered = b"forged-B"
+    assert len(original) == len(tampered), "本测试必须锁定同尺寸替换威胁"
+    upload_resp = client.post(
+        "/api/files/upload",
+        files={"file": ("tamper.txt", original, "text/plain")},
+    )
+    assert upload_resp.status_code == 200
+    record = upload_resp.json()
+    Path(record["path"]).write_bytes(tampered)
+
+    response = client.get(f"/api/files/{record['id']}/download")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "文件完整性校验失败：磁盘内容与登记指纹不符"
+    assert tampered not in response.content
+
+
+def test_download_symlink_replacement_returns_409(client: TestClient, tmp_path: Path) -> None:
+    content = b"signed-content"
+    upload_resp = client.post(
+        "/api/files/upload",
+        files={"file": ("linked.txt", content, "text/plain")},
+    )
+    assert upload_resp.status_code == 200
+    record = upload_resp.json()
+    path = Path(record["path"])
+    target = tmp_path / "same-content.txt"
+    target.write_bytes(content)
+    path.unlink()
+    try:
+        path.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("当前平台/权限不支持创建符号链接")
+
+    response = client.get(f"/api/files/{record['id']}/download")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "文件完整性校验失败：磁盘内容与登记指纹不符"
 
 
 def test_download_unknown_file_404(client: TestClient) -> None:

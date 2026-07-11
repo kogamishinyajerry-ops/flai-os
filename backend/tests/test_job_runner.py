@@ -7,7 +7,14 @@ from typing import Any
 
 import pytest
 
-from backend.app.jobs.runner import JobRunner
+from backend.app.jobs import runner as runner_module
+from backend.app.jobs.runner import (
+    JobRunner,
+    WorkerAlreadyRunningError,
+    recover_interrupted_tasks,
+    run_worker_forever,
+    worker_singleton_lock,
+)
 from backend.app.model_gateway.gateway import ModelGateway
 from backend.app.runtime.registry import AgentRegistry
 from backend.app.runtime.runtime import AgentRuntime
@@ -276,3 +283,156 @@ def test_mark_failed_best_effort_still_fails_running_task(runtime_env) -> None:
     assert "RuntimeError" in task["error_message"]
     failed_events = [event for event in events if event["event_type"] == "task_failed"]
     assert len(failed_events) == 1
+
+
+# ── CDX-7：worker 单实例锁与崩溃恢复 ─────────────────────────────────────
+
+
+def test_recover_interrupted_tasks_fails_all_execution_states(runtime_env) -> None:
+    conn_factory = runtime_env["conn_factory"]
+    execution_paths = {
+        "task_interrupted_validating": ("queued", "validating"),
+        "task_interrupted_running": ("queued", "validating", "running"),
+        "task_interrupted_parsing": ("queued", "validating", "running", "parsing"),
+        "task_interrupted_analyzing": ("queued", "validating", "running", "analyzing"),
+    }
+    for task_id, statuses in execution_paths.items():
+        _create_task_at_status(conn_factory, task_id, statuses)
+
+    assert recover_interrupted_tasks(conn_factory) == len(execution_paths)
+
+    conn = conn_factory()
+    try:
+        for task_id in execution_paths:
+            task = repos.get_task(conn, task_id)
+            events = repos.list_events(conn, task_id)
+            assert task["status"] == "failed"
+            assert "worker_interrupted" in task["error_message"]
+            failed_events = [event for event in events if event["event_type"] == "task_failed"]
+            assert len(failed_events) == 1
+            assert failed_events[0]["payload"] == {"worker_interrupted": True}
+    finally:
+        conn.close()
+
+
+def test_recover_interrupted_tasks_leaves_non_execution_states_untouched(runtime_env) -> None:
+    conn_factory = runtime_env["conn_factory"]
+    untouched_paths = {
+        "task_interrupted_created_guard": (),
+        "task_interrupted_queued_guard": ("queued",),
+        "task_interrupted_review_guard": (
+            "queued", "validating", "running", "waiting_review",
+        ),
+        "task_interrupted_completed_guard": (
+            "queued", "validating", "running", "analyzing", "completed",
+        ),
+        "task_interrupted_failed_guard": ("queued", "validating", "failed"),
+        "task_interrupted_cancelled_guard": ("queued", "cancelled"),
+    }
+    for task_id, statuses in untouched_paths.items():
+        _create_task_at_status(conn_factory, task_id, statuses)
+
+    assert recover_interrupted_tasks(conn_factory) == 0
+
+    conn = conn_factory()
+    try:
+        expected_statuses = {
+            task_id: statuses[-1] if statuses else "created"
+            for task_id, statuses in untouched_paths.items()
+        }
+        for task_id, expected_status in expected_statuses.items():
+            assert repos.get_task(conn, task_id)["status"] == expected_status
+            assert repos.list_events(conn, task_id) == []
+    finally:
+        conn.close()
+
+
+def test_recover_interrupted_tasks_is_idempotent(runtime_env) -> None:
+    conn_factory = runtime_env["conn_factory"]
+    task_id = "task_interrupted_idempotent"
+    _create_task_at_status(conn_factory, task_id, ("queued", "validating", "running"))
+
+    assert recover_interrupted_tasks(conn_factory) == 1
+    conn = conn_factory()
+    try:
+        first_task = repos.get_task(conn, task_id)
+        first_events = repos.list_events(conn, task_id)
+    finally:
+        conn.close()
+
+    assert recover_interrupted_tasks(conn_factory) == 0
+    conn = conn_factory()
+    try:
+        second_task = repos.get_task(conn, task_id)
+        second_events = repos.list_events(conn, task_id)
+    finally:
+        conn.close()
+
+    assert second_task == first_task
+    assert second_events == first_events
+    assert len([event for event in second_events if event["event_type"] == "task_failed"]) == 1
+
+
+def test_worker_singleton_lock_rejects_second_independent_open(tmp_path) -> None:
+    lock_path = tmp_path / "worker.lock"
+    with worker_singleton_lock(lock_path):
+        # 两个上下文会分别 open 同一路径；第二个非阻塞加锁必须立即失败。
+        with pytest.raises(WorkerAlreadyRunningError):
+            with worker_singleton_lock(lock_path):
+                pass
+
+
+def test_worker_singleton_lock_can_be_reacquired_after_release(tmp_path) -> None:
+    lock_path = tmp_path / "worker.lock"
+    with worker_singleton_lock(lock_path):
+        pass
+    with worker_singleton_lock(lock_path):
+        pass
+
+
+def test_worker_entrypoint_lock_conflict_exits_nonzero_before_assemble(
+    tmp_path, capsys,
+) -> None:
+    lock_path = tmp_path / "worker.lock"
+    assembled = False
+
+    def runner_factory() -> JobRunner:
+        nonlocal assembled
+        assembled = True
+        raise AssertionError("锁冲突时不应装配 runner")
+
+    def conn_factory():
+        raise AssertionError("锁冲突时不应连接数据库")
+
+    with worker_singleton_lock(lock_path):
+        exit_code = run_worker_forever(runner_factory, conn_factory, lock_path)
+
+    stderr = capsys.readouterr().err
+    assert exit_code != 0
+    assert assembled is False
+    assert "已有 worker 正在运行" in stderr
+    assert "拒绝并行启动第二个 worker" in stderr
+
+
+def test_worker_entrypoint_recovers_under_lock_before_polling(tmp_path, monkeypatch) -> None:
+    lock_path = tmp_path / "worker.lock"
+    order: list[str] = []
+
+    class _StubRunner:
+        def run_forever(self) -> None:
+            order.append("poll")
+
+    def runner_factory():
+        order.append("assemble")
+        return _StubRunner()
+
+    def fake_recover(conn_factory) -> int:
+        order.append("recover")
+        with pytest.raises(WorkerAlreadyRunningError):
+            with worker_singleton_lock(lock_path):
+                pass
+        return 0
+
+    monkeypatch.setattr(runner_module, "recover_interrupted_tasks", fake_recover)
+    assert run_worker_forever(runner_factory, lambda: None, lock_path) == 0
+    assert order == ["assemble", "recover", "poll"]

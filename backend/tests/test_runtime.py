@@ -16,6 +16,7 @@ conn=None, task_id=None)` 约定；后者未被 hello_agent 调用（`model.prof
 from __future__ import annotations
 
 import importlib
+import hashlib
 import json
 import shutil
 from datetime import datetime, timezone
@@ -120,6 +121,7 @@ def _make_runtime(agents_dir: Path, tmp_path: Path) -> tuple[AgentRuntime, Path]
         model_gateway=_FakeModelGateway(),
         conn_factory=lambda: get_conn(db_path),
         task_runs_dir=tmp_path / "task_runs",
+        uploads_dir=tmp_path / "uploads",
     )
     return runtime, db_path
 
@@ -396,9 +398,11 @@ def test_tool_context_reports_tool_failed_on_failed_status(tmp_path: Path) -> No
         conn.close()
 
 
-def test_execute_skips_missing_input_file_id_with_warning_event(tmp_path: Path) -> None:
-    """P3-4：input_file_ids 引用了不存在的 file_id——context.files 必须跳过该项，
-    且不得静默消失，须发一条 warning 事件留痕（修此前 _build_context 的静默跳过）。
+def test_execute_missing_input_file_id_fails_closed(tmp_path: Path) -> None:
+    """CDX-4 有意翻转旧行为：签发对象缺失即 validation_failed，绝不跳过后执行。
+
+    旧测试允许 hello_agent 在 file_id 缺失时 completed；完整性闸要求 fail-closed，
+    因为 Agent 当前是否读取 files 不能成为污染签发对象的放行依据。
     """
     runtime, db_path = _make_runtime(AGENTS_DIR, tmp_path)
     conn = get_conn(db_path)
@@ -414,15 +418,77 @@ def test_execute_skips_missing_input_file_id_with_warning_event(tmp_path: Path) 
         conn.close()
 
     result = runtime.execute("task_missing_file")
-    assert result["status"] == "completed", "缺失文件引用不应阻断任务本身（hello_agent 不消费 files）"
+    assert result["status"] == "failed"
+    assert "file_id=file_does_not_exist" in result["task"]["error_message"]
+    assert "完整性校验失败" in result["task"]["error_message"]
 
     conn = get_conn(db_path)
     try:
         events = repos.list_events(conn, "task_missing_file")
-        warning_events = [e for e in events if e["event_type"] == "warning"]
-        assert len(warning_events) == 1
-        assert warning_events[0]["payload"]["missing_file_id"] == "file_does_not_exist"
-        assert warning_events[0]["level"] == "warning"
+        assert [event["event_type"] for event in events] == [
+            "validation_started",
+            "validation_failed",
+            "task_failed",
+        ]
+        assert repos.list_tool_runs(conn, "task_missing_file") == []
+    finally:
+        conn.close()
+
+
+def test_execute_tampered_input_file_fails_before_workflow(tmp_path: Path) -> None:
+    """CDX-4 tamper 自证：同尺寸替换绕不过 sha256，且不得触达 workflow/工具。"""
+    runtime, db_path = _make_runtime(AGENTS_DIR, tmp_path)
+    file_id = "file_tampered"
+    original = b"signed-A"
+    tampered = b"forged-B"
+    assert len(original) == len(tampered), "本测试必须锁定同尺寸替换威胁"
+
+    file_path = tmp_path / "uploads" / file_id / "input.txt"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_bytes(original)
+    conn = get_conn(db_path)
+    try:
+        repos.create_file(
+            conn,
+            file_id=file_id,
+            task_id=None,
+            kind="input",
+            filename="input.txt",
+            path=str(file_path),
+            size_bytes=len(original),
+            sha256=hashlib.sha256(original).hexdigest(),
+        )
+        task = repos.create_task(
+            conn,
+            task_id="task_tampered_file",
+            agent_id="hello_agent",
+            agent_version="0.1.0",
+            name="篡改输入测试",
+            created_by="tester",
+            inputs={"name": "世界"},
+            input_file_ids=[file_id],
+            metadata={},
+        )
+        repos.set_task_status(conn, task["id"], "queued")
+        repos.set_task_status(conn, task["id"], "validating")
+    finally:
+        conn.close()
+
+    file_path.write_bytes(tampered)
+    result = runtime.execute("task_tampered_file")
+
+    assert result["status"] == "failed"
+    assert file_id in result["task"]["error_message"]
+    assert "完整性校验失败" in result["task"]["error_message"]
+    conn = get_conn(db_path)
+    try:
+        events = repos.list_events(conn, "task_tampered_file")
+        assert [event["event_type"] for event in events] == [
+            "validation_started",
+            "validation_failed",
+            "task_failed",
+        ]
+        assert repos.list_tool_runs(conn, "task_tampered_file") == []
     finally:
         conn.close()
 

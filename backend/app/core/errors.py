@@ -64,6 +64,10 @@ class FileNotFoundInStoreError(FlaiError):
     """按 id 查不到对应的 File Store 记录。"""
 
 
+class FileIntegrityError(FlaiError):
+    """File Store 磁盘对象与登记的大小/sha256 不一致，或路径不满足安全约束。"""
+
+
 class ConversationNotFoundError(FlaiError):
     """按 id 查不到对应的导引会话（M6）。"""
 

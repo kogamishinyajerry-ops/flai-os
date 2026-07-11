@@ -1,7 +1,7 @@
 """Job Runner：单 worker 轮询 queued 任务并驱动 AgentRuntime 执行。
 
-ADR-0008：sqlite claim_next_queued 用 BEGIN IMMEDIATE 保证单 worker 下无双抢；
-多 worker 并发场景留给 M3 按需引入分布式锁。
+sqlite claim_next_queued 用 BEGIN IMMEDIATE 保证单次拾取不双抢；worker 进程入口
+另以跨平台文件锁强制单实例，避免两个真实工具执行器同时消费同一数据库。
 
 P2-5 兜底纪律：run_once() 对单任务执行绝不裸抛——
 - claim 到 validating 后、真正执行前，任务若被外部竞态转移到其他状态
@@ -17,9 +17,14 @@ run_forever() 循环体再兜一层，防御 run_once 之外的意外（如 conn
 
 from __future__ import annotations
 
+import errno
 import logging
+import os
+import sys
 import time
-from typing import Callable
+from contextlib import contextmanager
+from pathlib import Path
+from typing import BinaryIO, Callable, Iterator
 
 import sqlite3
 
@@ -27,6 +32,121 @@ from ..core.errors import IllegalTransitionError
 from ..storage import repos
 
 logger = logging.getLogger(__name__)
+
+_INTERRUPTED_STATUSES = ("validating", "running", "parsing", "analyzing")
+_WORKER_INTERRUPTED_ERROR = (
+    "worker_interrupted：上次 worker 进程中断，任务未完成即失败；"
+    "真实工具可能已产生外部副作用，请人工核查后重建任务"
+)
+
+
+class WorkerAlreadyRunningError(RuntimeError):
+    """锁文件已被另一个 worker 持有。"""
+
+    def __init__(self, lock_path: Path) -> None:
+        super().__init__(
+            f"已有 worker 正在运行，拒绝并行启动第二个 worker（锁文件：{lock_path}）"
+        )
+
+
+def _lock_file_nonblocking(handle: BinaryIO, lock_path: Path) -> None:
+    """对已打开文件做跨平台非阻塞独占锁；竞争失败转为统一业务异常。"""
+    if os.name == "nt":
+        import msvcrt
+
+        # msvcrt.locking 锁定的是当前位置起的一段字节，空文件必须先补一个字节。
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            # Windows 的锁冲突通常映射为 EACCES；句柄由本函数上游创建，
+            # 因而这里的 locking 失败按“已有持有者”统一 fail-closed。
+            raise WorkerAlreadyRunningError(lock_path) from exc
+        return
+
+    import fcntl
+
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+            raise
+        raise WorkerAlreadyRunningError(lock_path) from exc
+
+
+def _unlock_file(handle: BinaryIO) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def worker_singleton_lock(lock_path: str | Path) -> Iterator[None]:
+    """持有 worker 单实例锁直到上下文退出；锁文件本身不删除以避免竞态。"""
+    path = Path(lock_path)
+    handle = path.open("a+b")
+    try:
+        _lock_file_nonblocking(handle, path)
+    except Exception:
+        handle.close()
+        raise
+
+    try:
+        yield
+    finally:
+        try:
+            _unlock_file(handle)
+        finally:
+            handle.close()
+
+
+def recover_interrupted_tasks(
+    conn_factory: Callable[[], sqlite3.Connection],
+) -> int:
+    """启动时将上次进程遗留的执行态任务置 failed，绝不重放外部副作用。"""
+    conn = conn_factory()
+    recovered = 0
+    try:
+        placeholders = ", ".join("?" for _ in _INTERRUPTED_STATUSES)
+        rows = conn.execute(
+            f"SELECT id FROM tasks WHERE status IN ({placeholders}) ORDER BY created_at, id",
+            _INTERRUPTED_STATUSES,
+        ).fetchall()
+        for row in rows:
+            task_id = row[0]
+            failed_task = repos.fail_task_from_execution(
+                conn,
+                task_id,
+                _WORKER_INTERRUPTED_ERROR,
+            )
+            # 扫描后若任务已被并发推进到审核态/终态，仓储锁内白名单会拒绝；
+            # 只有本次确实置 failed 才留事件，因此恢复天然幂等。
+            if failed_task is None:
+                continue
+            repos.append_event(
+                conn,
+                task_id=task_id,
+                agent_id=failed_task.get("agent_id"),
+                event_type="task_failed",
+                level="error",
+                message=_WORKER_INTERRUPTED_ERROR,
+                payload={"worker_interrupted": True},
+            )
+            recovered += 1
+    finally:
+        conn.close()
+    return recovered
 
 
 class JobRunner:
@@ -186,5 +306,47 @@ def _build_default_runner() -> JobRunner:
     return JobRunner(runtime, conn_factory)
 
 
+def run_worker_forever(
+    runner_factory: Callable[[], JobRunner],
+    conn_factory: Callable[[], sqlite3.Connection],
+    lock_path: str | Path,
+) -> int:
+    """持单实例锁装配 worker，恢复上次中断任务后进入常驻轮询。"""
+    try:
+        with worker_singleton_lock(lock_path):
+            # factory 内含真实 registry/model runtime 装配，必须放在锁后，避免
+            # 已有 worker 时第二个进程仍做一遍昂贵且可能写库的 bootstrap。
+            runner = runner_factory()
+            recovered = recover_interrupted_tasks(conn_factory)
+            if recovered:
+                logger.error(
+                    "worker 启动恢复：已将 %d 条上次进程中断的执行态任务置 failed，"
+                    "未自动重放，请人工核查外部副作用",
+                    recovered,
+                )
+            runner.run_forever()
+    except WorkerAlreadyRunningError as exc:
+        print(f"错误：{exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _run_default_worker() -> int:
+    """默认 CLI 入口：锁位于数据库同目录的 worker.lock。"""
+    from .. import config
+    from ..storage.db import get_conn
+
+    # FLAI_DB_PATH 可指向默认 data/ 之外的自定义位置；锁先于 init_db 创建，
+    # 因而必须在加锁前显式确保该数据库父目录存在。
+    config.ensure_dirs()
+    Path(config.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+
+    def conn_factory() -> sqlite3.Connection:
+        return get_conn(config.DB_PATH)
+
+    lock_path = Path(config.DB_PATH).parent / "worker.lock"
+    return run_worker_forever(_build_default_runner, conn_factory, lock_path)
+
+
 if __name__ == "__main__":
-    _build_default_runner().run_forever()
+    raise SystemExit(_run_default_worker())

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from pathlib import Path
 from typing import Any, Callable
 
 from ..core.errors import (
@@ -103,10 +104,13 @@ class ConversationService:
         agent_registry: Any,
         model_gateway: Any,
         conn_factory: Callable[[], sqlite3.Connection],
+        *,
+        uploads_dir: str | Path,
     ) -> None:
         self.agent_registry = agent_registry
         self.model_gateway = model_gateway
         self.conn_factory = conn_factory
+        self.uploads_dir = Path(uploads_dir)
 
     # ── 会话生命周期 ─────────────────────────────────────────────────────
 
@@ -206,7 +210,11 @@ class ConversationService:
                     by_id.get(fid, {"id": fid, "filename": f"(已不存在 {fid})", "path": ""})
                     for fid in ids
                 ]
-                block = render_attachment_blocks(rows, budget_chars=max(0, remaining))
+                block = render_attachment_blocks(
+                    rows,
+                    budget_chars=max(0, remaining),
+                    uploads_root=self.uploads_dir,
+                )
                 remaining -= len(block)
                 body = f"{body}\n\n{block}" if block else body
             rendered.append({"role": msg["role"], "content": body})
