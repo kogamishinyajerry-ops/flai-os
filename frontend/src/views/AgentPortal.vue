@@ -20,7 +20,7 @@
 
     <el-skeleton v-if="loading" :rows="4" animated />
 
-    <el-empty v-else-if="!loadError && agents.length === 0" description="暂无可用 Agent" />
+    <EmptyState v-else-if="!loadError && agents.length === 0" description="暂无可用 Agent" />
 
     <el-row v-else :gutter="16">
       <el-col v-for="agent in agents" :key="agent.id" :span="8" class="agent-col">
@@ -95,6 +95,7 @@
 import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { listAgents } from "../api/agents";
+import EmptyState from "../components/EmptyState.vue";
 import {
   statusTagType,
   agentStatusLabel,

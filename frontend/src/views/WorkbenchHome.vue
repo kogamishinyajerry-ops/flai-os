@@ -40,10 +40,11 @@
         <h3>协作会话</h3>
       </div>
       <p class="wb-note">导引召集了合适 Agent 组成协作的会话——点开看分工架构、召集进度与产物。</p>
-      <el-empty
+      <EmptyState
         v-if="!sessions.length"
+        variant="action"
         description="还没有协作会话——从上方「从导引开始一个协作」发起"
-        :image-size="60"
+        :image-size="76"
       />
       <div v-else class="sess-grid">
         <div v-for="c in sessions" :key="c.id" class="sess-card" @click="goSession(c)">
@@ -87,7 +88,7 @@
           <span class="wb-time">{{ formatTime(t.created_at) }}</span>
           <span v-if="rowActionLabel(t.status)" class="row-action">{{ rowActionLabel(t.status) }}</span>
         </div>
-        <el-empty v-if="!loading && tasks.length === 0" description="还没有任务——从导引开始一个协作吧" />
+        <EmptyState v-if="!loading && tasks.length === 0" description="还没有任务——从导引开始一个协作吧" />
       </div>
 
       <div v-if="hasMore" class="wb-more">
@@ -102,6 +103,7 @@ import { ref, reactive, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { listTasks } from "../api/tasks";
 import { listConversations } from "../api/conversations";
+import EmptyState from "../components/EmptyState.vue";
 import { statusLabel, formatTime, TASK_STATUS, taskLampColor, TASK_WORK_STATES } from "../utils/format";
 
 const router = useRouter();

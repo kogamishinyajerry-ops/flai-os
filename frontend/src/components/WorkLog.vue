@@ -34,7 +34,7 @@
     <div v-if="rawLine" class="worklog-rawline">{{ rawLine }}</div>
 
     <div v-if="expanded" class="worklog-timeline">
-      <el-empty v-if="!events.length" description="暂无事件" />
+      <EmptyState v-if="!events.length" variant="log" description="暂无事件" />
       <el-timeline v-else>
         <el-timeline-item
           v-for="e in events"
@@ -65,6 +65,7 @@
 import { ref, computed } from "vue";
 import { TASK_WORK_STATES, formatDuration, taskElapsedMs, formatTime, LEVEL_COLOR, eventTypeLabel } from "../utils/format";
 import { listToolRuns } from "../api/tasks";
+import EmptyState from "./EmptyState.vue";
 
 const props = defineProps({
   events: { type: Array, default: () => [] },

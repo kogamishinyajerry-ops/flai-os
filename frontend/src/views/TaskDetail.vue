@@ -171,7 +171,7 @@
           </el-form-item>
         </el-form>
 
-        <el-empty v-if="feedbackList.length === 0" description="暂无反馈" />
+        <EmptyState v-if="feedbackList.length === 0" description="暂无反馈" :image-size="84" />
         <ul v-else class="feedback-list">
           <li v-for="f in feedbackList" :key="f.id">
             <el-tag size="small" :type="f.rating === 'good' ? 'success' : 'danger'">
@@ -193,6 +193,7 @@ import { useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { getTask, listTaskEvents, cancelTask, reviewTask } from "../api/tasks";
 import { downloadUrl, fetchOutputFile } from "../api/files";
+import EmptyState from "../components/EmptyState.vue";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
 import { statusLabel, statusTagType, formatTime, TASK_WORK_STATES } from "../utils/format";
 import MarkdownLite from "../components/MarkdownLite.vue";

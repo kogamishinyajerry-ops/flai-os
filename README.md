@@ -83,8 +83,10 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 
 ## V0.1 已知限制（诚实清单，非缺陷否认）
 
-1. **任务 inputs 为 JSON 直填**：创建任务页按 Agent 输入契约手写 JSON；按
-   `input_schema.json` 自动生成结构化表单是 M4 项。
+1. **任务 inputs 已是 schema 驱动结构化表单**（P0-1，2026-07-10）：创建任务页按
+   `input_schema.json` 自动渲染字段（string/integer/boolean/enum/array 及
+   array-of-object），「高级：直接编辑 JSON」保留为双向可切的逃生舱；schema 缺失
+   或含未覆盖类型时诚实降级为 JSON 直填。
 2. **前端 bundle ~1MB**：Element Plus 全量引入未做按需 tree-shaking；内网静态
    托管场景（无公网带宽约束）接受此体积。
 3. **零前端单测**：前端验证靠 `frontend/e2e/m2_acceptance.py` 真浏览器走查 +
@@ -97,6 +99,12 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
    codex M7-P3）；重试不重复上传（前端记 fileId），但弃置即孤儿。同理，
    批量任务 `samples.jsonl` 写出后若汇总表写出失败（任务判 failed），已写的
    产物残留在 `task_runs_dir` 内且不被注册为输出文件。两类残留的 GC 是 M4 项。
+   **给未来 GC 实现的警示**：`files.task_id` 列对 kind="input" 的附件恒为
+   NULL（前端上传从不传 taskId，真实归属只单向记在 `tasks.input_file_ids`），
+   孤儿判定绝不可用 `files.task_id IS NULL`——会误删全部在用输入附件；存续
+   引用共三个来源：`tasks.input_file_ids` ∪ `tasks.output_file_ids` ∪
+   `conversation_messages.file_ids`（导引会话附件，漏了它同样会误删在用文件）。
+   只读诊断脚本 `scripts/diagnose_gc_debt.py` 已按此三源并集口径给出当前债务数字。
 6. **TaskDetail 轮询无退避**：固定间隔轮询，`waiting_review` 等长驻状态停止轮询
    后靠「刷新」按钮手动更新。
 7. **任务列表为「最近任务流」分页语义**：`limit/offset` 往回翻页（每页 100，
@@ -156,8 +164,12 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 19. **协作会话 GC 未完备**（M8/ADR-0016）：单 Agent 计划确认沿用 M6 归档（conclude）；
     多 Agent 会话保持 active 作协作锚点，工作台已有**显式「结束协作」按钮**归档会话
     （归档后只读、不再从蓝图召集，已建任务不受影响）；但**无主会话与孤儿附件的
-    GC 仍留 V0.2**（同 #5/#15 同源，统一回收）。会话视图的成员任务状态靠手动「刷新」
-    拉取（无轮询，同 #6）。
+    GC 仍留 V0.2**（同 #5/#15 同源，统一回收）。典型触发场景：用户在工作台召集
+    部分 Agent 后中途关闭页面离开——会话无超时、无第三态，将永久停留 active，
+    唯一归档路径是回到会话页手动点「结束协作」（`scripts/diagnose_gc_debt.py`
+    可只读盘点其中「从未召集任务」的弃置 active 会话；已召集部分任务后弃置的
+    识别仍缺口径，同属 V0.2）。会话视图的成员任务状态靠手动「刷新」拉取（无轮询，
+    同 #6）。
 
 ## 开发口径
 
@@ -183,12 +195,32 @@ bash scripts/dev_start_worker.sh
 
 内网 Windows 部署用同目录下同名 `.ps1`（头注 DECLARED-NOT-VERIFIED，本机未测，行为与 `.sh` 保持一致）。
 
-跑测试：
+### 环境变量一览（全部 FLAI_* 前缀，V0.1 不自动加载 .env——须在启动前 export 或写入进程环境）
+
+| 变量 | 默认值 | 用途 | M4 内网必填？ |
+| --- | --- | --- | --- |
+| `FLAI_DB_PATH` | `data/flai_os.db` | SQLite 数据库文件路径。**WAL 模式要求本地磁盘，禁止指向 UNC/映射网络盘**（共享内存锁在 SMB 上不可靠，可能锁死或损坏） | 可选（但须核对本地盘约束） |
+| `FLAI_BACKEND_PORT` | `8620` | 后端端口；被占用换端口，绝不挤占已有进程 | 可选 |
+| `FLAI_MAX_UPLOAD_MB` | `100` | 单文件上传上限 | 可选 |
+| `FLAI_LLM_BASE_URL` | 空 | 内网模型服务地址（OpenAI 兼容协议假设，**待内网侦察**，先跑 `scripts/probe_llm_gateway.py`） | 必填 |
+| `FLAI_LLM_API_KEY` | 空 | 模型服务鉴权 Key | 必填 |
+| `FLAI_LLM_MODEL_REASONING` | 空 | reasoning profile 模型名 | 必填 |
+| `FLAI_LLM_MODEL_FAST` | 空 | fast profile 模型名（当前生产 Agent 仅用 reasoning/none，接入 fast profile 时才必填） | 按需 |
+
+跑测试（串行基准命令；加 `--with pytest-xdist ... -n auto` 可并行——2026-07-11
+本机实测 514 例全量：串行 ~25s → `-n auto` ~7s）：
 
 ```bash
 uv run --no-project --with pytest --with jsonschema --with pyyaml \
   --with fastapi --with httpx --with python-multipart --with "pydantic>2" \
   --with openpyxl --with jieba python -m pytest -q
+```
+
+一键全量验证（前端构建 + 全量 pytest：tests/ + tools_impl/ + backend/tests 共三个
+testpaths(-n auto) + 5 套浏览器 e2e，任一步失败即止并打印汇总）：
+
+```bash
+bash scripts/verify_all.sh
 ```
 
 前端（M2）：

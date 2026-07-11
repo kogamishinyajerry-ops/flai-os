@@ -43,7 +43,7 @@
         <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
       </el-table-column>
       <template #empty>
-        <el-empty description="暂无任务" />
+        <EmptyState description="暂无任务" :image-size="84" />
       </template>
     </el-table>
 
@@ -58,6 +58,7 @@ import { ref, reactive, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { listTasks } from "../api/tasks";
 import { listAgents } from "../api/agents";
+import EmptyState from "../components/EmptyState.vue";
 import { statusLabel, statusTagType, formatTime, TASK_STATUS } from "../utils/format";
 
 const router = useRouter();

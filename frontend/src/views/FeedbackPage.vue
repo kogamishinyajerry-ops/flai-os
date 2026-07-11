@@ -51,7 +51,7 @@
       <el-alert v-if="feedbackError" type="warning" :title="feedbackError" show-icon :closable="false" />
 
       <h3>该任务已有反馈</h3>
-      <el-empty v-if="feedbackList.length === 0" description="暂无反馈" />
+      <EmptyState v-if="feedbackList.length === 0" description="暂无反馈" />
       <ul v-else class="feedback-list">
         <li v-for="f in feedbackList" :key="f.id">
           <el-tag size="small" :type="f.rating === 'good' ? 'success' : 'danger'">
@@ -64,7 +64,7 @@
       </ul>
     </template>
 
-    <el-empty v-else description="先在上方选择一个任务，再填写反馈" :image-size="80" />
+    <EmptyState v-else variant="action" description="先在上方选择一个任务，再填写反馈" :image-size="96" />
   </div>
 </template>
 
@@ -75,6 +75,7 @@ import { ElMessage } from "element-plus";
 import { listTasks } from "../api/tasks";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
 import { statusLabel, formatTime } from "../utils/format";
+import EmptyState from "../components/EmptyState.vue";
 import { getSavedName, saveName } from "../utils/identity";
 
 const route = useRoute();
