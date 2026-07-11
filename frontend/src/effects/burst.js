@@ -3,8 +3,25 @@
 // 值得庆祝且语义诚实）；其余一律中性 ink 尘埃。失败/驳回绝不做庆祝动效。
 // reduced-motion → 完全 no-op。一次性 overlay canvas，动画完自动移除，零常驻。
 
-const SIGNED_TEAL = "22, 125, 139"; // --trust-signed 的 RGB
-const NEUTRAL_INK = "107, 98, 89"; // --ink-soft 的 RGB
+// 快照常量仅作 fail-safe 兜底（暗色主题下真值来自 --trust-signed-rgb/--ink-rgb
+// 运行时读取，见 signedRgb()/neutralRgb() ——fail-safe 不 fail-broken：token
+// 读不到时仍用这两个亮色主题字面量兜底，不让迸发直接哑掉）。
+const SIGNED_TEAL_FALLBACK = "22, 125, 139"; // --trust-signed 的 RGB（亮色主题快照）
+const NEUTRAL_INK_FALLBACK = "107, 98, 89"; // --ink-soft 的 RGB（亮色主题快照）
+
+// 运行时读取 CSS 变量：暗色块把 --trust-signed-rgb 重定义为提亮值，迸发色随主题走。
+function readRgbToken(varName, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  return v || fallback;
+}
+function signedRgb() {
+  return readRgbToken("--trust-signed-rgb", SIGNED_TEAL_FALLBACK);
+}
+function neutralRgb() {
+  // --ink-rgb 是正文墨色（暗色下反相为暖白），比常驻不变的 --ink-soft 更贴合
+  // 「中性尘埃随主题走」的意图；读不到时兜底回原 --ink-soft 快照。
+  return readRgbToken("--ink-rgb", NEUTRAL_INK_FALLBACK);
+}
 
 function prefersReducedMotion() {
   return (
@@ -85,12 +102,12 @@ function centerOf(el) {
 export function burstSigned(el) {
   if (!el || prefersReducedMotion()) return;
   const { x, y } = centerOf(el);
-  runBurst(x, y, SIGNED_TEAL, 26);
+  runBurst(x, y, signedRgb(), 26);
 }
 
 /** 中性尘埃（completed 等中性时刻；绝不用于失败/驳回）。 */
 export function burstNeutral(el) {
   if (!el || prefersReducedMotion()) return;
   const { x, y } = centerOf(el);
-  runBurst(x, y, NEUTRAL_INK, 16);
+  runBurst(x, y, neutralRgb(), 16);
 }

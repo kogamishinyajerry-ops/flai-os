@@ -1,6 +1,6 @@
 <template>
   <Transition name="qs-fade">
-    <div v-if="isOpen" class="qs-overlay" @click="close">
+    <div v-if="quickSwitcher.open" class="qs-overlay" @click="close">
       <div class="qs-panel" role="dialog" aria-modal="true" aria-label="快速切换" @click.stop>
         <div class="qs-search">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
@@ -62,10 +62,10 @@ import { listTasks } from "../api/tasks";
 import { listAgents } from "../api/agents";
 import { statusLabel, taskLampColor } from "../utils/format";
 import { statusCenter, closeCenter } from "../stores/statusCenter";
+import { quickSwitcher, openQuickSwitcher, closeQuickSwitcher } from "../stores/quickSwitcher";
 
 const router = useRouter();
 
-const isOpen = ref(false);
 const query = ref("");
 const loading = ref(false);
 const selectedIndex = ref(0);
@@ -156,20 +156,30 @@ async function fetchAll() {
   }
 }
 
-async function open() {
-  // 状态中心抽屉（el-drawer z-index 2000+）开着时先关掉——否则 ⌘K 面板(200)
-  // 被抽屉遮罩盖住而焦点已被偷进不可见输入框。任意时刻只留一个顶层模态。
-  if (statusCenter.open) closeCenter();
-  isOpen.value = true;
-  selectedIndex.value = 0;
-  await nextTick();
-  inputRef.value?.focus();
-  fetchAll();
+function open() {
+  openQuickSwitcher();
 }
 function close() {
-  isOpen.value = false;
+  closeQuickSwitcher();
   query.value = "";
 }
+
+// 打开态的副作用（重置选中/聚焦输入框/拉数据）收在这一处 watch，而不是塞进
+// open()：面板可能被 open() 之外的入口唤起（如 App.vue 侧栏「搜索」按钮直
+// 接调 openQuickSwitcher），watch store.open 保证不管哪条路径打开都补齐同一套
+// 副作用；关状态中心抽屉的互斥逻辑同理搬进来统一生效。
+watch(
+  () => quickSwitcher.open,
+  (isOpen) => {
+    if (!isOpen) return;
+    // 状态中心抽屉（el-drawer z-index 2000+）开着时先关掉——否则 ⌘K 面板(200)
+    // 被抽屉遮罩盖住而焦点已被偷进不可见输入框。任意时刻只留一个顶层模态。
+    if (statusCenter.open) closeCenter();
+    selectedIndex.value = 0;
+    nextTick(() => inputRef.value?.focus());
+    fetchAll();
+  }
+);
 
 function activate(type, item) {
   if (type === "conversation") router.push(`/workbench/${item.id}`);
@@ -191,11 +201,11 @@ function onWindowKeydown(e) {
   const key = e.key.toLowerCase();
   if ((e.metaKey || e.ctrlKey) && key === "k") {
     e.preventDefault();
-    if (isOpen.value) close();
+    if (quickSwitcher.open) close();
     else open();
     return;
   }
-  if (!isOpen.value) return;
+  if (!quickSwitcher.open) return;
   if (e.key === "Escape") {
     e.preventDefault();
     close();
@@ -293,7 +303,7 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
   transition: background var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft);
 }
 .qs-item.is-selected {
-  background: rgba(193, 95, 60, 0.08);
+  background: var(--select-tint-clay);
   border-left-color: var(--clay);
 }
 .qs-item-main {

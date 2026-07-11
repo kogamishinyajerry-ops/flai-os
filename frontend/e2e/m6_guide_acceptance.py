@@ -130,7 +130,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
-    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
 
     # ① 导引页 = 统一入口（首页）
     page.goto(BASE + "/", wait_until="networkidle")

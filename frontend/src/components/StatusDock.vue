@@ -61,14 +61,14 @@ onUnmounted(releaseTaskFeed);
 /* amber=仅待人核（信任色锁）；行动召唤最强的一枚 */
 .dock-pill-waiting {
   color: var(--trust-pending);
-  border: 1px solid rgba(168, 118, 26, 0.35);
-  background: #fff;
+  border: 1px solid rgba(var(--trust-pending-rgb), 0.35);
+  background: var(--surface-raised);
 }
 /* clay=工作中（唯一工作强调色）；脉动点复用全局 .work-pulse-dot */
 .dock-pill-working {
   color: var(--clay);
-  border: 1px solid rgba(193, 95, 60, 0.3);
-  background: #fff;
+  border: 1px solid rgba(var(--clay-rgb), 0.3);
+  background: var(--surface-raised);
 }
 .dock-core {
   display: inline-flex;

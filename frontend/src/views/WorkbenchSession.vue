@@ -429,7 +429,7 @@ onUnmounted(clearPoll);
 }
 .bp-line {
   margin: 0 0 6px;
-  color: #4a443d;
+  color: var(--ink-mid);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -557,7 +557,7 @@ onUnmounted(clearPoll);
 }
 .task-chip.review {
   border-color: var(--trust-pending);
-  background: #f9f2e2;
+  background: var(--review-chip-bg);
 }
 .chip-lamp {
   width: 9px;

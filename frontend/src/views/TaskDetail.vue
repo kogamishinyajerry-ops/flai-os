@@ -16,6 +16,9 @@
         <h2>任务详情</h2>
         <span v-if="isTaskWorking" class="work-pulse-dot"></span>
         <el-tag :type="statusTagType(task.status)">{{ statusLabel(task.status) }}</el-tag>
+        <!-- 待你签发常驻徽章：与 el-tag 共存不替换（e2e 可能断言 el-tag 文案），
+             复用 App.vue 全局 .pill-amber（工作台会话页同款用法）。 -->
+        <span v-if="isWaitingReview" class="pill-amber">待你签发</span>
         <!-- 批量任务摘要（P2）：消解「全失败 case 仍显示绿色已完成」的误导——
              ok/failed 计数取自最后一条 summary_generated 折叠事件，纯前端派生。 -->
         <template v-if="batchSummary">
@@ -43,20 +46,22 @@
         <span>{{ formatTime(task.created_at) }}</span>
       </div>
 
-      <el-collapse class="task-meta-collapse">
-        <el-collapse-item title="任务信息（ID · 版本 · 时间）">
-          <el-descriptions :column="2" border class="task-descriptions">
-            <el-descriptions-item label="ID">{{ task.id }}</el-descriptions-item>
-            <el-descriptions-item label="Agent ID">{{ task.agent_id }}</el-descriptions-item>
-            <el-descriptions-item label="Agent 版本">{{ task.agent_version }}</el-descriptions-item>
-            <el-descriptions-item label="任务名称">{{ task.name || "—" }}</el-descriptions-item>
-            <el-descriptions-item label="创建人">{{ task.created_by }}</el-descriptions-item>
-            <el-descriptions-item label="创建时间">{{ formatTime(task.created_at) }}</el-descriptions-item>
-            <el-descriptions-item label="开始时间">{{ formatTime(task.started_at) }}</el-descriptions-item>
-            <el-descriptions-item label="结束时间">{{ formatTime(task.finished_at) }}</el-descriptions-item>
-          </el-descriptions>
-        </el-collapse-item>
-      </el-collapse>
+      <div class="task-meta-card">
+        <el-collapse class="task-meta-collapse">
+          <el-collapse-item title="任务信息（ID · 版本 · 时间）">
+            <el-descriptions :column="2" border class="task-descriptions">
+              <el-descriptions-item label="ID">{{ task.id }}</el-descriptions-item>
+              <el-descriptions-item label="Agent ID">{{ task.agent_id }}</el-descriptions-item>
+              <el-descriptions-item label="Agent 版本">{{ task.agent_version }}</el-descriptions-item>
+              <el-descriptions-item label="任务名称">{{ task.name || "—" }}</el-descriptions-item>
+              <el-descriptions-item label="创建人">{{ task.created_by }}</el-descriptions-item>
+              <el-descriptions-item label="创建时间">{{ formatTime(task.created_at) }}</el-descriptions-item>
+              <el-descriptions-item label="开始时间">{{ formatTime(task.started_at) }}</el-descriptions-item>
+              <el-descriptions-item label="结束时间">{{ formatTime(task.finished_at) }}</el-descriptions-item>
+            </el-descriptions>
+          </el-collapse-item>
+        </el-collapse>
+      </div>
 
       <el-alert
         v-if="task.error_message"
@@ -79,7 +84,9 @@
               <div class="artifact-head">
                 <span class="artifact-name">{{ a.filename }}</span>
                 <span v-if="a.ext" class="artifact-ext-badge">.{{ a.ext }}</span>
-                <span v-if="!a.loading && a.size" class="artifact-size">{{ formatSize(a.size) }}</span>
+                <span v-if="!a.loading && a.size" class="artifact-size">
+                  <span class="num-token">{{ formatSize(a.size) }}</span><template v-if="artifactLineCount(a) != null"> · <span class="num-token">{{ artifactLineCount(a) }}</span> 行</template>
+                </span>
                 <a :href="downloadUrl(a.fileId)" download class="artifact-download">下载</a>
               </div>
               <div v-if="a.loading" class="artifact-body muted">加载中…</div>
@@ -355,6 +362,12 @@ const modelCallStats = computed(() => {
 // 尺寸格式化走 utils/format 的 formatFileSize SSOT（含 GB 档）——本地副本已删。
 const formatSize = formatFileSize;
 
+// 文本产物行数派生（纯前端展示，不影响下载/内容本身）：非文本或空文本一律
+// null，不渲染「· N 行」，绝不显示假的 0 行。
+function artifactLineCount(a) {
+  return a.isText && a.text ? a.text.split("\n").length : null;
+}
+
 const feedbackForm = reactive({ rating: "good", category: "", message: "", createdBy: getSavedName() });
 const submittingFeedback = ref(false);
 const feedbackList = ref([]);
@@ -612,6 +625,10 @@ onUnmounted(() => {
   letter-spacing: 0.2px;
   margin: 0;
 }
+/* 状态 tag 切换过渡：与任务台 cl-lamp 动效语言统一（同一组 motion token）。 */
+.page-header :deep(.el-tag) {
+  transition: background-color var(--motion-med) var(--ease-out-soft);
+}
 .task-context {
   display: flex;
   flex-wrap: wrap;
@@ -629,8 +646,16 @@ onUnmounted(() => {
 .ctx-dot {
   color: var(--ink-faint);
 }
-.task-meta-collapse {
+/* 卡片化外包容器（el-collapse 本身不改，只加一层壳）：与 .artifact-card/
+   .source-panel 同一套 hairline + 圆角 + paper-rail 卡片语言。 */
+.task-meta-card {
   margin-bottom: 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--paper-rail);
+  overflow: hidden;
+}
+.task-meta-collapse {
   border-top: none;
 }
 .task-descriptions {
@@ -639,25 +664,30 @@ onUnmounted(() => {
 .section {
   margin-top: 24px;
 }
-.section h3 {
+.section h3,
+.source-panel h3 {
   margin: 0 0 12px;
   font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
 }
 .review-card {
   margin-top: 12px;
   max-width: 480px;
   background: var(--paper-rail);
 }
-/* 批准=人签，用信任锁 teal（--trust-signed）覆盖 Element Plus 按钮变量；绝不用绿。 */
+/* 批准=人签，用信任锁 teal（--trust-signed）覆盖 Element Plus 按钮变量；绝不用绿。
+   hover/active 深调统一走 --trust-signed-deep（App.vue color-mix 派生，暗色下自动
+   变亮而非变暗），不再各自硬编码一份 teal——单一 SSOT，跨主题自动跟随。 */
 .approve-btn {
   --el-button-bg-color: var(--trust-signed);
   --el-button-border-color: var(--trust-signed);
   --el-button-text-color: #fff;
-  --el-button-hover-bg-color: #12707c;
-  --el-button-hover-border-color: #12707c;
+  --el-button-hover-bg-color: var(--trust-signed-deep);
+  --el-button-hover-border-color: var(--trust-signed-deep);
   --el-button-hover-text-color: #fff;
-  --el-button-active-bg-color: #0f626d;
-  --el-button-active-border-color: #0f626d;
+  --el-button-active-bg-color: var(--trust-signed-deep);
+  --el-button-active-border-color: var(--trust-signed-deep);
 }
 .review-note {
   font-size: 12.5px;
@@ -734,10 +764,6 @@ onUnmounted(() => {
   background: var(--card-bg, var(--paper-surface));
   box-shadow: var(--shadow-card);
   padding: 16px;
-}
-.source-panel h3 {
-  margin: 0 0 12px;
-  font-size: 15px;
 }
 .source-block {
   margin-bottom: 14px;

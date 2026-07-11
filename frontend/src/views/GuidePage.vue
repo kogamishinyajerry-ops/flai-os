@@ -13,8 +13,26 @@
         <el-input v-model="createdBy" placeholder="你的名字（对话需具名）" class="name-input" />
         <span class="starter-hint">先留个名字，在下方描述你的需求开始对话；输入框左侧 ◎ 可浏览全部可用 Agent。</span>
       </div>
-      <div class="hero-examples">
-        <button v-for="(ex, i) in EXAMPLES" :key="i" class="ex-chip" @click="setExample(ex)">{{ ex }}</button>
+      <!-- 四意图卡（原 hero-examples/ex-chip 原地升级）：数据=四分类 AGENT_CATEGORY
+           一一配对，点击只填 draft + focusComposer，绝不代发（同 setExample 语义）。 -->
+      <div class="hero-intents">
+        <div
+          v-for="item in INTENT_EXAMPLES"
+          :key="item.category"
+          class="intent-card"
+          role="button"
+          tabindex="0"
+          @click="setExample(item.example)"
+          @keydown.enter.prevent="setExample(item.example)"
+          @keydown.space.prevent="setExample(item.example)"
+        >
+          <span class="intent-accent" :style="{ background: categoryColor(item.category) }"></span>
+          <div class="intent-body">
+            <div class="intent-title"><IntentGlyph :name="item.glyph" :size="21" />{{ categoryLabel(item.category) }}</div>
+            <p class="intent-tip">{{ categoryTip(item.category) }}</p>
+            <p class="intent-example">{{ item.example }}</p>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -37,13 +55,14 @@
           <div v-if="m.attachments && m.attachments.length" class="user-files">
             <span v-for="a in m.attachments" :key="a.id" class="file-chip">📎 {{ a.filename }}</span>
           </div>
+          <div v-if="m.createdAt" class="bubble-time">{{ formatTime(m.createdAt) }}</div>
         </div>
 
         <!-- 助手消息：小 mark + 流动排版，plan-card 内联渲染 -->
         <template v-else>
           <div class="ai-mark">导</div>
           <div class="ai-body" :class="{ 'fx-ink-in': m.fresh }">
-            <div class="ai-name">智能导引</div>
+            <div class="ai-name">智能导引<span v-if="m.createdAt" class="bubble-time">{{ formatTime(m.createdAt) }}</span></div>
             <p v-if="m.content" class="ai-lead">{{ m.content }}</p>
 
             <!-- 导引计划（M8 编排官）：refuse=显式拒绝 -->
@@ -295,7 +314,7 @@
             type="textarea"
             :autosize="{ minRows: 1, maxRows: 6 }"
             :disabled="sending"
-            placeholder="描述你的工程需求，或回答导引的追问…"
+            :placeholder="composerPlaceholder"
             class="composer-input"
             @keydown.enter.exact.prevent="send"
           />
@@ -319,16 +338,18 @@
 </template>
 
 <script setup>
-import { reactive, ref, nextTick, watch, onMounted, onUnmounted } from "vue";
+import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation, listConversationTasks } from "../api/conversations";
 import { listAgents } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
-import { categoryColor, categoryLabel, statusLabel, taskLampColor, TASK_WORK_STATES } from "../utils/format";
+import { categoryColor, categoryLabel, categoryTip, statusLabel, taskLampColor, TASK_WORK_STATES, formatTime } from "../utils/format";
 import { getSavedName, saveName } from "../utils/identity";
 import { openTaskPeek } from "../stores/statusCenter";
+import { resolvedTheme } from "../stores/theme";
 import ThinkingInk from "../components/artwork/ThinkingInk.vue";
+import IntentGlyph from "../components/artwork/IntentGlyph.vue";
 
 const router = useRouter();
 
@@ -343,31 +364,44 @@ const draft = ref("");
 const sending = ref(false);
 const pageError = ref("");
 const streamEl = ref(null);
+// composer placeholder 语境分化：未起手空会话引导点意图卡；会话中改为「继续说下去」，
+// 不再重复「回答导引的追问」（此刻输入框已在真实对话流里，无需再解释这是什么）。
+const composerPlaceholder = computed(() =>
+  !started.value && messages.value.length === 0
+    ? "描述你的工程需求，或点一张下方的意图卡…"
+    : "回复导引，继续说下去…"
+);
 // 待发送附件（M7）：选中只入列（raw 留本地），发送时才上传——同 TaskCreate 的
 // P2-A 反孤儿纪律；已上传项记 fileId，失败重试不重复上传。
 const pendingFiles = ref([]);
 let fileSeq = 0;
 
-// 时段感问候（Claude「Up late?」人格温度）：起手 hero 只挂载一次，用当前小时
-// 一次性求值即可，不需要跟随时间刷新（用户在页面停留跨越时段边界的概率低，
-// 且这只是克制的抒情点缀，不是状态展示——不值得为它另起一个 timer）。
-const greeting = (() => {
+// 时段感问候（Claude「Up late?」人格温度）：起手 hero 只挂载一次渲染，但改用
+// computed 让「随主题」变体能在主题切换时即时反映（不需要跟随时间跳动刷新，
+// 理由同旧注释——只是克制的抒情点缀，不值得为纯时间流逝另起 timer）。
+// 暗色主题下深夜变体换「夜航」风格文案（仅深夜这一档，其余时段克制不铺开臆造文案）。
+const greeting = computed(() => {
   const h = new Date().getHours();
   if (h >= 5 && h < 11) return "早。";
   if (h >= 11 && h < 14) return "午安。";
   if (h >= 14 && h < 18) return "下午好。";
   if (h >= 18 && h < 23) return "晚上好。";
-  return "夜深了，辛苦。"; // 23:00–次日 5:00
-})();
+  return resolvedTheme.value === "dark" ? "夜航中？" : "夜深了，辛苦。"; // 23:00–次日 5:00
+});
 
-// 空状态示例提示（Claude 起手 chips）：点一下把示例填进输入框，用户再改再发。
-const EXAMPLES = [
-  "做双通道供电系统的控制逻辑和故障树分析",
-  "给这批性能盘 case 做批量核算，出汇总",
-  "查一下供电系统适航规范的相关依据",
+// 空状态四意图卡（Claude 起手 chips 升级版）：与 AGENT_CATEGORY 四分类一一配对，
+// 点一下把示例填进输入框并聚焦，用户再改再发（绝不代发）。
+// glyph=IntentGlyph 墨线图标（Codex 绘）：disk=性能包线/knowledge=书+放大镜/
+// logic=状态机/fta=故障树——各配四分类的旗舰意象。
+const INTENT_EXAMPLES = [
+  { category: "tool_automation", glyph: "disk", example: "给这批性能盘 case 做批量核算，出汇总" },
+  { category: "knowledge_qa", glyph: "knowledge", example: "查一下供电系统适航规范的相关依据" },
+  { category: "structured_gen", glyph: "logic", example: "做双通道供电系统的控制逻辑和故障树分析" },
+  { category: "reasoning_assist", glyph: "fta", example: "帮我起草一份 XX 系统失效的 FTA 顶事件分析" },
 ];
 function setExample(text) {
   draft.value = text;
+  focusComposer();
 }
 
 function handleFileSelect(uploadFile) {
@@ -526,6 +560,7 @@ async function send() {
       content: res.message.content,
       recommendation: res.message.recommendation || null,
       fresh: true,
+      createdAt: res.message.created_at || null,
     });
     await scrollToBottom();
     maybeStartTaskPoll(); // 本轮若刚给出 orchestrate 方案，开始为其召集状态保鲜
@@ -695,6 +730,7 @@ async function loadConversation(id) {
       content: m.content,
       recommendation: m.recommendation || null,
       attachments: m.attachments && m.attachments.length ? m.attachments : undefined,
+      createdAt: m.created_at || null,
     }));
     await scrollToBottom();
     maybeStartTaskPoll(); // 恢复的历史会话若已带 orchestrate 方案，立即接上轮询
@@ -761,7 +797,7 @@ watch(
   font-weight: 800;
   font-size: 21px;
   background: linear-gradient(150deg, var(--clay), var(--clay-deep));
-  box-shadow: 0 6px 18px rgba(193, 95, 60, 0.28);
+  box-shadow: 0 6px 18px rgba(var(--clay-rgb), 0.28);
 }
 /* 时段感问候：抒情场合走衬线，字号克制小于主标题，颜色降一级不抢戏。 */
 .hero-greeting {
@@ -803,29 +839,68 @@ watch(
   color: var(--ink-faint);
   font-size: 12.5px;
 }
-.hero-examples {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-content: center;
+/* 四意图卡：≥520px 宽 2×2，窄屏 1 列（原 hero-examples/ex-chip 原地升级）。 */
+.hero-intents {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
   margin-top: 26px;
+  text-align: left;
 }
-.ex-chip {
-  font-size: 13px;
-  color: var(--ink-soft);
+@media (min-width: 520px) {
+  .hero-intents {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.intent-card {
+  display: flex;
+  gap: 12px;
   background: var(--surface-raised);
   border: 1px solid var(--hairline);
-  border-radius: 999px;
-  padding: 8px 16px;
+  border-radius: 14px;
+  padding: 14px 16px;
   cursor: pointer;
   box-shadow: var(--shadow-card);
-  transition: transform 0.16s var(--ease-lift), box-shadow 0.16s var(--ease-lift), border-color 0.16s var(--ease-lift), color 0.16s var(--ease-lift);
+  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
 }
-.ex-chip:hover {
-  transform: translateY(-2px);
+.intent-card:hover,
+.intent-card:focus-visible {
+  transform: translateY(-1px);
   box-shadow: var(--shadow-card-hover);
-  border-color: var(--clay-softer);
-  color: var(--clay);
+}
+.intent-card:focus-visible {
+  outline: 2px solid var(--clay-softer);
+  outline-offset: 1px;
+}
+.intent-accent {
+  flex: 0 0 auto;
+  width: 3px;
+  border-radius: 3px;
+}
+.intent-body { flex: 1 1 auto; min-width: 0; }
+.intent-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+.intent-tip {
+  font-size: 12px;
+  color: var(--ink-faint);
+  margin: 0 0 6px;
+  line-height: 1.5;
+}
+.intent-example {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  margin: 0;
+  line-height: 1.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .intent-card { transition: none; }
 }
 
 .page-alert {
@@ -847,12 +922,12 @@ watch(
 /* 用户气泡：靠右，暖 clay 淡底 */
 .user-bubble {
   max-width: 76%;
-  background: linear-gradient(180deg, #fbeee7, #f7e6dc);
-  border: 1px solid #f0d8ca;
-  color: #5b3524;
+  background: var(--bubble-user-bg);
+  border: 1px solid var(--bubble-user-border);
+  color: var(--bubble-user-ink);
   padding: 12px 16px;
   border-radius: 18px 18px 4px 18px;
-  box-shadow: 0 1px 2px rgba(140, 70, 40, 0.06);
+  box-shadow: 0 1px 2px rgba(var(--ink-rgb), 0.06);
   /* 入场动效交给全局 .fx-ink-in（墨迹晕开，见 App.vue）——本地 rise 动画让位，
    * 避免 scoped 选择器特异度盖过全局工具类导致新类无效播放。 */
 }
@@ -866,6 +941,23 @@ watch(
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
+}
+/* 悬浮时间戳：静止态隐去，hover 整行气泡才渐显（历史消息/新回合皆可能无
+ * createdAt——user 乐观推送不带时间戳，v-if 已兜底不渲染空占位）。 */
+.bubble-time {
+  opacity: 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+  transition: opacity var(--motion-fast) var(--ease-out-soft);
+}
+.bubble-row:hover .bubble-time { opacity: 1; }
+.user-bubble .bubble-time {
+  display: block;
+  margin-top: 6px;
+  text-align: right;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bubble-time { transition: none; }
 }
 
 /* 助手：小 mark + 流动排版 */
@@ -897,6 +989,11 @@ watch(
   letter-spacing: 0.3px;
   margin-bottom: 7px;
 }
+.ai-name .bubble-time {
+  margin-left: 8px;
+  font-weight: 500;
+  letter-spacing: normal;
+}
 .ai-lead {
   font-size: 15px;
   line-height: 1.72;
@@ -917,7 +1014,7 @@ watch(
 
 /* ── 协作方案 / 拒绝 卡片 ── */
 .plan-card {
-  background: var(--surface);
+  background: var(--surface-raised);
   border: 1px solid var(--hairline);
   border-radius: 18px;
   padding: 22px 24px 20px;
@@ -925,8 +1022,8 @@ watch(
   /* 入场动效交给全局 .fx-rise（见 App.vue）——本地 rise 动画让位，理由同 .user-bubble。 */
 }
 .plan-card.refuse {
-  background: linear-gradient(180deg, #fdf8ef, var(--surface));
-  border-color: #efdcbb;
+  background: var(--refuse-card-bg);
+  border-color: var(--refuse-card-border);
 }
 .plan-topline {
   display: flex;
@@ -979,14 +1076,14 @@ watch(
 .roster-label { margin-top: 4px; }
 .plan-workflow {
   margin: 0;
-  color: #4a443d;
+  color: var(--ink-mid);
   font-size: 13.5px;
   line-height: 1.65;
 }
 .plan-list {
   margin: 0;
   padding-left: 20px;
-  color: #4a443d;
+  color: var(--ink-mid);
   font-size: 13.5px;
   line-height: 1.75;
 }
@@ -1032,7 +1129,7 @@ watch(
 }
 .reframe-text {
   flex: 1 1 auto;
-  color: #4a443d;
+  color: var(--ink-mid);
   font-size: 13.5px;
   line-height: 1.6;
 }
@@ -1082,7 +1179,7 @@ watch(
 .agent-card:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-card-hover);
-  border-color: #e4d8c8;
+  border-color: var(--border-warm-hover);
 }
 .agent-accent {
   flex: 0 0 auto;
@@ -1256,7 +1353,7 @@ watch(
   border-radius: 9px;
   font-family: "SF Mono", ui-monospace, monospace;
   font-size: 12px;
-  color: #4a443d;
+  color: var(--ink-mid);
   overflow-x: auto;
   white-space: pre;
 }
@@ -1269,7 +1366,7 @@ watch(
   font-weight: 600;
   color: var(--clay);
   background: transparent;
-  border: 1px solid #e6c9bb;
+  border: 1px solid var(--border-clay-soft);
   border-radius: 10px;
   padding: 8px 14px;
   cursor: pointer;
@@ -1284,7 +1381,7 @@ watch(
   background: var(--clay);
   color: #fff;
   border-color: var(--clay);
-  box-shadow: 0 4px 12px rgba(193, 95, 60, 0.22);
+  box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.22);
 }
 .agent-cta:hover::after { transform: translateX(2px); }
 
@@ -1309,10 +1406,10 @@ watch(
   border-radius: 10px;
   padding: 9px 16px;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(193, 95, 60, 0.24);
+  box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.24);
   transition: transform 0.16s var(--ease-lift), box-shadow 0.16s var(--ease-lift);
 }
-.workbench-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(193, 95, 60, 0.3); }
+.workbench-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(var(--clay-rgb), 0.3); }
 .plan-escape {
   flex: 0 0 100%;
   order: 1;
@@ -1352,7 +1449,7 @@ watch(
   border-radius: 8px;
   padding: 3px 9px;
 }
-.file-chip.error { color: var(--trust-fail); border-color: #e6bcbc; background: #faeeee; }
+.file-chip.error { color: var(--trust-fail); border-color: var(--error-chip-border); background: var(--error-chip-bg); }
 .chip-x {
   cursor: pointer;
   color: var(--ink-faint);
@@ -1373,7 +1470,7 @@ watch(
   z-index: 15;
   margin-top: 0;
   padding: 22px 24px 24px;
-  background: linear-gradient(180deg, rgba(250, 247, 242, 0) 0%, rgba(250, 247, 242, 0.88) 42%, var(--page-bg) 74%);
+  background: linear-gradient(180deg, rgba(var(--page-bg-rgb), 0) 0%, rgba(var(--page-bg-rgb), 0.88) 42%, var(--page-bg) 74%);
   pointer-events: none;
 }
 @media (max-width: 860px) {
@@ -1400,8 +1497,8 @@ watch(
   transition: border-color 0.2s var(--ease-lift), box-shadow 0.2s var(--ease-lift);
 }
 .composer-shell:focus-within {
-  border-color: #dcb6a4;
-  box-shadow: 0 2px 6px rgba(43, 38, 34, 0.06), 0 16px 40px rgba(72, 58, 44, 0.13), 0 0 0 4px rgba(193, 95, 60, 0.08);
+  border-color: var(--focus-ring-clay);
+  box-shadow: 0 2px 6px rgba(var(--ink-rgb), 0.06), 0 16px 40px rgba(var(--ink-rgb), 0.13), 0 0 0 4px rgba(var(--clay-rgb), 0.08);
 }
 .composer-row {
   display: flex;
@@ -1447,10 +1544,10 @@ watch(
   color: #fff;
   display: grid;
   place-items: center;
-  box-shadow: 0 4px 12px rgba(193, 95, 60, 0.28);
+  box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.28);
   transition: transform 0.16s var(--ease-lift), box-shadow 0.16s var(--ease-lift), opacity 0.16s;
 }
-.send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(193, 95, 60, 0.34); }
+.send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(var(--clay-rgb), 0.34); }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 .send-spin {
   width: 15px; height: 15px; border-radius: 50%;
@@ -1468,8 +1565,23 @@ watch(
   font-size: 11.5px;
   color: var(--ink-faint);
 }
-.composer-hint .keys { display: flex; align-items: center; gap: 6px; }
+/* 按键提示段静止态隐去，composer 区域 hover / focus-within 时渐显——
+ * 「导引不会替你创建或签发任务」政策句留在旁边常驻，不受此规则影响。 */
+.composer-hint .keys {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out-soft);
+}
+.composer-inner:hover .composer-hint .keys,
+.composer-inner:focus-within .composer-hint .keys {
+  opacity: 1;
+}
 .composer-hint .sep { color: var(--hairline); }
+@media (prefers-reduced-motion: reduce) {
+  .composer-hint .keys { transition: none; }
+}
 
 /* 诚实地板句（Claude「can make mistakes」哲学）：常驻同一 composer 容器内，
  * 会话进行中（composer 变 fixed 悬浮）也不消失；放进容器内部避免布局跳动。 */

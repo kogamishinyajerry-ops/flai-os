@@ -491,7 +491,7 @@ onMounted(loadAgents);
   margin-bottom: 8px;
 }
 .field-error {
-  color: #f56c6c;
+  color: var(--trust-fail);
   font-size: 12px;
   margin-top: 4px;
 }

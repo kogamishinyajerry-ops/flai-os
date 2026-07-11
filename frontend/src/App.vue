@@ -44,9 +44,24 @@
           >
             <span class="convo-dot" :class="c.recommendation && c.recommendation.decision === 'refuse' ? 'refuse' : (c.recommendation ? 'plan' : 'talk')"></span>
             <span class="convo-title">{{ convoTitle(c) }}</span>
+            <span v-if="c.updated_at || c.created_at" class="convo-time">{{ formatTime(c.updated_at || c.created_at) }}</span>
           </a>
           <div v-if="!convos.length" class="convo-empty">还没有对话——从上方「新对话」开始</div>
         </div>
+      </div>
+
+      <!-- 侧栏脚部（美化批）：⌘K 可见入口（可点性+快捷键教学）+ 主题三段切换。 -->
+      <div class="sb-foot">
+        <button class="sb-foot-btn" title="搜索任务 / 会话 / Agent（⌘K）" @click="openQuickSwitcher">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          搜索
+          <kbd class="sb-kbd">⌘K</kbd>
+        </button>
+        <button class="sb-foot-btn sb-theme" :title="`主题：${themeLabel}（点击切换）`" @click="cycleTheme">
+          <svg v-if="resolvedTheme === 'dark'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+          {{ themeLabel }}
+        </button>
       </div>
     </aside>
 
@@ -76,9 +91,22 @@
 import { ref, computed, watch, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { listConversations } from "./api/conversations";
+import { formatTime } from "./utils/format";
+import { themeMode, resolvedTheme, setThemeMode } from "./stores/theme";
+import { openQuickSwitcher } from "./stores/quickSwitcher";
 import QuickSwitcher from "./components/QuickSwitcher.vue";
 import StatusDock from "./components/StatusDock.vue";
 import StatusCenter from "./components/StatusCenter.vue";
+
+// 主题三段循环（跟随系统→浅色→深色）：显示当前模式而非解析结果，用户能看懂
+// 「跟随系统」这个第三态；图标随 resolvedTheme（实际生效的亮暗）走。
+const THEME_ORDER = ["system", "light", "dark"];
+const THEME_LABELS = { system: "跟随系统", light: "浅色", dark: "深色" };
+const themeLabel = computed(() => THEME_LABELS[themeMode.value]);
+function cycleTheme() {
+  const next = THEME_ORDER[(THEME_ORDER.indexOf(themeMode.value) + 1) % THEME_ORDER.length];
+  setThemeMode(next);
+}
 
 const route = useRoute();
 const router = useRouter();
@@ -212,6 +240,166 @@ onMounted(loadConvos);
   --el-fill-color-light: #faf7f2;
   --el-fill-color-lighter: #fbf9f3;
   --el-fill-color-blank: #ffffff;
+  /* ── RGB 三元组（美化批）：供 rgba(var(--x-rgb), a) 派生透明色——此前各处
+   * 把 token 的 RGB 抄成字面量（rgba(193,95,60,.08) 等），主题一换就失联；
+   * 暗色块里三元组随主题重定义，派生色自动跟随。 ── */
+  --clay-rgb: 193, 95, 60;
+  --ink-rgb: 43, 38, 34;
+  --page-bg-rgb: 250, 247, 242;
+  --trust-pending-rgb: 168, 118, 26;
+  --trust-signed-rgb: 22, 125, 139;
+  /* ── 表面/边框语义 token（美化批）：散落在组件里的浅色字面量收口于此，
+   * 暗色主题只需在下方 dark 块翻转这一层。 ── */
+  --ink-mid: #4a443d; /* 介于 ink 与 ink-soft 的次级正文（plan 正文/JSON/蓝图行）*/
+  --bubble-user-bg: linear-gradient(180deg, #fbeee7, #f7e6dc);
+  --bubble-user-border: #f0d8ca;
+  --bubble-user-ink: #5b3524;
+  --refuse-card-bg: linear-gradient(180deg, #fdf8ef, var(--surface-raised));
+  --refuse-card-border: #efdcbb;
+  --border-warm-hover: #e4d8c8;
+  --border-clay-soft: #e6c9bb;
+  --error-chip-border: #e6bcbc;
+  --error-chip-bg: #faeeee;
+  --focus-ring-clay: #dcb6a4;
+  --review-chip-bg: #f9f2e2;
+  /* hover/选中叠色：亮色=深色小叠加，暗色=亮色小叠加——方向相反，必须走 token */
+  --hover-tint: rgba(43, 38, 34, 0.05);
+  --select-tint-clay: rgba(193, 95, 60, 0.08);
+  --trust-signed-deep: color-mix(in srgb, var(--trust-signed) 82%, black);
+  color-scheme: light; /* 原生控件（滚动条/复选框）跟随主题 */
+}
+
+/* ═══ 暗色主题「夜航图纸」（美化批，Claude Desktop 证据：暖炭非纯黑、clay
+ * 唯一强调保持、问候随主题变）。铁律：信任色锁五槽只做明度适配保 AA 对比，
+ * 语义与色相一个不动；e2e 默认亮色跑（harness 已 pin light），此块不进断言。═══ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  /* 画布与纸阶：暖炭系（棕黑，不是冷灰黑）*/
+  --page-bg: #211d19;
+  --card-bg: #2a2521;
+  --surface-raised: #2e2823;
+  --paper-canvas-a: #262019;
+  --paper-canvas-b: #1e1a15;
+  --paper-surface: #2b2620;
+  --paper-rail: #272220;
+  --paper-cream: #292420;
+  --hairline: #3a332c;
+  --hairline-soft: #332d26;
+  /* 墨阶反相为暖白系 */
+  --ink: #ece5db;
+  --ink-soft: #b0a698;
+  --ink-faint: #8a8174; /* 诚实地板句层级：4.5:1 AA-text on #211d19（审查实测 #7a7164 只 3.49）*/
+  --ink-mid: #cfc6b8;
+  /* clay 锚：微提亮保对比，色相不动（唯一强调地位不变）*/
+  --clay: #d4714a;
+  --clay-softer: #d98a68;
+  --clay-deep: #de8257;
+  --clay-soft: rgba(212, 113, 74, 0.16);
+  /* 信任五槽：明度适配（语义/色相锁死）*/
+  --trust-real: #4aa96c;
+  --trust-signed: #3b9eae;
+  --trust-fail: #d4645a;
+  --trust-pending: #c99a3f;
+  /* 阴影：浅底投深影公式在暗底失效，改黑基调重算 */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 14px rgba(0, 0, 0, 0.4);
+  --shadow-card-hover: 0 2px 6px rgba(0, 0, 0, 0.4), 0 12px 30px rgba(0, 0, 0, 0.5);
+  --shadow-hero: 0 1px 3px rgba(0, 0, 0, 0.35), 0 10px 34px rgba(0, 0, 0, 0.45);
+  --shadow-composer: 0 1px 3px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.5);
+  /* RGB 三元组随主题重定义（派生透明色自动跟随）*/
+  --clay-rgb: 212, 113, 74;
+  --ink-rgb: 236, 229, 219;
+  --page-bg-rgb: 33, 29, 25;
+  --trust-pending-rgb: 201, 154, 63;
+  --trust-signed-rgb: 59, 158, 174;
+  /* 表面/边框语义 token 暗色值 */
+  --bubble-user-bg: linear-gradient(180deg, #3a2d24, #332821);
+  --bubble-user-border: #4a3a2e;
+  --bubble-user-ink: #ecd9c9;
+  --refuse-card-bg: linear-gradient(180deg, #322b1f, var(--surface-raised));
+  --refuse-card-border: #4d4128;
+  --border-warm-hover: #4a4238;
+  --border-clay-soft: #55402f;
+  --error-chip-border: #5a3535;
+  --error-chip-bg: #362323;
+  --focus-ring-clay: #8a5a42;
+  --review-chip-bg: rgba(201, 154, 63, 0.12);
+  --hover-tint: rgba(255, 255, 255, 0.055);
+  --select-tint-clay: rgba(212, 113, 74, 0.16);
+  --trust-signed-deep: color-mix(in srgb, var(--trust-signed) 78%, white); /* 暗底 hover 变亮非变暗 */
+  /* Element Plus 暗色覆盖（main.js 未接 EP 官方 dark css-vars——那套按 html.dark
+   * 生效与本仓 data-theme 约定不合；沿用「手动暖化 EP」既有模式补暗色一套）*/
+  --el-bg-color: #2a2521;
+  --el-bg-color-page: #211d19;
+  --el-bg-color-overlay: #2e2823;
+  --el-mask-color: rgba(0, 0, 0, 0.55);
+  --el-mask-color-extra-light: rgba(0, 0, 0, 0.35);
+  --el-text-color-primary: #ece5db;
+  --el-text-color-regular: #cfc6b8;
+  --el-text-color-secondary: #b0a698;
+  --el-text-color-placeholder: #7a7164;
+  --el-text-color-disabled: #5f574c;
+  --el-border-color: #3f382f;
+  --el-border-color-light: #3a332c;
+  --el-border-color-lighter: #332d26;
+  --el-border-color-extra-light: #2f2924;
+  --el-fill-color: #332d26;
+  --el-fill-color-light: #2b2620;
+  --el-fill-color-lighter: #292420;
+  --el-fill-color-blank: #2e2823;
+  --el-color-primary: #d4714a;
+  /* primary 色阶暗色反向：light-N 朝暗底混（EP 拿它们做 hover/浅底，暗色下
+   * 照搬亮色的近白值会成奶油亮斑）*/
+  --el-color-primary-light-3: #b0603f;
+  --el-color-primary-light-5: #8f5136;
+  --el-color-primary-light-7: #6a4029;
+  --el-color-primary-light-8: #573729;
+  --el-color-primary-light-9: #453026;
+  --el-color-primary-dark-2: #de8257;
+  --el-box-shadow: 0 12px 32px 4px rgba(0, 0, 0, 0.36), 0 8px 20px rgba(0, 0, 0, 0.72);
+  --el-box-shadow-light: 0 0 12px rgba(0, 0, 0, 0.72);
+  --el-box-shadow-lighter: 0 0 6px rgba(0, 0, 0, 0.72);
+  --el-box-shadow-dark: 0 16px 48px 16px rgba(0, 0, 0, 0.72), 0 12px 32px #000, 0 8px 16px -8px #000;
+  --el-disabled-bg-color: #2b2620;
+  --el-disabled-text-color: #5f574c;
+  --el-disabled-border-color: #3a332c;
+  /* EP 语境四族：全梯度朝暗底混（light-N = 主色向 --page-bg 混 N 成，与 EP
+   * dark 梯度同构）——只补 8/9 会让 danger 按钮 hover/plain tag 边框（light-3/5）
+   * 继承亮色奶油值（Codex 异源审 P2）。 */
+  --el-color-success: #67c23a;
+  --el-color-success-light-3: color-mix(in srgb, #67c23a 70%, #211d19);
+  --el-color-success-light-5: color-mix(in srgb, #67c23a 50%, #211d19);
+  --el-color-success-light-7: color-mix(in srgb, #67c23a 30%, #211d19);
+  --el-color-success-light-8: #2a3a24;
+  --el-color-success-light-9: #253321;
+  --el-color-success-dark-2: color-mix(in srgb, #67c23a 80%, white);
+  --el-color-warning: #e6a23c;
+  --el-color-warning-light-3: color-mix(in srgb, #e6a23c 70%, #211d19);
+  --el-color-warning-light-5: color-mix(in srgb, #e6a23c 50%, #211d19);
+  --el-color-warning-light-7: color-mix(in srgb, #e6a23c 30%, #211d19);
+  --el-color-warning-light-8: #3e3423;
+  --el-color-warning-light-9: #362e20;
+  --el-color-warning-dark-2: color-mix(in srgb, #e6a23c 80%, white);
+  --el-color-danger: #f56c6c;
+  --el-color-danger-light-3: color-mix(in srgb, #f56c6c 70%, #211d19);
+  --el-color-danger-light-5: color-mix(in srgb, #f56c6c 50%, #211d19);
+  --el-color-danger-light-7: color-mix(in srgb, #f56c6c 30%, #211d19);
+  --el-color-danger-light-8: #422a2a;
+  --el-color-danger-light-9: #392525;
+  --el-color-danger-dark-2: color-mix(in srgb, #f56c6c 80%, white);
+  --el-color-error: #f56c6c;
+  --el-color-error-light-3: color-mix(in srgb, #f56c6c 70%, #211d19);
+  --el-color-error-light-5: color-mix(in srgb, #f56c6c 50%, #211d19);
+  --el-color-error-light-7: color-mix(in srgb, #f56c6c 30%, #211d19);
+  --el-color-error-light-8: #422a2a;
+  --el-color-error-light-9: #392525;
+  --el-color-error-dark-2: color-mix(in srgb, #f56c6c 80%, white);
+  --el-color-info: #909399;
+  --el-color-info-light-3: color-mix(in srgb, #909399 70%, #211d19);
+  --el-color-info-light-5: color-mix(in srgb, #909399 50%, #211d19);
+  --el-color-info-light-7: color-mix(in srgb, #909399 30%, #211d19);
+  --el-color-info-light-8: #33322f;
+  --el-color-info-light-9: #2d2c2a;
+  --el-color-info-dark-2: color-mix(in srgb, #909399 80%, white);
 }
 /* ── 工作态氛围（全局复用）── */
 @keyframes flai-work-pulse {
@@ -235,8 +423,8 @@ onMounted(loadConvos);
   border-radius: 999px;
   font-size: 12px;
   color: var(--trust-pending);
-  border: 1px solid rgba(168, 118, 26, .35);
-  background: rgba(168, 118, 26, .08);
+  border: 1px solid rgba(var(--trust-pending-rgb), 0.35);
+  background: rgba(var(--trust-pending-rgb), 0.08);
   white-space: nowrap;
 }
 /* ── 动效系统 v1 全局层（E3）：纸张过渡 + 入场工具类 + 按压微交互 ──
@@ -340,7 +528,7 @@ body {
   color: #fff;
   font-weight: 800;
   font-size: 16px;
-  box-shadow: 0 3px 10px rgba(193, 95, 60, 0.3);
+  box-shadow: 0 3px 10px rgba(var(--clay-rgb), 0.3);
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
 .brand-name { font-size: 16px; font-weight: 700; color: var(--ink); letter-spacing: 0.2px; }
@@ -352,7 +540,7 @@ body {
   gap: 8px;
   margin: 2px 0 8px;
   padding: 9px 12px;
-  border: 1px solid #e6cabc;
+  border: 1px solid var(--border-clay-soft);
   border-radius: 11px;
   background: var(--surface-raised);
   color: var(--clay);
@@ -362,7 +550,7 @@ body {
   box-shadow: var(--shadow-card);
   transition: all 0.16s var(--ease-lift);
 }
-.sb-new:hover { background: var(--clay); color: #fff; border-color: var(--clay); box-shadow: 0 4px 12px rgba(193, 95, 60, 0.22); }
+.sb-new:hover { background: var(--clay); color: #fff; border-color: var(--clay); box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.22); }
 
 .sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-link {
@@ -375,7 +563,7 @@ body {
   cursor: pointer;
   transition: background 0.14s var(--ease-lift), color 0.14s var(--ease-lift);
 }
-.nav-link:hover { background: rgba(193, 95, 60, 0.07); color: var(--ink); }
+.nav-link:hover { background: rgba(var(--clay-rgb), 0.07); color: var(--ink); }
 .nav-link.is-active { background: var(--clay-soft); color: var(--clay); font-weight: 600; }
 
 .sb-history {
@@ -405,8 +593,8 @@ body {
   cursor: pointer;
   transition: background 0.14s var(--ease-lift);
 }
-.convo-item:hover { background: rgba(43, 38, 34, 0.05); }
-.convo-item.is-active { background: rgba(193, 95, 60, 0.1); }
+.convo-item:hover { background: var(--hover-tint); }
+.convo-item.is-active { background: var(--select-tint-clay); }
 .convo-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-faint); }
 .convo-dot.plan { background: var(--clay); }
 .convo-dot.refuse { background: var(--trust-pending); }
@@ -418,7 +606,59 @@ body {
   text-overflow: ellipsis;
 }
 .convo-item.is-active .convo-title { color: var(--ink); font-weight: 600; }
+/* hover 出时间戳（Claude Desktop 语言）：静止零噪音，悬停渐显 */
+.convo-time {
+  flex: none;
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out-soft);
+}
+.convo-item:hover .convo-time { opacity: 1; }
 .convo-empty { font-size: 12px; color: var(--ink-faint); padding: 8px 12px; line-height: 1.5; }
+
+/* ── 侧栏脚部：搜索（⌘K 教学）+ 主题切换 ── */
+.sb-foot {
+  display: flex;
+  gap: 6px;
+  padding-top: 8px;
+  margin-top: 6px;
+  border-top: 1px solid var(--hairline-soft);
+}
+.sb-foot-btn {
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: none;
+  font-size: 12px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
+}
+.sb-foot-btn:hover {
+  background: var(--hover-tint);
+  color: var(--ink-soft);
+}
+.sb-kbd {
+  font-size: 10px;
+  font-family: ui-monospace, monospace;
+  padding: 0 4px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  color: var(--ink-faint);
+}
+@media (prefers-reduced-motion: reduce) {
+  .convo-time,
+  .sb-foot-btn {
+    transition: none;
+  }
+}
 
 /* ── 主区 ── */
 .app-main {

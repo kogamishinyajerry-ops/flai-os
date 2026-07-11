@@ -139,6 +139,6 @@
 }
 
 .stamp-clay {
-  fill: #c15f3c;
+  fill: var(--clay);
 }
 </style>

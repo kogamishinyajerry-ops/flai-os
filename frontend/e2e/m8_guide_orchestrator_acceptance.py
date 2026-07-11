@@ -111,7 +111,7 @@ def _start_and_send(page, name: str, text: str) -> None:
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
-    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
 
     # ── ① refuse：平台接不住 → 显式拒绝卡片 ──
     stub.plan = {

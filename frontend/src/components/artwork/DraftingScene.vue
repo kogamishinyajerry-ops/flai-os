@@ -234,7 +234,7 @@
 }
 
 .clay-mark {
-  fill: #c15f3c;
+  fill: var(--clay);
 }
 
 .cloud-body {

@@ -662,7 +662,7 @@ onUnmounted(() => {
   border-radius: 6px;
 }
 .peek-fullpage:hover {
-  background: rgba(193, 95, 60, 0.08);
+  background: rgba(var(--clay-rgb), 0.08);
 }
 .peek-block {
   margin-bottom: 16px;
@@ -757,10 +757,11 @@ onUnmounted(() => {
   padding: 0;
 }
 .peek-review-card {
-  border: 1px solid rgba(22, 125, 139, 0.25);
+  border: 1px solid rgba(var(--trust-signed-rgb), 0.25);
   border-radius: 12px;
   padding: 14px;
-  background: rgba(22, 125, 139, 0.03);
+  /* .03 太淡，暗色下几乎消失；提到 .06 保住「签发卡特殊感」 */
+  background: rgba(var(--trust-signed-rgb), 0.06);
 }
 .peek-review-note {
   font-size: 12px;
@@ -784,8 +785,8 @@ onUnmounted(() => {
 }
 .peek-approve:hover,
 .peek-approve:focus {
-  background: #126a76;
-  border-color: #126a76;
+  background: var(--trust-signed-deep);
+  border-color: var(--trust-signed-deep);
   color: #fff;
 }
 .peek-model-line {
