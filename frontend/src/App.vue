@@ -51,7 +51,13 @@
     </aside>
 
     <main class="app-main">
-      <router-view />
+      <!-- 路由纸张过渡（动效系统 E3）：key 用 route.path——路由/参数变化时重挂载
+           并触发入场动画（副作用修正：TaskDetail/WorkbenchSession 在 setup 捕获
+           params，实例复用会读到旧 id，重挂载天然修正）；query 变化不重挂载
+           （GuidePage 靠自身 watch 处理 ?c 重置，保持既有行为）。 -->
+      <div :key="route.path" class="page-turn">
+        <router-view />
+      </div>
     </main>
   </div>
 
@@ -161,6 +167,13 @@ onMounted(loadConvos);
   --shadow-hero: 0 1px 3px rgba(43, 38, 34, 0.04), 0 10px 34px rgba(72, 58, 44, 0.06);
   --shadow-composer: 0 1px 3px rgba(43, 38, 34, 0.05), 0 12px 32px rgba(72, 58, 44, 0.09);
   --ease-lift: 0.18s cubic-bezier(0.22, 0.61, 0.36, 1);
+  /* 动效系统 v1 tokens（SSOT=docs/design/MOTION-SYSTEM.md）：纸张/墨迹材质隐喻，
+   * 只用 transform/opacity；--ease-spring 仅限小位移元素（防溢出裁切）。 */
+  --motion-fast: 0.14s;
+  --motion-med: 0.22s;
+  --motion-slow: 0.6s;
+  --ease-out-soft: cubic-bezier(0.25, 0.8, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
   /* 衬线 display 字体（Claude 暖编辑语言）：只用于「大时刻」标题——目标句、hero 问候。
    * CJK 走 Songti/宋体，Latin 走 Iowan/Palatino，营造克制的编辑质感，与无衬线 body 对位。*/
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "STSong", "Times New Roman", serif;
@@ -213,8 +226,61 @@ onMounted(loadConvos);
   background: rgba(168, 118, 26, .08);
   white-space: nowrap;
 }
+/* ── 动效系统 v1 全局层（E3）：纸张过渡 + 入场工具类 + 按压微交互 ──
+ * 全部 transform/opacity（零 layout），reduced-motion 一律静态降级。 */
+/* 路由过渡刻意只用 opacity：动画期间容器带 transform 会成为后代
+ * position:fixed 的 containing block（GuidePage 悬浮 composer 会被劫持
+ * 220ms，回归镜头 P2 实证）——「升起」观感由各页内部 .fx-stagger/.fx-rise
+ * 承担（它们不包裹 fixed 后代）。 */
+@keyframes fx-page-turn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.page-turn {
+  animation: fx-page-turn var(--motion-med) var(--ease-out-soft) backwards;
+}
+/* 入场工具类：单元素 .fx-rise；容器 .fx-stagger 让直接子元素错峰升起
+ * （前 8 个逐级延迟，其后同步——长列表不做无限延迟）。 */
+@keyframes fx-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fx-rise { animation: fx-rise var(--motion-med) var(--ease-out-soft) backwards; }
+.fx-stagger > * { animation: fx-rise var(--motion-med) var(--ease-out-soft) backwards; }
+.fx-stagger > *:nth-child(1) { animation-delay: 0.03s; }
+.fx-stagger > *:nth-child(2) { animation-delay: 0.07s; }
+.fx-stagger > *:nth-child(3) { animation-delay: 0.11s; }
+.fx-stagger > *:nth-child(4) { animation-delay: 0.15s; }
+.fx-stagger > *:nth-child(5) { animation-delay: 0.19s; }
+.fx-stagger > *:nth-child(6) { animation-delay: 0.23s; }
+.fx-stagger > *:nth-child(7) { animation-delay: 0.27s; }
+.fx-stagger > *:nth-child(8) { animation-delay: 0.31s; }
+/* 墨迹晕开：新事件/新气泡入场（P2/P3 用）——轻微模糊聚焦，如墨点落纸。 */
+/* 墨迹晕开：只用 transform/opacity（硬约束⑤字面合规，不用 filter）——
+ * 「晕开」感由 scale 起点压小 + 时长放到 --motion-slow 营造。 */
+@keyframes fx-ink-in {
+  from { opacity: 0; transform: translateY(5px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.fx-ink-in { animation: fx-ink-in var(--motion-slow) var(--ease-out-soft) backwards; }
+/* 按压微交互：全站按钮统一「按得下去」的实感（transform-only）。
+ * 刻意不覆盖 .el-button 的 transition——Element Plus 自带 `transition: all .1s`
+ * 已含 transform；单独覆盖会吃掉 hover/loading 的颜色过渡（回归镜头 P2）。 */
+.el-button:not(.is-disabled):active,
+.sb-new:active,
+.nav-link:active {
+  transform: scale(0.97);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .work-pulse-dot { animation: none; }
+  .page-turn,
+  .fx-rise,
+  .fx-stagger > *,
+  .fx-ink-in { animation: none; }
+  .el-button:not(.is-disabled):active,
+  .sb-new:active,
+  .nav-link:active { transform: none; }
 }
 
 body {

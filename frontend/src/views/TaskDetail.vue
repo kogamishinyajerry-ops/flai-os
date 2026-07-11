@@ -10,6 +10,9 @@
         </el-button>
       </div>
       <div class="page-header">
+        <!-- 工作态流光带（P3，动效系统 v1）：v-if 绑真实 work-state，状态回落随之
+             立即消失——诚实地板：流光=真的在跑。装饰性，不承载信息，故 aria-hidden。 -->
+        <div v-if="isTaskWorking" class="work-flow-strip" aria-hidden="true"></div>
         <h2>任务详情</h2>
         <span v-if="isTaskWorking" class="work-pulse-dot"></span>
         <el-tag :type="statusTagType(task.status)">{{ statusLabel(task.status) }}</el-tag>
@@ -159,8 +162,9 @@
               批准即代表你作为工程师背书该产物——签发权在你，平台不代签。
             </div>
             <el-form-item>
-              <!-- 批准=人签，用信任锁的 teal（--trust-signed），绝不用绿（绿仅表真实结果）。 -->
-              <el-button class="approve-btn" :loading="reviewing" @click="handleReview('approve')">批准放行</el-button>
+              <!-- 批准=人签，用信任锁的 teal（--trust-signed），绝不用绿（绿仅表真实结果）。
+                   ref 供放行成功后的 teal burst 定位元素（动效系统 v1 E2，唯一 teal 许可点）。 -->
+              <el-button ref="approveBtnEl" class="approve-btn" :loading="reviewing" @click="handleReview('approve')">批准放行</el-button>
               <el-button type="danger" :loading="reviewing" @click="handleReview('reject')">拒绝</el-button>
             </el-form-item>
           </el-form>
@@ -226,6 +230,7 @@ import { statusLabel, statusTagType, formatTime, TASK_WORK_STATES } from "../uti
 import MarkdownLite from "../components/MarkdownLite.vue";
 import WorkLog from "../components/WorkLog.vue";
 import { getSavedName, saveName } from "../utils/identity";
+import { burstSigned } from "../effects/burst";
 
 const route = useRoute();
 const taskId = route.params.taskId;
@@ -237,6 +242,9 @@ const loadError = ref("");
 
 const reviewForm = reactive({ reviewer: getSavedName(), comment: "" });
 const reviewing = ref(false);
+// 批准按钮元素（动效系统 v1 E2）：放行成功后 burstSigned(el) 的定位来源；
+// el-button 组件 ref 通过 .ref 暴露原生 DOM（element-plus expose 契约）。
+const approveBtnEl = ref(null);
 
 // 产物内联查看（P0-2）：按 task.output_file_ids 拉取文件名+内容，增量同步、集合未变不重拉。
 const artifacts = ref([]);
@@ -488,6 +496,11 @@ async function handleReview(action) {
   try {
     await reviewTask(taskId, { action, reviewer: reviewForm.reviewer.trim(), comment: reviewForm.comment || null });
     saveName(reviewForm.reviewer); // 记住名字，全站免重填
+    // 人签放行成功时刻（唯一 teal 许可点，动效系统硬约束）：仅 approve 分支触发；
+    // 驳回/失败绝不放庆祝动效。元素取不到（ref 未挂载等）burstSigned 自兜 null。
+    if (action === "approve") {
+      burstSigned(approveBtnEl.value?.ref);
+    }
     ElMessage.success(`已${label}`);
     await loadTask();
   } catch (err) {
@@ -532,10 +545,50 @@ onUnmounted(clearPoll);
 
 <style scoped>
 .page-header {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 16px;
+}
+/* 工作态流光带（动效系统 v1 P3）：v-if 已绑真实 work-state，此处只管视觉——
+   静态 clay-soft 底线常显作 reduced-motion 兜底，::after 是流动的 clay 高光扫过，
+   transform-only、~2.4s linear infinite，绝不用 layout 属性。 */
+.work-flow-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: var(--clay-soft);
+  pointer-events: none;
+}
+.work-flow-strip::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, var(--clay), transparent);
+  animation: work-flow-sweep 2.4s linear infinite;
+  will-change: transform;
+}
+@keyframes work-flow-sweep {
+  from {
+    transform: translateX(-150%);
+  }
+  to {
+    transform: translateX(350%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .work-flow-strip::after {
+    animation: none;
+    display: none;
+  }
 }
 .page-header h2 {
   font-family: var(--serif);

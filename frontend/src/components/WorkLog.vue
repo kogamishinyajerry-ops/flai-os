@@ -36,11 +36,14 @@
     <div v-if="expanded" class="worklog-timeline">
       <EmptyState v-if="!events.length" variant="log" description="暂无事件" />
       <el-timeline v-else>
+        <!-- 墨迹入场只在真实工作态生效：工作中轮询追加的新事件晕开入场；已终态
+             任务展开日志时不重播「新事件」视觉（诚实地板——信任镜头 P2）。 -->
         <el-timeline-item
           v-for="e in events"
           :key="e.event_id"
           :timestamp="formatTime(e.created_at)"
           :color="LEVEL_COLOR[e.level] || LEVEL_COLOR.info"
+          :class="{ 'fx-ink-in': isWorking }"
         >
           <div class="event-type">
             {{ eventTypeLabel(e.event_type) }}

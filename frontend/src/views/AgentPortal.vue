@@ -22,7 +22,7 @@
 
     <EmptyState v-else-if="!loadError && agents.length === 0" description="暂无可用 Agent" />
 
-    <el-row v-else :gutter="16">
+    <el-row v-else :gutter="16" class="fx-stagger">
       <el-col v-for="agent in agents" :key="agent.id" :span="8" class="agent-col">
         <el-card class="agent-card" shadow="never" :body-style="{ padding: '0' }">
           <div class="cat-bar" :style="{ background: categoryColor(agent.category) }"></div>
@@ -177,12 +177,21 @@ onMounted(load);
   border-radius: 12px;
   overflow: hidden;
   box-shadow: var(--shadow-card);
-  transition: border-color var(--ease-lift), box-shadow var(--ease-lift), transform var(--ease-lift);
+  /* P4 纸感抬升：统一走动效系统 tokens（--motion-fast + --ease-out-soft），
+   * 悬停终态（阴影/位移量）不变，只是过渡节奏与全站微交互对齐。 */
+  transition: border-color var(--motion-fast) var(--ease-out-soft),
+    box-shadow var(--motion-fast) var(--ease-out-soft),
+    transform var(--motion-fast) var(--ease-out-soft);
 }
 .agent-card:hover {
   border-color: var(--clay-softer);
   box-shadow: var(--shadow-card-hover);
   transform: translateY(-2px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-card:hover {
+    transform: none;
+  }
 }
 .cat-bar {
   height: 4px;

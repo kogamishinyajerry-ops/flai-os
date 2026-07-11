@@ -31,7 +31,7 @@
       <div v-for="(m, idx) in messages" :key="idx" :class="['bubble-row', m.role]">
 
         <!-- 用户消息：靠右暖气泡 -->
-        <div v-if="m.role === 'user'" class="user-bubble">
+        <div v-if="m.role === 'user'" class="user-bubble" :class="{ 'fx-ink-in': m.fresh }">
           <div class="user-text">{{ m.content }}</div>
           <div v-if="m.attachments && m.attachments.length" class="user-files">
             <span v-for="a in m.attachments" :key="a.id" class="file-chip">📎 {{ a.filename }}</span>
@@ -41,12 +41,12 @@
         <!-- 助手消息：小 mark + 流动排版，plan-card 内联渲染 -->
         <template v-else>
           <div class="ai-mark">导</div>
-          <div class="ai-body">
+          <div class="ai-body" :class="{ 'fx-ink-in': m.fresh }">
             <div class="ai-name">智能导引</div>
             <p v-if="m.content" class="ai-lead">{{ m.content }}</p>
 
             <!-- 导引计划（M8 编排官）：refuse=显式拒绝 -->
-            <div v-if="m.recommendation && m.recommendation.decision === 'refuse'" class="plan-card refuse">
+            <div v-if="m.recommendation && m.recommendation.decision === 'refuse'" class="plan-card refuse" :class="{ 'fx-rise': m.fresh }">
               <div class="plan-kicker refuse">显式拒绝</div>
               <h3 class="plan-goal-title small">这个需求，平台暂时接不住</h3>
               <p v-if="m.recommendation.reason" class="plan-reason">{{ m.recommendation.reason }}</p>
@@ -71,6 +71,7 @@
             <div
               v-else-if="m.recommendation && m.recommendation.decision === 'orchestrate'"
               class="plan-card"
+              :class="{ 'fx-rise': m.fresh }"
             >
               <div class="plan-topline">
                 <span class="plan-kicker">协作方案</span>
@@ -159,7 +160,7 @@
       <div v-if="sending" class="bubble-row assistant">
         <div class="ai-mark">导</div>
         <div class="ai-thinking">
-          <span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>
+          <ThinkingInk />
           <span class="tlabel">导引思考中…</span>
         </div>
       </div>
@@ -225,6 +226,7 @@ import { createConversation, postMessage, getConversation } from "../api/convers
 import { uploadFile as apiUploadFile } from "../api/files";
 import { categoryColor, categoryLabel } from "../utils/format";
 import { getSavedName, saveName } from "../utils/identity";
+import ThinkingInk from "../components/artwork/ThinkingInk.vue";
 
 const router = useRouter();
 
@@ -353,6 +355,9 @@ async function send() {
     role: "user",
     content,
     attachments: optimisticAttachments.length ? optimisticAttachments : undefined,
+    // fresh：仅本次会话中「刚落地」的气泡播墨迹入场；历史加载不带此标记——
+    // 诚实地板：不让三天前的旧对话表演"刚发生"（信任镜头 P2）。
+    fresh: true,
   });
   draft.value = "";
   await scrollToBottom();
@@ -380,6 +385,7 @@ async function send() {
       role: "assistant",
       content: res.message.content,
       recommendation: res.message.recommendation || null,
+      fresh: true,
     });
     await scrollToBottom();
   } catch (err) {
@@ -614,7 +620,8 @@ watch(
   padding: 12px 16px;
   border-radius: 18px 18px 4px 18px;
   box-shadow: 0 1px 2px rgba(140, 70, 40, 0.06);
-  animation: rise 0.4s var(--ease-lift) both;
+  /* 入场动效交给全局 .fx-ink-in（墨迹晕开，见 App.vue）——本地 rise 动画让位，
+   * 避免 scoped 选择器特异度盖过全局工具类导致新类无效播放。 */
 }
 .user-text {
   white-space: pre-wrap;
@@ -673,14 +680,7 @@ watch(
   color: var(--ink-faint);
   font-size: 13.5px;
 }
-.ai-thinking .tdot {
-  width: 6px; height: 6px; border-radius: 50%; background: var(--clay);
-  opacity: 0.4; animation: blink 1.2s infinite both;
-}
-.ai-thinking .tdot:nth-child(2) { animation-delay: 0.2s; }
-.ai-thinking .tdot:nth-child(3) { animation-delay: 0.4s; }
 .ai-thinking .tlabel { margin-left: 6px; }
-@keyframes blink { 0%, 80%, 100% { opacity: 0.35; } 40% { opacity: 1; } }
 
 /* ── 协作方案 / 拒绝 卡片 ── */
 .plan-card {
@@ -689,7 +689,7 @@ watch(
   border-radius: 18px;
   padding: 22px 24px 20px;
   box-shadow: var(--shadow-card);
-  animation: rise 0.5s var(--ease-lift) both;
+  /* 入场动效交给全局 .fx-rise（见 App.vue）——本地 rise 动画让位，理由同 .user-bubble。 */
 }
 .plan-card.refuse {
   background: linear-gradient(180deg, #fdf8ef, var(--surface));

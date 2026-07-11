@@ -15,7 +15,7 @@
           />
         </div>
 
-        <div class="qs-results">
+        <div class="qs-results" ref="resultsRef">
           <div v-if="loading" class="qs-loading">加载中…</div>
           <template v-else>
             <template v-for="group in renderGroups" :key="group.key">
@@ -69,6 +69,7 @@ const query = ref("");
 const loading = ref(false);
 const selectedIndex = ref(0);
 const inputRef = ref(null);
+const resultsRef = ref(null);
 
 const conversations = ref([]);
 const tasks = ref([]);
@@ -128,6 +129,14 @@ const flatItems = computed(() => groups.value.flatMap((g) => g.items.map((item) 
 
 watch(query, () => {
   selectedIndex.value = 0;
+});
+
+// 键盘 ↑↓ 跨组连续移动时，把选中项滚入可视区（长列表/末组不被面板裁切）；
+// nextTick 等 is-selected 类先落到新 DOM 节点上再查询。
+watch(selectedIndex, () => {
+  nextTick(() => {
+    resultsRef.value?.querySelector(".qs-item.is-selected")?.scrollIntoView({ block: "nearest" });
+  });
 });
 
 async function fetchAll() {
@@ -277,7 +286,7 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
   border-radius: 8px;
   border-left: 3px solid transparent;
   cursor: pointer;
-  transition: background 0.12s var(--ease-lift), border-color 0.12s var(--ease-lift);
+  transition: background var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft);
 }
 .qs-item.is-selected {
   background: rgba(193, 95, 60, 0.08);
@@ -334,7 +343,11 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
 .qs-fade-leave-to {
   opacity: 0;
 }
-.qs-fade-enter-active .qs-panel,
+/* 入场用 --ease-spring 微弹（幅度不变，仍是 translateY(-8px) scale(0.98)→原位），
+ * 退出保留原软出，避免关闭时的回弹显得拖沓。 */
+.qs-fade-enter-active .qs-panel {
+  transition: transform var(--motion-med) var(--ease-spring), opacity 0.16s var(--ease-lift);
+}
 .qs-fade-leave-active .qs-panel {
   transition: transform 0.16s var(--ease-lift), opacity 0.16s var(--ease-lift);
 }

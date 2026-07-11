@@ -67,7 +67,7 @@
           <p v-if="plan.workflow" class="bp-line"><span class="bp-tag">协作方式</span>{{ plan.workflow }}</p>
         </div>
 
-        <div class="roster">
+        <div class="roster fx-stagger">
           <div v-for="(a, ai) in rosterAgents" :key="ai" class="member">
             <div class="member-bar" :style="{ background: categoryColor(a.category) }"></div>
             <div class="member-inner">
@@ -545,10 +545,12 @@ onUnmounted(clearPoll);
   border-radius: 8px;
   background: var(--paper-cream);
   cursor: pointer;
-  transition: border-color 0.15s;
+  /* P4 微抬：hover 加一丝纸张离桌感，只用 transform/opacity，token 与全站动效系统对齐。 */
+  transition: border-color var(--motion-fast) var(--ease-out-soft), transform var(--motion-fast) var(--ease-out-soft);
 }
 .task-chip:hover {
   border-color: var(--clay-softer);
+  transform: translateY(-1px);
 }
 .task-chip.review {
   border-color: var(--trust-pending);
@@ -586,6 +588,7 @@ onUnmounted(clearPoll);
 }
 @media (prefers-reduced-motion: reduce) {
   .chip-lamp.is-pulsing { animation: none; }
+  .task-chip:hover { transform: none; }
 }
 .sess-foot {
   margin-top: 18px;

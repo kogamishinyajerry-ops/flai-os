@@ -1,7 +1,10 @@
 <template>
   <div class="workbench-home">
     <div class="wb-hero">
-      <div class="wb-hero-text">
+      <!-- 动效 P1：hero ambient 粒子场（石墨尘，boost 绑真实 work-state 任务数）——
+           纯装饰层，绝对定位铺满、置于文案之下，pointer-events:none + aria-hidden。 -->
+      <canvas ref="heroCanvasEl" class="wb-hero-particles" aria-hidden="true"></canvas>
+      <div class="wb-hero-text fx-stagger">
         <h2>协作工作台</h2>
         <p class="wb-sub">
           把一个繁琐任务交给<strong>智能导引</strong>——它帮你分析、拆解，找到合适的
@@ -12,6 +15,10 @@
           <el-button type="primary" @click="$router.push('/')">从导引开始一个协作</el-button>
           <el-button text @click="$router.push('/portal')">浏览已上线的 Agent →</el-button>
         </div>
+      </div>
+      <!-- 动效 A1：hero 右缘制图场景插画，窄视口隐藏，绝不遮挡文案。 -->
+      <div class="wb-hero-art">
+        <DraftingScene />
       </div>
     </div>
 
@@ -107,6 +114,8 @@ import { useRouter } from "vue-router";
 import { listTasks } from "../api/tasks";
 import { listConversations } from "../api/conversations";
 import EmptyState from "../components/EmptyState.vue";
+import DraftingScene from "../components/artwork/DraftingScene.vue";
+import { createParticleField } from "../effects/particleField";
 import { statusLabel, formatTime, TASK_STATUS, taskLampColor, TASK_WORK_STATES } from "../utils/format";
 import { hasUnseen } from "../utils/lastSeen";
 
@@ -118,6 +127,16 @@ const loadError = ref("");
 const PAGE_SIZE = 100;
 const hasMore = ref(false);
 const filters = reactive({ status: "" });
+
+// 动效 P1（MOTION-SYSTEM.md）：hero ambient 粒子场句柄 + boost 绑定真实信号
+// （work-state 任务数/5 封顶，诚实地板——信号消失即回落到 0，不留残余强度）。
+const heroCanvasEl = ref(null);
+let heroField = null;
+function updateHeroBoost() {
+  if (!heroField) return;
+  const workCount = tasks.value.filter((t) => TASK_WORK_STATES.has(t.status)).length;
+  heroField.setBoost(Math.min(1, workCount / 5));
+}
 
 // 协作会话（M8 P4）：已形成召集方案（orchestrate）的导引会话——协作工作台的主对象。
 const sessions = ref([]);
@@ -193,6 +212,7 @@ async function load(opts) {
     tasks.value = page;
     hasMore.value = page.length === PAGE_SIZE;
     loadError.value = "";
+    updateHeroBoost(); // 每次任务数据刷新后同步——工作数为 0 时诚实回落到 0
   } catch (err) {
     if (silent && tasks.value !== baseline) return;
     if (!silent) loadError.value = err.detail || err.message;
@@ -208,6 +228,7 @@ async function loadMore() {
     tasks.value = tasks.value.concat(page);
     hasMore.value = page.length === PAGE_SIZE;
     loadError.value = "";
+    updateHeroBoost();
   } catch (err) {
     loadError.value = err.detail || err.message;
   } finally {
@@ -244,22 +265,41 @@ function clearPoll() {
   }
 }
 onMounted(() => {
+  // 动效 P1：先建粒子场句柄再触发数据加载——load() 完成后 updateHeroBoost()
+  // 才有 heroField 可写；reduced-motion 下 createParticleField 返回零副作用桩。
+  heroField = createParticleField(heroCanvasEl.value);
   load();
   loadSessions();
   loadReviewTasks();
   schedulePoll();
 });
-onUnmounted(clearPoll);
+onUnmounted(() => {
+  clearPoll();
+  heroField?.destroy();
+});
 </script>
 
 <style scoped>
 .wb-hero {
+  position: relative; /* 动效 P1：承载绝对定位粒子场 canvas + 右缘插画的定位上下文 */
+  overflow: hidden; /* 粒子/插画绝不溢出 hero 卡片边界 */
   background: linear-gradient(135deg, var(--paper-cream), var(--paper-surface));
   border: 1px solid var(--hairline);
   border-radius: 14px;
   padding: 28px 30px;
   margin-bottom: 24px;
   box-shadow: var(--shadow-hero);
+}
+/* 动效 P1：ambient 粒子场——铺满 hero、置于文案之下，纯装饰不吃交互。 */
+.wb-hero-particles {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.wb-hero-text {
+  position: relative; /* 高于粒子场 */
+  z-index: 1;
 }
 .wb-hero h2 {
   font-family: var(--serif);
@@ -278,6 +318,27 @@ onUnmounted(clearPoll);
   display: flex;
   gap: 12px;
   align-items: center;
+}
+/* 动效 A1：hero 右缘制图场景插画——窄视口隐藏，绝不遮挡文案（文案侧同步让出空间）。 */
+.wb-hero-art {
+  position: absolute;
+  right: 26px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 260px;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.9;
+}
+@media (max-width: 1099px) {
+  .wb-hero-art {
+    display: none;
+  }
+}
+@media (min-width: 1100px) {
+  .wb-hero-text {
+    padding-right: 280px;
+  }
 }
 .sess-grid {
   display: grid;
