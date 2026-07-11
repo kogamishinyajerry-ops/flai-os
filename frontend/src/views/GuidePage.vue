@@ -3,6 +3,7 @@
     <!-- 起手 hero（未开始且无消息）：衬线问候 + 具名，随 composer 在视口垂直居中。 -->
     <div v-if="!started && messages.length === 0" class="guide-hero fx-rise">
       <div class="hero-mark">导</div>
+      <p class="hero-greeting">{{ greeting }}</p>
       <h1 class="hero-title">说说你要做的工程活儿</h1>
       <p class="hero-sub">
         导引会帮你分析、拆解，召集合适的一个或多个 Agent 协作并预填草案；平台接不住时也会直说、
@@ -61,9 +62,23 @@
               </div>
               <div v-if="m.recommendation.reframe && m.recommendation.reframe.length" class="plan-section">
                 <div class="section-label">可以试试这样重述 / 拆解</div>
-                <ul class="plan-list">
-                  <li v-for="(r, i) in m.recommendation.reframe" :key="i">{{ r }}</li>
-                </ul>
+                <div class="reframe-list">
+                  <div
+                    v-for="(r, i) in m.recommendation.reframe"
+                    :key="i"
+                    class="reframe-item"
+                    role="button"
+                    tabindex="0"
+                    @click="adoptReframe(r)"
+                    @keydown.enter.prevent="adoptReframe(r)"
+                    @keydown.space.prevent="adoptReframe(r)"
+                  >
+                    <span class="reframe-num">{{ i + 1 }}</span>
+                    <span class="reframe-text">{{ r }}</span>
+                    <span class="reframe-adopt">采纳 →</span>
+                  </div>
+                </div>
+                <p class="reframe-escape">或者直接在下方输入框，告诉导引你想怎么调整。</p>
               </div>
             </div>
 
@@ -242,6 +257,10 @@
         <span>导引不会替你创建或签发任务</span>
         <span class="keys"><kbd>Enter</kbd> 发送<span class="sep">·</span><kbd>⇧ Enter</kbd> 换行<span class="sep">·</span>📎 可带附件</span>
       </div>
+      <div class="composer-floor">
+        <span class="floor-full">导引与 Agent 的产出是草案，可能有误——签发权始终在你。</span>
+        <span class="floor-short">产出是草案——签发权在你。</span>
+      </div>
       </div>
     </div>
   </div>
@@ -275,6 +294,18 @@ const streamEl = ref(null);
 // P2-A 反孤儿纪律；已上传项记 fileId，失败重试不重复上传。
 const pendingFiles = ref([]);
 let fileSeq = 0;
+
+// 时段感问候（Claude「Up late?」人格温度）：起手 hero 只挂载一次，用当前小时
+// 一次性求值即可，不需要跟随时间刷新（用户在页面停留跨越时段边界的概率低，
+// 且这只是克制的抒情点缀，不是状态展示——不值得为它另起一个 timer）。
+const greeting = (() => {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 11) return "早。";
+  if (h >= 11 && h < 14) return "午安。";
+  if (h >= 14 && h < 18) return "下午好。";
+  if (h >= 18 && h < 23) return "晚上好。";
+  return "夜深了，辛苦。"; // 23:00–次日 5:00
+})();
 
 // 空状态示例提示（Claude 起手 chips）：点一下把示例填进输入框，用户再改再发。
 const EXAMPLES = [
@@ -360,6 +391,13 @@ function focusComposer() {
   if (!el) return;
   el.focus();
   el.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function adoptReframe(text) {
+  // Codex 问题卡哲学：点一条重述建议只是把它填进草稿并聚焦输入框，人仍要
+  // 自己按发送——导引绝不代人发起这条消息（红线：人是唯一发起者）。
+  draft.value = text;
+  focusComposer();
 }
 
 async function scrollToBottom() {
@@ -610,7 +648,7 @@ watch(
 .guide-page {
   max-width: 784px;
   margin: 0 auto;
-  padding-bottom: 152px; /* 让会话内容避开固定悬浮 composer */
+  padding-bottom: 178px; /* 让会话内容避开固定悬浮 composer（含常驻诚实地板句一行） */
 }
 /* 空状态：hero + composer 作为一组在视口垂直居中（Claude 起手布局）。*/
 .guide-page.is-empty {
@@ -641,6 +679,14 @@ watch(
   font-size: 21px;
   background: linear-gradient(150deg, var(--clay), var(--clay-deep));
   box-shadow: 0 6px 18px rgba(193, 95, 60, 0.28);
+}
+/* 时段感问候：抒情场合走衬线，字号克制小于主标题，颜色降一级不抢戏。 */
+.hero-greeting {
+  font-family: var(--serif);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  margin: 0 0 8px;
 }
 .hero-title {
   font-family: var(--serif);
@@ -860,6 +906,75 @@ watch(
   color: #4a443d;
   font-size: 13.5px;
   line-height: 1.75;
+}
+
+/* 重述建议 → 可点编号选项（Codex 问题卡哲学）：点一条只填草稿+聚焦输入框，
+ * 绝不代人发送。序号圈用 clay（行动召唤语义，信任色锁合规）。 */
+.reframe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.reframe-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.16s var(--ease-out-soft), border-color 0.16s var(--ease-out-soft);
+}
+.reframe-item:hover,
+.reframe-item:focus-visible {
+  background: var(--paper-rail);
+  border-color: var(--hairline-soft);
+}
+.reframe-item:focus-visible {
+  outline: 2px solid var(--clay-softer);
+  outline-offset: 1px;
+}
+.reframe-num {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--clay);
+  background: var(--clay-soft);
+  border: 1.5px solid var(--clay);
+}
+.reframe-text {
+  flex: 1 1 auto;
+  color: #4a443d;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.reframe-adopt {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--clay);
+  opacity: 0;
+  transform: translateX(4px);
+  transition: opacity var(--motion-fast) var(--ease-out-soft), transform var(--motion-fast) var(--ease-out-soft);
+}
+.reframe-item:hover .reframe-adopt,
+.reframe-item:focus-visible .reframe-adopt {
+  opacity: 1;
+  transform: translateX(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .reframe-adopt { transition: none; transform: none; }
+}
+.reframe-escape {
+  margin: 8px 0 0;
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 /* Agent roster 卡 */
@@ -1238,6 +1353,21 @@ watch(
 }
 .composer-hint .keys { display: flex; align-items: center; gap: 6px; }
 .composer-hint .sep { color: var(--hairline); }
+
+/* 诚实地板句（Claude「can make mistakes」哲学）：常驻同一 composer 容器内，
+ * 会话进行中（composer 变 fixed 悬浮）也不消失；放进容器内部避免布局跳动。 */
+.composer-floor {
+  text-align: center;
+  padding: 5px 14px 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+.floor-short { display: none; }
+@media (max-width: 640px) {
+  .floor-full { display: none; }
+  .floor-short { display: inline; }
+}
 kbd {
   font-family: "SF Mono", ui-monospace, monospace;
   font-size: 10.5px;

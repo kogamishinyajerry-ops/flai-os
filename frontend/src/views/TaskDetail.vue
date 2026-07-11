@@ -29,6 +29,11 @@
         <el-button text type="primary" class="refresh-btn" @click="loadTask()">刷新</el-button>
       </div>
 
+      <!-- 终态盖章（Codex CLI「─ Worked for Xs ─」落定仪式）：位置=标题/返回行之下、
+           任务描述表之上——终态任务进页第一眼看到的官宣；组件自身对非终态渲染 null，
+           零占位，不产生 a[href]/新文案与既有 e2e 断言冲突。 -->
+      <CompletionSeal :task="task" />
+
       <!-- 首屏只留一行轻量上下文；完整元数据（ID/版本/时间）折叠为次要，让产物与决策优先。 -->
       <div class="task-context">
         <span>Agent <b>{{ task.agent_id }}</b></span>
@@ -126,15 +131,15 @@
               <template v-else>
                 <div class="source-row model-usage-summary">
                   <span>
-                    {{ modelCallStats.total }} 次调用（成功 {{ modelCallStats.ok }} · 失败
-                    <span :class="modelCallStats.failed > 0 ? 'model-usage-fail-count' : ''">{{ modelCallStats.failed }}</span>）
+                    <span class="num-token">{{ modelCallStats.total }}</span> 次调用（成功 <span class="num-token">{{ modelCallStats.ok }}</span> · 失败
+                    <span class="num-token" :class="modelCallStats.failed > 0 ? 'model-usage-fail-count' : ''">{{ modelCallStats.failed }}</span>）
                   </span>
                 </div>
                 <div class="source-row">
                   <span>模型：{{ modelCallStats.names.length ? modelCallStats.names.join("、") : "未知" }}</span>
                 </div>
                 <div class="source-row">
-                  <span v-if="modelCallStats.tokenKnownCount > 0">tokens 合计 {{ modelCallStats.tokenSum.toLocaleString() }}</span>
+                  <span v-if="modelCallStats.tokenKnownCount > 0">tokens 合计 <span class="num-token">{{ modelCallStats.tokenSum.toLocaleString() }}</span></span>
                   <span v-else class="muted">token 用量：未知</span>
                 </div>
                 <div v-if="modelCallStats.tokenKnownCount > 0 && modelCallStats.tokenMissingCount > 0" class="model-usage-note">
@@ -229,6 +234,7 @@ import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/fe
 import { statusLabel, statusTagType, formatTime, TASK_WORK_STATES } from "../utils/format";
 import MarkdownLite from "../components/MarkdownLite.vue";
 import WorkLog from "../components/WorkLog.vue";
+import CompletionSeal from "../components/CompletionSeal.vue";
 import { getSavedName, saveName } from "../utils/identity";
 import { burstSigned } from "../effects/burst";
 
@@ -769,6 +775,11 @@ onUnmounted(clearPoll);
 .model-usage-fail-count {
   color: var(--trust-fail);
   font-weight: 600;
+}
+/* 证据数字等宽 token 化：调用次数/tokens 合计是可核验的事实证据，非行动召唤，
+   故只换等宽字体（跨家族共性——Claude/Codex 行内证据同一处理），颜色/字号继承不变。 */
+.num-token {
+  font-family: var(--mono, "SF Mono", ui-monospace, monospace);
 }
 .model-usage-note {
   font-size: 11.5px;

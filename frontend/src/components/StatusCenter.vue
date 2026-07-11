@@ -95,6 +95,9 @@
             <button class="peek-fullpage" @click="goFullPage">打开完整页 ↗</button>
           </div>
 
+          <!-- 终态盖章：落定任务先给一行官宣（Codex「─ Worked for Xs ─」哲学） -->
+          <CompletionSeal :task="peekTask" class="peek-block" />
+
           <el-alert v-if="peekTask.error_message" type="error" :title="peekTask.error_message" show-icon :closable="false" class="peek-block" />
 
           <!-- 产物先于动作（信任核心 P0-2：先看要签的东西，再决定放行）。
@@ -172,6 +175,7 @@ import { burstSigned } from "../effects/burst";
 import WorkLog from "./WorkLog.vue";
 import MarkdownLite from "./MarkdownLite.vue";
 import InboxZero from "./artwork/InboxZero.vue";
+import CompletionSeal from "./CompletionSeal.vue";
 
 const router = useRouter();
 const drawerSize = window.innerWidth < 640 ? "100%" : "540px";
