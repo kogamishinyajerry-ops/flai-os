@@ -21,7 +21,6 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.app.main import create_app
 from backend.app.storage import db as db_mod
 from backend.app.storage import repos
 
@@ -34,20 +33,6 @@ _LLM_ENV_VARS = ("FLAI_LLM_BASE_URL", "FLAI_LLM_API_KEY", "FLAI_LLM_MODEL_REASON
 def _clean_llm_env(monkeypatch):
     for var in _LLM_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
-
-
-@pytest.fixture()
-def app_env(tmp_path):
-    app = create_app(
-        agents_dir=REPO_ROOT / "agents",
-        tools_dir=REPO_ROOT / "tools_impl",
-        contracts_dir=REPO_ROOT / "contracts",
-        db_path=tmp_path / "flai_os.db",
-        uploads_dir=tmp_path / "uploads",
-        task_runs_dir=tmp_path / "task_runs",
-    )
-    with TestClient(app) as client:
-        yield client, app
 
 
 @pytest.fixture()

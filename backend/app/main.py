@@ -7,6 +7,7 @@ knowledge 对账 + sync_to_db，与 Job Runner 共享同一装配路径，ADR-00
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -104,6 +105,9 @@ def create_app(
             "status": "ok",
             "agents": len(app.state.agent_registry.list()),
             "tools": len(app.state.tool_registry.list()),
+            "llm_base_url_set": bool(os.environ.get("FLAI_LLM_BASE_URL")),
+            "llm_api_key_set": bool(os.environ.get("FLAI_LLM_API_KEY")),
+            "llm_model_reasoning_set": bool(os.environ.get("FLAI_LLM_MODEL_REASONING")),
         }
 
     app.include_router(agents_api.router)

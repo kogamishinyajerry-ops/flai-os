@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 from jsonschema import validate
 
 from backend.app.jobs.runner import JobRunner
-from backend.app.main import create_app
+from backend.app.storage import repos
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACTS_DIR = REPO_ROOT / "contracts"
@@ -38,20 +38,6 @@ def _load_schema(name: str) -> dict[str, Any]:
 
 TASK_SCHEMA = _load_schema("task.schema.json")
 EVENT_SCHEMA = _load_schema("event.schema.json")
-
-
-@pytest.fixture()
-def app_env(tmp_path):
-    app = create_app(
-        agents_dir=REPO_ROOT / "agents",
-        tools_dir=REPO_ROOT / "tools_impl",
-        contracts_dir=REPO_ROOT / "contracts",
-        db_path=tmp_path / "flai_os.db",
-        uploads_dir=tmp_path / "uploads",
-        task_runs_dir=tmp_path / "task_runs",
-    )
-    with TestClient(app) as client:
-        yield client, app
 
 
 @pytest.fixture()
@@ -79,6 +65,65 @@ def test_get_task_response_matches_task_schema(client: TestClient) -> None:
     resp = client.get(f"/api/tasks/{task_id}")
     assert resp.status_code == 200
     validate(resp.json(), TASK_SCHEMA)
+
+
+def test_list_tasks_each_response_matches_task_schema(client: TestClient) -> None:
+    for suffix in ("列表一", "列表二"):
+        create_resp = client.post(
+            "/api/tasks",
+            json={
+                "agent_id": "hello_agent",
+                "inputs": {"name": f"契约对账{suffix}"},
+                "created_by": "parity_test",
+            },
+        )
+        assert create_resp.status_code == 200
+
+    resp = client.get("/api/tasks")
+    assert resp.status_code == 200
+    tasks = resp.json()
+    assert len(tasks) >= 2
+    for task in tasks:
+        validate(task, TASK_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    "action, expected_status",
+    [("approve", "completed"), ("reject", "failed")],
+)
+def test_review_response_matches_task_schema(
+    client: TestClient,
+    app_env,
+    action: str,
+    expected_status: str,
+) -> None:
+    _, app = app_env
+    create_resp = client.post(
+        "/api/tasks",
+        json={
+            "agent_id": "hello_agent",
+            "inputs": {"name": f"契约对账 review {action}"},
+            "created_by": "parity_test",
+        },
+    )
+    assert create_resp.status_code == 200
+    task_id = create_resp.json()["id"]
+
+    conn = app.state.conn_factory()
+    try:
+        for status in ("validating", "running", "waiting_review"):
+            repos.set_task_status(conn, task_id, status)
+    finally:
+        conn.close()
+
+    resp = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": action, "reviewer": "契约测试员", "comment": "响应体对账"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == expected_status
+    validate(body, TASK_SCHEMA)
 
 
 def test_completed_task_response_matches_task_schema(client: TestClient, app_env) -> None:

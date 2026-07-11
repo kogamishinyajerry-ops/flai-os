@@ -9,7 +9,13 @@ from __future__ import annotations
 import pytest
 
 from backend.app.core.errors import IllegalTransitionError
-from backend.app.core.statemachine import STATES, TERMINAL, assert_transition, is_terminal
+from backend.app.core.statemachine import (
+    STATES,
+    TERMINAL,
+    TRANSITIONS,
+    assert_transition,
+    is_terminal,
+)
 
 # ── 合法转移（严格镜像 docs/05 第 2 节表格）───────────────────────────
 
@@ -46,34 +52,28 @@ def test_legal_transition_does_not_raise(current: str, new: str) -> None:
 
 # ── 非法转移（含终态无出边 + running 不得跳过 analyzing 直转 completed）─
 
-ILLEGAL_TRANSITIONS = [
-    ("created", "running"),
-    ("created", "completed"),
-    ("created", "validating"),
-    ("queued", "running"),
-    ("queued", "completed"),
-    ("validating", "waiting_review"),
-    ("validating", "completed"),
-    ("running", "completed"),  # docs/05 强制规则：不得跳过 analyzing 直转 completed
-    ("running", "created"),
-    ("parsing", "waiting_review"),
-    ("parsing", "completed"),
-    ("analyzing", "running"),
-    ("analyzing", "parsing"),
-    ("waiting_review", "running"),
-    ("waiting_review", "cancelled"),  # waiting_review 只能人工放行转 completed/failed
-    ("completed", "failed"),
-    ("completed", "running"),
-    ("failed", "completed"),
-    ("cancelled", "created"),
-    ("cancelled", "queued"),
-]
+# STATES 是集合；排序只固定 xdist 各 worker 的收集顺序，不改变补集内容。
+ILLEGAL_TRANSITIONS = sorted(
+    [
+        (s, t)
+        for s in STATES
+        for t in STATES
+        if s != t and t not in TRANSITIONS[s]
+    ]
+)
 
 
 @pytest.mark.parametrize("current, new", ILLEGAL_TRANSITIONS)
 def test_illegal_transition_raises(current: str, new: str) -> None:
     with pytest.raises(IllegalTransitionError):
         assert_transition(current, new)
+
+
+@pytest.mark.parametrize("state", sorted(STATES))
+def test_self_transition_raises(state: str) -> None:
+    """补齐补集矩阵按定义排除的对角线：所有自迁移同样必须拒绝。"""
+    with pytest.raises(IllegalTransitionError):
+        assert_transition(state, state)
 
 
 @pytest.mark.parametrize("terminal_state", sorted(TERMINAL))

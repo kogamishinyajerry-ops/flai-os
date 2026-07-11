@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# 一键执行前端构建、后端全量测试与五组浏览器验收；任一步失败立即汇总退出。
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+COMPLETED_STEPS=()
+FAILED_STEPS=()
+
+print_summary() {
+  echo
+  echo "验证步骤汇总："
+  if ((${#COMPLETED_STEPS[@]})); then
+    for step in "${COMPLETED_STEPS[@]}"; do
+      echo "- [完成] ${step}"
+    done
+  else
+    echo "- [完成] （无）"
+  fi
+  if ((${#FAILED_STEPS[@]})); then
+    for step in "${FAILED_STEPS[@]}"; do
+      echo "- [失败] ${step}"
+    done
+  else
+    echo "- [失败] （无）"
+  fi
+}
+
+run_step() {
+  local name="$1"
+  shift
+  echo
+  echo "开始：${name}"
+  if "$@"; then
+    COMPLETED_STEPS+=("${name}")
+    echo "完成：${name}"
+  else
+    local exit_code=$?
+    FAILED_STEPS+=("${name}（退出码 ${exit_code}）")
+    print_summary
+    exit "${exit_code}"
+  fi
+}
+
+build_frontend() {
+  (cd frontend && npm run build)
+}
+
+run_step "① frontend npm run build" build_frontend
+
+# 不限定路径：跑满 pyproject testpaths（tests/ + tools_impl/ + backend/tests），
+# 只跑 backend/tests 会漏掉契约与工具包测试（Codex 互审 P2）。
+run_step "② 全量 pytest -n auto（三个 testpaths）" \
+  uv run --no-project \
+    --with pytest --with pytest-xdist --with jsonschema --with pyyaml \
+    --with fastapi --with httpx --with python-multipart --with "pydantic>2" \
+    --with jieba --with openpyxl \
+    python -m pytest -q -n auto
+
+E2E_SCRIPTS=(
+  "frontend/e2e/m2_acceptance.py"
+  "frontend/e2e/m6_guide_acceptance.py"
+  "frontend/e2e/m8_collab_chain_acceptance.py"
+  "frontend/e2e/m8_guide_orchestrator_acceptance.py"
+  "frontend/e2e/m8_workbench_acceptance.py"
+)
+
+for script in "${E2E_SCRIPTS[@]}"; do
+  run_step "③ E2E ${script}" \
+    uv run --no-project \
+      --with playwright --with uvicorn --with pytest --with pytest-xdist \
+      --with jsonschema --with pyyaml --with fastapi --with httpx \
+      --with python-multipart --with "pydantic>2" --with jieba --with openpyxl \
+      python "${script}"
+done
+
+print_summary

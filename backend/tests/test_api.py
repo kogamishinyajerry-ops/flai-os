@@ -21,23 +21,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture()
-def app_env(tmp_path):
-    db_path = tmp_path / "flai_os.db"
-    uploads_dir = tmp_path / "uploads"
-    task_runs_dir = tmp_path / "task_runs"
-    app = create_app(
-        agents_dir=REPO_ROOT / "agents",
-        tools_dir=REPO_ROOT / "tools_impl",
-        contracts_dir=REPO_ROOT / "contracts",
-        db_path=db_path,
-        uploads_dir=uploads_dir,
-        task_runs_dir=task_runs_dir,
-    )
-    with TestClient(app) as client:
-        yield client, app
-
-
-@pytest.fixture()
 def client(app_env) -> Iterator[TestClient]:
     c, _ = app_env
     yield c
@@ -53,6 +36,13 @@ def test_health(client: TestClient) -> None:
     assert body["status"] == "ok"
     assert body["agents"] >= 1
     assert body["tools"] >= 1
+
+
+def test_health_llm_configuration_flags_are_booleans(client: TestClient) -> None:
+    body = client.get("/api/health").json()
+    keys = {"llm_base_url_set", "llm_api_key_set", "llm_model_reasoning_set"}
+    assert keys <= body.keys()
+    assert all(type(body[key]) is bool for key in keys)
 
 
 def test_list_agents_contains_hello_agent(client: TestClient) -> None:

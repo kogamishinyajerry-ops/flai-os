@@ -24,7 +24,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.jobs.runner import JobRunner
-from backend.app.main import create_app
 from backend.app.storage import repos
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,20 +33,6 @@ CASE_TABLE = REPO_ROOT / "agents" / "performance_disk_agent" / "eval_cases" / "c
 EXPECTED = json.loads(
     (REPO_ROOT / "agents" / "performance_disk_agent" / "eval_cases" / "case_001.json").read_text(encoding="utf-8")
 )["expected"]
-
-
-@pytest.fixture()
-def app_env(tmp_path):
-    app = create_app(
-        agents_dir=REPO_ROOT / "agents",
-        tools_dir=REPO_ROOT / "tools_impl",
-        contracts_dir=REPO_ROOT / "contracts",
-        db_path=tmp_path / "flai_os.db",
-        uploads_dir=tmp_path / "uploads",
-        task_runs_dir=tmp_path / "task_runs",
-    )
-    with TestClient(app) as client:
-        yield client, app
 
 
 @pytest.fixture()

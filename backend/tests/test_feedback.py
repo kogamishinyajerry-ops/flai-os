@@ -18,7 +18,6 @@ from fastapi.testclient import TestClient
 from jsonschema import validate
 
 from backend.app.jobs.runner import JobRunner
-from backend.app.main import create_app
 from backend.app.storage import repos
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -33,20 +32,6 @@ EXPECTED_FEEDBACK_KEYS = {
     "id", "task_id", "agent_id", "agent_version",
     "rating", "category", "message", "created_by", "created_at",
 }
-
-
-@pytest.fixture()
-def app_env(tmp_path):
-    app = create_app(
-        agents_dir=REPO_ROOT / "agents",
-        tools_dir=REPO_ROOT / "tools_impl",
-        contracts_dir=REPO_ROOT / "contracts",
-        db_path=tmp_path / "flai_os.db",
-        uploads_dir=tmp_path / "uploads",
-        task_runs_dir=tmp_path / "task_runs",
-    )
-    with TestClient(app) as client:
-        yield client, app
 
 
 @pytest.fixture()
