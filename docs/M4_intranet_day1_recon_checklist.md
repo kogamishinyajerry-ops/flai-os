@@ -35,6 +35,8 @@
 | 2-2 | Windows 下 `.ps1` 启动脚本可用（DECLARED-NOT-VERIFIED） | `scripts/*.ps1` 头注 | 逐个跑 init_db/dev_start_backend/dev_start_worker 的 .ps1 | |
 | 2-3 | 内网机器可安装 Python 3.10+ 与依赖（离线 wheels 策略未定） | `scripts/package_release.*`（NOT-IMPLEMENTED） | 确认现场 Python 版本/架构 + 是否有内网 pip 源 | |
 | 2-4 | 部署机有 Node 或可接受「带 dist 产物入场」（后端静态托管 dist，现场可免 node） | `README 前端节` | 确认 dist 随包带入即可，无需现场构建 | |
+| 2-5 | worker 单实例锁的 Windows 分支（msvcrt.locking）真实生效（DECLARED-NOT-VERIFIED，本机仅测 POSIX fcntl） | `backend/app/jobs/runner.py`（R4 批） | Windows 上起第一个 worker 后再起第二个，应 stderr 报「已有 worker 正在运行」且退出码 1 | |
+| 2-6 | 完整性闸 O_NOFOLLOW 在 Windows/NTFS 上的行为（符号链接/junction 拒绝路径是否等效） | `backend/app/storage/file_integrity.py`（R4 批，README #20③） | Windows 上跑 `python -m pytest backend/tests/test_file_integrity.py -q`，尤其 symlink 用例不应被 skip 掩盖 | |
 
 ## ③ Knowledge 检索来源扩展
 

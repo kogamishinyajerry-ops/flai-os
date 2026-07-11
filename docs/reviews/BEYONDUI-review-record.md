@@ -83,3 +83,63 @@
 - gateway 重试上限 2 次尝试（交互式会话最坏等待 ~120s+0.5s，可接受；
   若内网抖动频繁再议退避参数）；
 - 空态插画为装饰性资产，e2e 对其零断言（截图为 archival 非 diff gate）。
+
+---
+
+# R4 批（2026-07-11 第二批）审查记录
+
+> 批次来源：owner「R4已经完成，进一步优化 ultracode」。上一批判缓的 CDX-4/CDX-7
+> 升格落地（Codex K lane），R4 实机拉片对应的三个前端件（Claude Workflow B lane），
+> 双镜头（信任色/诚实 + 回归风险）对抗审 → 主控裁决落修。
+
+## 落地清单
+
+**K lane（Codex 实现，Claude 亲核=APPROVE+1 项补强）**：
+- K1（原 CDX-7）：worker 跨平台单实例文件锁（fcntl/msvcrt，锁文件不删避免竞态、
+  锁先于装配）+ 启动恢复中断执行态任务置 failed（走 `fail_task_from_execution`
+  锁内白名单，waiting_review 天然免疫；`worker_interrupted` 事件留痕，绝不自动
+  重放）。README #15 由「无卡死任务回收」收窄为「仅覆盖进程重启时点」。
+- K2（原 CDX-4）：File Store 消费前完整性闸（`storage/file_integrity.py`：
+  O_NOFOLLOW→fstat size→流式 sha256→seek(0) 同句柄消费，权威根限定）。三个消费
+  口接线：下载 409 / 导引附件「已拒绝注入」/ 任务输入 validation_failed
+  （**行为翻转**：缺失输入从 warning 跳过改为整任务拒绝执行）。fd 生命周期三条
+  失败路径（knowledge 装配失败/置 running 失败/workflow 结束）全兜。
+- 主控补强：`api/files.py` 覆写 Starlette FileResponse 三个私有挂点实现已验
+  句柄的 Range 语义——升级改名会**静默绕过**覆写、基类重开 path 直出未验内容，
+  故加导入期哨兵（挂点缺失即 RuntimeError 拒绝启动，fail-loud）。
+
+**B lane（Claude Workflow 三 builder 并行 + 构建门 + 双镜头审）**：
+- B1 TaskDetail 模型调用消耗诚实披露（次数/成败/模型名/token 合计——只对可折算
+  行求和，凑不出即「未知」绝不记 0；失败数>0 才标 trust-fail 红，成功数中性）；
+- B2 工作台轻量轮询（首页+会话视图 5s）+ 会话卡未读 clay 圆点（行动召唤语义，
+  不占信任色四槽；窗口外任务诚实不亮）+ 成员任务「最近动态」行（最后一条事件
+  message 原文，不承诺第一人称叙事）；
+- B3 ⌘K QuickSwitcher（三源客户端过滤，键盘环绕导航）。**B3 自报告退化为占位
+  数据（"test"），按纪律判自报告作废，主控逐行亲读其 diff**——实现质量实际过关
+  （convoTitle 口径与 App.vue 一致、statusLabel/taskLampColor 复用、挂载零外溢），
+  仅缺 IME 守卫（见下）。
+
+## 双镜头审 findings 处置（全部落修）
+
+- 信任 P2：chip-lastword 按「状态未变跳过」节流，长任务同状态下动态冻结在第一条
+  → 去节流改每 tick 无条件重取（≤5 请求/5s，task_events 有索引）+ 请求序号守卫；
+- 信任 P3：「第一人称汇报」措辞过度承诺（实际多为机械上报文案）→ 注释/文档
+  统一改口径为「最近动态=最后一条事件 message 原文」；
+- 回归 P2：QuickSwitcher 缺 `e.isComposing` 守卫（中文 IME 选词 Enter 误触跳转）
+  → 补守卫；
+- 回归 P2：两工作台页用 setInterval（慢网堆积并发）→ 改 TaskDetail 同款链式
+  setTimeout（上一轮落地才排下一轮，document.hidden 跳过仍续轮）；
+- 回归 P3×2：fetchLastWord 乱序竞态 / syncModelCalls 游离于 baseline 守卫外
+  （stale 覆盖含旧错误横幅）→ 均加请求序号「最新发起者胜」守卫；
+- 确认性 P3×3（e2e 锚点含 m2 `a[href*='/download']` DOM 序、localStorage
+  降级、异步全兜错）复核通过，零改动。
+
+## 判否 / 残余
+
+- **BE-4（知识索引指纹 (mtime,size) 键复用）判否不落地**：knowledge 服务 docstring
+  已把「绝不基于 mtime 猜新鲜度」立为设计约束（Windows 复制保留 mtime 正是其
+  对抗场景），指纹复用恰在该场景失效——与既有设计承诺冲突，递延 owner 裁决；
+- path 型工具契约以路径二次打开输入文件的 TOCTOU 窗口（句柄化契约待后续升级，
+  README #20①）；
+- K1 msvcrt 锁 / O_NOFOLLOW 的 Windows 分支本机未实测（M4 侦察清单 2-5/2-6）；
+- 下载 Range 覆写依赖 Starlette 私有挂点（导入期哨兵兜底，README #20②）。

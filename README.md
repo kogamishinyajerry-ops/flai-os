@@ -105,8 +105,10 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
    引用共三个来源：`tasks.input_file_ids` ∪ `tasks.output_file_ids` ∪
    `conversation_messages.file_ids`（导引会话附件，漏了它同样会误删在用文件）。
    只读诊断脚本 `scripts/diagnose_gc_debt.py` 已按此三源并集口径给出当前债务数字。
-6. **TaskDetail 轮询无退避**：固定间隔轮询，`waiting_review` 等长驻状态停止轮询
-   后靠「刷新」按钮手动更新。
+6. **轮询固定间隔、无指数退避**：TaskDetail 2s、协作工作台两页（首页/会话视图，
+   R4 批新增）5s，均为链式 setTimeout（上一轮请求完全落地才排下一轮，慢网/慢
+   后端不堆积并发）+ `document.hidden` 时跳过本 tick；TaskDetail 在
+   `waiting_review` 等长驻状态停止轮询后靠「刷新」按钮手动更新。
 7. **任务列表为「最近任务流」分页语义**：`limit/offset` 往回翻页（每页 100，
    「加载更多」append），不提供总数计数（无 COUNT 查询）。
 8. **报告纯模板化，无 LLM**：批量任务的 `task_report.md` 为纯 Python 字符串
@@ -140,8 +142,12 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 14. **全局无鉴权**：所有 API（含文件下载、人工放行）不做身份认证，内网可信环境
     权衡 + 任务书 §15「不要一开始做复杂权限系统」；具名字段（created_by/reviewer）
     是留痕不是认证。权限体系是 V0.2+ 项。
-15. **无卡死任务回收**：worker 在 `validating`/`running` 中途崩溃，任务永卡该态
-    （单 worker 轮询无心跳/reaper）；V0.1 靠人工识别，reaper 是 V0.2 项。
+15. **卡死任务回收仅覆盖「进程重启」时点**（R4 批收窄）：worker 启动时持单实例
+    文件锁（跨平台，拒绝并行第二个 worker），并把上次进程遗留的执行态任务
+    （validating/running/parsing/analyzing）置 failed、留 `worker_interrupted`
+    事件——绝不自动重放（真实工具可能已产生外部副作用，需人工核查后重建任务）；
+    `waiting_review` 不在白名单，恢复扫描绝不触碰。剩余边界：worker 进程存活但
+    单任务挂死（无心跳/运行超时 reaper）仍无回收，运行中超时是 V0.2 项。
 16. **Memory 子系统部分实现**（ADR-0015 后）：Knowledge Memory 已有真实 BM25
     检索内核（`backend/app/knowledge/`，file_dir×document 类 scope），但
     Engineering Memory 仍只有 `docs/adr/` 承载、`backend/app/memory/` 仍是空
@@ -168,8 +174,18 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
     部分 Agent 后中途关闭页面离开——会话无超时、无第三态，将永久停留 active，
     唯一归档路径是回到会话页手动点「结束协作」（`scripts/diagnose_gc_debt.py`
     可只读盘点其中「从未召集任务」的弃置 active 会话；已召集部分任务后弃置的
-    识别仍缺口径，同属 V0.2）。会话视图的成员任务状态靠手动「刷新」拉取（无轮询，
-    同 #6）。
+    识别仍缺口径，同属 V0.2）。会话视图的成员任务状态已由 5s 轮询保鲜（R4 批，
+    见 #6），手动「刷新」按钮保留。
+20. **File Store 消费前完整性闸**（R4 批）：下载、导引附件渲染、任务输入装配三个
+    消费口在使用前均按登记的 size+sha256 重验（O_NOFOLLOW 拒符号链接、限权威根
+    内、验后同句柄消费），失败 fail-closed——下载 409、附件显式「附件完整性校验
+    失败，已拒绝注入」、任务 `validation_failed`（**行为翻转**：任务输入文件缺失/
+    被篡改从旧的「warning 事件跳过继续跑」改为整任务拒绝执行）。已知残余：①path
+    型工具契约仍以路径二次打开输入文件，校验与工具打开之间存在 TOCTOU 窗口
+    （句柄化工具契约待后续升级）；②下载 Range 语义靠覆写 Starlette FileResponse
+    私有挂点实现，`backend/app/api/files.py` 导入期哨兵保证升级破坏必炸、绝不
+    静默降级为未验直出；③worker 单实例锁与 O_NOFOLLOW 的 Windows 分支本机未实测，
+    列入 M4 内网侦察清单。
 
 ## 开发口径
 
