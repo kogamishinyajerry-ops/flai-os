@@ -12,7 +12,9 @@
   ③ 点任务行 → URL /tasks/:id + 中栏「任务详情」叙事流（TaskDetail 复用，
      m2 全部详情契约由 m2_acceptance 继续把守）；
   ④ 任务视图导航高亮归属「任务台」；
-  ⑤ /portal 深链仍可达（门户降级为 composer 选择器后不失联）。
+  ⑤ /portal 深链仍可达（门户降级为 composer 选择器后不失联）；
+  ⑥ 暗色主题颜色级探针：画布 token 翻转 + completed 到席灯中性墨暗值
+     （信任色锁在暗色下同样咬合——色相轴快照失聪，必须探针）。
 
 运行（仓根）：
   cd frontend && npm run build && cd ..
@@ -191,6 +193,20 @@ with sync_playwright() as p:
     page.goto(BASE + "/portal", wait_until="networkidle")
     portal_ok = "Agent" in page.locator("body").inner_text()
     check("⑤/portal 深链仍可达（门户降级不失联）", portal_ok)
+
+    # ── ⑥ 暗色主题颜色级探针（美化批「夜航图纸」）：色相轴快照失聪，必须探针
+    # 咬合（W13 方法学）。theme 默认跟随系统 → color_scheme=dark 即入暗色。──
+    dark = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="dark")
+    dark.goto(BASE + "/tasks", wait_until="networkidle")
+    dark.wait_for_selector(".cl-item", timeout=5000)
+    # 画布翻转真生效：--page-bg 暗值 #211d19
+    expect(dark.locator("body")).to_have_css("background-color", "rgb(33, 29, 25)", timeout=5000)
+    # 信任色锁暗色同样咬合：completed 到席灯=中性墨暗值 --ink-soft #b0a698，仍不给绿
+    drow = dark.locator(".cl-item", has_text="工作台验收样例任务").first
+    expect(drow.locator(".cl-lamp")).to_have_css("background-color", "rgb(176, 166, 152)", timeout=8000)
+    check("⑥暗色主题探针：画布翻转 + completed 到席灯中性墨暗值（不给绿）", True)
+    dark.screenshot(path=str(SHOTS / "4_console_dark.png"))
+    dark.close()
 
     browser.close()
 

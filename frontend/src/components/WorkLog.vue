@@ -21,10 +21,13 @@
     <!-- 过去式摘要：终态/审核事件优先，否则退化为最后一条事件消息。 -->
     <div v-if="summaryText" class="worklog-summary">{{ summaryText }}</div>
 
-    <!-- 聚合 chips：折叠态也常显。 -->
-    <div v-if="chips.length" class="worklog-chips">
-      <span v-for="c in chips" :key="c.key" class="worklog-chip">
-        {{ c.label }} ×{{ c.count }}
+    <!-- 工具聚合行（W13 实机证伪修正）：Codex 真实语言=灰色纯文字聚合行，
+         非徽章 chip——聚合逻辑不变，只降视觉噪音；mock 徽是诚实标注（amber
+         信任语言）保留贴在对应工具旁。折叠态也常显。 -->
+    <div v-if="chips.length" class="worklog-toolline">
+      <span v-for="(c, i) in chips" :key="c.key" class="worklog-tool">
+        <span v-if="i > 0" class="worklog-tool-sep" aria-hidden="true">·</span>
+        {{ c.label }}<template v-if="c.count > 1"> ×{{ c.count }}</template>
         <span v-if="c.mock" class="pill-amber">mock</span>
       </span>
     </div>
@@ -269,23 +272,24 @@ const rawLine = computed(() => {
   margin-top: 8px;
   padding-left: 2px;
 }
-.worklog-chips {
+.worklog-toolline {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-.worklog-chip {
-  display: inline-flex;
   align-items: center;
-  gap: 4px;
+  column-gap: 6px;
+  row-gap: 2px;
+  margin-top: 8px;
   font-size: 12px;
   color: var(--ink-soft);
-  background: var(--paper-surface);
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
-  padding: 2px 10px;
+}
+.worklog-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   white-space: nowrap;
+}
+.worklog-tool-sep {
+  color: var(--ink-faint);
 }
 .worklog-rawline {
   margin-top: 6px;

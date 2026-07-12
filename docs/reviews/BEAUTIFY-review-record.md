@@ -40,9 +40,23 @@
   clay 锚保持、到席灯语义色暗底可辨、空态插画浅线稿暗底可读（无需重画）；
 - IntentGlyph 构建独立验证 ×2（Codex 自跑 vite build）。
 
+## 追批：W13/W14 新拉片经验注入（同日）
+
+agent-ui-design W13 桌面证伪轮 + W14 CLI 轮（memory 2026-07-11 更新）逐条裁决：
+
+| 经验 | 裁决 | 落地 |
+|------|------|------|
+| W13 证伪「工具聚合 chips」——Codex 真实=灰色纯文字聚合行 | **采纳** | WorkLog 徽章 chip → .worklog-toolline 纯文字行（聚合逻辑零动；mock amber 徽=诚实标注保留贴对应工具旁） |
+| W13 盲区方法学：保亮度换色相钻过快照，色相轴必须探针 | **采纳** | m8_workbench 增⑥暗色探针：画布 --page-bg 暗值 + completed 到席灯 --ink-soft 暗值颜色级断言——暗色块从零断言补到有咬合 |
+| W13 时态双态（过去式纯灰零图标 vs 现在时+星标） | 已对齐 | WorkLog 现状核对通过（work-pulse-dot 进行时 / 纯文字过去式摘要），零改动 |
+| CLI ⏺/⎿ 悬挂缩进、✻ 俏皮盖章、模式循环色 | **不搬** | TUI 单画布语法不跨 shell 搬进 GUI（kit9 教训「GUI 分层 vs TUI 单画布=范式差」）；盖章已用 Codex 桌面式横线 |
+| kit9 defer：Claude 暗色气泡实测比画布暗（与三档暗阶反向，两源未裁决） | **持有** | 本仓暗色气泡亮于画布（常规做法）；等 kit 裁决后再议，不跟未决证据摇摆 |
+
 ## 遗留
 
 - 亮色 --ink-faint 2.52:1 既有对比度债（本批只修了暗色）；
 - categoryColor/LEVEL_COLOR JS hex 暗色截图复核通过，token 化递延；
 - particleField.js 零调用方（死代码），未投资暗色适配；
-- Codex MCP server 仍超时（本批全程走 codex exec CLI，通路稳定）。
+- Codex MCP server 仍超时（本批全程走 codex exec CLI，通路稳定；
+  后台 dispatch 必须 `< /dev/null`——开放 stdin 会挂住等输入）；
+- 暗色气泡明度方向：持有亮于画布，挂 kit9 defer 裁决。
