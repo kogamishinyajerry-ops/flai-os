@@ -30,8 +30,13 @@ surface**（操作员 Agent 会话），而**仿真 surface**（求解器真源�
    - **R1 仿真 surface 平台可发现**——前置：M11 鉴权落地 → verify_all 全量
      复跑 + 探针改真登录 → StatusDock 发现入口 + per-task run_ref 落库
      （即监控线决策书 Next-2 转正批，顺序不跳队）。
+     **✅ 已注册（2026-07-12）**：前置全达成（M11 `995cdd0` / verify_all
+     `ec9c4b1` / 探针真登录 hub `d4a00c0` / 转正批 `c293a83` + 治理审 fix
+     `b4f1e0d`），范围声明「仿真监控数据面向内网只读」，可发现性三处 UI 已交付
+     （config 门控不强制默认开）。注册记录 = docs/reviews/SIM-MONITOR-R1-registration-record.md。
    - **R2 生成器 agent 注册**——按 02 Agent 包标准立包，07 评测标准固化
-     case，M10 晋升门放行。
+     case，M10 晋升门放行。**🚧 进行中（2026-07-12）**：承重核已在 hub 侧实现
+     （`tools/adapter_gen.py`），平台 agent 包立包中。
    - **R3 转录 surface 入平台发现面**——**唯一前置 = owner 裁决多用户可见性
      授权模型**（谁能看、看谁的会话、EAR 语境默认拒绝）；裁决前保持操作员
      本机档位（回环 + pin 锁定 + fail-closed 启动门）。
