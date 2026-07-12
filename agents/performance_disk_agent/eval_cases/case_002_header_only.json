@@ -1,0 +1,14 @@
+{
+  "case_id": "case_002",
+  "description": "空表（仅表头，零数据行）→ excel_case_parser 解析失败 → 任务 failed 诚实、零产物（docs/07 §3「文件不存在/非法配置」族失败路径；口径同 test_performance_disk_e2e::test_header_only_table_task_failed_honestly）。",
+  "input_files": [
+    "header_only.xlsx"
+  ],
+  "inputs": {},
+  "checks": [
+    {
+      "kind": "status_is",
+      "value": "failed"
+    }
+  ]
+}

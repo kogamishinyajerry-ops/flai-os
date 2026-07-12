@@ -1,0 +1,11 @@
+{
+  "case_id": "case_003",
+  "description": "无输入文件 → workflow 显式拒绝 → 任务 failed（docs/07 §3「缺失字段」族失败路径；口径同 test_performance_disk_e2e 无输入文件场景）。",
+  "inputs": {},
+  "checks": [
+    {
+      "kind": "status_is",
+      "value": "failed"
+    }
+  ]
+}

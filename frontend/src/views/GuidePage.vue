@@ -297,8 +297,13 @@
               >
                 <span class="ap-dot" :style="{ background: categoryColor(a.category) }"></span>
                 <span class="ap-main">
-                  <span class="ap-name">{{ a.name }}</span>
+                  <span class="ap-name">{{ a.name }}
+                    <span v-if="a.maturity" class="ap-maturity" :title="maturityTip(a.maturity)">{{ a.maturity }}</span>
+                  </span>
                   <span class="ap-sub">{{ a.summary }}</span>
+                  <!-- 诚实前置（宪法五条）：信任边界随第一次点选同屏可见，
+                       不许「L0/模拟」藏在两跳深的 /portal 里 -->
+                  <span v-if="a.limitations && a.limitations.length" class="ap-limit">{{ a.limitations[0] }}</span>
                 </span>
               </div>
               <a class="ap-portal-link" @click="$router.push('/portal')">浏览完整门户 →</a>
@@ -337,7 +342,7 @@ import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation, listConversationTasks } from "../api/conversations";
 import { listAgents } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
-import { categoryColor, categoryLabel, categoryTip, statusLabel, taskLampColor, TASK_WORK_STATES, formatTime } from "../utils/format";
+import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, formatTime } from "../utils/format";
 import { getSavedName, saveName } from "../utils/identity";
 import { openTaskPeek } from "../stores/statusCenter";
 import { resolvedTheme } from "../stores/theme";
@@ -1579,6 +1584,25 @@ kbd {
   padding: 2px 14px 8px;
 }
 .agent-pick .ap-error { color: var(--trust-fail); font-size: 12px; padding: 4px 14px; }
+.agent-pick .ap-maturity {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--ink-mid);
+  border: 1px solid var(--border-soft, var(--hairline));
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+.agent-pick .ap-limit {
+  display: block;
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 268px;
+}
 .agent-pick .ap-item {
   display: flex;
   align-items: center;

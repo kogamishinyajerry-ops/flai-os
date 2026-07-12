@@ -255,6 +255,22 @@ with sync_playwright() as p:
     check("⑧''存储不可用：内存态身份闭环（门过+第一条消息可发）", True)
     priv.close()
 
+    # ── ⑨ 诚实前置（M11-A1）：composer Agent 选择器首屏可见 maturity 角标
+    # 与首条 limitation 摘要——「L0/模拟」不许藏在两跳深的 /portal 里。──
+    hon = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")
+    hon.add_init_script("localStorage.setItem('flai_user_name', '王工')")
+    hon.goto(BASE + "/", wait_until="networkidle")
+    hon.get_by_role("button", name="浏览可用 Agent").click()
+    hon.wait_for_selector(".agent-pick .ap-item", timeout=5000)
+    maturity_texts = hon.locator(".agent-pick .ap-maturity").all_inner_texts()
+    limit_count = hon.locator(".agent-pick .ap-limit").count()
+    item_count = hon.locator(".agent-pick .ap-item").count()
+    check("⑨选择器诚实前置：每条目 maturity 角标+limitation 摘要同屏",
+          item_count > 0 and len(maturity_texts) == item_count
+          and all(m.startswith("L") for m in maturity_texts) and limit_count == item_count,
+          f"items={item_count} maturity={maturity_texts} limits={limit_count}")
+    hon.close()
+
     browser.close()
 
 failed = [r for r in results if r[1] is not True]
