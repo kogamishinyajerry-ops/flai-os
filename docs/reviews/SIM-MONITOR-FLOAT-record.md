@@ -121,3 +121,8 @@
 - **残余披露**：iframe sandbox 的 allow-same-origin+allow-scripts 组合对跨源
   hub 是标准配置（hub 需自身 fetch）；若用户把 simhub 配成与 FLAi-OS 同源的
   地址则 sandbox 失去隔离意义——内网部署手册须写明 hub 独立端口部署。
+- **R2 复审（fix commit 5ca0c2f 复审 → 233f79b，零 P1）**：五 P2 verbatim
+  落地——报警记忆跨 unreachable 保留（报警路断流后只发得出 unreachable，
+  「曾报警」不被负载替换吞掉）· 换源清态+宽限期重起 · 从未发首拍的单路超
+  15s=stale 披露 · 兜底空闲态补断流后缀 · 负载 surface 以来源窗口覆写。
+  round cap（R0+2 fix）用满收口，build 绿+探针 11/11 两轮各复跑。
