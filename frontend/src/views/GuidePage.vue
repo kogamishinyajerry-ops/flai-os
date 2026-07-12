@@ -2,17 +2,12 @@
   <div class="guide-page" :class="{ 'is-empty': !started && messages.length === 0 }">
     <!-- 起手 hero（未开始且无消息）：衬线问候 + 具名，随 composer 在视口垂直居中。 -->
     <div v-if="!started && messages.length === 0 && !restoring" class="guide-hero fx-rise">
+      <!-- 减重批：hero 只剩问候+一句主标题（Claude 精髓=留白克制，信任靠交互
+           建立不靠说教）。价值主张/政策句收进 composer 下一行；名字由
+           WelcomeGate 身份门一次收齐，此处不再询问。 -->
       <div class="hero-mark">导</div>
       <p class="hero-greeting">{{ greeting }}</p>
       <h1 class="hero-title">说说你要做的工程活儿</h1>
-      <p class="hero-sub">
-        导引会帮你分析、拆解，召集合适的一个或多个 Agent 协作并预填草案；平台接不住时也会直说、
-        并告诉你怎么重述才可行——<strong>计划由你确认后亲手提交，导引不会替你创建或签发任务。</strong>
-      </p>
-      <div class="hero-starter">
-        <el-input v-model="createdBy" placeholder="你的名字（对话需具名）" class="name-input" />
-        <span class="starter-hint">先留个名字，在下方描述你的需求开始对话；输入框左侧 ◎ 可浏览全部可用 Agent。</span>
-      </div>
       <!-- 四意图卡（原 hero-examples/ex-chip 原地升级）：数据=四分类 AGENT_CATEGORY
            一一配对，点击只填 draft + focusComposer，绝不代发（同 setExample 语义）。 -->
       <div class="hero-intents">
@@ -27,9 +22,9 @@
           @keydown.space.prevent="setExample(item.example)"
         >
           <span class="intent-accent" :style="{ background: categoryColor(item.category) }"></span>
-          <div class="intent-body">
+          <!-- 减重批：tip 收进 title 悬浮，卡面只留标题+例句两行 -->
+          <div class="intent-body" :title="categoryTip(item.category)">
             <div class="intent-title"><IntentGlyph :name="item.glyph" :size="21" />{{ categoryLabel(item.category) }}</div>
-            <p class="intent-tip">{{ categoryTip(item.category) }}</p>
             <p class="intent-example">{{ item.example }}</p>
           </div>
         </div>
@@ -324,13 +319,11 @@
           </button>
         </div>
       </div>
+      <!-- 减重批：政策句+诚实地板合一行（「导引不会替你创建」是 m6 e2e 锚，
+           字面保留）；快捷键仍 hover/聚焦才显。 -->
       <div class="composer-hint">
-        <span>导引不会替你创建或签发任务</span>
+        <span>导引不会替你创建或签发任务——产出是草案，判定权在你。</span>
         <span class="keys"><kbd>Enter</kbd> 发送<span class="sep">·</span><kbd>⇧ Enter</kbd> 换行<span class="sep">·</span>📎 可带附件</span>
-      </div>
-      <div class="composer-floor">
-        <span class="floor-full">导引与 Agent 的产出是草案，可能有误——签发权始终在你。</span>
-        <span class="floor-short">产出是草案——签发权在你。</span>
       </div>
       </div>
     </div>
@@ -518,7 +511,8 @@ async function send() {
   const content = draft.value.trim();
   if (!content) return;
   if (!createdBy.value.trim()) {
-    ElMessage.error("请先在上方填写你的名字");
+    // 身份门保证有名字；此兜底只防 localStorage 被外部清空的边角
+    ElMessage.error("身份已失效，请刷新页面重新留下称呼");
     return;
   }
   pageError.value = "";
@@ -815,30 +809,6 @@ watch(
   margin: 0 0 14px;
   letter-spacing: 0.3px;
 }
-.hero-sub {
-  max-width: 560px;
-  margin: 0 auto 24px;
-  color: var(--ink-soft);
-  font-size: 14.5px;
-  line-height: 1.72;
-}
-.hero-sub strong {
-  color: var(--ink);
-  font-weight: 600;
-}
-.hero-starter {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-.name-input {
-  max-width: 280px;
-}
-.starter-hint {
-  color: var(--ink-faint);
-  font-size: 12.5px;
-}
 /* 四意图卡：≥520px 宽 2×2，窄屏 1 列（原 hero-examples/ex-chip 原地升级）。 */
 .hero-intents {
   display: grid;
@@ -886,12 +856,6 @@ watch(
   font-weight: 700;
   color: var(--ink);
   margin-bottom: 4px;
-}
-.intent-tip {
-  font-size: 12px;
-  color: var(--ink-faint);
-  margin: 0 0 6px;
-  line-height: 1.5;
 }
 .intent-example {
   font-size: 12.5px;
@@ -1585,17 +1549,7 @@ watch(
 
 /* 诚实地板句（Claude「can make mistakes」哲学）：常驻同一 composer 容器内，
  * 会话进行中（composer 变 fixed 悬浮）也不消失；放进容器内部避免布局跳动。 */
-.composer-floor {
-  text-align: center;
-  padding: 5px 14px 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--ink-faint);
-}
-.floor-short { display: none; }
 @media (max-width: 640px) {
-  .floor-full { display: none; }
-  .floor-short { display: inline; }
 }
 kbd {
   font-family: "SF Mono", ui-monospace, monospace;

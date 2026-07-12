@@ -131,6 +131,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
+    page.add_init_script("localStorage.setItem('flai_user_name', '王工')")  # 身份门：预注入工作身份，WelcomeGate 不拦
 
     # ① 导引页 = 统一入口（首页）
     page.goto(BASE + "/", wait_until="networkidle")
@@ -146,7 +147,6 @@ with sync_playwright() as p:
     ATTACH_NAME = "工况数据.txt"
     attach_path = WORK / ATTACH_NAME
     attach_path.write_text("双通道供电，顶事件：供电完全丧失；工况共 3 组。", encoding="utf-8")
-    page.get_by_placeholder("你的名字（对话需具名）").fill("王工")
     page.locator(".composer input[type=file]").set_input_files(str(attach_path))
     composer_chip = ATTACH_NAME in page.locator(".composer").inner_text()
     check("②附件选中入待发区（chip 可见）", composer_chip, page.locator(".composer").inner_text()[:120])
@@ -215,6 +215,45 @@ with sync_playwright() as p:
     check("⑤签发仍由人完成（页面有『提交任务』按钮，导引未自动建任务）",
           "提交任务" in body, "")
     page.screenshot(path=str(SHOTS / "3_prefilled_create.png"), full_page=True)
+
+    # ── ⑧ 身份门（WelcomeGate）：无身份首访被全屏拦下，具名进入后不再询问 ──
+    fresh = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")
+    fresh.goto(BASE + "/", wait_until="networkidle")
+    gate_input = fresh.get_by_placeholder("怎么称呼你？")
+    gate_seen = gate_input.is_visible()
+    gate_input.fill("新同事")
+    fresh.get_by_role("button", name="进入工作台").click()
+    fresh.wait_for_selector(".hero-title", timeout=5000)
+    hero_body = fresh.locator("body").inner_text()
+    no_more_ask = fresh.get_by_placeholder("怎么称呼你？").count() == 0  # 门关即不再询问
+    identity_shown = "新同事" in hero_body  # 侧栏身份行显示称呼
+    check("⑧身份门：首访拦下→具名进入→全站不再询问", gate_seen and no_more_ask and identity_shown,
+          f"gate={gate_seen} no_ask={no_more_ask} shown={identity_shown}")
+    # ⑧' 门过后身份真被对话取到：门是 overlay、底下页面曾以空身份 setup——
+    # 必须整页重挂（App.vue key 含 identityReady）才能发出第一条消息。
+    fresh.locator(".composer textarea").fill("你好")
+    fresh.get_by_role("button", name="发送").click()
+    fresh.wait_for_selector(".user-bubble", timeout=8000)
+    gate_send_ok = "身份已失效" not in fresh.locator("body").inner_text()
+    check("⑧'门过后第一条消息可发出（createdBy 已取到新身份）",
+          fresh.locator(".user-bubble").count() >= 1 and gate_send_ok,
+          f"bubble={fresh.locator('.user-bubble').count()} no_stale={gate_send_ok}")
+    fresh.screenshot(path=str(SHOTS / "4_welcome_gate_passed.png"))
+    fresh.close()
+
+    # ── ⑧'' 存储不可用（隐私模式）：内存态身份兜底——门照常过、消息照常发，
+    # 绝不死循环（Codex 审 P1 的回归咬合：修复前此链卡「身份已失效」）。──
+    priv = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")
+    priv.add_init_script("Storage.prototype.setItem = function() { throw new Error('storage disabled'); };")
+    priv.goto(BASE + "/", wait_until="networkidle")
+    priv.get_by_placeholder("怎么称呼你？").fill("隐私用户")
+    priv.get_by_role("button", name="进入工作台").click()
+    priv.wait_for_selector(".hero-title", timeout=5000)
+    priv.locator(".composer textarea").fill("你好")
+    priv.get_by_role("button", name="发送").click()
+    priv.wait_for_selector(".user-bubble", timeout=8000)
+    check("⑧''存储不可用：内存态身份闭环（门过+第一条消息可发）", True)
+    priv.close()
 
     browser.close()
 

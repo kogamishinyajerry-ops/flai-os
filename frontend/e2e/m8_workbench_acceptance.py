@@ -113,6 +113,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
+    page.add_init_script("localStorage.setItem('flai_user_name', '验收工程师')")  # 身份门：预注入工作身份，WelcomeGate 不拦
 
     # ── ① 左栏导航恰两个一级入口（双 Surface）──
     page.goto(BASE + "/", wait_until="networkidle")
@@ -197,6 +198,7 @@ with sync_playwright() as p:
     # ── ⑥ 暗色主题颜色级探针（美化批「夜航图纸」）：色相轴快照失聪，必须探针
     # 咬合（W13 方法学）。theme 默认跟随系统 → color_scheme=dark 即入暗色。──
     dark = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="dark")
+    dark.add_init_script("localStorage.setItem('flai_user_name', '验收工程师')")
     dark.goto(BASE + "/tasks", wait_until="networkidle")
     dark.wait_for_selector(".cl-item", timeout=5000)
     # 画布翻转真生效：--page-bg 暗值 #211d19

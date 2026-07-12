@@ -103,8 +103,12 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 def _start_and_send(page, name: str, text: str) -> None:
+    # 身份门时代：名字不再在 hero 填——注入 localStorage 后 reload，
+    # WelcomeGate 放行且 createdBy 取到该身份（本 helper 两次调用用不同名字，
+    # 故走运行时注入而非 page 级 init_script）。
     page.goto(BASE + "/", wait_until="networkidle")
-    page.get_by_placeholder("你的名字（对话需具名）").fill(name)
+    page.evaluate(f"localStorage.setItem('flai_user_name', {name!r})")
+    page.reload(wait_until="networkidle")
     page.locator(".composer textarea").fill(text)
     page.get_by_role("button", name="发送").click()
 

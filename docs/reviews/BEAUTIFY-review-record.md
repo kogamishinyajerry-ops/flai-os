@@ -52,6 +52,29 @@ agent-ui-design W13 桌面证伪轮 + W14 CLI 轮（memory 2026-07-11 更新）�
 | CLI ⏺/⎿ 悬挂缩进、✻ 俏皮盖章、模式循环色 | **不搬** | TUI 单画布语法不跨 shell 搬进 GUI（kit9 教训「GUI 分层 vs TUI 单画布=范式差」）；盖章已用 Codex 桌面式横线 |
 | kit9 defer：Claude 暗色气泡实测比画布暗（与三档暗阶反向，两源未裁决） | **持有** | 本仓暗色气泡亮于画布（常规做法）；等 kit 裁决后再议，不跟未决证据摇摆 |
 
+## 追批 2：身份门 + 文本减重（同日，owner「首页文字太多/要登录鉴权/文本太重」）
+
+- **WelcomeGate 身份门**：本地工作身份（非认证——真鉴权需后端 session/内网
+  SSO，递延 owner 批）。gpt-image-1 工牌插画（白底生成+PIL 去底）+Codex 写
+  组件（主控亲核 APPROVE）。一次具名全站免问；侧栏身份行可改名。
+- **文本减重**（Claude 精髓=留白克制，信任靠交互不靠说教）：hero 删三行
+  价值主张/名字框/starter-hint，只剩问候+一句主标题；composer 政策句+诚实
+  地板两行合一（m6 锚「导引不会替你创建」字面保留）；意图卡 tip 收进悬浮。
+- **e2e 契约重立**：6 套注入身份（add_init_script / orchestrator 双名走
+  evaluate+reload）；m6 新增 ⑧/⑧'/⑧'' 三断言（13 断言）。
+- **主控自审出真 P1**（送审 prompt 中即点出并先行修复）：门是 overlay、
+  GuidePage 门下已挂载捕获空身份，门过不重挂 → 第一条消息即撞兜底。
+  修=identityReady 参与 page-turn key（门过整页重挂）；⑧' 咬合+tamper
+  实证（拆 key 修复 → e2e 死在 waiting for .user-bubble → 复绿）。
+- **Codex 异源审 CHANGES_REQUIRED 三条全处置**：P1 存储失败死循环（隐私
+  模式 saveName 静默失败仍 emit done）→ identity.js 内存态兜底+saveName
+  返回持久化布尔+门内如实提示「本次会话有效」+⑧'' 回归咬合；P2 StatusCenter
+  根级不重挂、reviewer 门前空快照 → onOpen 懒补；P2 overlay 非真模态 →
+  :inert 隔离主 shell 与状态坞。**跨 tab 身份漂移判设计选择**（会话身份
+  延续，不做 storage 事件重开门——打断工作比边缘不一致代价高），注释+
+  此处双记录；QuickSwitcher 热键面板 z 序低于门，残余无害记录。
+- 验证：verify_all 八步门全绿（m6 13/13 逐断言实证）。
+
 ## 遗留
 
 - 亮色 --ink-faint 2.52:1 既有对比度债（本批只修了暗色）；

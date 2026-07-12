@@ -109,6 +109,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
+    page.add_init_script("localStorage.setItem('flai_user_name', '验收工程师')")  # 身份门：预注入工作身份，WelcomeGate 不拦
 
     # ── ①②门户：连接后端 + Agent 列表（两个 agent 卡片）──
     # M6 起首页 "/" 是智能导引，Agent 门户移至 /portal（ADR-0012 前端路由）。

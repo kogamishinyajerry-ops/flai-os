@@ -306,6 +306,8 @@ async function loadPeek(taskId, { initial = false } = {}) {
 }
 
 // ── 签发（宪法路径：与 TaskDetail 同一 API，人具名 fail-closed） ──
+// 本组件挂根级不随身份门重挂：setup 时可能门还没过（快照为空）——每次
+// 打开抽屉懒补一次（onOpen），保证「一次具名全站免问」（Codex 审 P2）。
 const reviewer = ref(getSavedName());
 const reviewComment = ref("");
 const reviewing = ref(false);
@@ -401,6 +403,7 @@ function clearPoll() {
 }
 
 function onOpen() {
+  if (!reviewer.value.trim()) reviewer.value = getSavedName(); // 门后懒补身份快照
   refreshInbox();
   ensurePeekLoaded(); // 幂等：watch 已载过同一任务则不重载
   schedulePoll();

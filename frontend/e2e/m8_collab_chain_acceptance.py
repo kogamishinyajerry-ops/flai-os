@@ -111,10 +111,10 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
+    page.add_init_script("localStorage.setItem('flai_user_name', '王工')")  # 身份门：预注入工作身份，WelcomeGate 不拦
 
     # ① 导引 → orchestrate 方案
     page.goto(BASE + "/", wait_until="networkidle")
-    page.get_by_placeholder("你的名字（对话需具名）").fill("王工")
     page.locator(".composer textarea").fill("做双通道供电的控制逻辑和故障树")
     page.get_by_role("button", name="发送").click()
     expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
