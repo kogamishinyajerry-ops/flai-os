@@ -1,5 +1,7 @@
 <template>
-  <div class="app-shell" :class="{ 'sidebar-open': sidebarOpen }">
+  <!-- :inert：身份门未过时主 shell 退出焦点/点击/AT 树（overlay 遮挡≠真模态，
+       Codex 审 P2）；QuickSwitcher 热键面板 z 序低于门，残余无害。 -->
+  <div class="app-shell" :class="{ 'sidebar-open': sidebarOpen }" :inert="!identityReady">
     <!-- 窄屏汉堡：<860px 侧栏收起，靠它唤出抽屉（P2-7：不再让导航凭空消失）。 -->
     <button class="sb-hamburger" aria-label="打开菜单" @click="toggleSidebar">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
@@ -50,6 +52,12 @@
         </div>
       </div>
 
+      <!-- 工作身份行：WelcomeGate 一次收齐后全站免问；点击可改（低频，改完
+           reload 让各页 getSavedName 取新值——不为此加响应层）。 -->
+      <button class="sb-identity" :title="`以「${userName}」的身份工作——点击更改`" @click="changeIdentity">
+        <span class="sb-id-dot"></span>{{ userName }}
+      </button>
+
       <!-- 侧栏脚部（美化批）：⌘K 可见入口（可点性+快捷键教学）+ 主题三段切换。 -->
       <div class="sb-foot">
         <button class="sb-foot-btn" title="搜索任务 / 会话 / Agent（⌘K）" @click="openQuickSwitcher">
@@ -71,32 +79,70 @@
            params，实例复用会读到旧 id，重挂载天然修正）；query 变化不重挂载
            （GuidePage 靠自身 watch 处理 ?c 重置，保持既有行为）。 -->
       <!-- key 优先 meta.pageKey：任务台 /tasks ↔ /tasks/:id 选中切换不整页
-           重挂（中栏 TaskDetail 靠 :key=taskId 自行重建，保留参数修正语义）。 -->
-      <div :key="route.meta.pageKey || route.path" class="page-turn">
+           重挂（中栏 TaskDetail 靠 :key=taskId 自行重建，保留参数修正语义）。
+           identityReady 参与 key：身份门是 overlay，底下页面在无身份时已
+           setup（createdBy 捕获空串）——门过必须整页重挂取新身份，否则首个
+           用户第一条消息就撞「身份已失效」兜底。 -->
+      <div :key="String(identityReady) + ':' + (route.meta.pageKey || route.path)" class="page-turn">
         <router-view />
       </div>
     </main>
   </div>
+
+  <!-- 身份门：本地工作身份（非认证，内网 SSO 递延）——无名字时全屏拦下，
+       一次具名全站免问。 -->
+  <WelcomeGate v-if="!identityReady" @done="onIdentityDone" />
 
   <!-- ⌘K 快速切换面板（B3）：热键监听与数据/跳转逻辑全封在组件内，这里只挂载。 -->
   <QuickSwitcher />
 
   <!-- 状态坞 + 状态中心（UI-PARADIGM Phase 1「状态来找人」）：轮询/数据/签发
        逻辑全封在组件与 stores/statusCenter 单例内，这里只挂载。 -->
-  <StatusDock />
+  <StatusDock :inert="!identityReady" />
   <StatusCenter />
+
+  <!-- 仿真监控浮窗（实验性，默认关——未配置 ?simhub= 时零渲染）：
+       配置/消息边界/收展逻辑全封组件内，这里只挂载；必须挂根级
+       （.page-turn 的 transform 会劫持 fixed 定位基准，动效系统判例）。 -->
+  <SimMonitorFloat />
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { listConversations } from "./api/conversations";
+import { ElMessageBox } from "element-plus";
 import { formatTime } from "./utils/format";
+import { getSavedName, saveName } from "./utils/identity";
 import { themeMode, resolvedTheme, setThemeMode } from "./stores/theme";
 import { openQuickSwitcher } from "./stores/quickSwitcher";
 import QuickSwitcher from "./components/QuickSwitcher.vue";
+import WelcomeGate from "./components/WelcomeGate.vue";
 import StatusDock from "./components/StatusDock.vue";
 import StatusCenter from "./components/StatusCenter.vue";
+import SimMonitorFloat from "./components/SimMonitorFloat.vue";
+
+// 工作身份（WelcomeGate 收齐）：identityReady 控门；改名低频走 prompt+reload。
+const identityReady = ref(Boolean(getSavedName()));
+const userName = ref(getSavedName());
+function onIdentityDone() {
+  userName.value = getSavedName();
+  identityReady.value = true;
+}
+async function changeIdentity() {
+  try {
+    const { value } = await ElMessageBox.prompt("换个称呼？各页将以新身份预填（不影响已有记录）。", "工作身份", {
+      inputValue: userName.value,
+      confirmButtonText: "更改",
+      cancelButtonText: "取消",
+      inputValidator: (v) => Boolean(v && v.trim()) || "称呼不能为空",
+    });
+    saveName(value);
+    window.location.reload();
+  } catch {
+    /* 取消 */
+  }
+}
 
 // 主题三段循环（跟随系统→浅色→深色）：显示当前模式而非解析结果，用户能看懂
 // 「跟随系统」这个第三态；图标随 resolvedTheme（实际生效的亮暗）走。
@@ -617,6 +663,32 @@ body {
 }
 .convo-item:hover .convo-time { opacity: 1; }
 .convo-empty { font-size: 12px; color: var(--ink-faint); padding: 8px 12px; line-height: 1.5; }
+
+/* ── 工作身份行 ── */
+.sb-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 9px;
+  background: none;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-out-soft);
+}
+.sb-identity:hover {
+  background: var(--hover-tint);
+}
+.sb-id-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink-faint);
+}
 
 /* ── 侧栏脚部：搜索（⌘K 教学）+ 主题切换 ── */
 .sb-foot {
