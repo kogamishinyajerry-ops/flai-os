@@ -114,7 +114,7 @@
   按 hunk 精确 stage（`git apply --cached` 仅本函数），`git diff --cached` 亲验零
   classification 污染，对方 8 行分级 hunk 完好留树。
 
-### 6.1 Codex 治理审 c293a83 收口（2026-07-12，fix commit 待落）
+### 6.1 Codex 治理审 c293a83 收口（2026-07-12，fix commit b4f1e0d push）
 
 **结论=零 P1 + 四 P2**（新 operator endpoint 命中即审，全部 grounded 复核确认为真，
 无 over-claim）：
