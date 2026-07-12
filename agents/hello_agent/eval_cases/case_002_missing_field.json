@@ -1,0 +1,11 @@
+{
+  "case_id": "case_002",
+  "description": "缺失必填字段：inputs 无 name → input_schema 校验拒绝 → 任务 failed（docs/07 §3「缺失字段」必测行）。",
+  "inputs": {},
+  "checks": [
+    {
+      "kind": "status_is",
+      "value": "failed"
+    }
+  ]
+}

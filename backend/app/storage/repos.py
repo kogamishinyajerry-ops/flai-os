@@ -69,12 +69,19 @@ def create_task(
     input_file_ids: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
     conversation_id: str | None = None,
+    origin: str = "user",
 ) -> dict[str, Any]:
     """建任务：初始态永远是 created（未入队）。
 
     conversation_id（M8/ADR-0016）：若本任务由导引协作会话产出，记会话 id 以便
     协作工作台按会话分组；门户直建任务留 None。仅作分组归属，不改任何执行语义。
+
+    origin（M10/ADR-0018）：'user'=用户任务（worker 候选集）/'eval'=评测跑批
+    任务（仅 eval runner 经 claim_task 驱动）。两候选集不相交，双跑竞态在
+    结构上不存在。白名单校验：拼写错误的 origin 会造永久无主孤儿，进门即拒。
     """
+    if origin not in ("user", "eval"):
+        raise ValueError(f"origin 只认 'user'/'eval'：{origin!r}")
     now = _now_iso()
     conn.execute(
         """
@@ -82,8 +89,8 @@ def create_task(
             (id, agent_id, agent_version, name, status, created_by,
              created_at, updated_at, started_at, finished_at,
              input_file_ids, output_file_ids, inputs_json, error_message, metadata_json,
-             conversation_id)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             conversation_id, origin)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             task_id, agent_id, agent_version, name, "created", created_by,
@@ -94,6 +101,7 @@ def create_task(
             None,
             json.dumps(metadata or {}, ensure_ascii=False),
             conversation_id,
+            origin,
         ),
     )
     return get_task(conn, task_id)  # type: ignore[return-value]
@@ -110,6 +118,7 @@ def list_tasks(
     agent_id: str | None = None,
     status: str | None = None,
     conversation_id: str | None = None,
+    origin: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -117,6 +126,8 @@ def list_tasks(
     保证 limit/offset 翻页不重不漏（P2-B：此前硬 LIMIT 100 静默截断）。
 
     conversation_id（M8）：按导引协作会话过滤——协作工作台取某次会话的成员任务。
+    origin（M10）：仓储层 None=不过滤保持中立；API 层默认 'user'——工程师任务流
+    不混入 eval 跑批任务（可显式查询，诚实可追溯，但不进默认工作流视图）。
     """
     clauses: list[str] = []
     params: list[Any] = []
@@ -129,6 +140,9 @@ def list_tasks(
     if conversation_id is not None:
         clauses.append("conversation_id = ?")
         params.append(conversation_id)
+    if origin is not None:
+        clauses.append("origin = ?")
+        params.append(origin)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     params.extend([limit, offset])
     rows = conn.execute(
@@ -215,27 +229,61 @@ def fail_task_from_execution(
 
 
 def claim_next_queued(conn: sqlite3.Connection) -> dict[str, Any] | None:
-    """原子拾取一条 queued 任务并转 validating（BEGIN IMMEDIATE 独占写锁，先来先服务）。
+    """原子拾取一条 queued **用户**任务并转 validating（BEGIN IMMEDIATE 独占写锁，先来先服务）。
 
     无 queued 任务返回 None。两个调用方并发调用本函数时，sqlite 的
     IMMEDIATE 锁保证同一行只会被其中一次调用拾取（另一次要么看不到该行
     已被更新前的状态，要么被阻塞到第一次提交后重新读到 validating 而非
     queued，从而拿不到同一任务）。
+
+    M10/ADR-0018：候选集限定 origin='user'——eval 跑批任务由 eval runner 经
+    claim_task 自驱，worker 永远看不到它们（隔离是集合不相交，不是时序侥幸）。
     """
     # 空队列是高频空跑路径：先做普通读，只有探测到候选才申请写锁。探测结果
     # 绝不参与拾取裁决；拿锁后仍须重新 SELECT，以锁内读到的状态为唯一真相。
-    if conn.execute("SELECT 1 FROM tasks WHERE status = 'queued' LIMIT 1").fetchone() is None:
+    if conn.execute(
+        "SELECT 1 FROM tasks WHERE status = 'queued' AND origin = 'user' LIMIT 1"
+    ).fetchone() is None:
         return None
 
     conn.execute("BEGIN IMMEDIATE")
     try:
         row = conn.execute(
-            "SELECT id FROM tasks WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1"
+            "SELECT id FROM tasks WHERE status = 'queued' AND origin = 'user' "
+            "ORDER BY created_at ASC LIMIT 1"
         ).fetchone()
         if row is None:
             conn.execute("COMMIT")
             return None
         task_id = row["id"]
+        assert_transition("queued", "validating")
+        now = _now_iso()
+        conn.execute(
+            "UPDATE tasks SET status = 'validating', updated_at = ? WHERE id = ? AND status = 'queued'",
+            (now, task_id),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id)
+
+
+def claim_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
+    """原子认领**指定** queued 的 eval 任务并转 validating（eval runner 专用，M10）。
+
+    与 claim_next_queued 同一 BEGIN IMMEDIATE 手法；目标任务不存在、不在
+    queued 态、或 origin 不是 'eval'（本函数绝不许被误用来抢用户任务——与
+    worker 的 origin='user' 过滤互为镜像）都返回 None（调用方 fail-closed）。
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT status, origin FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        if row is None or row["status"] != "queued" or row["origin"] != "eval":
+            conn.execute("COMMIT")
+            return None
         assert_transition("queued", "validating")
         now = _now_iso()
         conn.execute(
@@ -577,6 +625,11 @@ def record_sample(
     return _decode_sample(row)
 
 
+def get_sample(conn: sqlite3.Connection, sample_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM samples WHERE id = ?", (sample_id,)).fetchone()
+    return _decode_sample(row) if row is not None else None
+
+
 def list_samples(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT * FROM samples WHERE task_id = ? ORDER BY id ASC", (task_id,)
@@ -754,3 +807,125 @@ def set_conversation_status(
         (status, now, conversation_id),
     )
     return get_conversation(conn, conversation_id)  # type: ignore[return-value]
+
+
+# ── eval_runs / promotions（M10 治理闭环，ADR-0018） ────────────────────
+
+def _decode_eval_run(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    _decode_json(d, "case_results_json", "case_results", default=[])
+    _decode_json(d, "draft_cases_json", "draft_cases", default=[])
+    return d
+
+
+def create_eval_run(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    agent_id: str,
+    agent_version: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    now = _now_iso()
+    conn.execute(
+        """
+        INSERT INTO eval_runs (id, agent_id, agent_version, triggered_by, status, started_at)
+        VALUES (?,?,?,?, 'running', ?)
+        """,
+        (run_id, agent_id, agent_version, triggered_by, now),
+    )
+    return get_eval_run(conn, run_id)  # type: ignore[return-value]
+
+
+def finish_eval_run(
+    conn: sqlite3.Connection,
+    run_id: str,
+    *,
+    status: str,
+    total: int,
+    passed: int,
+    failed: int,
+    skipped: int,
+    case_results: list[dict[str, Any]],
+    draft_cases: list[dict[str, Any]],
+    eval_cases_digest: str | None,
+) -> dict[str, Any]:
+    now = _now_iso()
+    conn.execute(
+        """
+        UPDATE eval_runs
+           SET status = ?, finished_at = ?, total = ?, passed = ?, failed = ?, skipped = ?,
+               case_results_json = ?, draft_cases_json = ?, eval_cases_digest = ?
+         WHERE id = ?
+        """,
+        (
+            status, now, total, passed, failed, skipped,
+            json.dumps(case_results, ensure_ascii=False),
+            json.dumps(draft_cases, ensure_ascii=False),
+            eval_cases_digest,
+            run_id,
+        ),
+    )
+    return get_eval_run(conn, run_id)  # type: ignore[return-value]
+
+
+def get_eval_run(conn: sqlite3.Connection, run_id: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM eval_runs WHERE id = ?", (run_id,)).fetchone()
+    return _decode_eval_run(row) if row is not None else None
+
+
+def list_eval_runs(
+    conn: sqlite3.Connection, agent_id: str, *, limit: int = 20
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM eval_runs WHERE agent_id = ? ORDER BY started_at DESC, id DESC LIMIT ?",
+        (agent_id, limit),
+    ).fetchall()
+    return [_decode_eval_run(r) for r in rows]
+
+
+def record_promotion(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    agent_version: str,
+    from_maturity: str,
+    to_maturity: str,
+    eval_run_id: str,
+    checks: dict[str, Any],
+    confirmations: dict[str, Any],
+    confirmed_by: str,
+) -> dict[str, Any]:
+    now = _now_iso()
+    cur = conn.execute(
+        """
+        INSERT INTO promotions
+            (agent_id, agent_version, from_maturity, to_maturity, eval_run_id,
+             checks_json, confirmations_json, confirmed_by, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            agent_id, agent_version, from_maturity, to_maturity, eval_run_id,
+            json.dumps(checks, ensure_ascii=False),
+            json.dumps(confirmations, ensure_ascii=False),
+            confirmed_by, now,
+        ),
+    )
+    row = conn.execute("SELECT * FROM promotions WHERE id = ?", (cur.lastrowid,)).fetchone()
+    d = dict(row)
+    _decode_json(d, "checks_json", "checks", default={})
+    _decode_json(d, "confirmations_json", "confirmations", default={})
+    return d
+
+
+def list_promotions(conn: sqlite3.Connection, agent_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM promotions WHERE agent_id = ? ORDER BY id DESC", (agent_id,)
+    ).fetchall()
+    out = []
+    for row in rows:
+        d = dict(row)
+        _decode_json(d, "checks_json", "checks", default={})
+        _decode_json(d, "confirmations_json", "confirmations", default={})
+        out.append(d)
+    return out

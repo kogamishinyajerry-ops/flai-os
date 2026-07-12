@@ -1,0 +1,13 @@
+{
+  "case_id": "case_003",
+  "description": "非法类型：name 为整数 → input_schema type=string 校验拒绝 → 任务 failed（docs/07 §3「非法配置」必测行）。",
+  "inputs": {
+    "name": 123
+  },
+  "checks": [
+    {
+      "kind": "status_is",
+      "value": "failed"
+    }
+  ]
+}

@@ -166,7 +166,7 @@ def test_claim_next_queued_returns_none_when_empty(conn) -> None:
 
     normalized = [" ".join(statement.upper().split()) for statement in statements]
     assert any(
-        statement.startswith("SELECT 1 FROM TASKS WHERE STATUS = 'QUEUED' LIMIT 1")
+        statement.startswith("SELECT 1 FROM TASKS WHERE STATUS = 'QUEUED' AND ORIGIN = 'USER' LIMIT 1")
         for statement in normalized
     )
     assert not any(statement.startswith("BEGIN IMMEDIATE") for statement in normalized)
@@ -197,7 +197,7 @@ def test_claim_probe_hit_but_rival_claims_before_lock_returns_none(conn) -> None
     def trace(statement: str) -> None:
         nonlocal probe_seen, interposed
         normalized = " ".join(statement.upper().split())
-        if normalized.startswith("SELECT 1 FROM TASKS WHERE STATUS = 'QUEUED' LIMIT 1"):
+        if normalized.startswith("SELECT 1 FROM TASKS WHERE STATUS = 'QUEUED' AND ORIGIN = 'USER' LIMIT 1"):
             probe_seen = True
         elif normalized.startswith("BEGIN IMMEDIATE") and probe_seen and not interposed:
             # victim 尚未真正执行 BEGIN；此刻让 rival 完整拾取并提交，确定性复现

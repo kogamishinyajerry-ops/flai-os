@@ -64,6 +64,7 @@ E2E_SCRIPTS=(
   "frontend/e2e/m8_guide_orchestrator_acceptance.py"
   "frontend/e2e/m8_workbench_acceptance.py"
   "frontend/e2e/m9_guide_loop_acceptance.py"
+  "frontend/e2e/m10_governance_acceptance.py"
 )
 
 for script in "${E2E_SCRIPTS[@]}"; do

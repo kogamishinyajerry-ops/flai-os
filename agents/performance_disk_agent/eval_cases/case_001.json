@@ -1,7 +1,9 @@
 {
   "case_id": "case_001",
   "description": "50 行示例表（case_table_50.xlsx）全链路期望口径：2 行解析行级错误被跳过（行 15 mach 缺值、行 33 power_kw 非数值）→ 48 个有效 case；其中 3 个 altitude_m>15000 触发 mock 包线失败注入（行 10/25/40）→ 45 成功 + 3 失败；任务整体 completed（批量语义：单 case 失败不摧毁任务）。",
-  "input_files": ["case_table_50.xlsx"],
+  "input_files": [
+    "case_table_50.xlsx"
+  ],
   "inputs": {},
   "expected": {
     "task_status": "completed",
@@ -10,6 +12,28 @@
     "failed_count": 3,
     "row_errors": 2,
     "mock": true,
-    "artifacts": ["result_summary.xlsx", "samples.jsonl", "task_report.md"]
-  }
+    "artifacts": [
+      "result_summary.xlsx",
+      "samples.jsonl",
+      "task_report.md"
+    ]
+  },
+  "checks": [
+    {
+      "kind": "status_is",
+      "value": "completed"
+    },
+    {
+      "kind": "artifact_exists",
+      "file": "result_summary.xlsx"
+    },
+    {
+      "kind": "artifact_exists",
+      "file": "samples.jsonl"
+    },
+    {
+      "kind": "artifact_exists",
+      "file": "task_report.md"
+    }
+  ]
 }

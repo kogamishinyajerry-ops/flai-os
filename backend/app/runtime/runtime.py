@@ -427,7 +427,13 @@ class AgentRuntime:
         output_file_ids = self._register_outputs(conn, task_id, output_dir)
         repos.set_task_outputs(conn, task_id, output_file_ids)
 
-        if agent.get("data_asset", {}).get("collect_samples") is True:
+        # M10/ADR-0018 origin 白名单：只有用户任务落样。eval 跑批的输入本来就是
+        # 评测集，回灌样本库=循环喂养（评测数据冒充生产数据资产）；未知 origin
+        # 一律不落——错误方向必须是「少收一条」而非「污染资产」。
+        if (
+            agent.get("data_asset", {}).get("collect_samples") is True
+            and task.get("origin") == "user"
+        ):
             repos.record_sample(
                 conn,
                 task_id=task_id,
@@ -478,7 +484,12 @@ class AgentRuntime:
         留 NULL：失败任务不经人工放行，不冒充已定标数据）。此前只有成功路径沉淀，
         失败即蒸发。完整 Memory 子系统仍是 V0.2 槽位，此处不冒充。
         """
-        if agent.get("data_asset", {}).get("collect_samples") is True:
+        # 同成功路径的 origin 白名单（M10/ADR-0018）：eval 跑批的失败是评测结论
+        # 的一部分（记在 eval_runs.case_results），不是生产失败样本。
+        if (
+            agent.get("data_asset", {}).get("collect_samples") is True
+            and task.get("origin") == "user"
+        ):
             repos.record_sample(
                 conn,
                 task_id=task["id"],

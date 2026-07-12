@@ -4,7 +4,13 @@
   "inputs": {
     "top_event": "供电完全丧失",
     "system_description": "双通道供电系统：主通道由发电机 A 经汇流条 X 供电，备用通道由发电机 B 经汇流条 Y 供电，转换开关在主通道失效时自动切换至备用通道。",
-    "components": ["发电机A", "发电机B", "汇流条X", "汇流条Y", "转换开关"]
+    "components": [
+      "发电机A",
+      "发电机B",
+      "汇流条X",
+      "汇流条Y",
+      "转换开关"
+    ]
   },
   "expected": {
     "task_status": "waiting_review",
@@ -13,5 +19,20 @@
     "watermark_substring": "未经工程师确认",
     "model_call_event_recorded": true,
     "tool_runs_count": 0
-  }
+  },
+  "checks": [
+    {
+      "kind": "status_is",
+      "value": "waiting_review"
+    },
+    {
+      "kind": "artifact_exists",
+      "file": "fta_draft.md"
+    },
+    {
+      "kind": "artifact_contains",
+      "file": "fta_draft.md",
+      "value": "未经工程师确认"
+    }
+  ]
 }

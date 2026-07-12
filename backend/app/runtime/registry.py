@@ -44,6 +44,23 @@ class AgentRegistry:
         self._dirs: dict[str, Path] = {}
         self.errors: list[dict[str, str]] = []
 
+    def adopt(self, other: "AgentRegistry") -> None:
+        """原子采纳另一实例的扫描结果（M10/ADR-0018 异源审 F1）。
+
+        运行期重扫必须先在影子实例上完成 scan+reconcile，再一次性发布到
+        活注册表——直接对活实例 scan 会先清空再逐项重建，期间其他请求线程
+        可短暂读到部分注册表、甚至读到本应被 knowledge 对账注销的 Agent。
+
+        发布序（R2 残余加固）：_dirs/errors 先行、_agents 收尾——_agents 是
+        全部读者的入口（get/list），一个在 _agents 可见的 id 必已有对应 dir。
+        单次 get() 或 package_dir() 各自原子；跨两次调用横跨发布点的读者可能
+        新旧混读（dict 与 dir 同键、路径恒同，无既知危害路径）——完整快照
+        句柄 API 是 V0.2 槽位（ADR-0018 已声明限制）。
+        """
+        self._dirs = other._dirs
+        self.errors = other.errors
+        self._agents = other._agents
+
     def scan(self) -> None:
         """重新扫描 agents_dir，覆盖式重建内存注册表（幂等：可重复调用）。"""
         self._agents = {}

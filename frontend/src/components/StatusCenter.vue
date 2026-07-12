@@ -98,6 +98,21 @@
           <!-- 终态盖章：落定任务先给一行官宣（Codex「─ Worked for Xs ─」哲学） -->
           <CompletionSeal :task="peekTask" class="peek-block" />
 
+          <div v-if="acceptedSamples.length || sampleFixResults.length" class="peek-block">
+            <div v-if="acceptedSamples.length" class="sc-fix-row">
+              <span>{{ acceptedSamples.length }} 条样本已认可，可固化为评测用例</span>
+              <el-button
+                size="small"
+                class="sc-fix-sample-btn"
+                :loading="sampleFixing"
+                @click="fixAcceptedSamples"
+              >固化</el-button>
+            </div>
+            <div v-if="sampleFixResults.length" class="sc-fix-result">
+              <span v-for="item in sampleFixResults" :key="item.sampleId">{{ item.text }}</span>
+            </div>
+          </div>
+
           <el-alert v-if="peekTask.error_message" type="error" :title="peekTask.error_message" show-icon :closable="false" class="peek-block" />
 
           <!-- 产物先于动作（信任核心 P0-2：先看要签的东西，再决定放行）。
@@ -171,6 +186,7 @@ import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { statusCenter, openTaskPeek, backToInbox, closeCenter } from "../stores/statusCenter";
 import { listTasks, getTask, listTaskEvents, reviewTask, listModelCalls } from "../api/tasks";
+import { request } from "../api/client";
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import { statusLabel, statusTagType, taskLampColor, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
 import { getSavedName, saveName } from "../utils/identity";
@@ -312,6 +328,64 @@ const reviewer = ref(getSavedName());
 const reviewComment = ref("");
 const reviewing = ref(false);
 const peekApproveEl = ref(null);
+const acceptedSamples = ref([]);
+const sampleFixResults = ref([]);
+const sampleFixing = ref(false);
+let sampleFixEpoch = 0;
+
+function resetSampleFixState() {
+  sampleFixEpoch++;
+  acceptedSamples.value = [];
+  sampleFixResults.value = [];
+  sampleFixing.value = false;
+}
+
+async function loadAcceptedSamples(taskId) {
+  const epoch = ++sampleFixEpoch;
+  try {
+    const samples = await request(`/api/tasks/${taskId}/samples`);
+    if (epoch !== sampleFixEpoch || !statusCenter.open || statusCenter.taskId !== taskId) return;
+    acceptedSamples.value = samples.filter((sample) => sample.accepted_by_engineer === true);
+    sampleFixResults.value = [];
+  } catch {
+    if (epoch !== sampleFixEpoch || statusCenter.taskId !== taskId) return;
+    acceptedSamples.value = [];
+    sampleFixResults.value = [];
+  }
+}
+
+function sampleFixErrorText(err) {
+  if (err.status === 409) return "已固化";
+  if (err.status === 422) return err.detail || err.message || "前置条件未满足";
+  return err.detail || err.message || "固化失败";
+}
+
+async function fixAcceptedSamples() {
+  const taskId = statusCenter.taskId;
+  const samples = acceptedSamples.value.slice();
+  if (!taskId || !samples.length || sampleFixing.value) return;
+  const epoch = sampleFixEpoch;
+  const fixedBy = getSavedName();
+  sampleFixing.value = true;
+  try {
+    const results = await Promise.all(samples.map(async (sample) => {
+      try {
+        const result = await request(`/api/agents/${sample.agent_id}/eval-cases`, {
+          method: "POST",
+          json: { sample_id: sample.id, fixed_by: fixedBy },
+        });
+        return { sampleId: sample.id, text: result.case_file };
+      } catch (err) {
+        return { sampleId: sample.id, text: sampleFixErrorText(err) };
+      }
+    }));
+    if (epoch === sampleFixEpoch && statusCenter.open && statusCenter.taskId === taskId) {
+      sampleFixResults.value = results;
+    }
+  } finally {
+    if (epoch === sampleFixEpoch) sampleFixing.value = false;
+  }
+}
 
 async function doReview(action) {
   if (!reviewer.value.trim()) {
@@ -342,6 +416,7 @@ async function doReview(action) {
     markTaskSeen(taskId); // 亲手签发=已看过：其后完成不得对签发者亮未读
     reviewComment.value = ""; // 签发落定即清，绝不残留到下一个任务
     ElMessage.success(action === "approve" ? "已批准放行" : "已驳回");
+    if (action === "approve") loadAcceptedSamples(taskId); // 静默旁路：失败不影响签发主流程
     // 续体绑定：await 期间抽屉可能已关/任务已切——只有还在看同一任务时才迸发+刷新
     if (statusCenter.open && statusCenter.taskId === taskId) {
       if (action === "approve") {
@@ -416,6 +491,7 @@ function onClosed() {
   artifactsLoading.value = false;
   peekLoadedFor = null; // 下次打开重新初载
   reviewComment.value = ""; // 意见草稿不跨次会话残留（签发人姓名保留）
+  resetSampleFixState();
 }
 
 // 初载去重：openTaskPeek 从关闭态打开时，watch（open/view/taskId 变更）与
@@ -425,9 +501,11 @@ function ensurePeekLoaded() {
   const id = statusCenter.taskId;
   if (statusCenter.open && statusCenter.view === "peek" && id && peekLoadedFor !== id) {
     peekLoadedFor = id;
+    resetSampleFixState();
     reviewComment.value = ""; // 切任务清草稿，绝不把上个任务的意见签到这个任务
     markTaskSeen(id); // 速览含产物+签发，等价「看过」，驱动任务台未读点
     loadPeek(id, { initial: true });
+    loadAcceptedSamples(id); // 已批准任务重开也能看到固化入口（未认可样本被 ===true 过滤，静默无痕）
   }
 }
 watch(() => [statusCenter.open, statusCenter.view, statusCenter.taskId], ensurePeekLoaded);
@@ -447,6 +525,7 @@ onUnmounted(() => {
   clearPoll();
   peekEpoch++;
   artifactsFingerprint = null;
+  resetSampleFixState();
 });
 </script>
 
@@ -669,6 +748,31 @@ onUnmounted(() => {
 }
 .peek-block {
   margin-bottom: 16px;
+}
+.sc-fix-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--paper-rail);
+  color: var(--ink-soft);
+  font-size: 12.5px;
+}
+.sc-fix-sample-btn {
+  flex: none;
+}
+.sc-fix-result {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 12px 0;
+  color: var(--ink-mid);
+  font-family: var(--mono, "SF Mono", ui-monospace, monospace);
+  font-size: 11.5px;
+  word-break: break-word;
 }
 .peek-label {
   font-size: 12px;

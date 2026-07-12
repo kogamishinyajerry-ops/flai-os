@@ -2,7 +2,9 @@
   "case_id": "case_001",
   "description": "基本链路期望口径：提交问题 → ecm_frr_demo 合成语料检索命中 → 模型草案带出处引用存档（含强制水印）→ 任务停 waiting_review 等人工放行（不是 completed）。",
   "inputs": {
-    "questions": ["试飞机 FRR：短舱排液孔堵塞应如何处置？依据哪条 EM 条款或历史 ECM？"],
+    "questions": [
+      "试飞机 FRR：短舱排液孔堵塞应如何处置？依据哪条 EM 条款或历史 ECM？"
+    ],
     "top_k": 5
   },
   "expected": {
@@ -14,5 +16,24 @@
     "knowledge_search_event_recorded": true,
     "model_call_event_recorded": true,
     "tool_runs_count": 0
-  }
+  },
+  "checks": [
+    {
+      "kind": "status_is",
+      "value": "waiting_review"
+    },
+    {
+      "kind": "artifact_exists",
+      "file": "knowledge_qa_draft.md"
+    },
+    {
+      "kind": "artifact_exists",
+      "file": "answers.json"
+    },
+    {
+      "kind": "artifact_contains",
+      "file": "knowledge_qa_draft.md",
+      "value": "未经工程师确认"
+    }
+  ]
 }

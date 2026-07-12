@@ -64,6 +64,11 @@
     "conversation_id": {
       "type": ["string", "null"],
       "description": "归属的导引协作会话 id（M8/ADR-0016）：由导引编排官分流产出的任务记会话 id，供协作工作台按会话聚合；门户直建任务为 null。仅分组归属，不改执行语义。"
+    },
+    "origin": {
+      "type": "string",
+      "enum": ["user", "eval"],
+      "description": "任务来源（M10/ADR-0018）：user=用户任务（worker 候选集）/eval=评测跑批任务（仅 eval runner 驱动，不落样本、不进默认任务流视图）。两执行方候选集不相交，双跑竞态在结构上不存在。"
     }
   }
 }

@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     inputs_json TEXT NOT NULL DEFAULT '{}',
     error_message TEXT,
     metadata_json TEXT NOT NULL DEFAULT '{}',
-    conversation_id TEXT
+    conversation_id TEXT,
+    origin TEXT NOT NULL DEFAULT 'user'
 );
 
 CREATE TABLE IF NOT EXISTS task_events (
@@ -157,6 +158,39 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     file_ids TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL
 );
+
+-- M10 治理闭环（ADR-0018）。eval_runs=评测跑批证据（case_results 回溯到真实
+-- task_id 与事件时间轴；eval_cases_digest 咬合「同版本号下改 checks 后拿旧全绿
+-- 证据晋升」的博弈面）。promotions=晋升审计记录（机器判定与人工确认项分离落档）。
+CREATE TABLE IF NOT EXISTS eval_runs (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    agent_version TEXT NOT NULL,
+    triggered_by TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    total INTEGER NOT NULL DEFAULT 0,
+    passed INTEGER NOT NULL DEFAULT 0,
+    failed INTEGER NOT NULL DEFAULT 0,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    case_results_json TEXT NOT NULL DEFAULT '[]',
+    draft_cases_json TEXT NOT NULL DEFAULT '[]',
+    eval_cases_digest TEXT
+);
+
+CREATE TABLE IF NOT EXISTS promotions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL,
+    agent_version TEXT NOT NULL,
+    from_maturity TEXT NOT NULL,
+    to_maturity TEXT NOT NULL,
+    eval_run_id TEXT NOT NULL,
+    checks_json TEXT NOT NULL,
+    confirmations_json TEXT NOT NULL,
+    confirmed_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 _INDEX_DDL = (
@@ -171,6 +205,8 @@ _INDEX_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_tasks_conversation_id ON tasks(conversation_id)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_status_created_at ON tasks(status, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_eval_runs_agent_id ON eval_runs(agent_id)",
+    "CREATE INDEX IF NOT EXISTS idx_promotions_agent_id ON promotions(agent_id)",
 )
 
 
@@ -222,6 +258,14 @@ def init_db(db_path: str | Path) -> None:
             task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
             if "conversation_id" not in task_cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN conversation_id TEXT")
+            # 迁移 #4（ADR-0018/M10）：tasks.origin——eval 跑批任务与用户任务的
+            # 执行方隔离轴（worker 只认 origin='user'，eval runner 只认自己建的
+            # origin='eval'，两候选集不相交故双跑竞态在结构上不存在）。存量任务
+            # 全部是用户任务，DEFAULT 'user' 即正确回填。同在写锁内探测补列。
+            if "origin" not in task_cols:
+                conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"
+                )
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:

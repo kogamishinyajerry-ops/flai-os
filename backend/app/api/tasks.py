@@ -191,6 +191,11 @@ def list_tasks(
     status: str | None = None,
     agent_id: str | None = None,
     conversation_id: str | None = None,
+    origin: str = Query(
+        default="user",
+        description="任务来源：user（默认，工程师任务流）/eval（评测跑批）/all（不过滤）"
+        "——M10/ADR-0018：eval 任务可查（诚实可追溯）但不混入默认工作流视图",
+    ),
     limit: int = Query(default=100, ge=1, le=500, description="每页条数（1-500）"),
     offset: int = Query(default=0, ge=0, description="跳过条数（最近任务流分页语义，无总数计数）"),
 ) -> list[dict[str, Any]]:
@@ -198,6 +203,7 @@ def list_tasks(
     try:
         return repos.list_tasks(
             conn, agent_id=agent_id, status=status, conversation_id=conversation_id,
+            origin=None if origin == "all" else origin,
             limit=limit, offset=offset,
         )
     finally:
