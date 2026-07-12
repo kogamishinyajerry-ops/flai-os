@@ -49,6 +49,15 @@ export async function request(path, { method = "GET", json, formData } = {}) {
     throw new ApiError(0, `无法连接后端服务（${err.message}）——请确认后端已启动`);
   }
   if (!resp.ok) {
+    // 会话过期中途兜底（ADR-0019 D8）：任意接口 401 → 广播事件，App 重新亮
+    // 登录门。登录/探测接口自身除外——它们的 401 是登录门的正常输入。
+    if (
+      resp.status === 401 &&
+      path !== "/api/auth/login" &&
+      path !== "/api/auth/me"
+    ) {
+      window.dispatchEvent(new CustomEvent("flai:unauthorized"));
+    }
     throw new ApiError(resp.status, await parseDetail(resp));
   }
   return resp.json();

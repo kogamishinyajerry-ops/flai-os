@@ -26,6 +26,8 @@ from typing import Any, Iterator
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import TEST_DISPLAY_NAME
+
 from backend.app.jobs.runner import JobRunner
 from backend.app.storage import repos
 
@@ -72,7 +74,7 @@ def client(app_env) -> Iterator[TestClient]:
 def _create_and_run(client: TestClient, app, agent_id: str, inputs: dict[str, Any]) -> dict[str, Any]:
     resp = client.post(
         "/api/tasks",
-        json={"agent_id": agent_id, "inputs": inputs, "created_by": "m5_test"},
+        json={"agent_id": agent_id, "inputs": inputs},
     )
     assert resp.status_code == 200
     task_id = resp.json()["id"]
@@ -166,7 +168,7 @@ def test_control_logic_e2e_completed_with_unreachable_analysis(app_env) -> None:
     fb = client.post(
         "/api/feedback",
         json={"task_id": task["id"], "rating": "good", "category": "suggestion",
-              "message": "结构展开正确", "created_by": "m5_王工"},
+              "message": "结构展开正确"},
     )
     assert fb.status_code == 200
 
@@ -270,7 +272,7 @@ def test_fta_e2e_waiting_review_then_approve(app_env) -> None:
     # ⑥ 具名人工放行 → completed + review_approved（M1 建成的放行链首次被真实 Agent 使用）
     review = client.post(
         f"/api/tasks/{task_id}/review",
-        json={"action": "approve", "reviewer": "安全性分析师_李工", "comment": "草案结构合理，割集候选已核"},
+        json={"action": "approve", "comment": "草案结构合理，割集候选已核"},
     )
     assert review.status_code == 200
     assert review.json()["status"] == "completed"
@@ -282,7 +284,7 @@ def test_fta_e2e_waiting_review_then_approve(app_env) -> None:
     events_after = client.get(f"/api/tasks/{task_id}/events").json()
     approved = [e for e in events_after if e["event_type"] == "review_approved"]
     assert len(approved) == 1
-    assert approved[0]["payload"]["reviewer"] == "安全性分析师_李工"
+    assert approved[0]["payload"]["reviewer"] == TEST_DISPLAY_NAME
 
 
 def test_fta_gateway_upstream_failure_task_failed_honestly(app_env) -> None:
@@ -331,7 +333,7 @@ def test_fta_reject_marks_sample_not_accepted(app_env) -> None:
 
     review = client.post(
         f"/api/tasks/{task_id}/review",
-        json={"action": "reject", "reviewer": "安全性分析师_李工", "comment": "割集候选不完整，退回"},
+        json={"action": "reject", "comment": "割集候选不完整，退回"},
     )
     assert review.status_code == 200
     assert review.json()["status"] == "failed"

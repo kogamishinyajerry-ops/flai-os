@@ -11,6 +11,8 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import seed_and_login
+
 from backend.app.main import create_app
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +44,7 @@ def _make_app(tmp_path: Path, *, with_dist: bool):
 @pytest.fixture()
 def spa_client(tmp_path) -> Iterator[TestClient]:
     with TestClient(_make_app(tmp_path, with_dist=True)) as client:
+        seed_and_login(client, tmp_path / "flai_os.db")
         yield client
 
 
@@ -69,17 +72,23 @@ def test_api_routes_still_win(spa_client: TestClient) -> None:
     assert resp.json()["status"] == "ok"
 
 
-def test_unknown_api_path_is_honest_404_not_index(spa_client: TestClient) -> None:
+def test_unknown_api_path_is_honest_404_not_index(tmp_path) -> None:
     """接口不存在必须如实 404 JSON——用 index.html 掩盖 = 前端拿 HTML 当 JSON 解析
-    的假绿温床。"""
-    resp = spa_client.get("/api/no_such_endpoint")
-    assert resp.status_code == 404
-    assert _INDEX_MARK not in resp.text
-    assert "接口不存在" in resp.json()["detail"]
-    # 大小写变体同样不得被 index.html 掩盖（反审 P3-1）
-    upper = spa_client.get("/API/no_such_endpoint")
-    assert upper.status_code == 404
-    assert _INDEX_MARK not in upper.text
+    的假绿温床。ADR-0019 后先验未登录 401，再验登录后路由层 404。"""
+    with TestClient(_make_app(tmp_path, with_dist=True)) as client:
+        unauthenticated = client.get("/api/no_such_endpoint")
+        assert unauthenticated.status_code == 401
+        assert _INDEX_MARK not in unauthenticated.text
+
+        seed_and_login(client, tmp_path / "flai_os.db")
+        resp = client.get("/api/no_such_endpoint")
+        assert resp.status_code == 404
+        assert _INDEX_MARK not in resp.text
+        assert "接口不存在" in resp.json()["detail"]
+        # 大小写变体同样不得被 index.html 掩盖（反审 P3-1）
+        upper = client.get("/API/no_such_endpoint")
+        assert upper.status_code == 404
+        assert _INDEX_MARK not in upper.text
 
 
 def test_path_traversal_does_not_leak_files_outside_dist(spa_client: TestClient, tmp_path) -> None:
@@ -94,5 +103,6 @@ def test_without_dist_no_spa_routes(tmp_path) -> None:
     """dist 不存在（开发期 vite proxy 场景）：静态路由整体缺席，/ 返回 404，
     /api 行为与 M1 完全一致。"""
     with TestClient(_make_app(tmp_path, with_dist=False)) as client:
+        seed_and_login(client, tmp_path / "flai_os.db")
         assert client.get("/").status_code == 404
         assert client.get("/api/health").status_code == 200

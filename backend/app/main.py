@@ -20,11 +20,14 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config
 from .api import agents as agents_api
+from .api import auth as auth_api
 from .api import conversations as conversations_api
 from .api import feedback as feedback_api
 from .api import files as files_api
 from .api import governance as governance_api
 from .api import tasks as tasks_api
+from .auth.middleware import AuthGateMiddleware
+from .auth.service import LoginThrottle
 from .bootstrap import assemble
 from .runtime.conversation import ConversationService
 from .runtime.runtime import AgentRuntime
@@ -92,6 +95,11 @@ def create_app(
         yield
 
     app = FastAPI(title="FLAi-OS Backend", lifespan=lifespan)
+    app.state.login_throttle = LoginThrottle()  # 进程内节流（ADR-0019 D6），实例随 app
+
+    # 中间件栈序（后 add 者在外层）：会话门先 add（内层），CORS 后 add（外层）——
+    # 401 响应也必须带 CORS 头，否则浏览器只报跨域、看不到「未登录」真话。
+    app.add_middleware(AuthGateMiddleware, conn_factory=conn_factory)
 
     # M2 前端本机开发用任意端口，只放开 localhost。
     app.add_middleware(
@@ -113,6 +121,7 @@ def create_app(
             "llm_model_reasoning_set": bool(os.environ.get("FLAI_LLM_MODEL_REASONING")),
         }
 
+    app.include_router(auth_api.router)
     app.include_router(agents_api.router)
     app.include_router(tasks_api.router)
     app.include_router(files_api.router)

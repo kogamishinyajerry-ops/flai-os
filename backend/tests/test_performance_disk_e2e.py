@@ -57,7 +57,6 @@ def _create_and_run(client: TestClient, app, file_ids: list[str]) -> dict:
             "agent_id": "performance_disk_agent",
             "inputs": {},
             "input_file_ids": file_ids,
-            "created_by": "m3_e2e",
         },
     )
     assert resp.status_code == 200

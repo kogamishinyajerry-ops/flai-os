@@ -1,9 +1,9 @@
 """Feedback API 测试（任务书 §7.8，M2）。
 
 覆盖：提交→feedback 落库+feedback_received 事件（逐条过 event.schema.json）/
-task 不存在 404（POST 与 GET 双向）/created_by 空白 422/rating·category 非法
-枚举 422/响应形状钉死（feedback 无对外契约 schema，形状由本测试常驻锁定）/
-agent_id·agent_version 服务端自填不信客户端/GET 列表升序/E2E 完成任务反馈往返。
+task 不存在 404（POST 与 GET 双向）/客户端自报 created_by 422/rating·category
+非法枚举 422/响应形状钉死（feedback 无对外契约 schema，形状由本测试常驻锁定）/
+服务端派生记名与 agent 字段/GET 列表升序/E2E 完成任务反馈往返。
 DB/uploads/task_runs 全落 tmp_path，绝不碰真实 data/。
 """
 
@@ -16,6 +16,8 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 from jsonschema import validate
+
+from conftest import TEST_DISPLAY_NAME
 
 from backend.app.jobs.runner import JobRunner
 from backend.app.storage import repos
@@ -43,7 +45,7 @@ def client(app_env) -> Iterator[TestClient]:
 def _create_task(client: TestClient) -> str:
     resp = client.post(
         "/api/tasks",
-        json={"agent_id": "hello_agent", "inputs": {"name": "反馈用"}, "created_by": "fb_test"},
+        json={"agent_id": "hello_agent", "inputs": {"name": "反馈用"}},
     )
     assert resp.status_code == 200
     return resp.json()["id"]
@@ -63,7 +65,6 @@ def test_create_feedback_persists_row_and_emits_schema_valid_event(client: TestC
             "rating": "good",
             "category": "suggestion",
             "message": "结果可用，建议输出加上单位",
-            "created_by": "王工",
         },
     )
     assert resp.status_code == 200
@@ -75,7 +76,7 @@ def test_create_feedback_persists_row_and_emits_schema_valid_event(client: TestC
     assert record["rating"] == "good"
     assert record["category"] == "suggestion"
     assert record["message"] == "结果可用，建议输出加上单位"
-    assert record["created_by"] == "王工"
+    assert record["created_by"] == TEST_DISPLAY_NAME
     assert isinstance(record["id"], int)
     assert record["created_at"]
 
@@ -101,7 +102,7 @@ def test_create_feedback_persists_row_and_emits_schema_valid_event(client: TestC
     payload = fb_events[0]["payload"]
     assert payload["rating"] == "good"
     assert payload["category"] == "suggestion"
-    assert payload["created_by"] == "王工"
+    assert payload["created_by"] == TEST_DISPLAY_NAME
     assert payload["message_summary"] == "结果可用，建议输出加上单位"
 
 
@@ -116,7 +117,6 @@ def test_feedback_event_message_summary_truncated_to_200(client: TestClient) -> 
             "rating": "bad",
             "category": "result_incomplete",
             "message": long_message,
-            "created_by": "李工",
         },
     )
     assert resp.status_code == 200
@@ -133,7 +133,7 @@ def test_feedback_without_message_is_allowed(client: TestClient) -> None:
     task_id = _create_task(client)
     resp = client.post(
         "/api/feedback",
-        json={"task_id": task_id, "rating": "good", "category": "other", "created_by": "赵工"},
+        json={"task_id": task_id, "rating": "good", "category": "other"},
     )
     assert resp.status_code == 200
     assert resp.json()["message"] is None
@@ -144,8 +144,8 @@ def test_feedback_without_message_is_allowed(client: TestClient) -> None:
     assert fb["payload"]["message_summary"] is None
 
 
-def test_client_supplied_agent_fields_are_ignored(client: TestClient) -> None:
-    """客户端多传 agent_id/agent_version 也不采信——服务端一律以 task 记录为准。"""
+def test_client_supplied_agent_fields_are_forbidden(client: TestClient) -> None:
+    """请求模型 extra=forbid：客户端不得自报由 task 派生的 agent 字段。"""
     task_id = _create_task(client)
     resp = client.post(
         "/api/feedback",
@@ -153,15 +153,15 @@ def test_client_supplied_agent_fields_are_ignored(client: TestClient) -> None:
             "task_id": task_id,
             "rating": "good",
             "category": "usability",
-            "created_by": "钱工",
             "agent_id": "forged_agent",
             "agent_version": "9.9.9",
         },
     )
-    assert resp.status_code == 200
-    record = resp.json()
-    assert record["agent_id"] == "hello_agent"
-    assert record["agent_version"] == "0.1.0"
+    assert resp.status_code == 422
+    extra_fields = {
+        error["loc"][-1] for error in resp.json()["detail"] if error["type"] == "extra_forbidden"
+    }
+    assert extra_fields == {"agent_id", "agent_version"}
 
 
 # ── 失败路径：404 / 422 ──────────────────────────────────────────────────
@@ -171,7 +171,7 @@ def test_create_feedback_unknown_task_404_and_no_residue(client: TestClient, app
     _, app = app_env
     resp = client.post(
         "/api/feedback",
-        json={"task_id": "no_such_task", "rating": "good", "category": "other", "created_by": "王工"},
+        json={"task_id": "no_such_task", "rating": "good", "category": "other"},
     )
     assert resp.status_code == 404
 
@@ -198,20 +198,22 @@ def test_create_feedback_blank_created_by_422(client: TestClient, bad_created_by
     assert resp.status_code == 422
 
 
-def test_create_feedback_missing_created_by_422(client: TestClient) -> None:
+def test_create_feedback_missing_created_by_uses_session_identity(client: TestClient) -> None:
+    """created_by 省略是新合法契约，响应由登录会话身份记名。"""
     task_id = _create_task(client)
     resp = client.post(
         "/api/feedback",
         json={"task_id": task_id, "rating": "good", "category": "other"},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 200
+    assert resp.json()["created_by"] == TEST_DISPLAY_NAME
 
 
 def test_create_feedback_invalid_rating_422(client: TestClient) -> None:
     task_id = _create_task(client)
     resp = client.post(
         "/api/feedback",
-        json={"task_id": task_id, "rating": "excellent", "category": "other", "created_by": "王工"},
+        json={"task_id": task_id, "rating": "excellent", "category": "other"},
     )
     assert resp.status_code == 422
 
@@ -220,20 +222,26 @@ def test_create_feedback_invalid_category_422(client: TestClient) -> None:
     task_id = _create_task(client)
     resp = client.post(
         "/api/feedback",
-        json={"task_id": task_id, "rating": "good", "category": "乱写类别", "created_by": "王工"},
+        json={"task_id": task_id, "rating": "good", "category": "乱写类别"},
     )
     assert resp.status_code == 422
 
 
-def test_created_by_is_stored_stripped(client: TestClient) -> None:
-    """前后空白具名（如 ' 王工 '）合法但统一存 strip 后的名字（与 reviewer 同手法）。"""
+def test_client_created_by_forbidden_and_session_identity_stored(client: TestClient) -> None:
+    """客户端自报 created_by 一律 422；合法请求存登录会话的 display_name。"""
     task_id = _create_task(client)
-    resp = client.post(
+    forged = client.post(
         "/api/feedback",
         json={"task_id": task_id, "rating": "good", "category": "other", "created_by": "  王工  "},
     )
+    assert forged.status_code == 422
+
+    resp = client.post(
+        "/api/feedback",
+        json={"task_id": task_id, "rating": "good", "category": "other"},
+    )
     assert resp.status_code == 200
-    assert resp.json()["created_by"] == "王工"
+    assert resp.json()["created_by"] == TEST_DISPLAY_NAME
 
 
 # ── GET 列表升序 ─────────────────────────────────────────────────────────
@@ -251,7 +259,6 @@ def test_list_feedback_returns_ascending_by_created_at(client: TestClient) -> No
                 "rating": rating,
                 "category": category,
                 "message": f"第{i}条",
-                "created_by": "王工",
             },
         )
         assert resp.status_code == 200
@@ -280,7 +287,6 @@ def test_e2e_completed_task_feedback_roundtrip(client: TestClient, app_env) -> N
             "rating": "good",
             "category": "suggestion",
             "message": "E2E 反馈：结果正确",
-            "created_by": "e2e_王工",
         },
     )
     assert resp.status_code == 200
@@ -289,6 +295,7 @@ def test_e2e_completed_task_feedback_roundtrip(client: TestClient, app_env) -> N
     assert len(listed) == 1
     assert listed[0]["message"] == "E2E 反馈：结果正确"
     assert listed[0]["agent_id"] == "hello_agent"
+    assert listed[0]["created_by"] == TEST_DISPLAY_NAME
 
     # 事件时间轴：完整生命周期事件 + feedback_received 共存
     event_types = [e["event_type"] for e in client.get(f"/api/tasks/{task_id}/events").json()]

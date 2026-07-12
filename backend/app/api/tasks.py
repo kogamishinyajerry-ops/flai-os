@@ -9,7 +9,7 @@ import uuid
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..core.errors import IllegalTransitionError
 from ..storage import repos
@@ -22,11 +22,15 @@ _INPUTS_MAX_BYTES = 256 * 1024
 
 
 class CreateTaskRequest(BaseModel):
+    # ADR-0019 D5：created_by 已从请求体删除，服务端从登录会话派生——身份
+    # 不再自报。extra="forbid"：仍发 created_by 的旧客户端得到响亮 422 而非
+    # 静默忽略（以为自己设置了身份=更危险）。
+    model_config = ConfigDict(extra="forbid")
+
     agent_id: str
     name: str | None = Field(default=None, max_length=200)
     inputs: dict[str, Any] = Field(default_factory=dict)
     input_file_ids: list[str] = Field(default_factory=list)
-    created_by: str = Field(default="anonymous", max_length=100)
     # M8/ADR-0016：可选归属——由导引协作会话产出的任务记会话 id，供协作工作台
     # 按会话分组。仅分组归属，不改执行语义；门户直建任务不带此字段（留 None）。
     conversation_id: str | None = Field(default=None, max_length=100)
@@ -55,16 +59,6 @@ class CreateTaskRequest(BaseModel):
             raise ValueError("name 若提供则不得为空白——不命名请省略该字段（留 null）")
         return stripped
 
-    @field_validator("created_by")
-    @classmethod
-    def created_by_non_blank(cls, v: str) -> str:
-        # task.schema.json: created_by minLength=1（异源 Codex R6-#7）。默认 anonymous；
-        # 显式传空/空白一律拒——发起人标识不得为空。入库统一存 strip 后的名字。
-        stripped = v.strip()
-        if not stripped:
-            raise ValueError("created_by 不得为空白——发起人必须具名（不传则默认 anonymous）")
-        return stripped
-
     @field_validator("input_file_ids")
     @classmethod
     def input_file_ids_sane_and_unique(cls, v: list[str]) -> list[str]:
@@ -82,22 +76,14 @@ class CreateTaskRequest(BaseModel):
 
 
 class ReviewTaskRequest(BaseModel):
-    """人工放行请求体（P1-B）。reviewer 必填非空——人是唯一的工程签发者
-    （宪法铁律六），匿名放行等于没有签发者，pydantic 层直接 422 拒收。"""
+    """人工放行请求体（P1-B）。reviewer 已从请求体删除（ADR-0019 D5）：
+    签发者=登录会话身份，服务端派生——「人是唯一的工程签发者」（宪法铁律六）
+    的「人」从此是认证的人，不是自报文本。extra="forbid" 同 CreateTaskRequest。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     action: Literal["approve", "reject"]
-    reviewer: str = Field(min_length=1)
     comment: str | None = None
-
-    @field_validator("reviewer")
-    @classmethod
-    def reviewer_must_not_be_blank(cls, v: str) -> str:
-        """全空白 reviewer = 事实匿名签发（R1 复审 P3）：strip 后为空一律 422。
-        入库/入事件统一存 strip 后的名字。"""
-        stripped = v.strip()
-        if not stripped:
-            raise ValueError("reviewer 不得为空白字符——人工放行必须有具名签发者")
-        return stripped
 
 
 def _get_agent_or_none(registry: Any, agent_id: str) -> dict[str, Any] | None:
@@ -127,12 +113,14 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
     conn = request.app.state.conn_factory()
     try:
         task_id = f"task_{uuid.uuid4().hex}"
+        # ADR-0019 D5：发起人=登录会话身份（中间件已验证注入），非请求体自报
+        created_by = request.state.user["display_name"]
         create_kwargs = dict(
             task_id=task_id,
             agent_id=body.agent_id,
             agent_version=agent.get("version"),
             name=body.name,
-            created_by=body.created_by,
+            created_by=created_by,
             inputs=body.inputs,
             input_file_ids=body.input_file_ids,
             metadata={},
@@ -178,7 +166,7 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             event_type="task_created",
             level="info",
             message=f"任务已创建：agent={body.agent_id}",
-            payload={"created_by": body.created_by, "status_from": "created", "status_to": "queued"},
+            payload={"created_by": created_by, "status_from": "created", "status_to": "queued"},
         )
         return task
     finally:
@@ -280,13 +268,14 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
                 detail=f"任务处于 {task['status']}，不在 waiting_review，无法人工放行/拒绝",
             )
 
-        payload = {"reviewer": body.reviewer, "comment": body.comment}
+        reviewer = request.state.user["display_name"]  # ADR-0019 D5：签发者=认证身份
+        payload = {"reviewer": reviewer, "comment": body.comment}
         try:
             if body.action == "approve":
                 task = repos.set_task_status(conn, task_id, "completed")
             else:
                 # action == "reject"（Literal 已锁定只有两值）
-                reject_reason = f"人工拒绝（reviewer={body.reviewer}）" + (
+                reject_reason = f"人工拒绝（reviewer={reviewer}）" + (
                     f"：{body.comment}" if body.comment else ""
                 )
                 task = repos.set_task_status(conn, task_id, "failed", error_message=reject_reason)
@@ -313,7 +302,7 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
                 agent_id=task.get("agent_id"),
                 event_type="review_approved",
                 level="info",
-                message=f"人工批准放行（reviewer={body.reviewer}），任务转 completed"
+                message=f"人工批准放行（reviewer={reviewer}），任务转 completed"
                 + (f"；{sample_rows} 条样本标记为工程师认可" if sample_rows else ""),
                 payload=payload,
             )
@@ -325,7 +314,7 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             agent_id=task.get("agent_id"),
             event_type="review_rejected",
             level="warning",
-            message=f"人工拒绝（reviewer={body.reviewer}），任务转 failed"
+            message=f"人工拒绝（reviewer={reviewer}），任务转 failed"
             + (f"；{sample_rows} 条样本标记为未认可" if sample_rows else ""),
             payload=payload,
         )

@@ -11,6 +11,8 @@ from typing import Any, Iterator
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import TEST_DISPLAY_NAME, seed_and_login
+
 from backend.app.main import create_app
 from backend.app.storage import repos
 
@@ -99,25 +101,29 @@ def governance_env(tmp_path: Path) -> Iterator[GovernanceEnv]:
     )
     _write_eval_cases(agents_dir, _base_cases())
 
+    db_path = tmp_path / "flai_os.db"
     app = create_app(
         agents_dir=agents_dir,
         tools_dir=REPO / "tools_impl",
         contracts_dir=REPO / "contracts",
-        db_path=tmp_path / "flai_os.db",
+        db_path=db_path,
         uploads_dir=tmp_path / "uploads",
         task_runs_dir=tmp_path / "task_runs",
     )
     with TestClient(app) as client:
+        seed_and_login(client, db_path)
         yield GovernanceEnv(client=client, app=app, agents_dir=agents_dir)
 
 
 def _run_eval(env: GovernanceEnv, agent_id: str = "governed_agent") -> dict[str, Any]:
     response = env.client.post(
         f"/api/agents/{agent_id}/eval-runs",
-        json={"triggered_by": "测试工程师"},
+        json={},
     )
     assert response.status_code == 200, response.text
-    return response.json()
+    run = response.json()
+    assert run["triggered_by"] == TEST_DISPLAY_NAME
+    return run
 
 
 def _create_and_execute_user_task(
@@ -130,7 +136,6 @@ def _create_and_execute_user_task(
         json={
             "agent_id": "governed_agent",
             "inputs": {"name": name},
-            "created_by": "测试工程师",
         },
     )
     assert created.status_code == 200, created.text
@@ -173,7 +178,7 @@ def _reviewed_sample(
     assert result["status"] == "waiting_review"
     reviewed = env.client.post(
         f"/api/tasks/{task_id}/review",
-        json={"action": action, "reviewer": "审核工程师", "comment": "M10 测试"},
+        json={"action": action, "comment": "M10 测试"},
     )
     assert reviewed.status_code == 200, reviewed.text
     samples = _samples_for_task(env, task_id)
@@ -184,12 +189,10 @@ def _reviewed_sample(
 def _fix_sample(
     env: GovernanceEnv,
     sample_id: int,
-    *,
-    fixed_by: str = "策展工程师",
 ):
     return env.client.post(
         "/api/agents/governed_agent/eval-cases",
-        json={"sample_id": sample_id, "fixed_by": fixed_by},
+        json={"sample_id": sample_id},
     )
 
 
@@ -198,12 +201,10 @@ def _promote(
     eval_run_id: str,
     *,
     confirmations: Any = _MISSING,
-    confirmed_by: str = "王工",
 ):
     payload: dict[str, Any] = {
         "to_maturity": "L1",
         "eval_run_id": eval_run_id,
-        "confirmed_by": confirmed_by,
     }
     if confirmations is not _MISSING:
         payload["confirmations"] = confirmations
@@ -262,7 +263,7 @@ def test_runner_unknown_agent_returns_404(governance_env: GovernanceEnv) -> None
     """验证对不存在 Agent 触发 eval run 时 API fail-closed 返回 404。"""
     response = governance_env.client.post(
         "/api/agents/nope/eval-runs",
-        json={"triggered_by": "测试工程师"},
+        json={},
     )
 
     assert response.status_code == 404
@@ -463,7 +464,6 @@ def test_task_list_origin_filters_keep_eval_out_of_default_view(
         json={
             "agent_id": "governed_agent",
             "inputs": {"name": "列表见证"},
-            "created_by": "测试工程师",
         },
     )
     assert created.status_code == 200
@@ -488,7 +488,7 @@ def test_approved_sample_is_fixed_as_real_draft_case(
     assert sample["task_id"] == task_id
     assert sample["accepted_by_engineer"] is True
 
-    response = _fix_sample(governance_env, sample["id"], fixed_by="王工")
+    response = _fix_sample(governance_env, sample["id"])
 
     assert response.status_code == 200, response.text
     case_path = governance_env.governed_cases_dir / response.json()["case_file"]
@@ -497,7 +497,7 @@ def test_approved_sample_is_fixed_as_real_draft_case(
     assert case["curation"] == "draft"
     assert case["provenance"]["sample_id"] == sample["id"]
     assert case["provenance"]["task_id"] == task_id
-    assert case["provenance"]["fixed_by"] == "王工"
+    assert case["provenance"]["fixed_by"] == TEST_DISPLAY_NAME
     assert {"kind": "status_is", "value": "completed"} in case["checks"]
 
 
@@ -557,13 +557,13 @@ def test_promotion_happy_path_updates_yaml_projection_and_audit_record(
         governance_env,
         run["id"],
         confirmations={"exception_paths_handled": True},
-        confirmed_by="王工",
     )
 
     assert response.status_code == 200, response.text
     promotion = response.json()
     assert promotion["from_maturity"] == "L0"
     assert promotion["to_maturity"] == "L1"
+    assert promotion["confirmed_by"] == TEST_DISPLAY_NAME
     yaml_text = (governance_env.governed_dir / "agent.yaml").read_text(encoding="utf-8")
     assert "\nmaturity: L1\n" in f"\n{yaml_text}\n"
 
@@ -789,7 +789,6 @@ def test_promotion_manual_confirmation_is_strict_boolean_true(
         governance_env,
         run["id"],
         confirmations=confirmations,
-        confirmed_by="王工",
     )
 
     checks = _rejection_checks(response)
@@ -808,22 +807,30 @@ def test_promotion_manual_confirmation_is_strict_boolean_true(
     ) is True
 
 
-def test_promotion_rejects_blank_confirmed_by(
+def test_promotion_rejects_client_confirmed_by_and_derives_session_identity(
     governance_env: GovernanceEnv,
 ) -> None:
-    """验证 exception_paths_handled=true 但 confirmed_by 为空串时仍拒绝晋升。"""
+    """confirmed_by 已删除：显式发送字段 422；省略时由会话身份记名。"""
     run = _run_eval(governance_env)
 
-    checks = _rejection_checks(
-        _promote(
-            governance_env,
-            run["id"],
-            confirmations={"exception_paths_handled": True},
-            confirmed_by="",
-        )
+    forged = governance_env.client.post(
+        "/api/agents/governed_agent/promote",
+        json={
+            "to_maturity": "L1",
+            "eval_run_id": run["id"],
+            "confirmations": {"exception_paths_handled": True},
+            "confirmed_by": "",
+        },
     )
+    assert forged.status_code == 422
 
-    assert checks["manual_confirmation"]["ok"] is False
+    honest = _promote(
+        governance_env,
+        run["id"],
+        confirmations={"exception_paths_handled": True},
+    )
+    assert honest.status_code == 200, honest.text
+    assert honest.json()["confirmed_by"] == TEST_DISPLAY_NAME
 
 
 def test_promotion_rejects_l1_to_l1_transition(
@@ -938,7 +945,7 @@ def test_eval_run_invalidated_when_package_changes_during_run(
 
     monkeypatch.setattr(runner_mod, "compute_digest", _drifting)
     response = governance_env.client.post(
-        "/api/agents/governed_agent/eval-runs", json={"triggered_by": "注入"}
+        "/api/agents/governed_agent/eval-runs", json={}
     )
     assert response.status_code == 200, response.text
     run = response.json()
@@ -1005,15 +1012,17 @@ def test_scope_violating_agent_not_resurrected_by_promotion(
     vio_yaml.write_text(vio_text, encoding="utf-8")
     _write_eval_cases(agents_dir, _base_cases())
 
+    db_path = tmp_path / "flai_os.db"
     app = create_app(
         agents_dir=agents_dir,
         tools_dir=REPO / "tools_impl",
         contracts_dir=REPO / "contracts",
-        db_path=tmp_path / "flai_os.db",
+        db_path=db_path,
         uploads_dir=tmp_path / "uploads",
         task_runs_dir=tmp_path / "task_runs",
     )
     with TestClient(app) as client:
+        seed_and_login(client, db_path)
         # 启动对账已注销违规者
         ids = {a["id"] for a in client.get("/api/agents").json()}
         assert "violator_agent" not in ids
@@ -1051,15 +1060,17 @@ def test_digest_covers_custom_named_schema(tmp_path: Path) -> None:
     yaml_path.write_text(yaml_text, encoding="utf-8")
     _write_eval_cases(agents_dir, _base_cases())
 
+    db_path = tmp_path / "flai_os.db"
     app = create_app(
         agents_dir=agents_dir,
         tools_dir=REPO / "tools_impl",
         contracts_dir=REPO / "contracts",
-        db_path=tmp_path / "flai_os.db",
+        db_path=db_path,
         uploads_dir=tmp_path / "uploads",
         task_runs_dir=tmp_path / "task_runs",
     )
     with TestClient(app) as client:
+        seed_and_login(client, db_path)
         env = GovernanceEnv(client=client, app=app, agents_dir=agents_dir)
         run = _run_eval(env)
         assert run["status"] == "completed" and run["failed"] == 0
@@ -1094,7 +1105,7 @@ def test_eval_run_error_when_post_run_recheck_raises(
 
     monkeypatch.setattr(runner_mod, "load_eval_cases", _flaky)
     response = governance_env.client.post(
-        "/api/agents/governed_agent/eval-runs", json={"triggered_by": "注入"}
+        "/api/agents/governed_agent/eval-runs", json={}
     )
     assert response.status_code == 200, response.text
     run = response.json()

@@ -102,16 +102,20 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(("PASS" if ok is True else "FAIL"), name, ("| " + detail if detail and ok is not True else ""))
 
 
-def _start_and_send(page, name: str, text: str) -> None:
-    # 身份门时代：名字不再在 hero 填——注入 localStorage 后 reload，
-    # WelcomeGate 放行且 createdBy 取到该身份（本 helper 两次调用用不同名字，
-    # 故走运行时注入而非 page 级 init_script）。
+def _start_and_send(page, username: str, text: str) -> None:
+    # ADR-0019 真鉴权时代：换身份=真实重新登录（context.request 与页面共享
+    # cookie jar，新会话 cookie 覆盖旧的）。两次调用分别以王工/李工登录。
+    login_context(page.context, BASE, username=username, password=E2E_PASSWORD)
     page.goto(BASE + "/", wait_until="networkidle")
-    page.evaluate(f"localStorage.setItem('flai_user_name', {name!r})")
-    page.reload(wait_until="networkidle")
     page.locator(".composer textarea").fill(text)
     page.get_by_role("button", name="发送").click()
 
+
+
+from _auth import E2E_PASSWORD, login_context, seed_user  # noqa: E402
+
+seed_user(WORK / "flai_os.db", "王工", username="wang_gong")
+seed_user(WORK / "flai_os.db", "李工", username="li_gong")
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
@@ -124,7 +128,7 @@ with sync_playwright() as p:
         "residual_problems": ["你仍需人工整理这批表格", "口径不统一没解决"],
         "reframe": ["若拆成『按契约的性能盘批量计算』，performance_disk_agent 可接"],
     }
-    _start_and_send(page, "王工", "帮我把这堆杂事整理一下")
+    _start_and_send(page, "wang_gong", "帮我把这堆杂事整理一下")
     expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
     body = page.locator("body").inner_text()
     refuse_ok = (
@@ -152,7 +156,7 @@ with sync_playwright() as p:
             {"agent_id": "ghost_agent", "role": "x", "rationale": "x", "prefilled_inputs": {}},
         ],
     }
-    _start_and_send(page, "李工", "做双通道供电的控制逻辑和故障树")
+    _start_and_send(page, "li_gong", "做双通道供电的控制逻辑和故障树")
     expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
     page.wait_for_selector(".agent-card", timeout=5000)
     body = page.locator("body").inner_text()

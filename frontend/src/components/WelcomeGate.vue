@@ -3,47 +3,65 @@
     <main class="welcome-gate__content fx-rise">
       <img class="welcome-gate__art" :src="badgeArt" alt="" />
       <h1 id="welcome-gate-title" class="welcome-gate__title">欢迎来到 FLAi-OS</h1>
-      <p class="welcome-gate__note">留下称呼，工作台会记住你——签发永远由你亲手完成。</p>
+      <p class="welcome-gate__note">登录后开始工作——签发永远由你亲手完成。</p>
 
       <el-input
-        v-model="name"
+        v-model="username"
         class="welcome-gate__input"
-        placeholder="怎么称呼你？"
+        placeholder="用户名"
         autofocus
         @keyup.enter="submit"
       />
+      <el-input
+        v-model="password"
+        class="welcome-gate__input welcome-gate__password"
+        type="password"
+        placeholder="密码"
+        show-password
+        @keyup.enter="submit"
+      />
+      <p v-if="errorText" class="welcome-gate__error" data-test="login-error">{{ errorText }}</p>
       <el-button
         class="welcome-gate__button"
         type="primary"
         :disabled="!canSubmit"
+        :loading="pending"
         @click="submit"
       >
-        进入工作台
+        登录
       </el-button>
+      <p class="welcome-gate__hint">没有账户？请联系平台管理员开通（不提供自助注册）。</p>
     </main>
   </div>
 </template>
 
 <script setup>
 import { computed, ref } from "vue";
-import { ElMessage } from "element-plus";
 import badgeArt from "../assets/welcome-badge.png";
-import { saveName } from "../utils/identity";
+import { login } from "../stores/session";
 
-// 诚实边界：仅保存本地工作称呼，不做认证或代签；内网 SSO 接入递延。
-const name = ref("");
+// ADR-0019 D8：真登录门。错误如实展示后端 detail（401 凭据错/429 节流），
+// 不粉饰不翻译；成功后 emit done，App 收门。
+const username = ref("");
+const password = ref("");
+const errorText = ref("");
+const pending = ref(false);
 const emit = defineEmits(["done"]);
-const canSubmit = computed(() => Boolean(name.value.trim()));
+const canSubmit = computed(() => Boolean(username.value.trim()) && Boolean(password.value));
 
-function submit() {
-  const trimmedName = name.value.trim();
-  if (!trimmedName) return;
-  const persisted = saveName(trimmedName);
-  if (persisted === false) {
-    // 隐私模式等存储不可用：内存态照常工作，如实告知边界（不假装记住了）
-    ElMessage.warning("浏览器存储不可用——称呼仅本次会话有效，刷新后需重新留名。");
+async function submit() {
+  if (!canSubmit.value || pending.value) return;
+  pending.value = true;
+  errorText.value = "";
+  try {
+    await login(username.value.trim(), password.value);
+    emit("done");
+  } catch (err) {
+    errorText.value = err.detail || String(err.message || err);
+    password.value = "";
+  } finally {
+    pending.value = false;
   }
-  emit("done");
 }
 </script>
 
@@ -125,5 +143,23 @@ function submit() {
   border-radius: 10px;
   font-weight: 600;
   box-shadow: var(--shadow-card);
+}
+
+.welcome-gate__password {
+  margin-top: 10px;
+}
+
+.welcome-gate__error {
+  margin: 10px 0 0;
+  color: var(--danger, #c45656);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.welcome-gate__hint {
+  margin: 14px 0 0;
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1.6;
 }
 </style>

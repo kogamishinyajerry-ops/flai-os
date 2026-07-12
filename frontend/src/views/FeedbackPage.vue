@@ -44,9 +44,6 @@
         <el-form-item label="说明">
           <el-input v-model="feedbackForm.message" type="textarea" :rows="3" placeholder="可选" />
         </el-form-item>
-        <el-form-item label="创建人" required>
-          <el-input v-model="feedbackForm.createdBy" placeholder="你的名字" />
-        </el-form-item>
         <el-form-item>
           <el-button type="primary" :loading="submitting" @click="handleSubmit">提交反馈</el-button>
         </el-form-item>
@@ -80,7 +77,6 @@ import { listTasks } from "../api/tasks";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
 import { statusLabel, formatTime } from "../utils/format";
 import EmptyState from "../components/EmptyState.vue";
-import { getSavedName, saveName } from "../utils/identity";
 
 const route = useRoute();
 
@@ -88,7 +84,7 @@ const tasks = ref([]);
 const tasksLoadError = ref("");
 const taskId = ref(typeof route.query.task_id === "string" ? route.query.task_id : "");
 
-const feedbackForm = reactive({ rating: "good", category: "", message: "", createdBy: getSavedName() });
+const feedbackForm = reactive({ rating: "good", category: "", message: "" });
 const submitting = ref(false);
 const feedbackList = ref([]);
 const feedbackError = ref("");
@@ -121,10 +117,6 @@ function handleTaskChange() {
 }
 
 async function handleSubmit() {
-  if (!feedbackForm.createdBy.trim()) {
-    ElMessage.error("请填写创建人");
-    return;
-  }
   if (!feedbackForm.category) {
     ElMessage.error("请选择分类");
     return;
@@ -136,9 +128,7 @@ async function handleSubmit() {
       rating: feedbackForm.rating,
       category: feedbackForm.category,
       message: feedbackForm.message || null,
-      createdBy: feedbackForm.createdBy.trim(),
     });
-    saveName(feedbackForm.createdBy); // 记住名字，全站免重填
     ElMessage.success("反馈已提交");
     feedbackForm.message = "";
     await loadFeedback();

@@ -124,17 +124,23 @@ def flip_task_completed_with_artifact(task_id: str) -> None:
     conn.close()
 
 
+
+from _auth import login_context, login_httpx, seed_user  # noqa: E402
+
+seed_user(WORK / "flai_os.db", "王工")
+API = login_httpx(BASE)  # 直连 API 的已登录客户端（ADR-0019）
+
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
-    page.add_init_script("localStorage.setItem('flai_user_name', '王工')")  # 身份门：预注入工作身份，WelcomeGate 不拦
+    login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie
 
     # ① 导引对话 → orchestrate 方案卡
     page.goto(BASE + "/", wait_until="networkidle")
     page.locator(".composer textarea").fill("做双通道供电的控制逻辑和故障树")
     page.get_by_role("button", name="发送").click()
     expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
-    convs = httpx.get(BASE + "/api/conversations?limit=5").json()
+    convs = API.get("/api/conversations?limit=5").json()
     conv_list = convs if isinstance(convs, list) else convs.get("items", [])
     conv_id = conv_list[0]["id"] if conv_list else None
     check("①对话流出方案卡+拿到会话id", bool(conv_id))
@@ -148,7 +154,6 @@ with sync_playwright() as p:
     # ③ 补全+亲手提交 → 回流对话轴（零跳页，2a 核心承诺）
     page.locator('textarea[placeholder="请填写系统描述"]').first.fill("双通道供电系统（发电机A/B + 汇流条 + 转换开关）")
     page.locator('input[placeholder="组件列表 第 1 项"]').first.fill("发电机A")
-    page.get_by_placeholder("你的名字").fill("王工")
     page.get_by_role("button", name="提交任务").click()
     page.wait_for_url(re.compile(r"\?c=conv_[0-9a-f]+"), timeout=8000)
     check("③提交后回流对话轴 /?c=<conv>（零跳页）", f"c={conv_id}" in page.url)
@@ -161,7 +166,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(SHOTS / "2_returned_live_chip.png"), full_page=True)
 
     # ⑤ 夹具翻完成+产物 → 轮询窗口内锚点行长出
-    tasks = httpx.get(BASE + f"/api/conversations/{conv_id}/tasks").json()
+    tasks = API.get(f"/api/conversations/{conv_id}/tasks").json()
     flip_task_completed_with_artifact(tasks[0]["id"])
     page.wait_for_selector(".status-artifact", timeout=12000)
     check("⑤产物锚点行长出（1 件产物）", "1 件产物" in page.locator(".status-artifact").inner_text())

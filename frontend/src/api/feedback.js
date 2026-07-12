@@ -1,8 +1,8 @@
 import { request } from "./client";
 
 // 与后端 api/feedback.py 契约一致：rating ∈ good|bad；category 见后端 Literal 枚举；
-// created_by 必填具名（空白 422）。agent_id/agent_version 服务端自填，前端不传。
-export const submitFeedback = ({ taskId, rating, category, message, createdBy }) =>
+// created_by 服务端从登录会话派生（ADR-0019 D5）；agent_id/agent_version 服务端自填。
+export const submitFeedback = ({ taskId, rating, category, message }) =>
   request("/api/feedback", {
     method: "POST",
     json: {
@@ -10,7 +10,6 @@ export const submitFeedback = ({ taskId, rating, category, message, createdBy })
       rating,
       category,
       message: message || null,
-      created_by: createdBy,
     },
   });
 

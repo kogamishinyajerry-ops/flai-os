@@ -56,7 +56,7 @@ class _CapturingStub:
 
 def _open_conversation(client: TestClient) -> str:
     resp = client.post(
-        "/api/conversations", json={"agent_id": "guide_agent", "created_by": "m7_test"}
+        "/api/conversations", json={"agent_id": "guide_agent"}
     )
     assert resp.status_code == 200, resp.text
     return resp.json()["id"]

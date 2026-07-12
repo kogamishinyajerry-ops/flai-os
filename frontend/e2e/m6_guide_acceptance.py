@@ -128,10 +128,16 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(("PASS" if ok is True else "FAIL"), name, ("| " + detail if detail and ok is not True else ""))
 
 
+
+from _auth import E2E_PASSWORD, login_context, seed_user  # noqa: E402
+
+seed_user(WORK / "flai_os.db", "王工")
+seed_user(WORK / "flai_os.db", "新同事", username="xin_tongshi")
+
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
-    page.add_init_script("localStorage.setItem('flai_user_name', '王工')")  # 身份门：预注入工作身份，WelcomeGate 不拦
+    login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie
 
     # ① 导引页 = 统一入口（首页）
     page.goto(BASE + "/", wait_until="networkidle")
@@ -216,49 +222,53 @@ with sync_playwright() as p:
           "提交任务" in body, "")
     page.screenshot(path=str(SHOTS / "3_prefilled_create.png"), full_page=True)
 
-    # ── ⑧ 身份门（WelcomeGate）：无身份首访被全屏拦下，具名进入后不再询问 ──
+    # ── ⑧ 登录门（ADR-0019 真鉴权重立）：未登录首访被全屏拦下，真实登录后进入 ──
     fresh = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")
     fresh.goto(BASE + "/", wait_until="networkidle")
-    gate_input = fresh.get_by_placeholder("怎么称呼你？")
+    gate_input = fresh.get_by_placeholder("用户名")
     gate_seen = gate_input.is_visible()
-    gate_input.fill("新同事")
-    fresh.get_by_role("button", name="进入工作台").click()
+    gate_input.fill("xin_tongshi")
+    fresh.get_by_placeholder("密码").fill(E2E_PASSWORD)
+    fresh.locator(".welcome-gate__button").click()
+    # 门下页面的 .hero-title 从一开始就在 DOM——必须等门真正卸载，不然断言
+    # 跑在登录往返完成之前（竞态假红）
+    fresh.wait_for_selector(".welcome-gate", state="detached", timeout=8000)
     fresh.wait_for_selector(".hero-title", timeout=5000)
     hero_body = fresh.locator("body").inner_text()
-    no_more_ask = fresh.get_by_placeholder("怎么称呼你？").count() == 0  # 门关即不再询问
-    identity_shown = "新同事" in hero_body  # 侧栏身份行显示称呼
-    check("⑧身份门：首访拦下→具名进入→全站不再询问", gate_seen and no_more_ask and identity_shown,
+    no_more_ask = fresh.get_by_placeholder("用户名").count() == 0  # 门关即不再询问
+    identity_shown = "新同事" in hero_body  # 侧栏身份行显示登录身份 display_name
+    check("⑧登录门：未登录拦下→真实登录→进入且身份上侧栏", gate_seen and no_more_ask and identity_shown,
           f"gate={gate_seen} no_ask={no_more_ask} shown={identity_shown}")
-    # ⑧' 门过后身份真被对话取到：门是 overlay、底下页面曾以空身份 setup——
-    # 必须整页重挂（App.vue key 含 identityReady）才能发出第一条消息。
+    # ⑧' 门过后身份真被对话取到（created_by 服务端从会话派生）
     fresh.locator(".composer textarea").fill("你好")
     fresh.get_by_role("button", name="发送").click()
     fresh.wait_for_selector(".user-bubble", timeout=8000)
-    gate_send_ok = "身份已失效" not in fresh.locator("body").inner_text()
-    check("⑧'门过后第一条消息可发出（createdBy 已取到新身份）",
-          fresh.locator(".user-bubble").count() >= 1 and gate_send_ok,
-          f"bubble={fresh.locator('.user-bubble').count()} no_stale={gate_send_ok}")
+    check("⑧'门过后第一条消息可发出（会话身份生效）",
+          fresh.locator(".user-bubble").count() >= 1,
+          f"bubble={fresh.locator('.user-bubble').count()}")
     fresh.screenshot(path=str(SHOTS / "4_welcome_gate_passed.png"))
     fresh.close()
 
-    # ── ⑧'' 存储不可用（隐私模式）：内存态身份兜底——门照常过、消息照常发，
-    # 绝不死循环（Codex 审 P1 的回归咬合：修复前此链卡「身份已失效」）。──
+    # ── ⑧'' 存储不可用（隐私模式）：会话走 HttpOnly cookie 不依赖 localStorage
+    # ——storage 全坏照样登录照样发消息（原 Codex 审 P1 回归的鉴权时代等价物）。──
     priv = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")
     priv.add_init_script("Storage.prototype.setItem = function() { throw new Error('storage disabled'); };")
     priv.goto(BASE + "/", wait_until="networkidle")
-    priv.get_by_placeholder("怎么称呼你？").fill("隐私用户")
-    priv.get_by_role("button", name="进入工作台").click()
+    priv.get_by_placeholder("用户名").fill("xin_tongshi")
+    priv.get_by_placeholder("密码").fill(E2E_PASSWORD)
+    priv.locator(".welcome-gate__button").click()
+    priv.wait_for_selector(".welcome-gate", state="detached", timeout=8000)
     priv.wait_for_selector(".hero-title", timeout=5000)
     priv.locator(".composer textarea").fill("你好")
     priv.get_by_role("button", name="发送").click()
     priv.wait_for_selector(".user-bubble", timeout=8000)
-    check("⑧''存储不可用：内存态身份闭环（门过+第一条消息可发）", True)
+    check("⑧''存储不可用：cookie 会话闭环（登录+第一条消息可发）", True)
     priv.close()
 
     # ── ⑨ 诚实前置（M11-A1）：composer Agent 选择器首屏可见 maturity 角标
     # 与首条 limitation 摘要——「L0/模拟」不许藏在两跳深的 /portal 里。──
     hon = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")
-    hon.add_init_script("localStorage.setItem('flai_user_name', '王工')")
+    login_context(hon.context, BASE)
     hon.goto(BASE + "/", wait_until="networkidle")
     hon.get_by_role("button", name="浏览可用 Agent").click()
     hon.wait_for_selector(".agent-pick .ap-item", timeout=5000)

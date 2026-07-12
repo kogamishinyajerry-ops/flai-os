@@ -91,11 +91,15 @@ else:
 runner = JobRunner(app.state.runtime, app.state.conn_factory, poll_interval=0.2)
 threading.Thread(target=runner.run_forever, daemon=True).start()
 
+from _auth import login_context, login_httpx, seed_user  # noqa: E402
+
+seed_user(WORK / "flai_os.db", "验收工程师")
+API = login_httpx(BASE)  # 直连 API 的已登录客户端（ADR-0019；created_by 服务端派生）
+
 # 预置一个任务喂任务台列表（走真实 API，非直插库）。
-_created = httpx.post(
-    BASE + "/api/tasks",
-    json={"agent_id": "hello_agent", "name": "工作台验收样例任务", "inputs": {"name": "M8"}, "created_by": "验收工程师"},
-    timeout=5,
+_created = API.post(
+    "/api/tasks",
+    json={"agent_id": "hello_agent", "name": "工作台验收样例任务", "inputs": {"name": "M8"}},
 )
 if _created.status_code not in (200, 201):
     sys.exit(f"诚实失败：预置任务失败 {_created.status_code} {_created.text[:200]}")
@@ -113,7 +117,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
-    page.add_init_script("localStorage.setItem('flai_user_name', '验收工程师')")  # 身份门：预注入工作身份，WelcomeGate 不拦
+    login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie
 
     # ── ① 左栏导航恰两个一级入口（双 Surface）──
     page.goto(BASE + "/", wait_until="networkidle")
@@ -144,7 +148,7 @@ with sync_playwright() as p:
     # 等 hello_agent 跑到 completed，到席灯必须中性墨 --ink-soft #6b6259——
     # completed 永远不给绿（绿仅真实 REAL 结果）。
     for _ in range(60):
-        if httpx.get(BASE + f"/api/tasks/{SEED_TASK_ID}", timeout=2).json()["status"] == "completed":
+        if API.get(f"/api/tasks/{SEED_TASK_ID}").json()["status"] == "completed":
             break
         time.sleep(0.2)
     page.reload(wait_until="networkidle")
@@ -156,16 +160,15 @@ with sync_playwright() as p:
     # ── ②''' 完成未读点（2c）：baseline 之后新完成且没打开过 → clay 点；点开即灭 ──
     # baseline 已在首次进任务台时锚定（上方 goto /workbench），此后创建的任务
     # 完成时刻必然晚于 baseline——不依赖 SEED_TASK 的完成/首访时序。
-    _t2 = httpx.post(
-        BASE + "/api/tasks",
-        json={"agent_id": "hello_agent", "name": "未读点样例任务", "inputs": {"name": "unseen"}, "created_by": "验收工程师"},
-        timeout=5,
+    _t2 = API.post(
+        "/api/tasks",
+        json={"agent_id": "hello_agent", "name": "未读点样例任务", "inputs": {"name": "unseen"}},
     )
     if _t2.status_code not in (200, 201):
         sys.exit(f"诚实失败：未读点样例任务创建失败 {_t2.status_code}")
     T2_ID = _t2.json()["id"]
     for _ in range(60):
-        if httpx.get(BASE + f"/api/tasks/{T2_ID}", timeout=2).json()["status"] == "completed":
+        if API.get(f"/api/tasks/{T2_ID}").json()["status"] == "completed":
             break
         time.sleep(0.2)
     row2 = page.locator(".cl-item", has_text="未读点样例任务").first
@@ -198,7 +201,7 @@ with sync_playwright() as p:
     # ── ⑥ 暗色主题颜色级探针（美化批「夜航图纸」）：色相轴快照失聪，必须探针
     # 咬合（W13 方法学）。theme 默认跟随系统 → color_scheme=dark 即入暗色。──
     dark = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="dark")
-    dark.add_init_script("localStorage.setItem('flai_user_name', '验收工程师')")
+    login_context(dark.context, BASE)  # 暗色探针页同样真实登录
     dark.goto(BASE + "/tasks", wait_until="networkidle")
     dark.wait_for_selector(".cl-item", timeout=5000)
     # 画布翻转真生效：--page-bg 暗值 #211d19

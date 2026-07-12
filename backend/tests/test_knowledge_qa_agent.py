@@ -33,6 +33,8 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
+from conftest import TEST_DISPLAY_NAME, seed_and_login
+
 from backend.app.jobs.runner import JobRunner
 from backend.app.main import create_app
 from backend.app.storage import repos
@@ -116,16 +118,18 @@ def _clean_llm_env(monkeypatch):
 @pytest.fixture()
 def app_env(tmp_path):
     """真仓 agents/ + data/knowledge，tmp 只放 db/uploads/task_runs（SPEC §5）。"""
+    db_path = tmp_path / "flai_os.db"
     app = create_app(
         agents_dir=REPO_ROOT / "agents",
         tools_dir=REPO_ROOT / "tools_impl",
         contracts_dir=REPO_ROOT / "contracts",
         knowledge_dir=REPO_ROOT / "data" / "knowledge",
-        db_path=tmp_path / "flai_os.db",
+        db_path=db_path,
         uploads_dir=tmp_path / "uploads",
         task_runs_dir=tmp_path / "task_runs",
     )
     with TestClient(app) as client:
+        seed_and_login(client, db_path)
         yield client, app
 
 
@@ -184,23 +188,25 @@ def attack_env(tmp_path):
 
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir()
+    db_path = tmp_path / "flai_os.db"
     app = create_app(
         agents_dir=agents_dir,
         tools_dir=tools_dir,
         contracts_dir=REPO_ROOT / "contracts",
         knowledge_dir=knowledge_dir,
-        db_path=tmp_path / "flai_os.db",
+        db_path=db_path,
         uploads_dir=tmp_path / "uploads",
         task_runs_dir=tmp_path / "task_runs",
     )
     with TestClient(app) as client:
+        seed_and_login(client, db_path)
         yield client, app
 
 
 def _create_and_run(client: TestClient, app, agent_id: str, inputs: dict[str, Any]) -> dict[str, Any]:
     resp = client.post(
         "/api/tasks",
-        json={"agent_id": agent_id, "inputs": inputs, "created_by": "knowledge_qa_test"},
+        json={"agent_id": agent_id, "inputs": inputs},
     )
     assert resp.status_code == 200, resp.text
     task_id = resp.json()["id"]
@@ -338,8 +344,7 @@ def test_human_review_approve_chain(app_env) -> None:
 
     review = client.post(
         f"/api/tasks/{task_id}/review",
-        json={"action": "approve", "reviewer": "动力装置工程师_王工",
-              "comment": "草案出处齐全，归纳与语料一致"},
+        json={"action": "approve", "comment": "草案出处齐全，归纳与语料一致"},
     )
     assert review.status_code == 200
     assert review.json()["status"] == "completed"
@@ -350,7 +355,7 @@ def test_human_review_approve_chain(app_env) -> None:
     events = client.get(f"/api/tasks/{task_id}/events").json()
     approved = [e for e in events if e["event_type"] == "review_approved"]
     assert len(approved) == 1
-    assert approved[0]["payload"]["reviewer"] == "动力装置工程师_王工"
+    assert approved[0]["payload"]["reviewer"] == TEST_DISPLAY_NAME
 
 
 # ── witness 4：语料注入中和（tmp 环境，真 workflow.py 受测）──────────────

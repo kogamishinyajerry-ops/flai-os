@@ -21,6 +21,8 @@ import yaml
 from fastapi.testclient import TestClient
 from jsonschema import validate
 
+from conftest import seed_and_login
+
 from backend.app.jobs.runner import JobRunner
 from backend.app.main import create_app
 
@@ -128,22 +130,24 @@ def app_env(tmp_path) -> Iterator[tuple[TestClient, Any]]:
     # 已注册但不在 probe 白名单内的 scope（default-deny 越权钥匙）。
     _write_scope(knowledge_dir, "other_scope", {"doc.md": "另一范围的内容。"})
 
+    db_path = tmp_path / "flai_os.db"
     app = create_app(
         agents_dir=agents_dir,
         tools_dir=tools_dir,
         contracts_dir=CONTRACTS_DIR,
         knowledge_dir=knowledge_dir,
-        db_path=tmp_path / "flai_os.db",
+        db_path=db_path,
         uploads_dir=tmp_path / "uploads",
         task_runs_dir=tmp_path / "task_runs",
     )
     with TestClient(app) as client:
+        seed_and_login(client, db_path)
         yield client, app
 
 
 def _create_and_run(client: TestClient, app, agent_id: str, inputs: dict[str, Any]) -> dict[str, Any]:
     resp = client.post(
-        "/api/tasks", json={"agent_id": agent_id, "inputs": inputs, "created_by": "knowledge_e2e"}
+        "/api/tasks", json={"agent_id": agent_id, "inputs": inputs}
     )
     assert resp.status_code == 200, resp.text
     task_id = resp.json()["id"]
@@ -205,6 +209,6 @@ def test_e2e_reconcile_rejects_violator_at_api(app_env) -> None:
     assert "knowledge_violator" not in ids
     resp = client.post(
         "/api/tasks",
-        json={"agent_id": "knowledge_violator", "inputs": {"query": "x"}, "created_by": "e2e"},
+        json={"agent_id": "knowledge_violator", "inputs": {"query": "x"}},
     )
     assert resp.status_code == 404

@@ -171,8 +171,8 @@
 
         <el-card v-if="isWaitingReview" shadow="never" class="review-card">
           <el-form label-width="80px">
-            <el-form-item label="审核人" required>
-              <el-input v-model="reviewForm.reviewer" placeholder="你的名字" />
+            <el-form-item label="审核人">
+              <span class="review-signer">{{ signerName }}（登录身份，签发记名不可代填）</span>
             </el-form-item>
             <el-form-item label="意见">
               <el-input v-model="reviewForm.comment" type="textarea" :rows="2" placeholder="可选" />
@@ -213,9 +213,6 @@
           <el-form-item label="说明">
             <el-input v-model="feedbackForm.message" type="textarea" :rows="2" placeholder="可选" />
           </el-form-item>
-          <el-form-item label="创建人" required>
-            <el-input v-model="feedbackForm.createdBy" placeholder="你的名字" />
-          </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="submittingFeedback" @click="handleSubmitFeedback">提交反馈</el-button>
           </el-form-item>
@@ -249,7 +246,7 @@ import { statusLabel, statusTagType, formatTime, formatFileSize, TASK_WORK_STATE
 import MarkdownLite from "../components/MarkdownLite.vue";
 import WorkLog from "../components/WorkLog.vue";
 import CompletionSeal from "../components/CompletionSeal.vue";
-import { getSavedName, saveName } from "../utils/identity";
+import { displayName } from "../stores/session";
 import { markTaskSeen } from "../utils/lastSeen";
 import { burstSigned } from "../effects/burst";
 
@@ -277,7 +274,8 @@ const events = ref([]);
 const loading = ref(true);
 const loadError = ref("");
 
-const reviewForm = reactive({ reviewer: getSavedName(), comment: "" });
+const reviewForm = reactive({ comment: "" });
+const signerName = computed(() => displayName());
 const reviewing = ref(false);
 // 批准按钮元素（动效系统 v1 E2）：放行成功后 burstSigned(el) 的定位来源；
 // el-button 组件 ref 通过 .ref 暴露原生 DOM（element-plus expose 契约）。
@@ -391,7 +389,7 @@ function artifactLineCount(a) {
   return a.isText && a.text ? a.text.split("\n").length : null;
 }
 
-const feedbackForm = reactive({ rating: "good", category: "", message: "", createdBy: getSavedName() });
+const feedbackForm = reactive({ rating: "good", category: "", message: "" });
 const submittingFeedback = ref(false);
 const feedbackList = ref([]);
 const feedbackError = ref("");
@@ -526,10 +524,6 @@ async function handleCancel() {
 }
 
 async function handleReview(action) {
-  if (!reviewForm.reviewer.trim()) {
-    ElMessage.error("请填写审核人");
-    return;
-  }
   const label = action === "approve" ? "批准放行" : "拒绝";
   try {
     await ElMessageBox.confirm(`确认${label}该任务？`, label, { type: "warning" });
@@ -538,9 +532,8 @@ async function handleReview(action) {
   }
   reviewing.value = true;
   try {
-    await reviewTask(taskId, { action, reviewer: reviewForm.reviewer.trim(), comment: reviewForm.comment || null });
+    await reviewTask(taskId, { action, comment: reviewForm.comment || null });
     markTaskSeen(taskId); // 亲手签发=已看过：其后完成不得对签发者亮未读
-    saveName(reviewForm.reviewer); // 记住名字，全站免重填
     // 人签放行成功时刻（唯一 teal 许可点，动效系统硬约束）：仅 approve 分支触发；
     // 驳回/失败绝不放庆祝动效。元素取不到（ref 未挂载等）burstSigned 自兜 null。
     if (action === "approve") {
@@ -556,10 +549,6 @@ async function handleReview(action) {
 }
 
 async function handleSubmitFeedback() {
-  if (!feedbackForm.createdBy.trim()) {
-    ElMessage.error("请填写创建人");
-    return;
-  }
   if (!feedbackForm.category) {
     ElMessage.error("请选择分类");
     return;
@@ -571,9 +560,7 @@ async function handleSubmitFeedback() {
       rating: feedbackForm.rating,
       category: feedbackForm.category,
       message: feedbackForm.message || null,
-      createdBy: feedbackForm.createdBy.trim(),
     });
-    saveName(feedbackForm.createdBy); // 记住名字，全站免重填
     ElMessage.success("反馈已提交");
     feedbackForm.message = "";
     await loadFeedback();
@@ -694,6 +681,11 @@ onUnmounted(() => {
   font-weight: 600;
   color: var(--ink);
 }
+.review-signer {
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
 .review-card {
   margin-top: 12px;
   max-width: 480px;

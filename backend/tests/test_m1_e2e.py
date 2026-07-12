@@ -38,7 +38,7 @@ def test_m1_e2e_full_lifecycle(app_env) -> None:
     # ③ POST /api/tasks 建 hello 任务
     create_resp = client.post(
         "/api/tasks",
-        json={"agent_id": "hello_agent", "inputs": {"name": "E2E小明"}, "created_by": "e2e_test"},
+        json={"agent_id": "hello_agent", "inputs": {"name": "E2E小明"}},
     )
     assert create_resp.status_code == 200
     task = create_resp.json()
@@ -97,7 +97,7 @@ def test_cancel_queued_task_then_run_once_does_not_execute_it(app_env) -> None:
 
     create_resp = client.post(
         "/api/tasks",
-        json={"agent_id": "hello_agent", "inputs": {"name": "取消我"}, "created_by": "e2e_test"},
+        json={"agent_id": "hello_agent", "inputs": {"name": "取消我"}},
     )
     assert create_resp.status_code == 200
     task_id = create_resp.json()["id"]

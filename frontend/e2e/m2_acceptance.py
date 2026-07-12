@@ -94,6 +94,10 @@ for _ in range(50):
 else:
     sys.exit("诚实失败：后端 5s 内未就绪")
 
+from _auth import login_context, seed_user  # noqa: E402（须在后端就绪后种账户）
+
+seed_user(WORK / "flai_os.db", "验收工程师")
+
 runner = JobRunner(app.state.runtime, app.state.conn_factory, poll_interval=0.2)
 threading.Thread(target=runner.run_forever, daemon=True).start()
 
@@ -109,7 +113,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
-    page.add_init_script("localStorage.setItem('flai_user_name', '验收工程师')")  # 身份门：预注入工作身份，WelcomeGate 不拦
+    login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie，登录门不拦
 
     # ── ①②门户：连接后端 + Agent 列表（两个 agent 卡片）──
     # M6 起首页 "/" 是智能导引，Agent 门户移至 /portal（ADR-0012 前端路由）。
@@ -124,8 +128,7 @@ with sync_playwright() as p:
     page.get_by_role("button", name="创建任务").first.click()
     page.wait_for_url(re.compile(r"/tasks/new"), timeout=5000)
     expect(page.locator(".agent-preview")).to_be_visible(timeout=5000)
-    page.get_by_placeholder("你的名字").fill("验收工程师")
-    # 结构化表单：hello_agent 的 name 字段（不再手写 JSON）
+    # 结构化表单：hello_agent 的 name 字段（不再手写 JSON）；创建人=登录身份，无输入框
     page.locator('input[placeholder="请填写姓名"]').first.fill("M2验收")
     page.screenshot(path=str(SHOTS / "2_create_filled.png"), full_page=True)
     page.get_by_role("button", name="提交任务").click()
@@ -155,7 +158,6 @@ with sync_playwright() as p:
     page.locator(".feedback-form .el-select").click()
     page.get_by_role("option", name="改进建议").click()
     page.locator(".feedback-form textarea").fill("M2 验收走查：整链路可用")
-    page.locator(".feedback-form").get_by_placeholder("你的名字").fill("验收工程师")
     page.get_by_role("button", name="提交反馈").click()
     page.wait_for_timeout(1200)
     body = page.locator("body").inner_text()
@@ -173,7 +175,6 @@ with sync_playwright() as p:
     # ── 附加(P1-2)：waiting_review 人工放行 UI 全链 ──
     page.goto(BASE + "/tasks/new?agent_id=review_agent", wait_until="networkidle")
     expect(page.locator(".agent-preview")).to_be_visible(timeout=5000)
-    page.get_by_placeholder("你的名字").fill("验收工程师")
     page.locator('input[placeholder="请填写姓名"]').first.fill("待人工审核")
     page.get_by_role("button", name="提交任务").click()
     page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
@@ -189,13 +190,14 @@ with sync_playwright() as p:
           page.locator("body").inner_text()[:400])
     page.screenshot(path=str(SHOTS / "6_waiting_review.png"), full_page=True)
 
-    page.locator(".review-card").get_by_placeholder("你的名字").fill("审核员甲")
+    # 签发人=登录身份（验收工程师），审核卡只余意见框——先断言身份行如实展示
+    check("附加:签发人=登录身份展示", "验收工程师" in page.locator(".review-card").inner_text(),
+          page.locator(".review-card").inner_text()[:200])
     page.locator(".review-card textarea").fill("结果核对无误，批准")
     page.get_by_role("button", name="批准放行").click()
     page.get_by_role("button", name="确定").click()  # ElMessageBox 二次确认
     page.wait_for_timeout(1500)
     body = page.locator("body").inner_text()
-    approved_ok = "已完成" in body and "review_approved" in body and "审核员甲" not in ("",)
     check("附加:人工批准→completed+review_approved 事件上时间轴",
           "已完成" in body and "review_approved" in body, body[:600])
     page.screenshot(path=str(SHOTS / "7_review_approved.png"), full_page=True)

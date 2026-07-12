@@ -49,7 +49,7 @@ def client(app_env) -> Iterator[TestClient]:
 def test_create_task_response_matches_task_schema(client: TestClient) -> None:
     resp = client.post(
         "/api/tasks",
-        json={"agent_id": "hello_agent", "inputs": {"name": "契约对账"}, "created_by": "parity_test"},
+        json={"agent_id": "hello_agent", "inputs": {"name": "契约对账"}},
     )
     assert resp.status_code == 200
     validate(resp.json(), TASK_SCHEMA)
@@ -58,7 +58,7 @@ def test_create_task_response_matches_task_schema(client: TestClient) -> None:
 def test_get_task_response_matches_task_schema(client: TestClient) -> None:
     create_resp = client.post(
         "/api/tasks",
-        json={"agent_id": "hello_agent", "inputs": {"name": "契约对账2"}, "created_by": "parity_test"},
+        json={"agent_id": "hello_agent", "inputs": {"name": "契约对账2"}},
     )
     task_id = create_resp.json()["id"]
 
@@ -74,7 +74,6 @@ def test_list_tasks_each_response_matches_task_schema(client: TestClient) -> Non
             json={
                 "agent_id": "hello_agent",
                 "inputs": {"name": f"契约对账{suffix}"},
-                "created_by": "parity_test",
             },
         )
         assert create_resp.status_code == 200
@@ -103,7 +102,6 @@ def test_review_response_matches_task_schema(
         json={
             "agent_id": "hello_agent",
             "inputs": {"name": f"契约对账 review {action}"},
-            "created_by": "parity_test",
         },
     )
     assert create_resp.status_code == 200
@@ -118,7 +116,7 @@ def test_review_response_matches_task_schema(
 
     resp = client.post(
         f"/api/tasks/{task_id}/review",
-        json={"action": action, "reviewer": "契约测试员", "comment": "响应体对账"},
+        json={"action": action, "comment": "响应体对账"},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -131,7 +129,7 @@ def test_completed_task_response_matches_task_schema(client: TestClient, app_env
     _, app = app_env
     create_resp = client.post(
         "/api/tasks",
-        json={"agent_id": "hello_agent", "inputs": {"name": "契约对账3"}, "created_by": "parity_test"},
+        json={"agent_id": "hello_agent", "inputs": {"name": "契约对账3"}},
     )
     task_id = create_resp.json()["id"]
 
@@ -152,7 +150,7 @@ def test_task_events_response_matches_event_schema_across_full_lifecycle(client:
     _, app = app_env
     create_resp = client.post(
         "/api/tasks",
-        json={"agent_id": "hello_agent", "inputs": {"name": "契约对账4"}, "created_by": "parity_test"},
+        json={"agent_id": "hello_agent", "inputs": {"name": "契约对账4"}},
     )
     task_id = create_resp.json()["id"]
 

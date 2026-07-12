@@ -343,7 +343,6 @@ import { createConversation, postMessage, getConversation, listConversationTasks
 import { listAgents } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
 import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, formatTime } from "../utils/format";
-import { getSavedName, saveName } from "../utils/identity";
 import { openTaskPeek } from "../stores/statusCenter";
 import { resolvedTheme } from "../stores/theme";
 import ThinkingInk from "../components/artwork/ThinkingInk.vue";
@@ -354,7 +353,6 @@ const router = useRouter();
 const GUIDE_AGENT_ID = "guide_agent";
 const MAX_FILES_PER_MESSAGE = 5; // 与后端 PostMessageRequest / 运行时同值
 
-const createdBy = ref(getSavedName());
 const started = ref(false);
 const conversationId = ref("");
 const messages = ref([]);
@@ -515,11 +513,6 @@ async function send() {
   if (restoring.value) return; // 会话恢复在途不收发言——防止意外新建会话
   const content = draft.value.trim();
   if (!content) return;
-  if (!createdBy.value.trim()) {
-    // 身份门保证有名字；此兜底只防 localStorage 被外部清空的边角
-    ElMessage.error("身份已失效，请刷新页面重新留下称呼");
-    return;
-  }
   pageError.value = "";
 
   // 乐观追加用户气泡（附件 chips 一并显示；失败整体回滚）
@@ -540,8 +533,7 @@ async function send() {
     // 先传附件（已 done 的跳过，失败即中止——本轮消息不发送）
     const fileIds = await uploadPendingFiles();
     if (!conversationId.value) {
-      const conv = await createConversation({ agentId: GUIDE_AGENT_ID, createdBy: createdBy.value.trim() });
-      saveName(createdBy.value); // 记住名字，全站免重填
+      const conv = await createConversation({ agentId: GUIDE_AGENT_ID });
       conversationId.value = conv.id;
       started.value = true;
       // URL 反映当前会话（可刷新/分享/回退），并让左栏历史即时收录这条新会话。
@@ -722,8 +714,6 @@ async function loadConversation(id) {
     const conv = await getConversation(id);
     conversationId.value = conv.id;
     started.value = true;
-    // 具名沿用会话发起人——恢复后继续发言仍需具名，但 hero 的名字框已隐去。
-    createdBy.value = conv.created_by || createdBy.value;
     messages.value = (conv.messages || []).map((m) => ({
       role: m.role,
       content: m.content,

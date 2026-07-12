@@ -127,11 +127,16 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(("PASS" if ok is True else "FAIL"), name, ("| " + detail if detail and ok is not True else ""))
 
 
+
+from _auth import login_context, seed_user  # noqa: E402
+
+seed_user(WORK / "flai_os.db", "验收工程师")
+
 with sync_playwright() as p:
     browser = p.chromium.launch()
     # pin 亮色：theme.js 默认跟随系统，颜色/文案断言不许随 CI 环境漂移
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")
-    page.add_init_script("localStorage.setItem('flai_user_name', '验收工程师')")
+    login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie
 
     # ── ① 治理面板可开 ──
     page.goto(BASE + "/portal", wait_until="networkidle")
@@ -200,9 +205,7 @@ with sync_playwright() as p:
     # ── ⑥ 用户任务 → waiting_review → 状态坞批准放行 ──
     page.goto(BASE + "/tasks/new?agent_id=governed_agent", wait_until="networkidle")
     expect(page.locator(".agent-preview")).to_be_visible(timeout=5000)
-    name_input = page.get_by_placeholder("你的名字")
-    if name_input.count() > 0 and name_input.first.is_visible():
-        name_input.first.fill("验收工程师")
+    # 创建人=登录身份（ADR-0019），无输入框
     page.locator('input[placeholder="请填写姓名"]').first.fill("治理链样本")
     page.get_by_role("button", name="提交任务").click()
     page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
@@ -218,7 +221,8 @@ with sync_playwright() as p:
     expect(sc_item.first).to_be_visible(timeout=5000)
     sc_item.first.click()
     expect(page.locator(".peek-approve")).to_be_visible(timeout=8000)
-    page.locator(".peek-review-input input").first.fill("验收工程师")
+    # 签发人=登录身份行如实展示（不可代填）
+    assert "验收工程师" in page.locator(".peek-review-card").inner_text()
     page.locator(".peek-approve").click()
     # StatusCenter 与 TaskDetail 同款二次确认，按钮文案=「确认批准放行」
     page.get_by_role("button", name="确认批准放行").click()

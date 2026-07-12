@@ -24,6 +24,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import TEST_DISPLAY_NAME
+
 from backend.app.storage import repos
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -85,7 +87,7 @@ def client(app_env) -> Iterator[TestClient]:
 
 def _open_conversation(client: TestClient) -> str:
     resp = client.post(
-        "/api/conversations", json={"agent_id": "guide_agent", "created_by": "m6_test"}
+        "/api/conversations", json={"agent_id": "guide_agent"}
     )
     assert resp.status_code == 200, resp.text
     conv = resp.json()
@@ -114,7 +116,7 @@ def test_guide_agent_registered_as_interactive(client: TestClient, app_env) -> N
 
 def test_create_conversation_rejects_non_interactive_agent(client: TestClient) -> None:
     resp = client.post(
-        "/api/conversations", json={"agent_id": "hello_agent", "created_by": "m6_test"}
+        "/api/conversations", json={"agent_id": "hello_agent"}
     )
     assert resp.status_code == 409
     assert "interactive" in resp.json()["detail"]
@@ -122,7 +124,7 @@ def test_create_conversation_rejects_non_interactive_agent(client: TestClient) -
 
 def test_create_conversation_unknown_agent_404(client: TestClient) -> None:
     resp = client.post(
-        "/api/conversations", json={"agent_id": "no_such_agent", "created_by": "m6_test"}
+        "/api/conversations", json={"agent_id": "no_such_agent"}
     )
     assert resp.status_code == 404
 
@@ -134,11 +136,17 @@ def test_create_task_rejects_interactive_agent(client: TestClient) -> None:
     assert "conversations" in resp.json()["detail"]
 
 
-def test_create_conversation_requires_named_creator(client: TestClient) -> None:
-    resp = client.post(
+def test_create_conversation_rejects_client_creator_and_derives_session_identity(
+    client: TestClient,
+) -> None:
+    forged = client.post(
         "/api/conversations", json={"agent_id": "guide_agent", "created_by": "   "}
     )
-    assert resp.status_code == 422
+    assert forged.status_code == 422
+
+    honest = client.post("/api/conversations", json={"agent_id": "guide_agent"})
+    assert honest.status_code == 200
+    assert honest.json()["created_by"] == TEST_DISPLAY_NAME
 
 
 # ── 会话链：追问（无计划）────────────────────────────────────────────────
@@ -363,7 +371,7 @@ def test_guide_never_creates_task_and_human_signs(app_env) -> None:
     human_inputs["system_description"] = "双通道供电系统"
     human_inputs["components"] = ["发电机A", "发电机B"]
     created = client.post(
-        "/api/tasks", json={"agent_id": a0["agent_id"], "inputs": human_inputs, "created_by": "王工"}
+        "/api/tasks", json={"agent_id": a0["agent_id"], "inputs": human_inputs}
     )
     assert created.status_code == 200
     assert created.json()["status"] == "queued"
@@ -665,7 +673,7 @@ def test_conversation_model_calls_attributed(app_env) -> None:
     assert stub.calls[0]["agent_id"] == "guide_agent"
 
     conv2 = client.post(
-        "/api/conversations", json={"agent_id": "guide_agent", "created_by": "m6_test"}
+        "/api/conversations", json={"agent_id": "guide_agent"}
     ).json()["id"]
     app.state.conversation_service.model_gateway = app.state.model_gateway
     assert client.post(f"/api/conversations/{conv2}/messages", json={"content": "hi"}).status_code == 502

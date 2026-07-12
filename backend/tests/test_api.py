@@ -13,6 +13,8 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import TEST_DISPLAY_NAME, seed_and_login
+
 from backend.app import config
 from backend.app.jobs.runner import JobRunner
 from backend.app.main import create_app
@@ -105,7 +107,7 @@ def test_create_task_success_then_run_once_completes(client: TestClient, app_env
     _, app = app_env
     resp = client.post(
         "/api/tasks",
-        json={"agent_id": "hello_agent", "inputs": {"name": "小明"}, "created_by": "tester"},
+        json={"agent_id": "hello_agent", "inputs": {"name": "小明"}},
     )
     assert resp.status_code == 200
     task = resp.json()
@@ -313,22 +315,24 @@ def review_app_env(tmp_path):
     yaml_text = yaml_text.replace("requires_human_review: false", "requires_human_review: true")
     yaml_path.write_text(yaml_text, encoding="utf-8")
 
+    db_path = tmp_path / "flai_os.db"
     app = create_app(
         agents_dir=agents_dir,
         tools_dir=REPO_ROOT / "tools_impl",
         contracts_dir=REPO_ROOT / "contracts",
-        db_path=tmp_path / "flai_os.db",
+        db_path=db_path,
         uploads_dir=tmp_path / "uploads",
         task_runs_dir=tmp_path / "task_runs",
     )
     with TestClient(app) as client:
+        seed_and_login(client, db_path)
         yield client, app
 
 
 def _run_to_waiting_review(client: TestClient, app) -> str:
     resp = client.post(
         "/api/tasks",
-        json={"agent_id": "review_agent", "inputs": {"name": "待审"}, "created_by": "e2e_review"},
+        json={"agent_id": "review_agent", "inputs": {"name": "待审"}},
     )
     assert resp.status_code == 200
     task_id = resp.json()["id"]
@@ -348,7 +352,7 @@ def test_review_approve_e2e_full_chain(review_app_env) -> None:
 
     review_resp = client.post(
         f"/api/tasks/{task_id}/review",
-        json={"action": "approve", "reviewer": "张工", "comment": "结果核对无误"},
+        json={"action": "approve", "comment": "结果核对无误"},
     )
     assert review_resp.status_code == 200
     approved = review_resp.json()
@@ -360,7 +364,10 @@ def test_review_approve_e2e_full_chain(review_app_env) -> None:
     assert "review_requested" in event_types
     approved_events = [e for e in events if e["event_type"] == "review_approved"]
     assert len(approved_events) == 1
-    assert approved_events[0]["payload"] == {"reviewer": "张工", "comment": "结果核对无误"}
+    assert approved_events[0]["payload"] == {
+        "reviewer": TEST_DISPLAY_NAME,
+        "comment": "结果核对无误",
+    }
 
 
 def test_review_reject_e2e_full_chain(review_app_env) -> None:
@@ -369,7 +376,7 @@ def test_review_reject_e2e_full_chain(review_app_env) -> None:
 
     review_resp = client.post(
         f"/api/tasks/{task_id}/review",
-        json={"action": "reject", "reviewer": "李工", "comment": "输出与图纸不符"},
+        json={"action": "reject", "comment": "输出与图纸不符"},
     )
     assert review_resp.status_code == 200
     rejected = review_resp.json()
@@ -380,7 +387,7 @@ def test_review_reject_e2e_full_chain(review_app_env) -> None:
     events = client.get(f"/api/tasks/{task_id}/events").json()
     rejected_events = [e for e in events if e["event_type"] == "review_rejected"]
     assert len(rejected_events) == 1
-    assert rejected_events[0]["payload"]["reviewer"] == "李工"
+    assert rejected_events[0]["payload"]["reviewer"] == TEST_DISPLAY_NAME
     assert rejected_events[0]["level"] == "warning"
 
 
@@ -391,7 +398,7 @@ def test_review_non_waiting_review_task_409(client: TestClient) -> None:
 
     review_resp = client.post(
         f"/api/tasks/{task_id}/review",
-        json={"action": "approve", "reviewer": "张工"},
+        json={"action": "approve"},
     )
     assert review_resp.status_code == 409
 
@@ -399,38 +406,37 @@ def test_review_non_waiting_review_task_409(client: TestClient) -> None:
 def test_review_unknown_task_404(client: TestClient) -> None:
     resp = client.post(
         "/api/tasks/no_such_task/review",
-        json={"action": "approve", "reviewer": "张工"},
+        json={"action": "approve"},
     )
     assert resp.status_code == 404
 
 
-def test_review_missing_or_empty_reviewer_422(review_app_env) -> None:
-    """reviewer 缺失或空字符串 → 422（人是唯一签发者，匿名放行=没有签发者）。
-    422 被拒后任务必须仍停在 waiting_review，未被部分放行。
-    """
+def test_review_client_reviewer_forbidden_and_session_identity_stored(review_app_env) -> None:
+    """reviewer 已从请求模型删除：显式发送字段 422；省略字段时由会话身份签发。"""
     client, app = review_app_env
     task_id = _run_to_waiting_review(client, app)
 
-    missing = client.post(f"/api/tasks/{task_id}/review", json={"action": "approve"})
-    assert missing.status_code == 422
-
-    empty = client.post(
+    forged = client.post(
         f"/api/tasks/{task_id}/review", json={"action": "approve", "reviewer": ""}
     )
-    assert empty.status_code == 422
+    assert forged.status_code == 422
 
     bad_action = client.post(
-        f"/api/tasks/{task_id}/review", json={"action": "自动放行", "reviewer": "张工"}
+        f"/api/tasks/{task_id}/review", json={"action": "自动放行"}
     )
     assert bad_action.status_code == 422
 
     assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
 
+    honest = client.post(f"/api/tasks/{task_id}/review", json={"action": "approve"})
+    assert honest.status_code == 200
+    events = client.get(f"/api/tasks/{task_id}/events").json()
+    approved = [e for e in events if e["event_type"] == "review_approved"]
+    assert approved[0]["payload"]["reviewer"] == TEST_DISPLAY_NAME
 
-def test_review_whitespace_only_reviewer_422_and_stored_stripped(review_app_env) -> None:
-    """R1 复审 P3：全空白 reviewer = 事实匿名签发，必须 422；合法 reviewer
-    两端空白 strip 后入事件（审计账面上是具名的干净签名）。
-    """
+
+def test_review_any_client_reviewer_forbidden_and_session_identity_stored(review_app_env) -> None:
+    """任何客户端 reviewer（空白或带字）都是 forbidden extra；合法请求记会话身份。"""
     client, app = review_app_env
     task_id = _run_to_waiting_review(client, app)
 
@@ -443,10 +449,13 @@ def test_review_whitespace_only_reviewer_422_and_stored_stripped(review_app_env)
     padded = client.post(
         f"/api/tasks/{task_id}/review", json={"action": "approve", "reviewer": "  王工  "}
     )
-    assert padded.status_code == 200
+    assert padded.status_code == 422
+
+    honest = client.post(f"/api/tasks/{task_id}/review", json={"action": "approve"})
+    assert honest.status_code == 200
     events = client.get(f"/api/tasks/{task_id}/events").json()
     approved = [e for e in events if e["event_type"] == "review_approved"]
-    assert approved[0]["payload"]["reviewer"] == "王工"
+    assert approved[0]["payload"]["reviewer"] == TEST_DISPLAY_NAME
 
 
 def test_review_concurrent_race_returns_409_not_500(review_app_env, monkeypatch) -> None:
@@ -465,7 +474,7 @@ def test_review_concurrent_race_returns_409_not_500(review_app_env, monkeypatch)
 
     monkeypatch.setattr(repos_mod, "set_task_status", _concurrent_reject)
     resp = client.post(
-        f"/api/tasks/{task_id}/review", json={"action": "approve", "reviewer": "张工"}
+        f"/api/tasks/{task_id}/review", json={"action": "approve"}
     )
     assert resp.status_code == 409
     assert "并发" in resp.json()["detail"]
@@ -473,7 +482,7 @@ def test_review_concurrent_race_returns_409_not_500(review_app_env, monkeypatch)
     monkeypatch.undo()
     # 竞态被拒后任务未被本次请求触碰，仍可正常人工放行。
     ok = client.post(
-        f"/api/tasks/{task_id}/review", json={"action": "approve", "reviewer": "张工"}
+        f"/api/tasks/{task_id}/review", json={"action": "approve"}
     )
     assert ok.status_code == 200
 

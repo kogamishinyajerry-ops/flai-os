@@ -52,9 +52,8 @@
         </div>
       </div>
 
-      <!-- 工作身份行：WelcomeGate 一次收齐后全站免问；点击可改（低频，改完
-           reload 让各页 getSavedName 取新值——不为此加响应层）。 -->
-      <button class="sb-identity" :title="`以「${userName}」的身份工作——点击更改`" @click="changeIdentity">
+      <!-- 工作身份行：登录会话身份（服务端派生，前端只读）；点击退出登录。 -->
+      <button class="sb-identity" :title="`以「${userName}」的身份登录——点击退出`" @click="changeIdentity">
         <span class="sb-id-dot"></span>{{ userName }}
       </button>
 
@@ -83,7 +82,15 @@
            identityReady 参与 key：身份门是 overlay，底下页面在无身份时已
            setup（createdBy 捕获空串）——门过必须整页重挂取新身份，否则首个
            用户第一条消息就撞「身份已失效」兜底。 -->
-      <div :key="String(identityReady) + ':' + (route.meta.pageKey || route.path)" class="page-turn">
+      <!-- v-if identityReady（Codex R2 审 P2）：未登录不挂载路由页——否则
+           TaskConsole/WorkbenchSession 等页各自的轮询定时器在登录门后仍运行，
+           拿旧 cookie 反复打 /api/tasks 吃 401，穿透会话 DB 查。整页卸载=所有
+           页级轮询彻底停。 -->
+      <div
+        v-if="identityReady"
+        :key="String(identityReady) + ':' + (route.meta.pageKey || route.path)"
+        class="page-turn"
+      >
         <router-view />
       </div>
     </main>
@@ -91,15 +98,20 @@
 
   <!-- 身份门：本地工作身份（非认证，内网 SSO 递延）——无名字时全屏拦下，
        一次具名全站免问。 -->
-  <WelcomeGate v-if="!identityReady" @done="onIdentityDone" />
+  <WelcomeGate v-if="sessionProbed && !identityReady" @done="onIdentityDone" />
 
   <!-- ⌘K 快速切换面板（B3）：热键监听与数据/跳转逻辑全封在组件内，这里只挂载。 -->
   <QuickSwitcher />
 
   <!-- 状态坞 + 状态中心（UI-PARADIGM Phase 1「状态来找人」）：轮询/数据/签发
-       逻辑全封在组件与 stores/statusCenter 单例内，这里只挂载。 -->
-  <StatusDock :inert="!identityReady" />
-  <StatusCenter />
+       逻辑全封在组件与 stores/statusCenter 单例内，这里只挂载。
+       v-if identityReady（Codex R1 审 P2）：登录门后不挂载——否则 inert 只禁
+       交互、StatusDock 的 5s 轮询仍打 /api/tasks 每次 401 再排下轮，登出/过期
+       标签页无限刷未授权流量+会话 DB 查。未登录即卸载=轮询彻底停。 -->
+  <template v-if="identityReady">
+    <StatusDock />
+    <StatusCenter />
+  </template>
 
   <!-- 仿真监控浮窗（实验性，默认关——未配置 ?simhub= 时零渲染）：
        配置/消息边界/收展逻辑全封组件内，这里只挂载；必须挂根级
@@ -111,37 +123,77 @@
 import { ref, computed, watch, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { listConversations } from "./api/conversations";
-import { ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { formatTime } from "./utils/format";
-import { getSavedName, saveName } from "./utils/identity";
+import { currentUser, fetchMe, logout } from "./stores/session";
 import { themeMode, resolvedTheme, setThemeMode } from "./stores/theme";
 import { openQuickSwitcher } from "./stores/quickSwitcher";
+import { closeCenter } from "./stores/statusCenter";
 import QuickSwitcher from "./components/QuickSwitcher.vue";
 import WelcomeGate from "./components/WelcomeGate.vue";
 import StatusDock from "./components/StatusDock.vue";
 import StatusCenter from "./components/StatusCenter.vue";
 import SimMonitorFloat from "./components/SimMonitorFloat.vue";
 
-// 工作身份（WelcomeGate 收齐）：identityReady 控门；改名低频走 prompt+reload。
-const identityReady = ref(Boolean(getSavedName()));
-const userName = ref(getSavedName());
+// 登录态（ADR-0019 D8）：identityReady 控门，身份来自服务端会话。
+// sessionProbed 防「已登录用户刷新时登录门闪现」——探测完成前不渲染门。
+const identityReady = ref(false);
+const sessionProbed = ref(false);
+const userName = computed(() => (currentUser.value ? currentUser.value.display_name : ""));
 function onIdentityDone() {
-  userName.value = getSavedName();
   identityReady.value = true;
+  // 冷启动未登录时 onMounted 的 loadConvos 撞 401 清空了左栏——登录成功后
+  // 必须重拉，否则历史直到下次路由变化才回来（Codex 审 P2）。
+  loadConvos();
 }
 async function changeIdentity() {
   try {
-    const { value } = await ElMessageBox.prompt("换个称呼？各页将以新身份预填（不影响已有记录）。", "工作身份", {
-      inputValue: userName.value,
-      confirmButtonText: "更改",
+    await ElMessageBox.confirm(`当前以「${userName.value}」登录。退出登录？`, "工作身份", {
+      confirmButtonText: "退出登录",
       cancelButtonText: "取消",
-      inputValidator: (v) => Boolean(v && v.trim()) || "称呼不能为空",
+      type: "warning",
     });
-    saveName(value);
-    window.location.reload();
   } catch {
-    /* 取消 */
+    return; /* 取消 */
   }
+  // 只在服务端确认吊销后才回门（Codex R1 审 P1）：logout 失败时会话仍有效，
+  // 假装登出=谎报——保留登录态并如实提示重试，绝不表现为已登出。
+  try {
+    await logout();
+    resetToGate();
+  } catch (err) {
+    // 401=会话在确认与请求之间已失效（Codex R3 审 P2）：无有效会话可保留，
+    // client.js 已广播 flai:unauthorized 回门，本地登出即已完成，不谎报「仍有效」。
+    if (err.status === 401) return;
+    ElMessage.error(`退出登录失败，会话仍有效，请重试（${err.detail || err.message || err}）`);
+  }
+}
+onMounted(async () => {
+  identityReady.value = await fetchMe();
+  sessionProbed.value = true;
+});
+// 会话中途过期（任意接口 401，client.js 广播）：清态回登录门，不静默失败
+window.addEventListener("flai:unauthorized", resetToGate);
+// 多标签页身份纠偏（Codex R3/R4 审 P1）：flai_session cookie 跨标签页共享，另一
+// 标签页登出+换号后本标签页仍显示旧身份，签发会「显示 Alice 实录 Bob」。服务端是
+// 身份权威，fetchMe 把 currentUser 纠正为真身份（陈旧响应由 session.js 序号丢弃）；
+// 会话失效则回门。**必须同时听 focus**：两窗口并排常显时 visibilitychange 不触发，
+// 只有 focus 能在切窗时纠偏（Codex R4 审 P1）。
+async function revalidateIdentity() {
+  if (identityReady.value !== true) return;
+  const ok = await fetchMe();
+  if (ok !== true) resetToGate();
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") revalidateIdentity();
+});
+window.addEventListener("focus", revalidateIdentity);
+function resetToGate() {
+  currentUser.value = null;
+  identityReady.value = false;
+  // 状态坞抽屉 teleport 到 inert 外、z-index 高于登录门（Codex 审 P2）——
+  // 不关会残留任务数据浮在登录页之上甚至挡住登录，故失去会话时一并收起。
+  closeCenter();
 }
 
 // 主题三段循环（跟随系统→浅色→深色）：显示当前模式而非解析结果，用户能看懂

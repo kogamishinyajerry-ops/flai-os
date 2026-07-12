@@ -47,7 +47,7 @@ def client(app_env) -> Iterator[TestClient]:
 
 def _create_and_run(client: TestClient, app, agent_id: str, inputs: dict[str, Any]) -> dict[str, Any]:
     resp = client.post(
-        "/api/tasks", json={"agent_id": agent_id, "inputs": inputs, "created_by": "hardening_test"}
+        "/api/tasks", json={"agent_id": agent_id, "inputs": inputs}
     )
     assert resp.status_code == 200, resp.text
     task_id = resp.json()["id"]

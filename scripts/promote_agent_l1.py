@@ -6,9 +6,11 @@
       python scripts/promote_agent_l1.py performance_disk_agent 张工
 
 前置（fail-closed 自检，不满足即拒跑）：
-- 常驻 API（:8620）必须响应治理路由（GET /api/agents/{id}/eval-runs 200）——
-  这是「服务已从 ≥M10 代码重启」的代际见证。老代码 worker 的 claim 没有
-  origin 过滤，会抢走 eval 任务并把评测输入污染进真实样本库，绝不带病跑。
+- 常驻 API（:8620）打治理路由（GET /api/agents/{id}/eval-runs）：
+  404「接口不存在」= 老代码（无治理路由）→ 拒跑；401 = ≥M11 代码
+  （鉴权中间件在场，ADR-0019）→ 新代见证放行；200 = 已登录新代同样放行。
+  老代码 worker 的 claim 没有 origin 过滤，会抢走 eval 任务并把评测输入
+  污染进真实样本库，绝不带病跑。
 - 本脚本在进程内直连真实 data/（与常驻服务同一 DB/包目录），评测任务
   origin='eval'，新代码 worker 不会抢。
 
@@ -45,6 +47,8 @@ def main() -> int:
                 "  scripts/dev_start_backend.sh 与 scripts/dev_start_worker.sh"
             )
             return 1
+        # 401 = 鉴权中间件在场（≥M11/ADR-0019）——正是「新代」见证，放行继续；
+        # 本脚本走进程内直连不经 HTTP，无需登录态。
     except httpx.HTTPError:
         print("提示：常驻 API 未响应（:8620）。若 worker 也未在跑则无抢单风险，继续。")
 

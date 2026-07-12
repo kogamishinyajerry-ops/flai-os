@@ -191,6 +191,26 @@ CREATE TABLE IF NOT EXISTS promotions (
     confirmed_by TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+-- 迁移 #5（ADR-0019/M11-B1）：本地账户 + 服务端会话。新表无存量列迁移，
+-- CREATE TABLE IF NOT EXISTS 即幂等。账户只由 scripts/user_admin.py 建立。
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+-- auth_sessions 存 token 的 SHA-256（DB 文件泄露不直接换取活会话）；
+-- 明文 token 只存在于 Set-Cookie。过期判定 now < expires_at 严格比较。
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
 """
 
 _INDEX_DDL = (
@@ -207,6 +227,7 @@ _INDEX_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_tasks_status_created_at ON tasks(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_eval_runs_agent_id ON eval_runs(agent_id)",
     "CREATE INDEX IF NOT EXISTS idx_promotions_agent_id ON promotions(agent_id)",
+    "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)",
 )
 
 

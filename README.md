@@ -254,6 +254,11 @@ bash scripts/dev_start_frontend.sh
 cd frontend && npm run build      # 产出 frontend/dist/（不入库）
 # 之后只需起后端——frontend/dist 存在时 FastAPI 自动托管 SPA，
 # 浏览器直接访问 http://127.0.0.1:8620/
+
+# 部署第一步（ADR-0019 真鉴权，有意 fail-closed）：账户为空时所有人都在
+# 登录门外——先由管理员在服务器上建首个账户（密码交互输入，不走 argv）：
+python3 scripts/user_admin.py create <用户名> <显示名>
+python3 scripts/user_admin.py list   # 核对；停用/改密见脚本头注
 ```
 
 ## 参考

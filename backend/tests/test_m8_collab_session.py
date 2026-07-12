@@ -21,6 +21,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import TEST_DISPLAY_NAME
+
 from backend.app.storage import db as db_mod
 from backend.app.storage import repos
 
@@ -42,7 +44,7 @@ def client(app_env) -> Iterator[TestClient]:
 
 
 def _open_conversation(client: TestClient) -> str:
-    resp = client.post("/api/conversations", json={"agent_id": "guide_agent", "created_by": "m8_test"})
+    resp = client.post("/api/conversations", json={"agent_id": "guide_agent"})
     assert resp.status_code == 200, resp.text
     return resp.json()["id"]
 
@@ -139,7 +141,6 @@ def test_create_task_api_with_valid_conversation_groups(app_env) -> None:
         json={
             "agent_id": "fta_agent",
             "inputs": {"top_event": "供电完全丧失", "system_description": "双通道供电", "components": ["A", "B"]},
-            "created_by": "王工",
             "conversation_id": conv_id,
         },
     )
@@ -159,7 +160,6 @@ def test_create_task_api_nonexistent_conversation_404(app_env) -> None:
         json={
             "agent_id": "fta_agent",
             "inputs": {"top_event": "X", "system_description": "S", "components": ["A"]},
-            "created_by": "王工",
             "conversation_id": "conv_does_not_exist",
         },
     )
@@ -174,7 +174,7 @@ def test_portal_direct_task_has_null_conversation(app_env) -> None:
     conv_id = _open_conversation(client)
     resp = client.post(
         "/api/tasks",
-        json={"agent_id": "fta_agent", "inputs": {"top_event": "X", "system_description": "S", "components": ["A"]}, "created_by": "李工"},
+        json={"agent_id": "fta_agent", "inputs": {"top_event": "X", "system_description": "S", "components": ["A"]}},
     )
     assert resp.status_code == 200
     assert resp.json()["conversation_id"] is None
@@ -216,7 +216,7 @@ def test_multiple_tasks_same_conversation_grouped(app_env) -> None:
     ]:
         r = client.post(
             "/api/tasks",
-            json={"agent_id": agent_id, "inputs": inputs, "created_by": "王工", "conversation_id": conv_id},
+            json={"agent_id": agent_id, "inputs": inputs, "conversation_id": conv_id},
         )
         assert r.status_code == 200, r.text
         ids.append(r.json()["id"])
@@ -239,7 +239,6 @@ def test_create_task_on_concluded_conversation_rejected(client: TestClient) -> N
         json={
             "agent_id": "fta_agent",
             "inputs": {"top_event": "X", "system_description": "S", "components": ["A"]},
-            "created_by": "王工",
             "conversation_id": conv_id,
         },
     )
@@ -250,18 +249,19 @@ def test_create_task_on_concluded_conversation_rejected(client: TestClient) -> N
 
 
 def test_create_task_rejects_contract_violating_fields(client: TestClient) -> None:
-    """异源 Codex R6-#7：请求校验必须与 task.schema 对齐——空/纯空白 name、空 created_by、
-    重复 input_file_ids 一律 422，绝不落库产出违契约（minLength/uniqueItems）的响应。"""
+    """请求校验与 ADR-0019 同时守住：空白 name、重复 input_file_ids 仍 422；
+    客户端自报 created_by 作为 extra 也 422，合法请求由会话身份记名。"""
     base = {
         "agent_id": "fta_agent",
         "inputs": {"top_event": "X", "system_description": "S", "components": ["A"]},
     }
-    assert client.post("/api/tasks", json={**base, "name": "  ", "created_by": "王工"}).status_code == 422
+    assert client.post("/api/tasks", json={**base, "name": "  "}).status_code == 422
     assert client.post("/api/tasks", json={**base, "created_by": "  "}).status_code == 422
-    assert client.post("/api/tasks", json={**base, "created_by": "王工", "input_file_ids": ["d", "d"]}).status_code == 422
+    assert client.post("/api/tasks", json={**base, "input_file_ids": ["d", "d"]}).status_code == 422
     # 对照：合法输入 200（证明只咬违约输入，不误伤正常创建）
-    ok = client.post("/api/tasks", json={**base, "name": "正常名", "created_by": "王工"})
+    ok = client.post("/api/tasks", json={**base, "name": "正常名"})
     assert ok.status_code == 200, ok.text
+    assert ok.json()["created_by"] == TEST_DISPLAY_NAME
 
 
 def test_agentless_event_omits_agent_id_not_null(app_env) -> None:
@@ -276,7 +276,6 @@ def test_agentless_event_omits_agent_id_not_null(app_env) -> None:
         json={
             "agent_id": "fta_agent",
             "inputs": {"top_event": "X", "system_description": "S", "components": ["A"]},
-            "created_by": "王工",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -343,7 +342,6 @@ def test_create_task_concluded_race_is_atomic(app_env, tmp_path) -> None:
                 json={
                     "agent_id": "fta_agent",
                     "inputs": {"top_event": "X", "system_description": "S", "components": ["A"]},
-                    "created_by": "王工",
                     "conversation_id": conv_id,
                 },
             )

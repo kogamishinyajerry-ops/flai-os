@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..governance import curation, eval_runner, promotion
 from ..storage import repos
@@ -31,8 +31,10 @@ def _agent_or_404(request: Request, agent_id: str) -> dict[str, Any]:
     return agent
 
 
+# ADR-0019 D5：triggered_by 已从请求体删除——发起人=登录会话身份。请求体只剩
+# 空对象（保留 body 形态，extra="forbid" 让仍发 triggered_by 的旧客户端 422）。
 class TriggerEvalRequest(BaseModel):
-    triggered_by: str = Field(min_length=1, description="发起人（记名，证据链一环）")
+    model_config = ConfigDict(extra="forbid")
 
 
 @router.post("/agents/{agent_id}/eval-runs")
@@ -46,7 +48,7 @@ def trigger_eval_run(agent_id: str, body: TriggerEvalRequest, request: Request) 
             uploads_dir=request.app.state.uploads_dir,
             task_runs_dir=request.app.state.task_runs_dir,
             agent_id=agent_id,
-            triggered_by=body.triggered_by,
+            triggered_by=request.state.user["display_name"],  # ADR-0019 D5
         )
     except eval_runner.EvalBusy as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -63,8 +65,10 @@ def list_eval_runs(agent_id: str, request: Request) -> list[dict[str, Any]]:
 
 
 class FixSampleRequest(BaseModel):
+    # ADR-0019 D5：fixed_by 已删——固化人=登录会话身份（记名进 provenance）
+    model_config = ConfigDict(extra="forbid")
+
     sample_id: int
-    fixed_by: str = Field(min_length=1, description="固化人（记名进 provenance）")
 
 
 @router.post("/agents/{agent_id}/eval-cases")
@@ -76,7 +80,7 @@ def fix_sample(agent_id: str, body: FixSampleRequest, request: Request) -> dict[
             agent_registry=request.app.state.agent_registry,
             agent_id=agent_id,
             sample_id=body.sample_id,
-            fixed_by=body.fixed_by,
+            fixed_by=request.state.user["display_name"],  # ADR-0019 D5
         )
     except curation.SampleAlreadyFixed as exc:
         raise HTTPException(
@@ -88,12 +92,14 @@ def fix_sample(agent_id: str, body: FixSampleRequest, request: Request) -> dict[
 
 
 class PromoteRequest(BaseModel):
+    # ADR-0019 D5：confirmed_by 已删——晋升门第五条的记名从此指向认证身份。
+    model_config = ConfigDict(extra="forbid")
+
     to_maturity: str
     eval_run_id: str
     # 显式不给默认值结构：缺失/false/非 bool 都要走到门内被 is True 拒绝，
     # 而不是被请求模型偷偷归一化（D6）。
     confirmations: dict[str, Any] = Field(default_factory=dict)
-    confirmed_by: str = ""
 
 
 @router.post("/agents/{agent_id}/promote")
@@ -108,7 +114,7 @@ def promote(agent_id: str, body: PromoteRequest, request: Request) -> dict[str, 
             to_maturity=body.to_maturity,
             eval_run_id=body.eval_run_id,
             confirmations=body.confirmations,
-            confirmed_by=body.confirmed_by,
+            confirmed_by=request.state.user["display_name"],  # ADR-0019 D5
         )
     except promotion.PromotionRejected as exc:
         raise HTTPException(

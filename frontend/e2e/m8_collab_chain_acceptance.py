@@ -108,10 +108,15 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(("PASS" if ok is True else "FAIL"), name, ("| " + detail if detail and ok is not True else ""))
 
 
+
+from _auth import login_context, seed_user  # noqa: E402
+
+seed_user(WORK / "flai_os.db", "王工")
+
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
-    page.add_init_script("localStorage.setItem('flai_user_name', '王工')")  # 身份门：预注入工作身份，WelcomeGate 不拦
+    login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie
 
     # ① 导引 → orchestrate 方案
     page.goto(BASE + "/", wait_until="networkidle")
@@ -149,7 +154,6 @@ with sync_playwright() as p:
     # ④ 结构化表单补全剩余必填（系统描述 + 组件，无需手写 JSON）+ 亲手提交（人签发）
     page.locator('textarea[placeholder="请填写系统描述"]').first.fill("双通道供电系统（发电机A/B + 汇流条 + 转换开关）")
     page.locator('input[placeholder="组件列表 第 1 项"]').first.fill("发电机A")
-    page.get_by_placeholder("你的名字").fill("王工")
     page.get_by_role("button", name="提交任务").click()
     page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
     expect(page.get_by_role("heading", name="任务详情")).to_be_visible(timeout=5000)

@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..core.errors import (
     ConversationClosedError,
@@ -30,16 +30,10 @@ router = APIRouter(prefix="/api", tags=["conversations"])
 
 
 class CreateConversationRequest(BaseModel):
-    agent_id: str
-    created_by: str = Field(min_length=1, max_length=100)
+    # ADR-0019 D5：created_by 已删——会话发起人=登录会话身份，服务端派生
+    model_config = ConfigDict(extra="forbid")
 
-    @field_validator("created_by")
-    @classmethod
-    def created_by_must_not_be_blank(cls, v: str) -> str:
-        stripped = v.strip()
-        if not stripped:
-            raise ValueError("created_by 不得为空白字符——会话必须具名")
-        return stripped
+    agent_id: str
 
 
 class PostMessageRequest(BaseModel):
@@ -72,7 +66,9 @@ class PostMessageRequest(BaseModel):
 def create_conversation(body: CreateConversationRequest, request: Request) -> dict[str, Any]:
     service = request.app.state.conversation_service
     try:
-        return service.create(agent_id=body.agent_id, created_by=body.created_by)
+        return service.create(
+            agent_id=body.agent_id, created_by=request.state.user["display_name"]
+        )
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except NotInteractiveAgentError as exc:

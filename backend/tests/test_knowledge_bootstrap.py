@@ -16,6 +16,8 @@ from typing import Any
 import yaml
 from fastapi.testclient import TestClient
 
+from conftest import seed_and_login
+
 from backend.app import config
 from backend.app.jobs.runner import _build_default_runner
 from backend.app.main import create_app
@@ -99,7 +101,8 @@ def test_api_path_deregisters_and_db_has_no_row(tmp_path) -> None:
         knowledge_dir=env["knowledge"], db_path=db_path,
         uploads_dir=tmp_path / "uploads", task_runs_dir=tmp_path / "task_runs",
     )
-    with TestClient(app):
+    with TestClient(app) as client:
+        seed_and_login(client, db_path)
         registry = app.state.agent_registry
         assert registry.get("conf_violator") is None
         assert any("密级" in e["error"] for e in registry.errors)

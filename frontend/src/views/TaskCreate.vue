@@ -56,10 +56,6 @@
         <el-input v-model="form.name" placeholder="可选，便于在历史中辨认" />
       </el-form-item>
 
-      <el-form-item label="创建人" required>
-        <el-input v-model="form.createdBy" placeholder="你的名字" />
-      </el-form-item>
-
       <el-form-item label="输入参数">
         <div class="inputs-field">
           <el-alert
@@ -168,7 +164,6 @@ import { uploadFile as apiUploadFile } from "../api/files";
 import { statusLabel, statusTagType } from "../utils/format";
 import SchemaForm from "../components/SchemaForm.vue";
 import { parseSchema, blankInputs, collectInputs, validateInputs } from "../utils/schemaForm";
-import { getSavedName, saveName } from "../utils/identity";
 
 const route = useRoute();
 const router = useRouter();
@@ -205,7 +200,6 @@ const prefillConcludeAfter = ref(false);
 const form = reactive({
   agentId: typeof route.query.agent_id === "string" ? route.query.agent_id : "",
   name: "",
-  createdBy: getSavedName(),
   inputsText: "{}",
 });
 
@@ -374,11 +368,6 @@ async function handleSubmit() {
     ElMessage.error("请选择 Agent");
     return;
   }
-  if (!form.createdBy.trim()) {
-    ElMessage.error("请填写创建人");
-    return;
-  }
-
   let inputs = {};
   if (schemaRenderable.value && !jsonMode.value && selectedAgent.value) {
     // 结构化表单模式：前端轻量校验兜前（真正判定仍由后端 fail-closed），再收集。
@@ -420,7 +409,6 @@ async function handleSubmit() {
       name: form.name.trim() || null,
       inputs,
       inputFileIds: uploadItems.value.filter((i) => i.status === "done").map((i) => i.fileId),
-      createdBy: form.createdBy.trim(),
       conversationId: prefillConversationId.value,
     });
     // 单 Agent 导引流程：任务已创建成功，此刻再归档本会话（fire-and-forget，归档失败
@@ -429,7 +417,6 @@ async function handleSubmit() {
     if (prefillConcludeAfter.value && prefillConversationId.value) {
       concludeConversation(prefillConversationId.value).catch(() => {});
     }
-    saveName(form.createdBy); // 记住名字，全站免重填
     ElMessage.success("任务已创建");
     // 范式 2a 对话轴闭环：从导引来（back=chat）且会话仍活跃 → 回流对话，任务卡
     // 在流里原地亮起（Claude 式零跳页）。单 Agent conclude_after 已归档会话，

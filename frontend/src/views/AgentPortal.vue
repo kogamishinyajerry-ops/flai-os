@@ -189,7 +189,6 @@ import { ElMessage } from "element-plus";
 import { listAgents } from "../api/agents";
 import { request } from "../api/client";
 import EmptyState from "../components/EmptyState.vue";
-import { getSavedName } from "../utils/identity";
 import {
   statusTagType,
   agentStatusLabel,
@@ -296,7 +295,7 @@ async function runEvaluation() {
   try {
     await request(`/api/agents/${agentId}/eval-runs`, {
       method: "POST",
-      json: { triggered_by: getSavedName() },
+      json: {}, // 发起人=登录会话身份，服务端派生（ADR-0019 D5）
     });
     ElMessage.success("评测完成");
     if (governanceOpen.value && governanceAgent.value?.id === agentId) {
@@ -342,7 +341,7 @@ async function promoteToL1() {
         to_maturity: "L1",
         eval_run_id: evalRunId,
         confirmations: { exception_paths_handled: promotionConfirmed.value },
-        confirmed_by: getSavedName(),
+        // confirmed_by=登录会话身份，服务端派生（ADR-0019 D5）——记名不可代填
       },
     });
     ElMessage.success("已晋升 L1");

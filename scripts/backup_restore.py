@@ -130,13 +130,28 @@ def cmd_restore(backup_file: str, target: str) -> int:
         conn = sqlite3.connect(str(dest))
         try:
             integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+            # 鉴权状态 fail-closed 对账（ADR-0019 / Codex R1 审 P1）：备份逐表原样
+            # 恢复会连同旧 auth_sessions 一起复活——登出/停用/改密前的备份会让
+            # 被盗但未过期的 token 或已撤销的凭据重新生效。恢复即清空全部会话，
+            # 强制所有人重新登录（时间旅行回旧账户状态是恢复的固有语义，但绝不
+            # 让旧活会话跟着复活）。表不存在（M11 前老备份）则 no-op。
+            purged = 0
+            try:
+                purged = conn.execute("DELETE FROM auth_sessions").rowcount
+                conn.commit()
+            except sqlite3.OperationalError as exc:
+                # 只放行「表不存在」（M11 前老备份，无会话可复活=安全，Codex R2 审
+                # P1）；DELETE/commit 因磁盘满/锁失败绝不吞——否则谎报恢复成功而旧
+                # 会话 token 仍活。真失败原样抛给外层 abort（坏产物 unlink）。
+                if "no such table" not in str(exc).lower():
+                    raise
         finally:
             conn.close()
     except sqlite3.DatabaseError as exc:
         dest.unlink(missing_ok=True)  # 坏恢复产物不留盘，防被误当可用库
         print(f"诚实失败：备份文件损坏，恢复中止（{exc}）")
         return 1
-    print(f"恢复完成：{dest}，integrity_check={integrity}")
+    print(f"恢复完成：{dest}，integrity_check={integrity}；已清空 {purged} 条恢复出的会话（强制重登）")
     return 0 if integrity == "ok" else 1
 
 

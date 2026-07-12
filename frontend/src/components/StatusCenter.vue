@@ -146,7 +146,7 @@
           <div v-if="isPeekWaiting" class="peek-block peek-review-card">
             <div class="peek-label">签发</div>
             <div class="peek-review-note">批准即代表你作为工程师背书该产物——签发权在你，平台不代签。</div>
-            <el-input v-model="reviewer" placeholder="签发人姓名（必填）" class="peek-review-input" />
+            <div class="peek-review-signer">签发人：{{ signerName }}（登录身份，不可代填）</div>
             <el-input v-model="reviewComment" type="textarea" :rows="2" placeholder="意见（可选）" class="peek-review-input" />
             <div class="peek-review-actions">
               <!-- teal=人签唯一色；成功迸发=burstSigned 唯一许可点之一。
@@ -189,7 +189,7 @@ import { listTasks, getTask, listTaskEvents, reviewTask, listModelCalls } from "
 import { request } from "../api/client";
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import { statusLabel, statusTagType, taskLampColor, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
-import { getSavedName, saveName } from "../utils/identity";
+import { displayName } from "../stores/session";
 import { markTaskSeen } from "../utils/lastSeen";
 import { burstSigned } from "../effects/burst";
 import WorkLog from "./WorkLog.vue";
@@ -324,7 +324,7 @@ async function loadPeek(taskId, { initial = false } = {}) {
 // ── 签发（宪法路径：与 TaskDetail 同一 API，人具名 fail-closed） ──
 // 本组件挂根级不随身份门重挂：setup 时可能门还没过（快照为空）——每次
 // 打开抽屉懒补一次（onOpen），保证「一次具名全站免问」（Codex 审 P2）。
-const reviewer = ref(getSavedName());
+const signerName = computed(() => displayName());
 const reviewComment = ref("");
 const reviewing = ref(false);
 const peekApproveEl = ref(null);
@@ -365,14 +365,13 @@ async function fixAcceptedSamples() {
   const samples = acceptedSamples.value.slice();
   if (!taskId || !samples.length || sampleFixing.value) return;
   const epoch = sampleFixEpoch;
-  const fixedBy = getSavedName();
   sampleFixing.value = true;
   try {
     const results = await Promise.all(samples.map(async (sample) => {
       try {
         const result = await request(`/api/agents/${sample.agent_id}/eval-cases`, {
           method: "POST",
-          json: { sample_id: sample.id, fixed_by: fixedBy },
+          json: { sample_id: sample.id }, // 固化人=登录会话身份（ADR-0019 D5）
         });
         return { sampleId: sample.id, text: result.case_file };
       } catch (err) {
@@ -388,10 +387,6 @@ async function fixAcceptedSamples() {
 }
 
 async function doReview(action) {
-  if (!reviewer.value.trim()) {
-    ElMessage.error("请填写签发人姓名");
-    return;
-  }
   const taskId = statusCenter.taskId; // 调用前捕获：await 期间任务可能被切换
   if (!taskId) return;
   const label = action === "approve" ? "批准放行" : "拒绝";
@@ -409,10 +404,8 @@ async function doReview(action) {
   try {
     await reviewTask(taskId, {
       action,
-      reviewer: reviewer.value.trim(),
       comment: reviewComment.value || null,
     });
-    saveName(reviewer.value);
     markTaskSeen(taskId); // 亲手签发=已看过：其后完成不得对签发者亮未读
     reviewComment.value = ""; // 签发落定即清，绝不残留到下一个任务
     ElMessage.success(action === "approve" ? "已批准放行" : "已驳回");
@@ -478,7 +471,6 @@ function clearPoll() {
 }
 
 function onOpen() {
-  if (!reviewer.value.trim()) reviewer.value = getSavedName(); // 门后懒补身份快照
   refreshInbox();
   ensurePeekLoaded(); // 幂等：watch 已载过同一任务则不重载
   schedulePoll();
@@ -870,6 +862,12 @@ onUnmounted(() => {
   /* .03 太淡，暗色下几乎消失；提到 .06 保住「签发卡特殊感」 */
   background: rgba(var(--trust-signed-rgb), 0.06);
 }
+.peek-review-signer {
+  margin-bottom: 8px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
 .peek-review-note {
   font-size: 12px;
   color: var(--ink-soft);
