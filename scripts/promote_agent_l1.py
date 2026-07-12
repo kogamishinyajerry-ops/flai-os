@@ -72,6 +72,7 @@ def main() -> int:
         asm.agent_registry, asm.tool_registry, asm.model_gateway, conn_factory,
         config.TASK_RUNS_DIR, knowledge_service=asm.knowledge_service,
         uploads_dir=config.UPLOADS_DIR,
+        scope_registry=asm.scope_registry,  # ADR-0021 知识轴（Codex R1 审 P1）
     )
 
     print(f"[1/2] 跑评测：{agent_id} …")

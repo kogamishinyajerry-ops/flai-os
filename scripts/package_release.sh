@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
-# 打包离线发布物(wheels+dist+docs) —— M1 实现（见 docs/01_Overall_Architecture.md 里程碑表）。
-echo "NOT-IMPLEMENTED: package_release 将在 M1 实现，本脚本是诚实占位（绝不假装成功）。"
+# 打包离线发布物 —— 诚实占位（绝不假装成功）。
+# 双分支预案已定（docs/M11-OFFLINE-PACKAGE-PLAN.md）：走 pip 镜像还是 wheelhouse
+# 取决于 M4 对接方回复（目标 OS/Python 版本/有无内网镜像），落锤前不盲做。
+echo "NOT-IMPLEMENTED: 离线打包待 M4 回复落锤分支，预案见 docs/M11-OFFLINE-PACKAGE-PLAN.md"
 exit 1
