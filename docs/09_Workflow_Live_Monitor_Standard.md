@@ -40,6 +40,12 @@
 完成 **tamper 实证**（SIGKILL/断源必须咬红）+ 对称正测（真跑必须绿）——
 「全绿但无咬合实证 = 假信心」，视同未验证。
 
+> **硬前提（R2 生成器实测暴露）**：run 目录必须**时间戳前缀命名**——第二路
+> 停滞判定（发起未落地）的身份判据「目录名=出生时刻」依赖它（迟到写入推得高
+> mtime、改不了名字）。不合规的工作流须加 wrapper 在落盘时套时间戳目录；
+> `monitor_adapter_gen` 遇不合规命名会判 UNVERIFIED 并要求 wrapper，绝不硬编
+> 不可靠判据。起草可用 sim-live-hub `tools/adapter_gen.py`（只读、三档接地）。
+
 ## 5. 嵌入接缝（平台浮窗侧契约）
 
 postMessage 单向上报：类型 `sim-live-status`，`surface` 分流，targetOrigin

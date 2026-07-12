@@ -44,7 +44,19 @@ L0 draft（本 agent 产出）→ 人审（adapter 代码审 + 按诚实清单�
 （含至少一条失败路径：给残缺 sample_run 必须报 UNVERIFIED 而非编造）→
 M10 晋升门 L1。**跳过实证的 adapter = 把假绿批量化，fail-closed 拒绝。**
 
-## 6. 实现状态
+## 6. 实现状态（2026-07-12 更新）
 
-本文为契约草案（ADR-0020 R2 相），实现未开工。开工前置：R1 相收口
-（M11 鉴权 → verify_all → 转正批），届时按 02 标准立包。
+**承重核已实现**（sim-live-hub `tools/adapter_gen.py`，commit 053333d，170 测试绿）：
+确定性侦察 + 证据接地 + 三档诚实（VERIFIED/PROPOSED/UNVERIFIED）+ 四条红线
+咬合（只读目标目录/写前接地自检 fail-closed/拒写 adapters/）全部落地并测试。
+建在 hub 侧是因为**承重的是接地保证不是 LLM 措辞**——核里零 LLM 零网络，
+接地不变量可确定性测试；平台侧自然语言 agent 包（本文 §1-§5 的交互层）在此核
+外面套一层即可，接地保证由核提供，不重复实现。
+
+**R2 反检接入标准的产出**（本相的设计价值兑现）：生成器跑真实 fixture 暴露出
+docs/09 的一条隐含硬前提——**run 目录必须时间戳命名**（launch-pending 身份判据
+依赖它）。不合规工作流生成器会如实判 UNVERIFIED 并要求加 wrapper，绝不硬编。
+该前提已显式写进 sim-live-hub spec §1，docs/09 §4 亦应补一句（见下）。
+
+**平台 agent 包 wrapper 待做**：前置=R1 相收口（M11 鉴权 → verify_all → 转正批），
+届时按 02 标准立包，system prompt 调用 hub 核、把三档报告转成人审对话。
