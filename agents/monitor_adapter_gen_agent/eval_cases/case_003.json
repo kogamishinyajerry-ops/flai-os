@@ -1,0 +1,16 @@
+{
+  "case_id": "case_003",
+  "description": "失败路径·任务态（M10 晋升门①要求 ≥1 个 status_is failed case）：sample_run_dir 指向不存在的目录 → 承重侦察工具 fail-closed 返回 failed → workflow 诚实返回 failed → 任务 failed，绝不空壳草案顶替。这是 agent 的 fail-closed 回归护栏（区别于 case_002 的『任务成功但含 UNVERIFIED』诚实报缺）。sample_run_dir 为包相对路径（指向不存在的 fixture）。前置：FLAI_MONITOR_CORE_DIR 指向 sim-live-hub（核可达，失败来自 sample 不存在而非核不可达）。",
+  "inputs": {
+    "target_repo_path": "~/projects/structure-fea/StructureOptimizer",
+    "sample_run_dir": "eval_cases/fixtures/__does_not_exist__",
+    "solver_hint": "不存在的 run 目录（失败路径护栏）"
+  },
+  "expected": {
+    "task_status": "failed",
+    "reason": "sample_run_dir 不是目录 → 工具 fail-closed → 任务 failed（绝不空壳草案顶替）"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "failed" }
+  ]
+}

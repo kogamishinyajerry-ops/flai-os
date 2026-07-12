@@ -1,0 +1,20 @@
+{
+  "baseline": {
+    "compliance": 556.5257937852459,
+    "mass": 2.3550000000000003e-06,
+    "max_displacement": 0.5640342461482742,
+    "max_stress": 1615.1834021093648
+  },
+  "benchmark": "mbb_beam",
+  "input_hash": "sha256:99722225ab68c195eb9ee5d68ba28cdd31b7259da5c2d94765bf3ffb122099df",
+  "iterations": 10,
+  "optimized": {
+    "compliance": 2120.183640816885,
+    "mass": 9.419778097697928e-07,
+    "max_displacement": 2.1201836408168853,
+    "max_stress": 11036.619884359738
+  },
+  "report": "runs/mbb_beam/20260615-091743-763263/report.md",
+  "status": "completed",
+  "stop_reason": "max_iterations"
+}

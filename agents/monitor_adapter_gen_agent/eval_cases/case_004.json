@@ -1,0 +1,31 @@
+{
+  "case_id": "case_004",
+  "description": "富结构接地路径（填补 case_001/002 只覆盖 CSV 曲线的缺口）：给一个时间戳命名、含**网格场 + 校核 + 终止标记 + 帧序列**的真实 structopt run（vendored 自 sim-live-hub 真实 sample_run）→ 承重核必须逐字/magic/存在性接地这些富路径，绝不丢失或编造：field.source=density.npy（须过 NUMPY magic 二进制接地，缺 magic 会落 UNVERIFIED 而非出现在 truth_sources）、verification_file=verification.json（须命中校核键）、terminal_marker=summary.json（存在性）、field.frames_dir=optimization_frames（帧目录探测）、run_discovery.select=newest_by_name（时间戳名 PROPOSED）。断言直接查 module.json.draft 含这些实际文件名（非静态标题）——任一富路径静默回归（丢 field 接地/漏 verification/漏帧目录）即咬红。任务仍 waiting_review（草案永不自动生效）。sample_run_dir 为**包相对**路径（checkout-independent）。前置：FLAI_MONITOR_CORE_DIR 指向 sim-live-hub。",
+  "inputs": {
+    "target_repo_path": "~/projects/structure-fea/StructureOptimizer",
+    "sample_run_dir": "eval_cases/fixtures/20260712-041500-000000",
+    "module_name": "structopt_full_demo",
+    "solver_hint": "SIMP 拓扑优化（含 density.npy 网格场 + optimization_frames 帧序列 + verification.json 校核）",
+    "display_hints": ["compliance", "volume_fraction"]
+  },
+  "expected": {
+    "task_status": "waiting_review",
+    "draft_files": ["module.json.draft", "parser.py.stub", "REVIEW.md"],
+    "grounds_field_npy": "density.npy",
+    "grounds_verification": "verification.json",
+    "grounds_terminal_marker": "summary.json",
+    "grounds_frames_dir": "optimization_frames",
+    "proposes_discovery": "newest_by_name",
+    "human_review_required": true
+  },
+  "checks": [
+    { "kind": "status_is", "value": "waiting_review" },
+    { "kind": "artifact_exists", "file": "module.json.draft" },
+    { "kind": "artifact_exists", "file": "REVIEW.md" },
+    { "kind": "artifact_contains", "file": "module.json.draft", "value": "density.npy" },
+    { "kind": "artifact_contains", "file": "module.json.draft", "value": "verification.json" },
+    { "kind": "artifact_contains", "file": "module.json.draft", "value": "summary.json" },
+    { "kind": "artifact_contains", "file": "module.json.draft", "value": "optimization_frames" },
+    { "kind": "artifact_contains", "file": "module.json.draft", "value": "newest_by_name" }
+  ]
+}

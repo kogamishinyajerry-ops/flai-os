@@ -1,0 +1,149 @@
+{
+  "actual_volume_fraction": 0.39999057739693955,
+  "baseline": {
+    "aggregator": "weighted_sum",
+    "compliance": 556.5257937852459,
+    "mass": 2.3550000000000003e-06,
+    "max_displacement": 0.5640342461482742,
+    "max_stress": 1615.1834021093648
+  },
+  "candidate": {
+    "aggregator": "weighted_sum",
+    "compliance": 2120.183640816885,
+    "mass": 9.419778097697928e-07,
+    "max_displacement": 2.1201836408168853,
+    "max_stress": 11036.619884359738
+  },
+  "connectivity_ok": true,
+  "constraints": [
+    {
+      "limit": 0.42000000000000004,
+      "name": "volume_fraction",
+      "source": "independent_verification",
+      "status": "passed",
+      "unit": "ratio",
+      "value": 0.39999057739693955
+    },
+    {
+      "limit": true,
+      "name": "load_to_support_connectivity",
+      "source": "independent_verification",
+      "status": "passed",
+      "unit": "boolean",
+      "value": true
+    },
+    {
+      "limit": true,
+      "name": "frozen_solid_regions",
+      "source": "independent_verification",
+      "status": "passed",
+      "unit": "boolean",
+      "value": true
+    },
+    {
+      "limit": true,
+      "name": "void_regions",
+      "source": "independent_verification",
+      "status": "passed",
+      "unit": "boolean",
+      "value": true
+    }
+  ],
+  "frozen_solid_ok": true,
+  "limitations": "2D/2.5D SIMP results are optimization candidates and require engineering review before production use.",
+  "load_cases": {
+    "baseline": {
+      "primary": {
+        "compliance": 556.5257937852459,
+        "mass": 2.3550000000000003e-06,
+        "max_displacement": 0.5640342461482742,
+        "max_stress": 1615.1834021093648,
+        "weight": 1.0
+      }
+    },
+    "candidate": {
+      "primary": {
+        "compliance": 2120.183640816885,
+        "mass": 9.419778097697928e-07,
+        "max_displacement": 2.1201836408168853,
+        "max_stress": 11036.619884359738,
+        "weight": 1.0
+      }
+    }
+  },
+  "manufacturability": {
+    "checks": {
+      "isolated_islands": {
+        "component_count": 1,
+        "island_count": 0,
+        "largest_component_elements": 274,
+        "minimum_region_elements": 3,
+        "small_component_count": 0,
+        "status": "passed"
+      },
+      "local_density_warning": {
+        "gray_density_fraction": 0.74,
+        "rule": "active elements with density between 0.15 and 0.85 indicate unresolved local density regions",
+        "status": "warning"
+      },
+      "thin_member_warning": {
+        "rule": "solid elements with one or fewer solid orthogonal neighbors are flagged as thin-member candidates",
+        "status": "passed",
+        "thin_element_count": 0
+      }
+    },
+    "limitations": "These v0.2 checks are coarse manufacturability warnings for 2D/2.5D benchmark models, not production manufacturing approval.",
+    "status": "warning"
+  },
+  "manufacturing_compliance": {
+    "extrusion_compliance": {
+      "rule": "extrusion_not_declared",
+      "status": "missing"
+    },
+    "min_member_size_compliance": {
+      "rule": "min_member_size_not_declared",
+      "status": "missing"
+    },
+    "symmetry_compliance": {
+      "rule": "symmetry_not_declared",
+      "status": "missing"
+    }
+  },
+  "objective": {
+    "name": "compliance",
+    "role": "objective",
+    "sense": "minimize",
+    "source": "independent_verification",
+    "value": 2120.183640816885
+  },
+  "responses": [
+    {
+      "name": "mass",
+      "source": "independent_verification",
+      "unit": "model_mass",
+      "value": 9.419778097697928e-07
+    },
+    {
+      "name": "compliance",
+      "source": "independent_verification",
+      "unit": "force_length",
+      "value": 2120.183640816885
+    },
+    {
+      "name": "max_displacement",
+      "source": "independent_verification",
+      "unit": "model_length",
+      "value": 2.1201836408168853
+    },
+    {
+      "name": "max_stress",
+      "source": "independent_verification",
+      "unit": "model_stress",
+      "value": 11036.619884359738
+    }
+  ],
+  "status": "passed",
+  "target_volume_fraction": 0.4,
+  "void_regions_ok": true,
+  "volume_fraction_ok": true
+}
