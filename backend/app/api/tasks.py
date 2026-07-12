@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..core.errors import IllegalTransitionError
+from ..logging_setup import audit_event
 from ..storage import repos
 
 router = APIRouter(prefix="/api", tags=["tasks"])
@@ -304,6 +305,23 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
         # 定标，确保下游只把工程师认可的草案当作可复用数据。
         sample_rows = repos.set_sample_review_outcome(
             conn, task_id, accepted=(body.action == "approve")
+        )
+
+        # 治理签发审计（M12-2c）：人工放行/拒绝是「人是唯一签发者」红线的落点，
+        # 是平台最安全承重的动作——此前只落 task_event（应用数据），无篡改抗性的
+        # audit.log 轨。此处补审计轴：actor=签发者唯一 username（P2-4 唯一身份纪律），
+        # 记录被签发任务、创建者、及**近似自审标记**（签发者与创建者显示名相同）。
+        # 诚实边界：self_review 基于 display_name 比对（created_by 存的是显示名，非
+        # username）——显示名非唯一故为可见性提示非强制；硬性职责分离（禁自审 403）
+        # 需先补 created_by_username 身份列 + owner 定策略（角色轴，task #17 递延）。
+        created_by = task.get("created_by")
+        audit_event(
+            "task_review",
+            actor=request.state.user["username"],
+            outcome=("approved" if body.action == "approve" else "rejected"),
+            task_id=task_id,
+            created_by=created_by if created_by is not None else "(unknown)",
+            self_review=bool(created_by is not None and reviewer == created_by),
         )
 
         if body.action == "approve":

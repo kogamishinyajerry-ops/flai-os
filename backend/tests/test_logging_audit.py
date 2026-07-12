@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from pathlib import Path
 
 from backend.app.logging_setup import audit_event, configure_logging, reset_logging
+from backend.app.storage import repos
+from backend.app.storage.db import get_conn
 
-from conftest import TEST_USERNAME
+from conftest import TEST_DISPLAY_NAME, TEST_USERNAME
 
 
 def _audit_records(app) -> list[dict]:
@@ -142,3 +145,59 @@ def test_internal_download_is_not_audited_as_denied(app_env):
         r.get("action") == "sensitive_download_denied" and r.get("file_id") == file_id
         for r in records
     )
+
+
+# ── 治理签发审计（M12-2c）：人工放行/拒绝是「人是唯一签发者」红线的落点 ──────
+
+def _make_waiting_review_task(app, *, created_by: str) -> str:
+    """直接经 repos 把任务驱到 waiting_review（走合法状态机转移，非直插畸形态）。
+    agent_id 无外键约束，用固定串即可；review 端点只按状态与身份判定。"""
+    task_id = "t-" + uuid.uuid4().hex[:8]
+    conn = get_conn(app.state.db_path)
+    try:
+        repos.create_task(
+            conn, task_id=task_id, agent_id="fta_agent", agent_version="0.1.0",
+            name="audit-signoff-test", created_by=created_by, inputs={},
+        )
+        for st in ("queued", "validating", "running", "waiting_review"):
+            repos.set_task_status(conn, task_id, st)
+    finally:
+        conn.close()
+    return task_id
+
+
+def test_task_approval_is_audited_as_signoff(app_env):
+    """批准放行落 audit.log：action=task_review/outcome=approved/actor=唯一 username。
+    创建者显示名==签发者显示名 → 近似自审标记 self_review=True。"""
+    client, app = app_env
+    task_id = _make_waiting_review_task(app, created_by=TEST_DISPLAY_NAME)
+    resp = client.post(f"/api/tasks/{task_id}/review", json={"action": "approve"})
+    assert resp.status_code == 200, resp.text
+    hit = [r for r in _audit_records(app)
+           if r.get("action") == "task_review" and r.get("task_id") == task_id]
+    assert len(hit) == 1, "每次签发恰一条审计"
+    r = hit[0]
+    assert r["outcome"] == "approved"
+    assert r["actor"] == TEST_USERNAME  # 唯一身份（P2-4）
+    assert r["created_by"] == TEST_DISPLAY_NAME
+    assert r["self_review"] is True  # is True，不认 truthy
+
+
+def test_task_rejection_by_non_creator_audited_not_self_review(app_env):
+    """拒绝亦落审计；创建者≠签发者显示名 → self_review=False。
+    reject comment 是用户自由文本，非白名单字段 → 绝不入 audit.log（防注入/secret 回流）。"""
+    client, app = app_env
+    task_id = _make_waiting_review_task(app, created_by="另一位工程师")
+    resp = client.post(
+        f"/api/tasks/{task_id}/review", json={"action": "reject", "comment": "不合格-secret-xyz"}
+    )
+    assert resp.status_code == 200, resp.text
+    hit = [r for r in _audit_records(app)
+           if r.get("action") == "task_review" and r.get("task_id") == task_id]
+    assert len(hit) == 1
+    r = hit[0]
+    assert r["outcome"] == "rejected"
+    assert r["self_review"] is False
+    assert r["created_by"] == "另一位工程师"
+    audit_text = (Path(app.state.db_path).parent / "logs" / "audit.log").read_text("utf-8")
+    assert "不合格-secret-xyz" not in audit_text, "自由文本 comment 绝不入审计轴"

@@ -26,7 +26,13 @@ AUDIT_LOGGER_NAME = "flai.audit"
 # 审计字段白名单（Codex R0 P1-3 / P3-3）：audit_event 只接受这些附加字段，
 # 其余（含任何可能的 password/token/cookie）一律 DROP 不落库——「绝不记 secret」
 # 在边界内由构造保证，不靠调用点自觉。action/outcome/actor 是固定结构字段另计。
-_AUDIT_ALLOWED_FIELDS = frozenset({"reason", "file_id", "classification", "display_name"})
+_AUDIT_ALLOWED_FIELDS = frozenset({
+    "reason", "file_id", "classification", "display_name",
+    # 治理签发审计（M12-2c）：task_id=被签发任务（opaque UUID），created_by=创建者
+    # 显示名（非 secret，事件层已公开），self_review=签发者与创建者显示名相同的
+    # 近似自审标记（bool）。三者皆无 user-controlled 自由文本/secret，可安全入白名单。
+    "task_id", "created_by", "self_review",
+})
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 # 单文件 5MB 滚动；进程日志留 5 份、审计留 10 份（合规回溯窗口更长）。
