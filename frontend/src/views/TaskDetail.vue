@@ -30,6 +30,13 @@
         <!-- waiting_review 时轮询停止（避免无人值守页面永久空转），跨会话的
              人工放行结果靠本按钮手动拉取（反方审查 P2-1）。 -->
         <el-button text type="primary" class="refresh-btn" @click="loadTask()">刷新</el-button>
+        <!-- 仿真监控深链探针（PM 路线图 Next-1，S 级）：仅在浮窗已配置
+             （同 localStorage 开关，默认关零渲染）时出现，验证「任务页→监控」
+             联动的真实需求；per-task run 关联（数据库列）待后端 lane 空闲后
+             另批做——本探针零后端改动。 -->
+        <a v-if="simHubUrl" class="sim-link" :href="simHubUrl" target="_blank" rel="noopener">
+          查看仿真监控 ↗
+        </a>
       </div>
 
       <!-- 终态盖章（Codex CLI「─ Worked for Xs ─」落定仪式）：位置=标题/返回行之下、
@@ -248,6 +255,18 @@ import { burstSigned } from "../effects/burst";
 
 const route = useRoute();
 const taskId = route.params.taskId;
+
+// 仿真监控深链探针：读浮窗同款配置（未配置=null=按钮零渲染，e2e 不受扰）。
+// 探针阶段链到 hub 首页（模块卡一步可达）；per-task run 深链（#/mod@runid
+// hub 侧已支持）待 run 关联字段落库后接上。
+const simHubUrl = (() => {
+  try {
+    const configured = window.localStorage.getItem("flai.simMonitorHub");
+    return configured ? new URL(configured).origin + "/" : null;
+  } catch (e) {
+    return null;
+  }
+})();
 
 const task = ref(null);
 const events = ref([]);
@@ -865,4 +884,12 @@ onUnmounted(() => {
   font-size: 12px;
   white-space: nowrap;
 }
+.sim-link {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--clay);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.sim-link:hover { text-decoration: underline; }
 </style>

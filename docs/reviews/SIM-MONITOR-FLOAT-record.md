@@ -66,3 +66,20 @@
   （任务详情页挂对应仿真监控）递延到转正批。
 - 嵌入视图为 hub 暖纸浅色，暗色主题下浮窗内容不随主题切换（iframe 内容
   归 hub 管；转正时可经 URL 参数传主题）。
+
+
+## 5. Next-1 探针批：TaskDetail「查看仿真监控 ↗」深链（2026-07-12）
+
+- **范围（并发避撞裁决）**：开工时发现另一 lane 正在飞 B1 鉴权（db.py/main.py/
+  api/*/client.js 大面积未提交 WIP，迁移宿主 db.py 正在其手上）——探针降级为
+  **零后端方案**：TaskDetail 头部动作区加深链按钮（读浮窗同款 localStorage
+  `flai.simMonitorHub`，未配置零渲染），链到 hub 首页；**per-task run_ref 数据库列
+  推迟到该 lane 落地后另批**（hub 侧 `#/mod@runid` 深链+run 对账提示已先行就位）。
+- **归属核查**：TaskDetail.vue diff 仅含本批三个 hunk（按钮/常量/样式），与鉴权
+  lane 零交叠；staging 只点名本文件。
+- **验证（如实分级）**：npm build 绿 ✓；DOM 级实拍 PASS（.sim-link 可见，
+  href=配置 hub origin；截图时鉴权 lane 的登录遮罩为其未提交 WIP，评估用途下
+  隐藏并如实注明）✓；**m8 e2e 未跑通=△**——401 阻断，归因钉死为并行 lane
+  未提交的 backend/app/auth/middleware.py（字符串亲验），非本改动路径；本改动
+  在 e2e 上下文（localStorage 未配置）零 DOM 变化。**挂账：鉴权 lane 落地后
+  补跑 verify_all 全量。**
