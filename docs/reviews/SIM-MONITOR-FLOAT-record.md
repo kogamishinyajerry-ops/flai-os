@@ -83,3 +83,19 @@
   未提交的 backend/app/auth/middleware.py（字符串亲验），非本改动路径；本改动
   在 e2e 上下文（localStorage 未配置）零 DOM 变化。**挂账：鉴权 lane 落地后
   补跑 verify_all 全量。**
+
+## 6. 转正门槛清单批：暗色透传 + 窄屏适配（2026-07-12）
+
+- §4 递延两项落地（本仓侧仅 SimMonitorFloat.vue 单文件）：
+  ① **暗色透传**：`resolvedTheme` 为响应式依赖，暗色时 frameSrc 追加
+  `&theme=dark`——hub 嵌入视图（该仓 2108a77 新增暗色变量）随平台换肤，
+  切主题即 iframe 重载（嵌入页无长驻状态，1s 轮询重建，代价可接受）；
+  ② **窄屏**：<900px 浮窗抬高至 bottom:96px 避开 GuidePage 悬浮 composer，
+  卡宽 `min(400px, 100vw-24px)` 不溢出。
+- 同批 hub 侧新增**多模块切换器**（embed.html，自动+各模块 pill）与
+  provenance 点击复制——SSOT 仍全在 hub，本仓零逻辑复制。
+- **验证**：npm build 绿 ✓；暗色实拍 PASS（卡片暗底+4 切换 pill+
+  theme=dark 入 iframe src，截图 dark_switcher.png）✓；hub 实机探针
+  **11/11 ALL GREEN** 复跑 ✓（探针对并行 lane 登录门做 CSS 压制豁免并
+  注明，鉴权落地后改走真登录）；m8 e2e 挂账同 §5 不变。
+- 转正门槛剩余：StatusDock 发现入口（等鉴权 lane 落地后同批）+ Codex 补审。

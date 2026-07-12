@@ -38,6 +38,7 @@
 // "sim-live-status"，其余一律丢弃；负载只读取展示，绝不执行/写入。
 // v2：负载 surface 字段（"sim"|"workbench"）分流双页签，缺省按 "sim" 兼容。
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import { resolvedTheme } from "../stores/theme";
 
 const STORAGE_KEY = "flai.simMonitorHub";
 const TABS = [
@@ -57,10 +58,13 @@ try {
 }
 
 const enabled = hubOrigin !== null;
+// 主题透传（转正门槛清单项）：暗色时经 ?theme=dark 让 hub 嵌入视图随平台
+// 换肤；resolvedTheme 是响应式依赖——切主题时模板重取 src，iframe 重载
+// （嵌入页无长驻状态，1s 轮询重建，代价可接受）。
 function frameSrc(page) {
-  return enabled
-    ? `${hubOrigin}/${page}?host_origin=${encodeURIComponent(window.location.origin)}`
-    : "";
+  if (!enabled) return "";
+  const theme = resolvedTheme.value === "dark" ? "&theme=dark" : "";
+  return `${hubOrigin}/${page}?host_origin=${encodeURIComponent(window.location.origin)}${theme}`;
 }
 
 const expanded = ref(false);
@@ -236,5 +240,11 @@ onUnmounted(() => {
 @media (prefers-reduced-motion: reduce) {
   .sim-pill { transition: none; }
   .sim-dot.work { animation: none; }
+}
+/* 窄屏（转正门槛清单项）：<900px 抬高避开 GuidePage 底部悬浮 composer，
+   卡片宽度让出屏边距不溢出。 */
+@media (max-width: 900px) {
+  .sim-float { bottom: 96px; right: 12px; }
+  .sim-card { width: min(400px, calc(100vw - 24px)); }
 }
 </style>
