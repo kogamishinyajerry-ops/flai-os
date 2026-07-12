@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "monitor_adapter_gen_agent 输入契约",
+  "description": "为一个新求解器/新工作流起草接入实时监控的 adapter 草案。只读侦察一个真实历史 run 产物目录（无真实样本不接单——拒绝凭描述臆造解析器）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["target_repo_path", "sample_run_dir"],
+  "properties": {
+    "target_repo_path": {
+      "type": "string",
+      "title": "目标工作流仓路径",
+      "minLength": 1,
+      "maxLength": 1000,
+      "description": "被接入工作流的仓/目录（只读侦察，他仓神圣）。记入草案 module.json 的 repo 字段供人工确认。"
+    },
+    "sample_run_dir": {
+      "type": "string",
+      "title": "样本 run 目录",
+      "minLength": 1,
+      "maxLength": 1000,
+      "description": "至少一个真实历史 run 的产物目录（承重核只读侦察其真源文件）。"
+    },
+    "module_name": {
+      "type": "string",
+      "title": "模块名",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "可选，草案模块名（默认核取 run 目录父名）。"
+    },
+    "solver_hint": {
+      "type": "string",
+      "title": "求解器提示",
+      "maxLength": 500,
+      "description": "可选，引擎/求解器提示（如「STAR-CCM+ residuals in *.csv」）。"
+    },
+    "display_hints": {
+      "type": "array",
+      "title": "优先展示意愿",
+      "items": { "type": "string", "minLength": 1 },
+      "maxItems": 32,
+      "description": "可选，领域侧希望优先展示的量。仅进叙事层「生成器建议」的展示选择排序（选择权可智能化），绝不影响任何上屏数值（数据权红线）。"
+    }
+  }
+}

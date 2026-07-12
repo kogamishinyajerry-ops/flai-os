@@ -1,0 +1,23 @@
+{
+  "case_id": "case_001",
+  "description": "正常接地路径：给一个时间戳命名的真实 run 目录（含 metrics.csv 曲线源）→ 承重核逐字接地 curves（VERIFIED）+ 时间戳名提议 run_discovery（PROPOSED）→ 落 module.json.draft/REVIEW.md，任务停 waiting_review 等人工放行注册（非 completed）。前置：FLAI_MONITOR_CORE_DIR 指向 sim-live-hub。",
+  "inputs": {
+    "target_repo_path": "~/projects/structure-fea/StructureOptimizer",
+    "sample_run_dir": "~/projects/aircraft-comac/flai-os/agents/monitor_adapter_gen_agent/eval_cases/fixtures/happy_20260712-030000-000000",
+    "module_name": "structopt_demo",
+    "solver_hint": "SIMP 拓扑优化，metrics.csv 逐迭代",
+    "display_hints": ["compliance", "volume_fraction"]
+  },
+  "expected": {
+    "task_status": "waiting_review",
+    "draft_files": ["module.json.draft", "parser.py.stub", "REVIEW.md"],
+    "review_contains_verified": true,
+    "human_review_required": true
+  },
+  "checks": [
+    { "kind": "status_is", "value": "waiting_review" },
+    { "kind": "artifact_exists", "file": "module.json.draft" },
+    { "kind": "artifact_exists", "file": "REVIEW.md" },
+    { "kind": "artifact_contains", "file": "REVIEW.md", "value": "VERIFIED" }
+  ]
+}

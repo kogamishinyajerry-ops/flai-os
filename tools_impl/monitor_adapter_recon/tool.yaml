@@ -1,0 +1,69 @@
+id: monitor_adapter_recon
+name: "监控接入侦察工具（adapter 草案承重核）"
+version: 0.1.0
+type: python_adapter
+mock: false
+description: >
+  经受控子进程调用监控节点仓 sim-live-hub tools/adapter_gen.py 承重核（零 LLM/
+  零网络/纯 stdlib），只读侦察一个真实历史 run 目录，返回结构化 adapter 草案
+  （module.json 骨架 + parser 桩 + 诚实清单 + 三档侦察证据 VERIFIED/PROPOSED/
+  UNVERIFIED）。接地保证由核提供，本工具不重复实现（生成器契约 §6）。核目录来自
+  可信配置 FLAI_MONITOR_CORE_DIR，未配置/核缺失即 fail-closed（core_available=false）。
+  注意：mock=false 表示确实调真实确定性核，但本工具不触真实工程程序（求解器），
+  只侦察其产物目录——与 M4 真实求解器 adapter 语义边界不同（见 README）。
+entrypoint: tools_impl.monitor_adapter_recon.adapter:run
+input_schema:
+  type: object
+  required:
+    - sample_run_dir
+  properties:
+    sample_run_dir:
+      type: string
+      minLength: 1
+      description: 被接入工作流的一个真实历史 run 产物目录（只读侦察，他仓神圣）
+    module_name:
+      type: string
+      minLength: 1
+      description: 可选，模块名（默认核取 run 目录父名）
+    solver_hint:
+      type: string
+      description: 可选，求解器/领域提示（如 "STAR-CCM+ residuals in *.csv"）
+  additionalProperties: false
+output_schema:
+  type: object
+  required:
+    - status
+  properties:
+    status:
+      type: string
+      enum:
+        - success
+        - failed
+    core_available:
+      type: boolean
+      description: 承重核是否可达（false=FLAI_MONITOR_CORE_DIR 未配置或核缺失，fail-closed）
+    grounding_ok:
+      type: boolean
+      description: 核写前接地自检是否全通过（false=有证据未逐字接地，草案含 UNVERIFIED）
+    grounding_failures:
+      type: array
+      description: 接地自检未通过项（空=全接地）
+    module_name:
+      type: string
+    draft:
+      type: object
+      description: 核返回的结构化草案（module_json_draft/parser_stub/honesty_checklist/三档证据），宽松透传
+    error_message:
+      type: string
+  additionalProperties: false
+runtime:
+  timeout_seconds: 90
+  max_parallel_jobs: 2
+  retry: 0
+safety:
+  require_workspace_isolation: false
+  allow_shell_command: true
+  save_raw_files: false
+owner:
+  maintainer: TBD
+  business_owner: TBD

@@ -29,6 +29,11 @@ FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
 DB_PATH = Path(os.environ.get("FLAI_DB_PATH", str(DATA_DIR / "flai_os.db")))
 BACKEND_PORT = int(os.environ.get("FLAI_BACKEND_PORT", "8620"))
 
+# ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。
+# monitor_adapter_recon 工具经此子进程调核起草 adapter 草案；未配置=核不可达=工具
+# fail-closed（绝不猜路径）。默认 None：本机开发/内网按实况 export FLAI_MONITOR_CORE_DIR。
+MONITOR_CORE_DIR = os.environ.get("FLAI_MONITOR_CORE_DIR") or None
+
 
 def ensure_dirs() -> None:
     """确保运行期所需的真实目录存在（仅供 app 启动路径调用，测试不应调用本函数）。"""

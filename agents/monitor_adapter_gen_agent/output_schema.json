@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "monitor_adapter_gen_agent 输出契约",
+  "description": "workflow.run() 成功返回的 outputs[0] 摘要对象；module.json.draft / parser.py.stub / REVIEW.md 落任务 output_dir 由 Runtime 注册。任务不会因返回 success 而 completed——requires_human_review=true，Runtime 强制转 waiting_review 等人工放行与注册。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["target_repo_path", "sample_run_dir", "grounding_ok", "human_review_required", "artifacts"],
+  "properties": {
+    "target_repo_path": { "type": "string" },
+    "sample_run_dir": { "type": "string" },
+    "grounding_ok": { "type": "boolean", "description": "承重核写前接地自检是否全通过（false=草案含未逐字接地项，交人审）。" },
+    "verified": { "type": "integer", "minimum": 0, "description": "VERIFIED 逐字/magic/存在性接地条数。" },
+    "proposed": { "type": "integer", "minimum": 0, "description": "PROPOSED 结构推断待人确认条数。" },
+    "unverified": { "type": "integer", "minimum": 0, "description": "UNVERIFIED 无法接地如实报缺条数。" },
+    "narrative_generated": { "type": "boolean", "description": "AI 生成器建议叙事是否生成（false=模型不可达，已诚实降级，实质草案仍完整）。" },
+    "human_review_required": { "type": "boolean", "const": true, "description": "恒为 true：草案 draft 永不自动生效，注册是人的动作（人是唯一签发者）。" },
+    "artifacts": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  }
+}

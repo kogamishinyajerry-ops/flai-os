@@ -1,0 +1,20 @@
+{
+  "case_id": "case_002",
+  "description": "失败路径（契约 §5）：run 目录命名不符时间戳身份判据（第二路停滞判定依赖它）→ 承重核如实判 run_discovery UNVERIFIED 并要求 wrapper/改造，绝不编造一个 discovery。curves 仍逐字接地（能接地的照接，接不了的如实报缺）。任务仍 waiting_review（草案含 UNVERIFIED 是诚实产物，交人审）。前置：FLAI_MONITOR_CORE_DIR 指向 sim-live-hub。",
+  "inputs": {
+    "target_repo_path": "~/projects/structure-fea/StructureOptimizer",
+    "sample_run_dir": "~/projects/aircraft-comac/flai-os/agents/monitor_adapter_gen_agent/eval_cases/fixtures/nonconforming_run",
+    "solver_hint": "命名不规范的历史 run（无时间戳前缀）"
+  },
+  "expected": {
+    "task_status": "waiting_review",
+    "review_reports_unverified_run_discovery": true,
+    "does_not_fabricate_discovery": true
+  },
+  "checks": [
+    { "kind": "status_is", "value": "waiting_review" },
+    { "kind": "artifact_exists", "file": "REVIEW.md" },
+    { "kind": "artifact_contains", "file": "REVIEW.md", "value": "UNVERIFIED" },
+    { "kind": "artifact_contains", "file": "REVIEW.md", "value": "run_discovery" }
+  ]
+}

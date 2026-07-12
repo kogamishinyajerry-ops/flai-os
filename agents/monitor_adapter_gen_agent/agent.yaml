@@ -1,0 +1,64 @@
+id: monitor_adapter_gen_agent
+name: "监控接入生成器 Agent（adapter 草案）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: structured_gen
+summary: "「产生工作流的工作流」：给一个新求解器/新工作流的真实历史 run 目录，起草它接入实时可视化监控所需的全部件（module.json 骨架 + parser 桩 + 三档接地证据 + 诚实清单）——只起草不生效，注册与 tamper 实证是人的动作，任务强制人工放行。"
+description: >
+  ADR-0020 R2 的平台实体。承重=确定性接地侦察（sim-live-hub 承重核，经
+  monitor_adapter_recon 工具子进程；零 LLM/零网络/三档诚实 VERIFIED/PROPOSED/
+  UNVERIFIED），接地保证由核提供，本 Agent 不重复实现、不改一字证据；核不可达/
+  侦察失败即诚实 failed，绝不空壳顶替。推理模型仅加**叙事层「生成器建议」**（当前
+  展示什么曲线/场/参数信息量最大——选择权可智能化并标注，数据权绝不：绝不生成/
+  插值/美化任何上屏数值，docs/09 §3 红线）；模型不可达时诚实标注叙述未生成，
+  绝不因叙事层失败丢弃已接地的实质草案。requires_human_review=true：草案 draft
+  永不自动生效，工程师按诚实清单跑 tamper 实证（篡改必咬红+真跑必绿）+代码审后
+  人工注册进监控节点（人是唯一签发者）。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: reasoning
+knowledge:
+  enabled: false
+  scopes: []
+tools:
+  - monitor_adapter_recon
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats:
+    - .json
+    - .md
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: true
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: true
+  sample_fields:
+    - inputs.target_repo_path
+    - outputs.grounding_ok
+    - outputs.unverified
+limitations:
+  - "只起草不生效：产物是 draft，注册进监控节点、跑 tamper 实证、最终签发全部是人的动作，本 Agent 永远停在「等待人工审核」。"
+  - "接地由确定性承重核提供，非模型：module.json/证据的 VERIFIED/PROPOSED/UNVERIFIED 三档来自 sim-live-hub 承重核；模型只加展示选择建议（叙事层），绝不生成/插值/美化任何上屏数值（数据权红线）。"
+  - "无真实样本不接单：必须给一个真实历史 run 产物目录，绝不凭文字描述臆造解析器；run 目录命名不符时间戳身份判据时如实判 UNVERIFIED 并要求 wrapper，绝不硬编不可靠判据。"
+  - "只读侦察：对目标仓与样本目录零写入、零执行其脚本（他仓神圣）。"
+  - "承重核不可达即诚实失败：FLAI_MONITOR_CORE_DIR 未配置或核缺失时任务 failed，绝不猜路径、绝不空壳草案顶替。"
+  - "PROPOSED 项是结构推断而非确证：run_discovery 的 glob 层级、marker_file 落盘顺序、帧序号→迭代号映射等必须由人回目标仓核实。"
