@@ -173,12 +173,23 @@ def _max_upload_bytes() -> int:
     return int(os.environ.get("FLAI_MAX_UPLOAD_MB", "100")) * 1024 * 1024
 
 
+_CLASSIFICATIONS = ("internal", "sensitive")
+
+
 @router.post("/files/upload")
 async def upload_file(
     request: Request,
     file: UploadFile = File(...),
     task_id: str | None = Form(default=None),
+    classification: str = Form(default="internal"),
 ) -> dict[str, Any]:
+    # 分级合法性校验先于任何磁盘 I/O（ADR-0021 D2/设计审 F7）：非法值拒收
+    # 不落盘不入库——错误方向是「拒收」而非「静默降级 internal 洗白入库」。
+    if classification not in _CLASSIFICATIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"非法 classification：{classification!r}（合法值 internal|sensitive）",
+        )
     uploads_dir: Path = request.app.state.uploads_dir
     file_id = str(uuid.uuid4())
     dest_dir = uploads_dir / file_id
@@ -232,6 +243,9 @@ async def upload_file(
             path=str(dest_path),
             size_bytes=size,
             sha256=digest.hexdigest(),
+            classification=classification,
+            # 分级是自报值（ADR-0021 D2 信任根声明）——标注人记名，标错可追责。
+            uploaded_by=request.state.user["display_name"],
         )
     except Exception:
         # 审计 P3（孤儿 blob）：落盘成功但入库失败（如锁等待超时）——磁盘有文件、
@@ -255,6 +269,18 @@ def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
         conn.close()
     if record is None:
         raise HTTPException(status_code=404, detail=f"文件不存在：{file_id}")
+
+    # 分级下载门（ADR-0021 D4）：internal-allowlist——sensitive 与任何未知/坏值
+    # 一律 403。V0.1 无角色轴，「谁可下载 sensitive」无裁决依据，诚实答案就是
+    # 「暂时没有人可以」；不做白名单/口令旁路（伪造未经设计的授权体系）。
+    if record["classification"] != "internal":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"文件分级 {record['classification']!r} 未开放下载：角色授权体系"
+                "未建立前非 internal 数据一律 fail-closed 拒绝（ADR-0021）"
+            ),
+        )
 
     # input 与 output 分属两个权威根：根由应用装配给出，绝不从待校验 path 自推。
     # 未知 kind 没有可信根，按完整性失败 fail-closed。

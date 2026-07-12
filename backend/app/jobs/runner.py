@@ -28,10 +28,18 @@ from typing import BinaryIO, Callable, Iterator
 
 import sqlite3
 
+from ..config import WORKER_GENERATION
 from ..core.errors import IllegalTransitionError
 from ..storage import repos
 
 logger = logging.getLogger(__name__)
+
+# WORKER_GENERATION 定义在 config（纯 stdlib，Codex R2 审 P2：部署自检探针
+# 号称免应用依赖，从 runner 导会连带拉 repos→jsonschema）；此处经 import
+# re-export，runner.WORKER_GENERATION 的既有引用与调用点不变。
+# 部署自检门以「心跳新鲜 + 代际匹配」双条件见证独立 worker 进程跑当前代码——
+# API 升级而 worker 未重启时旧 worker 落库走 DDL DEFAULT 洗白 sensitive 派生。
+_HEARTBEAT_INTERVAL_SECONDS = 15.0
 
 _INTERRUPTED_STATUSES = ("validating", "running", "parsing", "analyzing")
 _WORKER_INTERRUPTED_ERROR = (
@@ -161,6 +169,37 @@ class JobRunner:
         self._runtime = runtime
         self._conn_factory = conn_factory
         self._poll_interval = poll_interval
+        self._last_beat_monotonic: float | None = None
+
+    def beat(self) -> None:
+        """写 worker 心跳+代际（迁移 #7）。失败只记日志不上抛——心跳是部署
+        自检的观测通道，绝不许它反过来炸掉真正干活的 worker。
+
+        conn_factory() 本身也在 try 内（Codex R2 审 P1）：连接层瞬时故障
+        （SQLite 打开/PRAGMA 失败）此前在 try 外抛出、经 _beat_if_due 逃逸
+        run_forever 直接杀 worker——与本方法「不上抛」的契约矛盾。
+        """
+        conn = None
+        try:
+            conn = self._conn_factory()
+            repos.beat_worker_heartbeat(
+                conn,
+                generation=WORKER_GENERATION,
+                detail=f"pid={os.getpid()}",
+            )
+            self._last_beat_monotonic = time.monotonic()
+        except Exception:
+            logger.exception("worker 心跳写入失败（不影响任务执行，继续轮询）")
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def _beat_if_due(self) -> None:
+        if (
+            self._last_beat_monotonic is None
+            or time.monotonic() - self._last_beat_monotonic >= _HEARTBEAT_INTERVAL_SECONDS
+        ):
+            self.beat()
 
     def run_once(self) -> bool:
         """拾取并执行一条 queued 任务；无任务可拾取返回 False。
@@ -264,6 +303,7 @@ class JobRunner:
         """
         try:
             while True:
+                self._beat_if_due()  # 心跳先于拾取：空轮询也证明 worker 活着（迁移 #7）
                 try:
                     did_work = self.run_once()
                 except Exception:
@@ -302,6 +342,9 @@ def _build_default_runner() -> JobRunner:
     runtime = AgentRuntime(
         asm.agent_registry, asm.tool_registry, asm.model_gateway, conn_factory,
         config.TASK_RUNS_DIR, knowledge_service=asm.knowledge_service,
+        # ADR-0021 知识轴（Codex R1 审 P1）：漏传=registry 缺失分支把 enabled
+        # Agent 全判 sensitive——public_internal 知识 Agent 的产物会 403。
+        scope_registry=asm.scope_registry,
     )
     return JobRunner(runtime, conn_factory)
 

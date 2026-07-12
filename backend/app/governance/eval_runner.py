@@ -517,6 +517,9 @@ def _run_one_case_inner(
                 path=str(dest),
                 size_bytes=dest.stat().st_size,
                 sha256=hashlib.sha256(dest.read_bytes()).hexdigest(),
+                # eval case 内容经人工放行+策展双关（ADR-0018），包内数据 internal
+                # 是治理流程的构造性口径（ADR-0021 D3）；非人工上传，uploaded_by 留 NULL。
+                classification="internal",
             )
             input_file_ids.append(file_id)
 

@@ -213,6 +213,56 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _task_input_classification(conn: sqlite3.Connection, task: dict[str, Any]) -> str:
+    """任务级派生分级（ADR-0021 D3 污点传播）：产物/样本继承此值。
+
+    三个 fail-closed 分支：无输入文件 → internal（无污点源）；输入记录缺失 →
+    sensitive（出处不可考，宁严勿洗白）；任一记录分级非 internal（含未知坏值，
+    allowlist 判定）→ sensitive。无条件基于 task.input_file_ids 现查 DB，不依赖
+    _open_input_files 副作用（设计审 F6：schema 校验先失败时 verified_files 恒空）。
+    """
+    file_ids = task.get("input_file_ids") or []
+    if not file_ids:
+        return "internal"
+    rows = repos.list_files_by_ids(conn, file_ids)
+    if len(rows) != len(file_ids):
+        return "sensitive"
+    if all(row.get("classification") == "internal" for row in rows) is True:
+        return "internal"
+    return "sensitive"
+
+
+def _knowledge_classification(agent: dict[str, Any], scope_registry: Any) -> str:
+    """知识轴派生分级（ADR-0021 D3/Codex R0-P1）：绑 restricted 知识库的 Agent
+    能把检索文本写进产物——无输入文件也携带受限内容，文件污点轴测不到。
+
+    allowlist：scope 密级 public_internal/department → internal（department
+    语义=部门内部，与 internal 定义重合）；restricted/未知密级/未注册 scope/
+    registry 缺失 → sensitive（fail-closed，与 scopes.py 静态门的兜底拒绝同向）。
+    knowledge.enabled 非字面 True 不构成访问面（同 reconcile_agent_scopes 口径）。
+    """
+    knowledge = agent.get("knowledge") or {}
+    if knowledge.get("enabled") is not True:
+        return "internal"
+    for scope_id in knowledge.get("scopes") or []:
+        scope = scope_registry.get(scope_id) if scope_registry is not None else None
+        conf = None if scope is None else scope.get("confidentiality")
+        if conf not in ("public_internal", "department"):
+            return "sensitive"
+    return "internal"
+
+
+def _task_data_classification(
+    conn: sqlite3.Connection, task: dict[str, Any], agent: dict[str, Any], scope_registry: Any
+) -> str:
+    """任务级派生分级 = 文件污点轴 ∨ 知识轴（任一 sensitive 即 sensitive）。"""
+    if _task_input_classification(conn, task) != "internal":
+        return "sensitive"
+    if _knowledge_classification(agent, scope_registry) != "internal":
+        return "sensitive"
+    return "internal"
+
+
 def _load_workflow_module(agent_id: str, workflow_path: Path) -> Any:
     spec = importlib.util.spec_from_file_location(f"flai_agent_{agent_id}_workflow", workflow_path)
     if spec is None or spec.loader is None:
@@ -296,6 +346,7 @@ class AgentRuntime:
         *,
         knowledge_service: Any | None = None,
         uploads_dir: str | Path | None = None,
+        scope_registry: Any | None = None,
     ) -> None:
         self.agent_registry = agent_registry
         self.tool_registry = tool_registry
@@ -310,6 +361,9 @@ class AgentRuntime:
         # ADR-0015：可为 None（纯工具/结构化 Agent 场景不需要）；但 Agent 声明
         # knowledge.enabled 而这里为 None 时任务必须诚实失败，见 _execute 1b。
         self.knowledge_service = knowledge_service
+        # ADR-0021 知识轴派生用；None 时知识轴对 enabled Agent 一律 fail-closed
+        # 判 sensitive（_knowledge_classification 的 registry 缺失分支）。
+        self.scope_registry = scope_registry
 
     def execute(self, task_id: str) -> dict[str, Any]:
         """驱动任务 task_id（调用前须已处于 validating 态）走完生命周期，返回最终 task dict。"""
@@ -423,8 +477,12 @@ class AgentRuntime:
             self._record_failure_sample(conn, task, agent, error_message)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
-        # 3) 成功：注册产物 + 样本沉淀
-        output_file_ids = self._register_outputs(conn, task_id, output_dir)
+        # 3) 成功：注册产物 + 样本沉淀（产物/样本继承任务级派生分级=文件污点轴
+        # ∨ 知识轴，ADR-0021 D3 + Codex R0-P1）
+        data_classification = _task_data_classification(conn, task, agent, self.scope_registry)
+        output_file_ids = self._register_outputs(
+            conn, task_id, output_dir, classification=data_classification
+        )
         repos.set_task_outputs(conn, task_id, output_file_ids)
 
         # M10/ADR-0018 origin 白名单：只有用户任务落样。eval 跑批的输入本来就是
@@ -442,6 +500,7 @@ class AgentRuntime:
                 input_json=task["inputs"],
                 output_json=result,
                 validation_status="success",
+                classification=data_classification,
             )
 
         # 宪法「安全 gate 判定一律 is True/is False」+ fail-closed（审计 P2）：
@@ -498,6 +557,12 @@ class AgentRuntime:
                 input_json=task["inputs"],
                 output_json={"error_message": error_message},
                 validation_status="failed",
+                # 派生现查 DB 而非复用 verified_files（ADR-0021 设计审 F6）：
+                # schema 校验先失败时 verified_files 恒空，据其推导会把带
+                # sensitive 输入的失败样本误判成 internal。知识轴同参与。
+                classification=_task_data_classification(
+                    conn, task, agent, self.scope_registry
+                ),
             )
 
     def _validate_inputs(self, pkg_dir: Path, agent: dict[str, Any], inputs: dict[str, Any]) -> None:
@@ -584,7 +649,9 @@ class AgentRuntime:
             )
         return context
 
-    def _register_outputs(self, conn: sqlite3.Connection, task_id: str, output_dir: Path) -> list[str]:
+    def _register_outputs(
+        self, conn: sqlite3.Connection, task_id: str, output_dir: Path, *, classification: str
+    ) -> list[str]:
         file_ids: list[str] = []
         if not output_dir.is_dir():
             return file_ids
@@ -601,6 +668,10 @@ class AgentRuntime:
                 path=str(path),
                 size_bytes=path.stat().st_size,
                 sha256=_sha256_file(path),
+                # 污点传播（ADR-0021 D3）：产物继承任务级派生分级，跑一次任务
+                # 不能把 sensitive 输入洗白成 internal 产物。uploaded_by 留
+                # NULL 如实——产物非人工标注场景。
+                classification=classification,
             )
             file_ids.append(file_id)
         return file_ids

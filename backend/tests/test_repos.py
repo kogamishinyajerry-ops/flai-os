@@ -331,6 +331,7 @@ def test_create_file_and_get_file_roundtrip(conn) -> None:
     created = repos.create_file(
         conn, file_id=file_id, task_id=task["id"], kind="input",
         filename="a.csv", path="/data/uploads/a.csv", size_bytes=123, sha256="deadbeef",
+        classification="internal",
     )
     assert created["id"] == file_id
     fetched = repos.get_file(conn, file_id)
@@ -378,7 +379,7 @@ def test_record_and_list_sample(conn) -> None:
     sample = repos.record_sample(
         conn, task_id=task["id"], agent_id="hello_agent", agent_version="0.1.0",
         input_json={"name": "张三"}, output_json={"greeting": "你好，张三"},
-        accepted_by_engineer=True,
+        accepted_by_engineer=True, classification="internal",
     )
     assert sample["input"] == {"name": "张三"}
     assert sample["accepted_by_engineer"] is True

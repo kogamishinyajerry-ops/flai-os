@@ -426,14 +426,21 @@ def create_file(
     path: str,
     size_bytes: int,
     sha256: str,
+    classification: str,
+    uploaded_by: str | None = None,
 ) -> dict[str, Any]:
+    """classification 必填无默认值（ADR-0021 D1/设计审 F4）：调用点漏传=TypeError
+    当场炸，绝不静默吃 DDL DEFAULT 把派生 sensitive 洗白成 internal。"""
     now = _now_iso()
     conn.execute(
         """
-        INSERT INTO files (id, task_id, kind, filename, path, size_bytes, sha256, created_at)
-        VALUES (?,?,?,?,?,?,?,?)
+        INSERT INTO files
+            (id, task_id, kind, filename, path, size_bytes, sha256, created_at,
+             classification, uploaded_by)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
         """,
-        (file_id, task_id, kind, filename, path, size_bytes, sha256, now),
+        (file_id, task_id, kind, filename, path, size_bytes, sha256, now,
+         classification, uploaded_by),
     )
     return get_file(conn, file_id)  # type: ignore[return-value]
 
@@ -443,16 +450,26 @@ def get_file(conn: sqlite3.Connection, file_id: str) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
+# IN 子句分批上限（Codex R1 审 P2）：SQLite 绑定变量默认上限 32766，超长
+# input_file_ids 一把梭会炸 OperationalError——在失败样本路径上炸掉的是
+# 分级派生本身。500 一批远离上限且单批开销可忽略。
+_IN_CLAUSE_CHUNK = 500
+
+
 def list_files_by_ids(conn: sqlite3.Connection, file_ids: list[str]) -> list[dict[str, Any]]:
     """按 id 列表批量取文件行，**保持入参顺序**；不存在的 id 静默缺位（调用方
-    自行对账缺失——会话附件校验/渲染都要求显式处理缺文件，不做兜底伪造）。"""
+    自行对账缺失——会话附件校验/渲染都要求显式处理缺文件，不做兜底伪造）。
+    超长列表分批查询（Codex R1 审 P2），语义与单发等价。"""
     if not file_ids:
         return []
-    placeholders = ",".join("?" for _ in file_ids)
-    rows = conn.execute(
-        f"SELECT * FROM files WHERE id IN ({placeholders})", tuple(file_ids)
-    ).fetchall()
-    by_id = {r["id"]: dict(r) for r in rows}
+    by_id: dict[str, dict[str, Any]] = {}
+    for i in range(0, len(file_ids), _IN_CLAUSE_CHUNK):
+        chunk = file_ids[i : i + _IN_CLAUSE_CHUNK]
+        placeholders = ",".join("?" for _ in chunk)
+        rows = conn.execute(
+            f"SELECT * FROM files WHERE id IN ({placeholders})", tuple(chunk)
+        ).fetchall()
+        by_id.update({r["id"]: dict(r) for r in rows})
     return [by_id[fid] for fid in file_ids if fid in by_id]
 
 
@@ -633,7 +650,9 @@ def record_sample(
     validation_status: str | None = None,
     accepted_by_engineer: bool | None = None,
     created_at: str | None = None,
+    classification: str,
 ) -> dict[str, Any]:
+    """classification 必填无默认值（ADR-0021 D1/设计审 F4），口径同 create_file。"""
     created_at = created_at or _now_iso()
     accepted_int = None if accepted_by_engineer is None else int(bool(accepted_by_engineer))
     cur = conn.execute(
@@ -641,14 +660,15 @@ def record_sample(
         INSERT INTO samples
             (task_id, agent_id, agent_version, tool_id, tool_version, case_id,
              input_json, output_json, raw_input_path, raw_output_path,
-             validation_status, accepted_by_engineer, created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+             validation_status, accepted_by_engineer, created_at, classification)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             task_id, agent_id, agent_version, tool_id, tool_version, case_id,
             json.dumps(input_json, ensure_ascii=False),
             json.dumps(output_json, ensure_ascii=False) if output_json is not None else None,
             raw_input_path, raw_output_path, validation_status, accepted_int, created_at,
+            classification,
         ),
     )
     row = conn.execute("SELECT * FROM samples WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -959,3 +979,32 @@ def list_promotions(conn: sqlite3.Connection, agent_id: str) -> list[dict[str, A
         _decode_json(d, "confirmations_json", "confirmations", default={})
         out.append(d)
     return out
+
+
+# ── worker heartbeats（迁移 #7，ADR-0021/Codex R1 审 P1）────────────────
+
+def beat_worker_heartbeat(conn: sqlite3.Connection, *, generation: str, detail: str | None = None) -> None:
+    """worker 心跳 upsert：单实例锁保证同库唯一 worker，固定主键单行不增长。
+
+    generation 每次心跳覆写——worker 升级重启后旧代际字符串不会残留误导
+    部署自检门；started_at 保留首次值供诊断。
+    """
+    now = _now_iso()
+    conn.execute(
+        """
+        INSERT INTO worker_heartbeats (worker_id, generation, detail, started_at, last_beat_at)
+        VALUES ('default', ?, ?, ?, ?)
+        ON CONFLICT(worker_id) DO UPDATE SET
+            generation = excluded.generation,
+            detail = excluded.detail,
+            last_beat_at = excluded.last_beat_at
+        """,
+        (generation, detail, now, now),
+    )
+
+
+def get_worker_heartbeat(conn: sqlite3.Connection) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM worker_heartbeats WHERE worker_id = 'default'"
+    ).fetchone()
+    return dict(row) if row is not None else None

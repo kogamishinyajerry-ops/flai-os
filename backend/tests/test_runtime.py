@@ -457,6 +457,7 @@ def test_execute_tampered_input_file_fails_before_workflow(tmp_path: Path) -> No
             path=str(file_path),
             size_bytes=len(original),
             sha256=hashlib.sha256(original).hexdigest(),
+            classification="internal",
         )
         task = repos.create_task(
             conn,

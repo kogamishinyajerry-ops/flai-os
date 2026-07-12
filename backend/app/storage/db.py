@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS task_events (
     created_at TEXT NOT NULL
 );
 
+-- classification（迁移 #6/ADR-0021）：internal|sensitive 数据分级轴。DDL DEFAULT
+-- 只服务存量回填（mock 期数据全 internal 是如实标注）；新写入走 repos 必填 kwarg。
+-- uploaded_by 仅上传端点记登录身份；runtime 产物/eval 复制件非人工标注场景留 NULL。
 CREATE TABLE IF NOT EXISTS files (
     id TEXT PRIMARY KEY,
     task_id TEXT,
@@ -73,7 +76,9 @@ CREATE TABLE IF NOT EXISTS files (
     path TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
     sha256 TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    classification TEXT NOT NULL DEFAULT 'internal',
+    uploaded_by TEXT
 );
 
 CREATE TABLE IF NOT EXISTS feedback (
@@ -133,7 +138,8 @@ CREATE TABLE IF NOT EXISTS samples (
     raw_output_path TEXT,
     validation_status TEXT,
     accepted_by_engineer INTEGER,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    classification TEXT NOT NULL DEFAULT 'internal'
 );
 
 -- M6 导引 Agent（interactive 会话运行时，ADR-0012）。会话是多轮对话状态，
@@ -211,6 +217,18 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
 );
+
+-- 迁移 #7（ADR-0021/Codex R1 审 P1）：worker 心跳+代际。Job Runner 是独立
+-- 进程——API 换到新代码而 worker 仍是旧进程时，旧 worker 落库走 DDL DEFAULT
+-- 把 sensitive 派生洗白成 internal，仅探 API 的部署自检会假 PASS。worker
+-- 单实例锁保证同库唯一 worker，固定 worker_id='default' 单行 upsert 不增长。
+CREATE TABLE IF NOT EXISTS worker_heartbeats (
+    worker_id TEXT PRIMARY KEY,
+    generation TEXT NOT NULL,
+    detail TEXT,
+    started_at TEXT NOT NULL,
+    last_beat_at TEXT NOT NULL
+);
 """
 
 _INDEX_DDL = (
@@ -286,6 +304,22 @@ def init_db(db_path: str | Path) -> None:
             if "origin" not in task_cols:
                 conn.execute(
                     "ALTER TABLE tasks ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"
+                )
+            # 迁移 #6（ADR-0021/M11-B2）：files/samples 数据分级轴 + 上传者追溯。
+            # 存量行 DEFAULT 'internal' 即如实回填（mock 期数据全部是演示产物，
+            # 同迁移 #4 origin 的裁决口径）；uploaded_by 存量留 NULL（自报时代
+            # 数据不冒充有追溯）。同在写锁内探测补列。
+            file_cols = {row[1] for row in conn.execute("PRAGMA table_info(files)")}
+            if "classification" not in file_cols:
+                conn.execute(
+                    "ALTER TABLE files ADD COLUMN classification TEXT NOT NULL DEFAULT 'internal'"
+                )
+            if "uploaded_by" not in file_cols:
+                conn.execute("ALTER TABLE files ADD COLUMN uploaded_by TEXT")
+            sample_cols = {row[1] for row in conn.execute("PRAGMA table_info(samples)")}
+            if "classification" not in sample_cols:
+                conn.execute(
+                    "ALTER TABLE samples ADD COLUMN classification TEXT NOT NULL DEFAULT 'internal'"
                 )
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。

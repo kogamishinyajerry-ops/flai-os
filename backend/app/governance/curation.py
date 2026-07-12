@@ -92,9 +92,22 @@ def _fix_locked(
                 f"样本 {sample_id} 未经工程师认可（accepted_by_engineer="
                 f"{sample.get('accepted_by_engineer')!r}），拒绝固化"
             )
+        # 分级固化门（ADR-0021 D5，internal-allowlist）：eval_cases 是版本化
+        # agent 包目录，sensitive 内容入包=脱离 DB 门控的静默离场通道。**必须
+        # 排在下方「含输入文件拒固化」门之前**——自然链路的 sensitive 样本
+        # （污点传播必经输入文件）才能撞到本门而非被那道技术门先拦，本门因此
+        # 是可达的有效拦截而非死代码（设计审 F1 的解法：安全语义门优先）。
+        if sample.get("classification") != "internal":
+            raise CurationError(
+                f"样本 {sample_id} 分级 {sample.get('classification')!r} 非 internal，"
+                "拒绝固化入版本化包目录（ADR-0021 D5，fail-closed）"
+            )
         task = repos.get_task(conn, sample["task_id"])
         if task is None:
             raise CurationError(f"样本 {sample_id} 的源任务不存在：{sample['task_id']}")
+        # 注意（ADR-0021 D5 耦合）：本门与上方分级门语义并立——本门防「搬运
+        # 用户上传物」，分级门防「敏感内容入包」。V0.2 若放开本门（人工落文件
+        # 固化），分级门即转正为唯一 sensitive 屏障，改造前先读 ADR-0021 D5。
         if task.get("input_file_ids"):
             raise CurationError(
                 "源任务含输入文件，V0.1 不自动把用户上传数据搬进 agent 包目录"

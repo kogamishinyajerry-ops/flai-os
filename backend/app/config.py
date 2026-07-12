@@ -29,6 +29,11 @@ FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
 DB_PATH = Path(os.environ.get("FLAI_DB_PATH", str(DATA_DIR / "flai_os.db")))
 BACKEND_PORT = int(os.environ.get("FLAI_BACKEND_PORT", "8620"))
 
+# worker 代际字符串（ADR-0021/Codex R2 审 P2）：放在纯 stdlib 的 config，
+# 让部署自检探针（deploy_selfcheck.py，号称免应用依赖）导入它时不连带拉
+# jobs.runner→storage.repos→jsonschema。改派生语义的里程碑同步 bump。
+WORKER_GENERATION = "m11-b2-classification"
+
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。
 # monitor_adapter_recon 工具经此子进程调核起草 adapter 草案；未配置=核不可达=工具
 # fail-closed（绝不猜路径）。默认 None：本机开发/内网按实况 export FLAI_MONITOR_CORE_DIR。

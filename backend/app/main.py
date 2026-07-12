@@ -7,6 +7,7 @@ knowledge 对账 + sync_to_db，与 Job Runner 共享同一装配路径，ADR-00
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sqlite3
 from contextlib import asynccontextmanager
@@ -75,6 +76,7 @@ def create_app(
         runtime = AgentRuntime(
             asm.agent_registry, asm.tool_registry, asm.model_gateway, conn_factory,
             task_runs_dir, knowledge_service=asm.knowledge_service, uploads_dir=uploads_dir,
+            scope_registry=asm.scope_registry,  # ADR-0021 知识轴派生分级用
         )
         conversation_service = ConversationService(
             asm.agent_registry, asm.model_gateway, conn_factory, uploads_dir=uploads_dir,
@@ -119,6 +121,18 @@ def create_app(
             "llm_base_url_set": bool(os.environ.get("FLAI_LLM_BASE_URL")),
             "llm_api_key_set": bool(os.environ.get("FLAI_LLM_API_KEY")),
             "llm_model_reasoning_set": bool(os.environ.get("FLAI_LLM_MODEL_REASONING")),
+            # B2 运行进程代际标记（ADR-0021/Codex R0-P1）：部署自检门据此见证
+            # 「活着的进程」跑的是分级轴代码——只查 DB 列会漏掉「库已迁移但服务
+            # 重启失败仍是旧进程」的假 PASS。仍是布尔位，不含数据。
+            "classification_axis": True,
+            # 库身份指纹（Codex R1 审 P2）：自检门比对「服务实际连的库」与
+            # 「探针检查的库」是否同一——FLAI_DB_PATH 两侧不一致时，探针查
+            # 有账户的库 A、服务连空库 B，全部 PASS 却无人能登录。路径哈希
+            # 不透出路径本身（opaque）；symlink 等价路径会误报不一致，错误
+            # 方向是多拦（fail-closed 可接受）。
+            "db_identity": hashlib.sha256(
+                str(db_path.resolve()).encode("utf-8")
+            ).hexdigest()[:16],
         }
 
     app.include_router(auth_api.router)
