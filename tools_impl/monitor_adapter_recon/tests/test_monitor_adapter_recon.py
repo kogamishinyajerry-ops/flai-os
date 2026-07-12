@@ -64,6 +64,33 @@ def test_shell_metachars_in_sample_path_no_injection(monkeypatch) -> None:
 
 
 @_requires_hub
+def test_fail_closed_when_grounding_check_fails(monkeypatch, tmp_path) -> None:
+    """接地自检未通过（核 rc=1 / grounding_ok=false：cited 证据对不上真源，如 recon
+    与自检间文件被换）→ fail-closed，绝不转 status=success 让未接地草案进人审
+    （Codex R2 审 P1）。用 monkeypatch 伪造核输出直测 wrapper 的 fail-closed 逻辑。"""
+    from tools_impl.monitor_adapter_recon import adapter as _ad
+    monkeypatch.setenv(_CORE_ENV, str(_HUB_DIR))
+    run_dir = tmp_path / "20260712-030000-000000"
+    run_dir.mkdir()
+    (run_dir / "metrics.csv").write_text("iteration,x\n1,2\n", encoding="utf-8")
+
+    class _FakeProc:
+        returncode = 1
+        stdout = ('{"module_name":"m","grounding_ok":false,'
+                  '"grounding_failures":[{"aspect":"fake","why":"样本行未在文件中逐字找到"}],'
+                  '"module_json_draft":{},"parser_stub":"","honesty_checklist":[],'
+                  '"verified":{},"proposed":[],"unverified":[]}')
+        stderr = ""
+
+    monkeypatch.setattr(_ad.subprocess, "run", lambda *a, **k: _FakeProc())
+    result = _ad.run({"sample_run_dir": str(run_dir)})
+    assert (result["status"] == "failed") is True
+    # 核可达（是接地失败，非核不可达）——两类失败要区分
+    assert (result.get("core_available") is False) is False
+    assert ("接地自检未通过" in result.get("error_message", "")) is True
+
+
+@_requires_hub
 def test_real_recon_on_hub_fixture_grounded(monkeypatch) -> None:
     """真调承重核侦察 hub structopt fixture：成功 + 接地全通过 + 草案骨架带
     未注册守卫标记（_GENERATED）。"""

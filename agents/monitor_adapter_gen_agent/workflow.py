@@ -45,6 +45,16 @@ def _load_system_prompt() -> str:
     return Path(__file__).with_name("prompt.md").read_text(encoding="utf-8").strip()
 
 
+def _resolve_input_dir(raw: str) -> str:
+    """把 sample_run_dir 解析成绝对路径（Codex R2 审 P2）：~ 展开；相对路径按 **agent
+    包目录** 解析——让 eval_cases 的包相对 fixture 引用 checkout-independent（绝不
+    嵌入作者机器的仓布局），真实用法传绝对/~ 路径不受影响。"""
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        p = Path(__file__).parent / p
+    return str(p.resolve())
+
+
 def run(context: dict[str, Any]) -> dict[str, Any]:
     event_logger = context["event_logger"]
     tool_registry = context["tool_registry"]
@@ -54,7 +64,7 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     agent_config = context["agent_config"]
 
     target_repo_path: str = inputs["target_repo_path"]
-    sample_run_dir: str = inputs["sample_run_dir"]
+    sample_run_dir: str = _resolve_input_dir(inputs["sample_run_dir"])
     solver_hint = inputs.get("solver_hint")
     display_hints = inputs.get("display_hints") or []
     module_name = inputs.get("module_name")
@@ -83,6 +93,10 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     grounding_failures = recon.get("grounding_failures") or []
     module_json_draft = draft["module_json_draft"]
     parser_stub = draft["parser_stub"]
+    # 注入已知的目标仓路径（Codex R2 审 P2）：generator 已有 target_repo_path，
+    # 别在草案里留 "PROPOSED: <目标工作流仓绝对路径>" 占位让人重填自己已给的信息。
+    if isinstance(module_json_draft, dict):
+        module_json_draft["repo"] = str(Path(target_repo_path).expanduser())
 
     n_verified = _count_verified(draft.get("verified") or {})
     n_proposed = len(draft.get("proposed") or [])

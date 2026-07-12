@@ -35,8 +35,20 @@ surface**（操作员 Agent 会话），而**仿真 surface**（求解器真源�
      `b4f1e0d`），范围声明「仿真监控数据面向内网只读」，可发现性三处 UI 已交付
      （config 门控不强制默认开）。注册记录 = docs/reviews/SIM-MONITOR-R1-registration-record.md。
    - **R2 生成器 agent 注册**——按 02 Agent 包标准立包，07 评测标准固化
-     case，M10 晋升门放行。**🚧 进行中（2026-07-12）**：承重核已在 hub 侧实现
-     （`tools/adapter_gen.py`），平台 agent 包立包中。
+     case，M10 晋升门放行。**✅ 立包完成（2026-07-12，`ab32ffc`）**：
+     `agents/monitor_adapter_gen_agent`（category=structured_gen / profile=reasoning /
+     requires_human_review=true / status=draft / maturity=L0）+ Tool
+     `tools_impl/monitor_adapter_recon`（mock=false / allow_shell_command=true，
+     受控子进程调 hub 承重核 `--json`，ADR-0022 记边界）+ eval_cases（正常接地 +
+     失败路径 UNVERIFIED 不编造）。承重核 SSOT 在 hub 不重复实现（契约 §6）。
+     已注册为 draft/L0（`GET /api/agents` 可见）；**L0→L1 晋升**属 M10 治理步
+     （operator 配 `FLAI_MONITOR_CORE_DIR` 后跑 eval runner + 人工确认），
+     本 ADR 不代拍。智能展示红线落地：LLM 仅叙事层「生成器建议」（选择权），
+     数据权绝不（docs/09 §3）。**Codex 治理审 R0（1 P1+5 P2 全 grounded 修，
+     round cap R0 收口）**：P1=接地失败必须 fail-closed（不得把核 rc=1/grounding_ok=false
+     转成可批准草案）；P2=草案补 hub 必填字段（stages/launch/reveal_pace_s）+ parser 桩
+     导出 collect + 子进程前 resolve 绝对路径 + eval fixture 包相对（checkout-independent）
+     + eval 断言实际值防假绿。记录=docs/reviews/SIM-MONITOR-R2-review-record.md。
    - **R3 转录 surface 入平台发现面**——**唯一前置 = owner 裁决多用户可见性
      授权模型**（谁能看、看谁的会话、EAR 语境默认拒绝）；裁决前保持操作员
      本机档位（回环 + pin 锁定 + fail-closed 启动门）。

@@ -52,10 +52,12 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
             core_available=False,
         )
 
-    # ② sample_run_dir 先行校验（核也会校验，这里给更清晰的错误）
+    # ② sample_run_dir 先行校验 + 绝对化（Codex R2 审 P2）：子进程 cwd=core_dir，
+    #    若传相对路径会在核目录下错位解析——必须先 resolve 成绝对路径再传子进程。
     sample = Path(sample_run_dir).expanduser()
     if not sample.is_dir():
         return _fail(f"sample_run_dir 不是目录：{sample}")
+    sample = sample.resolve()
 
     # ③ 受控子进程调核（shell=False，参数列表——无命令注入面）
     cmd = [sys.executable, "-m", "tools.adapter_gen", str(sample), "--json"]
@@ -73,8 +75,10 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
     except OSError as exc:
         return _fail(f"承重核子进程启动失败：{exc}")
 
-    # ④ 退出码：0=接地全通过 / 1=有未通过项（草案仍有效，含 UNVERIFIED，非工具失败）。
-    #    其他退出码=核异常（如 sample 校验失败 traceback）。
+    # ④ 退出码：核对 rc==0 iff 接地自检全通过；rc==1=接地自检未通过（cited 证据不在
+    #    真源里，如 recon 与自检间文件被换）；其他=核异常。**接地失败必须 fail-closed**
+    #    （Codex R2 审 P1）——绝不把「自检未通过」转成 status=success 让未接地草案进人审，
+    #    这正是承重核 write_draft 拒写的 fail-closed 语义，wrapper 不得绕过。
     if proc.returncode not in (0, 1):
         return _fail(
             f"承重核异常退出（rc={proc.returncode}）：{(proc.stderr or '').strip()[:500]}"
@@ -91,11 +95,20 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
     except json.JSONDecodeError as exc:
         return _fail(f"承重核输出非合法 JSON（rc={proc.returncode}）：{exc}")
 
+    # 接地自检未通过 = fail-closed（不是「有 UNVERIFIED 观察」——那是 rc=0/grounding_ok=true
+    # 的诚实报缺；这里是 cited VERIFIED 证据对不上真源 = 草案在撒谎，拒绝产出可批准草案）。
+    if draft.get("grounding_ok") is not True:
+        failures = draft.get("grounding_failures") or []
+        return _fail(
+            f"承重核接地自检未通过（rc={proc.returncode}，{len(failures)} 条证据未逐字接地）"
+            f"——fail-closed 拒绝产出草案：{str(failures)[:400]}"
+        )
+
     return {
         "status": "success",
         "core_available": True,
-        "grounding_ok": bool(draft.get("grounding_ok")),
-        "grounding_failures": draft.get("grounding_failures") or [],
+        "grounding_ok": True,
+        "grounding_failures": [],
         "module_name": draft.get("module_name") or "",
         "draft": {
             "module_json_draft": draft.get("module_json_draft"),
