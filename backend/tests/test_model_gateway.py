@@ -70,6 +70,46 @@ def test_chat_missing_env_raises_model_upstream_error_and_records_failed(tmp_pat
     assert calls[0]["error_message"]
 
 
+def test_missing_env_raises_model_config_error_subclass(tmp_path) -> None:
+    """缺 env → ModelConfigError（永久配置错），且它是 ModelUpstreamError 子类
+    （既有 except 全兼容）；上游 500（临时故障）则是 ModelUpstreamError 但**非**
+    ModelConfigError——分流的语义基石（PM 战略审 top 的诚实文案依赖它）。"""
+    from backend.app.core.errors import ModelConfigError
+
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    with pytest.raises(ModelConfigError):
+        gateway.chat("reasoning", [{"role": "user", "content": "你好"}], task_id="task_cfg")
+    # 子类关系：既有 except ModelUpstreamError 仍捕获
+    try:
+        gateway.chat("reasoning", [{"role": "user", "content": "你好"}])
+    except ModelUpstreamError as exc:
+        assert isinstance(exc, ModelConfigError)
+    else:
+        raise AssertionError("缺 env 必须抛异常")
+
+
+def test_upstream_500_is_not_config_error(tmp_path, monkeypatch) -> None:
+    """env 已配 + 上游 500 → ModelUpstreamError 但**不是** ModelConfigError
+    （否则会被误判为永久配置错、误导为不可重试）。"""
+    from backend.app.core.errors import ModelConfigError
+
+    monkeypatch.setenv("FLAI_LLM_BASE_URL", "https://fake-llm.internal")
+    monkeypatch.setenv("FLAI_LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("FLAI_LLM_MODEL_REASONING", "glm-mock")
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(500, text="upstream boom", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(gateway_mod.httpx, "post", fake_post)
+    with pytest.raises(ModelUpstreamError) as ei:
+        gateway.chat("reasoning", [{"role": "user", "content": "x"}], task_id="task_500")
+    assert not isinstance(ei.value, ModelConfigError)
+
+
 def test_embed_missing_env_raises_and_records_failed(tmp_path) -> None:
     db_path, conn_factory = _make_conn_factory(tmp_path)
     gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)

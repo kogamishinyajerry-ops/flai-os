@@ -56,6 +56,13 @@ class ModelUpstreamError(FlaiError):
     """模型网关上游调用失败（env 缺失/网络错误/非 2xx）。"""
 
 
+class ModelConfigError(ModelUpstreamError):
+    """模型网关**配置缺失**（FLAI_LLM_* 环境变量未设）——永久性错误，重试无效，
+    需运维配置后才能恢复。是 ModelUpstreamError 子类：既有 `except ModelUpstreamError`
+    仍全部捕获（失败留痕/状态码不变），但调用方可优先捕获本类给出「非临时故障、
+    需配置」的诚实文案，而非误导性的「可重试」。"""
+
+
 class TaskNotFoundError(FlaiError):
     """按 id 查不到对应任务。"""
 

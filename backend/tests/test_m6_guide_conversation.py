@@ -10,8 +10,9 @@
   refuse（显式拒绝）。orchestrate 里幻觉/自身/重复 agent_id 逐个剥离，无合法 Agent
   存活则整份作废（fail-closed）；预填非法字段逐字段剥离记名。
 - 人是唯一签发者红线：导引全程不创建任何任务；预填草案由人在 tasks 端点亲手提交。
-- 诚实失败（事务性单轮，ADR-0013）：无内网 key（清空 FLAI_LLM_*）→ 本轮 502 且
-  **零消息落库**（幂等重试）；并发轮冲突 → 409 且零落库。
+- 诚实失败（事务性单轮，ADR-0013）：无内网 key（清空 FLAI_LLM_*）=永久配置错
+  → 本轮 **503**（非「可重试」）；临时上游故障 → 502「可重试」；均**零消息落库**；
+  并发轮冲突 → 409 且零落库。
 """
 
 from __future__ import annotations
@@ -377,27 +378,53 @@ def test_guide_never_creates_task_and_human_signs(app_env) -> None:
     assert created.json()["status"] == "queued"
 
 
-# ── 诚实失败：无内网 key → 本轮 502，用户消息留档不伪造 ───────────────────
+# ── 诚实失败：区分永久配置错(503) 与临时上游故障(502)，均事务性零落库 ────────
 
 
-def test_gateway_failure_502_transactional_no_partial_write(app_env) -> None:
-    """无内网 key → 本轮 502；且是**事务性**的：失败一条消息都不落库，重试同一句
-    不会在历史里堆重复 user 行（Codex P2：可重试路径必须幂等）。"""
+class _RaisingStub:
+    """chat 抛指定异常的 stub gateway，用于测临时上游故障（非配置错）路径。"""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
+        raise self._exc
+
+
+def test_missing_config_503_transactional_no_partial_write(app_env) -> None:
+    """无内网 key（FLAI_LLM_* 未配）→ 本轮 **503 配置错**（PM 战略审 top：永久性
+    错误绝不谎报「可重试」误导用户反复点发送）；且事务性零落库，配置修好后重试
+    不会在历史里堆重复 user 行。"""
     client, app = app_env
     conv_id = _open_conversation(client)
 
     resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "帮我分析"})
-    assert resp.status_code == 502
-    assert "可重试" in resp.json()["detail"]
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert "模型网关未配置" in detail and "可重试" not in detail
 
     got = client.get(f"/api/conversations/{conv_id}").json()
-    assert [m["role"] for m in got["messages"]] == [], "瞬态失败必须零落库（可幂等重试）"
+    assert [m["role"] for m in got["messages"]] == [], "配置错必须零落库"
     assert got["recommendation"] is None
 
     resp2 = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "帮我分析"})
-    assert resp2.status_code == 502
+    assert resp2.status_code == 503
     got2 = client.get(f"/api/conversations/{conv_id}").json()
     assert [m["role"] for m in got2["messages"]] == [], "重试不得堆出重复 user 行"
+
+
+def test_transient_upstream_502_still_retryable(app_env) -> None:
+    """env 已配但上游临时故障（网络错误/非 2xx，非配置错）→ 仍 502「可重试」——
+    分流不得误伤真正可重试的临时故障。"""
+    from backend.app.core.errors import ModelUpstreamError
+
+    client, app = app_env
+    conv_id = _open_conversation(client)
+    _inject(app, _RaisingStub(ModelUpstreamError("上游网络错误：connect timeout")))
+
+    resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "帮我分析"})
+    assert resp.status_code == 502
+    assert "可重试" in resp.json()["detail"]
 
 
 # ── 计划撤回轮清空会话级 recommendation（反方 P3-1）──────────────────────
@@ -676,7 +703,8 @@ def test_conversation_model_calls_attributed(app_env) -> None:
         "/api/conversations", json={"agent_id": "guide_agent"}
     ).json()["id"]
     app.state.conversation_service.model_gateway = app.state.model_gateway
-    assert client.post(f"/api/conversations/{conv2}/messages", json={"content": "hi"}).status_code == 502
+    # 缺 env=配置错→503（原 502），但 model_calls 失败留痕不变（子类仍被内部 except 捕获记 failed）
+    assert client.post(f"/api/conversations/{conv2}/messages", json={"content": "hi"}).status_code == 503
 
     calls = client.get(f"/api/conversations/{conv2}/model_calls").json()
     assert len(calls) == 1

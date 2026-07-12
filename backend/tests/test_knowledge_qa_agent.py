@@ -471,7 +471,7 @@ def test_no_llm_key_fail_closed(app_env) -> None:
 
     task = _create_and_run(client, app, "knowledge_qa_agent", _QA_CASE["inputs"])
     assert task["status"] == "failed"
-    assert "ModelUpstreamError" in task["error_message"]
+    assert "ModelConfigError" in task["error_message"]  # 缺 env=配置错子类（更精确）
     assert task["output_file_ids"] == [], "上游失败绝不产出伪造草案"
 
     events = client.get(f"/api/tasks/{task['id']}/events").json()

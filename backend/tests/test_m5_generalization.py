@@ -299,7 +299,7 @@ def test_fta_gateway_upstream_failure_task_failed_honestly(app_env) -> None:
     task_id = task["id"]
 
     assert task["status"] == "failed"
-    assert "ModelUpstreamError" in task["error_message"]
+    assert "ModelConfigError" in task["error_message"]  # 缺 env=配置错子类（更精确）
     assert task["output_file_ids"] == [], "上游失败绝不产出伪造草案"
 
     events = client.get(f"/api/tasks/{task_id}/events").json()

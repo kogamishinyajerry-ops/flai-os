@@ -102,7 +102,7 @@ def test_failure_sample_recorded_for_collect_samples_agent(app_env) -> None:
     assert len(samples) == 1
     assert samples[0]["validation_status"] == "failed"
     assert samples[0]["accepted_by_engineer"] is None
-    assert "ModelUpstreamError" in samples[0]["output"]["error_message"]
+    assert "ModelConfigError" in samples[0]["output"]["error_message"]  # 缺 env=配置错子类
     assert samples[0]["input"] == inputs, "失败输入必须原样沉淀（未来评测反例素材）"
 
 

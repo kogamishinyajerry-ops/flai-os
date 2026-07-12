@@ -14,15 +14,18 @@
        60 秒内新鲜且代际=当前 WORKER_GENERATION。**部署顺序：先起 API+worker
        再跑本自检**，worker 未启动=FAIL 是有意判定。
     6. GET /api/health → 200 且 status=ok（服务活着）
-    7. health 含 classification_axis=true（**API 运行进程**的 B2 代际见证，Codex
+    7. 模型网关配置（PM 战略审 top）：reasoning profile 三环境变量已设——主入口
+       「对话/导引」首条消息才真调网关，未配即 503，而其余 10 项探不到此确定性
+       首日假绿。断言 health 已暴露的三布尔，不往返 LLM（保 stdlib-only）。
+    8. health 含 classification_axis=true（**API 运行进程**的 B2 代际见证，Codex
        审 P1：检查 4 只证明磁盘上的库迁移过——若服务重启失败仍是旧进程，库检
        查与鉴权 401 都会假 PASS，必须要活进程自报的代际标记）
-    8. health.db_identity = 探针侧库路径指纹（Codex R1 审 P2：两侧 FLAI_DB_PATH
+    9. health.db_identity = 探针侧库路径指纹（Codex R1 审 P2：两侧 FLAI_DB_PATH
        不一致时，探针查有账户的库 A、服务连空库 B，其余全 PASS 却无人能登录）
-    9. 未认证 GET /api/agents → 401（鉴权代际见证：200=裸奔旧代际，404=旧代码，
-       同 promote_agent_l1.py 的 401-witness 口径）
-    10. frontend/dist/index.html 存在（内网免 node 部署前提，由 FastAPI 静态托管）
-    11. uploads/task_runs 目录可写（写删探针文件）
+    10. 未认证 GET /api/agents → 401（鉴权代际见证：200=裸奔旧代际，404=旧代码，
+        同 promote_agent_l1.py 的 401-witness 口径）
+    11. frontend/dist/index.html 存在（内网免 node 部署前提，由 FastAPI 静态托管）
+    12. uploads/task_runs 目录可写（写删探针文件）
 
 诚实边界：本脚本只验「部署形态正确」，不验业务正确性（那是 verify_all 的事，
 在开发机跑）；也不验反代/TLS 等部署层配置（ADR-0019 威胁模型如实声明）。
@@ -202,6 +205,38 @@ def check_health(base_url: str) -> Check:
     return Check("服务健康检查", True, f"agents={payload.get('agents')} tools={payload.get('tools')}")
 
 
+def check_model_gateway_config(base_url: str) -> Check:
+    """模型网关配置见证（PM 战略审 top，三裁判一致）：主入口「对话/导引」用
+    reasoning profile，首条消息才真调网关；FLAI_LLM_BASE_URL/API_KEY/
+    MODEL_REASONING 任一未设 → gateway 抛 ModelConfigError → 首条消息 503。
+    此前 11 项自检无一探模型连通，管理员看 11/11 全绿判定上线，第一个工程师
+    写完需求点发送当场失败=最伤采纳信心。断言 /api/health 已暴露的三布尔
+    （is True，不认 truthy），零外部依赖、不往返 LLM（保 stdlib-only）；更深的
+    端点连通性诊断走 scripts/probe_llm_gateway.py（httpx 往返，非本门职责）。"""
+    url = f"{base_url}/api/health"
+    try:
+        _, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check("模型网关配置", False, f"{url} 不可达或非 JSON：{exc}")
+    missing = [
+        name
+        for name, key in (
+            ("FLAI_LLM_BASE_URL", "llm_base_url_set"),
+            ("FLAI_LLM_API_KEY", "llm_api_key_set"),
+            ("FLAI_LLM_MODEL_REASONING", "llm_model_reasoning_set"),
+        )
+        if payload.get(key) is not True
+    ]
+    if missing:
+        return Check(
+            "模型网关配置", False,
+            f"reasoning profile 缺环境变量 {missing}——主入口「对话/导引」首条消息将 503。"
+            "部署前设置这些变量（见 docs/04）；连通性再用 scripts/probe_llm_gateway.py 诊断",
+        )
+    return Check("模型网关配置", True, "reasoning profile 三变量均已设置（连通性另见 probe_llm_gateway）")
+
+
 def check_live_classification_generation(base_url: str) -> Check:
     """运行进程的 B2 代际见证（Codex 审 P1）：库列检查（检查 4）只证明磁盘，
     活进程必须自报 classification_axis 标记——否则「库已迁移+旧进程未重启」
@@ -298,6 +333,7 @@ def main() -> int:
             checks.append(Check(name, False, "跳过：DB 文件缺失"))
 
     checks.append(check_health(base_url))
+    checks.append(check_model_gateway_config(base_url))
     checks.append(check_live_classification_generation(base_url))
     checks.append(check_db_identity(base_url, db_path))
     checks.append(check_auth_generation(base_url))

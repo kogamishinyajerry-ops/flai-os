@@ -24,7 +24,7 @@ import yaml
 from jsonschema import validate
 
 from ..config import CONTRACTS_DIR
-from ..core.errors import ModelUpstreamError, ProfileNotConfiguredError
+from ..core.errors import ModelConfigError, ModelUpstreamError, ProfileNotConfiguredError
 from ..storage import repos
 
 _PROFILE_SCHEMA_PATH = CONTRACTS_DIR / "model_profile.schema.json"
@@ -67,7 +67,8 @@ class ModelGateway:
     def _resolve(self, profile: str) -> tuple[dict[str, Any], str, str | None, str]:
         """解析 profile 配置 + 环境变量，返回 (cfg, base_url, api_key, model_name)。
 
-        env 缺失一律抛 ``ModelUpstreamError``（宪法 fail-closed 条款，绝不静默降级）。
+        env 缺失一律抛 ``ModelConfigError``（ModelUpstreamError 子类，宪法 fail-closed
+        条款绝不静默降级；子类让调用方能区分「永久配置错」与「临时上游故障」）。
         """
         cfg = self._profiles.get(profile)
         if cfg is None:
@@ -76,18 +77,18 @@ class ModelGateway:
         base_url_env = cfg.get("base_url_env")
         base_url = os.environ.get(base_url_env, "") if base_url_env else ""
         if base_url_env and not base_url:
-            raise ModelUpstreamError(f"缺少环境变量 {base_url_env}（profile={profile} 的 base_url，见 docs/04）")
+            raise ModelConfigError(f"缺少环境变量 {base_url_env}（profile={profile} 的 base_url，见 docs/04）")
 
         api_key_env = cfg.get("api_key_env")
         api_key = os.environ.get(api_key_env) if api_key_env else None
         if api_key_env and not api_key:
-            raise ModelUpstreamError(f"缺少环境变量 {api_key_env}（profile={profile} 的 api_key，见 docs/04）")
+            raise ModelConfigError(f"缺少环境变量 {api_key_env}（profile={profile} 的 api_key，见 docs/04）")
 
         model_env = cfg.get("model_env")
         if model_env:
             model_name = os.environ.get(model_env, "")
             if not model_name:
-                raise ModelUpstreamError(f"缺少环境变量 {model_env}（profile={profile} 的模型名，见 docs/04）")
+                raise ModelConfigError(f"缺少环境变量 {model_env}（profile={profile} 的模型名，见 docs/04）")
         else:
             model_name = cfg["model"]
 

@@ -21,6 +21,7 @@ from ..core.errors import (
     ConversationConflictError,
     ConversationNotFoundError,
     FileNotFoundInStoreError,
+    ModelConfigError,
     ModelUpstreamError,
     NotInteractiveAgentError,
 )
@@ -113,8 +114,16 @@ def post_message(
     except (ConversationClosedError, ConversationConflictError) as exc:
         # 已结束 / 被并发轮抢先：如实 409。冲突轮零落库，可基于最新历史重试。
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ModelConfigError as exc:
+        # 模型网关未配置（缺 FLAI_LLM_*）=永久性错误：重试无效，需运维配置后恢复。
+        # 与临时上游故障分流，绝不谎报「可重试」误导用户反复点发送（PM 战略审 top）。
+        raise HTTPException(
+            status_code=503,
+            detail=f"模型网关未配置，导引不可用：{exc}。此为部署配置问题（非临时故障），"
+            "请联系管理员设置 FLAI_LLM_* 环境变量后再试。",
+        ) from exc
     except (ModelUpstreamError, ValueError) as exc:
-        # 上游失败或 workflow 诚实抛错：本轮零落库（事务性单轮），可幂等重试。
+        # 临时上游失败或 workflow 诚实抛错：本轮零落库（事务性单轮），可幂等重试。
         raise HTTPException(
             status_code=502, detail=f"导引本轮对话失败（可重试）：{exc}"
         ) from exc
