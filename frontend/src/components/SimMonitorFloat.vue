@@ -98,6 +98,12 @@ async function maybeAdoptParam() {
   try {
     window.localStorage.setItem(STORAGE_KEY, target);
   } catch (e) { /* storage 不可用：本次会话内仍生效 */ }
+  // 换源必须清空旧源的全部状态（R2 复审 P2）：A 的运行/报警残影不得挂在 B
+  // 名下；连接宽限期同步重起。
+  last.value = { sim: null, workbench: null };
+  lastTs.value = { sim: 0, workbench: 0 };
+  alarmMemo.value = { sim: null, workbench: null };
+  connectSince.value = Date.now();
   hubOrigin.value = target;
 }
 
@@ -121,7 +127,10 @@ const fullLink = computed(() =>
 const last = ref({ sim: null, workbench: null });
 const lastTs = ref({ sim: 0, workbench: 0 });
 const nowTick = ref(Date.now());
-const mountTs = Date.now();
+const connectSince = ref(Date.now());   // 本源的连接宽限期起点（换源时重起）
+// 报警记忆（R2 复审 P2）：报警路后续可能只发得出 unreachable（无 alarm 字段），
+// 负载替换不能吞掉「曾报警」这件事；恢复正常状态时才清。
+const alarmMemo = ref({ sim: null, workbench: null });
 
 const VALID_STATUS = new Set(["running", "finished", "failed", "stalled",
   "unreachable", "idle", "tooling", "generating"]);
@@ -135,8 +144,16 @@ function onMessage(e) {
   const d = e.data;
   if (!d || d.type !== "sim-live-status") return;
   if (typeof d.status !== "string" || !VALID_STATUS.has(d.status)) return;
-  last.value = { ...last.value, [surface]: d };
+  // surface 以来源窗口判定为准，覆写负载自报（R2 复审 P2：静默态分支会读
+  // act.surface，不规范化则 sim 帧可自称 workbench 展示）
+  last.value = { ...last.value, [surface]: { ...d, surface } };
   lastTs.value = { ...lastTs.value, [surface]: Date.now() };
+  if (d.alarm === true) {
+    alarmMemo.value = { ...alarmMemo.value,
+      [surface]: surface === "sim" ? (simWho(d) || "仿真") : "Agent 工作台" };
+  } else if (d.status !== "unreachable") {
+    alarmMemo.value = { ...alarmMemo.value, [surface]: null };
+  }
 }
 
 function fresh(surface) {
@@ -146,9 +163,11 @@ function fresh(surface) {
 function surfaceAlarm(surface) {
   return fresh(surface) === true && (last.value[surface].alarm === true);
 }
-// 曾收到过消息但已断流——单路断流必须可见（另一路的心跳不能掩盖它）
+// 单路断流必须可见（另一路的心跳不能掩盖它）：曾收到过消息但已断流，或
+// 该路从未发来第一拍且已过宽限期（页面缺失/被拦/启动即挂，R2 复审 P2）。
 function staleSeen(surface) {
-  return last.value[surface] !== null && fresh(surface) !== true;
+  if (last.value[surface] !== null) return fresh(surface) !== true;
+  return nowTick.value - connectSince.value > 15000;
 }
 
 // 诚实地板：双路全断流 → pill 显式「未连接」，绝不让最后一帧旧状态冒充活着。
@@ -167,7 +186,7 @@ const pill = computed(() => {
     const everSeen = last.value.sim || last.value.workbench;
     if (everSeen) return { cls: "mut", text: "监控 · 未连接" };
     // 首连超时：从未收到任何消息也不能永远「连接中」装等待
-    return nowTick.value - mountTs > 15000
+    return nowTick.value - connectSince.value > 15000
       ? { cls: "mut", text: "监控 · 未连接（hub 无响应）" }
       : { cls: "mut", text: "监控 · 连接中…" };
   }
@@ -179,11 +198,10 @@ const pill = computed(() => {
       return { cls: "fail", text: `⚠ ${who} ${d.status === "failed" ? "失败" : "停滞"}` };
     }
   }
-  // ①b 曾报警的一路断流失联——报警不能因心跳消失而被另一路的安静掩盖
+  // ①b 曾报警的一路断流/失联——报警不能因心跳消失或 unreachable 替换而被掩盖
   for (const s of ["sim", "workbench"]) {
-    if (staleSeen(s) && last.value[s].alarm === true) {
-      const who = s === "sim" ? simWho(last.value[s]) : "Agent 工作台";
-      return { cls: "fail", text: `⚠ ${who} 失联（曾报警）` };
+    if (staleSeen(s) && alarmMemo.value[s]) {
+      return { cls: "fail", text: `⚠ ${alarmMemo.value[s]} 失联（曾报警）` };
     }
   }
   // ② 工作中（仿真优先展示，其次工作台）；另一路断流时如实标注
@@ -204,7 +222,9 @@ const pill = computed(() => {
   if (act && act.status === "finished") {
     return { cls: "mut", text: `${simWho(act)} · 最近完成${staleNote("sim")}` };
   }
-  return { cls: "mut", text: "监控 · 空闲" };
+  // 兜底空闲态也要披露单路断流（R2 复审 P2：收起态页签不可见，这里不标就全隐身）
+  const anyStale = staleSeen("sim") || staleSeen("workbench");
+  return { cls: "mut", text: `监控 · 空闲${anyStale ? "｜另路断流" : ""}` };
 });
 
 let timer = null;
