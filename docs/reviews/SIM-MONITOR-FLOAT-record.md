@@ -99,3 +99,25 @@
   **11/11 ALL GREEN** 复跑 ✓（探针对并行 lane 登录门做 CSS 压制豁免并
   注明，鉴权落地后改走真登录）；m8 e2e 挂账同 §5 不变。
 - 转正门槛剩余：StatusDock 发现入口（等鉴权 lane 落地后同批）+ Codex 补审。
+
+## 7. Codex 补审 R1：浮窗接收侧安全硬化（2026-07-12）
+
+- **补审已执行**（86gs gpt-5.6-sol ultra，定向审浮窗/深链三处现状；两仓同批，
+  hub 侧对应其 d535ddb）：本仓 CHANGES_REQUIRED → grounded 复核逐条落地：
+  ① **scheme 白名单**：localStorage 配置值只认 http(s)（javascript:/data: 的
+  origin 序列化为 "null"，若放行则任意 opaque-origin 文档可冒充 hub 发消息）；
+  TaskDetail 深链同判据；② **?simhub= 确认闸**：新地址必须 ElMessageBox 显式
+  确认才持久化——恶意链接不能静默把浮窗指向攻击者站点；pill/完整面板 title
+  常显监控源 origin；③ **iframe sandbox**（allow-scripts allow-same-origin，
+  顶层导航/弹窗/表单/下载不给）；④ **来源绑定**：postMessage 必须来自自家两
+  iframe 的 contentWindow，surface 由来源窗口判定、负载自报不作数；⑤ **status
+  枚举 fail-closed**（未知/非字符串状态不刷新心跳不入槽）；⑥ **断流披露补全**：
+  单路断流→页签灰化+pill「另路断流」后缀，曾报警一路失联→pill 红「失联
+  （曾报警）」，双路断流展开态红字「双路断流」，首连 15s 无响应如实显示；
+  ⑦ label 类型钳制防非字符串负载炸 render。
+- **验证**：npm build 绿；hub 实机探针 11/11 复跑（探针替用户点「启用」确认闸
+  =兼验证闸存在；探针改为自起 pin 锁定本会话的 hub 副本——并发会话曾把
+  auto-follow 焦点切走致 ⑨ 前提被击穿，N1 风险的实机复现）。
+- **残余披露**：iframe sandbox 的 allow-same-origin+allow-scripts 组合对跨源
+  hub 是标准配置（hub 需自身 fetch）；若用户把 simhub 配成与 FLAi-OS 同源的
+  地址则 sandbox 失去隔离意义——内网部署手册须写明 hub 独立端口部署。

@@ -262,7 +262,11 @@ const taskId = route.params.taskId;
 const simHubUrl = (() => {
   try {
     const configured = window.localStorage.getItem("flai.simMonitorHub");
-    return configured ? new URL(configured).origin + "/" : null;
+    if (!configured) return null;
+    const u = new URL(configured);
+    // 只认 http(s)：存储值可能被 ?simhub= 链接投毒，scheme 白名单与浮窗同判据
+    // （javascript:/data: 的 origin 序列化为 "null"，深链 href 不给任何出口）
+    return (u.protocol === "http:" || u.protocol === "https:") ? u.origin + "/" : null;
   } catch (e) {
     return null;
   }
