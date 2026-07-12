@@ -83,6 +83,17 @@
   未提交的 backend/app/auth/middleware.py（字符串亲验），非本改动路径；本改动
   在 e2e 上下文（localStorage 未配置）零 DOM 变化。**挂账：鉴权 lane 落地后
   补跑 verify_all 全量。**
+- **挂账已清（2026-07-12）**：M11 鉴权 lane 落地（995cdd0）后 `scripts/verify_all.sh`
+  **全量复跑全绿**——build + 全量 pytest + 8 套 e2e（含 m11_auth 5/5），`[失败]（无）`。
+  浮窗默认关，确认零侵入真鉴权 e2e 路径。原 △ 升为 ✓：浮窗批与 TaskDetail 深链
+  在真鉴权下不破坏任何 e2e 断言。
+- **探针改真登录（2026-07-12，hub d4a00c0）**：兑现「鉴权落地探针改真登录」承诺——
+  hub 侧 `tests/probe_flai_embed.py` 去掉 WelcomeGate 的 CSS 压制豁免，改为自起
+  临时库 flai 后端（create_app+JobRunner，绝不碰真实 data/）+ seed_user +
+  login_context 走真实 `POST /api/auth/login` 换会话 cookie（与本仓 e2e `_auth`
+  同口径）。11/11 ALL GREEN 真登录下复跑。副产实证：flai 自起随机端口须注入
+  hub embed_ancestors，否则 frame-ancestors CSP 正确挡掉嵌入页装载（先跌 3/11
+  暴露的正是 CSP 在干活，非回归）。
 
 ## 6. 转正门槛清单批：暗色透传 + 窄屏适配（2026-07-12）
 
