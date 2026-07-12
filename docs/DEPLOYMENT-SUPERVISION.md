@@ -39,7 +39,7 @@ wheelhouse 离线装好——见 `docs/M11-OFFLINE-PACKAGE-PLAN.md`）。下文�
    本次真置 failed 才留痕）。故 worker **崩溃后由守护器直接重启即可**，无需人工清理
    卡住的任务——但产出**不会自动续跑**（中断=失败，需人重新发起，这是有意的诚实设计）。
 
-> 事实来源：`backend/app/jobs/runner.py`（WorkerAlreadyRunningError:54 / recover_interrupted_tasks:122 /
+> 事实来源：`backend/app/jobs/runner.py`（WorkerAlreadyRunningError:51 / recover_interrupted_tasks:122 /
 > fail_task_from_execution 白名单，waiting_review 免疫）。
 
 ## 三、启动顺序（事实）
@@ -48,7 +48,7 @@ wheelhouse 离线装好——见 `docs/M11-OFFLINE-PACKAGE-PLAN.md`）。下文�
 1. scripts/init_db          # 建表/迁移，幂等（API 与 worker 启动时也各自 init_db，但显式先跑更清晰）
 2. scripts/user_admin.py create <用户名> <显示名>   # 无账户=全员锁门外（ADR-0019 fail-closed）
 3. 起 API + 起 worker        # 两者都自 init_db；worker 先加锁再装配
-4. scripts/deploy_selfcheck.py   # 11 项全 PASS 才算部署完成（含 worker 心跳新鲜+代际见证）
+4. scripts/deploy_selfcheck.py   # 12 项全 PASS 才算部署完成（含 worker 心跳新鲜+代际见证）
 ```
 
 - API 与 worker **无硬启动依赖**（各自 `init_db` 幂等），可并行拉起；但 `deploy_selfcheck`
@@ -138,7 +138,7 @@ nssm set     FLAiOS-Worker AppExit Default Restart
 ```
 scripts/deploy_selfcheck.py --base-url http://127.0.0.1:8620 --db <FLAI_DB_PATH>
 ```
-必须 11/11 PASS——其中「worker 心跳代际新鲜」直接证明 worker 服务已被守护器拉起且在跑。
+必须 12/12 PASS——其中「worker 心跳代际新鲜」直接证明 worker 服务已被守护器拉起且在跑。
 崩溃重启演练：`kill`/停服务 worker → 守护器应自动拉起 → 自检 worker 心跳恢复 PASS
 （负例咬合已进 `backend/tests/test_deploy_selfcheck_negatives.py`：无心跳/过期心跳必 FAIL）。
 
