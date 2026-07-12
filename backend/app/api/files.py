@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse
 from starlette.datastructures import MutableHeaders
 
 from ..core.errors import FileIntegrityError
+from ..logging_setup import audit_event
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
 
@@ -274,6 +275,17 @@ def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
     # 一律 403。V0.1 无角色轴，「谁可下载 sensitive」无裁决依据，诚实答案就是
     # 「暂时没有人可以」；不做白名单/口令旁路（伪造未经设计的授权体系）。
     if record["classification"] != "internal":
+        # 审计留痕（ADR-0023）：谁尝试访问了 sensitive 数据必可回溯（EAR 合规）。
+        # actor=唯一 username（Codex R0 P2-4：display_name 非唯一，同名账户无法归因），
+        # display_name 作附加字段留人可读线索。
+        audit_event(
+            "sensitive_download_denied",
+            actor=request.state.user["username"],
+            outcome="denied",
+            file_id=file_id,
+            classification=record["classification"],
+            display_name=request.state.user["display_name"],
+        )
         raise HTTPException(
             status_code=403,
             detail=(

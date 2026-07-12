@@ -30,6 +30,7 @@ from .api import tasks as tasks_api
 from .auth.middleware import AuthGateMiddleware
 from .auth.service import LoginThrottle
 from .bootstrap import assemble
+from .logging_setup import configure_logging, reset_logging
 from .runtime.conversation import ConversationService
 from .runtime.runtime import AgentRuntime
 from .storage.db import get_conn, init_db
@@ -64,37 +65,47 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         for d in (db_path.parent, uploads_dir, task_runs_dir):
             d.mkdir(parents=True, exist_ok=True)
-        init_db(db_path)
+        # 进程日志 + 审计留痕（ADR-0023）：log_dir 派生 db_path.parent/logs——
+        # 生产落 data/logs，测试落 tmp（per-test 隔离，零 conftest 改动，D3）。
+        configure_logging(db_path.parent / "logs", process_tag="api")
+        # try/finally 覆盖 configure 之后全部启动过程 + yield（Codex R0 P2-2）：
+        # init_db/assemble/body 任一失败也必 reset_logging，绝不残留 handler/文件句柄。
+        try:
+            init_db(db_path)
 
-        asm = assemble(
-            agents_dir=agents_dir,
-            tools_dir=tools_dir,
-            contracts_dir=contracts_dir,
-            knowledge_dir=knowledge_dir,
-            conn_factory=conn_factory,
-        )
-        runtime = AgentRuntime(
-            asm.agent_registry, asm.tool_registry, asm.model_gateway, conn_factory,
-            task_runs_dir, knowledge_service=asm.knowledge_service, uploads_dir=uploads_dir,
-            scope_registry=asm.scope_registry,  # ADR-0021 知识轴派生分级用
-        )
-        conversation_service = ConversationService(
-            asm.agent_registry, asm.model_gateway, conn_factory, uploads_dir=uploads_dir,
-        )
+            asm = assemble(
+                agents_dir=agents_dir,
+                tools_dir=tools_dir,
+                contracts_dir=contracts_dir,
+                knowledge_dir=knowledge_dir,
+                conn_factory=conn_factory,
+            )
+            runtime = AgentRuntime(
+                asm.agent_registry, asm.tool_registry, asm.model_gateway, conn_factory,
+                task_runs_dir, knowledge_service=asm.knowledge_service, uploads_dir=uploads_dir,
+                scope_registry=asm.scope_registry,  # ADR-0021 知识轴派生分级用
+            )
+            conversation_service = ConversationService(
+                asm.agent_registry, asm.model_gateway, conn_factory, uploads_dir=uploads_dir,
+            )
 
-        app.state.agent_registry = asm.agent_registry
-        app.state.tool_registry = asm.tool_registry
-        app.state.scope_registry = asm.scope_registry
-        app.state.knowledge_service = asm.knowledge_service
-        app.state.model_gateway = asm.model_gateway
-        app.state.runtime = runtime
-        app.state.conversation_service = conversation_service
-        app.state.conn_factory = conn_factory
-        app.state.db_path = db_path
-        app.state.uploads_dir = uploads_dir
-        app.state.task_runs_dir = task_runs_dir
+            app.state.agent_registry = asm.agent_registry
+            app.state.tool_registry = asm.tool_registry
+            app.state.scope_registry = asm.scope_registry
+            app.state.knowledge_service = asm.knowledge_service
+            app.state.model_gateway = asm.model_gateway
+            app.state.runtime = runtime
+            app.state.conversation_service = conversation_service
+            app.state.conn_factory = conn_factory
+            app.state.db_path = db_path
+            app.state.uploads_dir = uploads_dir
+            app.state.task_runs_dir = task_runs_dir
 
-        yield
+            yield
+        finally:
+            # 退出复位（ADR-0023 D5）：移除本 app 所挂 handler + 恢复 logger 原态，
+            # 杜绝跨测试泄漏（测试 with TestClient 退出即清）；生产仅进程退出时触发。
+            reset_logging()
 
     app = FastAPI(title="FLAi-OS Backend", lifespan=lifespan)
     app.state.login_throttle = LoginThrottle()  # 进程内节流（ADR-0019 D6），实例随 app

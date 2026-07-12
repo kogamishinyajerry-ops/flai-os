@@ -8,6 +8,7 @@ data/task_runs/*
 data/vector_store/*
 data/memory_store/*
 logs/*
+data/logs/*
 !**/.gitkeep
 .env
 .pytest_cache/

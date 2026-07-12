@@ -384,6 +384,14 @@ def _run_default_worker() -> int:
     config.ensure_dirs()
     Path(config.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 
+    # worker 进程日志（ADR-0023）：恢复中断任务/心跳失败/未预期异常等 fail-closed
+    # 事件落 flai-os-worker.log，不再随 detached 启动蒸发。enable_audit_file=False：
+    # 审计事件全 API 侧产生，worker 不写 audit.log 避跨进程争用（D2）。
+    from ..logging_setup import configure_logging
+    configure_logging(
+        Path(config.DB_PATH).parent / "logs", process_tag="worker", enable_audit_file=False
+    )
+
     def conn_factory() -> sqlite3.Connection:
         return get_conn(config.DB_PATH)
 
