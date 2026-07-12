@@ -30,12 +30,11 @@
         <!-- waiting_review 时轮询停止（避免无人值守页面永久空转），跨会话的
              人工放行结果靠本按钮手动拉取（反方审查 P2-1）。 -->
         <el-button text type="primary" class="refresh-btn" @click="loadTask()">刷新</el-button>
-        <!-- 仿真监控深链探针（PM 路线图 Next-1，S 级）：仅在浮窗已配置
-             （同 localStorage 开关，默认关零渲染）时出现，验证「任务页→监控」
-             联动的真实需求；per-task run 关联（数据库列）待后端 lane 空闲后
-             另批做——本探针零后端改动。 -->
+        <!-- 仿真监控深链（PM 路线图 Next-1，S 级）：仅在浮窗已配置（同 localStorage
+             开关，默认关零渲染）时出现。任务已关联仿真 run（metadata.sim_run_ref）时
+             深链直达该 run 视图，否则回退 hub 首页。 -->
         <a v-if="simHubUrl" class="sim-link" :href="simHubUrl" target="_blank" rel="noopener">
-          查看仿真监控 ↗
+          {{ simRunLabel }}
         </a>
       </div>
 
@@ -253,10 +252,8 @@ import { burstSigned } from "../effects/burst";
 const route = useRoute();
 const taskId = route.params.taskId;
 
-// 仿真监控深链探针：读浮窗同款配置（未配置=null=按钮零渲染，e2e 不受扰）。
-// 探针阶段链到 hub 首页（模块卡一步可达）；per-task run 深链（#/mod@runid
-// hub 侧已支持）待 run 关联字段落库后接上。
-const simHubUrl = (() => {
+// 仿真监控深链：读浮窗同款配置（未配置=null=按钮零渲染，e2e 不受扰）。
+const simHubBase = (() => {
   try {
     const configured = window.localStorage.getItem("flai.simMonitorHub");
     if (!configured) return null;
@@ -268,6 +265,19 @@ const simHubUrl = (() => {
     return null;
   }
 })();
+// 本任务若已关联仿真 run（metadata.sim_run_ref，后端 setter 写入），深链直达该 run
+// 的监控视图 #/<mod>@<run_id>（hub 侧路由已支持+对账提示）；未关联则回退 hub 首页。
+// module/run_id 后端已按安全字符白名单钳死，此处直接拼 hash 无注入面。
+const simHubUrl = computed(() => {
+  if (!simHubBase) return null;
+  const r = task.value && task.value.metadata && task.value.metadata.sim_run_ref;
+  if (r && r.module && r.run_id) return `${simHubBase}#/${r.module}@${r.run_id}`;
+  return simHubBase;
+});
+const simRunLabel = computed(() => {
+  const r = task.value && task.value.metadata && task.value.metadata.sim_run_ref;
+  return r && r.run_id ? `查看仿真监控（${r.module}@${r.run_id}）↗` : "查看仿真监控 ↗";
+});
 
 const task = ref(null);
 const events = ref([]);

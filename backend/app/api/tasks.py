@@ -86,6 +86,17 @@ class ReviewTaskRequest(BaseModel):
     comment: str | None = None
 
 
+class SetSimRunRefRequest(BaseModel):
+    """关联本任务到一次仿真 run（供 TaskDetail 深链监控视图 #/<mod>@<run_id>）。
+    module/run_id 会进前端 URL hash——字符白名单钳死，只允许模块 id 与时间戳型
+    run 名的安全字符集，防注入/畸形 hash（不接受空白、路径分隔、hash 元字符）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    module: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    run_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.\-]+$")
+
+
 def _get_agent_or_none(registry: Any, agent_id: str) -> dict[str, Any] | None:
     try:
         agent = registry.get(agent_id)
@@ -318,6 +329,23 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             + (f"；{sample_rows} 条样本标记为未认可" if sample_rows else ""),
             payload=payload,
         )
+        return task
+    finally:
+        conn.close()
+
+
+@router.post("/tasks/{task_id}/sim-run-ref")
+def set_sim_run_ref(task_id: str, body: SetSimRunRefRequest, request: Request) -> dict[str, Any]:
+    """把任务关联到一次仿真 run（写 metadata.sim_run_ref，不改执行语义/不改状态机）。
+    真实时序：run_id 在任务跑起来后才知道，故独立于 create。鉴权由 default-deny
+    中间件覆盖（非 allowlist）。任务不存在→404。"""
+    conn = request.app.state.conn_factory()
+    try:
+        # 注：设 run 关联是 metadata 标注、非任务状态迁移——「无事件=没发生」约束的是
+        # 状态变化；metadata.sim_run_ref.set_at 本身即记录，不为此扩冻结的事件枚举。
+        task = repos.set_task_sim_run_ref(conn, task_id, module=body.module, run_id=body.run_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
         return task
     finally:
         conn.close()

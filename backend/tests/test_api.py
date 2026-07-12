@@ -140,6 +140,58 @@ def test_create_task_success_then_run_once_completes(client: TestClient, app_env
     assert download_resp.status_code == 200
 
 
+# ── tasks: 仿真 run 关联（per-task run_ref，复用 metadata 袋，不加列）──────
+
+
+def test_set_sim_run_ref_writes_metadata_and_get_reflects(client: TestClient) -> None:
+    created = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "关联"}})
+    task_id = created.json()["id"]
+    resp = client.post(
+        f"/api/tasks/{task_id}/sim-run-ref",
+        json={"module": "structopt", "run_id": "20260712-030000-123456"},
+    )
+    assert resp.status_code == 200
+    ref = resp.json()["metadata"]["sim_run_ref"]
+    assert ref["module"] == "structopt"
+    assert ref["run_id"] == "20260712-030000-123456"
+    assert "set_at" in ref
+    # GET 独立复查落库（非仅回显）
+    got = client.get(f"/api/tasks/{task_id}").json()
+    assert got["metadata"]["sim_run_ref"]["run_id"] == "20260712-030000-123456"
+
+
+def test_set_sim_run_ref_missing_task_404(client: TestClient) -> None:
+    resp = client.post(
+        "/api/tasks/no-such-task/sim-run-ref",
+        json={"module": "structopt", "run_id": "20260712-030000-000000"},
+    )
+    assert resp.status_code == 404
+
+
+def test_set_sim_run_ref_rejects_injection_chars(client: TestClient) -> None:
+    created = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {}})
+    task_id = created.json()["id"]
+    # module 含 hash 元字符 / run_id 含路径分隔——白名单必须 422 拒绝
+    bad_module = client.post(f"/api/tasks/{task_id}/sim-run-ref",
+                             json={"module": "a@b/../x", "run_id": "ok-1"})
+    bad_run = client.post(f"/api/tasks/{task_id}/sim-run-ref",
+                          json={"module": "structopt", "run_id": "../../etc/passwd"})
+    assert bad_module.status_code == 422
+    assert bad_run.status_code == 422
+
+
+def test_set_sim_run_ref_preserves_other_metadata(client: TestClient) -> None:
+    """read-modify-write 不得吞掉 metadata 其他键。"""
+    created = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {}})
+    task_id = created.json()["id"]
+    # 先塞一次 run_ref，再塞第二次——两次之间 metadata 应累积（这里验第二次不丢第一次 set_at 语义）
+    client.post(f"/api/tasks/{task_id}/sim-run-ref",
+                json={"module": "structopt", "run_id": "20260712-010000-000000"})
+    second = client.post(f"/api/tasks/{task_id}/sim-run-ref",
+                         json={"module": "fea_ccx", "run_id": "20260712-020000-000000"})
+    assert second.json()["metadata"]["sim_run_ref"]["module"] == "fea_ccx"
+
+
 # ── tasks: 列表分页（P2-B：拆掉硬 LIMIT 100 静默截断）─────────────────────
 
 

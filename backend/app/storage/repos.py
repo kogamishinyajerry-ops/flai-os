@@ -306,6 +306,33 @@ def set_task_outputs(conn: sqlite3.Connection, task_id: str, output_file_ids: li
     return get_task(conn, task_id)  # type: ignore[return-value]
 
 
+def set_task_sim_run_ref(
+    conn: sqlite3.Connection, task_id: str, *, module: str, run_id: str
+) -> dict[str, Any] | None:
+    """把「本任务关联的仿真 run」写进 metadata.sim_run_ref（复用现有 metadata 袋，
+    不加列不迁移）——供 TaskDetail 深链到该 run 的监控视图（#/<mod>@<run_id>）。
+    真实时序：run_id 在任务跑起来后才知道，故必须支持创建后写入。read-modify-write
+    metadata 整体包 BEGIN IMMEDIATE（与 set_task_status 同手法，防同任务并发写竞态
+    互相吞掉 metadata 其他键）。任务不存在返回 None（API 转 404）。"""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        task = get_task(conn, task_id)
+        if task is None:
+            conn.execute("ROLLBACK")
+            return None
+        metadata = dict(task.get("metadata") or {})
+        metadata["sim_run_ref"] = {"module": module, "run_id": run_id, "set_at": _now_iso()}
+        conn.execute(
+            "UPDATE tasks SET metadata_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(metadata, ensure_ascii=False), _now_iso(), task_id),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id)
+
+
 # ── task_events ────────────────────────────────────────────────────────
 
 def _decode_event(row: sqlite3.Row) -> dict[str, Any]:

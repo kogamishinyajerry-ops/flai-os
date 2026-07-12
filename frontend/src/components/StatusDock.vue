@@ -12,6 +12,14 @@
     <span class="dock-core" title="状态中心">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
     </span>
+    <!-- 仿真监控发现入口（转正批）：仅在浮窗已配置（同 localStorage 开关，默认关
+         零渲染）时出现，让同事不用记 ?simhub= 咒语就能进监控。@click.stop 不触发
+         状态中心；中性色——发现入口不是工作/告警信号，不占信任色锁。 -->
+    <a v-if="simHubUrl" class="dock-monitor" :href="simHubUrl" target="_blank"
+       rel="noopener" title="仿真实时监控" @click.stop>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 3 3 5-6"/></svg>
+      <span class="dock-monitor-tx">监控</span>
+    </a>
   </div>
 </template>
 
@@ -26,6 +34,19 @@ import { feedTasks, acquireTaskFeed, releaseTaskFeed } from "../stores/taskFeed"
 
 const workingCount = computed(() => feedTasks.value.filter((t) => TASK_WORK_STATES.has(t.status)).length);
 const waitingCount = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review").length);
+
+// 仿真监控发现入口：读浮窗同款配置（未配置=null=零渲染，e2e 不受扰）；
+// scheme 白名单与浮窗/深链同判据，防 localStorage 被 ?simhub= 投毒的危险 scheme。
+const simHubUrl = (() => {
+  try {
+    const configured = window.localStorage.getItem("flai.simMonitorHub");
+    if (!configured) return null;
+    const u = new URL(configured);
+    return (u.protocol === "http:" || u.protocol === "https:") ? u.origin + "/" : null;
+  } catch (e) {
+    return null;
+  }
+})();
 
 onMounted(acquireTaskFeed);
 onUnmounted(releaseTaskFeed);
@@ -88,10 +109,28 @@ onUnmounted(releaseTaskFeed);
   border-color: var(--clay-softer);
   transform: translateY(-1px);
 }
+/* 监控发现入口：中性色（非工作/告警信号，不占信任色锁）；hover 才轻抬 */
+.dock-monitor {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: var(--shadow-card);
+  transition: color var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft), transform var(--motion-fast) var(--ease-out-soft);
+}
+.dock-monitor:hover { color: var(--ink); border-color: var(--ink-faint); transform: translateY(-1px); }
 @media (max-width: 860px) {
   /* 窄屏与汉堡钮同高不同侧；pill 收起只留核心钮，避免挤占标题区 */
   .status-dock { top: 12px; right: 12px; }
   .dock-pill { display: none; }
+  .dock-monitor .dock-monitor-tx { display: none; }  /* 窄屏只留图标 */
 }
 @media (prefers-reduced-motion: reduce) {
   .dock-pill,
