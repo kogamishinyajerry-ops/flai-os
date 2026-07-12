@@ -16,7 +16,7 @@
          零渲染）时出现，让同事不用记 ?simhub= 咒语就能进监控。@click.stop 不触发
          状态中心；中性色——发现入口不是工作/告警信号，不占信任色锁。 -->
     <a v-if="simHubUrl" class="dock-monitor" :href="simHubUrl" target="_blank"
-       rel="noopener" title="仿真实时监控" @click.stop>
+       rel="noopener" title="仿真实时监控" @click.stop @keydown.enter.stop @keydown.space.stop>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 3 3 5-6"/></svg>
       <span class="dock-monitor-tx">监控</span>
     </a>
@@ -27,7 +27,7 @@
 // 计数派生自 taskFeed 共享轮询源（范式 2c：与任务台左栏同一条链同一份数据）；
 // 「最近窗口 100 条」诚实口径、失败保留上次计数下 tick 自愈、从未成功不显示
 // pill（无数据不装有数据）全部由 store 层承袭。
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TASK_WORK_STATES } from "../utils/format";
 import { openInbox } from "../stores/statusCenter";
 import { feedTasks, acquireTaskFeed, releaseTaskFeed } from "../stores/taskFeed";
@@ -37,19 +37,36 @@ const waitingCount = computed(() => feedTasks.value.filter((t) => t.status === "
 
 // 仿真监控发现入口：读浮窗同款配置（未配置=null=零渲染，e2e 不受扰）；
 // scheme 白名单与浮窗/深链同判据，防 localStorage 被 ?simhub= 投毒的危险 scheme。
-const simHubUrl = (() => {
+// 响应式 ref 而非一次性 IIFE（Codex 治理审 P2）：浮窗经 ?simhub= 确认后写
+// localStorage 的时机晚于本坞挂载，若只读一次则入口滞留到刷新才出现。
+const simHubUrl = ref(null);
+function readSimHubUrl() {
   try {
     const configured = window.localStorage.getItem("flai.simMonitorHub");
-    if (!configured) return null;
+    if (!configured) {
+      simHubUrl.value = null;
+      return;
+    }
     const u = new URL(configured);
-    return (u.protocol === "http:" || u.protocol === "https:") ? u.origin + "/" : null;
+    simHubUrl.value = (u.protocol === "http:" || u.protocol === "https:") ? u.origin + "/" : null;
   } catch (e) {
-    return null;
+    simHubUrl.value = null;
   }
-})();
+}
 
-onMounted(acquireTaskFeed);
-onUnmounted(releaseTaskFeed);
+onMounted(() => {
+  acquireTaskFeed();
+  readSimHubUrl();
+  // 浮窗（SimMonitorFloat）确认新源后派发 flai:simhub-changed（同标签页内变更，
+  // storage 事件不会自触发故需自定义事件）；storage 事件覆盖跨标签页改配置。
+  window.addEventListener("flai:simhub-changed", readSimHubUrl);
+  window.addEventListener("storage", readSimHubUrl);
+});
+onUnmounted(() => {
+  releaseTaskFeed();
+  window.removeEventListener("flai:simhub-changed", readSimHubUrl);
+  window.removeEventListener("storage", readSimHubUrl);
+});
 </script>
 
 <style scoped>

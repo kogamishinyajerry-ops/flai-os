@@ -322,9 +322,12 @@ def set_task_sim_run_ref(
             return None
         metadata = dict(task.get("metadata") or {})
         metadata["sim_run_ref"] = {"module": module, "run_id": run_id, "set_at": _now_iso()}
+        # 绝不 bump updated_at（Codex 治理审 P2）：sim_run_ref 是 metadata 标注不是
+        # 状态迁移——终态未读信号（taskHasUnseen/hasUnseen 依 updated_at 判新鲜度）
+        # 与「最近更新」排序都不该被一次关联/更正扰动。同理不 append_event。
         conn.execute(
-            "UPDATE tasks SET metadata_json = ?, updated_at = ? WHERE id = ?",
-            (json.dumps(metadata, ensure_ascii=False), _now_iso(), task_id),
+            "UPDATE tasks SET metadata_json = ? WHERE id = ?",
+            (json.dumps(metadata, ensure_ascii=False), task_id),
         )
         conn.execute("COMMIT")
     except Exception:

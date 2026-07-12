@@ -192,6 +192,21 @@ def test_set_sim_run_ref_preserves_other_metadata(client: TestClient) -> None:
     assert second.json()["metadata"]["sim_run_ref"]["module"] == "fea_ccx"
 
 
+def test_set_sim_run_ref_does_not_bump_updated_at(client: TestClient) -> None:
+    """sim_run_ref 是 metadata 标注不是状态迁移（Codex 治理审 P2）：绝不 bump
+    updated_at——否则给已完成/失败任务设关联会让终态未读信号误亮、任务在「最近
+    更新」序里假抬。_now_iso 带微秒，若回归 bump 时间戳必变，此断言真咬。"""
+    created = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {}})
+    task_id = created.json()["id"]
+    before = client.get(f"/api/tasks/{task_id}").json()["updated_at"]
+    resp = client.post(f"/api/tasks/{task_id}/sim-run-ref",
+                       json={"module": "structopt", "run_id": "20260712-030000-999999"})
+    assert resp.status_code == 200
+    assert resp.json()["metadata"]["sim_run_ref"]["run_id"] == "20260712-030000-999999"
+    after = client.get(f"/api/tasks/{task_id}").json()["updated_at"]
+    assert after == before, "设 sim_run_ref 不得改动 updated_at（非状态迁移）"
+
+
 # ── tasks: 列表分页（P2-B：拆掉硬 LIMIT 100 静默截断）─────────────────────
 
 

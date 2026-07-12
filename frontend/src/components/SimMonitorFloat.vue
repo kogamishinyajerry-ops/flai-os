@@ -105,6 +105,9 @@ async function maybeAdoptParam() {
   alarmMemo.value = { sim: null, workbench: null };
   connectSince.value = Date.now();
   hubOrigin.value = target;
+  // 通知全局状态坞（StatusDock）重取监控入口——它挂载时读过一次 localStorage，
+  // 本次确认属挂载后变更，无此事件坞入口会滞留到刷新才出现（Codex 治理审 P2）。
+  window.dispatchEvent(new CustomEvent("flai:simhub-changed"));
 }
 
 // 主题透传（转正门槛清单项）：暗色时经 ?theme=dark 让 hub 嵌入视图随平台

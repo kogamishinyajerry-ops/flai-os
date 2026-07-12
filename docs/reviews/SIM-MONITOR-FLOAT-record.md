@@ -95,6 +95,51 @@
   hub embed_ancestors，否则 frame-ancestors CSP 正确挡掉嵌入页装载（先跌 3/11
   暴露的正是 CSP 在干活，非回归）。
 
+## 6. 转正批：run_ref 落库 + 深链 + StatusDock 入口（2026-07-12，c293a83）
+
+- **R1 前置最后一段完成**（M11 鉴权落地后）：per-task 仿真 run 关联，**复用
+  tasks.metadata 袋（不加列不迁移，比新列更外科）**——`repos.set_task_sim_run_ref`
+  写 `metadata.sim_run_ref`（BEGIN IMMEDIATE 防并发吞键）+ `POST /api/tasks/{id}/
+  sim-run-ref`（module/run_id 安全字符白名单钳死防 hash 注入；设关联=metadata
+  标注非状态迁移，不扩冻结事件枚举；404 诚实）。
+- **前端消费**：TaskDetail 深链有 run_ref 则 `#/<mod>@<run_id>` 直达该 run，否则
+  回退 hub 首页；StatusDock 加中性色监控发现入口（simhub 配置才现，不占信任色锁，
+  `@click.stop` 不误触状态中心，默认关零渲染保 e2e）。
+- **验证**：后端 4 测试 + `verify_all` 全绿（8 套 e2e，StatusDock 默认关零侵入）+
+  hub 探针扩至 **14/14**（新增 ⑩a run_ref 落库/⑩b 深链 href/⑪ StatusDock 入口，
+  激活路径唯一能诚实测处）。Codex 治理审 c293a83（新 operator endpoint 命中即审）。
+- **并发纪律实录**：施工时 ADR-0021 数据分级 lane 同树在飞（改 repos.py 的
+  create_file/record_sample 加必填 classification，其半应用态外溢为探针 backend 的
+  `record_sample missing classification`——非本批引入）。本批唯一与其交叠 repos.py，
+  按 hunk 精确 stage（`git apply --cached` 仅本函数），`git diff --cached` 亲验零
+  classification 污染，对方 8 行分级 hunk 完好留树。
+
+### 6.1 Codex 治理审 c293a83 收口（2026-07-12，fix commit 待落）
+
+**结论=零 P1 + 四 P2**（新 operator endpoint 命中即审，全部 grounded 复核确认为真，
+无 over-claim）：
+
+- **P2-1**（repos.py）：setter bump `updated_at` 会让「metadata 标注」误触终态未读
+  信号（taskHasUnseen/hasUnseen 依 updated_at 判新鲜度），与我「非状态迁移」设计
+  意图自相矛盾（同理由我本就没 append_event）。**修**=UPDATE 去掉 updated_at，只写
+  metadata_json；加回归测试 `test_set_sim_run_ref_does_not_bump_updated_at`（_now_iso
+  带微秒，bump 必改字符串故真咬）。
+- **P2-2**（StatusDock.vue）：IIFE 只在挂载读一次 localStorage，`?simhub=` 挂载后
+  确认启用不刷新不显示。**修**=改响应式 ref + 监听 `flai:simhub-changed`（同标签页
+  自定义事件，storage 事件不自触发）+ `storage`（跨标签页）；SimMonitorFloat 确认
+  新源后派发该事件。
+- **P2-3**（StatusDock.vue）：anchor 的 keydown 冒泡到 `.status-dock`，Enter 同时开
+  状态中心+跳链（`@click.stop` 不拦 keydown）。**修**=anchor 加
+  `@keydown.enter.stop @keydown.space.stop`（stop 不 preventDefault，Enter 原生跳链
+  照常，仅止住冒泡）。
+- **P2-4**（TaskDetail.vue）：run_ref 全量渲染进不换行 header，module(64)+run_id(128)
+  极限外溢挤走控件。**修**=拆前缀/ref/箭头，只对 ref 段 CSS 截断（max-width 22ch +
+  ellipsis），全值进 title。
+
+**验证**：后端 5 测试（含新回归）绿 · 前端 build 干净 · 探针 **14/14 ALL GREEN**
+（真登录自起后端，⑩a/⑩b/⑪ 全过）。round cap R0（治理审仅一轮即零 P1）。repos.py
+仍按 hunk 精确 stage（只落 P2-1，ADR-0021 分级 hunk 不动）。
+
 ## 6. 转正门槛清单批：暗色透传 + 窄屏适配（2026-07-12）
 
 - §4 递延两项落地（本仓侧仅 SimMonitorFloat.vue 单文件）：

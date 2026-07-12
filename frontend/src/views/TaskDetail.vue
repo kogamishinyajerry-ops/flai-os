@@ -33,8 +33,8 @@
         <!-- 仿真监控深链（PM 路线图 Next-1，S 级）：仅在浮窗已配置（同 localStorage
              开关，默认关零渲染）时出现。任务已关联仿真 run（metadata.sim_run_ref）时
              深链直达该 run 视图，否则回退 hub 首页。 -->
-        <a v-if="simHubUrl" class="sim-link" :href="simHubUrl" target="_blank" rel="noopener">
-          {{ simRunLabel }}
+        <a v-if="simHubUrl" class="sim-link" :href="simHubUrl" target="_blank" rel="noopener" :title="simRunTitle">
+          查看仿真监控<span v-if="simRunRef" class="sim-link-ref">（{{ simRunRef }}）</span> ↗
         </a>
       </div>
 
@@ -274,10 +274,16 @@ const simHubUrl = computed(() => {
   if (r && r.module && r.run_id) return `${simHubBase}#/${r.module}@${r.run_id}`;
   return simHubBase;
 });
-const simRunLabel = computed(() => {
+// run 引用可长达 module(64)+run_id(128) 字符——只把这一段单独渲染并用 CSS
+// 截断（Codex 治理审 P2），前缀「查看仿真监控」与「↗」恒可见不外溢挤走 header
+// 控件；完整值进 title 悬停可读。
+const simRunRef = computed(() => {
   const r = task.value && task.value.metadata && task.value.metadata.sim_run_ref;
-  return r && r.run_id ? `查看仿真监控（${r.module}@${r.run_id}）↗` : "查看仿真监控 ↗";
+  return r && r.module && r.run_id ? `${r.module}@${r.run_id}` : "";
 });
+const simRunTitle = computed(() =>
+  simRunRef.value ? `查看仿真监控（${simRunRef.value}）` : "查看仿真监控",
+);
 
 const task = ref(null);
 const events = ref([]);
@@ -896,6 +902,17 @@ onUnmounted(() => {
   color: var(--clay);
   text-decoration: none;
   white-space: nowrap;
+  max-width: 100%;
 }
 .sim-link:hover { text-decoration: underline; }
+/* 只截 run 引用这一段（module@run_id 可长达 192 字符）：前缀与箭头恒可见，
+   窄屏/移动端不外溢挤走控件（Codex 治理审 P2）；全值在 title。 */
+.sim-link-ref {
+  display: inline-block;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
 </style>
