@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "cfd_evaluate_agent 输入契约",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["run_id"],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "待评估的 CFD 求解 run_id（YYYYMMDD-HHMMSS，= cfd_solve_agent 产出 / sim_run_ref 的 run 段）"
+    }
+  }
+}

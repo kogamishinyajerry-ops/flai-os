@@ -1,0 +1,20 @@
+{
+  "case_id": "case_002",
+  "description": "诚实地板路径（防假绿）：评估一次未起振 / 未收敛的求解（常值或微幅 Cl）→ oracle 拒出 St（st=null），evaluation.json verdict「未达评估条件」，草案如实报缺，绝不编造 St 逼近 0.164（Goodhart 防御）→ 任务仍停 waiting_review 交人审。",
+  "inputs": {
+    "run_id": "20260713-202020"
+  },
+  "expected": {
+    "task_status": "waiting_review",
+    "eval_file": "evaluation.json",
+    "converged": false,
+    "st_is_null": true,
+    "st_error_pct_is_null": true,
+    "verdict_substring": "未达评估条件"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "waiting_review" },
+    { "kind": "artifact_exists", "file": "evaluation.json" },
+    { "kind": "artifact_contains", "file": "evaluation.json", "value": "未达评估条件" }
+  ]
+}

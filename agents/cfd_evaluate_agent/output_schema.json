@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "cfd_evaluate_agent 输出契约",
+  "description": "workflow.run() 成功返回的 outputs[0] 摘要对象；evaluation.json + cfd_eval_draft.md 落任务 output_dir 由 Runtime 注册。requires_human_review=true，Runtime 强制转 waiting_review 等人工放行——签发权在人。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["run_id", "converged", "verdict", "human_review_required", "artifacts"],
+  "properties": {
+    "run_id": { "type": "string", "minLength": 1 },
+    "converged": { "type": "boolean", "description": "是否达到评估条件（≥3 稳定周期且振幅足够）。" },
+    "st": { "type": ["number", "null"], "description": "确定性 Strouhal 数；未收敛为 null（绝不编造）。" },
+    "st_ref": { "type": "number", "const": 0.164, "description": "Williamson Re=100 参考。" },
+    "st_error_pct": { "type": ["number", "null"], "description": "相对参考的误差百分比；未收敛为 null。" },
+    "cd_mean": { "type": ["number", "null"], "description": "末段平均阻力系数。" },
+    "verdict": { "type": "string", "minLength": 1, "description": "确定性判定文案。" },
+    "human_review_required": { "type": "boolean", "const": true, "description": "恒为 true：草案必须人工放行（宪法铁律六）。" },
+    "artifacts": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  }
+}

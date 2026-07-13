@@ -1,0 +1,61 @@
+id: cfd_evaluate_agent
+name: "CFD 结果评估 Agent（Strouhal/Cd 确定性判据 + 叙事草案）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: reasoning_assist
+summary: "读一次真实 CFD 求解（圆柱绕流 Re=100）的力系数与残差，确定性算出 Strouhal 数与平均阻力系数并对照 Williamson 参考，出带水印的评估草案交工程师签发——数字全来自确定性计算，LLM 只叙事，任务强制人工放行。"
+description: >
+  CFD 真接线 P2 评估侧。经 cfd_result_read 只读一次求解结果，用确定性
+  oracle（backend.app.cfd.st_oracle，纯 Python）算 St=f·D/U 与 Cd_mean，
+  对照 Williamson Re=100 参考 St_ref=0.164 出收敛/误差判据，落 evaluation.json。
+  LLM(reasoning) 仅对这些**已给定的确定性数字**做工程叙事（cfd_eval_draft.md
+  头强制水印），绝不自算/覆盖数字（宪法铁律六 + §11.2）。未收敛/数据不足如实
+  报「未达评估条件」，绝不编造 St 逼近参考（Goodhart 防御）。cfd_result_read
+  读取失败诚实 failed。requires_human_review=true：任务停 waiting_review 等具名放行。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: reasoning
+knowledge:
+  enabled: false
+  scopes: []
+tools:
+  - cfd_result_read
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats:
+    - .json
+    - .md
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: true
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: true
+  sample_fields:
+    - inputs.run_id
+    - outputs.st
+    - outputs.verdict
+limitations:
+  - "St/Cd 是确定性计算，但评估结论仍是草案：收敛判据、误差阈值仅为参考，未经工程师核实不得采信。"
+  - "LLM 叙事仅解读确定性数字，可能措辞不当或过度自信：任何工程判断以确定性判据与人工审核为准。"
+  - "对照基准是 Williamson Re=100 单点参考（St_ref=0.164）：不同雷诺数/网格/时间步下不适用。"
+  - "未收敛或数据不足时本 Agent 拒绝给出 St：这是诚实地板，不得视为工具故障。"
+  - "本 Agent 输出永远停在「等待人工审核」，由具名工程师放行或拒绝——签发权在人。"
