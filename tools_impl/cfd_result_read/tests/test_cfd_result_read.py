@@ -46,3 +46,19 @@ def test_missing_env_fail_closed(monkeypatch):
     monkeypatch.delenv("FLAI_CFD_CASE_DIR", raising=False)
     out = run({"run_id": "20260713-101010"})
     assert out["status"] == "failed"
+
+
+def test_ended_requires_final_nonempty_line_end(monkeypatch, tmp_path):
+    # Codex R2-P1：ended 是收敛门——log 中段的 End（重启/损坏 log）不算收尾，
+    # 只有末非空行全等 "End" 才算。
+    rid = "20260713-101010"
+    sub = tmp_path / rid
+    shutil.copytree(FIX, sub)
+    _seed(sub, rid)
+    log = sub / "log.pimpleFoam"
+    log.write_text(log.read_text(errors="replace")
+                   + "\nTime = 151\nsmoothSolver:  Solving for Ux, Initial residual = 0.1\n")
+    monkeypatch.setenv("FLAI_CFD_CASE_DIR", str(tmp_path))
+    out = run({"run_id": rid})
+    assert out["status"] == "success"
+    assert out["ended"] is False  # End 在中段=重启过，不是正常收尾

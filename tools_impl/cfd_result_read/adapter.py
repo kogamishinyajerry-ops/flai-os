@@ -58,5 +58,8 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
         "t_series": fc["t"],
         "resid_p_tail": [s["resid"].get("p") for s in steps[-20:]],
         "n_steps": len(steps),
-        "ended": "End" in text[-200:],
+        # Codex R2-P1（86gs 全分支审）：ended 是收敛门之一，须末**非空行全等**
+        # "End"（OpenFOAM 正常收尾唯一形态，与 cfd_solve_launch 同判据）——
+        # 子串判定会被重启/损坏 log 中段的 End 冒充。
+        "ended": next((ln.strip() for ln in reversed(text[-400:].splitlines()) if ln.strip()), "") == "End",
     }

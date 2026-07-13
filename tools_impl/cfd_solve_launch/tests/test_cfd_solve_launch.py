@@ -58,11 +58,14 @@ def _install_fake_run(monkeypatch, calls, *, overrides=None):
         if "checkMesh" in joined:
             return _FakeProc(stdout="... Mesh OK.\nEnd\n")
         if "pgrep" in joined:
-            # 两个调用点行为忠实：busy 扫（grep -q '^…run 根'）→ rc=1 无活跃
-            # 求解；alive 验证（grep -qx 精确 cwd）→ rc=0 命中。
-            if "grep -qx" in joined:
-                return _FakeProc(stdout="")
+            # busy 扫（唯一 pgrep 调用点，R2 后 alive 走 PID 握手）：rc=1=确认无活跃
             return _FakeProc(returncode=1, stdout="")
+        if "nohup" in joined:
+            # launch：`& echo $!` 行为忠实——stdout 给子壳 PID
+            return _FakeProc(stdout="4242\n")
+        if "readlink /proc/" in joined:
+            # alive PID 探测：rc=0=PID 活且 cwd 对账命中
+            return _FakeProc(stdout="")
         return _FakeProc()
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
@@ -228,14 +231,42 @@ def test_checkmesh_without_mesh_ok_marker_fail_closed(monkeypatch, tmp_path):
 
 
 def test_solver_not_running_after_fire_fail_closed_no_sidecar(monkeypatch, tmp_path):
-    # Codex R0-P1-2：`... && nohup x &` 整体后台化恒返 0——必须 pgrep 验证进程在，
-    # 不在即 fail 且不盖 sidecar（绝不谎报已发起）
+    # Codex R0-P1-2（R2 后判据=PID 握手）：`... && nohup x &` 整体后台化恒返 0——
+    # 必须验证子壳 PID 真活在本 run cwd，不在（且 log 无 End）即 fail 且不盖
+    # sidecar（绝不谎报已发起）
     case_root = _env(monkeypatch, tmp_path, with_msh=True)
     calls = []
-    _install_fake_run(monkeypatch, calls, overrides={"pgrep": _FakeProc(returncode=1, stdout="")})
+    _install_fake_run(monkeypatch, calls,
+                      overrides={"readlink /proc/": _FakeProc(returncode=1, stdout="")})
     out = run({"case": "cylinder_re100", "run_id": RID})
     assert out["status"] == "failed"
     assert not (case_root / RID / ".hub_run_id").exists()
+
+
+def test_launch_without_pid_output_fail_closed(monkeypatch, tmp_path):
+    # Codex R2-P1：launch 未吐 PID（stdout 空/非数字）→ 无存活凭据，fail-closed
+    case_root = _env(monkeypatch, tmp_path, with_msh=True)
+    calls = []
+    _install_fake_run(monkeypatch, calls, overrides={"nohup": _FakeProc(stdout="")})
+    out = run({"case": "cylinder_re100", "run_id": RID})
+    assert out["status"] == "failed"
+    assert "PID" in out["error_message"]
+    assert not (case_root / RID / ".hub_run_id").exists()
+
+
+def test_busy_probe_error_fail_closed(monkeypatch, tmp_path):
+    # Codex R2-P1：busy 探测 rc 非 0/1（docker exec 125 等）≠ idle——探测失败
+    # 必须 fail-closed，不得当「无活跃求解」继续开跑。
+    case_root = _env(monkeypatch, tmp_path, with_msh=True)
+    calls = []
+    _install_fake_run(monkeypatch, calls, overrides={
+        "grep -q '^": _FakeProc(returncode=125, stderr="docker: container not running"),
+    })
+    out = run({"case": "cylinder_re100", "run_id": RID})
+    assert out["status"] == "failed"
+    assert "探测失败" in out["error_message"]
+    assert not (case_root / RID / ".hub_run_id").exists()
+    assert not any("gmshToFoam" in " ".join(str(x) for x in argv) for argv, kw in calls)
 
 
 def test_end_time_dict_failure_aborts_before_launch(monkeypatch, tmp_path):
@@ -273,8 +304,9 @@ def test_mesh_failure_fail_closed_no_sidecar(monkeypatch, tmp_path):
 
 def test_alive_check_covers_of11_foamrun_comm(monkeypatch, tmp_path):
     # R1 真跑取证回归：OF11 pimpleFoam 是 sh wrapper，真进程 comm=foamRun——
-    # alive/busy 的 pgrep 必须 -x 'foamRun|pimpleFoam'（裸 pgrep pimpleFoam
-    # 假阴性=孤儿 run；-f 会误中 cmdline 含 pimpleFoam 的启动壳=假阳性）。
+    # busy 扫的 pgrep 必须 -x 'foamRun|pimpleFoam'（裸 pgrep pimpleFoam
+    # 假阴性；-f 会误中 cmdline 含 pimpleFoam 的启动壳=假阳性）。R2 后 alive
+    # 走 PID 握手不依赖进程名，pgrep 仅剩 busy 扫一个调用点。
     _env(monkeypatch, tmp_path, with_msh=True)
     calls = []
     _install_fake_run(monkeypatch, calls)
@@ -282,10 +314,15 @@ def test_alive_check_covers_of11_foamrun_comm(monkeypatch, tmp_path):
     assert out["status"] == "success"
     pgrep_scripts = [" ".join(str(a) for a in argv) for argv, kw in calls
                      if "pgrep" in " ".join(str(a) for a in argv)]
-    assert pgrep_scripts, "应有 pgrep 调用"
+    assert pgrep_scripts, "应有 pgrep 调用（busy 扫）"
     for js in pgrep_scripts:
         assert "pgrep -x 'foamRun|pimpleFoam'" in js
         assert "pgrep -f" not in js
+    # launch 必须带 PID 回执（& echo $!），alive 探测必须按 PID+cwd 对账
+    launch_scripts = [" ".join(str(a) for a in argv) for argv, kw in calls if "nohup" in " ".join(str(a) for a in argv)]
+    assert launch_scripts and all("echo $!" in js for js in launch_scripts)
+    alive_scripts = [" ".join(str(a) for a in argv) for argv, kw in calls if "readlink /proc/" in " ".join(str(a) for a in argv) and "pgrep" not in " ".join(str(a) for a in argv)]
+    assert alive_scripts and all("/proc/4242/cwd" in js for js in alive_scripts)
 
 
 def test_completed_before_probe_is_success_with_sidecar(monkeypatch, tmp_path):
@@ -297,11 +334,11 @@ def test_completed_before_probe_is_success_with_sidecar(monkeypatch, tmp_path):
     def _launch_writes_completed_log(argv):
         (case_root / RID / "log.pimpleFoam").write_text(
             "Time = 2s\nExecutionTime = 3.1 s\nEnd\n")
-        return _FakeProc()
+        return _FakeProc(stdout="4242\n")
 
     _install_fake_run(monkeypatch, calls, overrides={
         "nohup": _launch_writes_completed_log,
-        "grep -qx": _FakeProc(returncode=1, stdout=""),  # alive 扑空（已跑完）
+        "readlink /proc/": _FakeProc(returncode=1, stdout=""),  # PID 已退（跑完）
     })
     out = run({"case": "cylinder_re100", "run_id": RID, "end_time": 2})
     assert out["status"] == "success"
@@ -317,11 +354,11 @@ def test_crashed_solver_without_end_marker_still_fails(monkeypatch, tmp_path):
     def _launch_writes_truncated_log(argv):
         (case_root / RID / "log.pimpleFoam").write_text(
             "Time = 1.5s\nGAMG:  Solving for p, Initial residual = 0.01\n")
-        return _FakeProc()
+        return _FakeProc(stdout="4242\n")
 
     _install_fake_run(monkeypatch, calls, overrides={
         "nohup": _launch_writes_truncated_log,
-        "grep -qx": _FakeProc(returncode=1, stdout=""),
+        "readlink /proc/": _FakeProc(returncode=1, stdout=""),
     })
     out = run({"case": "cylinder_re100", "run_id": RID})
     assert out["status"] == "failed"

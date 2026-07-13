@@ -118,3 +118,71 @@ def test_tool_failure_fails_honestly(tmp_path):
     ctx["tool_registry"] = _FailReg()
     out = eval_run(ctx)
     assert out["status"] == "failed"  # 上游读取失败不伪造评估
+
+
+def test_missing_residual_samples_block_convergence(tmp_path):
+    # Codex R2-P1：残差 None=未知不是达标——过滤 None 会把「尾部全部达标」
+    # 偷换成「可得样本达标」。任一 None 即残差门不过。
+    class _Reg:
+        def call(self, tool_id, payload):
+            fc = parse_force_coeffs(GOLDEN.read_text(errors="replace"))
+            return {"status": "success", "run_id": payload["run_id"],
+                    "cl_series": fc["cl"], "cd_series": fc["cd"], "t_series": fc["t"],
+                    "resid_p_tail": [1e-6] * 10 + [None] * 10, "n_steps": 7500, "ended": True}
+
+    ctx = _ctx(tmp_path)
+    ctx["tool_registry"] = _Reg()
+    out = eval_run(ctx)
+    assert out["status"] == "success"
+    ev = json.loads((tmp_path / "evaluation.json").read_text())
+    assert ev["converged"] is False
+    assert ev["st"] is None
+
+
+def test_thin_residual_tail_blocks_convergence(tmp_path):
+    # 样本量 <10：数据太薄不判收敛（Codex R2-P1 minimum sample count）
+    class _Reg:
+        def call(self, tool_id, payload):
+            fc = parse_force_coeffs(GOLDEN.read_text(errors="replace"))
+            return {"status": "success", "run_id": payload["run_id"],
+                    "cl_series": fc["cl"], "cd_series": fc["cd"], "t_series": fc["t"],
+                    "resid_p_tail": [1e-6] * 5, "n_steps": 7500, "ended": True}
+
+    ctx = _ctx(tmp_path)
+    ctx["tool_registry"] = _Reg()
+    out = eval_run(ctx)
+    ev = json.loads((tmp_path / "evaluation.json").read_text())
+    assert ev["converged"] is False
+
+
+def test_rogue_narrative_numbers_rejected(tmp_path):
+    # Codex R2-P2：叙事含事实集之外的数字（LLM 改数/编数）→ 整段弃用换占位，
+    # 绝不让矛盾数字进人签草案。
+    class _RogueGateway:
+        def chat(self, profile, messages):
+            return {"content": "St=0.21，与参考偏差 28%，建议采信。", "finish_reason": "stop"}
+
+    ctx = _ctx(tmp_path)
+    ctx["model_gateway"] = _RogueGateway()
+    out = eval_run(ctx)
+    assert out["status"] == "success"
+    draft = (tmp_path / "cfd_eval_draft.md").read_text()
+    assert "0.21" not in draft.split("判定权在人")[-1].split("弃用")[0] or "弃用" in draft
+    assert "已按铁律弃用" in draft
+
+
+def test_legit_rounded_narrative_numbers_kept(tmp_path):
+    # 合法舍入（0.167 / 2.00% / 14 周期 / Re=100）不得误杀——误杀方向也要有证
+    class _LegitGateway:
+        def chat(self, profile, messages):
+            return {"content": "Re=100 涡街充分发展，共 14 个稳定周期，St≈0.167，"
+                               "与 Williamson 0.164 偏差约 2%，建议采信。",
+                    "finish_reason": "stop"}
+
+    ctx = _ctx(tmp_path)
+    ctx["model_gateway"] = _LegitGateway()
+    out = eval_run(ctx)
+    assert out["status"] == "success"
+    draft = (tmp_path / "cfd_eval_draft.md").read_text()
+    assert "已按铁律弃用" not in draft
+    assert "建议采信" in draft

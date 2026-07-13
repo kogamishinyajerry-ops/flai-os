@@ -4,6 +4,11 @@
   "inputs": {
     "run_id": "20260713-101010"
   },
+  "input_files": [
+    "fixtures/20260713-101010/.hub_run_id",
+    "fixtures/20260713-101010/log.pimpleFoam",
+    "fixtures/20260713-101010/postProcessing/forceCoeffs1/0/forceCoeffs.dat"
+  ],
   "expected": {
     "task_status": "waiting_review",
     "eval_file": "evaluation.json",

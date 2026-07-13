@@ -67,9 +67,10 @@ def _cfd_env(monkeypatch, tmp_path: Path) -> None:
 
 
 def _mock_docker(monkeypatch) -> None:
-    """行为忠实替身（对齐 cfd_solve_launch R1 修复后的探测语义）：
-    checkMesh → stdout 含 Mesh OK.；busy 扫（grep -q '^run根/'）→ rc=1 无活跃
-    求解；alive 验证（grep -qx 精确 cwd）→ rc=0 命中。"""
+    """行为忠实替身（对齐 cfd_solve_launch R2 修复后的探测语义）：
+    checkMesh → stdout 含 Mesh OK.；busy 扫（pgrep+grep -q '^run根/'）→ rc=1
+    无活跃求解；launch（nohup … & echo $!）→ stdout 给 PID；alive PID 探测
+    （readlink /proc/<pid>/cwd）→ rc=0 命中。"""
     import tools_impl.cfd_solve_launch.adapter as mod
 
     def fake_run(argv, **kw):
@@ -81,9 +82,11 @@ def _mock_docker(monkeypatch) -> None:
             stderr = ""
         if "checkMesh" in joined:
             R.stdout = "... Mesh OK.\nEnd\n"
-        elif "pgrep" in joined and "grep -qx" not in joined:
-            R.returncode = 1  # busy 扫：无活跃求解
+        elif "pgrep" in joined:
+            R.returncode = 1  # busy 扫（唯一 pgrep 调用点）：无活跃求解
             R.stdout = ""
+        elif "nohup" in joined:
+            R.stdout = "4242\n"  # launch 回执 PID
         return R()
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)

@@ -22,6 +22,7 @@ from backend.app.cfd.st_oracle import strouhal_from_cl, cd_mean_tail
 
 _ST_REF = 0.164  # Williamson (1996) Re=100 圆柱绕流 Strouhal 参考
 _RESID_TOL = 0.05  # 残差门（瞬态语义）：golden 收敛 run resid_p 尾部实测 ≤1.17e-2（4× 余量）
+_RESID_MIN_N = 10  # 残差门最小样本量（result_read 给尾部 20 步；<10 步=数据太薄不判收敛）
 _EVAL_JSON = "evaluation.json"
 _DRAFT_MD = "cfd_eval_draft.md"
 
@@ -38,6 +39,45 @@ def _fail(message: str) -> dict[str, Any]:
 
 def _load_system_prompt() -> str:
     return Path(__file__).with_name("prompt.md").read_text(encoding="utf-8").strip()
+
+
+# 叙事白名单常数：算例语境固有数字（Re=100、参考文献年份），不在 evaluation
+# dict 里但叙事合法提及。
+_NARRATIVE_CONST_OK = {100.0, 1996.0}
+
+
+def _fact_numbers(evaluation: dict[str, Any]) -> set[float]:
+    out: set[float] = set(_NARRATIVE_CONST_OK)
+    def _walk(v: Any) -> None:
+        if isinstance(v, bool):
+            return
+        if isinstance(v, (int, float)):
+            out.add(float(v))
+        elif isinstance(v, dict):
+            for x in v.values():
+                _walk(x)
+    _walk(evaluation)
+    return out
+
+
+def _rogue_numbers(narrative: str, evaluation: dict[str, Any]) -> list[str]:
+    """Codex R2-P2：找出叙事中不属于事实集的数字。匹配规则=某事实数在该 token
+    的显示精度下四舍五入后全等（LLM 合法地把 0.16727979… 写成 0.167/0.1673，
+    把 1.9998…% 写成 2%/2.00%）。找不到归属的数字即 rogue。"""
+    import re as _re
+    facts = _fact_numbers(evaluation)
+    # 字符串事实（run_id、verdict、reason 等）里的数字串（如 20260713-094039）
+    # 叙事合法引用，不算 rogue。
+    str_facts = " ".join(str(v) for v in evaluation.values() if isinstance(v, str))
+    rogue: list[str] = []
+    for tok in _re.findall(r"\d+(?:\.\d+)?", narrative):
+        if tok in str_facts:
+            continue
+        val = float(tok)
+        decimals = len(tok.split(".")[1]) if "." in tok else 0
+        if not any(round(f, decimals) == val for f in facts):
+            rogue.append(tok)
+    return rogue
 
 
 def run(context: dict[str, Any]) -> dict[str, Any]:
@@ -63,8 +103,15 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     #   ③ ended 门（log 以 End 正常收尾——solver 还在跑/中途崩一律未达条件）
     st = strouhal_from_cl(res.get("t_series") or [], res.get("cl_series") or [], D=1.0, U=1.0)
     cd_mean = cd_mean_tail(res.get("cd_series") or [])
-    resid_tail = [v for v in (res.get("resid_p_tail") or []) if v is not None]
-    resid_ok = bool(resid_tail) and all(v < _RESID_TOL for v in resid_tail)
+    # Codex R2-P1：过滤 None 会把「尾部全部达标」偷换成「可得样本达标」——缺失
+    # 残差=未知不是达标。原样本每条必须是有限数值且样本量 ≥_RESID_MIN_N，任一
+    # None/NaN/缺样即残差门不过（未知按不健康算，fail-closed）。
+    resid_raw = res.get("resid_p_tail") or []
+    resid_ok = (
+        len(resid_raw) >= _RESID_MIN_N
+        and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                and v == v and v < _RESID_TOL for v in resid_raw)
+    )
     ended_ok = res.get("ended") is True
     converged = st["converged"] and resid_ok and ended_ok
     st_value = st["st"] if converged else None  # 未达三门不给 St（诚实地板）
@@ -107,6 +154,12 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
             ]
             r = gw.chat(profile, msgs)
             narrative = (r.get("content") or "").strip()
+            # Codex R2-P2：prompt 约束不了模型行为——叙事里出现事实集之外的数字
+            # （改数/编数）→ 整段弃用换占位，绝不让矛盾数字进人签草案。
+            rogue = _rogue_numbers(narrative, evaluation)
+            if rogue:
+                narrative = (f"（LLM 叙事含事实集之外的数字 {rogue[:5]}，已按铁律弃用；"
+                             "以上确定性数字为准）")
         except Exception as exc:  # noqa: BLE001 - 叙事失败不阻断，确定性判据已落
             narrative = f"（LLM 叙事不可用：{exc.__class__.__name__}；以上确定性数字为准）"
 

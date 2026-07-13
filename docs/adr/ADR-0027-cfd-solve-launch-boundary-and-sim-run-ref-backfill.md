@@ -82,6 +82,21 @@ plan 原稿 `context.get("run_id_seed") or context.get("task_id")` 不可用：c
 | P2-D | 流式半写行逐列 append 撕裂 t/cd/cl 长度 → 有效 run 被 oracle 误拒 | verbatim 修：整行先转换再 append（两仓同源同修+diff 实证） |
 | P2-E | 发散 run 的 nan/inf 透传进 evaluation.json/FastAPI 严格 JSON | verbatim 修：`math.isfinite` 整行拒（两仓同修） |
 
+## 四b、Codex R2 全分支审处置（86gs sol ultra `--base main`，5P1+2P2，2026-07-13——与上表 CRS 轴独立，两审互补）
+
+全部 grounded 复核为真后 verbatim 落地（宪法 verbatim 例外：逐字落地上轮
+Suggested fix 不计新轮）；每条配 witness 测试且 tamper 咬合实证。
+
+| # | Finding | 处置 |
+|---|---------|------|
+| P1-α | eval 证据指纹不含夹具字节（case 只传 run_id，`FLAI_CFD_CASE_DIR` 进程全局）——换数据/改夹具后旧绿证据仍有效 | verbatim 修：两 case 补 `input_files` 列夹具三件（digest 吃到字节+staging 校验在场）。**残余诚实标注**：workflow 经 env 路径读 run 树而非 staged 副本，「被指纹的字节=被评估的字节」仍依赖 env 指向 vendored fixtures（case description 已写死该前置） |
+| P1-β | busy 探测 rc≠0 一律当 idle——docker exec 125 等探测失败时照常开跑，破单并发契约 | verbatim 修：rc=1（grep 确认无匹配）才 idle；rc=0 拒；其他 rc+超时 fail-closed |
+| P1-γ | alive 探测慢启动竞态（子壳后台化后 foamRun 未必已在）+ TimeoutExpired 直接穿透 | verbatim 修：launch `& echo $!` PID 握手——按子壳 PID+cwd 对账，与进程名/启动时序解耦；探测超时按未确认 fail-closed。**残余诚实标注**：fail 返回后 detached 求解仍可能起来=孤儿 run（无 sidecar 不被认作 run，错误信息已注明人工处置路径；零删除铁律不代杀） |
+| P1-δ | result_read `ended` 子串判定——重启/损坏 log 中段 End 冒充正常收尾 | verbatim 修：末非空行全等 "End"（与 solve_launch 同判据） |
+| P1-ε | 残差门过滤 None——「尾部全部达标」被偷换成「可得样本达标」 | verbatim 修：原样本全数值+有限+≥10 样本，任一 None/NaN/缺样即不过（未知按不健康算） |
+| P2-ζ | 半写残差 token（`1e-`）regex 能中 float() 炸——live 读把整次任务炸 failed | verbatim 修：`_float_or_none` 跳过不完整行（两仓同源同修，hub commit 见 sim-live-hub） |
+| P2-η | 叙事无数字校验——prompt 约束不了模型，改数/编数直进人签草案 | verbatim 修：`_rogue_numbers` 舍入归属校验（显示精度四舍五入全等；字符串事实如 run_id 内数字串放行；Re=100/1996 白名单），含 rogue 即整段弃用换占位 |
+
 ## 影响面
 
 - `tools_impl/cfd_solve_launch/`（新，安全边界）、`agents/cfd_solve_agent/`（新）、

@@ -178,10 +178,18 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
     # 根下（任意子目录）即算活跃求解，命中即拒——fail-closed，绝不并发开跑。
     _busy_script = (f"for p in $(pgrep -x '{_SOLVER_PGREP}'); do readlink /proc/$p/cwd; done"
                     f" | grep -q '^{_CONTAINER_RUN_ROOT}/'")
-    busy = subprocess.run(["docker", "exec", container, "bash", "-c", _busy_script],
-                          capture_output=True, text=True, timeout=_T_PGREP, shell=False)
+    try:
+        busy = subprocess.run(["docker", "exec", container, "bash", "-c", _busy_script],
+                              capture_output=True, text=True, timeout=_T_PGREP, shell=False)
+    except subprocess.TimeoutExpired:
+        return _fail("单并发探测超时——无法确认容器内无活跃求解，fail-closed 不发起")
     if busy.returncode == 0:
         return _fail("容器内已有活跃求解（单并发契约：同一时刻一次求解）——等其完成后重试，绝不并发开跑")
+    if busy.returncode != 1:
+        # Codex R2-P1：rc=1 是 grep 的「确认无匹配」；其他码（docker exec 125/126、
+        # bash 127 等）= 探测本身失败——不可与 idle 混同，fail-closed。
+        return _fail(f"单并发探测失败（rc={busy.returncode}）：{(busy.stderr or '').strip()[:200]}"
+                     "——无法确认 idle，fail-closed 不发起")
 
     # ④ 网格转换 + 检查（固定脚本模板，cwd=子目录；pipefail + Mesh OK. 正向断言，
     #    Codex R0-P1-3——tee 会吞 checkMesh 退出码）
@@ -203,25 +211,36 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
         if dic.returncode != 0:
             return _fail(f"endTime 写入失败：{(dic.stderr or dic.stdout or '').strip()[-200:]}——不发起求解")
 
-    # ⑥ 发起求解（fire：nohup & 立即返回，不等 ~200s）
-    launch = _dexec(container, ctr_cwd, f"{_OF} && nohup pimpleFoam > log.pimpleFoam 2>&1 &",
+    # ⑥ 发起求解（fire：nohup & 立即返回，不等 ~200s）。`echo $!` 输出被后台化
+    #    AND-list 子壳的 PID（Codex R2-P1 PID 握手）：子壳前台等 pimpleFoam
+    #    wrapper→foamRun，求解期间恒活、跑完即退——为 ⑥b 提供与进程名/启动
+    #    时序无关的存活凭据。
+    launch = _dexec(container, ctr_cwd,
+                    f"{_OF} && nohup pimpleFoam > log.pimpleFoam 2>&1 & echo $!",
                     _T_LAUNCH)
     if launch.returncode != 0:
         return _fail(f"发起求解失败：{(launch.stderr or '').strip()[:200]}")
+    launch_pid = (launch.stdout or "").strip().splitlines()[-1] if (launch.stdout or "").strip() else ""
+    if not launch_pid.isdigit():
+        return _fail(f"发起后未取得求解 PID（stdout={launch.stdout!r}）——无法验证存活，fail-closed")
 
-    # ⑥b 验证求解进程真起来了（Codex R0-P1-2：`… && nohup x &` 整体后台化，bash
-    # fork 即返 0——bashrc 缺失/pimpleFoam 不可执行也「成功」。按进程 cwd 精确
-    # 对账本 run 子目录：裸按名匹配会命中并行/legacy run 的求解进程，假阳性=
-    # 谎报已发起。进程名用 _SOLVER_PGREP（R1：OF11 真进程 comm=foamRun，见文件头
-    # 取证注释）。固定脚本，唯一变量是白名单校验过的 ctr_cwd。
-    _alive_script = (f"for p in $(pgrep -x '{_SOLVER_PGREP}'); do readlink /proc/$p/cwd; done"
-                     f" | grep -qx '{ctr_cwd}'")
+    # ⑥b 验证求解真起来了（Codex R0-P1-2 + R2-P1 换 PID 握手）：按 ⑥ 捕获的
+    # PID 查 /proc/<pid>/cwd 与本 run 子目录精确对账——不依赖进程名（OF11
+    # wrapper comm=foamRun 教训）也不受慢启动竞态影响（子壳从 fire 起即在）。
+    # bashrc 缺失/pimpleFoam 不可执行 → 子壳秒退 → PID 已死且 log 无 End →
+    # fail-closed。固定脚本，PID 已 isdigit 校验、ctr_cwd 白名单派生。
+    _alive_script = f"[ \"$(readlink /proc/{launch_pid}/cwd 2>/dev/null)\" = '{ctr_cwd}' ]"
     alive = False
+    probe_error = None
     for i in range(_PGREP_TRIES):
         if i:
             time.sleep(1)
-        pg = subprocess.run(["docker", "exec", container, "bash", "-c", _alive_script],
-                            capture_output=True, text=True, timeout=_T_PGREP, shell=False)
+        try:
+            pg = subprocess.run(["docker", "exec", container, "bash", "-c", _alive_script],
+                                capture_output=True, text=True, timeout=_T_PGREP, shell=False)
+        except subprocess.TimeoutExpired:
+            probe_error = "探测超时"
+            continue
         if pg.returncode == 0:
             alive = True
             break
@@ -231,16 +250,19 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
         if log_path.is_file():
             tail = log_path.read_text(errors="replace")[-300:]
         # R1 CRS-P2：小 end_time 求解可在探测窗口内**正常跑完**——OpenFOAM 正常
-        # 收尾 log 末行是 "End"。这是已完成的真 run，照常盖 sidecar；只有既无
-        # 活进程又无 End 才是启动失败。
+        # 收尾 log 末行是 "End"（与 cfd_result_read 的 ended 门同判据：末非空行
+        # 全等，防 log 中段偶现 End 子串冒充）。这是已完成的真 run，照常盖
+        # sidecar；只有既无活进程又无 End 才是启动失败。
         last_line = next((ln for ln in reversed(tail.splitlines()) if ln.strip()), "")
         if last_line.strip() == _END_MARKER:
             (run_dir / ".hub_run_id").write_text(run_id, encoding="utf-8")
             return {"status": "success", "run_id": run_id, "run_dir": str(run_dir),
                     "container": container, "checkmesh_ok": True, "launched_at": run_id,
                     "note": "求解在探测窗口内已正常跑完（log 以 End 收尾）"}
-        return _fail(f"求解进程未存活（pgrep 未命中，重试 {_PGREP_TRIES} 次）且 log 无正常"
-                     f"收尾 End——不盖 sidecar，绝不谎报已发起。log 尾：{tail.strip()}")
+        return _fail(f"求解未确认存活（PID {launch_pid} 探测未命中"
+                     f"{'，' + probe_error if probe_error else ''}，重试 {_PGREP_TRIES} 次）且 log"
+                     f"无正常收尾 End——不盖 sidecar，绝不谎报已发起。残留子目录无 sidecar 不会被"
+                     f"平台/hub 认作 run（若求解稍后仍起来即为孤儿 run，诊断后人工处置）。log 尾：{tail.strip()}")
 
     # ⑦ 盖 sidecar（host 侧，最后一步=hub marker：sidecar 在场即「这是一个已发起的 run」）
     (run_dir / ".hub_run_id").write_text(run_id, encoding="utf-8")

@@ -13,26 +13,41 @@ _TIME_RE = re.compile(r"^Time = ([0-9.eE+-]+)")
 _CLOCK_RE = re.compile(r"^ExecutionTime = [0-9.eE+-]+ s\s+ClockTime = ([0-9.eE+-]+) s")
 
 
+def _float_or_none(tok: str) -> float | None:
+    """Codex R2-P2：solver 在写、读方在读——末行可截断成 `1e-`/`3.` 这类
+    regex 能中但 float() 会炸的半个数。半写 token 按「本行不完整」跳过，
+    绝不让一行撕裂把整次读取炸成 failed。"""
+    try:
+        return float(tok)
+    except ValueError:
+        return None
+
+
 def parse_residuals(text: str) -> list[dict]:
     steps: list[dict] = []
     cur: dict | None = None
     for line in text.splitlines():
         m = _TIME_RE.match(line)
         if m:
+            t = _float_or_none(m.group(1))
+            if t is None:
+                continue  # 半写 Time 行：不开新步也不动当前步
             if cur is not None:
                 steps.append(cur)
-            cur = {"t": float(m.group(1)), "resid": {}, "clock_s": None}
+            cur = {"t": t, "resid": {}, "clock_s": None}
             continue
         if cur is None:
             continue
         m = _RESID_RE.search(line)
         if m:
-            # 每步每变量取「首次」（Initial residual），同名后续（PIMPLE 内循环）不覆盖首值
-            cur["resid"].setdefault(m.group(1), float(m.group(2)))
+            v = _float_or_none(m.group(2))
+            if v is not None:
+                # 每步每变量取「首次」（Initial residual），同名后续（PIMPLE 内循环）不覆盖首值
+                cur["resid"].setdefault(m.group(1), v)
             continue
         m = _CLOCK_RE.match(line)
         if m:
-            cur["clock_s"] = float(m.group(1))
+            cur["clock_s"] = _float_or_none(m.group(1))
     if cur is not None:
         steps.append(cur)
     return steps
