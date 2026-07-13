@@ -209,23 +209,16 @@ function cycleTheme() {
 const route = useRoute();
 const router = useRouter();
 
-// 范式 2b 双 Surface：应用只剩两个一级入口——对话（发起与跟进一切的家）
-// 与任务台（Codex 三栏：列表|叙事流|面板坞）。Agent 门户降级为 composer 内
-// 选择器 + /portal 深链（owner 拍板）；协作会话视图从对话/任务流深链进入。
+// 范式 Phase 3「对话即家」：对话是唯一一级入口（发起与跟进一切的家）。
+// 任务台/详情/门户/协作会话全部降级为深链——总览「来找你」（状态坞 → 状态中心
+// 抽屉「查看全部任务 →」深链达 /tasks），不再占主导航。路由全保留（可分享/刷新/回退）。
 const NAV = [
   { path: "/", label: "对话" },
-  { path: "/tasks", label: "任务台" },
 ];
 
-// 任务相关页（详情/创建）与协作会话子页归「任务台」高亮；门户归「对话」
-// （Agent 是对话的弹药库）。
-const activeMenu = computed(() => {
-  const p = route.path;
-  if (p === "/tasks" || p.startsWith("/tasks/")) return "/tasks";
-  if (p.startsWith("/workbench")) return "/tasks";
-  if (p === "/portal") return "/";
-  return p;
-});
+// 只有对话主轴（/ 与 /?c=，route.path 恒为 "/"）高亮；深链页（/tasks、/tasks/:id、
+// /workbench、/portal、/feedback）不占主导航高亮——你在深链视图里，不在某个一级 Surface 上。
+const activeMenu = computed(() => (route.path === "/" ? "/" : ""));
 
 // 当前恢复中的会话 id（导引页 /?c=<id>），用于左栏高亮。
 const activeConvoId = computed(() => (typeof route.query.c === "string" ? route.query.c : ""));

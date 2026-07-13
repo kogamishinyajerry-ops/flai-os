@@ -121,15 +121,9 @@
                   class="agent-card"
                   :class="{ 'fx-rise': m.fresh }"
                 >
-                  <div class="agent-accent" :style="{ background: categoryColor(a.category) }"></div>
                   <div class="agent-main">
                     <div class="agent-top">
-                      <span class="agent-step">{{ ai + 1 }}</span>
                       <span class="agent-name">{{ a.agent_name }}</span>
-                      <span
-                        class="agent-pill"
-                        :style="{ color: categoryColor(a.category), background: categoryColor(a.category) + '18' }"
-                      >{{ categoryLabel(a.category) }}</span>
                       <span class="agent-maturity">{{ a.maturity }} / {{ a.status }}</span>
                     </div>
 
@@ -176,26 +170,18 @@
 
                     <p v-if="a.rationale" class="agent-rationale">{{ a.rationale }}</p>
                     <p v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</p>
-                    <div class="agent-draft">
-                      <button
-                        type="button"
-                        class="draft-toggle"
-                        :class="{ open: isDraftOpen(draftKey(idx, ai)) }"
-                        @click="toggleDraft(draftKey(idx, ai))"
-                      >
-                        预填草案 · {{ inputCount(a) }} 个字段
-                        <span class="draft-chevron">›</span>
-                      </button>
-                      <pre v-show="isDraftOpen(draftKey(idx, ai))" class="plan-json">{{ prettyInputs(a.prefilled_inputs) }}</pre>
+                    <div v-if="inputCount(a)" class="agent-draft">
+                      <div class="draft-label">预填草案 · {{ inputCount(a) }} 个字段</div>
+                      <div class="draft-fields">
+                        <span v-for="(v, k) in a.prefilled_inputs" :key="k" class="draft-field">
+                          <span class="df-key">{{ k }}</span>
+                          <span class="df-val">{{ formatDraftVal(v) }}</span>
+                        </span>
+                      </div>
                     </div>
-                    <el-alert
-                      v-if="a.stripped_fields && a.stripped_fields.length"
-                      type="warning"
-                      :closable="false"
-                      show-icon
-                      class="agent-stripped"
-                      :title="`已剔除不合法字段：${a.stripped_fields.join('、')}（未匹配该 Agent 的输入契约）`"
-                    />
+                    <p v-if="a.stripped_fields && a.stripped_fields.length" class="agent-stripped">
+                      已剔除不合法字段：{{ a.stripped_fields.join("、") }}（未匹配该 Agent 的输入契约）
+                    </p>
                     <div class="agent-actions">
                       <button class="agent-cta" @click="createOneTask(a, m.recommendation)">去创建此任务</button>
                     </div>
@@ -203,22 +189,15 @@
                 </div>
               </div>
 
-              <el-alert
+              <p
                 v-if="m.recommendation.dropped_agents && m.recommendation.dropped_agents.length"
-                type="warning"
-                :closable="false"
-                show-icon
                 class="plan-alert"
-                :title="`已剔除无法召集的 Agent：${m.recommendation.dropped_agents.join('、')}（幻觉/已下线/不可召集/重复）`"
-              />
-              <el-alert
-                v-if="m.recommendation.capped"
-                type="info"
-                :closable="false"
-                show-icon
-                class="plan-alert"
-                title="召集 Agent 数已达上限（5 个），后续提议已截断。"
-              />
+              >
+                已剔除无法召集的 Agent：{{ m.recommendation.dropped_agents.join("、") }}（幻觉/已下线/不可召集/重复）
+              </p>
+              <p v-if="m.recommendation.capped" class="plan-alert">
+                召集 Agent 数已达上限（5 个），后续提议已截断。
+              </p>
 
               <div class="plan-foot">
                 <button class="workbench-btn" @click="openWorkbench">进入协作工作台 →</button>
@@ -444,27 +423,14 @@ async function uploadPendingFiles() {
   return pendingFiles.value.map((f) => f.fileId);
 }
 
-function prettyInputs(inputs) {
-  return JSON.stringify(inputs || {}, null, 2);
-}
 function inputCount(agent) {
   return Object.keys(agent.prefilled_inputs || {}).length;
 }
 
-// 提问卡：预填 JSON 默认展开（与既有 e2e 契约对齐——协作方案卡片一出现，
-// 预填字段/值需直接在 body 文本流可见，不依赖点击）；按「消息序号_Agent序号」
-// 记"用户手动收起"状态，供想要降低视觉负担的人自行折叠（纯 UI 态，不影响
-// prefilled_inputs 本身/不影响创建任务的调用签名）。
-const collapsedDrafts = reactive(new Set());
-function draftKey(msgIdx, agentIdx) {
-  return `${msgIdx}_${agentIdx}`;
-}
-function isDraftOpen(key) {
-  return !collapsedDrafts.has(key);
-}
-function toggleDraft(key) {
-  if (collapsedDrafts.has(key)) collapsedDrafts.delete(key);
-  else collapsedDrafts.add(key);
+// 预填值紧凑渲染：标量直显（值恒在可见 DOM 文本流——诚实地板 + m6 e2e 锚
+// top_event/供电完全丧失 不依赖点击）；对象/数组回退单行 JSON。
+function formatDraftVal(v) {
+  return v !== null && typeof v === "object" ? JSON.stringify(v) : String(v);
 }
 
 function focusComposer() {
@@ -1140,11 +1106,6 @@ watch(
   box-shadow: var(--shadow-card-hover);
   border-color: var(--border-warm-hover);
 }
-.agent-accent {
-  flex: 0 0 auto;
-  width: 3px;
-  border-radius: 3px;
-}
 .agent-main { flex: 1 1 auto; min-width: 0; }
 .agent-top {
   display: flex;
@@ -1153,30 +1114,10 @@ watch(
   flex-wrap: wrap;
   margin-bottom: 6px;
 }
-.agent-step {
-  flex: 0 0 auto;
-  width: 27px;
-  height: 27px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: 13px;
-  font-weight: 800;
-  color: var(--clay);
-  background: var(--clay-soft);
-  border: 1.75px solid var(--clay);
-}
 .agent-name {
   font-weight: 700;
   font-size: 15px;
   color: var(--ink);
-}
-.agent-pill {
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  padding: 2px 9px;
-  border-radius: 999px;
 }
 .agent-maturity {
   margin-left: auto;
@@ -1283,40 +1224,44 @@ watch(
   margin: 0 0 6px;
 }
 .agent-draft { margin-bottom: 10px; }
-.draft-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11.5px;
-  font-weight: 600;
+/* 预填草案：紧凑「键 值」chip 取代 monospace JSON 大块——值恒完整可见
+   （诚实地板：不截断，让人看清按此会创建什么），视觉重量大幅下降。 */
+.draft-label {
+  font-size: 11px;
   color: var(--ink-faint);
+  margin-bottom: 5px;
+}
+.draft-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.draft-field {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 9px;
   background: var(--paper-rail);
   border: 1px solid var(--hairline-soft);
-  border-radius: 8px;
-  padding: 5px 10px;
-  cursor: pointer;
-  transition: color 0.16s var(--ease-lift), border-color 0.16s var(--ease-lift), background 0.16s var(--ease-lift);
-}
-.draft-toggle:hover { color: var(--ink-soft); border-color: var(--hairline); }
-.draft-toggle.open { color: var(--ink-soft); }
-.draft-chevron {
-  display: inline-block;
-  transition: transform 0.18s var(--ease-lift);
-}
-.draft-toggle.open .draft-chevron { transform: rotate(90deg); }
-.plan-json {
-  margin: 8px 0 0;
-  padding: 10px 12px;
-  background: var(--paper-rail);
-  border: 1px solid var(--hairline-soft);
-  border-radius: 9px;
-  font-family: "SF Mono", ui-monospace, monospace;
+  border-radius: 7px;
   font-size: 12px;
-  color: var(--ink-mid);
-  overflow-x: auto;
-  white-space: pre;
+  min-width: 0;
 }
-.agent-stripped { margin-bottom: 10px; }
+.df-key {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-weight: 600;
+}
+.df-val {
+  color: var(--ink);
+  word-break: break-word;
+}
+.agent-stripped {
+  margin: 2px 0 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
 .agent-actions { display: flex; }
 .agent-cta {
   display: inline-flex;
@@ -1344,7 +1289,12 @@ watch(
 }
 .agent-cta:hover::after { transform: translateX(2px); }
 
-.plan-alert { margin-top: 12px; }
+.plan-alert {
+  margin-top: 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
 
 .plan-foot {
   display: flex;
