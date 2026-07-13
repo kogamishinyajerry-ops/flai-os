@@ -1,0 +1,4 @@
+Building prefix dict from the default dictionary ...
+Loading model from cache /var/folders/q4/859yhpgn6x3fx6kv4mj5gmv40000gp/T/jieba.cache
+Loading model cost 0.321 seconds.
+Prefix dict has been built successfully.
