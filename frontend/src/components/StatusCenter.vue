@@ -186,7 +186,8 @@ import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { statusCenter, openTaskPeek, backToInbox, closeCenter } from "../stores/statusCenter";
-import { listTasks, getTask, listTaskEvents, reviewTask, listModelCalls } from "../api/tasks";
+import { acquireChannel } from "../stores/liveFeed";
+import { getTask, listTaskEvents, reviewTask, listModelCalls } from "../api/tasks";
 import { request } from "../api/client";
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import { statusLabel, statusTagType, taskLampColor, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
@@ -208,7 +209,10 @@ function openAllTasks() {
 }
 const drawerSize = window.innerWidth < 640 ? "100%" : "540px";
 
-// ── 收件箱数据 ──
+// ── 收件箱数据（并轨 liveFeed 'tasks' channel：抽屉开 acquire、关 release——
+// 「关闭零后台消耗」语义原样保留：channel 无其他订阅者时自停,有订阅者（如
+// StatusDock）则由其继续养着,都正确。channel 内部 acquire 即触发一次立即
+// refresh,故打开抽屉的即时性不倒退,无需本组件额外拉一次） ──
 const inboxTasks = ref([]);
 const inboxError = ref("");
 const waitingTasks = computed(() => inboxTasks.value.filter((t) => t.status === "waiting_review"));
@@ -217,14 +221,36 @@ const recentDoneTasks = computed(() =>
   inboxTasks.value.filter((t) => ["completed", "failed", "cancelled"].includes(t.status)).slice(0, 5)
 );
 
-async function refreshInbox() {
-  try {
-    inboxTasks.value = await listTasks({ limit: 100 });
-    inboxError.value = "";
-  } catch (err) {
-    // 首载失败如实报错；轮询失败保留上次清单下 tick 自愈
-    if (!inboxTasks.value.length) inboxError.value = err.detail || err.message || "加载失败";
+let tasksHandle = null;
+let tasksStops = [];
+function acquireInboxFeed() {
+  if (tasksHandle) return; // 已持有,幂等（onOpen 可能与其它触发路径重入）
+  tasksHandle = acquireChannel("tasks");
+  tasksStops = [
+    watch(tasksHandle.state.tasks, (v) => { inboxTasks.value = v; }, { immediate: true }),
+    // channel 的 error 语义与旧 refreshInbox 一致：仅首载失败才置位,已 loaded
+    // 后的失败保旧值下 tick 自愈（liveFeed.js refresh()）。
+    watch(tasksHandle.state.error, (v) => { inboxError.value = v; }, { immediate: true }),
+  ];
+}
+function releaseInboxFeed() {
+  tasksStops.forEach((s) => s());
+  tasksStops = [];
+  if (tasksHandle) {
+    tasksHandle.release();
+    tasksHandle = null;
   }
+}
+
+// 收件箱计数即时回落（原 refreshInbox() 二次拉,现改为复用 doReview 里已经
+// 拉到的 peek 真值原地替换——不为这一下单独发网络请求）。
+function patchInboxTask(task) {
+  if (!task) return;
+  const idx = inboxTasks.value.findIndex((t) => t.id === task.id);
+  if (idx === -1) return;
+  const next = inboxTasks.value.slice();
+  next[idx] = { ...next[idx], ...task };
+  inboxTasks.value = next;
 }
 
 // ── 速览数据 ──
@@ -424,7 +450,7 @@ async function doReview(action) {
         burstSigned(peekApproveEl.value?.ref); // teal 迸发：人签成功唯一许可点
       }
       await loadPeek(taskId, { initial: true });
-      refreshInbox(); // 收件箱计数即时回落
+      patchInboxTask(peekTask.value); // 收件箱计数即时回落：复用刚拉到的 peek 真值,不再单独拉 inbox
     }
   } catch (err) {
     ElMessage.error(err.detail || err.message || "签发失败");
@@ -452,19 +478,16 @@ function onEsc(e) {
   }
 }
 
-// ── 打开期间 3s 链式轮询（关闭即停，零后台消耗） ──
+// ── 打开期间 3s 链式轮询（关闭即停，零后台消耗）——inbox 分支已并轨
+// liveFeed 'tasks' channel（5s 自链）,此处只剩 peek 用途,原样保留 ──
 let pollTimer = null;
 let disposed = false; // 卸载后 finally 不再续排（in-flight 轮询可越过 clearPoll）
 function schedulePoll() {
   clearPoll();
   pollTimer = setTimeout(async () => {
     try {
-      if (!document.hidden && statusCenter.open) {
-        if (statusCenter.view === "peek" && statusCenter.taskId) {
-          await loadPeek(statusCenter.taskId);
-        } else {
-          await refreshInbox();
-        }
+      if (!document.hidden && statusCenter.open && statusCenter.view === "peek" && statusCenter.taskId) {
+        await loadPeek(statusCenter.taskId);
       }
     } finally {
       if (!disposed && statusCenter.open) schedulePoll();
@@ -479,13 +502,14 @@ function clearPoll() {
 }
 
 function onOpen() {
-  refreshInbox();
+  acquireInboxFeed();
   ensurePeekLoaded(); // 幂等：watch 已载过同一任务则不重载
   schedulePoll();
   nextTick(() => document.querySelector(".sc-shell")?.focus());
 }
 function onClosed() {
   clearPoll();
+  releaseInboxFeed(); // channel 无其它订阅者时自停,有则由其继续养着
   peekEpoch++; // 关闭后迟到响应全作废
   artifactsFingerprint = null;
   artifactsLoading.value = false;
@@ -523,6 +547,7 @@ watch(
 onUnmounted(() => {
   disposed = true;
   clearPoll();
+  releaseInboxFeed(); // 安全网：正常路径已在 onClosed 释放,release() 本身幂等
   peekEpoch++;
   artifactsFingerprint = null;
   resetSampleFixState();
