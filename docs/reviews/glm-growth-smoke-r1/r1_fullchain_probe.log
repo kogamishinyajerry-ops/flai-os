@@ -1,0 +1,19 @@
+Installed 6 packages in 7ms
+[PASS] 后端起服 /api/health — port=8641 db=/var/folders/q4/859yhpgn6x3fx6kv4mj5gmv40000gp/T/glm_smoke_chain_6j40j4_0/flai_smoke.db
+[PASS] 种判卷账户
+[PASS] 真实登录 — 200
+[PASS] bench_summary_agent 注册可见 — agents=['bench_summary_agent', 'cfd_evaluate_agent', 'cfd_solve_agent', 'control_logic_agent', 'fta_agent', 'guide_agent', 'hello_agent', 'knowledge_qa_agent']
+[PASS] draft/L0 起点如实 — status=draft maturity=L0
+[PASS] 上传 bench_points.csv — 200 id=938cde12-f939-4251-985d-3a5f6fa9d143
+[PASS] 上传 bench_limits.csv — 200 id=ea67a9f1-0f74-4500-9bae-c02903658c02
+[PASS] 创建任务 — 200 task_dbfdb4b60cdb45e2b83bc486cb3ac19e
+[PASS] 执行后停 waiting_review（人签闸） — status=waiting_review
+[PASS] 产物落盘 summary_draft.md + channel_stats.csv — draft=/Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/data/task_runs/task_dbfdb4b60cdb45e2b83bc486cb3ac19e/output/summary_draft.md
+[PASS] 产物数值对 oracle（4 通道超限次数全中）
+[PASS] 草稿含草稿声明+人签語义
+[PASS] 草稿抬头吃进 inputs
+[PASS] 人工签发 approve — 200 
+[PASS] 终态 completed — status=completed
+[PASS] 签发记名=会话身份（服务端派生） — reviewer=''
+[cleanup] backend/worker 已停（仅本探针拉起的进程）；临时库=/var/folders/q4/859yhpgn6x3fx6kv4mj5gmv40000gp/T/glm_smoke_chain_6j40j4_0
+CHAIN_PROBE_RESULT=ALL_GREEN failures=0

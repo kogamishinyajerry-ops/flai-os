@@ -1,0 +1,1034 @@
+[0m
+> build · glm-5.1
+[0m
+[0m$ [0mls -la
+total 80
+drwxr-xr-x@ 21 Zhuanz  staff    672 Jul 13 10:35 .
+drwxr-xr-x@  3 Zhuanz  staff     96 Jul 13 10:34 ..
+-rw-r--r--@  1 Zhuanz  staff   1994 Jul 13 10:10 .env.example
+drwxr-xr-x@ 13 Zhuanz  staff    416 Jul 13 10:36 .git
+-rw-r--r--@  1 Zhuanz  staff    257 Jul 13 10:10 .gitignore
+drwxr-xr-x@ 11 Zhuanz  staff    352 Jul 13 10:10 agents
+drwxr-xr-x@  5 Zhuanz  staff    160 Jul 13 10:10 backend
+-rw-r--r--@  1 Zhuanz  staff    220 Jul 13 10:10 conftest.py
+drwxr-xr-x@  8 Zhuanz  staff    256 Jul 13 10:10 contracts
+drwxr-xr-x@  9 Zhuanz  staff    288 Jul 13 10:10 data
+drwxr-xr-x@ 21 Zhuanz  staff    672 Jul 13 10:10 docs
+drwxr-xr-x@  8 Zhuanz  staff    256 Jul 13 10:10 evals
+drwxr-xr-x@ 10 Zhuanz  staff    320 Jul 13 10:10 frontend
+drwxr-xr-x@  4 Zhuanz  staff    128 Jul 13 10:35 incoming
+drwxr-xr-x@  3 Zhuanz  staff     96 Jul 13 10:10 logs
+-rw-r--r--@  1 Zhuanz  staff    835 Jul 13 10:35 opencode.json
+-rw-r--r--@  1 Zhuanz  staff    539 Jul 13 10:10 pyproject.toml
+-rw-r--r--@  1 Zhuanz  staff  19068 Jul 13 10:10 README.md
+drwxr-xr-x@ 22 Zhuanz  staff    704 Jul 13 10:10 scripts
+drwxr-xr-x@  4 Zhuanz  staff    128 Jul 13 10:10 tests
+drwxr-xr-x@ 10 Zhuanz  staff    320 Jul 13 10:10 tools_impl
+[0m
+[0m→ [0mRead README.md
+[0m
+[0m$ [0mls -la docs/ docs/adr/ agents/ contracts/ tools_impl/ evals/ incoming/
+agents/:
+total 0
+drwxr-xr-x@ 11 Zhuanz  staff  352 Jul 13 10:10 .
+drwxr-xr-x@ 21 Zhuanz  staff  672 Jul 13 10:35 ..
+drwxr-xr-x@ 10 Zhuanz  staff  320 Jul 13 10:10 cfd_evaluate_agent
+drwxr-xr-x@ 10 Zhuanz  staff  320 Jul 13 10:10 cfd_solve_agent
+drwxr-xr-x@ 10 Zhuanz  staff  320 Jul 13 10:10 control_logic_agent
+drwxr-xr-x@ 10 Zhuanz  staff  320 Jul 13 10:10 fta_agent
+drwxr-xr-x@ 10 Zhuanz  staff  320 Jul 13 10:10 guide_agent
+drwxr-xr-x@ 10 Zhuanz  staff  320 Jul 13 10:10 hello_agent
+drwxr-xr-x@ 10 Zhuanz  staff  320 Jul 13 10:10 knowledge_qa_agent
+drwxr-xr-x@ 10 Zhuanz  staff  320 Jul 13 10:10 monitor_adapter_gen_agent
+drwxr-xr-x@ 10 Zhuanz  staff  320 Jul 13 10:10 performance_disk_agent
+
+contracts/:
+total 72
+drwxr-xr-x@  8 Zhuanz  staff   256 Jul 13 10:10 .
+drwxr-xr-x@ 21 Zhuanz  staff   672 Jul 13 10:35 ..
+-rw-r--r--@  1 Zhuanz  staff  7227 Jul 13 10:10 agent.schema.json
+-rw-r--r--@  1 Zhuanz  staff  2871 Jul 13 10:10 event.schema.json
+-rw-r--r--@  1 Zhuanz  staff  2683 Jul 13 10:10 knowledge_scope.schema.json
+-rw-r--r--@  1 Zhuanz  staff  2752 Jul 13 10:10 model_profile.schema.json
+-rw-r--r--@  1 Zhuanz  staff  5167 Jul 13 10:10 task.schema.json
+-rw-r--r--@  1 Zhuanz  staff  5753 Jul 13 10:10 tool.schema.json
+
+docs/:
+total 216
+drwxr-xr-x@ 21 Zhuanz  staff   672 Jul 13 10:10 .
+drwxr-xr-x@ 21 Zhuanz  staff   672 Jul 13 10:35 ..
+-rw-r--r--@  1 Zhuanz  staff  5189 Jul 13 10:10 00_FLAi-OS_Constitution.md
+-rw-r--r--@  1 Zhuanz  staff  5998 Jul 13 10:10 01_Overall_Architecture.md
+-rw-r--r--@  1 Zhuanz  staff  7330 Jul 13 10:10 02_Agent_Package_Standard.md
+-rw-r--r--@  1 Zhuanz  staff  6279 Jul 13 10:10 03_Tool_Package_Standard.md
+-rw-r--r--@  1 Zhuanz  staff  5598 Jul 13 10:10 04_Model_Gateway_Standard.md
+-rw-r--r--@  1 Zhuanz  staff  7990 Jul 13 10:10 05_Task_Event_Standard.md
+-rw-r--r--@  1 Zhuanz  staff  7591 Jul 13 10:10 06_Knowledge_Memory_Standard.md
+-rw-r--r--@  1 Zhuanz  staff  4749 Jul 13 10:10 07_Eval_Standard.md
+-rw-r--r--@  1 Zhuanz  staff  3916 Jul 13 10:10 08_Department_AI_Playbook.md
+-rw-r--r--@  1 Zhuanz  staff  4609 Jul 13 10:10 09_Workflow_Live_Monitor_Standard.md
+drwxr-xr-x@ 29 Zhuanz  staff   928 Jul 13 10:10 adr
+-rw-r--r--@  1 Zhuanz  staff  8336 Jul 13 10:10 DEPLOYMENT-SUPERVISION.md
+drwxr-xr-x@  9 Zhuanz  staff   288 Jul 13 10:10 design
+-rw-r--r--@  1 Zhuanz  staff  4022 Jul 13 10:10 M11-OFFLINE-PACKAGE-PLAN.md
+-rw-r--r--@  1 Zhuanz  staff  5839 Jul 13 10:10 M4_intranet_day1_recon_checklist.md
+-rw-r--r--@  1 Zhuanz  staff  1990 Jul 13 10:10 M4-UNLOCK-REQUEST.md
+-rw-r--r--@  1 Zhuanz  staff  3895 Jul 13 10:10 PM-M11-DIRECTION.md
+drwxr-xr-x@ 46 Zhuanz  staff  1472 Jul 13 10:10 reviews
+drwxr-xr-x@  4 Zhuanz  staff   128 Jul 13 10:10 superpowers
+
+docs/adr/:
+total 416
+drwxr-xr-x@ 29 Zhuanz  staff    928 Jul 13 10:10 .
+drwxr-xr-x@ 21 Zhuanz  staff    672 Jul 13 10:10 ..
+-rw-r--r--@  1 Zhuanz  staff   1159 Jul 13 10:10 ADR-0001-use-fastapi-vue.md
+-rw-r--r--@  1 Zhuanz  staff   1284 Jul 13 10:10 ADR-0002-agent-package-standard.md
+-rw-r--r--@  1 Zhuanz  staff   1043 Jul 13 10:10 ADR-0003-model-gateway-required.md
+-rw-r--r--@  1 Zhuanz  staff    984 Jul 13 10:10 ADR-0004-python-tool-first-mcp-later.md
+-rw-r--r--@  1 Zhuanz  staff   1291 Jul 13 10:10 ADR-0005-performance-disk-as-first-sample.md
+-rw-r--r--@  1 Zhuanz  staff   1483 Jul 13 10:10 ADR-0006-greenfield-kernel-comac-as-asset-library.md
+-rw-r--r--@  1 Zhuanz  staff   1628 Jul 13 10:10 ADR-0007-light-kernel-trust-principles-inherited.md
+-rw-r--r--@  1 Zhuanz  staff   2061 Jul 13 10:10 ADR-0008-m1-backend-decisions.md
+-rw-r--r--@  1 Zhuanz  staff   3583 Jul 13 10:10 ADR-0009-api-contract-parity.md
+-rw-r--r--@  1 Zhuanz  staff   2658 Jul 13 10:10 ADR-0010-m3-performance-disk-mock.md
+-rw-r--r--@  1 Zhuanz  staff   2436 Jul 13 10:10 ADR-0011-m5-generalization.md
+-rw-r--r--@  1 Zhuanz  staff   5556 Jul 13 10:10 ADR-0012-m6-guide-agent-interactive.md
+-rw-r--r--@  1 Zhuanz  staff   7422 Jul 13 10:10 ADR-0013-audit-hardening.md
+-rw-r--r--@  1 Zhuanz  staff  10728 Jul 13 10:10 ADR-0014-m7-conversation-attachments.md
+-rw-r--r--@  1 Zhuanz  staff   8782 Jul 13 10:10 ADR-0015-knowledge-kernel-service.md
+-rw-r--r--@  1 Zhuanz  staff   7291 Jul 13 10:10 ADR-0016-m8-collab-workbench.md
+-rw-r--r--@  1 Zhuanz  staff   5937 Jul 13 10:10 ADR-0017-knowledge-qa-agent.md
+-rw-r--r--@  1 Zhuanz  staff  14499 Jul 13 10:10 ADR-0018-m10-governance-loop.md
+-rw-r--r--@  1 Zhuanz  staff   9695 Jul 13 10:10 ADR-0019-m11-auth.md
+-rw-r--r--@  1 Zhuanz  staff   6105 Jul 13 10:10 ADR-0020-workflow-live-monitor-registration.md
+-rw-r--r--@  1 Zhuanz  staff  15453 Jul 13 10:10 ADR-0021-m11-b2-data-classification.md
+-rw-r--r--@  1 Zhuanz  staff   4263 Jul 13 10:10 ADR-0022-monitor-adapter-recon-subprocess-boundary.md
+-rw-r--r--@  1 Zhuanz  staff   6906 Jul 13 10:10 ADR-0023-m12-process-logging-audit-trail.md
+-rw-r--r--@  1 Zhuanz  staff  11070 Jul 13 10:10 ADR-0024-monitor-adapter-safe-activation.md
+-rw-r--r--@  1 Zhuanz  staff  10656 Jul 13 10:10 ADR-0025-immutable-task-classification.md
+-rw-r--r--@  1 Zhuanz  staff   2823 Jul 13 10:10 ADR-0026-cfd-parser-local-vendoring.md
+-rw-r--r--@  1 Zhuanz  staff  10204 Jul 13 10:10 ADR-0027-cfd-solve-launch-boundary-and-sim-run-ref-backfill.md
+
+evals/:
+total 8
+drwxr-xr-x@  8 Zhuanz  staff  256 Jul 13 10:10 .
+drwxr-xr-x@ 21 Zhuanz  staff  672 Jul 13 10:35 ..
+-rw-r--r--@  1 Zhuanz  staff    0 Jul 13 10:10 .gitkeep
+drwxr-xr-x@  3 Zhuanz  staff   96 Jul 13 10:10 control_logic
+drwxr-xr-x@  3 Zhuanz  staff   96 Jul 13 10:10 fta
+drwxr-xr-x@  3 Zhuanz  staff   96 Jul 13 10:10 knowledge_qa
+drwxr-xr-x@  3 Zhuanz  staff   96 Jul 13 10:10 performance_disk
+-rw-r--r--@  1 Zhuanz  staff  441 Jul 13 10:10 README.md
+
+incoming/:
+total 24
+drwxr-xr-x@  4 Zhuanz  staff   128 Jul 13 10:35 .
+drwxr-xr-x@ 21 Zhuanz  staff   672 Jul 13 10:35 ..
+-rw-r--r--@  1 Zhuanz  staff    82 Jul 13 10:35 bench_limits.csv
+-rw-r--r--@  1 Zhuanz  staff  6938 Jul 13 10:35 bench_points.csv
+
+tools_impl/:
+total 0
+-rw-r--r--@  1 Zhuanz  staff    0 Jul 13 10:10 __init__.py
+drwxr-xr-x@ 10 Zhuanz  staff  320 Jul 13 10:10 .
+drwxr-xr-x@ 21 Zhuanz  staff  672 Jul 13 10:35 ..
+drwxr-xr-x@  6 Zhuanz  staff  192 Jul 13 10:10 cfd_result_read
+drwxr-xr-x@  6 Zhuanz  staff  192 Jul 13 10:10 cfd_solve_launch
+drwxr-xr-x@  7 Zhuanz  staff  224 Jul 13 10:10 excel_case_parser
+drwxr-xr-x@  7 Zhuanz  staff  224 Jul 13 10:10 excel_summary_writer
+drwxr-xr-x@  7 Zhuanz  staff  224 Jul 13 10:10 mock_tools
+drwxr-xr-x@  7 Zhuanz  staff  224 Jul 13 10:10 monitor_adapter_recon
+drwxr-xr-x@  7 Zhuanz  staff  224 Jul 13 10:10 performance_disk_mock
+[0m
+[0m→ [0mRead docs/02_Agent_Package_Standard.md
+[0m→ [0mRead docs/03_Tool_Package_Standard.md
+[0m→ [0mRead docs/05_Task_Event_Standard.md
+现在让我参考一下最接近的智能体 (performance_disk)，查看示例数据，并同时查看 schemas/eval 标准。
+[0m
+[0m$ [0mls -la agents/performance_disk_agent/ agents/hello_agent/ tools_impl/excel_case_parser/ tools_impl/excel_summary_writer/
+agents/hello_agent/:
+total 56
+drwxr-xr-x@ 10 Zhuanz  staff   320 Jul 13 10:10 .
+drwxr-xr-x@ 11 Zhuanz  staff   352 Jul 13 10:10 ..
+-rw-r--r--@  1 Zhuanz  staff  1588 Jul 13 10:10 agent.yaml
+-rw-r--r--@  1 Zhuanz  staff   242 Jul 13 10:10 changelog.md
+drwxr-xr-x@  5 Zhuanz  staff   160 Jul 13 10:10 eval_cases
+-rw-r--r--@  1 Zhuanz  staff   339 Jul 13 10:10 input_schema.json
+-rw-r--r--@  1 Zhuanz  staff   492 Jul 13 10:10 output_schema.json
+-rw-r--r--@  1 Zhuanz  staff   703 Jul 13 10:10 prompt.md
+-rw-r--r--@  1 Zhuanz  staff  1709 Jul 13 10:10 README.md
+-rw-r--r--@  1 Zhuanz  staff  2985 Jul 13 10:10 workflow.py
+
+agents/performance_disk_agent/:
+total 72
+drwxr-xr-x@ 10 Zhuanz  staff    320 Jul 13 10:10 .
+drwxr-xr-x@ 11 Zhuanz  staff    352 Jul 13 10:10 ..
+-rw-r--r--@  1 Zhuanz  staff   2345 Jul 13 10:10 agent.yaml
+-rw-r--r--@  1 Zhuanz  staff    608 Jul 13 10:10 changelog.md
+drwxr-xr-x@  8 Zhuanz  staff    256 Jul 13 10:10 eval_cases
+-rw-r--r--@  1 Zhuanz  staff    629 Jul 13 10:10 input_schema.json
+-rw-r--r--@  1 Zhuanz  staff   1425 Jul 13 10:10 output_schema.json
+-rw-r--r--@  1 Zhuanz  staff    924 Jul 13 10:10 prompt.md
+-rw-r--r--@  1 Zhuanz  staff   2250 Jul 13 10:10 README.md
+-rw-r--r--@  1 Zhuanz  staff  10935 Jul 13 10:10 workflow.py
+
+tools_impl/excel_case_parser/:
+total 32
+-rw-r--r--@  1 Zhuanz  staff     0 Jul 13 10:10 __init__.py
+drwxr-xr-x@  7 Zhuanz  staff   224 Jul 13 10:10 .
+drwxr-xr-x@ 10 Zhuanz  staff   320 Jul 13 10:10 ..
+-rw-r--r--@  1 Zhuanz  staff  6968 Jul 13 10:10 adapter.py
+-rw-r--r--@  1 Zhuanz  staff  1894 Jul 13 10:10 README.md
+drwxr-xr-x@  3 Zhuanz  staff    96 Jul 13 10:10 tests
+-rw-r--r--@  1 Zhuanz  staff  2327 Jul 13 10:10 tool.yaml
+
+tools_impl/excel_summary_writer/:
+total 24
+-rw-r--r--@  1 Zhuanz  staff     0 Jul 13 10:10 __init__.py
+drwxr-xr-x@  7 Zhuanz  staff   224 Jul 13 10:10 .
+drwxr-xr-x@ 10 Zhuanz  staff   320 Jul 13 10:10 ..
+-rw-r--r--@  1 Zhuanz  staff  3872 Jul 13 10:10 adapter.py
+-rw-r--r--@  1 Zhuanz  staff  1706 Jul 13 10:10 README.md
+drwxr-xr-x@  3 Zhuanz  staff    96 Jul 13 10:10 tests
+-rw-r--r--@  1 Zhuanz  staff  2563 Jul 13 10:10 tool.yaml
+[0m
+[0m→ [0mRead agents/performance_disk_agent/agent.yaml
+[0m→ [0mRead agents/performance_disk_agent/workflow.py
+现在让我查看样本数据、`agent schema`、`eval standard` 以及参考工具实现。
+[0m→ [0mRead incoming/bench_limits.csv
+[0m
+[0m$ [0mhead -5 incoming/bench_points.csv; echo "---rows---"; wc -l incoming/bench_points.csv
+t_s,CH1,CH2,CH3,CH4
+0.0,118.91,675.31,3.187,44.758
+0.5,119.679,643.648,3.148,45.39
+1.0,119.387,637.719,3.249,46.557
+1.5,118.479,653.233,3.269,45.047
+---rows---
+     201 incoming/bench_points.csv
+[0m
+[0m→ [0mRead contracts/agent.schema.json
+[0m→ [0mRead contracts/tool.schema.json
+让我查看一下参考工具的适配器（adapters）和评估标准（eval standard），并了解工具注册与验证的原理。
+[0m→ [0mRead tools_impl/excel_case_parser/tool.yaml
+[0m→ [0mRead tools_impl/excel_case_parser/adapter.py
+[0m→ [0mRead tools_impl/excel_summary_writer/tool.yaml
+[0m→ [0mRead docs/07_Eval_Standard.md
+让我查看一下参考智能体的配套文件（README、changelog、prompt、schemas、eval_cases）以及工具注册和合约测试。
+[0m
+[0m$ [0mls -la agents/performance_disk_agent/eval_cases/ evals/performance_disk/ tools_impl/excel_case_parser/tests/ tools_impl/excel_summary_writer/tests/
+agents/performance_disk_agent/eval_cases/:
+total 64
+drwxr-xr-x@  8 Zhuanz  staff   256 Jul 13 10:10 .
+drwxr-xr-x@ 10 Zhuanz  staff   320 Jul 13 10:10 ..
+-rw-r--r--@  1 Zhuanz  staff  1044 Jul 13 10:10 case_001.json
+-rw-r--r--@  1 Zhuanz  staff   453 Jul 13 10:10 case_002_header_only.json
+-rw-r--r--@  1 Zhuanz  staff   319 Jul 13 10:10 case_003_no_input.json
+-rw-r--r--@  1 Zhuanz  staff  6136 Jul 13 10:10 case_table_50.xlsx
+-rw-r--r--@  1 Zhuanz  staff  2222 Jul 13 10:10 generate_case_table.py
+-rw-r--r--@  1 Zhuanz  staff  4860 Jul 13 10:10 header_only.xlsx
+
+evals/performance_disk/:
+total 0
+drwxr-xr-x@ 3 Zhuanz  staff   96 Jul 13 10:10 .
+drwxr-xr-x@ 8 Zhuanz  staff  256 Jul 13 10:10 ..
+-rw-r--r--@ 1 Zhuanz  staff    0 Jul 13 10:10 .gitkeep
+
+tools_impl/excel_case_parser/tests/:
+total 16
+drwxr-xr-x@ 3 Zhuanz  staff    96 Jul 13 10:10 .
+drwxr-xr-x@ 7 Zhuanz  staff   224 Jul 13 10:10 ..
+-rw-r--r--@ 1 Zhuanz  staff  6734 Jul 13 10:10 test_excel_case_parser.py
+
+tools_impl/excel_summary_writer/tests/:
+total 16
+drwxr-xr-x@ 3 Zhuanz  staff    96 Jul 13 10:10 .
+drwxr-xr-x@ 7 Zhuanz  staff   224 Jul 13 10:10 ..
+-rw-r--r--@ 1 Zhuanz  staff  5549 Jul 13 10:10 test_excel_summary_writer.py
+[0m
+[0m→ [0mRead agents/performance_disk_agent/eval_cases/case_001.json
+[0m
+[0m$ [0mls -la backend/app/ tests/ tests/contracts/ 2>/dev/null; echo "=== tool registry & runtime ==="; find backend/app -name "*.py" | grep -iE "tool|agent|runtime|registry|workflow|review" 
+backend/app/:
+total 72
+-rw-r--r--@  1 Zhuanz  staff    33 Jul 13 10:10 __init__.py
+drwxr-xr-x@ 20 Zhuanz  staff   640 Jul 13 10:10 .
+drwxr-xr-x@  5 Zhuanz  staff   160 Jul 13 10:10 ..
+-rw-r--r--@  1 Zhuanz  staff     0 Jul 13 10:10 .gitkeep
+drwxr-xr-x@ 11 Zhuanz  staff   352 Jul 13 10:10 api
+drwxr-xr-x@  6 Zhuanz  staff   192 Jul 13 10:10 auth
+-rw-r--r--@  1 Zhuanz  staff  4639 Jul 13 10:10 bootstrap.py
+drwxr-xr-x@  5 Zhuanz  staff   160 Jul 13 10:10 cfd
+-rw-r--r--@  1 Zhuanz  staff  2729 Jul 13 10:10 config.py
+drwxr-xr-x@  5 Zhuanz  staff   160 Jul 13 10:10 core
+drwxr-xr-x@  7 Zhuanz  staff   224 Jul 13 10:10 governance
+drwxr-xr-x@  4 Zhuanz  staff   128 Jul 13 10:10 jobs
+drwxr-xr-x@  8 Zhuanz  staff   256 Jul 13 10:10 knowledge
+-rw-r--r--@  1 Zhuanz  staff  7689 Jul 13 10:10 logging_setup.py
+-rw-r--r--@  1 Zhuanz  staff  8661 Jul 13 10:10 main.py
+drwxr-xr-x@  3 Zhuanz  staff    96 Jul 13 10:10 memory
+drwxr-xr-x@  5 Zhuanz  staff   160 Jul 13 10:10 model_gateway
+drwxr-xr-x@  7 Zhuanz  staff   224 Jul 13 10:10 runtime
+drwxr-xr-x@  6 Zhuanz  staff   192 Jul 13 10:10 storage
+drwxr-xr-x@  4 Zhuanz  staff   128 Jul 13 10:10 tools
+
+tests/:
+total 24
+drwxr-xr-x@  4 Zhuanz  staff   128 Jul 13 10:10 .
+drwxr-xr-x@ 21 Zhuanz  staff   672 Jul 13 10:35 ..
+-rw-r--r--@  1 Zhuanz  staff  8111 Jul 13 10:10 test_contracts.py
+-rw-r--r--@  1 Zhuanz  staff  2629 Jul 13 10:10 test_hello_agent_workflow.py
+=== tool registry & runtime ===
+backend/app/tools/registry.py
+backend/app/tools/__init__.py
+backend/app/runtime/registry.py
+backend/app/runtime/conversation.py
+backend/app/runtime/__init__.py
+backend/app/runtime/runtime.py
+backend/app/runtime/attachments.py
+backend/app/api/agents.py
+[0m
+[0m→ [0mRead backend/app/runtime/runtime.py
+[0m→ [0mRead tests/test_contracts.py
+[0m→ [0mRead backend/app/tools/registry.py
+[0m→ [0mRead agents/performance_disk_agent/input_schema.json
+[0m→ [0mRead agents/performance_disk_agent/output_schema.json
+[0m→ [0mRead agents/performance_disk_agent/prompt.md
+[0m→ [0mRead agents/performance_disk_agent/README.md
+[0m→ [0mRead tools_impl/excel_case_parser/tests/test_excel_case_parser.py
+[0m
+[0m$ [0mrg -n "tools_impl|tool.yaml|def test_|parametrize" tests/test_contracts.py tests/ tools_impl/mock_tools/ tests/test_hello_agent_workflow.py 2>/dev/null | head -50
+tests/test_hello_agent_workflow.py:32:        from tools_impl.mock_tools.adapter import run as echo
+tests/test_hello_agent_workflow.py:46:def test_run_satisfies_eval_case_001(tmp_path) -> None:
+tests/test_hello_agent_workflow.py:63:def test_run_without_registry_fails_honestly(tmp_path) -> None:
+tests/test_contracts.py:42:@pytest.mark.parametrize("name", SCHEMA_FILES)
+tests/test_contracts.py:43:def test_schema_file_is_valid_jsonschema(name: str) -> None:
+tests/test_contracts.py:53:def test_hello_agent_yaml_validates() -> None:
+tests/test_contracts.py:58:@pytest.mark.parametrize(
+tests/test_contracts.py:62:def test_every_agent_package_yaml_validates(agent_dir: str) -> None:
+tests/test_contracts.py:69:def test_mock_tool_yaml_validates() -> None:
+tests/test_contracts.py:70:    tool = _load_yaml(REPO / "tools_impl/mock_tools/tool.yaml")
+tests/test_contracts.py:76:def test_hello_agent_package_files_exist() -> None:
+tests/test_contracts.py:85:def test_mock_tool_package_files_exist() -> None:
+tests/test_contracts.py:87:    pkg = REPO / "tools_impl/mock_tools"
+tests/test_contracts.py:88:    for f in ["tool.yaml", "adapter.py", "README.md"]:
+tests/test_contracts.py:94:def test_slot_directories_tracked() -> None:
+tests/test_contracts.py:103:def test_hello_agent_declared_tool_is_registered_mock_tool() -> None:
+tests/test_contracts.py:106:    tool = _load_yaml(REPO / "tools_impl/mock_tools/tool.yaml")
+tests/test_contracts.py:116:@pytest.mark.parametrize("mutate, reason", [
+tests/test_contracts.py:127:def test_agent_schema_bites_on_invalid(mutate, reason) -> None:
+tests/test_contracts.py:136:    return _load_yaml(REPO / "tools_impl/mock_tools/tool.yaml")
+tests/test_contracts.py:139:@pytest.mark.parametrize("mutate, reason", [
+tests/test_contracts.py:146:def test_tool_schema_bites_on_invalid(mutate, reason) -> None:
+tests/test_contracts.py:156:def test_task_schema_has_ten_states() -> None:
+tests/test_contracts.py:165:def test_task_schema_accepts_inputs_property() -> None:
+tests/test_contracts.py:178:def test_event_schema_smoke() -> None:
+tests/test_hello_agent_workflow.py:32:        from tools_impl.mock_tools.adapter import run as echo
+tests/test_hello_agent_workflow.py:46:def test_run_satisfies_eval_case_001(tmp_path) -> None:
+tests/test_hello_agent_workflow.py:63:def test_run_without_registry_fails_honestly(tmp_path) -> None:
+tools_impl/mock_tools/README.md:8:- 契约：见 `tool.yaml`（入参必含 `message` object；返回必含 `status`）。
+tools_impl/mock_tools/README.md:10:- 测试：`python3 -m pytest tools_impl/mock_tools/tests -q`
+tests/test_contracts.py:42:@pytest.mark.parametrize("name", SCHEMA_FILES)
+tests/test_contracts.py:43:def test_schema_file_is_valid_jsonschema(name: str) -> None:
+tests/test_contracts.py:53:def test_hello_agent_yaml_validates() -> None:
+tests/test_contracts.py:58:@pytest.mark.parametrize(
+tests/test_contracts.py:62:def test_every_agent_package_yaml_validates(agent_dir: str) -> None:
+tests/test_contracts.py:69:def test_mock_tool_yaml_validates() -> None:
+tests/test_contracts.py:70:    tool = _load_yaml(REPO / "tools_impl/mock_tools/tool.yaml")
+tests/test_contracts.py:76:def test_hello_agent_package_files_exist() -> None:
+tests/test_contracts.py:85:def test_mock_tool_package_files_exist() -> None:
+tests/test_contracts.py:87:    pkg = REPO / "tools_impl/mock_tools"
+tests/test_contracts.py:88:    for f in ["tool.yaml", "adapter.py", "README.md"]:
+tests/test_contracts.py:94:def test_slot_directories_tracked() -> None:
+tests/test_contracts.py:103:def test_hello_agent_declared_tool_is_registered_mock_tool() -> None:
+tests/test_contracts.py:106:    tool = _load_yaml(REPO / "tools_impl/mock_tools/tool.yaml")
+tests/test_contracts.py:116:@pytest.mark.parametrize("mutate, reason", [
+tests/test_contracts.py:127:def test_agent_schema_bites_on_invalid(mutate, reason) -> None:
+tests/test_contracts.py:136:    return _load_yaml(REPO / "tools_impl/mock_tools/tool.yaml")
+tests/test_contracts.py:139:@pytest.mark.parametrize("mutate, reason", [
+tests/test_contracts.py:146:def test_tool_schema_bites_on_invalid(mutate, reason) -> None:
+tests/test_contracts.py:156:def test_task_schema_has_ten_states() -> None:
+[0m
+[0m→ [0mRead backend/app/bootstrap.py
+[0m→ [0mRead agents/hello_agent/input_schema.json
+[0m→ [0mRead agents/performance_disk_agent/changelog.md
+[0m
+[0m$ [0mcat pyproject.toml conftest.py; echo "=== mock_tools adapter ==="; cat tools_impl/mock_tools/tool.yaml
+[project]
+name = "flai-os"
+version = "0.1.0"
+description = "FLAi-OS Kernel V0.1 — 二所工程智能体运行底座"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic>=2",
+    "jsonschema",
+    "pyyaml",
+    "python-multipart",
+    "httpx",
+    "openpyxl",
+    "jieba",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-xdist",
+    "httpx",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "tools_impl", "backend/tests"]
+"""pytest 根引导：把仓根挂上 sys.path，使 tools_impl.* 可导入。"""
+import sys
+from pathlib import Path
+
+_ROOT = str(Path(__file__).resolve().parent)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+=== mock_tools adapter ===
+id: mock_echo
+name: "Mock 回显工具（平台闭环验证示例）"
+version: 0.1.0
+type: python_adapter
+mock: true
+description: >
+  原样回显入参 message 的 Mock 工具，用于在不接任何真实工程程序的前提下
+  验证「先注册再调用」链路（Tool Registry → adapter → 标准化返回）。
+  mock=true：本工具一切输出仅用于平台验证，绝不代表真实工程结果。
+entrypoint: tools_impl.mock_tools.adapter:run
+# 工具污点声明（ADR-0024）：本工具不碰外部不可考数据，产物 internal。
+output_classification: internal
+input_schema:
+  type: object
+  required:
+    - message
+  properties:
+    message:
+      type: object
+      description: 任意待回显对象
+  additionalProperties: false
+output_schema:
+  type: object
+  required:
+    - status
+    - echoed
+  properties:
+    status:
+      type: string
+      enum:
+        - success
+        - failed
+    echoed:
+      type: object
+    error_message:
+      type: string
+  additionalProperties: false
+runtime:
+  timeout_seconds: 10
+  max_parallel_jobs: 4
+  retry: 0
+safety:
+  require_workspace_isolation: false
+  allow_shell_command: false
+  save_raw_files: false
+owner:
+  maintainer: TBD
+  business_owner: TBD
+[0m
+我已经深入理解了该平台。让我确认一下基准测试通过（green），然后进行构建。
+[0m$ [0muv run --no-project --with pytest --with jsonschema --with pyyaml --with fastapi --with httpx --with python-multipart --with "pydantic>2" --with openpyxl --with jieba python -m pytest tests/test_contracts.py -q 2>&1 | tail -8
+.....................................                                    [100%]
+37 passed in 0.77s
+[0m
+[0m# [0mTodos
+[•] Build bench_channel_stats tool (tool.yaml, adapter.py, README, tests)
+[ ] Build bench_summary_agent package (agent.yaml, prompt, workflow, schemas, README, changelog)
+[ ] Add eval_cases + sample data fixtures
+[ ] Run full test suite + contract validation; verify registration
+[0m
+基准测试已通过。让我来规划并构建它。
+现在我来构建工具。首先是 `tool.yaml`：
+[0m← [0mWrite tools_impl/bench_channel_stats/tool.yaml
+Wrote file successfully.
+[0m
+我来修复一下通道项的 `required` 数组（它的格式有误）：
+[0m← [0mEdit tools_impl/bench_channel_stats/tool.yaml
+Index: /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/tools_impl/bench_channel_stats/tool.yaml
+===================================================================
+--- /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/tools_impl/bench_channel_stats/tool.yaml
++++ /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/tools_impl/bench_channel_stats/tool.yaml
+@@ -64,13 +64,13 @@
+   - mean
+   - min
+   - max
+   - has_limit
+-- lower
+-- upper
+-- out_of_limit_count
+-- first_breach_t_s
+-- last_breach_t_s
++  - lower
++  - upper
++  - out_of_limit_count
++  - first_breach_t_s
++  - last_breach_t_s
+ properties:
+   name:
+     type: string
+   sample_count:
+
+[0m
+现在是 adapter 的实现部分：
+[0m← [0mWrite tools_impl/bench_channel_stats/adapter.py
+Wrote file successfully.
+[0m
+接下来处理工具的 README 和 `__init__.py` 文件：
+[0m← [0mWrite tools_impl/bench_channel_stats/__init__.py
+Wrote file successfully.
+[0m
+[0m← [0mWrite tools_impl/bench_channel_stats/README.md
+Wrote file successfully.
+[0m
+接下来是工具测试：
+[0m← [0mWrite tools_impl/bench_channel_stats/tests/__init__.py
+Wrote file successfully.
+[0m
+[0m← [0mWrite tools_impl/bench_channel_stats/tests/test_bench_channel_stats.py
+Wrote file successfully.
+[0m
+在构建智能体之前，我先运行一下工具测试：
+[0m$ [0muv run --no-project --with pytest --with jsonschema --with pyyaml python -m pytest tools_impl/bench_channel_stats/tests -q 2>&1 | tail -15
+def test_dirty_cell_skipped_not_fatal(tmp_path: Path) -> None:
+        pts = _write(tmp_path / "p.csv", "t,CH1,CH2\n0,100,abc\n1,110,510\n2,xyz,520\n")
+        lim = _write(tmp_path / "l.csv", _LIMITS)
+        r = run({"points_csv_path": str(pts), "limits_csv_path": str(lim)})
+        assert r["status"] == "success"
+        assert r["total_samples"] == 3
+        ch1 = _by_name(r, "CH1")  # CH1 全有效
+>       assert ch1["sample_count"] == 3
+E       assert 2 == 3
+
+tools_impl/bench_channel_stats/tests/test_bench_channel_stats.py:124: AssertionError
+=========================== short test summary info ============================
+FAILED tools_impl/bench_channel_stats/tests/test_bench_channel_stats.py::test_first_and_last_breach_distinct
+FAILED tools_impl/bench_channel_stats/tests/test_bench_channel_stats.py::test_dirty_cell_skipped_not_fatal
+2 failed, 18 passed in 0.08s
+[0m
+两个测试失败——我的测试预期写错了（适配器是正确的）。让我来修复它们：
+[0m← [0mEdit tools_impl/bench_channel_stats/tests/test_bench_channel_stats.py
+Index: /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/tools_impl/bench_channel_stats/tests/test_bench_channel_stats.py
+===================================================================
+--- /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/tools_impl/bench_channel_stats/tests/test_bench_channel_stats.py
++++ /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/tools_impl/bench_channel_stats/tests/test_bench_channel_stats.py
+@@ -67,11 +67,11 @@
+     pts = _write(tmp_path / "p.csv", "t,CH\n0,100\n1,200\n2,100\n3,300\n")
+     lim = _write(tmp_path / "l.csv", "channel,lower,upper\nCH,150,250\n")
+     r = run({"points_csv_path": str(pts), "limits_csv_path": str(lim)})
+     ch = _by_name(r, "CH")
+-    # 200 在[150,250]合格；300>250 越限；首末越限都是 t=3.0
+-    assert ch["out_of_limit_count"] == 1
+-    assert ch["first_breach_t_s"] == 3.0
++    # 100<150 越限(t=0,t=2)，200 合格，300>250 越限(t=3) → 共 3 次
++    assert ch["out_of_limit_count"] == 3
++    assert ch["first_breach_t_s"] == 0.0
+     assert ch["last_breach_t_s"] == 3.0
+ 
+ 
+ def test_channel_without_limit_not_judged(tmp_path: Path) -> None:
+
+[0m
+[0m← [0mEdit tools_impl/bench_channel_stats/tests/test_bench_channel_stats.py
+Index: /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/tools_impl/bench_channel_stats/tests/test_bench_channel_stats.py
+===================================================================
+--- /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/tools_impl/bench_channel_stats/tests/test_bench_channel_stats.py
++++ /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/tools_impl/bench_channel_stats/tests/test_bench_channel_stats.py
+@@ -114,20 +114,22 @@
+ # ── 行级错误：不摧毁整表 ───────────────────────────────────────────
+ 
+ 
+ def test_dirty_cell_skipped_not_fatal(tmp_path: Path) -> None:
++    # 行 t=0: CH2=abc 脏；行 t=2: CH1=xyz 脏 → 各通道各剩 2 个有效
+     pts = _write(tmp_path / "p.csv", "t,CH1,CH2\n0,100,abc\n1,110,510\n2,xyz,520\n")
+     lim = _write(tmp_path / "l.csv", _LIMITS)
+     r = run({"points_csv_path": str(pts), "limits_csv_path": str(lim)})
+     assert r["status"] == "success"
+     assert r["total_samples"] == 3
+-    ch1 = _by_name(r, "CH1")  # CH1 全有效
+-    assert ch1["sample_count"] == 3
+-    ch2 = _by_name(r, "CH2")  # abc/xyz 被跳过，剩 1 个有效
+-    assert ch2["sample_count"] == 1
++    ch1 = _by_name(r, "CH1")  # 100,110 有效；xyz 跳过
++    assert ch1["sample_count"] == 2
++    assert ch1["mean"] == pytest.approx(105.0)
++    ch2 = _by_name(r, "CH2")  # 510,520 有效；abc 跳过
++    assert ch2["sample_count"] == 2
+     assert ch2["mean"] == pytest.approx(515.0)
+     assert len(r["row_errors"]) == 2
+-    assert {e["channel"] for e in r["row_errors"]} == {"CH2"}
++    assert {e["channel"] for e in r["row_errors"]} == {"CH1", "CH2"}
+ 
+ 
+ def test_blank_cell_is_missing_not_error(tmp_path: Path) -> None:
+     pts = _write(tmp_path / "p.csv", "t,CH1\n0,100\n1,\n2,120\n")
+
+[0m
+[0m$ [0muv run --no-project --with pytest --with jsonschema --with pyyaml python -m pytest tools_impl/bench_channel_stats/tests -q 2>&1 | tail -6
+....................                                                     [100%]
+20 passed in 0.05s
+[0m
+[0m# [0mTodos
+[✓] Build bench_channel_stats tool (tool.yaml, adapter.py, README, tests)
+[•] Build bench_summary_agent package (agent.yaml, prompt, workflow, schemas, README, changelog)
+[ ] Add eval_cases + sample data fixtures
+[ ] Run full test suite + contract validation; verify registration
+[0m
+所有 20 个工具测试已通过。现在开始处理智能体包。让我更新一下待办事项并构建它：
+[0m← [0mWrite agents/bench_summary_agent/agent.yaml
+Wrote file successfully.
+[0m
+[0m← [0mWrite agents/bench_summary_agent/input_schema.json
+Wrote file successfully.
+[0m
+[0m← [0mWrite agents/bench_summary_agent/output_schema.json
+Wrote file successfully.
+[0m
+现在是工作流部分——这是该智能体的核心：
+[0m← [0mWrite agents/bench_summary_agent/workflow.py
+Wrote file successfully.
+[0m
+[0m← [0mEdit agents/bench_summary_agent/workflow.py
+Index: /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/agents/bench_summary_agent/workflow.py
+===================================================================
+--- /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/agents/bench_summary_agent/workflow.py
++++ /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/agents/bench_summary_agent/workflow.py
+@@ -334,9 +334,9 @@
+             "详见第二节。"
+         )
+     else:
+         factual += "所有给出限值的通道均未超限。"
+-    lines.append(factful_line(factual))
++    lines.append(factual)
+     lines.append("")
+     lines.append("> 结论与处置建议：")
+     lines.append(">")
+     lines.append("> （请工程师在此填写试验结论、异常原因初判与后续处置建议）")
+@@ -357,8 +357,4 @@
+                  "数值来源为确定性工具 bench_channel_stats 的忠实转写。*")
+ 
+     with open(path, "w", encoding="utf-8") as f:
+         f.write("\n".join(lines) + "\n")
+-
+-
+-def factful_line(text: str) -> str:
+-    return text
+
+[0m
+让我移除那个多余的 `factful_line` 辅助函数：
+[0m← [0mWrite agents/bench_summary_agent/prompt.md
+Wrote file successfully.
+[0m
+接下来是 prompt.md、README 和 changelog：
+[0m← [0mWrite agents/bench_summary_agent/README.md
+Wrote file successfully.
+[0m
+[0m← [0mWrite agents/bench_summary_agent/changelog.md
+Wrote file successfully.
+[0m
+接下来处理 `eval_cases` 和示例数据。让我来创建带有精确且可手工验证统计数据的示例 CSV 文件：
+[0m← [0mWrite agents/bench_summary_agent/eval_cases/points_001.csv
+Wrote file successfully.
+[0m
+[0m← [0mWrite agents/bench_summary_agent/eval_cases/limits_001.csv
+Wrote file successfully.
+[0m
+[0m← [0mWrite agents/bench_summary_agent/eval_cases/case_001_normal.json
+Wrote file successfully.
+[0m
+[0m← [0mWrite agents/bench_summary_agent/eval_cases/case_002_missing_limits.json
+Wrote file successfully.
+[0m
+[0m← [0mWrite agents/bench_summary_agent/eval_cases/case_003_two_limits_ambiguous.json
+Wrote file successfully.
+[0m
+[0m← [0mWrite agents/bench_summary_agent/eval_cases/limits_extra.csv
+Wrote file successfully.
+[0m
+[0m← [0mWrite agents/bench_summary_agent/eval_cases/case_004_no_input.json
+Wrote file successfully.
+[0m
+现在让我添加一个 pytest 回归测试，以确保用例能够真正通过（符合 `docs/07` 标准）。首先让我查看一下 `hello_agent` 的测试模式：
+[0m→ [0mRead tests/test_hello_agent_workflow.py
+[0m
+[0m← [0mWrite tests/test_bench_summary_agent_workflow.py
+Wrote file successfully.
+[0m
+[0m# [0mTodos
+[✓] Build bench_channel_stats tool (tool.yaml, adapter.py, README, tests)
+[✓] Build bench_summary_agent package (agent.yaml, prompt, workflow, schemas, README, changelog)
+[✓] Add eval_cases + sample data fixtures
+[•] Run full test suite + contract validation; verify registration
+[0m
+现在让我来更新待办事项并运行完整的测试套件：
+[0m$ [0muv run --no-project --with pytest --with jsonschema --with pyyaml --with fastapi --with httpx --with python-multipart --with "pydantic>2" --with openpyxl --with jieba python -m pytest tests/test_contracts.py tests/test_bench_summary_agent_workflow.py tools_impl/bench_channel_stats/tests -q 2>&1 | tail -20
+context = {'inputs': {}, 'files': [{'id': 'file_points_001.csv', 'filename': 'points_001.csv', 'path': '/Users/Zhuanz/projects/a...dbox/flai-os/agents/bench_summary_agent/eval_cases/limits_001.csv'}], 'tool_registry': None, 'event_logger': None, ...}
+
+    def run(context: dict[str, Any]) -> dict[str, Any]:
+        event_logger = context["event_logger"]
+        tool_registry = context["tool_registry"]
+        inputs = context.get("inputs") or {}
+        files = context.get("files") or []
+        output_dir = context["output_dir"]
+    
+        # ── 1) 识别测点表 / 限值表 ───────────────────────────────────────
+        if not files:
+            return _fail("无输入文件：请上传测点 CSV 与限值 CSV 后重试")
+>       event_logger.log("classify_started", {"file_count": len(files)})
+        ^^^^^^^^^^^^^^^^
+E       AttributeError: 'NoneType' object has no attribute 'log'
+
+agents/bench_summary_agent/workflow.py:121: AttributeError
+=========================== short test summary info ============================
+FAILED tests/test_bench_summary_agent_workflow.py::test_run_without_registry_fails_honestly
+1 failed, 65 passed in 0.42s
+[0m
+让我检查一下 `hello_agent` 是如何处理缺失的 `registry` 的（为了符合其契约）：
+[0m→ [0mRead agents/hello_agent/workflow.py
+我将按照 `hello_agent` 的惯例，使工作流对缺失的 `registry/logger` 具有容错性（即诚实报错，而非直接崩溃）：
+[0m→ [0mRead agents/bench_summary_agent/workflow.py[90m [limit=55, offset=108][0m
+[0m
+[0m← [0mEdit agents/bench_summary_agent/workflow.py
+Index: /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/agents/bench_summary_agent/workflow.py
+===================================================================
+--- /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/agents/bench_summary_agent/workflow.py
++++ /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/agents/bench_summary_agent/workflow.py
+@@ -108,28 +108,36 @@
+     return points_file, limits_file, None
+ 
+ 
+ def run(context: dict[str, Any]) -> dict[str, Any]:
+-    event_logger = context["event_logger"]
+-    tool_registry = context["tool_registry"]
++    event_logger = context.get("event_logger")
++    tool_registry = context.get("tool_registry")
+     inputs = context.get("inputs") or {}
+     files = context.get("files") or []
+-    output_dir = context["output_dir"]
++    output_dir = context.get("output_dir", ".")
+ 
++    def _log(event_type: str, payload: dict[str, Any] | None = None) -> None:
++        if event_logger is not None:
++            event_logger.log(event_type, payload or {})
++
++    if tool_registry is None:
++        # 无 tool_registry 时诚实失败，绝不伪造统计结果（宪法第五条）。
++        return _fail("tool_registry 未注入")
++
+     # ── 1) 识别测点表 / 限值表 ───────────────────────────────────────
+     if not files:
+         return _fail("无输入文件：请上传测点 CSV 与限值 CSV 后重试")
+-    event_logger.log("classify_started", {"file_count": len(files)})
++    _log("classify_started", {"file_count": len(files)})
+     points_file, limits_file, classify_error = _classify_files(files)
+     if classify_error is not None:
+         return _fail(classify_error)
+-    event_logger.log("classify_finished", {
++    _log("classify_finished", {
+         "points_file": points_file.get("filename"),
+         "limits_file": limits_file.get("filename"),
+     })
+ 
+     # ── 2) 确定性统计（工具）─────────────────────────────────────────
+-    event_logger.log("stats_started", {"tool": "bench_channel_stats"})
++    _log("stats_started", {"tool": "bench_channel_stats"})
+     try:
+         result = tool_registry.call("bench_channel_stats", {
+             "points_csv_path": points_file["path"],
+             "limits_csv_path": limits_file["path"],
+@@ -142,9 +150,9 @@
+ 
+     channels = result["channels"]
+     row_errors = result.get("row_errors", [])
+     limit_row_errors = result.get("unmatched_limit_rows", [])
+-    event_logger.log("stats_finished", {
++    _log("stats_finished", {
+         "total_channels": len(channels),
+         "total_samples": result.get("total_samples"),
+         "row_error_count": len(row_errors),
+     })
+@@ -155,9 +163,9 @@
+ 
+     # ── 4) 产物二：summary_draft.md（模板，V0.1 无 LLM）──────────────
+     draft_path = os.path.join(output_dir, _DRAFT_MD)
+     _write_draft(draft_path, result, inputs, points_file.get("filename"), limits_file.get("filename"))
+-    event_logger.log("summary_generated", {"file": _DRAFT_MD, "breach_channels": len(_breach_names(channels))})
++    _log("summary_generated", {"file": _DRAFT_MD, "breach_channels": len(_breach_names(channels))})
+ 
+     # ── 5) 产物三：stats.json（完整结构化结果，数据资产沉淀）─────────
+     stats_json_path = os.path.join(output_dir, _STATS_JSON)
+     with open(stats_json_path, "w", encoding="utf-8") as f:
+
+[0m
+[0m$ [0muv run --no-project --with pytest --with jsonschema --with pyyaml --with fastapi --with httpx --with python-multipart --with "pydantic>2" --with openpyxl --with jieba python -m pytest tests/test_contracts.py tests/test_bench_summary_agent_workflow.py tools_impl/bench_channel_stats/tests -q 2>&1 | tail -8
+..................................................................       [100%]
+66 passed in 0.37s
+[0m
+全部 66 个测试已通过。现在运行完整测试套件，以确认平台范围内没有回归问题：
+[0m$ [0muv run --no-project --with pytest --with pytest-xdist --with jsonschema --with pyyaml --with fastapi --with httpx --with python-multipart --with "pydantic>2" --with openpyxl --with jieba python -m pytest -q -n auto 2>&1 | tail -15
+../../../../.cache/uv/archive-v0/Km7y1RyZ1jOJH_Ric3sRO/lib/python3.13/site-packages/jieba/__init__.py:44
+  /Users/Zhuanz/.cache/uv/archive-v0/Km7y1RyZ1jOJH_Ric3sRO/lib/python3.13/site-packages/jieba/__init__.py:44: SyntaxWarning: invalid escape sequence '\.'
+    re_han_default = re.compile("([\u4E00-\u9FD5a-zA-Z0-9+#&\._%\-]+)", re.U)
+
+../../../../.cache/uv/archive-v0/Km7y1RyZ1jOJH_Ric3sRO/lib/python3.13/site-packages/jieba/__init__.py:46
+  /Users/Zhuanz/.cache/uv/archive-v0/Km7y1RyZ1jOJH_Ric3sRO/lib/python3.13/site-packages/jieba/__init__.py:46: SyntaxWarning: invalid escape sequence '\s'
+    re_skip_default = re.compile("(\r\n|\s)", re.U)
+
+../../../../.cache/uv/archive-v0/Km7y1RyZ1jOJH_Ric3sRO/lib/python3.13/site-packages/jieba/finalseg/__init__.py:78
+  /Users/Zhuanz/.cache/uv/archive-v0/Km7y1RyZ1jOJH_Ric3sRO/lib/python3.13/site-packages/jieba/finalseg/__init__.py:78: SyntaxWarning: invalid escape sequence '\.'
+    re_skip = re.compile("([a-zA-Z0-9]+(?:\.\d+)?%?)")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+797 passed, 16 warnings in 24.32s
+[0m
+797 个测试用例通过，0 个失败。现在让我来验证智能体和工具是否确实已在平台注册表中注册（这是用户所要求的最终证明）：
+[0m$ [0muv run --no-project --with pytest --with jsonschema --with pyyaml --with fastapi --with httpx --with python-multipart --with "pydantic>2" --with openpyxl --with jieba python -c "
+from backend.app.tools.registry import ToolRegistry
+from backend.app.runtime.registry import AgentRegistry
+import json
+
+tr = ToolRegistry('tools_impl', 'contracts/tool.schema.json')
+tr.scan()
+t = tr.get('bench_channel_stats')
+print('TOOL registered:', t is not None)
+print('  tool errors:', tr.errors)
+print('  mock:', t.get('mock'), '| output_classification:', t.get('output_classification'), '| entrypoint:', t.get('entrypoint'))
+
+ar = AgentRegistry('agents', 'contracts/agent.schema.json')
+ar.scan()
+a = ar.get('bench_summary_agent')
+print('AGENT registered:', a is not None)
+print('  agent errors:', ar.errors)
+print('  status:', a.get('status'), '| maturity:', a.get('maturity'), '| category:', a.get('category'))
+print('  tools whitelist:', a.get('tools'))
+print('  requires_human_review:', a.get('workflow',{}).get('requires_human_review'))
+print('  model.profile:', a.get('model',{}).get('profile'))
+print('  declared tool in ToolRegistry:', all(tr.get(x) is not None for x in a.get('tools',[])))
+"
+TOOL registered: True
+  tool errors: []
+  mock: False | output_classification: internal | entrypoint: tools_impl.bench_channel_stats.adapter:run
+AGENT registered: True
+  agent errors: []
+  status: draft | maturity: L0 | category: tool_automation
+  tools whitelist: ['bench_channel_stats']
+  requires_human_review: True
+  model.profile: none
+  declared tool in ToolRegistry: True
+[0m
+两者均已注册，且没有错误。让我使用工作流以及 `incoming/` 目录下的实际样本数据，进行一次最终的端到端运行，以证明其能够生成合理的摘要：
+[0m$ [0muv run --no-project --with pytest --with jsonschema --with pyyaml python -c "
+import importlib.util, json, os, tempfile
+from tools_impl.bench_channel_stats.adapter import run as stats
+
+# load the agent workflow
+spec = importlib.util.spec_from_file_location('w', 'agents/bench_summary_agent/workflow.py')
+wf = importlib.util.module_from_spec(spec); spec.loader.exec_module(wf)
+
+class Reg:
+    def call(self, tid, p): 
+        assert tid=='bench_channel_stats'; return stats(p)
+class Log:
+    def log(self, t, p=None): pass
+
+out = tempfile.mkdtemp()
+res = wf.run({
+  'inputs': {'test_title':'地面台架工况A','engineer':'张工','test_date':'2026-07-13','test_stage':'稳态'},
+  'files': [{'filename':'bench_points.csv','path':'incoming/bench_points.csv'},
+            {'filename':'bench_limits.csv','path':'incoming/bench_limits.csv'}],
+  'tool_registry': Reg(), 'event_logger': Log(), 'output_dir': out,
+})
+print('status:', res['status'])
+print('summary:', json.dumps(res['outputs'][0], ensure_ascii=False))
+print('--- artifacts:', os.listdir(out))
+print('--- channel_stats.csv ---')
+print(open(os.path.join(out,'channel_stats.csv')).read())
+" 2>&1 | head -40
+status: success
+summary: {"total_channels": 4, "breach_channels": ["CH2", "CH4"], "channels_without_limit": [], "total_samples": 200, "duration_s": 99.5, "row_errors": 0, "limit_row_errors": 0, "artifacts": ["summary_draft.md", "channel_stats.csv", "stats.json"]}
+--- artifacts: ['channel_stats.csv', 'summary_draft.md', 'stats.json']
+--- channel_stats.csv ---
+channel,sample_count,mean,min,max,has_limit,lower,upper,out_of_limit_count,first_breach_t_s,last_breach_t_s
+CH1,200,120.1,110,130,yes,90,150,0,,
+CH2,200,653.9,592,780.9,yes,500,760,7,11.5,88.5
+CH3,200,3.205,2.946,3.452,yes,2,4,0,,
+CH4,200,44.9,32.04,49.1,yes,35,60,4,20,83
+[0m
+我来确认一下生成的摘要草稿看起来是否合适：
+[0m$ [0muv run --no-project --with pytest --with jsonschema --with pyyaml python -c "
+import importlib.util, os, tempfile
+from tools_impl.bench_channel_stats.adapter import run as stats
+spec = importlib.util.spec_from_file_location('w', 'agents/bench_summary_agent/workflow.py')
+wf = importlib.util.module_from_spec(spec); spec.loader.exec_module(wf)
+class Reg:
+    def call(self, tid, p): return stats(p)
+class Log:
+    def log(self, t, p=None): pass
+out = tempfile.mkdtemp()
+wf.run({'inputs':{'test_title':'地面台架工况A','engineer':'张工','test_date':'2026-07-13','test_stage':'稳态'},
+  'files':[{'filename':'bench_points.csv','path':'incoming/bench_points.csv'},{'filename':'bench_limits.csv','path':'incoming/bench_limits.csv'}],
+  'tool_registry':Reg(),'event_logger':Log(),'output_dir':out})
+print(open(os.path.join(out,'summary_draft.md')).read())
+"
+# 地面台架工况A · 台架试验测点小结（草稿）
+
+> **草稿声明**：本小结由 bench_summary_agent 自动生成，数值统计与超限判定由确定性工具完成（未交 LLM）；试验结论的最终措辞与放行须经审核工程师确认签发。请人工核对后使用。
+
+| 项目 | 内容 |
+|---|---|
+| 试验名称 | 地面台架工况A |
+| 试验阶段/工况 | 稳态 |
+| 试验日期 | 2026-07-13 |
+| 编制人 | 张工 |
+| 测点文件 | `bench_points.csv` |
+| 限值文件 | `bench_limits.csv` |
+| 数据行数 | 200 |
+| 时长 | 99.5 s
+| 通道总数 | 4 |
+
+## 一、通道统计
+
+| 通道 | 样本数 | 均值 | 最小 | 最大 | 下限 | 上限 | 超限次数 | 首次越限(s) | 末次越限(s) |
+|---|---|---|---|---|---|---|---|---|---|
+| CH1 | 200 | 120.1 | 110 | 130 | 90 | 150 | 0 |  |  |
+| CH2 | 200 | 653.9 | 592 | 780.9 | 500 | 760 | 7 | 11.5 | 88.5 |
+| CH3 | 200 | 3.205 | 2.946 | 3.452 | 2 | 4 | 0 |  |  |
+| CH4 | 200 | 44.9 | 32.04 | 49.1 | 35 | 60 | 4 | 20 | 83 |
+
+*超限判定：value < 下限 或 value > 上限 计一次超限；端点（含下限/上限）判合格。「未判定」=该通道未在限值表中给出限值。*
+
+## 二、超限情况
+
+共 **2** 个通道出现超限，按次数降序：
+
+| 通道 | 超限次数 | 首次越限 | 末次越限 | 限值范围 | 实测最大 | 实测最小 |
+|---|---|---|---|---|---|---|
+| CH2 | 7 | 11.5 s | 88.5 s | [500, 760] | 780.9 | 592 |
+| CH4 | 4 | 20 s | 83 s | [35, 60] | 49.1 | 32.04 |
+
+## 四、结论与建议（由工程师填写）
+
+本次试验共采集 200 个样本、时长 99.5 s，覆盖 4 个通道；其中 2 个通道出现超限（CH2, CH4），详见第二节。
+
+> 结论与处置建议：
+>
+> （请工程师在此填写试验结论、异常原因初判与后续处置建议）
+
+## 五、签发
+
+| 角色 | 姓名 | 日期 | 签字 |
+|---|---|---|---|
+| 编制 | 张工 | | |
+| 审核 | | | |
+| 签发 | | | |
+
+---
+
+*本草稿由 bench_summary_agent v0.1.0 生成（模板化，无 LLM 参与）；数值来源为确定性工具 bench_channel_stats 的忠实转写。*
+[0m
+实际输出中发现一个缺陷——`时长` 行因三元运算符优先级问题导致 Markdown 格式损坏。我来修复它：
+[0m← [0mEdit agents/bench_summary_agent/workflow.py
+Index: /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/agents/bench_summary_agent/workflow.py
+===================================================================
+--- /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/agents/bench_summary_agent/workflow.py
++++ /Users/Zhuanz/projects/aircraft-comac/_glm_smoke_sandbox/flai-os/agents/bench_summary_agent/workflow.py
+@@ -261,9 +261,10 @@
+ lines.append(f"| 编制人 | {_md_escape(engineer)} |")
+ lines.append(f"| 测点文件 | `{_md_escape(points_filename)}` |")
+ lines.append(f"| 限值文件 | `{_md_escape(limits_filename)}` |")
+ lines.append(f"| 数据行数 | {total_samples} |")
+-lines.append(f"| 时长 | {_fmt(duration_s)} s" if duration_s is not None else "| 时长 | （无有效时刻） |")
++duration_txt = f"{_fmt(duration_s)} s" if duration_s is not None else "（无有效时刻）"
++lines.append(f"| 时长 | {duration_txt} |")
+ lines.append(f"| 通道总数 | {total_channels} |")
+ lines.append("")
+ 
+ lines.append("## 一、通道统计")
+
+[0m
+[0m$ [0muv run --no-project --with pytest --with jsonschema --with pyyaml python -c "
+import importlib.util, os, tempfile
+from tools_impl.bench_channel_stats.adapter import run as stats
+spec = importlib.util.spec_from_file_location('w', 'agents/bench_summary_agent/workflow.py')
+wf = importlib.util.module_from_spec(spec); spec.loader.exec_module(wf)
+class Reg:
+    def call(self, tid, p): return stats(p)
+class Log:
+    def log(self, t, p=None): pass
+out = tempfile.mkdtemp()
+wf.run({'inputs':{},'files':[{'filename':'bench_points.csv','path':'incoming/bench_points.csv'},{'filename':'bench_limits.csv','path':'incoming/bench_limits.csv'}],'tool_registry':Reg(),'event_logger':Log(),'output_dir':out})
+# show only the header table to confirm the fix
+for line in open(os.path.join(out,'summary_draft.md')).read().splitlines()[:14]:
+    print(line)
+"
+# （待填写试验名称） · 台架试验测点小结（草稿）
+
+> **草稿声明**：本小结由 bench_summary_agent 自动生成，数值统计与超限判定由确定性工具完成（未交 LLM）；试验结论的最终措辞与放行须经审核工程师确认签发。请人工核对后使用。
+
+| 项目 | 内容 |
+|---|---|
+| 试验名称 | （待填写试验名称） |
+| 试验阶段/工况 | （待填写） |
+| 试验日期 | （待填写） |
+| 编制人 | （待填写） |
+| 测点文件 | `bench_points.csv` |
+| 限值文件 | `bench_limits.csv` |
+| 数据行数 | 200 |
+| 时长 | 99.5 s |
+[0m
+Markdown 行现在已修复。让我重新运行相关测试，以确认修复后一切仍然正常通过：
+[0m$ [0muv run --no-project --with pytest --with jsonschema --with pyyaml --with fastapi --with httpx --with python-multipart --with "pydantic>2" --with openpyxl --with jieba python -m pytest tests/test_contracts.py tests/test_bench_summary_agent_workflow.py tools_impl/bench_channel_stats/tests -q 2>&1 | tail -4
+..................................................................       [100%]
+66 passed in 0.36s
+[0m
+我来运行一下完整的测试套件，以确认自上次全量运行以来的工作流变更没有引入任何回归问题：
+[0m$ [0muv run --no-project --with pytest --with pytest-xdist --with jsonschema --with pyyaml --with fastapi --with httpx --with python-multipart --with "pydantic>2" --with openpyxl --with jieba python -m pytest -q -n auto 2>&1 | tail -4
+from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+797 passed, 13 warnings in 24.13s
+[0m
+[0m# [0mTodos
+[✓] Build bench_channel_stats tool (tool.yaml, adapter.py, README, tests)
+[✓] Build bench_summary_agent package (agent.yaml, prompt, workflow, schemas, README, changelog)
+[✓] Add eval_cases + sample data fixtures
+[✓] Run full test suite + contract validation; verify registration
+[0m
+已完成。
+
+## 做了什么
+
+按平台规范（零平台核改动，docs/02 §5）做了一个完整可用的 Agent + 配套工具，全程仓库内文档为准：
+
+**工具 `bench_channel_stats`**（`tools_impl/bench_channel_stats/`，mock=false，internal）
+- `tool.yaml` / `adapter.py` / `README.md` / `tests/`（20 例）
+- 确定性读两份 CSV → 每通道均值/最小/最大/超限次数 + 首/末越限时刻；宪法第六条边界（数值判断不交 LLM）的落点
+- 超限硬规则 `value<lower 或 value>upper`（端点合格）；行级脏值跳过不摧毁整表
+
+**Agent `bench_summary_agent`**（`agents/bench_summary_agent/`）
+- 八件套齐全：`agent.yaml` / `prompt.md` / `workflow.py` / `input_schema.json` / `output_schema.json` / `eval_cases/` / `README.md` / `changelog.md`
+- `requires_human_review: true` → 跑完停 `waiting_review`，**由你审核签发**（宪法铁律六，不自动签发）
+- workflow 按表头内容自动识别测点/限值文件，识别不出诚实拒绝
+- 三产物：`summary_draft.md`（一页草稿）/ `channel_stats.csv` / `stats.json`
+- `model.profile: none`（V0.1 模板生成小结，LLM 润色留 V0.2，同 performance_disk 立场）
+
+## 验收
+
+1. **注册可用**：`ToolRegistry.scan()` / `AgentRegistry.scan()` 均零错误收载（`requires_human_review=true`、白名单工具已注册）——重启后端即 `GET /api/agents` 可见。
+2. **契约 + 回归全绿**：全量 `pytest -n auto` → **797 passed**（含新增 20 工具例 + 9 workflow 例 + 自动校验本 agent.yaml 的契约门）。
+3. **真实样例跑通**：用 `incoming/bench_points.csv` + `incoming/bench_limits.csv` 实跑 → 4 通道/200 样本，正确判出 CH2(7 次)/CH4(4 次) 超限，生成完整草稿（已贴出）。
+
+**验收步骤**：`bash scripts/init_db.sh && bash scripts/dev_start_backend.sh && bash scripts/dev_start_worker.sh` → 门户上传两份 CSV 创建任务 → 任务转 `waiting_review` → 下载 `summary_draft.md` 审核 → `POST /api/tasks/{id}/review`（action=approve）签发。
+
+**两点治理提示**（不影响当前可用）：agent 当前 `status=draft/maturity=L0`、owner 为 TBD——这是新 Agent 的诚实起点，你作为 admin/agent_developer 现在即可提交跑通；升 `trial`/`L1` 给业务同事用前需补全 maintainer/business_reviewer 并经专家签字（docs/02 L0-L3 准入表，已在 changelog 记明）。
