@@ -51,6 +51,11 @@ class _RealishToolRegistry:
                 data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
                 self._tools[data["id"]] = data
 
+    def get(self, tool_id: str) -> dict[str, Any] | None:
+        """忠实替身：镜像真实 ToolRegistry.get（registry.py:85）——工具污点轴
+        （ADR-0024 `_tool_taint_classification`）经此读 tool.yaml 的 output_classification。"""
+        return self._tools.get(tool_id)
+
     def call(self, tool_id: str, payload: dict[str, Any], *, conn=None, task_id=None) -> dict[str, Any]:
         from backend.app.core.errors import (
             ToolInputInvalidError,

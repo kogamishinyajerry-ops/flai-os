@@ -69,6 +69,15 @@
       "type": "string",
       "enum": ["user", "eval"],
       "description": "任务来源（M10/ADR-0018）：user=用户任务（worker 候选集）/eval=评测跑批任务（仅 eval runner 驱动，不落样本、不进默认任务流视图）。两执行方候选集不相交，双跑竞态在结构上不存在。"
+    },
+    "data_classification": {
+      "type": ["string", "null"],
+      "enum": ["internal", "sensitive", null],
+      "description": "不可变任务级派生分级（迁移 #8/ADR-0025）：执行期算一次（文件∨知识∨工具三轴）落库，read 门只读此列不重派生（抗工具卸载漂移，Codex R1-B）。null=未分级（未跑任务/存量未回填），read 门兜底 fail-closed。"
+    },
+    "content_withheld": {
+      "type": "boolean",
+      "description": "本响应的内容承载字段（error_message 等）已因任务分级=sensitive 遮蔽（ADR-0025 单 chokepoint）。仅在 sensitive 任务响应上出现；元数据仍完整。"
     }
   }
 }

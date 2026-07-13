@@ -31,8 +31,12 @@ BACKEND_PORT = int(os.environ.get("FLAI_BACKEND_PORT", "8620"))
 
 # worker 代际字符串（ADR-0021/Codex R2 审 P2）：放在纯 stdlib 的 config，
 # 让部署自检探针（deploy_selfcheck.py，号称免应用依赖）导入它时不连带拉
-# jobs.runner→storage.repos→jsonschema。改派生语义的里程碑同步 bump。
-WORKER_GENERATION = "m11-b2-classification"
+# jobs.runner→storage.repos→jsonschema。**改派生语义的里程碑同步 bump**——
+# ADR-0024 加工具污点轴（文件∨知识∨工具三轴）+ ADR-0025 改「执行期落库不可变
+# 任务级分级」（Codex R1-B）：旧 worker（两轴/read 期重派生代码）与新 worker 不可
+# 混跑——旧 worker 不落 data_classification、monitor 产物洗成 internal 外泄。代际值
+# 变=部署门代际检查逼 worker 重启到新代码。
+WORKER_GENERATION = "m12-immutable-classification"
 
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。
 # monitor_adapter_recon 工具经此子进程调核起草 adapter 草案；未配置=核不可达=工具

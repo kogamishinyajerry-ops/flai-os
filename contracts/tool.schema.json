@@ -16,7 +16,8 @@
     "output_schema",
     "runtime",
     "safety",
-    "owner"
+    "owner",
+    "output_classification"
   ],
   "properties": {
     "id": {
@@ -54,6 +55,14 @@
       "type": "boolean",
       "default": false,
       "description": "true = 本工具是 Mock 实现（不触真实工程程序）。Mock 工具的一切输出在事件与样本中如实标注 mock=true，绝不冒充真实结果。"
+    },
+    "output_classification": {
+      "type": "string",
+      "enum": [
+        "internal",
+        "sensitive"
+      ],
+      "description": "工具污点声明（ADR-0024，**required**，Codex R0 P2-1 去静默省略）：任务产物分级下限。sensitive = 本工具碰外部不可考数据（如读外部真实 run 目录），任何 agent 挂此工具其任务产物一律派生 sensitive（_task_data_classification 工具污点轴）；internal = 明确无外部污点。每个工具必须显式表态（无缺省），漏声明的 tool.yaml 注册期即被拒——杜绝『忘声明→静默判 internal→外泄』。运行时对已加载工具纵深 fail-closed：非显式 internal（含坏值）一律判 sensitive。"
     },
     "input_schema": {
       "type": "object",

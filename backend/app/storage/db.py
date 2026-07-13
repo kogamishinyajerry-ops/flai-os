@@ -50,7 +50,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     error_message TEXT,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     conversation_id TEXT,
-    origin TEXT NOT NULL DEFAULT 'user'
+    origin TEXT NOT NULL DEFAULT 'user',
+    -- data_classification（迁移 #8/ADR-0025）：不可变任务级派生分级（internal|
+    -- sensitive）。可空：新任务 create 时留 NULL，执行期 runtime 落库；read 门读此
+    -- 列不重派生（抗工具卸载漂移，Codex R1-B）。
+    data_classification TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_events (
@@ -321,6 +325,14 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute(
                     "ALTER TABLE samples ADD COLUMN classification TEXT NOT NULL DEFAULT 'internal'"
                 )
+            # 迁移 #8（ADR-0025）：tasks.data_classification——不可变任务级派生分级。
+            # 可空（无 DEFAULT）：存量行留 NULL，由 bootstrap.assemble 按持久证据回填
+            # （registry 可用处），新任务执行期由 runtime 落库；NULL=未分级，read 门
+            # 兜底 fail-closed（有派生内容即封）。**不设 NOT NULL DEFAULT 'internal'**：
+            # 那会把存量 monitor（0.1.0 期）任务错洗成 internal，正是 R1-B 要闭的洞。
+            task_cols_v8 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+            if "data_classification" not in task_cols_v8:
+                conn.execute("ALTER TABLE tasks ADD COLUMN data_classification TEXT")
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:

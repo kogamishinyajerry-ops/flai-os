@@ -10,6 +10,8 @@ description: >
   返回 status=failed「超出 mock 包线」，供单 case 失败路径测试。M4 将由
   mock=false 的真实工具包替换（新增包切换 id，绝不原地翻牌 mock 字段）。
 entrypoint: tools_impl.performance_disk_mock.adapter:run
+# 工具污点声明（ADR-0024）：本工具不碰外部不可考数据，产物 internal。
+output_classification: internal
 input_schema:
   type: object
   required:

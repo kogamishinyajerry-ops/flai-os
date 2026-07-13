@@ -1,6 +1,8 @@
 id: monitor_adapter_recon
 name: "监控接入侦察工具（adapter 草案承重核）"
-version: 0.1.0
+# 0.1.1（Codex R0 P3-2）：新增 output_classification: sensitive 改变安全语义，
+# 升版本使历史 tool_run 可区分声明前/后（tool_runs 表按 tool_version 追溯）。
+version: 0.1.1
 type: python_adapter
 mock: false
 description: >
@@ -12,6 +14,10 @@ description: >
   注意：mock=false 表示确实调真实确定性核，但本工具不触真实工程程序（求解器），
   只侦察其产物目录——与 M4 真实求解器 adapter 语义边界不同（见 README）。
 entrypoint: tools_impl.monitor_adapter_recon.adapter:run
+# 工具污点声明（ADR-0024，兑现 ADR-0021:194-198 激活硬前置）：本工具读外部真实
+# run 目录、把侦察证据拷进 draft 产物，出处不可考——任务产物一律派生 sensitive，
+# 经 ADR-0021 下载 403 门 + ADR-0023 敏感访问审计。无此声明则会误判 internal 外泄。
+output_classification: sensitive
 input_schema:
   type: object
   required:

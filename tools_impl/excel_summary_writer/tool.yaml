@@ -11,6 +11,8 @@ description: >
   安全：所有字符串单元格强制惰性文本（data_type='s'），上游内容绝不会成为
   活公式（CWE-1236 防注入）。可选 notice 文本写入数据 sheet 之后的「声明」sheet。
 entrypoint: tools_impl.excel_summary_writer.adapter:run
+# 工具污点声明（ADR-0024）：本工具不碰外部不可考数据，产物 internal。
+output_classification: internal
 input_schema:
   type: object
   required:

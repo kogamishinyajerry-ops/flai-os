@@ -54,6 +54,7 @@ def _write_tool_yaml(
     timeout_seconds: int = 10,
     input_schema: dict[str, Any] | None = None,
     output_schema: dict[str, Any] | None = None,
+    output_classification: str = "internal",
 ) -> None:
     input_schema = input_schema or {
         "type": "object",
@@ -73,6 +74,7 @@ def _write_tool_yaml(
         "version": "0.1.0",
         "type": "python_adapter",
         "mock": mock,
+        "output_classification": output_classification,  # ADR-0024：schema required
         "description": "测试用工具包，仅供 ToolRegistry 单测使用",
         "entrypoint": entrypoint,
         "input_schema": input_schema,
@@ -110,6 +112,26 @@ def test_scan_excludes_invalid_tool_yaml_without_crashing(tmp_path) -> None:
     assert registry.get("bad_tool") is None
     assert len(registry.errors) == 1
     assert "bad_tool" in registry.errors[0]["dir"]
+
+
+def test_scan_rejects_tool_missing_output_classification(tmp_path) -> None:
+    """P2-1 witness（ADR-0024）：output_classification 是 required——漏声明的
+    tool.yaml 注册期即被拒（进 .errors 不 crash），杜绝『忘声明→静默判 internal→
+    外泄』。构造一份除该字段外全合规的 tool.yaml，验证仍被排除。"""
+    import yaml as _yaml
+
+    _write_tool_yaml(tmp_path / "ok_tool", tool_id="ok_tool", entrypoint="ok_tool.adapter:run")
+    bad_dir = tmp_path / "no_class_tool"
+    bad_dir.mkdir()
+    data = _yaml.safe_load((tmp_path / "ok_tool" / "tool.yaml").read_text("utf-8"))
+    data["id"] = "no_class_tool"
+    data.pop("output_classification")  # 只删这一个字段，其余全合规
+    (bad_dir / "tool.yaml").write_text(_yaml.safe_dump(data, allow_unicode=True), "utf-8")
+
+    registry = ToolRegistry(tmp_path, TOOL_SCHEMA_PATH)
+    registry.scan()
+    assert registry.get("ok_tool") is not None
+    assert registry.get("no_class_tool") is None, "漏声明 output_classification 的工具必须被拒"
 
 
 def test_scan_duplicate_tool_id_raises(tmp_path) -> None:

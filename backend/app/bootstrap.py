@@ -20,6 +20,7 @@ from .knowledge.scopes import ScopeRegistry, reconcile_agent_scopes
 from .knowledge.service import KnowledgeService
 from .model_gateway.gateway import ModelGateway
 from .runtime.registry import AgentRegistry
+from .storage import repos
 from .tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,25 @@ def assemble(
     conn = conn_factory()
     try:
         agent_registry.sync_to_db(conn)
+        # ADR-0025 D4：存量任务不可变分级回填。放此处（registry 已载、conn 可用），
+        # 迁移只加列不回填（init_db 无注册表算不出 sensitive 工具集）。sensitive 工具集
+        # = 当前注册表里 output_classification 非显式 internal 的工具（fail-closed 过近似，
+        # 与 runtime._tool_taint_classification 同口径）。幂等、锁内，双进程启动安全。
+        all_tools = tool_registry.list()
+        sensitive_tool_ids = [
+            tool["id"] for tool in all_tools if tool.get("output_classification") != "internal"
+        ]
+        # 全部已注册工具 id（sensitive+internal）：回填据此把「引用了当前不认识工具」的
+        # 历史任务 fail-closed 判 sensitive（卸载/改名工具分级不可考，Codex R0 P1-3）。
+        known_tool_ids = [tool["id"] for tool in all_tools]
+        backfilled = repos.backfill_task_data_classification(
+            conn, sensitive_tool_ids, known_tool_ids
+        )
+        if backfilled:
+            logger.info(
+                "ADR-0025 存量任务分级回填：%d 个终态任务（sensitive 工具集=%s）",
+                backfilled, sensitive_tool_ids or "空",
+            )
     finally:
         conn.close()
 

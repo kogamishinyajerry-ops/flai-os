@@ -83,10 +83,18 @@ class _ConversationGatewayContext:
         self._conversation_id = conversation_id
         self._agent_id = agent_id
 
+    # 归因键由 wrapper 钉死，workflow 不得经 kwargs 透传/覆写（与 job 侧
+    # _ModelGatewayContext._sanitize 对称，兑现 task/conversation XOR，Codex R0 P1-5/R1）：
+    # 尤其 task_id——会话模型调用只归因 conversation，若 workflow 塞 task_id 会造「同时带
+    # conversation_id + task_id」双归因行。此前 setdefault 只在缺省时注入，workflow 传入的
+    # task_id/覆写会漏过——改为**先剔除三归因键再权威注入**，杜绝任一方向的双归因。
+    _FORBIDDEN_ATTR_KWARGS = ("task_id", "conversation_id", "agent_id")
+
     def _ids(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        kwargs.setdefault("conversation_id", self._conversation_id)
-        kwargs.setdefault("agent_id", self._agent_id)
-        return kwargs
+        safe = {k: v for k, v in kwargs.items() if k not in self._FORBIDDEN_ATTR_KWARGS}
+        safe["conversation_id"] = self._conversation_id
+        safe["agent_id"] = self._agent_id
+        return safe
 
     def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         return self._model_gateway.chat(profile, messages, **self._ids(kwargs))

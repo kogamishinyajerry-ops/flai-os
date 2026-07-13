@@ -161,6 +161,15 @@ class _ModelGatewayContext:
         self._task_id = task_id
         self._agent_id = agent_id
 
+    # 归因键由 wrapper 钉死，workflow 不得经 kwargs 透传/覆写（Codex R0 P1-5）：尤其
+    # conversation_id——job 模型调用只归因 task，透传它会在 model_calls 造「同时带
+    # task_id + conversation_id」双归因行，经 GET /conversations/{id}/model_calls 旁路
+    # 遮蔽门泄漏 sensitive summary。task_id/agent_id 同理（否则与显式实参重复致 TypeError）。
+    _FORBIDDEN_ATTR_KWARGS = ("task_id", "agent_id", "conversation_id")
+
+    def _sanitize(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in kwargs.items() if k not in self._FORBIDDEN_ATTR_KWARGS}
+
     def _call(self, kind: str, profile: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         try:
             result = fn()
@@ -181,26 +190,29 @@ class _ModelGatewayContext:
         return result
 
     def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
+        safe = self._sanitize(kwargs)
         return self._call(
             "chat", profile,
             lambda: self._model_gateway.chat(
-                profile, messages, task_id=self._task_id, agent_id=self._agent_id, **kwargs
+                profile, messages, task_id=self._task_id, agent_id=self._agent_id, **safe
             ),
         )
 
     def embed(self, profile: str, text: str, **kwargs: Any) -> dict[str, Any]:
+        safe = self._sanitize(kwargs)
         return self._call(
             "embed", profile,
             lambda: self._model_gateway.embed(
-                profile, text, task_id=self._task_id, agent_id=self._agent_id, **kwargs
+                profile, text, task_id=self._task_id, agent_id=self._agent_id, **safe
             ),
         )
 
     def vision(self, profile: str, image_path: str, prompt: str, **kwargs: Any) -> dict[str, Any]:
+        safe = self._sanitize(kwargs)
         return self._call(
             "vision", profile,
             lambda: self._model_gateway.vision(
-                profile, image_path, prompt, task_id=self._task_id, agent_id=self._agent_id, **kwargs
+                profile, image_path, prompt, task_id=self._task_id, agent_id=self._agent_id, **safe
             ),
         )
 
@@ -252,13 +264,51 @@ def _knowledge_classification(agent: dict[str, Any], scope_registry: Any) -> str
     return "internal"
 
 
+def _tool_taint_classification(agent: dict[str, Any], tool_registry: Any) -> str:
+    """工具污点轴（ADR-0024，兑现 ADR-0021:194-198 声明的激活硬前置）：agent 的
+    allowed_tools 里任一工具 tool.yaml 声明 output_classification=sensitive → 任务
+    产物 sensitive。工具是真正碰外部不可考数据的单元（monitor_adapter_recon 读
+    外部真实 run 目录、把侦察证据拷进产物），污点跟随该单元——任何未来 agent 挂
+    该工具都自动继承，不靠单个 agent 作者记得声明。
+
+    静态 fail-closed 过近似：「agent 被授予该工具」即污染，不追踪本次是否真调用——
+    宁严勿洗白，与文件/知识轴同向。
+
+    纵深 fail-closed（Codex R0 P2-1）：output_classification 已是 tool.schema.json
+    的 required 字段，故**每个已加载工具必有显式值**（漏声明的 tool.yaml 注册期即被
+    拒）。对已加载工具判定「非显式 internal（含 sensitive/坏值/极端情形缺失）一律
+    sensitive」——比「仅 ==sensitive 才升级」更防漏。tool_registry 缺失或工具未加载
+    → 该工具不贡献污点（工具未加载时其 call 本就 fail-closed，产不出洗白产物）。
+    """
+    if tool_registry is None:
+        return "internal"
+    for tool_id in agent.get("tools") or []:
+        tool = tool_registry.get(tool_id)
+        if tool is None:
+            continue  # 工具未加载：其调用 fail-closed 产不出数据，不贡献污点
+        if tool.get("output_classification") != "internal":
+            return "sensitive"  # 已加载工具非显式 internal → fail-closed sensitive
+    return "internal"
+
+
 def _task_data_classification(
-    conn: sqlite3.Connection, task: dict[str, Any], agent: dict[str, Any], scope_registry: Any
+    conn: sqlite3.Connection,
+    task: dict[str, Any],
+    agent: dict[str, Any],
+    scope_registry: Any,
+    tool_registry: Any,
 ) -> str:
-    """任务级派生分级 = 文件污点轴 ∨ 知识轴（任一 sensitive 即 sensitive）。"""
+    """任务级派生分级 = 文件污点轴 ∨ 知识轴 ∨ 工具污点轴（任一 sensitive 即 sensitive）。
+
+    ADR-0025：此纯函数只**计算**分级；落库与不可变性由 AgentRuntime.execute 在执行期
+    调一次 + repos.set_task_data_classification 承担。read 期一律读落库列，绝不调本函数
+    重派生（否则工具卸载/降级会让历史 sensitive 任务漂移解封，Codex R1-B）。
+    """
     if _task_input_classification(conn, task) != "internal":
         return "sensitive"
     if _knowledge_classification(agent, scope_registry) != "internal":
+        return "sensitive"
+    if _tool_taint_classification(agent, tool_registry) != "internal":
         return "sensitive"
     return "internal"
 
@@ -390,6 +440,17 @@ class AgentRuntime:
 
         pkg_dir = self.agent_registry.package_dir(agent_id)
 
+        # ADR-0025：执行期算一次任务级分级（文件∨知识∨工具三轴）并**落库为不可变列**。
+        # 落在产出任何内容（产物/样本/tool_runs/事件正文/error_message）之前，故每条
+        # 派生行都被已落库的分级覆盖。read 期一律读此列，绝不重派生——工具事后卸载/
+        # 降级不改已落库值（闭 Codex R1-B 漂移）。后续产物/样本沿用同一 data_classification。
+        # CAS 首写落库；用**返回的持久值**（首写=本次算值；二次 execute=既有落库值）定
+        # 后续产物/样本分级——保「产物分级==落库任务级分级」即便二次 execute（Codex R0 P1-2）。
+        data_classification = repos.set_task_data_classification(
+            conn, task_id,
+            _task_data_classification(conn, task, agent, self.scope_registry, self.tool_registry),
+        )
+
         # 1) 输入校验
         repos.append_event(
             conn, task_id=task_id, agent_id=agent_id, event_type="validation_started",
@@ -409,7 +470,7 @@ class AgentRuntime:
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
                 level="error", message=f"输入校验未通过：{exc}",
             )
-            self._record_failure_sample(conn, task, agent, f"输入校验未通过：{exc}")
+            self._record_failure_sample(conn, task, agent, f"输入校验未通过：{exc}", data_classification)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
         # 1b) knowledge 服务可用性（ADR-0015 fail-closed）：Agent 声明了
@@ -430,7 +491,7 @@ class AgentRuntime:
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
                 level="error", message=msg,
             )
-            self._record_failure_sample(conn, task, agent, msg)
+            self._record_failure_sample(conn, task, agent, msg, data_classification)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
         # 2) 进入 running，构建 context 并调用 workflow.run()
@@ -462,7 +523,7 @@ class AgentRuntime:
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
                 level="error", message=f"workflow 执行异常：{error_message}",
             )
-            self._record_failure_sample(conn, task, agent, error_message)
+            self._record_failure_sample(conn, task, agent, error_message, data_classification)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
         finally:
             self._close_verified_files(verified_files)
@@ -474,12 +535,12 @@ class AgentRuntime:
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
                 level="error", message=error_message,
             )
-            self._record_failure_sample(conn, task, agent, error_message)
+            self._record_failure_sample(conn, task, agent, error_message, data_classification)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
-        # 3) 成功：注册产物 + 样本沉淀（产物/样本继承任务级派生分级=文件污点轴
-        # ∨ 知识轴，ADR-0021 D3 + Codex R0-P1）
-        data_classification = _task_data_classification(conn, task, agent, self.scope_registry)
+        # 3) 成功：注册产物 + 样本沉淀（产物/样本继承任务级派生分级=文件∨知识∨工具
+        # 三轴，ADR-0021 D3 + Codex R0-P1 + ADR-0024/0025）。复用执行期已算并落库的
+        # data_classification（不重算，保产物/样本与落库任务级分级一致）。
         output_file_ids = self._register_outputs(
             conn, task_id, output_dir, classification=data_classification
         )
@@ -534,7 +595,8 @@ class AgentRuntime:
         return {"status": "completed", "task": repos.get_task(conn, task_id)}
 
     def _record_failure_sample(
-        self, conn: sqlite3.Connection, task: dict[str, Any], agent: dict[str, Any], error_message: str
+        self, conn: sqlite3.Connection, task: dict[str, Any], agent: dict[str, Any],
+        error_message: str, data_classification: str,
     ) -> None:
         """失败任务的样本沉淀（ADR-0013，§18-Q7「每次失败能沉淀」的最小落点）。
 
@@ -557,12 +619,11 @@ class AgentRuntime:
                 input_json=task["inputs"],
                 output_json={"error_message": error_message},
                 validation_status="failed",
-                # 派生现查 DB 而非复用 verified_files（ADR-0021 设计审 F6）：
-                # schema 校验先失败时 verified_files 恒空，据其推导会把带
-                # sensitive 输入的失败样本误判成 internal。知识轴同参与。
-                classification=_task_data_classification(
-                    conn, task, agent, self.scope_registry
-                ),
+                # ADR-0025：复用执行期已算并落库的 data_classification（文件∨知识∨工具
+                # 三轴）——与任务级落库分级、成功产物分级三者一致。此前每处重算
+                # （ADR-0021 F6 修的是「据 verified_files 推导会误判」，改现查 DB；
+                # 现进一步统一为「执行期算一次、处处复用」，杜绝多点重算的漂移面）。
+                classification=data_classification,
             )
 
     def _validate_inputs(self, pkg_dir: Path, agent: dict[str, Any], inputs: dict[str, Any]) -> None:

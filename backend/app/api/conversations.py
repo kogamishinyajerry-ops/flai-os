@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from . import classification_gate as cgate
 from ..core.errors import (
     ConversationClosedError,
     ConversationConflictError,
@@ -149,7 +150,10 @@ def list_conversation_model_calls(conversation_id: str, request: Request) -> lis
     try:
         if repos.get_conversation(conn, conversation_id) is None:
             raise HTTPException(status_code=404, detail=f"会话不存在：{conversation_id}")
-        return repos.list_model_calls_for_conversation(conn, conversation_id)
+        # ADR-0025 单 chokepoint（R1-A 补漏）：会话聚合 model_calls 跨成员任务，
+        # sensitive 任务的 summary/error 承载工具产出——逐行按归属任务分级遮蔽。
+        rows = repos.list_model_calls_for_conversation(conn, conversation_id)
+        return cgate.redact_model_calls_by_task(conn, rows)
     finally:
         conn.close()
 
@@ -177,6 +181,8 @@ def list_conversation_tasks(conversation_id: str, request: Request) -> list[dict
             if len(page) < _PAGE:
                 break
             offset += _PAGE
-        return tasks
+        # ADR-0025 单 chokepoint（Codex R1-A 漏堵端点之一）：sensitive 任务的
+        # error_message 承载工具内容——逐行过门遮蔽。
+        return [cgate.redact_task_row_if_sensitive(conn, t) for t in tasks]
     finally:
         conn.close()

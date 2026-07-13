@@ -190,6 +190,136 @@ def set_task_status(
     return get_task(conn, task_id)  # type: ignore[return-value]
 
 
+def set_task_data_classification(
+    conn: sqlite3.Connection, task_id: str, classification: str
+) -> str:
+    """执行期把任务级派生分级落库为**真不可变**列（ADR-0025）：runtime.execute 在 agent
+    加载成功后、产出任何内容前调一次。
+
+    **CAS 首写语义（Codex R0 P1-2 闭合）**：只在列为 NULL 时写入——已落库值不可变。
+    此前为无条件 `UPDATE ... SET`，二次 `runtime.execute()` 会在状态机拒绝重跑前按**当前
+    注册表**重算并覆盖（工具降级后把历史 sensitive 改 internal），正是 R1-B 漂移换个入口
+    复现。CAS-on-NULL 结构性杜绝：首写定终身，后续 execute 一律 no-op。
+
+    返回**最终持久值**（首写=传入值；已存在=既有落库值）——runtime 必须用返回值而非
+    新算值定后续产物/样本分级，确保「产物分级 == 落库任务级分级」即便二次 execute。
+    read 期仍一律读此列不重派生。"""
+    conn.execute(
+        "UPDATE tasks SET data_classification = ? WHERE id = ? AND data_classification IS NULL",
+        (classification, task_id),
+    )
+    row = conn.execute(
+        "SELECT data_classification FROM tasks WHERE id = ?", (task_id,)
+    ).fetchone()
+    # 行必存在（runtime 已确认任务加载）；列在首写后非 NULL。防御性回退到传入值。
+    return row[0] if row is not None and row[0] is not None else classification
+
+
+_BACKFILL_TERMINAL_STATES = ("completed", "failed", "cancelled", "waiting_review")
+
+
+def backfill_task_data_classification(
+    conn: sqlite3.Connection,
+    sensitive_tool_ids: list[str],
+    known_tool_ids: list[str] | None = None,
+) -> int:
+    """一次性回填存量任务的不可变分级（ADR-0025 D4，在 bootstrap.assemble 调，registry
+    可用处）：只碰**终态** NULL 任务（created/queued/running 留 NULL，执行期由 runtime
+    落库），按**持久证据**定分级 → sensitive，否则 internal。sensitive 证据：
+      1. 非 internal 的 files/samples 行；
+      2. tool_runs 引用当前判 sensitive 的工具；
+      3. tool_runs 引用当前注册表**不认识**的工具（已卸载/scan 被拒/改名——历史分级
+         不可考，fail-closed 判 sensitive，绝不把「当前无命中」当「已证明 internal」，
+         Codex R0 P1-3）。
+
+    `known_tool_ids`=当前注册表全部工具 id（sensitive+internal）；缺省 None 表示调用方
+    未提供已知集 → 跳过第 3 类（保持旧行为，仅测试/兼容用）。`sensitive_tool_ids` 由调用
+    方从当前注册表算（非显式 internal 一律计入，含坏值/未知）。
+
+    **诚实残差（非本函数漏洞，见 ADR-0025 §五）**：输入文件/知识轴的历史 sensitive 不由
+    本函数直接对账——但 ADR-0021 执行期已按文件∨知识轴给这些任务的**产物**落 sensitive
+    分级（→第 1 类命中），且 sensitive 输入文件本身的下载受其自身 classification 保护
+    （files.py 下载门检子行，非父任务列），故无泄漏面。
+
+    幂等：NULL 终态集清空后每次启动重跑均为 no-op。全程 BEGIN IMMEDIATE 写锁内（双进程
+    启动竞态安全，与迁移同手法）。返回本次回填的任务数。"""
+    term_ph = ", ".join("?" for _ in _BACKFILL_TERMINAL_STATES)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        backfilled = conn.execute(
+            f"SELECT COUNT(*) FROM tasks WHERE data_classification IS NULL"
+            f" AND status IN ({term_ph})",
+            _BACKFILL_TERMINAL_STATES,
+        ).fetchone()[0]
+        # 1) sensitive：非 internal 的 files/samples 行（持久、执行期已定）。
+        conn.execute(
+            f"""UPDATE tasks SET data_classification = 'sensitive'
+                WHERE data_classification IS NULL AND status IN ({term_ph}) AND (
+                  id IN (SELECT task_id FROM files
+                         WHERE classification IS NOT NULL AND classification != 'internal')
+                  OR id IN (SELECT task_id FROM samples
+                            WHERE classification IS NOT NULL AND classification != 'internal'))""",
+            _BACKFILL_TERMINAL_STATES,
+        )
+        # 2) sensitive：tool_runs 引用了 (a) 当前判 sensitive 的工具，或 (b) 当前注册表
+        #    不认识的工具（fail-closed，Codex R0 P1-3）。覆盖无 files/samples 行的 sensitive
+        #    任务（Codex R1-B 点名的 eval/collect_samples=false/早失败）+ 卸载工具历史任务。
+        taint_clauses: list[str] = []
+        taint_params: list[str] = []
+        if sensitive_tool_ids:
+            taint_clauses.append(
+                f"tool_id IN ({', '.join('?' for _ in sensitive_tool_ids)})"
+            )
+            taint_params.extend(sensitive_tool_ids)
+        if known_tool_ids is not None:
+            if known_tool_ids:
+                taint_clauses.append(
+                    f"tool_id NOT IN ({', '.join('?' for _ in known_tool_ids)})"
+                )
+                taint_params.extend(known_tool_ids)
+            else:
+                # 注册表为空（退化启动）：一切历史工具不可考 → 全 fail-closed sensitive。
+                taint_clauses.append("1 = 1")
+        if taint_clauses:
+            conn.execute(
+                f"""UPDATE tasks SET data_classification = 'sensitive'
+                    WHERE data_classification IS NULL AND status IN ({term_ph})
+                    AND id IN (SELECT task_id FROM tool_runs
+                               WHERE {' OR '.join(taint_clauses)})""",
+                (*_BACKFILL_TERMINAL_STATES, *taint_params),
+            )
+        # 3) 剩余终态 NULL → internal（无 sensitive 证据）。
+        conn.execute(
+            f"UPDATE tasks SET data_classification = 'internal'"
+            f" WHERE data_classification IS NULL AND status IN ({term_ph})",
+            _BACKFILL_TERMINAL_STATES,
+        )
+        # 4) 子行一致化（Codex R0 P1）：**下载门（files.py:277）与固化/复用门（curation）
+        #    检的是 files/samples 自身的 classification 子行，不是父任务列**。步骤 1-2 把父
+        #    任务升 sensitive 后，历史 internal 子行（0.1.0 期 monitor 草案：工具轴当时不存在
+        #    →产物误落 internal）仍会过下载 403（不触发）与 eval-cases 原样固化=半闭合假绿。
+        #    故把**终态 sensitive 任务**的非 sensitive 子行一并升 sensitive——与执行期
+        #    _register_outputs/_record_failure_sample 对新任务「产物/样本继承任务级派生分级」
+        #    同口径，兑现「一个任务 sensitive 则其全部产出一致 sensitive」不变式。NULL 亦升
+        #    （fail-closed）。幂等（已 sensitive 子行不动）。锁内，与父行同事务。
+        term_sensitive = (
+            f"(SELECT id FROM tasks WHERE data_classification = 'sensitive'"
+            f" AND status IN ({term_ph}))"
+        )
+        for _child_table in ("files", "samples"):
+            conn.execute(
+                f"UPDATE {_child_table} SET classification = 'sensitive'"
+                f" WHERE (classification IS NULL OR classification != 'sensitive')"
+                f" AND task_id IN {term_sensitive}",
+                _BACKFILL_TERMINAL_STATES,
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return backfilled
+
+
 def fail_task_from_execution(
     conn: sqlite3.Connection,
     task_id: str,

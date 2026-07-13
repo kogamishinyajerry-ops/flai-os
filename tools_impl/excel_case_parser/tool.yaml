@@ -10,6 +10,8 @@ description: >
   并跳过该行；解析器自身失败（文件不存在/非 xlsx/缺必需列/零有效行）
   才返回 status=failed。本工具只做真实文件解析，不生成任何数据（mock=false）。
 entrypoint: tools_impl.excel_case_parser.adapter:run
+# 工具污点声明（ADR-0024）：本工具不碰外部不可考数据，产物 internal。
+output_classification: internal
 input_schema:
   type: object
   required:

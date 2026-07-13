@@ -11,6 +11,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from . import classification_gate as cgate
 from ..core.errors import IllegalTransitionError
 from ..logging_setup import audit_event
 from ..storage import repos
@@ -201,11 +202,13 @@ def list_tasks(
 ) -> list[dict[str, Any]]:
     conn = request.app.state.conn_factory()
     try:
-        return repos.list_tasks(
+        rows = repos.list_tasks(
             conn, agent_id=agent_id, status=status, conversation_id=conversation_id,
             origin=None if origin == "all" else origin,
             limit=limit, offset=offset,
         )
+        # ADR-0025 单 chokepoint：sensitive 任务的 error_message（承载工具内容）遮蔽。
+        return [cgate.redact_task_row_if_sensitive(conn, t) for t in rows]
     finally:
         conn.close()
 
@@ -217,7 +220,9 @@ def get_task(task_id: str, request: Request) -> dict[str, Any]:
         task = repos.get_task(conn, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
-        return task
+        # ADR-0025：sensitive→遮蔽 error_message（工具内容）；task.inputs 是用户自报
+        # 输入不在门内（ADR-0024 D5 边界：封「工具产出」不封「用户提交」）。
+        return cgate.redact_task_row_if_sensitive(conn, task)
     finally:
         conn.close()
 
@@ -242,7 +247,9 @@ def cancel_task(task_id: str, request: Request) -> dict[str, Any]:
                 message="任务被用户取消",
                 payload={"previous_status": current},
             )
-            return task
+            # ADR-0025 一致封闭：sensitive 任务的**任一**出场面（含变更响应回显的
+            # 任务行 error_message）都过 chokepoint，绝不「GET 封、mutation 漏」。
+            return cgate.redact_task_row_if_sensitive(conn, task)
 
         if current == "running":
             raise HTTPException(
@@ -335,7 +342,7 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
                 + (f"；{sample_rows} 条样本标记为工程师认可" if sample_rows else ""),
                 payload=payload,
             )
-            return task
+            return cgate.redact_task_row_if_sensitive(conn, task)  # ADR-0025 一致封闭
 
         repos.append_event(
             conn,
@@ -347,7 +354,7 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             + (f"；{sample_rows} 条样本标记为未认可" if sample_rows else ""),
             payload=payload,
         )
-        return task
+        return cgate.redact_task_row_if_sensitive(conn, task)  # ADR-0025 一致封闭
     finally:
         conn.close()
 
@@ -364,7 +371,8 @@ def set_sim_run_ref(task_id: str, body: SetSimRunRefRequest, request: Request) -
         task = repos.set_task_sim_run_ref(conn, task_id, module=body.module, run_id=body.run_id)
         if task is None:
             raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
-        return task
+        # ADR-0025：失败任务的 error_message 经此响应回；sensitive→遮蔽（Codex R1-A 三漏端点之一）。
+        return cgate.redact_task_row_if_sensitive(conn, task)
     finally:
         conn.close()
 
@@ -381,7 +389,13 @@ def list_events(
         task = repos.get_task(conn, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
-        return repos.list_events(conn, task_id, limit=limit, offset=offset)
+        events = repos.list_events(conn, task_id, limit=limit, offset=offset)
+        # ADR-0025：tool_started 事件 payload 带工具 input、tool_failed message 带外部
+        # grounding_failures（event.schema:74 本就要求敏感 payload 脱敏）——sensitive→
+        # 遮蔽 message+payload，只留 type/level/时间戳等元数据。
+        if cgate.is_sensitive_task(conn, task):
+            return cgate.redact_rows(events, cgate.EVENT_CONTENT_KEYS)
+        return events
     finally:
         conn.close()
 
@@ -403,8 +417,13 @@ def list_task_tool_runs(task_id: str, request: Request) -> list[dict[str, Any]]:
     """任务的工具调用留痕（含 tool_version/mock 标记/原始输入输出路径）。"""
     conn = request.app.state.conn_factory()
     try:
-        _get_task_or_404(conn, task_id)
-        return repos.list_tool_runs(conn, task_id)
+        task = _get_task_or_404(conn, task_id)
+        rows = repos.list_tool_runs(conn, task_id)
+        # ADR-0025：sensitive→遮蔽 input/output/raw_path + error_message（Codex R1-A：
+        # 工具错误文本承载外部 grounding_failures），只留元数据。
+        if cgate.is_sensitive_task(conn, task):
+            return cgate.redact_rows(rows, cgate.TOOL_RUN_CONTENT_KEYS)
+        return rows
     finally:
         conn.close()
 
@@ -414,8 +433,13 @@ def list_task_model_calls(task_id: str, request: Request) -> list[dict[str, Any]
     """任务的模型调用留痕（含 model_profile/model_name/token 用量，成败全量）。"""
     conn = request.app.state.conn_factory()
     try:
-        _get_task_or_404(conn, task_id)
-        return repos.list_model_calls(conn, task_id)
+        task = _get_task_or_404(conn, task_id)
+        rows = repos.list_model_calls(conn, task_id)
+        # ADR-0025：sensitive→遮蔽 request/response_summary + error_message；保留
+        # token 计数/model_name 等元数据（非内容）。
+        if cgate.is_sensitive_task(conn, task):
+            return cgate.redact_rows(rows, cgate.MODEL_CALL_CONTENT_KEYS)
+        return rows
     finally:
         conn.close()
 
@@ -426,7 +450,12 @@ def list_task_samples(task_id: str, request: Request) -> list[dict[str, Any]]:
     为人工审核结论回填，NULL=待定）。"""
     conn = request.app.state.conn_factory()
     try:
-        _get_task_or_404(conn, task_id)
-        return repos.list_samples(conn, task_id)
+        task = _get_task_or_404(conn, task_id)
+        rows = repos.list_samples(conn, task_id)
+        # ADR-0025：sensitive→遮蔽 input/output/raw_path；保留 validation_status/
+        # accepted_by_engineer/classification 等元数据。
+        if cgate.is_sensitive_task(conn, task):
+            return cgate.redact_rows(rows, cgate.SAMPLE_CONTENT_KEYS)
+        return rows
     finally:
         conn.close()
