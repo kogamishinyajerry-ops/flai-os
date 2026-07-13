@@ -30,3 +30,13 @@ export function makeEpochGuard() {
     },
   };
 }
+
+// join 去重（Task 3 网络自证发现）：channel 已 loaded 且 3s 内刚成功拉过
+// → join 不再补拉（下一 tick ≤5s 兜底）；否则保持「acquire 即时 refresh」
+// 原语义（新订阅者不吃陈旧窗口）。
+export const JOIN_FRESH_MS = 3000;
+export function shouldRefreshOnJoin(loaded, lastFetchAt, now) {
+  if (loaded !== true) return true;
+  if (typeof lastFetchAt !== "number") return true;
+  return now - lastFetchAt >= JOIN_FRESH_MS;
+}

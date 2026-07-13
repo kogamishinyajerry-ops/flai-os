@@ -7,7 +7,7 @@
 import { ref } from "vue";
 import { listTasks, getTask, listTaskEvents, listModelCalls } from "../api/tasks";
 import { getConversation, listConversationTasks } from "../api/conversations";
-import { diffTransitions, nextInterval, makeEpochGuard, TERMINAL_STATUSES } from "./liveFeedCore";
+import { diffTransitions, nextInterval, makeEpochGuard, shouldRefreshOnJoin } from "./liveFeedCore";
 
 const channels = new Map(); // key → channel
 const transitionSubs = new Set();
@@ -93,6 +93,7 @@ async function refresh(ch) {
       // wrap 语义：epoch 已变（channel 被释放重建/参数变更）→ fetch 整体不执行
       ch.state.loaded.value = true;
       ch.state.error.value = "";
+      ch.lastFetchAt = Date.now(); // join 去重新鲜度锚点（shouldRefreshOnJoin）
     } catch (err) {
       if (ch.state.loaded.value === false) ch.state.error.value = err.detail || err.message || "加载失败";
       // 已 loaded 的失败保旧值,下 tick 自愈（taskFeed 原语义）
@@ -124,7 +125,14 @@ export function acquireChannel(key) {
   let ch = channels.get(key);
   if (!ch) { ch = makeChannel(key); channels.set(key, ch); }
   ch.refCount += 1;
-  refresh(ch).finally(() => { if (ch.refCount > 0 && !ch.timer) schedule(ch); });
+  const ensureScheduled = () => { if (ch.refCount > 0 && !ch.timer) schedule(ch); };
+  // join 去重（liveFeedCore.shouldRefreshOnJoin）：channel 已 loaded 且 3s 内刚
+  // 拉过时,join 不再补拉一次——链本身继续跑,排链兜底逻辑原样保留。
+  if (shouldRefreshOnJoin(ch.state.loaded.value, ch.lastFetchAt, Date.now())) {
+    refresh(ch).finally(ensureScheduled);
+  } else {
+    ensureScheduled();
+  }
   let released = false;
   return {
     state: ch.state,
