@@ -69,11 +69,17 @@
         <EmptyState v-else variant="data" description="当前没有进行中的任务" />
       </section>
 
-      <!-- 版块 3/4/5：占位（今日交付/Agent 动态/团队总量），批B后续任务接入 -->
-      <section class="today-section today-placeholder">
-        <div class="today-section-head">今日交付</div>
-        <div class="today-placeholder-note">占位——待接入交付叙事卡</div>
+      <!-- 版块 3：今日交付（终态叙事卡）。animate 恒 false 占位——Task 6 才接
+           sealAnimateIds（本会话亲历迁移才播盖章仪式），此处直开静态渲染零回归。 -->
+      <section class="today-section">
+        <div class="today-section-head">今日交付 · {{ deliveryTasks.length }}</div>
+        <div v-if="deliveryTasks.length" class="today-list">
+          <DeliveryCard v-for="t in deliveryTasks" :key="t.id" :task="t" :animate="false" />
+        </div>
+        <EmptyState v-else variant="data" description="今天还没有交付的任务" />
       </section>
+
+      <!-- 版块 4/5：占位（Agent 动态/团队总量），批B后续任务接入 -->
       <section class="today-section today-placeholder">
         <div class="today-section-head">Agent 动态</div>
         <div class="today-placeholder-note">占位——待接入最近晋升 + 今日最活跃 Agent</div>
@@ -98,6 +104,7 @@ import { acquireChannel } from "../stores/liveFeed";
 import { statusLabel, taskLampColor, taskElapsedMs, formatDuration, TASK_WORK_STATES } from "../utils/format";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
+import DeliveryCard from "../components/DeliveryCard.vue";
 
 const router = useRouter();
 
@@ -108,6 +115,17 @@ const waitingTasks = computed(() => feedTasks.value.filter((t) => t.status === "
 const workingTasks = computed(() =>
   feedTasks.value.filter((t) => ["created", "queued", "running", "validating"].includes(t.status))
 );
+
+// 版块 3：今日交付——终态（completed/failed/cancelled）且 finished_at 落在本地
+// 今日（本地日切：今天 0 点起，非 UTC）。本地日切用 Date 对象比较，不字符串截断。
+const TERMINAL_STATES = new Set(["completed", "failed", "cancelled"]);
+const deliveryTasks = computed(() => {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  return feedTasks.value.filter(
+    (t) => TERMINAL_STATES.has(t.status) && t.finished_at && new Date(t.finished_at) >= todayStart
+  );
+});
 
 function isWork(status) {
   return TASK_WORK_STATES.has(status);
