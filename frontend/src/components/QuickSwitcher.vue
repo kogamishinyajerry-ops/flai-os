@@ -351,7 +351,7 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
 
 .qs-fade-enter-active,
 .qs-fade-leave-active {
-  transition: opacity 0.14s var(--ease-lift);
+  transition: opacity var(--motion-fast) var(--ease-out-soft);
 }
 .qs-fade-enter-from,
 .qs-fade-leave-to {
@@ -360,10 +360,10 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
 /* 入场用 --ease-spring 微弹（幅度不变，仍是 translateY(-8px) scale(0.98)→原位），
  * 退出保留原软出，避免关闭时的回弹显得拖沓。 */
 .qs-fade-enter-active .qs-panel {
-  transition: transform var(--motion-med) var(--ease-spring), opacity 0.16s var(--ease-lift);
+  transition: transform var(--motion-med) var(--ease-spring), opacity var(--motion-fast) var(--ease-out-soft);
 }
 .qs-fade-leave-active .qs-panel {
-  transition: transform 0.16s var(--ease-lift), opacity 0.16s var(--ease-lift);
+  transition: transform var(--motion-fast) var(--ease-out-soft), opacity var(--motion-fast) var(--ease-out-soft);
 }
 .qs-fade-enter-from .qs-panel,
 .qs-fade-leave-to .qs-panel {

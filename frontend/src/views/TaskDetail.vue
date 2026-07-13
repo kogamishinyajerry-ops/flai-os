@@ -1,6 +1,19 @@
 <template>
-  <div class="task-detail" v-loading="loading">
+  <div class="task-detail">
     <el-alert v-if="loadError" type="error" :title="loadError" show-icon :closable="false" />
+
+    <!-- 首载骨架（A3）：只在「从未 loaded 且无错误」时撑主区轮廓，轮询期间/
+         带旧值刷新绝不回骨架；失败态走上面 el-alert，骨架不吞错误。 -->
+    <div v-if="!loaded && !loadError" class="td-skel">
+      <SkeletonBlock height="26px" width="200px" />
+      <SkeletonBlock height="14px" width="340px" />
+      <SkeletonBlock height="76px" width="100%" />
+      <div class="io-panel">
+        <SkeletonBlock height="220px" width="100%" />
+        <SkeletonBlock height="220px" width="100%" />
+      </div>
+      <SkeletonBlock height="120px" width="100%" />
+    </div>
 
     <template v-if="task">
       <!-- M8：属于某协作会话的任务，提供返回工作台会话视图的入口（分组回溯）。 -->
@@ -27,9 +40,10 @@
             失败 {{ batchSummary.failed }}
           </el-tag>
         </template>
-        <!-- waiting_review 时轮询停止（避免无人值守页面永久空转），跨会话的
-             人工放行结果靠本按钮手动拉取（反方审查 P2-1）。 -->
-        <el-button text type="primary" class="refresh-btn" @click="loadTask()">刷新</el-button>
+        <!-- waiting_review 不再停轮（channel 8s 降频承接，见 liveFeedCore.
+             nextInterval）——跨会话人工放行结果免手动刷新即会到账；本按钮保留
+             作带外补拉（poke），满足「现在就要」的即时性诉求。 -->
+        <el-button text type="primary" class="refresh-btn" @click="pokeTask(taskId)">刷新</el-button>
         <!-- 仿真监控深链（PM 路线图 Next-1，S 级）：仅在浮窗已配置（同 localStorage
              开关，默认关零渲染）时出现。任务已关联仿真 run（metadata.sim_run_ref）时
              深链直达该 run 视图，否则回退 hub 首页。 -->
@@ -40,8 +54,9 @@
 
       <!-- 终态盖章（Codex CLI「─ Worked for Xs ─」落定仪式）：位置=标题/返回行之下、
            任务描述表之上——终态任务进页第一眼看到的官宣；组件自身对非终态渲染 null，
-           零占位，不产生 a[href]/新文案与既有 e2e 断言冲突。 -->
-      <CompletionSeal :task="task" />
+           零占位，不产生 a[href]/新文案与既有 e2e 断言冲突。animate=sealAnimate：
+           仪式只属于亲历者，见下方 onTransition 订阅注释。 -->
+      <CompletionSeal :task="task" :animate="sealAnimate" />
 
       <!-- 首屏只留一行轻量上下文；完整元数据（ID/版本/时间）折叠为次要，让产物与决策优先。 -->
       <div class="task-context">
@@ -240,12 +255,15 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from "vue";
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { getTask, listTaskEvents, cancelTask, reviewTask, listModelCalls } from "../api/tasks";
+import { cancelTask, reviewTask } from "../api/tasks";
 import { downloadUrl, fetchOutputFile } from "../api/files";
+import { acquireChannel, pokeTask, onTransition } from "../stores/liveFeed";
+import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import EmptyState from "../components/EmptyState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
 import { statusLabel, statusTagType, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
 import MarkdownLite from "../components/MarkdownLite.vue";
@@ -291,10 +309,14 @@ const simRunTitle = computed(() =>
   simRunRef.value ? `查看仿真监控（${simRunRef.value}）` : "查看仿真监控",
 );
 
-const task = ref(null);
-const events = ref([]);
-const loading = ref(true);
-const loadError = ref("");
+// 换轨（批A Task 4）：task/events/modelCalls/loaded/error 全部来自 liveFeed 的
+// task:<id> channel（onMounted 隐含 acquire——acquireChannel 调用即 join，
+// onUnmounted release；:key=taskId 令组件随任务切换整体重挂，天然重 acquire，
+// 无需额外 watch taskId）。旧的自建 2s 轮询/baseline 守卫/modelCallsSeq 全部
+// 删除——防 stale 语义已由 channel 的 epoch guard 统一承接（liveFeedCore.
+// makeEpochGuard，release 时 bump epoch，在途响应整包作废）。
+const taskChannel = acquireChannel(`task:${taskId}`);
+const { task, events, modelCalls, modelCallsError, loaded, error: loadError } = taskChannel.state;
 
 const reviewForm = reactive({ comment: "" });
 const signerName = computed(() => displayName());
@@ -302,6 +324,23 @@ const reviewing = ref(false);
 // 批准按钮元素（动效系统 v1 E2）：放行成功后 burstSigned(el) 的定位来源；
 // el-button 组件 ref 通过 .ref 暴露原生 DOM（element-plus expose 契约）。
 const approveBtnEl = ref(null);
+
+// 盖章动效仪式只属于亲历者（批A Task 9）：本次会话内亲眼观察到「活跃→终态」
+// 迁移才播；历史页面直开（首载即终态）sealAnimate 恒 false——一次性置真不
+// 复位，不随后续轮询/轮转翻回。onTransition 是全站总线（所有 channel 共用），
+// 用 ev.id===taskId 过滤只认本任务。
+//
+// 硬坑（实测抓到，勿删）：ev.from 必须显式判 != null，不能只判「不在终态
+// 列表」——StatusDock 全局常驻挂载，onMounted 无条件 acquireTaskFeed()（独立
+// 于本页 task:<id> channel 的另一条 'tasks' 清单链），其首次冷启动 fetch 对
+// diffTransitions 而言 prevById 为空，会给列表里每个任务都产出 from:null 的
+// 事件（liveFeedCore.diffTransitions 语义，供别处「新入列飞入动效」使用，
+// 本身正确）。若只判「!TERMINAL_STATUSES.includes(ev.from)」，from:null 会被
+// 当成「非终态」放行，导致历史直开一个已终态任务时，StatusDock 的冷启动
+// 清单拉取被误当成「亲历了一次迁移」，盖章动效假阳性播放。from 必须是本会话
+// 真观察到的非终态字符串，null（未知前态）不算亲历。
+const sealAnimate = ref(false);
+let offTransition = null;
 
 // 产物内联查看（P0-2）：按 task.output_file_ids 拉取文件名+内容，增量同步、集合未变不重拉。
 const artifacts = ref([]);
@@ -340,27 +379,10 @@ async function syncArtifacts(ids) {
   }
 }
 
-// 模型调用消耗披露（B1）：只读追溯端点，页面每次 loadTask（含 silent 轮询）都
-// 整包重拉——数据量小、无 offset 语义，不存在 events 那种 stale-merge 问题。
-const modelCalls = ref([]);
-const modelCallsError = ref("");
-// 请求序号（非响应式）：fire-and-forget 下手动刷新可与在途轮询重叠，只让「最新
-// 一次发起」的结果落盘，迟到的旧响应（含旧错误）整包作废——与 loadTask 的
-// baseline 守卫同一防 stale 倒灌纪律。
-let modelCallsSeq = 0;
-
-async function syncModelCalls() {
-  const seq = ++modelCallsSeq;
-  try {
-    const calls = await listModelCalls(taskId);
-    if (seq !== modelCallsSeq) return;
-    modelCalls.value = calls;
-    modelCallsError.value = "";
-  } catch (err) {
-    if (seq !== modelCallsSeq) return;
-    modelCallsError.value = err.detail || err.message || "加载失败";
-  }
-}
+// 模型调用消耗披露（B1）：modelCalls 现由 task:<id> channel 每轮询整包重拉
+// 承接（liveFeed.js buildTaskChannel）；请求序号守卫与失败态展示（main 原
+// modelCallsSeq/modelCallsError 语义，Task 12 修复 1/2）已下沉到 channel 层，
+// 本组件只读 modelCallsError，不再自己维护。
 
 // token_usage 是上游 chat/completions 原样透传的 usage 对象，形状不保证含
 // total_tokens（后端测试用例里就只有 prompt_tokens+completion_tokens）——能
@@ -461,71 +483,45 @@ const inputEntries = computed(() => {
   return Object.entries(inputs).map(([k, v]) => [k, summarizeInputValue(v)]);
 });
 
-let pollTimer = null;
+// artifacts fingerprint 增量逻辑保留在组件内：syncArtifacts 自身按 fileId
+// 做 Map 合并去重（已有的不重拉），output_file_ids 每次轮询都是全新数组
+// 引用（后端 JSON 每次现拼），watch 因而每轮询都会触发一次，但对已知产物
+// 零重复请求，语义与原 loadTask 内联调用完全等价。immediate（Task 12 修复
+// 6，warm-join）：channel join 时若已有 loaded 缓存（同 key 复用），首帧
+// output_file_ids 已非空却错过这次 watch——immediate 补首帧，syncArtifacts
+// 自带 fileId 去重，不产生重复请求。
+watch(() => task.value?.output_file_ids, (ids) => {
+  syncArtifacts(ids || []);
+}, { immediate: true });
 
-async function loadTask({ silent = false } = {}) {
-  if (!silent) loading.value = true;
-  // 2s 轮询（silent）只增量拉尾段事件（事件表 append-only + id ASC，见
-  // api/tasks.js），避免事件越多轮询越重（Codex R1-P2）；首载/手动刷新仍
-  // 全量重拉，兼作自愈路径。baseline 身份守卫：若轮询在途期间发生过全量
-  // 重载（刷新/取消/放行后的 loadTask 已整体替换数组），本次轮询**整包
-  // 作废**——task/events/loadError 都不动（Codex R2-P2：只弃 events 而仍写
-  // task 会让 stale 快照倒灌，放行后可把状态钉回 waiting_review 且不再续
-  // 轮询）；失败同理（Codex R3-P3：被淘汰快照的错误横幅不得盖住更新的
-  // 状态）。finally 的 schedulePoll 依当前（更新的）状态决定是否续轮。
-  const baseline = silent ? events.value : null;
-  try {
-    const offset = baseline ? baseline.length : 0;
-    const [t, ev] = await Promise.all([getTask(taskId), listTaskEvents(taskId, { offset })]);
-    if (silent && events.value !== baseline) {
-      return;
-    }
-    task.value = t;
-    markTaskSeen(taskId); // 详情页开着=正在看：轮询期间状态翻终态不得回头亮未读
-    syncArtifacts(t.output_file_ids); // fire-and-forget，增量同步产物内容
-    syncModelCalls(); // fire-and-forget，全量重拉模型调用留痕（消耗诚实披露）
-    if (!silent) {
-      events.value = ev;
-    } else if (ev.length) {
-      events.value = baseline.concat(ev);
-    }
-    loadError.value = "";
-    if (isTerminal.value) {
-      await loadFeedback();
-    }
-  } catch (err) {
-    if (silent && events.value !== baseline) {
-      return;
-    }
-    loadError.value = err.detail || err.message;
-  } finally {
-    if (!silent) loading.value = false;
-    schedulePoll();
-  }
-}
+// 详情页开着=正在看：task 每次更新（含跨会话人工放行到账）都重新标记已看
+// 过，轮询期间状态翻终态不得回头亮未读；到终态时补拉一次反馈列表——channel
+// 到终态即停轮（liveFeedCore.nextInterval 返回 null），故本 watch 只会在
+// 「刚好翻终态」的那一次触发 loadFeedback，效果与原 loadTask 内联调用一致，
+// 不会在终态后空转重复拉。immediate（Task 12 修复 6，warm-join）：channel
+// 复用时首帧 task 可能已是终态却错过这次 watch——immediate 补首帧标记已看
+// /补拉反馈；markTaskSeen/loadFeedback 均幂等，不产生副作用重复。
+// 请求序号（Task 12 修复 5）：终态 watch 补拉与「提交反馈后重载」都会调用本
+// 函数，慢的首拉响应若晚于后一次调用落地，会用旧列表覆盖掉刚提交的反馈——
+// 只让「最新一次发起」的结果落盘，迟到的旧响应整包作废。声明必须先于下方
+// immediate watch（Codex R2-P2 verbatim）：warm-join 终态首帧会同步触发
+// loadFeedback，`let` 在 TDZ 内即 ReferenceError。
+let feedbackSeq = 0;
 
-// disposed 守卫（2b 双镜头 P2）：任务台把「切任务」变成同页高频交互——
-// :key 重建卸载旧实例时，若 loadTask 正 await 在途，finally 的 schedulePoll
-// 会在死实例闭包上武装新 timer 且无人再清（onUnmounted 只触发一次）。
-let disposed = false;
-function schedulePoll() {
-  clearPoll();
-  if (!disposed && task.value && !isTerminal.value && !isWaitingReview.value) {
-    pollTimer = setTimeout(() => loadTask({ silent: true }), 2000);
-  }
-}
-function clearPoll() {
-  if (pollTimer) {
-    clearTimeout(pollTimer);
-    pollTimer = null;
-  }
-}
-
+watch(task, (t) => {
+  if (!t) return;
+  markTaskSeen(taskId);
+  if (isTerminal.value) loadFeedback();
+}, { immediate: true });
 async function loadFeedback() {
+  const seq = ++feedbackSeq;
   try {
-    feedbackList.value = await listTaskFeedback(taskId);
+    const list = await listTaskFeedback(taskId);
+    if (seq !== feedbackSeq) return;
+    feedbackList.value = list;
     feedbackError.value = "";
   } catch (err) {
+    if (seq !== feedbackSeq) return;
     feedbackError.value = `反馈列表加载失败：${err.detail || err.message}`;
   }
 }
@@ -539,7 +535,7 @@ async function handleCancel() {
   try {
     await cancelTask(taskId);
     ElMessage.success("任务已取消");
-    await loadTask();
+    await pokeTask(taskId); // 带外补拉：不等下一 tick，动作结果立即回显
   } catch (err) {
     ElMessage.error(err.detail || err.message);
   }
@@ -562,7 +558,7 @@ async function handleReview(action) {
       burstSigned(approveBtnEl.value?.ref);
     }
     ElMessage.success(`已${label}`);
-    await loadTask();
+    await pokeTask(taskId); // 带外补拉：不等下一 tick，动作结果立即回显
   } catch (err) {
     ElMessage.error(err.detail || err.message);
   } finally {
@@ -594,16 +590,30 @@ async function handleSubmitFeedback() {
 }
 
 onMounted(() => {
-  markTaskSeen(taskId); // 打开详情即视为「已看过」，驱动任务台未读点
-  loadTask();
+  markTaskSeen(taskId); // 打开详情即视为「已看过」，驱动任务台未读点——数据到达前先标
+  offTransition = onTransition((ev) => {
+    if (
+      ev.id === taskId &&
+      TERMINAL_STATUSES.includes(ev.to) &&
+      ev.from != null &&
+      !TERMINAL_STATUSES.includes(ev.from)
+    ) {
+      sealAnimate.value = true; // 一次性，不复位
+    }
+  });
 });
 onUnmounted(() => {
-  disposed = true;
-  clearPoll();
+  taskChannel.release(); // refCount 归零则停链（其它订阅者仍持有时继续养着，都正确）
+  if (offTransition) offTransition();
 });
 </script>
 
 <style scoped>
+.td-skel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
 .page-header {
   position: relative;
   display: flex;

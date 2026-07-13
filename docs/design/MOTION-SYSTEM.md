@@ -50,16 +50,38 @@
 --ease-spring:   cubic-bezier(.34,1.4,.64,1)   仅小位移元素（防溢出裁切）
 ```
 
+### 已废除：--ease-lift（批A T8，2026-07-13，实测证据）
+
+`--ease-lift: 0.18s cubic-bezier(0.22, 0.61, 0.36, 1)` 是复合 token（自带时长）。全站
+~20 处以 `transition: <prop> 0.14~0.22s var(--ease-lift)` 写法使用——显式时长 + 复合
+token 展开后，CSS transition 简写按位置解析两个 `<time>`：第一个记为
+`transition-duration`，第二个（来自 token 内的 0.18s）记为 `transition-delay`。
+
+**实机验证**（Playwright，`.sb-new` 真实渲染元素，chromium `getComputedStyle`）：
+```
+transition: 0.16s cubic-bezier(0.22, 0.61, 0.36, 1) 0.18s
+transitionDuration: 0.16s
+transitionDelay: 0.18s   ← 确证 bug：每次 hover/press 微交互多出 180ms 死等
+```
+即按压/hover 反馈实际比设计意图晚 180ms 才开始过渡，与「细腻」北极星相悖。
+
+**处置**：全站引用改为 `var(--motion-fast) var(--ease-out-soft)`（hover/press 微交互，
+唯一例外 `App.vue` 移动端侧栏抽屉开合过渡——非 hover 而是状态切换/入场语义，改用
+`var(--motion-med) var(--ease-out-soft)`，原时长 0.22s 与 --motion-med 精确重合）；
+`WorkbenchSession.vue` 一处裸用法（`transition: box-shadow var(--ease-lift)`，无
+显式时长，实测无 delay bug）为与站内同类卡片 hover 抬升写法一致，同样归一到
+`--motion-fast` + `--ease-out-soft`。`--ease-lift` 定义已从 `App.vue :root` 删除。
+
 ## 模块清单
 
 | 件 | 文件 | 说明 |
 |---|---|---|
-| E1 粒子场引擎 | `src/effects/particleField.js` | canvas 2D 石墨尘+蓝图连线；`createParticleField(canvas, opts)` → `{destroy, setBoost}`；boost∈[0,1] 绑真实信号微调速度/透明度 |
+| E1 粒子场引擎 | ~~`src/effects/particleField.js`~~ | 已按「可整体拆除」条款清理（批A T8，2026-07-13）——零调用方死代码（`BEAUTIFY-review-record.md` 已标注），`git rm` 删除 |
 | E2 迸发引擎 | `src/effects/burst.js` | 一次性粒子迸发 `burstAtElement(el, {color})`；**teal 仅人签放行**；completed 用中性 ink 尘埃沉降；reduced-motion → no-op |
 | E3 tokens+全局 | `App.vue` | tokens、路由过渡（`:key="route.path"`，**纯 opacity**——容器动画带 transform 会劫持后代 position:fixed 的定位基准，「升起」由各页内部 fx-* 承担）、按压 micro（不覆盖 .el-button 自带 transition）、stagger-in 工具类 |
-| A1 hero 动态插画 | `src/components/artwork/DraftingScene.vue` | 内嵌 SVG 制图场景（Codex 产），CSS 动画 ≥20s 极慢 loop，漫画墨线风 |
+| A1 hero 动态插画 | ~~`src/components/artwork/DraftingScene.vue`~~ | 已按「可整体拆除」条款清理（批A T8，2026-07-13）——宿主 `WorkbenchHome.vue` 已删,零调用方,`git rm` 删除 |
 | A2 思考墨滴 | `src/components/artwork/ThinkingInk.vue` | 导引等待回复的墨滴扩散动画（替换纯打字点），仅真实请求在途时渲染 |
-| P1 工作台首页 | `WorkbenchHome.vue` | hero ambient 粒子场（boost=真实 work-state 任务数/5 封顶）+ hero 文案 stagger |
+| P1 工作台首页 | ~~`WorkbenchHome.vue`~~ | 宿主已删，其 hero ambient 粒子场用法随 E1（particleField.js）一并清理（批A T8，2026-07-13） |
 | P2 智能导引 | `GuidePage.vue` | ThinkingInk + 消息气泡 stagger 入场 + 推荐卡片展开动效 |
 | P3 任务详情 | `TaskDetail.vue` | 真实 work-state 时页头细流光带（clay 流动渐变，状态回落即停）+ 新事件墨迹晕开入场 + 放行成功 teal burst |
 | P4 门户/会话/⌘K | `AgentPortal.vue` / `WorkbenchSession.vue` / `QuickSwitcher.vue` | 卡片 stagger + hover 微动 + 面板 spring 微弹（CSS-only） |

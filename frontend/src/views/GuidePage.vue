@@ -318,11 +318,12 @@
 import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { createConversation, postMessage, getConversation, listConversationTasks } from "../api/conversations";
+import { createConversation, postMessage, getConversation } from "../api/conversations";
 import { listAgents } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
 import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, formatTime } from "../utils/format";
 import { openTaskPeek } from "../stores/statusCenter";
+import { acquireChannel } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";
 import ThinkingInk from "../components/artwork/ThinkingInk.vue";
 import IntentGlyph from "../components/artwork/IntentGlyph.vue";
@@ -520,7 +521,7 @@ async function send() {
       createdAt: res.message.created_at || null,
     });
     await scrollToBottom();
-    maybeStartTaskPoll(); // 本轮若刚给出 orchestrate 方案，开始为其召集状态保鲜
+    ensureConversationTasksFeed(); // 本轮若刚给出 orchestrate 方案，开始为其召集状态保鲜
   } catch (err) {
     // 本轮失败：后端契约是「失败零落库」（幂等重试，ADR-0013），本地同样回滚
     // 乐观气泡并把原文还原到输入框——不在界面上留一条服务端不存在的幽灵消息，
@@ -594,10 +595,16 @@ function createOneTask(agent, plan) {
 // orchestrate 方案卡的每个 agent-card 内联该会话真实任务状态：只在本会话已为
 // 该 agent_id 召集过任务时渲染 chip（诚实地板，未召集零占位）；点「速览 →」
 // 直开任务速览（openTaskPeek），渐进披露不逼人跳页。只在会话真出现 orchestrate
-// 方案时才拉取，5s 链式轮询保鲜（TaskDetail/WorkbenchSession 同款纪律）。
+// 方案时才订阅，改并轨 liveFeed 'conversation:<id>' channel（批A Task 6）——
+// GuidePage 组件实例跨会话复用（App.vue router-view :key 对 query 变化不重挂
+// 载，见该文件注释），故不能像 WorkbenchSession 那样在 setup 顶层一次性
+// acquire，需按当前目标（有无 orchestrate 方案 × 当前 conversationId）
+// watch-diff acquire/release，同 StatusCenter.vue 的 ensurePeekLoaded 姿势。
 const conversationTasks = ref([]);
-let taskPollTimer = null;
-let taskPollDisposed = false; // 卸载后 in-flight finally 不再续排（clearTaskPoll 拦不住已入 await 的那轮）
+let convTasksHandle = null;
+let convTasksStop = null;
+let convTasksHandleFor = null; // 当前持有订阅所属的 conversationId（null=未订阅）
+let feedDisposed = false; // 组件已卸载：拒绝 await 续体的迟到 acquire（Codex R2-P1）
 
 function hasOrchestratePlan() {
   return messages.value.some(
@@ -617,41 +624,42 @@ function agentTaskInfo(agent) {
   return { latest: list[0], extra: list.length - 1 };
 }
 
-async function refreshConversationTasks(convId) {
-  if (!convId) return;
-  try {
-    const tasks = await listConversationTasks(convId);
-    // 轮询在途期间会话可能已切换：陈旧响应作废，绝不倒灌覆盖新会话的状态。
-    if (convId !== conversationId.value) return;
-    conversationTasks.value = tasks;
-  } catch {
-    // 轮询失败：诚实不覆盖已展示的上一次成功结果，下一 tick 自愈（非关键展示）。
+function releaseConversationTasksFeed() {
+  if (convTasksStop) {
+    convTasksStop();
+    convTasksStop = null;
   }
-}
-
-function clearTaskPoll() {
-  if (taskPollTimer) {
-    clearTimeout(taskPollTimer);
-    taskPollTimer = null;
+  if (convTasksHandle) {
+    convTasksHandle.release();
+    convTasksHandle = null;
   }
+  convTasksHandleFor = null;
+  conversationTasks.value = [];
 }
 
-function scheduleTaskPoll() {
-  clearTaskPoll();
-  taskPollTimer = setTimeout(async () => {
-    try {
-      if (!document.hidden) await refreshConversationTasks(conversationId.value);
-    } finally {
-      if (!taskPollDisposed) scheduleTaskPoll();
-    }
-  }, 5000);
-}
-
-// 只在真出现 orchestrate 方案时启动（幂等：已有轮询在跑则不重复起）。
-function maybeStartTaskPoll() {
-  if (taskPollTimer || !conversationId.value || !hasOrchestratePlan()) return;
-  refreshConversationTasks(conversationId.value);
-  scheduleTaskPoll();
+// 只在真出现 orchestrate 方案时订阅（幂等：目标未变则不重新 acquire；目标
+// 变化——含「离开该会话」的 null——先 release 旧的再 acquire 新的，防止同屏
+// 挂两条 conversation channel）。channel 落地的 memberTasks 直接镜射到本地
+// conversationTasks，陈旧响应作废由 channel 自身的 epoch guard 承接，不需要
+// 本组件再比对 convId。
+function ensureConversationTasksFeed() {
+  // 卸载后拒绝迟到订阅（Codex R2-P1 verbatim）：postMessage/getConversation 的
+  // await 续体可能在组件卸载后才走到这里——那时唯一的 onUnmounted release 已
+  // 执行过，再 acquire 的 channel 将无人释放，泄漏成 tab 级 5s 常驻轮询。
+  if (feedDisposed) return;
+  const id = hasOrchestratePlan() ? conversationId.value : null;
+  if (id === convTasksHandleFor) return;
+  if (convTasksHandleFor) releaseConversationTasksFeed();
+  if (!id) return;
+  convTasksHandleFor = id;
+  convTasksHandle = acquireChannel(`conversation:${id}`);
+  convTasksStop = watch(
+    convTasksHandle.state.memberTasks,
+    (v) => {
+      if (convTasksHandleFor === id) conversationTasks.value = v;
+    },
+    { immediate: true }
+  );
 }
 
 // ── 会话恢复（左栏历史点击 / 刷新 /?c=<id>）──
@@ -663,8 +671,7 @@ function resetToFresh(clearError = true) {
   conversationId.value = "";
   draft.value = "";
   pendingFiles.value = [];
-  conversationTasks.value = [];
-  clearTaskPoll();
+  releaseConversationTasksFeed();
   if (clearError) pageError.value = "";
 }
 
@@ -688,7 +695,7 @@ async function loadConversation(id) {
       createdAt: m.created_at || null,
     }));
     await scrollToBottom();
-    maybeStartTaskPoll(); // 恢复的历史会话若已带 orchestrate 方案，立即接上轮询
+    ensureConversationTasksFeed(); // 恢复的历史会话若已带 orchestrate 方案，立即接上订阅
   } catch (err) {
     pageError.value = err.detail || err.message || "会话加载失败";
   } finally {
@@ -701,8 +708,8 @@ onMounted(() => {
   if (typeof c === "string" && c) loadConversation(c);
 });
 onUnmounted(() => {
-  taskPollDisposed = true;
-  clearTaskPoll();
+  feedDisposed = true; // 先封门再释放：卸载后任何 await 续体不得再 acquire
+  releaseConversationTasksFeed();
 });
 
 // 左栏切换会话 / 点「新对话」→ 据 ?c 变化恢复或重置（跳过刚创建的本会话，避免回灌）。
@@ -1028,7 +1035,7 @@ watch(
   border-radius: 10px;
   border: 1px solid transparent;
   cursor: pointer;
-  transition: background-color 0.16s var(--ease-out-soft), border-color 0.16s var(--ease-out-soft);
+  transition: background-color var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft);
 }
 .reframe-item:hover,
 .reframe-item:focus-visible {
@@ -1097,7 +1104,7 @@ watch(
   border: 1px solid var(--hairline-soft);
   border-radius: 14px;
   padding: 15px 16px;
-  transition: transform 0.22s var(--ease-lift), box-shadow 0.22s var(--ease-lift), border-color 0.22s var(--ease-lift);
+  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft);
   /* 入场动效交给全局 .fx-rise（m.fresh 门控，见 template）——历史会话加载
    * 路径重挂载不重播「刚发生」视觉，理由同 .plan-card/.user-bubble。 */
 }
@@ -1156,7 +1163,7 @@ watch(
   font-weight: 700;
   color: var(--clay);
   margin-left: 2px;
-  transition: color 0.16s var(--ease-lift);
+  transition: color var(--motion-fast) var(--ease-out-soft);
 }
 .agent-status:hover .status-peek {
   color: var(--clay-deep);
@@ -1178,7 +1185,7 @@ watch(
   cursor: pointer;
   color: var(--ink-soft);
   font-size: 12px;
-  transition: border-color 0.16s var(--ease-lift), color 0.16s var(--ease-lift);
+  transition: border-color var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
 }
 .status-artifact:hover {
   border-color: var(--clay-softer);
@@ -1274,12 +1281,12 @@ watch(
   border-radius: 10px;
   padding: 8px 14px;
   cursor: pointer;
-  transition: all 0.18s var(--ease-lift);
+  transition: all var(--motion-fast) var(--ease-out-soft);
 }
 .agent-cta::after {
   content: "→";
   margin-left: 7px;
-  transition: transform 0.18s var(--ease-lift);
+  transition: transform var(--motion-fast) var(--ease-out-soft);
 }
 .agent-cta:hover {
   background: var(--clay);
@@ -1316,7 +1323,7 @@ watch(
   padding: 9px 16px;
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.24);
-  transition: transform 0.16s var(--ease-lift), box-shadow 0.16s var(--ease-lift);
+  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
 }
 .workbench-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(var(--clay-rgb), 0.3); }
 .plan-escape {
@@ -1333,7 +1340,7 @@ watch(
   font-weight: 600;
   color: var(--clay);
   cursor: pointer;
-  transition: color 0.16s var(--ease-lift), transform 0.16s var(--ease-lift);
+  transition: color var(--motion-fast) var(--ease-out-soft), transform var(--motion-fast) var(--ease-out-soft);
 }
 .plan-escape:hover { color: var(--clay-deep); transform: translateX(2px); }
 .plan-note {
@@ -1403,7 +1410,7 @@ watch(
   border-radius: 22px;
   box-shadow: var(--shadow-composer);
   padding: 6px;
-  transition: border-color 0.2s var(--ease-lift), box-shadow 0.2s var(--ease-lift);
+  transition: border-color var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
 }
 .composer-shell:focus-within {
   border-color: var(--focus-ring-clay);
@@ -1425,7 +1432,7 @@ watch(
   cursor: pointer;
   display: grid;
   place-items: center;
-  transition: all 0.18s var(--ease-lift);
+  transition: all var(--motion-fast) var(--ease-out-soft);
 }
 .icon-btn:hover:not(:disabled) { background: var(--paper-rail); color: var(--ink-soft); }
 .icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -1454,7 +1461,7 @@ watch(
   display: grid;
   place-items: center;
   box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.28);
-  transition: transform 0.16s var(--ease-lift), box-shadow 0.16s var(--ease-lift), opacity 0.16s;
+  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft), opacity var(--motion-fast) var(--ease-out-soft);
 }
 .send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(var(--clay-rgb), 0.34); }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }

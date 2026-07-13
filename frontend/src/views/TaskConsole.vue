@@ -11,11 +11,39 @@
 
       <div v-if="feedError" class="cl-error">{{ feedError }}</div>
 
-      <!-- 待你签发：amber 组置顶（行动召唤最高优先） -->
-      <template v-if="waitingTasks.length">
-        <div class="cl-group-label waiting">✍ 待你签发 · {{ waitingTasks.length }}</div>
+      <!-- 首载骨架（A3）：只在「从未 loaded 且无错误」时撑轮廓，轮询期间/带旧值
+           刷新绝不回骨架；失败态走上面 cl-error，骨架不吞错误。 -->
+      <div v-if="!feedLoaded && !feedError" class="cl-skel-list">
+        <SkeletonBlock v-for="(w, i) in ['92%', '76%', '88%', '68%', '84%', '72%']" :key="i" height="40px" :width="w" />
+      </div>
+
+      <template v-else>
+        <!-- 待你签发：amber 组置顶（行动召唤最高优先） -->
+        <template v-if="waitingTasks.length">
+          <div class="cl-group-label waiting">✍ 待你签发 · {{ waitingTasks.length }}</div>
+          <div
+            v-for="t in waitingTasks"
+            :key="t.id"
+            class="cl-item"
+            :class="{ 'is-active': t.id === selectedId }"
+            role="button"
+            tabindex="0"
+            @click="select(t)"
+            @keydown.enter.prevent="select(t)"
+            @keydown.space.prevent="select(t)"
+          >
+            <span class="cl-lamp" :style="{ background: 'var(--trust-pending)' }"></span>
+            <span class="cl-main">
+              <span class="cl-name">{{ t.name || t.id.slice(0, 12) }}</span>
+              <span class="cl-sub">{{ t.agent_id }} · 需要你签发</span>
+            </span>
+          </div>
+        </template>
+
+        <!-- 全部任务（最近窗口）：状态徽章随 5s 轮询原地切换 -->
+        <div class="cl-group-label">最近任务 · {{ otherTasks.length }}</div>
         <div
-          v-for="t in waitingTasks"
+          v-for="t in otherTasks"
           :key="t.id"
           class="cl-item"
           :class="{ 'is-active': t.id === selectedId }"
@@ -25,35 +53,15 @@
           @keydown.enter.prevent="select(t)"
           @keydown.space.prevent="select(t)"
         >
-          <span class="cl-lamp" :style="{ background: 'var(--trust-pending)' }"></span>
+          <span class="cl-lamp" :class="{ 'is-pulsing': isWork(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
           <span class="cl-main">
-            <span class="cl-name">{{ t.name || t.id.slice(0, 12) }}</span>
-            <span class="cl-sub">{{ t.agent_id }} · 需要你签发</span>
+            <span class="cl-name" :class="{ 'is-unread': unseen(t) }">{{ t.name || t.id.slice(0, 12) }}</span>
+            <span class="cl-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }}</span>
           </span>
+          <span v-if="unseen(t)" class="cl-unseen-dot" title="完成后你还没看过"></span>
         </div>
+        <div v-if="feedLoaded && !feedTasks.length" class="cl-zero">还没有任务——从对话召集，或点上方「+ 新任务」。</div>
       </template>
-
-      <!-- 全部任务（最近窗口）：状态徽章随 5s 轮询原地切换 -->
-      <div class="cl-group-label">最近任务 · {{ otherTasks.length }}</div>
-      <div
-        v-for="t in otherTasks"
-        :key="t.id"
-        class="cl-item"
-        :class="{ 'is-active': t.id === selectedId }"
-        role="button"
-        tabindex="0"
-        @click="select(t)"
-        @keydown.enter.prevent="select(t)"
-        @keydown.space.prevent="select(t)"
-      >
-        <span class="cl-lamp" :class="{ 'is-pulsing': isWork(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
-        <span class="cl-main">
-          <span class="cl-name" :class="{ 'is-unread': unseen(t) }">{{ t.name || t.id.slice(0, 12) }}</span>
-          <span class="cl-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }}</span>
-        </span>
-        <span v-if="unseen(t)" class="cl-unseen-dot" title="完成后你还没看过"></span>
-      </div>
-      <div v-if="feedLoaded && !feedTasks.length" class="cl-zero">还没有任务——从对话召集，或点上方「+ 新任务」。</div>
 
       <div class="cl-foot-note">清单来自最近任务窗口（100 条）真实轮询——窗口外不虚报。</div>
     </aside>
@@ -82,6 +90,7 @@ import { ensureTaskBaseline, markTaskSeen, taskHasUnseen } from "../utils/lastSe
 import { feedTasks, feedLoaded, feedError, acquireTaskFeed, releaseTaskFeed } from "../stores/taskFeed";
 import TaskDetail from "./TaskDetail.vue";
 import EmptyState from "../components/EmptyState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -151,6 +160,12 @@ onUnmounted(releaseTaskFeed);
   color: var(--trust-fail);
   font-size: 12px;
   margin-bottom: 10px;
+}
+.cl-skel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 10px;
 }
 .cl-group-label {
   font-size: 11px;

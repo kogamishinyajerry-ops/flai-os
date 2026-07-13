@@ -8,12 +8,24 @@
           text
           @click="concludeSession"
         >结束协作</el-button>
-        <el-button text :loading="loading" @click="load">刷新</el-button>
+        <el-button text @click="pokeConversation(sessionId)">刷新</el-button>
       </div>
     </div>
 
-    <!-- 三态降级：加载中 / 出错 / 就绪 -->
-    <div v-if="loading && !conversation" class="wb-state" v-loading="true" style="min-height: 200px"></div>
+    <!-- 三态降级：加载中 / 出错 / 就绪。批A Task 6：loading 现由 channel 的
+         loaded 派生（首次拉取失败时 loaded 恒为 false，见 liveFeed.js
+         refresh()）——补 !loadError 条件，否则失败态会被挡在「加载中」分支
+         里出不来，错误横幅永远不可见。 -->
+    <!-- 首载骨架（A3）：只在「从未 loaded 且无 conversation 且无错误」时撑
+         hero+roster 轮廓，轮询期间/带旧值刷新绝不回骨架；失败态走下面
+         el-alert，骨架不吞错误。 -->
+    <div v-if="loading && !conversation && !loadError" class="wb-skel">
+      <SkeletonBlock height="28px" width="220px" />
+      <SkeletonBlock height="60px" width="90%" />
+      <SkeletonBlock height="72px" width="100%" />
+      <SkeletonBlock height="72px" width="100%" />
+      <SkeletonBlock height="72px" width="100%" />
+    </div>
 
     <el-alert
       v-else-if="loadError"
@@ -143,23 +155,30 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from "vue";
+// 批A Task 6：会话数据并轨 liveFeed 'conversation:<id>' channel（frontend/src/
+// stores/liveFeed.js）。本页 route.path 含 :sessionId，App.vue 的 router-view
+// :key 令 sessionId 变化时整页重挂载（同 TaskDetail 惯例），故这里可以在 setup
+// 顶层直接 acquireChannel 并解构 state，无需像 GuidePage 那样按目标 watch
+// acquire/release（GuidePage 组件实例跨会话复用）。旧的自建 5s 轮询链
+// （schedulePoll/load(silent)/baseline 守卫）整体删除，防 stale 语义由
+// channel 的 epoch guard 统一承接。
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { getConversation, listConversationTasks, concludeConversation } from "../api/conversations";
-import { listTaskEvents } from "../api/tasks";
+import { concludeConversation } from "../api/conversations";
 import { categoryColor, categoryLabel, statusLabel, taskLampColor, TASK_WORK_STATES } from "../utils/format";
 import { markSeen } from "../utils/lastSeen";
 import { openTaskPeek } from "../stores/statusCenter";
+import { acquireChannel, pokeConversation } from "../stores/liveFeed";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 
 const route = useRoute();
 const router = useRouter();
 const sessionId = route.params.sessionId;
 
-const conversation = ref(null);
-const memberTasks = ref([]);
-const loading = ref(false);
-const loadError = ref("");
+const convHandle = acquireChannel(`conversation:${sessionId}`);
+const { conversation, memberTasks, loaded: convLoaded, error: loadError } = convHandle.state;
+const loading = computed(() => !convLoaded.value);
 
 const plan = computed(() => conversation.value?.recommendation || null);
 const goal = computed(() => (plan.value?.decision === "orchestrate" ? plan.value.goal : ""));
@@ -186,74 +205,74 @@ function chipActionLabel(status) {
   return "";
 }
 
-// 轻量轮询（B2）：silent=true 时不切 loading 态、失败不覆盖已展示数据/错误横幅
-// （瞬时抖动不该把一个好端端的页面闪成空态或错误态，下一 tick 自愈）；沿用
-// TaskDetail.vue 同款「轮询整包作废」守卫——baseline 身份比对，轮询在途期间
-// 若发生过手动刷新/结束协作等整包重载，本次轮询结果整包作废，绝不用 stale
-// 快照倒灌覆盖更新的状态。opts 用 ?. 兼容 @click="load" 时 Vue 透传的原生
-// 事件对象（MouseEvent 没有 .silent，安全落到默认 false）。
-async function load(opts) {
-  const silent = opts?.silent === true;
-  if (!silent) loading.value = true;
-  const baseline = silent ? memberTasks.value : null;
-  try {
-    const [conv, tasks] = await Promise.all([
-      getConversation(sessionId),
-      listConversationTasks(sessionId),
-    ]);
-    if (silent && memberTasks.value !== baseline) return;
-    conversation.value = conv;
-    memberTasks.value = tasks;
-    loadError.value = "";
-    refreshLastWords(); // fire-and-forget：≤5 个补充请求，不阻塞主数据 loading 态
-  } catch (err) {
-    if (silent && memberTasks.value !== baseline) return;
-    if (!silent) loadError.value = err.detail || err.message || "加载协作会话失败";
-  } finally {
-    if (!silent) loading.value = false;
-  }
-}
-
-// 成员任务「最近动态」（Codex 子智能体面板同款定位，B2）：taskId → 该任务最后
-// 一条事件的 message 原文（截 60 字）——是"最新一条留痕"而非承诺第一人称叙事。
-// 无事件/message 为空则不记 key（对应行不渲染——绝不编造展示内容）。
+// 成员任务「最近动态」（Codex 子智能体面板同款定位，B2；批A Task 6 改增量
+// 订阅）：taskId → 该任务最后一条事件的 message 原文（截 60 字）——是"最新
+// 一条留痕"而非承诺第一人称叙事。无事件/message 为空则不记 key（对应行不
+// 渲染——绝不编造展示内容）。
 const taskLastWord = ref({});
-// taskId → 请求序号（非响应式）：手动刷新可与在途轮询重叠，只让「最新一次发起」
-// 的结果落盘，迟到的旧响应作废，避免动态被 stale 快照倒灌回退。
-const lastWordSeq = {};
 
-async function fetchLastWord(taskId) {
-  const seq = (lastWordSeq[taskId] = (lastWordSeq[taskId] || 0) + 1);
-  try {
-    const events = await listTaskEvents(taskId, { offset: 0 });
-    if (seq !== lastWordSeq[taskId]) return;
-    const msg = events.length ? events[events.length - 1].message || "" : "";
-    if (msg) {
-      taskLastWord.value[taskId] = msg.length > 60 ? `${msg.slice(0, 60)}…` : msg;
-    } else {
-      delete taskLastWord.value[taskId];
-    }
-  } catch {
-    // 拉取失败：诚实降级为不显示该行，不阻断其它成员或主数据（非关键展示）
-  }
-}
-
-// 上限 5 个已召集成员（按 roster 顺序截断，一并控住请求数——常态 1 任务/成员，
-// ≤5 个请求）。
+// 上限 5 个已召集成员的任务（按 roster 顺序截断，控住常驻订阅数——常态
+// 1 任务/成员，≤5 条 task channel），超出部分不订阅、不显示动态行（静态
+// 占位=零渲染，不伪造陈旧数据）。
 function lastWordTargets() {
   const members = rosterAgents.value.filter((a) => tasksFor(a).length > 0).slice(0, 5);
   const out = [];
   for (const a of members) {
     for (const t of tasksFor(a)) out.push(t);
   }
-  return out;
+  return out.slice(0, 5);
+}
+// 只在目标 taskId 集合真变化时重新订阅（join 用字符串比较,避免每次轮询
+// tick 因数组引用变化而空转 diff）。
+const lastWordTargetKey = computed(() => lastWordTargets().map((t) => t.id).join(","));
+
+// taskId → { handle, stop }：每个非终态/终态成员任务统一走 acquireChannel
+// ('task:'+id)——与页面其它位置（TaskDetail/StatusCenter）共用同一条 channel
+// 池,同 taskId 同屏零重复轮询。终态任务的 channel 由 liveFeedCore.nextInterval
+// 自动停轮（返回 null），常驻 acquire 对它们是零持续成本，取实现最简单的
+// 「常驻订阅」分支（brief 允许二选一），不再额外区分"一次性拉取即 release"。
+const lastWordHandles = new Map();
+
+function applyLastWordEvents(taskId, events) {
+  const msg = events && events.length ? events[events.length - 1].message || "" : "";
+  if (msg) {
+    taskLastWord.value = { ...taskLastWord.value, [taskId]: msg.length > 60 ? `${msg.slice(0, 60)}…` : msg };
+  } else if (taskLastWord.value[taskId] !== undefined) {
+    const next = { ...taskLastWord.value };
+    delete next[taskId];
+    taskLastWord.value = next;
+  }
 }
 
-// 每 tick 无条件重取（不做「状态未变跳过」节流）：长任务在同一状态下事件持续
-// 追加，按状态节流会让「最近动态」冻结在该状态的第一条——诚实优先于省请求；
-// 代价可控（≤5 个请求/5s，task_events 有 task_id 索引，内网可承受）。
-async function refreshLastWords() {
-  await Promise.all(lastWordTargets().map((t) => fetchLastWord(t.id)));
+function syncLastWordSubs() {
+  const targets = lastWordTargets();
+  const targetIds = new Set(targets.map((t) => t.id));
+  for (const [taskId, entry] of lastWordHandles) {
+    if (targetIds.has(taskId)) continue;
+    entry.stop();
+    entry.handle.release();
+    lastWordHandles.delete(taskId);
+    if (taskLastWord.value[taskId] !== undefined) {
+      const next = { ...taskLastWord.value };
+      delete next[taskId];
+      taskLastWord.value = next;
+    }
+  }
+  for (const t of targets) {
+    if (lastWordHandles.has(t.id)) continue;
+    const handle = acquireChannel(`task:${t.id}`);
+    const stop = watch(handle.state.events, (evs) => applyLastWordEvents(t.id, evs), { immediate: true });
+    lastWordHandles.set(t.id, { handle, stop });
+  }
+}
+watch(lastWordTargetKey, syncLastWordSubs, { immediate: true });
+
+function releaseLastWordSubs() {
+  for (const [, entry] of lastWordHandles) {
+    entry.stop();
+    entry.handle.release();
+  }
+  lastWordHandles.clear();
 }
 
 function goTask(t) {
@@ -275,7 +294,7 @@ async function concludeSession() {
   try {
     await concludeConversation(sessionId);
     ElMessage.success("协作已归档");
-    await load();
+    pokeConversation(sessionId); // 带外补拉：不等下一 tick，归档结果立即回显
   } catch (err) {
     ElMessage.error(err.detail || err.message || "结束协作失败");
   }
@@ -296,33 +315,13 @@ function summon(agent) {
   router.push({ path: "/tasks/new", query: { agent_id: agent.agent_id, from: "guide" } });
 }
 
-// 轻量轮询（B2）：链式 setTimeout（TaskDetail 同款纪律）——下一个 tick 只在
-// 上一次 load 完全落地后才排队，慢网/慢后端下绝不会堆积并发请求（setInterval
-// 会）。document.hidden 时本 tick 跳过但仍续轮；手动「刷新」按钮保留不动
-// （仍直调非 silent 的 load()）。
-let pollTimer = null;
-function schedulePoll() {
-  clearPoll();
-  pollTimer = setTimeout(async () => {
-    try {
-      if (!document.hidden) await load({ silent: true });
-    } finally {
-      schedulePoll();
-    }
-  }, 5000);
-}
-function clearPoll() {
-  if (pollTimer) {
-    clearTimeout(pollTimer);
-    pollTimer = null;
-  }
-}
 onMounted(() => {
   markSeen(sessionId); // 进入会话即视为「已看过」，驱动首页未读徽章
-  load();
-  schedulePoll();
 });
-onUnmounted(clearPoll);
+onUnmounted(() => {
+  convHandle.release(); // refCount 归零则停链（其它订阅者仍持有时继续养着，都正确）
+  releaseLastWordSubs();
+});
 </script>
 
 <style scoped>
@@ -331,6 +330,11 @@ onUnmounted(clearPoll);
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+}
+.wb-skel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 .wb-back-actions {
   display: flex;
@@ -457,7 +461,7 @@ onUnmounted(clearPoll);
   overflow: hidden;
   background: var(--card-bg);
   box-shadow: var(--shadow-card);
-  transition: box-shadow var(--ease-lift), transform var(--ease-lift);
+  transition: box-shadow var(--motion-fast) var(--ease-out-soft), transform var(--motion-fast) var(--ease-out-soft);
 }
 .member:hover {
   box-shadow: var(--shadow-card-hover);
