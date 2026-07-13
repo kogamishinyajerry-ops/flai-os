@@ -1,12 +1,15 @@
-"""批A「活的工作台」liveFeed 换轨验收（Task 4 先建骨架，仅断言②；①③ 见 TODO，
-Task 7 补全）。
+"""批A「活的工作台」liveFeed 换轨验收（Task 4 先建骨架仅断言②；Task 7 补全①，
+③留待其收口任务）。
 
 自包含：脚本自起后端（tmp 目录，绝不碰真实 data/）+ Job Runner + 真 chromium。
 除 frontend/dist 构建产物外无外部前置。
 
 覆盖：
-  TODO(Task 7) ①StatusDock/TaskConsole 翻转唤醒——tasks channel 观察到状态
-    翻转后带外 pokeTask 对应详情 channel，免等其下一 tick。
+  ①全站任务清单单链：TaskConsole（/tasks）与状态中心抽屉（inbox）同屏开启，
+    二者共享同一个 liveFeed 'tasks' channel（引用计数，非各自轮询）。30s 窗口
+    内统计 `/api/tasks`（清单接口，路径精确匹配，天然排除 `/api/tasks/<id>`
+    详情接口）请求次数，断言 ≤8（单链 5s 语义：首拉+6 tick+余量；旧双链
+    TaskConsole/StatusCenter 各自轮询会 ≥12，此断言在旧实现上必然超限失败）。
   ②TaskDetail 跨会话人工放行免手动刷新：本机浏览器开着 waiting_review 任务
     的详情页（channel 已按 liveFeedCore.nextInterval 降频到 8s）；另一个
     httpx 会话（模拟另一位工程师，不共享浏览器 cookie）直接 POST
@@ -14,7 +17,7 @@ Task 7 补全）。
     不点批准），12 秒内应自行出现终态盖章文案「已完成」——验证的是
     TaskDetail 已并轨 task:<id> channel 而非自建轮询（旧实现 waiting_review
     时轮询整体停止，此断言在旧实现上必然超时失败）。
-  TODO(Task 7) ③其余批A validate 场景（占位）。
+  TODO(Task 9) ③盖章动效场景（占位）。
 
 运行（仓根）：
   cd frontend && npm run build && cd ..
@@ -35,6 +38,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
@@ -122,6 +126,41 @@ with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")
     login_context(page.context, BASE)  # ADR-0019：本机浏览器会话——「等着看」的那一方
+
+    # ── 断言①：全站任务清单单链——TaskConsole + 状态中心抽屉同屏订阅同一
+    #    liveFeed 'tasks' channel，非各自轮询 ──
+    list_requests: list[str] = []
+
+    def _on_tasks_request(request) -> None:
+        if request.method == "GET" and urlparse(request.url).path == "/api/tasks":
+            list_requests.append(request.url)
+
+    page.on("request", _on_tasks_request)
+    window_start = time.time()
+    page.goto(BASE + "/tasks", wait_until="networkidle")
+    page.wait_for_selector(".console-list", state="visible", timeout=5000)
+    page.get_by_role("button", name="打开状态中心").click()
+    page.wait_for_selector(".status-center-drawer", state="visible", timeout=5000)
+
+    # 纯 Python 侧 time.sleep() 不会给渲染进程任何 CDP 活动——无画面刷新需求的
+    # headless 页签会被 Chromium 判定为后台而冻结 setTimeout 链（实测：单次大
+    # sleep 下 5s 轮询在首拉后即停摆，30s 窗口只剩 1 次请求，双链/单链回归都
+    # 测不出来，等于假绿）。每秒一次 page.evaluate 把渲染进程唤醒，讨回真实
+    # 的 5s 轮询节奏，断言才咬得住旧双链回归。
+    window_deadline = window_start + 30
+    while time.time() < window_deadline:
+        time.sleep(1)
+        page.evaluate("1")
+    page.remove_listener("request", _on_tasks_request)
+
+    list_count = len(list_requests)
+    check(
+        "①全站清单单链：/tasks + 状态中心抽屉同屏 30s 内 /api/tasks 清单请求 ≤8"
+        "（单链首拉+6tick+余量；旧双链会 ≥12）",
+        list_count <= 8,
+        f"count={list_count} urls={list_requests}",
+    )
+    page.screenshot(path=str(SHOTS / "0_single_chain_30s.png"), full_page=True)
 
     # ── 建 review_agent 任务，驱动到 waiting_review ──
     page.goto(BASE + "/tasks/new?agent_id=review_agent", wait_until="networkidle")
