@@ -1112,9 +1112,11 @@ def list_promotions(conn: sqlite3.Connection, agent_id: str) -> list[dict[str, A
 
 
 def list_promotions_all(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]:
-    """全局最近晋升（批B /today Agent 动态）。与单 agent 版同解码，最近优先。"""
+    """全局最近晋升（批B /today Agent 动态）。与单 agent 版同解码，最近优先。
+    排序按 created_at 主键（Codex R2-P2 verbatim）：恢复/回填的行可能乱插入序，
+    自增 id 只是并列决胜，「最近」以时间戳为准。"""
     rows = conn.execute(
-        "SELECT * FROM promotions ORDER BY id DESC LIMIT ?", (limit,)
+        "SELECT * FROM promotions ORDER BY created_at DESC, id DESC LIMIT ?", (limit,)
     ).fetchall()
     out = []
     for row in rows:

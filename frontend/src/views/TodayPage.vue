@@ -259,12 +259,19 @@ const topActiveAgents = computed(() => {
     .map(([agent_id, count]) => ({ agent_id, count }));
 });
 
+// 请求序号（Codex R2-P2 verbatim）：setup 首拉/迁移补拉/零点定时三处可并发在途，
+// 迟到的旧响应不得覆盖新落地（与 liveFeed fresh()/loadFeedback seq 同族守卫）。
+let statsSeq = 0;
 async function fetchStats() {
   weekStartMs.value = computeWeekStartMs(); // 每次拉取前重算，绝不用挂载时的陈旧边界
+  const seq = ++statsSeq;
   try {
-    stats.value = await getStatsOverview(new Date(weekStartMs.value).toISOString());
+    const next = await getStatsOverview(new Date(weekStartMs.value).toISOString());
+    if (seq !== statsSeq) return; // 已有更新一轮发起，本响应整包作废
+    stats.value = next;
     statsError.value = "";
   } catch (err) {
+    if (seq !== statsSeq) return;
     // 诚实地板：失败显式报错，绝不显示 0 冒充无数据。
     statsError.value = err.detail || err.message || "统计不可用";
   }

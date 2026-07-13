@@ -499,3 +499,36 @@ def test_migration_concurrent_init_db_sweep(tmp_path) -> None:
             th.join(timeout=30)
         assert errors == [], f"round {round_no}: 并发 init_db 崩溃 {errors!r}"
         assert "conversation_id" in _model_calls_columns(db_path)
+
+
+def test_delivery_summary_sensitive_task_suppresses_batch_fields(app_env) -> None:
+    """ADR-0025 一致封闭回归（Codex R2-P1）：/events 对 sensitive 任务遮蔽
+    summary_generated payload，delivery_summary 若照读事件 payload 即重开被封
+    数据面。sensitive 任务：批量字段必 null（即便事件真实存在）；model_calls
+    计数/token 元数据（与内容遮蔽面正交）照常返回。tamper：拆掉实现里的
+    is_sensitive_task 门，本测必红。"""
+    client, app = app_env
+    task = _create_and_run(client, app, "hello_agent", {"name": "敏感批量"})
+    task_id = task["id"]
+    conn = app.state.conn_factory()
+    try:
+        repos.record_model_call(
+            conn, task_id=task_id, model_profile="reasoning", status="success",
+            token_usage_json={"total_tokens": 42},
+        )
+        repos.append_event(
+            conn, task_id=task_id, event_type="agent_log", level="info",
+            message="批量收尾", payload={"workflow_event_type": "summary_generated", "ok_count": 9, "failed_count": 1},
+        )
+        conn.execute(
+            "UPDATE tasks SET data_classification = 'sensitive' WHERE id = ?", (task_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    body = client.get(f"/api/tasks/{task_id}/delivery_summary").json()
+    assert body["batch_ok"] is None       # 事件存在但被门封——绝不外泄
+    assert body["batch_failed"] is None
+    assert body["mc_total"] == 1          # 元数据聚合不受内容遮蔽面影响
+    assert body["token_sum"] == 42

@@ -522,7 +522,7 @@ def get_task_delivery_summary(task_id: str, request: Request) -> dict[str, Any]:
     """
     conn = request.app.state.conn_factory()
     try:
-        _get_task_or_404(conn, task_id)
+        task = _get_task_or_404(conn, task_id)
 
         mc_rows = conn.execute(
             "SELECT status, token_usage_json FROM model_calls WHERE task_id = ?",
@@ -551,7 +551,12 @@ def get_task_delivery_summary(task_id: str, request: Request) -> dict[str, Any]:
 
         batch_ok: int | None = None
         batch_failed: int | None = None
-        event_rows = conn.execute(
+        # ADR-0025 一致封闭（Codex R2-P1 verbatim）：/tasks/{id}/events 对 sensitive
+        # 任务遮蔽 payload（含 summary_generated 的 ok/failed_count），本聚合若照读
+        # payload 即重开被封的任务派生数据面——sensitive 一律不做事件扫描，批量字段
+        # 保持 null（卡片不显示批量行）。model_calls 聚合只含计数/token 元数据，
+        # 与 MODEL_CALL_CONTENT_KEYS 遮蔽面正交，保留。
+        event_rows = [] if cgate.is_sensitive_task(conn, task) else conn.execute(
             "SELECT payload_json FROM task_events WHERE task_id = ? AND event_type = 'agent_log'"
             " ORDER BY id DESC LIMIT 50",
             (task_id,),

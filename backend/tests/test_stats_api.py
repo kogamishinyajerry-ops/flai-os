@@ -178,3 +178,18 @@ def test_count_curated_cases_pure(tmp_path):
     (d / "notes.md").write_text("")  # 非 case_*.json 不计
     assert count_curated_cases(tmp_path / "agents") == 2
     assert count_curated_cases(tmp_path / "不存在") == 0
+
+
+def test_global_promotions_ordered_by_created_at_not_insertion(app_env):
+    """Codex R2-P2 回归：恢复/回填可乱插入序——「最近」必须以 created_at 为准。
+    夹具故意后插一条更早时间戳的行（id 更大但时间更早），断言时间序胜出。
+    tamper：把实现改回 ORDER BY id DESC，本测必红。"""
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        _insert_promotion(conn, "agent_new", "2026-07-13T05:00:00+00:00")
+        _insert_promotion(conn, "agent_backfill", "2026-07-01T00:00:00+00:00")  # 回填:id大时间早
+    finally:
+        conn.close()
+    rows = client.get("/api/promotions").json()
+    assert [x["agent_id"] for x in rows[:2]] == ["agent_new", "agent_backfill"]

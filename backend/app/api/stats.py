@@ -27,8 +27,12 @@ def count_curated_cases(agents_dir: Path) -> int:
 def stats_overview(request: Request, since: str | None = None) -> dict[str, Any]:
     if not since:
         raise HTTPException(status_code=422, detail="since 必填（ISO8601）")
+    # Python 3.10 兼容（Codex R2-P1 verbatim）：fromisoformat 到 3.11 才认 'Z'
+    # 后缀，而前端 toISOString() 恒发 Z——3.10 运行时（内网 Windows 定版下限）
+    # 不预归一化会把 /today 的每次统计请求全打成 422。先把尾缀 Z 换 +00:00 再解析。
+    parse_src = since[:-1] + "+00:00" if since[-1] in ("Z", "z") else since
     try:
-        dt = datetime.fromisoformat(since)
+        dt = datetime.fromisoformat(parse_src)
         if dt.tzinfo is None:
             # naive/纯日期没有确定时刻语义，与库内 offset-aware 字符串比较必错序——拒收。
             raise HTTPException(
