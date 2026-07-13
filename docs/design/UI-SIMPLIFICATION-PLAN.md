@@ -154,6 +154,15 @@ git commit -m "$(printf 'feat(ui): 方案卡去装饰重量（Batch1 · 保诚�
 
 ## Batch 3 — 任务详情速览优先（中风险 · 默认路径改道 + 整页深链态清理）
 
+> **规划期审计结论（Batch 1-2 落地后，2026-07-12）**：**「速览优先」核心目标已满足**——
+> 全部随手「看任务」入口默认走速览 `openTaskPeek`（对话 plan-card 督战点/产物锚 · StatusDock/
+> StatusCenter inbox · WorkbenchSession chips）；每个 `router.push('/tasks/:id')` 整页跳转均为
+> ①速览内「打开完整页 ↗」显式 opt-in / ②已在深链上下文内（TaskConsole 行/WorkbenchSession）/
+> ③创建后或 ⌘K 搜索——**无一随手一瞥被甩去 87 控件整页**。故 Batch 3 只剩**可选**的「整页深链态
+> 二次密度清理」（TaskDetail 918 LOC/87 控件），属 §九「只深链态二次清理不重写」的低边际、
+> 主观、opt-in-page 工作 → **交 owner 定优先级**（是否值得做、削到多克制），不擅自重塑复杂页。
+> 次要可选增强：⌘K 选任务 → 速览（当前跳整页，可议）。
+
 > 依赖 Batch 2。step 级细化 JIT 补。
 
 **Files:** `components/StatusCenter.vue`(peek 已含内联签发，确认所有默认点击落 peek) · `views/TaskConsole.vue`/`views/TaskDetail.vue`(整页深链态二次密度清理) · e2e：`m8_workbench`·`m9_guide_loop`·`m2_acceptance`。
