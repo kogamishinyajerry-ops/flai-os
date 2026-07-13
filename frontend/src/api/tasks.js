@@ -56,3 +56,7 @@ export const listToolRuns = (taskId) => request(`/api/tasks/${taskId}/tool_runs`
 // 模型调用留痕（只读端点，消耗诚实披露用；字段=model_profile/model_name/status/
 // token_usage，token_usage 上游未回报时为 null，绝不补 0）。
 export const listModelCalls = (taskId) => request(`/api/tasks/${taskId}/model_calls`);
+
+// 产物文件只读元数据投影（批B P1 修复，字段=id/filename/size_bytes/data_classification，
+// 绝不含 path/内容）——DeliveryCard 产物条用它取代逐个 fetchOutputFile 全量拉 blob。
+export const listOutputFiles = (taskId) => request(`/api/tasks/${taskId}/output_files`);

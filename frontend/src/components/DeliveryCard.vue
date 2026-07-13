@@ -19,19 +19,30 @@
       </span>
     </div>
 
-    <!-- 产物条：无产物不渲染该条——诚实地板不编「0 产物」。fileId 去重 + 一次性
-         取 meta（onMounted，终态数据静态绝不轮询），前 3 件文件名 chip，超出显「+N」。
-         chip 是原生 <a download>，click.stop 阻断整卡点击（否则先触发下载又跳转）。 -->
+    <!-- 产物条：无产物不渲染该条——诚实地板不编「0 产物」。一次性拉全部产物元数据
+         投影（listOutputFiles，onMounted，终态数据静态绝不轮询），前 3 件文件名
+         chip，超出显「+N」。internal 分级=原生 <a download> 真下载意图；非 internal
+         （含拉取失败退化的 unknown）=不可点 span，绝不触发下载审计——chip 只做
+         展示，点击才是下载意图。click/keydown.stop 阻断整卡点击（不 prevent 默认
+         行为，Enter 仍能触发锚点原生下载）。 -->
     <div v-if="artifacts.length" class="delivery-artifacts">
-      <a
-        v-for="a in artifacts"
-        :key="a.fileId"
-        :href="downloadUrl(a.fileId)"
-        download
-        class="delivery-chip"
-        :title="a.filename"
-        @click.stop
-      >{{ a.filename }}</a>
+      <template v-for="a in artifacts" :key="a.id">
+        <a
+          v-if="a.data_classification === 'internal'"
+          :href="downloadUrl(a.id)"
+          download
+          class="delivery-chip"
+          :title="a.filename"
+          @click.stop
+          @keydown.enter.stop
+          @keydown.space.stop
+        >{{ a.filename }}</a>
+        <span
+          v-else
+          class="delivery-chip delivery-chip-restricted"
+          title="受限产物，详情页签发流程查看"
+        >{{ a.filename }}</span>
+      </template>
       <span v-if="extraCount > 0" class="delivery-chip delivery-chip-more">+{{ extraCount }}</span>
     </div>
 
@@ -55,8 +66,8 @@
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import CompletionSeal from "./CompletionSeal.vue";
-import { downloadUrl, fetchOutputFile } from "../api/files";
-import { listModelCalls, listTaskEvents } from "../api/tasks";
+import { downloadUrl } from "../api/files";
+import { listModelCalls, listTaskEvents, listOutputFiles } from "../api/tasks";
 import { taskElapsedMs, formatDuration } from "../utils/format";
 
 const props = defineProps({ task: Object, animate: { type: Boolean, default: false } });
@@ -74,32 +85,38 @@ const elapsedText = computed(() => {
   return text === "—" ? "" : text;
 });
 
-// ── 产物条：fileId 去重取前 3 件一次性拉 meta（fetchOutputFile 同 StatusCenter
-// syncPeekArtifacts 手法）；单件拉取失败不摧毁整条——退化显示 fileId 前 8 位。 ──
+// ── 产物条：一次请求拉全部产物元数据投影（/tasks/{id}/output_files，只读
+// id/filename/size_bytes/data_classification，绝不含内容/路径——不再逐个调
+// fetchOutputFile 拖全量 blob）。前 3 件 chip，超出显「+N」。整请求失败（非
+// 单件失败）时 fail-closed 退化：用 id 前 8 位占位、分级标 unknown——unknown
+// 一律按非 internal 处理（chip 不可点），绝不在拉取失败时误当 internal 放行下载。 ──
 const artifacts = ref([]);
 const extraCount = ref(0);
 
-async function loadArtifacts(ids) {
+async function loadArtifacts(taskId, ids) {
   const uniqueIds = [...new Set(ids || [])];
-  const targets = uniqueIds.slice(0, 3);
-  extraCount.value = Math.max(0, uniqueIds.length - targets.length);
-  if (!targets.length) {
+  if (!uniqueIds.length) {
     artifacts.value = [];
+    extraCount.value = 0;
     return;
   }
-  const out = [];
-  for (const fid of targets) {
-    try {
-      out.push(await fetchOutputFile(fid));
-    } catch (err) {
-      out.push({ fileId: fid, filename: fid.slice(0, 8) });
-    }
+  try {
+    const files = await listOutputFiles(taskId);
+    artifacts.value = files.slice(0, 3);
+    extraCount.value = Math.max(0, files.length - artifacts.value.length);
+  } catch (err) {
+    const targets = uniqueIds.slice(0, 3);
+    extraCount.value = Math.max(0, uniqueIds.length - targets.length);
+    artifacts.value = targets.map((fid) => ({ id: fid, filename: fid.slice(0, 8), data_classification: "unknown" }));
   }
-  artifacts.value = out;
 }
 
 // ── 尾行·模型调用：null（fetch 失败）→「模型调用：未知」；[]→「无模型调用」；
-// 有→「N 次调用·token 合计 X」，token 凑不出（无任何一条能折算出总数）显「未知」。
+// 有调用时四态（B7 P2 修复——三态版把「部分凑出的和」当成合计显示，是冒充合计
+// 的假信息）：全部能折算→「N 次调用 · tokens 合计 X」；全部凑不出→「N 次调用 ·
+// token 用量：未知」（与 TaskDetail modelCallStats 空态措辞一致）；部分能折算→
+// 追加「（部分未报，下界）」，逐字对齐 TaskDetail.vue tokenMissingCount 分支
+// 「部分调用上游未回报 token，合计为下界」的语义，绝不让部分和冒充合计。
 // token 折算口径与 TaskDetail modelCallTokenTotal 同源（total_tokens 优先，
 // 否则 prompt+completion；两者皆无算未知，绝不记 0）。 ──
 const modelCalls = ref(null); // null=未知（fetch 失败）区别于 []（真的零调用）
@@ -126,8 +143,9 @@ const modelCallText = computed(() => {
       tokenKnown++;
     }
   }
-  const tokenText = tokenKnown > 0 ? String(tokenSum) : "未知";
-  return `${calls.length} 次调用 · token 合计 ${tokenText}`;
+  if (tokenKnown === 0) return `${calls.length} 次调用 · token 用量：未知`;
+  const suffix = tokenKnown < calls.length ? "（部分未报，下界）" : "";
+  return `${calls.length} 次调用 · tokens 合计 ${tokenSum}${suffix}`;
 });
 
 // ── 尾行·批量 ok/failed：同 TaskDetail.batchSummary 口径——最后一条
@@ -153,7 +171,7 @@ function deriveBatchSummary(events) {
 onMounted(() => {
   const t = props.task;
   if (!t) return;
-  loadArtifacts(t.output_file_ids);
+  loadArtifacts(t.id, t.output_file_ids);
   listModelCalls(t.id)
     .then((calls) => { modelCalls.value = calls; })
     .catch(() => { modelCalls.value = null; });
@@ -222,6 +240,11 @@ onMounted(() => {
 .delivery-chip-more {
   color: var(--ink-faint);
   cursor: default;
+}
+.delivery-chip-restricted {
+  color: var(--ink-faint);
+  cursor: default;
+  border-style: dashed;
 }
 .delivery-tail {
   display: flex;

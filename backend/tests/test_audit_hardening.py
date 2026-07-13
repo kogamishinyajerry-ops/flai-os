@@ -138,6 +138,53 @@ def test_trace_read_apis_expose_versions(app_env) -> None:
         assert client.get(f"/api/tasks/task_missing/{ep}").status_code == 404
 
 
+def test_output_files_endpoint_projects_metadata_no_leak(app_env) -> None:
+    """批B P1 修复：/tasks/{id}/output_files 只投影
+    [{id, filename, size_bytes, data_classification}]，绝不含 path/sha256/uploaded_by。
+    hello_agent 产出的 internal 文件 + 手工插入的 sensitive 文件都要能看见——分级本身
+    是元数据（前端据此决定要不要渲染下载链接），真下载仍走 /files/{id}/download 原
+    分级门，本端点不代管下载授权。"""
+    client, app = app_env
+    task = _create_and_run(client, app, "hello_agent", {"name": "产物投影"})
+    assert task["status"] == "completed"
+    task_id = task["id"]
+    assert task["output_file_ids"], "hello_agent 必须产出至少一个文件"
+    internal_file_id = task["output_file_ids"][0]
+
+    # 手工插入一个 sensitive 分级产物并挂到同一任务，模拟受限产物场景。
+    conn = app.state.conn_factory()
+    try:
+        sensitive_file = repos.create_file(
+            conn,
+            file_id="file_sensitive_test",
+            task_id=task_id,
+            kind="output",
+            filename="受限产物.csv",
+            path="/nonexistent/受限产物.csv",
+            size_bytes=42,
+            sha256="0" * 64,
+            classification="sensitive",
+        )
+        repos.set_task_outputs(conn, task_id, [*task["output_file_ids"], sensitive_file["id"]])
+    finally:
+        conn.close()
+
+    projection = client.get(f"/api/tasks/{task_id}/output_files").json()
+    assert len(projection) == 2
+    by_id = {row["id"]: row for row in projection}
+
+    assert by_id[internal_file_id]["data_classification"] == "internal"
+    assert by_id["file_sensitive_test"]["data_classification"] == "sensitive"
+    assert by_id["file_sensitive_test"]["filename"] == "受限产物.csv"
+    assert by_id["file_sensitive_test"]["size_bytes"] == 42
+
+    # 绝不泄漏 path/sha256/uploaded_by/kind——投影只允许这四个约定字段。
+    for row in projection:
+        assert set(row.keys()) == {"id", "filename", "size_bytes", "data_classification"}
+
+    assert client.get("/api/tasks/task_missing/output_files").status_code == 404
+
+
 # ── inputs 大小上限（DoS 面）──────────────────────────────────────────────
 
 

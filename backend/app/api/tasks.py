@@ -459,3 +459,28 @@ def list_task_samples(task_id: str, request: Request) -> list[dict[str, Any]]:
         return rows
     finally:
         conn.close()
+
+
+@router.get("/tasks/{task_id}/output_files")
+def list_task_output_files(task_id: str, request: Request) -> list[dict[str, Any]]:
+    """任务产物文件的只读元数据投影（批B P1 治理修复）：DeliveryCard 产物条此前
+    逐个调用 /files/{id}/download 只为取文件名——纯展示需求却全量拖 blob，且对
+    非 internal 分级文件触发 sensitive_download_denied 假阳性审计（用户根本没
+    有下载意图）。本端点只投影 [{id, filename, size_bytes, data_classification}]，
+    绝不含 path/sha256/uploaded_by 等敏感或内容字段——前端据此渲染 chip，真实下载
+    仍走 /files/{id}/download 原有分级门（该端点自身的审计语义不受影响）。"""
+    conn = request.app.state.conn_factory()
+    try:
+        task = _get_task_or_404(conn, task_id)
+        rows = repos.list_files_by_ids(conn, task.get("output_file_ids") or [])
+        return [
+            {
+                "id": r["id"],
+                "filename": r["filename"],
+                "size_bytes": r["size_bytes"],
+                "data_classification": r["classification"],
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
