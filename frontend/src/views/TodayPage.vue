@@ -69,12 +69,12 @@
         <EmptyState v-else variant="data" description="当前没有进行中的任务" />
       </section>
 
-      <!-- 版块 3：今日交付（终态叙事卡）。animate 恒 false 占位——Task 6 才接
-           sealAnimateIds（本会话亲历迁移才播盖章仪式），此处直开静态渲染零回归。 -->
+      <!-- 版块 3：今日交付（终态叙事卡）。animate 接 sealAnimateIds（批B Task 6）
+           ——本会话亲历「活跃→终态」迁移的任务才播盖章合拢仪式，历史直开静态渲染。 -->
       <section class="today-section">
         <div class="today-section-head">今日交付 · {{ deliveryTasks.length }}</div>
         <div v-if="deliveryTasks.length" class="today-list">
-          <DeliveryCard v-for="t in deliveryTasks" :key="t.id" :task="t" :animate="false" />
+          <DeliveryCard v-for="t in deliveryTasks" :key="t.id" :task="t" :animate="sealAnimateIds.has(t.id)" />
         </div>
         <EmptyState v-else variant="data" description="今天还没有交付的任务" />
       </section>
@@ -143,9 +143,10 @@
 // 数据源：liveFeed 'tasks' channel（批A 单源轮询，5s 自链，与 StatusCenter/
 // StatusDock/TaskConsole 同一份真值）。本页整页挂载期间持有一次 acquire，
 // 卸载即 release（channel 无其它订阅者时自停）。
-import { computed, onUnmounted, ref } from "vue";
+import { computed, onUnmounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { acquireChannel, onTransition } from "../stores/liveFeed";
+import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import { getStatsOverview, listGlobalPromotions } from "../api/stats";
 import { statusLabel, taskLampColor, taskElapsedMs, formatDuration, formatRelativeTime, TASK_WORK_STATES, MATURITY } from "../utils/format";
 import EmptyState from "../components/EmptyState.vue";
@@ -164,16 +165,22 @@ const workingTasks = computed(() =>
   feedTasks.value.filter((t) => ["created", "queued", "running", "validating"].includes(t.status))
 );
 
-// 版块 3：今日交付——终态（completed/failed/cancelled）且 finished_at 落在本地
-// 今日（本地日切：今天 0 点起，非 UTC）。本地日切用 Date 对象比较，不字符串截断。
-const TERMINAL_STATES = new Set(["completed", "failed", "cancelled"]);
+// 版块 3：今日交付——终态（completed/failed/cancelled，TERMINAL_STATUSES 单一
+// 映射源，与 liveFeedCore/TaskDetail 同款）且 finished_at 落在本地今日（本地
+// 日切：今天 0 点起，非 UTC）。本地日切用 Date 对象比较，不字符串截断。
 const deliveryTasks = computed(() => {
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   return feedTasks.value.filter(
-    (t) => TERMINAL_STATES.has(t.status) && t.finished_at && new Date(t.finished_at) >= todayStart
+    (t) => TERMINAL_STATUSES.includes(t.status) && t.finished_at && new Date(t.finished_at) >= todayStart
   );
 });
+
+// 盖章仪式只属于亲历者（批A Task 9 同款判据，见 TaskDetail.vue ~328-341 行的
+// 硬坑注释：ev.from 必须显式 != null，不能只判「不在终态列表」——否则
+// StatusDock 全局常驻挂载的冷启动清单拉取会被误当成一次「亲历迁移」）。页面
+// 生命周期内不清除：同一会话回看仍算亲历过。
+const sealAnimateIds = reactive(new Set());
 
 // 版块 4/5（B-T5）：「本周」=本地周一零点转 UTC ISO 作 since（周日 getDay()=0 归上周一）。
 // 算一次即可——页面挂载期间「本周」边界不变，不必做成响应式。
@@ -237,14 +244,19 @@ fetchPromotions();
 
 // 补拉纪律（brief §拉取纪律）：任务转 completed 或离开 waiting_review 时才可能
 // 产生新的治理事件（完成数/人签数），补拉一次 stats；30s 内去重防事件雨连环拉。
-// 不进 liveFeed 轮询——只在真实转移事件上触发。
+// 不进 liveFeed 轮询——只在真实转移事件上触发。同一订阅内并入亲历仪式判据
+// （单一 onTransition 订阅，off 只需配对一次，不造双份补拉）。
 let lastStatsRefetchAt = 0;
 const offTransition = onTransition((ev) => {
   if (ev.to === "completed" || ev.from === "waiting_review") {
     const now = Date.now();
-    if (now - lastStatsRefetchAt < 30000) return;
-    lastStatsRefetchAt = now;
-    fetchStats();
+    if (now - lastStatsRefetchAt >= 30000) {
+      lastStatsRefetchAt = now;
+      fetchStats();
+    }
+  }
+  if (ev.from != null && !TERMINAL_STATUSES.includes(ev.from) && TERMINAL_STATUSES.includes(ev.to)) {
+    sealAnimateIds.add(ev.id);
   }
 });
 
