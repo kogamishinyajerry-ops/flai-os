@@ -30,11 +30,14 @@
             @keydown.enter.prevent="openTask(t.id)"
             @keydown.space.prevent="openTask(t.id)"
           >
-            <span class="today-lamp" :style="{ background: 'var(--trust-pending)' }"></span>
+            <!-- lamp 走 taskLampColor SSOT（B-T3 审 P3）；耗时文案「运行」而非
+                 「等待」——taskElapsedMs 起点是 started_at，是任务总耗时不是
+                 进入待签发队列的排队时长（诚实地板：文案不得暗示不存在的语义）。 -->
+            <span class="today-lamp" :style="{ background: taskLampColor(t.status) }"></span>
             <span class="today-card-main">
               <span class="today-card-name">{{ t.name || t.id.slice(0, 12) }}</span>
               <span class="today-card-sub">
-                {{ t.agent_id }}<template v-if="elapsedText(t)"> · 已等待 {{ elapsedText(t) }}</template>
+                {{ t.agent_id }}<template v-if="elapsedText(t)"> · 运行 {{ elapsedText(t) }}</template>
               </span>
             </span>
           </div>
