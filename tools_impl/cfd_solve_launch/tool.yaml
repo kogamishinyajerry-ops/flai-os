@@ -35,7 +35,8 @@ input_schema:
     end_time:
       type: number
       exclusiveMinimum: 0
-      description: 可选，覆盖 controlDict endTime（数值型才注入，非法忽略）
+      maximum: 600
+      description: 可选，覆盖 controlDict endTime（上界 600=canonical 150 的 4×，R1-P1-4——detached 求解无取消路径，无界时长=无界烧 CPU；adapter 同守）
   additionalProperties: false
 output_schema:
   type: object

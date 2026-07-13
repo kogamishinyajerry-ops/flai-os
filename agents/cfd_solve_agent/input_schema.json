@@ -13,12 +13,13 @@
     "end_time": {
       "type": "number",
       "exclusiveMinimum": 0,
-      "description": "可选，覆盖 controlDict endTime（求解物理时长）"
+      "maximum": 600,
+      "description": "可选，覆盖 controlDict endTime（上界 600=canonical 150 的 4×，R1-P1-4——detached 求解无取消路径，无界时长=无界烧 CPU；Tool adapter 同守）"
     },
     "run_id": {
       "type": "string",
-      "pattern": "^\\d{8}-\\d{6}$",
-      "description": "可选，固定 run_id（测试/eval 确定性重放用）；缺省由 workflow 生成 UTC 时间戳"
+      "pattern": "^[0-9]{8}-[0-9]{6}$",
+      "description": "可选，固定 run_id（测试/重放用）；缺省由 workflow 生成 UTC 时间戳。Tool 侧另做语义校验（真日期且不超前当前 UTC 24h，R1-P2-2——假日期/远未来 ID 会钉死 hub newest_by_name 遮蔽后续 run）"
     }
   }
 }

@@ -59,6 +59,19 @@ plan 原稿 `context.get("run_id_seed") or context.get("task_id")` 不可用：c
 （schema pattern 校验，测试/eval 确定性重放用），缺省 workflow 生成 UTC 时间戳
 `YYYYMMDD-HHMMSS`（hub `newest_by_name` 排序键 + Tool 白名单双满足）。
 
+## 三、Codex R1 处置（5P1+3P2，2026-07-13）
+
+| # | Finding | 处置 |
+|---|---------|------|
+| P1 | pgrep 匹配不到 OF11 真进程（pimpleFoam 是 sh wrapper，comm=foamRun） | 真跑取证后修 `pgrep -x 'foamRun\|pimpleFoam'`（孤儿 run 实证假阴性） |
+| P1 | rehearse.sh `rm -rf case/run/*` 会清 managed runs（共享目录） | **运维红线**（代码不可修：bind-mount 固定 + 他仓零改动铁律）——managed 求解在场勿跑 rehearse.sh；被清后评估 fail-closed 诚实报缺不静默错读；红线记 agent README |
+| P1 | detached 求解生命周期 > Tool 调用，max_parallel_jobs 无法防并发 | 发起前容器内活跃求解扫描（pgrep+cwd 在 run 根下即拒）。注：扫描→发起有 TOCTOU 窗口，单 worker 串行下实际风险极低，显式接受 |
+| P1 | end_time 无上界（1e12 无限烧 CPU，无取消路径） | 三层同守：tool.yaml maximum 600 + agent schema maximum 600 + adapter 0<t≤600 fail-closed（600=canonical 150 的 4×） |
+| P1 | eval output_field 检查缺 file/无 JSON 产物，治理跑必报配置错 | workflow 落 `solve_receipt.json` 持久回执，checks 带 file |
+| P2 | eval 固定 run_id 重跑即拒（零删除），治理跑一次性毒化 | case_001 去 run_id 注入，每次生成新时间戳 |
+| P2 | run_id pattern 只查宽度，hour-30/远未来 ID 钉死 hub newest_by_name | adapter 语义校验（strptime 真日期 + 不超前 now+24h）；过去 ID 不设限（重放合法） |
+| P2 | 短 end_time 在探测窗口内正常跑完被误报失败 | log 末行 `End` 收尾即判已完成，照常盖 sidecar |
+
 ## 影响面
 
 - `tools_impl/cfd_solve_launch/`（新，安全边界）、`agents/cfd_solve_agent/`（新）、

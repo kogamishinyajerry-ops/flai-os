@@ -37,6 +37,16 @@ R1 修复（2026-07-13，真跑取证 + CRS 复审）：
 - CRS-P2 单并发契约：agent 声明「同一时刻一次求解」但 Registry 不强制
   max_parallel_jobs → 发起前扫容器内活跃求解（同款 pgrep+cwd 对账，cwd 在
   run 根下即算），命中即拒，fail-closed。
+- Codex R1-P1-4：end_time 上界 ≤600（canonical controlDict endTime=150 的 4×）
+  ——detached 进程无 PID 取消路径，无界 endTime=无界烧 CPU。
+- Codex R1-P2-2：run_id 语义校验（strptime 真日期 + 不超前 now+24h）——纯宽度
+  pattern 会放行 hour-30/远未来 ID，被 hub newest_by_name 字典序钉死后遮蔽
+  后续真 run。单 chokepoint：校验集中本 Tool（公开可调面），workflow 生成的
+  时间戳天然合法。
+- Codex R1-P1-2（运维红线，代码不可修）：agent-cfd-live scripts/rehearse.sh:78
+  会 `rm -rf case/run/*`——与 managed runs 共享该目录（bind-mount 固定，他仓
+  零改动铁律）。红线=managed 求解期间勿跑 rehearse.sh；残余风险与缓解记
+  ADR-0027 与 cfd_solve_agent/README。
 """
 from __future__ import annotations
 import os
@@ -44,6 +54,7 @@ import re
 import shutil
 import subprocess
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +84,18 @@ _T_PGREP = 10
 _PGREP_TRIES = 3
 
 _MESH_OK_MARKER = "Mesh OK."  # checkMesh 成功正向 marker（agent-cfd-live checkMesh.log 实测）
+_MAX_END_TIME = 600.0  # R1-P1-4：canonical endTime=150 的 4×；detached 无取消路径，必须有界
+_RUN_ID_MAX_AHEAD = timedelta(hours=24)  # R1-P2-2：拒远未来 ID 钉死 hub newest_by_name
+
+
+def _run_id_semantic_ok(run_id: str) -> bool:
+    """fullmatch 之后的语义校验：真日期（strptime 拒 hour-30/99999999）且不超前
+    当前 UTC 24h（拒远未来 pinning）。过去的 ID 不设限——重放/补录合法。"""
+    try:
+        ts = datetime.strptime(run_id, "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return False
+    return ts <= datetime.now(timezone.utc) + _RUN_ID_MAX_AHEAD
 
 
 def _fail(msg: str) -> dict[str, Any]:
@@ -94,6 +117,14 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
     run_id = str(payload.get("run_id", ""))
     if not _RUN_ID_RE.fullmatch(run_id):
         return _fail(f"run_id 非法（须 YYYYMMDD-HHMMSS）：{run_id!r}——拒绝拼路径，fail-closed")
+    if not _run_id_semantic_ok(run_id):
+        return _fail(f"run_id 语义非法（须真实日期且不超前当前 UTC 24h）：{run_id!r}——"
+                     "假日期/远未来 ID 会钉死 hub newest_by_name 遮蔽后续 run，fail-closed")
+    et = payload.get("end_time")
+    if et is not None:
+        if not isinstance(et, (int, float)) or isinstance(et, bool) or not (0 < et <= _MAX_END_TIME):
+            return _fail(f"end_time 非法（须 0<t≤{_MAX_END_TIME:g}）：{et!r}——detached 求解无"
+                         "取消路径，无界时长=无界烧 CPU，fail-closed")
     container = os.environ.get(_CONTAINER_ENV)
     case_root_raw = os.environ.get(_CASE_ENV)
     template_raw = os.environ.get(_TEMPLATE_ENV)
@@ -162,10 +193,10 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
         return _fail("网格/检查失败（无 Mesh OK. 正向 marker）："
                      f"{(mesh.stderr or mesh.stdout or '').strip()[-300:]}")
 
-    # ⑤ 可选 end_time（数值型才注入，非法忽略——零自由文本进脚本；
-    #    Codex R0-P2-1：foamDictionary 失败即 fail，绝不带错误 endTime 开跑）
-    et = payload.get("end_time")
-    if isinstance(et, (int, float)) and not isinstance(et, bool) and et > 0:
+    # ⑤ 可选 end_time（入口处已校验 0<t≤_MAX_END_TIME，R1-P1-4——此处只注入数值，
+    #    零自由文本进脚本；Codex R0-P2-1：foamDictionary 失败即 fail，绝不带错
+    #    endTime 开跑）
+    if et is not None:
         dic = _dexec(container, ctr_cwd,
                      f"{_OF} && foamDictionary system/controlDict -entry endTime -set {float(et)}",
                      _T_DICT)

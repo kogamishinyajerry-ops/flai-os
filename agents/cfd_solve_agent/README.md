@@ -39,6 +39,19 @@ Re=100）→ 任务秒级 completed，求解在后台真跑约 200s → 工作�
 - `FLAI_CFD_TEMPLATE_DIR`=agent-cfd-live `case/template` 宿主绝对路径
 - 容器 up 且 bind-mount `case/run → /home/openfoam/run`（inspect 实测）
 
+## ⚠ 运维红线：与 agent-cfd-live rehearse.sh 互斥（Codex R1-P1-2）
+
+managed runs 与 agent-cfd-live 自身的 legacy 流程**共享** `case/run`
+（bind-mount 固定挂该目录，他仓零改动铁律不重挂）。agent-cfd-live 的
+`scripts/rehearse.sh` staging 段会 **`rm -rf case/run/*`**（实测 :78）——
+会删掉全部 managed run 子目录（含 sidecar/结果，可能连活跃求解目录一起），
+使已持久化的 `sim_run_ref` 深链失效、后续评估 fail-closed。
+
+红线：**FLAi-OS managed 求解在场（跑过/在跑）期间，勿运行 rehearse.sh**。
+若必须 rehearse：先确认无活跃求解（浮窗/`docker exec … pgrep`），并接受
+历史 managed run 被清（评估会诚实报 sidecar 缺失，不会静默错读）。
+残余风险与裁决记 ADR-0027 §三。
+
 ## eval_cases
 
 - `case_001`：发起正常路径的期望口径（completed + sim_run_ref 落 metadata）。

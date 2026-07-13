@@ -113,6 +113,29 @@ def test_run_id_trailing_newline_rejected(monkeypatch, tmp_path):
     assert list(case_root.iterdir()) == []
 
 
+def test_run_id_fake_or_far_future_rejected(monkeypatch, tmp_path):
+    # Codex R1-P2-2：纯宽度 pattern 放行 hour-30/远未来 ID——被 hub newest_by_name
+    # 字典序钉死后遮蔽后续真 run。语义校验：strptime 真日期 + 不超前 now+24h。
+    case_root = _env(monkeypatch, tmp_path)
+    _forbid_subprocess(monkeypatch)
+    for bad in ("20260713-303030", "99999999-999999", "20991231-235959"):
+        out = run({"case": "cylinder_re100", "run_id": bad})
+        assert out["status"] == "failed", f"应拒语义非法 run_id：{bad}"
+        assert "run_id" in out["error_message"]
+    assert list(case_root.iterdir()) == []  # 零路径副作用
+
+
+def test_end_time_out_of_bound_rejected(monkeypatch, tmp_path):
+    # Codex R1-P1-4：detached 求解无取消路径——end_time 必须有界（0<t≤600）
+    case_root = _env(monkeypatch, tmp_path)
+    _forbid_subprocess(monkeypatch)
+    for bad in (1e12, 601, 0, -5, "60", True):
+        out = run({"case": "cylinder_re100", "run_id": RID, "end_time": bad})
+        assert out["status"] == "failed", f"应拒越界 end_time：{bad!r}"
+        assert "end_time" in out["error_message"]
+    assert list(case_root.iterdir()) == []
+
+
 def test_existing_run_dir_not_overwritten(monkeypatch, tmp_path):
     case_root = _env(monkeypatch, tmp_path)
     (case_root / RID).mkdir()
