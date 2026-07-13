@@ -1,5 +1,5 @@
-"""批A「活的工作台」liveFeed 换轨验收（Task 4 先建骨架仅断言②；Task 7 补全①，
-③留待其收口任务）。
+"""批A「活的工作台」liveFeed 换轨验收（Task 4 先建骨架仅断言②；Task 7 补全①；
+Task 9 补全③盖章动效）。
 
 自包含：脚本自起后端（tmp 目录，绝不碰真实 data/）+ Job Runner + 真 chromium。
 除 frontend/dist 构建产物外无外部前置。
@@ -17,7 +17,10 @@
     不点批准），12 秒内应自行出现终态盖章文案「已完成」——验证的是
     TaskDetail 已并轨 task:<id> channel 而非自建轮询（旧实现 waiting_review
     时轮询整体停止，此断言在旧实现上必然超时失败）。
-  TODO(Task 9) ③盖章动效场景（占位）。
+  ③CompletionSeal 盖章动效——仪式只属于亲历者：③a 复用②的跨会话放行场景，
+    本机页面全程开着观察到 waiting_review→completed 的迁移，应播放 .seal-animate
+    合拢仪式；③b 另开新页面直接访问同一（已终态）任务，CompletionSeal 正常渲染
+    但绝不播放（非亲历不放）。
 
 运行（仓根）：
   cd frontend && npm run build && cd ..
@@ -197,6 +200,33 @@ with sync_playwright() as p:
     check("②跨会话放行免手动刷新：12s 内页面自行出现「已完成」（零点击）",
           seen_completed is True, body[:400])
     page.screenshot(path=str(SHOTS / "2_auto_completed_no_click.png"), full_page=True)
+
+    # ── 断言③：CompletionSeal 盖章动效——仪式只属于亲历者（Task 9）──
+    # ③a 亲历：复用刚验证完的跨会话放行场景——本机页面全程开着（未刷新未点击），
+    #    从 waiting_review 到自行出现「已完成」的这次迁移就是本会话「亲历」的
+    #    活跃→终态过程，CompletionSeal 应播放合拢仪式（.seal-animate）。
+    try:
+        page.wait_for_selector(".completion-seal.seal-animate", state="visible", timeout=3000)
+        seal_animate_witnessed = True
+    except Exception:
+        seal_animate_witnessed = False
+    check("③a 亲历放行→自动到终态：CompletionSeal 播放 .seal-animate（仪式只属亲历者）",
+          seal_animate_witnessed is True)
+    page.screenshot(path=str(SHOTS / "3a_seal_animate_witnessed.png"), full_page=True)
+
+    # ③b 历史直开：另开一个全新页面直接访问同一（此刻已是终态）任务——CompletionSeal
+    #    组件应正常渲染（非终态渲染 null 的既有语义不变），但绝不播放合拢仪式，因为
+    #    这个新页面从未亲历「活跃→终态」的迁移，只是冷启动直接看到已落定的结果。
+    page2 = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")
+    login_context(page2.context, BASE)
+    page2.goto(BASE + f"/tasks/{task_id}", wait_until="networkidle")
+    page2.wait_for_selector(".completion-seal", state="visible", timeout=5000)
+    has_seal = page2.locator(".completion-seal").count() > 0
+    has_seal_animate = page2.locator(".completion-seal.seal-animate").count() > 0
+    check("③b 历史直开：CompletionSeal 正常渲染", has_seal is True)
+    check("③b 历史直开：不播 .seal-animate（非亲历不放）", has_seal_animate is False)
+    page2.screenshot(path=str(SHOTS / "3b_seal_static_cold_open.png"), full_page=True)
+    page2.close()
 
     browser.close()
 

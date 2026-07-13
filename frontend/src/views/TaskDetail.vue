@@ -41,8 +41,9 @@
 
       <!-- 终态盖章（Codex CLI「─ Worked for Xs ─」落定仪式）：位置=标题/返回行之下、
            任务描述表之上——终态任务进页第一眼看到的官宣；组件自身对非终态渲染 null，
-           零占位，不产生 a[href]/新文案与既有 e2e 断言冲突。 -->
-      <CompletionSeal :task="task" />
+           零占位，不产生 a[href]/新文案与既有 e2e 断言冲突。animate=sealAnimate：
+           仪式只属于亲历者，见下方 onTransition 订阅注释。 -->
+      <CompletionSeal :task="task" :animate="sealAnimate" />
 
       <!-- 首屏只留一行轻量上下文；完整元数据（ID/版本/时间）折叠为次要，让产物与决策优先。 -->
       <div class="task-context">
@@ -245,7 +246,8 @@ import { useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { cancelTask, reviewTask } from "../api/tasks";
 import { downloadUrl, fetchOutputFile } from "../api/files";
-import { acquireChannel, pokeTask } from "../stores/liveFeed";
+import { acquireChannel, pokeTask, onTransition } from "../stores/liveFeed";
+import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import EmptyState from "../components/EmptyState.vue";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
 import { statusLabel, statusTagType, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
@@ -308,6 +310,23 @@ const reviewing = ref(false);
 // 批准按钮元素（动效系统 v1 E2）：放行成功后 burstSigned(el) 的定位来源；
 // el-button 组件 ref 通过 .ref 暴露原生 DOM（element-plus expose 契约）。
 const approveBtnEl = ref(null);
+
+// 盖章动效仪式只属于亲历者（批A Task 9）：本次会话内亲眼观察到「活跃→终态」
+// 迁移才播；历史页面直开（首载即终态）sealAnimate 恒 false——一次性置真不
+// 复位，不随后续轮询/轮转翻回。onTransition 是全站总线（所有 channel 共用），
+// 用 ev.id===taskId 过滤只认本任务。
+//
+// 硬坑（实测抓到，勿删）：ev.from 必须显式判 != null，不能只判「不在终态
+// 列表」——StatusDock 全局常驻挂载，onMounted 无条件 acquireTaskFeed()（独立
+// 于本页 task:<id> channel 的另一条 'tasks' 清单链），其首次冷启动 fetch 对
+// diffTransitions 而言 prevById 为空，会给列表里每个任务都产出 from:null 的
+// 事件（liveFeedCore.diffTransitions 语义，供别处「新入列飞入动效」使用，
+// 本身正确）。若只判「!TERMINAL_STATUSES.includes(ev.from)」，from:null 会被
+// 当成「非终态」放行，导致历史直开一个已终态任务时，StatusDock 的冷启动
+// 清单拉取被误当成「亲历了一次迁移」，盖章动效假阳性播放。from 必须是本会话
+// 真观察到的非终态字符串，null（未知前态）不算亲历。
+const sealAnimate = ref(false);
+let offTransition = null;
 
 // 产物内联查看（P0-2）：按 task.output_file_ids 拉取文件名+内容，增量同步、集合未变不重拉。
 const artifacts = ref([]);
@@ -542,9 +561,20 @@ async function handleSubmitFeedback() {
 
 onMounted(() => {
   markTaskSeen(taskId); // 打开详情即视为「已看过」，驱动任务台未读点——数据到达前先标
+  offTransition = onTransition((ev) => {
+    if (
+      ev.id === taskId &&
+      TERMINAL_STATUSES.includes(ev.to) &&
+      ev.from != null &&
+      !TERMINAL_STATUSES.includes(ev.from)
+    ) {
+      sealAnimate.value = true; // 一次性，不复位
+    }
+  });
 });
 onUnmounted(() => {
   taskChannel.release(); // refCount 归零则停链（其它订阅者仍持有时继续养着，都正确）
+  if (offTransition) offTransition();
 });
 </script>
 
