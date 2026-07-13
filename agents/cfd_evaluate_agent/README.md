@@ -37,5 +37,18 @@ Williamson (1996) Re=100 圆柱绕流 Strouhal 参考 **St_ref=0.164**。good-ru
 
 ## eval_cases
 
-- `case_001`：正常 good-run → converged，St≈0.167，水印草案，waiting_review。
-- `case_002`：未收敛路径 → 拒出 St（`st=null`），verdict「未达评估条件」（防假绿）。
+- `case_001`：正常 good-run（run_id=20260713-101010）→ converged，St≈0.167，
+  水印草案，waiting_review。
+- `case_002`：未收敛路径（run_id=20260713-202020）→ 拒出 St（`st=null`），
+  verdict「未达评估条件」（防假绿），任务仍 waiting_review（workflow 对未收敛
+  仍返回 success，`requires_human_review` 把它转 waiting_review，不是 failed）。
+- 两 case 的 run_id 对应 `eval_cases/fixtures/` 下 vendored 的真实夹具（从
+  `backend/tests/fixtures/cfd_good_run/` 截取，只删行不改字；来源/截取范围/
+  实测周期数见 `eval_cases/fixtures/README.md`）——`cfd_result_read` 是真实
+  fail-closed 工具，M10 治理 eval-runner 跑 `eval_cases/*.json` 时经**真实
+  `runtime.execute` 全链**执行，case 引用的 run_id 必须有对应真实夹具。
+- **运行前置**：跑本包 eval（无论 API 还是本地驱动）需先
+  `export FLAI_CFD_CASE_DIR=<repo>/agents/cfd_evaluate_agent/eval_cases/fixtures`
+  （`FLAI_CFD_CASE_DIR` 是进程环境变量，`cfd_result_read` 工具本身不改；未配置
+  fail-closed，两 case 都会失败——照 `monitor_adapter_gen_agent` 的
+  `FLAI_MONITOR_CORE_DIR` 先例，操作员在晋升/跑 eval 前自行配置）。

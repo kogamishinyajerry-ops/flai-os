@@ -1,5 +1,20 @@
 # cfd_evaluate_agent 变更记录
 
+## 0.1.0（补丁，2026-07-13）
+
+- 修 Important 评审发现：`eval_cases/case_001.json`/`case_002.json` 引用的
+  run_id 此前在仓内无对应真实夹具，经 M10 治理 eval-runner（真实
+  `runtime.execute` 全链）跑会在 `cfd_result_read` 处 fail-closed，与自身
+  `expected` 矛盾。补 `eval_cases/fixtures/20260713-101010/`（收敛）与
+  `20260713-202020/`（未收敛）——逐字截取自 `backend/tests/fixtures/cfd_good_run/`
+  golden 夹具（只删行不改字，来源见 `eval_cases/fixtures/README.md`）；两 case
+  的 checks 补 `output_field` 断言真实值（converged/st）而非只查静态标题。
+  运行前置：`FLAI_CFD_CASE_DIR` 须指向本包 `eval_cases/fixtures`（照
+  `monitor_adapter_gen_agent` 的 `FLAI_MONITOR_CORE_DIR` 先例，未改 runner/工具）。
+  自证：临时驱动经真实 `/api/agents/cfd_evaluate_agent/eval-runs`（真实
+  runtime.execute 全链）跑通两 case 全绿 + 负控（不设环境变量）验证 fail-closed
+  真咬合。
+
 ## 0.1.0（CFD 真接线 P2，2026-07-13）
 
 - 初版：CFD 结果评估（圆柱绕流 Re=100）——经 `cfd_result_read` 只读一次求解

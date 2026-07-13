@@ -1,6 +1,6 @@
 {
   "case_id": "case_001",
-  "description": "正常路径：评估一次充分发展的圆柱绕流求解（good-run，St≈0.167）→ 确定性判据落 evaluation.json（converged=true，St 与 Williamson 0.164 一致）+ 水印草案 cfd_eval_draft.md → 任务停 waiting_review 等人工放行（不是 completed）。",
+  "description": "正常路径：评估一次充分发展的圆柱绕流求解（good-run，St≈0.167）→ 确定性判据落 evaluation.json（converged=true，St 与 Williamson 0.164 一致）+ 水印草案 cfd_eval_draft.md → 任务停 waiting_review 等人工放行（不是 completed）。run_id=20260713-101010 对应 eval_cases/fixtures/20260713-101010/（vendored，从 backend/tests/fixtures/cfd_good_run/ 截取末段，见 fixtures/README.md）。前置：跑本包 eval 需 FLAI_CFD_CASE_DIR=<repo>/agents/cfd_evaluate_agent/eval_cases/fixtures（未配置时 cfd_result_read fail-closed，运行环境需自行设置，runner 不代配）。",
   "inputs": {
     "run_id": "20260713-101010"
   },
@@ -9,8 +9,10 @@
     "eval_file": "evaluation.json",
     "draft_file": "cfd_eval_draft.md",
     "converged": true,
+    "st_actual": 0.16734954634856494,
     "st_band": [0.15, 0.185],
     "st_ref": 0.164,
+    "n_cycles": 3,
     "draft_contains_watermark": true,
     "watermark_substring": "判定权在人",
     "tool_runs_count": 1
@@ -19,6 +21,9 @@
     { "kind": "status_is", "value": "waiting_review" },
     { "kind": "artifact_exists", "file": "evaluation.json" },
     { "kind": "artifact_exists", "file": "cfd_eval_draft.md" },
-    { "kind": "artifact_contains", "file": "cfd_eval_draft.md", "value": "判定权在人" }
+    { "kind": "artifact_contains", "file": "cfd_eval_draft.md", "value": "判定权在人" },
+    { "kind": "output_field", "file": "evaluation.json", "path": "converged", "op": "eq", "value": true },
+    { "kind": "output_field", "file": "evaluation.json", "path": "st", "op": "gte", "value": 0.15 },
+    { "kind": "output_field", "file": "evaluation.json", "path": "st", "op": "lte", "value": 0.185 }
   ]
 }
