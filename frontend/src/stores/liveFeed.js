@@ -153,3 +153,8 @@ export function pokeTask(id) {
   const ch = channels.get(`task:${id}`);
   if (ch && ch.refCount > 0) refresh(ch);
 }
+
+export function pokeConversation(id) {
+  const ch = channels.get(`conversation:${id}`);
+  if (ch && ch.refCount > 0) refresh(ch);
+}
