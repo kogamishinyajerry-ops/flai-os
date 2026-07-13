@@ -92,7 +92,7 @@
               <span class="today-promo-main">
                 {{ p.agent_id }} 晋升 {{ maturityLabel(p.from_maturity) }} → {{ maturityLabel(p.to_maturity) }}
               </span>
-              <span class="today-promo-sub">{{ formatTime(p.created_at) }} · 签发人 {{ p.confirmed_by }}</span>
+              <span class="today-promo-sub">{{ formatRelativeTime(p.created_at) }} · 签发人 {{ p.confirmed_by }}</span>
             </div>
           </div>
           <EmptyState v-else variant="data" description="本周暂无晋升" />
@@ -147,7 +147,7 @@ import { computed, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { acquireChannel, onTransition } from "../stores/liveFeed";
 import { getStatsOverview, listGlobalPromotions } from "../api/stats";
-import { statusLabel, taskLampColor, taskElapsedMs, formatDuration, formatTime, TASK_WORK_STATES, MATURITY } from "../utils/format";
+import { statusLabel, taskLampColor, taskElapsedMs, formatDuration, formatRelativeTime, TASK_WORK_STATES, MATURITY } from "../utils/format";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import DeliveryCard from "../components/DeliveryCard.vue";
