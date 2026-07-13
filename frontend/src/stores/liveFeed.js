@@ -33,7 +33,13 @@ function buildTasksChannel(ch) {
   ch.fetch = async (fresh) => {
     const next = await listTasks({ limit: 100 });
     if (!fresh()) return; // 落地前复查：响应回来时若已换代（release 重建）,整包作废
-    const evs = diffTransitions(ch.state.tasks.value, next);
+    // 水合抑制（Task 12 修复 3）：loaded 仍 false 说明这是本 channel 冷启动首拉,
+    // prevById 为空会让 diffTransitions 把每个任务都判成 from:null 的「迁移」——
+    // 那不是真事件,是快照的初次显影,不广播不带外补拉（上百任务的冷启动不该
+    // 打一发事件雨）。首拉之后（loaded 已真）的 from:null 才是轮询窗口间新出现
+    // 的任务,是真事件。
+    const hydrating = ch.state.loaded.value !== true;
+    const evs = hydrating ? [] : diffTransitions(ch.state.tasks.value, next);
     ch.state.tasks.value = next;
     if (evs.length) {
       emitTransitions(evs);
@@ -44,9 +50,19 @@ function buildTasksChannel(ch) {
 }
 
 function buildTaskChannel(ch, taskId) {
-  ch.state = { task: ref(null), events: ref([]), modelCalls: ref([]), loaded: ref(false), error: ref("") };
+  ch.state = {
+    task: ref(null),
+    events: ref([]),
+    modelCalls: ref([]),
+    modelCallsError: ref(""),
+    loaded: ref(false),
+    error: ref(""),
+  };
   // 动态频率：活跃 2s / waiting_review 8s / 终态 null 停轮（liveFeedCore.nextInterval）
   ch.intervalOf = () => nextInterval(ch.state.task.value?.status || "running");
+  // modelCalls 请求序号（Task 12 修复 1，恢复 main 的 modelCallsSeq 语义）：挂在 channel
+  // 上而非组件内——channel 按 key 池化跨组件复用,序号必须与 channel 同寿命。
+  ch.modelCallsSeq = 0;
   ch.fetch = async (fresh) => {
     const offset = ch.state.events.value.length;
     const [task, tailEvents] = await Promise.all([
@@ -59,10 +75,21 @@ function buildTaskChannel(ch, taskId) {
     if (tailEvents.length) ch.state.events.value = ch.state.events.value.concat(tailEvents);
     if (prev && prev.status !== task.status) emitTransitions([{ id: taskId, from: prev.status, to: task.status, task }]);
     // modelCalls 解耦主链（Task 12 修复 4）：task+events 已落地,不因它拖慢/拖挂主快照；
-    // 并行独立发,同样受 fresh() 守卫,失败保旧值（StatusCenter 原语义不变,不引入新 error 态）。
+    // 并行独立发,同样受 fresh() 守卫。序号守卫（修复 1）：手动刷新可与在途轮询重叠,
+    // 只让「最新一次发起」的结果落盘,迟到的旧响应（含旧错误）整包作废。错误诚实化
+    // （修复 2）：main 原语义是失败时展示 modelCallsError,换轨时被静默吞掉误报「无
+    // 模型调用」,此处恢复。
+    const seq = ++ch.modelCallsSeq;
     listModelCalls(taskId)
-      .then((modelCalls) => { if (fresh()) ch.state.modelCalls.value = modelCalls; })
-      .catch(() => {});
+      .then((modelCalls) => {
+        if (!fresh() || seq !== ch.modelCallsSeq) return;
+        ch.state.modelCalls.value = modelCalls;
+        ch.state.modelCallsError.value = "";
+      })
+      .catch((err) => {
+        if (!fresh() || seq !== ch.modelCallsSeq) return;
+        ch.state.modelCallsError.value = err.detail || err.message || "加载失败";
+      });
   };
 }
 
@@ -74,7 +101,9 @@ function buildConversationChannel(ch, convId) {
       getConversation(convId), listConversationTasks(convId),
     ]);
     if (!fresh()) return; // 落地前复查：响应回来时若已换代,整包作废
-    const evs = diffTransitions(ch.state.memberTasks.value, memberTasks);
+    // 水合抑制（Task 12 修复 3）：语义同 buildTasksChannel——冷启动首拉不广播/不带外补拉。
+    const hydrating = ch.state.loaded.value !== true;
+    const evs = hydrating ? [] : diffTransitions(ch.state.memberTasks.value, memberTasks);
     ch.state.conversation.value = conversation;
     ch.state.memberTasks.value = memberTasks;
     if (evs.length) { emitTransitions(evs); for (const ev of evs) pokeTask(ev.id); }
@@ -167,14 +196,25 @@ export function acquireChannel(key) {
 // （第二个 .then 执行时 ch.inflight 已被第一个占住,直接复用其 promise）,
 // 不会无限链。无 channel/refCount=0 时 poke 是 no-op,返回已 resolve 的 promise
 // 给调用方 await 不挂起。
+// 续体所有权复查（Task 12 修复 6）：inflight 续体等待期间 channel 可能已被
+// release（refCount 归零→从池中删除）或换代重建（同 key 新 ch 实例）——两种
+// 情况下对旧 ch 再发一次 refresh 都是浪费请求（epoch 守卫已挡住其落地污染
+// state，这里只是省网络）。channels.get(key)===ch 判同一实例，ch.refCount>0
+// 判仍有人持有。
 export function pokeTask(id) {
-  const ch = channels.get(`task:${id}`);
+  const key = `task:${id}`;
+  const ch = channels.get(key);
   if (!ch || ch.refCount <= 0) return Promise.resolve();
-  return ch.inflight ? ch.inflight.then(() => refresh(ch)) : refresh(ch);
+  return ch.inflight
+    ? ch.inflight.then(() => (channels.get(key) === ch && ch.refCount > 0) ? refresh(ch) : undefined)
+    : refresh(ch);
 }
 
 export function pokeConversation(id) {
-  const ch = channels.get(`conversation:${id}`);
+  const key = `conversation:${id}`;
+  const ch = channels.get(key);
   if (!ch || ch.refCount <= 0) return Promise.resolve();
-  return ch.inflight ? ch.inflight.then(() => refresh(ch)) : refresh(ch);
+  return ch.inflight
+    ? ch.inflight.then(() => (channels.get(key) === ch && ch.refCount > 0) ? refresh(ch) : undefined)
+    : refresh(ch);
 }

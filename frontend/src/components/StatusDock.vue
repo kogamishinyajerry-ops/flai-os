@@ -41,8 +41,11 @@ const workingCount = computed(() => feedTasks.value.filter((t) => TASK_WORK_STAT
 const waitingCount = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review").length);
 
 // 待签发即时回声（批A T10）：tasks channel 每次翻转经 liveFeed 总线广播,这里
-// 只订阅落地→waiting_review 的迁移。from=null 是 channel 冷启动首拉快照
-// （T9 实证坑：不是「本次会话亲历」的迁移），显式判 ev.from != null 排除。
+// 只订阅落地→waiting_review 的迁移。冷启动首拉的 from=null 噪声已在 channel
+// 层水合抑制掉（liveFeed.js buildTasksChannel 的 hydrating 判据，Task 12 修复
+// 3）——这里收到的 from=null 只可能是水合完成后、轮询窗口间新出现即直达
+// waiting_review 的真事件（快任务两 tick 间创建即到审，同样要提醒），故不再
+// 要求 ev.from != null。
 const ECHO_DEDUPE_MS = 30000; // 同 id 30s 内不重复弹 toast（角标脉冲不受此限）
 const echoedAt = new Map();
 const pulseEcho = ref(false);
@@ -71,7 +74,7 @@ function playPulseEcho() {
 }
 
 function handleTransition(ev) {
-  if (ev.from == null || ev.to !== "waiting_review") return;
+  if (ev.to !== "waiting_review") return;
   const now = Date.now();
   sweepEchoedAt(now);
   playPulseEcho(); // 角标脉冲不受 dedupe/hidden 限制——「积到角标」

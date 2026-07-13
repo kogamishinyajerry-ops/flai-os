@@ -469,8 +469,10 @@ async function doReview(action) {
         burstSigned(peekApproveEl.value?.ref); // teal 迸发：人签成功唯一许可点
       }
       // 带外补拉（Task 4 同款）：不等下一轮询，channel 落地后 task watch
-      // 自动回填 peekTask 并 patchInboxTask，不再本地二次拉取。
-      pokeTask(taskId);
+      // 自动回填 peekTask 并 patchInboxTask，不再本地二次拉取。await（Task 12
+      // 修复 4）：reviewing 须在数据真落地后才解锁，否则用户可能在旧数据仍
+      // 显示 waiting_review 时二次点击提交，触发后端 409。
+      await pokeTask(taskId);
     }
   } catch (err) {
     ElMessage.error(err.detail || err.message || "签发失败");

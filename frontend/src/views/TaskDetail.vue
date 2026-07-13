@@ -154,7 +154,8 @@
                  a[href*='/download'] DOM 顺序取值。 -->
             <div class="source-block model-usage">
               <div class="source-label">模型调用</div>
-              <div v-if="modelCallStats.total === 0" class="muted">无模型调用</div>
+              <div v-if="modelCallsError" class="muted">模型调用加载失败：{{ modelCallsError }}</div>
+              <div v-else-if="modelCallStats.total === 0" class="muted">无模型调用</div>
               <template v-else>
                 <div class="source-row model-usage-summary">
                   <span>
@@ -315,7 +316,7 @@ const simRunTitle = computed(() =>
 // 删除——防 stale 语义已由 channel 的 epoch guard 统一承接（liveFeedCore.
 // makeEpochGuard，release 时 bump epoch，在途响应整包作废）。
 const taskChannel = acquireChannel(`task:${taskId}`);
-const { task, events, modelCalls, loaded, error: loadError } = taskChannel.state;
+const { task, events, modelCalls, modelCallsError, loaded, error: loadError } = taskChannel.state;
 
 const reviewForm = reactive({ comment: "" });
 const signerName = computed(() => displayName());
@@ -379,8 +380,9 @@ async function syncArtifacts(ids) {
 }
 
 // 模型调用消耗披露（B1）：modelCalls 现由 task:<id> channel 每轮询整包重拉
-// 承接（liveFeed.js buildTaskChannel），失败静默保旧值下一 tick 自愈——与
-// channel 内其余字段同一纪律，本组件不再单独维护请求序号/错误态。
+// 承接（liveFeed.js buildTaskChannel）；请求序号守卫与失败态展示（main 原
+// modelCallsSeq/modelCallsError 语义，Task 12 修复 1/2）已下沉到 channel 层，
+// 本组件只读 modelCallsError，不再自己维护。
 
 // token_usage 是上游 chat/completions 原样透传的 usage 对象，形状不保证含
 // total_tokens（后端测试用例里就只有 prompt_tokens+completion_tokens）——能
@@ -505,11 +507,19 @@ watch(task, (t) => {
   if (isTerminal.value) loadFeedback();
 }, { immediate: true });
 
+// 请求序号（Task 12 修复 5）：终态 watch 补拉与「提交反馈后重载」都会调用本
+// 函数，慢的首拉响应若晚于后一次调用落地，会用旧列表覆盖掉刚提交的反馈——
+// 只让「最新一次发起」的结果落盘，迟到的旧响应整包作废。
+let feedbackSeq = 0;
 async function loadFeedback() {
+  const seq = ++feedbackSeq;
   try {
-    feedbackList.value = await listTaskFeedback(taskId);
+    const list = await listTaskFeedback(taskId);
+    if (seq !== feedbackSeq) return;
+    feedbackList.value = list;
     feedbackError.value = "";
   } catch (err) {
+    if (seq !== feedbackSeq) return;
     feedbackError.value = `反馈列表加载失败：${err.detail || err.message}`;
   }
 }
