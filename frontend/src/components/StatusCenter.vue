@@ -178,16 +178,17 @@
 </template>
 
 <script setup>
-// 状态中心（收件箱+速览双视图）。轮询纪律：仅打开期间 3s 链式（上轮落地才排
-// 下轮，hidden 跳过仍续轮）；速览事件走 offset 增量 + epoch 守卫（taskId 切换
-// 后迟到响应整包作废）。签发链路与 TaskDetail 完全同源（reviewTask API），
-// 只是把「去哪签」变成了「签发来找你」。
+// 状态中心（收件箱+速览双视图）。轮询纪律：收件箱并轨 liveFeed 'tasks'
+// channel（5s 自链），速览并轨 'task:<id>' channel（批A Task 5：与 TaskDetail
+// 共用同一条链——同 taskId 同屏时全站只此一条该任务详情轮询）。本组件不再
+// 自建任何 setTimeout 轮询/epoch 守卫，全部由 channel 统一承接。签发链路与
+// TaskDetail 完全同源（reviewTask API），只是把「去哪签」变成了「签发来找你」。
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { statusCenter, openTaskPeek, backToInbox, closeCenter } from "../stores/statusCenter";
-import { acquireChannel } from "../stores/liveFeed";
-import { getTask, listTaskEvents, reviewTask, listModelCalls } from "../api/tasks";
+import { acquireChannel, pokeTask } from "../stores/liveFeed";
+import { reviewTask } from "../api/tasks";
 import { request } from "../api/client";
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import { statusLabel, statusTagType, taskLampColor, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
@@ -253,14 +254,16 @@ function patchInboxTask(task) {
   inboxTasks.value = next;
 }
 
-// ── 速览数据 ──
+// ── 速览数据（并轨 liveFeed 'task:<id>' channel——与 TaskDetail 同 taskId
+// 同屏时全站只有一条该任务详情链。acquire 时机=速览打开某任务；release 时机
+// =切任务/退出速览/抽屉关闭。epoch 守卫、动态轮询频率、失败保旧值全由
+// channel 统一承接，本组件不再自建 epoch/setTimeout 轮询） ──
 const peekTask = ref(null);
 const peekEvents = ref([]);
 const peekArtifacts = ref([]);
 const peekModelCalls = ref([]);
 const peekLoading = ref(false);
 const peekError = ref("");
-let peekEpoch = 0; // taskId 切换守卫：迟到响应整包作废
 
 const isPeekWorking = computed(() => peekTask.value && TASK_WORK_STATES.has(peekTask.value.status));
 const isPeekWaiting = computed(() => peekTask.value?.status === "waiting_review");
@@ -291,9 +294,9 @@ const peekModelStats = computed(() => {
   };
 });
 
-// 产物加载持有独立指纹世代（taskId+file_ids），不挂靠轮询 epoch——轮询每 3s
-// 换代，加载 >3s 的产物会被永久丢弃且 file_ids 未变不再重试（Codex 审出的
-// 竞态）。指纹只在「任务或产物集真的变了」时换，慢加载不再被误杀。
+// 产物加载持有独立指纹（taskId+file_ids）：同一指纹已加载/加载中不重拉；
+// 指纹只在「任务或产物集真的变了」时换，慢加载不再被误杀（Codex 审出的
+// 竞态，Task 4 同款姿势沿用）。
 const artifactsLoading = ref(false);
 let artifactsFingerprint = null;
 
@@ -321,38 +324,47 @@ async function syncPeekArtifacts(taskId, ids) {
   artifactsLoading.value = false;
 }
 
-async function loadPeek(taskId, { initial = false } = {}) {
-  const epoch = ++peekEpoch;
-  if (initial) {
-    peekLoading.value = true;
-    peekTask.value = null;
-    peekEvents.value = [];
-    peekArtifacts.value = [];
-    peekModelCalls.value = [];
-    peekError.value = "";
-    artifactsFingerprint = null; // 重进同任务允许重试上次失败的产物预览
-    artifactsLoading.value = false;
+// 产物集变化即触发（Task 4 / TaskDetail 同款姿势）：channel 每轮询整包重拉
+// task，output_file_ids 每次都是新数组引用，但 fingerprint 对未变集合零重拉。
+watch(() => peekTask.value?.output_file_ids, (ids) => {
+  const tid = peekTask.value?.id;
+  if (!tid) return;
+  syncPeekArtifacts(tid, ids || []);
+});
+
+let peekHandle = null;
+let peekStops = [];
+function acquirePeekFeed(taskId) {
+  if (peekHandle) return; // 已持有,幂等（ensurePeekLoaded 已按 id 去重,双保险）
+  peekHandle = acquireChannel(`task:${taskId}`);
+  peekStops = [
+    watch(peekHandle.state.task, (v) => {
+      peekTask.value = v;
+      if (v) {
+        markTaskSeen(taskId); // 速览开着=正在看：轮询期间翻终态不得回头亮未读
+        patchInboxTask(v); // 收件箱条目跟随速览真值即时回落，不必单独拉 inbox
+      }
+    }, { immediate: true }),
+    watch(peekHandle.state.events, (v) => { peekEvents.value = v; }, { immediate: true }),
+    watch(peekHandle.state.modelCalls, (v) => { peekModelCalls.value = v; }, { immediate: true }),
+    watch(peekHandle.state.loaded, (v) => { peekLoading.value = !v; }, { immediate: true }),
+    watch(peekHandle.state.error, (v) => { peekError.value = v; }, { immediate: true }),
+  ];
+}
+function releasePeekFeed() {
+  peekStops.forEach((s) => s());
+  peekStops = [];
+  if (peekHandle) {
+    peekHandle.release();
+    peekHandle = null;
   }
-  try {
-    const offset = initial ? 0 : peekEvents.value.length;
-    const [t, ev, calls] = await Promise.all([
-      getTask(taskId),
-      listTaskEvents(taskId, { offset }),
-      listModelCalls(taskId).catch(() => peekModelCalls.value),
-    ]);
-    if (epoch !== peekEpoch) return;
-    peekTask.value = t;
-    markTaskSeen(taskId); // 速览开着=正在看：轮询期间翻终态不得回头亮未读
-    peekEvents.value = initial ? ev : peekEvents.value.concat(ev);
-    peekModelCalls.value = calls;
-    peekError.value = "";
-    syncPeekArtifacts(taskId, t.output_file_ids); // 指纹自去重，产物集没变不重拉
-  } catch (err) {
-    if (epoch !== peekEpoch) return;
-    if (initial) peekError.value = err.detail || err.message || "加载失败";
-  } finally {
-    if (initial && epoch === peekEpoch) peekLoading.value = false;
-  }
+  // 换代/关闭即清显示态：channel 释放后不再更新，残留旧任务数据会在下次
+  // acquire 前的空档里闪烁（组件在 destroy-on-close 之外的场景下持续挂载）。
+  peekTask.value = null;
+  peekEvents.value = [];
+  peekModelCalls.value = [];
+  peekLoading.value = false;
+  peekError.value = "";
 }
 
 // ── 签发（宪法路径：与 TaskDetail 同一 API，人具名 fail-closed） ──
@@ -449,8 +461,9 @@ async function doReview(action) {
       if (action === "approve") {
         burstSigned(peekApproveEl.value?.ref); // teal 迸发：人签成功唯一许可点
       }
-      await loadPeek(taskId, { initial: true });
-      patchInboxTask(peekTask.value); // 收件箱计数即时回落：复用刚拉到的 peek 真值,不再单独拉 inbox
+      // 带外补拉（Task 4 同款）：不等下一轮询，channel 落地后 task watch
+      // 自动回填 peekTask 并 patchInboxTask，不再本地二次拉取。
+      pokeTask(taskId);
     }
   } catch (err) {
     ElMessage.error(err.detail || err.message || "签发失败");
@@ -478,59 +491,40 @@ function onEsc(e) {
   }
 }
 
-// ── 打开期间 3s 链式轮询（关闭即停，零后台消耗）——inbox 分支已并轨
-// liveFeed 'tasks' channel（5s 自链）,此处只剩 peek 用途,原样保留 ──
-let pollTimer = null;
-let disposed = false; // 卸载后 finally 不再续排（in-flight 轮询可越过 clearPoll）
-function schedulePoll() {
-  clearPoll();
-  pollTimer = setTimeout(async () => {
-    try {
-      if (!document.hidden && statusCenter.open && statusCenter.view === "peek" && statusCenter.taskId) {
-        await loadPeek(statusCenter.taskId);
-      }
-    } finally {
-      if (!disposed && statusCenter.open) schedulePoll();
-    }
-  }, 3000);
-}
-function clearPoll() {
-  if (pollTimer) {
-    clearTimeout(pollTimer);
-    pollTimer = null;
-  }
-}
-
 function onOpen() {
   acquireInboxFeed();
-  ensurePeekLoaded(); // 幂等：watch 已载过同一任务则不重载
-  schedulePoll();
+  ensurePeekLoaded(); // 幂等：目标未变则不重新 acquire
   nextTick(() => document.querySelector(".sc-shell")?.focus());
 }
 function onClosed() {
-  clearPoll();
   releaseInboxFeed(); // channel 无其它订阅者时自停,有则由其继续养着
-  peekEpoch++; // 关闭后迟到响应全作废
+  releasePeekFeed();
+  peekLoadedFor = null; // 下次打开重新初载
   artifactsFingerprint = null;
   artifactsLoading.value = false;
-  peekLoadedFor = null; // 下次打开重新初载
   reviewComment.value = ""; // 意见草稿不跨次会话残留（签发人姓名保留）
   resetSampleFixState();
 }
 
-// 初载去重：openTaskPeek 从关闭态打开时，watch（open/view/taskId 变更）与
-// @open 会双触发——peekLoadedFor 保证同一任务只发一次 initial 加载。
+// 初载/换代去重：openTaskPeek 从关闭态打开时，watch（open/view/taskId 变更）
+// 与 @open 会双触发——peekLoadedFor 保证同一目标只 acquire 一次；目标（含
+// 「离开速览」的 null）变化时先 release 旧的再 acquire 新的，防止同屏挂两条
+// task channel。
 let peekLoadedFor = null;
 function ensurePeekLoaded() {
-  const id = statusCenter.taskId;
-  if (statusCenter.open && statusCenter.view === "peek" && id && peekLoadedFor !== id) {
-    peekLoadedFor = id;
-    resetSampleFixState();
-    reviewComment.value = ""; // 切任务清草稿，绝不把上个任务的意见签到这个任务
-    markTaskSeen(id); // 速览含产物+签发，等价「看过」，驱动任务台未读点
-    loadPeek(id, { initial: true });
-    loadAcceptedSamples(id); // 已批准任务重开也能看到固化入口（未认可样本被 ===true 过滤，静默无痕）
-  }
+  const id = (statusCenter.open && statusCenter.view === "peek") ? statusCenter.taskId : null;
+  if (id === peekLoadedFor) return;
+  if (peekLoadedFor) releasePeekFeed(); // 换代前先释放旧任务的 channel 订阅
+  peekLoadedFor = id;
+  if (!id) return;
+  resetSampleFixState();
+  reviewComment.value = ""; // 切任务清草稿，绝不把上个任务的意见签到这个任务
+  peekArtifacts.value = []; // 换任务先清旧任务的产物预览，避免换代间隙闪烁旧内容
+  artifactsFingerprint = null; // 重进同任务（含重开同任务）允许重试上次失败的产物预览
+  artifactsLoading.value = false;
+  markTaskSeen(id); // 速览含产物+签发，等价「看过」，驱动任务台未读点（打开即标，不等首次拉取落地）
+  acquirePeekFeed(id);
+  loadAcceptedSamples(id); // 已批准任务重开也能看到固化入口（未认可样本被 ===true 过滤，静默无痕）
 }
 watch(() => [statusCenter.open, statusCenter.view, statusCenter.taskId], ensurePeekLoaded);
 
@@ -545,10 +539,8 @@ watch(
 );
 
 onUnmounted(() => {
-  disposed = true;
-  clearPoll();
   releaseInboxFeed(); // 安全网：正常路径已在 onClosed 释放,release() 本身幂等
-  peekEpoch++;
+  releasePeekFeed();
   artifactsFingerprint = null;
   resetSampleFixState();
 });
