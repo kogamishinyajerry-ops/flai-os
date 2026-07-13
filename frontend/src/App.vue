@@ -209,16 +209,19 @@ function cycleTheme() {
 const route = useRoute();
 const router = useRouter();
 
-// 范式 Phase 3「对话即家」：对话是唯一一级入口（发起与跟进一切的家）。
-// 任务台/详情/门户/协作会话全部降级为深链——总览「来找你」（状态坞 → 状态中心
-// 抽屉「查看全部任务 →」深链达 /tasks），不再占主导航。路由全保留（可分享/刷新/回退）。
+// 双入口=对话+今日（批B owner 拍板 A 案）：对话是发起与跟进一切的家，今日
+// 工作台是「开工即看」的目的地页，值得与对话并列一级入口；其余仍全部深链。
+// 任务台/详情/门户/协作会话降级为深链——总览「来找你」（状态坞 → 状态中心
+// 抽屉「查看全部任务 →」深链达 /tasks）。路由全保留（可分享/刷新/回退）。
 const NAV = [
   { path: "/", label: "对话" },
+  { path: "/today", label: "今日" },
 ];
 
-// 只有对话主轴（/ 与 /?c=，route.path 恒为 "/"）高亮；深链页（/tasks、/tasks/:id、
-// /workbench、/portal、/feedback）不占主导航高亮——你在深链视图里，不在某个一级 Surface 上。
-const activeMenu = computed(() => (route.path === "/" ? "/" : ""));
+// 对话主轴（/ 与 /?c=，route.path 恒为 "/"）与 /today 高亮；其余深链页（/tasks、
+// /tasks/:id、/workbench、/portal、/feedback）不占主导航高亮——你在深链视图里，
+// 不在某个一级 Surface 上。
+const activeMenu = computed(() => (route.path === "/" || route.path === "/today" ? route.path : ""));
 
 // 当前恢复中的会话 id（导引页 /?c=<id>），用于左栏高亮。
 const activeConvoId = computed(() => (typeof route.query.c === "string" ? route.query.c : ""));
