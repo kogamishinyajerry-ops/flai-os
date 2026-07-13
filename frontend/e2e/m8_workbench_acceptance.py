@@ -120,12 +120,14 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
     login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie
 
-    # ── ① 左栏导航恰一个一级入口（Phase 3「对话即家」，任务台降级为深链）──
+    # ── ① 左栏导航=双入口「对话+今日」（Phase 3「对话即家」经批B A 案演进：
+    #     owner 拍板 /today 升一级入口，其余页面仍全部深链——断言精确集合，
+    #     多一项少一项都红）──
     page.goto(BASE + "/", wait_until="networkidle")
     nav_items = page.locator(".sidebar-nav .nav-link")
     nav_texts = [t.strip() for t in nav_items.all_inner_texts()]
-    nav_ok = nav_texts == ["对话"]
-    check("①左栏导航收敛为单一级入口（对话即家）", nav_ok, f"实际={nav_texts}")
+    nav_ok = nav_texts == ["对话", "今日"]
+    check("①左栏导航=双入口 对话+今日（批B A 案，其余仍深链）", nav_ok, f"实际={nav_texts}")
     page.screenshot(path=str(SHOTS / "1_nav_two.png"))
 
     # ── ①' 任务总览「来找你」：状态坞 → 状态中心「查看全部任务 →」深链达 /tasks ──
