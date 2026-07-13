@@ -79,14 +79,59 @@
         <EmptyState v-else variant="data" description="今天还没有交付的任务" />
       </section>
 
-      <!-- 版块 4/5：占位（Agent 动态/团队总量），批B后续任务接入 -->
-      <section class="today-section today-placeholder">
+      <!-- 版块 4：Agent 动态（4a 本周最近晋升 ≤5 条 + 4b 今日最活跃 Agent top3）。
+           4a 用「本周」框定（与版块5「本周晋升」同一 since 口径），故对
+           listGlobalPromotions 的结果做本地 weekStartIso 过滤而非直接取前 5——
+           否则「本周暂无晋升」空态文案可能在有更早晋升时误判有数据。 -->
+      <section class="today-section">
         <div class="today-section-head">Agent 动态</div>
-        <div class="today-placeholder-note">占位——待接入最近晋升 + 今日最活跃 Agent</div>
+        <div v-if="promotionsError" class="today-error">{{ promotionsError }}</div>
+        <template v-else>
+          <div v-if="recentPromotions.length" class="today-list">
+            <div v-for="p in recentPromotions" :key="p.id" class="today-promo-row">
+              <span class="today-promo-main">
+                {{ p.agent_id }} 晋升 {{ maturityLabel(p.from_maturity) }} → {{ maturityLabel(p.to_maturity) }}
+              </span>
+              <span class="today-promo-sub">{{ formatTime(p.created_at) }} · 签发人 {{ p.confirmed_by }}</span>
+            </div>
+          </div>
+          <EmptyState v-else variant="data" description="本周暂无晋升" />
+        </template>
+
+        <div class="today-subhead">今日最活跃 Agent</div>
+        <div v-if="topActiveAgents.length" class="today-active-row">
+          <span v-for="a in topActiveAgents" :key="a.agent_id" class="today-active-chip">
+            {{ a.agent_id }} · {{ a.count }}
+          </span>
+        </div>
+        <EmptyState v-else variant="data" description="窗口内暂无任务" />
+        <div class="today-subhead-note">近 100 条任务窗口口径</div>
       </section>
-      <section class="today-section today-placeholder">
+
+      <!-- 版块 5：团队总量条——四格横条，全中性 ink 色（信任色锁：绿/teal 只留给
+           REAL 结果/人签动作本身，不预支到统计数字）。 -->
+      <section class="today-section">
         <div class="today-section-head">团队总量</div>
-        <div class="today-placeholder-note">占位——待接入团队总量条</div>
+        <div v-if="statsError" class="today-error">{{ statsError }}</div>
+        <div v-else-if="stats" class="today-stats-bar">
+          <div class="today-stat-tile">
+            <span class="today-stat-num">{{ stats.tasks_completed }}</span>
+            <span class="today-stat-label">本周完成</span>
+          </div>
+          <div class="today-stat-tile">
+            <span class="today-stat-num">{{ stats.reviews_approved }}</span>
+            <span class="today-stat-label">本周人签放行</span>
+          </div>
+          <div class="today-stat-tile">
+            <span class="today-stat-num">{{ stats.curated_cases_total }}</span>
+            <span class="today-stat-label">累计固化 case（按仓内固化文件计）</span>
+          </div>
+          <div class="today-stat-tile">
+            <span class="today-stat-num">{{ stats.promotions }}</span>
+            <span class="today-stat-label">本周晋升</span>
+          </div>
+        </div>
+        <SkeletonBlock v-else height="52px" width="100%" />
       </section>
     </template>
 
@@ -98,10 +143,11 @@
 // 数据源：liveFeed 'tasks' channel（批A 单源轮询，5s 自链，与 StatusCenter/
 // StatusDock/TaskConsole 同一份真值）。本页整页挂载期间持有一次 acquire，
 // 卸载即 release（channel 无其它订阅者时自停）。
-import { computed, onUnmounted } from "vue";
+import { computed, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { acquireChannel } from "../stores/liveFeed";
-import { statusLabel, taskLampColor, taskElapsedMs, formatDuration, TASK_WORK_STATES } from "../utils/format";
+import { acquireChannel, onTransition } from "../stores/liveFeed";
+import { getStatsOverview, listGlobalPromotions } from "../api/stats";
+import { statusLabel, taskLampColor, taskElapsedMs, formatDuration, formatTime, TASK_WORK_STATES, MATURITY } from "../utils/format";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import DeliveryCard from "../components/DeliveryCard.vue";
@@ -110,6 +156,8 @@ const router = useRouter();
 
 const tasksChannel = acquireChannel("tasks");
 const { tasks: feedTasks, loaded: feedLoaded, error: feedError } = tasksChannel.state;
+
+const maturityLabel = (m) => MATURITY[m]?.label ?? m;
 
 const waitingTasks = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review"));
 const workingTasks = computed(() =>
@@ -127,6 +175,79 @@ const deliveryTasks = computed(() => {
   );
 });
 
+// 版块 4/5（B-T5）：「本周」=本地周一零点转 UTC ISO 作 since（周日 getDay()=0 归上周一）。
+// 算一次即可——页面挂载期间「本周」边界不变，不必做成响应式。
+const weekStartIso = (() => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return d.toISOString();
+})();
+
+const stats = ref(null);
+const statsError = ref("");
+const promotions = ref([]);
+const promotionsError = ref("");
+
+// 4a 空态文案「本周暂无晋升」要求本地按 weekStartIso 过滤（listGlobalPromotions
+// 本身是全局最近 N 条，无 since 参数）——直接掐前 5 条在晋升稀疏时会把「本周
+// 之前」的旧晋升误显示成「本周有」，或反过来把「本周确实有」误判成空。
+// Date 对象比较而非字符串比较：weekStartIso 是 'Z' 后缀、created_at 是后端
+// 归一化的 '+00:00' 后缀，同一时刻两种表示字典序不等价（stats.py 同款坑：
+// ASCII '.'/'Z' 与 '+' 错序），必须转 Date 再比才是真时间序。
+const weekStartMs = Date.parse(weekStartIso);
+const recentPromotions = computed(() =>
+  promotions.value.filter((p) => Date.parse(p.created_at) >= weekStartMs).slice(0, 5)
+);
+
+// 4b 今日最活跃 Agent：从已持有的 tasks channel（近 100 条窗口）派生，不再单独 acquire。
+const topActiveAgents = computed(() => {
+  const counts = new Map();
+  for (const t of feedTasks.value) {
+    if (!t.agent_id) continue;
+    counts.set(t.agent_id, (counts.get(t.agent_id) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([agent_id, count]) => ({ agent_id, count }));
+});
+
+async function fetchStats() {
+  try {
+    stats.value = await getStatsOverview(weekStartIso);
+    statsError.value = "";
+  } catch (err) {
+    // 诚实地板：失败显式报错，绝不显示 0 冒充无数据。
+    statsError.value = err.detail || err.message || "统计不可用";
+  }
+}
+
+async function fetchPromotions() {
+  try {
+    promotions.value = await listGlobalPromotions(20);
+    promotionsError.value = "";
+  } catch (err) {
+    promotionsError.value = err.detail || err.message || "晋升列表不可用";
+  }
+}
+
+fetchStats();
+fetchPromotions();
+
+// 补拉纪律（brief §拉取纪律）：任务转 completed 或离开 waiting_review 时才可能
+// 产生新的治理事件（完成数/人签数），补拉一次 stats；30s 内去重防事件雨连环拉。
+// 不进 liveFeed 轮询——只在真实转移事件上触发。
+let lastStatsRefetchAt = 0;
+const offTransition = onTransition((ev) => {
+  if (ev.to === "completed" || ev.from === "waiting_review") {
+    const now = Date.now();
+    if (now - lastStatsRefetchAt < 30000) return;
+    lastStatsRefetchAt = now;
+    fetchStats();
+  }
+});
+
 function isWork(status) {
   return TASK_WORK_STATES.has(status);
 }
@@ -142,6 +263,7 @@ function openTask(id) {
 
 onUnmounted(() => {
   tasksChannel.release();
+  offTransition();
 });
 </script>
 
@@ -239,12 +361,73 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.today-placeholder .today-placeholder-note {
-  font-size: 12px;
-  color: var(--ink-faint);
-  padding: 12px 14px;
-  border: 1px dashed var(--hairline);
+.today-promo-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 14px;
+  border: 1px solid var(--hairline-soft);
   border-radius: 10px;
+  background: var(--card-bg);
+}
+.today-promo-main {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.today-promo-sub {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.today-subhead {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-faint);
+  margin: 16px 0 8px;
+}
+.today-subhead-note {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  margin-top: 6px;
+}
+.today-active-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.today-active-chip {
+  font-size: 12px;
+  color: var(--ink);
+  padding: 5px 10px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 999px;
+  background: var(--card-bg);
+}
+.today-stats-bar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.today-stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 10px;
+  background: var(--card-bg);
+  box-shadow: var(--shadow-card);
+}
+.today-stat-num {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.today-stat-label {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  line-height: 1.35;
 }
 .today-foot-note {
   font-size: 10.5px;
