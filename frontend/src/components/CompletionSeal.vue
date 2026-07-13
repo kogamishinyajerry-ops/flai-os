@@ -18,7 +18,7 @@
 <script setup>
 // 时长口径 SSOT=utils/format 的 taskElapsedMs+formatDuration（与 WorkLog 同源
 // 同取整）——绝不自建第二套 formatter，避免同屏「1h 0m」vs「59 分 59 秒」互相打脸。
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onMounted } from "vue";
 import { formatDuration, taskElapsedMs } from "../utils/format";
 import { burstNeutral } from "../effects/burst";
 
@@ -62,16 +62,22 @@ const tail = computed(() => {
 // 语义比原先的「watch 非 immediate 天然只咬一下」更明确、不依赖隐式假设。
 // flush: post 确保 DOM（rootEl）先落定再取动效目标元素。
 let bursted = false;
+function maybeBurst(a, s) {
+  if (a === true && s === "completed" && !bursted) {
+    bursted = true;
+    burstNeutral(rootEl.value); // el 缺失/降级 burstNeutral 自兜 no-op
+  }
+}
 watch(
   [() => props.animate, () => props.task?.status],
-  ([a, s]) => {
-    if (a === true && s === "completed" && !bursted) {
-      bursted = true;
-      burstNeutral(rootEl.value); // el 缺失/降级 burstNeutral 自兜 no-op
-    }
-  },
+  ([a, s]) => maybeBurst(a, s),
   { flush: "post" },
 );
+// 挂载即已满足的场景（Codex R2-P3 verbatim）：tasks channel 在本组件挂载前
+// 就发出亲历迁移（TaskDetail 首拉未落地时父级已置 animate=true），组件带着
+// animate=true + completed 初次挂载，非 immediate watch 永不触发——onMounted
+// 补判一次，此时 rootEl 已可用；bursted 标记保证与 watch 路径互斥只咬一次。
+onMounted(() => maybeBurst(props.animate, props.task?.status));
 </script>
 
 <style scoped>

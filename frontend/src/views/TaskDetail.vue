@@ -501,16 +501,18 @@ watch(() => task.value?.output_file_ids, (ids) => {
 // 不会在终态后空转重复拉。immediate（Task 12 修复 6，warm-join）：channel
 // 复用时首帧 task 可能已是终态却错过这次 watch——immediate 补首帧标记已看
 // /补拉反馈；markTaskSeen/loadFeedback 均幂等，不产生副作用重复。
+// 请求序号（Task 12 修复 5）：终态 watch 补拉与「提交反馈后重载」都会调用本
+// 函数，慢的首拉响应若晚于后一次调用落地，会用旧列表覆盖掉刚提交的反馈——
+// 只让「最新一次发起」的结果落盘，迟到的旧响应整包作废。声明必须先于下方
+// immediate watch（Codex R2-P2 verbatim）：warm-join 终态首帧会同步触发
+// loadFeedback，`let` 在 TDZ 内即 ReferenceError。
+let feedbackSeq = 0;
+
 watch(task, (t) => {
   if (!t) return;
   markTaskSeen(taskId);
   if (isTerminal.value) loadFeedback();
 }, { immediate: true });
-
-// 请求序号（Task 12 修复 5）：终态 watch 补拉与「提交反馈后重载」都会调用本
-// 函数，慢的首拉响应若晚于后一次调用落地，会用旧列表覆盖掉刚提交的反馈——
-// 只让「最新一次发起」的结果落盘，迟到的旧响应整包作废。
-let feedbackSeq = 0;
 async function loadFeedback() {
   const seq = ++feedbackSeq;
   try {

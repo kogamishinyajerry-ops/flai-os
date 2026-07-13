@@ -604,6 +604,7 @@ const conversationTasks = ref([]);
 let convTasksHandle = null;
 let convTasksStop = null;
 let convTasksHandleFor = null; // 当前持有订阅所属的 conversationId（null=未订阅）
+let feedDisposed = false; // 组件已卸载：拒绝 await 续体的迟到 acquire（Codex R2-P1）
 
 function hasOrchestratePlan() {
   return messages.value.some(
@@ -642,6 +643,10 @@ function releaseConversationTasksFeed() {
 // conversationTasks，陈旧响应作废由 channel 自身的 epoch guard 承接，不需要
 // 本组件再比对 convId。
 function ensureConversationTasksFeed() {
+  // 卸载后拒绝迟到订阅（Codex R2-P1 verbatim）：postMessage/getConversation 的
+  // await 续体可能在组件卸载后才走到这里——那时唯一的 onUnmounted release 已
+  // 执行过，再 acquire 的 channel 将无人释放，泄漏成 tab 级 5s 常驻轮询。
+  if (feedDisposed) return;
   const id = hasOrchestratePlan() ? conversationId.value : null;
   if (id === convTasksHandleFor) return;
   if (convTasksHandleFor) releaseConversationTasksFeed();
@@ -703,6 +708,7 @@ onMounted(() => {
   if (typeof c === "string" && c) loadConversation(c);
 });
 onUnmounted(() => {
+  feedDisposed = true; // 先封门再释放：卸载后任何 await 续体不得再 acquire
   releaseConversationTasksFeed();
 });
 
