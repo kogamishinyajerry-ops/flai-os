@@ -1,0 +1,74 @@
+id: cfd_solve_launch
+name: "CFD 求解发起工具（docker exec 真求解，fire-and-register）"
+version: 0.1.0
+type: python_adapter
+mock: false
+description: >
+  在 agent-cfd-live case/run/<run_id>/ 时间戳子目录里发起一次真实 OpenFOAM
+  求解（圆柱绕流 Re=100）：host 侧从 template 铺算例 → docker exec 容器内
+  gmshToFoam + checkMesh → nohup pimpleFoam 后台发起（fire，不阻塞 ~200s 求解）
+  → 盖 .hub_run_id sidecar（hub marker + 评估对账凭据）。安全边界
+  （allow_shell_command=true，ADR-0022 同款纪律）：shell=False 参数列表、docker
+  脚本固定模板零用户串拼、容器名/路径来自可信 env config（FLAI_CFD_CONTAINER/
+  FLAI_CFD_CASE_DIR/FLAI_CFD_TEMPLATE_DIR）非请求体、case 白名单枚举、run_id
+  正则白名单先于拼路径。fail-closed：config 缺失/容器未 up/网格失败 → failed，
+  绝不谎报已发起（sidecar 最后盖，失败残留无 sidecar 不被 hub 认作 run）。
+  bind-mount 铁律强化版：每 run 新建子目录，零删除操作——case/run 本体与旧 run
+  谁都不碰，同名 run 已存在即拒。
+entrypoint: tools_impl.cfd_solve_launch.adapter:run
+output_classification: internal
+input_schema:
+  type: object
+  required:
+    - case
+    - run_id
+  properties:
+    case:
+      type: string
+      enum:
+        - cylinder_re100
+      description: 算例白名单（本批固定 canonical case）
+    run_id:
+      type: string
+      minLength: 1
+      description: 时间戳 run_id（YYYYMMDD-HHMMSS，由 cfd_solve_agent 生成传入；Tool 只校验不自生，保测试确定性）
+    end_time:
+      type: number
+      exclusiveMinimum: 0
+      description: 可选，覆盖 controlDict endTime（数值型才注入，非法忽略）
+  additionalProperties: false
+output_schema:
+  type: object
+  required:
+    - status
+  properties:
+    status:
+      type: string
+      enum:
+        - success
+        - failed
+    run_id:
+      type: string
+    run_dir:
+      type: string
+      description: host 侧 run 子目录绝对路径
+    container:
+      type: string
+    checkmesh_ok:
+      type: boolean
+    launched_at:
+      type: string
+    error_message:
+      type: string
+  additionalProperties: false
+runtime:
+  timeout_seconds: 180
+  max_parallel_jobs: 1
+  retry: 0
+safety:
+  require_workspace_isolation: false
+  allow_shell_command: true
+  save_raw_files: false
+owner:
+  maintainer: TBD
+  business_owner: TBD
