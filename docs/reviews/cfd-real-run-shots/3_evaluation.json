@@ -1,0 +1,17 @@
+{
+ "run_id": "20260713-104108",
+ "converged": true,
+ "st": 0.16727979535884366,
+ "st_ref": 0.164,
+ "st_error_pct": 1.9998752188071043,
+ "n_cycles": 14,
+ "cd_mean": 1.4011198628898962,
+ "ended": true,
+ "resid_gate": {
+  "tol": 0.05,
+  "passed": true
+ },
+ "verdict": "收敛，St 与 Williamson 参考一致",
+ "oracle_reason": "14 个稳定周期，f=0.1673",
+ "source": "cfd_result_read → st_oracle(确定性)"
+}
