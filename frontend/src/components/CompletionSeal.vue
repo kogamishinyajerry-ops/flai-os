@@ -54,14 +54,23 @@ const tail = computed(() => {
 
 // 中性尘埃迸发（动效系统 v1 E2 burstNeutral）：仅 completed 且父级判定「亲历
 // 迁移」时播放一次；failed/cancelled 零迸发零彩色（信任色锁——盖章本身已把
-// 情绪限定在状态词，动效不得越权加戏）。animate 一次性 false→true，watch
-// 非 immediate 天然只咬这一下，历史直开（animate 恒 false）永不触发。
+// 情绪限定在状态词，动效不得越权加戏）。组合条件 watch（Task 12 修复 7）：
+// animate 与 task.status 常在同一 tick 内一起到账（channel 落地整包替换
+// task），若只 watch animate 单源，animate 已 true 但 status 尚未翻到
+// completed 的窗口会被单发 watch 漏判、之后 status 单独变化不会被本 watch
+// 感知——双源 watch + bursted 标记显式保证「整个组件生命周期只咬一次」，
+// 语义比原先的「watch 非 immediate 天然只咬一下」更明确、不依赖隐式假设。
+// flush: post 确保 DOM（rootEl）先落定再取动效目标元素。
+let bursted = false;
 watch(
-  () => props.animate,
-  (v) => {
-    if (v !== true || props.task?.status !== "completed") return;
-    burstNeutral(rootEl.value); // el 缺失/降级 burstNeutral 自兜 no-op
+  [() => props.animate, () => props.task?.status],
+  ([a, s]) => {
+    if (a === true && s === "completed" && !bursted) {
+      bursted = true;
+      burstNeutral(rootEl.value); // el 缺失/降级 burstNeutral 自兜 no-op
+    }
   },
+  { flush: "post" },
 );
 </script>
 

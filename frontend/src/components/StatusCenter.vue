@@ -347,7 +347,14 @@ function acquirePeekFeed(taskId) {
     }, { immediate: true }),
     watch(peekHandle.state.events, (v) => { peekEvents.value = v; }, { immediate: true }),
     watch(peekHandle.state.modelCalls, (v) => { peekModelCalls.value = v; }, { immediate: true }),
-    watch(peekHandle.state.loaded, (v) => { peekLoading.value = !v; }, { immediate: true }),
+    // loading 双源联动（Task 12 修复 5）：单独 watch loaded 时,已 loaded 的
+    // channel 若之后拉取失败,loaded 不回落 false,peekLoading 会卡在 false
+    // 却无内容可看——error 分支需同样能把 loading 状态收口,而不是只镜像展示。
+    watch(
+      [peekHandle.state.loaded, peekHandle.state.error],
+      ([l, e]) => { peekLoading.value = !l && !e; },
+      { immediate: true },
+    ),
     watch(peekHandle.state.error, (v) => { peekError.value = v; }, { immediate: true }),
   ];
 }

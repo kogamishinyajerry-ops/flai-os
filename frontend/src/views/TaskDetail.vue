@@ -484,21 +484,26 @@ const inputEntries = computed(() => {
 // artifacts fingerprint 增量逻辑保留在组件内：syncArtifacts 自身按 fileId
 // 做 Map 合并去重（已有的不重拉），output_file_ids 每次轮询都是全新数组
 // 引用（后端 JSON 每次现拼），watch 因而每轮询都会触发一次，但对已知产物
-// 零重复请求，语义与原 loadTask 内联调用完全等价。
+// 零重复请求，语义与原 loadTask 内联调用完全等价。immediate（Task 12 修复
+// 6，warm-join）：channel join 时若已有 loaded 缓存（同 key 复用），首帧
+// output_file_ids 已非空却错过这次 watch——immediate 补首帧，syncArtifacts
+// 自带 fileId 去重，不产生重复请求。
 watch(() => task.value?.output_file_ids, (ids) => {
   syncArtifacts(ids || []);
-});
+}, { immediate: true });
 
 // 详情页开着=正在看：task 每次更新（含跨会话人工放行到账）都重新标记已看
 // 过，轮询期间状态翻终态不得回头亮未读；到终态时补拉一次反馈列表——channel
 // 到终态即停轮（liveFeedCore.nextInterval 返回 null），故本 watch 只会在
 // 「刚好翻终态」的那一次触发 loadFeedback，效果与原 loadTask 内联调用一致，
-// 不会在终态后空转重复拉。
+// 不会在终态后空转重复拉。immediate（Task 12 修复 6，warm-join）：channel
+// 复用时首帧 task 可能已是终态却错过这次 watch——immediate 补首帧标记已看
+// /补拉反馈；markTaskSeen/loadFeedback 均幂等，不产生副作用重复。
 watch(task, (t) => {
   if (!t) return;
   markTaskSeen(taskId);
   if (isTerminal.value) loadFeedback();
-});
+}, { immediate: true });
 
 async function loadFeedback() {
   try {

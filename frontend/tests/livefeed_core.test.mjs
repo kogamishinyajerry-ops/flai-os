@@ -51,3 +51,20 @@ test("epochGuard: bump 后旧 epoch 的 wrap 整体 no-op（整包作废,ADR-001
   apply2();
   assert.equal(applied, 1); // 当代响应落地
 });
+
+// 落地复查谓词地基（Task 12 修复 1）：liveFeed.js 的 refresh() 用
+// `fresh = () => epochAtStart === guard.current()` 作为「响应落地前」的
+// 复查判据（区别于 wrap 的「起跑前」预检，覆盖 await 期间换代的窗口）。
+// tamper：把 refresh() 里的落地复查删掉/固定 fresh 恒 true，此条不会红
+// （它测的是 makeEpochGuard 本身），但对应 build*Channel 里的 `if (!fresh())
+// return;` 一旦被拆掉，批A 治理审 R0 task-report 里的落地复查回归测试会红——
+// 本条只锚 epoch 语义地基，行为回归覆盖见 fetch 落地路径本身。
+test("epochGuard: current() 是 fresh() 谓词的地基——bump 后 current() 变化使旧 epoch 判 stale", () => {
+  const g = makeEpochGuard();
+  const epochAtStart = g.current();
+  const freshBefore = () => epochAtStart === g.current();
+  assert.equal(freshBefore(), true); // 未 bump：仍是当代
+  g.bump(); // 模拟 channel release 重建（响应在途中换代）
+  const freshAfter = () => epochAtStart === g.current();
+  assert.equal(freshAfter(), false); // bump 后：旧 epoch 判 stale,落地必须整包作废
+});
