@@ -145,9 +145,11 @@
       />
 
       <el-form-item>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">
-          {{ uploadingFiles ? "上传附件中…" : "提交任务" }}
-        </el-button>
+        <span ref="submitAnchor" class="submit-anchor">
+          <el-button type="primary" :loading="submitting" @click="handleSubmit">
+            {{ uploadingFiles ? "上传附件中…" : "提交任务" }}
+          </el-button>
+        </span>
       </el-form-item>
     </el-form>
   </div>
@@ -196,6 +198,24 @@ const prefillConversationId = ref(null);
 // 单 Agent 导引流程：任务创建成功后再归档本会话（异源 Codex R2-#3：会话 concluded 后
 // API 真只读拒新任务，故归档必须后于创建，不能像旧流程那样先归档再跳创建页）。
 const prefillConcludeAfter = ref(false);
+// 提交飞入（批A T10）：提交成功、跳转前在提交按钮附近播一次 fx-rise（列表飞入感）。
+const submitAnchor = ref(null);
+function prefersReducedMotion() {
+  return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+function playSubmitRise() {
+  return new Promise((resolve) => {
+    if (prefersReducedMotion() || !submitAnchor.value) {
+      resolve();
+      return;
+    }
+    submitAnchor.value.classList.add("fx-rise");
+    setTimeout(() => {
+      if (submitAnchor.value) submitAnchor.value.classList.remove("fx-rise");
+      resolve();
+    }, 120);
+  });
+}
 
 const form = reactive({
   agentId: typeof route.query.agent_id === "string" ? route.query.agent_id : "",
@@ -418,6 +438,7 @@ async function handleSubmit() {
       concludeConversation(prefillConversationId.value).catch(() => {});
     }
     ElMessage.success("任务已创建");
+    await playSubmitRise();
     // 范式 2a 对话轴闭环：从导引来（back=chat）且会话仍活跃 → 回流对话，任务卡
     // 在流里原地亮起（Claude 式零跳页）。单 Agent conclude_after 已归档会话，
     // 回一个刚被归档的会话反而突兀——仍走详情页；工作台来的召集同样走详情页
@@ -489,6 +510,9 @@ onMounted(loadAgents);
 }
 .field-foot {
   margin-top: 8px;
+}
+.submit-anchor {
+  display: inline-block;
 }
 .mode-toggle {
   color: var(--ink-faint);

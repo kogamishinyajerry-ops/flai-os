@@ -2,7 +2,7 @@
   <!-- 全局状态坞（UI-PARADIGM.md 祈使句②「状态来找人」）：常驻每页右上，
        计数全部来自真实轮询（诚实地板——绝不估算）。点击任意处打开状态中心。 -->
   <div class="status-dock" role="button" tabindex="0" aria-label="打开状态中心" @click="openInbox" @keydown.enter="openInbox" @keydown.space.prevent="openInbox">
-    <span v-if="waitingCount > 0" class="dock-pill dock-pill-waiting">
+    <span v-if="waitingCount > 0" class="dock-pill dock-pill-waiting" :class="{ 'dock-pulse-echo': pulseEcho }">
       ✍ 待你签发 {{ waitingCount }}
     </span>
     <span v-if="workingCount > 0" class="dock-pill dock-pill-working">
@@ -27,13 +27,68 @@
 // 计数派生自 taskFeed 共享轮询源（范式 2c：与任务台左栏同一条链同一份数据）；
 // 「最近窗口 100 条」诚实口径、失败保留上次计数下 tick 自愈、从未成功不显示
 // pill（无数据不装有数据）全部由 store 层承袭。
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, h, onMounted, onUnmounted, ref } from "vue";
+import { useRouter } from "vue-router";
+import { ElMessage } from "element-plus";
 import { TASK_WORK_STATES } from "../utils/format";
 import { openInbox } from "../stores/statusCenter";
 import { feedTasks, acquireTaskFeed, releaseTaskFeed } from "../stores/taskFeed";
+import { onTransition } from "../stores/liveFeed";
+
+const router = useRouter();
 
 const workingCount = computed(() => feedTasks.value.filter((t) => TASK_WORK_STATES.has(t.status)).length);
 const waitingCount = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review").length);
+
+// 待签发即时回声（批A T10）：tasks channel 每次翻转经 liveFeed 总线广播,这里
+// 只订阅落地→waiting_review 的迁移。from=null 是 channel 冷启动首拉快照
+// （T9 实证坑：不是「本次会话亲历」的迁移），显式判 ev.from != null 排除。
+const ECHO_DEDUPE_MS = 30000; // 同 id 30s 内不重复弹 toast（角标脉冲不受此限）
+const echoedAt = new Map();
+const pulseEcho = ref(false);
+let pulseTimer = null;
+let offTransition = null;
+
+function sweepEchoedAt(now) {
+  // 懒惰清理：随写入机会顺带扫一遍过期项,不开定时器。
+  for (const [id, ts] of echoedAt) {
+    if (now - ts >= ECHO_DEDUPE_MS) echoedAt.delete(id);
+  }
+}
+
+function playPulseEcho() {
+  if (pulseTimer) clearTimeout(pulseTimer);
+  pulseEcho.value = false;
+  // 先摘类目再下一帧重加,使连续两次翻转（class 未变化时浏览器不会重播 CSS 动画）
+  // 也能各自重播「播一轮」。
+  requestAnimationFrame(() => {
+    pulseEcho.value = true;
+    pulseTimer = setTimeout(() => {
+      pulseEcho.value = false;
+      pulseTimer = null;
+    }, 3600); // flai-work-pulse 1.8s × 2 播完即停,不常驻闪烁
+  });
+}
+
+function handleTransition(ev) {
+  if (ev.from == null || ev.to !== "waiting_review") return;
+  const now = Date.now();
+  sweepEchoedAt(now);
+  playPulseEcho(); // 角标脉冲不受 dedupe/hidden 限制——「积到角标」
+  if (document.hidden) return; // 后台标签页不弹 toast，脉冲已代为记录
+  const last = echoedAt.get(ev.id);
+  if (last && now - last < ECHO_DEDUPE_MS) return;
+  echoedAt.set(ev.id, now);
+  const name = (ev.task && (ev.task.name || ev.task.id)) || ev.id;
+  ElMessage({
+    type: "warning",
+    message: h(
+      "span",
+      { style: "cursor:pointer", onClick: () => router.push(`/tasks/${ev.id}`) },
+      `「${name}」待你签发`
+    ),
+  });
+}
 
 // 仿真监控发现入口：读浮窗同款配置（未配置=null=零渲染，e2e 不受扰）；
 // scheme 白名单与浮窗/深链同判据，防 localStorage 被 ?simhub= 投毒的危险 scheme。
@@ -56,6 +111,7 @@ function readSimHubUrl() {
 
 onMounted(() => {
   acquireTaskFeed();
+  offTransition = onTransition(handleTransition);
   readSimHubUrl();
   // 浮窗（SimMonitorFloat）确认新源后派发 flai:simhub-changed（同标签页内变更，
   // storage 事件不会自触发故需自定义事件）；storage 事件覆盖跨标签页改配置。
@@ -64,6 +120,8 @@ onMounted(() => {
 });
 onUnmounted(() => {
   releaseTaskFeed();
+  if (offTransition) offTransition();
+  if (pulseTimer) clearTimeout(pulseTimer);
   window.removeEventListener("flai:simhub-changed", readSimHubUrl);
   window.removeEventListener("storage", readSimHubUrl);
 });
@@ -101,6 +159,11 @@ onUnmounted(() => {
   color: var(--trust-pending);
   border: 1px solid rgba(var(--trust-pending-rgb), 0.35);
   background: var(--surface-raised);
+}
+/* 待签发即时回声：复用全局 flai-work-pulse，限定 2 轮（3.6s）播完自停——
+   常驻角标绝不常驻闪烁，只在真翻转发生的这一刻多看一眼。 */
+.dock-pill-waiting.dock-pulse-echo {
+  animation: flai-work-pulse var(--pulse-duration) ease-in-out 2;
 }
 /* clay=工作中（唯一工作强调色）；脉动点复用全局 .work-pulse-dot */
 .dock-pill-working {
@@ -157,6 +220,9 @@ onUnmounted(() => {
   .status-dock:hover .dock-pill,
   .status-dock:hover .dock-core {
     transform: none;
+  }
+  .dock-pill-waiting.dock-pulse-echo {
+    animation: none;
   }
 }
 </style>
