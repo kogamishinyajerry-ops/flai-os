@@ -78,6 +78,7 @@
           </div>
         </div>
 
+        <button type="button" class="sc-viewall" @click="openAllTasks">查看全部任务 →</button>
         <div class="sc-foot-note">计数与清单来自最近任务窗口（100 条）真实轮询——窗口外不虚报。</div>
       </div>
 
@@ -198,6 +199,13 @@ import InboxZero from "./artwork/InboxZero.vue";
 import CompletionSeal from "./CompletionSeal.vue";
 
 const router = useRouter();
+
+// 「查看全部任务 →」：状态中心是任务总览的家（来找你）；要看更全的三栏视图 /
+// 历史全量时深链到 /tasks（范式 Phase 3：任务台降级为深链，不占主导航）。
+function openAllTasks() {
+  router.push("/tasks");
+  closeCenter();
+}
 const drawerSize = window.innerWidth < 640 ? "100%" : "540px";
 
 // ── 收件箱数据 ──
@@ -675,6 +683,21 @@ onUnmounted(() => {
 .sc-zero-art {
   width: 120px;
 }
+.sc-viewall {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--clay);
+  background: transparent;
+  border: 1px solid var(--border-clay-soft, var(--hairline));
+  border-radius: 9px;
+  padding: 7px 13px;
+  cursor: pointer;
+  transition: background 0.16s var(--ease-lift), color 0.16s var(--ease-lift);
+}
+.sc-viewall:hover { background: var(--clay-soft); }
 .sc-foot-note {
   font-size: 11px;
   color: var(--ink-faint);

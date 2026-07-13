@@ -1,17 +1,18 @@
-"""任务台（范式 2b 双 Surface）验收走查——原 M8 工作台契约在 2b 骨架手术后重立。
+"""任务台验收走查——契约在 Phase 3「对话即家」IA 收敛后重立（原 2b 双 Surface 之上）。
 
 自包含：脚本自起后端（tmp 目录，绝不碰真实 data/）+ Job Runner + 真 chromium。
 除 frontend/dist 构建产物外无外部前置。
 
-2b 覆盖（双 Surface IA + 任务台三栏）：
-  ① 左栏导航收敛为恰两个一级入口（对话 / 任务台）——门户/工作台已撤出导航；
+Phase 3 覆盖（对话即家：对话是唯一一级入口，任务台降级为深链）：
+  ① 左栏导航收敛为恰一个一级入口（对话）——任务台/门户/工作台均已撤出导航；
+  ①' 任务总览「来找你」：状态坞 → 状态中心「查看全部任务 →」深链达 /tasks；
   ② /workbench 深链重定向到 /tasks（旧链接不断）+ 任务台左栏列表渲染
      （API 预置一个任务），到席灯（信任色锁：completed **不给绿**）可见，
      诚实脚注（100 条窗口口径）常驻；②''到席灯颜色级真咬合；
      ②'''/②''''完成未读点（2c）：baseline 后新完成任务亮 clay 点、点开即灭；
   ③ 点任务行 → URL /tasks/:id + 中栏「任务详情」叙事流（TaskDetail 复用，
      m2 全部详情契约由 m2_acceptance 继续把守）；
-  ④ 任务视图导航高亮归属「任务台」；
+  ④ 任务详情深链页不占主导航高亮（对话即家：深链非一级 Surface）；
   ⑤ /portal 深链仍可达（门户降级为 composer 选择器后不失联）；
   ⑥ 暗色主题颜色级探针：画布 token 翻转 + completed 到席灯中性墨暗值
      （信任色锁在暗色下同样咬合——色相轴快照失聪，必须探针）。
@@ -119,13 +120,24 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
     login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie
 
-    # ── ① 左栏导航恰两个一级入口（双 Surface）──
+    # ── ① 左栏导航恰一个一级入口（Phase 3「对话即家」，任务台降级为深链）──
     page.goto(BASE + "/", wait_until="networkidle")
     nav_items = page.locator(".sidebar-nav .nav-link")
     nav_texts = [t.strip() for t in nav_items.all_inner_texts()]
-    nav_ok = nav_texts == ["对话", "任务台"]
-    check("①左栏导航收敛为双 Surface（对话/任务台）", nav_ok, f"实际={nav_texts}")
+    nav_ok = nav_texts == ["对话"]
+    check("①左栏导航收敛为单一级入口（对话即家）", nav_ok, f"实际={nav_texts}")
     page.screenshot(path=str(SHOTS / "1_nav_two.png"))
+
+    # ── ①' 任务总览「来找你」：状态坞 → 状态中心「查看全部任务 →」深链达 /tasks ──
+    # （任务台从一级导航降级为深链，总览入口移入状态中心抽屉——Phase 3 核心 IA 动作）。
+    page.wait_for_selector(".status-dock", timeout=5000)
+    page.locator(".status-dock").click()
+    page.wait_for_selector(".sc-viewall", timeout=5000)
+    viewall_text = page.locator(".sc-viewall").inner_text().strip()
+    page.locator(".sc-viewall").click()
+    page.wait_for_url(re.compile(r"/tasks$"), timeout=5000)
+    check("①'状态中心「查看全部任务」深链达 /tasks",
+          "/tasks" in page.url and "查看全部任务" in viewall_text, f"url={page.url} text={viewall_text!r}")
 
     # ── ② /workbench 旧深链重定向 /tasks + 任务台左栏列表 + 到席灯 + 诚实脚注 ──
     page.goto(BASE + "/workbench", wait_until="networkidle")
@@ -140,9 +152,10 @@ with sync_playwright() as p:
           f"row={row.is_visible()} lamp={lamp_visible} foot={foot_ok}")
     page.screenshot(path=str(SHOTS / "2_console.png"), full_page=True)
 
-    # 任务台页导航高亮 = 任务台
-    active_console = page.locator(".sidebar-nav .nav-link.is-active").inner_text().strip()
-    check("②'任务台页高亮归属任务台", active_console == "任务台", f"active={active_console}")
+    # 深链页 /tasks 不占主导航高亮（Phase 3：任务台是深链、非一级 Surface，
+    # 对话是唯一一级入口——在深链视图里没有某个一级 Surface 处于 active）。
+    active_count = page.locator(".sidebar-nav .nav-link.is-active").count()
+    check("②'任务台深链页不占主导航高亮（对话即家）", active_count == 0, f"active_count={active_count}")
 
     # 信任色锁真咬合（2b 双镜头指出旧断言只查可见性=声明超出证据）：
     # 等 hello_agent 跑到 completed，到席灯必须中性墨 --ink-soft #6b6259——
@@ -188,9 +201,9 @@ with sync_playwright() as p:
     landed_ok = page.url.endswith(SEED_TASK_ID)
     check("③点任务行→中栏任务叙事流（URL /tasks/:id）", landed_ok, f"url={page.url} seed={SEED_TASK_ID}")
 
-    # ── ④ 任务视图高亮仍归属任务台 ──
-    active_detail = page.locator(".sidebar-nav .nav-link.is-active").inner_text().strip()
-    check("④任务视图高亮归属任务台", active_detail == "任务台", f"active={active_detail}")
+    # ── ④ 任务详情深链页同样不占主导航高亮 ──
+    active_detail_count = page.locator(".sidebar-nav .nav-link.is-active").count()
+    check("④任务详情深链页不占主导航高亮（对话即家）", active_detail_count == 0, f"active_count={active_detail_count}")
     page.screenshot(path=str(SHOTS / "3_detail_in_console.png"), full_page=True)
 
     # ── ⑤ /portal 深链仍可达（门户降级不失联）──
