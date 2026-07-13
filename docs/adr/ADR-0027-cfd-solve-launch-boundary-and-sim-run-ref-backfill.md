@@ -76,7 +76,7 @@ plan 原稿 `context.get("run_id_seed") or context.get("task_id")` 不可用：c
 
 | # | Finding | 处置 |
 |---|---------|------|
-| P1-A | `permissions: admin_only` 纯声明——任务创建路径无角色检查，任何登录账户可发起真求解（CPU/盘副作用） | **平台横断债交 owner 裁决**（round cap 已尽）：users 表无 role 字段，admin_only 角色轴本就 owner-gated 在册（M11 后续）。现状风险有界=内网单实例+账户仅管理员手工建（ADR-0019 无自助注册）+end_time 有界。owner 选项：①接受现状角色轴统一收口 ②requires_human_review 改 true（发起也人签）③status disabled 至角色轴落地 |
+| P1-A | `permissions: admin_only` 纯声明——任务创建路径无角色检查，任何登录账户可发起真求解（CPU/盘副作用） | **平台横断债交 owner 裁决**（round cap 已尽）：users 表无 role 字段，admin_only 角色轴本就 owner-gated 在册（M11 后续）。现状风险有界=内网单实例+账户仅管理员手工建（ADR-0019 无自助注册）+end_time 有界。owner 选项：①接受现状角色轴统一收口 ②requires_human_review 改 true（发起也人签）③status disabled 至角色轴落地。**owner 裁决（2026-07-13）：选项①**——内网单实例+账户仅管理员手工建+end_time 有界+单并发锁，风险有界；admin_only 角色轴落地时全平台统一收口 |
 | P1-B | 评估只看周期数——solver 在跑/已崩也可能发 Williamson-consistent verdict | verbatim 修：收敛=三门 AND（oracle 周期+残差门 resid_p 尾部全<0.05+ended 收尾门）；tol 依 golden 尾部实测 1.17e-2 的 4× 余量（瞬态 Initial residual 语义，非稳态 1e-6） |
 | P1-C | 快完成分支返回 note 超 output_schema（additionalProperties:false）→ 已盖 sidecar 的 run 被 Registry 误判 failed | verbatim 修：tool.yaml 声明 note |
 | P2-D | 流式半写行逐列 append 撕裂 t/cd/cl 长度 → 有效 run 被 oracle 误拒 | verbatim 修：整行先转换再 append（两仓同源同修+diff 实证） |
