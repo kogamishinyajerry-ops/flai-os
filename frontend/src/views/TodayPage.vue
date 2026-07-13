@@ -8,14 +8,19 @@
       <span class="today-title">今日</span>
     </div>
 
-    <div v-if="feedError" class="today-error">{{ feedError }}</div>
+    <!-- 首拉失败态（治理审 R1 P2 修复）：feedError 且从未 loaded 过 → 只显错误块，
+         绝不在没有真数据的情况下渲染五个空版块冒充「已加载」。已 loaded 后的轮询
+         错误走 v-else 分支内部的顶部小字错误条，保旧值自愈，不打断已渲染内容。 -->
+    <div v-if="feedError && !feedLoaded" class="today-error">{{ feedError }}</div>
 
     <!-- 首载骨架：只在「从未 loaded 且无错误」时撑轮廓，轮询期间/带旧值刷新绝不回骨架。 -->
-    <div v-if="!feedLoaded && !feedError" class="today-skel">
+    <div v-else-if="!feedLoaded" class="today-skel">
       <SkeletonBlock v-for="(w, i) in ['70%', '92%', '84%', '76%', '88%', '64%']" :key="i" height="52px" :width="w" />
     </div>
 
     <template v-else>
+      <div v-if="feedError" class="today-error">{{ feedError }}</div>
+
       <!-- 版块 1：待你签发（amber 置顶，行动召唤最高优先） -->
       <section class="today-section">
         <div class="today-section-head waiting">✍ 待你签发 · {{ waitingTasks.length }}</div>
@@ -86,7 +91,7 @@
 
       <!-- 版块 4：Agent 动态（4a 本周最近晋升 ≤5 条 + 4b 今日最活跃 Agent top3）。
            4a 用「本周」框定（与版块5「本周晋升」同一 since 口径），故对
-           listGlobalPromotions 的结果做本地 weekStartIso 过滤而非直接取前 5——
+           listGlobalPromotions 的结果做本地 weekStartMs 过滤而非直接取前 5——
            否则「本周暂无晋升」空态文案可能在有更早晋升时误判有数据。 -->
       <section class="today-section">
         <div class="today-section-head">Agent 动态</div>
@@ -188,11 +193,20 @@ const deliveryTasks = computed(() => {
   );
 });
 
-// 渲染上界（B7 P1 修复）：DeliveryCard 每卡自带 output_files/model_calls/events
-// 三个只读请求，deliveryTasks 无界时=无界扇出。feedTasks 已是 created_at 降序
-// （repos.list_tasks），故前 N 张即「最近 N 条」，非任意截断。
+// 渲染上界（B7 P1 修复）：DeliveryCard 每卡自带只读请求，deliveryTasks 无界时
+// =无界扇出。截断前必须按 finished_at 降序排（治理审 R1 P2 修复）——feedTasks
+// 是 created_at 降序，与 finished_at 降序不等价（先创建不等于先完成），此前
+// 直接对 created_at 序 slice 会把「最近交付」误判成「最近创建」。finished_at
+// 缺失（理论不应发生，deliveryTasks 已过滤要求其非空）防御性排最后。
 const DELIVERY_DISPLAY_CAP = 12;
-const visibleDeliveryTasks = computed(() => deliveryTasks.value.slice(0, DELIVERY_DISPLAY_CAP));
+function deliverySortKeyMs(t) {
+  return t.finished_at ? Date.parse(t.finished_at) : -Infinity;
+}
+const visibleDeliveryTasks = computed(() =>
+  [...deliveryTasks.value]
+    .sort((a, b) => deliverySortKeyMs(b) - deliverySortKeyMs(a))
+    .slice(0, DELIVERY_DISPLAY_CAP)
+);
 
 // 盖章仪式只属于亲历者（批A Task 9 同款判据，见 TaskDetail.vue ~328-341 行的
 // 硬坑注释：ev.from 必须显式 != null，不能只判「不在终态列表」——否则
@@ -200,29 +214,32 @@ const visibleDeliveryTasks = computed(() => deliveryTasks.value.slice(0, DELIVER
 // 生命周期内不清除：同一会话回看仍算亲历过。
 const sealAnimateIds = reactive(new Set());
 
-// 版块 4/5（B-T5）：「本周」=本地周一零点转 UTC ISO 作 since（周日 getDay()=0 归上周一）。
-// 算一次即可——页面挂载期间「本周」边界不变，不必做成响应式。
-const weekStartIso = (() => {
+// 版块 4/5（B-T5）：「本周」=本地周一零点（周日 getDay()=0 归上周一）。治理审
+// R1 P2 修复：此前算一次存常量，页面若挂机跨过周一零点或跨日（版块 4a 用
+// weekStartMs 过滤晋升列表），边界永远停在挂载那一刻，标题「本周」会漂移成
+// 「上周+今天」。改响应式 ref，fetchStats 每次调用前重算，另排一个「下个本地
+// 零点」定时器兜底跨日翻新（跨周必然先跨若干个日，日翻新即含周翻新）。
+const weekStartMs = ref(computeWeekStartMs());
+function computeWeekStartMs() {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-  return d.toISOString();
-})();
+  return d.getTime();
+}
 
 const stats = ref(null);
 const statsError = ref("");
 const promotions = ref([]);
 const promotionsError = ref("");
 
-// 4a 空态文案「本周暂无晋升」要求本地按 weekStartIso 过滤（listGlobalPromotions
+// 4a 空态文案「本周暂无晋升」要求本地按 weekStartMs 过滤（listGlobalPromotions
 // 本身是全局最近 N 条，无 since 参数）——直接掐前 5 条在晋升稀疏时会把「本周
 // 之前」的旧晋升误显示成「本周有」，或反过来把「本周确实有」误判成空。
-// Date 对象比较而非字符串比较：weekStartIso 是 'Z' 后缀、created_at 是后端
-// 归一化的 '+00:00' 后缀，同一时刻两种表示字典序不等价（stats.py 同款坑：
-// ASCII '.'/'Z' 与 '+' 错序），必须转 Date 再比才是真时间序。
-const weekStartMs = Date.parse(weekStartIso);
+// Date 对象比较而非字符串比较：created_at 是后端归一化的 '+00:00' 后缀，与
+// 'Z' 后缀字符串字典序不等价（stats.py 同款坑：ASCII '.'/'Z' 与 '+' 错序），
+// 必须转 Date 再比才是真时间序。weekStartMs.value 响应式——跨周/跨日翻新见上。
 const recentPromotions = computed(() =>
-  promotions.value.filter((p) => Date.parse(p.created_at) >= weekStartMs).slice(0, 5)
+  promotions.value.filter((p) => Date.parse(p.created_at) >= weekStartMs.value).slice(0, 5)
 );
 
 // 4b 今日最活跃 Agent：从已持有的 tasks channel（近 100 条窗口）派生，不再单独
@@ -243,8 +260,9 @@ const topActiveAgents = computed(() => {
 });
 
 async function fetchStats() {
+  weekStartMs.value = computeWeekStartMs(); // 每次拉取前重算，绝不用挂载时的陈旧边界
   try {
-    stats.value = await getStatsOverview(weekStartIso);
+    stats.value = await getStatsOverview(new Date(weekStartMs.value).toISOString());
     statsError.value = "";
   } catch (err) {
     // 诚实地板：失败显式报错，绝不显示 0 冒充无数据。
@@ -263,6 +281,23 @@ async function fetchPromotions() {
 
 fetchStats();
 fetchPromotions();
+
+// 跨日翻新兜底（治理审 R1 P2 修复）：排一个「下个本地零点」定时器，触发时
+// 重算 weekStartMs（连带纠正版块 5「本周完成」的 since）+ 补拉 stats（版块
+// 4a recentPromotions 的过滤直接读 weekStartMs.value，翻新即生效不必单独拉）
+// + 重排下一个零点，页面挂机跨日/跨周不再停在挂载那一刻的旧边界。
+let midnightTimer = null;
+function scheduleNextMidnight() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(24, 0, 0, 0); // 本地下一个零点
+  midnightTimer = setTimeout(() => {
+    weekStartMs.value = computeWeekStartMs();
+    fetchStats();
+    scheduleNextMidnight();
+  }, next.getTime() - now.getTime());
+}
+scheduleNextMidnight();
 
 // 补拉纪律（brief §拉取纪律）：任务转 completed 或离开 waiting_review 时才可能
 // 产生新的治理事件（完成数/人签数），补拉一次 stats；30s 内去重防事件雨连环拉。
@@ -310,6 +345,7 @@ onUnmounted(() => {
   tasksChannel.release();
   offTransition();
   if (pendingStatsRefetchTimer !== null) clearTimeout(pendingStatsRefetchTimer);
+  if (midnightTimer !== null) clearTimeout(midnightTimer);
 });
 </script>
 
@@ -453,6 +489,11 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 10px;
+}
+@media (max-width: 520px) {
+  .today-stats-bar {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 .today-stat-tile {
   display: flex;

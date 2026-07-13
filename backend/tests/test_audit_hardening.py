@@ -185,6 +185,101 @@ def test_output_files_endpoint_projects_metadata_no_leak(app_env) -> None:
     assert client.get("/api/tasks/task_missing/output_files").status_code == 404
 
 
+# ── 单卡交付摘要（治理审 R1 P1 修复）──────────────────────────────────────
+
+
+def test_delivery_summary_aggregates_model_calls_and_batch(app_env) -> None:
+    """混合 token known/missing/failed 的 model_calls + 一条 summary_generated
+    agent_log 事件 → 聚合精确。tamper：拆掉 token 折算/status 分支任一维，
+    夹具里对应的反例行会让断言必红。"""
+    client, app = app_env
+    task = _create_and_run(client, app, "hello_agent", {"name": "交付摘要"})
+    task_id = task["id"]
+
+    conn = app.state.conn_factory()
+    try:
+        # 4 条 model_calls：成功+total_tokens known / 成功+prompt+completion known /
+        # 成功+token_usage 缺失(unknown) / 失败(status=failed，不计入 ok，token 也可能缺)。
+        repos.record_model_call(
+            conn, task_id=task_id, model_profile="reasoning", status="success",
+            token_usage_json={"total_tokens": 100},
+        )
+        repos.record_model_call(
+            conn, task_id=task_id, model_profile="reasoning", status="success",
+            token_usage_json={"prompt_tokens": 20, "completion_tokens": 5},
+        )
+        repos.record_model_call(
+            conn, task_id=task_id, model_profile="reasoning", status="success",
+            token_usage_json=None,
+        )
+        repos.record_model_call(
+            conn, task_id=task_id, model_profile="reasoning", status="failed",
+            token_usage_json=None,
+        )
+        repos.append_event(
+            conn, task_id=task_id, event_type="agent_log", level="info",
+            message="批量收尾", payload={"workflow_event_type": "summary_generated", "ok_count": 7, "failed_count": 2},
+        )
+    finally:
+        conn.close()
+
+    body = client.get(f"/api/tasks/{task_id}/delivery_summary").json()
+    assert body["mc_total"] == 4
+    assert body["mc_ok"] == 3
+    assert body["mc_failed"] == 1
+    assert body["token_sum"] == 125  # 100 + (20+5)
+    assert body["token_known"] == 2
+    assert body["token_missing"] == 2
+    assert body["batch_ok"] == 7
+    assert body["batch_failed"] == 2
+
+
+def test_delivery_summary_no_batch_event_returns_null(app_env) -> None:
+    """非批量 Agent 任务（hello_agent 不发 summary_generated）→ batch_ok/failed
+    诚实返回 null，不冒充有批量结果；无 model_calls 时 mc_total=0 且不算 0 token。"""
+    client, app = app_env
+    task = _create_and_run(client, app, "hello_agent", {"name": "非批量"})
+    body = client.get(f"/api/tasks/{task['id']}/delivery_summary").json()
+    assert body["mc_total"] == 0
+    assert body["mc_ok"] == 0
+    assert body["mc_failed"] == 0
+    assert body["token_known"] == 0
+    assert body["token_missing"] == 0
+    assert body["batch_ok"] is None
+    assert body["batch_failed"] is None
+
+
+def test_delivery_summary_beyond_50_event_window_stays_null(app_env) -> None:
+    """有界扫描的诚实取舍（端点 docstring 明示）：summary_generated 若被 50 条
+    更新的 agent_log 挤出窗口，宁缺毋错返回 null，不做无界扫描换假完整。"""
+    client, app = app_env
+    task = _create_and_run(client, app, "hello_agent", {"name": "超窗口"})
+    task_id = task["id"]
+
+    conn = app.state.conn_factory()
+    try:
+        repos.append_event(
+            conn, task_id=task_id, event_type="agent_log", level="info",
+            message="批量收尾", payload={"workflow_event_type": "summary_generated", "ok_count": 1, "failed_count": 0},
+        )
+        for i in range(50):  # 50 条更新的 agent_log 把上面那条挤出 DESC LIMIT 50 窗口
+            repos.append_event(
+                conn, task_id=task_id, event_type="agent_log", level="info",
+                message=f"噪声事件 {i}", payload={"workflow_event_type": "noise"},
+            )
+    finally:
+        conn.close()
+
+    body = client.get(f"/api/tasks/{task_id}/delivery_summary").json()
+    assert body["batch_ok"] is None
+    assert body["batch_failed"] is None
+
+
+def test_delivery_summary_unknown_task_404(app_env) -> None:
+    client, _ = app_env
+    assert client.get("/api/tasks/task_missing/delivery_summary").status_code == 404
+
+
 # ── inputs 大小上限（DoS 面）──────────────────────────────────────────────
 
 

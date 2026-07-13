@@ -29,12 +29,16 @@ def stats_overview(request: Request, since: str | None = None) -> dict[str, Any]
         raise HTTPException(status_code=422, detail="since 必填（ISO8601）")
     try:
         dt = datetime.fromisoformat(since)
-    except ValueError as exc:
+        if dt.tzinfo is None:
+            # naive/纯日期没有确定时刻语义，与库内 offset-aware 字符串比较必错序——拒收。
+            raise HTTPException(
+                status_code=422, detail=f"since 必须带时区偏移（offset-aware）：{since}"
+            )
+        since = dt.astimezone(timezone.utc).isoformat()  # 归一化 'Z'/任意偏移 → '+00:00' 表示
+    except (ValueError, OverflowError) as exc:
+        # ValueError=非法 ISO8601；OverflowError=极端年份+大偏移归一化到 UTC 时溢出
+        # datetime 可表示范围（如 0001-01-01T00:00:00+23:59），二者同归 422 fail-closed。
         raise HTTPException(status_code=422, detail=f"since 不是合法 ISO8601：{since}") from exc
-    if dt.tzinfo is None:
-        # naive/纯日期没有确定时刻语义，与库内 offset-aware 字符串比较必错序——拒收。
-        raise HTTPException(status_code=422, detail=f"since 必须带时区偏移（offset-aware）：{since}")
-    since = dt.astimezone(timezone.utc).isoformat()  # 归一化 'Z'/任意偏移 → '+00:00' 表示
     conn = request.app.state.conn_factory()
     try:
         tasks_completed = conn.execute(

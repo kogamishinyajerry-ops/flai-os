@@ -60,3 +60,8 @@ export const listModelCalls = (taskId) => request(`/api/tasks/${taskId}/model_ca
 // 产物文件只读元数据投影（批B P1 修复，字段=id/filename/size_bytes/data_classification，
 // 绝不含 path/内容）——DeliveryCard 产物条用它取代逐个 fetchOutputFile 全量拉 blob。
 export const listOutputFiles = (taskId) => request(`/api/tasks/${taskId}/output_files`);
+
+// 单卡交付摘要（批B 治理审 R1 P1 修复）：服务端有界聚合 model_calls 状态/token
+// 与批量 ok/failed（口径见后端端点 docstring），DeliveryCard 用它取代
+// listModelCalls+listTaskEvents 两个无界只读请求。
+export const getDeliverySummary = (taskId) => request(`/api/tasks/${taskId}/delivery_summary`);

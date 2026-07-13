@@ -142,6 +142,16 @@ def test_stats_since_required_and_valid(app_env):
     assert client.get("/api/stats/overview", params={"since": "2026-07-13T00:00:00"}).status_code == 422
 
 
+def test_stats_since_overflow_on_utc_normalize_422_not_500(app_env):
+    """治理审 R1 P2 修复回归：极端年份+大偏移在 astimezone(UTC) 归一化时会
+    OverflowError（date value out of range）——fix 前该路径未被 try 覆盖会 500，
+    fix 后归一化行并入同一 try，与 ValueError 同归 422 fail-closed。tamper：把
+    实现里的 except 子句改回单 ValueError，本测必红（500 而非 422）。"""
+    client, _ = app_env
+    resp = client.get("/api/stats/overview", params={"since": "0001-01-01T00:00:00+23:59"})
+    assert resp.status_code == 422
+
+
 def test_stats_since_z_suffix_normalized(app_env):
     """B-T2 审查③实证的真 bug 回归：'Z' 后缀（JS toISOString 默认格式）同秒
     边界曾因 ASCII 'Z' > '.'/'+' 字典序错序漏计。归一化后 Z 表示与 +00:00

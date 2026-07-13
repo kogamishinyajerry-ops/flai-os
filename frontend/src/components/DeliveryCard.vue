@@ -67,7 +67,7 @@ import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import CompletionSeal from "./CompletionSeal.vue";
 import { downloadUrl } from "../api/files";
-import { listModelCalls, listTaskEvents, listOutputFiles } from "../api/tasks";
+import { getDeliverySummary, listOutputFiles } from "../api/tasks";
 import { taskElapsedMs, formatDuration } from "../utils/format";
 
 const props = defineProps({ task: Object, animate: { type: Boolean, default: false } });
@@ -111,73 +111,38 @@ async function loadArtifacts(taskId, ids) {
   }
 }
 
-// ── 尾行·模型调用：null（fetch 失败）→「模型调用：未知」；[]→「无模型调用」；
-// 有调用时四态（B7 P2 修复——三态版把「部分凑出的和」当成合计显示，是冒充合计
-// 的假信息）：全部能折算→「N 次调用 · tokens 合计 X」；全部凑不出→「N 次调用 ·
-// token 用量：未知」（与 TaskDetail modelCallStats 空态措辞一致）；部分能折算→
-// 追加「（部分未报，下界）」，逐字对齐 TaskDetail.vue tokenMissingCount 分支
-// 「部分调用上游未回报 token，合计为下界」的语义，绝不让部分和冒充合计。
-// token 折算口径与 TaskDetail modelCallTokenTotal 同源（total_tokens 优先，
-// 否则 prompt+completion；两者皆无算未知，绝不记 0）。 ──
-const modelCalls = ref(null); // null=未知（fetch 失败）区别于 []（真的零调用）
-
-function tokenTotal(call) {
-  const usage = call.token_usage;
-  if (!usage || typeof usage !== "object") return null;
-  if (typeof usage.total_tokens === "number") return usage.total_tokens;
-  const { prompt_tokens: p, completion_tokens: c } = usage;
-  if (typeof p === "number" && typeof c === "number") return p + c;
-  return null;
-}
+// ── 尾行·模型调用 + 批量 ok/failed：单次服务端有界聚合（治理审 R1 P1 修复）
+// ——GET /tasks/{id}/delivery_summary 取代此前 listModelCalls+listTaskEvents
+// 两个无界请求（每卡 2-3 个只读请求 × 今日交付上界 12 张=无界扇出的另一半）。
+// summary=null（fetch 失败）→「模型调用：未知」，与旧 modelCalls=null 语义相同。
+// summary.token_known 折算口径与端点 docstring/DeliveryCard 旧版同源（服务端
+// _model_call_token_total 同款：total_tokens 优先，否则 prompt+completion
+// 均为数字才计，两者皆无算未知）；batch_ok/batch_failed 为 null=非批量 Agent
+// 正常态或超出端点 50 条事件有界扫描（诚实降级：不显示批量行，不猜）。 ──
+const summary = ref(null);
 
 const modelCallText = computed(() => {
-  const calls = modelCalls.value;
-  if (calls === null) return "模型调用：未知";
-  if (calls.length === 0) return "无模型调用";
-  let tokenSum = 0;
-  let tokenKnown = 0;
-  for (const c of calls) {
-    const t = tokenTotal(c);
-    if (t != null) {
-      tokenSum += t;
-      tokenKnown++;
-    }
-  }
-  if (tokenKnown === 0) return `${calls.length} 次调用 · token 用量：未知`;
-  const suffix = tokenKnown < calls.length ? "（部分未报，下界）" : "";
-  return `${calls.length} 次调用 · tokens 合计 ${tokenSum}${suffix}`;
+  const s = summary.value;
+  if (!s) return "模型调用：未知";
+  if (s.mc_total === 0) return "无模型调用";
+  if (s.token_known === 0) return `${s.mc_total} 次调用 · token 用量：未知`;
+  const suffix = s.token_known < s.mc_total ? "（部分未报，下界）" : "";
+  return `${s.mc_total} 次调用 · tokens 合计 ${s.token_sum}${suffix}`;
 });
 
-// ── 尾行·批量 ok/failed：同 TaskDetail.batchSummary 口径——最后一条
-// agent_log 且 payload.workflow_event_type==='summary_generated' 且带
-// ok_count/failed_count 的事件；无该事件（非批量 Agent）不显示。 ──
-const batchSummary = ref(null);
-
-function deriveBatchSummary(events) {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i];
-    if (
-      e.event_type === "agent_log" &&
-      e.payload?.workflow_event_type === "summary_generated" &&
-      e.payload.ok_count != null &&
-      e.payload.failed_count != null
-    ) {
-      return { ok: e.payload.ok_count, failed: e.payload.failed_count };
-    }
-  }
-  return null;
-}
+const batchSummary = computed(() => {
+  const s = summary.value;
+  if (!s || s.batch_ok == null || s.batch_failed == null) return null;
+  return { ok: s.batch_ok, failed: s.batch_failed };
+});
 
 onMounted(() => {
   const t = props.task;
   if (!t) return;
   loadArtifacts(t.id, t.output_file_ids);
-  listModelCalls(t.id)
-    .then((calls) => { modelCalls.value = calls; })
-    .catch(() => { modelCalls.value = null; });
-  listTaskEvents(t.id, { offset: 0 })
-    .then((events) => { batchSummary.value = deriveBatchSummary(events); })
-    .catch(() => { batchSummary.value = null; });
+  getDeliverySummary(t.id)
+    .then((s) => { summary.value = s; })
+    .catch(() => { summary.value = null; });
 });
 </script>
 
