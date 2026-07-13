@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **安全边界命中即审**：`cfd_solve_launch` 是 `allow_shell_command=true` → 落地前必过 Codex 异源审（`codex review`）。
-- **bind-mount 铁律**：清 `case/run` 只清**内容**，绝不 `rm -rf` 目录本体（VirtioFS inode 悬空，实测 P1）。用 `find <dir> -mindepth 1 -delete` 或等价，绝不 `rm -rf <dir>` / `rmdir <dir>`。
+- **bind-mount 铁律（强化版，落法 2026-07-13）**：绝不删 `case/run` 目录本体（VirtioFS inode 悬空，实测 P1）。本计划采时间戳子目录落法（`case/run/<run_id>/`），求解 Tool **零删除操作**——case/run 本体与旧 run 谁都不碰，铁律自动满足。
 - **fail-closed 恒定**：容器未 up / `FLAI_CFD_*` 未配 / mesh 失败 / run_id 不符 → 抛错/返回 failed，**绝不谎报成功、绝不猜路径、绝不编造数字**。
 - **shell=False**：所有 `subprocess.run` 用参数列表，容器名/路径来自可信 env config 非请求体，`case` 走白名单枚举，docker 脚本为固定模板零用户串拼。
 - **诚实地板**：评估 St/Cd 一律**确定性计算**（纯 Python），LLM 只叙事；草案强制水印「AI 辅助 · 未经工程师确认 · 判定权在人」；未收敛/数据不足如实报缺，**绝不反向拟合逼近 st_ref=0.164**（Goodhart 防御）。
@@ -31,7 +31,7 @@
 - Create `adapters/cfd_openfoam/module.json` — native 模块契约（只读 CFD run）
 - Create `adapters/cfd_openfoam/parser.py` — `collect(run_dir, contract)` 读残差+Cl/Cd
 - Create `adapters/cfd_openfoam/cfd_log_parser.py` — log.pimpleFoam 残差 + forceCoeffs Cl/Cd 解析（数值行为复刻 agent-cfd-live/server/parsers.py，golden 对账）
-- Modify `server/config.json` — 增 `cfd_openfoam.watch_dir`（指向 agent-cfd-live case/run 的宿主绝对路径）
+- （落法 2026-07-13：module.json `repo` 直指 case/run，**无需改 server/config.json**）
 - Create `tests/test_cfd_openfoam_adapter.py` — parser golden + 停滞
 - Create `tests/fixtures/cfd_good_run/` — 从 agent-cfd-live good-run 拷入的只读 golden（log.pimpleFoam + forceCoeffs dat）
 
@@ -244,7 +244,7 @@ Expected: FAIL（`ModuleNotFoundError` / `FileNotFoundError` on module.json）
   "domain": "cfd-openfoam-cylinder-re100",
   "label": "OpenFOAM · 圆柱绕流 Re=100（agent-cfd-live 求解）",
   "kind": "native",
-  "watch_dir_config_key": "cfd_openfoam.watch_dir",
+  "repo": "/Users/Zhuanz/projects/cfd/agent-cfd-live/case/run",
   "stages": [
     {"key": "launch", "label": "发起求解"},
     {"key": "mesh", "label": "网格就绪"},
@@ -253,9 +253,10 @@ Expected: FAIL（`ModuleNotFoundError` / `FileNotFoundError` on module.json）
     {"key": "done", "label": "完成"}
   ],
   "run_discovery": {
-    "fixed_dir": true,
+    "glob": "*",
+    "select": "newest_by_name",
     "marker_file": ".hub_run_id",
-    "marker_file_note": "固定单目录（agent-cfd-live case/run），run 身份靠 cfd_solve_launch 盖的 .hub_run_id sidecar 而非时间戳子目录名——本模块与 hub 惯例的唯一偏差，见 spec §6"
+    "marker_file_note": "case/run/<YYYYMMDD-HHMMSS>/ 时间戳子目录（bind-mount 父目录，子目录容器/宿主双向可见，2026-07-13 探针实测）；.hub_run_id 由 cfd_solve_launch 盖，过滤半成品/非法目录——hub 时间戳命名硬前提零例外满足，见 spec §6"
   },
   "truth_sources": {
     "write_mode": "streaming",
@@ -331,22 +332,19 @@ def collect(run_dir: Path, contract: dict) -> dict:
 Run: `cd ~/projects/sim-live-hub && .venv/bin/python -m pytest tests/test_cfd_openfoam_adapter.py -q`
 Expected: PASS（2 passed）
 
-- [ ] **Step 6: config 增 watch_dir + 全量回归**
+- [ ] **Step 6: 全量回归 + collect 测试改用时间戳子目录夹具**
 
-Modify `server/config.json`：增顶层键
-```json
-"cfd_openfoam": {"watch_dir": "/Users/Zhuanz/projects/cfd/agent-cfd-live/case/run"}
-```
+【落法已钉死 2026-07-13，主控实测】：run 落 `case/run/<run_id>/` 时间戳子目录，module.json `repo` 直接指 case/run——`server/main.py` 的 `_discover_run_dir`（repo.glob→marker 过滤→按名排序取最新）与时间戳硬前提**零例外满足**，**无需改 server/config.json、无需 symlink**。测试注意：`collect()` 的 run_dir 直接传夹具目录即可（Collector 负责发现，parser 不关心发现机制）；`tests/test_cfd_openfoam_adapter.py` 无需改。
 Run: `cd ~/projects/sim-live-hub && .venv/bin/python -m pytest -q`
-Expected: 全绿（既有测试 + 新 4 条）。若 Collector 装配（server/main.py）对 native 模块强制要求时间戳子目录 run_discovery 而拒 `fixed_dir`，**停下**：这是 spec §6/§11 的已知偏差，按 spec 落法二（hub 侧建指向 case/run 的时间戳 symlink）——但 symlink 在 hub 有安全收紧史（frames 符号链接封堵），需先读 `server/main.py` 的 run_discovery 逻辑再定，不硬改。
+Expected: 全绿（既有测试 + 新 4 条）。
 
 - [ ] **Step 7: Commit**
 
 ```bash
 cd ~/projects/sim-live-hub
 git add adapters/cfd_openfoam/parser.py adapters/cfd_openfoam/module.json \
-        server/config.json tests/test_cfd_openfoam_adapter.py
-git commit -m "feat(cfd): cfd_openfoam native adapter（只读 case/run 流式残差+Cl/Cd）"
+        tests/test_cfd_openfoam_adapter.py
+git commit -m "feat(cfd): cfd_openfoam native adapter（只读 case/run/<run_id> 时间戳子目录，流式残差+Cl/Cd）"
 ```
 
 ---
@@ -496,26 +494,34 @@ def _seed_run_id(case_dir: Path, rid: str):
     (case_dir / ".hub_run_id").write_text(rid)
 
 def test_reads_good_run(monkeypatch, tmp_path):
-    # 拷 golden 到临时 case_dir + 盖 run_id
+    # 拷 golden 到 case/run/<run_id>/ 时间戳子目录 + 盖 sidecar（落法 2026-07-13）
     import shutil
-    case = tmp_path / "run"; shutil.copytree(FIX, case)
-    _seed_run_id(case, "20260713-101010")
-    monkeypatch.setenv("FLAI_CFD_CASE_DIR", str(case))
-    out = run({"run_id": "20260713-101010"})
+    rid = "20260713-101010"
+    sub = tmp_path / rid; shutil.copytree(FIX, sub)
+    _seed_run_id(sub, rid)
+    monkeypatch.setenv("FLAI_CFD_CASE_DIR", str(tmp_path))  # = case/run 根
+    out = run({"run_id": rid})
     assert out["status"] == "success"
     assert len(out["cl_series"]) > 20
 
 def test_run_id_mismatch_fail_closed(monkeypatch, tmp_path):
     import shutil
-    case = tmp_path / "run"; shutil.copytree(FIX, case)
-    _seed_run_id(case, "AAA")
-    monkeypatch.setenv("FLAI_CFD_CASE_DIR", str(case))
-    out = run({"run_id": "BBB"})
+    rid = "20260713-101010"
+    sub = tmp_path / rid; shutil.copytree(FIX, sub)
+    _seed_run_id(sub, "20990101-000000")  # sidecar 与目录名/请求不符
+    monkeypatch.setenv("FLAI_CFD_CASE_DIR", str(tmp_path))
+    out = run({"run_id": rid})
     assert out["status"] == "failed"  # 防读错 run
+
+def test_run_id_traversal_rejected(monkeypatch, tmp_path):
+    # 目录穿越：非 ^\d{8}-\d{6}$ 一律拒（先于任何路径拼接）
+    monkeypatch.setenv("FLAI_CFD_CASE_DIR", str(tmp_path))
+    out = run({"run_id": "../../../etc"})
+    assert out["status"] == "failed"
 
 def test_missing_env_fail_closed(monkeypatch):
     monkeypatch.delenv("FLAI_CFD_CASE_DIR", raising=False)
-    out = run({"run_id": "x"})
+    out = run({"run_id": "20260713-101010"})
     assert out["status"] == "failed"
 ```
 
@@ -528,19 +534,22 @@ Expected: FAIL（模块不存在）
 
 ```python
 # tools_impl/cfd_result_read/adapter.py
-"""cfd_result_read（mock=false，只读，无 shell）：读 agent-cfd-live case/run 的
-CFD 求解产物（log.pimpleFoam + forceCoeffs），返回原始 Cl/Cd/残差序列。
-不下判据（判据在 cfd_evaluate_agent workflow）。run_id 与 .hub_run_id sidecar
-不符即 fail-closed（防读错 run）。FLAI_CFD_CASE_DIR 未配即 fail-closed。"""
+"""cfd_result_read（mock=false，只读，无 shell）：读 agent-cfd-live
+case/run/<run_id>/ 时间戳子目录里的 CFD 求解产物（log.pimpleFoam + forceCoeffs），
+返回原始 Cl/Cd/残差序列。不下判据（判据在 cfd_evaluate_agent workflow）。
+run_id 先过正则白名单 ^\\d{8}-\\d{6}$ 才拼路径（防目录穿越），再与子目录内
+.hub_run_id sidecar 对账（防读错 run）。FLAI_CFD_CASE_DIR 未配即 fail-closed。"""
 from __future__ import annotations
 import glob
 import os
+import re
 from pathlib import Path
 from typing import Any
 
-_CASE_ENV = "FLAI_CFD_CASE_DIR"
+_CASE_ENV = "FLAI_CFD_CASE_DIR"  # = agent-cfd-live case/run 根（run 子目录的父）
 _LOG = "log.pimpleFoam"
 _FORCE_GLOB = "postProcessing/forceCoeffs1/0/*.dat"
+_RUN_ID_RE = re.compile(r"^\d{8}-\d{6}$")
 
 
 def _fail(msg: str) -> dict[str, Any]:
@@ -549,24 +558,26 @@ def _fail(msg: str) -> dict[str, Any]:
 
 def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
     del context
-    run_id = payload["run_id"]
+    run_id = str(payload["run_id"])
+    if not _RUN_ID_RE.match(run_id):
+        return _fail(f"run_id 非法（须 YYYYMMDD-HHMMSS）：{run_id!r}——拒绝拼路径，fail-closed")
     case_raw = os.environ.get(_CASE_ENV)
     if not case_raw:
         return _fail(f"{_CASE_ENV} 未配置——fail-closed，绝不猜路径")
-    case = Path(case_raw).expanduser()
+    case = Path(case_raw).expanduser() / run_id  # 时间戳子目录（落法 2026-07-13）
     sidecar = case / ".hub_run_id"
     if not sidecar.is_file():
-        return _fail("run 未发起或 .hub_run_id 缺失——无可读结果")
+        return _fail(f"run {run_id} 不存在或 .hub_run_id 缺失——无可读结果")
     actual = sidecar.read_text(errors="replace").strip()
-    if actual != str(run_id):
-        return _fail(f"run_id 不符（请求 {run_id!r} ≠ 当前 {actual!r}）——防读错 run，fail-closed")
+    if actual != run_id:
+        return _fail(f"run_id 不符（请求 {run_id!r} ≠ sidecar {actual!r}）——防读错 run，fail-closed")
     log_path = case / _LOG
     if not log_path.is_file():
         return _fail("log.pimpleFoam 缺失——求解未产数据")
 
-    # 复用 hub 解析器（同一数值行为 SSOT；测试上下文已把 sim-live-hub 加进 sys.path）
-    import sys
-    hub = case.parents[2] if False else None  # 生产由部署把 sim-live-hub 置于 sys.path/PYTHONPATH
+    # 复用 hub 解析器（同一数值行为 SSOT）——sim-live-hub 须在 sys.path：
+    # 测试由 test 头 sys.path.insert；生产由部署 PYTHONPATH（见 P2.2 实现注记，
+    # 若跨仓 import 不可接受则复制两函数进 backend/app/cfd/ 并 golden 对账，记 ADR）。
     from adapters.cfd_openfoam.cfd_log_parser import parse_residuals, parse_force_coeffs
 
     text = log_path.read_text(errors="replace")
@@ -798,45 +809,78 @@ git commit -m "feat(cfd): cfd_evaluate_agent（确定性 St/Cd + LLM 叙事水�
 
 ```python
 # tools_impl/cfd_solve_launch/tests/test_cfd_solve_launch.py
-from tools_impl.cfd_solve_launch.adapter import run, _build_reset_argv
+import shutil
+from tools_impl.cfd_solve_launch.adapter import run
+
+RID = "20260713-101010"
+
+def _env(monkeypatch, tmp_path):
+    case_root = tmp_path / "run"; case_root.mkdir()
+    template = tmp_path / "template"; template.mkdir()
+    # 最小 template：真实模板含 0/ constant/ system/ cyl2d.msh，测试只需存在性
+    (template / "cyl2d.msh").write_text("$MeshFormat\n")
+    for d in ("0", "constant", "system"):
+        (template / d).mkdir()
+    monkeypatch.setenv("FLAI_CFD_CONTAINER", "cfd-openfoam-live")
+    monkeypatch.setenv("FLAI_CFD_CASE_DIR", str(case_root))
+    monkeypatch.setenv("FLAI_CFD_TEMPLATE_DIR", str(template))
+    return case_root
 
 def test_config_missing_fail_closed(monkeypatch):
     monkeypatch.delenv("FLAI_CFD_CONTAINER", raising=False)
-    out = run({"case": "cylinder_re100"})
+    out = run({"case": "cylinder_re100", "run_id": RID})
     assert out["status"] == "failed"
 
 def test_case_whitelist_only(monkeypatch, tmp_path):
-    monkeypatch.setenv("FLAI_CFD_CONTAINER", "cfd-openfoam-live")
-    monkeypatch.setenv("FLAI_CFD_CASE_DIR", str(tmp_path))
-    monkeypatch.setenv("FLAI_CFD_TEMPLATE_DIR", str(tmp_path))
-    out = run({"case": "'; rm -rf /"})  # 注入尝试
+    _env(monkeypatch, tmp_path)
+    out = run({"case": "'; rm -rf /", "run_id": RID})  # 注入尝试
     assert out["status"] == "failed"  # 白名单外拒绝
 
-def test_reset_never_deletes_dir_itself():
-    # bind-mount 铁律：清内容不删目录本体（VirtioFS inode）
-    argv = _build_reset_argv("cfd-openfoam-live", "/home/openfoam/run")
-    joined = " ".join(argv)
-    assert "-mindepth 1" in joined  # 只清内容
-    assert "rm -rf /home/openfoam/run" not in joined
-    assert "rmdir" not in joined
+def test_run_id_traversal_rejected(monkeypatch, tmp_path):
+    _env(monkeypatch, tmp_path)
+    out = run({"case": "cylinder_re100", "run_id": "../../etc"})
+    assert out["status"] == "failed"  # 非 ^\d{8}-\d{6}$ 拒绝，先于任何路径拼接
 
-def test_shell_false_argv_no_string_concat(monkeypatch, tmp_path):
-    # 容器名来自 config；docker 调用是参数列表非 shell 串拼
+def test_never_deletes_anything(monkeypatch, tmp_path):
+    # bind-mount 铁律强化版（落法 2026-07-13）：每 run 新建子目录，adapter 全程
+    # 零删除操作——旧 run 与 case/run 本体谁都不碰
+    case_root = _env(monkeypatch, tmp_path)
+    old_run = case_root / "20260101-000000"; old_run.mkdir()
+    (old_run / "keep.txt").write_text("old")
     import tools_impl.cfd_solve_launch.adapter as mod
     calls = []
     def fake_run(argv, **kw):
         calls.append((argv, kw))
-        class R: returncode=0; stdout="ok"; stderr=""
+        class R: returncode = 0; stdout = "ok"; stderr = ""
         return R()
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
-    monkeypatch.setenv("FLAI_CFD_CONTAINER", "cfd-openfoam-live")
-    monkeypatch.setenv("FLAI_CFD_CASE_DIR", str(tmp_path))
-    monkeypatch.setenv("FLAI_CFD_TEMPLATE_DIR", str(tmp_path))
-    out = run({"case": "cylinder_re100"})
+    out = run({"case": "cylinder_re100", "run_id": RID})
+    assert (old_run / "keep.txt").read_text() == "old"  # 旧 run 完好
     for argv, kw in calls:
-        assert isinstance(argv, list) and argv[0] == "docker"
+        joined = " ".join(argv)
+        assert "rm -rf" not in joined and "rmdir" not in joined and "-delete" not in joined
+    assert (case_root / RID / ".hub_run_id").is_file() or out["status"] == "failed"
+
+def test_shell_false_argv_and_subdir_cwd(monkeypatch, tmp_path):
+    # 容器名来自 config；docker 调用是参数列表非 shell 串拼；cwd=子目录
+    import tools_impl.cfd_solve_launch.adapter as mod
+    case_root = _env(monkeypatch, tmp_path)
+    calls = []
+    def fake_run(argv, **kw):
+        calls.append((argv, kw))
+        class R: returncode = 0; stdout = "ok"; stderr = ""
+        return R()
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    out = run({"case": "cylinder_re100", "run_id": RID})
+    assert out["status"] == "success"
+    assert (case_root / RID / "cyl2d.msh").is_file()  # host 侧铺算例进子目录
+    docker_calls = [argv for argv, kw in calls if argv and argv[0] == "docker"]
+    assert docker_calls, "应有 docker exec 调用"
+    for argv, kw in calls:
+        assert isinstance(argv, list)
         assert kw.get("shell", False) is False
-    assert out["status"] in ("success", "failed")  # mock 下不真跑，结构成立
+    # 求解 cwd 必须是时间戳子目录（-w /home/openfoam/run/<run_id>）
+    assert any(f"/home/openfoam/run/{RID}" in " ".join(a) for a in docker_calls)
 ```
 
 - [ ] **Step 2: 跑测确认失败**
@@ -849,32 +893,33 @@ Expected: FAIL（模块不存在）
 ```python
 # tools_impl/cfd_solve_launch/adapter.py
 """cfd_solve_launch（allow_shell_command=true，安全边界，ADR-0022 同款纪律）：
-docker exec 在 cfd-openfoam-live 容器里发起真实 pimpleFoam 求解（fire-and-register，
-不阻塞求解 ~200s），盖 run_id sidecar。
+在 case/run/<run_id>/ 时间戳子目录里发起真实 pimpleFoam 求解（fire-and-register，
+不阻塞求解 ~200s）。host 侧铺算例（同 agent-cfd-live staging 方式），docker exec
+只跑 OpenFOAM 命令（bind-mount 使子目录两侧可见，2026-07-13 探针实测）。
 
 红线：① shell=False 参数列表，docker 命令为固定脚本模板零用户串拼；② 容器名/路径
-来自可信 env config 非请求体；③ case 白名单枚举；④ 容器未 up / config 缺失 /
-mesh 失败 fail-closed，绝不谎报已发起；⑤ bind-mount 铁律：清 run 只清内容绝不删
-目录本体（VirtioFS inode 悬空实测 P1）。"""
+来自可信 env config 非请求体；③ case 白名单枚举 + run_id 正则白名单（先于任何
+路径拼接）；④ 容器未 up / config 缺失 / mesh 失败 fail-closed，绝不谎报已发起；
+⑤ bind-mount 铁律强化版：每 run 新建子目录，本工具**零删除操作**——case/run
+本体与旧 run 谁都不碰。"""
 from __future__ import annotations
-import os, subprocess
+import os
+import re
+import shutil
+import subprocess
+from pathlib import Path
 from typing import Any
 
 _CASE_WHITELIST = {"cylinder_re100"}
+_RUN_ID_RE = re.compile(r"^\d{8}-\d{6}$")
 _CONTAINER_ENV, _CASE_ENV, _TEMPLATE_ENV = "FLAI_CFD_CONTAINER", "FLAI_CFD_CASE_DIR", "FLAI_CFD_TEMPLATE_DIR"
-_CONTAINER_RUN = "/home/openfoam/run"
+_CONTAINER_RUN_ROOT = "/home/openfoam/run"  # bind-mount 容器侧根（= host 的 case/run）
 _OF = "source /opt/openfoam11/etc/bashrc"
 _STEP_TIMEOUT = 120  # mesh/check 步；求解本身 nohup & 不等
 
 
 def _fail(msg: str) -> dict[str, Any]:
     return {"status": "failed", "error_message": msg}
-
-
-def _build_reset_argv(container: str, cdir: str) -> list[str]:
-    # bind-mount 铁律：清内容不删目录本体
-    return ["docker", "exec", "-w", cdir, container, "bash", "-lc",
-            f"find {cdir} -mindepth 1 -delete"]
 
 
 def _dexec(container: str, cwd: str, script: str) -> subprocess.CompletedProcess:
@@ -887,65 +932,72 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
     case = payload.get("case")
     if case not in _CASE_WHITELIST:
         return _fail(f"case 非白名单：{case!r}（仅 {_CASE_WHITELIST}）")
+    run_id = str(payload.get("run_id", ""))
+    if not _RUN_ID_RE.match(run_id):
+        return _fail(f"run_id 非法（须 YYYYMMDD-HHMMSS）：{run_id!r}——拒绝拼路径，fail-closed")
     container = os.environ.get(_CONTAINER_ENV)
-    case_dir = os.environ.get(_CASE_ENV)
-    template_dir = os.environ.get(_TEMPLATE_ENV)
-    if not (container and case_dir and template_dir):
+    case_root_raw = os.environ.get(_CASE_ENV)
+    template_raw = os.environ.get(_TEMPLATE_ENV)
+    if not (container and case_root_raw and template_raw):
         return _fail(f"config 缺失（{_CONTAINER_ENV}/{_CASE_ENV}/{_TEMPLATE_ENV}）——fail-closed")
+    case_root = Path(case_root_raw).expanduser()
+    template = Path(template_raw).expanduser()
+    if not case_root.is_dir():
+        return _fail(f"case 根不存在：{case_root}")
+    if not (template / "cyl2d.msh").is_file():
+        return _fail(f"template 缺 cyl2d.msh：{template}")
 
-    # ① 容器可达性
+    # ① 建 run 子目录（host 侧；零删除——已存在即拒，防覆写在跑的 run）
+    run_dir = case_root / run_id
+    if run_dir.exists():
+        return _fail(f"run 子目录已存在：{run_dir}——拒绝覆写，换 run_id")
+    ctr_cwd = f"{_CONTAINER_RUN_ROOT}/{run_id}"
+
+    # ② 铺算例（host 侧拷 template：0/ constant/ system/ cyl2d.msh）
+    try:
+        shutil.copytree(template, run_dir)
+    except OSError as exc:
+        return _fail(f"铺算例失败：{exc}")
+
+    # ③ 容器可达性（fire 前最后一道；先铺后 ping 使失败残留可诊断，子目录无 sidecar
+    #    不会被 hub marker 认作 run）
     ping = subprocess.run(["docker", "exec", container, "true"],
                           capture_output=True, text=True, timeout=15, shell=False)
     if ping.returncode != 0:
         return _fail(f"容器 {container} 未就绪：{(ping.stderr or '').strip()[:200]}——绝不谎报已发起")
 
-    # ② 重置（铁律：清内容不删本体）
-    r = subprocess.run(_build_reset_argv(container, _CONTAINER_RUN),
-                       capture_output=True, text=True, timeout=_STEP_TIMEOUT, shell=False)
-    if r.returncode != 0:
-        return _fail(f"重置 run 失败：{(r.stderr or '').strip()[:200]}")
-
-    # ③ 铺算例（固定脚本模板；template 内容由部署置于容器可见路径，路径来自 config 非请求体）
-    lay = _dexec(container, _CONTAINER_RUN,
-                 f"cp -r {template_dir}/. {_CONTAINER_RUN}/ && ls {_CONTAINER_RUN}/cyl2d.msh")
-    if lay.returncode != 0:
-        return _fail(f"铺算例失败：{(lay.stderr or '').strip()[:200]}")
-
-    # ④ 网格 + 检查（固定序列）
-    mesh = _dexec(container, _CONTAINER_RUN,
+    # ④ 网格 + 检查（固定脚本模板，cwd=子目录）
+    mesh = _dexec(container, ctr_cwd,
                   f"{_OF} && gmshToFoam cyl2d.msh && "
                   f"foamDictionary constant/polyMesh/boundary -entry entry0/frontAndBack/type -set empty && "
                   f"checkMesh | tee checkMesh.log")
-    checkmesh_ok = mesh.returncode == 0 and "Failed" not in (mesh.stdout or "")
-    if not checkmesh_ok:
+    if mesh.returncode != 0 or "Failed" in (mesh.stdout or ""):
         return _fail(f"网格/检查失败：{(mesh.stderr or mesh.stdout or '').strip()[-300:]}")
 
     # ⑤ 可选 end_time（数值型才注入，非法忽略）
     et = payload.get("end_time")
     if isinstance(et, (int, float)) and et > 0:
-        _dexec(container, _CONTAINER_RUN, f"{_OF} && foamDictionary system/controlDict -entry endTime -set {float(et)}")
+        _dexec(container, ctr_cwd,
+               f"{_OF} && foamDictionary system/controlDict -entry endTime -set {float(et)}")
 
-    # ⑥ 发起求解（fire：nohup & 立即返回）+ 盖 run_id sidecar
-    #    run_id 由调用侧（agent workflow）传入或此处生成——为避免 Date.now 类不确定性，
-    #    run_id 从 payload 取（agent 生成），此处只负责盖 sidecar。
-    run_id = str(payload["run_id"])
-    launch = _dexec(container, _CONTAINER_RUN,
-                    f"{_OF} && nohup pimpleFoam > log.pimpleFoam 2>&1 & "
-                    f"echo {run_id} > .hub_run_id")
+    # ⑥ 发起求解（fire：nohup & 立即返回）
+    launch = _dexec(container, ctr_cwd, f"{_OF} && nohup pimpleFoam > log.pimpleFoam 2>&1 &")
     if launch.returncode != 0:
         return _fail(f"发起求解失败：{(launch.stderr or '').strip()[:200]}")
 
-    return {"status": "success", "run_id": run_id, "run_dir": case_dir,
+    # ⑦ 盖 sidecar（host 侧，最后一步=hub marker：sidecar 在场即"这是一个已发起的 run"）
+    (run_dir / ".hub_run_id").write_text(run_id, encoding="utf-8")
+
+    return {"status": "success", "run_id": run_id, "run_dir": str(run_dir),
             "container": container, "checkmesh_ok": True, "launched_at": run_id}
 ```
 
-> **run_id 由 agent 传入**（见 P3.2）：Tool 不用 `Date.now`（保测试确定性），agent workflow 生成时间戳 run_id 传进 payload。测试里显式传 `run_id`。
+> **run_id 由 agent 传入**（见 P3.2）：Tool 不自生时间戳（保测试确定性），agent workflow 生成时间戳 run_id 传进 payload；Tool 只做正则白名单校验 + 建目录 + 盖 sidecar。
 
-- [ ] **Step 4: 补测试 run_id 传入 + 跑测通过**
+- [ ] **Step 4: 跑测通过**
 
-在 test 的 mock 调用里给 `payload` 加 `"run_id": "20260713-101010"`；跑测。
 Run: `cd ~/projects/aircraft-comac/flai-os && uv run --no-project --with pytest python -m pytest tools_impl/cfd_solve_launch/tests/ -q`
-Expected: PASS
+Expected: PASS（5 passed；测试已内置 run_id）
 
 - [ ] **Step 5: tool.yaml（allow_shell_command=true）**
 
@@ -953,7 +1005,7 @@ clone `monitor_adapter_recon/tool.yaml`，确切值：`id: cfd_solve_launch`，`
 
 - [ ] **Step 6: tamper 咬合测试（必红）**
 
-加变异测试：把 `_build_reset_argv` 改成 `rm -rf {cdir}` → `test_reset_never_deletes_dir_itself` 必 RED；把 config 检查改成恒真 → `test_config_missing_fail_closed` 必 RED。记录 tamper witness（存 docs/reviews）。
+三注伤逐一验证（改→跑→红→还原 byte-identical）：① 在 adapter 加一步 `docker exec ... rm -rf` 清理旧 run → `test_never_deletes_anything` 必 RED；② `_RUN_ID_RE.match` 改恒真 → `test_run_id_traversal_rejected` 必 RED；③ config 检查改恒真 → `test_config_missing_fail_closed` 必 RED。记录 tamper witness（存 docs/reviews）。
 
 - [ ] **Step 7: Commit + Codex 异源审（阻塞）**
 
@@ -1119,7 +1171,7 @@ git commit -m "test(cfd): 回放夹具全链 E2E（评估→人签）入 verify_
 
 ### Task P4.3: 真求解端到端手动验证 + 监控深链 + ADR
 
-- [ ] **Step 1: 真求解验证** — 起 sim-live-hub（:8791，config 已配 cfd_openfoam.watch_dir）+ 起容器；经工作台建&提交 `cfd_solve_agent` 任务 → 浮窗 `#/cfd_openfoam@<run_id>` 深链看**实时**残差/Cl/Cd 流式；收敛后建 `cfd_evaluate_agent`（run_id 承接）→ 确定性 St≈0.167 → 人签 → completed。**截图存证**。
+- [ ] **Step 1: 真求解验证** — 起 sim-live-hub（:8791，cfd_openfoam module.json 已入 adapters/）+ 起容器；经工作台建&提交 `cfd_solve_agent` 任务 → 浮窗 `#/cfd_openfoam@<run_id>` 深链看**实时**残差/Cl/Cd 流式；收敛后建 `cfd_evaluate_agent`（run_id 承接）→ 确定性 St≈0.167 → 人签 → completed。**截图存证**。
 - [ ] **Step 2: 诚实核对** — 监控 UI 无「回放」字样（真实时）；评估草案有水印；未收敛路径如实报缺（可 `--kill-after` 中断求解验证停滞报警 + 评估「数据不足」）。
 - [ ] **Step 3: ADR + 记录** — 写 `docs/adr/ADR-00XX-cfd-integration.md`（两 Tool/Agent + allow_shell_command 边界 + hub adapter run_dir 偏差落法 + taint=internal）；tamper witness + Codex 审记录存 `docs/reviews/`。Commit。
 
@@ -1129,7 +1181,7 @@ git commit -m "test(cfd): 回放夹具全链 E2E（评估→人签）入 verify_
 
 **Spec 覆盖**：§3 三接缝→P1（hub adapter）/P2（评估+read Tool）/P3（求解 Tool+agent）✓；§4 组件契约→各 Task 逐一 ✓；§5 数据流→P4 联调 ✓；§6 run_id/sim_run_ref/hub 偏差→P1.2 Step6 + P3.2 Step1 显式挂 ✓；§7 安全→P3 Codex 审 + 铁律守卫测试 ✓；§8 fail-closed→各 Tool fail-closed 测试 ✓；§9 测试→单元/E2E/tamper 全覆盖 ✓；§10 诚实→水印 + St 不编造测试 ✓。
 
-**Placeholder 扫描**：两处显式「plan 阶段决策」——P1.2 Step6（hub run_discovery `fixed_dir` 兼容）+ P2.2 Step3/P3.2 Step1（跨仓 import / sim_run_ref 回填接缝）——均给了判定路径与退化方案，非空占位。
+**Placeholder 扫描**：原两处「plan 阶段决策」之一（hub run_dir 落法）已于 2026-07-13 主控实测钉死=时间戳子目录（探针实证 gitignore + 双向可见，见 spec §6）；剩一处（P2.2 跨仓 import / P3.2 sim_run_ref 回填接缝）给了判定路径与退化方案，非空占位。
 
 **类型一致**：`collect(run_dir, contract)`、`run(payload, context)`、`run(context)`、`strouhal_from_cl`/`cd_mean_tail`、`sim_run_ref="cfd_openfoam@<run_id>"`、`.hub_run_id` sidecar 全计划一致。
 

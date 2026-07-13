@@ -85,20 +85,20 @@
 ### 4.1 Tool `cfd_solve_launch`（FLAi-OS，安全边界）
 - **类型**：`allow_shell_command=true`，`mock=false`。照 `tools_impl/monitor_adapter_recon` 模板（ADR-0022 边界）。
 - **输入**：`case: "cylinder_re100"`（固定枚举，本批只此一个）；`end_time`（可选，默认取 template 的 controlDict）。**无自由文本进 docker 命令**。
-- **动作**（`subprocess.run(shell=False, 参数列表)`，每步 `docker exec ... bash -lc '<固定脚本>'`）：
-  1. **重置** `case/run`：清内容**绝不删目录本体**（bind-mount 铁律，VirtioFS inode）——`bash -lc 'find /home/openfoam/run -mindepth 1 -delete'` 或等价，**不 `rm -rf` 整目录**。
-  2. **铺算例**：从 `case/template` 复制 `0/ constant/ system/ cyl2d.msh` 到 `run/`。
-  3. `gmshToFoam cyl2d.msh` → 修 frontAndBack 为 empty → `checkMesh | tee checkMesh.log`。
-  4. **发起求解**：`nohup pimpleFoam > log.pimpleFoam 2>&1 &`（fire，立即返回）。
-  5. 盖 `run_id`（`YYYYMMDD-HHMMSS`）写入 sidecar `case/run/.hub_run_id`。
+- **动作**（时间戳子目录落法，2026-07-13 钉死；host 侧文件操作 + `subprocess.run(shell=False, 参数列表)` 的 `docker exec ... bash -lc '<固定脚本>'`）：
+  1. **建 run 子目录**（host 侧）：`case/run/<run_id>/`（run_id=`YYYYMMDD-HHMMSS`，正则白名单校验后才拼路径）。**不清、不碰 case/run 本体与旧 run**（bind-mount 铁律天然满足；旧 run 累积由人工/后续清理，本批不做）。
+  2. **铺算例**（host 侧）：从 `case/template` 复制 `0/ constant/ system/ cyl2d.msh` 到该子目录（同 agent-cfd-live staging 的 host 侧落位方式）。
+  3. `docker exec -w /home/openfoam/run/<run_id>`：`gmshToFoam cyl2d.msh` → 修 frontAndBack 为 empty → `checkMesh | tee checkMesh.log`。
+  4. **发起求解**：同 cwd `nohup pimpleFoam > log.pimpleFoam 2>&1 &`（fire，立即返回）。
+  5. 盖 sidecar `case/run/<run_id>/.hub_run_id`（内容=run_id；hub marker_file + 评估对账凭据）。
 - **输出**：`{run_id, run_dir, container, launched_at, checkmesh_ok}`。求解在后台跑，Tool 不等。
 - **fail-closed**：容器未 up / config（`FLAI_CFD_*`）缺失 / checkMesh 失败 / gmshToFoam 报错 → 抛错，**绝不谎报已发起**。
 - **安全**：容器名/路径来自可信 config（`FLAI_CFD_CONTAINER`/`FLAI_CFD_CASE_DIR`/`FLAI_CFD_TEMPLATE_DIR`），非请求体；`case` 枚举白名单；docker 命令为固定脚本模板，零用户串拼。
 
 ### 4.2 Tool `cfd_result_read`（FLAi-OS，只读）
 - **类型**：`mock=false`，**无 shell**（source_mode=host，bind-mount 使 run 输出在宿主文件系统，直接 `read_text`）。
-- **输入**：`run_id`（对账 sidecar `.hub_run_id`，防读错 run）。
-- **动作**：读 `case/run/log.pimpleFoam` + `postProcessing/forceCoeffs1/0/*.dat`；解析残差序列 + Cl(t)/Cd(t)。
+- **输入**：`run_id`（正则白名单 `^\d{8}-\d{6}$` 校验后才拼路径——防目录穿越；再对账子目录内 sidecar `.hub_run_id`，防读错 run）。
+- **动作**：读 `case/run/<run_id>/log.pimpleFoam` + `case/run/<run_id>/postProcessing/forceCoeffs1/0/*.dat`；解析残差序列 + Cl(t)/Cd(t)。
 - **输出**：`{run_id, converged: bool, cl_series, cd_series, resid_tail, n_cycles, wall_clock_s, ended: bool}`（原始数据，不下判据）。
 - **fail-closed**：run_id 与 sidecar 不符 / 文件缺失 / 求解未产数据 → 如实报缺，不补零、不编造。
 
@@ -142,9 +142,9 @@
 
 ## 6. run 身份 / sim_run_ref / hub 观测（待 plan 阶段钉的实现细节）
 
-- **run_id**：`YYYYMMDD-HHMMSS`，`cfd_solve_launch` 盖进 `case/run/.hub_run_id`。与 hub 时间戳-run 身份判据同构（停滞/换源判据依赖时间戳名，见 sim-live-hub spec §1）。
+- **run_id**：`YYYYMMDD-HHMMSS`，即 run 子目录名；`cfd_solve_launch` 另盖 `case/run/<run_id>/.hub_run_id` sidecar 作 hub marker_file + 对账凭据。
 - **sim_run_ref**：`cfd_openfoam@<run_id>`（match 现有深链 `#/<mod>@<run_id>` 格式）。
-- **hub Collector 如何拿到 run_dir**：hub 侧需一个 config 把 `cfd_openfoam` 模块的 run_dir 指到 agent-cfd-live 的 `case/run`（fixed 单目录，非时间戳子目录）。**这是本设计与 hub「每模块 workspace/时间戳子目录」惯例的唯一偏差，plan 阶段确认落法**：方案倾向 hub config 增 `cfd_openfoam.watch_dir` 显式配置项（默认指 agent-cfd-live case/run），run 身份靠 `.hub_run_id` sidecar 而非目录名。若与 hub 停滞判据（依赖时间戳目录名）冲突，退化为 hub 侧建一个指向 case/run 的时间戳符号链接（但 symlink 在 hub 有安全收紧史，需评估）。
+- **hub Collector 如何拿到 run_dir【2026-07-13 落法已钉死·实测】**：每次求解在 `case/run/<run_id>/` 时间戳子目录里跑（bind-mount 挂在父目录 case/run 上，子目录容器/宿主双向可见——host 建/容器写/双侧读探针实测 ✓）。hub `module.json` 的 `repo` 直接指 case/run 宿主绝对路径，`run_discovery={glob:"*", select:newest_by_name, marker_file:".hub_run_id"}`——**hub 时间戳命名硬前提（spec §1）零例外满足**，run 身份/深链对账/换源清态天然成立，且无需改 hub server/config.json。原设想的 fixed 单目录方案已否决（server/main.py 不支持且 run 身份不可区分）；symlink 方案已否决（hub 有 symlink 安全封堵史）。agent-cfd-live 的 `case/run/` 整目录 gitignored（实测），建子目录零弄脏仓、其 staging 清理流程天然兼容——「零改动」精确语义=**零代码/零入库文件改动**，运行时工作区内新建 run 子目录。附带收益：求解 Tool 不再清共享目录（每 run 新建子目录），bind-mount 误删面进一步缩小。
 - **config/env**（FLAi-OS 侧，全部 fail-closed 未设即拒）：
   - `FLAI_CFD_CONTAINER=cfd-openfoam-live`
   - `FLAI_CFD_CASE_DIR`=agent-cfd-live `case/run` 宿主绝对路径
