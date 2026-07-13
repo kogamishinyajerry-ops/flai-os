@@ -1,0 +1,67 @@
+id: cfd_result_read
+name: "CFD 求解结果只读工具（残差 + Cl/Cd 原始序列）"
+version: 0.1.0
+type: python_adapter
+mock: false
+description: >
+  只读一次 CFD 求解（圆柱绕流 Re=100）落在 case/run/<run_id>/ 时间戳子目录里的
+  产物（log.pimpleFoam 残差 + postProcessing/forceCoeffs Cl/Cd），返回原始序列。
+  零判据（St/Cd 判据在 cfd_evaluate_agent workflow 的确定性 oracle）、零 shell、
+  零写入。run_id 先过正则白名单 ^\d{8}-\d{6}$ 才拼路径（防目录穿越），再与子目录
+  内 .hub_run_id sidecar 对账（防读错 run）。核目录来自可信配置 FLAI_CFD_CASE_DIR，
+  未配置/sidecar 不符/产物缺失即 fail-closed（绝不猜路径、不补零、不编造）。
+entrypoint: tools_impl.cfd_result_read.adapter:run
+output_classification: internal
+input_schema:
+  type: object
+  required:
+    - run_id
+  properties:
+    run_id:
+      type: string
+      minLength: 1
+      description: 待读取的 CFD 求解 run_id（YYYYMMDD-HHMMSS，= sim_run_ref 的 run 段）
+  additionalProperties: false
+output_schema:
+  type: object
+  required:
+    - status
+  properties:
+    status:
+      type: string
+      enum:
+        - success
+        - failed
+    run_id:
+      type: string
+    cl_series:
+      type: array
+      description: 升力系数 Cl(t) 原始序列
+    cd_series:
+      type: array
+      description: 阻力系数 Cd(t) 原始序列
+    t_series:
+      type: array
+      description: 力系数时间列
+    resid_p_tail:
+      type: array
+      description: 压力残差末 20 步（收敛性观测）
+    n_steps:
+      type: integer
+    ended:
+      type: boolean
+      description: log 尾含 End 标记（求解正常收尾）
+    error_message:
+      type: string
+  additionalProperties: false
+runtime:
+  timeout_seconds: 30
+  max_parallel_jobs: 2
+  retry: 0
+safety:
+  require_workspace_isolation: false
+  allow_shell_command: false
+  save_raw_files: false
+owner:
+  maintainer: TBD
+  business_owner: TBD
