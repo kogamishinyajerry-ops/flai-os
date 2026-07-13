@@ -712,7 +712,7 @@ onUnmounted(() => {
   border-radius: 9px;
   padding: 7px 13px;
   cursor: pointer;
-  transition: background 0.16s var(--ease-lift), color 0.16s var(--ease-lift);
+  transition: background var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
 }
 .sc-viewall:hover { background: var(--clay-soft); }
 .sc-foot-note {

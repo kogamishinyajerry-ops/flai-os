@@ -1029,7 +1029,7 @@ watch(
   border-radius: 10px;
   border: 1px solid transparent;
   cursor: pointer;
-  transition: background-color 0.16s var(--ease-out-soft), border-color 0.16s var(--ease-out-soft);
+  transition: background-color var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft);
 }
 .reframe-item:hover,
 .reframe-item:focus-visible {
@@ -1098,7 +1098,7 @@ watch(
   border: 1px solid var(--hairline-soft);
   border-radius: 14px;
   padding: 15px 16px;
-  transition: transform 0.22s var(--ease-lift), box-shadow 0.22s var(--ease-lift), border-color 0.22s var(--ease-lift);
+  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft);
   /* 入场动效交给全局 .fx-rise（m.fresh 门控，见 template）——历史会话加载
    * 路径重挂载不重播「刚发生」视觉，理由同 .plan-card/.user-bubble。 */
 }
@@ -1157,7 +1157,7 @@ watch(
   font-weight: 700;
   color: var(--clay);
   margin-left: 2px;
-  transition: color 0.16s var(--ease-lift);
+  transition: color var(--motion-fast) var(--ease-out-soft);
 }
 .agent-status:hover .status-peek {
   color: var(--clay-deep);
@@ -1179,7 +1179,7 @@ watch(
   cursor: pointer;
   color: var(--ink-soft);
   font-size: 12px;
-  transition: border-color 0.16s var(--ease-lift), color 0.16s var(--ease-lift);
+  transition: border-color var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
 }
 .status-artifact:hover {
   border-color: var(--clay-softer);
@@ -1275,12 +1275,12 @@ watch(
   border-radius: 10px;
   padding: 8px 14px;
   cursor: pointer;
-  transition: all 0.18s var(--ease-lift);
+  transition: all var(--motion-fast) var(--ease-out-soft);
 }
 .agent-cta::after {
   content: "→";
   margin-left: 7px;
-  transition: transform 0.18s var(--ease-lift);
+  transition: transform var(--motion-fast) var(--ease-out-soft);
 }
 .agent-cta:hover {
   background: var(--clay);
@@ -1317,7 +1317,7 @@ watch(
   padding: 9px 16px;
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.24);
-  transition: transform 0.16s var(--ease-lift), box-shadow 0.16s var(--ease-lift);
+  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
 }
 .workbench-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(var(--clay-rgb), 0.3); }
 .plan-escape {
@@ -1334,7 +1334,7 @@ watch(
   font-weight: 600;
   color: var(--clay);
   cursor: pointer;
-  transition: color 0.16s var(--ease-lift), transform 0.16s var(--ease-lift);
+  transition: color var(--motion-fast) var(--ease-out-soft), transform var(--motion-fast) var(--ease-out-soft);
 }
 .plan-escape:hover { color: var(--clay-deep); transform: translateX(2px); }
 .plan-note {
@@ -1404,7 +1404,7 @@ watch(
   border-radius: 22px;
   box-shadow: var(--shadow-composer);
   padding: 6px;
-  transition: border-color 0.2s var(--ease-lift), box-shadow 0.2s var(--ease-lift);
+  transition: border-color var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
 }
 .composer-shell:focus-within {
   border-color: var(--focus-ring-clay);
@@ -1426,7 +1426,7 @@ watch(
   cursor: pointer;
   display: grid;
   place-items: center;
-  transition: all 0.18s var(--ease-lift);
+  transition: all var(--motion-fast) var(--ease-out-soft);
 }
 .icon-btn:hover:not(:disabled) { background: var(--paper-rail); color: var(--ink-soft); }
 .icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -1455,7 +1455,7 @@ watch(
   display: grid;
   place-items: center;
   box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.28);
-  transition: transform 0.16s var(--ease-lift), box-shadow 0.16s var(--ease-lift), opacity 0.16s;
+  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft), opacity var(--motion-fast) var(--ease-out-soft);
 }
 .send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(var(--clay-rgb), 0.34); }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }

@@ -254,7 +254,7 @@ const rawLine = computed(() => {
   display: inline-block;
   color: var(--ink-faint);
   font-size: 12px;
-  transition: transform var(--ease-lift, 0.18s ease);
+  transition: transform var(--motion-fast) var(--ease-out-soft);
   flex: none;
 }
 .worklog-arrow.is-open {

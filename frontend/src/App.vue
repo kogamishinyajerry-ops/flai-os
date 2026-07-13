@@ -298,7 +298,6 @@ onMounted(loadConvos);
   --shadow-card-hover: 0 2px 6px rgba(43, 38, 34, 0.06), 0 12px 30px rgba(72, 58, 44, 0.10);
   --shadow-hero: 0 1px 3px rgba(43, 38, 34, 0.04), 0 10px 34px rgba(72, 58, 44, 0.06);
   --shadow-composer: 0 1px 3px rgba(43, 38, 34, 0.05), 0 12px 32px rgba(72, 58, 44, 0.09);
-  --ease-lift: 0.18s cubic-bezier(0.22, 0.61, 0.36, 1);
   /* 动效系统 v1 tokens（SSOT=docs/design/MOTION-SYSTEM.md）：纸张/墨迹材质隐喻，
    * 只用 transform/opacity；--ease-spring 仅限小位移元素（防溢出裁切）。 */
   --motion-fast: 0.14s;
@@ -639,7 +638,7 @@ body {
   font-weight: 600;
   cursor: pointer;
   box-shadow: var(--shadow-card);
-  transition: all 0.16s var(--ease-lift);
+  transition: all var(--motion-fast) var(--ease-out-soft);
 }
 .sb-new:hover { background: var(--clay); color: #fff; border-color: var(--clay); box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.22); }
 
@@ -652,7 +651,7 @@ body {
   font-weight: 500;
   color: var(--ink-soft);
   cursor: pointer;
-  transition: background 0.14s var(--ease-lift), color 0.14s var(--ease-lift);
+  transition: background var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
 }
 .nav-link:hover { background: rgba(var(--clay-rgb), 0.07); color: var(--ink); }
 .nav-link.is-active { background: var(--clay-soft); color: var(--clay); font-weight: 600; }
@@ -682,7 +681,7 @@ body {
   padding: 7px 12px;
   border-radius: 8px;
   cursor: pointer;
-  transition: background 0.14s var(--ease-lift);
+  transition: background var(--motion-fast) var(--ease-out-soft);
 }
 .convo-item:hover { background: var(--hover-tint); }
 .convo-item.is-active { background: var(--select-tint-clay); }
@@ -793,7 +792,7 @@ body {
 @media (max-width: 860px) {
   .sidebar {
     transform: translateX(-100%);
-    transition: transform 0.22s var(--ease-lift);
+    transition: transform var(--motion-med) var(--ease-out-soft);
     box-shadow: none;
   }
   .sidebar.is-open {

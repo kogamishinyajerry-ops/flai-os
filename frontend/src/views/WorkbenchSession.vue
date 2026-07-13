@@ -446,7 +446,7 @@ onUnmounted(() => {
   overflow: hidden;
   background: var(--card-bg);
   box-shadow: var(--shadow-card);
-  transition: box-shadow var(--ease-lift), transform var(--ease-lift);
+  transition: box-shadow var(--motion-fast) var(--ease-out-soft), transform var(--motion-fast) var(--ease-out-soft);
 }
 .member:hover {
   box-shadow: var(--shadow-card-hover);
