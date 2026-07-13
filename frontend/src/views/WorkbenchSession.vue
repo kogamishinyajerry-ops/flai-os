@@ -16,7 +16,16 @@
          loaded 派生（首次拉取失败时 loaded 恒为 false，见 liveFeed.js
          refresh()）——补 !loadError 条件，否则失败态会被挡在「加载中」分支
          里出不来，错误横幅永远不可见。 -->
-    <div v-if="loading && !conversation && !loadError" class="wb-state" v-loading="true" style="min-height: 200px"></div>
+    <!-- 首载骨架（A3）：只在「从未 loaded 且无 conversation 且无错误」时撑
+         hero+roster 轮廓，轮询期间/带旧值刷新绝不回骨架；失败态走下面
+         el-alert，骨架不吞错误。 -->
+    <div v-if="loading && !conversation && !loadError" class="wb-skel">
+      <SkeletonBlock height="28px" width="220px" />
+      <SkeletonBlock height="60px" width="90%" />
+      <SkeletonBlock height="72px" width="100%" />
+      <SkeletonBlock height="72px" width="100%" />
+      <SkeletonBlock height="72px" width="100%" />
+    </div>
 
     <el-alert
       v-else-if="loadError"
@@ -161,6 +170,7 @@ import { categoryColor, categoryLabel, statusLabel, taskLampColor, TASK_WORK_STA
 import { markSeen } from "../utils/lastSeen";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -320,6 +330,11 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+}
+.wb-skel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 .wb-back-actions {
   display: flex;

@@ -1,6 +1,19 @@
 <template>
-  <div class="task-detail" v-loading="loading">
+  <div class="task-detail">
     <el-alert v-if="loadError" type="error" :title="loadError" show-icon :closable="false" />
+
+    <!-- 首载骨架（A3）：只在「从未 loaded 且无错误」时撑主区轮廓，轮询期间/
+         带旧值刷新绝不回骨架；失败态走上面 el-alert，骨架不吞错误。 -->
+    <div v-if="!loaded && !loadError" class="td-skel">
+      <SkeletonBlock height="26px" width="200px" />
+      <SkeletonBlock height="14px" width="340px" />
+      <SkeletonBlock height="76px" width="100%" />
+      <div class="io-panel">
+        <SkeletonBlock height="220px" width="100%" />
+        <SkeletonBlock height="220px" width="100%" />
+      </div>
+      <SkeletonBlock height="120px" width="100%" />
+    </div>
 
     <template v-if="task">
       <!-- M8：属于某协作会话的任务，提供返回工作台会话视图的入口（分组回溯）。 -->
@@ -249,6 +262,7 @@ import { downloadUrl, fetchOutputFile } from "../api/files";
 import { acquireChannel, pokeTask, onTransition } from "../stores/liveFeed";
 import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import EmptyState from "../components/EmptyState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
 import { statusLabel, statusTagType, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
 import MarkdownLite from "../components/MarkdownLite.vue";
@@ -302,7 +316,6 @@ const simRunTitle = computed(() =>
 // makeEpochGuard，release 时 bump epoch，在途响应整包作废）。
 const taskChannel = acquireChannel(`task:${taskId}`);
 const { task, events, modelCalls, loaded, error: loadError } = taskChannel.state;
-const loading = computed(() => !loaded.value);
 
 const reviewForm = reactive({ comment: "" });
 const signerName = computed(() => displayName());
@@ -579,6 +592,11 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.td-skel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
 .page-header {
   position: relative;
   display: flex;

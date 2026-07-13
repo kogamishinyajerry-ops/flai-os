@@ -18,7 +18,17 @@
       class="page-alert"
     />
 
-    <el-skeleton v-if="loading" :rows="4" animated />
+    <!-- 首载骨架（A3）：只在「从未加载完成且无错误」时撑卡片栅格轮廓，轮询期间
+         /带旧值刷新绝不回骨架（本页无轮询，loading 天然只在首载为真）；失败态
+         走上面 el-alert，骨架不吞错误。 -->
+    <div v-if="loading && !loadError" class="portal-skel-grid">
+      <div v-for="i in 6" :key="i" class="portal-skel-card">
+        <SkeletonBlock height="18px" width="60%" />
+        <SkeletonBlock height="13px" width="40%" />
+        <SkeletonBlock height="13px" width="90%" />
+        <SkeletonBlock height="13px" width="75%" />
+      </div>
+    </div>
 
     <EmptyState v-else-if="!loadError && agents.length === 0" description="暂无可用 Agent" />
 
@@ -189,6 +199,7 @@ import { ElMessage } from "element-plus";
 import { listAgents } from "../api/agents";
 import { request } from "../api/client";
 import EmptyState from "../components/EmptyState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import {
   statusTagType,
   agentStatusLabel,
@@ -401,6 +412,19 @@ onMounted(load);
 }
 .page-alert {
   margin-bottom: 16px;
+}
+.portal-skel-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+.portal-skel-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
 }
 .agent-col {
   margin-bottom: 16px;
