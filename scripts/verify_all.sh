@@ -57,6 +57,15 @@ run_step "② 全量 pytest -n auto（三个 testpaths）" \
     --with jieba --with openpyxl \
     python -m pytest -q -n auto
 
+# node --test 若显式给目录参数（如 `tests/`）,本机 node v24 会把该参数当 CJS
+# entry module 解析而非测试目录,报 MODULE_NOT_FOUND；不带路径参数走默认发现
+# （test/、tests/、**/*.test.{js,mjs,cjs}）才能正确扫到 frontend/tests/。
+test_frontend_core() {
+  (cd frontend && node --test)
+}
+
+run_step "①b 前端纯函数核 node --test" test_frontend_core
+
 E2E_SCRIPTS=(
   "frontend/e2e/m2_acceptance.py"
   "frontend/e2e/m6_guide_acceptance.py"
