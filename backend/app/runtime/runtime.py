@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import logging
+import re
 import sqlite3
 import uuid
 from dataclasses import asdict
@@ -546,6 +547,13 @@ class AgentRuntime:
         )
         repos.set_task_outputs(conn, task_id, output_file_ids)
 
+        # sim_run_ref 回填（P3.2 接缝，spec §4.3）：workflow 成功输出
+        # outputs[0].sim_run_ref（"module@run_id"）→ 回填 task.metadata.sim_run_ref
+        # （与 POST /tasks/{id}/sim-run-ref 人工关联同一 setter，metadata 标注非
+        # 状态迁移，不破「人是唯一签发者」）。标注非承重：畸形/回填失败只记
+        # warning 事件不摧毁已成功的任务——错误方向必须是「少标注」。
+        self._backfill_sim_run_ref(conn, task_id, agent_id, result)
+
         # M10/ADR-0018 origin 白名单：只有用户任务落样。eval 跑批的输入本来就是
         # 评测集，回灌样本库=循环喂养（评测数据冒充生产数据资产）；未知 origin
         # 一律不落——错误方向必须是「少收一条」而非「污染资产」。
@@ -593,6 +601,39 @@ class AgentRuntime:
             level="info", message="任务完成",
         )
         return {"status": "completed", "task": repos.get_task(conn, task_id)}
+
+    def _backfill_sim_run_ref(
+        self, conn: sqlite3.Connection, task_id: str, agent_id: str, result: dict[str, Any]
+    ) -> None:
+        """workflow outputs[0].sim_run_ref（"module@run_id"）→ metadata.sim_run_ref。
+
+        格式门：module 须 ^[a-z][a-z0-9_]*$、run_id 须 ^\\d{8}-\\d{6}$（与
+        cfd_solve_launch/hub run_discovery 同一白名单语义）；畸形不回填、记
+        warning 事件继续——标注失败绝不摧毁已成功的任务。"""
+        outputs = result.get("outputs") or []
+        first = outputs[0] if outputs and isinstance(outputs[0], dict) else {}
+        ref = first.get("sim_run_ref")
+        if not isinstance(ref, str) or not ref:
+            return  # 无声明即无事发生（绝大多数 agent 走这里）
+        module, sep, run_id = ref.partition("@")
+        if (
+            sep != "@"
+            or re.fullmatch(r"[a-z][a-z0-9_]*", module) is None
+            or re.fullmatch(r"[0-9]{8}-[0-9]{6}", run_id) is None
+        ):
+            repos.append_event(
+                conn, task_id=task_id, agent_id=agent_id, event_type="agent_log",
+                level="warning",
+                message=f"sim_run_ref 畸形，不回填：{ref!r}（须 module@YYYYMMDD-HHMMSS）",
+                payload={"workflow_event_type": "sim_run_ref_malformed", "sim_run_ref": ref},
+            )
+            return
+        try:
+            repos.set_task_sim_run_ref(conn, task_id, module=module, run_id=run_id)
+        except Exception:
+            logger.exception(
+                "任务 %s sim_run_ref 回填失败（标注非承重，任务保持成功态）", task_id
+            )
 
     def _record_failure_sample(
         self, conn: sqlite3.Connection, task: dict[str, Any], agent: dict[str, Any],

@@ -1,0 +1,58 @@
+id: cfd_solve_agent
+name: "CFD 求解发起 Agent（真实 OpenFOAM，fire-and-register）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: tool_automation
+summary: "在容器里发起一次真实 OpenFOAM 求解（圆柱绕流 Re=100，fire-and-register 秒级返回），登记 run_id 与 sim_run_ref 让工作台监控浮窗实时看残差/Cl/Cd——求解在后台真跑约 200 秒，收敛后由人建评估任务承接。"
+description: >
+  CFD 真接线 P3 求解侧。零 LLM（model.profile=none）：workflow 只调
+  cfd_solve_launch（安全边界 Tool，docker exec 固定脚本模板）发起真求解，
+  输出 sim_run_ref=cfd_openfoam@<run_id>（Runtime 成功路径回填
+  task.metadata.sim_run_ref，监控浮窗/深链 #/cfd_openfoam@<run_id> 据此看活的）。
+  fire-and-register：任务秒级 completed，求解在 cfd-openfoam-live 容器后台
+  真跑；hub cfd_openfoam adapter 只读 case/run/<run_id>/ 流式解析。
+  requires_human_review=false——发起动作本身=人建任务的动作，工程判定在评估
+  阶段（cfd_evaluate_agent waiting_review 人签），不破「人是唯一签发者」。
+  发起失败（容器未 up / config 缺失 / 网格失败）诚实 failed，绝不谎报已发起。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: none
+knowledge:
+  enabled: false
+  scopes: []
+tools:
+  - cfd_solve_launch
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats: []
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: false
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: false
+  sample_fields: []
+limitations:
+  - "只发起求解不判结果：收敛与否、结果可信与否由监控浮窗人工观察 + cfd_evaluate_agent 评估草案 + 工程师签发决定。"
+  - "固定 canonical 算例（cylinder_re100）：不做参数化（Re/网格档不可调），end_time 仅覆盖求解时长。"
+  - "同一时刻一次求解：Tool max_parallel_jobs=1，且同名 run_id 已存在即拒（防覆写在跑的 run）。"
+  - "依赖 cfd-openfoam-live 容器与 FLAI_CFD_* 配置在场：缺任一即诚实 failed，不猜路径不谎报。"
+  - "任务 completed ≠ 求解成功：completed 只表示「已发起」，求解可能发散/中途崩——以监控与评估为准。"

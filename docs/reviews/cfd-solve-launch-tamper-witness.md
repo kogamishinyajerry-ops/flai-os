@@ -24,3 +24,21 @@ docker mesh 步失败）仍然通过——通过路径错误，且入参非法�
 
 教训（对齐 canon「假绿是唯一死罪」）：fail-closed 测试只断言 failed 不够，
 必须钉死**失败原因**与**零副作用**，否则 tamper 可被任意后续失败冒充。
+
+## R1 重放（Codex R0 4P1+2P2 修复后，2026-07-13）
+
+修复后 adapter（md5 `$(见 git)`）重放五注伤，全咬、byte-identical 还原、15 passed：
+
+| # | 注伤 | 结果 |
+|---|------|------|
+| ① | rm -rf 注入（铁律） | 1 failed ✓ |
+| ② | run_id fullmatch 恒真 | 2 failed ✓（traversal + 尾换行两测齐咬，R0 版仅断 failed 时不咬的缺口已封） |
+| ③ | config 恒真 | 1 failed ✓ |
+| ④ | **新守卫** Mesh OK. 正向断言撤除（R0-P1-3） | 1 failed ✓ |
+| ⑤ | **新守卫** 求解进程存活验证撤除（R0-P1-2） | 1 failed ✓ |
+
+R0→R1 变化：mesh 两条腿（真实 template 布局无 msh，host gmsh 从 geo 生成——
+R0 单测夹具曾发明生产不存在的 template/cyl2d.msh，Codex P1-1 咬中）；pipefail+
+Mesh OK. 正向断言；fire 后按进程 cwd 精确对账本 run（裸 pgrep 会误认并行/legacy
+run）；end_time 写失败即 fail；run_id 三处统一 fullmatch [0-9]（launch/read/
+runtime 回填）；timeout 预算闭合（≈298s < tool.yaml 360s）。

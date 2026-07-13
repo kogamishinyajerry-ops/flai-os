@@ -1,33 +1,65 @@
 """cfd_solve_launch 安全属性测试（mock subprocess/docker，无容器）：
-case 白名单 / run_id 正则先于拼路径 / config fail-closed / shell=False 参数列表 /
-bind-mount 铁律强化版（零删除——旧 run 与 case/run 本体谁都不碰）。
+case 白名单 / run_id fullmatch 白名单先于拼路径 / config fail-closed /
+shell=False 参数列表 / bind-mount 铁律强化版（零删除）/ mesh 双腿
+（template 自备 msh 或 host gmsh 从 geo 生成，Codex R0-P1-1）/ checkMesh
+正向断言 Mesh OK.（R0-P1-3）/ 求解进程 pgrep 验证后才盖 sidecar（R0-P1-2）/
+end_time 失败即 fail（R0-P2-1）。
 """
+from pathlib import Path
+
 from tools_impl.cfd_solve_launch.adapter import run
 
 RID = "20260713-101010"
 
 
-def _env(monkeypatch, tmp_path):
+def _env(monkeypatch, tmp_path, *, with_msh: bool = False):
     case_root = tmp_path / "run"
     case_root.mkdir()
     template = tmp_path / "template"
     template.mkdir()
-    # 最小 template：真实模板含 0/ constant/ system/ cyl2d.msh，测试只需存在性
-    (template / "cyl2d.msh").write_text("$MeshFormat\n")
-    for d in ("0", "constant", "system"):
+    # 真实布局（agent-cfd-live case/template 实测）：0/ constant/ system/ geo/，
+    # **无 cyl2d.msh**——mesh 由 host gmsh 从 geo/domain_parametric.geo 生成
+    # （canonical 兜底路线，rehearse.sh:94）。with_msh=True 覆盖「自备模板」路径。
+    for d in ("0", "constant", "system", "geo"):
         (template / d).mkdir()
+    (template / "geo" / "domain_parametric.geo").write_text("// param geo\n")
+    if with_msh:
+        (template / "cyl2d.msh").write_text("$MeshFormat\n")
     monkeypatch.setenv("FLAI_CFD_CONTAINER", "cfd-openfoam-live")
     monkeypatch.setenv("FLAI_CFD_CASE_DIR", str(case_root))
     monkeypatch.setenv("FLAI_CFD_TEMPLATE_DIR", str(template))
     return case_root
 
 
-def test_config_missing_fail_closed(monkeypatch):
-    monkeypatch.delenv("FLAI_CFD_CONTAINER", raising=False)
-    monkeypatch.delenv("FLAI_CFD_CASE_DIR", raising=False)
-    monkeypatch.delenv("FLAI_CFD_TEMPLATE_DIR", raising=False)
-    out = run({"case": "cylinder_re100", "run_id": RID})
-    assert out["status"] == "failed"
+class _FakeProc:
+    def __init__(self, returncode=0, stdout="ok", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _install_fake_run(monkeypatch, calls, *, overrides=None):
+    """按 argv 内容分派的 subprocess 替身。默认全成功且行为忠实：
+    gmsh → 真在 -o 目标落一个 mesh 文件；checkMesh → stdout 含 Mesh OK.；
+    pgrep → 命中。overrides: {关键字: _FakeProc 或 callable(argv)->_FakeProc}。"""
+    import tools_impl.cfd_solve_launch.adapter as mod
+
+    def fake_run(argv, **kw):
+        calls.append((argv, kw))
+        joined = " ".join(str(a) for a in argv)
+        for key, resp in (overrides or {}).items():
+            if key in joined:
+                return resp(argv) if callable(resp) else resp
+        if argv[0] == "gmsh":
+            Path(argv[argv.index("-o") + 1]).write_text("$MeshFormat\n")
+            return _FakeProc()
+        if "checkMesh" in joined:
+            return _FakeProc(stdout="... Mesh OK.\nEnd\n")
+        if "pgrep" in joined:
+            return _FakeProc(stdout="4242\n")
+        return _FakeProc()
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
 
 def _forbid_subprocess(monkeypatch):
@@ -39,6 +71,14 @@ def _forbid_subprocess(monkeypatch):
         raise AssertionError("入参非法时不得触任何 subprocess（拒绝须先于拼路径/执行）")
 
     monkeypatch.setattr(mod.subprocess, "run", _boom)
+
+
+def test_config_missing_fail_closed(monkeypatch):
+    monkeypatch.delenv("FLAI_CFD_CONTAINER", raising=False)
+    monkeypatch.delenv("FLAI_CFD_CASE_DIR", raising=False)
+    monkeypatch.delenv("FLAI_CFD_TEMPLATE_DIR", raising=False)
+    out = run({"case": "cylinder_re100", "run_id": RID})
+    assert out["status"] == "failed"
 
 
 def test_case_whitelist_only(monkeypatch, tmp_path):
@@ -53,13 +93,21 @@ def test_run_id_traversal_rejected(monkeypatch, tmp_path):
     case_root = _env(monkeypatch, tmp_path)
     _forbid_subprocess(monkeypatch)
     out = run({"case": "cylinder_re100", "run_id": "../../etc"})
-    assert out["status"] == "failed"  # 非 ^\d{8}-\d{6}$ 拒绝，先于任何路径拼接
-    assert "run_id" in out["error_message"]  # 失败原因=正则白名单
-    assert list(case_root.iterdir()) == []  # 零路径副作用（没铺任何东西）
+    assert out["status"] == "failed"  # 白名单 fullmatch 拒绝，先于任何路径拼接
+    assert "run_id" in out["error_message"]
+    assert list(case_root.iterdir()) == []  # 零路径副作用
+
+
+def test_run_id_trailing_newline_rejected(monkeypatch, tmp_path):
+    # Codex R0-P2-2：re.match+$ 会放行尾 \n（sidecar 对账时又读不回来）——须 fullmatch [0-9]
+    case_root = _env(monkeypatch, tmp_path)
+    _forbid_subprocess(monkeypatch)
+    out = run({"case": "cylinder_re100", "run_id": RID + "\n"})
+    assert out["status"] == "failed"
+    assert list(case_root.iterdir()) == []
 
 
 def test_existing_run_dir_not_overwritten(monkeypatch, tmp_path):
-    # 零删除的另一半：同名 run 已存在 → 拒绝覆写（防覆写在跑的 run）
     case_root = _env(monkeypatch, tmp_path)
     (case_root / RID).mkdir()
     out = run({"case": "cylinder_re100", "run_id": RID})
@@ -67,74 +115,117 @@ def test_existing_run_dir_not_overwritten(monkeypatch, tmp_path):
 
 
 def test_never_deletes_anything(monkeypatch, tmp_path):
-    # bind-mount 铁律强化版（落法 2026-07-13）：每 run 新建子目录，adapter 全程
-    # 零删除操作——旧 run 与 case/run 本体谁都不碰
+    # bind-mount 铁律强化版：每 run 新建子目录，adapter 全程零删除操作
     case_root = _env(monkeypatch, tmp_path)
     old_run = case_root / "20260101-000000"
     old_run.mkdir()
     (old_run / "keep.txt").write_text("old")
-    import tools_impl.cfd_solve_launch.adapter as mod
     calls = []
-
-    def fake_run(argv, **kw):
-        calls.append((argv, kw))
-
-        class R:
-            returncode = 0
-            stdout = "ok"
-            stderr = ""
-        return R()
-
-    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    _install_fake_run(monkeypatch, calls)
     out = run({"case": "cylinder_re100", "run_id": RID})
     assert (old_run / "keep.txt").read_text() == "old"  # 旧 run 完好
     for argv, kw in calls:
-        joined = " ".join(argv)
+        joined = " ".join(str(a) for a in argv)
         assert "rm -rf" not in joined and "rmdir" not in joined and "-delete" not in joined
     assert (case_root / RID / ".hub_run_id").is_file() or out["status"] == "failed"
 
 
-def test_shell_false_argv_and_subdir_cwd(monkeypatch, tmp_path):
-    # 容器名来自 config；docker 调用是参数列表非 shell 串拼；cwd=子目录
-    import tools_impl.cfd_solve_launch.adapter as mod
-    case_root = _env(monkeypatch, tmp_path)
+def test_mesh_generated_from_geo_when_template_has_no_msh(monkeypatch, tmp_path):
+    # Codex R0-P1-1：真实 template 无 cyl2d.msh——host gmsh 从 geo 生成进 run 子目录
+    case_root = _env(monkeypatch, tmp_path, with_msh=False)
     calls = []
-
-    def fake_run(argv, **kw):
-        calls.append((argv, kw))
-
-        class R:
-            returncode = 0
-            stdout = "ok"
-            stderr = ""
-        return R()
-
-    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    _install_fake_run(monkeypatch, calls)
     out = run({"case": "cylinder_re100", "run_id": RID})
     assert out["status"] == "success"
-    assert (case_root / RID / "cyl2d.msh").is_file()  # host 侧铺算例进子目录
+    assert (case_root / RID / "cyl2d.msh").is_file()
+    gmsh_calls = [argv for argv, kw in calls if argv[0] == "gmsh"]
+    assert len(gmsh_calls) == 1
+    assert kw_shell_all_false(calls)
+
+
+def test_template_msh_used_directly_no_gmsh(monkeypatch, tmp_path):
+    # 自备模板（template 已含 cyl2d.msh）→ 直接拷，不调 gmsh
+    case_root = _env(monkeypatch, tmp_path, with_msh=True)
+    calls = []
+    _install_fake_run(monkeypatch, calls)
+    out = run({"case": "cylinder_re100", "run_id": RID})
+    assert out["status"] == "success"
+    assert (case_root / RID / "cyl2d.msh").is_file()
+    assert not [argv for argv, kw in calls if argv[0] == "gmsh"]
+
+
+def test_no_msh_and_no_geo_fail_closed(monkeypatch, tmp_path):
+    # 两条腿都断（无 msh 无 geo）→ fail，不猜
+    case_root = _env(monkeypatch, tmp_path, with_msh=False)
+    import os
+    tpl = os.environ["FLAI_CFD_TEMPLATE_DIR"]
+    (Path(tpl) / "geo" / "domain_parametric.geo").unlink()
+    calls = []
+    _install_fake_run(monkeypatch, calls)
+    out = run({"case": "cylinder_re100", "run_id": RID})
+    assert out["status"] == "failed"
+    assert not (case_root / RID / ".hub_run_id").exists()
+
+
+def test_shell_false_argv_and_subdir_cwd(monkeypatch, tmp_path):
+    case_root = _env(monkeypatch, tmp_path, with_msh=True)
+    calls = []
+    _install_fake_run(monkeypatch, calls)
+    out = run({"case": "cylinder_re100", "run_id": RID})
+    assert out["status"] == "success"
+    assert (case_root / RID / "cyl2d.msh").is_file()
     docker_calls = [argv for argv, kw in calls if argv and argv[0] == "docker"]
     assert docker_calls, "应有 docker exec 调用"
-    for argv, kw in calls:
-        assert isinstance(argv, list)
-        assert kw.get("shell", False) is False
-    # 求解 cwd 必须是时间戳子目录（-w /home/openfoam/run/<run_id>）
+    assert kw_shell_all_false(calls)
     assert any(f"/home/openfoam/run/{RID}" in " ".join(a) for a in docker_calls)
 
 
+def kw_shell_all_false(calls) -> bool:
+    for argv, kw in calls:
+        assert isinstance(argv, list)
+        assert kw.get("shell", False) is False
+    return True
+
+
+def test_checkmesh_without_mesh_ok_marker_fail_closed(monkeypatch, tmp_path):
+    # Codex R0-P1-3：tee 吞退出码——必须正向要求 Mesh OK.，缺 marker 即 fail
+    case_root = _env(monkeypatch, tmp_path, with_msh=True)
+    calls = []
+    _install_fake_run(monkeypatch, calls,
+                      overrides={"checkMesh": _FakeProc(stdout="...FOAM FATAL ERROR piped away\nEnd\n")})
+    out = run({"case": "cylinder_re100", "run_id": RID})
+    assert out["status"] == "failed"
+    assert not (case_root / RID / ".hub_run_id").exists()
+
+
+def test_solver_not_running_after_fire_fail_closed_no_sidecar(monkeypatch, tmp_path):
+    # Codex R0-P1-2：`... && nohup x &` 整体后台化恒返 0——必须 pgrep 验证进程在，
+    # 不在即 fail 且不盖 sidecar（绝不谎报已发起）
+    case_root = _env(monkeypatch, tmp_path, with_msh=True)
+    calls = []
+    _install_fake_run(monkeypatch, calls, overrides={"pgrep": _FakeProc(returncode=1, stdout="")})
+    out = run({"case": "cylinder_re100", "run_id": RID})
+    assert out["status"] == "failed"
+    assert not (case_root / RID / ".hub_run_id").exists()
+
+
+def test_end_time_dict_failure_aborts_before_launch(monkeypatch, tmp_path):
+    # Codex R0-P2-1：foamDictionary 失败必须 fail，绝不带错误 endTime 静默开跑
+    case_root = _env(monkeypatch, tmp_path, with_msh=True)
+    calls = []
+    _install_fake_run(monkeypatch, calls,
+                      overrides={"foamDictionary system/controlDict": _FakeProc(returncode=1, stderr="cannot open")})
+    out = run({"case": "cylinder_re100", "run_id": RID, "end_time": 60})
+    assert out["status"] == "failed"
+    assert not (case_root / RID / ".hub_run_id").exists()
+    assert not any("pimpleFoam" in " ".join(str(x) for x in argv) and "nohup" in " ".join(str(x) for x in argv)
+                   for argv, kw in calls), "endTime 失败后不得发起求解"
+
+
 def test_sidecar_written_last_and_success_shape(monkeypatch, tmp_path):
-    # sidecar 是 hub marker：success 时必在场且内容=run_id
-    import tools_impl.cfd_solve_launch.adapter as mod
-    case_root = _env(monkeypatch, tmp_path)
-
-    def fake_run(argv, **kw):
-        class R:
-            returncode = 0
-            stdout = "ok"
-            stderr = ""
-        return R()
-
-    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    case_root = _env(monkeypatch, tmp_path, with_msh=True)
+    calls = []
+    _install_fake_run(monkeypatch, calls)
     out = run({"case": "cylinder_re100", "run_id": RID})
     assert out["status"] == "success"
     assert out["run_id"] == RID
@@ -142,22 +233,10 @@ def test_sidecar_written_last_and_success_shape(monkeypatch, tmp_path):
 
 
 def test_mesh_failure_fail_closed_no_sidecar(monkeypatch, tmp_path):
-    # 网格失败 → failed 且不盖 sidecar（hub 不认作 run，绝不谎报已发起）
-    import tools_impl.cfd_solve_launch.adapter as mod
-    case_root = _env(monkeypatch, tmp_path)
-
-    def fake_run(argv, **kw):
-        class R:
-            returncode = 0
-            stdout = "ok"
-            stderr = ""
-        joined = " ".join(argv)
-        if "gmshToFoam" in joined:
-            R.returncode = 1
-            R.stderr = "gmshToFoam: cannot read mesh"
-        return R()
-
-    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    case_root = _env(monkeypatch, tmp_path, with_msh=True)
+    calls = []
+    _install_fake_run(monkeypatch, calls,
+                      overrides={"gmshToFoam": _FakeProc(returncode=1, stderr="gmshToFoam: cannot read mesh")})
     out = run({"case": "cylinder_re100", "run_id": RID})
     assert out["status"] == "failed"
     assert not (case_root / RID / ".hub_run_id").exists()

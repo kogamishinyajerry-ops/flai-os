@@ -62,7 +62,10 @@ output_schema:
       type: string
   additionalProperties: false
 runtime:
-  timeout_seconds: 180
+  # Codex R0-P1-4：须 > adapter worst-case 累计（15 ping + 120 gmsh + 90 mesh +
+  # 20 endTime + 20 launch + ~33 pgrep 重试 ≈ 298s，见 adapter _T_* 预算注释），
+  # 否则 Registry 记 failed 后 adapter 线程仍可能稍后盖 marker（幽灵 run）。
+  timeout_seconds: 360
   max_parallel_jobs: 1
   retry: 0
 safety:

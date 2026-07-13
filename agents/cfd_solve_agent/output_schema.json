@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "cfd_solve_agent 输出契约",
+  "description": "workflow.run() 成功返回的 outputs[0] 摘要对象。sim_run_ref 由 Runtime 成功路径回填 task.metadata.sim_run_ref（metadata 标注非状态迁移）。注意：任务 completed 只表示「已发起」（fire-and-register），求解在容器后台跑约 200s——结果判定在监控浮窗 + cfd_evaluate_agent + 人签。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["run_id", "sim_run_ref", "human_review_required", "note"],
+  "properties": {
+    "run_id": { "type": "string", "pattern": "^\\d{8}-\\d{6}$" },
+    "sim_run_ref": { "type": "string", "pattern": "^cfd_openfoam@\\d{8}-\\d{6}$", "description": "监控深链引用（#/<module>@<run_id>）。" },
+    "container": { "type": ["string", "null"] },
+    "checkmesh_ok": { "type": ["boolean", "null"] },
+    "human_review_required": { "type": "boolean", "const": false, "description": "恒为 false：发起动作=人建任务的动作；工程判定在评估阶段人签。" },
+    "note": { "type": "string", "minLength": 1 },
+    "artifacts": { "type": "array", "items": { "type": "string" } }
+  }
+}

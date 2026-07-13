@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "cfd_solve_agent 输入契约",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["case"],
+  "properties": {
+    "case": {
+      "type": "string",
+      "enum": ["cylinder_re100"],
+      "description": "算例白名单（本批固定 canonical case：圆柱绕流 Re=100）"
+    },
+    "end_time": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "可选，覆盖 controlDict endTime（求解物理时长）"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^\\d{8}-\\d{6}$",
+      "description": "可选，固定 run_id（测试/eval 确定性重放用）；缺省由 workflow 生成 UTC 时间戳"
+    }
+  }
+}

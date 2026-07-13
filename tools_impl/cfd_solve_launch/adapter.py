@@ -1,43 +1,70 @@
 """cfd_solve_launch（allow_shell_command=true，安全边界，ADR-0022 同款纪律）：
 在 case/run/<run_id>/ 时间戳子目录里发起真实 pimpleFoam 求解（fire-and-register，
-不阻塞求解 ~200s）。host 侧铺算例（同 agent-cfd-live staging 方式），docker exec
-只跑 OpenFOAM 命令（bind-mount 使子目录两侧可见，2026-07-13 探针实测：
-host case/run → 容器 /home/openfoam/run）。
+不阻塞求解 ~200s）。host 侧铺算例 + 产 mesh（同 agent-cfd-live staging-v2 host
+直出方式），docker exec 只跑 OpenFOAM 命令（bind-mount 使子目录两侧可见，
+2026-07-13 探针实测：host case/run → 容器 /home/openfoam/run）。
 
-红线：① shell=False 参数列表，docker 命令为固定脚本模板零用户串拼；② 容器名/路径
-来自可信 env config 非请求体；③ case 白名单枚举 + run_id 正则白名单（先于任何
-路径拼接）；④ 容器未 up / config 缺失 / mesh 失败 fail-closed，绝不谎报已发起
-（sidecar 最后盖——失败残留子目录无 sidecar，hub 不认作 run）；⑤ bind-mount
-铁律强化版：每 run 新建子目录，本工具**零删除操作**——case/run 本体与旧 run
-谁都不碰，同名 run 已存在即拒（防覆写在跑的 run）。
+红线：① shell=False 参数列表，docker/gmsh 命令为固定模板零用户串拼；② 容器名/
+路径来自可信 env config 非请求体；③ case 白名单枚举 + run_id fullmatch [0-9]
+白名单（先于任何路径拼接；Codex R0-P2-2：re.match+$ 会放行尾换行）；④ config
+缺失 / 容器未 up / mesh 失败 / checkMesh 无 Mesh OK. / 求解进程未起 一律
+fail-closed，绝不谎报已发起（sidecar 最后盖——失败残留子目录无 sidecar，hub
+不认作 run）；⑤ bind-mount 铁律强化版：每 run 新建子目录，本工具**零删除操作**
+——case/run 本体与旧 run 谁都不碰，同名 run 已存在即拒。
+
+Codex R0 修复（2026-07-13）：
+- P1-1 mesh 两条腿：template/cyl2d.msh 在则拷（自备模板）；否则 host gmsh 从
+  template/geo/domain_parametric.geo 生成进 run 子目录（canonical 兜底路线，
+  rehearse.sh:94 逐字参数）——真实 case/template 不含 msh。两腿全断 fail。
+- P1-2 fire 后 pgrep 验证求解进程真在（`… && nohup x &` 整体后台化恒返 0，
+  bashrc 缺失/pimpleFoam 不存在也「成功」）；进程不在 → fail 不盖 sidecar。
+- P1-3 checkMesh 经 tee 管道吞退出码（无 pipefail）→ 固定脚本加 set -o
+  pipefail 且正向断言 stdout 含 Mesh OK.（真实成功 marker，checkMesh.log 实测）。
+- P1-4 timeout 预算闭合（见 _T_* 常量注释），worst-case 总和 < tool.yaml
+  timeout_seconds=360，杜绝 Registry 已记 failed 而 adapter 线程稍后盖 marker。
+- P2-1 end_time 的 foamDictionary 失败即 fail，绝不带错误 endTime 静默开跑。
 """
 from __future__ import annotations
 import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
 _CASE_WHITELIST = {"cylinder_re100"}
-_RUN_ID_RE = re.compile(r"^\d{8}-\d{6}$")
+_RUN_ID_RE = re.compile(r"[0-9]{8}-[0-9]{6}")  # 用 fullmatch；[0-9] 拒非 ASCII 数字
 _CONTAINER_ENV = "FLAI_CFD_CONTAINER"
 _CASE_ENV = "FLAI_CFD_CASE_DIR"
 _TEMPLATE_ENV = "FLAI_CFD_TEMPLATE_DIR"
 _CONTAINER_RUN_ROOT = "/home/openfoam/run"  # bind-mount 容器侧根（= host 的 case/run，inspect 实测）
-_OF = "source /opt/openfoam11/etc/bashrc"  # 容器实测路径；未 source 时 OpenFOAM 命令不在 PATH
-_STEP_TIMEOUT = 120  # mesh/check 步；求解本身 nohup & 不等
+_OF = "set -o pipefail; source /opt/openfoam11/etc/bashrc"  # 容器实测路径；pipefail 保 tee 不吞退出码
+_GEO_REL = "geo/domain_parametric.geo"  # canonical 参数化兜底 geo（rehearse.sh:94）
+
+# timeout 预算（Codex R0-P1-4）：worst-case 累计 = 15(ping) + 120(gmsh) + 90(mesh)
+# + 20(endTime) + 20(launch) + 3×(10+1)(pgrep 重试) ≈ 298s + copytree 秒级
+# < tool.yaml timeout_seconds=360（含余量）。改任一常量须同步复核该预算。
+_T_PING = 15
+_T_GMSH = 120
+_T_MESH = 90
+_T_DICT = 20
+_T_LAUNCH = 20
+_T_PGREP = 10
+_PGREP_TRIES = 3
+
+_MESH_OK_MARKER = "Mesh OK."  # checkMesh 成功正向 marker（agent-cfd-live checkMesh.log 实测）
 
 
 def _fail(msg: str) -> dict[str, Any]:
     return {"status": "failed", "error_message": msg}
 
 
-def _dexec(container: str, cwd: str, script: str) -> subprocess.CompletedProcess:
+def _dexec(container: str, cwd: str, script: str, timeout: int) -> subprocess.CompletedProcess:
     # 固定脚本模板经参数列表传入（shell=False）：唯一进 script 的变量是白名单校验过的
     # run_id（拼 cwd）与数值校验过的 end_time，零用户自由文本。
     return subprocess.run(["docker", "exec", "-w", cwd, container, "bash", "-lc", script],
-                          capture_output=True, text=True, timeout=_STEP_TIMEOUT, shell=False)
+                          capture_output=True, text=True, timeout=timeout, shell=False)
 
 
 def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -46,7 +73,7 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
     if case not in _CASE_WHITELIST:
         return _fail(f"case 非白名单：{case!r}（仅 {sorted(_CASE_WHITELIST)}）")
     run_id = str(payload.get("run_id", ""))
-    if not _RUN_ID_RE.match(run_id):
+    if not _RUN_ID_RE.fullmatch(run_id):
         return _fail(f"run_id 非法（须 YYYYMMDD-HHMMSS）：{run_id!r}——拒绝拼路径，fail-closed")
     container = os.environ.get(_CONTAINER_ENV)
     case_root_raw = os.environ.get(_CASE_ENV)
@@ -57,8 +84,10 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
     template = Path(template_raw).expanduser()
     if not case_root.is_dir():
         return _fail(f"case 根不存在：{case_root}")
-    if not (template / "cyl2d.msh").is_file():
-        return _fail(f"template 缺 cyl2d.msh：{template}")
+    template_msh = template / "cyl2d.msh"
+    template_geo = template / _GEO_REL
+    if not template_msh.is_file() and not template_geo.is_file():
+        return _fail(f"template 无 mesh 来源（既无 cyl2d.msh 也无 {_GEO_REL}）：{template}——fail-closed")
 
     # ① 建 run 子目录（host 侧；零删除——已存在即拒，防覆写在跑的 run）
     run_dir = case_root / run_id
@@ -66,37 +95,82 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
         return _fail(f"run 子目录已存在：{run_dir}——拒绝覆写，换 run_id")
     ctr_cwd = f"{_CONTAINER_RUN_ROOT}/{run_id}"
 
-    # ② 铺算例（host 侧拷 template：0/ constant/ system/ cyl2d.msh）
+    # ② 铺算例（host 侧拷 template：0/ constant/ system/ [geo/ cyl2d.msh]）
     try:
         shutil.copytree(template, run_dir)
     except OSError as exc:
         return _fail(f"铺算例失败：{exc}")
 
+    # ②b mesh（Codex R0-P1-1 两条腿）：自备 msh 已随 copytree 就位；否则 host gmsh
+    # 从 geo 生成（canonical 兜底路线，host 直出免 docker cp）。
+    if not (run_dir / "cyl2d.msh").is_file():
+        try:
+            gm = subprocess.run(
+                ["gmsh", str(run_dir / _GEO_REL), "-3", "-format", "msh2",
+                 "-o", str(run_dir / "cyl2d.msh")],
+                capture_output=True, text=True, timeout=_T_GMSH, shell=False)
+        except FileNotFoundError:
+            return _fail("host gmsh 不在位且 template 无自备 cyl2d.msh——fail-closed")
+        except subprocess.TimeoutExpired:
+            return _fail(f"gmsh 生成网格超时（>{_T_GMSH}s）")
+        if gm.returncode != 0 or not (run_dir / "cyl2d.msh").is_file():
+            return _fail(f"gmsh 生成网格失败：{(gm.stderr or gm.stdout or '').strip()[-300:]}")
+
     # ③ 容器可达性（fire 前最后一道；先铺后 ping 使失败残留可诊断，子目录无 sidecar
     #    不会被 hub marker 认作 run）
     ping = subprocess.run(["docker", "exec", container, "true"],
-                          capture_output=True, text=True, timeout=15, shell=False)
+                          capture_output=True, text=True, timeout=_T_PING, shell=False)
     if ping.returncode != 0:
         return _fail(f"容器 {container} 未就绪：{(ping.stderr or '').strip()[:200]}——绝不谎报已发起")
 
-    # ④ 网格 + 检查（固定脚本模板，cwd=子目录）
+    # ④ 网格转换 + 检查（固定脚本模板，cwd=子目录；pipefail + Mesh OK. 正向断言，
+    #    Codex R0-P1-3——tee 会吞 checkMesh 退出码）
     mesh = _dexec(container, ctr_cwd,
                   f"{_OF} && gmshToFoam cyl2d.msh && "
                   f"foamDictionary constant/polyMesh/boundary -entry entry0/frontAndBack/type -set empty && "
-                  f"checkMesh | tee checkMesh.log")
-    if mesh.returncode != 0 or "Failed" in (mesh.stdout or ""):
-        return _fail(f"网格/检查失败：{(mesh.stderr or mesh.stdout or '').strip()[-300:]}")
+                  f"checkMesh | tee checkMesh.log", _T_MESH)
+    if mesh.returncode != 0 or _MESH_OK_MARKER not in (mesh.stdout or ""):
+        return _fail("网格/检查失败（无 Mesh OK. 正向 marker）："
+                     f"{(mesh.stderr or mesh.stdout or '').strip()[-300:]}")
 
-    # ⑤ 可选 end_time（数值型才注入，非法忽略——零自由文本进脚本）
+    # ⑤ 可选 end_time（数值型才注入，非法忽略——零自由文本进脚本；
+    #    Codex R0-P2-1：foamDictionary 失败即 fail，绝不带错误 endTime 开跑）
     et = payload.get("end_time")
     if isinstance(et, (int, float)) and not isinstance(et, bool) and et > 0:
-        _dexec(container, ctr_cwd,
-               f"{_OF} && foamDictionary system/controlDict -entry endTime -set {float(et)}")
+        dic = _dexec(container, ctr_cwd,
+                     f"{_OF} && foamDictionary system/controlDict -entry endTime -set {float(et)}",
+                     _T_DICT)
+        if dic.returncode != 0:
+            return _fail(f"endTime 写入失败：{(dic.stderr or dic.stdout or '').strip()[-200:]}——不发起求解")
 
     # ⑥ 发起求解（fire：nohup & 立即返回，不等 ~200s）
-    launch = _dexec(container, ctr_cwd, f"{_OF} && nohup pimpleFoam > log.pimpleFoam 2>&1 &")
+    launch = _dexec(container, ctr_cwd, f"{_OF} && nohup pimpleFoam > log.pimpleFoam 2>&1 &",
+                    _T_LAUNCH)
     if launch.returncode != 0:
         return _fail(f"发起求解失败：{(launch.stderr or '').strip()[:200]}")
+
+    # ⑥b 验证求解进程真起来了（Codex R0-P1-2：`… && nohup x &` 整体后台化，bash
+    # fork 即返 0——bashrc 缺失/pimpleFoam 不可执行也「成功」。按进程 cwd 精确
+    # 对账本 run 子目录：裸 pgrep pimpleFoam 会命中并行/legacy run 的求解进程，
+    # 假阳性=谎报已发起。固定脚本，唯一变量是白名单校验过的 ctr_cwd。
+    _alive_script = ("for p in $(pgrep pimpleFoam); do readlink /proc/$p/cwd; done"
+                     f" | grep -qx '{ctr_cwd}'")
+    alive = False
+    for i in range(_PGREP_TRIES):
+        if i:
+            time.sleep(1)
+        pg = subprocess.run(["docker", "exec", container, "bash", "-c", _alive_script],
+                            capture_output=True, text=True, timeout=_T_PGREP, shell=False)
+        if pg.returncode == 0:
+            alive = True
+            break
+    if not alive:
+        tail = ""
+        log_path = run_dir / "log.pimpleFoam"
+        if log_path.is_file():
+            tail = log_path.read_text(errors="replace")[-300:]
+        return _fail(f"求解进程未存活（pgrep 未命中，重试 {_PGREP_TRIES} 次）——不盖 sidecar，"
+                     f"绝不谎报已发起。log 尾：{tail.strip()}")
 
     # ⑦ 盖 sidecar（host 侧，最后一步=hub marker：sidecar 在场即「这是一个已发起的 run」）
     (run_dir / ".hub_run_id").write_text(run_id, encoding="utf-8")

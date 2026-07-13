@@ -18,7 +18,7 @@ from backend.app.cfd.cfd_log_parser import parse_residuals, parse_force_coeffs
 _CASE_ENV = "FLAI_CFD_CASE_DIR"  # = agent-cfd-live case/run 根（run 子目录的父）
 _LOG = "log.pimpleFoam"
 _FORCE_GLOB = "postProcessing/forceCoeffs1/0/*.dat"
-_RUN_ID_RE = re.compile(r"^\d{8}-\d{6}$")
+_RUN_ID_RE = re.compile(r"[0-9]{8}-[0-9]{6}")  # 用 fullmatch：re.match+$ 放行尾换行、\d 收非 ASCII 数字（Codex R0-P2-2 同款）
 
 
 def _fail(msg: str) -> dict[str, Any]:
@@ -28,7 +28,7 @@ def _fail(msg: str) -> dict[str, Any]:
 def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
     del context
     run_id = str(payload["run_id"])
-    if not _RUN_ID_RE.match(run_id):
+    if not _RUN_ID_RE.fullmatch(run_id):
         return _fail(f"run_id 非法（须 YYYYMMDD-HHMMSS）：{run_id!r}——拒绝拼路径，fail-closed")
     case_raw = os.environ.get(_CASE_ENV)
     if not case_raw:
