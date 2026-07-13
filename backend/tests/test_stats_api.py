@@ -70,6 +70,32 @@ BEFORE = "2026-07-12T23:59:59+00:00"
 AFTER = "2026-07-13T08:00:00+00:00"
 
 
+def _insert_task_null_finished(conn, task_id: str, created_at: str) -> None:
+    """反例见证（B-T2 审查②）：completed 但 finished_at 为 NULL 的畸形行——
+    拆掉实现里 finished_at IS NOT NULL 过滤时，本行会被 >= 比较连带排除吗？
+    不会（SQLite NULL >= x 为 NULL 假），但 COUNT 语义靠双条件冗余表达意图，
+    真正咬合见 test_stats_overview_exact_counts 的 event_type/origin 维。"""
+    conn.execute(
+        "INSERT INTO tasks (id, agent_id, agent_version, name, status, inputs_json,"
+        " input_file_ids, output_file_ids, created_by, origin, created_at, updated_at)"
+        " VALUES (?, 'hello_agent', '0.1.0', ?, 'completed', '{}', '[]', '[]',"
+        " '测试工程师', 'user', ?, ?)",
+        (task_id, task_id, created_at, created_at),
+    )
+    conn.commit()
+
+
+def _insert_other_event(conn, task_id: str, created_at: str) -> None:
+    """反例见证：非 review_approved 事件——拆掉 event_type 过滤本行必混入计数。"""
+    conn.execute(
+        "INSERT INTO task_events (event_id, task_id, event_type, level, message,"
+        " payload_json, created_at)"
+        " VALUES (?, ?, 'task_created', 'info', '任务已创建', '{}', ?)",
+        (f"evt-other-{task_id}-{created_at}", task_id, created_at),
+    )
+    conn.commit()
+
+
 def test_stats_overview_exact_counts(app_env):
     client, app = app_env
     conn = app.state.conn_factory()
@@ -77,8 +103,10 @@ def test_stats_overview_exact_counts(app_env):
         _insert_completed_task(conn, "t-in", AFTER)
         _insert_completed_task(conn, "t-out", BEFORE)          # 界前不计
         _insert_completed_task(conn, "t-eval", AFTER, origin="eval")  # eval 不计
+        _insert_task_null_finished(conn, "t-null", AFTER)      # NULL finished_at 不计
         _insert_review_event(conn, "t-in", AFTER)
         _insert_review_event(conn, "t-out", BEFORE)
+        _insert_other_event(conn, "t-in", AFTER)               # 非 review 事件不计
         _insert_promotion(conn, "hello_agent", AFTER)
         _insert_promotion(conn, "hello_agent", BEFORE)
     finally:
@@ -86,7 +114,8 @@ def test_stats_overview_exact_counts(app_env):
     r = client.get("/api/stats/overview", params={"since": SINCE})
     assert r.status_code == 200
     body = r.json()
-    # tamper：把实现里 event_type 过滤/origin 过滤/since 比较任一拆掉，本测必红。
+    # tamper（B-T2 审查②变异实证后补齐反例）：拆掉实现里 event_type 过滤/
+    # origin 过滤/since 比较任一，本测必红（夹具已含每一维的反例见证行）。
     assert body["tasks_completed"] == 1
     assert body["reviews_approved"] == 1
     assert body["promotions"] == 1
@@ -108,6 +137,26 @@ def test_stats_since_required_and_valid(app_env):
     client, _ = app_env
     assert client.get("/api/stats/overview").status_code == 422
     assert client.get("/api/stats/overview", params={"since": "昨天"}).status_code == 422
+    # naive/纯日期无确定时刻语义，fail-closed 拒收（B-T2 审查③）
+    assert client.get("/api/stats/overview", params={"since": "2026-07-13"}).status_code == 422
+    assert client.get("/api/stats/overview", params={"since": "2026-07-13T00:00:00"}).status_code == 422
+
+
+def test_stats_since_z_suffix_normalized(app_env):
+    """B-T2 审查③实证的真 bug 回归：'Z' 后缀（JS toISOString 默认格式）同秒
+    边界曾因 ASCII 'Z' > '.'/'+' 字典序错序漏计。归一化后 Z 表示与 +00:00
+    表示必须等价计数。tamper：删掉实现里 astimezone 归一化行，本测必红。"""
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        _insert_completed_task(conn, "t-z-edge", "2026-07-13T08:00:00.123456+00:00")
+    finally:
+        conn.close()
+    plus = client.get("/api/stats/overview", params={"since": "2026-07-13T08:00:00+00:00"}).json()
+    zed = client.get("/api/stats/overview", params={"since": "2026-07-13T08:00:00Z"}).json()
+    assert plus["tasks_completed"] == 1
+    assert zed["tasks_completed"] == 1  # 归一化前此处为 0（漏计 bug）
+    assert zed["since"] == "2026-07-13T08:00:00+00:00"  # 回显=生效窗口的归一化表示
 
 
 def test_count_curated_cases_pure(tmp_path):

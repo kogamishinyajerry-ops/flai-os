@@ -1,10 +1,12 @@
 """批B /today 只读聚合（spec docs/superpowers/specs/2026-07-13-today-workbench-batch-b-design.md §三）。
-零 schema 变更：SQL 直查既有表 + eval_cases 落盘文件计数。since 必填合法
-ISO8601（fail-closed 422，不默认兜底窗口）；ISO8601 UTC 字符串字典序可比，
-与 repos 写入格式一致，SQL 直接 >= 比较。"""
+零 schema 变更：SQL 直查既有表 + eval_cases 落盘文件计数。since 必填、必须
+offset-aware ISO8601（naive/纯日期 422 fail-closed，不默认兜底窗口）；入 SQL
+前归一化为 UTC "+00:00" 表示——库内 repos 写入即该格式，归一化后字典序
+比较才恒等于时间序（B-T2 审查实证：'Z' 后缀同秒会因 ASCII 'Z'>'.'/'+'
+错序漏计，而 JS toISOString() 默认就是 'Z' 后缀）。"""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -26,9 +28,13 @@ def stats_overview(request: Request, since: str | None = None) -> dict[str, Any]
     if not since:
         raise HTTPException(status_code=422, detail="since 必填（ISO8601）")
     try:
-        datetime.fromisoformat(since)
+        dt = datetime.fromisoformat(since)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"since 不是合法 ISO8601：{since}") from exc
+    if dt.tzinfo is None:
+        # naive/纯日期没有确定时刻语义，与库内 offset-aware 字符串比较必错序——拒收。
+        raise HTTPException(status_code=422, detail=f"since 必须带时区偏移（offset-aware）：{since}")
+    since = dt.astimezone(timezone.utc).isoformat()  # 归一化 'Z'/任意偏移 → '+00:00' 表示
     conn = request.app.state.conn_factory()
     try:
         tasks_completed = conn.execute(
