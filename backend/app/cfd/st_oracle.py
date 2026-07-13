@@ -1,9 +1,11 @@
 """确定性 Strouhal / Cd 计算——评估 Agent 的 oracle，纯 Python 无 LLM。
 
-St = f·D/U，f 由 Cl(t) 末段稳定振荡的过零点数估计（上升沿 + 线性插值，
-复刻 agent-cfd-live/server/parsers.py 的 estimate_strouhal 数值行为，
-good-run-01 golden 对账 St=0.16734）。未起振/数据不足 → converged=False 且
-st=None，绝不编造逼近参考值 0.164（Goodhart 防御）。
+St = f·D/U，f 由 Cl(t) 末段稳定振荡的过零点数估计（上升沿 + 线性插值）。
+与 agent-cfd-live/server/parsers.py 的 estimate_strouhal **同法独立实现**
+（尾窗 60% vs 其 50%、振幅地板 1e-3 vs 其 1e-6，故非逐位复刻）；good-run-01
+golden 双实现交叉对账：本实现 0.167292（14 周期）vs 原版 0.167344（11 周期），
+差 0.03%，同带一致（对照 Williamson 0.164；证据见 ADR-0026）。未起振/数据
+不足 → converged=False 且 st=None，绝不编造逼近参考值 0.164（Goodhart 防御）。
 """
 from __future__ import annotations
 
