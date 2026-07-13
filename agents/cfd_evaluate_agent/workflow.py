@@ -21,6 +21,7 @@ from typing import Any
 from backend.app.cfd.st_oracle import strouhal_from_cl, cd_mean_tail
 
 _ST_REF = 0.164  # Williamson (1996) Re=100 圆柱绕流 Strouhal 参考
+_RESID_TOL = 0.05  # 残差门（瞬态语义）：golden 收敛 run resid_p 尾部实测 ≤1.17e-2（4× 余量）
 _EVAL_JSON = "evaluation.json"
 _DRAFT_MD = "cfd_eval_draft.md"
 
@@ -52,21 +53,41 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
         return _fail(f"读求解结果失败：{res.get('error_message', '未知')}——诚实失败，不伪造评估")
 
     # ── 确定性判据（唯一数字来源，非 LLM）──
+    # 收敛=三门 AND（spec §4.4「残差 < tol 且 ≥N 个稳定周期」+ Codex R2-P1：
+    # sidecar 在场时 solver 可能还在跑或已崩，只看周期数会给 unhealthy run 发
+    # Williamson-consistent verdict）：
+    #   ① oracle 周期门（≥3 稳定周期且振幅足够）
+    #   ② 残差门 resid_p_tail 全 < 0.05——瞬态涡街的每步 Initial residual 不会
+    #      降到稳态量级，golden 收敛 run 尾部实测 8.2e-3~1.17e-2（4× 余量）；
+    #      发散/崩溃 run 的残差 >0.1 或 nan（nan 比较恒 False → 门自然拒）
+    #   ③ ended 门（log 以 End 正常收尾——solver 还在跑/中途崩一律未达条件）
     st = strouhal_from_cl(res.get("t_series") or [], res.get("cl_series") or [], D=1.0, U=1.0)
     cd_mean = cd_mean_tail(res.get("cd_series") or [])
-    converged = st["converged"]
-    st_error_pct = (abs(st["st"] - _ST_REF) / _ST_REF * 100.0) if converged else None
+    resid_tail = [v for v in (res.get("resid_p_tail") or []) if v is not None]
+    resid_ok = bool(resid_tail) and all(v < _RESID_TOL for v in resid_tail)
+    ended_ok = res.get("ended") is True
+    converged = st["converged"] and resid_ok and ended_ok
+    st_value = st["st"] if converged else None  # 未达三门不给 St（诚实地板）
+    st_error_pct = (abs(st_value - _ST_REF) / _ST_REF * 100.0) if st_value is not None else None
     if not converged:
-        verdict = "未达评估条件（未收敛/数据不足）"
+        blockers = []
+        if not st["converged"]:
+            blockers.append(st["reason"])
+        if not resid_ok:
+            blockers.append(f"残差门未过（resid_p 尾部须全 <{_RESID_TOL:g}）")
+        if not ended_ok:
+            blockers.append("求解未正常收尾（无 End——可能仍在跑或中途崩）")
+        verdict = "未达评估条件（" + "；".join(blockers) + "）"
     elif st_error_pct is not None and st_error_pct < 10:
         verdict = "收敛，St 与 Williamson 参考一致"
     else:
         verdict = "收敛但 St 偏离参考"
 
     evaluation = {
-        "run_id": run_id, "converged": converged, "st": st["st"],
+        "run_id": run_id, "converged": converged, "st": st_value,
         "st_ref": _ST_REF, "st_error_pct": st_error_pct, "n_cycles": st["n_cycles"],
-        "cd_mean": cd_mean, "ended": res.get("ended"), "verdict": verdict,
+        "cd_mean": cd_mean, "ended": res.get("ended"),
+        "resid_gate": {"tol": _RESID_TOL, "passed": resid_ok}, "verdict": verdict,
         "oracle_reason": st["reason"], "source": "cfd_result_read → st_oracle(确定性)",
     }
     with open(os.path.join(output_dir, _EVAL_JSON), "w", encoding="utf-8") as f:
@@ -96,7 +117,10 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     lines = [
         "# CFD 评估草案（圆柱绕流 Re=100）", "", _WATERMARK, "",
         "## 确定性判据（数字来源：st_oracle，非 LLM）", "",
-        f"- 收敛：{'是' if converged else '否'}（{evaluation['oracle_reason']}）",
+        f"- 收敛（三门 AND）：{'是' if converged else '否'}",
+        f"  - 周期门：{'过' if st['converged'] else '未过'}（{evaluation['oracle_reason']}）",
+        f"  - 残差门（resid_p 尾部全 <{_RESID_TOL:g}）：{'过' if resid_ok else '未过'}",
+        f"  - 收尾门（log 以 End 正常结束）：{'过' if ended_ok else '未过'}",
         f"- Strouhal St：{st_disp}",
         f"- 参考 St_ref（Williamson）：{_ST_REF}",
         f"- 相对误差：{err_disp}",

@@ -68,6 +68,48 @@ def test_unconverged_does_not_fabricate_st(tmp_path):
     assert "未达评估条件" in ev["verdict"]
 
 
+def _healthy_read(payload):
+    fc = parse_force_coeffs(GOLDEN.read_text(errors="replace"))
+    return {"status": "success", "run_id": payload["run_id"],
+            "cl_series": fc["cl"], "cd_series": fc["cd"], "t_series": fc["t"],
+            "resid_p_tail": [1e-2] * 20, "n_steps": 7500, "ended": True}
+
+
+def test_high_residual_blocks_convergence_despite_cycles(tmp_path):
+    # Codex R2-P1：sidecar 在场时 solver 可能已崩——周期够但残差爆，三门 AND 必须拒
+    class _Reg:
+        def call(self, tool_id, payload):
+            out = _healthy_read(payload)
+            out["resid_p_tail"] = [0.3] * 20  # >> tol 0.05（发散量级）
+            return out
+
+    ctx = _ctx(tmp_path)
+    ctx["tool_registry"] = _Reg()
+    out = eval_run(ctx)
+    assert out["status"] == "success"  # 诚实草案仍产出交人审
+    ev = json.loads((tmp_path / "evaluation.json").read_text())
+    assert ev["converged"] is False
+    assert ev["st"] is None  # 残差门未过绝不给 Williamson-consistent 数
+    assert "残差门" in ev["verdict"]
+
+
+def test_not_ended_blocks_convergence(tmp_path):
+    # solver 仍在跑（ended=False）：周期/残差都好也未达评估条件
+    class _Reg:
+        def call(self, tool_id, payload):
+            out = _healthy_read(payload)
+            out["ended"] = False
+            return out
+
+    ctx = _ctx(tmp_path)
+    ctx["tool_registry"] = _Reg()
+    out = eval_run(ctx)
+    ev = json.loads((tmp_path / "evaluation.json").read_text())
+    assert ev["converged"] is False
+    assert ev["st"] is None
+    assert "收尾" in ev["verdict"]
+
+
 def test_tool_failure_fails_honestly(tmp_path):
     class _FailReg:
         def call(self, tool_id, payload):

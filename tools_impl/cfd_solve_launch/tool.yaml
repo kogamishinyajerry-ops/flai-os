@@ -59,6 +59,9 @@ output_schema:
       type: boolean
     launched_at:
       type: string
+    note:
+      type: string
+      description: 补充说明（如「求解在探测窗口内已正常跑完」快完成分支，R2-P1——缺此声明时该分支出参触 additionalProperties:false 被 Registry 判 ToolOutputInvalidError，已盖 sidecar 的完成 run 被误标 failed）
     error_message:
       type: string
   additionalProperties: false

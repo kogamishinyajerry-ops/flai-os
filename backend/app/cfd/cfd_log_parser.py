@@ -5,6 +5,7 @@ adapters/cfd_openfoam/cfd_log_parser.py **逐字同源**（同一 good-run-01 go
 FLAi-OS 侧独立持有一份，避免生产部署跨仓 sys.path 依赖（ADR-0026）。
 """
 from __future__ import annotations
+import math
 import re
 
 _RESID_RE = re.compile(r"Solving for (\w+), Initial residual = ([0-9.eE+-]+)")
@@ -57,10 +58,17 @@ def parse_force_coeffs(text: str) -> dict:
         i_cl = cols.get("cl", 3) if cols else 3
         if i_cd >= len(vals) or i_cl >= len(vals):
             continue
+        # 整行先转换再一起 append（Codex R2-P2：流式读到半写行时，逐列 append
+        # 会在 ValueError 前已推入部分列 → t/cd/cl 长度撕裂，oracle 拒整个 run）；
+        # 非有限值（发散 run 的 nan/inf）整行拒——它们会穿进 cd_mean/evaluation.json
+        # 的 NaN token 并炸 FastAPI 严格 JSON（Codex R2-P2）。
         try:
-            t.append(float(vals[0]))
-            cd.append(float(vals[i_cd]))
-            cl.append(float(vals[i_cl]))
+            row = (float(vals[0]), float(vals[i_cd]), float(vals[i_cl]))
         except ValueError:
             continue
+        if not all(math.isfinite(v) for v in row):
+            continue
+        t.append(row[0])
+        cd.append(row[1])
+        cl.append(row[2])
     return {"t": t, "cd": cd, "cl": cl}
