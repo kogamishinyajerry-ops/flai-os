@@ -3,7 +3,9 @@ case 白名单 / run_id fullmatch 白名单先于拼路径 / config fail-closed 
 shell=False 参数列表 / bind-mount 铁律强化版（零删除）/ mesh 双腿
 （template 自备 msh 或 host gmsh 从 geo 生成，Codex R0-P1-1）/ checkMesh
 正向断言 Mesh OK.（R0-P1-3）/ 求解进程 pgrep 验证后才盖 sidecar（R0-P1-2）/
-end_time 失败即 fail（R0-P2-1）。
+end_time 失败即 fail（R0-P2-1）/ R1：alive 匹配 OF11 真进程 comm=foamRun
+（wrapper 假阴性回归）/ 探测窗口内正常跑完（log End 收尾）算成功 /
+单并发契约（容器内已有活跃求解即拒）。
 """
 from pathlib import Path
 
@@ -56,7 +58,11 @@ def _install_fake_run(monkeypatch, calls, *, overrides=None):
         if "checkMesh" in joined:
             return _FakeProc(stdout="... Mesh OK.\nEnd\n")
         if "pgrep" in joined:
-            return _FakeProc(stdout="4242\n")
+            # 两个调用点行为忠实：busy 扫（grep -q '^…run 根'）→ rc=1 无活跃
+            # 求解；alive 验证（grep -qx 精确 cwd）→ rc=0 命中。
+            if "grep -qx" in joined:
+                return _FakeProc(stdout="")
+            return _FakeProc(returncode=1, stdout="")
         return _FakeProc()
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
@@ -240,3 +246,76 @@ def test_mesh_failure_fail_closed_no_sidecar(monkeypatch, tmp_path):
     out = run({"case": "cylinder_re100", "run_id": RID})
     assert out["status"] == "failed"
     assert not (case_root / RID / ".hub_run_id").exists()
+
+
+def test_alive_check_covers_of11_foamrun_comm(monkeypatch, tmp_path):
+    # R1 真跑取证回归：OF11 pimpleFoam 是 sh wrapper，真进程 comm=foamRun——
+    # alive/busy 的 pgrep 必须 -x 'foamRun|pimpleFoam'（裸 pgrep pimpleFoam
+    # 假阴性=孤儿 run；-f 会误中 cmdline 含 pimpleFoam 的启动壳=假阳性）。
+    _env(monkeypatch, tmp_path, with_msh=True)
+    calls = []
+    _install_fake_run(monkeypatch, calls)
+    out = run({"case": "cylinder_re100", "run_id": RID})
+    assert out["status"] == "success"
+    pgrep_scripts = [" ".join(str(a) for a in argv) for argv, kw in calls
+                     if "pgrep" in " ".join(str(a) for a in argv)]
+    assert pgrep_scripts, "应有 pgrep 调用"
+    for js in pgrep_scripts:
+        assert "pgrep -x 'foamRun|pimpleFoam'" in js
+        assert "pgrep -f" not in js
+
+
+def test_completed_before_probe_is_success_with_sidecar(monkeypatch, tmp_path):
+    # R1 CRS-P2：小 end_time 求解在探测窗口内正常跑完（log 以 End 收尾）——
+    # 这是已完成的真 run，须照常盖 sidecar，而非误判启动失败。
+    case_root = _env(monkeypatch, tmp_path, with_msh=True)
+    calls = []
+
+    def _launch_writes_completed_log(argv):
+        (case_root / RID / "log.pimpleFoam").write_text(
+            "Time = 2s\nExecutionTime = 3.1 s\nEnd\n")
+        return _FakeProc()
+
+    _install_fake_run(monkeypatch, calls, overrides={
+        "nohup": _launch_writes_completed_log,
+        "grep -qx": _FakeProc(returncode=1, stdout=""),  # alive 扑空（已跑完）
+    })
+    out = run({"case": "cylinder_re100", "run_id": RID, "end_time": 2})
+    assert out["status"] == "success"
+    assert (case_root / RID / ".hub_run_id").read_text() == RID
+
+
+def test_crashed_solver_without_end_marker_still_fails(monkeypatch, tmp_path):
+    # 对称负例：进程不在且 log 无 End（中途死/没起来）→ fail 不盖 sidecar，
+    # 防「探测窗口内跑完」分支被崩溃 log 冒充。
+    case_root = _env(monkeypatch, tmp_path, with_msh=True)
+    calls = []
+
+    def _launch_writes_truncated_log(argv):
+        (case_root / RID / "log.pimpleFoam").write_text(
+            "Time = 1.5s\nGAMG:  Solving for p, Initial residual = 0.01\n")
+        return _FakeProc()
+
+    _install_fake_run(monkeypatch, calls, overrides={
+        "nohup": _launch_writes_truncated_log,
+        "grep -qx": _FakeProc(returncode=1, stdout=""),
+    })
+    out = run({"case": "cylinder_re100", "run_id": RID})
+    assert out["status"] == "failed"
+    assert not (case_root / RID / ".hub_run_id").exists()
+
+
+def test_active_solver_in_container_rejects_new_launch(monkeypatch, tmp_path):
+    # R1 CRS-P2 单并发契约：容器内已有活跃求解（busy 扫 rc=0）→ 拒绝发起，
+    # 不触 mesh/求解，不盖 sidecar。
+    case_root = _env(monkeypatch, tmp_path, with_msh=True)
+    calls = []
+    _install_fake_run(monkeypatch, calls, overrides={
+        "grep -q '^": _FakeProc(returncode=0, stdout=""),  # busy 扫命中
+    })
+    out = run({"case": "cylinder_re100", "run_id": RID})
+    assert out["status"] == "failed"
+    assert "并发" in out["error_message"] or "活跃" in out["error_message"]
+    assert not (case_root / RID / ".hub_run_id").exists()
+    assert not any("gmshToFoam" in " ".join(str(x) for x in argv) for argv, kw in calls), \
+        "单并发拒绝须先于任何容器 mesh 操作"

@@ -1,20 +1,20 @@
 {
   "case_id": "case_001",
-  "description": "发起正常路径期望口径：人建任务（case=cylinder_re100，注入 run_id 保确定性）→ cfd_solve_launch 发起真求解 → outputs[0].sim_run_ref=cfd_openfoam@<run_id> → Runtime 回填 task.metadata.sim_run_ref → 任务 completed（fire-and-register：completed=已发起，非求解成功）。运行前置：需 cfd-openfoam-live 容器 up + FLAI_CFD_* 三变量配置；无容器环境跑本 case 会在 Tool 处 fail-closed 返回 failed——这是诚实行为（绝不谎报已发起），不是缺陷。无容器的全链验证走 P4 E2E（mock docker）。",
+  "description": "发起正常路径期望口径：人建任务（case=cylinder_re100，end_time=2 缩短真求解）→ cfd_solve_launch 发起真求解 → 持久回执 solve_receipt.json（sim_run_ref=cfd_openfoam@<run_id>）→ Runtime 回填 task.metadata.sim_run_ref → 任务 completed（fire-and-register：completed=已发起，非求解成功）。run_id 不注入——每次 eval 生成新 UTC 时间戳保可重复（工具零删除且同名 run 已存在即拒，固定 run_id 会把 eval 毒化成一次性，R1 CRS-P2）。运行前置：需 cfd-openfoam-live 容器 up + FLAI_CFD_* 三变量配置；无容器环境跑本 case 会在 Tool 处 fail-closed 返回 failed——这是诚实行为（绝不谎报已发起），不是缺陷。无容器的全链验证走 P4 E2E（mock docker）。",
   "inputs": {
     "case": "cylinder_re100",
-    "run_id": "20260713-303030",
     "end_time": 2
   },
   "expected": {
     "task_status": "completed",
-    "sim_run_ref": "cfd_openfoam@20260713-303030",
+    "sim_run_ref_prefix": "cfd_openfoam@",
     "metadata_sim_run_ref_backfilled": true,
     "requires_container": true
   },
   "checks": [
     { "kind": "status_is", "value": "completed" },
-    { "kind": "output_field", "path": "sim_run_ref", "op": "eq", "value": "cfd_openfoam@20260713-303030" },
-    { "kind": "output_field", "path": "human_review_required", "op": "eq", "value": false }
+    { "kind": "artifact_exists", "file": "solve_receipt.json" },
+    { "kind": "output_field", "file": "solve_receipt.json", "path": "sim_run_ref", "op": "contains", "value": "cfd_openfoam@" },
+    { "kind": "output_field", "file": "solve_receipt.json", "path": "human_review_required", "op": "eq", "value": false }
   ]
 }

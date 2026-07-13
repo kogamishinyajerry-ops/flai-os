@@ -13,10 +13,14 @@ hub run_discovery newest_by_name 的排序键）。发起失败（容器未 up/�
 config 缺失）诚实 failed，绝不谎报已发起。
 """
 from __future__ import annotations
+import json
+import os
 from datetime import datetime, timezone
 from typing import Any
 
 _MODULE = "cfd_openfoam"
+_RECEIPT_JSON = "solve_receipt.json"  # 持久回执产物——eval_cases 的 output_field
+# 检查只认具名 JSON 产物（eval_runner 契约：任务行不存 result JSON），R1 CRS-P1。
 
 
 def _fail(msg: str) -> dict[str, Any]:
@@ -44,13 +48,18 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     sim_run_ref = f"{_MODULE}@{run_id}"
     if logger:
         logger.log("cfd_launched", {"run_id": run_id, "sim_run_ref": sim_run_ref})
-    return {"status": "success", "outputs": [{
+    receipt = {
         "run_id": run_id,
         "sim_run_ref": sim_run_ref,
         "container": res.get("container"),
         "checkmesh_ok": res.get("checkmesh_ok"),
         "human_review_required": False,
+    }
+    with open(os.path.join(context["output_dir"], _RECEIPT_JSON), "w", encoding="utf-8") as f:
+        json.dump(receipt, f, ensure_ascii=False, indent=1)
+    return {"status": "success", "outputs": [{
+        **receipt,
         "note": "已发起真实 CFD 求解（约 200s）——实时监控见工作台监控浮窗/本任务「查看仿真监控 ↗」深链；"
                 "看到收敛后请创建『CFD 评估』任务（run_id 承接）交工程师签发。",
-        "artifacts": [],
+        "artifacts": [_RECEIPT_JSON],
     }]}

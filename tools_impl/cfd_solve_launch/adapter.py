@@ -23,6 +23,20 @@ Codex R0 修复（2026-07-13）：
 - P1-4 timeout 预算闭合（见 _T_* 常量注释），worst-case 总和 < tool.yaml
   timeout_seconds=360，杜绝 Registry 已记 failed 而 adapter 线程稍后盖 marker。
 - P2-1 end_time 的 foamDictionary 失败即 fail，绝不带错误 endTime 静默开跑。
+
+R1 修复（2026-07-13，真跑取证 + CRS 复审）：
+- 真跑 P1（主控取证）：OF11 `pimpleFoam` 是 POSIX sh wrapper，实际求解进程
+  comm=**foamRun**（`foamRun -solver incompressibleFluid`，容器实测）——
+  `pgrep pimpleFoam` 按 comm 匹配永远扑空 → alive 假阴性：任务误报 failed
+  且无 sidecar，求解器却真在跑（孤儿 run 20260713-092338 实证）。修：pgrep
+  `-x 'foamRun|pimpleFoam'`（-x 精确全串，容器实测命中 foamRun 且**排除**
+  启动壳 bash——其 cmdline 含 pimpleFoam 且 cwd=run 目录，-f 会假阳性）。
+- CRS-P2：小 end_time 求解可在探测窗口内正常跑完（非启动失败）→ pgrep 扑空
+  后读 log 末行，OpenFOAM 正常收尾 marker `End` 在场即判「已完成」照常盖
+  sidecar；无 End 才是启动失败 fail-closed。
+- CRS-P2 单并发契约：agent 声明「同一时刻一次求解」但 Registry 不强制
+  max_parallel_jobs → 发起前扫容器内活跃求解（同款 pgrep+cwd 对账，cwd 在
+  run 根下即算），命中即拒，fail-closed。
 """
 from __future__ import annotations
 import os
@@ -41,10 +55,15 @@ _TEMPLATE_ENV = "FLAI_CFD_TEMPLATE_DIR"
 _CONTAINER_RUN_ROOT = "/home/openfoam/run"  # bind-mount 容器侧根（= host 的 case/run，inspect 实测）
 _OF = "set -o pipefail; source /opt/openfoam11/etc/bashrc"  # 容器实测路径；pipefail 保 tee 不吞退出码
 _GEO_REL = "geo/domain_parametric.geo"  # canonical 参数化兜底 geo（rehearse.sh:94）
+# OF11 的 pimpleFoam 是 sh wrapper，真进程 comm=foamRun（R1 真跑取证）；-x 精确
+# 全串匹配（容器实测：命中 foamRun、排除 cmdline 含 pimpleFoam 的启动壳 bash）。
+_SOLVER_PGREP = "foamRun|pimpleFoam"
+_END_MARKER = "End"  # OpenFOAM 正常收尾时 log 末行（区分「跑完了」与「没起来」）
 
-# timeout 预算（Codex R0-P1-4）：worst-case 累计 = 15(ping) + 120(gmsh) + 90(mesh)
-# + 20(endTime) + 20(launch) + 3×(10+1)(pgrep 重试) ≈ 298s + copytree 秒级
-# < tool.yaml timeout_seconds=360（含余量）。改任一常量须同步复核该预算。
+# timeout 预算（Codex R0-P1-4）：worst-case 累计 = 15(ping) + 10(busy 扫，R1)
+# + 120(gmsh) + 90(mesh) + 20(endTime) + 20(launch) + 3×(10+1)(pgrep 重试)
+# ≈ 308s + copytree 秒级 < tool.yaml timeout_seconds=360（含余量）。
+# 改任一常量须同步复核该预算。
 _T_PING = 15
 _T_GMSH = 120
 _T_MESH = 90
@@ -123,6 +142,16 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
     if ping.returncode != 0:
         return _fail(f"容器 {container} 未就绪：{(ping.stderr or '').strip()[:200]}——绝不谎报已发起")
 
+    # ③b 单并发契约（R1 CRS-P2）：agent 声明「同一时刻一次求解」，Registry 不
+    # 强制 max_parallel_jobs → 工具侧兜底。同款 pgrep+cwd 对账，cwd 落在 run
+    # 根下（任意子目录）即算活跃求解，命中即拒——fail-closed，绝不并发开跑。
+    _busy_script = (f"for p in $(pgrep -x '{_SOLVER_PGREP}'); do readlink /proc/$p/cwd; done"
+                    f" | grep -q '^{_CONTAINER_RUN_ROOT}/'")
+    busy = subprocess.run(["docker", "exec", container, "bash", "-c", _busy_script],
+                          capture_output=True, text=True, timeout=_T_PGREP, shell=False)
+    if busy.returncode == 0:
+        return _fail("容器内已有活跃求解（单并发契约：同一时刻一次求解）——等其完成后重试，绝不并发开跑")
+
     # ④ 网格转换 + 检查（固定脚本模板，cwd=子目录；pipefail + Mesh OK. 正向断言，
     #    Codex R0-P1-3——tee 会吞 checkMesh 退出码）
     mesh = _dexec(container, ctr_cwd,
@@ -151,9 +180,10 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
 
     # ⑥b 验证求解进程真起来了（Codex R0-P1-2：`… && nohup x &` 整体后台化，bash
     # fork 即返 0——bashrc 缺失/pimpleFoam 不可执行也「成功」。按进程 cwd 精确
-    # 对账本 run 子目录：裸 pgrep pimpleFoam 会命中并行/legacy run 的求解进程，
-    # 假阳性=谎报已发起。固定脚本，唯一变量是白名单校验过的 ctr_cwd。
-    _alive_script = ("for p in $(pgrep pimpleFoam); do readlink /proc/$p/cwd; done"
+    # 对账本 run 子目录：裸按名匹配会命中并行/legacy run 的求解进程，假阳性=
+    # 谎报已发起。进程名用 _SOLVER_PGREP（R1：OF11 真进程 comm=foamRun，见文件头
+    # 取证注释）。固定脚本，唯一变量是白名单校验过的 ctr_cwd。
+    _alive_script = (f"for p in $(pgrep -x '{_SOLVER_PGREP}'); do readlink /proc/$p/cwd; done"
                      f" | grep -qx '{ctr_cwd}'")
     alive = False
     for i in range(_PGREP_TRIES):
@@ -169,8 +199,17 @@ def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[
         log_path = run_dir / "log.pimpleFoam"
         if log_path.is_file():
             tail = log_path.read_text(errors="replace")[-300:]
-        return _fail(f"求解进程未存活（pgrep 未命中，重试 {_PGREP_TRIES} 次）——不盖 sidecar，"
-                     f"绝不谎报已发起。log 尾：{tail.strip()}")
+        # R1 CRS-P2：小 end_time 求解可在探测窗口内**正常跑完**——OpenFOAM 正常
+        # 收尾 log 末行是 "End"。这是已完成的真 run，照常盖 sidecar；只有既无
+        # 活进程又无 End 才是启动失败。
+        last_line = next((ln for ln in reversed(tail.splitlines()) if ln.strip()), "")
+        if last_line.strip() == _END_MARKER:
+            (run_dir / ".hub_run_id").write_text(run_id, encoding="utf-8")
+            return {"status": "success", "run_id": run_id, "run_dir": str(run_dir),
+                    "container": container, "checkmesh_ok": True, "launched_at": run_id,
+                    "note": "求解在探测窗口内已正常跑完（log 以 End 收尾）"}
+        return _fail(f"求解进程未存活（pgrep 未命中，重试 {_PGREP_TRIES} 次）且 log 无正常"
+                     f"收尾 End——不盖 sidecar，绝不谎报已发起。log 尾：{tail.strip()}")
 
     # ⑦ 盖 sidecar（host 侧，最后一步=hub marker：sidecar 在场即「这是一个已发起的 run」）
     (run_dir / ".hub_run_id").write_text(run_id, encoding="utf-8")
