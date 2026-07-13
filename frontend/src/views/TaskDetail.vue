@@ -195,7 +195,11 @@
       </div>
 
       <div class="section" v-if="isTerminal">
-        <h3>反馈</h3>
+        <!-- 细削（Phase 3）：反馈折叠为渐进披露（默认收起，标题带计数）——任务详情
+             已是深链检视页，留反馈是次要动作，不再 always 占屏（诚实地板不变：内容
+             一件不删，展开即完整表单+历史）。 -->
+        <el-collapse class="feedback-collapse">
+        <el-collapse-item name="fb" :title="feedbackList.length ? `反馈（${feedbackList.length}）` : '反馈'">
         <el-alert v-if="feedbackError" type="warning" :title="feedbackError" show-icon :closable="false" />
         <el-form label-width="80px" class="feedback-form">
           <el-form-item label="评价">
@@ -228,6 +232,8 @@
             <span class="feedback-meta">{{ f.created_by }} · {{ formatTime(f.created_at) }}</span>
           </li>
         </ul>
+        </el-collapse-item>
+        </el-collapse>
       </div>
     </template>
   </div>

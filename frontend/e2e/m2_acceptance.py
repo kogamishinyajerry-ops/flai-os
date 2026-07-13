@@ -153,7 +153,9 @@ with sync_playwright() as p:
     check("⑤输出文件可下载", resp.ok is True and "greeting" in resp.text(),
           f"href={href} status={resp.status}")
 
-    # ── ⑥提交反馈（终态详情页内嵌表单）──
+    # ── ⑥提交反馈（终态详情页——细削后反馈折叠，先展开再填表）──
+    page.locator(".feedback-collapse .el-collapse-item__header").click()
+    page.wait_for_selector(".feedback-form", state="visible", timeout=3000)
     page.get_by_role("radio", name="可用").first.check()
     page.locator(".feedback-form .el-select").click()
     page.get_by_role("option", name="改进建议").click()
