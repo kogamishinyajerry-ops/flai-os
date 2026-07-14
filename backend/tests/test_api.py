@@ -802,3 +802,71 @@ def test_upload_exceeding_limit_returns_413_and_leaves_no_residue(
     # 磁盘无残留：uploads_dir 下不应留下任何文件或空目录。
     leftovers = list(uploads_dir.rglob("*")) if uploads_dir.exists() else []
     assert leftovers == [], f"上传超限后磁盘应无残留，实际残留：{leftovers}"
+
+
+# ── governance: 批C Task 3 curated_cases_count ─────────────────────────────
+
+
+@pytest.fixture()
+def governance_client_env(tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
+    """tmp agents 目录：hello_agent + review_agent（同 review_app_env 套路），
+    供 curated_cases_count 端点测试造固化 case 文件、验证按 agent 精确 scope。
+    """
+    import shutil
+
+    # registry.py _REQUIRED_DIRS=("eval_cases",)：eval_cases/ 目录本身是包注册
+    # 的硬性前提（缺目录=整包不注册→_agent_or_404 会 404），所以拷贝件不能
+    # rmtree 整个目录，只能清空目录内的 *.json（真实 hello_agent 自带
+    # golden-sample case 文件，会把断言撑大，须先清掉再由测试自己写入）。
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    shutil.copytree(REPO_ROOT / "agents" / "hello_agent", agents_dir / "hello_agent")
+    for p in (agents_dir / "hello_agent" / "eval_cases").glob("*.json"):
+        p.unlink()
+    review_dir = agents_dir / "review_agent"
+    shutil.copytree(REPO_ROOT / "agents" / "hello_agent", review_dir)
+    for p in (review_dir / "eval_cases").glob("*.json"):
+        p.unlink()
+    yaml_path = review_dir / "agent.yaml"
+    yaml_text = yaml_path.read_text(encoding="utf-8")
+    yaml_text = yaml_text.replace("id: hello_agent", "id: review_agent")
+    yaml_path.write_text(yaml_text, encoding="utf-8")
+
+    db_path = tmp_path / "flai_os.db"
+    app = create_app(
+        agents_dir=agents_dir,
+        tools_dir=REPO_ROOT / "tools_impl",
+        contracts_dir=REPO_ROOT / "contracts",
+        db_path=db_path,
+        uploads_dir=tmp_path / "uploads",
+        task_runs_dir=tmp_path / "task_runs",
+    )
+    with TestClient(app) as c:
+        seed_and_login(c, db_path)
+        yield c, agents_dir
+
+
+def test_curated_cases_count_scoped_and_missing(governance_client_env) -> None:
+    client, agents_dir = governance_client_env
+    # 造 hello_agent 两个固化 case + 另一 agent 一个，验证按 agent 精确 scope
+    (agents_dir / "hello_agent" / "eval_cases").mkdir(parents=True, exist_ok=True)
+    (agents_dir / "hello_agent" / "eval_cases" / "case_001.json").write_text("{}", encoding="utf-8")
+    (agents_dir / "hello_agent" / "eval_cases" / "case_002.json").write_text("{}", encoding="utf-8")
+
+    r = client.get("/api/agents/hello_agent/curated_cases_count")
+    assert r.status_code == 200
+    assert r.json() == {"agent_id": "hello_agent", "count": 2}
+
+    # 无 eval_cases 目录的 agent = 0（不抛）。registry 已在 fixture 内 TestClient
+    # 启动时扫描完毕（agent 注册状态常驻内存），此刻才把磁盘上的 eval_cases/
+    # 目录整个删掉，真实触达端点里 `cases_dir.is_dir()` 为 False 的分支——
+    # 而不只是「目录存在但空」的近似。
+    import shutil as _shutil
+
+    _shutil.rmtree(agents_dir / "review_agent" / "eval_cases")
+    r2 = client.get("/api/agents/review_agent/curated_cases_count")
+    assert r2.status_code == 200
+    assert r2.json()["count"] == 0
+
+    # 不存在的 agent → 404
+    assert client.get("/api/agents/no_such_agent/curated_cases_count").status_code == 404

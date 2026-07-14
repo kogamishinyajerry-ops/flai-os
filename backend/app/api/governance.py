@@ -142,3 +142,13 @@ def list_promotions_all(request: Request, limit: int = 20) -> list[dict[str, Any
         return repos.list_promotions_all(conn, limit)
     finally:
         conn.close()
+
+
+@router.get("/agents/{agent_id}/curated_cases_count")
+def curated_cases_count(agent_id: str, request: Request) -> dict[str, Any]:
+    """该 agent 已固化 eval case 数（批C Agent 成长档案）。按仓内落盘文件计
+    （ADR-0018 固化即落盘无 DB 行）。agent 不存在 404；目录缺失=0（不抛）。只读。"""
+    _agent_or_404(request, agent_id)
+    cases_dir = request.app.state.agents_dir / agent_id / "eval_cases"
+    count = sum(1 for _ in cases_dir.glob("case_*.json")) if cases_dir.is_dir() else 0
+    return {"agent_id": agent_id, "count": count}
