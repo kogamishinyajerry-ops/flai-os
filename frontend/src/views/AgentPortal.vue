@@ -754,7 +754,7 @@ onMounted(load);
   /* 直接用半透明 clay（--clay-softer 是不透明实色 hex，会闪成实块非微光）——
      亲历微光是「淡入淡出的一次性高亮」，恒用低透明度字面量。信任色锁：clay=工作
      语义非五槽信任色。 */
-  0% { background: rgba(193, 95, 60, 0.14); }
+  0% { background: rgba(var(--clay-rgb), 0.14); }
   100% { background: transparent; }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -151,7 +151,7 @@ async function submit() {
 
 .welcome-gate__error {
   margin: 10px 0 0;
-  color: var(--danger, #c45656);
+  color: var(--trust-fail);
   font-size: 13px;
   line-height: 1.6;
 }
