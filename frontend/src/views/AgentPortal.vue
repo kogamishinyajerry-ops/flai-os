@@ -700,13 +700,6 @@ onMounted(load);
 .gov-promote-submit {
   margin-top: 2px;
 }
-.gov-promotion-history {
-  margin-top: 18px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--hairline);
-  color: var(--ink-faint);
-  font-size: 11.5px;
-}
 .gov-ladder { margin-bottom: 16px; }
 .gov-ladder-track { display: flex; gap: 6px; margin: 6px 0 4px; }
 .gov-ladder-step {
@@ -755,7 +748,10 @@ onMounted(load);
   border-radius: 6px;
 }
 @keyframes promote-glow {
-  0% { background: var(--clay-softer, rgba(193,95,60,0.14)); }
+  /* 直接用半透明 clay（--clay-softer 是不透明实色 hex，会闪成实块非微光）——
+     亲历微光是「淡入淡出的一次性高亮」，恒用低透明度字面量。信任色锁：clay=工作
+     语义非五槽信任色。 */
+  0% { background: rgba(193, 95, 60, 0.14); }
   100% { background: transparent; }
 }
 @media (prefers-reduced-motion: reduce) {
