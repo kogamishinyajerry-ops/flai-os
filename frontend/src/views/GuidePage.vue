@@ -1489,6 +1489,7 @@ watch(
 .composer-hint .sep { color: var(--hairline); }
 @media (prefers-reduced-motion: reduce) {
   .composer-hint .keys { transition: none; }
+  .send-spin { animation: none; }
 }
 
 /* 诚实地板句（Claude「can make mistakes」哲学）：常驻同一 composer 容器内，
