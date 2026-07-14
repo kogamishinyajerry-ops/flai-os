@@ -21,6 +21,7 @@ import errno
 import logging
 import os
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -315,11 +316,11 @@ class JobRunner:
             return
 
 
-def _build_default_runner() -> JobRunner:
-    """用 backend/app/config.py 默认路径装配一个 JobRunner（真实 data/ 目录）。
-
-    装配走共享 bootstrap.assemble（ADR-0015 Finding 1）：与 API 进程同一条
-    「scan→scope scan→reconcile→sync」路径，本函数只剩取 config 默认值的薄壳。
+def _assemble_default_worker_runtime() -> tuple[Any, Any, Callable[[], sqlite3.Connection]]:
+    """装配 worker 进程共享的 (assembly, runtime, conn_factory)——JobRunner 与
+    EvalRunner（T1 异步评测队列，GH #2）复用同一份，避免 worker 启动跑两遍昂贵的
+    bootstrap.assemble。走共享路径（ADR-0015 Finding 1）：与 API 进程同一条
+    「scan→scope scan→reconcile→sync」。
     """
     from .. import config
     from ..bootstrap import assemble
@@ -346,6 +347,13 @@ def _build_default_runner() -> JobRunner:
         # Agent 全判 sensitive——public_internal 知识 Agent 的产物会 403。
         scope_registry=asm.scope_registry,
     )
+    return asm, runtime, conn_factory
+
+
+def _build_default_runner() -> JobRunner:
+    """用 config 默认路径装配一个 JobRunner（真实 data/ 目录）。薄壳，复用
+    _assemble_default_worker_runtime（与 EvalRunner 同源装配）。"""
+    _asm, runtime, conn_factory = _assemble_default_worker_runtime()
     return JobRunner(runtime, conn_factory)
 
 
@@ -353,8 +361,16 @@ def run_worker_forever(
     runner_factory: Callable[[], JobRunner],
     conn_factory: Callable[[], sqlite3.Connection],
     lock_path: str | Path,
+    *,
+    eval_runner_factory: Callable[[], Any] | None = None,
 ) -> int:
-    """持单实例锁装配 worker，恢复上次中断任务后进入常驻轮询。"""
+    """持单实例锁装配 worker，恢复上次中断任务后进入常驻轮询。
+
+    eval_runner_factory（T1，GH #2）：给定时，在锁内、恢复后、进入任务轮询前，
+    起一条 daemon 线程跑 EvalRunner.run_forever——评测队列与任务队列同属这唯一
+    worker 进程（单实例锁），故评测配额是全局的。两 factory 均在锁后调用（避免
+    第二个进程重跑昂贵 bootstrap）；生产装配共享同一份 assembly（见 _run_default_worker）。
+    """
     try:
         with worker_singleton_lock(lock_path):
             # factory 内含真实 registry/model runtime 装配，必须放在锁后，避免
@@ -367,6 +383,11 @@ def run_worker_forever(
                     "未自动重放，请人工核查外部副作用",
                     recovered,
                 )
+            if eval_runner_factory is not None:
+                eval_runner = eval_runner_factory()
+                threading.Thread(
+                    target=eval_runner.run_forever, daemon=True, name="eval-worker"
+                ).start()
             runner.run_forever()
     except WorkerAlreadyRunningError as exc:
         print(f"错误：{exc}", file=sys.stderr)
@@ -395,8 +416,32 @@ def _run_default_worker() -> int:
     def conn_factory() -> sqlite3.Connection:
         return get_conn(config.DB_PATH)
 
+    # T1（GH #2）：JobRunner 与 EvalRunner 共享单次 assembly（避免 worker 启动跑
+    # 两遍 bootstrap）。job_factory 装配一次、旁建 EvalRunner 暂存，eval_factory
+    # 取出——run_worker_forever 保证 job_factory 先于 eval_factory 调用（均在锁后）。
+    from ..governance.eval_worker import EvalRunner
+
+    _stash: dict[str, EvalRunner] = {}
+
+    def job_factory() -> JobRunner:
+        asm, runtime, cf = _assemble_default_worker_runtime()
+        _stash["eval"] = EvalRunner(
+            agent_registry=asm.agent_registry,
+            runtime=runtime,
+            conn_factory=cf,
+            uploads_dir=config.UPLOADS_DIR,
+            task_runs_dir=config.TASK_RUNS_DIR,
+            quota=config.DEFAULT_EVAL_QUOTA,
+        )
+        return JobRunner(runtime, cf)
+
+    def eval_factory() -> EvalRunner:
+        return _stash["eval"]
+
     lock_path = Path(config.DB_PATH).parent / "worker.lock"
-    return run_worker_forever(_build_default_runner, conn_factory, lock_path)
+    return run_worker_forever(
+        job_factory, conn_factory, lock_path, eval_runner_factory=eval_factory
+    )
 
 
 if __name__ == "__main__":

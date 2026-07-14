@@ -1,7 +1,8 @@
 """治理闭环 API（M10/ADR-0018）：评测跑批 / 样本固化 / L0→L1 晋升。
 
-- POST /api/agents/{id}/eval-runs      触发一次评测跑批（V0.1 同步执行）
+- POST /api/agents/{id}/eval-runs      入队一次评测跑批（T1 异步队列，202 + queued）
 - GET  /api/agents/{id}/eval-runs      跑批历史（证据链，最近优先）
+- GET  /api/agents/{id}/eval-runs/{id} 单条状态（T1 轮询 queued→running→completed）
 - POST /api/agents/{id}/eval-cases     认可样本固化为 draft eval case
 - POST /api/agents/{id}/promote        L0→L1 晋升（fail-closed，422 携逐条判定）
 - GET  /api/agents/{id}/promotions     晋升审计记录
@@ -37,21 +38,23 @@ class TriggerEvalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-@router.post("/agents/{agent_id}/eval-runs")
+@router.post("/agents/{agent_id}/eval-runs", status_code=202)
 def trigger_eval_run(agent_id: str, body: TriggerEvalRequest, request: Request) -> dict[str, Any]:
+    """入队一次评测跑批（T1 异步队列，GH #2）：立即返回 status='queued' 的 run
+    （202 Accepted），真正执行交给 worker 在配额门内认领。轮询 GET
+    /eval-runs/{run_id} 或列表看状态流转 queued→running→completed。并发触发不再
+    409——超配额的 run 排队最终执行（原 EvalBusy single-flight 已由配额门替换）。"""
     _agent_or_404(request, agent_id)
+    conn = request.app.state.conn_factory()
     try:
-        return eval_runner.run_agent_evals(
-            conn_factory=request.app.state.conn_factory,
+        return eval_runner.enqueue_eval_run(
+            conn,
             agent_registry=request.app.state.agent_registry,
-            runtime=request.app.state.runtime,
-            uploads_dir=request.app.state.uploads_dir,
-            task_runs_dir=request.app.state.task_runs_dir,
             agent_id=agent_id,
             triggered_by=request.state.user["display_name"],  # ADR-0019 D5
         )
-    except eval_runner.EvalBusy as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        conn.close()
 
 
 @router.get("/agents/{agent_id}/eval-runs")
@@ -62,6 +65,21 @@ def list_eval_runs(agent_id: str, request: Request) -> list[dict[str, Any]]:
         return repos.list_eval_runs(conn, agent_id)
     finally:
         conn.close()
+
+
+@router.get("/agents/{agent_id}/eval-runs/{run_id}")
+def get_eval_run(agent_id: str, run_id: str, request: Request) -> dict[str, Any]:
+    """单条 eval-run 状态（T1 轮询用）。agent 不存在 404；run 不存在或不属该
+    agent 404（不跨 agent 泄漏 run）。只读。"""
+    _agent_or_404(request, agent_id)
+    conn = request.app.state.conn_factory()
+    try:
+        run = repos.get_eval_run(conn, run_id)
+    finally:
+        conn.close()
+    if run is None or run.get("agent_id") != agent_id:
+        raise HTTPException(status_code=404, detail=f"eval-run 不存在：{run_id}")
+    return run
 
 
 class FixSampleRequest(BaseModel):

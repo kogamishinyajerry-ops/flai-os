@@ -25,7 +25,6 @@ import hashlib
 import json
 import logging
 import shutil
-import threading
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -54,14 +53,9 @@ def _referenced_package_files(agent: dict[str, Any]) -> list[str]:
             names.append(ref)
     return sorted(set(names))
 
-# 同步执行的 single-flight（异源审 P2-10）：同一 agent 同时只许一个 eval run，
-# 防重复请求耗尽工作线程与 SQLite 写锁。进程内锁——多进程部署是 V0.1 已声明限制。
-_EVAL_LOCKS: dict[str, threading.Lock] = {}
-_EVAL_LOCKS_GUARD = threading.Lock()
-
-
-class EvalBusy(Exception):
-    """该 agent 已有 eval run 在执行（API 层映射 409）。"""
+# T1（异步评测队列，GH #2）：原进程内 single-flight 锁（EvalBusy→409）已由
+# 「入队 + worker 配额门」替换——并发触发不再拒绝，超配额的 run 排队最终执行
+# （见 storage.claim_next_queued_eval_run 与 governance.eval_worker.EvalRunner）。
 
 
 class CheckConfigError(Exception):
@@ -272,6 +266,27 @@ def _eval_one_check(
     return ok, f"output_field: {dotted!r} {op} {expected!r}，实际 {actual!r}"
 
 
+def enqueue_eval_run(
+    conn: Any,
+    *,
+    agent_registry: Any,
+    agent_id: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    """入队一次评测跑批（T1，GH #2）：建 status='queued' 的 eval_run 立即返回，
+    真正执行交给 worker（配额门内认领 queued→running）。调用方保证 agent 已注册
+    （API 层 404 前置）。agent_version 在入队时刻从活注册表采样落库。"""
+    agent = agent_registry.get(agent_id)
+    if agent is None:
+        raise ValueError(f"agent 不存在：{agent_id}")
+    run_id = f"eval_{uuid.uuid4().hex}"
+    return repos.create_eval_run(
+        conn, run_id=run_id, agent_id=agent_id,
+        agent_version=str(agent.get("version")), triggered_by=triggered_by,
+        status="queued",
+    )
+
+
 def run_agent_evals(
     *,
     conn_factory: Callable[[], Any],
@@ -282,60 +297,82 @@ def run_agent_evals(
     agent_id: str,
     triggered_by: str,
 ) -> dict[str, Any]:
-    """跑一个 agent 的全部 eval_cases，返回终态 eval_run dict。
+    """同步跑一个 agent 的全部 eval_cases 到终态，返回终态 eval_run dict。
 
-    调用方保证 agent 已注册（API 层 404 前置）。同步执行（V0.1 已声明限制：
-    无异步队列，case 数小）。同一 agent single-flight：并发触发抛 EvalBusy。
-    任何意外异常都先把 run 收口为 status='error' 再上抛——绝不留永久 running
-    的僵尸证据（异源审 P2-7/P2-10）。
+    = 建 status='running' 的 run + 立即 `execute_eval_run`（不入队、不经 worker）。
+    T1 起生产入口改异步（API 走 enqueue_eval_run + worker）；本函数保留作
+    「立即跑完拿终态」的同步便捷（测试与需要内联结果处），已去除原 single-flight
+    锁——并发控制归 worker 配额门。调用方保证 agent 已注册（API 层 404 前置）。
     """
-    with _EVAL_LOCKS_GUARD:
-        lock = _EVAL_LOCKS.setdefault(agent_id, threading.Lock())
-    if lock.acquire(blocking=False) is not True:
-        raise EvalBusy(f"agent {agent_id} 已有评测在执行，请等它结束")
-    try:
-        return _run_agent_evals_locked(
-            conn_factory=conn_factory,
-            agent_registry=agent_registry,
-            runtime=runtime,
-            uploads_dir=uploads_dir,
-            task_runs_dir=task_runs_dir,
-            agent_id=agent_id,
-            triggered_by=triggered_by,
-        )
-    finally:
-        lock.release()
-
-
-def _run_agent_evals_locked(
-    *,
-    conn_factory: Callable[[], Any],
-    agent_registry: Any,
-    runtime: Any,
-    uploads_dir: Path,
-    task_runs_dir: Path,
-    agent_id: str,
-    triggered_by: str,
-) -> dict[str, Any]:
     agent = agent_registry.get(agent_id)
     if agent is None:
         raise ValueError(f"agent 不存在：{agent_id}")
-    pkg_dir = agent_registry.package_dir(agent_id)
-    agent_version = str(agent.get("version"))
-    is_interactive = (agent.get("workflow") or {}).get("mode") == "interactive"
-
-    approved, drafts, broken = load_eval_cases(pkg_dir)
-    digest = compute_digest(approved, pkg_dir, agent)
-
     run_id = f"eval_{uuid.uuid4().hex}"
     conn = conn_factory()
     try:
         repos.create_eval_run(
             conn, run_id=run_id, agent_id=agent_id,
-            agent_version=agent_version, triggered_by=triggered_by,
+            agent_version=str(agent.get("version")), triggered_by=triggered_by,
+            status="running",
         )
     finally:
         conn.close()
+    return execute_eval_run(
+        run_id=run_id,
+        conn_factory=conn_factory,
+        agent_registry=agent_registry,
+        runtime=runtime,
+        uploads_dir=uploads_dir,
+        task_runs_dir=task_runs_dir,
+    )
+
+
+def execute_eval_run(
+    *,
+    run_id: str,
+    conn_factory: Callable[[], Any],
+    agent_registry: Any,
+    runtime: Any,
+    uploads_dir: Path,
+    task_runs_dir: Path,
+) -> dict[str, Any]:
+    """执行一个**已建行且处于 running 态**的 eval_run（T1，GH #2）：从 run 行取
+    agent_id/triggered_by，跑全部 approved case，终点复核 digest 后收口。worker
+    认领 queued→running 后调本函数；同步便捷 run_agent_evals 亦复用本核。
+
+    任何意外异常都先把 run 收口为 status='error' 再上抛——绝不留永久 running
+    的僵尸证据（异源审 P2-7/P2-10）。agent 在入队后被删=收口 error 不上抛，worker
+    照常存活。
+    """
+    conn = conn_factory()
+    try:
+        run = repos.get_eval_run(conn, run_id)
+    finally:
+        conn.close()
+    if run is None:
+        raise ValueError(f"eval_run 不存在：{run_id}")
+    agent_id = run["agent_id"]
+    triggered_by = run["triggered_by"]
+
+    agent = agent_registry.get(agent_id)
+    if agent is None:
+        conn = conn_factory()
+        try:
+            return repos.finish_eval_run(
+                conn, run_id, status="error", total=0, passed=0, failed=0, skipped=0,
+                case_results=[{
+                    "case_file": "<runner>", "verdict": "failed",
+                    "detail": f"agent 在评测执行前已消失：{agent_id}",
+                }],
+                draft_cases=[], eval_cases_digest=None,
+            )
+        finally:
+            conn.close()
+    pkg_dir = agent_registry.package_dir(agent_id)
+    is_interactive = (agent.get("workflow") or {}).get("mode") == "interactive"
+
+    approved, drafts, broken = load_eval_cases(pkg_dir)
+    digest = compute_digest(approved, pkg_dir, agent)
 
     case_results: list[dict[str, Any]] = []
     passed = failed = skipped = 0

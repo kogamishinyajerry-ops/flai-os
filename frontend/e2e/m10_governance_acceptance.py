@@ -52,6 +52,7 @@ except ImportError:
 
 import uvicorn
 
+from backend.app.governance.eval_worker import EvalRunner
 from backend.app.jobs.runner import JobRunner
 from backend.app.main import create_app
 
@@ -117,6 +118,20 @@ else:
 
 runner = JobRunner(app.state.runtime, app.state.conn_factory, poll_interval=0.2)
 threading.Thread(target=runner.run_forever, daemon=True).start()
+
+# T1 异步评测队列（GH #2）：POST /eval-runs 现只入队 status='queued'，靠 EvalRunner
+# 在配额门内认领并驱动到终态；UI「跑评测」按钮轮询才等得到 3/3。缺此 worker → run
+# 永远 queued → 前端轮询超时。与 JobRunner 同进程单实例，配额门原子性在 storage 层。
+eval_worker = EvalRunner(
+    agent_registry=app.state.agent_registry,
+    runtime=app.state.runtime,
+    conn_factory=app.state.conn_factory,
+    uploads_dir=app.state.uploads_dir,
+    task_runs_dir=app.state.task_runs_dir,
+    quota=2,
+    poll_interval=0.1,
+)
+threading.Thread(target=eval_worker.run_forever, daemon=True).start()
 
 SHOTS.mkdir(parents=True, exist_ok=True)
 results: list[tuple[str, bool, str]] = []

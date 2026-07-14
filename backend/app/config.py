@@ -29,6 +29,11 @@ FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
 DB_PATH = Path(os.environ.get("FLAI_DB_PATH", str(DATA_DIR / "flai_os.db")))
 BACKEND_PORT = int(os.environ.get("FLAI_BACKEND_PORT", "8620"))
 
+# 异步评测队列并发配额（T1，GH #2）：worker 同时最多认领执行的 eval-run 数上限，
+# 超出的排队最终执行（非拒绝）。轻内核默认 2（case 数小、无 Redis/Celery）；
+# 内网可 export FLAI_EVAL_QUOTA 调整。下限夹 1（0/负会永久卡住队列）。
+DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
+
 # worker 代际字符串（ADR-0021/Codex R2 审 P2）：放在纯 stdlib 的 config，
 # 让部署自检探针（deploy_selfcheck.py，号称免应用依赖）导入它时不连带拉
 # jobs.runner→storage.repos→jsonschema。**改派生语义的里程碑同步 bump**——

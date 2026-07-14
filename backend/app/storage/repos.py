@@ -1017,16 +1017,64 @@ def create_eval_run(
     agent_id: str,
     agent_version: str,
     triggered_by: str,
+    status: str = "running",
 ) -> dict[str, Any]:
+    """建 eval_run 行。status 默认 'running'（既有同步路径向后兼容）；异步队列
+    入队传 status='queued'（T1，GH #2）。started_at 记建行时刻——同步路径下建行
+    即开跑二者同一瞬间；异步队列下 started_at 语义即「入队时刻」，worker 认领
+    （queued→running）不另立时间戳（配额门与状态机只看 status，不看时间戳）。"""
     now = _now_iso()
     conn.execute(
         """
         INSERT INTO eval_runs (id, agent_id, agent_version, triggered_by, status, started_at)
-        VALUES (?,?,?,?, 'running', ?)
+        VALUES (?,?,?,?,?,?)
         """,
-        (run_id, agent_id, agent_version, triggered_by, now),
+        (run_id, agent_id, agent_version, triggered_by, status, now),
     )
     return get_eval_run(conn, run_id)  # type: ignore[return-value]
+
+
+def claim_next_queued_eval_run(
+    conn: sqlite3.Connection, *, quota: int
+) -> dict[str, Any] | None:
+    """配额门 + 认领的原子原语（T1 异步评测队列，GH #2）。
+
+    单个 BEGIN IMMEDIATE 写锁内完成「统计 running → 配额判断 → 挑最旧 queued →
+    CAS 置 running」：running 已达配额则返回 None（超配额排队不拒，非 409）；否则
+    FIFO（started_at, id）挑一条 queued，`WHERE id=? AND status='queued'` CAS 翻
+    running 并回该行。配额判断与 CAS 同锁原子——即使多 poller 也不会超额放行。
+    worker 单实例锁保证同库唯一 poller，此原子性是纵深防御。
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        running = conn.execute(
+            "SELECT COUNT(*) FROM eval_runs WHERE status = 'running'"
+        ).fetchone()[0]
+        if running >= quota:
+            conn.execute("COMMIT")
+            return None
+        row = conn.execute(
+            "SELECT id FROM eval_runs WHERE status = 'queued' "
+            "ORDER BY started_at ASC, id ASC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            conn.execute("COMMIT")
+            return None
+        run_id = row["id"]
+        cur = conn.execute(
+            "UPDATE eval_runs SET status = 'running' WHERE id = ? AND status = 'queued'",
+            (run_id,),
+        )
+        if cur.rowcount != 1:
+            # 理论不可能（同锁内独占）；防御性 fail-closed：不认领畸形态
+            conn.execute("ROLLBACK")
+            return None
+        claimed = get_eval_run(conn, run_id)
+        conn.execute("COMMIT")
+        return claimed
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def finish_eval_run(

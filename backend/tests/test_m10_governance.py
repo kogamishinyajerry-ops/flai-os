@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
@@ -115,15 +116,48 @@ def governance_env(tmp_path: Path) -> Iterator[GovernanceEnv]:
         yield GovernanceEnv(client=client, app=app, agents_dir=agents_dir)
 
 
+def _drain_eval_run(
+    env: GovernanceEnv, run_id: str, *, timeout_s: float = 30.0
+) -> dict[str, Any]:
+    """把一条 queued eval-run 用 EvalRunner 驱动到终态并返回（T1 异步队列，GH #2）。
+
+    治理逻辑测试不关心 eval 跑批「同步还是异步」，只关心触发后产出的终态证据对不对；
+    本 helper 把「入队→worker 排空到终态」封在一处，既有各测试的断言语义原样保留。"""
+    from backend.app.governance.eval_worker import EvalRunner
+
+    worker = EvalRunner(
+        agent_registry=env.app.state.agent_registry,
+        runtime=env.app.state.runtime,
+        conn_factory=env.app.state.conn_factory,
+        uploads_dir=env.app.state.uploads_dir,
+        task_runs_dir=env.app.state.task_runs_dir,
+        quota=2,
+        poll_interval=0.02,
+    )
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        worker.run_once()
+        conn = env.app.state.conn_factory()
+        try:
+            run = repos.get_eval_run(conn, run_id)
+        finally:
+            conn.close()
+        if run is not None and run["status"] not in ("queued", "running"):
+            return run
+        time.sleep(0.05)
+    raise AssertionError(f"eval-run {run_id} 未在 {timeout_s}s 内到终态")
+
+
 def _run_eval(env: GovernanceEnv, agent_id: str = "governed_agent") -> dict[str, Any]:
     response = env.client.post(
         f"/api/agents/{agent_id}/eval-runs",
         json={},
     )
-    assert response.status_code == 200, response.text
-    run = response.json()
-    assert run["triggered_by"] == TEST_DISPLAY_NAME
-    return run
+    assert response.status_code == 202, response.text  # T1：入队立即返回 queued
+    queued = response.json()
+    assert queued["status"] == "queued"
+    assert queued["triggered_by"] == TEST_DISPLAY_NAME
+    return _drain_eval_run(env, queued["id"])
 
 
 def _create_and_execute_user_task(
@@ -947,8 +981,8 @@ def test_eval_run_invalidated_when_package_changes_during_run(
     response = governance_env.client.post(
         "/api/agents/governed_agent/eval-runs", json={}
     )
-    assert response.status_code == 200, response.text
-    run = response.json()
+    assert response.status_code == 202, response.text  # T1：入队 + worker 排空
+    run = _drain_eval_run(governance_env, response.json()["id"])
     assert run["status"] == "error"
     assert run["eval_cases_digest"] is None
     assert any("证据作废" in (c.get("detail") or "") for c in run["case_results"])
@@ -1107,8 +1141,8 @@ def test_eval_run_error_when_post_run_recheck_raises(
     response = governance_env.client.post(
         "/api/agents/governed_agent/eval-runs", json={}
     )
-    assert response.status_code == 200, response.text
-    run = response.json()
+    assert response.status_code == 202, response.text  # T1：入队 + worker 排空
+    run = _drain_eval_run(governance_env, response.json()["id"])
     assert run["status"] == "error"
     assert run["eval_cases_digest"] is None
     conn = governance_env.app.state.conn_factory()

@@ -389,19 +389,38 @@ function resetGovernanceDialog() {
   witnessedPromotionBurst.value = false;
 }
 
+// T1（GH #2）：评测改异步队列——POST 入队立即返回 status='queued'，真正执行由
+// worker 在配额门内认领。前端入队后轮询该 run 到终态再刷新+提示，按钮全程 loading
+// 如实反映「执行中」。用户轮询期间切走 Agent/关弹窗即停止（不对已离开对象空转请求）。
+async function pollEvalRunToTerminal(agentId, runId, { timeoutMs = 120000, intervalMs = 1500 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!governanceOpen.value || governanceAgent.value?.id !== agentId) {
+      return { status: "aborted" };
+    }
+    const run = await request(`/api/agents/${agentId}/eval-runs/${runId}`);
+    if (run.status !== "queued" && run.status !== "running") return run;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw { message: "评测执行超时（可稍后在下方列表查看结果）" };
+}
+
 async function runEvaluation() {
   const agentId = governanceAgent.value?.id;
   if (!agentId) return;
   governanceRunLoading.value = true;
   promotionErrors.value = [];
   try {
-    await request(`/api/agents/${agentId}/eval-runs`, {
+    const queued = await request(`/api/agents/${agentId}/eval-runs`, {
       method: "POST",
       json: {}, // 发起人=登录会话身份，服务端派生（ADR-0019 D5）
     });
-    ElMessage.success("评测完成");
+    ElMessage.info("评测已入队，执行中…");
+    const run = await pollEvalRunToTerminal(agentId, queued.id);
     if (governanceOpen.value && governanceAgent.value?.id === agentId) {
       await loadGovernance(agentId);
+      if (run.status === "completed") ElMessage.success("评测完成");
+      else if (run.status !== "aborted") ElMessage.warning(`评测收口为 ${run.status}`);
     }
   } catch (err) {
     ElMessage.error(err.detail || err.message || "评测失败");
