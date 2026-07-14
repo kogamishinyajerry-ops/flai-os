@@ -86,7 +86,7 @@
     },
     "input_binding": {
       "type": ["object", "null"],
-      "description": "artifact→input 绑定（迁移 #9/协作运行时 §3.1）：声明上游产物如何映射为本任务输入。null=默认拷全部上游 output_file_ids 入 input_file_ids。引用的上游任务必在 depends_on 内（越权引用创建期拒）。"
+      "description": "artifact→input 绑定（迁移 #9/协作运行时 §3.1）：声明上游产物如何映射为本任务输入。字段 from_tasks（string 数组，创建期 typed+有界≤32+去重）：非空=resolver 只从这些上游拷 output_file_ids 入 input_file_ids，其余上游仍参与依赖等待但产物不注入；空数组或 null=默认拷全部上游 output_file_ids。from_tasks 引用的上游必在 depends_on 内（越权引用创建期 422 拒）。"
     }
   }
 }

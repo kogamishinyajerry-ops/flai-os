@@ -163,8 +163,15 @@ def resolve_dependencies_once(conn_factory: Callable[[], sqlite3.Connection]) ->
                     advanced += 1
                 continue
             if all(u is not None and u["status"] == "completed" for u in upstreams):
+                # input_binding 兑现（Codex 增量2审 P2-3）：非空 from_tasks 只从声明的
+                # 上游拷产物入下游 input，其余上游仍参与依赖等待但产物不注入（防越权拷
+                # 入调用方显式排除的文件，含 sensitive）。空/None=默认拷全部上游 output。
+                binding = task.get("input_binding") or {}
+                from_tasks = binding.get("from_tasks") or None
                 piped: list[str] = []
                 for u in upstreams:
+                    if from_tasks is not None and u["id"] not in from_tasks:
+                        continue
                     piped.extend(u.get("output_file_ids") or [])
                 enqueued = repos.enqueue_dependent_task(conn, task_id, piped)
                 if enqueued is not None:

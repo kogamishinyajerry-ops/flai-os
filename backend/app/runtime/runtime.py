@@ -695,8 +695,29 @@ class AgentRuntime:
                 # 在 uploads_dir，上游产物（管道进来的 kind=output）在 task_runs_dir——
                 # 二者都是**装配注入**的权威根，根由 DB 的 kind 字段选、绝不从待验 path
                 # 反推（R4 原则不破）；选定根后 open_verified_file 仍做 O_NOFOLLOW 拒
-                # symlink + resolve-inside-root + sha256/size 全套校验。**安全边界改动，
-                # 命中即审：待 Codex 异源治理审。**
+                # symlink + resolve-inside-root + sha256/size 全套校验。
+                if record.get("kind") == "output":
+                    # 消费点 provenance 校验（Codex 增量2审 P1-1）：output 文件只能来自
+                    # 本任务 depends_on 声明**且已 completed**的上游（=resolver 管道的正当
+                    # 来源）。创建期 input_file_ids allowlist 只挡新 API 建的任务；旧 API 建
+                    # 的（或前滚 rollout 窗口混版）任务的 input_file_ids 可能已直含他人 output
+                    # ——本处结构校验把「产物只经 review-gated resolver 管道注入」钉在消费
+                    # 动作上，不依赖创建期单点，堵死绕过 resolver + 人签闸消费未签发产物。
+                    dep = task.get("depends_on") or []
+                    owner_id = record.get("task_id")
+                    if owner_id not in dep:
+                        raise FileIntegrityError(
+                            f"输入文件完整性校验失败：file_id={file_id} 是任务 {owner_id!r} 的产物，"
+                            "但本任务未在 depends_on 声明其为依赖——产物只能经依赖 resolver 管道注入，"
+                            "不得绕过依赖链直引"
+                        )
+                    owner = repos.get_task(conn, owner_id)
+                    owner_status = owner["status"] if owner is not None else "missing"
+                    if owner_status != "completed":
+                        raise FileIntegrityError(
+                            f"输入文件完整性校验失败：上游任务 {owner_id!r} 状态={owner_status}（非 completed）"
+                            "——产物未过人工签发闸（waiting_review→completed 只人工）不可被下游消费"
+                        )
                 allowed_root = (
                     self.task_runs_dir if record.get("kind") == "output" else self.uploads_dir
                 )

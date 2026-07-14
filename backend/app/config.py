@@ -36,7 +36,11 @@ BACKEND_PORT = int(os.environ.get("FLAI_BACKEND_PORT", "8620"))
 # 任务级分级」（Codex R1-B）：旧 worker（两轴/read 期重派生代码）与新 worker 不可
 # 混跑——旧 worker 不落 data_classification、monitor 产物洗成 internal 外泄。代际值
 # 变=部署门代际检查逼 worker 重启到新代码。
-WORKER_GENERATION = "m12-immutable-classification"
+# 协作运行时（Codex 增量2审 P1）：worker run_forever 每轮新增 resolve_dependencies_once
+# ——**这是 worker 行为变更**。若 API 前滚而 worker 滞留旧 commit，旧 worker 从不跑
+# resolver，所有带 depends_on 的任务永滞 created 且部署自检误绿。故 bump 代际逼 worker
+# 重启到含 resolver 的新代码，否则部署门 check_worker_generation 拦下。
+WORKER_GENERATION = "collab-dependency-resolver"
 
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。
 # monitor_adapter_recon 工具经此子进程调核起草 adapter 草案；未配置=核不可达=工具

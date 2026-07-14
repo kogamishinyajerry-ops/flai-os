@@ -388,3 +388,104 @@ def test_E2E_taint_chain_sensitive_upstream_derives_downstream(runtime_env):
         )  # 分级沿产物继续传播，下载门读此列 → 403
     finally:
         conn.close()
+
+
+# ── P1-1 消费点 provenance（Codex 增量2审）：output 只能来自 depends_on 声明且 completed 上游 ──
+
+def _real_output(runtime, conn, owner_task, *, name="out.txt", classification="internal"):
+    """在 task_runs_dir/{owner}/output/ 落真字节 output 文件并登记，返回 file_id。"""
+    out_dir = runtime.task_runs_dir / owner_task / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload = f"{owner_task}:{name}\n".encode("utf-8")
+    path = out_dir / name
+    path.write_bytes(payload)
+    fid = str(uuid.uuid4())
+    repos.create_file(
+        conn, file_id=fid, task_id=owner_task, kind="output", filename=name,
+        path=str(path), size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(), classification=classification,
+    )
+    return fid
+
+
+def test_provenance_undeclared_output_rejected_at_consume(runtime_env):
+    """P1-1 tamper（第一支）：直引非 depends_on 声明的他人 output（模拟旧 API/混版无
+    kind guard 的绕过任务）→ 执行期消费点拒 → 任务 failed。拆 provenance 校验 → 绕过
+    任务反而 completed。"""
+    cf = runtime_env["conn_factory"]
+    runtime = runtime_env["runtime"]
+    runner = JobRunner(runtime, cf)
+    conn = cf()
+    try:
+        _mk(conn, "producer")
+        fid = _real_output(runtime, conn, "producer")
+        repos.set_task_outputs(conn, "producer", [fid])
+        _drive(conn, "producer", "completed_reviewed")
+        # 绕过任务：直塞 producer 的 output 入 input_file_ids，但 depends_on 为空
+        _mk(conn, "bypass", inputs={"name": "x"}, input_file_ids=[fid])
+        repos.set_task_status(conn, "bypass", "queued")
+    finally:
+        conn.close()
+    runner.run_once()
+    conn = cf()
+    try:
+        assert repos.get_task(conn, "bypass")["status"] == "failed"  # 未声明依赖 → 消费点拒
+    finally:
+        conn.close()
+
+
+def test_provenance_uncompleted_upstream_output_rejected(runtime_env):
+    """P1-1 tamper（第二支）：output 的 owner 在 depends_on 但停在 waiting_review（未过
+    人签闸）→ 消费点拒。防「产物在上游 waiting_review 期已存在被抢先消费」绕人签。"""
+    cf = runtime_env["conn_factory"]
+    runtime = runtime_env["runtime"]
+    runner = JobRunner(runtime, cf)
+    conn = cf()
+    try:
+        _mk(conn, "pending")
+        fid = _real_output(runtime, conn, "pending")
+        repos.set_task_outputs(conn, "pending", [fid])
+        _drive(conn, "pending", "waiting_review")  # 停在人签闸，未 completed
+        # consumer 声明依赖 pending（provenance 第一支满足）但手动强推 queued 绕过 resolver
+        _mk(conn, "consumer", depends_on=["pending"], inputs={"name": "x"}, input_file_ids=[fid])
+        repos.set_task_status(conn, "consumer", "queued")
+    finally:
+        conn.close()
+    runner.run_once()
+    conn = cf()
+    try:
+        assert repos.get_task(conn, "consumer")["status"] == "failed"  # 上游未 completed → 拒
+    finally:
+        conn.close()
+
+
+# ── P2-3 input_binding 兑现（Codex 增量2审）：非空 from_tasks 只拷声明的上游产物 ──
+
+def test_input_binding_filters_piped_upstreams(dbf):
+    """P2-3 tamper：depends_on=[A,B] + input_binding.from_tasks=[A] → resolver 只拷 A 产物、
+    不拷 B（调用方显式排除，含可能的 sensitive）。拆 binding 过滤 → B 产物也被拷入 → RED。"""
+    conn = dbf()
+    try:
+        _mk(conn, "bind_a")
+        f_a = _attach_output(conn, "bind_a", name="a.txt")
+        _drive(conn, "bind_a", "completed_reviewed")
+        _mk(conn, "bind_b")
+        f_b = _attach_output(conn, "bind_b", name="b.txt")
+        _drive(conn, "bind_b", "completed_reviewed")
+        repos.create_task(
+            conn, task_id="bind_down", agent_id="hello_agent", agent_version="0.1.0",
+            name="bind_down", created_by="tester", inputs={}, input_file_ids=[], metadata={},
+            depends_on=["bind_a", "bind_b"], input_binding={"from_tasks": ["bind_a"]},
+        )
+    finally:
+        conn.close()
+
+    assert resolve_dependencies_once(dbf) == 1
+    conn = dbf()
+    try:
+        down = repos.get_task(conn, "bind_down")
+        assert down["status"] == "queued"
+        assert f_a in down["input_file_ids"]      # 绑定的 A 产物拷入
+        assert f_b not in down["input_file_ids"]  # 未绑定的 B 产物不拷（尊重 binding）
+    finally:
+        conn.close()

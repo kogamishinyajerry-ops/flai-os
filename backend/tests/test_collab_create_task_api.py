@@ -51,6 +51,35 @@ def test_T6_create_input_binding_stray_reference_rejected(app_env):
     assert r.status_code == 422
 
 
+def test_malformed_input_binding_rejected_422_not_500(app_env):
+    """P2-4 tamper：input_binding.from_tasks 非 list（{"from_tasks": 1}）→ typed 模型
+    422，不再迭代抛 TypeError→500。任意 dict 时此入参会打崩服务端。"""
+    client, _ = app_env
+    up = _mk(client, "up").json()
+    r = _mk(client, "bad", depends_on=[up["id"]], input_binding={"from_tasks": 1})
+    assert r.status_code == 422  # 畸形入参响亮拒，非 500
+
+
+def test_input_binding_extra_key_rejected(app_env):
+    """P2-5 侧证：InputBinding extra=forbid——未知键拒，堵住任意嵌套对象绕放大闸。"""
+    client, _ = app_env
+    up = _mk(client, "up").json()
+    r = _mk(client, "extra", depends_on=[up["id"]],
+            input_binding={"from_tasks": [up["id"]], "junk": {"x": "y" * 100000}})
+    assert r.status_code == 422
+
+
+def test_wellformed_input_binding_accepted(app_env):
+    """正控（证 binding 校验非空咬合）：from_tasks ⊆ depends_on 的良构绑定 → 放行，
+    任务滞留 created（带依赖）。"""
+    client, _ = app_env
+    up = _mk(client, "up").json()
+    r = _mk(client, "down", depends_on=[up["id"]],
+            input_binding={"from_tasks": [up["id"]]})
+    assert r.status_code == 200
+    assert r.json()["status"] == "created"
+
+
 def test_output_file_cannot_be_directly_referenced_as_input(app_env):
     """安全边界 tamper：kind=output 产物经 create_task 直引 → 422。
 

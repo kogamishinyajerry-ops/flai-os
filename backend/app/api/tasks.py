@@ -23,6 +23,32 @@ router = APIRouter(prefix="/api", tags=["tasks"])
 _INPUTS_MAX_BYTES = 256 * 1024
 
 
+class InputBinding(BaseModel):
+    """artifact→input 绑定（协作运行时 §3.1）：声明只从哪些上游拷产物入 input_file_ids。
+
+    from_tasks 空=默认拷全部上游 output（等价 input_binding=null）；非空=只拷这些上游
+    的 output，其余上游仍参与依赖等待但产物不注入下游。**typed + extra=forbid + 有界列表**
+    （Codex 增量2审 P2-4/P2-5）：任意 dict 会让 `{"from_tasks":1}` 过 Pydantic 后在服务端
+    迭代抛 TypeError→500，且无大小上限可提交 MB 级嵌套对象绕过 inputs 的 256KB 放大闸；
+    收成 str 列表模型后畸形入参得响亮 422、载荷天然有界。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    from_tasks: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("from_tasks")
+    @classmethod
+    def _from_tasks_sane_and_unique(cls, v: list[str]) -> list[str]:
+        seen: set[str] = set()
+        for tid in v:
+            if not tid.strip() or len(tid) > 64:
+                raise ValueError(f"非法上游 task_id：{tid!r}")
+            if tid in seen:
+                raise ValueError(f"input_binding.from_tasks 重复：{tid!r}")
+            seen.add(tid)
+        return v
+
+
 class CreateTaskRequest(BaseModel):
     # ADR-0019 D5：created_by 已从请求体删除，服务端从登录会话派生——身份
     # 不再自报。extra="forbid"：仍发 created_by 的旧客户端得到响亮 422 而非
@@ -39,9 +65,9 @@ class CreateTaskRequest(BaseModel):
     # 协作运行时 §3.5：声明式依赖。depends_on 非空 → 任务滞留 created 由 resolver
     # 在全部上游 completed 后管道产物入 input_file_ids 并入队（人是唯一签发者不变：
     # 人建整图、人签每个 review 环节；resolver 只排序执行，绝不建/签任务）。
-    # input_binding 预留（None=默认拷全部上游 output_file_ids）。
+    # input_binding：None=默认拷全部上游 output_file_ids；非 null 见 InputBinding（typed）。
     depends_on: list[str] = Field(default_factory=list, max_length=32)
-    input_binding: dict[str, Any] | None = Field(default=None)
+    input_binding: InputBinding | None = Field(default=None)
 
     @field_validator("inputs")
     @classmethod
@@ -160,8 +186,7 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                     ),
                 )
         if body.input_binding is not None:
-            bound = body.input_binding.get("from_tasks") or []
-            stray = [t for t in bound if t not in body.depends_on]
+            stray = [t for t in body.input_binding.from_tasks if t not in body.depends_on]
             if stray:
                 raise HTTPException(
                     status_code=422,
@@ -177,7 +202,8 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             input_file_ids=body.input_file_ids,
             metadata={},
             depends_on=body.depends_on or None,
-            input_binding=body.input_binding,
+            # 持久化为普通 dict（repos.create_task json.dumps 落库）；None 保持 None。
+            input_binding=body.input_binding.model_dump() if body.input_binding is not None else None,
             conversation_id=body.conversation_id,
         )
         if body.conversation_id is not None:
