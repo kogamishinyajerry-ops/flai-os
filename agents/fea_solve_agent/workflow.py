@@ -35,6 +35,10 @@ _WATERMARK = (
 )
 
 _DEFAULT_N_ELEMENTS = 8
+# 特征值二分的尺度相对收敛容差（Codex 异源审 P1-1）。单一常量：求解器终止判据与
+# fea_solution.json 的 solver.rel_tol provenance 必须用同一个值，绝不让产物谎报比
+# 算法实际更强的精度（Codex R1 P2）。
+_REL_TOL = 1e-12
 
 
 def _fail(message: str) -> dict[str, Any]:
@@ -126,7 +130,6 @@ def _smallest_eigenvalue(K: list[list[float]], M: list[list[float]], scale: floa
     λ₁，会把量级错误的解误判 converged。故：种子 hi=scale（≈λ₁ 量级，非 max(scale,1)
     的 1.0 地板）+ 相对收敛 `hi-lo ≤ rel_tol·hi` + 非有限（溢出→inf≤inf 假收敛）守卫。"""
     ndof = len(K)
-    _REL_TOL = 1e-12
 
     def pd_at(lam: float) -> bool:
         shifted = [[K[i][j] - lam * M[i][j] for j in range(ndof)] for i in range(ndof)]
@@ -204,7 +207,7 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
         },
         "solver": {
             "method": "cholesky_pd_bisection_generalized_eig",
-            "rel_tol": 1e-13,
+            "rel_tol": _REL_TOL,
             "converged": True,
         },
         "human_review_required": True,
