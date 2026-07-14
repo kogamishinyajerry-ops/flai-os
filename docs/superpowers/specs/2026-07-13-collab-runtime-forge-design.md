@@ -48,9 +48,10 @@
 
 ### 3.6 判决⟹人签 注册期不变量（F3 owner 裁决=注册期不变量，审后新增）
 > owner 宪法裁决（2026-07-13 AskUserQuestion）：非 review-gated 上游自动链的处置=注册期强制"判决型必 review-gated"，令非-gated 恒确定性、自动链安全。
-- **不变量**：Agent 注册（`runtime/registry.py` scan）时，若 `model.profile != "none"`（该 Agent 调 LLM）则 `workflow.requires_human_review` 必须 `is True`（严格 is True，非 truthiness）；违反=**注册期 fail-closed 拒载**，绝不静默接受。
-- **精度**：判据用 `profile != none` 而非 category——它精确捕获"是否调 LLM"（含 monitor_adapter_gen 这类 category=structured_gen 但 profile=reasoning 的混合型：LLM 叙事层也必须人签）。
-- **存量 fleet 校验**：实现时以新不变量跑全 fleet registry scan；**若有存量 Agent 违反=如实上报 finding，绝不静默"修好"**（继承假绿死罪纪律）。审计已测 0 个 requires_human_review:false，预期存量全过——但以真实 scan 为准。
+- **不变量（真实 scan 后精化）**：Agent 注册（`runtime/registry.py._load_one`）时，若 `workflow.mode == "job"` **且** `model.profile != "none"`（作为 job 任务跑且调 LLM）则 `workflow.requires_human_review` 必须 `is True`（严格 is True，非 truthiness）；违反=**注册期 fail-closed 拒载**，绝不静默接受。落点=registry.py:107-119 P2-7 跨字段校验同款位置。
+- **为何限 mode==job**：F3 只关乎 depends_on 链，而链只由 **job** 任务组成——**interactive Agent（编排官/导引）跑在 ConversationService 不进 JobRunner、且 create_task tasks.py:119 本就 409 拒 interactive，根本进不了链**。其宪法安全阀是 ADR-0012「绝不建任务、只推荐由人实例化」，正交于 requires_human_review。故 mode==job 精确覆盖"能入链"的全集。
+- **精度**：判据用 `profile != none` 而非 category——精确捕获"是否调 LLM"（含 monitor_adapter_gen 这类 category=structured_gen 但 profile=reasoning 混合型）。
+- **★真实 fleet scan 诚实上报（2026-07-13，非静默修）**：9 个 Agent 实测——4 个 profile=none 确定性非-gated（performance_disk/cfd_solve/control_logic/hello，合法非-gated）+ 4 个 LLM job 全 gated（knowledge_qa/fta/monitor_gen/cfd_evaluate）+ **guide_agent（interactive/reasoning/rhr=False）——mode==job 限定下豁免、合法**。**全 9 过精化不变量。** 附带纠 loop-auditor grounding 错：其"0 个 rhr:false"结论 grep 了不存在的 `backend/agents`（真实路径 `agents/`）得空误读；真实有 5 个 rhr=False，但均合法（4 确定性 + 1 交互式豁免）。
 
 ## 四、scope fence（本 forge 明确不做）
 - 不做条件/分支工作流；不做上游 retry/重跑（另立）；不做 Agent/编排官自动建任务（红线永不做）；不做跨 conversation 依赖；resolver 不做任何 LLM 调用；**不支持创建后编辑 depends_on**（§3.4 依赖 DAG-by-construction）。
