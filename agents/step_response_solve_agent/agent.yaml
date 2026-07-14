@@ -1,0 +1,61 @@
+id: step_response_solve_agent
+name: "二阶系统阶跃响应求解 Agent（纯 Python 梯形积分）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: structured_gen
+summary: "把标准二阶欠阻尼系统（ζ, ωn）的单位阶跃响应用纯 Python 梯形（双线性/Tustin）定步长积分确定性仿真，提取超调量 Mp，零 LLM、零工具、零第三方依赖（无 numpy/scipy），停 waiting_review 待工程师签发。"
+description: >
+  判据①第二发零内核 diff 验证弹·求解侧。零 LLM（model.profile=none）零工具
+  （tools=[]）：workflow 内联实现标准二阶系统 ÿ+2ζωn·ẏ+ωn²·y=ωn²·u(t) 的
+  状态空间仿真——梯形（双线性变换/Tustin）定步长隐式积分（控制学科 canonical
+  离散法，A-稳定，任意步长不发散），每步解 2×2 线性系统（纯 stdlib，无 numpy）。
+  从仿真轨迹 argmax 提取超调量 overshoot_pct=（峰值−稳态）×100%。输出
+  step_solution.json（含求解 params 原样回存 + overshoot_pct + solver.converged）
+  与 step_solution.md（人读摘要 + 水印）。仿真非有限/无超调/峰值落边界（horizon
+  未覆盖首峰）→ 诚实 failed，绝不返回无效数当解。requires_human_review=true：
+  仿真结果即工程结论输入，停 waiting_review 等工程师签发放行（人是唯一签发者），
+  签发后其产物才经 depends_on/input_binding 管道流入 step_response_evaluate_agent。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: none
+knowledge:
+  enabled: false
+  scopes: []
+tools: []
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats:
+    - .json
+    - .md
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: true
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: false
+  sample_fields: []
+limitations:
+  - "只做标准二阶欠阻尼系统（0<ζ<1）单位阶跃响应的超调量：不做高阶系统、非线性、零点影响、多输入、频域/根轨迹分析。"
+  - "只输出超调量 overshoot_pct：不做上升时间、调节时间、稳态误差、带宽等其它时/频域指标。"
+  - "超调量在数学上只依赖 ζ（与 ωn 无关：Mp=e^(−ζπ/√(1−ζ²))）：ωn 只设定时间尺度（仿真窗/步长）。若 ωn 输入了量纲滑档，超调比对无法察觉——只能靠 input_schema 量级护栏 + 人工签发复核拦截（见 evaluate 侧同类 limitation）。"
+  - "梯形定步长积分为纯 Python 手写（无 numpy/scipy），适用小规模标量二阶系统；粗 n_steps 下超调有真实离散（O(h²)）误差，由 step_response_evaluate_agent 对照闭式解析解判据裁定是否收敛。"
+  - "不判定工程结论：overshoot_pct 是确定性仿真结果，是否满足设计要求（超调裕度等）由 step_response_evaluate_agent 对照闭式解析解判据给出，采信权在工程师。"
+  - "仿真非有限/无超调/峰值落仿真窗边界时诚实 failed，不臆测补窗、不返回无效数当解。"

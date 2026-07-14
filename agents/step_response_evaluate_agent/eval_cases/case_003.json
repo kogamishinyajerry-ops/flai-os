@@ -1,0 +1,23 @@
+{
+  "case_id": "case_003",
+  "curation": "approved",
+  "description": "诚实负例（非篡改）：ζ=0.5 但 n_steps=12 真实粗步长仿真，梯形 O(h²) 离散误差使超调=23.08 vs 闭式 16.30，相对误差 41.5% > 2% 容差 → passed=False。oracle 若逢正必过就会误判它通过——这是 oracle 判别力的真源回归见证。粗步长产物由 solve agent 真实产出（A-稳定不发散，故 converged=true 但精度不足）。",
+  "curation_note": "input_files 的 step_solution.json 是 step_response_solve_agent 在 n_steps=12 的真实粗仿真产物，未篡改任何数字。",
+  "inputs": {
+    "tolerance_pct": 2.0
+  },
+  "input_files": ["fixtures/coarse_grid/step_solution.json"],
+  "expected": {
+    "task_status": "waiting_review",
+    "passed": false,
+    "note": "人读期望旁注，不参与机判"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "waiting_review" },
+    { "kind": "artifact_exists", "file": "evaluation.json" },
+    { "kind": "output_field", "file": "evaluation.json", "path": "passed", "op": "eq", "value": false },
+    { "kind": "output_field", "file": "evaluation.json", "path": "upstream_converged", "op": "eq", "value": true },
+    { "kind": "output_field", "file": "evaluation.json", "path": "error_pct", "op": "gte", "value": 10.0 },
+    { "kind": "artifact_contains", "file": "evaluation.md", "value": "超出容差" }
+  ]
+}

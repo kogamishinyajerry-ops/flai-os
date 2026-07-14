@@ -1,0 +1,23 @@
+{
+  "case_id": "case_001",
+  "curation": "approved",
+  "description": "欠阻尼正例（ζ=0.5, ωn=1, n_steps=2000）。闭式超调 Mp=16.3034%，梯形 n=2000 收敛值 16.3036%（误差 0.0016%）。rhr=true 故任务停 waiting_review（非 completed）；产物 step_solution.json 落库、md 带水印。overshoot 检查带带宽 [16.2,16.4]：正确仿真稳过，若积分器/组装/argmax 写错致数值漂移则咬红。",
+  "inputs": {
+    "zeta": 0.5,
+    "omega_n": 1.0,
+    "n_steps": 2000
+  },
+  "expected": {
+    "task_status": "waiting_review",
+    "overshoot_pct_approx": 16.3036,
+    "note": "人读期望旁注，不参与机判"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "waiting_review" },
+    { "kind": "artifact_exists", "file": "step_solution.json" },
+    { "kind": "output_field", "file": "step_solution.json", "path": "response_result.overshoot_pct", "op": "gte", "value": 16.2 },
+    { "kind": "output_field", "file": "step_solution.json", "path": "response_result.overshoot_pct", "op": "lte", "value": 16.4 },
+    { "kind": "output_field", "file": "step_solution.json", "path": "solver.converged", "op": "eq", "value": true },
+    { "kind": "artifact_contains", "file": "step_solution.md", "value": "判定权在人" }
+  ]
+}
