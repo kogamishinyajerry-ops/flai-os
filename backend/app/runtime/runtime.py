@@ -472,6 +472,25 @@ class AgentRuntime:
             )
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
+        # Codex 命中即审 R2 P1（K1 签发见证的前提）：_execute 按 agent_id 载**当前** registry，
+        # 而 task.agent_version 是创建期锁定值（tasks.py 建时 = 当时当前版本）。跨升级窗口二者可
+        # drift——任务实际跑当前版本而 task.agent_version 停旧值，则 K1 签发见证（键 task.agent_version
+        # 历史 manifest）检的不是真跑版本，判据失真。fail-closed 拒版本漂移 → task.agent_version 恒等
+        # 真跑版本，K1 键之即权威（provenance 诚实：绝不静默在异于锁定版本上执行；跨升级排队任务
+        # 失败、由用户对新版本重建，优于悄悄跑异版本产出错误归因的产物）。
+        if agent.get("version") != task["agent_version"]:
+            msg = (
+                f"Agent 版本漂移：任务锁定 agent_version={task['agent_version']!r} 但当前注册 "
+                f"{agent.get('version')!r}——拒在异于锁定版本上执行（跨升级窗口 provenance 权威性，"
+                "K1 签发见证前提）；请对当前版本重建任务"
+            )
+            repos.set_task_status(conn, task_id, "failed", error_message=msg)
+            repos.append_event(
+                conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
+                level="error", message=msg,
+            )
+            return {"status": "failed", "task": repos.get_task(conn, task_id)}
+
         pkg_dir = self.agent_registry.package_dir(agent_id)
 
         # ADR-0025：执行期算一次任务级分级（文件∨知识∨工具三轴）并**落库为不可变列**。

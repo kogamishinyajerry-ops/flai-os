@@ -442,18 +442,25 @@ def task_output_is_signed_off(conn: sqlite3.Connection, task: dict[str, Any]) ->
 
     fail-closed 双见证（皆持久、皆键于任务自身锁定的 agent_version）：
       ① 存在持久 review_approved 事件（人工签发）→ 放行；或
-      ② 该任务 agent_version 的历史 manifest 明确 model.profile∈{None,'none'}（确定性零-LLM
-         Agent，合法自动完成、无需人签；与 runtime._build_context 的 _NoModelGatewayContext
-         门同口径、与 §3.6 注册期 not in (None,'none') 判据同源）→ 放行。
-    manifest 缺失/损坏 → 版本 profile 无法确立 → **False（拒）**（绝不把"读不到 manifest"当
-    "profile=none"放行=fail-open）。二者皆不成立（LLM 型且无人签）→ False（拒）。"""
+      ② 该任务 agent_version 的历史 manifest **显式** model.profile=='none' **且** workflow
+         .requires_human_review is False（确定性零-LLM Agent 且显式非 review-gated，合法自动
+         完成无需人签；与 §3.6 注册期判据同源——真实 agent 均显式声明二字段）→ 放行。
+    **命中即审 R1 收紧**：原判据 `profile in (None,'none')` 会把空/退化 manifest（`{}`、
+    `model.profile:null`、profile 缺失）当 none 放行=**fail-open**；且忽略 requires_human_review
+    （profile=none+rhr:true 的 agent 其任务仍应人签，不该自动放行）。收紧为**二字段皆显式**：
+    profile 必显式字符串 'none'（缺失/null→拒）+ rhr 必显式 False（缺失/None/True→拒）→ 退化/
+    损坏/半 manifest 一律 fail-closed。manifest 缺失/损坏（get_agent_version_manifest 返 None）
+    亦拒。二者皆不成立 → False（拒）。"""
     if has_review_approved_event(conn, task["id"]):
         return True
     manifest = get_agent_version_manifest(conn, task["agent_id"], task["agent_version"])
     if manifest is None:
         return False  # 版本 provenance 无法确立 → fail-closed，绝不 fail-open 放行
-    profile = (manifest.get("model") or {}).get("profile")
-    return profile in (None, "none")  # manifest 明确存在且 profile none-equiv = 确定性零-LLM
+    model = manifest.get("model") or {}
+    workflow = manifest.get("workflow") or {}
+    # 显式确定性（profile=='none'）且显式非 review-gated（rhr is False）——皆显式杜绝退化 manifest
+    # fail-open（空 dict/缺字段→None，非 'none'/非 False→拒）。
+    return model.get("profile") == "none" and workflow.get("requires_human_review") is False
 
 
 def set_task_data_classification(

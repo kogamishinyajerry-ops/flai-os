@@ -147,13 +147,16 @@ def resolve_dependencies_once(conn_factory: Callable[[], sqlite3.Connection]) ->
         try:
             if _resolve_one_candidate(conn, task):
                 advanced += 1
-        except Exception as exc:
-            # R1（loop-auditor 巡查）：**单候选毒丸隔离**。畸形持久数据（depends_on/上游
-            # output_file_ids 非 list、input_binding.from_tasks 非 list、畸形 agent_id 致事件校验
-            # 炸…直调 repos/legacy/迁移可绕 API Pydantic 写入）绝不掀翻整趟 resolver 令其后所有
-            # 合法候选永久饿死（毒丸滞留 created，每 tick 重命中）。quarantine 坏候选
-            # （created→cancelled+诊断）而非中止全 pass。契约收紧/写边界校验（R2）defer 内网，
-            # 本隔离使 resolver 对**已存**畸形数据鲁棒（quarantine 非 prevent）。
+        except (TypeError, KeyError, ValueError) as exc:
+            # R1（loop-auditor 巡查）+ 命中即审 R3：**单候选毒丸隔离，仅限确定性畸形数据错**。
+            # TypeError/KeyError/ValueError（含 json 解码、append_event 事件契约校验 wrap 的
+            # ValueError）=持久数据本身畸形（depends_on/上游 output_file_ids 非 list、
+            # input_binding.from_tasks 非 list、畸形 agent_id…直调 repos/legacy/迁移可绕 API
+            # Pydantic 写入），重试必永久命中、掀翻整趟令其后合法候选饿死→quarantine
+            # （created→cancelled+诊断）除之。**命中即审 R3：operational 错误（sqlite3.OperationalError
+            # 锁超时/IO 等瞬时故障）绝不当毒丸**——DB 恢复后本可重试，若 cancel 会把合法任务
+            # **永久误杀**；不在此 except 内、上抛至 _resolve_if_due except 兜底（记日志、下 tick 重试）。
+            # 契约收紧/写边界校验（R2）defer 内网，本隔离使 resolver 对**已存**畸形数据鲁棒（quarantine 非 prevent）。
             if _quarantine_poison_candidate(conn, task, exc):
                 advanced += 1
         finally:

@@ -70,7 +70,7 @@ def dbf(tmp_path):
     # 自行注册对应 profile 或造 review_approved 事件。
     conn = factory()
     try:
-        _register_agent_version(conn, "hello_agent", "0.1.0", profile="none")
+        _register_agent_version(conn, "hello_agent", "0.1.0", profile="none", requires_human_review=False)
     finally:
         conn.close()
     return factory
@@ -962,7 +962,7 @@ def test_K2_consume_side_eval_origin_output_rejected(runtime_env):
     runner = JobRunner(runtime, cf)
     conn = cf()
     try:
-        _register_agent_version(conn, "eval_det_agent", "0.1.0", profile="none")  # 确定性→过 K1
+        _register_agent_version(conn, "eval_det_agent", "0.1.0", profile="none", requires_human_review=False)  # 确定性→过 K1
         repos.create_task(
             conn, task_id="eval_up", agent_id="eval_det_agent", agent_version="0.1.0",
             name="eval_up", created_by="t", inputs={}, input_file_ids=[], metadata={}, origin="eval",
@@ -1031,5 +1031,88 @@ def test_R1_poison_scalar_depends_on_quarantined(dbf):
     conn = dbf()
     try:
         assert repos.get_task(conn, "poison_scalar")["status"] == "cancelled"  # 毒丸隔离取消
+    finally:
+        conn.close()
+
+
+# ══ 命中即审收口（安全边界异源实现审逮出我 sweep 代码 3 P1）：谓词收紧/版本权威/隔离窄化 ══
+
+def test_hitreview_R1_degenerate_manifest_fails_closed(dbf):
+    """命中即审 R1 tamper：签发见证收紧——manifest 有 profile=none 但 requires_human_review
+    **缺失**（半/退化 manifest）绝不当自动签发放行。仅显式 profile=='none'+rhr is False 才放行。
+    拆收紧（回 profile in (None,'none')）→ 半 manifest 被当 none 放行、下游入队 RED（fail-open）。"""
+    conn = dbf()
+    try:
+        _register_agent_version(conn, "half_agent", "0.1.0", profile="none")  # rhr 缺失=退化
+        _mk(conn, "half_up", agent_id="half_agent")
+        _attach_output(conn, "half_up")
+        _drive(conn, "half_up", "completed_auto")  # 无 review_approved
+        _mk(conn, "down", depends_on=["half_up"])
+    finally:
+        conn.close()
+    resolve_dependencies_once(dbf)
+    conn = dbf()
+    try:
+        # rhr 非显式 False → 未确立自动签发资格 → fail-closed 取消（收紧前会 fail-open 入队）
+        assert repos.get_task(conn, "down")["status"] == "cancelled"
+        assert any(
+            e["payload"].get("reason") == "upstream_unsigned" for e in repos.list_events(conn, "down")
+        )
+    finally:
+        conn.close()
+
+
+def test_hitreview_R2_agent_version_drift_fails_task(runtime_env):
+    """命中即审 R2 tamper：任务锁定 agent_version 异于当前注册版本（跨升级窗口 drift）→ _execute
+    fail-closed 拒执行（provenance 权威性=K1 签发见证前提：task.agent_version 恒等真跑版本）。
+    拆版本检查 → 任务在异版本上照跑 completed RED（有效 inputs 命门保非空）。"""
+    cf = runtime_env["conn_factory"]
+    runtime = runtime_env["runtime"]
+    runner = JobRunner(runtime, cf)
+    conn = cf()
+    try:
+        # hello_agent 当前注册 0.1.0；锁定不存在的旧版本 0.0.9 模拟 drift。给有效 inputs（name）
+        # 使拆检查后能真 completed（否则缺输入 failed=假绿）。
+        _mk(conn, "drift_task", agent_id="hello_agent", agent_version="0.0.9", inputs={"name": "x"})
+        repos.set_task_status(conn, "drift_task", "queued")
+    finally:
+        conn.close()
+    runner.run_once()
+    conn = cf()
+    try:
+        t = repos.get_task(conn, "drift_task")
+        assert t["status"] == "failed"  # 版本漂移 → fail-closed
+        assert "版本漂移" in (t.get("error_message") or "")  # 且失败因确是版本检查
+    finally:
+        conn.close()
+
+
+def test_hitreview_R3_operational_error_not_quarantined(dbf, monkeypatch):
+    """命中即审 R3 tamper：候选处理遇 operational 错误（sqlite3.OperationalError 瞬时故障）绝不
+    当毒丸 cancel（那会永久误杀合法任务），而上抛至 _resolve_if_due 兜底待下 tick 重试。任务
+    留 created。拆窄化 except（回 except Exception）→ 合法任务被误 quarantine cancel RED。"""
+    import sqlite3 as _sqlite3
+    import backend.app.jobs.runner as runner_mod
+
+    conn = dbf()
+    try:
+        _mk(conn, "up")
+        _attach_output(conn, "up")
+        _drive(conn, "up", "completed_reviewed")
+        _mk(conn, "victim", depends_on=["up"])
+    finally:
+        conn.close()
+
+    def _boom(_conn, _task):
+        raise _sqlite3.OperationalError("database is locked")  # 瞬时 operational 故障
+
+    monkeypatch.setattr(runner_mod, "_resolve_one_candidate", _boom)
+    with pytest.raises(_sqlite3.OperationalError):  # 上抛而非吞（窄化 except 不捕 operational）
+        resolve_dependencies_once(dbf)
+    monkeypatch.undo()
+
+    conn = dbf()
+    try:
+        assert repos.get_task(conn, "victim")["status"] == "created"  # 未被误 cancel，留待重试
     finally:
         conn.close()
