@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "step_response_evaluate_agent 输出契约",
+  "description": "workflow.run() 成功返回的 outputs[0] 摘要对象。持久产物是 evaluation.json（确定性判据数字）与 evaluation.md（人读草案 + 水印）。任务 requires_human_review=true 故返回 success 后 Runtime 转 waiting_review，须工程师签发才 completed。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["zeta", "overshoot_fem", "overshoot_ref", "tolerance_pct", "passed", "verdict", "human_review_required", "artifacts"],
+  "properties": {
+    "zeta": { "type": "number" },
+    "overshoot_fem": { "type": "number", "description": "上游仿真超调量（%）。" },
+    "overshoot_ref": { "type": "number", "description": "包内闭式解析参考超调量（%）=100·e^(−ζπ/√(1−ζ²))。" },
+    "error_pct": { "type": ["number", "null"], "description": "相对误差（%）；未达评估条件时为 null。" },
+    "tolerance_pct": { "type": "number" },
+    "passed": { "type": "boolean", "description": "相对误差是否在容差内且上游已收敛。" },
+    "verdict": { "type": "string", "minLength": 1 },
+    "human_review_required": { "type": "boolean", "const": true },
+    "artifacts": { "type": "array", "items": { "type": "string" } }
+  }
+}

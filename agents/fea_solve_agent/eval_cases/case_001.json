@@ -1,0 +1,27 @@
+{
+  "case_id": "case_001",
+  "curation": "approved",
+  "description": "悬臂钢梁正例（50×10mm 矩形截面，L=1.0m，n_elements=10）。闭式解析 ω₁=52.49706 rad/s（f₁=8.3552 Hz），FEM 收敛值 52.49710（误差 8.6e-5%）。rhr=true 故任务停 waiting_review（非 completed）；产物 fea_solution.json 落库、md 带水印。omega1 检查带带宽 [52.4,52.6]：正确 FEM 稳过，若组装/边界/特征值求解写错致数值漂移则咬红。",
+  "inputs": {
+    "boundary_condition": "cantilever",
+    "E": 210000000000.0,
+    "I": 4.1666666666666667e-9,
+    "L": 1.0,
+    "rho": 7850.0,
+    "A": 0.0005,
+    "n_elements": 10
+  },
+  "expected": {
+    "task_status": "waiting_review",
+    "omega1_rad_s_approx": 52.497101,
+    "note": "人读期望旁注，不参与机判"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "waiting_review" },
+    { "kind": "artifact_exists", "file": "fea_solution.json" },
+    { "kind": "output_field", "file": "fea_solution.json", "path": "fem_result.omega1_rad_s", "op": "gte", "value": 52.4 },
+    { "kind": "output_field", "file": "fea_solution.json", "path": "fem_result.omega1_rad_s", "op": "lte", "value": 52.6 },
+    { "kind": "output_field", "file": "fea_solution.json", "path": "solver.converged", "op": "eq", "value": true },
+    { "kind": "artifact_contains", "file": "fea_solution.md", "value": "判定权在人" }
+  ]
+}

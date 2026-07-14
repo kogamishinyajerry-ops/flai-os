@@ -24,6 +24,32 @@ router = APIRouter(prefix="/api", tags=["tasks"])
 _INPUTS_MAX_BYTES = 256 * 1024
 
 
+class InputBinding(BaseModel):
+    """artifact→input 绑定（协作运行时 §3.1）：声明只从哪些上游拷产物入 input_file_ids。
+
+    from_tasks 空=默认拷全部上游 output（等价 input_binding=null）；非空=只拷这些上游
+    的 output，其余上游仍参与依赖等待但产物不注入下游。**typed + extra=forbid + 有界列表**
+    （Codex 增量2审 P2-4/P2-5）：任意 dict 会让 `{"from_tasks":1}` 过 Pydantic 后在服务端
+    迭代抛 TypeError→500，且无大小上限可提交 MB 级嵌套对象绕过 inputs 的 256KB 放大闸；
+    收成 str 列表模型后畸形入参得响亮 422、载荷天然有界。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    from_tasks: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("from_tasks")
+    @classmethod
+    def _from_tasks_sane_and_unique(cls, v: list[str]) -> list[str]:
+        seen: set[str] = set()
+        for tid in v:
+            if not tid.strip() or len(tid) > 64:
+                raise ValueError(f"非法上游 task_id：{tid!r}")
+            if tid in seen:
+                raise ValueError(f"input_binding.from_tasks 重复：{tid!r}")
+            seen.add(tid)
+        return v
+
+
 class CreateTaskRequest(BaseModel):
     # ADR-0019 D5：created_by 已从请求体删除，服务端从登录会话派生——身份
     # 不再自报。extra="forbid"：仍发 created_by 的旧客户端得到响亮 422 而非
@@ -33,10 +59,19 @@ class CreateTaskRequest(BaseModel):
     agent_id: str
     name: str | None = Field(default=None, max_length=200)
     inputs: dict[str, Any] = Field(default_factory=dict)
-    input_file_ids: list[str] = Field(default_factory=list)
+    # max_length（Codex 增量2审 R3 P2）：仅 minLength/唯一不够——无数量上限时可提交数万
+    # 个唯一 id，create_task 的 kind-allowlist 逐 id 查库=数万次 round trip 绕 256KB inputs
+    # 闸的 authenticated DoS。64 对直提交输入绰绰有余（resolver 管道注入是内部写、不过本闸）。
+    input_file_ids: list[str] = Field(default_factory=list, max_length=64)
     # M8/ADR-0016：可选归属——由导引协作会话产出的任务记会话 id，供协作工作台
     # 按会话分组。仅分组归属，不改执行语义；门户直建任务不带此字段（留 None）。
     conversation_id: str | None = Field(default=None, max_length=100)
+    # 协作运行时 §3.5：声明式依赖。depends_on 非空 → 任务滞留 created 由 resolver
+    # 在全部上游 completed 后管道产物入 input_file_ids 并入队（人是唯一签发者不变：
+    # 人建整图、人签每个 review 环节；resolver 只排序执行，绝不建/签任务）。
+    # input_binding：None=默认拷全部上游 output_file_ids；非 null 见 InputBinding（typed）。
+    depends_on: list[str] = Field(default_factory=list, max_length=32)
+    input_binding: InputBinding | None = Field(default=None)
 
     @field_validator("inputs")
     @classmethod
@@ -75,6 +110,21 @@ class CreateTaskRequest(BaseModel):
             if fid in seen:
                 raise ValueError(f"输入文件 id 重复：{fid!r}（契约要求 uniqueItems）")
             seen.add(fid)
+        return v
+
+    @field_validator("depends_on")
+    @classmethod
+    def depends_on_sane_and_unique(cls, v: list[str]) -> list[str]:
+        # Codex 增量2审 R1 P2：max_length=32 只限条数，单个 ID 无长度上限时可提交 MB 级
+        # 字符串绕 inputs 256KB 放大闸 + 404 detail 回显放大（authenticated DoS）。与
+        # input_file_ids 同口径钳每项（非空白、≤64、唯一），把 task_id 收成有界标识符。
+        seen: set[str] = set()
+        for tid in v:
+            if not tid.strip() or len(tid) > 64:
+                raise ValueError(f"非法依赖 task_id：{tid!r}")
+            if tid in seen:
+                raise ValueError(f"依赖 task_id 重复：{tid!r}")
+            seen.add(tid)
         return v
 
 
@@ -133,6 +183,65 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
         # （禁自审）也以此为准（现仅落库，策略待 owner 定角色轴）。
         created_by = request.state.user["display_name"]
         created_by_username = request.state.user["username"]
+        # 协作运行时 §3.4/§3.5：depends_on 只能引用**已存在**任务（→图按构造即 DAG，
+        # 无法建回边指向未来任务，无需运行时环检测）；缺失即 404 fail-closed。
+        # input_binding 引用的上游必在 depends_on 内（越权引用拒，T6）。
+        for dep_id in body.depends_on:
+            upstream = repos.get_task(conn, dep_id)
+            if upstream is None:
+                raise HTTPException(
+                    status_code=404, detail=f"依赖的上游任务不存在：{dep_id}"
+                )
+            # Codex 增量2审 R1 P1：依赖必须同 conversation 作用域（设计明列「不做跨
+            # conversation 依赖」）。conversation_id 是分组归属、机密由 classification/taint
+            # 独立管，但声明的排除须 fail-closed 强制——否则 C2 任务 depends_on C1 任务时
+            # resolver 会把 C1 产物管道漏进 C2 协作会话。None==None（门户直建）/C==C 放行，
+            # 不等即跨作用域 422 拒。
+            if upstream.get("conversation_id") != body.conversation_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"依赖跨协作会话作用域：上游 {dep_id} 归属会话 "
+                        f"{upstream.get('conversation_id')!r}，本任务归属 {body.conversation_id!r}"
+                        "——不支持跨 conversation 依赖（产物不得跨会话管道）"
+                    ),
+                )
+            # Codex 增量2审 R2 P1：依赖不得跨 eval/user 执行方隔离轴（ADR-0018）。用户
+            # 任务（本 API 建的一律 origin=user）depends_on 一个 origin=eval 跑批任务时，
+            # resolver 会把 eval 产物管道进 user 任务→user-origin sample gate 落库 samples，
+            # 污染真实用户样本库、违 M10 隔离。上游须 origin=user 否则 422 fail-closed。
+            if upstream.get("origin") != "user":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"依赖跨执行方隔离轴：上游 {dep_id} origin={upstream.get('origin')!r} 非 user"
+                        "——不得依赖 eval 跑批任务（ADR-0018 eval/user 隔离，防 eval 产物污染样本库）"
+                    ),
+                )
+        # 协作运行时安全边界（与 _open_input_files 按 kind 选权威根的放宽配对成闭）：
+        # 直接提交的 input_file_ids 只允许上传件（allowlist：kind=input）。上游产物
+        # （kind=output）唯一合法入口是 review-gated resolver 的管道注入
+        # （enqueue_dependent_task 合并写 input_file_ids）——绝不许绕过 depends_on/人签闸
+        # 直引他人 output，否则 _open_input_files 的 task_runs_dir 放宽会沦为直读任意
+        # 任务产物的旁路。allowlist 而非 denylist：未来新增 kind 默认拒（fail-closed）。
+        # 缺失文件（get_file=None）留执行期 _open_input_files 兜底，不在创建期拒。
+        for fid in body.input_file_ids:
+            rec = repos.get_file(conn, fid)
+            if rec is not None and rec.get("kind") != "input":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"input_file_ids 只接受上传件（kind=input）：{fid} 的 kind="
+                        f"{rec.get('kind')!r}——上游产物须经依赖 resolver 管道注入，不得直引"
+                    ),
+                )
+        if body.input_binding is not None:
+            stray = [t for t in body.input_binding.from_tasks if t not in body.depends_on]
+            if stray:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"input_binding 引用了 depends_on 之外的任务（越权）：{stray}",
+                )
         create_kwargs = dict(
             task_id=task_id,
             agent_id=body.agent_id,
@@ -143,6 +252,9 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             inputs=body.inputs,
             input_file_ids=body.input_file_ids,
             metadata={},
+            depends_on=body.depends_on or None,
+            # 持久化为普通 dict（repos.create_task json.dumps 落库）；None 保持 None。
+            input_binding=body.input_binding.model_dump() if body.input_binding is not None else None,
             conversation_id=body.conversation_id,
         )
         if body.conversation_id is not None:
@@ -174,18 +286,32 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                 raise
         else:
             repos.create_task(conn, **create_kwargs)
-        # P2-4：created->queued 由本创建动作原子完成（docs/05 §6「两处文档化原子例外」
-        # 之一）——先把状态迁到 queued，再发 task_created 事件，事件 payload 显式携带
-        # status_from/status_to 双态见证，而不是只见证 created 这一态就消失。
-        task = repos.set_task_status(conn, task_id, "queued")
+        # 协作运行时 §3.5 条件短路（F4 命门修复）：depends_on 非空的任务**不自动入队**，
+        # 滞留 created 由 resolver 在全部上游 completed 后管道产物入 input 并入队——否则
+        # 带依赖任务会在此被 P2-4 无条件推进到 queued，resolver 永远看不到 created 态、
+        # 且 input_file_ids 尚无上游产物（"滞留 created"整机制静默失效）。
+        # 无依赖任务保持 P2-4 原子 created->queued（docs/05 §6 文档化原子例外）。
+        if body.depends_on:
+            task = repos.get_task(conn, task_id)
+            status_to = "created"
+            message = f"任务已创建（等待 {len(body.depends_on)} 个前置任务）：agent={body.agent_id}"
+        else:
+            task = repos.set_task_status(conn, task_id, "queued")
+            status_to = "queued"
+            message = f"任务已创建：agent={body.agent_id}"
         repos.append_event(
             conn,
             task_id=task_id,
             agent_id=body.agent_id,
             event_type="task_created",
             level="info",
-            message=f"任务已创建：agent={body.agent_id}",
-            payload={"created_by": created_by, "status_from": "created", "status_to": "queued"},
+            message=message,
+            payload={
+                "created_by": created_by,
+                "status_from": "created",
+                "status_to": status_to,
+                "depends_on": body.depends_on or [],
+            },
         )
         return task
     finally:
@@ -294,16 +420,14 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             )
 
         reviewer = request.state.user["display_name"]  # ADR-0019 D5：签发者=认证身份
-        payload = {"reviewer": reviewer, "comment": body.comment}
         try:
-            if body.action == "approve":
-                task = repos.set_task_status(conn, task_id, "completed")
-            else:
-                # action == "reject"（Literal 已锁定只有两值）
-                reject_reason = f"人工拒绝（reviewer={reviewer}）" + (
-                    f"：{body.comment}" if body.comment else ""
-                )
-                task = repos.set_task_status(conn, task_id, "failed", error_message=reject_reason)
+            # Codex 增量2审 R4 P1：状态迁移 + 样本标签回填 + signer 事件三者**同一事务
+            # 原子落库**（此前三次分离提交，crash 窗口可留下 status=completed 却无
+            # review_approved 事件的任务，resolver 见 status 即放行下游）。approve→completed
+            # + review_approved / reject→failed + review_rejected；样本 approve→1/reject→0。
+            task, _sample_rows = repos.apply_human_review(
+                conn, task_id, action=body.action, reviewer=reviewer, comment=body.comment
+            )
         except IllegalTransitionError as exc:
             # R1 复审 P2：两个 review 请求并发命中同一 waiting_review 任务时，
             # 后到者可通过预检但在状态机层被拒——这是正常并发竞态，
@@ -313,17 +437,11 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
                 detail=f"任务已被并发的人工审核动作转出 waiting_review，本次不生效：{exc}",
             ) from exc
 
-        # 回填该任务全部样本的工程师确认标签（approve→1 / reject→0）。
-        # collect_samples 型 Agent 执行时留 NULL（结果未定），此处按人工审核结论
-        # 定标，确保下游只把工程师认可的草案当作可复用数据。
-        sample_rows = repos.set_sample_review_outcome(
-            conn, task_id, accepted=(body.action == "approve")
-        )
-
         # 治理签发审计（M12-2c）：人工放行/拒绝是「人是唯一签发者」红线的落点，
         # 是平台最安全承重的动作——此前只落 task_event（应用数据），无篡改抗性的
         # audit.log 轨。此处补审计轴：actor=签发者唯一 username（P2-4 唯一身份纪律），
-        # 记录被签发任务、创建者、及自审标记。
+        # 记录被签发任务、创建者、及自审标记。audit.log 独立于 DB（不同持久化域，无法
+        # 互相原子），故置于原子 DB 提交**之后**——只为已提交的签发决策落审计。
         # 自审判定（迁移 #9 后升级）：created_by_username 存在（新任务）时按唯一
         # username 精确比对——绝不因显示名撞名误判；legacy 行（该列 NULL）回退
         # display_name 近似比对，并标 self_review_basis 说明证据等级。仍**只标记
@@ -346,30 +464,6 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             created_by_username=created_by_username if created_by_username is not None else "(legacy-null)",
             self_review=self_review,
             self_review_basis=self_review_basis,
-        )
-
-        if body.action == "approve":
-            repos.append_event(
-                conn,
-                task_id=task_id,
-                agent_id=task.get("agent_id"),
-                event_type="review_approved",
-                level="info",
-                message=f"人工批准放行（reviewer={reviewer}），任务转 completed"
-                + (f"；{sample_rows} 条样本标记为工程师认可" if sample_rows else ""),
-                payload=payload,
-            )
-            return cgate.redact_task_row_if_sensitive(conn, task)  # ADR-0025 一致封闭
-
-        repos.append_event(
-            conn,
-            task_id=task_id,
-            agent_id=task.get("agent_id"),
-            event_type="review_rejected",
-            level="warning",
-            message=f"人工拒绝（reviewer={reviewer}），任务转 failed"
-            + (f"；{sample_rows} 条样本标记为未认可" if sample_rows else ""),
-            payload=payload,
         )
         return cgate.redact_task_row_if_sensitive(conn, task)  # ADR-0025 一致封闭
     finally:

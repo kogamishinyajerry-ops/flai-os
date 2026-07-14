@@ -117,6 +117,26 @@ class AgentRegistry:
                 f"{entry} status={status!r} 但 owner.maintainer/business_reviewer 仍为 TBD"
                 "（trial 及以上状态禁止 TBD，agent.schema.json owner 字段说明的强制校验）"
             )
+
+        # 判决⟹人签 注册期不变量（协作运行时 F3 owner 裁决=注册期不变量）：
+        # 作为 job 任务运行且调 LLM（profile != none）的 Agent 必须 review-gated——令
+        # 协作运行时 depends_on 链里的非 review-gated 上游恒为 profile=none 确定性 Agent，
+        # 自动链是安全自动化，LLM 判决永不无人签流经依赖链。interactive Agent 豁免（跑
+        # ConversationService 不入链、create_task 本就 409 拒之，安全阀=ADR-0012 绝不建任务）。
+        # 同 P2-7：跨字段条件（mode×profile ⟹ requires_human_review）jsonschema 无法表达，
+        # 故在 Registry 扫描侧 Python 补，fail-closed 拒载。
+        workflow = data.get("workflow", {}) or {}
+        model = data.get("model", {}) or {}
+        if (
+            workflow.get("mode") == "job"
+            and model.get("profile") not in (None, "none")
+            and workflow.get("requires_human_review") is not True
+        ):
+            raise InvalidPackageError(
+                f"{entry} workflow.mode=job 且 model.profile={model.get('profile')!r}（调 LLM）"
+                "但 workflow.requires_human_review 非 True——判决型 job Agent 必须 review-gated"
+                "（协作运行时 F3 注册期不变量：LLM 判决必经人签，绝不自动流经依赖链）"
+            )
         return data
 
     def get(self, agent_id: str) -> dict[str, Any] | None:

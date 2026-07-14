@@ -1,0 +1,16 @@
+{
+  "case_id": "case_004",
+  "curation": "approved",
+  "description": "任务失败路径覆盖（Codex 异源审 P2-1，min_eval_coverage 晋升门要求至少一个 status_is:failed 案）：喂畸形产物（缺 params/fem_result，非 fea_solve_agent 完整产出）→ evaluate 诚实 _fail → 任务 failed。验证 evaluate 对不完整上游产物不兜底修复、不编造评估。",
+  "inputs": {
+    "tolerance_pct": 2.0
+  },
+  "input_files": ["fixtures/malformed/bad_solution.json"],
+  "expected": {
+    "task_status": "failed",
+    "note": "人读期望旁注，不参与机判"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "failed" }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "step_response_solve_agent 输入契约",
+  "description": "标准二阶欠阻尼系统单位阶跃响应求解参数。非法输入（ζ 越界/非正 ωn/n_steps 越界）在 Runtime _validate_inputs 层经 jsonschema 直接 fail-closed 拒绝，不进 workflow.py——与所有既有 Agent 同一套通用机制。ωn 量级护栏（minimum/maximum）只拦『离谱到几个数量级的量纲滑档』，不是完整系统辨识校验。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["zeta", "omega_n"],
+  "properties": {
+    "zeta": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "exclusiveMaximum": 1,
+      "description": "阻尼比 ζ，限欠阻尼 0<ζ<1（临界/过阻尼 ζ≥1 无超调，超调闭式 Mp=e^(−ζπ/√(1−ζ²)) 亦仅对欠阻尼有定义）。"
+    },
+    "omega_n": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "minimum": 0.001,
+      "maximum": 1000000.0,
+      "description": "自然频率 ωn（rad/s）。量级护栏 1e-3~1e6 覆盖极慢到极快系统，拦量纲滑档。注意：超调量只依赖 ζ、与 ωn 无关，ωn 仅设定时间尺度（仿真窗/步长）。"
+    },
+    "n_steps": {
+      "type": "integer",
+      "minimum": 4,
+      "maximum": 200000,
+      "description": "梯形积分步数（默认 2000）。下界保留 4（而非收紧到大值）是为诚实负例——粗步长下超调有真实 O(h²) 离散误差可超容差，evaluate 侧据此拦截；不得为『优化』收紧到大值而作废该失败路径。"
+    }
+  }
+}

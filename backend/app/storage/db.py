@@ -55,10 +55,16 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- sensitive）。可空：新任务 create 时留 NULL，执行期 runtime 落库；read 门读此
     -- 列不重派生（抗工具卸载漂移，Codex R1-B）。
     data_classification TEXT,
-    -- created_by_username（迁移 #9）：发起人的不可变唯一 username，区别于
-    -- created_by（display_name，可变且非唯一）。批C 个人贡献归因/职责分离的
-    -- 身份主键——按 username 归因绝不撞名。可空：存量行留 NULL（自报时代之后
-    -- 才有的追溯，不可从 display_name 反推，同迁移 #6 uploaded_by 口径）。
+    -- depends_on / input_binding（迁移 #9/协作运行时 forge §3.1）：声明式任务依赖 +
+    -- artifact→input 绑定。均可空 NULL=无依赖。depends_on=JSON array 上游 task_id
+    -- （建时冻结、只引已存在任务 → DAG-by-construction）；input_binding=JSON
+    -- （None=默认拷全部上游 output_file_ids 入本任务 input_file_ids）。
+    depends_on TEXT,
+    input_binding TEXT,
+    -- created_by_username（迁移 #9/批C，与协作运行时 forge 同期并行两支各称 #9）：发起人的
+    -- 不可变唯一 username，区别于 created_by（display_name，可变且非唯一）。批C 个人贡献归因/
+    -- 职责分离的身份主键——按 username 归因绝不撞名。可空：存量行留 NULL（自报时代之后才有的
+    -- 追溯，不可从 display_name 反推，同迁移 #6 uploaded_by 口径）。
     created_by_username TEXT
 );
 
@@ -358,11 +364,21 @@ def init_db(db_path: str | Path) -> None:
             # 贡献归因/职责分离前置）。可空、无 DEFAULT：存量行留 NULL，绝不用
             # created_by（display_name）反推冒充（自报时代不冒充追溯，同迁移 #6
             # uploaded_by）。同在写锁内探测补列，口径同前八迁移。
+            # 迁移 #10（协作运行时 forge §3.1）：tasks.depends_on / input_binding——
+            # 声明式任务依赖 + artifact→input 绑定。均可空：存量行 NULL=无依赖，
+            # 行为不变（resolver 只扫 depends_on 非空的 created 任务）。depends_on=
+            # JSON array of 上游 task_id（建时冻结、只引已存在任务 → 图按构造即 DAG）；
+            # input_binding=JSON（None=默认拷全部上游 output_file_ids）。
             task_cols_v9 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
             if "created_by_username" not in task_cols_v9:
                 conn.execute("ALTER TABLE tasks ADD COLUMN created_by_username TEXT")
-            # 迁移 #10（T2/#5）：eval_runs.snapshot_handle——run 绑定其冻结快照句柄。
-            # 存量 run 无快照=NULL（执行侧回退活磁盘，向后兼容）。同写锁内探测补列。
+            if "depends_on" not in task_cols_v9:
+                conn.execute("ALTER TABLE tasks ADD COLUMN depends_on TEXT")
+            if "input_binding" not in task_cols_v9:
+                conn.execute("ALTER TABLE tasks ADD COLUMN input_binding TEXT")
+            # 迁移 #11（T2/#5）：eval_runs.snapshot_handle——run 绑定其冻结快照句柄。存量 run
+            # 无快照=NULL（执行侧回退活磁盘，向后兼容）。同写锁内探测补列。原 feat 分支标 #10，
+            # 合并（→ main）时 #10 已被协作运行时 forge 的 depends_on/input_binding 占用，顺延 #11。
             eval_cols = {row[1] for row in conn.execute("PRAGMA table_info(eval_runs)")}
             if "snapshot_handle" not in eval_cols:
                 conn.execute("ALTER TABLE eval_runs ADD COLUMN snapshot_handle TEXT")

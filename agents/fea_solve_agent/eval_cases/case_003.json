@@ -1,0 +1,21 @@
+{
+  "case_id": "case_003",
+  "curation": "approved",
+  "description": "非法输入失败路径：E=-1（负杨氏模量）违反 input_schema.json 的 exclusiveMinimum:0，在 Runtime _validate_inputs 层经 jsonschema 直接 fail-closed，任务 failed，不进 workflow。验证契约层护栏真起作用（而非逢输入必求解）。",
+  "inputs": {
+    "boundary_condition": "cantilever",
+    "E": -1.0,
+    "I": 4.1666666666666667e-9,
+    "L": 1.0,
+    "rho": 7850.0,
+    "A": 0.0005,
+    "n_elements": 10
+  },
+  "expected": {
+    "task_status": "failed",
+    "note": "人读期望旁注，不参与机判"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "failed" }
+  ]
+}

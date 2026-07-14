@@ -1,0 +1,21 @@
+{
+ "params": {
+  "zeta": 0.5,
+  "omega_n": 1.0,
+  "n_steps": 12
+ },
+ "response_result": {
+  "overshoot_pct": 23.078123972847454,
+  "peak_value": 1.2307812397284745,
+  "steady_state": 1.0,
+  "n_steps": 12,
+  "horizon_s": 14.510394913873743,
+  "dt_s": 1.2091995761561452,
+  "integrator": "trapezoidal_bilinear_fixed_step"
+ },
+ "solver": {
+  "method": "trapezoidal_bilinear_fixed_step",
+  "converged": true
+ },
+ "human_review_required": true
+}

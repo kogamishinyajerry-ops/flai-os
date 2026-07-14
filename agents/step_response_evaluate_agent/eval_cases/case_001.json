@@ -1,0 +1,24 @@
+{
+  "case_id": "case_001",
+  "curation": "approved",
+  "description": "欠阻尼 ζ=0.5 n=2000 仿真产物评估正例（fixture 由 step_response_solve_agent 真实产出）。仿真超调=16.3036 vs 闭式 Mp_ref=16.3034，相对误差 0.0016% ≪ 2% → passed=true、verdict 含『一致』。rhr=true 故任务停 waiting_review；草案带水印。",
+  "curation_note": "input_files 的 step_solution.json 是 step_response_solve_agent 对应参数的真实产物，非手工构造。",
+  "inputs": {
+    "tolerance_pct": 2.0
+  },
+  "input_files": ["fixtures/underdamped_fine/step_solution.json"],
+  "expected": {
+    "task_status": "waiting_review",
+    "passed": true,
+    "note": "人读期望旁注，不参与机判"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "waiting_review" },
+    { "kind": "artifact_exists", "file": "evaluation.json" },
+    { "kind": "output_field", "file": "evaluation.json", "path": "passed", "op": "eq", "value": true },
+    { "kind": "output_field", "file": "evaluation.json", "path": "upstream_converged", "op": "eq", "value": true },
+    { "kind": "output_field", "file": "evaluation.json", "path": "error_pct", "op": "lte", "value": 0.5 },
+    { "kind": "artifact_contains", "file": "evaluation.md", "value": "判定权在人" },
+    { "kind": "artifact_contains", "file": "evaluation.md", "value": "一致" }
+  ]
+}

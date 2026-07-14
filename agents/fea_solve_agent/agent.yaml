@@ -1,0 +1,60 @@
+id: fea_solve_agent
+name: "FEA 梁固有频率求解 Agent（纯 Python 有限元）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: structured_gen
+summary: "把等截面 Euler-Bernoulli 梁（悬臂/简支）用纯 Python 有限元（三次 Hermite 梁单元 + 一致质量阵）确定性求解一阶固有频率 ω₁，零 LLM、零工具、零第三方依赖（无 numpy），停 waiting_review 待工程师签发。"
+description: >
+  判据①第一发零内核 diff 验证弹·求解侧。零 LLM（model.profile=none）零工具
+  （tools=[]）：workflow 内联实现等截面梁横向自由振动的有限元离散——2 节点
+  三次 Hermite 梁单元、一致（consistent）质量阵，广义特征值问题 K φ = λ M φ
+  取最小特征值 λ₁=ω₁²，用纯 stdlib Cholesky 正定性二分求解（不依赖 numpy——
+  numpy 未接入本仓 pyproject/verify_all.sh 的 uv --with 列表）。输出
+  fea_solution.json（含求解 params 原样回存 + ω₁_fem + solver.converged）
+  与 fea_solution.md（人读摘要 + 水印）。刚度阵非正定/二分不收敛（结构约束
+  不足成机构）→ 诚实 failed，绝不返回发散数当解。requires_human_review=true：
+  求解结果即工程结论输入，停 waiting_review 等工程师签发放行（人是唯一签发
+  者），签发后其产物才经 depends_on/input_binding 管道流入 fea_evaluate_agent。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: none
+knowledge:
+  enabled: false
+  scopes: []
+tools: []
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats:
+    - .json
+    - .md
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: true
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: false
+  sample_fields: []
+limitations:
+  - "只做等截面梁一阶横向固有频率的线性有限元：不做高阶模态振型输出、非线性、屈曲、阻尼、静力位移/应力分析。"
+  - "仅支持悬臂（cantilever, fixed-free）与简支（simply_supported）两种边界条件：不支持固支-固支、弹性支承、多跨、变截面。"
+  - "特征值求解为纯 Python 手写 Cholesky 正定性二分（无 numpy/scipy）：适用小规模模型（n_elements≤64），大规模/病态问题的数值稳定性未经验证。"
+  - "不判定工程结论：ω₁ 是确定性计算结果，是否满足设计要求（避开激励频率等）由 fea_evaluate_agent 对照闭式解析解判据给出，采信权在工程师。"
+  - "结构约束不足成机构（刚度阵非正定）时诚实 failed 并指出，不臆测补充边界条件、不返回发散或 NaN 当解。"

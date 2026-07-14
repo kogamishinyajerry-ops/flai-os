@@ -1,0 +1,24 @@
+{
+  "case_id": "case_001",
+  "curation": "approved",
+  "description": "悬臂钢梁 n=10 求解产物评估正例（fixture 由 fea_solve_agent 真实产出）。FEM ω₁=52.497101 vs 闭式 ω₁_ref=52.497056，相对误差 8.6e-5% ≪ 2% → passed=true、verdict 含『一致』。rhr=true 故任务停 waiting_review；草案带水印。",
+  "curation_note": "input_files 的 fea_solution.json 是 fea_solve_agent 对应参数的真实产物，非手工构造。",
+  "inputs": {
+    "tolerance_pct": 2.0
+  },
+  "input_files": ["fixtures/cantilever_n10/fea_solution.json"],
+  "expected": {
+    "task_status": "waiting_review",
+    "passed": true,
+    "note": "人读期望旁注，不参与机判"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "waiting_review" },
+    { "kind": "artifact_exists", "file": "evaluation.json" },
+    { "kind": "output_field", "file": "evaluation.json", "path": "passed", "op": "eq", "value": true },
+    { "kind": "output_field", "file": "evaluation.json", "path": "upstream_converged", "op": "eq", "value": true },
+    { "kind": "output_field", "file": "evaluation.json", "path": "error_pct", "op": "lte", "value": 0.01 },
+    { "kind": "artifact_contains", "file": "evaluation.md", "value": "判定权在人" },
+    { "kind": "artifact_contains", "file": "evaluation.md", "value": "一致" }
+  ]
+}

@@ -25,7 +25,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import BinaryIO, Callable, Iterator
+from typing import Any, BinaryIO, Callable, Iterator
 
 import sqlite3
 
@@ -41,6 +41,10 @@ logger = logging.getLogger(__name__)
 # 部署自检门以「心跳新鲜 + 代际匹配」双条件见证独立 worker 进程跑当前代码——
 # API 升级而 worker 未重启时旧 worker 落库走 DDL DEFAULT 洗白 sensitive 派生。
 _HEARTBEAT_INTERVAL_SECONDS = 15.0
+# 依赖解析节奏（Codex 增量2审 R3 P2）：resolver 按独立节流跑、不每 run_once 前都跑——
+# 就绪队列长时 run_once 连返 True 无 sleep，逐次前置 resolve 会把无变化的阻塞集重扫致
+# 吞吐坍塌。1s 节流下阻塞任务的解析延迟无害（它本就在等上游）。
+_RESOLVE_INTERVAL_SECONDS = 1.0
 
 _INTERRUPTED_STATUSES = ("validating", "running", "parsing", "analyzing")
 _WORKER_INTERRUPTED_ERROR = (
@@ -120,6 +124,180 @@ def worker_singleton_lock(lock_path: str | Path) -> Iterator[None]:
             handle.close()
 
 
+def resolve_dependencies_once(conn_factory: Callable[[], sqlite3.Connection]) -> int:
+    """一趟依赖解析（协作运行时 §3.3，确定性、无 LLM、无 model_gateway 调用）。
+
+    对每个 created 且 depends_on 非空的 user 任务：
+      - 任一上游 failed/cancelled/缺失 → created→cancelled(reason=upstream_failed)，
+        fail-closed 绝不在失败上游上执行下游。
+      - 全部上游 completed → 拷全部上游 output_file_ids 入 input_file_ids + created→queued
+        （repos.enqueue_dependent_task 原子）。**绝不写 data_classification**——分级 100%
+        交下游执行期既有派生（_task_input_classification 读刚管道进来的产物文件污点）。
+      - 否则（上游 waiting_review/进行中/created）→ 保持 created，下 tick 再看。
+    返回本轮推进（入队+取消）的任务数。JobRunner claim 循环不受影响（只 claim queued）。
+    """
+    conn = conn_factory()
+    try:
+        candidates = repos.list_created_dependent_tasks(conn)
+    finally:
+        conn.close()
+
+    advanced = 0
+    for task in candidates:
+        conn = conn_factory()
+        try:
+            if _resolve_one_candidate(conn, task):
+                advanced += 1
+        except Exception as exc:
+            # R1（loop-auditor）+ 命中即审 R3 + final-confirm：**单候选毒丸隔离，黑名单-瞬时**。
+            # broad catch，只 re-raise 瞬时 operational 错（sqlite3.OperationalError 锁超时/IO——DB
+            # 恢复后本可重试，绝不当毒丸 cancel **永久误杀合法任务**，上抛至 _resolve_if_due except
+            # 兜底记日志+下 tick 重试）；其余一律 quarantine（created→cancelled+诊断）：确定性畸形
+            # 持久数据（depends_on/上游 output_file_ids 非 list=TypeError、input_binding 非 dict=
+            # AttributeError、depends_on 元素非 str=sqlite3.ProgrammingError、畸形 agent_id 致事件契约
+            # =ValueError…直调 repos/legacy/迁移可绕 API Pydantic 写入），重试必永久命中、掀翻整趟令
+            # 后续合法候选饿死。**★final-confirm 修正方向**：前版白名单 (TypeError,KeyError,ValueError)
+            # 漏了 AttributeError/ProgrammingError 等毒丸→重新饿死；**毒丸集是开集**，正解=黑名单
+            # **瞬时**（小闭集）、quarantine 其余。契约收紧/写边界校验（R2）defer 内网，本隔离使
+            # resolver 对**已存**畸形数据鲁棒（quarantine 非 prevent）。
+            if isinstance(exc, sqlite3.OperationalError):
+                raise  # 瞬时 operational 故障：上抛兜底重试，绝不 quarantine 误杀合法任务
+            if _quarantine_poison_candidate(conn, task, exc):
+                advanced += 1
+        finally:
+            conn.close()
+    return advanced
+
+
+def _resolve_one_candidate(conn: sqlite3.Connection, task: dict[str, Any]) -> bool:
+    """处理单个 created 依赖候选，返回是否推进（入队/级联取消）。任何异常交调用方
+    quarantine 隔离（R1），故遇畸形持久数据可自然抛、绝不自吞。"""
+    task_id = task["id"]
+    upstream_ids = task.get("depends_on") or []
+    upstreams = [repos.get_task(conn, uid) for uid in upstream_ids]
+    failed = [
+        uid for uid, u in zip(upstream_ids, upstreams)
+        if u is None or u["status"] in ("failed", "cancelled")
+    ]
+    if failed:
+        return repos.cancel_dependent_task(
+            conn, task_id,
+            f"上游任务失败/取消/缺失，依赖无法满足：{', '.join(failed)}",
+            event={  # R2 P2：事件与状态迁移同事务原子写
+                "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
+                "level": "warning",
+                "message": "依赖的上游任务失败或被取消，本任务级联取消（绝不在失败上游上执行）",
+                "payload": {"reason": "upstream_failed", "upstream_task_ids": failed},
+            },
+        ) is not None
+    # Codex 增量2审 R2 P1：上游跨 eval/user 执行方隔离轴（origin≠user）→ fail-closed 级联
+    # 取消。创建期已挡（tasks.py），此为 legacy/混版任务的消费侧兜底（ADR-0018：eval 产物
+    # 绝不经依赖链流入 user 任务→user-origin sample gate 污染样本库）。
+    non_user = [
+        uid for uid, u in zip(upstream_ids, upstreams)
+        if u is not None and u.get("origin") != "user"
+    ]
+    if non_user:
+        return repos.cancel_dependent_task(
+            conn, task_id,
+            f"上游任务跨 eval/user 隔离轴（origin≠user）：{', '.join(non_user)}",
+            event={
+                "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
+                "level": "warning",
+                "message": "依赖的上游任务非 user 执行方（eval 隔离轴），本任务级联取消（ADR-0018 防样本库污染）",
+                "payload": {"reason": "upstream_origin_isolation", "upstream_task_ids": non_user},
+            },
+        ) is not None
+    # K1 签发维 provenance（Codex 增量2审 R5-1 + loop-auditor）：上游已 completed 但无签发
+    # 见证（未签 LLM 判决 / agent_version manifest 不可确立）→ fail-closed 级联取消。completed
+    # 只是时序代理；legacy pre-§3.6 任务可能自动放行无人签，其未签产物绝不越依赖边界；已
+    # 终态永不自愈故取消而非等待。resolver 生产侧 + 消费侧 runtime._open_input_files 双点同守。
+    unsigned = [
+        uid for uid, u in zip(upstream_ids, upstreams)
+        if u is not None and u["status"] == "completed"
+        and not repos.task_output_is_signed_off(conn, u)
+    ]
+    if unsigned:
+        return repos.cancel_dependent_task(
+            conn, task_id,
+            f"上游已 completed 但无签发见证（未签 LLM 判决/manifest 不可确立）：{', '.join(unsigned)}",
+            event={
+                "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
+                "level": "warning",
+                "message": "依赖的上游 completed 但产物未过人工签发闸（K1 签发维 provenance），级联取消（fail-closed 未签判决绝不越界）",
+                "payload": {"reason": "upstream_unsigned", "upstream_task_ids": unsigned},
+            },
+        ) is not None
+    if not all(u is not None and u["status"] == "completed" for u in upstreams):
+        return False  # 上游未全完成、无失败 → 保持 created
+    # input_binding 兑现（Codex 增量2审 P2-3）：非空 from_tasks 只从声明的上游拷产物入下游
+    # input，其余上游仍参与依赖等待但产物不注入（防越权拷入调用方显式排除的文件，含
+    # sensitive）。空/None=默认拷全部上游 output。
+    binding = task.get("input_binding") or {}
+    from_tasks = binding.get("from_tasks") or None
+    piped: list[str] = []
+    invalid: list[str] = []
+    for u in upstreams:
+        if from_tasks is not None and u["id"] not in from_tasks:
+            continue
+        for fid in u.get("output_file_ids") or []:
+            # Codex 增量2审 R1 P1：管道 ID 必须是真 registered kind=output 且属该上游——陈旧/
+            # legacy 行若把 input-file id 混入 output_file_ids，下游 _open_input_files 会当普通上传
+            # （uploads_dir、无 provenance）消费，绕过 registered-output 边界。生产侧 fail-closed
+            # 校验配合消费侧 provenance 双端收口；任一无效即整体作废、级联取消（绝不喂未注册文件）。
+            rec = repos.get_file(conn, fid)
+            if rec is None or rec.get("kind") != "output" or rec.get("task_id") != u["id"]:
+                invalid.append(fid)
+            else:
+                piped.append(fid)
+    if invalid:
+        return repos.cancel_dependent_task(
+            conn, task_id,
+            f"上游产物完整性校验失败，管道 id 非本上游 registered output：{', '.join(invalid)}",
+            event={
+                "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
+                "level": "warning",
+                "message": "上游 output_file_ids 含非法/非本上游 registered output，级联取消（fail-closed 绝不喂入未注册文件）",
+                "payload": {"reason": "upstream_output_integrity", "invalid_file_ids": invalid},
+            },
+        ) is not None
+    return repos.enqueue_dependent_task(
+        conn, task_id, piped,
+        event={  # R2 P2：dependency_resolved 事件与 created→queued 同事务原子写
+            "agent_id": task.get("agent_id"), "event_type": "agent_log",
+            "level": "info",
+            "message": f"依赖满足：{len(upstream_ids)} 个上游全部完成，管道 {len(piped)} 件产物入队",
+            "payload": {
+                "workflow_event_type": "dependency_resolved",
+                "upstream_task_ids": upstream_ids,
+                "piped_file_count": len(piped),
+            },
+        },
+    ) is not None
+
+
+def _quarantine_poison_candidate(
+    conn: sqlite3.Connection, task: dict[str, Any], exc: Exception
+) -> bool:
+    """R1 毒丸隔离：把处理时抛异常的畸形候选 created→cancelled 并留诊断，使其不再每 tick
+    重命中掀翻整趟 resolver。诊断事件用 **agent_id=None**——候选自身 agent_id 可能正是畸形源
+    （违 event.schema pattern，正是抛异常之一因），复用之会令 quarantine 自身二次抛。若
+    quarantine 仍抛（极端），交调用方 finally 关连接、异常上抛至 _resolve_if_due 的 except 兜底
+    （worker 存活、本 tick 退化为旧全-pass-loss、下 tick 再试），绝不静默吞。"""
+    task_id = task.get("id")
+    return repos.cancel_dependent_task(
+        conn, task_id,
+        f"候选依赖解析抛异常，畸形持久数据隔离（quarantine）：{type(exc).__name__}: {exc}",
+        event={
+            "agent_id": None,  # 候选 agent_id 可能畸形（毒丸源），quarantine 事件绝不复用之
+            "event_type": "task_cancelled",
+            "level": "error",
+            "message": "候选依赖解析遇畸形持久数据抛异常，单候选隔离取消（R1：绝不掀翻整趟 resolver 令合法候选饿死）",
+            "payload": {"reason": "poison_candidate_quarantined", "error_type": type(exc).__name__},
+        },
+    ) is not None
+
+
 def recover_interrupted_tasks(
     conn_factory: Callable[[], sqlite3.Connection],
 ) -> int:
@@ -171,6 +349,7 @@ class JobRunner:
         self._conn_factory = conn_factory
         self._poll_interval = poll_interval
         self._last_beat_monotonic: float | None = None
+        self._last_resolve_monotonic: float | None = None
 
     def beat(self) -> None:
         """写 worker 心跳+代际（迁移 #7）。失败只记日志不上抛——心跳是部署
@@ -201,6 +380,21 @@ class JobRunner:
             or time.monotonic() - self._last_beat_monotonic >= _HEARTBEAT_INTERVAL_SECONDS
         ):
             self.beat()
+
+    def _resolve_if_due(self) -> None:
+        """依赖解析按独立节流跑（Codex 增量2审 R3 P2）：距上次 <间隔 则跳过，避免就绪
+        队列长时对无变化阻塞集的重扫。异常只记日志不炸 worker（resolver 确定性）。"""
+        now = time.monotonic()
+        if (
+            self._last_resolve_monotonic is not None
+            and now - self._last_resolve_monotonic < _RESOLVE_INTERVAL_SECONDS
+        ):
+            return
+        self._last_resolve_monotonic = now
+        try:
+            resolve_dependencies_once(self._conn_factory)
+        except Exception:
+            logger.exception("run_forever：resolve_dependencies_once 抛异常，继续轮询")
 
     def run_once(self) -> bool:
         """拾取并执行一条 queued 任务；无任务可拾取返回 False。
@@ -305,6 +499,9 @@ class JobRunner:
         try:
             while True:
                 self._beat_if_due()  # 心跳先于拾取：空轮询也证明 worker 活着（迁移 #7）
+                # 依赖解析按独立节流跑（§3.3 + R3 P2）：满足依赖的任务 created→queued 后，
+                # 后续 run_once 即可拾取。节流避免就绪队列长时重扫无变化阻塞集。
+                self._resolve_if_due()
                 try:
                     did_work = self.run_once()
                 except Exception:

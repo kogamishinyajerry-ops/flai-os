@@ -54,6 +54,10 @@ def _decode_task(row: sqlite3.Row) -> dict[str, Any]:
     _decode_json(d, "output_file_ids", default=[])
     _decode_json(d, "inputs_json", "inputs", default={})
     _decode_json(d, "metadata_json", "metadata", default={})
+    # 迁移 #9（协作运行时）：depends_on 缺省 []（存量 NULL / 无依赖）；input_binding
+    # 缺省 None（默认拷全部上游 output）。存量库无此列时 dict(row) 无该键，兜默认。
+    d["depends_on"] = json.loads(d["depends_on"]) if d.get("depends_on") else []
+    d["input_binding"] = json.loads(d["input_binding"]) if d.get("input_binding") else None
     return d
 
 
@@ -71,8 +75,14 @@ def create_task(
     conversation_id: str | None = None,
     origin: str = "user",
     created_by_username: str | None = None,
+    depends_on: list[str] | None = None,
+    input_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """建任务：初始态永远是 created（未入队）。
+
+    depends_on / input_binding（迁移 #10/协作运行时 §3.5）：声明式依赖。depends_on
+    非空时任务滞留 created 由 resolver 在全部上游 completed 后拷产物入 input_file_ids
+    并入队（API 层负责"depends_on 非空则不自动入队"的短路，本函数只忠实落列）。
 
     conversation_id（M8/ADR-0016）：若本任务由导引协作会话产出，记会话 id 以便
     协作工作台按会话分组；门户直建任务留 None。仅作分组归属，不改任何执行语义。
@@ -94,8 +104,8 @@ def create_task(
             (id, agent_id, agent_version, name, status, created_by,
              created_at, updated_at, started_at, finished_at,
              input_file_ids, output_file_ids, inputs_json, error_message, metadata_json,
-             conversation_id, origin, created_by_username)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             conversation_id, origin, created_by_username, depends_on, input_binding)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             task_id, agent_id, agent_version, name, "created", created_by,
@@ -108,9 +118,129 @@ def create_task(
             conversation_id,
             origin,
             created_by_username,
+            json.dumps(depends_on, ensure_ascii=False) if depends_on else None,
+            json.dumps(input_binding, ensure_ascii=False) if input_binding else None,
         ),
     )
     return get_task(conn, task_id)  # type: ignore[return-value]
+
+
+def list_created_dependent_tasks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """resolver 候选集：status='created' 且 depends_on 非空的 user 任务（不含 eval）。
+
+    只读，不参与拾取裁决——resolver 拿到候选后逐个在写锁内复查状态再推进。
+    depends_on 列 NULL/空 JSON 的存量任务天然不入候选（IS NOT NULL 且非 '[]'）。
+
+    **列投影（Codex 增量2审 R4 P2）**：只取 resolver 实际消费的 4 列
+    （id/agent_id/depends_on/input_binding），绝不 `SELECT *`。上游卡 waiting_review
+    时其全部下游每个 resolve tick 都重现于此候选集；若拉全行，`_decode_task` 会 JSON
+    解码每个下游至多 256KB 的 `inputs`（resolver 根本不读），大依赖批下累积可拖垮内存
+    或阻塞唯一 worker 及其心跳。projected 后单候选负载只剩 depends_on(≤32 id)+小
+    input_binding，与 `inputs` 体量彻底解耦。created_at 仅用于 ORDER BY 无需入选择列。
+    """
+    rows = conn.execute(
+        "SELECT id, agent_id, depends_on, input_binding FROM tasks "
+        "WHERE status = 'created' AND origin = 'user' "
+        "AND depends_on IS NOT NULL AND depends_on != '[]' "
+        "ORDER BY created_at ASC, id ASC"
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["depends_on"] = json.loads(d["depends_on"]) if d.get("depends_on") else []
+        d["input_binding"] = json.loads(d["input_binding"]) if d.get("input_binding") else None
+        out.append(d)
+    return out
+
+
+def enqueue_dependent_task(
+    conn: sqlite3.Connection,
+    task_id: str,
+    piped_input_file_ids: list[str],
+    *,
+    event: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """resolver 把依赖满足的任务原子推进 created→queued 并落管道产物入 input_file_ids。
+
+    BEGIN IMMEDIATE 写锁内**复查 status=='created'**（防并发：另一 resolver tick 或
+    人工 cancel 可能已推进本任务）——非 created 返回 None（本次放弃，幂等）。
+    **绝不写 data_classification**（F2：分级 100% 交执行期既有派生，避免抢写 CAS 冻结
+    列挤掉下游自身污点）。input_file_ids = 原有 + 管道产物（去重保序）。
+    event（Codex 增量2审 R2 P2）：lifecycle 事件与状态迁移**同事务原子写**——「无事件=
+    没发生」宪法铁律，crash 窗口绝不留下 queued 却无 dependency_resolved 事件的任务。
+    event 校验失败（append_event 抛）连状态迁移一并 ROLLBACK（原子）。
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT status, input_file_ids FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        if row is None or row["status"] != "created":
+            conn.execute("COMMIT")
+            return None
+        existing = json.loads(row["input_file_ids"]) if row["input_file_ids"] else []
+        merged = list(existing)
+        for fid in piped_input_file_ids:
+            if fid not in merged:
+                merged.append(fid)
+        assert_transition("created", "queued")
+        now = _now_iso()
+        conn.execute(
+            "UPDATE tasks SET status = 'queued', input_file_ids = ?, updated_at = ? "
+            "WHERE id = ? AND status = 'created'",
+            (json.dumps(merged, ensure_ascii=False), now, task_id),
+        )
+        if event is not None:
+            append_event(conn, task_id=task_id, **event)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id)
+
+
+def cancel_dependent_task(
+    conn: sqlite3.Connection,
+    task_id: str,
+    error_message: str,
+    *,
+    event: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """resolver 级联取消：**仅当仍 created** 时 created→cancelled（上游失败/取消）。
+
+    BEGIN IMMEDIATE 复查 status=='created'——非 created（已被人工/并发推进）返回 None
+    幂等放弃。刻意不走 set_task_status：后者的 assert_transition 允许 queued→cancelled，
+    会误伤已入队任务（虽本分支上游失败下不该已入队，仍以结构守卫杜绝）。
+    event（Codex 增量2审 R2 P2）：task_cancelled 事件与状态迁移**同事务原子写**（同
+    enqueue，「无事件=没发生」，crash 窗口不留无事件的取消）。
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is None or row["status"] != "created":
+            conn.execute("COMMIT")
+            return None
+        assert_transition("created", "cancelled")
+        now = _now_iso()
+        conn.execute(
+            # data_classification=COALESCE(…, 'internal')（Codex 增量2审 R3 P2）：级联取消
+            # 任务从未执行故 data_classification=NULL，而 error_message 一置，classification_gate
+            # 会因「NULL 分级 + 有内容」fail-closed 判 sensitive 遮蔽掉系统取消诊断（reason/
+            # message/payload），客户端无法区分级联取消。取消原因是**固定系统消息、非敏感
+            # 用户内容**，CAS-on-NULL 落 internal 使诊断可见（ADR-0025：仅 NULL 时首写、
+            # 不覆盖既有分级，保不可变语义；created 任务本恒 NULL 故等价落 internal）。
+            "UPDATE tasks SET status = 'cancelled', error_message = ?, finished_at = ?, "
+            "data_classification = COALESCE(data_classification, 'internal'), "
+            "updated_at = ? WHERE id = ? AND status = 'created'",
+            (error_message, now, now, task_id),
+        )
+        if event is not None:
+            append_event(conn, task_id=task_id, **event)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id)
 
 
 def get_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
@@ -200,6 +330,149 @@ def set_task_status(
         conn.execute("ROLLBACK")
         raise
     return get_task(conn, task_id)  # type: ignore[return-value]
+
+
+def apply_human_review(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    action: str,
+    reviewer: str,
+    comment: str | None,
+) -> tuple[dict[str, Any], int]:
+    """人工签发（approve/reject）的原子落库（Codex 增量2审 R4 P1）。
+
+    waiting_review→completed/failed 状态迁移、样本标签回填、signer 事件
+    （review_approved / review_rejected）三者包进**同一 BEGIN IMMEDIATE** 原子提交。
+    此前 review_task 依次调 set_task_status（自带独立 COMMIT）+ set_sample_review_outcome
+    + append_event 三次**分离提交**：crash 窗口可留下 status=completed 却无 signer 事件、
+    样本仍 NULL 的任务——resolver 只看 status=='completed' 即放行下游，「无事件=没发生」
+    铁律在最承重的人签路径失守（R2-3 已给次要的 resolver enqueue/cancel 上原子事件，
+    此处补齐人签路径本身）。诚实边界：签名本体是人工触发、状态机门控且已持久提交的
+    状态迁移**本身**（人确实签了，非未签发放行）；本修补的是审计事件与样本标签同迁移的
+    **原子性**——防审计轨/样本标签在 crash 窗口丢失、与迁移脱节。event 契约校验失败 /
+    非法转换 → 连状态迁移一并 ROLLBACK。
+
+    返回 (最终任务行, 回填样本行数)。非 waiting_review 由 assert_transition 抛
+    IllegalTransitionError（调用方按并发竞态转 409；含另一 review 已并发转出的场景）。
+    """
+    approve = action == "approve"
+    new_status = "completed" if approve else "failed"
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        task = get_task(conn, task_id)
+        if task is None:
+            raise TaskNotFoundError(f"任务不存在：{task_id}")
+        # waiting_review→completed/failed 是人签唯一合法出口；terminal→terminal 非法
+        # （并发二次 review 命中已转出任务时在此抛 IllegalTransitionError）。
+        assert_transition(task["status"], new_status)
+        now = _now_iso()
+        updates: dict[str, Any] = {
+            "status": new_status,
+            "updated_at": now,
+            "finished_at": now,  # completed/failed 均 terminal
+        }
+        if not approve:
+            updates["error_message"] = f"人工拒绝（reviewer={reviewer}）" + (
+                f"：{comment}" if comment else ""
+            )
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        conn.execute(
+            f"UPDATE tasks SET {set_clause} WHERE id = ?",
+            (*updates.values(), task_id),
+        )
+        # 样本标签回填（approve→1 / reject→0）——复用 set_sample_review_outcome
+        # primitive（其裸 UPDATE 不自开事务，参与本 BEGIN IMMEDIATE，故与迁移同事务原子）。
+        sample_rows = set_sample_review_outcome(conn, task_id, accepted=approve)
+        # signer 事件，与迁移同事务（「无事件=没发生」在人签路径落地）。
+        payload = {"reviewer": reviewer, "comment": comment}
+        if approve:
+            append_event(
+                conn,
+                task_id=task_id,
+                agent_id=task.get("agent_id"),
+                event_type="review_approved",
+                level="info",
+                message=f"人工批准放行（reviewer={reviewer}），任务转 completed"
+                + (f"；{sample_rows} 条样本标记为工程师认可" if sample_rows else ""),
+                payload=payload,
+            )
+        else:
+            append_event(
+                conn,
+                task_id=task_id,
+                agent_id=task.get("agent_id"),
+                event_type="review_rejected",
+                level="warning",
+                message=f"人工拒绝（reviewer={reviewer}），任务转 failed"
+                + (f"；{sample_rows} 条样本标记为未认可" if sample_rows else ""),
+                payload=payload,
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id), sample_rows  # type: ignore[return-value]
+
+
+def get_agent_version_manifest(
+    conn: sqlite3.Connection, agent_id: str, version: str
+) -> dict[str, Any] | None:
+    """读该 (agent_id, version) **锁定版本**的历史 manifest（agent_versions.yaml_json=
+    registry 注册期落库的 json.dumps(data)）。键于任务自身锁定的 agent_version 而非当前
+    registry——正确处理**版本翻转**（当前 v2=profile:none 但历史任务跑在 v1=reasoning）。
+    行缺失 / yaml 损坏 / 非 dict → None（=版本 provenance 无法确立，调用方 fail-closed）。"""
+    row = conn.execute(
+        "SELECT yaml_json FROM agent_versions WHERE agent_id = ? AND version = ?",
+        (agent_id, version),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        manifest = json.loads(row["yaml_json"])
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return manifest if isinstance(manifest, dict) else None
+
+
+def has_review_approved_event(conn: sqlite3.Connection, task_id: str) -> bool:
+    """该任务是否有持久 review_approved 事件=人工签发见证（apply_human_review 是唯一写入
+    方，见其实现）。K1 签发维 provenance 用：`status=='completed'` 只证时序、不证人签。"""
+    row = conn.execute(
+        "SELECT 1 FROM task_events WHERE task_id = ? AND event_type = 'review_approved' LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    return row is not None
+
+
+def task_output_is_signed_off(conn: sqlite3.Connection, task: dict[str, Any]) -> bool:
+    """K1 签发维 provenance（Codex 增量2审 R5-1 + loop-auditor 巡查）：一个 completed 任务的
+    产物**可否越依赖边界流入下游**。`status=='completed'` 只是时序代理——review-gated 上游
+    经人签转出 completed 才带 review_approved 事件；但 pre-§3.6（或曾发过 profile≠none+rhr:
+    false 版本后修正）的 legacy 任务可能已 analyzing→completed **自动放行、无人签**=未签
+    LLM 判决，注册期 §3.6 只拒当前加载包、改不动历史行。
+
+    fail-closed 双见证（皆持久、皆键于任务自身锁定的 agent_version）：
+      ① 存在持久 review_approved 事件（人工签发）→ 放行；或
+      ② 该任务 agent_version 的历史 manifest **显式** model.profile=='none' **且** workflow
+         .requires_human_review is False（确定性零-LLM Agent 且显式非 review-gated，合法自动
+         完成无需人签；与 §3.6 注册期判据同源——真实 agent 均显式声明二字段）→ 放行。
+    **命中即审 R1 收紧**：原判据 `profile in (None,'none')` 会把空/退化 manifest（`{}`、
+    `model.profile:null`、profile 缺失）当 none 放行=**fail-open**；且忽略 requires_human_review
+    （profile=none+rhr:true 的 agent 其任务仍应人签，不该自动放行）。收紧为**二字段皆显式**：
+    profile 必显式字符串 'none'（缺失/null→拒）+ rhr 必显式 False（缺失/None/True→拒）→ 退化/
+    损坏/半 manifest 一律 fail-closed。manifest 缺失/损坏（get_agent_version_manifest 返 None）
+    亦拒。二者皆不成立 → False（拒）。"""
+    if has_review_approved_event(conn, task["id"]):
+        return True
+    manifest = get_agent_version_manifest(conn, task["agent_id"], task["agent_version"])
+    if manifest is None:
+        return False  # 版本 provenance 无法确立 → fail-closed，绝不 fail-open 放行
+    model = manifest.get("model") or {}
+    workflow = manifest.get("workflow") or {}
+    # 显式确定性（profile=='none'）且显式非 review-gated（rhr is False）——皆显式杜绝退化 manifest
+    # fail-open（空 dict/缺字段→None，非 'none'/非 False→拒）。
+    return model.get("profile") == "none" and workflow.get("requires_human_review") is False
 
 
 def set_task_data_classification(

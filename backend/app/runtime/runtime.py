@@ -23,7 +23,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
-from ..core.errors import FileIntegrityError, KnowledgeScopeDeniedError, ToolNotAllowedError
+from ..core.errors import (
+    FileIntegrityError,
+    KnowledgeScopeDeniedError,
+    ModelAccessDeniedError,
+    ToolNotAllowedError,
+)
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
 
@@ -216,6 +221,34 @@ class _ModelGatewayContext:
                 profile, image_path, prompt, task_id=self._task_id, agent_id=self._agent_id, **safe
             ),
         )
+
+
+class _NoModelGatewayContext:
+    """profile:none Agent 的 model_gateway 桩（Codex 增量2审 R3 P1）：chat/embed/vision 一律
+    fail-closed 抛 ModelAccessDeniedError。§3.6 注册期不变量豁免 profile:none job 于「判决型
+    必 review-gated」——该豁免只有 runtime **真的不让 none agent 调 LLM** 时才成立，否则声明
+    none 即可绕人签闸调 LLM、自动 completed、经 resolver 把未签发判决传下游。此桩把「声明
+    profile:none」钉成「运行时物理无 LLM」，让声明与强制名实一致。非 none profile 的 job 已被
+    §3.6 强制 requires_human_review:true（受人签闸兜底），故仍给功能 _ModelGatewayContext。"""
+
+    def __init__(self, agent_id: str) -> None:
+        self._agent_id = agent_id
+
+    def _deny(self, kind: str) -> None:
+        raise ModelAccessDeniedError(
+            f"Agent {self._agent_id!r} 声明 model.profile=none（不调 LLM）却尝试模型调用（{kind}）"
+            "——profile:none 运行时强制无 LLM（§3.6 判决⟹人签 keystone）；需 LLM 请声明真实 "
+            "profile 且 requires_human_review:true"
+        )
+
+    def chat(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        self._deny("chat")
+
+    def embed(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        self._deny("embed")
+
+    def vision(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        self._deny("vision")
 
 
 def _sha256_file(path: Path) -> str:
@@ -436,6 +469,30 @@ class AgentRuntime:
             repos.append_event(
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
                 level="error", message=f"Agent 未注册：{agent_id}",
+            )
+            return {"status": "failed", "task": repos.get_task(conn, task_id)}
+
+        # Codex 命中即审 R2 P1（K1 签发见证的前提）：_execute 按 agent_id 载**当前** registry，
+        # 而 task.agent_version 是创建期锁定值（tasks.py 建时 = 当时当前版本）。跨升级窗口二者可
+        # drift——任务实际跑当前版本而 task.agent_version 停旧值，则 K1 签发见证（键 task.agent_version
+        # 历史 manifest）检的不是真跑版本，判据失真。fail-closed 拒版本漂移 → task.agent_version 恒等
+        # 真跑版本，K1 键之即权威（provenance 诚实：绝不静默在异于锁定版本上执行；跨升级排队任务
+        # 失败、由用户对新版本重建，优于悄悄跑异版本产出错误归因的产物）。
+        if agent.get("version") != task["agent_version"]:
+            msg = (
+                f"Agent 版本漂移：任务锁定 agent_version={task['agent_version']!r} 但当前注册 "
+                f"{agent.get('version')!r}——拒在异于锁定版本上执行（跨升级窗口 provenance 权威性，"
+                "K1 签发见证前提）；请对当前版本重建任务"
+            )
+            # final-confirm P2：本分支在 set_task_data_classification 前触发，任务分级留 NULL→
+            # classification_gate 当 sensitive 遮蔽 drift 诊断（含"请重建"指引），用户无法诊断。
+            # drift 是固定系统消息、非敏感用户内容，CAS 落 internal 使诊断经分级门可见（同 R3-2
+            # 级联取消；set_task_data_classification 是 CAS-on-NULL，未执行任务恒 NULL 故等价落 internal）。
+            repos.set_task_data_classification(conn, task_id, "internal")
+            repos.set_task_status(conn, task_id, "failed", error_message=msg)
+            repos.append_event(
+                conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
+                level="error", message=msg,
             )
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
@@ -691,10 +748,87 @@ class AgentRuntime:
                     raise FileIntegrityError(
                         f"输入文件完整性校验失败：file_id={file_id}，File Store 无登记记录"
                     )
+                # 权威根按文件 kind 选（协作运行时 §3.3 管道跨信任边界）：上传输入
+                # 在 uploads_dir，上游产物（管道进来的 kind=output）在 task_runs_dir——
+                # 二者都是**装配注入**的权威根，根由 DB 的 kind 字段选、绝不从待验 path
+                # 反推（R4 原则不破）；选定根后 open_verified_file 仍做 O_NOFOLLOW 拒
+                # symlink + resolve-inside-root + sha256/size 全套校验。
+                kind = record.get("kind")
+                if kind == "output":
+                    # 消费点 provenance 校验（Codex 增量2审 P1-1）：output 文件只能来自
+                    # 本任务 depends_on 声明**且已 completed**的上游（=resolver 管道的正当
+                    # 来源）。创建期 input_file_ids allowlist 只挡新 API 建的任务；旧 API 建
+                    # 的（或前滚 rollout 窗口混版）任务的 input_file_ids 可能已直含他人 output
+                    # ——本处结构校验把「产物只经 review-gated resolver 管道注入」钉在消费
+                    # 动作上，不依赖创建期单点，堵死绕过 resolver + 人签闸消费未签发产物。
+                    dep = task.get("depends_on") or []
+                    owner_id = record.get("task_id")
+                    if owner_id not in dep:
+                        raise FileIntegrityError(
+                            f"输入文件完整性校验失败：file_id={file_id} 是任务 {owner_id!r} 的产物，"
+                            "但本任务未在 depends_on 声明其为依赖——产物只能经依赖 resolver 管道注入，"
+                            "不得绕过依赖链直引"
+                        )
+                    owner = repos.get_task(conn, owner_id)
+                    owner_status = owner["status"] if owner is not None else "missing"
+                    if owner_status != "completed":
+                        raise FileIntegrityError(
+                            f"输入文件完整性校验失败：上游任务 {owner_id!r} 状态={owner_status}（非 completed）"
+                            "——产物未过人工签发闸（waiting_review→completed 只人工）不可被下游消费"
+                        )
+                    # K1 签发维 provenance（Codex 增量2审 R5-1 + loop-auditor）：completed 只证
+                    # 时序不证人签。legacy pre-§3.6（或版本翻转前）任务可能已自动 completed、无人签
+                    # =未签 LLM 判决；其 input_file_ids 若已直含产物（绕 resolver）只撞本消费点，故
+                    # resolver 生产侧修不到。双见证 fail-closed（review_approved 事件 ∨ 该任务锁定
+                    # agent_version 的 manifest profile=none），与 runner._resolve_one_candidate 同守。
+                    if not repos.task_output_is_signed_off(conn, owner):
+                        raise FileIntegrityError(
+                            f"输入文件完整性校验失败：上游任务 {owner_id!r} 已 completed 但无签发见证"
+                            "（未签 LLM 判决 / agent_version manifest 不可确立）——未过人工签发闸的产物"
+                            "不可被下游消费（K1 签发维 provenance，fail-closed）"
+                        )
+                    # K2 消费侧 origin 隔离（loop-auditor 巡查）：resolver（runner）与 create_task
+                    # （tasks.py）都校上游 origin=='user'，独消费点漏——legacy/直写任务 input_file_ids
+                    # 已直含某 eval 任务产物且满足 depends_on+completed+manifest+binding 时，此处会开
+                    # eval 内容入 user 任务→user-origin sample gate 污染样本库（ADR-0018）。补齐兜底。
+                    if owner.get("origin") != "user":
+                        raise FileIntegrityError(
+                            f"输入文件完整性校验失败：上游任务 {owner_id!r} origin={owner.get('origin')!r}"
+                            "（非 user，跨 eval/user 隔离轴）——eval 产物绝不经依赖链流入 user 任务"
+                            "（ADR-0018 防样本库污染，K2 消费侧兜底）"
+                        )
+                    # Codex 增量2审 R2 P2：provenance 还须校（a）file_id 真在 owner 的
+                    # output_file_ids manifest 内（非仅"owner 是已完成依赖"——legacy 任务
+                    # input_file_ids 直含某已完成依赖的**非产物** id 时前两关放行）；（b）owner
+                    # 被本任务 input_binding.from_tasks 选中（否则被显式排除的产物、含 sensitive，
+                    # 仍能在消费点被读）。生产侧（resolver）+ 消费侧双端各自独立强制 binding+manifest。
+                    if file_id not in (owner.get("output_file_ids") or []):
+                        raise FileIntegrityError(
+                            f"输入文件完整性校验失败：file_id={file_id} 不在上游 {owner_id!r} 的 "
+                            "output_file_ids 产物清单内——非该上游 registered 产物，拒消费"
+                        )
+                    _binding = task.get("input_binding") or {}
+                    _from_tasks = _binding.get("from_tasks") or None
+                    if _from_tasks is not None and owner_id not in _from_tasks:
+                        raise FileIntegrityError(
+                            f"输入文件完整性校验失败：file_id={file_id} 的上游 {owner_id!r} 被本任务 "
+                            "input_binding.from_tasks 显式排除——不得消费绑定排除的产物"
+                        )
+                    allowed_root = self.task_runs_dir
+                elif kind == "input":
+                    allowed_root = self.uploads_dir
+                else:
+                    # Codex 增量2审 R1 P2：只有 input/output 两类合法权威根。legacy/future
+                    # 未知 kind 绝不默认当上传件开（原 ternary else 分支静默落 uploads_dir=
+                    # fail-open）——未知类型 fail-closed 拒消费，杜绝无法归类的记录被当输入喂入。
+                    raise FileIntegrityError(
+                        f"输入文件完整性校验失败：file_id={file_id} kind={kind!r} 非 input/output"
+                        "——未知文件类型 fail-closed 拒绝消费（绝不默认当上传件开）"
+                    )
                 try:
                     handle = open_verified_file(
                         record["path"],
-                        allowed_root=self.uploads_dir,
+                        allowed_root=allowed_root,
                         expected_size=record["size_bytes"],
                         expected_sha256=record["sha256"],
                     )
@@ -729,11 +863,20 @@ class AgentRuntime:
     ) -> dict[str, Any]:
         agent_id = task["agent_id"]
         allowed_tools = frozenset(agent.get("tools") or [])
+        # Codex 增量2审 R3 P1：按声明 profile 强制 gateway 访问。profile:none（含缺省）→ 抛异常
+        # 桩，物理封死 LLM 调用，令 §3.6「none job 豁免 review-gate」的豁免名实一致；非 none
+        # profile 的 job 已被 §3.6 强制 rhr:true（人签闸兜底）→ 功能 gateway。
+        _profile = (agent.get("model") or {}).get("profile")
+        _gateway = (
+            _NoModelGatewayContext(agent_id)
+            if _profile in (None, "none")
+            else _ModelGatewayContext(self.model_gateway, conn, task["id"], agent_id)
+        )
         context: dict[str, Any] = {
             "task": task,
             "inputs": task["inputs"],
             "files": files,
-            "model_gateway": _ModelGatewayContext(self.model_gateway, conn, task["id"], agent_id),
+            "model_gateway": _gateway,
             "tool_registry": _ToolRegistryContext(
                 self.tool_registry, conn, task["id"], agent_id, allowed_tools
             ),

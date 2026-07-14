@@ -41,6 +41,10 @@ DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 # 任务级分级」（Codex R1-B）：旧 worker（两轴/read 期重派生代码）与新 worker 不可
 # 混跑——旧 worker 不落 data_classification、monitor 产物洗成 internal 外泄。代际值
 # 变=部署门代际检查逼 worker 重启到新代码。
+# 协作运行时（Codex 增量2审 P1）：worker run_forever 每轮新增 resolve_dependencies_once
+# ——**这是 worker 行为变更**。若 API 前滚而 worker 滞留旧 commit，旧 worker 从不跑
+# resolver，所有带 depends_on 的任务永滞 created 且部署自检误绿。故 bump 代际逼 worker
+# 重启到含 resolver 的新代码，否则部署门 check_worker_generation 拦下。
 # T1（GH #2，Codex R1 审 P1）：worker 新增必需行为——驱动评测异步队列（EvalRunner）。
 # 旧 worker 无此代码时仍产新鲜心跳骗过 deploy_selfcheck，却从不消费 eval_runs，令每个
 # 202 入队响应永久停 queued。故随此必需 worker 行为 bump 代际，逼 worker 重启到新代码。
@@ -48,7 +52,10 @@ DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 # 材化冻结快照执行（读快照非活磁盘）。T1 worker 无此分支会忽略 handle、按活磁盘执行，
 # 「评的就是晋升的那版」不可变保证在分离部署窗口内静默失效，而心跳仍新鲜。故随此协议
 # 变更 bump 代际，配合 health.eval_snapshot_axis（API 侧见证）双向逼两端重启到新代码。
-WORKER_GENERATION = "t2-eval-immutable-snapshot"
+# T1/T2 分支与协作运行时分支各自独立 bump 代际；合并（feat/eval-async-queue → main）后
+# worker 同时具备 resolver + EvalRunner + 快照认领三项新行为，代际值须区别于两条父线
+# 各自的值——任一侧滞留旧码（缺 resolver 或缺快照认领）都要被 check_worker_generation 拦下。
+WORKER_GENERATION = "collab-resolver+t2-eval-snapshot"
 
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。
 # monitor_adapter_recon 工具经此子进程调核起草 adapter 草案；未配置=核不可达=工具

@@ -1,0 +1,23 @@
+{
+  "case_id": "case_002",
+  "curation": "approved",
+  "description": "轻阻尼 ζ=0.3 ωn=2 n=2000 仿真产物评估正例（fixture 真实产出）。仿真超调=37.2329 vs 闭式 Mp_ref=37.2326，相对误差 0.0007% ≪ 2% → passed=true。验证 ωn≠1（不同时间尺度）仍正确收敛（超调只依赖 ζ）。rhr=true 停 waiting_review。",
+  "curation_note": "input_files 的 step_solution.json 是 step_response_solve_agent 对应参数的真实产物，非手工构造。",
+  "inputs": {
+    "tolerance_pct": 2.0
+  },
+  "input_files": ["fixtures/light_damp_fine/step_solution.json"],
+  "expected": {
+    "task_status": "waiting_review",
+    "passed": true,
+    "note": "人读期望旁注，不参与机判"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "waiting_review" },
+    { "kind": "artifact_exists", "file": "evaluation.json" },
+    { "kind": "output_field", "file": "evaluation.json", "path": "passed", "op": "eq", "value": true },
+    { "kind": "output_field", "file": "evaluation.json", "path": "upstream_converged", "op": "eq", "value": true },
+    { "kind": "output_field", "file": "evaluation.json", "path": "error_pct", "op": "lte", "value": 0.5 },
+    { "kind": "artifact_contains", "file": "evaluation.md", "value": "判定权在人" }
+  ]
+}

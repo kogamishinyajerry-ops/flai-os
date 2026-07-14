@@ -1,0 +1,17 @@
+{
+  "case_id": "case_003",
+  "curation": "approved",
+  "description": "非法输入失败路径：zeta=1.5（过阻尼）违反 input_schema.json 的 exclusiveMaximum:1，在 Runtime _validate_inputs 层经 jsonschema 直接 fail-closed，任务 failed，不进 workflow。验证契约层护栏真起作用（而非逢输入必仿真）；同时满足 min_eval_coverage 晋升门要求的 status_is:failed 覆盖案。",
+  "inputs": {
+    "zeta": 1.5,
+    "omega_n": 1.0,
+    "n_steps": 2000
+  },
+  "expected": {
+    "task_status": "failed",
+    "note": "人读期望旁注，不参与机判"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "failed" }
+  ]
+}

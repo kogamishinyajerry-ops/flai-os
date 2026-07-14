@@ -593,6 +593,10 @@ def test_review_concurrent_race_returns_409_not_500(review_app_env, monkeypatch)
     """R1 复审 P2：两个 review 并发命中同一 waiting_review 任务，后到者通过预检
     但被状态机层拒绝（IllegalTransitionError）——必须折叠为 409 与预检同口径，
     绝不 500 逃逸。用注入状态机拒绝精确复现「预检已过、转移被拒」的竞态窗口。
+
+    R4 P1 后转换点从 set_task_status 移入原子的 apply_human_review（状态迁移+样本
+    标签+signer 事件同事务）——注入靶点随之为 apply_human_review，其内部 assert_transition
+    在 completed→completed 时抛的正是本测试模拟的并发窗口异常。
     """
     from backend.app.core.errors import IllegalTransitionError
     from backend.app.storage import repos as repos_mod
@@ -603,7 +607,7 @@ def test_review_concurrent_race_returns_409_not_500(review_app_env, monkeypatch)
     def _concurrent_reject(*args, **kwargs):
         raise IllegalTransitionError("非法转移：completed -> completed（已被并发放行）")
 
-    monkeypatch.setattr(repos_mod, "set_task_status", _concurrent_reject)
+    monkeypatch.setattr(repos_mod, "apply_human_review", _concurrent_reject)
     resp = client.post(
         f"/api/tasks/{task_id}/review", json={"action": "approve"}
     )

@@ -1,0 +1,24 @@
+{
+ "params": {
+  "boundary_condition": "cantilever",
+  "E": 210000000000.0,
+  "I": 4.166666666666667e-09,
+  "L": 1.0,
+  "rho": 7850.0,
+  "A": 0.0005,
+  "n_elements": 10
+ },
+ "fem_result": {
+  "omega1_rad_s": 52.49710079175971,
+  "f1_hz": 8.355173089002012,
+  "dof_count": 22,
+  "element_type": "euler_bernoulli_cubic_hermite_2node",
+  "mass_formulation": "consistent"
+ },
+ "solver": {
+  "method": "cholesky_pd_bisection_generalized_eig",
+  "rel_tol": 1e-12,
+  "converged": true
+ },
+ "human_review_required": true
+}

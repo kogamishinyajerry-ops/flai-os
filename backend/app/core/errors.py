@@ -52,6 +52,13 @@ class ProfileNotConfiguredError(FlaiError):
     """Model Gateway 收到了未在 profiles.yaml 中声明的 profile 名。"""
 
 
+class ModelAccessDeniedError(FlaiError):
+    """Agent 声明 model.profile=none（不调 LLM）却在运行时尝试模型调用（Codex 增量2审
+    R3 P1）。§3.6「判决⟹人签」keystone 豁免 profile:none job 于「必 review-gated」——该
+    豁免只有 runtime 真的不让 none agent 调 LLM 时才成立；否则声明 none 即可绕人签闸调
+    LLM、自动 completed、经 resolver 传未签发判决。故 profile:none 运行时强制无 LLM。"""
+
+
 class ModelUpstreamError(FlaiError):
     """模型网关上游调用失败（env 缺失/网络错误/非 2xx）。"""
 
