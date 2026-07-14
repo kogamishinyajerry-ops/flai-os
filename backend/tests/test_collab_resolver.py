@@ -14,6 +14,7 @@ waiting_review 当"未就绪"；"waiting_review→completed 只人工"由状态�
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from pathlib import Path
 
@@ -45,10 +46,11 @@ def dbf(tmp_path):
     return lambda: get_conn(db_path)
 
 
-def _mk(conn, task_id, *, depends_on=None, inputs=None):
+def _mk(conn, task_id, *, depends_on=None, inputs=None, input_file_ids=None):
     return repos.create_task(
         conn, task_id=task_id, agent_id="hello_agent", agent_version="0.1.0",
-        name=task_id, created_by="tester", inputs=inputs or {}, input_file_ids=[], metadata={},
+        name=task_id, created_by="tester", inputs=inputs or {},
+        input_file_ids=input_file_ids or [], metadata={},
         depends_on=depends_on,
     )
 
@@ -313,5 +315,76 @@ def test_E2E_failure_chain_a_fails_b_cancelled(runtime_env):
     conn = cf()
     try:
         assert repos.get_task(conn, "fail_b")["status"] == "cancelled"
+    finally:
+        conn.close()
+
+
+def test_E2E_taint_chain_sensitive_upstream_derives_downstream(runtime_env):
+    """E2E 污点链（契约 §6 第三链，真 runtime 全程）：sensitive 输入 → A 真跑派生
+    sensitive 产物 → resolver 管道 → B 真 runtime 从 task_runs_dir 开上游 output
+    （走 kind-based root 放宽）→ B 执行期派生 sensitive → B 产物亦 sensitive。
+
+    一条链同时压：kind=input 根（A 读 uploads）+ kind=output 根（B 读 task_runs，
+    本增量放宽）+ 污点合成（ADR-0025 CAS 落库）+ 分级沿产物传播。下载 403 由既有
+    ADR-0025 下载门读此 classification 列覆盖，此处断言承载列=sensitive。"""
+    cf = runtime_env["conn_factory"]
+    runtime = runtime_env["runtime"]
+    runner = JobRunner(runtime, cf)
+
+    # A 的 sensitive 输入：真字节落 uploads_dir/{fid}/input.txt，可过 _open_input_files 校验
+    in_fid = str(uuid.uuid4())
+    payload = "机密上游输入\n".encode("utf-8")
+    in_path = runtime.uploads_dir / in_fid / "input.txt"
+    in_path.parent.mkdir(parents=True, exist_ok=True)
+    in_path.write_bytes(payload)
+
+    conn = cf()
+    try:
+        repos.create_file(
+            conn, file_id=in_fid, task_id=None, kind="input", filename="input.txt",
+            path=str(in_path), size_bytes=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(), classification="sensitive",
+        )
+        _mk(conn, "taint_a", inputs={"name": "上游"}, input_file_ids=[in_fid])
+        repos.set_task_status(conn, "taint_a", "queued")
+        _mk(conn, "taint_b", depends_on=["taint_a"], inputs={"name": "下游"})
+    finally:
+        conn.close()
+
+    # A 真 runtime 执行 → 读 sensitive 输入派生 sensitive → 产 sensitive output
+    assert runner.run_once() is True
+    conn = cf()
+    try:
+        a = repos.get_task(conn, "taint_a")
+        assert a["status"] == "completed"
+        assert a["data_classification"] == "sensitive"
+        a_outputs = a["output_file_ids"]
+        assert a_outputs, "A 应产出 hello_output.json"
+        assert all(repos.get_file(conn, f)["classification"] == "sensitive" for f in a_outputs)
+    finally:
+        conn.close()
+
+    # resolver 把 A 的 sensitive output 管道入 B 的 input
+    assert resolve_dependencies_once(cf) == 1
+    conn = cf()
+    try:
+        b = repos.get_task(conn, "taint_b")
+        assert b["status"] == "queued"
+        assert set(a_outputs) <= set(b["input_file_ids"])  # 上游 sensitive 产物已入下游 input
+    finally:
+        conn.close()
+
+    # B 真 runtime 执行：从 task_runs_dir 开上游 output（kind-based root）→ 派生 sensitive
+    assert runner.run_once() is True
+    conn = cf()
+    try:
+        b = repos.get_task(conn, "taint_b")
+        assert b["status"] == "completed"
+        assert b["data_classification"] == "sensitive"  # 污点经管道跨任务合成
+        assert b["output_file_ids"], "B 应产出 hello_output.json"
+        assert all(
+            repos.get_file(conn, f)["classification"] == "sensitive"
+            for f in b["output_file_ids"]
+        )  # 分级沿产物继续传播，下载门读此列 → 403
     finally:
         conn.close()
