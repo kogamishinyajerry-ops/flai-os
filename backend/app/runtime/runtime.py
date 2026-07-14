@@ -691,10 +691,19 @@ class AgentRuntime:
                     raise FileIntegrityError(
                         f"输入文件完整性校验失败：file_id={file_id}，File Store 无登记记录"
                     )
+                # 权威根按文件 kind 选（协作运行时 §3.3 管道跨信任边界）：上传输入
+                # 在 uploads_dir，上游产物（管道进来的 kind=output）在 task_runs_dir——
+                # 二者都是**装配注入**的权威根，根由 DB 的 kind 字段选、绝不从待验 path
+                # 反推（R4 原则不破）；选定根后 open_verified_file 仍做 O_NOFOLLOW 拒
+                # symlink + resolve-inside-root + sha256/size 全套校验。**安全边界改动，
+                # 命中即审：待 Codex 异源治理审。**
+                allowed_root = (
+                    self.task_runs_dir if record.get("kind") == "output" else self.uploads_dir
+                )
                 try:
                     handle = open_verified_file(
                         record["path"],
-                        allowed_root=self.uploads_dir,
+                        allowed_root=allowed_root,
                         expected_size=record["size_bytes"],
                         expected_sha256=record["sha256"],
                     )

@@ -36,6 +36,12 @@ class CreateTaskRequest(BaseModel):
     # M8/ADR-0016：可选归属——由导引协作会话产出的任务记会话 id，供协作工作台
     # 按会话分组。仅分组归属，不改执行语义；门户直建任务不带此字段（留 None）。
     conversation_id: str | None = Field(default=None, max_length=100)
+    # 协作运行时 §3.5：声明式依赖。depends_on 非空 → 任务滞留 created 由 resolver
+    # 在全部上游 completed 后管道产物入 input_file_ids 并入队（人是唯一签发者不变：
+    # 人建整图、人签每个 review 环节；resolver 只排序执行，绝不建/签任务）。
+    # input_binding 预留（None=默认拷全部上游 output_file_ids）。
+    depends_on: list[str] = Field(default_factory=list, max_length=32)
+    input_binding: dict[str, Any] | None = Field(default=None)
 
     @field_validator("inputs")
     @classmethod
@@ -128,6 +134,39 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
         task_id = f"task_{uuid.uuid4().hex}"
         # ADR-0019 D5：发起人=登录会话身份（中间件已验证注入），非请求体自报
         created_by = request.state.user["display_name"]
+        # 协作运行时 §3.4/§3.5：depends_on 只能引用**已存在**任务（→图按构造即 DAG，
+        # 无法建回边指向未来任务，无需运行时环检测）；缺失即 404 fail-closed。
+        # input_binding 引用的上游必在 depends_on 内（越权引用拒，T6）。
+        for dep_id in body.depends_on:
+            if repos.get_task(conn, dep_id) is None:
+                raise HTTPException(
+                    status_code=404, detail=f"依赖的上游任务不存在：{dep_id}"
+                )
+        # 协作运行时安全边界（与 _open_input_files 按 kind 选权威根的放宽配对成闭）：
+        # 直接提交的 input_file_ids 只允许上传件（allowlist：kind=input）。上游产物
+        # （kind=output）唯一合法入口是 review-gated resolver 的管道注入
+        # （enqueue_dependent_task 合并写 input_file_ids）——绝不许绕过 depends_on/人签闸
+        # 直引他人 output，否则 _open_input_files 的 task_runs_dir 放宽会沦为直读任意
+        # 任务产物的旁路。allowlist 而非 denylist：未来新增 kind 默认拒（fail-closed）。
+        # 缺失文件（get_file=None）留执行期 _open_input_files 兜底，不在创建期拒。
+        for fid in body.input_file_ids:
+            rec = repos.get_file(conn, fid)
+            if rec is not None and rec.get("kind") != "input":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"input_file_ids 只接受上传件（kind=input）：{fid} 的 kind="
+                        f"{rec.get('kind')!r}——上游产物须经依赖 resolver 管道注入，不得直引"
+                    ),
+                )
+        if body.input_binding is not None:
+            bound = body.input_binding.get("from_tasks") or []
+            stray = [t for t in bound if t not in body.depends_on]
+            if stray:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"input_binding 引用了 depends_on 之外的任务（越权）：{stray}",
+                )
         create_kwargs = dict(
             task_id=task_id,
             agent_id=body.agent_id,
@@ -137,6 +176,8 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             inputs=body.inputs,
             input_file_ids=body.input_file_ids,
             metadata={},
+            depends_on=body.depends_on or None,
+            input_binding=body.input_binding,
             conversation_id=body.conversation_id,
         )
         if body.conversation_id is not None:
@@ -168,18 +209,32 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                 raise
         else:
             repos.create_task(conn, **create_kwargs)
-        # P2-4：created->queued 由本创建动作原子完成（docs/05 §6「两处文档化原子例外」
-        # 之一）——先把状态迁到 queued，再发 task_created 事件，事件 payload 显式携带
-        # status_from/status_to 双态见证，而不是只见证 created 这一态就消失。
-        task = repos.set_task_status(conn, task_id, "queued")
+        # 协作运行时 §3.5 条件短路（F4 命门修复）：depends_on 非空的任务**不自动入队**，
+        # 滞留 created 由 resolver 在全部上游 completed 后管道产物入 input 并入队——否则
+        # 带依赖任务会在此被 P2-4 无条件推进到 queued，resolver 永远看不到 created 态、
+        # 且 input_file_ids 尚无上游产物（"滞留 created"整机制静默失效）。
+        # 无依赖任务保持 P2-4 原子 created->queued（docs/05 §6 文档化原子例外）。
+        if body.depends_on:
+            task = repos.get_task(conn, task_id)
+            status_to = "created"
+            message = f"任务已创建（等待 {len(body.depends_on)} 个前置任务）：agent={body.agent_id}"
+        else:
+            task = repos.set_task_status(conn, task_id, "queued")
+            status_to = "queued"
+            message = f"任务已创建：agent={body.agent_id}"
         repos.append_event(
             conn,
             task_id=task_id,
             agent_id=body.agent_id,
             event_type="task_created",
             level="info",
-            message=f"任务已创建：agent={body.agent_id}",
-            payload={"created_by": created_by, "status_from": "created", "status_to": "queued"},
+            message=message,
+            payload={
+                "created_by": created_by,
+                "status_from": "created",
+                "status_to": status_to,
+                "depends_on": body.depends_on or [],
+            },
         )
         return task
     finally:

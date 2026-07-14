@@ -78,6 +78,15 @@
     "content_withheld": {
       "type": "boolean",
       "description": "本响应的内容承载字段（error_message 等）已因任务分级=sensitive 遮蔽（ADR-0025 单 chokepoint）。仅在 sensitive 任务响应上出现；元数据仍完整。"
+    },
+    "depends_on": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "声明式任务依赖（迁移 #9/协作运行时 §3.1）：本任务依赖的上游 task_id 列表。非空时任务滞留 created，由 resolver 在全部上游 completed（review-gated 上游必经人签）后，管道上游产物入 input_file_ids 并 created→queued。空数组=无依赖（门户直建任务）。建时冻结、只引已存在任务 → 图按构造即 DAG。"
+    },
+    "input_binding": {
+      "type": ["object", "null"],
+      "description": "artifact→input 绑定（迁移 #9/协作运行时 §3.1）：声明上游产物如何映射为本任务输入。null=默认拷全部上游 output_file_ids 入 input_file_ids。引用的上游任务必在 depends_on 内（越权引用创建期拒）。"
     }
   }
 }

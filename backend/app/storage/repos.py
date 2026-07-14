@@ -54,6 +54,10 @@ def _decode_task(row: sqlite3.Row) -> dict[str, Any]:
     _decode_json(d, "output_file_ids", default=[])
     _decode_json(d, "inputs_json", "inputs", default={})
     _decode_json(d, "metadata_json", "metadata", default={})
+    # 迁移 #9（协作运行时）：depends_on 缺省 []（存量 NULL / 无依赖）；input_binding
+    # 缺省 None（默认拷全部上游 output）。存量库无此列时 dict(row) 无该键，兜默认。
+    d["depends_on"] = json.loads(d["depends_on"]) if d.get("depends_on") else []
+    d["input_binding"] = json.loads(d["input_binding"]) if d.get("input_binding") else None
     return d
 
 
@@ -70,8 +74,14 @@ def create_task(
     metadata: dict[str, Any] | None = None,
     conversation_id: str | None = None,
     origin: str = "user",
+    depends_on: list[str] | None = None,
+    input_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """建任务：初始态永远是 created（未入队）。
+
+    depends_on / input_binding（迁移 #9/协作运行时 §3.5）：声明式依赖。depends_on
+    非空时任务滞留 created 由 resolver 在全部上游 completed 后拷产物入 input_file_ids
+    并入队（API 层负责"depends_on 非空则不自动入队"的短路，本函数只忠实落列）。
 
     conversation_id（M8/ADR-0016）：若本任务由导引协作会话产出，记会话 id 以便
     协作工作台按会话分组；门户直建任务留 None。仅作分组归属，不改任何执行语义。
@@ -89,8 +99,8 @@ def create_task(
             (id, agent_id, agent_version, name, status, created_by,
              created_at, updated_at, started_at, finished_at,
              input_file_ids, output_file_ids, inputs_json, error_message, metadata_json,
-             conversation_id, origin)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             conversation_id, origin, depends_on, input_binding)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             task_id, agent_id, agent_version, name, "created", created_by,
@@ -102,9 +112,91 @@ def create_task(
             json.dumps(metadata or {}, ensure_ascii=False),
             conversation_id,
             origin,
+            json.dumps(depends_on, ensure_ascii=False) if depends_on else None,
+            json.dumps(input_binding, ensure_ascii=False) if input_binding else None,
         ),
     )
     return get_task(conn, task_id)  # type: ignore[return-value]
+
+
+def list_created_dependent_tasks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """resolver 候选集：status='created' 且 depends_on 非空的 user 任务（不含 eval）。
+
+    只读，不参与拾取裁决——resolver 拿到候选后逐个在写锁内复查状态再推进。
+    depends_on 列 NULL/空 JSON 的存量任务天然不入候选（IS NOT NULL 且非 '[]'）。
+    """
+    rows = conn.execute(
+        "SELECT * FROM tasks WHERE status = 'created' AND origin = 'user' "
+        "AND depends_on IS NOT NULL AND depends_on != '[]' "
+        "ORDER BY created_at ASC, id ASC"
+    ).fetchall()
+    return [_decode_task(r) for r in rows]
+
+
+def enqueue_dependent_task(
+    conn: sqlite3.Connection, task_id: str, piped_input_file_ids: list[str]
+) -> dict[str, Any] | None:
+    """resolver 把依赖满足的任务原子推进 created→queued 并落管道产物入 input_file_ids。
+
+    BEGIN IMMEDIATE 写锁内**复查 status=='created'**（防并发：另一 resolver tick 或
+    人工 cancel 可能已推进本任务）——非 created 返回 None（本次放弃，幂等）。
+    **绝不写 data_classification**（F2：分级 100% 交执行期既有派生，避免抢写 CAS 冻结
+    列挤掉下游自身污点）。input_file_ids = 原有 + 管道产物（去重保序）。
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT status, input_file_ids FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        if row is None or row["status"] != "created":
+            conn.execute("COMMIT")
+            return None
+        existing = json.loads(row["input_file_ids"]) if row["input_file_ids"] else []
+        merged = list(existing)
+        for fid in piped_input_file_ids:
+            if fid not in merged:
+                merged.append(fid)
+        assert_transition("created", "queued")
+        now = _now_iso()
+        conn.execute(
+            "UPDATE tasks SET status = 'queued', input_file_ids = ?, updated_at = ? "
+            "WHERE id = ? AND status = 'created'",
+            (json.dumps(merged, ensure_ascii=False), now, task_id),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id)
+
+
+def cancel_dependent_task(
+    conn: sqlite3.Connection, task_id: str, error_message: str
+) -> dict[str, Any] | None:
+    """resolver 级联取消：**仅当仍 created** 时 created→cancelled（上游失败/取消）。
+
+    BEGIN IMMEDIATE 复查 status=='created'——非 created（已被人工/并发推进）返回 None
+    幂等放弃。刻意不走 set_task_status：后者的 assert_transition 允许 queued→cancelled，
+    会误伤已入队任务（虽本分支上游失败下不该已入队，仍以结构守卫杜绝）。
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is None or row["status"] != "created":
+            conn.execute("COMMIT")
+            return None
+        assert_transition("created", "cancelled")
+        now = _now_iso()
+        conn.execute(
+            "UPDATE tasks SET status = 'cancelled', error_message = ?, finished_at = ?, "
+            "updated_at = ? WHERE id = ? AND status = 'created'",
+            (error_message, now, now, task_id),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id)
 
 
 def get_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:

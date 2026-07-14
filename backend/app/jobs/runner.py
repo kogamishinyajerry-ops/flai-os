@@ -119,6 +119,72 @@ def worker_singleton_lock(lock_path: str | Path) -> Iterator[None]:
             handle.close()
 
 
+def resolve_dependencies_once(conn_factory: Callable[[], sqlite3.Connection]) -> int:
+    """一趟依赖解析（协作运行时 §3.3，确定性、无 LLM、无 model_gateway 调用）。
+
+    对每个 created 且 depends_on 非空的 user 任务：
+      - 任一上游 failed/cancelled/缺失 → created→cancelled(reason=upstream_failed)，
+        fail-closed 绝不在失败上游上执行下游。
+      - 全部上游 completed → 拷全部上游 output_file_ids 入 input_file_ids + created→queued
+        （repos.enqueue_dependent_task 原子）。**绝不写 data_classification**——分级 100%
+        交下游执行期既有派生（_task_input_classification 读刚管道进来的产物文件污点）。
+      - 否则（上游 waiting_review/进行中/created）→ 保持 created，下 tick 再看。
+    返回本轮推进（入队+取消）的任务数。JobRunner claim 循环不受影响（只 claim queued）。
+    """
+    conn = conn_factory()
+    try:
+        candidates = repos.list_created_dependent_tasks(conn)
+    finally:
+        conn.close()
+
+    advanced = 0
+    for task in candidates:
+        task_id = task["id"]
+        upstream_ids = task.get("depends_on") or []
+        conn = conn_factory()
+        try:
+            upstreams = [repos.get_task(conn, uid) for uid in upstream_ids]
+            failed = [
+                uid for uid, u in zip(upstream_ids, upstreams)
+                if u is None or u["status"] in ("failed", "cancelled")
+            ]
+            if failed:
+                cancelled = repos.cancel_dependent_task(
+                    conn, task_id,
+                    f"上游任务失败/取消/缺失，依赖无法满足：{', '.join(failed)}",
+                )
+                if cancelled is not None:
+                    repos.append_event(
+                        conn, task_id=task_id, agent_id=task.get("agent_id"),
+                        event_type="task_cancelled", level="warning",
+                        message="依赖的上游任务失败或被取消，本任务级联取消（绝不在失败上游上执行）",
+                        payload={"reason": "upstream_failed", "upstream_task_ids": failed},
+                    )
+                    advanced += 1
+                continue
+            if all(u is not None and u["status"] == "completed" for u in upstreams):
+                piped: list[str] = []
+                for u in upstreams:
+                    piped.extend(u.get("output_file_ids") or [])
+                enqueued = repos.enqueue_dependent_task(conn, task_id, piped)
+                if enqueued is not None:
+                    repos.append_event(
+                        conn, task_id=task_id, agent_id=task.get("agent_id"),
+                        event_type="agent_log", level="info",
+                        message=f"依赖满足：{len(upstream_ids)} 个上游全部完成，管道 {len(piped)} 件产物入队",
+                        payload={
+                            "workflow_event_type": "dependency_resolved",
+                            "upstream_task_ids": upstream_ids,
+                            "piped_file_count": len(piped),
+                        },
+                    )
+                    advanced += 1
+            # else：上游未全完成、无失败 → 保持 created
+        finally:
+            conn.close()
+    return advanced
+
+
 def recover_interrupted_tasks(
     conn_factory: Callable[[], sqlite3.Connection],
 ) -> int:
@@ -304,6 +370,12 @@ class JobRunner:
         try:
             while True:
                 self._beat_if_due()  # 心跳先于拾取：空轮询也证明 worker 活着（迁移 #7）
+                # 依赖解析先于拾取：满足依赖的任务 created→queued 后，本轮 run_once
+                # 即可拾取（协作运行时 §3.3）。resolver 确定性，异常不炸 worker。
+                try:
+                    resolve_dependencies_once(self._conn_factory)
+                except Exception:
+                    logger.exception("run_forever：resolve_dependencies_once 抛异常，继续轮询")
                 try:
                     did_work = self.run_once()
                 except Exception:

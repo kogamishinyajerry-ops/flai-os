@@ -54,7 +54,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- data_classification（迁移 #8/ADR-0025）：不可变任务级派生分级（internal|
     -- sensitive）。可空：新任务 create 时留 NULL，执行期 runtime 落库；read 门读此
     -- 列不重派生（抗工具卸载漂移，Codex R1-B）。
-    data_classification TEXT
+    data_classification TEXT,
+    -- depends_on / input_binding（迁移 #9/协作运行时 forge §3.1）：声明式任务依赖 +
+    -- artifact→input 绑定。均可空 NULL=无依赖。depends_on=JSON array 上游 task_id
+    -- （建时冻结、只引已存在任务 → DAG-by-construction）；input_binding=JSON
+    -- （None=默认拷全部上游 output_file_ids 入本任务 input_file_ids）。
+    depends_on TEXT,
+    input_binding TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_events (
@@ -333,6 +339,16 @@ def init_db(db_path: str | Path) -> None:
             task_cols_v8 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
             if "data_classification" not in task_cols_v8:
                 conn.execute("ALTER TABLE tasks ADD COLUMN data_classification TEXT")
+            # 迁移 #9（协作运行时 forge §3.1）：tasks.depends_on / input_binding——
+            # 声明式任务依赖 + artifact→input 绑定。均可空：存量行 NULL=无依赖，
+            # 行为不变（resolver 只扫 depends_on 非空的 created 任务）。depends_on=
+            # JSON array of 上游 task_id（建时冻结、只引已存在任务 → 图按构造即 DAG）；
+            # input_binding=JSON（None=默认拷全部上游 output_file_ids）。
+            task_cols_v9 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+            if "depends_on" not in task_cols_v9:
+                conn.execute("ALTER TABLE tasks ADD COLUMN depends_on TEXT")
+            if "input_binding" not in task_cols_v9:
+                conn.execute("ALTER TABLE tasks ADD COLUMN input_binding TEXT")
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:
