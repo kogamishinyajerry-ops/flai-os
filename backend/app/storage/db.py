@@ -54,7 +54,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- data_classification（迁移 #8/ADR-0025）：不可变任务级派生分级（internal|
     -- sensitive）。可空：新任务 create 时留 NULL，执行期 runtime 落库；read 门读此
     -- 列不重派生（抗工具卸载漂移，Codex R1-B）。
-    data_classification TEXT
+    data_classification TEXT,
+    -- created_by_username（迁移 #9）：发起人的不可变唯一 username，区别于
+    -- created_by（display_name，可变且非唯一）。批C 个人贡献归因/职责分离的
+    -- 身份主键——按 username 归因绝不撞名。可空：存量行留 NULL（自报时代之后
+    -- 才有的追溯，不可从 display_name 反推，同迁移 #6 uploaded_by 口径）。
+    created_by_username TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_events (
@@ -333,6 +338,13 @@ def init_db(db_path: str | Path) -> None:
             task_cols_v8 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
             if "data_classification" not in task_cols_v8:
                 conn.execute("ALTER TABLE tasks ADD COLUMN data_classification TEXT")
+            # 迁移 #9：tasks.created_by_username——发起人不可变唯一身份轴（批C 个人
+            # 贡献归因/职责分离前置）。可空、无 DEFAULT：存量行留 NULL，绝不用
+            # created_by（display_name）反推冒充（自报时代不冒充追溯，同迁移 #6
+            # uploaded_by）。同在写锁内探测补列，口径同前八迁移。
+            task_cols_v9 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+            if "created_by_username" not in task_cols_v9:
+                conn.execute("ALTER TABLE tasks ADD COLUMN created_by_username TEXT")
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:

@@ -70,6 +70,7 @@ def create_task(
     metadata: dict[str, Any] | None = None,
     conversation_id: str | None = None,
     origin: str = "user",
+    created_by_username: str | None = None,
 ) -> dict[str, Any]:
     """建任务：初始态永远是 created（未入队）。
 
@@ -79,6 +80,10 @@ def create_task(
     origin（M10/ADR-0018）：'user'=用户任务（worker 候选集）/'eval'=评测跑批
     任务（仅 eval runner 经 claim_task 驱动）。两候选集不相交，双跑竞态在
     结构上不存在。白名单校验：拼写错误的 origin 会造永久无主孤儿，进门即拒。
+
+    created_by_username（迁移 #9）：发起人不可变唯一 username。created_by 存
+    display_name（可变、可撞名，仅展示），本列存身份主键（批C 个人贡献按此归
+    因绝不撞名）。省略=None，绝不用 created_by 冒充（自报时代不冒充追溯）。
     """
     if origin not in ("user", "eval"):
         raise ValueError(f"origin 只认 'user'/'eval'：{origin!r}")
@@ -89,8 +94,8 @@ def create_task(
             (id, agent_id, agent_version, name, status, created_by,
              created_at, updated_at, started_at, finished_at,
              input_file_ids, output_file_ids, inputs_json, error_message, metadata_json,
-             conversation_id, origin)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             conversation_id, origin, created_by_username)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             task_id, agent_id, agent_version, name, "created", created_by,
@@ -102,6 +107,7 @@ def create_task(
             json.dumps(metadata or {}, ensure_ascii=False),
             conversation_id,
             origin,
+            created_by_username,
         ),
     )
     return get_task(conn, task_id)  # type: ignore[return-value]

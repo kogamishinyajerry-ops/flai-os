@@ -20,6 +20,8 @@
     8. health 含 classification_axis=true（**API 运行进程**的 B2 代际见证，Codex
        审 P1：检查 4 只证明磁盘上的库迁移过——若服务重启失败仍是旧进程，库检
        查与鉴权 401 都会假 PASS，必须要活进程自报的代际标记）
+    8b. health 含 created_by_username_axis=true（迁移 #9 运行进程代际，Codex 治理审
+        P2：库补列后旧 API 未重启窗口会造无归因 user 任务混入 legacy NULL 群）
     9. health.db_identity = 探针侧库路径指纹（Codex R1 审 P2：两侧 FLAI_DB_PATH
        不一致时，探针查有账户的库 A、服务连空库 B，其余全 PASS 却无人能登录）
     10. 未认证 GET /api/agents → 401（鉴权代际见证：200=裸奔旧代际，404=旧代码，
@@ -256,6 +258,25 @@ def check_live_classification_generation(base_url: str) -> Check:
     )
 
 
+def check_live_created_by_username_generation(base_url: str) -> Check:
+    """运行进程的迁移 #9 代际见证（Codex 治理审 P2）：库补列（迁移已跑）只证磁盘，
+    活 API 必须自报 created_by_username_axis——否则「库已迁移+旧 API 未重启」窗口内
+    旧 API 静默造无 username 的 user 任务，混入 legacy NULL 群无法归因。判定 is True。"""
+    url = f"{base_url}/api/health"
+    try:
+        _, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check("运行进程归因代际", False, f"{url} 不可达或非 JSON：{exc}")
+    if payload.get("created_by_username_axis") is True:
+        return Check("运行进程归因代际", True, "活进程自报 created_by_username_axis=true")
+    return Check(
+        "运行进程归因代际", False,
+        "health 无 created_by_username_axis 标记——运行中的 API 是迁移 #9 之前的旧进程"
+        "（库可能已补列但服务未重启到新代码，会造无归因 user 任务），fail-closed",
+    )
+
+
 def check_auth_generation(base_url: str) -> Check:
     """鉴权代际见证：匿名打有数据的端点，401 才是新代际的证词。
 
@@ -335,6 +356,7 @@ def main() -> int:
     checks.append(check_health(base_url))
     checks.append(check_model_gateway_config(base_url))
     checks.append(check_live_classification_generation(base_url))
+    checks.append(check_live_created_by_username_generation(base_url))
     checks.append(check_db_identity(base_url, db_path))
     checks.append(check_auth_generation(base_url))
     checks.append(check_frontend_dist())

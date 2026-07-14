@@ -138,6 +138,11 @@ def create_app(
             # 「活着的进程」跑的是分级轴代码——只查 DB 列会漏掉「库已迁移但服务
             # 重启失败仍是旧进程」的假 PASS。仍是布尔位，不含数据。
             "classification_axis": True,
+            # 迁移 #9 运行进程代际标记（Codex 治理审 P2 同款范式）：见证「活着的
+            # API 进程」跑的是带 created_by_username 写入的代码。部署版本偏斜（worker/
+            # 脚本已跑迁移、API 仍旧码）时旧 API 无此位 → 部署自检 FAIL，operator
+            # 据此知 API 未重启，避免旧 API 静默造无归因 user 任务混入 legacy NULL 群。
+            "created_by_username_axis": True,
             # 库身份指纹（Codex R1 审 P2）：自检门比对「服务实际连的库」与
             # 「探针检查的库」是否同一——FLAI_DB_PATH 两侧不一致时，探针查
             # 有账户的库 A、服务连空库 B，全部 PASS 却无人能登录。路径哈希

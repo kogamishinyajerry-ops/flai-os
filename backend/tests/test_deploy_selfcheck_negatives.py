@@ -317,6 +317,33 @@ def test_live_classification_true_passes(monkeypatch) -> None:
     assert deploy_selfcheck.check_live_classification_generation("http://x").ok is True
 
 
+# ---------- 9. check_live_created_by_username_generation（迁移 #9 代际, is True） ----------
+
+def test_live_username_axis_false_fails(monkeypatch) -> None:
+    _fake_http(monkeypatch, payload={"created_by_username_axis": False})
+    assert deploy_selfcheck.check_live_created_by_username_generation("http://x").ok is False
+
+
+def test_live_username_axis_missing_fails(monkeypatch) -> None:
+    """旧 API health 无此标记——库可能已补列（迁移 #9）但 API 未重启到新代码，
+    该窗口内旧 API 会造无归因 user 任务，必 FAIL 逼 operator 重启 API。"""
+    _fake_http(monkeypatch, payload={"status": "ok", "classification_axis": True})
+    assert deploy_selfcheck.check_live_created_by_username_generation("http://x").ok is False
+
+
+def test_live_username_axis_truthy_not_true_fails(monkeypatch) -> None:
+    """is True 纪律：truthy 非布尔真一律 FAIL（安全 gate 铁律）。"""
+    for truthy in ("true", 1, "1"):
+        _fake_http(monkeypatch, payload={"created_by_username_axis": truthy})
+        c = deploy_selfcheck.check_live_created_by_username_generation("http://x")
+        assert c.ok is False, f"created_by_username_axis={truthy!r} 是 truthy 非 True，必 FAIL"
+
+
+def test_live_username_axis_true_passes(monkeypatch) -> None:
+    _fake_http(monkeypatch, payload={"created_by_username_axis": True})
+    assert deploy_selfcheck.check_live_created_by_username_generation("http://x").ok is True
+
+
 # ---------- 9. check_auth_generation（default-deny 见证） ----------
 
 def test_auth_generation_200_fails(monkeypatch) -> None:
