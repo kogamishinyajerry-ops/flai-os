@@ -13,7 +13,7 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import TEST_DISPLAY_NAME, seed_and_login
+from conftest import TEST_DISPLAY_NAME, login, seed_and_login, seed_user
 
 from backend.app import config
 from backend.app.jobs.runner import JobRunner
@@ -616,6 +616,159 @@ def test_review_concurrent_race_returns_409_not_500(review_app_env, monkeypatch)
         f"/api/tasks/{task_id}/review", json={"action": "approve"}
     )
     assert ok.status_code == 200
+
+
+# ── me: 工程师私有贡献端点（批C 轨2，私有=安全线）──────────────────────────
+
+
+@pytest.fixture()
+def me_two_user_env(tmp_path: Path):
+    """两个已登录身份的 client：alice/bob 各自真实登录（F6 纪律，走真实
+    /api/auth/login 换 Set-Cookie），复用 test_m11_auth.py `_anon(app)` 同款
+    手法——第二个 client 不再 `with TestClient(app)`，直接在已由第一个 client
+    启动过 lifespan 的同一 app 上开新实例（独立 cookie jar，共享 app.state）。
+
+    seed(username, display_name, *, created, completed, waiting, feedback)：
+    绕过 API 逐条 POST，直接用 repos.create_task/set_task_status/create_feedback
+    造数据（同 test_repos.py::test_list_tasks_filters_by_created_by_username
+    的直插样板）。created 条任务里前 completed 条经合法状态机路径
+    （queued→validating→running→waiting_review→completed）转终态，紧接
+    waiting 条只转到 waiting_review 停住，其余留在 created 态；feedback 条
+    反馈全部挂在 task_ids[0] 上（feedback 计数只按 created_by 近似，不依赖
+    挂在哪个具体任务）。
+    """
+    from backend.app.storage import repos
+    from backend.app.storage.db import get_conn
+
+    db_path = tmp_path / "flai_os.db"
+    app = create_app(
+        agents_dir=REPO_ROOT / "agents",
+        tools_dir=REPO_ROOT / "tools_impl",
+        contracts_dir=REPO_ROOT / "contracts",
+        db_path=db_path,
+        uploads_dir=tmp_path / "uploads",
+        task_runs_dir=tmp_path / "task_runs",
+    )
+    with TestClient(app) as alice_client:
+        seed_user(db_path, username="alice", display_name="Alice", password="alice-pass-123")
+        seed_user(db_path, username="bob", display_name="Bob", password="bob-pass-123")
+        login(alice_client, username="alice", password="alice-pass-123")
+
+        bob_client = TestClient(app)  # 同 app 已启动 lifespan：独立 cookie jar，共享 state
+        login(bob_client, username="bob", password="bob-pass-123")
+
+        def seed(
+            username: str,
+            display_name: str,
+            *,
+            created: int,
+            completed: int,
+            waiting: int,
+            feedback: int,
+        ) -> list[str]:
+            conn = get_conn(db_path)
+            try:
+                task_ids = []
+                for i in range(created):
+                    tid = f"{username}-task-{i}"
+                    repos.create_task(
+                        conn,
+                        task_id=tid,
+                        agent_id="hello_agent",
+                        agent_version="0.1.0",
+                        name=None,
+                        created_by=display_name,
+                        created_by_username=username,
+                    )
+                    task_ids.append(tid)
+                idx = 0
+                for _ in range(completed):
+                    tid = task_ids[idx]
+                    idx += 1
+                    for st in ("queued", "validating", "running", "waiting_review", "completed"):
+                        repos.set_task_status(conn, tid, st)
+                for _ in range(waiting):
+                    tid = task_ids[idx]
+                    idx += 1
+                    for st in ("queued", "validating", "running", "waiting_review"):
+                        repos.set_task_status(conn, tid, st)
+                for _ in range(feedback):
+                    repos.create_feedback(
+                        conn,
+                        task_id=task_ids[0],
+                        agent_id="hello_agent",
+                        agent_version="0.1.0",
+                        rating="good",
+                        category="usability",
+                        message=None,
+                        created_by=display_name,
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+            return task_ids
+
+        yield alice_client, bob_client, seed
+
+
+def test_me_contributions_precise_private_and_feedback_approx(me_two_user_env) -> None:
+    alice_client, bob_client, seed = me_two_user_env
+    seed("alice", "Alice", created=3, completed=1, waiting=1, feedback=2)
+    seed("bob", "Bob", created=5, completed=2, waiting=0, feedback=1)
+
+    since = "2000-01-01T00:00:00Z"  # 远早 → since_* 窗口含全部
+    a = alice_client.get(f"/api/me/contributions?since={since}").json()
+    assert a["username"] == "alice"
+    assert a["total_created"] == 3  # 只计 alice，绝不含 bob 的 5
+    assert a["since_completed"] == 1
+    assert a["waiting_review"] == 1
+    assert a["feedback_count_approx"] == 2  # 按 display_name "Alice"
+
+    # 私有实证：bob 登录只拿到 bob 的数，无 username 参数可越权查 alice
+    b = bob_client.get(f"/api/me/contributions?since={since}").json()
+    assert b["username"] == "bob"
+    assert b["total_created"] == 5
+    # 端点不接受 username query（多给了也被忽略，仍返回自己的）
+    b2 = bob_client.get(f"/api/me/contributions?since={since}&username=alice").json()
+    assert b2["total_created"] == 5 and b2["username"] == "bob"
+
+    # since 必填 422
+    assert alice_client.get("/api/me/contributions").status_code == 422
+
+
+def test_me_tasks_private_and_sensitive_redacted(me_two_user_env) -> None:
+    alice_client, bob_client, seed = me_two_user_env
+    alice_ids = seed("alice", "Alice", created=2, completed=0, waiting=0, feedback=0)
+    seed("bob", "Bob", created=1, completed=0, waiting=0, feedback=0)
+
+    a = alice_client.get("/api/me/tasks?limit=50").json()
+    assert all(t["created_by_username"] == "alice" for t in a)  # 只我的
+    assert len(a) == 2
+    b = bob_client.get("/api/me/tasks?limit=50").json()
+    assert all(t["created_by_username"] == "bob" for t in b)
+    assert len(b) == 1
+    # limit 夹取：>100 被拒或夹取（ge/le），0 被拒
+    assert alice_client.get("/api/me/tasks?limit=0").status_code == 422
+    assert alice_client.get("/api/me/tasks?limit=101").status_code == 422
+
+    # ADR-0025 遮蔽 chokepoint：alice 一条任务标 sensitive 后，/api/me/tasks
+    # 必须经 cgate.redact_task_row_if_sensitive 同款遮蔽（content_withheld=True），
+    # 不因为「是我自己发起的任务」就绕过遮蔽门。
+    from backend.app.storage import repos
+    from backend.app.storage.db import get_conn
+
+    conn = get_conn(alice_client.app.state.db_path)
+    try:
+        repos.set_task_data_classification(conn, alice_ids[0], "sensitive")
+        conn.commit()
+    finally:
+        conn.close()
+
+    a2 = alice_client.get("/api/me/tasks?limit=50").json()
+    sensitive_row = next(t for t in a2 if t["id"] == alice_ids[0])
+    assert sensitive_row["content_withheld"] is True
+    assert sensitive_row["error_message"] is None
+    assert sensitive_row["created_by_username"] == "alice"  # 元数据保留，只遮内容
 
 
 # ── files: upload -> download 往返 ───────────────────────────────────────
