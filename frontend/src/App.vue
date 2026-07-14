@@ -52,6 +52,9 @@
         </div>
       </div>
 
+      <!-- 「我的贡献」深链（批C task7）：独立入口，不并进登出按钮语义。 -->
+      <a class="sb-mine" :class="{ 'is-active': route.path === '/me' }" @click="$router.push('/me')">我的贡献</a>
+
       <!-- 工作身份行：登录会话身份（服务端派生，前端只读）；点击退出登录。 -->
       <button class="sb-identity" :title="`以「${userName}」的身份登录——点击退出`" @click="changeIdentity">
         <span class="sb-id-dot"></span>{{ userName }}
@@ -710,6 +713,13 @@ body {
 }
 .convo-item:hover .convo-time { opacity: 1; }
 .convo-empty { font-size: 12px; color: var(--ink-faint); padding: 8px 12px; line-height: 1.5; }
+
+/* ── 「我的贡献」深链（批C task7）：贴合 .sb-identity 视觉 ── */
+.sb-mine {
+  display: block; padding: 6px 10px; margin: 0 8px 4px; cursor: pointer;
+  color: var(--ink-soft); font-size: 12.5px; border-radius: 6px;
+}
+.sb-mine:hover, .sb-mine.is-active { color: var(--ink); background: var(--paper-rail); }
 
 /* ── 工作身份行 ── */
 .sb-identity {

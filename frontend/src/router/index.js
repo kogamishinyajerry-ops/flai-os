@@ -8,6 +8,7 @@ import { createRouter, createWebHistory } from "vue-router";
 const routes = [
   { path: "/", name: "guide", component: () => import("../views/GuidePage.vue"), meta: { title: "对话" } },
   { path: "/today", name: "today", component: () => import("../views/TodayPage.vue"), meta: { title: "今日" } },
+  { path: "/me", name: "me", component: () => import("../views/MePage.vue"), meta: { title: "我的贡献" } },
   { path: "/portal", name: "portal", component: () => import("../views/AgentPortal.vue"), meta: { title: "Agent 门户" } },
   { path: "/workbench", redirect: "/tasks" },
   { path: "/workbench/:sessionId", name: "workbench-session", component: () => import("../views/WorkbenchSession.vue"), meta: { title: "协作会话" } },
