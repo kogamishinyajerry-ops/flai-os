@@ -107,18 +107,22 @@ def test_solve_convergence_improves_with_more_steps(tmp_path):
 
 
 def test_solve_a_stable_at_coarse_no_blowup(tmp_path):
-    """本发核心设计断言：梯形 A-稳定——粗到 ωn·dt≫2.8（显式 RK4 必发散的区）仍不发散。
-    n_steps=6 时 ωn·dt≈2.4，梯形须给出有限、有界、有超调的解（converged=true），
-    而非 blowup。这是选梯形而非 RK4 的关键，也防未来有人『优化』成显式法作废诚实负例。"""
-    inputs = {"zeta": 0.5, "omega_n": 1.0, "n_steps": 6}
+    """本发核心设计断言：梯形 A-稳定——粗到落入显式 RK4 的发散区仍不发散、且钉住方法。
+    n_steps=4 时 ωn·dt≈3.63（|z|≈3.63 > RK4 振荡稳定限 2.828，RK4 放大因子 |R(z)|≈3.70>1）：
+    梯形须给出有限有界解（peak≈1.347，超调≈34.71%），而显式 RK4 在此发散（peak→39.7、
+    max|y|→151.6）。故 `peak<2` 与超调紧带宽两条断言各自独立会被 RK4 替换破坏——真区分
+    梯形 vs RK4。（Codex P2-2 + loop-auditor Gap2 交叉命中：原 n=6 的 ωn·dt=2.42<2.828，
+    RK4 在该处 |R|=0.80 仍稳定=测试防不住方法替换；已独立数值复核 n=4 处 RK4 真发散。）
+    也防未来『优化』成显式法作废诚实负例。"""
+    inputs = {"zeta": 0.5, "omega_n": 1.0, "n_steps": 4}
     out = _SOLVE.run({"inputs": inputs, "output_dir": str(tmp_path), "event_logger": _Logger()})
     assert out["status"] == "success"
     sol = json.loads((tmp_path / "step_solution.json").read_text())
     ov = sol["response_result"]["overshoot_pct"]
     peak = sol["response_result"]["peak_value"]
     assert math.isfinite(ov) and math.isfinite(peak)
-    assert 0.0 < ov < 200.0          # 有超调、有界（不发散）
-    assert peak < 100.0              # 绝不 blowup
+    assert peak < 2.0                # 梯形 peak≈1.347 有界；RK4 此处发散(peak≈39.7)破此断言
+    assert 33.5 < ov < 36.0          # 钉梯形 n=4 特定超调 34.71%；RK4 的 ~3867% 破此断言
 
 
 def test_solve_fail_closed_branch_reachable(tmp_path, monkeypatch):
@@ -192,12 +196,51 @@ def test_evaluate_catches_wrong_overshoot_tamper(tmp_path):
 
 
 def test_evaluate_fail_closed_on_bad_zeta(tmp_path):
-    """tamper：params.zeta 篡改成 1.5（非欠阻尼）→ 闭式超调无定义 → 诚实 failed，
-    不臆测、不编造。守 oracle 的 ζ 定义域护栏（_analytic_overshoot_pct 的 0<ζ<1 断言）。"""
+    """tamper：params.zeta 篡改成越域值 → 闭式超调无定义 → 诚实 failed，不臆测、不编造。
+    守 oracle 的 ζ 定义域护栏（_analytic_overshoot_pct 的 0<ζ<1 断言）。
+    **关键含 ζ=-0.5（负阻尼）**：loop-auditor Gap1 变异测试证——ζ=1.5 时 sqrt(1-1.5²)
+    自身抛 math domain error，护栏对它冗余（删护栏该值仍 failed=空洞见证）；护栏真正
+    独占保护的是 ζ≤0（sqrt 不抛，无护栏则静默给 overshoot_ref≈613% 假判为 success）。
+    故必须含 ζ=-0.5/0.0 才真咬住护栏——删护栏时这两个子例才会由绿转红。"""
+    for i, bad_zeta in enumerate((-0.5, 0.0, 1.5)):
+        good = json.loads((FIXTURES / "underdamped_fine" / "step_solution.json").read_text())
+        good["params"]["zeta"] = bad_zeta
+        d = tmp_path / f"z{i}"
+        d.mkdir()
+        out, ev = _eval_on_dict(d, good)
+        assert out["status"] == "failed", f"ζ={bad_zeta} 应 fail-closed 但得 {out['status']}"
+
+
+def test_evaluate_fail_closed_on_bad_omega_n(tmp_path):
+    """Codex 异源审 P1：evaluate 走 file_upload 路径，solve input_schema 不作用于 params。
+    tamper：params.omega_n 篡改成 -1 / 0（非正=非稳定标准二阶系统），即便 ζ/overshoot
+    匹配、converged=true，也须 fail-closed，绝不假绿。中和 omega_n 护栏则此测试转红。"""
+    for i, bad_wn in enumerate((-1.0, 0.0)):
+        good = json.loads((FIXTURES / "underdamped_fine" / "step_solution.json").read_text())
+        good["params"]["omega_n"] = bad_wn
+        d = tmp_path / f"wn{i}"
+        d.mkdir()
+        out, ev = _eval_on_dict(d, good)
+        assert out["status"] == "failed", f"ωn={bad_wn} 应 fail-closed 但得 {out['status']}"
+
+
+def test_evaluate_fail_closed_on_underflow_ref(tmp_path):
+    """Codex 异源审 P2：ζ=0.999992（schema 合法但过接近临界阻尼）令闭式 Mp_ref 下溢到 0——
+    未加护栏时相对误差除零崩。护栏须 fail-closed（未达评估条件），绝不崩、绝不假绿。"""
     good = json.loads((FIXTURES / "underdamped_fine" / "step_solution.json").read_text())
-    good["params"]["zeta"] = 1.5  # 越出欠阻尼定义域
+    good["params"]["zeta"] = 0.999992
     out, ev = _eval_on_dict(tmp_path, good)
     assert out["status"] == "failed"
+
+
+def test_evaluate_fail_closed_on_nonfinite_overshoot(tmp_path):
+    """Codex 异源审 P2：上游 overshoot_pct=1e309（json 解析为 inf）——未加护栏时
+    json.dump 写出非标准 Infinity 却报 success。护栏须 fail-closed，且绝不落带 Infinity 的产物。"""
+    good = json.loads((FIXTURES / "underdamped_fine" / "step_solution.json").read_text())
+    good["response_result"]["overshoot_pct"] = 1e309  # → inf
+    out, ev = _eval_on_dict(tmp_path, good)
+    assert out["status"] == "failed"
+    assert not (tmp_path / "out" / "evaluation.json").exists()  # 不落 Infinity 产物
 
 
 def test_evaluate_fail_closed_on_missing_params(tmp_path):

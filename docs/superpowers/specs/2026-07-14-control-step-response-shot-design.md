@@ -53,9 +53,12 @@ registry（`backend/app/runtime/registry.py`）自动扫描同步进 DB，加新
 超调由轨迹 argmax 取（峰值−稳态）。梯形对稳态一致（DC 增益恒 1）→ 稳态 y_ss=1 精确。
 
 **为何梯形而非显式 RK4**（关键设计决策）：第二发要能演示「粗离散超容差、细离散
-收敛」的诚实负例。显式 RK4 对振荡系统有稳定上限 `ωn·h<2.828`，粗步长会 **blowup**
+收敛」的诚实负例。显式 RK4 对振荡系统有稳定上限 `|z|=ωn·h<2.828`，越过即 **blowup**
 而非「误差大但有界」——诚实负例撞发散悬崖、不鲁棒。梯形是 **A-稳定**：粗步长只是
-O(h²) 精度差、绝不发散（已数值实测 `n_steps=3, ωn·dt=4.84` 仍 max|y|=1.26 不发散）。
+O(h²) 精度差、绝不发散（本发算例 horizon=4π/ωd 下实测：n_steps=4 时 ωn·dt≈3.63、
+|z|≈3.63>2.828、RK4 放大因子 |R(z)|≈3.70>1 → RK4 真发散 peak→39.7/max|y|→151.6，
+而梯形 peak≈1.347 有界；n_steps=6 时 ωn·dt≈2.42<2.828、RK4 |R|≈0.80 仍稳定=**签名
+测试必须取 n≤5 才真落 RK4 发散区**，此为 Codex P2-2 + loop-auditor Gap2 交叉命中修正）。
 且双线性变换是控制学科离散连续系统的标准工具，域上 canonical。
 
 **evaluate（评估侧）= oracle**：从上游 `step_solution.json` 的 `params`（单一来源，不
@@ -97,9 +100,10 @@ evaluate 任务 `depends_on:[solve]` + `input_binding:{from_tasks:[solve]}`。**
 
 `backend/tests/test_step_response_agents.py`（15 测试，pytest 自动纳入 verify_all）：
 - **单元·solve**：对闭式解析超调（ζ=0.5 / ζ=0.3 且 ωn=2）+ 单调收敛（n=12 粗 vs
-  n=2000 收敛）+ **A-稳定性签名测试**（n_steps=6, ωn·dt≈2.4 显式 RK4 必发散区，梯形
-  须有限有界有超调，防未来『优化』成显式法作废诚实负例）+ fail-closed 分支
-  monkeypatch 可达。
+  n=2000 收敛）+ **A-稳定性签名测试**（n_steps=4, ωn·dt≈3.63 显式 RK4 真发散区
+  |z|≈3.63>2.828/|R(z)|≈3.70>1，实测 RK4 peak→39.7/max|y|→151.6，梯形须有限有界
+  (peak≈1.347)且钉住 n=4 特定超调 34.71%——两条断言各自会被 RK4 替换破坏，真区分梯形
+  vs RK4，防未来『优化』成显式法作废诚实负例）+ fail-closed 分支 monkeypatch 可达。
 - **单元·evaluate**：正例通过 + **诚实负例**（n=12 真实 41.5% 误差 → passed=false，
   非注入真源回归）+ fail-closed（converged=false / **ζ 越域 1.5** / 缺 params / 无 .json
   → 不编造）+ **tamper**（改 overshoot +50% → 必判 passed=false，证比对非空洞）。
@@ -136,6 +140,36 @@ docs/superpowers/specs/2026-07-14-control-step-response-shot-design.md（本文�
 ```
 `git diff backend/app` = 空。
 
-## 8. 异源双轴审收口
+## 8. 异源双轴审收口（commit d8b37b7 → 修复）
 
-（待 Codex 治理审 + loop-auditor 验证架构审后补。）
+两轴正交异源审（Codex 代码正确性 + loop-auditor 验证架构），全 finding 已 grounded
+复核并处置（修复 commit 见 changelog）：
+
+**Codex（86gs gpt-5.6-sol ultra）1P1+2P2 全 grounded 全修**（Codex 亲跑 python 复现）：
+- P1 evaluate 未校验 ωn：evaluate 走 file_upload 路径，solve 的 input_schema 不作用于
+  产物 params；超调只依赖 ζ，故 ωn=0/-1 配匹配 ζ/overshoot + converged=true 仍 passed=true
+  （非正 ωn 非稳定标准二阶系统却假绿）→ 加 `omega_n 有限且 >0` 护栏，否则 fail-closed。
+- P2-1 相对误差除法未防下溢/非有限：ζ=0.999992（schema 合法）令 Mp_ref 下溢到 0 触发
+  除零崩；上传 overshoot=1e309→inf 让 json 写出非标准 Infinity 却报 success → 加
+  `overshoot_fem 有限` + `overshoot_ref 有限且 >0` 护栏，均 fail-closed。3 护栏各配 tamper 测试。
+- P2-2 A-稳定性测试没真区分 RK4：原 n_steps=6 的 ωn·dt=2.42<2.828，RK4 在此 |R|=0.80
+  仍稳定（peak=1.66 满足所有断言）→ 测试防不住方法替换 → 改 n_steps=4（ωn·dt=3.63，RK4
+  真发散 peak→39.7）+ 钉梯形特定超调 34.71%，两断言各自独立咬 RK4 替换。
+
+**loop-auditor（Opus，隔离副本真变异测试 + scipy 独立重算，sha256 前后一致）：APPROVE 17/20，2 FLAG 全修**：
+- Gap1 ζ 定义域护栏见证空洞：原 tamper 用 ζ=1.5，但 sqrt(1−1.5²) 自身抛 math domain
+  error，护栏对它冗余（删护栏仍 failed=空洞）；护栏真正独占保护的是 ζ≤0（sqrt 不抛，
+  无护栏则静默给 overshoot_ref≈613% 假判）→ tamper 值改含 ζ=-0.5/0.0，删护栏才真转红。
+- Gap2 A-稳定叙事数字不实（与 Codex P2-2 同域，独立交叉命中，故高置信）：n=6 非「≫2.8」→
+  一并改 n=4 + 修 docstring/设计文档数字。
+
+loop-auditor 独立用 scipy.signal.step + solve_ivp(RK45) 对 5 组 (ζ,ωn) 重算，与闭式超调
+吻合 ~1e-9；对梯形 A-稳定性做解析（双线性把稳定特征值映入单位圆）+ 数值扫描（h 从 1e-6
+到 1e12 谱半径全 ≤1）双重独立坐实；对 3 处 fail-closed 分支做真变异测试（中和后绿转红）。
+零 diff / oracle 正确 / fail-closed / 篡改必咬 / 诚实标注五条核心断言独立复算为真。
+
+**教训沉淀**：①单标量 oracle（超调只依赖 ζ）的「未参与判定的伴随参数」（ωn）必须独立
+校验合法性，否则非法值配匹配主参数即假绿——异源审逮住的 fail-open；②tamper 见证必须取
+「防御独占保护的输入」（ζ≤0），取会被别的机制（sqrt 抛异常）拦下的值（ζ=1.5）是空洞见证
+（同第一发教训⑨「覆盖面=见证强度上限」）；③声称「A 优于 B」的比较性断言必须让测试参数
+真落入「B 失败」的区间，否则测试防不住 B 替换（选参数前先算 B 的失败边界 |z|>2.828）。

@@ -99,9 +99,23 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     try:
         overshoot_fem = float(result["overshoot_pct"])
         zeta = float(params["zeta"])
-        overshoot_ref = _analytic_overshoot_pct(zeta)  # ζ 越界在此 raise → fail-closed
+        omega_n = float(params["omega_n"])
+        overshoot_ref = _analytic_overshoot_pct(zeta)  # ζ 越出 (0,1) 在此 raise → fail-closed
     except (ValueError, ZeroDivisionError, TypeError) as exc:
         return _fail(f"闭式解析参考值计算失败：{exc}——未达评估条件，不评估")
+
+    # 数值合法性护栏（fail-closed，Codex 异源审 P1/P2）：evaluate 走 file_upload 路径，
+    # solve 的 input_schema 不作用于此处 params——须在判定前独立校验数值合法，否则：
+    # ①非正/非有限 ωn（非稳定标准二阶系统）会配匹配 ζ/overshoot + converged=true 假绿；
+    # ②上游 overshoot 非有限（如 1e309→inf）会让 json.dump 写出非标准 Infinity 却报 success；
+    # ③ζ 过接近临界（如 0.999992）令 Mp_ref 下溢到 0 触发相对误差除零崩。
+    # 一律「显式肯定证据才判、否则 fail-closed」（防 fail-open 经典陷阱，宪法铁律）。
+    if not (math.isfinite(omega_n) and omega_n > 0.0):
+        return _fail(f"上游 params.omega_n={omega_n} 非法（须有限且 >0，否则非稳定标准二阶系统）——未达评估条件，不评估")
+    if not math.isfinite(overshoot_fem):
+        return _fail(f"上游 overshoot_pct 非有限（{overshoot_fem}）——未达评估条件，不评估")
+    if not (math.isfinite(overshoot_ref) and overshoot_ref > 0.0):
+        return _fail("闭式参考超调下溢或非有限（ζ 过接近临界阻尼，超出可判区）——未达评估条件，不评估")
 
     # 上游未收敛 → 未达评估条件（不给通过/不给误差比较），fail-closed
     if not converged_upstream:
@@ -116,7 +130,7 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
 
     evaluation = {
         "zeta": zeta,
-        "omega_n": float(params["omega_n"]),
+        "omega_n": omega_n,
         "overshoot_fem": overshoot_fem,
         "overshoot_ref": overshoot_ref,
         "error_pct": error_pct,
