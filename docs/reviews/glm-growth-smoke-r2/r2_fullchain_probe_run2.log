@@ -1,0 +1,17 @@
+[PASS] 后端起服 /api/health — port=8642
+[PASS] 种判卷账户
+[PASS] 真实登录
+[PASS] spec_compliance_precheck_agent 注册可见 — agents=['cfd_evaluate_agent', 'cfd_solve_agent', 'control_logic_agent', 'fta_agent', 'guide_agent', 'hello_agent', 'knowledge_qa_agent', 'monitor_adapter_gen_agent', 'performance_disk_agent']
+[PASS] 上传大纲草稿 — 200
+[PASS] 创建任务 — 200 task_0bb21ce537254174a24f58420314a54c
+[PASS] 执行后停 waiting_review（人签闸） — status=waiting_review
+[PASS] 产物落盘 precheck_report.md
+[PASS] 引用条款零捏造（硬门） — cited=32 fabricated=0
+[NOTE] 种植违规召回 — 6/6 命中=['CAL-2.1', 'DR-3.2', 'DR-5.1', 'OL-1.4', 'SF-2.1', 'SF-4.3'] 语义项命中=['CAL-2.1', 'DR-5.1']（软指标：≥4 且语义≥1）
+[PASS] 召回软指标达标 — recall=6/6 semantic=2/2
+[PASS] 文件头水印/草案声明在场
+[PASS] 预检结论为『建议』语态
+[PASS] 人工签发 approve — 200
+[PASS] 终态 completed — status=completed
+[cleanup] 探针进程已停；临时库=/var/folders/q4/859yhpgn6x3fx6kv4mj5gmv40000gp/T/glm_smoke_r2_tgv7xerb
+CHAIN_PROBE_RESULT=ALL_GREEN failures=0

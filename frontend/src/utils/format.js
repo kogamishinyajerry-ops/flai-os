@@ -106,6 +106,21 @@ export const formatTime = (iso) => {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString("zh-CN", { hour12: false });
 };
 
+// 相对时间 SSOT（批B /today Agent 动态）：近期事件用人话距离，7 天以上回落
+// formatTime 绝对时间；非法/未来时间戳诚实降级为 formatTime，不编「刚刚」。
+export const formatRelativeTime = (iso, nowMs = Date.now()) => {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t) || t > nowMs) return formatTime(iso);
+  const diff = nowMs - t;
+  const min = 60_000;
+  if (diff < min) return "刚刚";
+  if (diff < 60 * min) return `${Math.floor(diff / min)} 分钟前`;
+  if (diff < 24 * 60 * min) return `${Math.floor(diff / (60 * min))} 小时前`;
+  if (diff < 7 * 24 * 60 * min) return `${Math.floor(diff / (24 * 60 * min))} 天前`;
+  return formatTime(iso);
+};
+
 // 毫秒 → 人话时长（工作态氛围展示用；非法/负值一律诚实降级为「—」，不编造）。
 export const formatDuration = (ms) => {
   if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "—";

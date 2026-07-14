@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any, Literal
 
@@ -459,3 +460,130 @@ def list_task_samples(task_id: str, request: Request) -> list[dict[str, Any]]:
         return rows
     finally:
         conn.close()
+
+
+@router.get("/tasks/{task_id}/output_files")
+def list_task_output_files(task_id: str, request: Request) -> list[dict[str, Any]]:
+    """任务产物文件的只读元数据投影（批B P1 治理修复）：DeliveryCard 产物条此前
+    逐个调用 /files/{id}/download 只为取文件名——纯展示需求却全量拖 blob，且对
+    非 internal 分级文件触发 sensitive_download_denied 假阳性审计（用户根本没
+    有下载意图）。本端点只投影 [{id, filename, size_bytes, data_classification}]，
+    绝不含 path/sha256/uploaded_by 等敏感或内容字段——前端据此渲染 chip，真实下载
+    仍走 /files/{id}/download 原有分级门（该端点自身的审计语义不受影响）。"""
+    conn = request.app.state.conn_factory()
+    try:
+        task = _get_task_or_404(conn, task_id)
+        rows = repos.list_files_by_ids(conn, task.get("output_file_ids") or [])
+        return [
+            {
+                "id": r["id"],
+                "filename": r["filename"],
+                "size_bytes": r["size_bytes"],
+                "data_classification": r["classification"],
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def _model_call_token_total(usage: Any) -> int | float | None:
+    """与 DeliveryCard.vue/TaskDetail.vue modelCallTokenTotal() 同源口径：
+    total_tokens 优先；否则 prompt_tokens+completion_tokens 均为数字才计入；
+    两者皆无算未知，绝不记 0（bool 是 int 子类，显式排除避免 True 被当 1 计入）。"""
+    if not isinstance(usage, dict):
+        return None
+    total = usage.get("total_tokens")
+    if isinstance(total, (int, float)) and not isinstance(total, bool):
+        return total
+    p = usage.get("prompt_tokens")
+    c = usage.get("completion_tokens")
+    if (
+        isinstance(p, (int, float)) and not isinstance(p, bool)
+        and isinstance(c, (int, float)) and not isinstance(c, bool)
+    ):
+        return p + c
+    return None
+
+
+@router.get("/tasks/{task_id}/delivery_summary")
+def get_task_delivery_summary(task_id: str, request: Request) -> dict[str, Any]:
+    """今日交付卡（DeliveryCard）的有界服务端聚合（批B 治理审 R1 P1 修复）：
+    此前单卡自带 listModelCalls+listTaskEvents 两个无界只读请求，交付量大时
+    今日工作台=无界扇出。本端点一次聚合返回：
+
+    - model_calls：只读 status/token_usage_json 两列（不 SELECT *，避免拖
+      request/response_summary 等内容字段），token 口径与 DeliveryCard/TaskDetail
+      的 tokenTotal 完全同源。
+    - 批量摘要（batch_ok/batch_failed）：只看最近 50 条 agent_log 事件（DESC
+      LIMIT 50，有界）——summary_generated 是批量 Agent 收尾事件，正常态必在
+      事件尾部；若真被 50 条后续日志淹没，诚实返回 null（宁缺毋错，卡片就不
+      显示批量行），不做无界扫描换取「万一漏了」的假完整。
+    """
+    conn = request.app.state.conn_factory()
+    try:
+        task = _get_task_or_404(conn, task_id)
+
+        mc_rows = conn.execute(
+            "SELECT status, token_usage_json FROM model_calls WHERE task_id = ?",
+            (task_id,),
+        ).fetchall()
+        mc_total = len(mc_rows)
+        mc_ok = 0
+        mc_failed = 0
+        token_sum: int | float = 0
+        token_known = 0
+        for row in mc_rows:
+            if row["status"] == "success":
+                mc_ok += 1
+            elif row["status"] == "failed":
+                mc_failed += 1
+            usage = None
+            if row["token_usage_json"]:
+                try:
+                    usage = json.loads(row["token_usage_json"])
+                except (TypeError, ValueError):
+                    usage = None
+            total = _model_call_token_total(usage)
+            if total is not None:
+                token_sum += total
+                token_known += 1
+
+        batch_ok: int | None = None
+        batch_failed: int | None = None
+        # ADR-0025 一致封闭（Codex R2-P1 verbatim）：/tasks/{id}/events 对 sensitive
+        # 任务遮蔽 payload（含 summary_generated 的 ok/failed_count），本聚合若照读
+        # payload 即重开被封的任务派生数据面——sensitive 一律不做事件扫描，批量字段
+        # 保持 null（卡片不显示批量行）。model_calls 聚合只含计数/token 元数据，
+        # 与 MODEL_CALL_CONTENT_KEYS 遮蔽面正交，保留。
+        event_rows = [] if cgate.is_sensitive_task(conn, task) else conn.execute(
+            "SELECT payload_json FROM task_events WHERE task_id = ? AND event_type = 'agent_log'"
+            " ORDER BY id DESC LIMIT 50",
+            (task_id,),
+        ).fetchall()
+        for row in event_rows:
+            try:
+                payload = json.loads(row["payload_json"]) if row["payload_json"] else {}
+            except (TypeError, ValueError):
+                payload = {}
+            if (
+                payload.get("workflow_event_type") == "summary_generated"
+                and payload.get("ok_count") is not None
+                and payload.get("failed_count") is not None
+            ):
+                batch_ok = payload["ok_count"]
+                batch_failed = payload["failed_count"]
+                break
+    finally:
+        conn.close()
+
+    return {
+        "mc_total": mc_total,
+        "mc_ok": mc_ok,
+        "mc_failed": mc_failed,
+        "token_sum": token_sum,
+        "token_known": token_known,
+        "token_missing": mc_total - token_known,
+        "batch_ok": batch_ok,
+        "batch_failed": batch_failed,
+    }

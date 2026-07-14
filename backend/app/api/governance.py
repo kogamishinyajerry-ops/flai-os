@@ -131,3 +131,14 @@ def list_promotions(agent_id: str, request: Request) -> list[dict[str, Any]]:
         return repos.list_promotions(conn, agent_id)
     finally:
         conn.close()
+
+
+@router.get("/promotions")
+def list_promotions_all(request: Request, limit: int = 20) -> list[dict[str, Any]]:
+    """全局最近晋升（批B /today）。只读；limit 夹取 1-100 防全表倾倒。"""
+    limit = max(1, min(int(limit), 100))
+    conn = request.app.state.conn_factory()
+    try:
+        return repos.list_promotions_all(conn, limit)
+    finally:
+        conn.close()
