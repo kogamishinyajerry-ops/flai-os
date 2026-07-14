@@ -6,11 +6,12 @@ offset-aware ISO8601（naive/纯日期 422 fail-closed，不默认兜底窗口�
 错序漏计，而 JS toISOString() 默认就是 'Z' 后缀）。"""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
+
+from ._since import parse_since_utc
 
 router = APIRouter(prefix="/api", tags=["stats"])
 
@@ -25,24 +26,7 @@ def count_curated_cases(agents_dir: Path) -> int:
 
 @router.get("/stats/overview")
 def stats_overview(request: Request, since: str | None = None) -> dict[str, Any]:
-    if not since:
-        raise HTTPException(status_code=422, detail="since 必填（ISO8601）")
-    # Python 3.10 兼容（Codex R2-P1 verbatim）：fromisoformat 到 3.11 才认 'Z'
-    # 后缀，而前端 toISOString() 恒发 Z——3.10 运行时（内网 Windows 定版下限）
-    # 不预归一化会把 /today 的每次统计请求全打成 422。先把尾缀 Z 换 +00:00 再解析。
-    parse_src = since[:-1] + "+00:00" if since[-1] in ("Z", "z") else since
-    try:
-        dt = datetime.fromisoformat(parse_src)
-        if dt.tzinfo is None:
-            # naive/纯日期没有确定时刻语义，与库内 offset-aware 字符串比较必错序——拒收。
-            raise HTTPException(
-                status_code=422, detail=f"since 必须带时区偏移（offset-aware）：{since}"
-            )
-        since = dt.astimezone(timezone.utc).isoformat()  # 归一化 'Z'/任意偏移 → '+00:00' 表示
-    except (ValueError, OverflowError) as exc:
-        # ValueError=非法 ISO8601；OverflowError=极端年份+大偏移归一化到 UTC 时溢出
-        # datetime 可表示范围（如 0001-01-01T00:00:00+23:59），二者同归 422 fail-closed。
-        raise HTTPException(status_code=422, detail=f"since 不是合法 ISO8601：{since}") from exc
+    since = parse_since_utc(since)
     conn = request.app.state.conn_factory()
     try:
         tasks_completed = conn.execute(

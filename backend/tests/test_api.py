@@ -22,6 +22,30 @@ from backend.app.main import create_app
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_parse_since_utc_normalizes_and_rejects():
+    import pytest
+    from fastapi import HTTPException
+
+    from backend.app.api._since import parse_since_utc
+
+    # Z 后缀归一化为 +00:00（Py3.10 兼容路径）
+    assert parse_since_utc("2026-07-01T00:00:00Z") == "2026-07-01T00:00:00+00:00"
+    # 任意偏移归一化到 UTC
+    assert parse_since_utc("2026-07-01T08:00:00+08:00") == "2026-07-01T00:00:00+00:00"
+    # 空 → 422
+    with pytest.raises(HTTPException) as e1:
+        parse_since_utc(None)
+    assert e1.value.status_code == 422
+    # naive（无时区）→ 422 fail-closed
+    with pytest.raises(HTTPException) as e2:
+        parse_since_utc("2026-07-01T00:00:00")
+    assert e2.value.status_code == 422
+    # 非法 ISO → 422
+    with pytest.raises(HTTPException) as e3:
+        parse_since_utc("not-a-date")
+    assert e3.value.status_code == 422
+
+
 @pytest.fixture()
 def client(app_env) -> Iterator[TestClient]:
     c, _ = app_env
