@@ -216,12 +216,13 @@
             >申请晋升 L1</el-button>
           </div>
 
-          <div v-if="governancePromotions.length" class="gov-promotion-timeline">
+          <div v-if="governancePromotions.length" ref="promotionTimelineRef" class="gov-promotion-timeline">
             <div class="gov-section-label">晋升史</div>
             <div
-              v-for="p in governancePromotions"
+              v-for="(p, idx) in governancePromotions"
               :key="p.id"
               class="gov-promotion-card"
+              :class="{ 'promote-burst': idx === 0 && witnessedPromotionBurst }"
             >
               <div class="gov-promotion-head">
                 <span class="gov-promotion-jump">{{ p.from_maturity }}→{{ p.to_maturity }}</span>
@@ -246,11 +247,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { listAgents } from "../api/agents";
 import { request } from "../api/client";
+import { burstNeutral } from "../effects/burst.js";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import {
@@ -279,10 +281,13 @@ const governanceRunLoading = ref(false);
 const promotionConfirmed = ref(false);
 const promotionLoading = ref(false);
 const promotionErrors = ref([]);
+const promotionTimelineRef = ref(null);
+// 亲历者纪律：仅本会话同步点成晋升成功回调置 true；resetGovernanceDialog/openGovernance
+// 各重置点清 false——保证换 agent / 重开弹窗 / 历史直开恒静态（零残留）。
+const witnessedPromotionBurst = ref(false);
 let governanceEpoch = 0;
 
 const latestGovernanceRun = computed(() => governanceRuns.value[0] || null);
-const latestPromotion = computed(() => governancePromotions.value[0] || null);
 const MATURITY_LADDER = ["L0", "L1", "L2", "L3"];
 const maturityLadder = computed(() => {
   const current = governanceAgent.value?.maturity || "L0";
@@ -366,6 +371,7 @@ function openGovernance(agent) {
   governanceLoadError.value = "";
   promotionConfirmed.value = false;
   promotionErrors.value = [];
+  witnessedPromotionBurst.value = false;
   governanceOpen.value = true;
   loadGovernance(agent.id);
 }
@@ -379,6 +385,7 @@ function resetGovernanceDialog() {
   governanceLoadError.value = "";
   promotionConfirmed.value = false;
   promotionErrors.value = [];
+  witnessedPromotionBurst.value = false;
 }
 
 async function runEvaluation() {
@@ -448,6 +455,13 @@ async function promoteToL1() {
         const refreshedAgent = agents.value.find((agent) => agent.id === agentId);
         if (refreshedAgent) governanceAgent.value = refreshedAgent;
       }
+      // 亲历者动效（批C）：仅本次同步点成晋升触发一次中性 burst——历史直开恒静态。
+      // burstNeutral 对 reduced-motion 内置 no-op；.promote-burst class 仍加（e2e 可断言）。
+      witnessedPromotionBurst.value = true;
+      await nextTick();
+      const topCard = promotionTimelineRef.value?.querySelector(".gov-promotion-card");
+      if (topCard) burstNeutral(topCard);
+      window.setTimeout(() => { witnessedPromotionBurst.value = false; }, 1600);
     } else {
       load();
     }
@@ -735,5 +749,16 @@ onMounted(load);
 .gov-checks-list {
   margin: 4px 0 0; padding-left: 16px; color: var(--ink-soft);
   font-size: 11.5px; line-height: 1.7;
+}
+.gov-promotion-card.promote-burst {
+  animation: promote-glow 1.5s var(--ease-out-soft, ease-out);
+  border-radius: 6px;
+}
+@keyframes promote-glow {
+  0% { background: var(--clay-softer, rgba(193,95,60,0.14)); }
+  100% { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gov-promotion-card.promote-burst { animation: none; }
 }
 </style>
