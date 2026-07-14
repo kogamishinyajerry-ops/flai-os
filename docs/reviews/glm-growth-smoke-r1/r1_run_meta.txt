@@ -1,0 +1,7 @@
+run: R1 seg1
+start: 2026-07-13 10:36:40
+opencode: 1.15.13
+model: glm/glm-5.1 (project opencode.json)
+sandbox_base: b0cce19 (= flai-os 15d747a 去 spec 快照)
+flags: --pure
+seg1_exit=0 end: 10:50:28

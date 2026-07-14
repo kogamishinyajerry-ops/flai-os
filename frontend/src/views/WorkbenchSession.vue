@@ -360,7 +360,11 @@ onUnmounted(() => {
 }
 .sess-title-row h2 {
   margin: 0;
-  font-size: 20px;
+  /* Task 9 R0 ④owner裁决：这是会话版块类型标签（同 TaskConsole .cl-title 一
+     个语义层级），不是页标题——真正的内容标题是下方 22px serif 的 .sess-goal。
+     裸 20px 魔数消到既有字号阶：--fs-h3=16px「版块标题」正是这一层级，绝不
+     新增 --fs-h2。可见缩小 20px→16px，见 task-9-report.md 显著标注。 */
+  font-size: var(--fs-h3);
 }
 .sess-goal-kicker {
   font-size: 11px;
@@ -623,5 +627,8 @@ onUnmounted(() => {
   color: var(--ink-faint);
   font-size: 12px;
   line-height: 1.6;
+}
+@media (max-width: 640px) {
+  .sess-hero { flex-direction: column; align-items: flex-start; gap: 10px; }
 }
 </style>

@@ -77,6 +77,9 @@ E2E_SCRIPTS=(
   "frontend/e2e/m11_auth_acceptance.py"
   "frontend/e2e/cfd_flow_acceptance.py"
   "frontend/e2e/batch_a_livefeed_acceptance.py"
+  "frontend/e2e/batch_b_today_acceptance.py"
+  "frontend/e2e/batch_c_rewards_acceptance.py"
+  "frontend/e2e/batch_d_visual_acceptance.py"
 )
 
 for script in "${E2E_SCRIPTS[@]}"; do

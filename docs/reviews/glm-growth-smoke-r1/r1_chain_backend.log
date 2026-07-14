@@ -1,0 +1,25 @@
+Installed 26 packages in 25ms
+/Users/Zhuanz/.cache/uv/archive-v0/XavxFeNDT5ijP6rhUGmrs/lib/python3.13/site-packages/jieba/__init__.py:44: SyntaxWarning: invalid escape sequence '\.'
+  re_han_default = re.compile("([\u4E00-\u9FD5a-zA-Z0-9+#&\._%\-]+)", re.U)
+/Users/Zhuanz/.cache/uv/archive-v0/XavxFeNDT5ijP6rhUGmrs/lib/python3.13/site-packages/jieba/__init__.py:46: SyntaxWarning: invalid escape sequence '\s'
+  re_skip_default = re.compile("(\r\n|\s)", re.U)
+/Users/Zhuanz/.cache/uv/archive-v0/XavxFeNDT5ijP6rhUGmrs/lib/python3.13/site-packages/jieba/finalseg/__init__.py:78: SyntaxWarning: invalid escape sequence '\.'
+  re_skip = re.compile("([a-zA-Z0-9]+(?:\.\d+)?%?)")
+INFO:     Started server process [60135]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8641 (Press CTRL+C to quit)
+INFO:     127.0.0.1:64797 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64800 - "POST /api/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64800 - "GET /api/agents HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64800 - "POST /api/files/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64800 - "POST /api/files/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64800 - "POST /api/tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64800 - "GET /api/tasks/task_dbfdb4b60cdb45e2b83bc486cb3ac19e HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64800 - "GET /api/tasks/task_dbfdb4b60cdb45e2b83bc486cb3ac19e HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64800 - "POST /api/tasks/task_dbfdb4b60cdb45e2b83bc486cb3ac19e/review HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64800 - "GET /api/tasks/task_dbfdb4b60cdb45e2b83bc486cb3ac19e HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [60135]

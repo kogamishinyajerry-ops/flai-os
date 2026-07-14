@@ -96,6 +96,92 @@ def test_get_task_missing_returns_none(conn) -> None:
     assert repos.get_task(conn, "no_such_task") is None
 
 
+# ── 迁移 #9：created_by_username（不可变身份轴，批C 个人贡献归因前置）────────
+
+
+def test_fresh_db_has_created_by_username_column(conn) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+    assert "created_by_username" in cols
+
+
+def test_create_task_stores_and_projects_username(conn) -> None:
+    task = _new_task(conn, created_by="张三", created_by_username="zhangsan")
+    # 写入即回读；投影自动带出（_decode_task 是 dict(row)）
+    assert task["created_by_username"] == "zhangsan"
+    assert repos.get_task(conn, task["id"])["created_by_username"] == "zhangsan"
+    # display_name 仍走 created_by，两轴并存不互相污染
+    assert task["created_by"] == "张三"
+
+
+def test_create_task_username_defaults_to_none(conn) -> None:
+    """省略 created_by_username（如 eval 系统建任务、无人类创建者）→ 留 NULL，
+    绝不用 created_by（display_name）冒充 username 身份。"""
+    task = _new_task(conn, origin="eval")
+    assert task["created_by_username"] is None
+
+
+# pre-迁移#9 的 tasks 表形态（=迁移 #8 era：有 data_classification，无
+# created_by_username）。显式建缺列的 legacy 表来触发迁移路径，**不用
+# DROP COLUMN**（那要 SQLite≥3.35，超内网部署下限——ADR-0013 R2 同款教训）。
+_LEGACY_TASKS_DDL_PRE_9 = """
+CREATE TABLE tasks (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    agent_version TEXT NOT NULL,
+    name TEXT,
+    status TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    input_file_ids TEXT NOT NULL DEFAULT '[]',
+    output_file_ids TEXT NOT NULL DEFAULT '[]',
+    inputs_json TEXT NOT NULL DEFAULT '{}',
+    error_message TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    conversation_id TEXT,
+    origin TEXT NOT NULL DEFAULT 'user',
+    data_classification TEXT
+)
+"""
+
+
+def test_migration_9_adds_column_to_legacy_db_existing_rows_null(tmp_path) -> None:
+    """存量库（无 created_by_username 列）再跑 init_db → 补列，存量行留 NULL
+    （username 是自报时代之后才有的追溯，不可从 display_name 反推——同迁移 #6
+    uploaded_by 的「不冒充追溯」口径）。补列幂等，重复 init_db 安全。"""
+    db_path = tmp_path / "legacy.db"
+    # 先手建 pre-#9 的 tasks 表 + 插一行老任务，再让 init_db 走迁移补列。
+    legacy = db_mod.get_conn(db_path)
+    try:
+        legacy.execute(_LEGACY_TASKS_DDL_PRE_9)
+        legacy.execute(
+            "INSERT INTO tasks (id, agent_id, agent_version, name, status, created_by,"
+            " created_at, updated_at) VALUES"
+            " ('old-1','hello_agent','0.1.0','老任务','completed','历史用户',"
+            " '2026-01-01T00:00:00+00:00','2026-01-01T00:00:00+00:00')"
+        )
+        legacy.commit()
+        cols_before = {row[1] for row in legacy.execute("PRAGMA table_info(tasks)")}
+        assert "created_by_username" not in cols_before
+    finally:
+        legacy.close()
+    # init_db：CREATE TABLE IF NOT EXISTS 跳过已存在的 tasks，迁移 #9 补列。
+    db_mod.init_db(db_path)
+    c2 = db_mod.get_conn(db_path)
+    try:
+        cols_after = {row[1] for row in c2.execute("PRAGMA table_info(tasks)")}
+        assert "created_by_username" in cols_after
+        old = repos.get_task(c2, "old-1")
+        assert old["created_by_username"] is None  # 存量行不冒充追溯
+        assert old["created_by"] == "历史用户"      # display_name 原样保留
+    finally:
+        c2.close()
+    # 幂等：再跑 init_db 不炸（列已存在，探测跳过）
+    db_mod.init_db(db_path)
+
+
 def test_list_tasks_filters_by_agent_and_status(conn) -> None:
     t1 = _new_task(conn, agent_id="agent_a")
     t2 = _new_task(conn, agent_id="agent_b")
@@ -386,3 +472,28 @@ def test_record_and_list_sample(conn) -> None:
 
     samples = repos.list_samples(conn, task["id"])
     assert len(samples) == 1
+
+
+def test_list_tasks_filters_by_created_by_username(conn):
+    # 三条：alice 两条（含一条 eval origin）、bob 一条、无归因一条（None）
+    from backend.app.storage import repos
+    repos.create_task(conn, task_id="t-a1", agent_id="hello_agent", agent_version="0.1.0",
+                      name=None, created_by="Alice", created_by_username="alice")
+    repos.create_task(conn, task_id="t-a2", agent_id="hello_agent", agent_version="0.1.0",
+                      name=None, created_by="Alice", created_by_username="alice", origin="eval")
+    repos.create_task(conn, task_id="t-b1", agent_id="hello_agent", agent_version="0.1.0",
+                      name=None, created_by="Bob", created_by_username="bob")
+    repos.create_task(conn, task_id="t-legacy", agent_id="hello_agent", agent_version="0.1.0",
+                      name=None, created_by="Legacy")  # created_by_username 省略=None
+
+    alice = repos.list_tasks(conn, created_by_username="alice")
+    assert {t["id"] for t in alice} == {"t-a1", "t-a2"}  # 精确，不含 bob/legacy
+
+    bob = repos.list_tasks(conn, created_by_username="bob")
+    assert {t["id"] for t in bob} == {"t-b1"}
+
+    # None 归因行不被任何 username 误计（NULL != 任何值）
+    assert repos.list_tasks(conn, created_by_username="legacy") == []
+
+    # None 参数=不过滤，四条全回
+    assert len(repos.list_tasks(conn, created_by_username=None)) == 4

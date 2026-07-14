@@ -33,7 +33,7 @@
         :step="1"
         :step-strictly="f.integer"
         controls-position="right"
-        style="width: 180px"
+        class="sf-control"
       />
       <!-- 布尔 -->
       <el-switch v-else-if="f.kind === 'boolean'" v-model="model[f.key]" />
@@ -42,7 +42,7 @@
         v-else-if="f.kind === 'enum'"
         v-model="model[f.key]"
         :placeholder="`请选择${f.label}`"
-        style="width: 260px"
+        class="sf-control"
       >
         <el-option v-for="opt in f.enum" :key="opt" :label="opt" :value="opt" />
       </el-select>
@@ -81,14 +81,14 @@
               :max="sub.max"
               :step-strictly="sub.integer"
               controls-position="right"
-              style="width: 160px"
+              class="sf-control"
             />
             <el-switch v-else-if="sub.kind === 'boolean'" v-model="model[f.key][i][sub.key]" />
             <el-select
               v-else-if="sub.kind === 'enum'"
               v-model="model[f.key][i][sub.key]"
               :placeholder="`请选择${sub.label}`"
-              style="width: 220px"
+              class="sf-control"
             >
               <el-option v-for="opt in sub.enum" :key="opt" :label="opt" :value="opt" />
             </el-select>
@@ -150,6 +150,10 @@ function removeAt(key, i) {
 }
 .sf-item {
   margin-bottom: 18px;
+}
+.sf-control {
+  width: 100%;
+  max-width: 260px;
 }
 .sf-list,
 .sf-objlist {

@@ -1,0 +1,9 @@
+[PASS] 后端起服 /api/health — port=8642
+[PASS] 种判卷账户
+[PASS] 真实登录
+[PASS] spec_compliance_precheck_agent 注册可见 — agents=['cfd_evaluate_agent', 'cfd_solve_agent', 'control_logic_agent', 'fta_agent', 'guide_agent', 'hello_agent', 'knowledge_qa_agent', 'monitor_adapter_gen_agent', 'performance_disk_agent']
+[PASS] 上传大纲草稿 — 200
+[PASS] 创建任务 — 200 task_915c47228d00449b8de6f871c68a4274
+[FAIL] 执行后停 waiting_review（人签闸） — status=failed
+[cleanup] 探针进程已停；临时库=/var/folders/q4/859yhpgn6x3fx6kv4mj5gmv40000gp/T/glm_smoke_r2_8tt_h51t
+CHAIN_PROBE_RESULT=FAILED failures=1

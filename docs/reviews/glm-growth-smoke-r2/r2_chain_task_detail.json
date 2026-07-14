@@ -1,0 +1,25 @@
+{
+  "id": "task_0bb21ce537254174a24f58420314a54c",
+  "agent_id": "spec_compliance_precheck_agent",
+  "agent_version": "0.1.0",
+  "name": "R2 全链判卷",
+  "status": "waiting_review",
+  "created_by": "判卷工程师",
+  "created_at": "2026-07-13T18:35:59.270208+00:00",
+  "updated_at": "2026-07-13T18:37:08.442827+00:00",
+  "started_at": "2026-07-13T18:35:59.483835+00:00",
+  "finished_at": null,
+  "error_message": null,
+  "conversation_id": null,
+  "origin": "user",
+  "data_classification": "internal",
+  "input_file_ids": [
+    "1ce8338c-3a78-47ae-a412-fb488aeb36cb"
+  ],
+  "output_file_ids": [
+    "f87bf045-da02-4baa-8289-f36205c44f89",
+    "a439857c-0678-477d-9ca9-f5b3a0ae652e"
+  ],
+  "inputs": {},
+  "metadata": {}
+}

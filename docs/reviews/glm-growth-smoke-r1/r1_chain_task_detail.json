@@ -1,0 +1,32 @@
+{
+  "id": "task_dbfdb4b60cdb45e2b83bc486cb3ac19e",
+  "agent_id": "bench_summary_agent",
+  "agent_version": "0.1.0",
+  "name": "R1 全链判卷",
+  "status": "waiting_review",
+  "created_by": "判卷工程师",
+  "created_at": "2026-07-13T17:58:08.374490+00:00",
+  "updated_at": "2026-07-13T17:58:08.621318+00:00",
+  "started_at": "2026-07-13T17:58:08.600604+00:00",
+  "finished_at": null,
+  "error_message": null,
+  "conversation_id": null,
+  "origin": "user",
+  "data_classification": "internal",
+  "input_file_ids": [
+    "938cde12-f939-4251-985d-3a5f6fa9d143",
+    "ea67a9f1-0f74-4500-9bae-c02903658c02"
+  ],
+  "output_file_ids": [
+    "c294e1b2-8d06-4f2f-9f5a-2688b83192e7",
+    "1779d30a-d50b-47c1-a058-5c33140d434e",
+    "8fbe8bec-c8db-4695-b9c5-df0c97dcf6dd"
+  ],
+  "inputs": {
+    "test_title": "R1 烟测台架样例",
+    "engineer": "判卷工程师",
+    "test_date": "2026-07-13",
+    "test_stage": "合成基线"
+  },
+  "metadata": {}
+}

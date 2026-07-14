@@ -1,0 +1,7 @@
+run: R2 seg1（升级轮：弱先例复合+D6）
+start: 2026-07-13 11:16:05
+opencode: 1.15.13
+model: glm/glm-5.1 (project opencode.json)
+sandbox_base: b0cce19 clone（全新，无 R1 残留/会话史）
+flags: --pure
+seg1_exit=0 end: 11:27:07

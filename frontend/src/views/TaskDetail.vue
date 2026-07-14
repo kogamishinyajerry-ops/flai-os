@@ -236,7 +236,7 @@
           </el-form-item>
         </el-form>
 
-        <EmptyState v-if="feedbackList.length === 0" description="暂无反馈" :image-size="84" />
+        <EmptyState v-if="feedbackList.length === 0 && !feedbackError" description="暂无反馈" :image-size="84" />
         <ul v-else class="feedback-list">
           <li v-for="f in feedbackList" :key="f.id">
             <el-tag size="small" :type="f.rating === 'good' ? 'success' : 'danger'">
@@ -662,7 +662,7 @@ onUnmounted(() => {
 }
 .page-header h2 {
   font-family: var(--serif);
-  font-size: 25px;
+  font-size: var(--fs-title);
   font-weight: 600;
   letter-spacing: 0.2px;
   margin: 0;

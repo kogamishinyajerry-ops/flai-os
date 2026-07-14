@@ -52,6 +52,9 @@
         </div>
       </div>
 
+      <!-- 「我的贡献」深链（批C task7）：独立入口，不并进登出按钮语义。 -->
+      <a class="sb-mine" :class="{ 'is-active': route.path === '/me' }" @click="$router.push('/me')">我的贡献</a>
+
       <!-- 工作身份行：登录会话身份（服务端派生，前端只读）；点击退出登录。 -->
       <button class="sb-identity" :title="`以「${userName}」的身份登录——点击退出`" @click="changeIdentity">
         <span class="sb-id-dot"></span>{{ userName }}
@@ -209,16 +212,19 @@ function cycleTheme() {
 const route = useRoute();
 const router = useRouter();
 
-// 范式 Phase 3「对话即家」：对话是唯一一级入口（发起与跟进一切的家）。
-// 任务台/详情/门户/协作会话全部降级为深链——总览「来找你」（状态坞 → 状态中心
-// 抽屉「查看全部任务 →」深链达 /tasks），不再占主导航。路由全保留（可分享/刷新/回退）。
+// 双入口=对话+今日（批B owner 拍板 A 案）：对话是发起与跟进一切的家，今日
+// 工作台是「开工即看」的目的地页，值得与对话并列一级入口；其余仍全部深链。
+// 任务台/详情/门户/协作会话降级为深链——总览「来找你」（状态坞 → 状态中心
+// 抽屉「查看全部任务 →」深链达 /tasks）。路由全保留（可分享/刷新/回退）。
 const NAV = [
   { path: "/", label: "对话" },
+  { path: "/today", label: "今日" },
 ];
 
-// 只有对话主轴（/ 与 /?c=，route.path 恒为 "/"）高亮；深链页（/tasks、/tasks/:id、
-// /workbench、/portal、/feedback）不占主导航高亮——你在深链视图里，不在某个一级 Surface 上。
-const activeMenu = computed(() => (route.path === "/" ? "/" : ""));
+// 对话主轴（/ 与 /?c=，route.path 恒为 "/"）与 /today 高亮；其余深链页（/tasks、
+// /tasks/:id、/workbench、/portal、/feedback）不占主导航高亮——你在深链视图里，
+// 不在某个一级 Surface 上。
+const activeMenu = computed(() => (route.path === "/" || route.path === "/today" ? route.path : ""));
 
 // 当前恢复中的会话 id（导引页 /?c=<id>），用于左栏高亮。
 const activeConvoId = computed(() => (typeof route.query.c === "string" ? route.query.c : ""));
@@ -298,6 +304,10 @@ onMounted(loadConvos);
   --shadow-card-hover: 0 2px 6px rgba(43, 38, 34, 0.06), 0 12px 30px rgba(72, 58, 44, 0.10);
   --shadow-hero: 0 1px 3px rgba(43, 38, 34, 0.04), 0 10px 34px rgba(72, 58, 44, 0.06);
   --shadow-composer: 0 1px 3px rgba(43, 38, 34, 0.05), 0 12px 32px rgba(72, 58, 44, 0.09);
+  /* 遮罩 scrim（批D新增，QuickSwitcher 等模态背板消费）：黑基不透明度随主题重算，
+   * 与 --el-mask-color（Element Plus 自有 loading 遮罩，暗色前已单独覆盖）语义分离——
+   * 该 EP 变量亮色默认 #ffffffe6（近白），复用会让本项目模态背板在亮色下变白，故另立此槽。*/
+  --scrim-backdrop: rgba(43, 38, 34, 0.32);
   /* 动效系统 v1 tokens（SSOT=docs/design/MOTION-SYSTEM.md）：纸张/墨迹材质隐喻，
    * 只用 transform/opacity；--ease-spring 仅限小位移元素（防溢出裁切）。 */
   --motion-fast: 0.14s;
@@ -308,6 +318,20 @@ onMounted(loadConvos);
   /* 衬线 display 字体（Claude 暖编辑语言）：只用于「大时刻」标题——目标句、hero 问候。
    * CJK 走 Songti/宋体，Latin 走 Iowan/Palatino，营造克制的编辑质感，与无衬线 body 对位。*/
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "STSong", "Times New Roman", serif;
+  /* 批D token 地基：字体三元组（--serif 已有）+ 字号阶 + radius 阶 */
+  --sans: "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --mono: "SF Mono", ui-monospace, Menlo, "Cascadia Code", monospace;
+  --fs-title: 26px;   /* 页标题（收口散落 20/22/25/27 四档） */
+  --fs-h3: 16px;      /* 版块标题 */
+  --fs-body: 13.5px;  /* 正文 */
+  --fs-sm: 12.5px;    /* 次要 */
+  --fs-xs: 11.5px;    /* faint/caption */
+  --fs-2xs: 10px;     /* eyebrow/微标 */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;  /* 卡片主 */
+  --radius-xl: 16px;
+  --radius-pill: 999px;
   --clay-deep: #a54e2f;
   --surface-raised: #ffffff;
   --sidebar-w: 264px;
@@ -378,7 +402,8 @@ onMounted(loadConvos);
   /* 墨阶反相为暖白系 */
   --ink: #ece5db;
   --ink-soft: #b0a698;
-  --ink-faint: #8a8174; /* 诚实地板句层级：4.5:1 AA-text on #211d19（审查实测 #7a7164 只 3.49）*/
+  --ink-faint: #978e81; /* 诚实地板句层级：批D复检 #8a8174 on --surface-raised #2e2823 仅 3.79:1 未达 AA，
+   * 提亮至 #978e81 → on surface-raised 4.50:1／on page-bg #211d19 5.18:1／on card-bg #2a2521 4.69:1，三面均 ≥4.5 AA-text */
   --ink-mid: #cfc6b8;
   /* clay 锚：微提亮保对比，色相不动（唯一强调地位不变）*/
   --clay: #d4714a;
@@ -395,6 +420,7 @@ onMounted(loadConvos);
   --shadow-card-hover: 0 2px 6px rgba(0, 0, 0, 0.4), 0 12px 30px rgba(0, 0, 0, 0.5);
   --shadow-hero: 0 1px 3px rgba(0, 0, 0, 0.35), 0 10px 34px rgba(0, 0, 0, 0.45);
   --shadow-composer: 0 1px 3px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.5);
+  --scrim-backdrop: rgba(0, 0, 0, 0.55);
   /* RGB 三元组随主题重定义（派生透明色自动跟随）*/
   --clay-rgb: 212, 113, 74;
   --ink-rgb: 236, 229, 219;
@@ -491,6 +517,14 @@ onMounted(loadConvos);
   --el-color-info-light-9: #2d2c2a;
   --el-color-info-dark-2: color-mix(in srgb, #909399 80%, white);
 }
+/* 批D：统一 eyebrow 小标题（收口 7 种散写）；语义色由使用处覆盖（waiting=trust-pending/working=clay） */
+.section-label {
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--ink-faint);
+  margin-bottom: 8px;
+}
 /* ── 工作态氛围（全局复用）── */
 @keyframes flai-work-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
@@ -578,7 +612,7 @@ body {
   margin: 0;
   background: var(--page-bg);
   color: var(--ink);
-  font-family: "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  font-family: var(--sans);
 }
 .app-shell {
   min-height: 100vh;
@@ -707,6 +741,13 @@ body {
 }
 .convo-item:hover .convo-time { opacity: 1; }
 .convo-empty { font-size: 12px; color: var(--ink-faint); padding: 8px 12px; line-height: 1.5; }
+
+/* ── 「我的贡献」深链（批C task7）：贴合 .sb-identity 视觉 ── */
+.sb-mine {
+  display: block; padding: 6px 10px; margin: 0 8px 4px; cursor: pointer;
+  color: var(--ink-soft); font-size: 12.5px; border-radius: 6px;
+}
+.sb-mine:hover, .sb-mine.is-active { color: var(--ink); background: var(--paper-rail); }
 
 /* ── 工作身份行 ── */
 .sb-identity {

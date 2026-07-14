@@ -859,7 +859,7 @@ watch(
   color: var(--bubble-user-ink);
   padding: 12px 16px;
   border-radius: 18px 18px 4px 18px;
-  box-shadow: 0 1px 2px rgba(var(--ink-rgb), 0.06);
+  box-shadow: var(--shadow-card);
   /* 入场动效交给全局 .fx-ink-in（墨迹晕开，见 App.vue）——本地 rise 动画让位，
    * 避免 scoped 选择器特异度盖过全局工具类导致新类无效播放。 */
 }
@@ -997,14 +997,6 @@ watch(
   margin: 0 0 16px;
 }
 .plan-section { margin: 0 0 16px; }
-.section-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 1.1px;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-  margin-bottom: 8px;
-}
 .roster-label { margin-top: 4px; }
 .plan-workflow {
   margin: 0;
@@ -1414,7 +1406,7 @@ watch(
 }
 .composer-shell:focus-within {
   border-color: var(--focus-ring-clay);
-  box-shadow: 0 2px 6px rgba(var(--ink-rgb), 0.06), 0 16px 40px rgba(var(--ink-rgb), 0.13), 0 0 0 4px rgba(var(--clay-rgb), 0.08);
+  box-shadow: var(--shadow-composer), 0 0 0 4px rgba(var(--clay-rgb), 0.08);
 }
 .composer-row {
   display: flex;
@@ -1497,6 +1489,7 @@ watch(
 .composer-hint .sep { color: var(--hairline); }
 @media (prefers-reduced-motion: reduce) {
   .composer-hint .keys { transition: none; }
+  .send-spin { animation: none; }
 }
 
 /* 诚实地板句（Claude「can make mistakes」哲学）：常驻同一 composer 容器内，
@@ -1504,7 +1497,7 @@ watch(
 @media (max-width: 640px) {
 }
 kbd {
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--mono);
   font-size: 10.5px;
   background: var(--paper-rail);
   border: 1px solid var(--hairline);
@@ -1532,7 +1525,7 @@ kbd {
 }
 .agent-pick .ap-error { color: var(--trust-fail); font-size: 12px; padding: 4px 14px; }
 .agent-pick .ap-maturity {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--mono);
   font-size: 10px;
   color: var(--ink-mid);
   border: 1px solid var(--border-soft, var(--hairline));

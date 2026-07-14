@@ -138,6 +138,148 @@ def test_trace_read_apis_expose_versions(app_env) -> None:
         assert client.get(f"/api/tasks/task_missing/{ep}").status_code == 404
 
 
+def test_output_files_endpoint_projects_metadata_no_leak(app_env) -> None:
+    """批B P1 修复：/tasks/{id}/output_files 只投影
+    [{id, filename, size_bytes, data_classification}]，绝不含 path/sha256/uploaded_by。
+    hello_agent 产出的 internal 文件 + 手工插入的 sensitive 文件都要能看见——分级本身
+    是元数据（前端据此决定要不要渲染下载链接），真下载仍走 /files/{id}/download 原
+    分级门，本端点不代管下载授权。"""
+    client, app = app_env
+    task = _create_and_run(client, app, "hello_agent", {"name": "产物投影"})
+    assert task["status"] == "completed"
+    task_id = task["id"]
+    assert task["output_file_ids"], "hello_agent 必须产出至少一个文件"
+    internal_file_id = task["output_file_ids"][0]
+
+    # 手工插入一个 sensitive 分级产物并挂到同一任务，模拟受限产物场景。
+    conn = app.state.conn_factory()
+    try:
+        sensitive_file = repos.create_file(
+            conn,
+            file_id="file_sensitive_test",
+            task_id=task_id,
+            kind="output",
+            filename="受限产物.csv",
+            path="/nonexistent/受限产物.csv",
+            size_bytes=42,
+            sha256="0" * 64,
+            classification="sensitive",
+        )
+        repos.set_task_outputs(conn, task_id, [*task["output_file_ids"], sensitive_file["id"]])
+    finally:
+        conn.close()
+
+    projection = client.get(f"/api/tasks/{task_id}/output_files").json()
+    assert len(projection) == 2
+    by_id = {row["id"]: row for row in projection}
+
+    assert by_id[internal_file_id]["data_classification"] == "internal"
+    assert by_id["file_sensitive_test"]["data_classification"] == "sensitive"
+    assert by_id["file_sensitive_test"]["filename"] == "受限产物.csv"
+    assert by_id["file_sensitive_test"]["size_bytes"] == 42
+
+    # 绝不泄漏 path/sha256/uploaded_by/kind——投影只允许这四个约定字段。
+    for row in projection:
+        assert set(row.keys()) == {"id", "filename", "size_bytes", "data_classification"}
+
+    assert client.get("/api/tasks/task_missing/output_files").status_code == 404
+
+
+# ── 单卡交付摘要（治理审 R1 P1 修复）──────────────────────────────────────
+
+
+def test_delivery_summary_aggregates_model_calls_and_batch(app_env) -> None:
+    """混合 token known/missing/failed 的 model_calls + 一条 summary_generated
+    agent_log 事件 → 聚合精确。tamper：拆掉 token 折算/status 分支任一维，
+    夹具里对应的反例行会让断言必红。"""
+    client, app = app_env
+    task = _create_and_run(client, app, "hello_agent", {"name": "交付摘要"})
+    task_id = task["id"]
+
+    conn = app.state.conn_factory()
+    try:
+        # 4 条 model_calls：成功+total_tokens known / 成功+prompt+completion known /
+        # 成功+token_usage 缺失(unknown) / 失败(status=failed，不计入 ok，token 也可能缺)。
+        repos.record_model_call(
+            conn, task_id=task_id, model_profile="reasoning", status="success",
+            token_usage_json={"total_tokens": 100},
+        )
+        repos.record_model_call(
+            conn, task_id=task_id, model_profile="reasoning", status="success",
+            token_usage_json={"prompt_tokens": 20, "completion_tokens": 5},
+        )
+        repos.record_model_call(
+            conn, task_id=task_id, model_profile="reasoning", status="success",
+            token_usage_json=None,
+        )
+        repos.record_model_call(
+            conn, task_id=task_id, model_profile="reasoning", status="failed",
+            token_usage_json=None,
+        )
+        repos.append_event(
+            conn, task_id=task_id, event_type="agent_log", level="info",
+            message="批量收尾", payload={"workflow_event_type": "summary_generated", "ok_count": 7, "failed_count": 2},
+        )
+    finally:
+        conn.close()
+
+    body = client.get(f"/api/tasks/{task_id}/delivery_summary").json()
+    assert body["mc_total"] == 4
+    assert body["mc_ok"] == 3
+    assert body["mc_failed"] == 1
+    assert body["token_sum"] == 125  # 100 + (20+5)
+    assert body["token_known"] == 2
+    assert body["token_missing"] == 2
+    assert body["batch_ok"] == 7
+    assert body["batch_failed"] == 2
+
+
+def test_delivery_summary_no_batch_event_returns_null(app_env) -> None:
+    """非批量 Agent 任务（hello_agent 不发 summary_generated）→ batch_ok/failed
+    诚实返回 null，不冒充有批量结果；无 model_calls 时 mc_total=0 且不算 0 token。"""
+    client, app = app_env
+    task = _create_and_run(client, app, "hello_agent", {"name": "非批量"})
+    body = client.get(f"/api/tasks/{task['id']}/delivery_summary").json()
+    assert body["mc_total"] == 0
+    assert body["mc_ok"] == 0
+    assert body["mc_failed"] == 0
+    assert body["token_known"] == 0
+    assert body["token_missing"] == 0
+    assert body["batch_ok"] is None
+    assert body["batch_failed"] is None
+
+
+def test_delivery_summary_beyond_50_event_window_stays_null(app_env) -> None:
+    """有界扫描的诚实取舍（端点 docstring 明示）：summary_generated 若被 50 条
+    更新的 agent_log 挤出窗口，宁缺毋错返回 null，不做无界扫描换假完整。"""
+    client, app = app_env
+    task = _create_and_run(client, app, "hello_agent", {"name": "超窗口"})
+    task_id = task["id"]
+
+    conn = app.state.conn_factory()
+    try:
+        repos.append_event(
+            conn, task_id=task_id, event_type="agent_log", level="info",
+            message="批量收尾", payload={"workflow_event_type": "summary_generated", "ok_count": 1, "failed_count": 0},
+        )
+        for i in range(50):  # 50 条更新的 agent_log 把上面那条挤出 DESC LIMIT 50 窗口
+            repos.append_event(
+                conn, task_id=task_id, event_type="agent_log", level="info",
+                message=f"噪声事件 {i}", payload={"workflow_event_type": "noise"},
+            )
+    finally:
+        conn.close()
+
+    body = client.get(f"/api/tasks/{task_id}/delivery_summary").json()
+    assert body["batch_ok"] is None
+    assert body["batch_failed"] is None
+
+
+def test_delivery_summary_unknown_task_404(app_env) -> None:
+    client, _ = app_env
+    assert client.get("/api/tasks/task_missing/delivery_summary").status_code == 404
+
+
 # ── inputs 大小上限（DoS 面）──────────────────────────────────────────────
 
 
@@ -357,3 +499,36 @@ def test_migration_concurrent_init_db_sweep(tmp_path) -> None:
             th.join(timeout=30)
         assert errors == [], f"round {round_no}: 并发 init_db 崩溃 {errors!r}"
         assert "conversation_id" in _model_calls_columns(db_path)
+
+
+def test_delivery_summary_sensitive_task_suppresses_batch_fields(app_env) -> None:
+    """ADR-0025 一致封闭回归（Codex R2-P1）：/events 对 sensitive 任务遮蔽
+    summary_generated payload，delivery_summary 若照读事件 payload 即重开被封
+    数据面。sensitive 任务：批量字段必 null（即便事件真实存在）；model_calls
+    计数/token 元数据（与内容遮蔽面正交）照常返回。tamper：拆掉实现里的
+    is_sensitive_task 门，本测必红。"""
+    client, app = app_env
+    task = _create_and_run(client, app, "hello_agent", {"name": "敏感批量"})
+    task_id = task["id"]
+    conn = app.state.conn_factory()
+    try:
+        repos.record_model_call(
+            conn, task_id=task_id, model_profile="reasoning", status="success",
+            token_usage_json={"total_tokens": 42},
+        )
+        repos.append_event(
+            conn, task_id=task_id, event_type="agent_log", level="info",
+            message="批量收尾", payload={"workflow_event_type": "summary_generated", "ok_count": 9, "failed_count": 1},
+        )
+        conn.execute(
+            "UPDATE tasks SET data_classification = 'sensitive' WHERE id = ?", (task_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    body = client.get(f"/api/tasks/{task_id}/delivery_summary").json()
+    assert body["batch_ok"] is None       # 事件存在但被门封——绝不外泄
+    assert body["batch_failed"] is None
+    assert body["mc_total"] == 1          # 元数据聚合不受内容遮蔽面影响
+    assert body["token_sum"] == 42

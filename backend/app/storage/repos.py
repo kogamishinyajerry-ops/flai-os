@@ -74,12 +74,13 @@ def create_task(
     metadata: dict[str, Any] | None = None,
     conversation_id: str | None = None,
     origin: str = "user",
+    created_by_username: str | None = None,
     depends_on: list[str] | None = None,
     input_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """建任务：初始态永远是 created（未入队）。
 
-    depends_on / input_binding（迁移 #9/协作运行时 §3.5）：声明式依赖。depends_on
+    depends_on / input_binding（迁移 #10/协作运行时 §3.5）：声明式依赖。depends_on
     非空时任务滞留 created 由 resolver 在全部上游 completed 后拷产物入 input_file_ids
     并入队（API 层负责"depends_on 非空则不自动入队"的短路，本函数只忠实落列）。
 
@@ -89,6 +90,10 @@ def create_task(
     origin（M10/ADR-0018）：'user'=用户任务（worker 候选集）/'eval'=评测跑批
     任务（仅 eval runner 经 claim_task 驱动）。两候选集不相交，双跑竞态在
     结构上不存在。白名单校验：拼写错误的 origin 会造永久无主孤儿，进门即拒。
+
+    created_by_username（迁移 #9）：发起人不可变唯一 username。created_by 存
+    display_name（可变、可撞名，仅展示），本列存身份主键（批C 个人贡献按此归
+    因绝不撞名）。省略=None，绝不用 created_by 冒充（自报时代不冒充追溯）。
     """
     if origin not in ("user", "eval"):
         raise ValueError(f"origin 只认 'user'/'eval'：{origin!r}")
@@ -99,8 +104,8 @@ def create_task(
             (id, agent_id, agent_version, name, status, created_by,
              created_at, updated_at, started_at, finished_at,
              input_file_ids, output_file_ids, inputs_json, error_message, metadata_json,
-             conversation_id, origin, depends_on, input_binding)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             conversation_id, origin, created_by_username, depends_on, input_binding)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             task_id, agent_id, agent_version, name, "created", created_by,
@@ -112,6 +117,7 @@ def create_task(
             json.dumps(metadata or {}, ensure_ascii=False),
             conversation_id,
             origin,
+            created_by_username,
             json.dumps(depends_on, ensure_ascii=False) if depends_on else None,
             json.dumps(input_binding, ensure_ascii=False) if input_binding else None,
         ),
@@ -249,6 +255,7 @@ def list_tasks(
     status: str | None = None,
     conversation_id: str | None = None,
     origin: str | None = None,
+    created_by_username: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -258,6 +265,8 @@ def list_tasks(
     conversation_id（M8）：按导引协作会话过滤——协作工作台取某次会话的成员任务。
     origin（M10）：仓储层 None=不过滤保持中立；API 层默认 'user'——工程师任务流
     不混入 eval 跑批任务（可显式查询，诚实可追溯，但不进默认工作流视图）。
+    created_by_username（批C）：仓储层 None=不过滤中立；API 的 /me 端点按登录会话
+    username 精确归因「我发起的任务」，NULL 存量行不被任何 username 误计。
     """
     clauses: list[str] = []
     params: list[Any] = []
@@ -273,6 +282,9 @@ def list_tasks(
     if origin is not None:
         clauses.append("origin = ?")
         params.append(origin)
+    if created_by_username is not None:
+        clauses.append("created_by_username = ?")
+        params.append(created_by_username)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     params.extend([limit, offset])
     rows = conn.execute(
@@ -1374,6 +1386,22 @@ def record_promotion(
 def list_promotions(conn: sqlite3.Connection, agent_id: str) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT * FROM promotions WHERE agent_id = ? ORDER BY id DESC", (agent_id,)
+    ).fetchall()
+    out = []
+    for row in rows:
+        d = dict(row)
+        _decode_json(d, "checks_json", "checks", default={})
+        _decode_json(d, "confirmations_json", "confirmations", default={})
+        out.append(d)
+    return out
+
+
+def list_promotions_all(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]:
+    """全局最近晋升（批B /today Agent 动态）。与单 agent 版同解码，最近优先。
+    排序按 created_at 主键（Codex R2-P2 verbatim）：恢复/回填的行可能乱插入序，
+    自增 id 只是并列决胜，「最近」以时间戳为准。"""
+    rows = conn.execute(
+        "SELECT * FROM promotions ORDER BY created_at DESC, id DESC LIMIT ?", (limit,)
     ).fetchall()
     out = []
     for row in rows:

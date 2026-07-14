@@ -24,7 +24,8 @@
       ],
       "description": "十态状态机，仅 Kernel Task Runner 可写。waiting_review 对应 agent.yaml workflow.requires_human_review=true 的强制人工放行点；completed 只能从 waiting_review 或 analyzing 迁入，不得跳过人工判决。"
     },
-    "created_by": { "type": "string", "minLength": 1, "description": "发起用户/角色标识，对齐 agent.yaml permissions.allowed_roles 的鉴权主体。" },
+    "created_by": { "type": "string", "minLength": 1, "description": "发起用户显示名（display_name，可变、可撞名，仅展示）。" },
+    "created_by_username": { "type": ["string", "null"], "description": "发起人不可变唯一 username（迁移 #9）。批C 个人贡献归因/职责分离的身份主键，按此绝不撞名；存量行为 null（自报时代不冒充追溯）。" },
     "created_at": { "type": "string", "format": "date-time", "description": "ISO 8601 时间戳。" },
     "updated_at": { "type": "string", "format": "date-time", "description": "状态最近一次变更时间；每次状态迁移必须同步刷新。" },
     "started_at": {

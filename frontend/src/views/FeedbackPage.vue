@@ -1,6 +1,8 @@
 <template>
   <div class="feedback-page">
-    <h2>提交反馈</h2>
+    <div class="page-header">
+      <h2>提交反馈</h2>
+    </div>
 
     <el-form label-width="80px" class="task-select-form fx-rise">
       <el-form-item label="任务" required>
@@ -51,8 +53,8 @@
 
       <el-alert v-if="feedbackError" type="warning" :title="feedbackError" show-icon :closable="false" />
 
-      <h3>该任务已有反馈</h3>
-      <EmptyState v-if="feedbackList.length === 0" description="暂无反馈" />
+      <h3 class="section-label">该任务已有反馈</h3>
+      <EmptyState v-if="feedbackList.length === 0 && !feedbackError" description="暂无反馈" />
       <ul v-else class="feedback-list">
         <li v-for="f in feedbackList" :key="f.id">
           <el-tag size="small" :type="f.rating === 'good' ? 'success' : 'danger'">
@@ -151,12 +153,13 @@ onMounted(async () => {
 .feedback-page {
   max-width: 640px;
 }
-.feedback-page > h2 {
+.page-header { margin-bottom: 20px; }
+.page-header h2 {
   font-family: var(--serif);
-  font-size: 25px;
+  font-size: var(--fs-title);
   font-weight: 600;
   letter-spacing: 0.2px;
-  margin: 0 0 16px;
+  margin: 0;
 }
 .task-select-form {
   margin-bottom: 8px;
