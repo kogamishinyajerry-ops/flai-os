@@ -125,6 +125,7 @@ def list_tasks(
     status: str | None = None,
     conversation_id: str | None = None,
     origin: str | None = None,
+    created_by_username: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -134,6 +135,8 @@ def list_tasks(
     conversation_id（M8）：按导引协作会话过滤——协作工作台取某次会话的成员任务。
     origin（M10）：仓储层 None=不过滤保持中立；API 层默认 'user'——工程师任务流
     不混入 eval 跑批任务（可显式查询，诚实可追溯，但不进默认工作流视图）。
+    created_by_username（批C）：仓储层 None=不过滤中立；API 的 /me 端点按登录会话
+    username 精确归因「我发起的任务」，NULL 存量行不被任何 username 误计。
     """
     clauses: list[str] = []
     params: list[Any] = []
@@ -149,6 +152,9 @@ def list_tasks(
     if origin is not None:
         clauses.append("origin = ?")
         params.append(origin)
+    if created_by_username is not None:
+        clauses.append("created_by_username = ?")
+        params.append(created_by_username)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     params.extend([limit, offset])
     rows = conn.execute(

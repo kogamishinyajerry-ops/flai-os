@@ -472,3 +472,28 @@ def test_record_and_list_sample(conn) -> None:
 
     samples = repos.list_samples(conn, task["id"])
     assert len(samples) == 1
+
+
+def test_list_tasks_filters_by_created_by_username(conn):
+    # 三条：alice 两条（含一条 eval origin）、bob 一条、无归因一条（None）
+    from backend.app.storage import repos
+    repos.create_task(conn, task_id="t-a1", agent_id="hello_agent", agent_version="0.1.0",
+                      name=None, created_by="Alice", created_by_username="alice")
+    repos.create_task(conn, task_id="t-a2", agent_id="hello_agent", agent_version="0.1.0",
+                      name=None, created_by="Alice", created_by_username="alice", origin="eval")
+    repos.create_task(conn, task_id="t-b1", agent_id="hello_agent", agent_version="0.1.0",
+                      name=None, created_by="Bob", created_by_username="bob")
+    repos.create_task(conn, task_id="t-legacy", agent_id="hello_agent", agent_version="0.1.0",
+                      name=None, created_by="Legacy")  # created_by_username 省略=None
+
+    alice = repos.list_tasks(conn, created_by_username="alice")
+    assert {t["id"] for t in alice} == {"t-a1", "t-a2"}  # 精确，不含 bob/legacy
+
+    bob = repos.list_tasks(conn, created_by_username="bob")
+    assert {t["id"] for t in bob} == {"t-b1"}
+
+    # None 归因行不被任何 username 误计（NULL != 任何值）
+    assert repos.list_tasks(conn, created_by_username="legacy") == []
+
+    # None 参数=不过滤，四条全回
+    assert len(repos.list_tasks(conn, created_by_username=None)) == 4
