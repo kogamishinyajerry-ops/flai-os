@@ -235,9 +235,25 @@ def test_evaluate_fail_closed_on_underflow_ref(tmp_path):
 
 def test_evaluate_fail_closed_on_nonfinite_overshoot(tmp_path):
     """Codex 异源审 P2：上游 overshoot_pct=1e309（json 解析为 inf）——未加护栏时
-    json.dump 写出非标准 Infinity 却报 success。护栏须 fail-closed，且绝不落带 Infinity 的产物。"""
+    json.dump 把 overshoot_fem 字段写成非标准 Infinity 却报 success。**用 converged=false 路径**：
+    结果级护栏 G5（error_pct 有限性）只在 converged 分支，不在此路径，故本测试唯一见证
+    overshoot_fem 有限性护栏 G2（tamper 自证发现：converged=true 时 inf 会流到 error_pct 被
+    G5 兜住掩盖 G2 见证——空洞；converged=false 时只有 G2 能拦 overshoot_fem=inf 进 json）。"""
     good = json.loads((FIXTURES / "underdamped_fine" / "step_solution.json").read_text())
     good["response_result"]["overshoot_pct"] = 1e309  # → inf
+    good["solver"]["converged"] = False   # 走 not-converged 分支，G5 不触及，唯一见证 G2
+    out, ev = _eval_on_dict(tmp_path, good)
+    assert out["status"] == "failed"
+    assert not (tmp_path / "out" / "evaluation.json").exists()  # 不落 Infinity 产物
+
+
+def test_evaluate_fail_closed_on_error_pct_overflow(tmp_path):
+    """Codex R1 P2（更深边界）：ζ=0.999991 令 overshoot_ref=2.6e-320（次正规、>0 且有限，
+    过前置输入护栏），配 overshoot_fem=1.0 则相对误差除法溢出成 inf。结果级护栏须 fail-closed，
+    绝不让 json 写出非标准 Infinity 却报 success。中和结果级护栏则此测试转红。"""
+    good = json.loads((FIXTURES / "underdamped_fine" / "step_solution.json").read_text())
+    good["params"]["zeta"] = 0.999991
+    good["response_result"]["overshoot_pct"] = 1.0
     out, ev = _eval_on_dict(tmp_path, good)
     assert out["status"] == "failed"
     assert not (tmp_path / "out" / "evaluation.json").exists()  # 不落 Infinity 产物

@@ -168,6 +168,13 @@ loop-auditor 独立用 scipy.signal.step + solve_ivp(RK45) 对 5 组 (ζ,ωn) �
 到 1e12 谱半径全 ≤1）双重独立坐实；对 3 处 fail-closed 分支做真变异测试（中和后绿转红）。
 零 diff / oracle 正确 / fail-closed / 篡改必咬 / 诚实标注五条核心断言独立复算为真。
 
+**Codex R1 确认审（--commit 5831191，聚焦 R0 修复 delta）1P2 全 grounded 全修**：
+- R1-P2 相对误差溢出未在序列化前拦（R0 P2-1 的更深边界）：R0 加了 `overshoot_ref>0` 护栏
+  拦下溢到 0，但 ζ=0.999991 令 overshoot_ref=2.6e-320（次正规、>0 且有限，过前置输入护栏），
+  配 overshoot_fem=1.0 则除法溢出成 inf，json 又写非标准 Infinity 却报 success → 加**结果级**
+  护栏（error_pct 有限性校验，前置输入护栏挡不住除法本身溢出），配 tamper 测试。
+  教训：fail-closed 校验须覆盖「输入合法但运算结果非法」——只守输入不守结果留溢出缝。
+
 **教训沉淀**：①单标量 oracle（超调只依赖 ζ）的「未参与判定的伴随参数」（ωn）必须独立
 校验合法性，否则非法值配匹配主参数即假绿——异源审逮住的 fail-open；②tamper 见证必须取
 「防御独占保护的输入」（ζ≤0），取会被别的机制（sqrt 抛异常）拦下的值（ζ=1.5）是空洞见证

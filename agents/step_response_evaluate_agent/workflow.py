@@ -124,6 +124,12 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
         verdict = "未达评估条件（上游 solver.converged≠true，仿真无效）"
     else:
         error_pct = abs(overshoot_fem - overshoot_ref) / overshoot_ref * 100.0
+        # 结果级 fail-closed（Codex R1 P2）：ζ 过接近临界时 overshoot_ref 可为次正规极小值
+        # （如 ζ=0.999991→2.6e-320，>0 且有限故过前置输入护栏），相对误差除法仍会溢出成 inf。
+        # 前置输入护栏挡不住除法本身溢出——必须在写产物前校验结果本身有限，否则 json.dump
+        # 又写出非标准 Infinity 却报 success（正是本补丁要 fail-closed 的条件）。
+        if not math.isfinite(error_pct):
+            return _fail(f"相对误差非有限（{error_pct}，参考超调次正规极小致除法溢出，ζ 过接近临界超出可判区）——未达评估条件，不评估")
         passed = error_pct <= tolerance_pct
         verdict = ("仿真超调与闭式解析解一致（收敛）" if passed
                    else "仿真超调偏离闭式解析解（超出容差，建议加密时间步长或复核参数）")
