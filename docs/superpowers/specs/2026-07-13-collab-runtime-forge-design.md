@@ -1,6 +1,6 @@
-# 协作运行时 Forge · 设计契约 v2（loop-auditor mode-A 审后修订）
+# 协作运行时 Forge · 设计契约 v3（loop-auditor mode-A 审 + F3 owner 裁决后定稿）
 
-- **状态**：设计审 **FLAG→已修订**（v1 4 个 P1：F1/F2/F4 机制 P1 本 v2 已闭合；F3 宪法解释待 owner 裁，见 §十）。修订后待 owner 就 F3 裁决 → 实现 → Codex 异源审。**本文尚未落任何 backend/app 代码。**
+- **状态**：设计审 **FLAG→全 P1 闭合→定稿进入实现**。v1 4 个 P1：F1/F2/F4 机制 P1（v2 闭合）+ F3 宪法解释（owner 裁"注册期不变量"，v3 落 §3.6+T8）。→ 实现 → Codex 异源审。**本文尚未落任何 backend/app 代码。**
 - **地位**：封板双判据的**判据①内核改动期**。forge 不是 integration——**预期有内核 diff**（迁移+resolver+repos+api+create_task 端点），这正是"骨架尚未完成"的进度条。改完趋稳后判据①两发零 diff 验证弹（§八）才有意义。
 - **分支**：`feat/collab-runtime`（worktree 隔离）。基线 main@7963b16。
 - **审计存档**：loop-auditor mode-A 裁决 FLAG，grounded 到文件行；本 v2 逐条落其 P1 gate 清单。
@@ -16,7 +16,7 @@
 1. **人是唯一签发者（精确条件句，F3 审后修正）**：下游等的是上游 `completed`。到达 completed **只有两条合法路径**（loop-auditor 穷举，均经 assert_transition）：
    - **P-B `waiting_review→completed`**（tasks.py:294）：**必经人工** `POST /tasks/{id}/review` approve。statemachine.py:39 焊死 waiting_review 只人工放行转出、禁任何自动化路径。**故 review-gated 上游未经人签绝不 completed、下游绝不就绪——红线由既有状态机结构承接，非新增承诺。**
    - **P-A `analyzing→completed`**（runtime.py:597）：仅当 agent `requires_human_review is False` 时走此路，**零人工**。
-   - **边界（诚实标注）**：对 **review-gated** 上游"下游等 completed = 等人签"成立；对 **非 review-gated** 上游**不成立**，链式会全自动。当前 fleet **0 个** `requires_human_review:false` Agent（机制休眠）。此边界的宪法处置见 §十（owner 待裁），**本 forge 不新增也不移除该既有机制，只诚实声明**。
+   - **边界（F3 owner 已裁，升级为机械保证）**：对 **review-gated** 上游"下游等 completed = 等人签"成立（P-B）。对**非 review-gated** 上游，owner 裁决=**注册期不变量**（§3.6）令其恒为 profile=none 确定性 Agent——故非-gated 自动链是**安全自动化**（无 LLM 判决），任何产 LLM 判决的 Agent 必 review-gated、必在链中断出人签点。**"LLM 判决永不无人签流经协作链"由 §3.6 机械保证，此句不再是条件声明。**
 2. **Agent 绝不建任务**：任务图由**人**编写（人建每任务、人声明依赖边）。编排官只推荐边，人实例化。resolver 只排序执行，绝不创建任务。
 3. **LLM 不进判决链**：resolver 纯确定性——只按声明绑定拷贝已注册产物引用，绝无 model_gateway 调用（哪个产物流向哪个输入由人写的绑定决定）。
 4. **分级不可变 + 污点合成（ADR-0025 集成，F2 审后修正）**：**resolver 绝不写 `data_classification`**。它只把带文件级分级的上游产物引用管道进下游 `input_file_ids`；下游首次 execute 时既有 `_task_data_classification`（runtime.py:450-453 无条件调用，含 `_task_input_classification` 文件轴 runtime.py:229-245）**自动吃到**上游产物文件行的分级、天然合成。**杜绝 resolver 抢写 CAS-on-NULL 冻结列、挤掉下游自身知识/工具轴污点的欠分级泄漏（monitor-taint R1-B 换入口复现）。计算逻辑不在 resolver 复制第二份=真正单 chokepoint。**
@@ -46,9 +46,15 @@
 - `create_task()` tasks.py:174 的自动入队改**条件短路**：`if not body.depends_on: set_task_status(...,"queued")` else 停留 `created`；`task_created` 事件 payload 去掉硬编码 `"status_to":"queued"`、按实际初态填。
 - 创建时校验：depends_on 每个 id 存在（否则 404/422）；input_binding 引用的 upstream 必在 depends_on 内。
 
+### 3.6 判决⟹人签 注册期不变量（F3 owner 裁决=注册期不变量，审后新增）
+> owner 宪法裁决（2026-07-13 AskUserQuestion）：非 review-gated 上游自动链的处置=注册期强制"判决型必 review-gated"，令非-gated 恒确定性、自动链安全。
+- **不变量**：Agent 注册（`runtime/registry.py` scan）时，若 `model.profile != "none"`（该 Agent 调 LLM）则 `workflow.requires_human_review` 必须 `is True`（严格 is True，非 truthiness）；违反=**注册期 fail-closed 拒载**，绝不静默接受。
+- **精度**：判据用 `profile != none` 而非 category——它精确捕获"是否调 LLM"（含 monitor_adapter_gen 这类 category=structured_gen 但 profile=reasoning 的混合型：LLM 叙事层也必须人签）。
+- **存量 fleet 校验**：实现时以新不变量跑全 fleet registry scan；**若有存量 Agent 违反=如实上报 finding，绝不静默"修好"**（继承假绿死罪纪律）。审计已测 0 个 requires_human_review:false，预期存量全过——但以真实 scan 为准。
+
 ## 四、scope fence（本 forge 明确不做）
 - 不做条件/分支工作流；不做上游 retry/重跑（另立）；不做 Agent/编排官自动建任务（红线永不做）；不做跨 conversation 依赖；resolver 不做任何 LLM 调用；**不支持创建后编辑 depends_on**（§3.4 依赖 DAG-by-construction）。
-- **F3 边界声明**：非 review-gated 上游会被 resolver 纳入自动编排链形成多跳零人工执行；本 forge 不新增约束禁止之（处置待 §十 owner 裁）。
+- **F3 边界声明（owner 已裁）**：非 review-gated 上游会被 resolver 纳入自动编排链；owner 裁决=注册期不变量（§3.6）保证非-gated 恒确定性、故自动链安全；判决型 Agent 必 review-gated、必断链出人签点。本 forge **新增** §3.6 注册期 gate 落此裁决。
 
 ## 五、Tamper witnesses（fail-closed 门，拆一层必红；审后强化）
 - **T1 人签闸**：上游 waiting_review（未签）→ 下游永不 enqueue。拆=resolver 把 waiting_review 当就绪→下游跑→RED。（注：T1 测不出 F3 非-gated 缺口，F3 靠 §十 边界处置非 T1。）
@@ -58,13 +64,14 @@
 - **T5 resolver 确定性（审后强化）**：resolver 一次 tick 前后 `model_calls` 表行数不变（**行为级证据**，比静态 grep import 抗绕过——挡"resolver 调间接 import model_gateway 的 helper"）。拆=resolver 内插一次 gateway 调用→行数+1→RED。
 - **T6 绑定收口（审后强化）**：绑定只能引用本任务 depends_on 声明的上游自己的 output_file_ids。拆=绑定引用非 depends_on 集合内任务的 output_file_id（越权盗用）或任意路径→必须拒→拆则 RED。
 - **T7 滞留 created（F4 审后新增，把地基钉成可测）**：depends_on 非空任务 create 后立即查状态断言仍 `created`。拆=移除 create_task 条件短路→任务被自动 queued→RED。
+- **T8 判决⟹人签不变量（F3 审后新增）**：profile≠none + requires_human_review:false 的 agent.yaml → registry scan 拒载。拆=移除 §3.6 不变量校验→该 agent 被接受→RED。
 
 ## 六、验收标准
 - 迁移 #9 幂等（存量库实证）；**100 对状态矩阵字节不变**（证无新态）。
 - E2E 主链：建 A(review-gated)→建 B depends_on A→B 滞 created 期间 A 历经 queued/running/waiting_review→人签 A→resolver 管道 A 产物入 B、B enqueue→B 跑→waiting_review→人签 B→completed。**断言 B 在 A 人签前从未 running**。
 - E2E 失败链：A failed→B `cancelled(upstream_failed)` 从不 running。
 - E2E 污点：sensitive A→B 执行期派生 sensitive→B 产物下载 403。
-- **7 个 tamper 全 RED→GREEN 还原**（T1-T7）。
+- **8 个 tamper 全 RED→GREEN 还原**（T1-T8）。
 - verify_all 全绿 + 零回归。
 
 ## 七、审查计划
@@ -79,6 +86,9 @@
 - **OQ3**：上游失败下游处置 → **`created→cancelled`**（非终态 failed，因 failed 从 created 不可达；cancelled+payload 区分优于永滞 created 制造僵尸）。
 - **OQ4**：判据①两发验证弹 → **多 Agent，且二者均 review-gated**。
 
-## 十、F3 宪法解释（唯一待 owner 裁项，非机制缺陷）
-**问题**：非 review-gated（确定性）上游 A 喂下游 B 时，A 无人签自动跑（与今天单任务同）——"人是唯一签发者"是否隐含"每个执行链至少一个人工决策点"？当前 fleet 0 个此类 Agent，机制休眠。
-**待 owner 三选一**（详见主控 AskUserQuestion）：①注册期不变量（判决型 category ⟹ 强制 review-gated，令非-gated 恒为确定性、自动链安全）②每链≥1 人签强制 ③文档化边界暂不设机制。裁决后：选①/②追加对应 gate+tamper 入本 forge；选③仅保留 §四 F3 边界声明。**在 owner 裁定前不实现任何 F3 相关强制逻辑。**
+## 十、F3 宪法解释（owner 已裁：注册期不变量）✅
+**owner 裁决（2026-07-13 AskUserQuestion）= 选项① 注册期不变量。** 落点已入契约：
+- §3.6 新增注册期 gate：`profile != none ⟹ requires_human_review is True`，违反 fail-closed 拒载。
+- §五 T8 新增对应 tamper witness。
+- §二.1 脊梁句 + §四 边界声明升级为机械保证（非条件声明）。
+**设计全部 P1 闭合，FLAG 清零，进入实现。** 实现顺位：§3.6 注册期不变量（自足可即测）→ 迁移#9+create_task §3.5（地基）→ resolver §3.3（心脏）→ T1-T8 tamper → E2E 三链 → verify_all → Codex 异源审。
