@@ -93,3 +93,16 @@
 - §五 T8 新增对应 tamper witness。
 - §二.1 脊梁句 + §四 边界声明升级为机械保证（非条件声明）。
 **设计全部 P1 闭合，FLAG 清零，进入实现。** 实现顺位：§3.6 注册期不变量（自足可即测）→ 迁移#9+create_task §3.5（地基）→ resolver §3.3（心脏）→ T1-T8 tamper → E2E 三链 → verify_all → Codex 异源审。
+
+## 十一、信任模型设计级巡查收口（2026-07-14，R5 tripwire → loop-auditor + owner）
+Codex 逐轮审 R0-R5 每轮出新 grounded 切面，证**点抓未收敛**——缺口是 3 个矩阵行（不变量 × 表面 × 数据世代）被 cell-by-cell 修。R5 触发 owner 预设 tripwire → 停 R6、转**设计级巡查**（loop-auditor 完整性审 + Claude grounded 复核），一次找全兄弟，按 owner 裁「K1+K2+R1，defer R2+R3」收口：
+
+- **K1 签发维 provenance（keystone，已修双点）**：`status=='completed'` 只是时序代理，不证人签。legacy pre-§3.6（或版本翻转前 profile≠none+rhr:false 版本）任务可能已自动 completed、无人签=未签 LLM 判决。§3.6 只拒当前加载包、改不动历史行。→ 完成谓词换 `repos.task_output_is_signed_off`：**持久 review_approved 事件（人签见证）∨ 该任务锁定 agent_version 的历史 manifest profile∈{None,'none'}（确定性零-LLM）**，manifest 缺失/损坏 fail-closed。**resolver 生产侧（runner._resolve_one_candidate 未签→级联取消）+ 消费侧（runtime._open_input_files 未签→拒消费）双点同守**——legacy 任务 input_file_ids 已直含产物时绕 resolver、只撞消费侧。键于任务锁定版本正确处理版本翻转（不被"当前版本=none"反向欺骗）。
+- **K2 消费侧 origin 隔离（keystone，已修）**：resolver（runner）与 create_task（tasks.py）都校上游 origin=='user'，独 `_open_input_files` 消费点漏 → legacy/直写任务 input_file_ids 已直含 eval 产物时消费侧开 eval 内容入 user 任务污染样本库。消费点补齐 origin 校验。
+- **R1 resolver per-candidate 隔离（robustness，已修）**：resolver for-candidate 循环零 try/except → 单条畸形持久数据（input_binding.from_tasks 非 list / depends_on 标量 / output_file_ids 非 list / 畸形 agent_id）抛异常掀翻整趟 pass、后续合法候选**永久饿死**（毒丸滞留 created 每 tick 重命中）。→ per-candidate try/except，毒丸 quarantine（created→cancelled+诊断，事件 agent_id=None 免二次污染）而非中止全 pass。
+
+**诚实递延内网后锻（owner 裁 defer + 显式标注，非静默）**：
+- **R2 写边界零 schema 校验 + input_binding 契约松（object|null）**：task.schema.json 从不在 DB 写路径校验（仅 API Pydantic，直调 repos/legacy/迁移可绕）；input_binding 契约未钉 `from_tasks:array[string]`，故 `{"from_tasks":1}` 契约合法。**残差**：畸形持久 binding 可被写入——但 **R1 隔离使 resolver 对其鲁棒（quarantine 非 prevent），blast 已收敛**；收紧嵌套 schema/写边界校验属廉价后补，内网批做。
+- **R3 逐边上游 get_task 全解码（perf）**：runner._resolve_one_candidate 逐边 `repos.get_task` 仍 `SELECT *`+解码 256KB inputs（R4-2 只投影了候选扫描，漏对称的上游查找）；fan-in 下 O(N×M)/tick，上游未完成时每 tick 重复。**残差**：部门级 fan-in 规模温和，且 K1 签发见证每上游 1-2 查询叠加于此路径——**内网真实负载画像后一并投影收口**（上游查找投影 id/status/origin/output_file_ids/agent_id/agent_version）。
+
+**巡查未误杀确认（设计已正确覆盖）**：§3.6 `mode=='job'` 有 agent.schema mode required+enum 背书非欠覆盖；runtime 执行期 rhr 门 `is not False`、_NoModelGatewayContext 物理封 profile=none LLM、resolver origin backstop、apply_human_review 原子性（R4-1）已收口。

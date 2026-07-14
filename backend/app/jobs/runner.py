@@ -24,7 +24,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import BinaryIO, Callable, Iterator
+from typing import Any, BinaryIO, Callable, Iterator
 
 import sqlite3
 
@@ -143,106 +143,151 @@ def resolve_dependencies_once(conn_factory: Callable[[], sqlite3.Connection]) ->
 
     advanced = 0
     for task in candidates:
-        task_id = task["id"]
-        upstream_ids = task.get("depends_on") or []
         conn = conn_factory()
         try:
-            upstreams = [repos.get_task(conn, uid) for uid in upstream_ids]
-            failed = [
-                uid for uid, u in zip(upstream_ids, upstreams)
-                if u is None or u["status"] in ("failed", "cancelled")
-            ]
-            if failed:
-                cancelled = repos.cancel_dependent_task(
-                    conn, task_id,
-                    f"上游任务失败/取消/缺失，依赖无法满足：{', '.join(failed)}",
-                    event={  # R2 P2：事件与状态迁移同事务原子写
-                        "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
-                        "level": "warning",
-                        "message": "依赖的上游任务失败或被取消，本任务级联取消（绝不在失败上游上执行）",
-                        "payload": {"reason": "upstream_failed", "upstream_task_ids": failed},
-                    },
-                )
-                if cancelled is not None:
-                    advanced += 1
-                continue
-            # Codex 增量2审 R2 P1：上游跨 eval/user 执行方隔离轴（origin≠user）→ fail-closed
-            # 级联取消。创建期已挡（tasks.py），此为 legacy/混版任务的消费侧兜底（ADR-0018：
-            # eval 产物绝不经依赖链流入 user 任务→user-origin sample gate 污染样本库）。任何
-            # 状态的非-user 上游都拒（用户任务本就不该依赖 eval 跑批任务）。
-            non_user = [
-                uid for uid, u in zip(upstream_ids, upstreams)
-                if u is not None and u.get("origin") != "user"
-            ]
-            if non_user:
-                cancelled = repos.cancel_dependent_task(
-                    conn, task_id,
-                    f"上游任务跨 eval/user 隔离轴（origin≠user）：{', '.join(non_user)}",
-                    event={
-                        "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
-                        "level": "warning",
-                        "message": "依赖的上游任务非 user 执行方（eval 隔离轴），本任务级联取消（ADR-0018 防样本库污染）",
-                        "payload": {"reason": "upstream_origin_isolation", "upstream_task_ids": non_user},
-                    },
-                )
-                if cancelled is not None:
-                    advanced += 1
-                continue
-            if all(u is not None and u["status"] == "completed" for u in upstreams):
-                # input_binding 兑现（Codex 增量2审 P2-3）：非空 from_tasks 只从声明的
-                # 上游拷产物入下游 input，其余上游仍参与依赖等待但产物不注入（防越权拷
-                # 入调用方显式排除的文件，含 sensitive）。空/None=默认拷全部上游 output。
-                binding = task.get("input_binding") or {}
-                from_tasks = binding.get("from_tasks") or None
-                piped: list[str] = []
-                invalid: list[str] = []
-                for u in upstreams:
-                    if from_tasks is not None and u["id"] not in from_tasks:
-                        continue
-                    for fid in u.get("output_file_ids") or []:
-                        # Codex 增量2审 R1 P1：管道 ID 必须是真 registered kind=output 且属
-                        # 该上游——陈旧/legacy 行若把 input-file id 混入 output_file_ids，下游
-                        # _open_input_files 会当普通上传（uploads_dir、无 provenance）消费，绕过
-                        # registered-output 边界。生产侧 fail-closed 校验配合消费侧 provenance
-                        # 双端收口；任一无效即整体作废、级联取消下游（绝不喂入未注册文件）。
-                        rec = repos.get_file(conn, fid)
-                        if rec is None or rec.get("kind") != "output" or rec.get("task_id") != u["id"]:
-                            invalid.append(fid)
-                        else:
-                            piped.append(fid)
-                if invalid:
-                    cancelled = repos.cancel_dependent_task(
-                        conn, task_id,
-                        f"上游产物完整性校验失败，管道 id 非本上游 registered output：{', '.join(invalid)}",
-                        event={
-                            "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
-                            "level": "warning",
-                            "message": "上游 output_file_ids 含非法/非本上游 registered output，级联取消（fail-closed 绝不喂入未注册文件）",
-                            "payload": {"reason": "upstream_output_integrity", "invalid_file_ids": invalid},
-                        },
-                    )
-                    if cancelled is not None:
-                        advanced += 1
-                    continue
-                enqueued = repos.enqueue_dependent_task(
-                    conn, task_id, piped,
-                    event={  # R2 P2：dependency_resolved 事件与 created→queued 同事务原子写
-                        "agent_id": task.get("agent_id"), "event_type": "agent_log",
-                        "level": "info",
-                        "message": f"依赖满足：{len(upstream_ids)} 个上游全部完成，管道 {len(piped)} 件产物入队",
-                        "payload": {
-                            "workflow_event_type": "dependency_resolved",
-                            "upstream_task_ids": upstream_ids,
-                            "piped_file_count": len(piped),
-                        },
-                    },
-                )
-                if enqueued is not None:
-                    advanced += 1
-            # else：上游未全完成、无失败 → 保持 created
+            if _resolve_one_candidate(conn, task):
+                advanced += 1
+        except Exception as exc:
+            # R1（loop-auditor 巡查）：**单候选毒丸隔离**。畸形持久数据（depends_on/上游
+            # output_file_ids 非 list、input_binding.from_tasks 非 list、畸形 agent_id 致事件校验
+            # 炸…直调 repos/legacy/迁移可绕 API Pydantic 写入）绝不掀翻整趟 resolver 令其后所有
+            # 合法候选永久饿死（毒丸滞留 created，每 tick 重命中）。quarantine 坏候选
+            # （created→cancelled+诊断）而非中止全 pass。契约收紧/写边界校验（R2）defer 内网，
+            # 本隔离使 resolver 对**已存**畸形数据鲁棒（quarantine 非 prevent）。
+            if _quarantine_poison_candidate(conn, task, exc):
+                advanced += 1
         finally:
             conn.close()
     return advanced
+
+
+def _resolve_one_candidate(conn: sqlite3.Connection, task: dict[str, Any]) -> bool:
+    """处理单个 created 依赖候选，返回是否推进（入队/级联取消）。任何异常交调用方
+    quarantine 隔离（R1），故遇畸形持久数据可自然抛、绝不自吞。"""
+    task_id = task["id"]
+    upstream_ids = task.get("depends_on") or []
+    upstreams = [repos.get_task(conn, uid) for uid in upstream_ids]
+    failed = [
+        uid for uid, u in zip(upstream_ids, upstreams)
+        if u is None or u["status"] in ("failed", "cancelled")
+    ]
+    if failed:
+        return repos.cancel_dependent_task(
+            conn, task_id,
+            f"上游任务失败/取消/缺失，依赖无法满足：{', '.join(failed)}",
+            event={  # R2 P2：事件与状态迁移同事务原子写
+                "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
+                "level": "warning",
+                "message": "依赖的上游任务失败或被取消，本任务级联取消（绝不在失败上游上执行）",
+                "payload": {"reason": "upstream_failed", "upstream_task_ids": failed},
+            },
+        ) is not None
+    # Codex 增量2审 R2 P1：上游跨 eval/user 执行方隔离轴（origin≠user）→ fail-closed 级联
+    # 取消。创建期已挡（tasks.py），此为 legacy/混版任务的消费侧兜底（ADR-0018：eval 产物
+    # 绝不经依赖链流入 user 任务→user-origin sample gate 污染样本库）。
+    non_user = [
+        uid for uid, u in zip(upstream_ids, upstreams)
+        if u is not None and u.get("origin") != "user"
+    ]
+    if non_user:
+        return repos.cancel_dependent_task(
+            conn, task_id,
+            f"上游任务跨 eval/user 隔离轴（origin≠user）：{', '.join(non_user)}",
+            event={
+                "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
+                "level": "warning",
+                "message": "依赖的上游任务非 user 执行方（eval 隔离轴），本任务级联取消（ADR-0018 防样本库污染）",
+                "payload": {"reason": "upstream_origin_isolation", "upstream_task_ids": non_user},
+            },
+        ) is not None
+    # K1 签发维 provenance（Codex 增量2审 R5-1 + loop-auditor）：上游已 completed 但无签发
+    # 见证（未签 LLM 判决 / agent_version manifest 不可确立）→ fail-closed 级联取消。completed
+    # 只是时序代理；legacy pre-§3.6 任务可能自动放行无人签，其未签产物绝不越依赖边界；已
+    # 终态永不自愈故取消而非等待。resolver 生产侧 + 消费侧 runtime._open_input_files 双点同守。
+    unsigned = [
+        uid for uid, u in zip(upstream_ids, upstreams)
+        if u is not None and u["status"] == "completed"
+        and not repos.task_output_is_signed_off(conn, u)
+    ]
+    if unsigned:
+        return repos.cancel_dependent_task(
+            conn, task_id,
+            f"上游已 completed 但无签发见证（未签 LLM 判决/manifest 不可确立）：{', '.join(unsigned)}",
+            event={
+                "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
+                "level": "warning",
+                "message": "依赖的上游 completed 但产物未过人工签发闸（K1 签发维 provenance），级联取消（fail-closed 未签判决绝不越界）",
+                "payload": {"reason": "upstream_unsigned", "upstream_task_ids": unsigned},
+            },
+        ) is not None
+    if not all(u is not None and u["status"] == "completed" for u in upstreams):
+        return False  # 上游未全完成、无失败 → 保持 created
+    # input_binding 兑现（Codex 增量2审 P2-3）：非空 from_tasks 只从声明的上游拷产物入下游
+    # input，其余上游仍参与依赖等待但产物不注入（防越权拷入调用方显式排除的文件，含
+    # sensitive）。空/None=默认拷全部上游 output。
+    binding = task.get("input_binding") or {}
+    from_tasks = binding.get("from_tasks") or None
+    piped: list[str] = []
+    invalid: list[str] = []
+    for u in upstreams:
+        if from_tasks is not None and u["id"] not in from_tasks:
+            continue
+        for fid in u.get("output_file_ids") or []:
+            # Codex 增量2审 R1 P1：管道 ID 必须是真 registered kind=output 且属该上游——陈旧/
+            # legacy 行若把 input-file id 混入 output_file_ids，下游 _open_input_files 会当普通上传
+            # （uploads_dir、无 provenance）消费，绕过 registered-output 边界。生产侧 fail-closed
+            # 校验配合消费侧 provenance 双端收口；任一无效即整体作废、级联取消（绝不喂未注册文件）。
+            rec = repos.get_file(conn, fid)
+            if rec is None or rec.get("kind") != "output" or rec.get("task_id") != u["id"]:
+                invalid.append(fid)
+            else:
+                piped.append(fid)
+    if invalid:
+        return repos.cancel_dependent_task(
+            conn, task_id,
+            f"上游产物完整性校验失败，管道 id 非本上游 registered output：{', '.join(invalid)}",
+            event={
+                "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
+                "level": "warning",
+                "message": "上游 output_file_ids 含非法/非本上游 registered output，级联取消（fail-closed 绝不喂入未注册文件）",
+                "payload": {"reason": "upstream_output_integrity", "invalid_file_ids": invalid},
+            },
+        ) is not None
+    return repos.enqueue_dependent_task(
+        conn, task_id, piped,
+        event={  # R2 P2：dependency_resolved 事件与 created→queued 同事务原子写
+            "agent_id": task.get("agent_id"), "event_type": "agent_log",
+            "level": "info",
+            "message": f"依赖满足：{len(upstream_ids)} 个上游全部完成，管道 {len(piped)} 件产物入队",
+            "payload": {
+                "workflow_event_type": "dependency_resolved",
+                "upstream_task_ids": upstream_ids,
+                "piped_file_count": len(piped),
+            },
+        },
+    ) is not None
+
+
+def _quarantine_poison_candidate(
+    conn: sqlite3.Connection, task: dict[str, Any], exc: Exception
+) -> bool:
+    """R1 毒丸隔离：把处理时抛异常的畸形候选 created→cancelled 并留诊断，使其不再每 tick
+    重命中掀翻整趟 resolver。诊断事件用 **agent_id=None**——候选自身 agent_id 可能正是畸形源
+    （违 event.schema pattern，正是抛异常之一因），复用之会令 quarantine 自身二次抛。若
+    quarantine 仍抛（极端），交调用方 finally 关连接、异常上抛至 _resolve_if_due 的 except 兜底
+    （worker 存活、本 tick 退化为旧全-pass-loss、下 tick 再试），绝不静默吞。"""
+    task_id = task.get("id")
+    return repos.cancel_dependent_task(
+        conn, task_id,
+        f"候选依赖解析抛异常，畸形持久数据隔离（quarantine）：{type(exc).__name__}: {exc}",
+        event={
+            "agent_id": None,  # 候选 agent_id 可能畸形（毒丸源），quarantine 事件绝不复用之
+            "event_type": "task_cancelled",
+            "level": "error",
+            "message": "候选依赖解析遇畸形持久数据抛异常，单候选隔离取消（R1：绝不掀翻整趟 resolver 令合法候选饿死）",
+            "payload": {"reason": "poison_candidate_quarantined", "error_type": type(exc).__name__},
+        },
+    ) is not None
 
 
 def recover_interrupted_tasks(

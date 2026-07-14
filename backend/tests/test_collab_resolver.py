@@ -15,6 +15,7 @@ waiting_review 当"未就绪"；"waiting_review→completed 只人工"由状态�
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from pathlib import Path
 
@@ -39,19 +40,49 @@ _PATHS = {
 }
 
 
+def _register_agent_version(conn, agent_id, version="0.1.0", *, profile="none", requires_human_review=None):
+    """注册最小 agent_versions manifest（K1 签发见证测试用）。profile='none'=确定性零-LLM
+    Agent（其 completed 产物经 task_output_is_signed_off 的 profile=none 支合法放行）；
+    profile='reasoning' 建模 LLM 型上游（需另有 review_approved 事件才算签发，否则未签）。
+    本 helper 只忠实落库 manifest，不校 §3.6（测试要造违规历史行时正需绕校验）。"""
+    manifest = {
+        "id": agent_id, "version": version,
+        "workflow": {"mode": "job"},
+        "model": {"profile": profile},
+    }
+    if requires_human_review is not None:
+        manifest["workflow"]["requires_human_review"] = requires_human_review
+    conn.execute(
+        "INSERT OR REPLACE INTO agent_versions (agent_id, version, yaml_json, created_at) "
+        "VALUES (?,?,?,?)",
+        (agent_id, version, json.dumps(manifest, ensure_ascii=False), "2026-01-01T00:00:00+00:00"),
+    )
+
+
 @pytest.fixture()
 def dbf(tmp_path):
     db_path = tmp_path / "flai_os.db"
     init_db(db_path)
-    return lambda: get_conn(db_path)
+    factory = lambda: get_conn(db_path)
+    # K1 签发见证（Codex 增量2审 R5-1 + loop-auditor）：resolver 机制测试的默认上游 agent
+    # 注册为 profile=none（确定性）——其 completed 产物经 task_output_is_signed_off 的
+    # profile=none 支放行（等价"确定性上游合法自动完成"）。需未签/review-gated 上游的测试
+    # 自行注册对应 profile 或造 review_approved 事件。
+    conn = factory()
+    try:
+        _register_agent_version(conn, "hello_agent", "0.1.0", profile="none")
+    finally:
+        conn.close()
+    return factory
 
 
-def _mk(conn, task_id, *, depends_on=None, inputs=None, input_file_ids=None):
+def _mk(conn, task_id, *, depends_on=None, inputs=None, input_file_ids=None,
+        agent_id="hello_agent", agent_version="0.1.0", input_binding=None):
     return repos.create_task(
-        conn, task_id=task_id, agent_id="hello_agent", agent_version="0.1.0",
+        conn, task_id=task_id, agent_id=agent_id, agent_version=agent_version,
         name=task_id, created_by="tester", inputs=inputs or {},
         input_file_ids=input_file_ids or [], metadata={},
-        depends_on=depends_on,
+        depends_on=depends_on, input_binding=input_binding,
     )
 
 
@@ -813,5 +844,192 @@ def test_R4_candidate_query_projects_columns_only(dbf):
         assert "inputs" not in c  # 大 inputs 绝未 materialize
         assert c["depends_on"] == ["up"]  # depends_on 仍正确解码
         assert c["input_binding"] is None
+    finally:
+        conn.close()
+
+
+# ══ 设计级巡查收口批（Codex R5 + loop-auditor）：K1 签发维 / K2 消费侧 origin / R1 隔离 ══
+
+# ── K1 签发维 provenance（R5-1 + loop-auditor）：completed 谓词换持久签发见证，双点 fail-closed ──
+
+def test_K1_unsigned_completed_upstream_cancels_downstream(dbf):
+    """K1 tamper（resolver 侧）：LLM 型（profile=reasoning）上游到 completed 但**无 review_approved
+    事件**（模拟 legacy pre-§3.6 自动放行/未签）→ task_output_is_signed_off False → resolver
+    fail-closed 级联取消下游（未签 LLM 判决绝不越依赖边界）。拆签发见证（恒 True）→ 反而入队。"""
+    conn = dbf()
+    try:
+        _register_agent_version(conn, "llm_up_agent", "0.1.0", profile="reasoning", requires_human_review=True)
+        _mk(conn, "llm_up", agent_id="llm_up_agent")
+        _attach_output(conn, "llm_up")
+        _drive(conn, "llm_up", "completed_auto")  # 自动完成路径，无人签、无 review_approved
+        _mk(conn, "down", depends_on=["llm_up"])
+    finally:
+        conn.close()
+    resolve_dependencies_once(dbf)
+    conn = dbf()
+    try:
+        down = repos.get_task(conn, "down")
+        assert down["status"] == "cancelled"  # 未签上游 → fail-closed 取消
+        assert any(
+            e["payload"].get("reason") == "upstream_unsigned" for e in repos.list_events(conn, "down")
+        )
+    finally:
+        conn.close()
+
+
+def test_K1_signed_via_review_approved_releases(dbf):
+    """K1 正控：review-gated LLM 上游经 apply_human_review 人签（造持久 review_approved 事件）→
+    task_output_is_signed_off 经事件支放行 → resolver 入队下游。证签发见证正路可通。"""
+    conn = dbf()
+    try:
+        _register_agent_version(conn, "llm_up_agent", "0.1.0", profile="reasoning", requires_human_review=True)
+        _mk(conn, "llm_up", agent_id="llm_up_agent")
+        _attach_output(conn, "llm_up")
+        _drive(conn, "llm_up", "waiting_review")  # LLM 型停人签闸
+        repos.apply_human_review(conn, "llm_up", action="approve", reviewer="张三", comment=None)
+        _mk(conn, "down", depends_on=["llm_up"])
+    finally:
+        conn.close()
+    assert resolve_dependencies_once(dbf) == 1  # 已签 → 入队
+    conn = dbf()
+    try:
+        assert repos.get_task(conn, "down")["status"] == "queued"
+    finally:
+        conn.close()
+
+
+def test_K1_version_flip_keys_on_locked_version(dbf):
+    """K1 版本翻转 tamper：任务锁 agent_version=1（profile=reasoning，未签），当前 registry 已发
+    version=2（profile=none）。task_output_is_signed_off 键于任务**锁定的 v1** 历史 manifest →
+    未签拒；绝不被"当前版本=none"反向欺骗放行。naive「查当前 registry」修法在此 RED。"""
+    conn = dbf()
+    try:
+        _register_agent_version(conn, "flip_agent", "1", profile="reasoning", requires_human_review=True)
+        _register_agent_version(conn, "flip_agent", "2", profile="none")  # 当前版本已修正为确定性
+        _mk(conn, "flip_up", agent_id="flip_agent", agent_version="1")  # 任务跑在历史 v1
+        _attach_output(conn, "flip_up")
+        _drive(conn, "flip_up", "completed_auto")  # v1 下自动完成、未签
+        _mk(conn, "down", depends_on=["flip_up"])
+    finally:
+        conn.close()
+    resolve_dependencies_once(dbf)
+    conn = dbf()
+    try:
+        assert repos.get_task(conn, "down")["status"] == "cancelled"  # 键 v1 未签 → 拒（非被 v2=none 欺骗）
+    finally:
+        conn.close()
+
+
+def test_K1_consume_side_unsigned_output_rejected(runtime_env):
+    """K1 消费侧 tamper（loop-auditor 逮的孪生洞）：上游 completed 但未签（profile=reasoning 无
+    review_approved），其 output 已直含消费者 input_file_ids（绕 resolver，模拟 legacy）→ 执行期
+    消费点 K1 拒 → failed。resolver 生产侧修不到此路径（input_file_ids 已直含），故消费侧双点同
+    守。拆消费侧 K1 签发见证 → 绕过消费者反而 completed。"""
+    cf = runtime_env["conn_factory"]
+    runtime = runtime_env["runtime"]
+    runner = JobRunner(runtime, cf)
+    conn = cf()
+    try:
+        _register_agent_version(conn, "llm_producer", "0.1.0", profile="reasoning", requires_human_review=True)
+        _mk(conn, "llm_up", agent_id="llm_producer")
+        fid = _real_output(runtime, conn, "llm_up")
+        repos.set_task_outputs(conn, "llm_up", [fid])
+        _drive(conn, "llm_up", "completed_auto")  # completed 但无 review_approved（未签）
+        # 消费者给**有效** inputs（name）——非空见证的命门：否则消费者会因缺输入 failed，
+        # 与 K1 无关而假绿（tamper 关 K1 仍 failed）。给全输入 → 唯一 failed 因即 K1 消费点拒。
+        _mk(conn, "consumer", depends_on=["llm_up"], inputs={"name": "x"}, input_file_ids=[fid])
+        repos.set_task_status(conn, "consumer", "queued")
+    finally:
+        conn.close()
+    runner.run_once()
+    conn = cf()
+    try:
+        c = repos.get_task(conn, "consumer")
+        assert c["status"] == "failed"  # K1 消费侧签发见证拒
+        assert "签发见证" in (c.get("error_message") or "")  # 且失败因确是 K1（非缺输入等）
+    finally:
+        conn.close()
+
+
+# ── K2 消费侧 origin 隔离（loop-auditor）：resolver/create_task 都校，消费点补齐 ──
+
+def test_K2_consume_side_eval_origin_output_rejected(runtime_env):
+    """K2 消费侧 tamper：上游 origin=eval（用 profile=none agent 故过 K1 签发见证），其 output 已
+    直含 user 消费者 input_file_ids（绕 resolver+create_task 双挡，模拟 legacy/直写）→ 消费点 K2
+    origin 隔离拒 → failed（ADR-0018 防样本库污染）。拆消费侧 K2 → eval 内容流入 user 任务。"""
+    cf = runtime_env["conn_factory"]
+    runtime = runtime_env["runtime"]
+    runner = JobRunner(runtime, cf)
+    conn = cf()
+    try:
+        _register_agent_version(conn, "eval_det_agent", "0.1.0", profile="none")  # 确定性→过 K1
+        repos.create_task(
+            conn, task_id="eval_up", agent_id="eval_det_agent", agent_version="0.1.0",
+            name="eval_up", created_by="t", inputs={}, input_file_ids=[], metadata={}, origin="eval",
+        )
+        fid = _real_output(runtime, conn, "eval_up")
+        repos.set_task_outputs(conn, "eval_up", [fid])
+        _drive(conn, "eval_up", "completed_auto")
+        # 有效 inputs（非空见证命门，同 K1 消费侧）→ 唯一 failed 因即 K2 origin 隔离
+        _mk(conn, "user_consumer", depends_on=["eval_up"], inputs={"name": "x"}, input_file_ids=[fid])
+        repos.set_task_status(conn, "user_consumer", "queued")
+    finally:
+        conn.close()
+    runner.run_once()
+    conn = cf()
+    try:
+        c = repos.get_task(conn, "user_consumer")
+        assert c["status"] == "failed"  # K2 origin 隔离拒
+        assert "隔离轴" in (c.get("error_message") or "")  # 且失败因确是 K2（非缺输入/K1）
+    finally:
+        conn.close()
+
+
+# ── R1 resolver per-candidate 隔离（R5-3 + loop-auditor）：毒丸 quarantine 不掀翻整趟 ──
+
+def test_R1_poison_binding_quarantined_valid_proceeds(dbf):
+    """R1 tamper（R5-3 canonical）：畸形 input_binding.from_tasks 非 list（直调 repos 绕 API
+    Pydantic，模拟 legacy/直写）令 membership 检查抛 TypeError。**毒丸候选被 quarantine
+    （created→cancelled），同趟合法候选照常入队不被饿死**。拆 per-candidate try/except →
+    毒丸掀翻整趟 pass → 合法候选滞留 created（RED）。"""
+    conn = dbf()
+    try:
+        _mk(conn, "up")
+        _attach_output(conn, "up")
+        _drive(conn, "up", "completed_reviewed")
+        _mk(conn, "poison", depends_on=["up"], input_binding={"from_tasks": 1})  # 毒丸：非 list
+        _mk(conn, "valid", depends_on=["up"])  # 合法候选，依赖同一 completed 上游
+    finally:
+        conn.close()
+    resolve_dependencies_once(dbf)
+    conn = dbf()
+    try:
+        assert repos.get_task(conn, "poison")["status"] == "cancelled"  # 毒丸隔离
+        assert any(
+            e["payload"].get("reason") == "poison_candidate_quarantined"
+            for e in repos.list_events(conn, "poison")
+        )
+        assert repos.get_task(conn, "valid")["status"] == "queued"  # 合法候选未被饿死（隔离生效）
+    finally:
+        conn.close()
+
+
+def test_R1_poison_scalar_depends_on_quarantined(dbf):
+    """R1 兄弟：depends_on 持久为 JSON 标量（直写绕 API；候选查询 filter != '[]' 放行）→
+    `for uid in 5` 抛 TypeError。证隔离对**不同抛点**（非仅 from_tasks）皆通用——毒丸 quarantine，
+    resolver 不炸。"""
+    conn = dbf()
+    try:
+        repos.create_task(
+            conn, task_id="poison_scalar", agent_id="hello_agent", agent_version="0.1.0",
+            name="poison_scalar", created_by="t", inputs={}, input_file_ids=[], metadata={},
+            depends_on=5,  # 非 list 标量（直写模拟 legacy）
+        )
+    finally:
+        conn.close()
+    resolve_dependencies_once(dbf)  # 不应抛
+    conn = dbf()
+    try:
+        assert repos.get_task(conn, "poison_scalar")["status"] == "cancelled"  # 毒丸隔离取消
     finally:
         conn.close()

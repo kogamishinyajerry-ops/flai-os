@@ -752,6 +752,27 @@ class AgentRuntime:
                             f"输入文件完整性校验失败：上游任务 {owner_id!r} 状态={owner_status}（非 completed）"
                             "——产物未过人工签发闸（waiting_review→completed 只人工）不可被下游消费"
                         )
+                    # K1 签发维 provenance（Codex 增量2审 R5-1 + loop-auditor）：completed 只证
+                    # 时序不证人签。legacy pre-§3.6（或版本翻转前）任务可能已自动 completed、无人签
+                    # =未签 LLM 判决；其 input_file_ids 若已直含产物（绕 resolver）只撞本消费点，故
+                    # resolver 生产侧修不到。双见证 fail-closed（review_approved 事件 ∨ 该任务锁定
+                    # agent_version 的 manifest profile=none），与 runner._resolve_one_candidate 同守。
+                    if not repos.task_output_is_signed_off(conn, owner):
+                        raise FileIntegrityError(
+                            f"输入文件完整性校验失败：上游任务 {owner_id!r} 已 completed 但无签发见证"
+                            "（未签 LLM 判决 / agent_version manifest 不可确立）——未过人工签发闸的产物"
+                            "不可被下游消费（K1 签发维 provenance，fail-closed）"
+                        )
+                    # K2 消费侧 origin 隔离（loop-auditor 巡查）：resolver（runner）与 create_task
+                    # （tasks.py）都校上游 origin=='user'，独消费点漏——legacy/直写任务 input_file_ids
+                    # 已直含某 eval 任务产物且满足 depends_on+completed+manifest+binding 时，此处会开
+                    # eval 内容入 user 任务→user-origin sample gate 污染样本库（ADR-0018）。补齐兜底。
+                    if owner.get("origin") != "user":
+                        raise FileIntegrityError(
+                            f"输入文件完整性校验失败：上游任务 {owner_id!r} origin={owner.get('origin')!r}"
+                            "（非 user，跨 eval/user 隔离轴）——eval 产物绝不经依赖链流入 user 任务"
+                            "（ADR-0018 防样本库污染，K2 消费侧兜底）"
+                        )
                     # Codex 增量2审 R2 P2：provenance 还须校（a）file_id 真在 owner 的
                     # output_file_ids manifest 内（非仅"owner 是已完成依赖"——legacy 任务
                     # input_file_ids 直含某已完成依赖的**非产物** id 时前两关放行）；（b）owner

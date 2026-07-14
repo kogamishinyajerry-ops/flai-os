@@ -403,6 +403,59 @@ def apply_human_review(
     return get_task(conn, task_id), sample_rows  # type: ignore[return-value]
 
 
+def get_agent_version_manifest(
+    conn: sqlite3.Connection, agent_id: str, version: str
+) -> dict[str, Any] | None:
+    """读该 (agent_id, version) **锁定版本**的历史 manifest（agent_versions.yaml_json=
+    registry 注册期落库的 json.dumps(data)）。键于任务自身锁定的 agent_version 而非当前
+    registry——正确处理**版本翻转**（当前 v2=profile:none 但历史任务跑在 v1=reasoning）。
+    行缺失 / yaml 损坏 / 非 dict → None（=版本 provenance 无法确立，调用方 fail-closed）。"""
+    row = conn.execute(
+        "SELECT yaml_json FROM agent_versions WHERE agent_id = ? AND version = ?",
+        (agent_id, version),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        manifest = json.loads(row["yaml_json"])
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return manifest if isinstance(manifest, dict) else None
+
+
+def has_review_approved_event(conn: sqlite3.Connection, task_id: str) -> bool:
+    """该任务是否有持久 review_approved 事件=人工签发见证（apply_human_review 是唯一写入
+    方，见其实现）。K1 签发维 provenance 用：`status=='completed'` 只证时序、不证人签。"""
+    row = conn.execute(
+        "SELECT 1 FROM task_events WHERE task_id = ? AND event_type = 'review_approved' LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    return row is not None
+
+
+def task_output_is_signed_off(conn: sqlite3.Connection, task: dict[str, Any]) -> bool:
+    """K1 签发维 provenance（Codex 增量2审 R5-1 + loop-auditor 巡查）：一个 completed 任务的
+    产物**可否越依赖边界流入下游**。`status=='completed'` 只是时序代理——review-gated 上游
+    经人签转出 completed 才带 review_approved 事件；但 pre-§3.6（或曾发过 profile≠none+rhr:
+    false 版本后修正）的 legacy 任务可能已 analyzing→completed **自动放行、无人签**=未签
+    LLM 判决，注册期 §3.6 只拒当前加载包、改不动历史行。
+
+    fail-closed 双见证（皆持久、皆键于任务自身锁定的 agent_version）：
+      ① 存在持久 review_approved 事件（人工签发）→ 放行；或
+      ② 该任务 agent_version 的历史 manifest 明确 model.profile∈{None,'none'}（确定性零-LLM
+         Agent，合法自动完成、无需人签；与 runtime._build_context 的 _NoModelGatewayContext
+         门同口径、与 §3.6 注册期 not in (None,'none') 判据同源）→ 放行。
+    manifest 缺失/损坏 → 版本 profile 无法确立 → **False（拒）**（绝不把"读不到 manifest"当
+    "profile=none"放行=fail-open）。二者皆不成立（LLM 型且无人签）→ False（拒）。"""
+    if has_review_approved_event(conn, task["id"]):
+        return True
+    manifest = get_agent_version_manifest(conn, task["agent_id"], task["agent_version"])
+    if manifest is None:
+        return False  # 版本 provenance 无法确立 → fail-closed，绝不 fail-open 放行
+    profile = (manifest.get("model") or {}).get("profile")
+    return profile in (None, "none")  # manifest 明确存在且 profile none-equiv = 确定性零-LLM
+
+
 def set_task_data_classification(
     conn: sqlite3.Connection, task_id: str, classification: str
 ) -> str:
