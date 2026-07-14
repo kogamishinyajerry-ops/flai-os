@@ -122,6 +122,36 @@
         />
 
         <template v-else>
+          <div class="gov-ladder">
+            <div class="gov-section-label">成熟度</div>
+            <div class="gov-ladder-track">
+              <span
+                v-for="step in maturityLadder"
+                :key="step.level"
+                class="gov-ladder-step"
+                :class="{ reached: step.reached, current: step.current, oos: step.outOfScope }"
+                :title="step.outOfScope ? 'L2/L3 范围外：当前仅 L0→L1 由机器把关晋升' : ''"
+              >{{ step.level }}<em v-if="step.outOfScope" class="gov-oos-tag">范围外</em></span>
+            </div>
+            <div class="gov-ladder-note">仅 L0→L1 机器化把关；L2/L3 范围外</div>
+          </div>
+
+          <div v-if="evalTrend.length" class="gov-eval-trend">
+            <div class="gov-section-label">评测通过率（近 {{ evalTrend.length }} 次）</div>
+            <div class="gov-trend-bars">
+              <span
+                v-for="run in evalTrend"
+                :key="run.id"
+                class="gov-trend-bar"
+                :class="{ 'is-empty': run.pct === null }"
+                :style="run.pct !== null ? { height: Math.max(6, run.pct) + '%' } : {}"
+                :title="run.pct === null
+                  ? `无有效用例 · ${formatTime(run.at)}`
+                  : `${run.passed}/${run.total}（${run.pct}%） · ${formatTime(run.at)}`"
+              ></span>
+            </div>
+          </div>
+
           <div class="gov-run-block">
             <div class="gov-section-label">最近评测</div>
             <div class="gov-run-summary">
@@ -157,6 +187,10 @@
             @click="runEvaluation"
           >跑评测</el-button>
 
+          <div v-if="curatedCasesCount !== null" class="gov-cases-count">
+            已固化 <b>{{ curatedCasesCount }}</b> 个 eval case（按仓内固化文件计）
+          </div>
+
           <div v-if="governanceAgent.maturity === 'L0'" class="gov-promote-block">
             <p class="gov-promote-note">晋升 L1 需引用一次全绿评测</p>
             <el-checkbox v-model="promotionConfirmed" class="gov-promote-confirm">
@@ -182,9 +216,28 @@
             >申请晋升 L1</el-button>
           </div>
 
-          <div v-if="latestPromotion" class="gov-promotion-history">
-            {{ latestPromotion.from_maturity }}→{{ latestPromotion.to_maturity }} ·
-            {{ latestPromotion.confirmed_by }} · {{ formatTime(latestPromotion.created_at) }}
+          <div v-if="governancePromotions.length" class="gov-promotion-timeline">
+            <div class="gov-section-label">晋升史</div>
+            <div
+              v-for="p in governancePromotions"
+              :key="p.id"
+              class="gov-promotion-card"
+            >
+              <div class="gov-promotion-head">
+                <span class="gov-promotion-jump">{{ p.from_maturity }}→{{ p.to_maturity }}</span>
+                <span class="gov-promotion-meta">{{ p.confirmed_by }} · {{ formatTime(p.created_at) }}</span>
+              </div>
+              <el-collapse v-if="p.checks && Object.keys(p.checks).length">
+                <el-collapse-item title="五门判定快照">
+                  <ul class="gov-checks-list">
+                    <li v-for="(check, name) in p.checks" :key="name">
+                      {{ name }}：{{ check && check.ok === true ? '✓' : '✗' }}
+                      <span v-if="check && check.detail"> · {{ check.detail }}</span>
+                    </li>
+                  </ul>
+                </el-collapse-item>
+              </el-collapse>
+            </div>
           </div>
         </template>
       </div>
@@ -219,6 +272,7 @@ const governanceOpen = ref(false);
 const governanceAgent = ref(null);
 const governanceRuns = ref([]);
 const governancePromotions = ref([]);
+const curatedCasesCount = ref(null);
 const governanceLoading = ref(false);
 const governanceLoadError = ref("");
 const governanceRunLoading = ref(false);
@@ -229,6 +283,30 @@ let governanceEpoch = 0;
 
 const latestGovernanceRun = computed(() => governanceRuns.value[0] || null);
 const latestPromotion = computed(() => governancePromotions.value[0] || null);
+const MATURITY_LADDER = ["L0", "L1", "L2", "L3"];
+const maturityLadder = computed(() => {
+  const current = governanceAgent.value?.maturity || "L0";
+  const curIdx = MATURITY_LADDER.indexOf(current);
+  return MATURITY_LADDER.map((level, idx) => ({
+    level,
+    reached: idx <= curIdx,
+    current: idx === curIdx,
+    outOfScope: idx >= 2, // L2/L3 仅 L0→L1 机器化把关，诚实标范围外
+  }));
+});
+// 最近 ≤8 次评测，旧→新（时间轴左旧右新）；pct=null 表示 total=0「无有效用例」
+const evalTrend = computed(() =>
+  (governanceRuns.value || [])
+    .slice(0, 8)
+    .map((r) => ({
+      id: r.id,
+      passed: r.passed ?? 0,
+      total: r.total ?? 0,
+      pct: r.total > 0 ? Math.round((r.passed / r.total) * 100) : null,
+      at: r.finished_at || r.started_at,
+    }))
+    .reverse()
+);
 
 async function load() {
   loading.value = true;
@@ -260,17 +338,20 @@ async function loadGovernance(agentId) {
   governanceLoading.value = true;
   governanceLoadError.value = "";
   try {
-    const [runs, promotions] = await Promise.all([
+    const [runs, promotions, casesCount] = await Promise.all([
       request(`/api/agents/${agentId}/eval-runs`),
       request(`/api/agents/${agentId}/promotions`),
+      request(`/api/agents/${agentId}/curated_cases_count`),
     ]);
     if (epoch !== governanceEpoch) return;
     governanceRuns.value = runs;
     governancePromotions.value = promotions;
+    curatedCasesCount.value = casesCount?.count ?? null;
   } catch (err) {
     if (epoch !== governanceEpoch) return;
     governanceRuns.value = [];
     governancePromotions.value = [];
+    curatedCasesCount.value = null;
     governanceLoadError.value = err.detail || err.message || "治理信息加载失败";
   } finally {
     if (epoch === governanceEpoch) governanceLoading.value = false;
@@ -281,6 +362,7 @@ function openGovernance(agent) {
   governanceAgent.value = agent;
   governanceRuns.value = [];
   governancePromotions.value = [];
+  curatedCasesCount.value = null;
   governanceLoadError.value = "";
   promotionConfirmed.value = false;
   promotionErrors.value = [];
@@ -293,6 +375,7 @@ function resetGovernanceDialog() {
   governanceAgent.value = null;
   governanceRuns.value = [];
   governancePromotions.value = [];
+  curatedCasesCount.value = null;
   governanceLoadError.value = "";
   promotionConfirmed.value = false;
   promotionErrors.value = [];
@@ -609,5 +692,48 @@ onMounted(load);
   border-top: 1px dashed var(--hairline);
   color: var(--ink-faint);
   font-size: 11.5px;
+}
+.gov-ladder { margin-bottom: 16px; }
+.gov-ladder-track { display: flex; gap: 6px; margin: 6px 0 4px; }
+.gov-ladder-step {
+  flex: 1; text-align: center; padding: 5px 0; border-radius: 6px;
+  font-size: 12px; font-weight: 700; color: var(--ink-faint);
+  background: var(--paper-rail); border: 1px solid var(--hairline);
+}
+.gov-ladder-step.reached { color: var(--ink); }
+.gov-ladder-step.current { border-color: var(--clay-softer); color: var(--clay); }
+.gov-ladder-step.oos { opacity: 0.6; }
+.gov-oos-tag { display: block; font-size: 9px; font-style: normal; font-weight: 500; }
+.gov-ladder-note { color: var(--ink-faint); font-size: 11px; }
+.gov-eval-trend { margin: 14px 0; }
+.gov-trend-bars {
+  display: flex; align-items: flex-end; gap: 4px; height: 48px;
+  padding: 4px 0; margin-top: 4px;
+}
+.gov-trend-bar {
+  flex: 1; min-height: 6px; background: var(--ink-mid); border-radius: 2px 2px 0 0;
+  opacity: 0.75;
+}
+.gov-trend-bar.is-empty {
+  background: transparent; border: 1px dashed var(--hairline); min-height: 100%;
+  opacity: 1;
+}
+.gov-cases-count { margin-top: 12px; color: var(--ink-soft); font-size: 12.5px; }
+.gov-cases-count b { color: var(--ink); }
+.gov-promotion-timeline {
+  margin-top: 18px; padding-top: 12px; border-top: 1px dashed var(--hairline);
+}
+.gov-promotion-card {
+  padding: 8px 0; border-bottom: 1px solid var(--hairline);
+}
+.gov-promotion-card:last-child { border-bottom: none; }
+.gov-promotion-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+}
+.gov-promotion-jump { color: var(--ink); font-weight: 700; font-size: 13px; }
+.gov-promotion-meta { color: var(--ink-faint); font-size: 11.5px; }
+.gov-checks-list {
+  margin: 4px 0 0; padding-left: 16px; color: var(--ink-soft);
+  font-size: 11.5px; line-height: 1.7;
 }
 </style>
