@@ -274,6 +274,7 @@ onUnmounted(releaseTaskFeed);
   .console {
     gap: 0;
     flex-direction: column;
+    align-items: stretch; /* 列纵向时 flex-start 会让 .console-main 收成 fit-content → 撑不满/仍可能溢出 */
   }
 }
 </style>
