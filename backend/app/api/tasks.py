@@ -108,6 +108,21 @@ class CreateTaskRequest(BaseModel):
             seen.add(fid)
         return v
 
+    @field_validator("depends_on")
+    @classmethod
+    def depends_on_sane_and_unique(cls, v: list[str]) -> list[str]:
+        # Codex 增量2审 R1 P2：max_length=32 只限条数，单个 ID 无长度上限时可提交 MB 级
+        # 字符串绕 inputs 256KB 放大闸 + 404 detail 回显放大（authenticated DoS）。与
+        # input_file_ids 同口径钳每项（非空白、≤64、唯一），把 task_id 收成有界标识符。
+        seen: set[str] = set()
+        for tid in v:
+            if not tid.strip() or len(tid) > 64:
+                raise ValueError(f"非法依赖 task_id：{tid!r}")
+            if tid in seen:
+                raise ValueError(f"依赖 task_id 重复：{tid!r}")
+            seen.add(tid)
+        return v
+
 
 class ReviewTaskRequest(BaseModel):
     """人工放行请求体（P1-B）。reviewer 已从请求体删除（ADR-0019 D5）：
@@ -164,9 +179,24 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
         # 无法建回边指向未来任务，无需运行时环检测）；缺失即 404 fail-closed。
         # input_binding 引用的上游必在 depends_on 内（越权引用拒，T6）。
         for dep_id in body.depends_on:
-            if repos.get_task(conn, dep_id) is None:
+            upstream = repos.get_task(conn, dep_id)
+            if upstream is None:
                 raise HTTPException(
                     status_code=404, detail=f"依赖的上游任务不存在：{dep_id}"
+                )
+            # Codex 增量2审 R1 P1：依赖必须同 conversation 作用域（设计明列「不做跨
+            # conversation 依赖」）。conversation_id 是分组归属、机密由 classification/taint
+            # 独立管，但声明的排除须 fail-closed 强制——否则 C2 任务 depends_on C1 任务时
+            # resolver 会把 C1 产物管道漏进 C2 协作会话。None==None（门户直建）/C==C 放行，
+            # 不等即跨作用域 422 拒。
+            if upstream.get("conversation_id") != body.conversation_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"依赖跨协作会话作用域：上游 {dep_id} 归属会话 "
+                        f"{upstream.get('conversation_id')!r}，本任务归属 {body.conversation_id!r}"
+                        "——不支持跨 conversation 依赖（产物不得跨会话管道）"
+                    ),
                 )
         # 协作运行时安全边界（与 _open_input_files 按 kind 选权威根的放宽配对成闭）：
         # 直接提交的 input_file_ids 只允许上传件（allowlist：kind=input）。上游产物

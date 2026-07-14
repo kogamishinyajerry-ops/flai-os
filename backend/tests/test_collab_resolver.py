@@ -489,3 +489,72 @@ def test_input_binding_filters_piped_upstreams(dbf):
         assert f_b not in down["input_file_ids"]  # 未绑定的 B 产物不拷（尊重 binding）
     finally:
         conn.close()
+
+
+# ── R1-2 生产侧管道 id 校验（Codex 增量2审 R1）：非 registered kind=output 属该上游即拒 ──
+
+def test_R1_invalid_piped_output_id_cancels_downstream(dbf):
+    """R1-2 tamper：上游 output_file_ids 混入非 registered-output 的 id（如 kind=input，
+    模拟 legacy/陈旧行）→ resolver 生产侧 fail-closed 级联取消下游，绝不喂入未注册文件
+    绕消费侧 provenance。拆生产侧校验 → 坏 id 被拷入下游 input → 后续消费才炸/绕过。"""
+    conn = dbf()
+    try:
+        _mk(conn, "up")
+        bad_fid = str(uuid.uuid4())
+        repos.create_file(  # kind=input 却被塞进 up 的 output_file_ids
+            conn, file_id=bad_fid, task_id=None, kind="input", filename="wrong.txt",
+            path=f"/tmp/{bad_fid}", size_bytes=1, sha256="a" * 64, classification="internal",
+        )
+        repos.set_task_outputs(conn, "up", [bad_fid])
+        _drive(conn, "up", "completed_reviewed")
+        _mk(conn, "down", depends_on=["up"])
+    finally:
+        conn.close()
+
+    assert resolve_dependencies_once(dbf) == 1
+    conn = dbf()
+    try:
+        down = repos.get_task(conn, "down")
+        assert down["status"] == "cancelled"  # 生产侧完整性校验拒
+        events = repos.list_events(conn, "down")
+        assert any(
+            e["event_type"] == "task_cancelled"
+            and e["payload"].get("reason") == "upstream_output_integrity"
+            for e in events
+        )
+    finally:
+        conn.close()
+
+
+# ── R1-4 未知 kind fail-closed（Codex 增量2审 R1）：非 input/output 记录拒消费 ──
+
+def test_R1_unknown_file_kind_rejected_at_consume(runtime_env):
+    """R1-4 tamper：input_file_ids 含 kind 非 input/output 的记录 → 执行期 fail-closed 拒
+    （绝不默认当上传件开 uploads_dir）。**真实可开文件落 uploads_dir**（sha256/size 匹配）
+    使非空咬合：拆未知 kind 分支（else→uploads_dir）会把它当上传成功开→任务 completed；
+    有 fail-closed 时未知 kind 直接拒→failed。"""
+    cf = runtime_env["conn_factory"]
+    runtime = runtime_env["runtime"]
+    runner = JobRunner(runtime, cf)
+    weird_fid = str(uuid.uuid4())
+    payload = b"weird kind payload\n"
+    p = runtime.uploads_dir / weird_fid / "input.txt"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(payload)
+    conn = cf()
+    try:
+        repos.create_file(
+            conn, file_id=weird_fid, task_id=None, kind="weird", filename="input.txt",
+            path=str(p), size_bytes=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(), classification="internal",
+        )
+        _mk(conn, "weird_task", inputs={"name": "x"}, input_file_ids=[weird_fid])
+        repos.set_task_status(conn, "weird_task", "queued")
+    finally:
+        conn.close()
+    runner.run_once()
+    conn = cf()
+    try:
+        assert repos.get_task(conn, "weird_task")["status"] == "failed"  # 未知 kind fail-closed
+    finally:
+        conn.close()

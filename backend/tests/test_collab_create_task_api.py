@@ -121,6 +121,42 @@ def test_uploaded_input_file_can_be_referenced(app_env):
     assert r.json()["status"] == "queued"
 
 
+def test_R1_cross_conversation_dependency_rejected(app_env):
+    """R1-1 tamper：C2 任务 depends_on C1 任务 → 422（不支持跨 conversation 依赖，防 C1
+    产物经 resolver 管道漏进 C2）。同会话（C1→C1）放行、滞留 created 作正控。"""
+    import uuid
+    from backend.app.storage import repos
+    client, app = app_env
+    c1, c2 = f"conv_{uuid.uuid4().hex}", f"conv_{uuid.uuid4().hex}"
+    conn = app.state.conn_factory()
+    try:
+        repos.create_conversation(conn, conversation_id=c1, agent_id="guide_agent", created_by="t")
+        repos.create_conversation(conn, conversation_id=c2, agent_id="guide_agent", created_by="t")
+        repos.create_task(
+            conn, task_id="t1_in_c1", agent_id="hello_agent", agent_version="0.1.0",
+            name="t1", created_by="t", inputs={"name": "x"}, input_file_ids=[], metadata={},
+            conversation_id=c1,
+        )
+    finally:
+        conn.close()
+    cross = client.post("/api/tasks", json={
+        "agent_id": "hello_agent", "name": "cross", "inputs": {"name": "y"},
+        "conversation_id": c2, "depends_on": ["t1_in_c1"]})
+    assert cross.status_code == 422  # 跨会话依赖拒
+    same = client.post("/api/tasks", json={
+        "agent_id": "hello_agent", "name": "same", "inputs": {"name": "z"},
+        "conversation_id": c1, "depends_on": ["t1_in_c1"]})
+    assert same.status_code == 200 and same.json()["status"] == "created"  # 同会话放行（正控）
+
+
+def test_R1_oversized_dependency_id_rejected(app_env):
+    """R1-3 tamper：depends_on 单个 id 超 64 字符 → 422（防 MB 级字符串绕 256KB 放大闸
+    + 404 detail 回显放大）。max_length=32 只限条数、挡不住单项超长。"""
+    client, _ = app_env
+    r = _mk(client, "big", depends_on=["x" * 65])
+    assert r.status_code == 422
+
+
 def test_dependent_task_not_claimed_by_worker(app_env):
     """滞留 created 的依赖任务不进 worker 候选集（claim 只取 queued）。"""
     client, app = app_env

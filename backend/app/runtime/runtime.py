@@ -696,7 +696,8 @@ class AgentRuntime:
                 # 二者都是**装配注入**的权威根，根由 DB 的 kind 字段选、绝不从待验 path
                 # 反推（R4 原则不破）；选定根后 open_verified_file 仍做 O_NOFOLLOW 拒
                 # symlink + resolve-inside-root + sha256/size 全套校验。
-                if record.get("kind") == "output":
+                kind = record.get("kind")
+                if kind == "output":
                     # 消费点 provenance 校验（Codex 增量2审 P1-1）：output 文件只能来自
                     # 本任务 depends_on 声明**且已 completed**的上游（=resolver 管道的正当
                     # 来源）。创建期 input_file_ids allowlist 只挡新 API 建的任务；旧 API 建
@@ -718,9 +719,17 @@ class AgentRuntime:
                             f"输入文件完整性校验失败：上游任务 {owner_id!r} 状态={owner_status}（非 completed）"
                             "——产物未过人工签发闸（waiting_review→completed 只人工）不可被下游消费"
                         )
-                allowed_root = (
-                    self.task_runs_dir if record.get("kind") == "output" else self.uploads_dir
-                )
+                    allowed_root = self.task_runs_dir
+                elif kind == "input":
+                    allowed_root = self.uploads_dir
+                else:
+                    # Codex 增量2审 R1 P2：只有 input/output 两类合法权威根。legacy/future
+                    # 未知 kind 绝不默认当上传件开（原 ternary else 分支静默落 uploads_dir=
+                    # fail-open）——未知类型 fail-closed 拒消费，杜绝无法归类的记录被当输入喂入。
+                    raise FileIntegrityError(
+                        f"输入文件完整性校验失败：file_id={file_id} kind={kind!r} 非 input/output"
+                        "——未知文件类型 fail-closed 拒绝消费（绝不默认当上传件开）"
+                    )
                 try:
                     handle = open_verified_file(
                         record["path"],

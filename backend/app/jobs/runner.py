@@ -169,10 +169,35 @@ def resolve_dependencies_once(conn_factory: Callable[[], sqlite3.Connection]) ->
                 binding = task.get("input_binding") or {}
                 from_tasks = binding.get("from_tasks") or None
                 piped: list[str] = []
+                invalid: list[str] = []
                 for u in upstreams:
                     if from_tasks is not None and u["id"] not in from_tasks:
                         continue
-                    piped.extend(u.get("output_file_ids") or [])
+                    for fid in u.get("output_file_ids") or []:
+                        # Codex 增量2审 R1 P1：管道 ID 必须是真 registered kind=output 且属
+                        # 该上游——陈旧/legacy 行若把 input-file id 混入 output_file_ids，下游
+                        # _open_input_files 会当普通上传（uploads_dir、无 provenance）消费，绕过
+                        # registered-output 边界。生产侧 fail-closed 校验配合消费侧 provenance
+                        # 双端收口；任一无效即整体作废、级联取消下游（绝不喂入未注册文件）。
+                        rec = repos.get_file(conn, fid)
+                        if rec is None or rec.get("kind") != "output" or rec.get("task_id") != u["id"]:
+                            invalid.append(fid)
+                        else:
+                            piped.append(fid)
+                if invalid:
+                    cancelled = repos.cancel_dependent_task(
+                        conn, task_id,
+                        f"上游产物完整性校验失败，管道 id 非本上游 registered output：{', '.join(invalid)}",
+                    )
+                    if cancelled is not None:
+                        repos.append_event(
+                            conn, task_id=task_id, agent_id=task.get("agent_id"),
+                            event_type="task_cancelled", level="warning",
+                            message="上游 output_file_ids 含非法/非本上游 registered output，级联取消（fail-closed 绝不喂入未注册文件）",
+                            payload={"reason": "upstream_output_integrity", "invalid_file_ids": invalid},
+                        )
+                        advanced += 1
+                    continue
                 enqueued = repos.enqueue_dependent_task(conn, task_id, piped)
                 if enqueued is not None:
                     repos.append_event(
