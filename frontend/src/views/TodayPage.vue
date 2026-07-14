@@ -366,8 +366,9 @@ onUnmounted(() => {
 }
 .today-title {
   font-family: var(--serif);
-  font-size: 22px;
-  font-weight: 700;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  letter-spacing: 0.2px;
   color: var(--ink);
 }
 .today-error {

@@ -1,6 +1,8 @@
 <template>
   <div class="task-create">
-    <h2>创建任务</h2>
+    <div class="page-header">
+      <h2>创建任务</h2>
+    </div>
 
     <el-alert
       v-if="agentsListError"
@@ -473,12 +475,13 @@ onUnmounted(() => window.removeEventListener("resize", onResize));
 .task-create {
   max-width: 640px;
 }
-.task-create > h2 {
+.page-header { margin-bottom: 20px; }
+.page-header h2 {
   font-family: var(--serif);
-  font-size: 25px;
+  font-size: var(--fs-title);
   font-weight: 600;
   letter-spacing: 0.2px;
-  margin: 0 0 16px;
+  margin: 0;
 }
 .inline-alert {
   margin-bottom: 16px;

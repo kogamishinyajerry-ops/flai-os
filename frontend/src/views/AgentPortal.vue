@@ -123,7 +123,7 @@
 
         <template v-else>
           <div class="gov-ladder">
-            <div class="gov-section-label">成熟度</div>
+            <div class="section-label">成熟度</div>
             <div class="gov-ladder-track">
               <span
                 v-for="step in maturityLadder"
@@ -137,7 +137,7 @@
           </div>
 
           <div v-if="evalTrend.length" class="gov-eval-trend">
-            <div class="gov-section-label">评测通过率（近 {{ evalTrend.length }} 次）</div>
+            <div class="section-label">评测通过率（近 {{ evalTrend.length }} 次）</div>
             <div class="gov-trend-bars">
               <span
                 v-for="run in evalTrend"
@@ -153,7 +153,7 @@
           </div>
 
           <div class="gov-run-block">
-            <div class="gov-section-label">最近评测</div>
+            <div class="section-label">最近评测</div>
             <div class="gov-run-summary">
               <template v-if="latestGovernanceRun">
                 通过 {{ latestGovernanceRun.passed }}/{{ latestGovernanceRun.total }} ·
@@ -172,7 +172,7 @@
             </ul>
 
             <div v-if="latestGovernanceRun?.draft_cases?.length" class="gov-drafts">
-              <div class="gov-section-label">待策展（不计入评测）</div>
+              <div class="section-label">待策展（不计入评测）</div>
               <div v-for="item in latestGovernanceRun.draft_cases" :key="item.case_file" class="gov-draft-item">
                 <span class="gov-case-file">{{ item.case_file }}</span>
                 <span v-if="item.detail"> · {{ item.detail }}</span>
@@ -217,7 +217,7 @@
           </div>
 
           <div v-if="governancePromotions.length" ref="promotionTimelineRef" class="gov-promotion-timeline">
-            <div class="gov-section-label">晋升史</div>
+            <div class="section-label">晋升史</div>
             <div
               v-for="(p, idx) in governancePromotions"
               :key="p.id"
@@ -486,7 +486,7 @@ onMounted(load);
 }
 .page-header h2 {
   font-family: var(--serif);
-  font-size: 27px;
+  font-size: var(--fs-title);
   font-weight: 600;
   letter-spacing: 0.2px;
   margin: 0 0 6px;
@@ -642,12 +642,6 @@ onMounted(load);
 }
 .gov-run-block {
   margin-top: 2px;
-}
-.gov-section-label {
-  color: var(--ink-faint);
-  font-size: 11.5px;
-  font-weight: 700;
-  margin-bottom: 6px;
 }
 .gov-run-summary {
   color: var(--ink);

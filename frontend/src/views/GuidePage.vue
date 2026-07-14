@@ -997,14 +997,6 @@ watch(
   margin: 0 0 16px;
 }
 .plan-section { margin: 0 0 16px; }
-.section-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 1.1px;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-  margin-bottom: 8px;
-}
 .roster-label { margin-top: 4px; }
 .plan-workflow {
   margin: 0;

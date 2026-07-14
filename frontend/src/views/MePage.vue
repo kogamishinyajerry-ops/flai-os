@@ -17,7 +17,7 @@
 
     <!-- 版块2：我发起的任务（精确） -->
     <div class="me-section">
-      <div class="me-section-label">最近发起的任务</div>
+      <div class="section-label">最近发起的任务</div>
       <EmptyState v-if="!loading && !loadError && !myTasks.length" description="你还没有发起任务" />
       <div v-else class="me-task-list">
         <router-link v-for="t in myTasks" :key="t.id" class="me-task-item" :to="`/tasks/${t.id}`">
@@ -33,14 +33,14 @@
 
     <!-- 版块3：我的反馈（近似，显式标注） -->
     <div class="me-section">
-      <div class="me-section-label">我的反馈</div>
+      <div class="section-label">我的反馈</div>
       <div class="me-feedback-count">{{ contrib?.feedback_count_approx ?? "—" }} 条</div>
       <div class="me-feedback-note">按显示名近似统计（可能与同名者混计）——反馈无唯一身份列</div>
     </div>
 
     <!-- 版块4：团队总量（复用批B，无人际排名） -->
     <div class="me-section">
-      <div class="me-section-label">团队总量</div>
+      <div class="section-label">团队总量</div>
       <div class="me-team-bar">
         <span>本周完成 {{ team?.tasks_completed ?? "—" }}</span>
         <span>本周签发 {{ team?.reviews_approved ?? "—" }}</span>
@@ -138,7 +138,7 @@ watch(() => currentUser.value?.username, (next, prev) => {
 
 <style scoped>
 .page-header { margin-bottom: 20px; }
-.page-header h2 { font-family: var(--serif); font-size: 27px; font-weight: 600; margin: 0 0 6px; }
+.page-header h2 { font-family: var(--serif); font-size: var(--fs-title); font-weight: 600; letter-spacing: 0.2px; margin: 0 0 6px; }
 .page-sub { margin: 0; color: var(--ink-faint); font-size: 13px; }
 .page-alert { margin-bottom: 16px; }
 .me-overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
@@ -149,7 +149,6 @@ watch(() => currentUser.value?.username, (next, prev) => {
 .me-stat-num { font-size: 26px; font-weight: 700; color: var(--ink); font-family: var(--serif); }
 .me-stat-label { font-size: 12px; color: var(--ink-soft); }
 .me-section { margin-bottom: 22px; }
-.me-section-label { font-size: 11.5px; font-weight: 700; color: var(--ink-faint); margin-bottom: 8px; }
 .me-task-list { display: flex; flex-direction: column; gap: 6px; }
 .me-task-item {
   display: flex; align-items: center; gap: 12px; padding: 10px 14px; cursor: pointer;

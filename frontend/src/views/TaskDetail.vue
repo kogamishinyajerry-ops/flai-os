@@ -662,7 +662,7 @@ onUnmounted(() => {
 }
 .page-header h2 {
   font-family: var(--serif);
-  font-size: 25px;
+  font-size: var(--fs-title);
   font-weight: 600;
   letter-spacing: 0.2px;
   margin: 0;

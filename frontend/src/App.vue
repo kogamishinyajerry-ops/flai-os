@@ -517,6 +517,14 @@ onMounted(loadConvos);
   --el-color-info-light-9: #2d2c2a;
   --el-color-info-dark-2: color-mix(in srgb, #909399 80%, white);
 }
+/* 批D：统一 eyebrow 小标题（收口 7 种散写）；语义色由使用处覆盖（waiting=trust-pending/working=clay） */
+.section-label {
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--ink-faint);
+  margin-bottom: 8px;
+}
 /* ── 工作态氛围（全局复用）── */
 @keyframes flai-work-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
