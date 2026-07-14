@@ -297,3 +297,48 @@ def test_thread_start_failure_terminalizes_and_frees_quota(conn_factory, tmp_pat
     finally:
         conn.close()
     assert statuses == ["error"], f"启动失败的认领行必收口 error（配额释放），实际 {statuses}"
+
+
+def test_reap_retries_terminalization_after_transient_db_failure(conn_factory, tmp_path) -> None:
+    """P1（Codex R2 复审）：finally 兜底收口遇瞬时 DB 故障失败后，_reap 绝不遗忘僵尸——死
+    线程的 running 行保留在 _active（配额不误放），DB 恢复后下个 _reap 收口 error 并摘除。"""
+    import sqlite3
+    import threading as _threading
+
+    conn = conn_factory()
+    try:
+        repos.create_eval_run(conn, run_id="eval_orphan", agent_id="a", agent_version="0.1.0",
+                              triggered_by="t", status="running")
+    finally:
+        conn.close()
+
+    worker = EvalRunner(agent_registry=None, runtime=None, conn_factory=conn_factory,
+                        uploads_dir=tmp_path, task_runs_dir=tmp_path, quota=1)
+    orig_cf = worker._conn_factory
+    dead = _threading.Thread(target=lambda: None)  # 立即结束=已死线程，模拟执行线程已退出
+    dead.start()
+    dead.join()
+    worker._active["eval_orphan"] = dead
+
+    # 首个 reap：conn_factory 瞬时故障 → 收口失败 → 不摘除、行仍 running、配额不误放
+    def _broken():
+        raise sqlite3.OperationalError("模拟瞬时 DB 故障")
+
+    worker._conn_factory = _broken
+    worker._reap()
+    assert "eval_orphan" in worker._active, "收口失败时绝不遗忘僵尸（保留 _active 重试）"
+    conn = conn_factory()
+    try:
+        assert repos.get_eval_run(conn, "eval_orphan")["status"] == "running", "收口失败不误标"
+    finally:
+        conn.close()
+
+    # DB 恢复 → 下个 reap 收口 error 并摘除，配额释放
+    worker._conn_factory = orig_cf
+    worker._reap()
+    assert "eval_orphan" not in worker._active, "恢复后摘除 _active"
+    conn = conn_factory()
+    try:
+        assert repos.get_eval_run(conn, "eval_orphan")["status"] == "error", "恢复后收口 error"
+    finally:
+        conn.close()

@@ -374,7 +374,7 @@ function openGovernance(agent) {
   promotionErrors.value = [];
   witnessedPromotionBurst.value = false;
   governanceOpen.value = true;
-  loadGovernance(agent.id);
+  loadGovernance(agent.id).then(() => resumeInFlightRunIfAny(agent.id));
 }
 
 function resetGovernanceDialog() {
@@ -403,6 +403,28 @@ async function pollEvalRunToTerminal(agentId, runId, { intervalMs = 1500 } = {})
     const run = await request(`/api/agents/${agentId}/eval-runs/${runId}`);
     if (run.status !== "queued" && run.status !== "running") return run;
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+// 重开治理面板时若最新 run 仍在队列/执行中，恢复轮询并锁住「跑评测」按钮到终态
+// （P2，Codex R2 复审）：关弹窗会中止唯一的轮询，但后端仍在跑；重开只加载行不恢复
+// 轮询、也不由行状态派生 loading，会把在跑的 run 显示成旧态且重亮触发按钮，诱发对同一
+// agent 的重复提交。此处按最新行状态恢复轮询/锁按钮。请求层异常静默复位，用户可重试。
+async function resumeInFlightRunIfAny(agentId) {
+  if (!governanceOpen.value || governanceAgent.value?.id !== agentId) return;
+  if (governanceRunLoading.value) return; // 已在轮询（如本会话刚发起）
+  const latest = latestGovernanceRun.value;
+  if (!latest || (latest.status !== "queued" && latest.status !== "running")) return;
+  governanceRunLoading.value = true;
+  try {
+    const run = await pollEvalRunToTerminal(agentId, latest.id);
+    if (run.status !== "aborted" && governanceOpen.value && governanceAgent.value?.id === agentId) {
+      await loadGovernance(agentId);
+    }
+  } catch {
+    // 请求层异常：静默复位 loading（下方 finally），用户可重试
+  } finally {
+    governanceRunLoading.value = false;
   }
 }
 

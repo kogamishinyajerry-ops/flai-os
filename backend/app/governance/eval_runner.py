@@ -303,6 +303,13 @@ def run_agent_evals(
     T1 起生产入口改异步（API 走 enqueue_eval_run + worker）；本函数保留作
     「立即跑完拿终态」的同步便捷（测试与需要内联结果处），已去除原 single-flight
     锁——并发控制归 worker 配额门。调用方保证 agent 已注册（API 层 404 前置）。
+
+    已知限制（Codex R2 复审 P2，显式接受入 retro）：本同步路径直建 running 不经
+    `claim_next_queued_eval_run` 的配额门，故与 worker 并发时评测配额不是全局硬上限
+    ——promote_agent_l1.py 之类 CLI 可在 worker 满额时另起一评测。这是刻意的：CLI
+    须能在**无 worker 独立进程**下跑（走队列会因无人排空而死等）；配额语义定为「worker
+    并发上限」而非「跨所有入口的全局资源硬闸」。CLI 评测是操作者审慎的单发动作，非高
+    并发面。若未来需全局硬闸，另开工单加「CLI 也走配额预留」而非在此埋隐性队列依赖。
     """
     agent = agent_registry.get(agent_id)
     if agent is None:

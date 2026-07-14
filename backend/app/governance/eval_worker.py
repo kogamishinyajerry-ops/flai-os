@@ -49,9 +49,16 @@ class EvalRunner:
         self._active_lock = threading.Lock()
 
     def _reap(self) -> None:
+        # 死线程仅当其 run 已达终态才从 _active 摘除；若仍 running（finally 的兜底收口曾
+        # 遇瞬时 DB 故障失败）则保留在 _active、下个 poll 重试收口——绝不删掉「唯一的
+        # run↔thread 关联」后遗忘一个永停 running 的僵尸（P1，Codex R2 复审）。保留期间
+        # 该 id 占的配额=行仍 running 的真实占用，会计一致。DB I/O 不持锁。
         with self._active_lock:
-            for run_id in [rid for rid, t in self._active.items() if not t.is_alive()]:
-                del self._active[run_id]
+            dead = [rid for rid, t in self._active.items() if not t.is_alive()]
+        for run_id in dead:
+            if self._settle_run(run_id):
+                with self._active_lock:
+                    self._active.pop(run_id, None)
 
     def active_count(self) -> int:
         self._reap()
@@ -117,28 +124,38 @@ class EvalRunner:
 
     def _terminalize_zombie(self, run_id: str) -> None:
         """兜底收口（P1，Codex R1 审）：execute_eval_run 已在其 try 内自收口 error；此处
-        只兜它保护范围之外的意外（如读 run 行前 conn/get_eval_run 瞬时故障）。仅当行仍
-        running 才收口 error——不覆盖已终态行。单实例 worker + 本行执行线程为唯一写者，
-        check-then-set 无并发对手。兜底本身失败只记日志，绝不炸 worker。"""
+        只兜它保护范围之外的意外（如读 run 行前 conn/get_eval_run 瞬时故障）。best-effort，
+        收口失败不上抛（_reap 会重试）——见 `_settle_run`。"""
+        self._settle_run(run_id)
+
+    def _settle_run(self, run_id: str) -> bool:
+        """核查并（必要时）收口一个死线程的 run。返回该 run 是否已「落定」可从 _active
+        摘除：已终态（正常完成/已收口）→True；仍 running 则收口 error 成功→True；DB 瞬时
+        故障致核查/收口失败→False（保留在 _active，_reap 下个 poll 重试，绝不遗忘僵尸，
+        P1 Codex R2 复审）。仅当行仍 running 才写——不覆盖已终态行；单实例 worker 保证
+        该行执行线程唯一，check-then-set 无并发对手。"""
         from ..storage import repos
 
         try:
             conn = self._conn_factory()
             try:
                 run = repos.get_eval_run(conn, run_id)
-                if run is not None and run.get("status") == "running":
-                    repos.finish_eval_run(
-                        conn, run_id, status="error", total=0, passed=0, failed=0, skipped=0,
-                        case_results=[{
-                            "case_file": "<worker>", "verdict": "failed",
-                            "detail": "执行线程意外中断且未自收口，兜底收口 error（配额释放）",
-                        }],
-                        draft_cases=[], eval_cases_digest=None,
-                    )
+                if run is None or run.get("status") != "running":
+                    return True
+                repos.finish_eval_run(
+                    conn, run_id, status="error", total=0, passed=0, failed=0, skipped=0,
+                    case_results=[{
+                        "case_file": "<worker>", "verdict": "failed",
+                        "detail": "执行线程已退出但终态未落库，兜底收口 error（配额释放）",
+                    }],
+                    draft_cases=[], eval_cases_digest=None,
+                )
+                return True
             finally:
                 conn.close()
-        except Exception:  # noqa: BLE001 - 兜底失败不上抛，绝不炸 worker
-            logger.exception("eval-run %s 兜底收口失败", run_id)
+        except Exception:  # noqa: BLE001 - 瞬时故障不上抛：返回 False 令 _reap 保留重试
+            logger.exception("eval-run %s 兜底收口失败，保留 _active 下个 poll 重试", run_id)
+            return False
 
     def recover_interrupted(self) -> int:
         """worker 启动回收（P1，Codex R1 审）：上次进程崩溃遗留的 running eval_run 是无
