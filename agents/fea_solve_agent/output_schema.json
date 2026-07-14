@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fea_solve_agent 输出契约",
+  "description": "workflow.run() 成功返回的 outputs[0] 摘要对象。持久产物是 fea_solution.json（完整解 + 求解 params 原样回存，供 fea_evaluate_agent 经 depends_on/input_binding 管道消费）与 fea_solution.md（人读摘要 + 水印）。注意：任务返回 success 只表示求解完成，requires_human_review=true 故 Runtime 转 waiting_review，须工程师签发才 completed。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["boundary_condition", "omega1_rad_s", "f1_hz", "n_elements", "converged", "human_review_required", "artifacts"],
+  "properties": {
+    "boundary_condition": { "type": "string", "enum": ["cantilever", "simply_supported"] },
+    "omega1_rad_s": { "type": "number", "exclusiveMinimum": 0, "description": "一阶圆频率 ω₁（rad/s）。" },
+    "f1_hz": { "type": "number", "exclusiveMinimum": 0, "description": "一阶固有频率 f₁=ω₁/2π（Hz）。" },
+    "n_elements": { "type": "integer", "minimum": 1 },
+    "converged": { "type": "boolean", "const": true, "description": "恒 true：不收敛路径走 status=failed，绝不返回发散数当解。" },
+    "human_review_required": { "type": "boolean", "const": true },
+    "artifacts": { "type": "array", "items": { "type": "string" } }
+  }
+}

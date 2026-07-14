@@ -1,0 +1,20 @@
+{
+  "case_id": "case_002",
+  "curation": "approved",
+  "description": "简支铝梁 n=8 求解产物评估正例（不同边界条件+不同材料）。FEM ω₁=125.635980 vs 闭式 ω₁_ref=125.633915，相对误差 1.6e-3% < 2% → passed=true。覆盖简支闭式 β₁L=π 分支。",
+  "inputs": {
+    "tolerance_pct": 2.0
+  },
+  "input_files": ["fixtures/ss_n8/fea_solution.json"],
+  "expected": {
+    "task_status": "waiting_review",
+    "passed": true,
+    "note": "人读期望旁注，不参与机判"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "waiting_review" },
+    { "kind": "output_field", "file": "evaluation.json", "path": "passed", "op": "eq", "value": true },
+    { "kind": "output_field", "file": "evaluation.json", "path": "error_pct", "op": "lte", "value": 0.01 },
+    { "kind": "output_field", "file": "evaluation.json", "path": "boundary_condition", "op": "eq", "value": "simply_supported" }
+  ]
+}

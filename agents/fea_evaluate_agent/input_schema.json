@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fea_evaluate_agent 输入契约",
+  "description": "评估参数（params 部分）。被评估的求解产物 fea_solution.json 经 input_file_ids/depends_on 管道注入 context.files，不在本 inputs 里。梁物性 params 只从求解产物读取（单一来源），本 inputs 只含评估容差。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [],
+  "properties": {
+    "tolerance_pct": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 100,
+      "description": "FEM 相对闭式解析解的容许相对误差（%），缺省 2.0。相对误差 ≤ 此值判『一致/收敛』。"
+    }
+  }
+}

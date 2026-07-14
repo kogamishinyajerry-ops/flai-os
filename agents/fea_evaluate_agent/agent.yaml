@@ -1,0 +1,62 @@
+id: fea_evaluate_agent
+name: "FEA 梁频率评估 Agent（闭式解析解确定性判据）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: structured_gen
+summary: "读一次 fea_solve_agent 的求解产物（经 depends_on/input_binding 管道注入），从其回存 params 现算 Euler-Bernoulli 梁一阶固有频率的闭式解析解，与 FEM 结果比对容差，出确定性收敛判定草案，零 LLM，任务强制人工放行。"
+description: >
+  判据①第一发零内核 diff 验证弹·评估侧。零 LLM（model.profile=none）：workflow
+  内联实现确定性 oracle（不 import 任何 backend/app 模块——评估判据留在本包内，
+  刻意规避 cfd_evaluate_agent 把 st_oracle 放进 backend/app/cfd/ 的先例）。判据：
+  从上游 fea_solution.json 的 params 现算闭式解析一阶频率 ω₁_ref=(β₁L)²·√(EI/ρAL⁴)
+  （悬臂 β₁L=1.87510407，简支 β₁L=π），与 FEM 的 ω₁_fem 比相对误差 ≤ tolerance_pct
+  即判「收敛/一致」，否则「超出容差」（欠网格化等）。上游 solver.converged≠true /
+  产物缺字段/解析失败 → 诚实「未达评估条件」，绝不逢正必过、绝不编造。params 只从
+  求解产物单一来源读（不重新接受 E/I/L 等输入），杜绝两次录入互相漂移的 rogue 数字。
+  requires_human_review=true：任务强制停 waiting_review，草案头水印声明「确定性计算，
+  未经工程师确认不得采信」，由具名工程师签发（人是唯一签发者）。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: none
+knowledge:
+  enabled: false
+  scopes: []
+tools: []
+input:
+  type: file_upload
+  allowed_extensions:
+    - .json
+  schema: input_schema.json
+output:
+  formats:
+    - .json
+    - .md
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: true
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: false
+  sample_fields: []
+limitations:
+  - "评估基准是理想等截面 Euler-Bernoulli 梁的闭式解析一阶频率：只对 fea_solve_agent 同一理想模型的离散收敛性负责，不校验建模假设（截面、材料、边界理想化）本身是否贴合真实结构。"
+  - "只判一阶频率的 FEM vs 闭式相对误差是否在 tolerance_pct 内：不做高阶模态、振型、静力、强度校核。"
+  - "params 只从上游 fea_solution.json 单一来源读、用同一份 params 现算参考值：若求解侧输入了量纲滑档的物性（如 E 少打数量级），FEM 与闭式会一致地印证同一个物理错误答案，内部一致性检查对此失明——只能靠 solve 侧 input_schema 量级护栏 + 人工签发复核拦截。"
+  - "上游产物 solver.converged≠true 或缺字段/解析失败时诚实『未达评估条件』，不重新求解、不对不完整产物兜底修复。"
+  - "结论永远是草案：任务停 waiting_review，签发权在具名工程师，不构成设计/适航依据。"

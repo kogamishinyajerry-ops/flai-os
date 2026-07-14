@@ -1,0 +1,26 @@
+{
+  "case_id": "case_002",
+  "curation": "approved",
+  "description": "简支铝梁正例（不同边界条件+不同材料/几何，L=2.0m，n_elements=8）。闭式解析 ω₁=125.6339 rad/s，FEM 收敛值 125.6360（误差 1.6e-3%）。覆盖第二种边界条件的组装/约束路径（去 v0 与 v_n 两 DOF），omega1 带宽 [125.5,125.8]。",
+  "inputs": {
+    "boundary_condition": "simply_supported",
+    "E": 70000000000.0,
+    "I": 1.256637e-7,
+    "L": 2.0,
+    "rho": 2700.0,
+    "A": 1.256637e-3,
+    "n_elements": 8
+  },
+  "expected": {
+    "task_status": "waiting_review",
+    "omega1_rad_s_approx": 125.636,
+    "note": "人读期望旁注，不参与机判"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "waiting_review" },
+    { "kind": "artifact_exists", "file": "fea_solution.json" },
+    { "kind": "output_field", "file": "fea_solution.json", "path": "fem_result.omega1_rad_s", "op": "gte", "value": 125.5 },
+    { "kind": "output_field", "file": "fea_solution.json", "path": "fem_result.omega1_rad_s", "op": "lte", "value": 125.8 },
+    { "kind": "output_field", "file": "fea_solution.json", "path": "params.boundary_condition", "op": "eq", "value": "simply_supported" }
+  ]
+}

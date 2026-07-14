@@ -1,0 +1,24 @@
+{
+ "params": {
+  "boundary_condition": "simply_supported",
+  "E": 70000000000.0,
+  "I": 1.256637e-07,
+  "L": 2.0,
+  "rho": 2700.0,
+  "A": 0.001256637,
+  "n_elements": 1
+ },
+ "fem_result": {
+  "omega1_rad_s": 139.44333775567713,
+  "f1_hz": 22.193096485048734,
+  "dof_count": 4,
+  "element_type": "euler_bernoulli_cubic_hermite_2node",
+  "mass_formulation": "consistent"
+ },
+ "solver": {
+  "method": "cholesky_pd_bisection_generalized_eig",
+  "rel_tol": 1e-13,
+  "converged": true
+ },
+ "human_review_required": true
+}

@@ -1,0 +1,21 @@
+{
+  "case_id": "case_003",
+  "curation": "approved",
+  "description": "诚实超容差负例（非篡改）：简支铝梁 n_elements=1 的真实欠网格化求解产物——单元数太少致离散误差 10.99% > 默认容差 2%。fixture 是 fea_solve_agent 对 n=1 合法输入的真实产出（solver.converged=true，数字真实），验证 oracle 真能拦截离散不足、而非逢正必过。绝不需要伪造任何数字。",
+  "inputs": {
+    "tolerance_pct": 2.0
+  },
+  "input_files": ["fixtures/ss_n1/fea_solution.json"],
+  "expected": {
+    "task_status": "waiting_review",
+    "passed": false,
+    "error_pct_approx": 10.99,
+    "note": "人读期望旁注，不参与机判"
+  },
+  "checks": [
+    { "kind": "status_is", "value": "waiting_review" },
+    { "kind": "output_field", "file": "evaluation.json", "path": "passed", "op": "eq", "value": false },
+    { "kind": "output_field", "file": "evaluation.json", "path": "error_pct", "op": "gte", "value": 10.0 },
+    { "kind": "artifact_contains", "file": "evaluation.md", "value": "超出容差" }
+  ]
+}
