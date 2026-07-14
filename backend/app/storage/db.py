@@ -253,6 +253,9 @@ _INDEX_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_status_created_at ON tasks(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_eval_runs_agent_id ON eval_runs(agent_id)",
+    # T1 异步队列 worker 的 claim 预检 + FIFO 认领（status='queued' ORDER BY started_at, id）
+    # 与 running 计数（status='running'）——避免评测史增长后每 poll 全表扫（P2，Codex R1 复审）。
+    "CREATE INDEX IF NOT EXISTS idx_eval_runs_status_started ON eval_runs(status, started_at, id)",
     "CREATE INDEX IF NOT EXISTS idx_promotions_agent_id ON promotions(agent_id)",
     "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)",
 )

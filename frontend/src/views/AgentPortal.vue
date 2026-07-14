@@ -391,10 +391,12 @@ function resetGovernanceDialog() {
 
 // T1（GH #2）：评测改异步队列——POST 入队立即返回 status='queued'，真正执行由
 // worker 在配额门内认领。前端入队后轮询该 run 到终态再刷新+提示，按钮全程 loading
-// 如实反映「执行中」。用户轮询期间切走 Agent/关弹窗即停止（不对已离开对象空转请求）。
-async function pollEvalRunToTerminal(agentId, runId, { timeoutMs = 120000, intervalMs = 1500 } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+// 如实反映「执行中」。队列等待无界 + 单工具可跑数分钟（如 cfd_solve_launch 允许 360s），
+// 故不设客户端硬超时——硬超时会误报错、停轮询、重亮触发按钮诱发重复提交，而后端 run
+// 仍在跑（P2，Codex R1 复审）。唯一终止=用户切走 Agent/关弹窗（不对已离开对象空转请求）；
+// 弹窗常开则一路轮询到终态。请求层异常照常上抛给 runEvaluation 的 catch 收口。
+async function pollEvalRunToTerminal(agentId, runId, { intervalMs = 1500 } = {}) {
+  while (true) {
     if (!governanceOpen.value || governanceAgent.value?.id !== agentId) {
       return { status: "aborted" };
     }
@@ -402,7 +404,6 @@ async function pollEvalRunToTerminal(agentId, runId, { timeoutMs = 120000, inter
     if (run.status !== "queued" && run.status !== "running") return run;
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
-  throw { message: "评测执行超时（可稍后在下方列表查看结果）" };
 }
 
 async function runEvaluation() {

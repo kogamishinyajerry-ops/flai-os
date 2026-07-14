@@ -83,7 +83,16 @@ class EvalRunner:
         )
         with self._active_lock:
             self._active[run_id] = thread
-        thread.start()
+        try:
+            thread.start()
+        except Exception:  # noqa: BLE001 - 线程起不来（OS 线程耗尽/关停）：认领态行已 running 却无
+            # 执行者，run_forever 会吞掉本异常继续轮询而启动恢复不再触发 → 僵尸永久占配额。
+            # 收口 error 释放配额再返回（P2，Codex R1 复审）。
+            logger.exception("eval-run %s 执行线程启动失败，收口 error 释放配额", run_id)
+            with self._active_lock:
+                self._active.pop(run_id, None)
+            self._terminalize_zombie(run_id)
+            return False
         return True
 
     def _execute_claimed(self, run_id: str) -> None:
@@ -96,10 +105,14 @@ class EvalRunner:
                 uploads_dir=self._uploads_dir,
                 task_runs_dir=self._task_runs_dir,
             )
-        except Exception:  # noqa: BLE001 - execute_eval_run 保护范围内已自收口 error；此处兜底不炸 worker
+        except Exception:  # noqa: BLE001 - execute_eval_run 保护范围内已自收口 error；此处只记日志
             logger.exception("eval-run %s 执行线程未预期异常", run_id)
-            self._terminalize_zombie(run_id)
         finally:
+            # 兜底收口移入 finally（P1，Codex R1 复审）：正常结束→行已终态跳过；Exception→
+            # execute 已自收口跳过；BaseException（SystemExit/KeyboardInterrupt 等 execute 的
+            # `except Exception` 拦不住的）→行仍 running，此处收口后 BaseException 继续传播
+            # （finally 不吞），任何线程退出路径都不留 running 僵尸泄配额。
+            self._terminalize_zombie(run_id)
             self._reap()
 
     def _terminalize_zombie(self, run_id: str) -> None:

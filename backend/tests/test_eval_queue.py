@@ -243,3 +243,57 @@ def test_worker_path_never_leaves_zombie_on_prelude_exception(conn_factory, tmp_
         assert repos.get_eval_run(conn, "eval_prelude")["status"] == "error", "prelude 异常绝不留僵尸 running"
     finally:
         conn.close()
+
+
+def test_base_exception_in_execution_still_terminalizes(conn_factory, tmp_path) -> None:
+    """P1（Codex R1 复审）：workflow 抛 BaseException（SystemExit 等 `except Exception` 拦不住
+    的）时，执行线程边界的 finally 仍收口 error，绝不留 running 僵尸泄配额。"""
+    conn = conn_factory()
+    try:
+        repos.create_eval_run(conn, run_id="eval_be", agent_id="a", agent_version="0.1.0",
+                              triggered_by="t", status="running")
+    finally:
+        conn.close()
+
+    class _BaseBoomRegistry:
+        def get(self, agent_id):
+            return {"id": agent_id, "version": "0.1.0", "workflow": {}}
+
+        def package_dir(self, agent_id):
+            raise SystemExit("模拟 BaseException 中断")
+
+    worker = EvalRunner(agent_registry=_BaseBoomRegistry(), runtime=None, conn_factory=conn_factory,
+                        uploads_dir=tmp_path, task_runs_dir=tmp_path, quota=1)
+    with pytest.raises(SystemExit):  # 收口后 BaseException 继续透传（daemon 线程内只杀本线程）
+        worker._execute_claimed("eval_be")
+
+    conn = conn_factory()
+    try:
+        assert repos.get_eval_run(conn, "eval_be")["status"] == "error", "BaseException 也不留僵尸"
+    finally:
+        conn.close()
+
+
+def test_thread_start_failure_terminalizes_and_frees_quota(conn_factory, tmp_path, monkeypatch) -> None:
+    """P2（Codex R1 复审）：claim 已置 running 后 thread.start() 失败（线程耗尽/关停）→ 收口
+    error 释放配额，绝不留认领态却无执行者的僵尸（run_forever 会吞异常继续轮询）。"""
+    _seed_queued(conn_factory, "a", 1)
+    worker = EvalRunner(agent_registry=None, runtime=None, conn_factory=conn_factory,
+                        uploads_dir=tmp_path, task_runs_dir=tmp_path, quota=1)
+
+    import threading as _threading
+
+    def _boom(self):
+        raise RuntimeError("模拟线程耗尽")
+
+    monkeypatch.setattr(_threading.Thread, "start", _boom)
+    claimed = worker.run_once()
+    monkeypatch.undo()  # 立即恢复，避免影响后续任何线程创建
+
+    assert claimed is False, "启动失败时 run_once 返回 False（未认领到可执行的）"
+    conn = conn_factory()
+    try:
+        statuses = [r["status"] for r in conn.execute("SELECT status FROM eval_runs").fetchall()]
+    finally:
+        conn.close()
+    assert statuses == ["error"], f"启动失败的认领行必收口 error（配额释放），实际 {statuses}"

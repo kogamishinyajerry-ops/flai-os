@@ -1057,7 +1057,17 @@ def claim_next_queued_eval_run(
     FIFO（started_at, id）挑一条 queued，`WHERE id=? AND status='queued'` CAS 翻
     running 并回该行。配额判断与 CAS 同锁原子——即使多 poller 也不会超额放行。
     worker 单实例锁保证同库唯一 poller，此原子性是纵深防御。
+
+    只读预检（P2，Codex R1 复审）：无 queued 时 worker 每 poll 都 BEGIN IMMEDIATE 抢
+    SQLite 唯一写锁只为发现无活可干，空转期阻塞 JobRunner/API 的无关写。先用 WAL 下不
+    上写锁的只读 SELECT 探一眼，无 queued 直接返回 None（不进写事务）。TOCTOU：预检后
+    才入队的 run 顺延一个 poll 周期被认领——非正确性问题（配额门仍在写锁内权威判定），
+    idx_eval_runs_status_started 支撑这条与内部 FIFO 查询避免全表扫。
     """
+    if conn.execute(
+        "SELECT 1 FROM eval_runs WHERE status = 'queued' LIMIT 1"
+    ).fetchone() is None:
+        return None
     conn.execute("BEGIN IMMEDIATE")
     try:
         running = conn.execute(
