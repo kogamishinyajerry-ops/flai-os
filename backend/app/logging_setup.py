@@ -29,9 +29,13 @@ AUDIT_LOGGER_NAME = "flai.audit"
 _AUDIT_ALLOWED_FIELDS = frozenset({
     "reason", "file_id", "classification", "display_name",
     # 治理签发审计（M12-2c）：task_id=被签发任务（opaque UUID），created_by=创建者
-    # 显示名（非 secret，事件层已公开），self_review=签发者与创建者显示名相同的
-    # 近似自审标记（bool）。三者皆无 user-controlled 自由文本/secret，可安全入白名单。
+    # 显示名（非 secret，事件层已公开），self_review=自审标记（bool）。皆无
+    # user-controlled 自由文本/secret，可安全入白名单。
     "task_id", "created_by", "self_review",
+    # 迁移 #9：created_by_username=创建者唯一 username（登录标识，非 secret，与
+    # actor 同类已入白名单）；self_review_basis='username'|'display_name' 标注自审
+    # 判定的证据等级（精确 vs legacy 近似）。二者皆枚举/受控标识，无自由文本。
+    "created_by_username", "self_review_basis",
 })
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"

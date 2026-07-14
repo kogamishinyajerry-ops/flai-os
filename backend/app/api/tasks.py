@@ -127,14 +127,19 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
     conn = request.app.state.conn_factory()
     try:
         task_id = f"task_{uuid.uuid4().hex}"
-        # ADR-0019 D5：发起人=登录会话身份（中间件已验证注入），非请求体自报
+        # ADR-0019 D5：发起人=登录会话身份（中间件已验证注入），非请求体自报。
+        # created_by 存 display_name（展示用，可撞名）；created_by_username（迁移 #9）
+        # 存不可变唯一 username——批C 个人贡献归因按 username 绝不撞名，职责分离
+        # （禁自审）也以此为准（现仅落库，策略待 owner 定角色轴）。
         created_by = request.state.user["display_name"]
+        created_by_username = request.state.user["username"]
         create_kwargs = dict(
             task_id=task_id,
             agent_id=body.agent_id,
             agent_version=agent.get("version"),
             name=body.name,
             created_by=created_by,
+            created_by_username=created_by_username,
             inputs=body.inputs,
             input_file_ids=body.input_file_ids,
             metadata={},
@@ -318,18 +323,29 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
         # 治理签发审计（M12-2c）：人工放行/拒绝是「人是唯一签发者」红线的落点，
         # 是平台最安全承重的动作——此前只落 task_event（应用数据），无篡改抗性的
         # audit.log 轨。此处补审计轴：actor=签发者唯一 username（P2-4 唯一身份纪律），
-        # 记录被签发任务、创建者、及**近似自审标记**（签发者与创建者显示名相同）。
-        # 诚实边界：self_review 基于 display_name 比对（created_by 存的是显示名，非
-        # username）——显示名非唯一故为可见性提示非强制；硬性职责分离（禁自审 403）
-        # 需先补 created_by_username 身份列 + owner 定策略（角色轴，task #17 递延）。
+        # 记录被签发任务、创建者、及自审标记。
+        # 自审判定（迁移 #9 后升级）：created_by_username 存在（新任务）时按唯一
+        # username 精确比对——绝不因显示名撞名误判；legacy 行（该列 NULL）回退
+        # display_name 近似比对，并标 self_review_basis 说明证据等级。仍**只标记
+        # 不拦截**（硬性职责分离 403 是 owner 待定的角色轴策略，task #17）。
         created_by = task.get("created_by")
+        created_by_username = task.get("created_by_username")
+        reviewer_username = request.state.user["username"]
+        if created_by_username is not None:
+            self_review = bool(reviewer_username == created_by_username)
+            self_review_basis = "username"  # 精确身份，不撞名
+        else:
+            self_review = bool(created_by is not None and reviewer == created_by)
+            self_review_basis = "display_name"  # legacy 近似，可撞名
         audit_event(
             "task_review",
-            actor=request.state.user["username"],
+            actor=reviewer_username,
             outcome=("approved" if body.action == "approve" else "rejected"),
             task_id=task_id,
             created_by=created_by if created_by is not None else "(unknown)",
-            self_review=bool(created_by is not None and reviewer == created_by),
+            created_by_username=created_by_username if created_by_username is not None else "(legacy-null)",
+            self_review=self_review,
+            self_review_basis=self_review_basis,
         )
 
         if body.action == "approve":

@@ -140,6 +140,17 @@ def test_create_task_success_then_run_once_completes(client: TestClient, app_env
     assert download_resp.status_code == 200
 
 
+def test_create_task_captures_creator_username_from_session(client: TestClient) -> None:
+    """迁移 #9：创建任务从登录会话落 created_by_username（不可变唯一身份），
+    与 created_by（display_name）并存。TEST_USERNAME=test_engineer /
+    TEST_DISPLAY_NAME=测试工程师，两轴不互相污染。"""
+    resp = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "小明"}})
+    assert resp.status_code == 200
+    task = resp.json()
+    assert task["created_by_username"] == "test_engineer"
+    assert task["created_by"] == "测试工程师"
+
+
 # ── tasks: 仿真 run 关联（per-task run_ref，复用 metadata 袋，不加列）──────
 
 
@@ -435,6 +446,26 @@ def test_review_approve_e2e_full_chain(review_app_env) -> None:
         "reviewer": TEST_DISPLAY_NAME,
         "comment": "结果核对无误",
     }
+
+
+def test_review_audit_self_review_basis_is_username_exact(review_app_env, caplog) -> None:
+    """迁移 #9 后签发审计自审判定升级：新任务带 created_by_username，签发者=同
+    一登录身份 → self_review=True 且 basis='username'（精确身份，非显示名近似）。
+    tamper：把实现的 self_review_basis 改回恒 'display_name'，本 basis 断言必红。"""
+    import logging
+
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+    with caplog.at_level(logging.INFO):
+        approved = client.post(
+            f"/api/tasks/{task_id}/review",
+            json={"action": "approve", "comment": "同一人签发=自审"},
+        )
+    assert approved.status_code == 200
+    audit_line = next((r.getMessage() for r in caplog.records if "task_review" in r.getMessage()), "")
+    assert '"self_review": true' in audit_line
+    assert '"self_review_basis": "username"' in audit_line
+    assert '"created_by_username": "test_engineer"' in audit_line
 
 
 def test_review_reject_e2e_full_chain(review_app_env) -> None:
