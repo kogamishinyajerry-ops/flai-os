@@ -1,6 +1,6 @@
 id: cfd_result_read
 name: "CFD 求解结果只读工具（残差 + Cl/Cd 原始序列）"
-version: 0.1.0
+version: 0.2.0
 type: python_adapter
 mock: false
 description: >
@@ -8,8 +8,10 @@ description: >
   产物（log.pimpleFoam 残差 + postProcessing/forceCoeffs Cl/Cd），返回原始序列。
   零判据（St/Cd 判据在 cfd_evaluate_agent workflow 的确定性 oracle）、零 shell、
   零写入。run_id 先过正则白名单 ^\d{8}-\d{6}$ 才拼路径（防目录穿越），再与子目录
-  内 .hub_run_id sidecar 对账（防读错 run）。核目录来自可信配置 FLAI_CFD_CASE_DIR，
-  未配置/sidecar 不符/产物缺失即 fail-closed（绝不猜路径、不补零、不编造）。
+  内 .hub_run_id sidecar 对账（防读错 run）。核目录选取（0.2.0，#8/R2-1）：任务级
+  context 的 eval_fixtures_dir 优先于可信配置 FLAI_CFD_CASE_DIR——令 eval 任务读材化
+  快照的**冻结** fixture 而非全局活态；context 缺该键（普通任务）回退活 env，真实 CFD
+  运行语义不变。未配置/sidecar 不符/产物缺失即 fail-closed（绝不猜路径、不补零、不编造）。
 entrypoint: tools_impl.cfd_result_read.adapter:run
 output_classification: internal
 input_schema:
