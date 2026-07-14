@@ -719,6 +719,23 @@ class AgentRuntime:
                             f"输入文件完整性校验失败：上游任务 {owner_id!r} 状态={owner_status}（非 completed）"
                             "——产物未过人工签发闸（waiting_review→completed 只人工）不可被下游消费"
                         )
+                    # Codex 增量2审 R2 P2：provenance 还须校（a）file_id 真在 owner 的
+                    # output_file_ids manifest 内（非仅"owner 是已完成依赖"——legacy 任务
+                    # input_file_ids 直含某已完成依赖的**非产物** id 时前两关放行）；（b）owner
+                    # 被本任务 input_binding.from_tasks 选中（否则被显式排除的产物、含 sensitive，
+                    # 仍能在消费点被读）。生产侧（resolver）+ 消费侧双端各自独立强制 binding+manifest。
+                    if file_id not in (owner.get("output_file_ids") or []):
+                        raise FileIntegrityError(
+                            f"输入文件完整性校验失败：file_id={file_id} 不在上游 {owner_id!r} 的 "
+                            "output_file_ids 产物清单内——非该上游 registered 产物，拒消费"
+                        )
+                    _binding = task.get("input_binding") or {}
+                    _from_tasks = _binding.get("from_tasks") or None
+                    if _from_tasks is not None and owner_id not in _from_tasks:
+                        raise FileIntegrityError(
+                            f"输入文件完整性校验失败：file_id={file_id} 的上游 {owner_id!r} 被本任务 "
+                            "input_binding.from_tasks 显式排除——不得消费绑定排除的产物"
+                        )
                     allowed_root = self.task_runs_dir
                 elif kind == "input":
                     allowed_root = self.uploads_dir

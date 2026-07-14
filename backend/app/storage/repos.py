@@ -134,7 +134,11 @@ def list_created_dependent_tasks(conn: sqlite3.Connection) -> list[dict[str, Any
 
 
 def enqueue_dependent_task(
-    conn: sqlite3.Connection, task_id: str, piped_input_file_ids: list[str]
+    conn: sqlite3.Connection,
+    task_id: str,
+    piped_input_file_ids: list[str],
+    *,
+    event: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """resolver 把依赖满足的任务原子推进 created→queued 并落管道产物入 input_file_ids。
 
@@ -142,6 +146,9 @@ def enqueue_dependent_task(
     人工 cancel 可能已推进本任务）——非 created 返回 None（本次放弃，幂等）。
     **绝不写 data_classification**（F2：分级 100% 交执行期既有派生，避免抢写 CAS 冻结
     列挤掉下游自身污点）。input_file_ids = 原有 + 管道产物（去重保序）。
+    event（Codex 增量2审 R2 P2）：lifecycle 事件与状态迁移**同事务原子写**——「无事件=
+    没发生」宪法铁律，crash 窗口绝不留下 queued 却无 dependency_resolved 事件的任务。
+    event 校验失败（append_event 抛）连状态迁移一并 ROLLBACK（原子）。
     """
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -163,6 +170,8 @@ def enqueue_dependent_task(
             "WHERE id = ? AND status = 'created'",
             (json.dumps(merged, ensure_ascii=False), now, task_id),
         )
+        if event is not None:
+            append_event(conn, task_id=task_id, **event)
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
@@ -171,13 +180,19 @@ def enqueue_dependent_task(
 
 
 def cancel_dependent_task(
-    conn: sqlite3.Connection, task_id: str, error_message: str
+    conn: sqlite3.Connection,
+    task_id: str,
+    error_message: str,
+    *,
+    event: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """resolver 级联取消：**仅当仍 created** 时 created→cancelled（上游失败/取消）。
 
     BEGIN IMMEDIATE 复查 status=='created'——非 created（已被人工/并发推进）返回 None
     幂等放弃。刻意不走 set_task_status：后者的 assert_transition 允许 queued→cancelled，
     会误伤已入队任务（虽本分支上游失败下不该已入队，仍以结构守卫杜绝）。
+    event（Codex 增量2审 R2 P2）：task_cancelled 事件与状态迁移**同事务原子写**（同
+    enqueue，「无事件=没发生」，crash 窗口不留无事件的取消）。
     """
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -192,6 +207,8 @@ def cancel_dependent_task(
             "updated_at = ? WHERE id = ? AND status = 'created'",
             (error_message, now, now, task_id),
         )
+        if event is not None:
+            append_event(conn, task_id=task_id, **event)
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")

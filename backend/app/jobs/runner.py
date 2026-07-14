@@ -152,14 +152,36 @@ def resolve_dependencies_once(conn_factory: Callable[[], sqlite3.Connection]) ->
                 cancelled = repos.cancel_dependent_task(
                     conn, task_id,
                     f"上游任务失败/取消/缺失，依赖无法满足：{', '.join(failed)}",
+                    event={  # R2 P2：事件与状态迁移同事务原子写
+                        "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
+                        "level": "warning",
+                        "message": "依赖的上游任务失败或被取消，本任务级联取消（绝不在失败上游上执行）",
+                        "payload": {"reason": "upstream_failed", "upstream_task_ids": failed},
+                    },
                 )
                 if cancelled is not None:
-                    repos.append_event(
-                        conn, task_id=task_id, agent_id=task.get("agent_id"),
-                        event_type="task_cancelled", level="warning",
-                        message="依赖的上游任务失败或被取消，本任务级联取消（绝不在失败上游上执行）",
-                        payload={"reason": "upstream_failed", "upstream_task_ids": failed},
-                    )
+                    advanced += 1
+                continue
+            # Codex 增量2审 R2 P1：上游跨 eval/user 执行方隔离轴（origin≠user）→ fail-closed
+            # 级联取消。创建期已挡（tasks.py），此为 legacy/混版任务的消费侧兜底（ADR-0018：
+            # eval 产物绝不经依赖链流入 user 任务→user-origin sample gate 污染样本库）。任何
+            # 状态的非-user 上游都拒（用户任务本就不该依赖 eval 跑批任务）。
+            non_user = [
+                uid for uid, u in zip(upstream_ids, upstreams)
+                if u is not None and u.get("origin") != "user"
+            ]
+            if non_user:
+                cancelled = repos.cancel_dependent_task(
+                    conn, task_id,
+                    f"上游任务跨 eval/user 隔离轴（origin≠user）：{', '.join(non_user)}",
+                    event={
+                        "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
+                        "level": "warning",
+                        "message": "依赖的上游任务非 user 执行方（eval 隔离轴），本任务级联取消（ADR-0018 防样本库污染）",
+                        "payload": {"reason": "upstream_origin_isolation", "upstream_task_ids": non_user},
+                    },
+                )
+                if cancelled is not None:
                     advanced += 1
                 continue
             if all(u is not None and u["status"] == "completed" for u in upstreams):
@@ -188,28 +210,30 @@ def resolve_dependencies_once(conn_factory: Callable[[], sqlite3.Connection]) ->
                     cancelled = repos.cancel_dependent_task(
                         conn, task_id,
                         f"上游产物完整性校验失败，管道 id 非本上游 registered output：{', '.join(invalid)}",
+                        event={
+                            "agent_id": task.get("agent_id"), "event_type": "task_cancelled",
+                            "level": "warning",
+                            "message": "上游 output_file_ids 含非法/非本上游 registered output，级联取消（fail-closed 绝不喂入未注册文件）",
+                            "payload": {"reason": "upstream_output_integrity", "invalid_file_ids": invalid},
+                        },
                     )
                     if cancelled is not None:
-                        repos.append_event(
-                            conn, task_id=task_id, agent_id=task.get("agent_id"),
-                            event_type="task_cancelled", level="warning",
-                            message="上游 output_file_ids 含非法/非本上游 registered output，级联取消（fail-closed 绝不喂入未注册文件）",
-                            payload={"reason": "upstream_output_integrity", "invalid_file_ids": invalid},
-                        )
                         advanced += 1
                     continue
-                enqueued = repos.enqueue_dependent_task(conn, task_id, piped)
-                if enqueued is not None:
-                    repos.append_event(
-                        conn, task_id=task_id, agent_id=task.get("agent_id"),
-                        event_type="agent_log", level="info",
-                        message=f"依赖满足：{len(upstream_ids)} 个上游全部完成，管道 {len(piped)} 件产物入队",
-                        payload={
+                enqueued = repos.enqueue_dependent_task(
+                    conn, task_id, piped,
+                    event={  # R2 P2：dependency_resolved 事件与 created→queued 同事务原子写
+                        "agent_id": task.get("agent_id"), "event_type": "agent_log",
+                        "level": "info",
+                        "message": f"依赖满足：{len(upstream_ids)} 个上游全部完成，管道 {len(piped)} 件产物入队",
+                        "payload": {
                             "workflow_event_type": "dependency_resolved",
                             "upstream_task_ids": upstream_ids,
                             "piped_file_count": len(piped),
                         },
-                    )
+                    },
+                )
+                if enqueued is not None:
                     advanced += 1
             # else：上游未全完成、无失败 → 保持 created
         finally:

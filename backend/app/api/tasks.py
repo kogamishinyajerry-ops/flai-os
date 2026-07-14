@@ -198,6 +198,18 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                         "——不支持跨 conversation 依赖（产物不得跨会话管道）"
                     ),
                 )
+            # Codex 增量2审 R2 P1：依赖不得跨 eval/user 执行方隔离轴（ADR-0018）。用户
+            # 任务（本 API 建的一律 origin=user）depends_on 一个 origin=eval 跑批任务时，
+            # resolver 会把 eval 产物管道进 user 任务→user-origin sample gate 落库 samples，
+            # 污染真实用户样本库、违 M10 隔离。上游须 origin=user 否则 422 fail-closed。
+            if upstream.get("origin") != "user":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"依赖跨执行方隔离轴：上游 {dep_id} origin={upstream.get('origin')!r} 非 user"
+                        "——不得依赖 eval 跑批任务（ADR-0018 eval/user 隔离，防 eval 产物污染样本库）"
+                    ),
+                )
         # 协作运行时安全边界（与 _open_input_files 按 kind 选权威根的放宽配对成闭）：
         # 直接提交的 input_file_ids 只允许上传件（allowlist：kind=input）。上游产物
         # （kind=output）唯一合法入口是 review-gated resolver 的管道注入

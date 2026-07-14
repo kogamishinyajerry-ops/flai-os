@@ -157,6 +157,26 @@ def test_R1_oversized_dependency_id_rejected(app_env):
     assert r.status_code == 422
 
 
+def test_R2_eval_origin_upstream_rejected(app_env):
+    """R2-1 tamper：user 任务 depends_on origin=eval 任务 → 422（ADR-0018 eval/user 隔离，
+    防 eval 产物经依赖链流入 user 任务→user-origin sample gate 污染样本库）。"""
+    import uuid
+    from backend.app.storage import repos
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        repos.create_task(
+            conn, task_id=f"eval_{uuid.uuid4().hex}", agent_id="hello_agent",
+            agent_version="0.1.0", name="eval", created_by="t", inputs={"name": "x"},
+            input_file_ids=[], metadata={}, origin="eval",
+        )
+        eval_id = conn.execute("SELECT id FROM tasks WHERE origin='eval'").fetchone()[0]
+    finally:
+        conn.close()
+    r = _mk(client, "down", depends_on=[eval_id])
+    assert r.status_code == 422
+
+
 def test_dependent_task_not_claimed_by_worker(app_env):
     """滞留 created 的依赖任务不进 worker 候选集（claim 只取 queued）。"""
     client, app = app_env

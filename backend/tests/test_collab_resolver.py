@@ -558,3 +558,120 @@ def test_R1_unknown_file_kind_rejected_at_consume(runtime_env):
         assert repos.get_task(conn, "weird_task")["status"] == "failed"  # 未知 kind fail-closed
     finally:
         conn.close()
+
+
+# ── R2-1 eval/user 隔离（Codex 增量2审 R2）：非 user 上游 fail-closed 级联取消 ──
+
+def test_R2_eval_upstream_cancels_downstream_at_resolver(dbf):
+    """R2-1 tamper（消费侧兜底）：legacy user 任务的上游是 origin=eval（绕过创建期检查）
+    → resolver fail-closed 级联取消（reason=upstream_origin_isolation）。拆 non_user 检查
+    → eval 产物经管道流入 user 任务违 ADR-0018 隔离。"""
+    conn = dbf()
+    try:
+        repos.create_task(
+            conn, task_id="eval_up", agent_id="hello_agent", agent_version="0.1.0",
+            name="eval", created_by="t", inputs={}, input_file_ids=[], metadata={}, origin="eval",
+        )
+        _attach_output(conn, "eval_up")
+        _drive(conn, "eval_up", "completed_reviewed")
+        _mk(conn, "down", depends_on=["eval_up"])  # _mk 建的 down 是 origin=user
+    finally:
+        conn.close()
+
+    assert resolve_dependencies_once(dbf) == 1
+    conn = dbf()
+    try:
+        down = repos.get_task(conn, "down")
+        assert down["status"] == "cancelled"
+        events = repos.list_events(conn, "down")
+        assert any(
+            e["event_type"] == "task_cancelled"
+            and e["payload"].get("reason") == "upstream_origin_isolation"
+            for e in events
+        )
+    finally:
+        conn.close()
+
+
+# ── R2-2 消费点 manifest + binding（Codex 增量2审 R2）：双端各自独立强制 ──
+
+def test_R2_output_not_in_owner_manifest_rejected(runtime_env):
+    """R2-2 tamper（manifest）：input_file_ids 直含某已完成依赖的 output-kind 文件，但该
+    file_id 不在 owner 的 output_file_ids 清单内（legacy 直塞非产物 id）→ 消费点拒。"""
+    cf = runtime_env["conn_factory"]
+    runtime = runtime_env["runtime"]
+    runner = JobRunner(runtime, cf)
+    conn = cf()
+    try:
+        _mk(conn, "owner")
+        stray = _real_output(runtime, conn, "owner", name="stray.txt")  # 不 set_task_outputs
+        _drive(conn, "owner", "completed_reviewed")
+        _mk(conn, "consumer", depends_on=["owner"], inputs={"name": "x"}, input_file_ids=[stray])
+        repos.set_task_status(conn, "consumer", "queued")
+    finally:
+        conn.close()
+    runner.run_once()
+    conn = cf()
+    try:
+        assert repos.get_task(conn, "consumer")["status"] == "failed"  # 不在 owner manifest → 拒
+    finally:
+        conn.close()
+
+
+def test_R2_binding_excluded_upstream_output_rejected_at_consume(runtime_env):
+    """R2-2 tamper（from_tasks 排除）：depends_on=[A,B]、from_tasks=[A]，B 的 output 直塞
+    input_file_ids（在 B manifest 内、B completed）→ 消费点因 from_tasks 排除 B 拒。"""
+    cf = runtime_env["conn_factory"]
+    runtime = runtime_env["runtime"]
+    runner = JobRunner(runtime, cf)
+    conn = cf()
+    try:
+        _mk(conn, "up_a")
+        _drive(conn, "up_a", "completed_reviewed")
+        _mk(conn, "up_b")
+        fb = _real_output(runtime, conn, "up_b", name="b.txt")
+        repos.set_task_outputs(conn, "up_b", [fb])  # fb 真在 up_b manifest 内
+        _drive(conn, "up_b", "completed_reviewed")
+        repos.create_task(
+            conn, task_id="consumer", agent_id="hello_agent", agent_version="0.1.0",
+            name="c", created_by="t", inputs={"name": "x"}, input_file_ids=[fb], metadata={},
+            depends_on=["up_a", "up_b"], input_binding={"from_tasks": ["up_a"]},
+        )
+        repos.set_task_status(conn, "consumer", "queued")
+    finally:
+        conn.close()
+    runner.run_once()
+    conn = cf()
+    try:
+        assert repos.get_task(conn, "consumer")["status"] == "failed"  # B 被 from_tasks 排除 → 拒
+    finally:
+        conn.close()
+
+
+# ── R2-3 事件与状态迁移同事务原子（Codex 增量2审 R2）：非法事件整体回滚 ──
+
+def test_R2_enqueue_event_atomic_rollback_on_invalid_event(dbf):
+    """R2-3 tamper：传非法 event_type（不在 event.schema 枚举）→ append_event 校验炸 →
+    created→queued 整体 ROLLBACK，任务留 created（绝无「queued 却无 dependency_resolved
+    事件」的半态）。证事件与状态迁移同事务原子。"""
+    conn = dbf()
+    try:
+        _mk(conn, "up")
+        f = _attach_output(conn, "up")
+        _drive(conn, "up", "completed_reviewed")
+        _mk(conn, "down", depends_on=["up"])
+    finally:
+        conn.close()
+    conn = dbf()
+    try:
+        with pytest.raises(Exception):
+            repos.enqueue_dependent_task(
+                conn, "down", [f],
+                event={
+                    "agent_id": "hello_agent", "event_type": "NOT_A_REAL_EVENT_TYPE",
+                    "level": "info", "message": "x", "payload": {},
+                },
+            )
+        assert repos.get_task(conn, "down")["status"] == "created"  # 回滚，未半推进到 queued
+    finally:
+        conn.close()
