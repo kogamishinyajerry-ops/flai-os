@@ -175,6 +175,16 @@ loop-auditor 独立用 scipy.signal.step + solve_ivp(RK45) 对 5 组 (ζ,ωn) �
   护栏（error_pct 有限性校验，前置输入护栏挡不住除法本身溢出），配 tamper 测试。
   教训：fail-closed 校验须覆盖「输入合法但运算结果非法」——只守输入不守结果留溢出缝。
 
+**Codex R2 最终确认审（--commit e6147c5，聚焦 R1 修复 delta）1P2（信息质量，非行为缺口）全修**：
+- R2-P2 错误信息误导归因：R1 结果级护栏行为正确（确实 fail-closed、不写 Infinity），但错误
+  信息把 error_pct=inf 归因于「次正规参考/ζ 过接近临界」；然 overshoot_fem=1e308 配普通 ζ=0.5
+  也令 error_pct 溢出 inf，此时信息误导运维去改 ζ 而非查上游超调 → 改 cause-neutral（列出
+  overshoot_fem/overshoot_ref 两操作数实值，不预设归因）+ 补 test 见证护栏覆盖两条溢出来源。
+  按 verbatim 例外（逐字落地 Codex 建议+行为中性）直接改，不再走一轮。
+
+**收敛轨迹**：R0(1P1+2P2+2FLAG) → R1(1P2) → R2(1P2 信息) → 0。三轮至 round cap，末轮仅信息
+质量 P2（行为已正确），verbatim 落地收口。全程严重度单调降、每 finding 独立 grounded 复核。
+
 **教训沉淀**：①单标量 oracle（超调只依赖 ζ）的「未参与判定的伴随参数」（ωn）必须独立
 校验合法性，否则非法值配匹配主参数即假绿——异源审逮住的 fail-open；②tamper 见证必须取
 「防御独占保护的输入」（ζ≤0），取会被别的机制（sqrt 抛异常）拦下的值（ζ=1.5）是空洞见证

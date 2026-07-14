@@ -259,6 +259,17 @@ def test_evaluate_fail_closed_on_error_pct_overflow(tmp_path):
     assert not (tmp_path / "out" / "evaluation.json").exists()  # 不落 Infinity 产物
 
 
+def test_evaluate_fail_closed_on_huge_overshoot_overflow(tmp_path):
+    """Codex R2 P2：error_pct 非有限的另一可达来源——上游 overshoot_pct=1e308（有限但极大，
+    过 overshoot_fem 有限护栏）配普通 ζ=0.5（overshoot_ref≈16.3）时，相对误差 1e308/16.3×100
+    仍溢出成 inf。结果级护栏须一并 fail-closed（证其覆盖两条溢出来源，非只次正规参考那条）。"""
+    good = json.loads((FIXTURES / "underdamped_fine" / "step_solution.json").read_text())
+    good["response_result"]["overshoot_pct"] = 1e308  # 有限但极大 → error_pct 溢出 inf
+    out, ev = _eval_on_dict(tmp_path, good)
+    assert out["status"] == "failed"
+    assert not (tmp_path / "out" / "evaluation.json").exists()  # 不落 Infinity 产物
+
+
 def test_evaluate_fail_closed_on_missing_params(tmp_path):
     """tamper：产物缺 params → 诚实 failed，不臆测参数、不编造评估。"""
     out, ev = _eval_on_dict(tmp_path, {"response_result": {"overshoot_pct": 16.3}, "solver": {"converged": True}})
