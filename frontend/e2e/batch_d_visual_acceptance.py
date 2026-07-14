@@ -14,15 +14,25 @@
   ③ 375px 无横向溢出：/portal、/tasks/new、/tasks/<id>（含真实选中任务——
     TaskConsole 中栏切到 TaskDetail 选中态面板，非空任务台）三页逐一断言
     `document.documentElement.scrollWidth <= clientWidth`；task 用
-    repos.create_task 直插种一条，保证 /tasks 有真行可开。
+    repos.create_task 直插种一条，保证 /tasks 有真行可开。刻意选择探针
+    `/tasks/<id>` 选中态而非未选中的空任务台是明示范围收窄——Task 2 审查
+    要求验证的正是「TaskConsole 中栏切到 TaskDetail 详情面板」这一分支在
+    375px 下不溢出（该面板内容量最大、是回归高发区），空态本身信息量小，
+    与⑥的收窄说明同一透明度标准。
   ④ 暗色 `--ink-faint` on `--surface-raised` WCAG≥4.5：页内用真实
     getComputedStyle 读两个 token 的 rgb() 值算相对亮度对比度（非硬编码色值）。
-  ⑤ reduced-motion 下 `.send-spin` 不转：独立
-    `browser.new_context(reduced_motion="reduce")` 打开 GuidePage，注入一枚
-    临时 `.send-spin` 探针元素（该 class 只在「发送中」这一瞬间真实挂载，
-    静态断言窗口里稳定捕获不到；注入探针元素让浏览器真的应用同一条
-    `@media (prefers-reduced-motion: reduce) { .send-spin { animation: none; } }`
-    CSS 规则并读 computed animationName——测的是规则真生效，不是编造断言）。
+  ⑤ reduced-motion 下 `.send-spin` 不转：**已从 DOM 注入改为编译 CSS bundle
+    grep**（原版做法已判定 vacuous 假绿并废弃：`.send-spin` 定义在
+    GuidePage.vue `<style scoped>` 内，编译后规则是
+    `.send-spin[data-v-XXXX]{...}`，只匹配带该 scope 属性的元素；手工
+    `document.createElement('span')` 出来的探针元素没有该属性，无论有没有
+    reduced-motion 覆盖规则，规则都不命中，`getComputedStyle().animationName`
+    恒为 CSS 默认值 `'none'`——删掉源码里的覆盖规则也不会让检查变红，是纯
+    vacuous 断言）。现改为直接读 `frontend/dist/assets/GuidePage-*.css`，
+    在 `@media (prefers-reduced-motion:reduce)` 块内做括号平衡提取，断言其中
+    含 `.send-spin{...animation:none...}`（minified 无空格容错正则）——
+    tamper-sensitive：删掉源码里的 override 再 build，bundle 里就没有，
+    真红。
   ⑥ 页标题字号全等：GuidePage 的 `.plan-goal-title` 是对话气泡内的目标标题
     （仅在推荐消息落地后才挂载、且字号 20/21px 是刻意的气泡层级而非页级
     token），排除在断言范围外并在此明示；改为对 6 个有稳定单一页标题元素的
@@ -53,6 +63,7 @@
 """
 from __future__ import annotations
 
+import re
 import shutil
 import socket
 import subprocess
@@ -186,6 +197,50 @@ check(
     f"returncode={grep_danger.returncode} stdout={grep_danger.stdout[:200]!r}",
 )
 
+# ── ⑤ reduced-motion 下 .send-spin 不转：编译 CSS bundle grep（不依赖浏览器，
+# 与②同批先跑）。原 DOM 注入法已判定 vacuous 假绿并废弃——见文件头注释。
+# 编译产物的 scoped 规则形如 `.send-spin[data-v-xxxx]{...}`，minified 后
+# `@media (prefers-reduced-motion:reduce)` 是单行、多条规则挤在同一花括号
+# 深度里，不能用非贪婪正则截断，所以手工做括号平衡提取该 @media 块的完整
+# 内容（含嵌套规则），再在块内断言含 `.send-spin{...animation:none...}`。
+guide_css_files = sorted((DIST / "assets").glob("GuidePage-*.css"))
+send_spin_none_found = False
+send_spin_evidence = ""
+if not guide_css_files:
+    send_spin_evidence = "未找到 frontend/dist/assets/GuidePage-*.css（先 npm run build）"
+else:
+    for css_path in guide_css_files:
+        css_text = css_path.read_text(encoding="utf-8")
+        for media_match in re.finditer(r"@media[^{]*prefers-reduced-motion\s*:\s*reduce[^{]*\{", css_text):
+            start = media_match.end()
+            depth = 1
+            i = start
+            while i < len(css_text) and depth > 0:
+                if css_text[i] == "{":
+                    depth += 1
+                elif css_text[i] == "}":
+                    depth -= 1
+                i += 1
+            block = css_text[start : i - 1]
+            spin_rule = re.search(r"\.send-spin(?:\[[^\]]*\])?\s*\{[^}]*\}", block)
+            if spin_rule and re.search(r"animation\s*:\s*none", spin_rule.group(0)):
+                send_spin_none_found = True
+                send_spin_evidence = f"{css_path.name} :: {spin_rule.group(0)}"
+                break
+        if send_spin_none_found:
+            break
+    if not send_spin_evidence:
+        send_spin_evidence = (
+            f"扫描 {[p.name for p in guide_css_files]} 未在 prefers-reduced-motion:reduce "
+            "块内命中 .send-spin{animation:none}"
+        )
+check(
+    "⑤ 编译 CSS bundle 含 reduced-motion 下 .send-spin{animation:none}"
+    "（原 DOM 注入因 Vue scoped data-v 不匹配已判定 vacuous，见文件头说明）",
+    send_spin_none_found,
+    send_spin_evidence,
+)
+
 AFFECTED = [
     ("portal", "/portal"),
     ("tasks_new", "/tasks/new"),
@@ -296,24 +351,6 @@ with sync_playwright() as p:
         None not in distinct and len(distinct) == 1,
         str(sizes),
     )
-
-    # ── ⑤ reduced-motion 下 .send-spin 不转（独立 context，注入探针元素读 CSS 生效结果）──
-    rm_context = browser.new_context(reduced_motion="reduce")
-    rm_page = rm_context.new_page()
-    login_context(rm_context, BASE)
-    rm_page.goto(BASE + "/", wait_until="networkidle")
-    anim = rm_page.evaluate(
-        """() => {
-          const el = document.createElement('span');
-          el.className = 'send-spin';
-          document.body.appendChild(el);
-          const name = getComputedStyle(el).animationName;
-          el.remove();
-          return name;
-        }"""
-    )
-    check("⑤ reduced-motion 下 .send-spin computed animationName===none", anim == "none", f"animationName={anim!r}")
-    rm_context.close()
 
     # ── ⑦ 失败态互斥：反馈接口拦截返 500，选任务后 error alert 在屏 且 EmptyState 不在屏 ──
     page.route("**/api/tasks/*/feedback", lambda route: route.fulfill(status=500, body="mock 500"))
