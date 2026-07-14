@@ -95,10 +95,14 @@ class ToolRegistry:
         *,
         conn: Any = None,
         task_id: str | None = None,
+        tool_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """统一调用入口：入参契约校验 → 线程超时执行 → 出参契约校验 → 无论成败落 tool_runs。
 
         ``conn=None`` 时跳过落库（供库内自测使用，不落真实/临时 db）。
+        ``tool_context``：任务级注入 adapter 的额外只读上下文（#8/R2-1，如 eval 任务的
+        材化 fixture 根 eval_fixtures_dir），并入 adapter 的 context 参数。任务级传递、
+        非进程全局 env，并发安全。
         """
         tool = self._tools.get(tool_id)
         if tool is None:
@@ -153,9 +157,16 @@ class ToolRegistry:
         timeout_seconds = tool["runtime"]["timeout_seconds"]
         box: dict[str, Any] = {}
 
+        # adapter context = task_id + 任务级注入（#8/R2-1）。both 空则传 None（向后兼容）。
+        adapter_ctx: dict[str, Any] = {}
+        if task_id:
+            adapter_ctx["task_id"] = task_id
+        if tool_context:
+            adapter_ctx.update(tool_context)
+
         def _target() -> None:
             try:
-                box["result"] = func(payload, {"task_id": task_id} if task_id else None)
+                box["result"] = func(payload, adapter_ctx or None)
             except Exception as exc:  # noqa: BLE001 - adapter 契约要求绝不裸抛，这里兜底防炸 worker
                 box["exc"] = exc
 

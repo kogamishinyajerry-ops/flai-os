@@ -26,11 +26,15 @@ def _fail(msg: str) -> dict[str, Any]:
 
 
 def run(payload: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
-    del context
     run_id = str(payload["run_id"])
     if not _RUN_ID_RE.fullmatch(run_id):
         return _fail(f"run_id 非法（须 YYYYMMDD-HHMMSS）：{run_id!r}——拒绝拼路径，fail-closed")
-    case_raw = os.environ.get(_CASE_ENV)
+    # 评测上下文优先（#8 / R2-1）：eval 任务经**任务级 context** 注入材化快照的 fixture 根
+    # （<materialized>/eval_cases/fixtures），令评测读**冻结**产物而非全局 $FLAI_CFD_CASE_DIR
+    # 的活态——「评的就是晋升的那版」对「工具读外部活态」的 agent 也成立。context 缺该键
+    # （普通任务）时回退活 env（真实 CFD 运行），语义不变。任务级传递、非进程全局 env，
+    # 并发安全（worker 多线程并跑评测不互踩）。
+    case_raw = (context or {}).get("eval_fixtures_dir") or os.environ.get(_CASE_ENV)
     if not case_raw:
         return _fail(f"{_CASE_ENV} 未配置——fail-closed，绝不猜路径")
     case = Path(case_raw).expanduser() / run_id  # 时间戳子目录（落法 2026-07-13）

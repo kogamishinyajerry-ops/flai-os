@@ -94,12 +94,16 @@ class _ToolRegistryContext:
         task_id: str,
         agent_id: str,
         allowed_tools: frozenset[str],
+        tool_context: dict[str, Any] | None = None,
     ) -> None:
         self._tool_registry = tool_registry
         self._conn = conn
         self._task_id = task_id
         self._agent_id = agent_id
         self._allowed_tools = allowed_tools
+        # #8/R2-1：任务级注入 adapter 的只读上下文（eval 任务的材化 fixture 根），
+        # 令「工具读外部活态」的工具（cfd_result_read）在评测里读冻结产物而非全局 env。
+        self._tool_context = tool_context
 
     def call(self, tool_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         if tool_id not in self._allowed_tools:
@@ -121,7 +125,10 @@ class _ToolRegistryContext:
             message=f"开始调用工具 {tool_id}", payload={"tool_id": tool_id, "input": payload},
         )
         try:
-            result = self._tool_registry.call(tool_id, payload, conn=self._conn, task_id=self._task_id)
+            result = self._tool_registry.call(
+                tool_id, payload, conn=self._conn, task_id=self._task_id,
+                tool_context=self._tool_context,
+            )
         except Exception as exc:
             repos.append_event(
                 self._conn, task_id=self._task_id, agent_id=self._agent_id,
@@ -872,13 +879,24 @@ class AgentRuntime:
             if _profile in (None, "none")
             else _ModelGatewayContext(self.model_gateway, conn, task["id"], agent_id)
         )
+        # #8/R2-1：eval 任务（origin='eval'）把材化快照的 fixture 根经任务级 context 注入
+        # 「工具读外部活态」的工具（如 cfd_result_read），令其读**冻结**产物而非全局
+        # $FLAI_CFD_CASE_DIR 活态——「评的就是晋升的那版」对这类 agent 也成立。snapshot 路径
+        # 下 pkg_dir=材化目录 → fixture 根=<materialized>/eval_cases/fixtures。普通任务
+        # （origin≠eval）不注入，工具回退活 env，真实 CFD 运行语义不变；无 fixtures 目录也不注入。
+        eval_tool_context: dict[str, Any] | None = None
+        if task.get("origin") == "eval":
+            _fixtures = pkg_dir / "eval_cases" / "fixtures"
+            if _fixtures.is_dir():
+                eval_tool_context = {"eval_fixtures_dir": str(_fixtures)}
         context: dict[str, Any] = {
             "task": task,
             "inputs": task["inputs"],
             "files": files,
             "model_gateway": _gateway,
             "tool_registry": _ToolRegistryContext(
-                self.tool_registry, conn, task["id"], agent_id, allowed_tools
+                self.tool_registry, conn, task["id"], agent_id, allowed_tools,
+                tool_context=eval_tool_context,
             ),
             "event_logger": _WorkflowEventLogger(conn, task["id"], agent_id),
             "output_dir": str(output_dir),

@@ -56,7 +56,10 @@ class _RealishToolRegistry:
         （ADR-0024 `_tool_taint_classification`）经此读 tool.yaml 的 output_classification。"""
         return self._tools.get(tool_id)
 
-    def call(self, tool_id: str, payload: dict[str, Any], *, conn=None, task_id=None) -> dict[str, Any]:
+    def call(self, tool_id: str, payload: dict[str, Any], *, conn=None, task_id=None,
+             tool_context=None) -> dict[str, Any]:
+        # 镜像真 ToolRegistry.call 的 tool_context 形参（#8/R2-1）——否则 _ToolRegistryContext
+        # 传 tool_context= 时本替身 TypeError，令走此替身的任务全 failed。
         from backend.app.core.errors import (
             ToolInputInvalidError,
             ToolNotRegisteredError,
@@ -85,7 +88,14 @@ class _RealishToolRegistry:
 
         module_path, func_name = tool["entrypoint"].split(":")
         module = importlib.import_module(module_path)
-        output = getattr(module, func_name)(payload)
+        # 忠实镜像真 registry 的 adapter context = task_id + 任务级注入（#8/R2-1）：
+        # 令 eval 路由（cfd_result_read 读 eval_fixtures_dir）在 realish 集成测试里可验证。
+        _adapter_ctx: dict[str, Any] = {}
+        if task_id:
+            _adapter_ctx["task_id"] = task_id
+        if tool_context:
+            _adapter_ctx.update(tool_context)
+        output = getattr(module, func_name)(payload, _adapter_ctx or None)
 
         try:
             jsonschema.validate(output, tool["output_schema"])
@@ -374,7 +384,7 @@ class _FailedStatusToolRegistry:
     故此处用 stub 构造（返回形状对齐 ToolRegistry.call 的输出契约）。
     """
 
-    def call(self, tool_id, payload, *, conn=None, task_id=None):
+    def call(self, tool_id, payload, *, conn=None, task_id=None, tool_context=None):
         return {"status": "failed", "echoed": {}, "error_message": "case 级可恢复失败（测试注入）"}
 
 
