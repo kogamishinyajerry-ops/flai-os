@@ -17,7 +17,7 @@
 
     <!-- 版块2：我发起的任务（精确） -->
     <div class="me-section">
-      <div class="me-section-label">我发起的任务</div>
+      <div class="me-section-label">最近发起的任务</div>
       <EmptyState v-if="!loading && !myTasks.length" description="你还没有发起任务" />
       <div v-else class="me-task-list">
         <a v-for="t in myTasks" :key="t.id" class="me-task-item" @click="openTask(t)">
@@ -25,6 +25,9 @@
           <span class="me-task-status">{{ t.status }}</span>
           <span class="me-task-time">{{ formatTime(t.created_at) }}</span>
         </a>
+      </div>
+      <div v-if="contrib && contrib.total_created > myTasks.length" class="me-feedback-note">
+        仅显示最近 {{ myTasks.length }} 条，共发起 {{ contrib.total_created }} 条
       </div>
     </div>
 
@@ -37,12 +40,12 @@
 
     <!-- 版块4：团队总量（复用批B，无人际排名） -->
     <div class="me-section">
-      <div class="me-section-label">团队本周总量</div>
+      <div class="me-section-label">团队总量</div>
       <div class="me-team-bar">
-        <span>完成 {{ team?.tasks_completed ?? "—" }}</span>
-        <span>签发 {{ team?.reviews_approved ?? "—" }}</span>
-        <span>固化 {{ team?.curated_cases_total ?? "—" }}</span>
-        <span>晋升 {{ team?.promotions ?? "—" }}</span>
+        <span>本周完成 {{ team?.tasks_completed ?? "—" }}</span>
+        <span>本周签发 {{ team?.reviews_approved ?? "—" }}</span>
+        <span>累计固化 {{ team?.curated_cases_total ?? "—" }}</span>
+        <span>本周晋升 {{ team?.promotions ?? "—" }}</span>
       </div>
       <div class="me-team-note">团队总量仅作氛围对照，不含任何人际排名</div>
     </div>

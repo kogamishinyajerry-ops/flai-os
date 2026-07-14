@@ -213,6 +213,12 @@ with sync_playwright() as p:
     gov_card.locator(".gov-entry").click()
     expect(page.locator(".gov-dialog")).to_be_visible(timeout=5000)
     check("①治理弹窗内 .gov-ladder 可见", page.locator(".gov-ladder").count() > 0)
+    # 对话框在 loadGovernance()（eval-runs + promotions + curated_cases_count 三请求）
+    # resolve 之前就先可见——.gov-cases-count 和种入的历史 .gov-promotion-card 要等这些
+    # 请求回来才挂载。慢后端下立即 count() 会撞到挂载前的窗口，误判为 0，出现 flake。
+    # 这里显式等数据落地的 locator 出现，再做下面的计数断言（不放宽任何断言本身）。
+    page.wait_for_selector(".gov-cases-count", timeout=8000)
+    page.wait_for_selector(".gov-promotion-card", timeout=8000)  # 至少种入的历史行已挂载
     check("①治理弹窗内 .gov-cases-count 可见", page.locator(".gov-cases-count").count() > 0)
     check("①晋升前：历史晋升行已在晋升史里可见（1 条）",
           page.locator(".gov-promotion-card").count() == 1,

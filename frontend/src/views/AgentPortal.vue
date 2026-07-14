@@ -451,17 +451,19 @@ async function promoteToL1() {
       promotionConfirmed.value = false;
       governanceAgent.value = { ...governanceAgent.value, maturity: "L1" };
       await Promise.all([load(), loadGovernance(agentId)]);
+      // 亲历者动效（批C，Codex R0 P2-A 修正）：必须在 post-await recheck 内触发——
+      // 外层守卫在 await 前，await 期间切到别的 agent 时，recheck 外播 burst 会给
+      // 无关 agent 的时间线误播「假亲历」，违反亲历者纪律。放进 recheck 内即只在
+      // 「reload 完成后仍看同一 agent」时放。
       if (governanceOpen.value && governanceAgent.value?.id === agentId) {
         const refreshedAgent = agents.value.find((agent) => agent.id === agentId);
         if (refreshedAgent) governanceAgent.value = refreshedAgent;
+        witnessedPromotionBurst.value = true;
+        await nextTick();
+        const topCard = promotionTimelineRef.value?.querySelector(".gov-promotion-card");
+        if (topCard) burstNeutral(topCard);
+        window.setTimeout(() => { witnessedPromotionBurst.value = false; }, 1600);
       }
-      // 亲历者动效（批C）：仅本次同步点成晋升触发一次中性 burst——历史直开恒静态。
-      // burstNeutral 对 reduced-motion 内置 no-op；.promote-burst class 仍加（e2e 可断言）。
-      witnessedPromotionBurst.value = true;
-      await nextTick();
-      const topCard = promotionTimelineRef.value?.querySelector(".gov-promotion-card");
-      if (topCard) burstNeutral(topCard);
-      window.setTimeout(() => { witnessedPromotionBurst.value = false; }, 1600);
     } else {
       load();
     }
