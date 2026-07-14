@@ -10,15 +10,35 @@
 
   ① token 定义：`getComputedStyle(root)` 的 --sans/--mono/--fs-title/--radius-lg
     均非空（frontend/src/App.vue :root 块新增的批D token 地基）。
-  ② 无 `var(--danger` 残留：subprocess grep frontend/src/ 返回码非 0（无匹配）。
+  ② 无 `var(--danger` 残留：**Task 9 R0 收口**——已从 `subprocess.run(["grep",...])`
+    改为纯 Python `pathlib` 递归扫描（frontend/src/ 下所有 .vue/.js/.css 文本
+    文件逐行找子串），断言零命中。原 grep 版两个坑：(a) Windows 无 grep 前置，
+    `subprocess.run` 直接抛 `FileNotFoundError` 崩掉 `verify_all.ps1`；(b) 把
+    grep 自身任何非零返回码（含它自己报错的 2）都当「无匹配」误判通过，语义
+    脆弱。pathlib 版跨平台、且「命中即失败」精确到 file:line，不依赖外部进程
+    返回码。
   ③ 375px 无横向溢出：/portal、/tasks/new、/tasks/<id>（含真实选中任务——
-    TaskConsole 中栏切到 TaskDetail 选中态面板，非空任务台）三页逐一断言
+    TaskConsole 中栏切到 TaskDetail 选中态面板，非空任务台）+ **Task 9 R0
+    新增** `/workbench/<sessionId>`（WorkbenchSession 会话页，先经真实
+    POST /api/conversations 用 guide_agent 种一条会话）共四页逐一断言
     `document.documentElement.scrollWidth <= clientWidth`；task 用
     repos.create_task 直插种一条，保证 /tasks 有真行可开。刻意选择探针
     `/tasks/<id>` 选中态而非未选中的空任务台是明示范围收窄——Task 2 审查
     要求验证的正是「TaskConsole 中栏切到 TaskDetail 详情面板」这一分支在
     375px 下不溢出（该面板内容量最大、是回归高发区），空态本身信息量小，
-    与⑥的收窄说明同一透明度标准。
+    与⑥的收窄说明同一透明度标准。WorkbenchSession 的移动端 `.sess-hero`
+    响应式规则（Task 2，commit d8812c3）此前未被本 oracle 的 AFFECTED 覆盖到
+    ——本次补上，种的会话无需推进对话（`.sess-hero` 挂载不依赖 recommendation）。
+    **诚实标注**：workbench 路由的 scrollWidth 溢出断言对该路由**是 vacuous**
+    ——最小种子会话（无 recommendation）下 `.sess-hero` 实测 mainW≈135px +
+    progW≈147px + gap 20px ≈ 302px，远小于 375px 视口下的容器可用宽度
+    （≈343px），行布局本身就不溢出，删掉 Task 2 的响应式规则也不会让这条
+    scrollWidth 断言变红（已用真实 tamper 验证：deleteRule + rebuild + 重跑，
+    该断言仍 PASS）。故额外加一条**直接机制断言**：375px 下 `.sess-hero` 的
+    `getComputedStyle().flexDirection` 必须是 `column`——这条对 Task 2 的规则
+    真 tamper-sensitive（删规则直接翻回 `row`，与内容量/字体渲染无关）。
+    scrollWidth 断言本身仍保留（对未来任何在该路由引入的溢出仍有防护价值，
+    只是不是这次 Task 2 规则的判别信号）。
   ④ 暗色 `--ink-faint` on `--surface-raised` WCAG≥4.5：页内用真实
     getComputedStyle 读两个 token 的 rgb() 值算相对亮度对比度（非硬编码色值）。
   ⑤ reduced-motion 下 `.send-spin` 不转：**已从 DOM 注入改为编译 CSS bundle
@@ -47,7 +67,19 @@
     FeedbackPage/MePage/TaskCreate/TaskDetail/TodayPage 六处 grep 命中），是
     「页标题」这一语义类目里唯一具有单一稳定选择器的全集——不是任务书字面的
     「9 view」（该数字数不出 9 个语义不同的页标题，已核实源码后诚实收窄，非
-    偷懒放水）。
+    偷懒放水）。**Task 9 R0 owner 裁决补三个排除项的具体理由**（凑齐 9 view
+    字面数、逐一核实为何不进 6-view 全集）：
+      - GuidePage `.hero-title`：h1，30px，是页面 hero 大标题，语义层级高于
+        「页标题」（其下 `.plan-goal-title` 气泡内标题另有 20/21px 的气泡层级
+        原因，已在上面说明）；
+      - TaskConsole `.cl-title`：18px，是三栏任务台的**面板列头**（「任务台」
+        三字），不是页标题——中栏切到 TaskDetail 选中态才是真正的页标题
+        `.page-header h2`（即本 oracle 已纳入的 `/tasks/<id>` 选中态探针）；
+      - WorkbenchSession `.sess-title-row h2`：「协作会话」四字是**会话版块
+        类型标签**（同 TaskConsole `.cl-title` 一个语义层级），不是页标题——
+        真正的内容标题是其下 22px serif 的 `.sess-goal`；该 h2 已从裸 20px
+        魔数迁到 `var(--fs-h3)`（16px，版块标题档位，Task 9 R0 ④），但迁移
+        目标 token 是 `--fs-h3` 而非 `--fs-title`，仍不进本 6-view 全集。
   ⑦ 失败态互斥：FeedbackPage 用 `page.route` 拦截反馈列表接口返 500，选中
     任务后断言 error alert 在屏 且「暂无反馈」EmptyState 不在屏（源码里两者
     本就是 `v-if="...&&!feedbackError"` 互斥关系，这里是行为验证非重复实现）。
@@ -59,14 +91,14 @@
     --with "pydantic>2" --with jieba python frontend/e2e/batch_d_visual_acceptance.py
 
 截图落 docs/reviews/batch-d-shots/（每次重跑覆盖，保持证据与代码同步）：
-  亮/暗 × 桌面/375px × {portal, tasks_new, task_detail} 共 12 张。
+  亮/暗 × 桌面/375px × {portal, tasks_new, task_detail, workbench}（Task 9 R0
+  新增 workbench）共 16 张。
 """
 from __future__ import annotations
 
 import re
 import shutil
 import socket
-import subprocess
 import sys
 import tempfile
 import threading
@@ -101,6 +133,11 @@ WORK = Path(tempfile.mkdtemp(prefix="flai_batch_d_visual_"))
 AGENTS_DIR = WORK / "agents"
 AGENTS_DIR.mkdir()
 shutil.copytree(REPO / "agents" / "hello_agent", AGENTS_DIR / "hello_agent")
+# guide_agent（interactive 型）：Task 9 R0 ③ 需要 POST /api/conversations 种一条
+# 真实 workbench 会话——create_conversation() 要求目标 agent 的 workflow.mode
+# == interactive，hello_agent 不满足，故额外拷入。不推进对话（不发消息、不碰
+# model gateway），只用它的「能建会话」这一能力。
+shutil.copytree(REPO / "agents" / "guide_agent", AGENTS_DIR / "guide_agent")
 
 _sock = socket.socket()
 _sock.bind(("127.0.0.1", 0))
@@ -131,7 +168,7 @@ for _ in range(50):
 else:
     sys.exit("诚实失败：后端 5s 内未就绪")
 
-from _auth import login_context, seed_user  # noqa: E402（须在后端就绪后种账户）
+from _auth import login_context, login_httpx, seed_user  # noqa: E402（须在后端就绪后种账户）
 
 seed_user(DB_PATH, "验收工程师")  # 默认 e2e_engineer/e2e-pass-flai（_auth 默认值）
 
@@ -150,6 +187,16 @@ try:
     )
 finally:
     _conn.close()
+
+# ── 种一条真实 workbench 会话：/workbench/<id> 需要真会话才能渲染（Task 9 R0
+# ③）。走真实 POST /api/conversations（非直插库），与创建页的正规入口同径。
+# 不发消息、不推进对话——WorkbenchSession 的 `.sess-hero`（含要断言的 375
+# 响应式规则）挂载只依赖 conversation 已 loaded，不依赖 recommendation。──
+_conv_api = login_httpx(BASE)
+_conv_resp = _conv_api.post("/api/conversations", json={"agent_id": "guide_agent"})
+if _conv_resp.status_code not in (200, 201):
+    sys.exit(f"诚实失败：种 workbench 会话失败 {_conv_resp.status_code} {_conv_resp.text[:200]}")
+WORKBENCH_SESSION_ID = _conv_resp.json()["id"]
 
 runner = JobRunner(app.state.runtime, app.state.conn_factory, poll_interval=0.2)
 threading.Thread(target=runner.run_forever, daemon=True).start()
@@ -187,14 +234,25 @@ def _title_font_size(page) -> str | None:
     )
 
 
-# ── ② 无 var(--danger 残留：不依赖浏览器，先跑（subprocess，真返回码）──
-grep_danger = subprocess.run(
-    ["grep", "-rn", "var(--danger", "frontend/src/"], cwd=REPO, capture_output=True, text=True
-)
+# ── ② 无 var(--danger 残留：不依赖浏览器，先跑。Task 9 R0 ①：改用纯 Python
+# pathlib 递归扫描替代 subprocess grep——跨平台（Windows 无 grep 前置也不崩），
+# 且「命中即失败/未命中即通过」精确到 file:line，不依赖外部进程返回码语义。──
+SRC_DIR = REPO / "frontend" / "src"
+danger_hits: list[str] = []
+for suffix in ("*.vue", "*.js", "*.css"):
+    for src_file in sorted(SRC_DIR.rglob(suffix)):
+        try:
+            text = src_file.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as exc:
+            danger_hits.append(f"{src_file.relative_to(REPO)}:<读取失败 {exc}>")
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if "var(--danger" in line:
+                danger_hits.append(f"{src_file.relative_to(REPO)}:{lineno}")
 check(
-    "② 无 var(--danger 残留（token 绕过消除）",
-    grep_danger.returncode != 0,
-    f"returncode={grep_danger.returncode} stdout={grep_danger.stdout[:200]!r}",
+    "② 无 var(--danger 残留（token 绕过消除，pathlib 跨平台扫描）",
+    len(danger_hits) == 0,
+    f"命中={danger_hits}" if danger_hits else "扫描 frontend/src/**/*.{vue,js,css} 零命中",
 )
 
 # ── ⑤ reduced-motion 下 .send-spin 不转：编译 CSS bundle grep（不依赖浏览器，
@@ -271,7 +329,12 @@ with sync_playwright() as p:
         page.screenshot(path=str(SHOTS / f"{slug}_light_desktop.png"), full_page=True)
 
         page.set_viewport_size({"width": 375, "height": 800})
-        poke_wait(page, lambda: True, 0.5)  # 让 resize 触发的重排/CSS 生效
+        # Task 9 R0 ②：原 poke_wait(lambda: True, 0.5) 先查 predicate 再 sleep，
+        # `lambda: True` 立刻返回、根本不等——侧栏 220ms transform 过渡未沉降就
+        # 截图，会拍到抽屉盖住正文的中间态。改真等：page.wait_for_timeout 是
+        # 无条件真睡眠，让 resize 触发的重排 + 220ms transform 充分完成。溢出
+        # 断言逻辑不变（scrollWidth 测量对 fixed 元素本就稳健，不受此影响）。
+        page.wait_for_timeout(400)
         overflow_ok = page.evaluate(
             "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth"
         )
@@ -280,6 +343,48 @@ with sync_playwright() as p:
         )
         check(f"③ 375px 无横向溢出 {path}", overflow_ok, f"scrollWidth,clientWidth={widths}")
         page.screenshot(path=str(SHOTS / f"{slug}_light_375.png"), full_page=True)
+
+    # ── ③ WorkbenchSession 纳入 375 溢出 oracle（Task 9 R0）：种好的会话页，
+    # 移动端 `.sess-hero` 响应式规则（Task 2, commit d8812c3）此前不在 AFFECTED
+    # 覆盖范围内——单独走一段而非塞进 AFFECTED 循环，因为它要等的挂载选择器
+    # （.sess-hero）与 AFFECTED 里 task_detail 专属的 .page-header h2 不同。──
+    WORKBENCH_PATH = f"/workbench/{WORKBENCH_SESSION_ID}"
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(BASE + WORKBENCH_PATH, wait_until="networkidle")
+    poke_wait(page, lambda: page.locator(".sess-hero").count() > 0, 10)
+    page.screenshot(path=str(SHOTS / "workbench_light_desktop.png"), full_page=True)
+
+    page.set_viewport_size({"width": 375, "height": 800})
+    page.wait_for_timeout(400)
+    wb_overflow_ok = page.evaluate(
+        "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+    )
+    wb_widths = page.evaluate(
+        "() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]"
+    )
+    check(f"③ 375px 无横向溢出 {WORKBENCH_PATH}（WorkbenchSession .sess-hero 响应式）",
+          wb_overflow_ok, f"scrollWidth,clientWidth={wb_widths}")
+    # 补一条直接机制断言（不只是溢出代理）：种子会话内容量小（无 recommendation
+    # 时 .sess-hero 的 mainW/progW 实测组合远小于容器宽度），scrollWidth 溢出
+    # 代理对**这条路由**是 vacuous——has 命 中即验证 canon 同款教训（本文件 ⑤
+    # 的 vacuous DOM 注入前车之鉴）：实测 mainW≈135px + progW≈147px + gap20px
+    # ≈302px < 343px 容器宽，行布局本身就不溢出，删掉 Task 2 的响应式规则也
+    # 不会让 scrollWidth 断言变红——那条断言因此不是 tamper-sensitive 的，需要
+    # 直接验证机制本身：断言 375px 下 .sess-hero 的 computed flex-direction
+    # 确实是 column（删规则→变回 row，直接真红，不依赖内容量/字体渲染）。
+    sess_hero_flex_dir = page.evaluate(
+        """() => {
+          const el = document.querySelector('.sess-hero');
+          return el ? getComputedStyle(el).flexDirection : null;
+        }"""
+    )
+    check(
+        "③ 375px WorkbenchSession .sess-hero 响应式规则生效（flex-direction:column，"
+        "直接机制断言——scrollWidth 代理对本路由种子内容量 vacuous，见上方注释）",
+        sess_hero_flex_dir == "column",
+        f"flexDirection={sess_hero_flex_dir!r}",
+    )
+    page.screenshot(path=str(SHOTS / "workbench_light_375.png"), full_page=True)
 
     page.set_viewport_size({"width": 1440, "height": 900})
 
@@ -324,8 +429,19 @@ with sync_playwright() as p:
         page.screenshot(path=str(SHOTS / f"{slug}_dark_desktop.png"), full_page=True)
 
         page.set_viewport_size({"width": 375, "height": 800})
-        poke_wait(page, lambda: True, 0.5)
+        page.wait_for_timeout(400)  # Task 9 R0 ②：真等，理由同亮色段
         page.screenshot(path=str(SHOTS / f"{slug}_dark_375.png"), full_page=True)
+
+    # ── 暗色 workbench 截图（桌面+375，Task 9 R0 ③）：断言已在亮色段做过一次
+    # （与其它三页同款：亮色段断言、暗色段只取截图证据），此处保持同一非对称结构。──
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(BASE + WORKBENCH_PATH, wait_until="networkidle")
+    poke_wait(page, lambda: page.locator(".sess-hero").count() > 0, 10)
+    page.screenshot(path=str(SHOTS / "workbench_dark_desktop.png"), full_page=True)
+
+    page.set_viewport_size({"width": 375, "height": 800})
+    page.wait_for_timeout(400)
+    page.screenshot(path=str(SHOTS / "workbench_dark_375.png"), full_page=True)
 
     page.set_viewport_size({"width": 1440, "height": 900})
     page.evaluate("() => localStorage.setItem('flai_theme_mode', 'light')")

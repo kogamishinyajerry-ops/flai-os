@@ -53,7 +53,7 @@
 
       <el-alert v-if="feedbackError" type="warning" :title="feedbackError" show-icon :closable="false" />
 
-      <div class="section-label">该任务已有反馈</div>
+      <h3 class="section-label">该任务已有反馈</h3>
       <EmptyState v-if="feedbackList.length === 0 && !feedbackError" description="暂无反馈" />
       <ul v-else class="feedback-list">
         <li v-for="f in feedbackList" :key="f.id">
