@@ -304,6 +304,10 @@ onMounted(loadConvos);
   --shadow-card-hover: 0 2px 6px rgba(43, 38, 34, 0.06), 0 12px 30px rgba(72, 58, 44, 0.10);
   --shadow-hero: 0 1px 3px rgba(43, 38, 34, 0.04), 0 10px 34px rgba(72, 58, 44, 0.06);
   --shadow-composer: 0 1px 3px rgba(43, 38, 34, 0.05), 0 12px 32px rgba(72, 58, 44, 0.09);
+  /* 遮罩 scrim（批D新增，QuickSwitcher 等模态背板消费）：黑基不透明度随主题重算，
+   * 与 --el-mask-color（Element Plus 自有 loading 遮罩，暗色前已单独覆盖）语义分离——
+   * 该 EP 变量亮色默认 #ffffffe6（近白），复用会让本项目模态背板在亮色下变白，故另立此槽。*/
+  --scrim-backdrop: rgba(43, 38, 34, 0.32);
   /* 动效系统 v1 tokens（SSOT=docs/design/MOTION-SYSTEM.md）：纸张/墨迹材质隐喻，
    * 只用 transform/opacity；--ease-spring 仅限小位移元素（防溢出裁切）。 */
   --motion-fast: 0.14s;
@@ -398,7 +402,8 @@ onMounted(loadConvos);
   /* 墨阶反相为暖白系 */
   --ink: #ece5db;
   --ink-soft: #b0a698;
-  --ink-faint: #8a8174; /* 诚实地板句层级：4.5:1 AA-text on #211d19（审查实测 #7a7164 只 3.49）*/
+  --ink-faint: #978e81; /* 诚实地板句层级：批D复检 #8a8174 on --surface-raised #2e2823 仅 3.79:1 未达 AA，
+   * 提亮至 #978e81 → on surface-raised 4.50:1／on page-bg #211d19 5.18:1／on card-bg #2a2521 4.69:1，三面均 ≥4.5 AA-text */
   --ink-mid: #cfc6b8;
   /* clay 锚：微提亮保对比，色相不动（唯一强调地位不变）*/
   --clay: #d4714a;
@@ -415,6 +420,7 @@ onMounted(loadConvos);
   --shadow-card-hover: 0 2px 6px rgba(0, 0, 0, 0.4), 0 12px 30px rgba(0, 0, 0, 0.5);
   --shadow-hero: 0 1px 3px rgba(0, 0, 0, 0.35), 0 10px 34px rgba(0, 0, 0, 0.45);
   --shadow-composer: 0 1px 3px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.5);
+  --scrim-backdrop: rgba(0, 0, 0, 0.55);
   /* RGB 三元组随主题重定义（派生透明色自动跟随）*/
   --clay-rgb: 212, 113, 74;
   --ink-rgb: 236, 229, 219;

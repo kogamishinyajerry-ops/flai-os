@@ -332,8 +332,10 @@ onUnmounted(() => {
   cursor: pointer;
 }
 .sim-btn:hover { color: var(--clay); border-color: var(--clay-softer); }
-/* iframe 底色钉死为 hub 嵌入视图自身的暖纸色：暗色主题下装载瞬间不闪白/黑 */
-.sim-frame { flex: 1; border: none; width: 100%; background: #f7f4ee; }
+/* iframe 底色跟随宿主主题（批D修正：hub embed.html 早已随 frameSrc 的 ?theme=dark
+ * 透传自带暗色纸阶#24201c，钉死亮色纸色反而在暗色下先闪浅底再切成 hub 自身暗底——
+ * 换 token 使容器底色与即将加载的 hub 内容一致，才是真正消闪白/黑）*/
+.sim-frame { flex: 1; border: none; width: 100%; background: var(--paper-rail); }
 @media (prefers-reduced-motion: reduce) {
   .sim-pill { transition: none; }
   .sim-dot.work { animation: none; }

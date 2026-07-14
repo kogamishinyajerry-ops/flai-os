@@ -234,7 +234,7 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
   display: flex;
   justify-content: center;
   padding-top: 12vh;
-  background: rgba(43, 38, 34, 0.32);
+  background: var(--scrim-backdrop);
 }
 .qs-panel {
   width: 560px;
@@ -246,7 +246,7 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
   background: var(--paper-surface);
   border: 1px solid var(--hairline);
   border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(43, 38, 34, 0.12), 0 24px 64px rgba(43, 38, 34, 0.18);
+  box-shadow: var(--shadow-hero);
   overflow: hidden;
 }
 .qs-search {
