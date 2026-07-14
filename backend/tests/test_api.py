@@ -47,6 +47,15 @@ def test_health_llm_configuration_flags_are_booleans(client: TestClient) -> None
     assert all(type(body[key]) is bool for key in keys)
 
 
+def test_health_exposes_generation_markers_is_true(client: TestClient) -> None:
+    """运行进程代际标记（部署自检据此拦版本偏斜）：迁移 #9 的
+    created_by_username_axis 与既有 classification_axis 均须 is True——活进程
+    真的自报，否则自检恒 FAIL 上不了线。"""
+    body = client.get("/api/health").json()
+    assert body["created_by_username_axis"] is True
+    assert body["classification_axis"] is True
+
+
 def test_list_agents_contains_hello_agent(client: TestClient) -> None:
     resp = client.get("/api/agents")
     assert resp.status_code == 200

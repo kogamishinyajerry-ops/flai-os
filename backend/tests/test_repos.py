@@ -114,9 +114,9 @@ def test_create_task_stores_and_projects_username(conn) -> None:
 
 
 def test_create_task_username_defaults_to_none(conn) -> None:
-    """省略 created_by_username（如内部/系统建任务路径）→ 留 NULL，绝不用
-    created_by（display_name）冒充 username 身份。"""
-    task = _new_task(conn)
+    """省略 created_by_username（如 eval 系统建任务、无人类创建者）→ 留 NULL，
+    绝不用 created_by（display_name）冒充 username 身份。"""
+    task = _new_task(conn, origin="eval")
     assert task["created_by_username"] is None
 
 
