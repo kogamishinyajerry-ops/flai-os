@@ -21,6 +21,8 @@
 | 结构覆盖 | coverage-auditor | job 数值类骨架 2 发干净成立；**判据①结构保证不外推到日常交互入口**（交互运行时结构性弱于 job） |
 
 > **主控纠错记录（诚实优先）**：审计前主控初评"无备份/DR"**是错的**——`scripts/backup_restore.py` 实际存在且成熟（在线备份 + drill 门 + 14 轮转 + 恢复清会话，✔ 已 `ls` 亲核）。README #14"全局无鉴权"亦已过时——鉴权 M11/ADR-0019 已实装（`backend/app/auth/middleware.py` 存在 ✔）。异源新鲜眼睛纠了主控 grep 漏检。
+>
+> **grounding 基线与漂移（诚实标注）**：本纲领 file:line 证据 grounded 于封板 commit `1e3cebc`。合并时 origin/main 已并入 9 个并行治理评测队列 commit（T1 异步队列 + T2 不可变快照，GH #2/#5），触及 `main.py`/`runner.py`/`AgentPortal.vue`/`deploy_selfcheck.py` 等本纲领引用的文件。经复核：**M2†（/api/health 仍无 worker 心跳，仅新增 eval_snapshot_axis）、M1（runner 仍只进程重启恢复、无 live per-task reaper）等 P0/P1 finding 均未被翻转**；但部分 file:line 已漂移（health payload 变长、runner 恢复逻辑移至 ~304 行）。**实现阶段以 HEAD 为准复定位。**
 
 ---
 
