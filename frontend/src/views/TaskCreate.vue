@@ -11,7 +11,7 @@
       class="inline-alert"
     />
 
-    <el-form label-width="100px" class="create-form fx-rise">
+    <el-form :label-width="narrow ? '0' : '100px'" :label-position="narrow ? 'top' : 'right'" class="create-form fx-rise">
       <el-form-item label="Agent" required>
         <el-select
           v-model="form.agentId"
@@ -156,7 +156,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, computed, onMounted } from "vue";
+import { reactive, ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { listAgents, getAgent } from "../api/agents";
@@ -192,6 +192,11 @@ const uploadingFiles = ref(false);
 const submitError = ref("");
 const uploadItems = ref([]);
 const prefilledFromGuide = ref(false);
+// P0 手机端响应式：窄屏（<640px）标签置顶，避免固定 label-width 挤压输入区导致横向溢出。
+const narrow = ref(false);
+function onResize() {
+  narrow.value = window.innerWidth < 640;
+}
 // M8：由导引协作会话带入的会话 id——提交任务时回填，使任务归到协作工作台的
 // 同一次会话下。门户直建（无 from=guide）时保持 null。
 const prefillConversationId = ref(null);
@@ -456,7 +461,12 @@ async function handleSubmit() {
   }
 }
 
-onMounted(loadAgents);
+onMounted(() => {
+  loadAgents();
+  onResize();
+  window.addEventListener("resize", onResize);
+});
+onUnmounted(() => window.removeEventListener("resize", onResize));
 </script>
 
 <style scoped>

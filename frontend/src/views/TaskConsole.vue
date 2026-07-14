@@ -273,6 +273,7 @@ onUnmounted(releaseTaskFeed);
   }
   .console {
     gap: 0;
+    flex-direction: column;
   }
 }
 </style>

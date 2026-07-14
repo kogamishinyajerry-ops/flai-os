@@ -33,7 +33,7 @@
     <EmptyState v-else-if="!loadError && agents.length === 0" description="暂无可用 Agent" />
 
     <el-row v-else :gutter="16" class="fx-stagger">
-      <el-col v-for="agent in agents" :key="agent.id" :span="8" class="agent-col">
+      <el-col v-for="agent in agents" :key="agent.id" :xs="24" :sm="12" :md="8" class="agent-col">
         <el-card class="agent-card" shadow="never" :body-style="{ padding: '0' }">
           <div class="cat-bar" :style="{ background: categoryColor(agent.category) }"></div>
           <div class="card-inner">
@@ -515,7 +515,7 @@ onMounted(load);
 }
 .portal-skel-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 16px;
 }
 .portal-skel-card {

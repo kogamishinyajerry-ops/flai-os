@@ -624,4 +624,7 @@ onUnmounted(() => {
   font-size: 12px;
   line-height: 1.6;
 }
+@media (max-width: 640px) {
+  .sess-hero { flex-direction: column; align-items: flex-start; gap: 10px; }
+}
 </style>
