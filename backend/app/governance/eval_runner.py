@@ -92,6 +92,20 @@ def load_eval_cases(pkg_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str,
             continue
         data["_file"] = path.name
         data["_raw"] = raw
+        # input_files 形态严校（Codex R1 审 P2）：必须是 list[str]。畸形（整数/混型/
+        # 非列表）此前会让 compute_digest 的 sorted()/路径拼接抛 TypeError——T2 起 freeze
+        # 在 create_eval_run 之前算 digest，未捕获的异常令 POST 返 500 且不落 run，async
+        # 端点失去可观测性（T1 时该 run 会被终态化 error）。归类 broken（同坏 JSON 口径，
+        # D3 记 failed），digest 与执行都不碰它，端点保持 202+终态可观测。
+        ifiles = data.get("input_files")
+        if ifiles is not None and (
+            not isinstance(ifiles, list) or any(not isinstance(x, str) for x in ifiles)
+        ):
+            broken.append({
+                "_file": path.name,
+                "error": f"input_files 形态非法（须 list[str]）：{ifiles!r}",
+            })
+            continue
         # curation 三值严判（异源审 P2-8）：缺省=approved（既有手写口径）、
         # 精确 "draft"=待策展、其余任何值（"pending"/"draft "/false…）一律
         # broken——fail-closed 于畸形策展状态，绝不静默当 approved。
@@ -281,10 +295,23 @@ def freeze_eval_snapshot(conn: Any, *, agent_registry: Any, agent_id: str) -> st
     if agent is None:
         raise ValueError(f"agent 不存在：{agent_id}")
     pkg_dir = agent_registry.package_dir(agent_id)
+    pkg_real = pkg_dir.resolve()
     files: dict[str, str] = {}
 
     def _grab(rel: str) -> None:
         p = pkg_dir / rel
+        # 路径封闭（Codex R1 审 P1）：只捕获**真实位于包根内的常规文件**。schema/entrypoint
+        # 名是任意字符串（可为 ../shared/x 或绝对路径），eval_cases/ 内可能有 symlink→包外
+        # ——两者都会把包外字节洗进快照。symlink 更危险：材化把目标固化成常规文件，绕过
+        # _run_one_case_inner 对活磁盘的 resolve() containment（活路径会拒 symlink 逃逸，
+        # 快照路径却放行）。故在捕获点按 resolve 后是否落在包根内堵死，越界一律跳过
+        # （fail-closed，宁漏勿越界读）。
+        try:
+            real = p.resolve()
+        except OSError:
+            return
+        if real != pkg_real and pkg_real not in real.parents:
+            return
         if p.is_file():
             files[rel] = base64.b64encode(p.read_bytes()).decode("ascii")
 
@@ -425,8 +452,17 @@ class _SnapshotRegistry:
 def _materialize_snapshot(content: dict[str, Any], dest_dir: Path) -> None:
     """把快照冻结的包文件（base64）还原到临时目录，保持相对路径（agent.yaml/workflow.py/
     schemas/eval_cases/* 等），供执行读取。"""
+    dest_root = dest_dir.resolve()
     for rel, b64 in content.get("files", {}).items():
         p = dest_dir / rel
+        # 路径封闭（Codex R1 审 P1，纵深防御）：快照 content 取自 DB，按不可信对待——
+        # 绝对路径 / .. 逃逸的 key 会写出 dest_dir 覆写快照根外的活/共享文件（freeze 的
+        # _grab 已在捕获点堵一道，此处再堵写入点，防直改库行的 content 绕过捕获封闭）。
+        # 解析后不落在快照根内即跳过。
+        try:
+            p.resolve().relative_to(dest_root)
+        except (ValueError, OSError):
+            continue
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(base64.b64decode(b64))
 

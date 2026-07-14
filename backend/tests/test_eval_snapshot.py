@@ -232,3 +232,83 @@ def test_freeze_digest_derived_from_frozen_bytes_not_live_reread(
         recomputed = real_compute(approved, frozen, content["agent"])
     assert snap["eval_cases_digest"] == recomputed, \
         "digest 必派生自冻结字节：与快照自身内容复算一致（未修复的二次读活磁盘会打架）"
+
+
+def test_freeze_rejects_symlink_escaping_package(conn_factory, tmp_path) -> None:
+    """R1-P1（Codex）：eval_cases/ 内 symlink→包外，freeze 绝不把目标字节洗进快照。
+    材化会把 symlink 目标固化成常规文件，绕过 _run_one_case_inner 对活磁盘的 resolve()
+    containment（活路径拒 symlink 逃逸、快照路径却放行）。tamper：去掉 _grab 的
+    resolve-under-root 封闭 → 外部字节入 files → RED。"""
+    import base64 as _b64
+    import json as _json
+
+    from backend.app.governance import eval_runner
+
+    reg, pkg = _fresh_registry(tmp_path)
+    secret = tmp_path / "outside_secret.txt"
+    secret.write_text("EXTERNAL SECRET BYTES", encoding="utf-8")
+    (pkg / "eval_cases" / "sneaky.dat").symlink_to(secret)
+    conn = conn_factory()
+    try:
+        handle = eval_runner.freeze_eval_snapshot(conn, agent_registry=reg, agent_id="hello_agent")
+        snap = repos.get_eval_snapshot(conn, handle)
+    finally:
+        conn.close()
+    content = _json.loads(snap["content_json"])
+    assert "eval_cases/sneaky.dat" not in content["files"], "包外 symlink 目标绝不冻结"
+    for b64 in content["files"].values():
+        assert b"EXTERNAL SECRET BYTES" not in _b64.b64decode(b64), "外部字节绝不进快照任何文件"
+
+
+def test_materialize_rejects_escaping_keys(tmp_path) -> None:
+    """R1-P1（Codex，纵深防御）：_materialize_snapshot 绝不写出 dest_dir——快照 content
+    按不可信对待，绝对/.. 逃逸 key 跳过。tamper：去掉 relative_to(dest_root) 封闭 →
+    覆写 dest_dir 外文件 → RED。"""
+    import base64 as _b64
+
+    from backend.app.governance import eval_runner
+
+    dest = tmp_path / "mat"
+    dest.mkdir()
+    victim = tmp_path / "victim.txt"
+    victim.write_text("ORIGINAL", encoding="utf-8")
+    content = {"files": {
+        "../victim.txt": _b64.b64encode(b"HIJACKED").decode("ascii"),
+        "eval_cases/ok.json": _b64.b64encode(b"{}").decode("ascii"),
+    }}
+    eval_runner._materialize_snapshot(content, dest)
+    assert victim.read_text(encoding="utf-8") == "ORIGINAL", "越界 key 绝不覆写快照根外文件"
+    assert (dest / "eval_cases" / "ok.json").is_file(), "正常 key 正常材化"
+
+
+def test_enqueue_malformed_input_files_stays_observable_not_500(conn_factory, tmp_path) -> None:
+    """R1-P2（Codex）：approved case 的 input_files 形态畸形（非 list[str]）此前会让 freeze
+    的 compute_digest 抛 TypeError——T2 起 freeze 在 create_eval_run 之前算 digest，未捕获
+    异常 → POST 500 且不落 run，async 端点失可观测。归类 broken 后 enqueue 正常返回
+    queued run（digest 不碰畸形 case），执行侧记 failed。tamper：去掉 load_eval_cases 的
+    input_files 形态校 → freeze 抛 → enqueue 抛 → RED。"""
+    import json as _json
+
+    from backend.app.governance import eval_runner
+
+    reg, pkg = _fresh_registry(tmp_path)
+    (pkg / "eval_cases" / "case_bad.json").write_text(
+        _json.dumps({
+            "case_id": "bad", "inputs": {"name": "x"},
+            "input_files": [1, 2],  # 畸形：非 str 元素
+            "checks": [{"kind": "status_is", "value": "completed"}],
+        }),
+        encoding="utf-8",
+    )
+    conn = conn_factory()
+    try:
+        run = eval_runner.enqueue_eval_run(
+            conn, agent_registry=reg, agent_id="hello_agent", triggered_by="t"
+        )
+    finally:
+        conn.close()
+    assert run["status"] == "queued", "畸形 case 不该让 enqueue 抛，端点保持 202+queued 可观测"
+    assert str(run.get("snapshot_handle") or "").startswith("snap_")
+    approved, _d, broken = eval_runner.load_eval_cases(pkg)
+    assert any(b["_file"] == "case_bad.json" for b in broken), "畸形 input_files → broken"
+    assert not any(c["_file"] == "case_bad.json" for c in approved), "畸形 case 不进 approved"
