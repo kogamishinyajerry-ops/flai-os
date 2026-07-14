@@ -1,6 +1,6 @@
 # FLAi-OS Kernel V0.1
 
-二所工程智能体运行底座。当前 **本地可交付里程碑 M0-M3/M5/M6/M7/M8 + CFD 集成 + 协作运行时 forge（声明式任务依赖+确定性 artifact→input 管道）+ 封板双判据（判据①结构完成、判据②生长完成）均已收口**（审查存档见 `docs/reviews/` 与 `docs/superpowers/specs/`），唯一悬置 M4（真实性能盘 Tool Adapter，需内网环境）。**封板状态见下方专节**——双判据结构上已满足，冻结 V0.1 转内网导入待 owner 终裁。
+二所工程智能体运行底座。当前 **本地可交付里程碑 M0-M3/M5/M6/M7/M8 + CFD 集成 + 协作运行时 forge（声明式任务依赖+确定性 artifact→input 管道）+ 封板双判据（判据①结构完成、判据②生长完成）均已收口**（审查存档见 `docs/reviews/` 与 `docs/superpowers/specs/`），唯一悬置 M4（真实性能盘 Tool Adapter，需内网环境）。**V0.1 已封板（SEALED 2026-07-14，双判据齐：判据①结构完成 2 类范式零内核 diff + 判据②生长完成双 A）**，下一相=内网导入（M4）。封板状态与诚实边界见下方专节。
 
 ## 是什么 / 不是什么
 
@@ -83,9 +83,9 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 | CFD 集成（增补） | CFD solve→evaluate 多 Agent 工作流接入（st_oracle 判据，ADR-0026） | **完成** |
 | 协作运行时 forge（增补） | 声明式任务依赖（tasks.depends_on/input_binding）+ 确定性 artifact→input 管道（resolver 纯确定性零 LLM，K1/K2 签发见证闸，上游须人签 completed 才放行下游）；十态不变量零改动 | **完成**（异源多轮审收敛，`docs/superpowers/specs/2026-07-13-collab-runtime-forge-design.md`） |
 
-## 封板状态（V0.1 结构完成，2026-07-14）
+## 封板状态：**已封板 V0.1（SEALED 2026-07-14）**
 
-冻结 V0.1 内核转内网导入的门槛=**两个可证伪判据**均满足。当前**两判据结构上均已满足**，冻结与内网导入待 owner 终裁。
+冻结 V0.1 内核转内网导入的门槛=**两个可证伪判据**均满足。**两判据结构上均已满足 + loop-auditor 封板前里程碑终检达 APPROVE-SEAL 条件（裁决 FLAG 无 BLOCK，机制与证据独立复核扎实，3 文档级 FLAG 已处置）→ owner 终裁封板**。V0.1 内核冻结，下一相=内网导入（M4 真实性能盘 Tool Adapter + 角色轴内网后锻）。tag：`v0.1.0-sealed`。
 
 | 封板判据 | 定义（可证伪） | 状态 | 证据 |
 |---|---|---|---|
@@ -210,6 +210,7 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
     内网慢模型（长推理 Agent）场景会系统性超时。当时判卷补丁仅落沙箱、主仓未动（见
     `docs/reviews/glm-growth-smoke-r2/r2_judgment.md`）。**列入 M4 punch list**：改为
     `FLAI_LLM_TIMEOUT_S` 可配，走内核级入队全套仪式。与封板判据①②无关（不阻断封板）。
+    tracker：GitHub issue #7。
 
 ## 开发口径
 
