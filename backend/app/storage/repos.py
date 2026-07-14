@@ -124,13 +124,27 @@ def list_created_dependent_tasks(conn: sqlite3.Connection) -> list[dict[str, Any
 
     只读，不参与拾取裁决——resolver 拿到候选后逐个在写锁内复查状态再推进。
     depends_on 列 NULL/空 JSON 的存量任务天然不入候选（IS NOT NULL 且非 '[]'）。
+
+    **列投影（Codex 增量2审 R4 P2）**：只取 resolver 实际消费的 4 列
+    （id/agent_id/depends_on/input_binding），绝不 `SELECT *`。上游卡 waiting_review
+    时其全部下游每个 resolve tick 都重现于此候选集；若拉全行，`_decode_task` 会 JSON
+    解码每个下游至多 256KB 的 `inputs`（resolver 根本不读），大依赖批下累积可拖垮内存
+    或阻塞唯一 worker 及其心跳。projected 后单候选负载只剩 depends_on(≤32 id)+小
+    input_binding，与 `inputs` 体量彻底解耦。created_at 仅用于 ORDER BY 无需入选择列。
     """
     rows = conn.execute(
-        "SELECT * FROM tasks WHERE status = 'created' AND origin = 'user' "
+        "SELECT id, agent_id, depends_on, input_binding FROM tasks "
+        "WHERE status = 'created' AND origin = 'user' "
         "AND depends_on IS NOT NULL AND depends_on != '[]' "
         "ORDER BY created_at ASC, id ASC"
     ).fetchall()
-    return [_decode_task(r) for r in rows]
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["depends_on"] = json.loads(d["depends_on"]) if d.get("depends_on") else []
+        d["input_binding"] = json.loads(d["input_binding"]) if d.get("input_binding") else None
+        out.append(d)
+    return out
 
 
 def enqueue_dependent_task(
@@ -304,6 +318,89 @@ def set_task_status(
         conn.execute("ROLLBACK")
         raise
     return get_task(conn, task_id)  # type: ignore[return-value]
+
+
+def apply_human_review(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    action: str,
+    reviewer: str,
+    comment: str | None,
+) -> tuple[dict[str, Any], int]:
+    """人工签发（approve/reject）的原子落库（Codex 增量2审 R4 P1）。
+
+    waiting_review→completed/failed 状态迁移、样本标签回填、signer 事件
+    （review_approved / review_rejected）三者包进**同一 BEGIN IMMEDIATE** 原子提交。
+    此前 review_task 依次调 set_task_status（自带独立 COMMIT）+ set_sample_review_outcome
+    + append_event 三次**分离提交**：crash 窗口可留下 status=completed 却无 signer 事件、
+    样本仍 NULL 的任务——resolver 只看 status=='completed' 即放行下游，「无事件=没发生」
+    铁律在最承重的人签路径失守（R2-3 已给次要的 resolver enqueue/cancel 上原子事件，
+    此处补齐人签路径本身）。诚实边界：签名本体是人工触发、状态机门控且已持久提交的
+    状态迁移**本身**（人确实签了，非未签发放行）；本修补的是审计事件与样本标签同迁移的
+    **原子性**——防审计轨/样本标签在 crash 窗口丢失、与迁移脱节。event 契约校验失败 /
+    非法转换 → 连状态迁移一并 ROLLBACK。
+
+    返回 (最终任务行, 回填样本行数)。非 waiting_review 由 assert_transition 抛
+    IllegalTransitionError（调用方按并发竞态转 409；含另一 review 已并发转出的场景）。
+    """
+    approve = action == "approve"
+    new_status = "completed" if approve else "failed"
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        task = get_task(conn, task_id)
+        if task is None:
+            raise TaskNotFoundError(f"任务不存在：{task_id}")
+        # waiting_review→completed/failed 是人签唯一合法出口；terminal→terminal 非法
+        # （并发二次 review 命中已转出任务时在此抛 IllegalTransitionError）。
+        assert_transition(task["status"], new_status)
+        now = _now_iso()
+        updates: dict[str, Any] = {
+            "status": new_status,
+            "updated_at": now,
+            "finished_at": now,  # completed/failed 均 terminal
+        }
+        if not approve:
+            updates["error_message"] = f"人工拒绝（reviewer={reviewer}）" + (
+                f"：{comment}" if comment else ""
+            )
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        conn.execute(
+            f"UPDATE tasks SET {set_clause} WHERE id = ?",
+            (*updates.values(), task_id),
+        )
+        # 样本标签回填（approve→1 / reject→0）——复用 set_sample_review_outcome
+        # primitive（其裸 UPDATE 不自开事务，参与本 BEGIN IMMEDIATE，故与迁移同事务原子）。
+        sample_rows = set_sample_review_outcome(conn, task_id, accepted=approve)
+        # signer 事件，与迁移同事务（「无事件=没发生」在人签路径落地）。
+        payload = {"reviewer": reviewer, "comment": comment}
+        if approve:
+            append_event(
+                conn,
+                task_id=task_id,
+                agent_id=task.get("agent_id"),
+                event_type="review_approved",
+                level="info",
+                message=f"人工批准放行（reviewer={reviewer}），任务转 completed"
+                + (f"；{sample_rows} 条样本标记为工程师认可" if sample_rows else ""),
+                payload=payload,
+            )
+        else:
+            append_event(
+                conn,
+                task_id=task_id,
+                agent_id=task.get("agent_id"),
+                event_type="review_rejected",
+                level="warning",
+                message=f"人工拒绝（reviewer={reviewer}），任务转 failed"
+                + (f"；{sample_rows} 条样本标记为未认可" if sample_rows else ""),
+                payload=payload,
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id), sample_rows  # type: ignore[return-value]
 
 
 def set_task_data_classification(

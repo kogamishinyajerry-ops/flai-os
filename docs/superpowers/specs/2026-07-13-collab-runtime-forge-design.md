@@ -83,7 +83,7 @@
 
 ## 九、开放问题裁决（loop-auditor + owner）
 - **OQ1**：滞留 created + 派生显示 → **采纳**（保十态不变量论证成立）。
-- **OQ2**：默认全部上游 output + 可选 glob → **采纳**，前提=T6 越权引用检查（默认全部放大绑定路径触发面）。
+- **OQ2**：默认全部上游 output + 可选 glob → **部分采纳（2026-07-14 增量2审 R4 P2 校正）**。**已交=任务级选择器 `from_tasks`**：非空=resolver 只从声明的上游拷 `output_file_ids` 入下游 input，其余上游仍参与依赖等待但产物不注入；空/null=默认拷全部上游 output。满足"选择性绑定、防越权拷入调用方显式排除产物（含 sensitive）"的核心意图，前提 T6 越权引用检查已落（`from_tasks ⊆ depends_on`，越权引用创建期 422）。**文件名级 glob（同一上游多产物中只绑定部分文件）未建，递延 retro 作可选增强**——契约（`task.schema.json` input_binding）与 `InputBinding`（Pydantic `extra="forbid"`）只暴露 `from_tasks`，故任何 glob/filename 型 selector 创建期即 422 拒（fail-closed，绝不静默接受未实现语义、绝不"设计承诺了但实现无声吞掉"）。原措辞"可选 glob → 采纳"过度承诺，此校正使设计⟷契约⟷实现三者一致。
 - **OQ3**：上游失败下游处置 → **`created→cancelled`**（非终态 failed，因 failed 从 created 不可达；cancelled+payload 区分优于永滞 created 制造僵尸）。
 - **OQ4**：判据①两发验证弹 → **多 Agent，且二者均 review-gated**。
 

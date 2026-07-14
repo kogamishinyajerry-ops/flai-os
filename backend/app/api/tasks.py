@@ -414,16 +414,14 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             )
 
         reviewer = request.state.user["display_name"]  # ADR-0019 D5：签发者=认证身份
-        payload = {"reviewer": reviewer, "comment": body.comment}
         try:
-            if body.action == "approve":
-                task = repos.set_task_status(conn, task_id, "completed")
-            else:
-                # action == "reject"（Literal 已锁定只有两值）
-                reject_reason = f"人工拒绝（reviewer={reviewer}）" + (
-                    f"：{body.comment}" if body.comment else ""
-                )
-                task = repos.set_task_status(conn, task_id, "failed", error_message=reject_reason)
+            # Codex 增量2审 R4 P1：状态迁移 + 样本标签回填 + signer 事件三者**同一事务
+            # 原子落库**（此前三次分离提交，crash 窗口可留下 status=completed 却无
+            # review_approved 事件的任务，resolver 见 status 即放行下游）。approve→completed
+            # + review_approved / reject→failed + review_rejected；样本 approve→1/reject→0。
+            task, _sample_rows = repos.apply_human_review(
+                conn, task_id, action=body.action, reviewer=reviewer, comment=body.comment
+            )
         except IllegalTransitionError as exc:
             # R1 复审 P2：两个 review 请求并发命中同一 waiting_review 任务时，
             # 后到者可通过预检但在状态机层被拒——这是正常并发竞态，
@@ -433,17 +431,12 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
                 detail=f"任务已被并发的人工审核动作转出 waiting_review，本次不生效：{exc}",
             ) from exc
 
-        # 回填该任务全部样本的工程师确认标签（approve→1 / reject→0）。
-        # collect_samples 型 Agent 执行时留 NULL（结果未定），此处按人工审核结论
-        # 定标，确保下游只把工程师认可的草案当作可复用数据。
-        sample_rows = repos.set_sample_review_outcome(
-            conn, task_id, accepted=(body.action == "approve")
-        )
-
         # 治理签发审计（M12-2c）：人工放行/拒绝是「人是唯一签发者」红线的落点，
-        # 是平台最安全承重的动作——此前只落 task_event（应用数据），无篡改抗性的
-        # audit.log 轨。此处补审计轴：actor=签发者唯一 username（P2-4 唯一身份纪律），
+        # 是平台最安全承重的动作。actor=签发者唯一 username（P2-4 唯一身份纪律），
         # 记录被签发任务、创建者、及**近似自审标记**（签发者与创建者显示名相同）。
+        # audit.log 是独立于 DB 的篡改抗性治理轨，故置于原子 DB 提交**之后**——只为已提交
+        # 的签发决策落审计（DB task_events 已含 signer 事件，为功能事实源；audit.log 为补充
+        # 治理轨，两者分属不同持久化域无法互相原子，先提交 DB 再补审计轨）。
         # 诚实边界：self_review 基于 display_name 比对（created_by 存的是显示名，非
         # username）——显示名非唯一故为可见性提示非强制；硬性职责分离（禁自审 403）
         # 需先补 created_by_username 身份列 + owner 定策略（角色轴，task #17 递延）。
@@ -455,30 +448,6 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             task_id=task_id,
             created_by=created_by if created_by is not None else "(unknown)",
             self_review=bool(created_by is not None and reviewer == created_by),
-        )
-
-        if body.action == "approve":
-            repos.append_event(
-                conn,
-                task_id=task_id,
-                agent_id=task.get("agent_id"),
-                event_type="review_approved",
-                level="info",
-                message=f"人工批准放行（reviewer={reviewer}），任务转 completed"
-                + (f"；{sample_rows} 条样本标记为工程师认可" if sample_rows else ""),
-                payload=payload,
-            )
-            return cgate.redact_task_row_if_sensitive(conn, task)  # ADR-0025 一致封闭
-
-        repos.append_event(
-            conn,
-            task_id=task_id,
-            agent_id=task.get("agent_id"),
-            event_type="review_rejected",
-            level="warning",
-            message=f"人工拒绝（reviewer={reviewer}），任务转 failed"
-            + (f"；{sample_rows} 条样本标记为未认可" if sample_rows else ""),
-            payload=payload,
         )
         return cgate.redact_task_row_if_sensitive(conn, task)  # ADR-0025 一致封闭
     finally:

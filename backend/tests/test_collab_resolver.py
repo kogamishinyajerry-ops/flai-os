@@ -749,3 +749,69 @@ def test_R3_resolve_if_due_throttles(runtime_env, monkeypatch):
     runner._resolve_if_due()  # 间隔内：跳过
     runner._resolve_if_due()  # 仍间隔内：跳过
     assert calls["n"] == 1
+
+
+# ── R4-1 人签路径原子性（Codex 增量2审 R4 P1）：迁移+样本标签+signer 事件同事务 ──
+
+def test_R4_apply_human_review_atomic_happy_path(dbf):
+    """R4-1：apply_human_review(approve) 原子落 waiting_review→completed 迁移 + signer 事件。
+    迁移后 review_approved 事件与状态同批可见（非分两次提交）。"""
+    conn = dbf()
+    try:
+        _mk(conn, "t")
+        _drive(conn, "t", "waiting_review")
+        task, sample_rows = repos.apply_human_review(
+            conn, "t", action="approve", reviewer="张三", comment=None
+        )
+        assert task["status"] == "completed"
+        assert sample_rows == 0  # 本任务无样本
+        assert any(e["event_type"] == "review_approved" for e in repos.list_events(conn, "t"))
+    finally:
+        conn.close()
+
+
+def test_R4_review_event_failure_rolls_back_transition(dbf, monkeypatch):
+    """R4-1 tamper：signer 事件写入失败 → waiting_review→completed 迁移**整体 ROLLBACK**，
+    任务留 waiting_review、无 review_approved 事件。证「无事件=没发生」在人签路径原子——
+    绝无 status=completed 却无 signer 事件的半态（resolver 只看 status 会放行未签发下游）。
+    拆原子（迁移先独立 COMMIT，如旧 set_task_status 路径）→ 迁移残留 completed → RED。"""
+    conn = dbf()
+    try:
+        _mk(conn, "t")
+        _drive(conn, "t", "waiting_review")
+
+        def _boom(*a, **k):
+            raise RuntimeError("signer 事件写入炸")
+
+        monkeypatch.setattr(repos, "append_event", _boom)
+        with pytest.raises(RuntimeError):
+            repos.apply_human_review(conn, "t", action="approve", reviewer="张三", comment=None)
+        monkeypatch.undo()
+
+        t = repos.get_task(conn, "t")
+        assert t["status"] == "waiting_review"  # 回滚：绝未半推进到 completed
+        assert not any(
+            e["event_type"] == "review_approved" for e in repos.list_events(conn, "t")
+        )
+    finally:
+        conn.close()
+
+
+# ── R4-2 候选集列投影（Codex 增量2审 R4 P2）：绝不 materialize/解码 256KB inputs ──
+
+def test_R4_candidate_query_projects_columns_only(dbf):
+    """R4-2 tamper：list_created_dependent_tasks 只投影 resolver 消费的 4 列
+    （id/agent_id/depends_on/input_binding）——即便任务 inputs 极大也绝不解码入候选负载。
+    返回 dict 恰含这四键、不含 inputs。拆回 SELECT *+_decode_task → 冒出 inputs 键 → RED。"""
+    conn = dbf()
+    try:
+        _mk(conn, "down", depends_on=["up"], inputs={"blob": "x" * 200_000})
+        cands = repos.list_created_dependent_tasks(conn)
+        assert len(cands) == 1
+        c = cands[0]
+        assert set(c.keys()) == {"id", "agent_id", "depends_on", "input_binding"}
+        assert "inputs" not in c  # 大 inputs 绝未 materialize
+        assert c["depends_on"] == ["up"]  # depends_on 仍正确解码
+        assert c["input_binding"] is None
+    finally:
+        conn.close()
