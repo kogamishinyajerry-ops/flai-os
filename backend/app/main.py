@@ -144,6 +144,12 @@ def create_app(
             # 脚本已跑迁移、API 仍旧码）时旧 API 无此位 → 部署自检 FAIL，operator
             # 据此知 API 未重启，避免旧 API 静默造无归因 user 任务混入 legacy NULL 群。
             "created_by_username_axis": True,
+            # T2/#5 不可变快照代际标记（Codex R0 审 P1 同款范式）：见证「活着的 API
+            # 进程」跑的是 enqueue 冻结快照的代码。分离部署偏斜（DB 已迁移出 eval_snapshots
+            # 表、worker 已更新，API 仍是 T1 旧码不冻结）时旧 API 无此位 → 部署自检 FAIL，
+            # operator 据此知 API 未重启；否则旧 API 入队无 handle 的 run、worker 回退活磁盘，
+            # 不可变保证静默失效。仍是布尔位，不含数据。
+            "eval_snapshot_axis": True,
             # 库身份指纹（Codex R1 审 P2）：自检门比对「服务实际连的库」与
             # 「探针检查的库」是否同一——FLAI_DB_PATH 两侧不一致时，探针查
             # 有账户的库 A、服务连空库 B，全部 PASS 却无人能登录。路径哈希

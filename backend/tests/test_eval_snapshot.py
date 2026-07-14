@@ -148,3 +148,87 @@ def test_materialized_snapshot_is_frozen_against_live_edits(conn_factory, tmp_pa
         mat_wf = (Path(td) / "workflow.py").read_text(encoding="utf-8")
     assert "MUTATED_LIVE" not in mat_case and mat_case == frozen_case, "材化 case 是冻结原文"
     assert "MUTATED LIVE" not in mat_wf, "材化 workflow 是冻结原文，非活磁盘改动"
+
+
+def test_freeze_captures_nested_input_files(conn_factory, tmp_path) -> None:
+    """#1（Codex R0-P1）：case 的 input_files 引用嵌套 fixture（eval_cases/fixtures/…）
+    必须冻结进快照——freeze 若用非递归 iterdir 会漏掉子目录内文件，材化后
+    _run_one_case_inner 判「input_files 引用不合法或不存在」令每个此类 case 失败
+    （checked-in cfd_evaluate_agent 正是这形态）。tamper：rglob 改回 iterdir → 嵌套
+    文件不在 files → RED。"""
+    import json as _json
+    import tempfile as _tempfile
+
+    from backend.app.governance import eval_runner
+
+    reg, pkg = _fresh_registry(tmp_path)
+    nested = pkg / "eval_cases" / "fixtures" / "run_x" / "postProcessing"
+    nested.mkdir(parents=True)
+    (nested / "forceCoeffs.dat").write_text("NESTED FIXTURE BYTES", encoding="utf-8")
+    (pkg / "eval_cases" / "case_nested.json").write_text(
+        _json.dumps({
+            "case_id": "nested", "inputs": {"name": "x"},
+            "input_files": ["fixtures/run_x/postProcessing/forceCoeffs.dat"],
+            "checks": [{"kind": "status_is", "value": "completed"}],
+        }),
+        encoding="utf-8",
+    )
+    conn = conn_factory()
+    try:
+        handle = eval_runner.freeze_eval_snapshot(conn, agent_registry=reg, agent_id="hello_agent")
+        snap = repos.get_eval_snapshot(conn, handle)
+    finally:
+        conn.close()
+    content = _json.loads(snap["content_json"])
+    key = "eval_cases/fixtures/run_x/postProcessing/forceCoeffs.dat"
+    assert key in content["files"], "嵌套 input_files fixture 必冻结（rglob 递归，非 iterdir）"
+    with _tempfile.TemporaryDirectory() as td:
+        eval_runner._materialize_snapshot(content, Path(td))
+        got = (Path(td) / "eval_cases" / "fixtures" / "run_x" / "postProcessing"
+               / "forceCoeffs.dat").read_text(encoding="utf-8")
+    assert got == "NESTED FIXTURE BYTES", "材化后嵌套 fixture 字节还原"
+
+
+def test_freeze_digest_derived_from_frozen_bytes_not_live_reread(
+    conn_factory, tmp_path, monkeypatch
+) -> None:
+    """#3（Codex R0-P2）：freeze 的 digest 必派生自已抓的冻结字节，非二次重读活磁盘。
+    模拟「抓完 files、算 digest 前活包被并发改」：patch compute_digest 在真算前改活磁盘
+    prompt.md。修复后 digest 从材化冻结字节算（读 frozen_dir 非活 pkg），不受活改影响；
+    未修复（二次读活 pkg_dir）则 digest 反映改后 prompt、与冻结 files 打架。
+    不变式：snapshot.eval_cases_digest == 从快照自身冻结字节复算的 digest（执行侧口径）。
+    tamper：freeze 改回 compute_digest(approved, pkg_dir_live, agent) → RED。"""
+    import base64 as _b64
+    import json as _json
+    import tempfile as _tempfile
+
+    from backend.app.governance import eval_runner
+
+    reg, pkg = _fresh_registry(tmp_path)
+    (pkg / "prompt.md").write_text("ORIGINAL PROMPT", encoding="utf-8")  # 确保被捕获的已知原文
+    real_compute = eval_runner.compute_digest
+
+    def _mutate_live_then_compute(approved, pkg_dir=None, agent=None):
+        # 模拟 freeze 抓完字节后、算 digest 前，活包 prompt.md 被并发改动
+        (pkg / "prompt.md").write_text("MUTATED LIVE DURING FREEZE", encoding="utf-8")
+        return real_compute(approved, pkg_dir, agent)
+
+    monkeypatch.setattr(eval_runner, "compute_digest", _mutate_live_then_compute)
+    conn = conn_factory()
+    try:
+        handle = eval_runner.freeze_eval_snapshot(conn, agent_registry=reg, agent_id="hello_agent")
+        snap = repos.get_eval_snapshot(conn, handle)
+    finally:
+        conn.close()
+    content = _json.loads(snap["content_json"])
+    # 冻结的 prompt.md 是原文，未被并发改污染（旁证冻结字节独立于活磁盘）
+    assert _b64.b64decode(content["files"]["prompt.md"]).decode("utf-8") == "ORIGINAL PROMPT"
+    # 核心不变式：从快照自身冻结字节复算 digest（execute 侧材化后正是这么算），
+    # 必与快照记录的 eval_cases_digest 全等——否则 run 与 GET /snapshot 指纹会打架。
+    with _tempfile.TemporaryDirectory() as td:
+        frozen = Path(td)
+        eval_runner._materialize_snapshot(content, frozen)
+        approved, _d, _b = eval_runner.load_eval_cases(frozen)
+        recomputed = real_compute(approved, frozen, content["agent"])
+    assert snap["eval_cases_digest"] == recomputed, \
+        "digest 必派生自冻结字节：与快照自身内容复算一致（未修复的二次读活磁盘会打架）"

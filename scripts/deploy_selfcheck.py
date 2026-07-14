@@ -22,6 +22,9 @@
        查与鉴权 401 都会假 PASS，必须要活进程自报的代际标记）
     8b. health 含 created_by_username_axis=true（迁移 #9 运行进程代际，Codex 治理审
         P2：库补列后旧 API 未重启窗口会造无归因 user 任务混入 legacy NULL 群）
+    8c. health 含 eval_snapshot_axis=true（T2/#5 运行进程代际，Codex R0 审 P1：enqueue
+        须冻结不可变快照——旧 API 未重启会入队无 handle 的 run、worker 回退活磁盘执行，
+        「评的就是晋升的那版」不可变保证静默失效。配合 WORKER_GENERATION bump 双向见证）
     9. health.db_identity = 探针侧库路径指纹（Codex R1 审 P2：两侧 FLAI_DB_PATH
        不一致时，探针查有账户的库 A、服务连空库 B，其余全 PASS 却无人能登录）
     10. 未认证 GET /api/agents → 401（鉴权代际见证：200=裸奔旧代际，404=旧代码，
@@ -62,6 +65,9 @@ REQUIRED_TABLES = frozenset({
     "tool_runs", "model_calls", "samples", "conversations",
     "conversation_messages", "eval_runs", "promotions", "users", "auth_sessions",
     "worker_heartbeats",
+    # T2/#5（Codex R0 审 P1 schema 见证）：不可变评测快照表——库未迁出此表=旧代际，
+    # enqueue 冻结快照将报错。与 health.eval_snapshot_axis（活进程见证）互补。
+    "eval_snapshots",
 })
 
 _HTTP_TIMEOUT = 10
@@ -277,6 +283,27 @@ def check_live_created_by_username_generation(base_url: str) -> Check:
     )
 
 
+def check_live_eval_snapshot_generation(base_url: str) -> Check:
+    """T2/#5 运行进程的不可变快照代际见证（Codex R0 审 P1）：eval_snapshots 表存在
+    （检查 2）只证磁盘，活 API 必须自报 eval_snapshot_axis——否则「DB 已迁移+worker 已
+    更新、API 仍 T1 旧码」窗口内旧 API 入队无 snapshot_handle 的 run，worker 回退活磁盘
+    执行，enqueue 后改活包对 run 有影响，「评的就是晋升的那版」不可变保证静默失效。
+    判定 is True，不认 truthy。"""
+    url = f"{base_url}/api/health"
+    try:
+        _, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check("运行进程快照代际", False, f"{url} 不可达或非 JSON：{exc}")
+    if payload.get("eval_snapshot_axis") is True:
+        return Check("运行进程快照代际", True, "活进程自报 eval_snapshot_axis=true")
+    return Check(
+        "运行进程快照代际", False,
+        "health 无 eval_snapshot_axis 标记——运行中的 API 是 T2 之前的旧进程"
+        "（库可能已迁移+worker 已更新，但 API 未重启到冻结快照的代码），fail-closed",
+    )
+
+
 def check_auth_generation(base_url: str) -> Check:
     """鉴权代际见证：匿名打有数据的端点，401 才是新代际的证词。
 
@@ -357,6 +384,7 @@ def main() -> int:
     checks.append(check_model_gateway_config(base_url))
     checks.append(check_live_classification_generation(base_url))
     checks.append(check_live_created_by_username_generation(base_url))
+    checks.append(check_live_eval_snapshot_generation(base_url))
     checks.append(check_db_identity(base_url, db_path))
     checks.append(check_auth_generation(base_url))
     checks.append(check_frontend_dist())

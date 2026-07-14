@@ -44,7 +44,11 @@ DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 # T1（GH #2，Codex R1 审 P1）：worker 新增必需行为——驱动评测异步队列（EvalRunner）。
 # 旧 worker 无此代码时仍产新鲜心跳骗过 deploy_selfcheck，却从不消费 eval_runs，令每个
 # 202 入队响应永久停 queued。故随此必需 worker 行为 bump 代际，逼 worker 重启到新代码。
-WORKER_GENERATION = "t1-eval-async-queue"
+# T2（GH #5，Codex R0 审 P1）：worker 新增必需行为——认领带 snapshot_handle 的 run 时须
+# 材化冻结快照执行（读快照非活磁盘）。T1 worker 无此分支会忽略 handle、按活磁盘执行，
+# 「评的就是晋升的那版」不可变保证在分离部署窗口内静默失效，而心跳仍新鲜。故随此协议
+# 变更 bump 代际，配合 health.eval_snapshot_axis（API 侧见证）双向逼两端重启到新代码。
+WORKER_GENERATION = "t2-eval-immutable-snapshot"
 
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。
 # monitor_adapter_recon 工具经此子进程调核起草 adapter 草案；未配置=核不可达=工具

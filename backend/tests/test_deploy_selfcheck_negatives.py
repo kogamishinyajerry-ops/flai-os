@@ -344,6 +344,34 @@ def test_live_username_axis_true_passes(monkeypatch) -> None:
     assert deploy_selfcheck.check_live_created_by_username_generation("http://x").ok is True
 
 
+# ---- 8c. check_live_eval_snapshot_generation（T2/#5 快照代际, is True, Codex R0-P1）----
+
+def test_live_eval_snapshot_axis_false_fails(monkeypatch) -> None:
+    _fake_http(monkeypatch, payload={"eval_snapshot_axis": False})
+    assert deploy_selfcheck.check_live_eval_snapshot_generation("http://x").ok is False
+
+
+def test_live_eval_snapshot_axis_missing_fails(monkeypatch) -> None:
+    """旧 API health 无此标记——库可能已迁出 eval_snapshots+worker 已更新，但 API 仍是
+    T1 旧码不冻结快照；该窗口内旧 API 入队无 handle 的 run、worker 回退活磁盘执行，
+    不可变保证静默失效，必 FAIL 逼 operator 重启 API。"""
+    _fake_http(monkeypatch, payload={"status": "ok", "classification_axis": True})
+    assert deploy_selfcheck.check_live_eval_snapshot_generation("http://x").ok is False
+
+
+def test_live_eval_snapshot_axis_truthy_not_true_fails(monkeypatch) -> None:
+    """is True 纪律：truthy 非布尔真一律 FAIL（安全 gate 铁律）。"""
+    for truthy in ("true", 1, "1"):
+        _fake_http(monkeypatch, payload={"eval_snapshot_axis": truthy})
+        c = deploy_selfcheck.check_live_eval_snapshot_generation("http://x")
+        assert c.ok is False, f"eval_snapshot_axis={truthy!r} 是 truthy 非 True，必 FAIL"
+
+
+def test_live_eval_snapshot_axis_true_passes(monkeypatch) -> None:
+    _fake_http(monkeypatch, payload={"eval_snapshot_axis": True})
+    assert deploy_selfcheck.check_live_eval_snapshot_generation("http://x").ok is True
+
+
 # ---------- 9. check_auth_generation（default-deny 见证） ----------
 
 def test_auth_generation_200_fails(monkeypatch) -> None:

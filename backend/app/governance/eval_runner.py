@@ -291,14 +291,27 @@ def freeze_eval_snapshot(conn: Any, *, agent_registry: Any, agent_id: str) -> st
     for name in _referenced_package_files(agent):
         _grab(name)
     _grab("workflow.py")
+    # eval_cases/ 递归全量冻结（Codex R0 审 P1）：iterdir 非递归、只抓直接子文件，会漏
+    # 掉 case 的 input_files 引用的嵌套 fixture（如 cfd_evaluate_agent 的
+    # fixtures/<run>/postProcessing/.../forceCoeffs.dat）。材化后这些文件缺席，
+    # _run_one_case_inner 判「input_files 引用不合法或不存在」令每个此类 case 失败。
+    # rglob 保相对路径全量抓，覆盖任意深度 fixture。
     cases_dir = pkg_dir / "eval_cases"
     if cases_dir.is_dir():
-        for f in sorted(cases_dir.iterdir()):
+        for f in sorted(cases_dir.rglob("*")):
             if f.is_file():
-                _grab(f"eval_cases/{f.name}")
+                _grab(f.relative_to(pkg_dir).as_posix())
 
-    approved, _drafts, _broken = load_eval_cases(pkg_dir)
-    digest = compute_digest(approved, pkg_dir, agent)
+    # 指纹从冻结字节派生（Codex R0 审 P2）：原实现首遍抓 files、次遍重读活磁盘算
+    # digest，两读之间活包被并发改（部署/case 编辑）会让 content 存 A 版字节却配 B 版
+    # 指纹，执行侧再从材化 A 字节重算得第三个值——run 记录的 digest 与 GET /snapshot
+    # 暴露的 digest 打架。改为把已抓的 files 材化到临时目录、就地 load+算 digest：
+    # 「冻结的字节 == 算指纹的字节 == 执行侧材化读的字节」三者恒等，freeze 内部无 TOCTOU。
+    with tempfile.TemporaryDirectory(prefix="flai_eval_freeze_") as _td:
+        frozen_dir = Path(_td)
+        _materialize_snapshot({"files": files}, frozen_dir)
+        approved, _drafts, _broken = load_eval_cases(frozen_dir)
+        digest = compute_digest(approved, frozen_dir, agent)
     content = {
         "agent_id": agent_id,
         "agent_version": str(agent.get("version")),
