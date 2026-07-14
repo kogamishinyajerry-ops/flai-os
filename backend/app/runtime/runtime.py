@@ -484,6 +484,11 @@ class AgentRuntime:
                 f"{agent.get('version')!r}——拒在异于锁定版本上执行（跨升级窗口 provenance 权威性，"
                 "K1 签发见证前提）；请对当前版本重建任务"
             )
+            # final-confirm P2：本分支在 set_task_data_classification 前触发，任务分级留 NULL→
+            # classification_gate 当 sensitive 遮蔽 drift 诊断（含"请重建"指引），用户无法诊断。
+            # drift 是固定系统消息、非敏感用户内容，CAS 落 internal 使诊断经分级门可见（同 R3-2
+            # 级联取消；set_task_data_classification 是 CAS-on-NULL，未执行任务恒 NULL 故等价落 internal）。
+            repos.set_task_data_classification(conn, task_id, "internal")
             repos.set_task_status(conn, task_id, "failed", error_message=msg)
             repos.append_event(
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",

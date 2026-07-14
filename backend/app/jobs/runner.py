@@ -147,16 +147,20 @@ def resolve_dependencies_once(conn_factory: Callable[[], sqlite3.Connection]) ->
         try:
             if _resolve_one_candidate(conn, task):
                 advanced += 1
-        except (TypeError, KeyError, ValueError) as exc:
-            # R1（loop-auditor 巡查）+ 命中即审 R3：**单候选毒丸隔离，仅限确定性畸形数据错**。
-            # TypeError/KeyError/ValueError（含 json 解码、append_event 事件契约校验 wrap 的
-            # ValueError）=持久数据本身畸形（depends_on/上游 output_file_ids 非 list、
-            # input_binding.from_tasks 非 list、畸形 agent_id…直调 repos/legacy/迁移可绕 API
-            # Pydantic 写入），重试必永久命中、掀翻整趟令其后合法候选饿死→quarantine
-            # （created→cancelled+诊断）除之。**命中即审 R3：operational 错误（sqlite3.OperationalError
-            # 锁超时/IO 等瞬时故障）绝不当毒丸**——DB 恢复后本可重试，若 cancel 会把合法任务
-            # **永久误杀**；不在此 except 内、上抛至 _resolve_if_due except 兜底（记日志、下 tick 重试）。
-            # 契约收紧/写边界校验（R2）defer 内网，本隔离使 resolver 对**已存**畸形数据鲁棒（quarantine 非 prevent）。
+        except Exception as exc:
+            # R1（loop-auditor）+ 命中即审 R3 + final-confirm：**单候选毒丸隔离，黑名单-瞬时**。
+            # broad catch，只 re-raise 瞬时 operational 错（sqlite3.OperationalError 锁超时/IO——DB
+            # 恢复后本可重试，绝不当毒丸 cancel **永久误杀合法任务**，上抛至 _resolve_if_due except
+            # 兜底记日志+下 tick 重试）；其余一律 quarantine（created→cancelled+诊断）：确定性畸形
+            # 持久数据（depends_on/上游 output_file_ids 非 list=TypeError、input_binding 非 dict=
+            # AttributeError、depends_on 元素非 str=sqlite3.ProgrammingError、畸形 agent_id 致事件契约
+            # =ValueError…直调 repos/legacy/迁移可绕 API Pydantic 写入），重试必永久命中、掀翻整趟令
+            # 后续合法候选饿死。**★final-confirm 修正方向**：前版白名单 (TypeError,KeyError,ValueError)
+            # 漏了 AttributeError/ProgrammingError 等毒丸→重新饿死；**毒丸集是开集**，正解=黑名单
+            # **瞬时**（小闭集）、quarantine 其余。契约收紧/写边界校验（R2）defer 内网，本隔离使
+            # resolver 对**已存**畸形数据鲁棒（quarantine 非 prevent）。
+            if isinstance(exc, sqlite3.OperationalError):
+                raise  # 瞬时 operational 故障：上抛兜底重试，绝不 quarantine 误杀合法任务
             if _quarantine_poison_candidate(conn, task, exc):
                 advanced += 1
         finally:

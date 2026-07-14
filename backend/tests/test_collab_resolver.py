@@ -1083,6 +1083,37 @@ def test_hitreview_R2_agent_version_drift_fails_task(runtime_env):
         t = repos.get_task(conn, "drift_task")
         assert t["status"] == "failed"  # 版本漂移 → fail-closed
         assert "版本漂移" in (t.get("error_message") or "")  # 且失败因确是版本检查
+        assert t["data_classification"] == "internal"  # final-confirm P2：诊断经分级门可见非遮蔽
+    finally:
+        conn.close()
+
+
+def test_finalconfirm_open_set_poison_shapes_quarantined(dbf):
+    """final-confirm P1：**毒丸集是开集**——input_binding 非 dict（AttributeError）、depends_on 元素
+    非 str（sqlite3.ProgrammingError）等前版白名单 (TypeError,KeyError,ValueError) 漏掉的毒丸，
+    黑名单-瞬时结构下一律 quarantine、不掀翻整趟。拆回白名单 → 这些毒丸重新饿死后续候选 RED。"""
+    conn = dbf()
+    try:
+        _mk(conn, "up")
+        _attach_output(conn, "up")
+        _drive(conn, "up", "completed_reviewed")
+        # 毒丸①：input_binding 是 list（非 dict）→ binding.get 抛 AttributeError
+        _mk(conn, "poison_attr", depends_on=["up"], input_binding=["x"])
+        # 毒丸②：depends_on 元素是 dict（非 str）→ get_task 绑定抛 sqlite3.ProgrammingError
+        repos.create_task(
+            conn, task_id="poison_prog", agent_id="hello_agent", agent_version="0.1.0",
+            name="poison_prog", created_by="t", inputs={}, input_file_ids=[], metadata={},
+            depends_on=[{}],
+        )
+        _mk(conn, "zvalid", depends_on=["up"])  # 合法候选（id 序在毒丸后），验不被饿死
+    finally:
+        conn.close()
+    resolve_dependencies_once(dbf)  # 不应抛（毒丸各自 quarantine，非 operational）
+    conn = dbf()
+    try:
+        assert repos.get_task(conn, "poison_attr")["status"] == "cancelled"  # AttributeError 毒丸隔离
+        assert repos.get_task(conn, "poison_prog")["status"] == "cancelled"  # ProgrammingError 毒丸隔离
+        assert repos.get_task(conn, "zvalid")["status"] == "queued"  # 合法候选未被饿死
     finally:
         conn.close()
 
