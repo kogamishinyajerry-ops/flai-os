@@ -312,3 +312,83 @@ def test_enqueue_malformed_input_files_stays_observable_not_500(conn_factory, tm
     approved, _d, broken = eval_runner.load_eval_cases(pkg)
     assert any(b["_file"] == "case_bad.json" for b in broken), "畸形 input_files → broken"
     assert not any(c["_file"] == "case_bad.json" for c in approved), "畸形 case 不进 approved"
+
+
+def test_snapshot_registry_respects_live_deregistration(tmp_path) -> None:
+    """R2-P1（Codex）：agent 被活注册表注销后（base.get→None），shim 绝不用冻结配置复活它
+    ——授权以活注册表为准，返回 None 让 _run_eval_body 的 missing-agent 门 fail-closed。
+    tamper：get 无条件返回 frozen → 返回冻结配置非 None → RED。"""
+    from backend.app.governance import eval_runner
+
+    class _DeregisteredBase:
+        def get(self, aid):  # 已被 reconcile_agent_scopes 注销
+            return None
+
+    frozen = {"id": "hello_agent", "version": "0.1.0-frozen"}
+    shim = eval_runner._SnapshotRegistry(_DeregisteredBase(), "hello_agent", frozen, tmp_path)
+    assert shim.get("hello_agent") is None, "活注册表注销后绝不返回冻结 agent（授权 fail-closed）"
+
+
+def test_snapshot_registry_returns_frozen_when_live_authorizes(tmp_path) -> None:
+    """活注册表仍持有该 agent 时，shim 返回**冻结内容**（可复现执行），非活配置。"""
+    from backend.app.governance import eval_runner
+
+    class _AuthorizedBase:
+        def get(self, aid):  # 活态仍在（版本刻意不同于冻结）
+            return {"id": aid, "version": "9.9.9-live"}
+
+    frozen = {"id": "hello_agent", "version": "0.1.0-frozen"}
+    shim = eval_runner._SnapshotRegistry(_AuthorizedBase(), "hello_agent", frozen, tmp_path)
+    got = shim.get("hello_agent")
+    assert got is not None and got["version"] == "0.1.0-frozen", "活授权在→返回冻结内容非活配置"
+
+
+def test_draft_with_malformed_input_files_stays_draft_not_broken(tmp_path) -> None:
+    """R2-P2（Codex）：draft case（待策展 WIP）的 input_files 即便畸形也绝不判 broken
+    （broken→failed 挡晋升覆盖，违 draft 隔离契约「列出但绝不计数」）——input_files 形态
+    校仅施于 approved。tamper：把形态校移到 curation 分类之前 → draft 判 broken → RED。"""
+    import json as _json
+
+    from backend.app.governance import eval_runner
+
+    reg, pkg = _fresh_registry(tmp_path)
+    (pkg / "eval_cases" / "case_draft_wip.json").write_text(
+        _json.dumps({
+            "case_id": "wip", "curation": "draft", "inputs": {"name": "x"},
+            "input_files": [1, 2],  # WIP 临时畸形
+            "checks": [{"kind": "status_is", "value": "completed"}],
+        }),
+        encoding="utf-8",
+    )
+    approved, drafts, broken = eval_runner.load_eval_cases(pkg)
+    assert any(d["_file"] == "case_draft_wip.json" for d in drafts), "draft 保持 draft（隔离契约）"
+    assert not any(b["_file"] == "case_draft_wip.json" for b in broken), \
+        "draft 绝不因畸形 input_files 判 broken"
+
+
+def test_freeze_rejects_agent_with_escaping_schema_ref(conn_factory, tmp_path) -> None:
+    """R2-P2（Codex）：agent 的 schema/entrypoint 引用逃出包根（绝对/..）→ freeze fail-closed
+    拒。仅跳过捕获不足以堵：冻结的 agent 配置仍原样保留该路径，执行侧 AgentRuntime 与
+    compute_digest 会用它读活磁盘（materialized_dir / "/abs" == "/abs"），快照声称冻结 A 却
+    实评 live B。tamper：去掉 freeze 的引用封闭 raise → 不抛 → RED。"""
+    import pytest as _pytest
+
+    from backend.app.governance import eval_runner
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "agent.yaml").write_text("id: x\nversion: 0.1.0\n", encoding="utf-8")
+
+    class _FakeReg:
+        def get(self, aid):
+            return {"id": "x", "version": "0.1.0", "input": {"schema": "/etc/hostname"}}  # 绝对逃逸
+
+        def package_dir(self, aid):
+            return pkg
+
+    conn = conn_factory()
+    try:
+        with _pytest.raises(ValueError, match="逃出包根"):
+            eval_runner.freeze_eval_snapshot(conn, agent_registry=_FakeReg(), agent_id="x")
+    finally:
+        conn.close()

@@ -92,11 +92,28 @@ def load_eval_cases(pkg_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str,
             continue
         data["_file"] = path.name
         data["_raw"] = raw
-        # input_files 形态严校（Codex R1 审 P2）：必须是 list[str]。畸形（整数/混型/
-        # 非列表）此前会让 compute_digest 的 sorted()/路径拼接抛 TypeError——T2 起 freeze
-        # 在 create_eval_run 之前算 digest，未捕获的异常令 POST 返 500 且不落 run，async
-        # 端点失去可观测性（T1 时该 run 会被终态化 error）。归类 broken（同坏 JSON 口径，
-        # D3 记 failed），digest 与执行都不碰它，端点保持 202+终态可观测。
+        # curation 三值严判（异源审 P2-8）：缺省=approved（既有手写口径）、
+        # 精确 "draft"=待策展、其余任何值（"pending"/"draft "/false…）一律
+        # broken——fail-closed 于畸形策展状态，绝不静默当 approved。
+        # 先分 curation（Codex R2 审 P2）：draft 是待策展 WIP、契约上「列出但绝不计数」，
+        # 其 input_files 可能仍是临时畸形值——绝不能因此把 draft 判 broken（会 →failed
+        # 挡晋升覆盖，违背 draft 隔离契约）。故 input_files 形态校**仅施于 approved**。
+        curation = data.get("curation")
+        if curation == "draft":
+            drafts.append(data)
+            continue
+        if curation is not None and curation != "approved":
+            broken.append({
+                "_file": path.name,
+                "error": f"curation 字段值不合法：{curation!r}（只认缺省/approved/draft）",
+            })
+            continue
+        # 至此为 approved（缺省/approved）——只对将计入证据的 approved case 校 input_files
+        # 形态（Codex R1 审 P2）：必须是 list[str]。畸形（整数/混型/非列表）此前会让
+        # compute_digest 的 sorted()/路径拼接抛 TypeError——T2 起 freeze 在 create_eval_run
+        # 之前算 digest，未捕获异常令 POST 返 500 且不落 run，async 端点失可观测（T1 时该
+        # run 会终态化 error）。归类 broken（同坏 JSON 口径，D3 记 failed），digest 与执行
+        # 都不碰它，端点保持 202+终态可观测。
         ifiles = data.get("input_files")
         if ifiles is not None and (
             not isinstance(ifiles, list) or any(not isinstance(x, str) for x in ifiles)
@@ -106,19 +123,7 @@ def load_eval_cases(pkg_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str,
                 "error": f"input_files 形态非法（须 list[str]）：{ifiles!r}",
             })
             continue
-        # curation 三值严判（异源审 P2-8）：缺省=approved（既有手写口径）、
-        # 精确 "draft"=待策展、其余任何值（"pending"/"draft "/false…）一律
-        # broken——fail-closed 于畸形策展状态，绝不静默当 approved。
-        curation = data.get("curation")
-        if curation == "draft":
-            drafts.append(data)
-        elif curation is None or curation == "approved":
-            approved.append(data)
-        else:
-            broken.append({
-                "_file": path.name,
-                "error": f"curation 字段值不合法：{curation!r}（只认缺省/approved/draft）",
-            })
+        approved.append(data)
     return approved, drafts, broken
 
 
@@ -290,12 +295,35 @@ def freeze_eval_snapshot(conn: Any, *, agent_registry: Any, agent_id: str) -> st
     """冻结当前活包为不可变快照，返回内容派生 handle（T2/#5）。捕获 { 解析配置 agent +
     材化所需全部包文件 + eval_cases_digest }，canonical JSON 的 sha256 为 handle，
     insert-once 落库。执行侧据 handle 材化读取而非活磁盘——enqueue 后改活包对该 run 无
-    影响，「评的就是晋升的那版」由冻结保证而非靠检测篡改。"""
+    影响，「评的就是晋升的那版」由冻结保证而非靠检测篡改。
+
+    覆盖边界（Codex R2 审 P1，与 compute_digest / ADR-0018 同界，如实声明不掩盖）：
+    快照冻结的是**agent 包 + eval_cases 文件**——workflow/prompt/schema/case/input_files。
+    它**不冻结工具经环境变量读取的外部活状态**：如 cfd_evaluate_agent 的 workflow 调
+    cfd_result_read，其 adapter 只认 run_id、从 `$FLAI_CFD_CASE_DIR/<run_id>` 读**活**
+    文件系统，绕过材化目录与 task input_files。对这类「工具读外部活态」的 agent，冻结的
+    fixture 是惰性的、实评仍是 live 结果，快照的不可变保证不覆盖该外部态（与 M10 digest
+    的既有边界一致——digest 亦只哈希 case+包文件，不含工具读的外部态）。完整 tool/model/
+    scope provenance 与外部态固化是 V0.2 槽位（ADR-0018 已声明）；自足 agent（包内可复现，
+    如 hello_agent）快照完整生效，已由 eval_snapshot_acceptance e2e 实证。"""
     agent = agent_registry.get(agent_id)
     if agent is None:
         raise ValueError(f"agent 不存在：{agent_id}")
     pkg_dir = agent_registry.package_dir(agent_id)
     pkg_real = pkg_dir.resolve()
+    # 引用文件路径封闭 fail-closed 拒冻结（Codex R2 审 P2）：schema/entrypoint 仅受「是
+    # 字符串」约束。绝对路径 / ../ 逃逸的 ref 即便 _grab 跳过捕获，冻结的 agent 配置仍原样
+    # 保留该路径字符串——执行侧 AgentRuntime 校验与 compute_digest 会用它读**活磁盘**
+    # （materialized_dir / "/abs" == "/abs"），令快照声称冻结 A 却实评 live B。故在建 run
+    # 前直接拒冻结此类畸形 agent（引用应为包内相对路径，于 agent 注册期修正）。跳过捕获
+    # 不足以堵——必须让这种 agent 根本进不了快照。无 checked-in agent 用逃逸 ref。
+    for _ref in _referenced_package_files(agent):
+        _rp = (pkg_dir / _ref).resolve()
+        if _rp != pkg_real and pkg_real not in _rp.parents:
+            raise ValueError(
+                f"agent {agent_id!r} 的引用文件逃出包根：{_ref!r}——拒绝冻结，快照无法保证"
+                "该路径不可变（把 schema/entrypoint 改为包内相对路径后重试）"
+            )
     files: dict[str, str] = {}
 
     def _grab(rel: str) -> None:
@@ -440,7 +468,16 @@ class _SnapshotRegistry:
         self._dir = materialized_dir
 
     def get(self, agent_id: str) -> Any:
-        return self._frozen_agent if agent_id == self._agent_id else self._base.get(agent_id)
+        if agent_id != self._agent_id:
+            return self._base.get(agent_id)
+        # 冻结内容仅供**可复现执行**；授权仍以活注册表为准（Codex R2 审 P1）：enqueue
+        # 后 agent 被 reconcile_agent_scopes 注销（如 scope 转 restricted、包被撤下）时，
+        # 绝不用冻结配置把它复活——活注册表已 get→None 即 fail-closed 返回 None，让
+        # _run_eval_body 的 missing-agent 门收口 error。否则跨重启存活的 queued run 会用
+        # 冻结 scope 白名单执行一个已被治理注销的 agent，missing-agent 门永不触达。
+        if self._base.get(agent_id) is None:
+            return None
+        return self._frozen_agent
 
     def package_dir(self, agent_id: str) -> Any:
         return self._dir if agent_id == self._agent_id else self._base.package_dir(agent_id)
