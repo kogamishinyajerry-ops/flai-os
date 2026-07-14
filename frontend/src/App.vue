@@ -314,6 +314,20 @@ onMounted(loadConvos);
   /* 衬线 display 字体（Claude 暖编辑语言）：只用于「大时刻」标题——目标句、hero 问候。
    * CJK 走 Songti/宋体，Latin 走 Iowan/Palatino，营造克制的编辑质感，与无衬线 body 对位。*/
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "STSong", "Times New Roman", serif;
+  /* 批D token 地基：字体三元组（--serif 已有）+ 字号阶 + radius 阶 */
+  --sans: "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --mono: "SF Mono", ui-monospace, Menlo, "Cascadia Code", monospace;
+  --fs-title: 26px;   /* 页标题（收口散落 20/22/25/27 四档） */
+  --fs-h3: 16px;      /* 版块标题 */
+  --fs-body: 13.5px;  /* 正文 */
+  --fs-sm: 12.5px;    /* 次要 */
+  --fs-xs: 11.5px;    /* faint/caption */
+  --fs-2xs: 10px;     /* eyebrow/微标 */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;  /* 卡片主 */
+  --radius-xl: 16px;
+  --radius-pill: 999px;
   --clay-deep: #a54e2f;
   --surface-raised: #ffffff;
   --sidebar-w: 264px;
@@ -584,7 +598,7 @@ body {
   margin: 0;
   background: var(--page-bg);
   color: var(--ink);
-  font-family: "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  font-family: var(--sans);
 }
 .app-shell {
   min-height: 100vh;

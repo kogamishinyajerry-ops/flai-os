@@ -1504,7 +1504,7 @@ watch(
 @media (max-width: 640px) {
 }
 kbd {
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--mono);
   font-size: 10.5px;
   background: var(--paper-rail);
   border: 1px solid var(--hairline);
@@ -1532,7 +1532,7 @@ kbd {
 }
 .agent-pick .ap-error { color: var(--trust-fail); font-size: 12px; padding: 4px 14px; }
 .agent-pick .ap-maturity {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--mono);
   font-size: 10px;
   color: var(--ink-mid);
   border: 1px solid var(--border-soft, var(--hairline));

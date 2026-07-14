@@ -579,7 +579,7 @@ onMounted(load);
   gap: 12px;
   color: var(--ink-soft);
   font-size: 12px;
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--mono);
   margin-bottom: 10px;
 }
 .agent-tags {
