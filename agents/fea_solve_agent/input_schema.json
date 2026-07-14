@@ -21,7 +21,9 @@
     "I": {
       "type": "number",
       "exclusiveMinimum": 0,
-      "description": "截面对中性轴惯性矩 I（m^4）。"
+      "minimum": 1e-12,
+      "maximum": 10.0,
+      "description": "截面对中性轴惯性矩 I（m^4）。量级护栏 1e-12~10 覆盖细丝到巨梁，拦量纲滑档。"
     },
     "L": {
       "type": "number",
@@ -39,7 +41,9 @@
     "A": {
       "type": "number",
       "exclusiveMinimum": 0,
-      "description": "横截面积 A（m^2）。"
+      "minimum": 1e-9,
+      "maximum": 1000.0,
+      "description": "横截面积 A（m^2）。量级护栏 1e-9~1000 覆盖细丝到巨梁，拦量纲滑档。"
     },
     "n_elements": {
       "type": "integer",

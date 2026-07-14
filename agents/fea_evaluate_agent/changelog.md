@@ -19,3 +19,6 @@
   先例）。
 - 诚实负例（eval_cases case_003）：简支 n_elements=1 真实欠网格化误差 10.99%
   > 默认容差 2%，非篡改 fixture——验证 oracle 真能拦截离散不足，而非逢正必过。
+- 异源双轴审收口（Codex P2-1/P2-2，均 grounded）：①人签件 .md 频率值
+  `.6f`→`.6g`（极小频率不再显示成 0 误导签发人）；②加 case_004 失败路径覆盖案
+  （畸形产物→诚实 failed），满足 min_eval_coverage 晋升门要求的 status_is:failed。

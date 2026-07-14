@@ -9,8 +9,8 @@
   "n_elements": 1
  },
  "fem_result": {
-  "omega1_rad_s": 139.44333775567713,
-  "f1_hz": 22.193096485048734,
+  "omega1_rad_s": 139.44333775564544,
+  "f1_hz": 22.193096485043693,
   "dof_count": 4,
   "element_type": "euler_bernoulli_cubic_hermite_2node",
   "mass_formulation": "consistent"

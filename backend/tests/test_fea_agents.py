@@ -7,19 +7,23 @@
 2. 集成（真实 runtime + resolver + 人签）：solve→evaluate 经 depends_on/input_binding
    声明式串联，**未签发的 solve 上游 resolver 绝不放行下游**（K1 签发见证闸），
    人签后才管道产物入队 evaluate——同时验证本发消费的协作运行时。
+3. eval_cases 实跑（run_agent_evals）：两 Agent 的 eval_cases 经真实治理 runner 全绿，
+   非休眠资产（loop-auditor d7）。
 
-零内核 diff 断言（test_zero_kernel_diff_footprint）：本发不改 backend/app。
+零内核 diff（backend/app 零改动）是本发一次性属性，经 `git diff backend/app` 为空
+验证并记于设计文档——不放进永久 pytest 套件（Codex P1-1/loop-auditor FLAG：HEAD-vs-main
+的 git-diff 断言既会在未来合法改内核的分支上误红，又对纯 untracked 文件盲）。
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
 
+from backend.app.governance.eval_runner import run_agent_evals
 from backend.app.jobs.runner import JobRunner, resolve_dependencies_once
 from backend.app.model_gateway.gateway import ModelGateway
 from backend.app.runtime.registry import AgentRegistry
@@ -193,7 +197,7 @@ def env(tmp_path):
         REPO_ROOT / "backend" / "app" / "model_gateway" / "profiles.yaml", conn_factory=cf
     )
     runtime = AgentRuntime(agent_registry, tool_registry, model_gateway, cf, tmp_path / "task_runs")
-    return {"cf": cf, "runtime": runtime}
+    return {"cf": cf, "runtime": runtime, "registry": agent_registry}
 
 
 def test_chain_solve_signoff_then_evaluate(env):
@@ -272,22 +276,61 @@ def test_chain_solve_signoff_then_evaluate(env):
     assert data["error_pct"] < 0.01
 
 
-# ─────────────────────── 判据①：零内核 diff 断言 ───────────────────────
-def test_zero_kernel_diff_footprint():
-    """判据①的可度量断言：本发相对 main 分叉点不改 backend/app/*（内核）。
-    只加 agents/fea_*_agent/ 包 + 本测试文件。若某后续改动碰了内核，此测试红。"""
-    merge_base = subprocess.run(
-        ["git", "merge-base", "HEAD", "main"], cwd=REPO_ROOT,
-        capture_output=True, text=True, check=True,
-    ).stdout.strip()
-    changed = subprocess.run(
-        ["git", "diff", "--name-only", merge_base, "HEAD"], cwd=REPO_ROOT,
-        capture_output=True, text=True, check=True,
-    ).stdout.split()
-    # 已提交的内核改动为零；工作树未提交改动也一并检查（本发实现期）
-    changed += subprocess.run(
-        ["git", "diff", "--name-only", merge_base], cwd=REPO_ROOT,
-        capture_output=True, text=True, check=True,
-    ).stdout.split()
-    kernel_touched = sorted({p for p in changed if p.startswith("backend/app/")})
-    assert kernel_touched == [], f"判据①违背：本发碰了内核 backend/app：{kernel_touched}"
+def test_eval_cases_all_green_through_runner(env):
+    """两 Agent 的 eval_cases 经真实治理 runner（run_agent_evals，全链 runtime.execute
+    + checks 机判）全绿——非休眠资产（loop-auditor d7）。同时坐实晋升门 min_eval_coverage：
+    ≥3 approved case + 至少 1 个 status_is:failed（Codex P2-1）。"""
+    runtime = env["runtime"]
+    for agent_id in ("fea_solve_agent", "fea_evaluate_agent"):
+        result = run_agent_evals(
+            conn_factory=env["cf"], agent_registry=env["registry"], runtime=runtime,
+            uploads_dir=runtime.uploads_dir, task_runs_dir=runtime.task_runs_dir,
+            agent_id=agent_id, triggered_by="pytest",
+        )
+        assert result["total"] >= 3, f"{agent_id} eval 覆盖不足：{result}"
+        assert result["failed"] == 0, f"{agent_id} eval 有失败：{result.get('case_results')}"
+        assert result["skipped"] == 0, f"{agent_id} eval 有跳过（无 checks?）：{result}"
+
+
+def test_promotion_coverage_has_failure_path():
+    """Codex P2-1：两 Agent 的 eval_cases 各含 ≥3 approved + 至少 1 个 status_is:failed，
+    满足 min_eval_coverage 晋升门。直查磁盘 eval_cases（run_agent_evals 的 case_results
+    不回传原始 checks）。"""
+    for agent_id in ("fea_solve_agent", "fea_evaluate_agent"):
+        cases_dir = REPO_ROOT / "agents" / agent_id / "eval_cases"
+        approved = []
+        for p in sorted(cases_dir.glob("*.json")):
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if data.get("curation", "approved") in (None, "approved"):
+                approved.append(data)
+        assert len(approved) >= 3, f"{agent_id} approved case < 3"
+        has_failed = any(
+            isinstance(c, dict) and c.get("kind") == "status_is" and c.get("value") == "failed"
+            for case in approved for c in (case.get("checks") or [])
+        )
+        assert has_failed, f"{agent_id} 缺 status_is:failed 失败路径案（min_eval_coverage 会拒晋升）"
+
+
+# ─────────────────────── solve 数值鲁棒性 + fail-closed 见证 ───────────────────────
+def test_solve_tiny_scale_frequency(tmp_path):
+    """Codex P1-1 回归：schema 合法的极小频率梁（ω₁~6e-9 rad/s）——旧绝对收敛容差
+    会误判 converged 且 2526% 误差。修复后（尺度相对收敛）须逼近闭式解析解。"""
+    inputs = {"boundary_condition": "cantilever", "E": 1e6, "I": 1e-12,
+              "L": 1000.0, "rho": 30000.0, "A": 1e-6, "n_elements": 8}
+    out = _SOLVE.run({"inputs": inputs, "output_dir": str(tmp_path), "event_logger": _Logger()})
+    assert out["status"] == "success"
+    sol = json.loads((tmp_path / "fea_solution.json").read_text())
+    omega1 = sol["fem_result"]["omega1_rad_s"]
+    ref = (1.8751040687119611 ** 2) * (1e6 * 1e-12 / (30000.0 * 1e-6 * 1000.0 ** 4)) ** 0.5
+    assert abs(omega1 - ref) / ref < 1e-3, f"极小尺度求解误差过大：{omega1} vs {ref}"
+    # 人签件 .md 用 .6g 显示极小频率（P2-2：.6f 会显示成 0.000000 误导签发人）
+    assert "0.000000 rad/s" not in (tmp_path / "fea_solution.md").read_text()
+
+
+def test_solve_fail_closed_branch_reachable(tmp_path, monkeypatch):
+    """loop-auditor FLAG-2：solve 的非正定/机构 fail-closed 分支（正常输入面不可达）
+    经 monkeypatch 强制 _is_positive_definite 恒 False → run() 须诚实 failed，绝不出解。"""
+    monkeypatch.setattr(_SOLVE, "_is_positive_definite", lambda A: False)
+    out = _SOLVE.run({"inputs": _CANTILEVER, "output_dir": str(tmp_path), "event_logger": _Logger()})
+    assert out["status"] == "failed"
+    assert not (tmp_path / "fea_solution.json").exists()  # 不落发散解

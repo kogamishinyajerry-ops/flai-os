@@ -119,30 +119,38 @@ def _is_positive_definite(A: list[list[float]]) -> bool:
 
 def _smallest_eigenvalue(K: list[list[float]], M: list[list[float]], scale: float) -> tuple[float, bool]:
     """广义特征值 Kφ=λMφ 的最小 λ₁：λ₁ = sup{λ : K-λM 正定}。
-    返回 (λ₁, converged)。converged=False 表示二分未能定界（不出解，交诚实 failed）。"""
+    返回 (λ₁, converged)。converged=False 表示二分未能定界（不出解，交诚实 failed）。
+
+    收敛判据必须**尺度相对**（Codex 异源审 P1-1）：λ₁ 量级 ≈ scale=EI/(ρAL⁴)，
+    横跨物性可小至 ~1e-17。绝对容差（旧 `1e-13·max(1,hi)`）解不了比 1e-13 更小的
+    λ₁，会把量级错误的解误判 converged。故：种子 hi=scale（≈λ₁ 量级，非 max(scale,1)
+    的 1.0 地板）+ 相对收敛 `hi-lo ≤ rel_tol·hi` + 非有限（溢出→inf≤inf 假收敛）守卫。"""
     ndof = len(K)
+    _REL_TOL = 1e-12
 
     def pd_at(lam: float) -> bool:
         shifted = [[K[i][j] - lam * M[i][j] for j in range(ndof)] for i in range(ndof)]
         return _is_positive_definite(shifted)
 
+    if not (math.isfinite(scale) and scale > 0.0):
+        return 0.0, False
     if not pd_at(0.0):
         # λ=0 时 K 本身应正定（约束充分）；不正定=结构约束不足/机构，无正频率
         return 0.0, False
-    lo, hi = 0.0, max(scale, 1.0)
+    lo, hi = 0.0, scale  # 种子取 λ₁ 量级；下方按需几何扩张跨过 λ₁
     expand = 0
     while pd_at(hi):
         hi *= 2.0
         expand += 1
-        if expand > 200:  # 病态：无法在合理范围内跨过 λ₁
+        if not math.isfinite(hi) or expand > 4000:  # 溢出/无法定界→诚实失败，绝不 inf≤inf 假收敛
             return 0.0, False
-    for _ in range(200):
+    for _ in range(4000):
         mid = 0.5 * (lo + hi)
         if pd_at(mid):
             lo = mid
         else:
             hi = mid
-        if hi - lo <= 1e-13 * max(1.0, hi):
+        if hi - lo <= _REL_TOL * hi:  # 相对收敛：对任意 λ₁ 量级都精确
             break
     return 0.5 * (lo + hi), True
 
@@ -216,8 +224,8 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
         f"- 截面积 A：{A:.6g} m²",
         f"- 离散单元数 n_elements：{n}（自由度 {2 * (n + 1)}）", "",
         "## 有限元结果（确定性，数字来源：直接刚度法，非 LLM）", "",
-        f"- 一阶圆频率 ω₁：{omega1:.6f} rad/s",
-        f"- 一阶固有频率 f₁：{f1_hz:.6f} Hz",
+        f"- 一阶圆频率 ω₁：{omega1:.6g} rad/s",
+        f"- 一阶固有频率 f₁：{f1_hz:.6g} Hz",
         "- 单元类型：2 节点三次 Hermite 梁单元 · 一致质量阵",
         "- 求解方法：广义特征值 Cholesky 正定性二分", "",
         "> 收敛性/是否满足设计要求由 fea_evaluate_agent 对照闭式解析解判据给出，"

@@ -92,7 +92,13 @@ solve 侧 rhr=false 多一次人工卡点，是设计意图非缺陷）。这条
 - **集成（真实 runtime+resolver+人签）**：全链 solve→waiting_review→**未签则 resolver
   返回 0 不放行**→人签 completed→resolver 管道入队 evaluate→waiting_review→人签
   →completed，评估 passed=true。
-- **判据①度量**：`test_zero_kernel_diff_footprint` git-diff 断言 `backend/app` 零改动。
+- **eval_cases 实跑**：`test_eval_cases_all_green_through_runner` 经真实治理 runner
+  （run_agent_evals，全链 runtime.execute + checks 机判）跑两 Agent 全部 eval_cases
+  全绿——非休眠资产。
+- **判据①度量**：`git diff backend/app`（分叉点 main@1abb3b6 → HEAD 及工作树）为空——
+  一次性属性，经 git 命令验证并记于本文档，**不放进永久 pytest 套件**（异源审指出
+  HEAD-vs-main 的 git-diff 断言既会在未来合法改内核的分支上误红、又对纯 untracked
+  文件盲）。本发两审独立各自 `git diff --stat main HEAD -- backend/app` 复核为空。
 
 ## 6. 诚实边界 / 残余
 
@@ -116,3 +122,28 @@ backend/tests/test_fea_agents.py
 docs/superpowers/specs/2026-07-14-fea-shot-design.md（本文件）
 ```
 `git diff backend/app` = 空。
+
+## 8. 异源双轴审收口（commit 48fa5dc → 修复）
+
+两轴正交异源审（Codex 代码正确性 + loop-auditor 验证架构），全 finding 已 grounded
+复核并处置：
+
+**Codex（86gs gpt-5.6-sol ultra）2P1+2P2 全 grounded 全修**：
+- P1-1 特征值收敛非尺度相对：schema 合法极小频率梁（ω₁~6e-9）旧绝对容差
+  `1e-13·max(1,hi)` 误判 converged 且 2526% 误差 → 改**尺度相对收敛**（种子 hi=scale、
+  `hi-lo≤1e-12·hi`、非有限守卫）+ 回归测试 test_solve_tiny_scale_frequency（2526%→0.0002%）。
+- P1-2 kernel-footprint 测试耦合 HEAD：会在未来合法改内核的分支上误红 → 移出永久套件，
+  零 diff 改由 git 命令一次性验证 + 文档记录。
+- P2-1 evaluate 缺失败路径覆盖案：min_eval_coverage 晋升门要求 ≥1 个 status_is:failed →
+  加 case_004（畸形产物→failed）+ test_promotion_coverage_has_failure_path。
+- P2-2 人签件小频率显示 `.6f`→`0.000000` 误导：两 .md 频率值改 `.6g`（保 evaluation.json 全精度）。
+
+**loop-auditor（Opus，独立 scipy 重写 FEM 交叉验证 + 真变异测试）：APPROVE 18/20，3 FLAG 全修**：
+- FLAG-1 kernel-footprint 测试对纯 untracked 文件盲（与 Codex P1-2 同域，一并移除）。
+- FLAG-2 solve 非正定/机构 fail-closed 分支零覆盖 → 加 test_solve_fail_closed_branch_reachable
+  （monkeypatch _is_positive_definite 恒 False → run() 诚实 failed）。
+- FLAG-3 input_schema 的 I/A 缺量级护栏（仅 E/rho/L 有）→ 补 I(1e-12~10)、A(1e-9~1000)，
+  令「量级护栏」文案覆盖全 5 物性。
+
+loop-auditor 独立复算确认五条核心断言（零 diff / oracle 正确 / fail-closed / 篡改必咬 /
+诚实标注）全部为真；其 scipy 重写 FEM 与本包 Cholesky-二分对 5 案例吻合到 1e-10~1e-14。

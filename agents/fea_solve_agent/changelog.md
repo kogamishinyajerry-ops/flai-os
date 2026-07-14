@@ -19,3 +19,8 @@
   backend/app/cfd/ 的先例）。
 - 数值自验：无量纲 (β₁L)² 收敛表与闭式解析解逐位吻合（悬臂 n=10 误差
   8.6e-5%，简支 n=1 欠网格化误差 10.99% 供 evaluate 侧诚实负例）。
+- 异源双轴审收口（Codex P1-1/P2-2 + loop-auditor FLAG-2/3，均 grounded）：
+  ①特征值二分收敛改**尺度相对**（种子 hi=scale + `hi-lo≤1e-12·hi` + 非有限守卫）——
+  修 schema 合法极小频率梁（ω₁~6e-9）被旧绝对容差误判 converged 的 2526% 误差 bug；
+  ②人签件 .md 频率值 `.6f`→`.6g`（极小频率不再显示成 0）；③input_schema 补 I/A
+  量级护栏（令护栏覆盖全 5 物性）；④非正定 fail-closed 分支加 monkeypatch 见证。
