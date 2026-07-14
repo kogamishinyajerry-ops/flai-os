@@ -203,7 +203,14 @@ def cancel_dependent_task(
         assert_transition("created", "cancelled")
         now = _now_iso()
         conn.execute(
+            # data_classification=COALESCE(…, 'internal')（Codex 增量2审 R3 P2）：级联取消
+            # 任务从未执行故 data_classification=NULL，而 error_message 一置，classification_gate
+            # 会因「NULL 分级 + 有内容」fail-closed 判 sensitive 遮蔽掉系统取消诊断（reason/
+            # message/payload），客户端无法区分级联取消。取消原因是**固定系统消息、非敏感
+            # 用户内容**，CAS-on-NULL 落 internal 使诊断可见（ADR-0025：仅 NULL 时首写、
+            # 不覆盖既有分级，保不可变语义；created 任务本恒 NULL 故等价落 internal）。
             "UPDATE tasks SET status = 'cancelled', error_message = ?, finished_at = ?, "
+            "data_classification = COALESCE(data_classification, 'internal'), "
             "updated_at = ? WHERE id = ? AND status = 'created'",
             (error_message, now, now, task_id),
         )

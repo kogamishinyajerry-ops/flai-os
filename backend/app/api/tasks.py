@@ -58,7 +58,10 @@ class CreateTaskRequest(BaseModel):
     agent_id: str
     name: str | None = Field(default=None, max_length=200)
     inputs: dict[str, Any] = Field(default_factory=dict)
-    input_file_ids: list[str] = Field(default_factory=list)
+    # max_length（Codex 增量2审 R3 P2）：仅 minLength/唯一不够——无数量上限时可提交数万
+    # 个唯一 id，create_task 的 kind-allowlist 逐 id 查库=数万次 round trip 绕 256KB inputs
+    # 闸的 authenticated DoS。64 对直提交输入绰绰有余（resolver 管道注入是内部写、不过本闸）。
+    input_file_ids: list[str] = Field(default_factory=list, max_length=64)
     # M8/ADR-0016：可选归属——由导引协作会话产出的任务记会话 id，供协作工作台
     # 按会话分组。仅分组归属，不改执行语义；门户直建任务不带此字段（留 None）。
     conversation_id: str | None = Field(default=None, max_length=100)

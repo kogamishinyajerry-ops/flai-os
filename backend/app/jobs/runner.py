@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 # 部署自检门以「心跳新鲜 + 代际匹配」双条件见证独立 worker 进程跑当前代码——
 # API 升级而 worker 未重启时旧 worker 落库走 DDL DEFAULT 洗白 sensitive 派生。
 _HEARTBEAT_INTERVAL_SECONDS = 15.0
+# 依赖解析节奏（Codex 增量2审 R3 P2）：resolver 按独立节流跑、不每 run_once 前都跑——
+# 就绪队列长时 run_once 连返 True 无 sleep，逐次前置 resolve 会把无变化的阻塞集重扫致
+# 吞吐坍塌。1s 节流下阻塞任务的解析延迟无害（它本就在等上游）。
+_RESOLVE_INTERVAL_SECONDS = 1.0
 
 _INTERRUPTED_STATUSES = ("validating", "running", "parsing", "analyzing")
 _WORKER_INTERRUPTED_ERROR = (
@@ -292,6 +296,7 @@ class JobRunner:
         self._conn_factory = conn_factory
         self._poll_interval = poll_interval
         self._last_beat_monotonic: float | None = None
+        self._last_resolve_monotonic: float | None = None
 
     def beat(self) -> None:
         """写 worker 心跳+代际（迁移 #7）。失败只记日志不上抛——心跳是部署
@@ -322,6 +327,21 @@ class JobRunner:
             or time.monotonic() - self._last_beat_monotonic >= _HEARTBEAT_INTERVAL_SECONDS
         ):
             self.beat()
+
+    def _resolve_if_due(self) -> None:
+        """依赖解析按独立节流跑（Codex 增量2审 R3 P2）：距上次 <间隔 则跳过，避免就绪
+        队列长时对无变化阻塞集的重扫。异常只记日志不炸 worker（resolver 确定性）。"""
+        now = time.monotonic()
+        if (
+            self._last_resolve_monotonic is not None
+            and now - self._last_resolve_monotonic < _RESOLVE_INTERVAL_SECONDS
+        ):
+            return
+        self._last_resolve_monotonic = now
+        try:
+            resolve_dependencies_once(self._conn_factory)
+        except Exception:
+            logger.exception("run_forever：resolve_dependencies_once 抛异常，继续轮询")
 
     def run_once(self) -> bool:
         """拾取并执行一条 queued 任务；无任务可拾取返回 False。
@@ -426,12 +446,9 @@ class JobRunner:
         try:
             while True:
                 self._beat_if_due()  # 心跳先于拾取：空轮询也证明 worker 活着（迁移 #7）
-                # 依赖解析先于拾取：满足依赖的任务 created→queued 后，本轮 run_once
-                # 即可拾取（协作运行时 §3.3）。resolver 确定性，异常不炸 worker。
-                try:
-                    resolve_dependencies_once(self._conn_factory)
-                except Exception:
-                    logger.exception("run_forever：resolve_dependencies_once 抛异常，继续轮询")
+                # 依赖解析按独立节流跑（§3.3 + R3 P2）：满足依赖的任务 created→queued 后，
+                # 后续 run_once 即可拾取。节流避免就绪队列长时重扫无变化阻塞集。
+                self._resolve_if_due()
                 try:
                     did_work = self.run_once()
                 except Exception:

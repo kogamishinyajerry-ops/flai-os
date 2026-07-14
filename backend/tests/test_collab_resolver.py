@@ -675,3 +675,77 @@ def test_R2_enqueue_event_atomic_rollback_on_invalid_event(dbf):
         assert repos.get_task(conn, "down")["status"] == "created"  # 回滚，未半推进到 queued
     finally:
         conn.close()
+
+
+# ── R3-1 profile:none 运行时强制无 LLM（Codex 增量2审 R3 P1，§3.6 keystone）──
+
+def test_R3_no_model_gateway_stub_denies_all_calls():
+    """R3-1 tamper（桩）：_NoModelGatewayContext 的 chat/embed/vision 一律抛
+    ModelAccessDeniedError——profile:none agent 物理无 LLM。"""
+    from backend.app.core.errors import ModelAccessDeniedError
+    from backend.app.runtime.runtime import _NoModelGatewayContext
+    ctx = _NoModelGatewayContext("evil_none_agent")
+    for call in (
+        lambda: ctx.chat("reasoning", []),
+        lambda: ctx.embed("reasoning", "x"),
+        lambda: ctx.vision("reasoning", "/p", "prompt"),
+    ):
+        with pytest.raises(ModelAccessDeniedError):
+            call()
+
+
+def test_R3_build_context_gates_gateway_by_profile(runtime_env):
+    """R3-1 tamper（注入）：_build_context 按声明 profile 选 gateway——none（含缺省）→ 抛异常
+    桩，非 none → 功能 gateway。拆条件注入 → none agent 拿功能 gateway 可绕人签闸调 LLM+
+    自动 completed+经 resolver 传未签发判决（§3.6 keystone 被击穿）。"""
+    from backend.app.runtime.runtime import _ModelGatewayContext, _NoModelGatewayContext
+    runtime = runtime_env["runtime"]
+    conn = runtime_env["conn_factory"]()
+    try:
+        task = {"agent_id": "x", "id": "t", "inputs": {}}
+        d = Path("/tmp")
+        none_ctx = runtime._build_context(conn, task, {"model": {"profile": "none"}, "tools": []}, d, d, [])
+        default_ctx = runtime._build_context(conn, task, {"tools": []}, d, d, [])  # 缺省 profile
+        real_ctx = runtime._build_context(conn, task, {"model": {"profile": "reasoning"}, "tools": []}, d, d, [])
+        assert isinstance(none_ctx["model_gateway"], _NoModelGatewayContext)
+        assert isinstance(default_ctx["model_gateway"], _NoModelGatewayContext)  # 缺省=none
+        assert isinstance(real_ctx["model_gateway"], _ModelGatewayContext)
+    finally:
+        conn.close()
+
+
+# ── R3-2 级联取消诊断可见（Codex 增量2审 R3 P2）：落 internal 不被分级门遮蔽 ──
+
+def test_R3_cascade_cancel_sets_internal_classification(dbf):
+    """R3-2 tamper：级联取消任务落 data_classification=internal（非 NULL），系统取消诊断经
+    分级门可见、不被 fail-closed 当 sensitive 遮蔽。拆 COALESCE → NULL → 诊断被遮蔽。"""
+    conn = dbf()
+    try:
+        _mk(conn, "up")
+        _drive(conn, "up", "failed")
+        _mk(conn, "down", depends_on=["up"])
+    finally:
+        conn.close()
+    resolve_dependencies_once(dbf)
+    conn = dbf()
+    try:
+        down = repos.get_task(conn, "down")
+        assert down["status"] == "cancelled"
+        assert down["data_classification"] == "internal"  # 非 NULL → 诊断经分级门可见
+    finally:
+        conn.close()
+
+
+# ── R3-3 resolver 独立节流（Codex 增量2审 R3 P2）：间隔内不重跑 ──
+
+def test_R3_resolve_if_due_throttles(runtime_env, monkeypatch):
+    """R3-3 tamper：_resolve_if_due 按间隔节流——间隔内三连调用只真解析一次（防就绪队列
+    长时对无变化阻塞集重扫）。拆节流 → 三次全跑。"""
+    import backend.app.jobs.runner as runner_mod
+    calls = {"n": 0}
+    monkeypatch.setattr(runner_mod, "resolve_dependencies_once", lambda cf: calls.__setitem__("n", calls["n"] + 1))
+    runner = runner_mod.JobRunner(runtime_env["runtime"], runtime_env["conn_factory"])
+    runner._resolve_if_due()  # 首次：跑
+    runner._resolve_if_due()  # 间隔内：跳过
+    runner._resolve_if_due()  # 仍间隔内：跳过
+    assert calls["n"] == 1

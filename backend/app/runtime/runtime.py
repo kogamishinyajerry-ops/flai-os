@@ -23,7 +23,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
-from ..core.errors import FileIntegrityError, KnowledgeScopeDeniedError, ToolNotAllowedError
+from ..core.errors import (
+    FileIntegrityError,
+    KnowledgeScopeDeniedError,
+    ModelAccessDeniedError,
+    ToolNotAllowedError,
+)
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
 
@@ -216,6 +221,34 @@ class _ModelGatewayContext:
                 profile, image_path, prompt, task_id=self._task_id, agent_id=self._agent_id, **safe
             ),
         )
+
+
+class _NoModelGatewayContext:
+    """profile:none Agent 的 model_gateway 桩（Codex 增量2审 R3 P1）：chat/embed/vision 一律
+    fail-closed 抛 ModelAccessDeniedError。§3.6 注册期不变量豁免 profile:none job 于「判决型
+    必 review-gated」——该豁免只有 runtime **真的不让 none agent 调 LLM** 时才成立，否则声明
+    none 即可绕人签闸调 LLM、自动 completed、经 resolver 把未签发判决传下游。此桩把「声明
+    profile:none」钉成「运行时物理无 LLM」，让声明与强制名实一致。非 none profile 的 job 已被
+    §3.6 强制 requires_human_review:true（受人签闸兜底），故仍给功能 _ModelGatewayContext。"""
+
+    def __init__(self, agent_id: str) -> None:
+        self._agent_id = agent_id
+
+    def _deny(self, kind: str) -> None:
+        raise ModelAccessDeniedError(
+            f"Agent {self._agent_id!r} 声明 model.profile=none（不调 LLM）却尝试模型调用（{kind}）"
+            "——profile:none 运行时强制无 LLM（§3.6 判决⟹人签 keystone）；需 LLM 请声明真实 "
+            "profile 且 requires_human_review:true"
+        )
+
+    def chat(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        self._deny("chat")
+
+    def embed(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        self._deny("embed")
+
+    def vision(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        self._deny("vision")
 
 
 def _sha256_file(path: Path) -> str:
@@ -785,11 +818,20 @@ class AgentRuntime:
     ) -> dict[str, Any]:
         agent_id = task["agent_id"]
         allowed_tools = frozenset(agent.get("tools") or [])
+        # Codex 增量2审 R3 P1：按声明 profile 强制 gateway 访问。profile:none（含缺省）→ 抛异常
+        # 桩，物理封死 LLM 调用，令 §3.6「none job 豁免 review-gate」的豁免名实一致；非 none
+        # profile 的 job 已被 §3.6 强制 rhr:true（人签闸兜底）→ 功能 gateway。
+        _profile = (agent.get("model") or {}).get("profile")
+        _gateway = (
+            _NoModelGatewayContext(agent_id)
+            if _profile in (None, "none")
+            else _ModelGatewayContext(self.model_gateway, conn, task["id"], agent_id)
+        )
         context: dict[str, Any] = {
             "task": task,
             "inputs": task["inputs"],
             "files": files,
-            "model_gateway": _ModelGatewayContext(self.model_gateway, conn, task["id"], agent_id),
+            "model_gateway": _gateway,
             "tool_registry": _ToolRegistryContext(
                 self.tool_registry, conn, task["id"], agent_id, allowed_tools
             ),

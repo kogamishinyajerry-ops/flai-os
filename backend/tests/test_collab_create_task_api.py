@@ -177,6 +177,16 @@ def test_R2_eval_origin_upstream_rejected(app_env):
     assert r.status_code == 422
 
 
+def test_R3_oversized_input_file_ids_rejected(app_env):
+    """R3-4 tamper：input_file_ids 超 64 条 → 422（防数万唯一 id 逐个查库绕 256KB 闸的
+    authenticated DoS；max_length=64 前仅逐项长度/唯一约束、无数量上限）。"""
+    client, _ = app_env
+    r = client.post("/api/tasks", json={
+        "agent_id": "hello_agent", "name": "dos", "inputs": {"name": "x"},
+        "input_file_ids": [f"f{i}" for i in range(65)]})
+    assert r.status_code == 422
+
+
 def test_dependent_task_not_claimed_by_worker(app_env):
     """滞留 created 的依赖任务不进 worker 候选集（claim 只取 queued）。"""
     client, app = app_env
