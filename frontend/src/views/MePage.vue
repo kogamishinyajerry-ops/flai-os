@@ -20,11 +20,11 @@
       <div class="me-section-label">最近发起的任务</div>
       <EmptyState v-if="!loading && !loadError && !myTasks.length" description="你还没有发起任务" />
       <div v-else class="me-task-list">
-        <a v-for="t in myTasks" :key="t.id" class="me-task-item" @click="openTask(t)">
+        <router-link v-for="t in myTasks" :key="t.id" class="me-task-item" :to="`/tasks/${t.id}`">
           <span class="me-task-name">{{ t.name || t.agent_id }}</span>
           <span class="me-task-status">{{ statusLabel(t.status) }}</span>
           <span class="me-task-time">{{ formatTime(t.created_at) }}</span>
-        </a>
+        </router-link>
       </div>
       <div v-if="contrib && contrib.total_created > myTasks.length" class="me-feedback-note">
         仅显示最近 {{ myTasks.length }} 条，共发起 {{ contrib.total_created }} 条
@@ -58,15 +58,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from "vue";
-import { useRouter } from "vue-router";
+import { ref, onMounted, onUnmounted, watch } from "vue";
 import { fetchMyContributions, fetchMyTasks } from "../api/me";
 import { request } from "../api/client";
 import EmptyState from "../components/EmptyState.vue";
 import { formatTime, statusLabel } from "../utils/format";
 import { currentUser } from "../stores/session";
 
-const router = useRouter();
 const contrib = ref(null);
 const myTasks = ref([]);
 const team = ref(null);
@@ -105,11 +103,26 @@ async function load() {
   }
 }
 
-function openTask(t) {
-  router.push({ path: `/tasks/${t.id}` });
+// 跨日/跨周零点翻新（Codex R2，同 TodayPage）：页面挂机跨过本地零点时 since 会停在
+// 挂载那天的旧边界，本周 tiles 漂移。排「下个本地零点」定时器：触发即重拉（load 内
+// 每次重算 weekStartIso）并重排；跨日必先跨周则连带纠正。
+let midnightTimer = null;
+function scheduleMidnightRefresh() {
+  const next = new Date();
+  next.setHours(24, 0, 0, 0); // 下一个本地零点
+  midnightTimer = window.setTimeout(() => {
+    load();
+    scheduleMidnightRefresh();
+  }, next.getTime() - Date.now());
 }
 
-onMounted(load);
+onMounted(() => {
+  load();
+  scheduleMidnightRefresh();
+});
+onUnmounted(() => {
+  if (midnightTimer) window.clearTimeout(midnightTimer);
+});
 
 // 换号纠偏（Codex R1 P1）：另一标签页登出换号→本标签 focus 纠正 currentUser 但页面
 // 不重挂（identityReady/route 不变），/me 是私有页会残留旧用户私有数据。监听 username
@@ -143,7 +156,7 @@ watch(() => currentUser.value?.username, (next, prev) => {
   border: 1px solid var(--hairline); border-radius: 8px;
 }
 .me-task-item:hover { border-color: var(--clay-softer); }
-.me-task-name { flex: 1; color: var(--ink); font-size: 13.5px; }
+.me-task-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 13.5px; }
 .me-task-status { color: var(--ink-soft); font-size: 12px; }
 .me-task-time { color: var(--ink-faint); font-size: 11.5px; }
 .me-feedback-count { font-size: 18px; font-weight: 700; color: var(--ink); }

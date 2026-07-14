@@ -302,6 +302,7 @@ const maturityLadder = computed(() => {
 // 最近 ≤8 次评测，旧→新（时间轴左旧右新）；pct=null 表示 total=0「无有效用例」
 const evalTrend = computed(() =>
   (governanceRuns.value || [])
+    .filter((r) => r.status === "completed") // 只画已完成跑批——running(total=0)/error(部分) 不作通过率证据（Codex R2）
     .slice(0, 8)
     .map((r) => ({
       id: r.id,
