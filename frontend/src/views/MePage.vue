@@ -18,11 +18,11 @@
     <!-- 版块2：我发起的任务（精确） -->
     <div class="me-section">
       <div class="me-section-label">最近发起的任务</div>
-      <EmptyState v-if="!loading && !myTasks.length" description="你还没有发起任务" />
+      <EmptyState v-if="!loading && !loadError && !myTasks.length" description="你还没有发起任务" />
       <div v-else class="me-task-list">
         <a v-for="t in myTasks" :key="t.id" class="me-task-item" @click="openTask(t)">
           <span class="me-task-name">{{ t.name || t.agent_id }}</span>
-          <span class="me-task-status">{{ t.status }}</span>
+          <span class="me-task-status">{{ statusLabel(t.status) }}</span>
           <span class="me-task-time">{{ formatTime(t.created_at) }}</span>
         </a>
       </div>
@@ -58,12 +58,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { fetchMyContributions, fetchMyTasks } from "../api/me";
 import { request } from "../api/client";
 import EmptyState from "../components/EmptyState.vue";
-import { formatTime } from "../utils/format";
+import { formatTime, statusLabel } from "../utils/format";
+import { currentUser } from "../stores/session";
 
 const router = useRouter();
 const contrib = ref(null);
@@ -80,7 +81,9 @@ function weekStartIso() {
   return monday.toISOString();
 }
 
+let loadSeq = 0;
 async function load() {
+  const seq = ++loadSeq;
   loading.value = true;
   loadError.value = "";
   const since = weekStartIso();
@@ -90,13 +93,15 @@ async function load() {
       fetchMyTasks(20),
       request(`/api/stats/overview?since=${encodeURIComponent(since)}`),
     ]);
+    if (seq !== loadSeq) return; // 陈旧响应丢弃（换号期间 in-flight 不落地）
     contrib.value = c;
     myTasks.value = t;
     team.value = s;
   } catch (err) {
+    if (seq !== loadSeq) return;
     loadError.value = err.detail || err.message || "加载失败";
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
 }
 
@@ -105,6 +110,17 @@ function openTask(t) {
 }
 
 onMounted(load);
+
+// 换号纠偏（Codex R1 P1）：另一标签页登出换号→本标签 focus 纠正 currentUser 但页面
+// 不重挂（identityReady/route 不变），/me 是私有页会残留旧用户私有数据。监听 username
+// 变化：立即清空旧数据（不留残影）+ 重新拉取（seq 丢弃 in-flight 旧响应）。
+watch(() => currentUser.value?.username, (next, prev) => {
+  if (next === prev) return;
+  contrib.value = null;
+  myTasks.value = [];
+  team.value = null;
+  load();
+});
 </script>
 
 <style scoped>
@@ -138,5 +154,10 @@ onMounted(load);
   margin-top: 24px; padding: 12px 14px; border: 1px dashed var(--hairline);
   border-radius: 8px; background: var(--paper-rail);
   color: var(--ink-faint); font-size: 12px; line-height: 1.6;
+}
+
+@media (max-width: 640px) {
+  .me-overview { grid-template-columns: repeat(2, 1fr); }
+  .me-team-bar { flex-wrap: wrap; gap: 10px 18px; }
 }
 </style>
