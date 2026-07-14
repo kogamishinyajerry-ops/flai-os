@@ -1018,6 +1018,7 @@ def create_eval_run(
     agent_version: str,
     triggered_by: str,
     status: str = "running",
+    snapshot_handle: str | None = None,
 ) -> dict[str, Any]:
     """建 eval_run 行。status 默认 'running'（既有同步路径向后兼容）；异步队列
     入队传 status='queued'（T1，GH #2）。started_at 记建行时刻——同步路径下建行
@@ -1034,10 +1035,11 @@ def create_eval_run(
     try:
         conn.execute(
             """
-            INSERT INTO eval_runs (id, agent_id, agent_version, triggered_by, status, started_at)
-            VALUES (?,?,?,?,?,?)
+            INSERT INTO eval_runs
+                (id, agent_id, agent_version, triggered_by, status, started_at, snapshot_handle)
+            VALUES (?,?,?,?,?,?,?)
             """,
-            (run_id, agent_id, agent_version, triggered_by, status, now),
+            (run_id, agent_id, agent_version, triggered_by, status, now, snapshot_handle),
         )
         snapshot = get_eval_run(conn, run_id)
         conn.execute("COMMIT")
@@ -1045,6 +1047,37 @@ def create_eval_run(
     except Exception:
         conn.execute("ROLLBACK")
         raise
+
+
+def insert_eval_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    handle: str,
+    agent_id: str,
+    agent_version: str,
+    eval_cases_digest: str | None,
+    content_json: str,
+) -> None:
+    """写入不可变评测快照（T2/#5）。handle=内容 sha256（内容派生）。**insert-once**：
+    `INSERT OR IGNORE`——handle 为 PK 且内容派生，同 handle 必同内容，二次写入静默忽略、
+    绝不覆盖（M12 monitor 教训：不可变行绝不无条件 UPDATE/REPLACE）。多 run 引用同一
+    冻结内容自然去重到一行。"""
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO eval_snapshots
+            (handle, agent_id, agent_version, eval_cases_digest, content_json, created_at)
+        VALUES (?,?,?,?,?,?)
+        """,
+        (handle, agent_id, agent_version, eval_cases_digest, content_json, _now_iso()),
+    )
+
+
+def get_eval_snapshot(conn: sqlite3.Connection, handle: str) -> dict[str, Any] | None:
+    """取快照行（含 content_json 原文）。不存在返回 None。"""
+    row = conn.execute(
+        "SELECT * FROM eval_snapshots WHERE handle = ?", (handle,)
+    ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def claim_next_queued_eval_run(

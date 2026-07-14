@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -80,6 +81,35 @@ def get_eval_run(agent_id: str, run_id: str, request: Request) -> dict[str, Any]
     if run is None or run.get("agent_id") != agent_id:
         raise HTTPException(status_code=404, detail=f"eval-run 不存在：{run_id}")
     return run
+
+
+@router.get("/agents/{agent_id}/eval-runs/{run_id}/snapshot")
+def get_eval_run_snapshot(agent_id: str, run_id: str, request: Request) -> dict[str, Any]:
+    """该 run 绑定的不可变快照元数据（T2/#5）：句柄 / agent / 版本 / eval_cases_digest /
+    冻结文件集 / created_at。只回文件名清单，不回文件内容（base64 可能很大）。run 或快照
+    不存在、run 不属该 agent、run 未绑定快照 → 404。只读。"""
+    _agent_or_404(request, agent_id)
+    conn = request.app.state.conn_factory()
+    try:
+        run = repos.get_eval_run(conn, run_id)
+        owned = run is not None and run.get("agent_id") == agent_id
+        handle = run.get("snapshot_handle") if owned else None
+        snap = repos.get_eval_snapshot(conn, handle) if handle else None
+    finally:
+        conn.close()
+    if not owned:
+        raise HTTPException(status_code=404, detail=f"eval-run 不存在：{run_id}")
+    if snap is None:
+        raise HTTPException(status_code=404, detail=f"eval-run 无绑定快照：{run_id}")
+    content = json.loads(snap["content_json"])
+    return {
+        "handle": snap["handle"],
+        "agent_id": snap["agent_id"],
+        "agent_version": snap["agent_version"],
+        "eval_cases_digest": snap["eval_cases_digest"],
+        "frozen_files": sorted(content.get("files", {}).keys()),
+        "created_at": snap["created_at"],
+    }
 
 
 class FixSampleRequest(BaseModel):

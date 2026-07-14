@@ -21,10 +21,12 @@ eval_cases_digest（D2）：本次运行加载的全部 approved case 文件内�
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
 import shutil
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -266,6 +268,54 @@ def _eval_one_check(
     return ok, f"output_field: {dotted!r} {op} {expected!r}，实际 {actual!r}"
 
 
+# 执行材化所需的包文件集（T2/#5）：runtime 显式加载 pkg_dir/workflow.py（见
+# runtime.execute），故 workflow.py 必冻结；其余引用文件（agent.yaml/prompt.md/
+# schemas/entrypoint）+ eval_cases/ 全量（case + input_files）覆盖 load_eval_cases /
+# compute_digest / _run_one_case 的全部磁盘读点。
+def freeze_eval_snapshot(conn: Any, *, agent_registry: Any, agent_id: str) -> str:
+    """冻结当前活包为不可变快照，返回内容派生 handle（T2/#5）。捕获 { 解析配置 agent +
+    材化所需全部包文件 + eval_cases_digest }，canonical JSON 的 sha256 为 handle，
+    insert-once 落库。执行侧据 handle 材化读取而非活磁盘——enqueue 后改活包对该 run 无
+    影响，「评的就是晋升的那版」由冻结保证而非靠检测篡改。"""
+    agent = agent_registry.get(agent_id)
+    if agent is None:
+        raise ValueError(f"agent 不存在：{agent_id}")
+    pkg_dir = agent_registry.package_dir(agent_id)
+    files: dict[str, str] = {}
+
+    def _grab(rel: str) -> None:
+        p = pkg_dir / rel
+        if p.is_file():
+            files[rel] = base64.b64encode(p.read_bytes()).decode("ascii")
+
+    for name in _referenced_package_files(agent):
+        _grab(name)
+    _grab("workflow.py")
+    cases_dir = pkg_dir / "eval_cases"
+    if cases_dir.is_dir():
+        for f in sorted(cases_dir.iterdir()):
+            if f.is_file():
+                _grab(f"eval_cases/{f.name}")
+
+    approved, _drafts, _broken = load_eval_cases(pkg_dir)
+    digest = compute_digest(approved, pkg_dir, agent)
+    content = {
+        "agent_id": agent_id,
+        "agent_version": str(agent.get("version")),
+        "agent": agent,
+        "files": files,
+        "eval_cases_digest": digest,
+    }
+    content_json = json.dumps(content, ensure_ascii=False, sort_keys=True)
+    handle = "snap_" + hashlib.sha256(content_json.encode("utf-8")).hexdigest()
+    repos.insert_eval_snapshot(
+        conn, handle=handle, agent_id=agent_id,
+        agent_version=str(agent.get("version")), eval_cases_digest=digest,
+        content_json=content_json,
+    )
+    return handle
+
+
 def enqueue_eval_run(
     conn: Any,
     *,
@@ -275,15 +325,19 @@ def enqueue_eval_run(
 ) -> dict[str, Any]:
     """入队一次评测跑批（T1，GH #2）：建 status='queued' 的 eval_run 立即返回，
     真正执行交给 worker（配额门内认领 queued→running）。调用方保证 agent 已注册
-    （API 层 404 前置）。agent_version 在入队时刻从活注册表采样落库。"""
+    （API 层 404 前置）。agent_version 在入队时刻从活注册表采样落库。
+
+    T2/#5：入队瞬间冻结不可变快照并把 run 绑定其 handle——执行读快照材化而非活磁盘，
+    enqueue 后改活包对该 run 无影响。"""
     agent = agent_registry.get(agent_id)
     if agent is None:
         raise ValueError(f"agent 不存在：{agent_id}")
+    snapshot_handle = freeze_eval_snapshot(conn, agent_registry=agent_registry, agent_id=agent_id)
     run_id = f"eval_{uuid.uuid4().hex}"
     return repos.create_eval_run(
         conn, run_id=run_id, agent_id=agent_id,
         agent_version=str(agent.get("version")), triggered_by=triggered_by,
-        status="queued",
+        status="queued", snapshot_handle=snapshot_handle,
     )
 
 
@@ -334,6 +388,54 @@ def run_agent_evals(
     )
 
 
+class _SnapshotRegistry:
+    """只读注册表 shim（T2/#5）：对被评测 agent 返回快照冻结的解析配置与材化包目录，
+    其余 agent 委托活注册表。让执行（含 runtime 的 workflow/schema 定位）读冻结内容而非
+    活磁盘——enqueue 后改活包对本 run 无影响。"""
+
+    def __init__(self, base: Any, agent_id: str, frozen_agent: dict[str, Any], materialized_dir: Path) -> None:
+        self._base = base
+        self._agent_id = agent_id
+        self._frozen_agent = frozen_agent
+        self._dir = materialized_dir
+
+    def get(self, agent_id: str) -> Any:
+        return self._frozen_agent if agent_id == self._agent_id else self._base.get(agent_id)
+
+    def package_dir(self, agent_id: str) -> Any:
+        return self._dir if agent_id == self._agent_id else self._base.package_dir(agent_id)
+
+    def __getattr__(self, name: str) -> Any:  # 其余方法（list/scan/deregister…）委托活注册表
+        return getattr(self._base, name)
+
+
+def _materialize_snapshot(content: dict[str, Any], dest_dir: Path) -> None:
+    """把快照冻结的包文件（base64）还原到临时目录，保持相对路径（agent.yaml/workflow.py/
+    schemas/eval_cases/* 等），供执行读取。"""
+    for rel, b64 in content.get("files", {}).items():
+        p = dest_dir / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(base64.b64decode(b64))
+
+
+def _clone_runtime_with_registry(runtime: Any, registry: Any) -> Any:
+    """克隆运行时、仅替换 agent_registry（T2/#5）：runtime.execute 用其 agent_registry
+    定位 workflow.py / schema，必须指向快照材化目录才能读冻结代码/配置。其余依赖
+    （tool_registry/model_gateway/conn_factory/dirs/knowledge/scope）原样复用。"""
+    from ..runtime.runtime import AgentRuntime
+
+    return AgentRuntime(
+        agent_registry=registry,
+        tool_registry=runtime.tool_registry,
+        model_gateway=runtime.model_gateway,
+        conn_factory=runtime.conn_factory,
+        task_runs_dir=runtime.task_runs_dir,
+        knowledge_service=runtime.knowledge_service,
+        uploads_dir=runtime.uploads_dir,
+        scope_registry=runtime.scope_registry,
+    )
+
+
 def execute_eval_run(
     *,
     run_id: str,
@@ -343,13 +445,11 @@ def execute_eval_run(
     uploads_dir: Path,
     task_runs_dir: Path,
 ) -> dict[str, Any]:
-    """执行一个**已建行且处于 running 态**的 eval_run（T1，GH #2）：从 run 行取
-    agent_id/triggered_by，跑全部 approved case，终点复核 digest 后收口。worker
-    认领 queued→running 后调本函数；同步便捷 run_agent_evals 亦复用本核。
+    """执行一个**已建行且处于 running 态**的 eval_run（T1，GH #2）。
 
-    任何意外异常都先把 run 收口为 status='error' 再上抛——绝不留永久 running
-    的僵尸证据（异源审 P2-7/P2-10）。agent 在入队后被删=收口 error 不上抛，worker
-    照常存活。
+    T2/#5：若 run 绑定不可变快照，把快照材化到临时目录 + 用快照绑定的注册表/运行时
+    执行——读冻结内容而非活磁盘，enqueue 后改活包对本 run 无影响。无快照（旧行/同步
+    路径未冻结）回退活注册表读活磁盘（向后兼容）。真正的执行核在 `_run_eval_body`。
     """
     conn = conn_factory()
     try:
@@ -361,6 +461,62 @@ def execute_eval_run(
     agent_id = run["agent_id"]
     triggered_by = run["triggered_by"]
 
+    snapshot_handle = run.get("snapshot_handle")
+    if not snapshot_handle:
+        return _run_eval_body(
+            run=run, run_id=run_id, agent_id=agent_id, triggered_by=triggered_by,
+            conn_factory=conn_factory, agent_registry=agent_registry, runtime=runtime,
+            uploads_dir=uploads_dir, task_runs_dir=task_runs_dir,
+        )
+
+    conn = conn_factory()
+    try:
+        snap = repos.get_eval_snapshot(conn, snapshot_handle)
+    finally:
+        conn.close()
+    if snap is None:
+        # 绑定的快照丢失=证据不可信，fail-closed 收口 error（绝不回退活磁盘伪装成功）
+        conn = conn_factory()
+        try:
+            return repos.finish_eval_run(
+                conn, run_id, status="error", total=0, passed=0, failed=0, skipped=0,
+                case_results=[{
+                    "case_file": "<runner>", "verdict": "failed",
+                    "detail": f"绑定的不可变快照缺失，证据不可信：{snapshot_handle}",
+                }],
+                draft_cases=[], eval_cases_digest=None,
+            )
+        finally:
+            conn.close()
+
+    content = json.loads(snap["content_json"])
+    with tempfile.TemporaryDirectory(prefix="flai_eval_snap_") as _td:
+        materialized = Path(_td)
+        _materialize_snapshot(content, materialized)
+        shim_registry = _SnapshotRegistry(agent_registry, agent_id, content["agent"], materialized)
+        shim_runtime = _clone_runtime_with_registry(runtime, shim_registry)
+        return _run_eval_body(
+            run=run, run_id=run_id, agent_id=agent_id, triggered_by=triggered_by,
+            conn_factory=conn_factory, agent_registry=shim_registry, runtime=shim_runtime,
+            uploads_dir=uploads_dir, task_runs_dir=task_runs_dir,
+        )
+
+
+def _run_eval_body(
+    *,
+    run: dict[str, Any],
+    run_id: str,
+    agent_id: str,
+    triggered_by: str,
+    conn_factory: Callable[[], Any],
+    agent_registry: Any,
+    runtime: Any,
+    uploads_dir: Path,
+    task_runs_dir: Path,
+) -> dict[str, Any]:
+    """评测执行核（活磁盘或快照材化均复用）：agent 解析 → 版本守卫 → 跑全部 approved
+    case → 起终点 digest 复核 → 收口。agent_registry/runtime 由 execute_eval_run 决定是
+    活注册表还是快照绑定的 shim。任何意外异常先收口 error 再上抛，绝不留僵尸 running。"""
     agent = agent_registry.get(agent_id)
     if agent is None:
         conn = conn_factory()

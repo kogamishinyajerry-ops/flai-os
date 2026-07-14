@@ -194,6 +194,19 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     eval_cases_digest TEXT
 );
 
+-- 不可变评测快照（T2/#5）：enqueue 时把 { agent 解析配置 + 引用包文件 + approved
+-- case 集 } 冻结成一行，handle=内容 sha256（内容派生、去重）。执行读快照材化而非活
+-- 磁盘——enqueue 后改活包对该 run 无影响，「评的就是晋升的那版」由冻结保证而非检测。
+-- handle 为 PK ⇒ 写入 INSERT OR IGNORE 即 insert-once（同 handle=同内容，二次不覆盖）。
+CREATE TABLE IF NOT EXISTS eval_snapshots (
+    handle TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    agent_version TEXT NOT NULL,
+    eval_cases_digest TEXT,
+    content_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS promotions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id TEXT NOT NULL,
@@ -348,6 +361,11 @@ def init_db(db_path: str | Path) -> None:
             task_cols_v9 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
             if "created_by_username" not in task_cols_v9:
                 conn.execute("ALTER TABLE tasks ADD COLUMN created_by_username TEXT")
+            # 迁移 #10（T2/#5）：eval_runs.snapshot_handle——run 绑定其冻结快照句柄。
+            # 存量 run 无快照=NULL（执行侧回退活磁盘，向后兼容）。同写锁内探测补列。
+            eval_cols = {row[1] for row in conn.execute("PRAGMA table_info(eval_runs)")}
+            if "snapshot_handle" not in eval_cols:
+                conn.execute("ALTER TABLE eval_runs ADD COLUMN snapshot_handle TEXT")
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:

@@ -974,8 +974,9 @@ def test_eval_run_invalidated_when_package_changes_during_run(
     def _drifting(*args: Any, **kwargs: Any):
         calls["n"] += 1
         value = real_compute(*args, **kwargs)
-        # 第二次调用（run 后复核）返回漂移值，模拟执行期间内容被改
-        return f"{value}-drift" if calls["n"] >= 2 else value
+        # 调用序：①enqueue 冻结快照（T2/#5）②run 起点 ③run 后复核。仅第三次（后复核）
+        # 返回漂移值，模拟「起点采样后、执行期间」内容被改 → 起终点指纹不一致 → 证据作废。
+        return f"{value}-drift" if calls["n"] >= 3 else value
 
     monkeypatch.setattr(runner_mod, "compute_digest", _drifting)
     response = governance_env.client.post(
@@ -998,12 +999,14 @@ def test_eval_task_reaches_terminal_failed_when_runtime_raises(
 ) -> None:
     """F4：runtime.execute 炸掉时 eval 任务必须终态化 failed，绝不留
     validating/running 非终态孤儿；case 如实记 failed。"""
-    runtime = governance_env.app.state.runtime
+    from backend.app.runtime.runtime import AgentRuntime
 
-    def _explode(task_id: str) -> None:
+    def _explode(self: Any, task_id: str) -> None:
         raise RuntimeError("注入：执行炸裂")
 
-    monkeypatch.setattr(runtime, "execute", _explode)
+    # T2/#5：快照执行会克隆 runtime（换快照绑定注册表定位材化包），实例级 patch 不传到
+    # 克隆体——patch 类方法让原 runtime 与克隆体的 execute 都注入失败，覆盖真实执行路径。
+    monkeypatch.setattr(AgentRuntime, "execute", _explode)
     run = _run_eval(governance_env)
     assert run["failed"] >= 1
     exploded = [c for c in run["case_results"] if "runtime.execute 异常" in (c.get("detail") or "")]

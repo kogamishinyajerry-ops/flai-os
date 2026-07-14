@@ -81,6 +81,7 @@ E2E_SCRIPTS=(
   "frontend/e2e/batch_c_rewards_acceptance.py"
   "frontend/e2e/batch_d_visual_acceptance.py"
   "frontend/e2e/eval_queue_acceptance.py"
+  "frontend/e2e/eval_snapshot_acceptance.py"
 )
 
 for script in "${E2E_SCRIPTS[@]}"; do
