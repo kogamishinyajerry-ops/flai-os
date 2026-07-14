@@ -1022,16 +1022,29 @@ def create_eval_run(
     """建 eval_run 行。status 默认 'running'（既有同步路径向后兼容）；异步队列
     入队传 status='queued'（T1，GH #2）。started_at 记建行时刻——同步路径下建行
     即开跑二者同一瞬间；异步队列下 started_at 语义即「入队时刻」，worker 认领
-    （queued→running）不另立时间戳（配额门与状态机只看 status，不看时间戳）。"""
+    （queued→running）不另立时间戳（配额门与状态机只看 status，不看时间戳）。
+
+    INSERT 与回查快照包在单个 BEGIN IMMEDIATE 事务里（P2，Codex R1 审）：连接为
+    isolation_level=None（autocommit），裸 INSERT 即刻可见，live worker 可能在下一条
+    get_eval_run 之前就认领/收口本行，令本应返回 queued 的入队响应变成 running/终态
+    （违反 POST 202+queued 契约与 e2e 断言）。写锁内 INSERT 再回查，worker 的 claim
+    （同样 BEGIN IMMEDIATE）被写锁挡到 COMMIT 之后，快照必是入队瞬时态。"""
     now = _now_iso()
-    conn.execute(
-        """
-        INSERT INTO eval_runs (id, agent_id, agent_version, triggered_by, status, started_at)
-        VALUES (?,?,?,?,?,?)
-        """,
-        (run_id, agent_id, agent_version, triggered_by, status, now),
-    )
-    return get_eval_run(conn, run_id)  # type: ignore[return-value]
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            """
+            INSERT INTO eval_runs (id, agent_id, agent_version, triggered_by, status, started_at)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (run_id, agent_id, agent_version, triggered_by, status, now),
+        )
+        snapshot = get_eval_run(conn, run_id)
+        conn.execute("COMMIT")
+        return snapshot  # type: ignore[return-value]
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def claim_next_queued_eval_run(

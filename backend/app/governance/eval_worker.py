@@ -96,10 +96,66 @@ class EvalRunner:
                 uploads_dir=self._uploads_dir,
                 task_runs_dir=self._task_runs_dir,
             )
-        except Exception:  # noqa: BLE001 - execute_eval_run 自身已把 run 收口 error；此处兜底不炸 worker
+        except Exception:  # noqa: BLE001 - execute_eval_run 保护范围内已自收口 error；此处兜底不炸 worker
             logger.exception("eval-run %s 执行线程未预期异常", run_id)
+            self._terminalize_zombie(run_id)
         finally:
             self._reap()
+
+    def _terminalize_zombie(self, run_id: str) -> None:
+        """兜底收口（P1，Codex R1 审）：execute_eval_run 已在其 try 内自收口 error；此处
+        只兜它保护范围之外的意外（如读 run 行前 conn/get_eval_run 瞬时故障）。仅当行仍
+        running 才收口 error——不覆盖已终态行。单实例 worker + 本行执行线程为唯一写者，
+        check-then-set 无并发对手。兜底本身失败只记日志，绝不炸 worker。"""
+        from ..storage import repos
+
+        try:
+            conn = self._conn_factory()
+            try:
+                run = repos.get_eval_run(conn, run_id)
+                if run is not None and run.get("status") == "running":
+                    repos.finish_eval_run(
+                        conn, run_id, status="error", total=0, passed=0, failed=0, skipped=0,
+                        case_results=[{
+                            "case_file": "<worker>", "verdict": "failed",
+                            "detail": "执行线程意外中断且未自收口，兜底收口 error（配额释放）",
+                        }],
+                        draft_cases=[], eval_cases_digest=None,
+                    )
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001 - 兜底失败不上抛，绝不炸 worker
+            logger.exception("eval-run %s 兜底收口失败", run_id)
+
+    def recover_interrupted(self) -> int:
+        """worker 启动回收（P1，Codex R1 审）：上次进程崩溃遗留的 running eval_run 是无
+        执行线程的僵尸，永久占配额（quota=1 立即锁死；默认 quota 两次崩溃后锁死）。worker
+        单实例锁保证同库唯一 poller——此刻任何 running 行必属已死的上一代 worker，逐条收口
+        error（不自动重放：case 会真起 origin='eval' 任务有外部副作用，与 runner 的
+        recover_interrupted_tasks 同口径 fail-closed）。返回回收条数；须在起轮询线程前调。"""
+        from ..storage import repos
+
+        conn = self._conn_factory()
+        try:
+            rows = conn.execute(
+                "SELECT id FROM eval_runs WHERE status = 'running' ORDER BY started_at, id"
+            ).fetchall()
+        finally:
+            conn.close()
+        for row in rows:
+            conn = self._conn_factory()
+            try:
+                repos.finish_eval_run(
+                    conn, row["id"], status="error", total=0, passed=0, failed=0, skipped=0,
+                    case_results=[{
+                        "case_file": "<worker-recovery>", "verdict": "failed",
+                        "detail": "worker 上次进程中断，遗留 running 评测收口 error（未自动重放，配额释放）",
+                    }],
+                    draft_cases=[], eval_cases_digest=None,
+                )
+            finally:
+                conn.close()
+        return len(rows)
 
     def run_forever(self) -> None:
         """常驻轮询：认领到就立即再试（尽快填满配额），空转按 poll_interval 休眠。

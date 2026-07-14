@@ -368,15 +368,43 @@ def execute_eval_run(
             )
         finally:
             conn.close()
-    pkg_dir = agent_registry.package_dir(agent_id)
-    is_interactive = (agent.get("workflow") or {}).get("mode") == "interactive"
 
-    approved, drafts, broken = load_eval_cases(pkg_dir)
-    digest = compute_digest(approved, pkg_dir, agent)
+    # 版本漂移拒执（P1，Codex R1 审）：agent_version 在入队时刻由 API 侧注册表采样落库，
+    # 执行发生在 worker 进程、读 worker 侧活注册表。只重启一侧的分离部署会让二者分叉——
+    # 若仍用 worker 版本执行却贴入队版本标签，证据链就认证了错误版本（digest 只哈希 case
+    # 与引用文件内容，model/tools/review 等 yaml 字段改动+文件名不变会漏网，可让错版本过
+    # 晋升门）。fail-closed 收口 error，交由部署对齐后重新入队。同步路径入队与执行同一注册
+    # 表同一瞬间，version 恒等，不会误伤。
+    enqueued_version = run.get("agent_version")
+    live_version = str(agent.get("version"))
+    if enqueued_version is not None and str(enqueued_version) != live_version:
+        conn = conn_factory()
+        try:
+            return repos.finish_eval_run(
+                conn, run_id, status="error", total=0, passed=0, failed=0, skipped=0,
+                case_results=[{
+                    "case_file": "<runner>", "verdict": "failed",
+                    "detail": f"agent 版本漂移：入队登记 {enqueued_version!r} ≠ worker 执行时活版本 "
+                              f"{live_version!r}（API/worker 分离部署未同步）；拒以错版本认证评测",
+                }],
+                draft_cases=[], eval_cases_digest=None,
+            )
+        finally:
+            conn.close()
 
     case_results: list[dict[str, Any]] = []
     passed = failed = skipped = 0
+    digest: str | None = None
+    drafts: list[dict[str, Any]] = []
     try:
+        # 整段 prelude 纳入 try（P1，Codex R1 审）：package_dir / load_eval_cases /
+        # compute_digest 抛异常（注册表故障、畸形 case、包 I/O、input_files 非法类型等）
+        # 此前落在保护范围外，会让 worker 已认领的行永久停 running 泄配额。纳入后与 case
+        # 循环统一 fail-closed 收口 error。
+        pkg_dir = agent_registry.package_dir(agent_id)
+        is_interactive = (agent.get("workflow") or {}).get("mode") == "interactive"
+        approved, drafts, broken = load_eval_cases(pkg_dir)
+        digest = compute_digest(approved, pkg_dir, agent)
         for item in broken:
             failed += 1
             case_results.append(

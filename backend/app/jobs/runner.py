@@ -385,6 +385,16 @@ def run_worker_forever(
                 )
             if eval_runner_factory is not None:
                 eval_runner = eval_runner_factory()
+                # P1（Codex R1 审）：起轮询前先收口上次进程崩溃遗留的 running 评测僵尸，
+                # 否则它们永久占配额（quota=1 立即锁死队列）。单实例锁下此刻 running 行
+                # 必属已死的上一代 worker，收口 error 释放配额（与任务恢复同口径，不重放）。
+                recovered_evals = eval_runner.recover_interrupted()
+                if recovered_evals:
+                    logger.error(
+                        "worker 启动恢复：已将 %d 条上次中断的 running 评测收口 error"
+                        "（配额释放，未自动重放，请人工核查外部副作用）",
+                        recovered_evals,
+                    )
                 threading.Thread(
                     target=eval_runner.run_forever, daemon=True, name="eval-worker"
                 ).start()
