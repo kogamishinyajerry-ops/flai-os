@@ -342,12 +342,12 @@ import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation } from "../api/conversations";
-import { createTask, listTaskEvents } from "../api/tasks";
+import { createTask } from "../api/tasks";
 import { listAgents, getAgent } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
-import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, formatTime } from "../utils/format";
+import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime } from "../utils/format";
 import { openTaskPeek } from "../stores/statusCenter";
-import { acquireChannel } from "../stores/liveFeed";
+import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";
 import ThinkingInk from "../components/artwork/ThinkingInk.vue";
 import IntentGlyph from "../components/artwork/IntentGlyph.vue";
@@ -670,23 +670,37 @@ function ensureAgentSchemasForMessages() {
 
 // ── 实时子 agent 行引擎（owner 定向「像 codex 子 agent」）────────────────────
 // 秒表：1s 离散文本替换（codex 灰阶纪律：活着的信号=文本活跳，零 spinner 通胀）；
-// 旁白：运行中任务 ~2.5s 轮询事件时间轴，取最新事件译成一行人话（事件驱动，
-// 不滚屏 raw——disclosure grammar「过程压成摘要行」）。两者都只在有工作态任务时运转。
+// 旁白：每个工作态最新任务 acquire 共享 liveFeed 'task:<id>' channel（Codex R1-P2：
+// 不自开第二条轮询链——in-flight 去重/hidden 跳过/引用计数/与速览共链全部继承，
+// task+events 同拍落地不产生「状态还在跑、旁白已收官」的错拍窗口），取最新过程
+// 事件译成一行人话（disclosure grammar「过程压成摘要行」）。只在有工作态任务时运转。
 const nowTick = ref(Date.now());
-const stageNotes = reactive({}); // taskId -> 最新旁白（保留终态最后一句作盖章素材）
+const stageNotes = reactive({}); // taskId -> 最新过程旁白（状态措辞一律由 status 出，见下）
 let liveTimer = null;
-let stageBusy = false;
+
+// 状态迁移类事件不进旁白（Codex R1-P2）：终态/审核措辞统一由任务快照 status 经
+// stagelineText 给出，避免事件先到、快照未追平时「clay 脉动灯 + 任务完成」同屏矛盾。
+const STATE_EVENT_TYPES = new Set([
+  "task_created",
+  "review_requested",
+  "review_approved",
+  "review_rejected",
+  "task_completed",
+  "task_failed",
+]);
 
 const EVENT_VERB = {
-  task_created: "已创建，等待执行器领取",
   validation_started: "校验输入契约…",
   tool_started: "调用工具…",
   tool_finished: "工具已返回",
   agent_log: "运行中…",
-  review_requested: "产物就绪，等待人工放行",
-  review_approved: "人工已放行",
-  task_completed: "任务完成",
-  task_failed: "运行失败",
+};
+
+// workflow 折叠事件译文（runtime._WorkflowEventLogger 把业务事件折成 agent_log，
+// 原始类型在 payload.workflow_event_type）：只译仓内已知类型，未知回退通用工作语。
+const WORKFLOW_EVENT_VERB = {
+  dependency_resolved: "前序产物已就绪，接力开始",
+  summary_generated: "汇总已生成",
 };
 
 function describeEvent(ev) {
@@ -699,50 +713,88 @@ function describeEvent(ev) {
     if (payload.result) txt += ` · ${payload.result}`;
     return txt;
   }
+  // 折叠事件的 message 形如「workflow 上报事件：case_started」——直显会把内部
+  // snake_case 标识符泄进旁白（Codex R1-P2），必须先于 message 分支拦截翻译。
+  if (typeof payload.workflow_event_type === "string" && payload.workflow_event_type) {
+    return WORKFLOW_EVENT_VERB[payload.workflow_event_type] || EVENT_VERB.agent_log;
+  }
   if (typeof ev.message === "string" && ev.message.trim()) return ev.message.trim();
-  return EVENT_VERB[ev.event_type] || ev.event_type || "";
+  return EVENT_VERB[ev.event_type] || ""; // 未知类型不裸显 snake_case，留旧旁白
 }
 
-const stageOffsets = {}; // taskId -> 已读事件数（只读尾巴，不重扫 append-only 全史——Codex R0-P1）
+// 从事件尾巴取最新「过程」旁白（状态迁移类跳过，见 STATE_EVENT_TYPES）。
+function latestProcessNote(events) {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const ev = events[i];
+    if (STATE_EVENT_TYPES.has(ev.event_type)) continue;
+    const note = describeEvent(ev);
+    if (note) return note;
+  }
+  return "";
+}
 
-async function pollRunningStages() {
-  if (stageBusy === true) return;
-  // 轮询集=每个 agent 的**最新可见任务**（与 agentTaskInfo 同口径：列表 created_at 降序
-  // 取首个），旧的重复任务不占名额（Codex R0-P2）；覆盖全部工作态（validating/parsing/
-  // analyzing 同样产事件），queued 无事件不拉。
+// taskId -> { handle, stops }：每个工作态最新任务持一条共享 task channel。
+const liveChannels = new Map();
+
+function syncLiveChannels() {
+  // 目标集=每个 agent 的**最新可见任务**（与 agentTaskInfo 同口径：列表 created_at
+  // 降序取首个），旧的重复任务不占名额（Codex R0-P2）；覆盖全部工作态
+  // （validating/parsing/analyzing 同样产事件），queued 无事件不拉。
   const latestByAgent = new Map();
   for (const t of conversationTasks.value) {
     if (!latestByAgent.has(t.agent_id)) latestByAgent.set(t.agent_id, t);
   }
-  const active = [...latestByAgent.values()].filter((t) => TASK_WORK_STATES.has(t.status));
-  if (active.length === 0) return;
-  stageBusy = true;
-  try {
-    for (const t of active) {
-      try {
-        const offset = stageOffsets[t.id] || 0;
-        const events = await listTaskEvents(t.id, { offset });
-        if (events && events.length) {
-          stageOffsets[t.id] = offset + events.length;
-          const note = describeEvent(events[events.length - 1]);
-          if (note) stageNotes[t.id] = note;
-        }
-      } catch {
-        /* 单任务事件拉取失败不打断秒表与其它行（下轮重试，不伪造旁白） */
-      }
+  const wanted = new Set(
+    [...latestByAgent.values()]
+      .filter((t) => TASK_WORK_STATES.has(t.status))
+      .map((t) => t.id)
+  );
+  for (const [id, entry] of [...liveChannels]) {
+    if (!wanted.has(id)) {
+      entry.stops.forEach((stop) => stop());
+      entry.handle.release();
+      liveChannels.delete(id);
     }
-  } finally {
-    stageBusy = false;
   }
+  for (const id of wanted) {
+    if (liveChannels.has(id)) continue;
+    const handle = acquireChannel(`task:${id}`);
+    const stops = [
+      watch(
+        handle.state.events,
+        (events) => {
+          const note = latestProcessNote(events || []);
+          if (note) stageNotes[id] = note;
+        },
+        { immediate: true }
+      ),
+      // channel（2s）先于会话快照（5s）看到离开工作态 → poke 会话链让成员行
+      // 状态秒级追平，收窄「灯还脉动、任务已收官」的错拍窗（Codex R1-P2）。
+      watch(
+        () => handle.state.task.value && handle.state.task.value.status,
+        (s) => {
+          if (s && !TASK_WORK_STATES.has(s) && conversationId.value) {
+            pokeConversation(conversationId.value);
+          }
+        }
+      ),
+    ];
+    liveChannels.set(id, { handle, stops });
+  }
+}
+
+function releaseLiveChannels() {
+  for (const [, entry] of liveChannels) {
+    entry.stops.forEach((stop) => stop());
+    entry.handle.release();
+  }
+  liveChannels.clear();
 }
 
 function ensureLiveTicker() {
   if (liveTimer) return;
-  let beat = 0;
   liveTimer = setInterval(() => {
-    nowTick.value = Date.now();
-    beat += 1;
-    if (beat % 3 === 0) pollRunningStages(); // ~3s 一轮旁白，秒表仍 1s 活跳
+    nowTick.value = Date.now(); // 秒表 1s 活跳（纯本地渲染，零请求）
   }, 1000);
 }
 
@@ -753,20 +805,17 @@ function stopLiveTicker() {
   }
 }
 
+// 秒表锚点=started_at（taskElapsedMs 的诚实契约：未开工返回 null 不编造）——锚
+// created_at 会把排队等待计成工时，且 started_at 落库后时钟倒跳（Codex R1-P2）。
+// 数字格式走 canon §三（<60s 纯秒 / ≥60s Nm 0Ss 秒补零），不复用 formatDuration
+// 的「X 分 X 秒」长格式——codex 式紧凑行寸土寸金。
 function elapsedText(t) {
-  const startRaw = t.started_at || t.created_at || "";
-  const start = Date.parse(startRaw);
-  if (!Number.isFinite(start)) return "";
-  let end;
-  if (TASK_WORK_STATES.has(t.status)) {
-    end = nowTick.value;
-  } else {
-    end = Date.parse(t.finished_at || "");
-    if (!Number.isFinite(end)) return "";
-  }
-  const sec = Math.max(0, Math.round((end - start) / 1000));
+  if (!TASK_WORK_STATES.has(t.status) && !t.finished_at) return ""; // 非工作态无收尾戳不给活秒表
+  const ms = taskElapsedMs(t, nowTick.value);
+  if (ms === null) return "";
+  const sec = Math.max(0, Math.round(ms / 1000));
   if (sec < 60) return `${sec}s`;
-  return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`; // canon §三：秒补零
+  return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`;
 }
 
 function stagelineText(t) {
@@ -911,23 +960,25 @@ function createOneTask(agent, plan) {
 // watch-diff acquire/release，同 StatusCenter.vue 的 ensurePeekLoaded 姿势。
 const conversationTasks = ref([]);
 
-// 有任一工作态成员任务 → 实时引擎开；全部终态 → 引擎停（不空转）。
-// 必须声明在 conversationTasks 之后：watch getter 创建时即求值，TDZ 抛错会被
-// Vue callWithErrorHandling 吞成 console.error，watcher 静默死亡（Codex R0-P0，
-// 实拍佐证：秒表恒 0s、旁白恒兜底句——引擎看似在场实则从未运转）。
+// 会话任务快照每次落地 → 对账 task channel 持有集；有任一工作态成员任务 →
+// 秒表开，全部终态 → 秒表停（不空转）。必须声明在 conversationTasks 之后：
+// watch source 创建时即求值，TDZ 抛错会被 Vue callWithErrorHandling 吞成
+// console.error，watcher 静默死亡（Codex R0-P0，实拍佐证：秒表恒 0s、旁白恒
+// 兜底句——引擎看似在场实则从未运转）。
 watch(
-  () => conversationTasks.value.some((t) => TASK_WORK_STATES.has(t.status)),
-  (anyWork) => {
-    if (anyWork === true) {
-      ensureLiveTicker();
-      pollRunningStages();
-    } else {
-      stopLiveTicker();
-    }
+  conversationTasks,
+  (tasks) => {
+    syncLiveChannels();
+    const anyWork = tasks.some((t) => TASK_WORK_STATES.has(t.status));
+    if (anyWork === true) ensureLiveTicker();
+    else stopLiveTicker();
   },
   { immediate: true }
 );
-onUnmounted(stopLiveTicker);
+onUnmounted(() => {
+  stopLiveTicker();
+  releaseLiveChannels();
+});
 let convTasksHandle = null;
 let convTasksStop = null;
 let convTasksHandleFor = null; // 当前持有订阅所属的 conversationId（null=未订阅）
