@@ -166,7 +166,7 @@
                   <div
                     v-if="agentTaskInfo(a)"
                     class="sa-stageline"
-                    :class="{ 'is-running': agentTaskInfo(a).latest.status === 'running',
+                    :class="{ 'is-running': isWorkState(agentTaskInfo(a).latest.status),
                               'is-review': agentTaskInfo(a).latest.status === 'waiting_review' }"
                   >{{ stagelineText(agentTaskInfo(a).latest) }}</div>
                   <!-- 次行：未召集——理由 + 预填摘要一行收纳（过程可折） -->
@@ -703,18 +703,30 @@ function describeEvent(ev) {
   return EVENT_VERB[ev.event_type] || ev.event_type || "";
 }
 
+const stageOffsets = {}; // taskId -> 已读事件数（只读尾巴，不重扫 append-only 全史——Codex R0-P1）
+
 async function pollRunningStages() {
   if (stageBusy === true) return;
-  const running = conversationTasks.value.filter((t) => t.status === "running").slice(0, 3);
-  if (running.length === 0) return;
+  // 轮询集=每个 agent 的**最新可见任务**（与 agentTaskInfo 同口径：列表 created_at 降序
+  // 取首个），旧的重复任务不占名额（Codex R0-P2）；覆盖全部工作态（validating/parsing/
+  // analyzing 同样产事件），queued 无事件不拉。
+  const latestByAgent = new Map();
+  for (const t of conversationTasks.value) {
+    if (!latestByAgent.has(t.agent_id)) latestByAgent.set(t.agent_id, t);
+  }
+  const active = [...latestByAgent.values()].filter((t) => TASK_WORK_STATES.has(t.status));
+  if (active.length === 0) return;
   stageBusy = true;
   try {
-    for (const t of running) {
+    for (const t of active) {
       try {
-        const events = await listTaskEvents(t.id);
-        const last = events && events.length ? events[events.length - 1] : null;
-        const note = describeEvent(last);
-        if (note) stageNotes[t.id] = note;
+        const offset = stageOffsets[t.id] || 0;
+        const events = await listTaskEvents(t.id, { offset });
+        if (events && events.length) {
+          stageOffsets[t.id] = offset + events.length;
+          const note = describeEvent(events[events.length - 1]);
+          if (note) stageNotes[t.id] = note;
+        }
       } catch {
         /* 单任务事件拉取失败不打断秒表与其它行（下轮重试，不伪造旁白） */
       }
@@ -741,21 +753,6 @@ function stopLiveTicker() {
   }
 }
 
-// 有任一工作态成员任务 → 引擎开；全部终态 → 引擎停（不空转）。
-watch(
-  () => conversationTasks.value.some((t) => TASK_WORK_STATES.has(t.status)),
-  (anyWork) => {
-    if (anyWork === true) {
-      ensureLiveTicker();
-      pollRunningStages();
-    } else {
-      stopLiveTicker();
-    }
-  },
-  { immediate: false }
-);
-onUnmounted(stopLiveTicker);
-
 function elapsedText(t) {
   const startRaw = t.started_at || t.created_at || "";
   const start = Date.parse(startRaw);
@@ -774,7 +771,7 @@ function elapsedText(t) {
 
 function stagelineText(t) {
   if (t.status === "queued") return "排队中——等待执行器领取";
-  if (t.status === "running") return stageNotes[t.id] || "运行中…";
+  if (TASK_WORK_STATES.has(t.status)) return stageNotes[t.id] || `${statusLabel(t.status)}…`;
   if (t.status === "waiting_review") return "产物已就绪——等待你审阅放行";
   if (t.status === "completed") {
     const dur = elapsedText(t);
@@ -913,6 +910,24 @@ function createOneTask(agent, plan) {
 // acquire，需按当前目标（有无 orchestrate 方案 × 当前 conversationId）
 // watch-diff acquire/release，同 StatusCenter.vue 的 ensurePeekLoaded 姿势。
 const conversationTasks = ref([]);
+
+// 有任一工作态成员任务 → 实时引擎开；全部终态 → 引擎停（不空转）。
+// 必须声明在 conversationTasks 之后：watch getter 创建时即求值，TDZ 抛错会被
+// Vue callWithErrorHandling 吞成 console.error，watcher 静默死亡（Codex R0-P0，
+// 实拍佐证：秒表恒 0s、旁白恒兜底句——引擎看似在场实则从未运转）。
+watch(
+  () => conversationTasks.value.some((t) => TASK_WORK_STATES.has(t.status)),
+  (anyWork) => {
+    if (anyWork === true) {
+      ensureLiveTicker();
+      pollRunningStages();
+    } else {
+      stopLiveTicker();
+    }
+  },
+  { immediate: true }
+);
+onUnmounted(stopLiveTicker);
 let convTasksHandle = null;
 let convTasksStop = null;
 let convTasksHandleFor = null; // 当前持有订阅所属的 conversationId（null=未订阅）
