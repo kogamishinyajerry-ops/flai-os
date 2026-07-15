@@ -151,3 +151,64 @@ def test_reconcile_missing_db_fails(backlog_dir, tmp_path, capsys) -> None:
     rc = cli.main(["reconcile", "--by", "严冬杰", "--db", str(tmp_path / "nope.db")])
     assert rc == 1
     assert "任务库不存在" in capsys.readouterr().err
+
+
+# ── witness 5(R1-P1):reconcile 缺省尊重 FLAI_DB_PATH ────────────────────
+
+
+def test_reconcile_honors_flai_db_path(backlog_dir, tmp_path, monkeypatch, capsys) -> None:
+    """部署机 export FLAI_DB_PATH 时,不带 --db 的 reconcile 必须打到该库,
+    绝不能默认仓内陈旧库(错库对账会把活档案错杀成不可逆 rejected)。"""
+    _write_rows(backlog_dir, [_assessed("t_failed")])
+    db = tmp_path / "deployed.db"
+    _make_task_db(db, [("t_failed", "failed")])
+    monkeypatch.setenv("FLAI_DB_PATH", str(db))
+    rc = cli.main(["reconcile", "--by", "严冬杰"])
+    assert rc == 0
+    assert "清理 1 条" in capsys.readouterr().out
+    items, _bad = cli._fold()
+    assert items["t_failed"]["status"] == "rejected"
+
+
+# ── witness 6(R1-P2):跨进程写锁互斥 ─────────────────────────────────────
+
+
+def test_write_lock_mutual_exclusion(backlog_dir, capsys) -> None:
+    """锁文件被占(模拟并发的另一方):set-status 必须 fail-closed 退出,
+    账本零写入;错误信息给出锁路径供人工核清崩溃遗留。"""
+    _write_rows(backlog_dir, [_assessed("r1")])
+    lock = backlog_dir / "backlog.jsonl.lock"
+    lock.write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["set-status", "r1", "queued", "--by", "严冬杰"])
+    assert "写锁被占用" in str(exc_info.value)
+    rows = (backlog_dir / "backlog.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 1, "拿不到锁绝不写入"
+    lock.unlink()
+    assert cli.main(["set-status", "r1", "queued", "--by", "严冬杰"]) == 0, "锁释放后正常流转"
+    assert not lock.exists(), "正常路径锁文件必须清理"
+
+
+# ── witness 7(R1-P2):show 与 list 同一坏行警告契约 ──────────────────────
+
+
+def test_show_reports_bad_rows(backlog_dir, capsys) -> None:
+    _write_rows(backlog_dir, [_assessed("r1"), "{not-json"])
+    rc = cli.main(["show", "r1"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "1 条" in err and "队列行" in err, "show 的读者必须被告知账本有坏行"
+
+
+# ── witness 8(R1-P2):坏库 fail-closed 且零写入 ──────────────────────────
+
+
+def test_reconcile_corrupt_db_fails_zero_write(backlog_dir, tmp_path, capsys) -> None:
+    _write_rows(backlog_dir, [_assessed("r1")])
+    fake_db = tmp_path / "corrupt.db"
+    fake_db.write_text("这不是 SQLite 文件", encoding="utf-8")
+    rc = cli.main(["reconcile", "--by", "严冬杰", "--db", str(fake_db)])
+    assert rc == 1
+    assert "读取失败" in capsys.readouterr().err
+    rows = (backlog_dir / "backlog.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 1, "坏库诊断必须发生在任何账本写入之前(零写入)"
