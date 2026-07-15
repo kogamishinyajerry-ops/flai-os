@@ -182,8 +182,26 @@
                     <p v-if="a.stripped_fields && a.stripped_fields.length" class="agent-stripped">
                       已剔除不合法字段：{{ a.stripped_fields.join("、") }}（未匹配该 Agent 的输入契约）
                     </p>
-                    <div class="agent-actions">
+                    <!-- 原地召集（内联确认，零跳页）：多 Agent 方案 + 预填非空 + 无携带附件
+                         才提供；两次显式点击（原地召集→确认召集）均由人亲手完成，导引绝不
+                         代召集。创建走同一 POST /api/tasks（服务端校验 fail-closed），参数
+                         不全由 422 如实透出并引导走创建页补全。附件必须经创建页人工过目。 -->
+                    <div v-if="inlineArmed !== inlineKey(a, idx)" class="agent-actions">
+                      <button
+                        v-if="canInlineSummon(a, m.recommendation)"
+                        class="agent-cta agent-cta-inline"
+                        @click="armInlineSummon(a, idx)"
+                      >原地召集</button>
                       <button class="agent-cta" @click="createOneTask(a, m.recommendation)">去创建此任务</button>
+                    </div>
+                    <div v-else class="inline-confirm">
+                      <span class="ic-note">以上方预填参数召集，任务归本会话——仍由你亲手确认。</span>
+                      <div class="ic-actions">
+                        <button class="agent-cta ic-go" :disabled="inlineBusy" @click="confirmInlineSummon(a)">
+                          {{ inlineBusy ? "召集中…" : "确认召集" }}
+                        </button>
+                        <button class="ic-cancel" :disabled="inlineBusy" @click="inlineArmed = null">再想想</button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -319,6 +337,7 @@ import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation } from "../api/conversations";
+import { createTask } from "../api/tasks";
 import { listAgents } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
 import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, formatTime } from "../utils/format";
@@ -560,6 +579,54 @@ function openWorkbench() {
   // 工作台里还要继续从蓝图召集 Agent；会话作协作锚点保持存续。
   if (conversationId.value) {
     router.push(`/workbench/${conversationId.value}`);
+  }
+}
+
+// ── 原地召集（对话轴内联确认，范式 2a 单入口）─────────────────────────
+// 宪法边界：导引绝不代召集——「原地召集」「确认召集」两次点击都由人亲手完成，
+// 走与创建页完全相同的 POST /api/tasks（服务端 jsonschema 校验 fail-closed）。
+// 只在①多 Agent 方案（单 Agent 保留创建页 conclude_after 归档语义）②预填非空
+// ③会话无携带附件（附件必须经创建页人工过目）时提供；参数不全由 422 如实
+// 透出，引导走「去创建此任务」补全，绝不客户端猜校验。
+const inlineArmed = ref(null); // `${消息idx}:${agent_id}`——同 Agent 出现在两张方案卡不串态
+const inlineBusy = ref(false);
+
+function inlineKey(agent, idx) {
+  return `${idx}:${agent.agent_id}`;
+}
+
+function canInlineSummon(agent, plan) {
+  return (
+    !!conversationId.value &&
+    plan && Array.isArray(plan.agents) && plan.agents.length > 1 &&
+    Object.keys(agent.prefilled_inputs || {}).length > 0 &&
+    collectCarriedFiles().length === 0
+  );
+}
+
+function armInlineSummon(agent, idx) {
+  inlineArmed.value = inlineKey(agent, idx);
+}
+
+async function confirmInlineSummon(agent) {
+  if (inlineBusy.value === true) return;
+  inlineBusy.value = true;
+  try {
+    await createTask({
+      agentId: agent.agent_id,
+      name: null,
+      inputs: agent.prefilled_inputs || {},
+      inputFileIds: [],
+      conversationId: conversationId.value,
+    });
+    ElMessage.success(`已召集「${agent.agent_name}」——任务已归入本会话`);
+    inlineArmed.value = null;
+    ensureConversationTasksFeed(); // 督战 chip 保鲜：召集即接上会话任务订阅
+  } catch (err) {
+    // fail-closed 如实透出：常见为 422 预填不全——引导走创建页补全，不静默
+    ElMessage.error(err.detail || err.message || "召集失败——请走「去创建此任务」补全参数后亲手提交");
+  } finally {
+    inlineBusy.value = false;
   }
 }
 
@@ -1287,6 +1354,43 @@ watch(
   box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.22);
 }
 .agent-cta:hover::after { transform: translateX(2px); }
+
+/* 原地召集：与「去创建此任务」同级并排（次序在前=推荐路径），间距走 gap */
+.agent-actions { gap: 8px; }
+.agent-cta-inline::after { content: "⚡"; }
+.agent-cta:disabled {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* 内联确认行：召集是签发级动作，确认态给一句诚实说明 + 双按钮 */
+.inline-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ic-note {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.ic-actions { display: flex; align-items: center; gap: 8px; }
+.ic-go {
+  background: var(--clay);
+  color: #fff;
+  border-color: var(--clay);
+}
+.ic-go::after { content: "✓"; }
+.ic-cancel {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 8px 6px;
+}
+.ic-cancel:hover { color: var(--ink); }
 
 .plan-alert {
   margin-top: 10px;
