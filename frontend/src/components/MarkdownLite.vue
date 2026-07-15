@@ -6,30 +6,65 @@
         v-if="blk.type === 'h'"
         class="md-h"
         :class="`md-h${blk.level}`"
-      >{{ blk.text }}</component>
+      ><MdSegs :segs="blk.segs" /></component>
       <blockquote v-else-if="blk.type === 'quote'" class="md-quote" :class="`md-quote--${blk.variant}`">
-        {{ blk.text }}
+        <MdSegs :segs="blk.segs" />
       </blockquote>
       <hr v-else-if="blk.type === 'hr'" class="md-hr" />
       <ul v-else-if="blk.type === 'ul'" class="md-ul">
-        <li v-for="(it, j) in blk.items" :key="j">{{ it }}</li>
+        <li v-for="(it, j) in blk.items" :key="j"><MdSegs :segs="it" /></li>
       </ul>
-      <p v-else-if="blk.type === 'p'" class="md-p">{{ blk.text }}</p>
+      <p v-else-if="blk.type === 'p'" class="md-p"><MdSegs :segs="blk.segs" /></p>
     </template>
   </div>
 </template>
 
 <script setup>
-import { computed } from "vue";
+import { computed, defineComponent, h as hv } from "vue";
 
 const props = defineProps({
   text: { type: String, default: "" },
 });
 
-// 去掉行内强调/代码标记（**、`）——纯为可读，不注入任何 HTML（全经插值转义，防 XSS）。
-function clean(s) {
-  return s.replace(/\*\*/g, "").replace(/`/g, "").trimEnd();
+// 行内分段（Codex R1+R2 P1 两轮修订）：只把**成对**的 `code` / **strong** 落成
+// 真实元素；配不上对的 ** 与 ` 逐字保留——绝不无差别删字符（助手回复是任意
+// 字符串，`def f(**kwargs)`、`2 ** 3` 必须保真）。strong 配对=侧翼扫描子集：
+//   开标记：后必贴非空白，且**前禁 ASCII 代码上下文字符**（字母/数字/_/([{/\）
+//     ——f(**kwargs 的 ** 永不当开标记（R2 例证 def f(**kwargs)：**重要** 若无
+//     此卫，'：**' 会被当闭标记吃掉函数语法）；
+//   闭标记：前必贴非空白。
+// 刻意收窄于 CommonMark（ASCII 词内加粗 word**b**word 不解析）换取代码字面量
+// 零误伤；中文惯用「**关键**是」不受影响。全程文本节点零 v-html。
+const INLINE_RE = /(`([^`\n]+)`)|((?<![A-Za-z0-9_([{\\*])\*\*(?=\S)([^*\n]*?\S)\*\*)/;
+function inlineSegs(s) {
+  const segs = [];
+  let rest = s.trimEnd();
+  while (rest) {
+    const m = INLINE_RE.exec(rest);
+    if (!m) {
+      segs.push({ t: "text", s: rest });
+      break;
+    }
+    if (m.index > 0) segs.push({ t: "text", s: rest.slice(0, m.index) });
+    if (m[1]) segs.push({ t: "code", s: m[2] });
+    else segs.push({ t: "strong", s: m[4] });
+    rest = rest.slice(m.index + m[0].length);
+  }
+  return segs;
 }
+
+// 行内段渲染器（函数式，纯文本子节点——不产出 HTML 字符串）。
+const MdSegs = defineComponent({
+  props: { segs: { type: Array, default: () => [] } },
+  setup(p) {
+    return () =>
+      p.segs.map((sg) =>
+        sg.t === "code" ? hv("code", { class: "md-code" }, sg.s)
+        : sg.t === "strong" ? hv("strong", null, sg.s)
+        : hv("span", null, sg.s)
+      );
+  },
+});
 
 // 引用块变体：🚨=截断危险（红），⚠=草案警示（amber），其余=普通引用。
 function quoteVariant(s) {
@@ -55,13 +90,13 @@ const blocks = computed(() => {
     const h = /^(#{1,4})\s+(.*)$/.exec(line);
     if (h) {
       flushList();
-      out.push({ type: "h", level: h[1].length, text: clean(h[2]) });
+      out.push({ type: "h", level: h[1].length, segs: inlineSegs(h[2]) });
       continue;
     }
     if (/^>\s?/.test(line)) {
       flushList();
       const body = line.replace(/^>\s?/, "");
-      out.push({ type: "quote", variant: quoteVariant(body), text: clean(body) });
+      out.push({ type: "quote", variant: quoteVariant(body), segs: inlineSegs(body) });
       continue;
     }
     if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) {
@@ -72,7 +107,7 @@ const blocks = computed(() => {
     const li = /^[-*+]\s+(.*)$/.exec(line) || /^\d+\.\s+(.*)$/.exec(line);
     if (li) {
       if (!list) list = [];
-      list.push(clean(li[1]));
+      list.push(inlineSegs(li[1]));
       continue;
     }
     if (line.trim() === "") {
@@ -80,7 +115,7 @@ const blocks = computed(() => {
       continue;
     }
     flushList();
-    out.push({ type: "p", text: clean(line) });
+    out.push({ type: "p", segs: inlineSegs(line) });
   }
   flushList();
   return out;
@@ -122,6 +157,15 @@ const blocks = computed(() => {
 }
 .md-ul li {
   margin: 3px 0;
+}
+/* MdSegs 由运行时 h() 产出，不带本 SFC 的 scoped 属性——必须 :deep 命中。 */
+.md-lite :deep(.md-code) {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  background: var(--paper-rail);
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-xs);
+  padding: 0 4px;
 }
 .md-hr {
   border: none;

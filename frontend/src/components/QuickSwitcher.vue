@@ -16,7 +16,14 @@
         </div>
 
         <div class="qs-results" ref="resultsRef">
-          <div v-if="loading" class="qs-loading">加载中…</div>
+          <!-- 骨架语言对齐全站（W7，低优先级样式项）：面板每次打开都是新挂载/
+               重拉（关闭即整体卸载），不是同页静默轮询，不需要 A3 的 everLoaded
+               防闪烁——直接绑 loading 即可。骨架根是 aria-hidden，必须保留
+               视觉隐藏的「加载中…」status 文本给读屏（Codex R0 P2）。 -->
+          <div v-if="loading" class="qs-loading" role="status">
+            <span class="qs-loading-sr">加载中…</span>
+            <SkeletonBlock v-for="i in 4" :key="i" height="46px" />
+          </div>
           <template v-else>
             <template v-for="group in renderGroups" :key="group.key">
               <div v-if="group.items.length" class="qs-group">
@@ -63,6 +70,7 @@ import { listAgents } from "../api/agents";
 import { statusLabel, taskLampColor } from "../utils/format";
 import { statusCenter, closeCenter } from "../stores/statusCenter";
 import { quickSwitcher, openQuickSwitcher, closeQuickSwitcher } from "../stores/quickSwitcher";
+import SkeletonBlock from "./SkeletonBlock.vue";
 
 const router = useRouter();
 
@@ -333,12 +341,26 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
   font-weight: 600;
   white-space: nowrap;
 }
-.qs-empty,
-.qs-loading {
+.qs-empty {
   padding: 24px 12px;
   text-align: center;
   color: var(--ink-faint);
   font-size: 13px;
+}
+.qs-loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+}
+/* 读屏专用（视觉裁剪不显示，AT 可读）：repo 无全局 sr-only，本地最小实现。 */
+.qs-loading-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 .qs-footer {
   flex: none;

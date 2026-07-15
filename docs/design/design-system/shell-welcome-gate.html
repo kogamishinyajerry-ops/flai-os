@@ -1,0 +1,52 @@
+<!-- @dsCard group="Shell" name="登录门 · 分屏仪式" -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>登录门 · 分屏仪式</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  :root {
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "STSong", serif;
+    --ink: #2b2622; --ink-soft: #6b6259; --ink-faint: #a39d90;
+    --paper-cream: #fbf9f3; --paper-canvas-b: #f1eee6; --paper-rail: #f7f4ec;
+    --hairline: #ece5db; --clay: #c15f3c; --clay-deep: #a54e2f;
+  }
+  body { font-family: "PingFang SC", system-ui, sans-serif; background: #faf7f2; color: var(--ink); padding: 24px; }
+  h1 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .rule { font-size: 12px; color: var(--ink-soft); line-height: 1.7; margin-bottom: 16px; max-width: 580px; }
+  .gate { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--hairline); border-radius: 12px; overflow: hidden; max-width: 640px; min-height: 260px; }
+  .brand { background: linear-gradient(155deg, var(--paper-cream), var(--paper-canvas-b) 60%, var(--paper-rail)); border-right: 1px solid var(--hairline); padding: 28px; display: flex; flex-direction: column; justify-content: center; }
+  .badge { width: 54px; height: 54px; border: 2px solid var(--clay); border-radius: 50% 46% 52% 48%; margin-bottom: 14px; display: grid; place-items: center; font-size: 22px; opacity: .8; }
+  .tagline { font-family: var(--serif); font-size: 24px; font-weight: 600; line-height: 1.25; margin-bottom: 8px; }
+  .sub { font-size: 11.5px; color: var(--ink-soft); line-height: 1.7; max-width: 34ch; }
+  .card { padding: 28px; display: flex; flex-direction: column; justify-content: center; gap: 8px; }
+  .card h2 { font-size: 16px; margin-bottom: 2px; }
+  .inp { border: 1px solid var(--hairline); border-radius: 8px; padding: 7px 10px; font-size: 11.5px; color: var(--ink-faint); background: #fff; }
+  .btn { background: linear-gradient(160deg, var(--clay), var(--clay-deep)); color: #fff; border: none; border-radius: 9px; padding: 8px; font-size: 12px; font-weight: 600; }
+  .floor { font-size: 10.5px; color: var(--ink-faint); line-height: 1.6; }
+  .note { font-size: 11.5px; color: var(--ink-faint); line-height: 1.7; margin-top: 12px; max-width: 580px; }
+</style>
+</head>
+<body>
+  <h1>登录门 · 分屏仪式感</h1>
+  <p class="rule">≥900px 左=品牌氛围面（暖纸渐变 + 放大插画 + serif 标语，纯装饰 aria-hidden）、右=登录卡原样；
+  <900px 回落单卡居中。</p>
+  <div class="gate">
+    <div class="brand">
+      <div class="badge">🛡</div>
+      <div class="tagline">机器提议，人签发。</div>
+      <div class="sub">二所工程智能体运行底座——任务在这里拆解、执行、留痕。</div>
+    </div>
+    <div class="card">
+      <h2>欢迎来到 FLAi-OS</h2>
+      <div class="inp">用户名</div>
+      <div class="inp">密码</div>
+      <button class="btn">进入</button>
+      <div class="floor">登录后开始工作——签发永远由你亲手完成。</div>
+    </div>
+  </div>
+  <p class="note">诚实地板句逐字焊死、恒可见（两种宽度都在）；标语锚定宪法条款「人是唯一签发者」；
+  副句取自侧栏既有官方定位语，非杜撰。分屏面零新色值，全走既有暖纸 token。</p>
+</body>
+</html>

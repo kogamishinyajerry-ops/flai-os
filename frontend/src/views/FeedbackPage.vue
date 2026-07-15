@@ -6,21 +6,30 @@
 
     <el-form label-width="80px" class="task-select-form fx-rise">
       <el-form-item label="任务" required>
-        <el-select
-          v-model="taskId"
-          placeholder="请选择任务"
-          filterable
-          style="width: 100%"
-          @change="handleTaskChange"
-        >
-          <el-option
-            v-for="t in tasks"
-            :key="t.id"
-            :label="`${t.id.slice(0, 12)} · ${t.name || '(未命名)'} · ${statusLabel(t.status)}`"
-            :value="t.id"
-          />
-        </el-select>
-        <div class="select-hint">仅显示最近 100 条任务，更早任务从任务历史页进入详情提交反馈</div>
+        <!-- 首载骨架（A3 同款）：本页 loadTasks 仅 onMounted 调一次，无轮询/重刷，
+             tasksLoading 天然只在首载为真。骨架根 aria-hidden，须留可读 status
+             给读屏（Codex R2 P2，QuickSwitcher 同款）。 -->
+        <div v-if="tasksLoading" role="status">
+          <span class="skel-sr">任务列表加载中…</span>
+          <SkeletonBlock height="32px" />
+        </div>
+        <template v-else>
+          <el-select
+            v-model="taskId"
+            placeholder="请选择任务"
+            filterable
+            style="width: 100%"
+            @change="handleTaskChange"
+          >
+            <el-option
+              v-for="t in tasks"
+              :key="t.id"
+              :label="`${t.id.slice(0, 12)} · ${t.name || '(未命名)'} · ${statusLabel(t.status)}`"
+              :value="t.id"
+            />
+          </el-select>
+          <div class="select-hint">仅显示最近 100 条任务，更早任务从任务历史页进入详情提交反馈</div>
+        </template>
       </el-form-item>
     </el-form>
 
@@ -79,11 +88,13 @@ import { listTasks } from "../api/tasks";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
 import { statusLabel, formatTime } from "../utils/format";
 import EmptyState from "../components/EmptyState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 
 const route = useRoute();
 
 const tasks = ref([]);
 const tasksLoadError = ref("");
+const tasksLoading = ref(true);
 const taskId = ref(typeof route.query.task_id === "string" ? route.query.task_id : "");
 
 const feedbackForm = reactive({ rating: "good", category: "", message: "" });
@@ -95,11 +106,14 @@ const CATEGORY_LABEL_MAP = Object.fromEntries(FEEDBACK_CATEGORIES.map((c) => [c.
 const categoryLabel = (c) => CATEGORY_LABEL_MAP[c] ?? c;
 
 async function loadTasks() {
+  tasksLoading.value = true;
   try {
     tasks.value = await listTasks();
     tasksLoadError.value = "";
   } catch (err) {
     tasksLoadError.value = err.detail || err.message;
+  } finally {
+    tasksLoading.value = false;
   }
 }
 
@@ -153,7 +167,7 @@ onMounted(async () => {
 .feedback-page {
   max-width: 640px;
 }
-.page-header { margin-bottom: 20px; }
+.page-header { margin-bottom: var(--space-5); }
 .page-header h2 {
   font-family: var(--serif);
   font-size: var(--fs-title);
@@ -162,16 +176,16 @@ onMounted(async () => {
   margin: 0;
 }
 .task-select-form {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 .select-hint {
   color: var(--ink-faint);
   font-size: 12px;
   line-height: 1.5;
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 .feedback-form {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 .feedback-list {
   list-style: none;
@@ -181,8 +195,8 @@ onMounted(async () => {
 .feedback-list li {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 0;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
   border-bottom: 1px solid var(--hairline);
   font-size: 13px;
 }
@@ -193,6 +207,15 @@ onMounted(async () => {
 .feedback-meta {
   color: var(--ink-faint);
   font-size: 12px;
+  white-space: nowrap;
+}
+/* 读屏专用（视觉裁剪，AT 可读）：repo 无全局 sr-only 的本地最小实现。 */
+.skel-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
   white-space: nowrap;
 }
 </style>

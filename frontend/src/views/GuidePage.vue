@@ -58,7 +58,9 @@
           <div class="ai-mark">导</div>
           <div class="ai-body" :class="{ 'fx-ink-in': m.fresh }">
             <div class="ai-name">智能导引<span v-if="m.createdAt" class="bubble-time">{{ formatTime(m.createdAt) }}</span></div>
-            <p v-if="m.content" class="ai-lead">{{ m.content }}</p>
+            <!-- 助手正文走 MarkdownLite（W5）：列表/标题/引用成块渲染——桌面级
+                 富文本；纯插值零 v-html，XSS 面不变。用户气泡仍纯文本忠实显示。 -->
+            <MarkdownLite v-if="m.content" :text="m.content" class="ai-lead" />
 
             <!-- 导引计划（M8 编排官）：refuse=显式拒绝 -->
             <div v-if="m.recommendation && m.recommendation.decision === 'refuse'" class="plan-card refuse" :class="{ 'fx-rise': m.fresh }">
@@ -219,11 +221,14 @@
               <div class="plan-foot">
                 <button
                   v-if="openableCount(m.recommendation) > 0"
-                  class="open-plan-btn"
+                  class="open-plan-btn cta-clay"
                   :disabled="opening === conversationId"
                   @click="openPlan(m.recommendation)"
                 >{{ opening === conversationId ? "召集中…" : `照此方案开工 · 召集 ${openableCount(m.recommendation)} 名就绪成员` }}</button>
-                <button class="workbench-btn" @click="openWorkbench">进入协作工作台 →</button>
+                <!-- 层级结构化（W5）：开工在场时工作台入口降次级——由数据显式绑定，
+                     不再依赖 :has() 条件级联（一屏一主动作的结构性落点）。主/次
+                     互斥换装：主态接全局 .cta-clay（SSOT），次态走 .is-secondary。 -->
+                <button class="workbench-btn" :class="openableCount(m.recommendation) > 0 ? 'is-secondary' : 'cta-clay'" @click="openWorkbench">进入协作工作台 →</button>
                 <button type="button" class="plan-escape" @click="focusComposer">想调整方案？直接告诉导引 ↓</button>
                 <span class="plan-note">
                   开工由你亲手点下——导引绝不代召集；参数未齐的成员回复导引补全，或在创建页
@@ -302,7 +307,7 @@
                   <span class="ap-name">{{ a.name }}
                     <span v-if="a.maturity" class="ap-maturity" :title="maturityTip(a.maturity)">{{ a.maturity }}</span>
                   </span>
-                  <span class="ap-sub">{{ a.summary }}</span>
+                  <span class="ap-sub" :title="a.summary">{{ a.summary }}</span>
                   <!-- 诚实前置（宪法五条）：信任边界随第一次点选同屏可见，
                        不许「L0/模拟」藏在两跳深的 /portal 里 -->
                   <span v-if="a.limitations && a.limitations.length" class="ap-limit">{{ a.limitations[0] }}</span>
@@ -320,7 +325,7 @@
             class="composer-input"
             @keydown.enter.exact.prevent="send"
           />
-          <button class="send-btn" :disabled="sending || !draft.trim()" aria-label="发送" @click="send">
+          <button class="send-btn cta-clay" :disabled="sending || !draft.trim()" aria-label="发送" @click="send">
             <svg v-if="!sending" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
             <span v-else class="send-spin"></span>
           </button>
@@ -351,6 +356,7 @@ import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";
 import ThinkingInk from "../components/artwork/ThinkingInk.vue";
 import IntentGlyph from "../components/artwork/IntentGlyph.vue";
+import MarkdownLite from "../components/MarkdownLite.vue";
 
 const router = useRouter();
 
@@ -1146,8 +1152,8 @@ watch(
   color: #fff;
   font-weight: 800;
   font-size: 21px;
-  background: linear-gradient(150deg, var(--clay), var(--clay-deep));
-  box-shadow: 0 6px 18px rgba(var(--clay-rgb), 0.28);
+  background: linear-gradient(160deg, var(--clay), var(--clay-deep));
+  box-shadow: 0 6px 18px rgba(var(--clay-rgb), 0.26);
 }
 /* 时段感问候：抒情场合走衬线，字号克制小于主标题，颜色降一级不抢戏。 */
 .hero-greeting {
@@ -1159,7 +1165,7 @@ watch(
 }
 .hero-title {
   font-family: var(--serif);
-  font-size: 30px;
+  font-size: var(--fs-display-lg);
   font-weight: 600;
   color: var(--ink);
   margin: 0 0 14px;
@@ -1314,12 +1320,17 @@ watch(
   font-weight: 500;
   letter-spacing: normal;
 }
+/* ai-lead 现为 MarkdownLite 容器（W5）：块结构由组件内 md-* 承担，容器只定
+ * 基础字号/行高/下距；pre-wrap 移除（段落切分已由块级渲染接管）。 */
 .ai-lead {
   font-size: 15px;
   line-height: 1.72;
   color: var(--ink);
   margin: 0 0 16px;
-  white-space: pre-wrap;
+}
+.ai-lead :deep(.md-p:first-child),
+.ai-lead :deep(.md-h:first-child) {
+  margin-top: 0;
 }
 
 /* 思考指示 */
@@ -1370,7 +1381,7 @@ watch(
 }
 .plan-goal-title {
   font-family: var(--serif);
-  font-size: 24px;
+  font-size: var(--fs-display);
   line-height: 1.36;
   color: var(--ink);
   font-weight: 600;
@@ -1567,14 +1578,10 @@ watch(
   box-shadow: var(--shadow-card-hover);
   border-color: var(--border-warm-hover);
 }
-.agent-main { flex: 1 1 auto; min-width: 0; }
-.agent-top {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
-}
+/* 死 CSS 清理（W5，grep 实证模板零消费）：.agent-main/.agent-top 属旧大卡布局，
+ * sa-row 改版后无 DOM 承载——删规则；.agent-card 基类是 sa-row 的承重底座
+ * （背景/描边/圆角/hover 阴影），保留；class token 本身是 m9 e2e 的 nth 钩子，
+ * 模板中的 "agent-card" 字符串绝不可摘。 */
 .agent-name {
   font-weight: 700;
   font-size: 15px;
@@ -1684,19 +1691,9 @@ watch(
   color: var(--ink);
   margin: 0 0 6px;
 }
-.agent-draft { margin-bottom: 10px; }
 /* 预填草案：紧凑「键 值」chip 取代 monospace JSON 大块——值恒完整可见
-   （诚实地板：不截断，让人看清按此会创建什么），视觉重量大幅下降。 */
-.draft-label {
-  font-size: 11px;
-  color: var(--ink-faint);
-  margin-bottom: 5px;
-}
-.draft-fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
+   （诚实地板：不截断，让人看清按此会创建什么），视觉重量大幅下降。
+   （.agent-draft/.draft-label/.draft-fields 旧容器类已删——模板零消费，W5） */
 .draft-field {
   display: inline-flex;
   align-items: baseline;
@@ -1764,29 +1761,26 @@ watch(
 }
 
 /* 照此方案开工：整卡唯一主决策（clay 满底=工作态启动） */
+/* 渐变/投影/hover/过渡走全局 .cta-clay（W0 真归位，模板已接线）——本类只留结构。 */
 .open-plan-btn {
   flex: 0 0 auto;
   font-size: 13.5px;
   font-weight: 700;
-  color: #fff;
-  background: linear-gradient(160deg, var(--clay), var(--clay-deep));
-  border: none;
   border-radius: 10px;
   padding: 10px 18px;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.26);
-  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft), opacity var(--motion-fast) var(--ease-out-soft);
-}
-.open-plan-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(var(--clay-rgb), 0.32);
 }
 .open-plan-btn:disabled { opacity: 0.6; cursor: default; }
-/* 开工在场时，工作台入口降级为次级样式 */
-.plan-foot:has(.open-plan-btn) .workbench-btn {
+/* 开工在场时工作台入口降次级：数据驱动 .is-secondary（模板显式绑定），
+ * 替换原 :has() 条件级联——主次由状态决定而非 DOM 巧合。 */
+.workbench-btn.is-secondary {
   background: transparent;
   color: var(--clay);
   border: 1px solid var(--border-clay-soft);
+  box-shadow: none;
+  transition: background var(--motion-fast) var(--ease-out-soft);
+}
+.workbench-btn.is-secondary:hover {
+  background: var(--select-tint-clay);
   box-shadow: none;
 }
 
@@ -1806,20 +1800,15 @@ watch(
   padding-top: 16px;
   border-top: 1px solid var(--hairline-soft);
 }
+/* 主态渐变/投影/hover 走全局 .cta-clay（模板按主/次互斥换装）——本类只留结构。 */
 .workbench-btn {
   flex: 0 0 auto;
   font-size: 13.5px;
   font-weight: 600;
-  color: #fff;
-  background: linear-gradient(160deg, var(--clay), var(--clay-deep));
-  border: none;
   border-radius: 10px;
   padding: 9px 16px;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.24);
-  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
 }
-.workbench-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(var(--clay-rgb), 0.3); }
 .plan-escape {
   flex: 0 0 100%;
   order: 1;
@@ -1879,7 +1868,8 @@ watch(
   bottom: 0;
   z-index: 15;
   margin-top: 0;
-  padding: 22px 24px 24px;
+  /* 底部悬浮条减重（W5）：多轮对话时视觉更轻，渐隐遮罩起点不变 */
+  padding: var(--space-4) var(--space-6) var(--space-5);
   background: linear-gradient(180deg, rgba(var(--page-bg-rgb), 0) 0%, rgba(var(--page-bg-rgb), 0.88) 42%, var(--page-bg) 74%);
   pointer-events: none;
 }
@@ -1943,22 +1933,16 @@ watch(
   color: var(--ink);
 }
 .composer-input :deep(.el-textarea__inner::placeholder) { color: var(--ink-faint); }
+/* 渐变/投影/hover/过渡走全局 .cta-clay（W0 真归位，模板已接线）——本类只留结构。 */
 .send-btn {
   flex: 0 0 auto;
   width: 40px;
   height: 40px;
   border-radius: 12px;
-  border: none;
-  cursor: pointer;
-  background: linear-gradient(160deg, var(--clay), var(--clay-deep));
-  color: #fff;
   display: grid;
   place-items: center;
-  box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.28);
-  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft), opacity var(--motion-fast) var(--ease-out-soft);
 }
-.send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(var(--clay-rgb), 0.34); }
-.send-btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+.send-btn:disabled { opacity: 0.4; box-shadow: none; }
 .send-spin {
   width: 15px; height: 15px; border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.4);

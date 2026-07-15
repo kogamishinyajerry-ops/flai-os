@@ -1,0 +1,48 @@
+<!-- @dsCard group="Components" name="工作日志 · 语义着色" -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>工作日志 · 语义着色</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  :root {
+    --mono: "SF Mono", ui-monospace, Menlo, monospace;
+    --ink: #2b2622; --ink-soft: #6b6259; --ink-faint: #a39d90;
+    --trust-fail: #be3a3a; --trust-pending: #a8761a; --trust-pending-rgb: 168, 118, 26;
+    --hairline: #ece5db;
+  }
+  body { font-family: "PingFang SC", system-ui, sans-serif; background: #faf7f2; color: var(--ink); padding: 24px; }
+  h1 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .rule { font-size: 12px; color: var(--ink-soft); line-height: 1.7; margin-bottom: 16px; max-width: 580px; }
+  .card { background: #fff; border: 1px solid var(--hairline); border-radius: 12px; padding: 14px 16px; max-width: 560px; box-shadow: 0 1px 2px rgba(43,38,34,.035), 0 4px 14px rgba(72,58,44,.05); }
+  .toolline { font-size: 12px; color: var(--ink-soft); margin-bottom: 12px; }
+  .tool-object { font-family: var(--mono); font-weight: 600; color: var(--ink); }
+  .pill-amber { display: inline-flex; padding: 0 8px; border-radius: 999px; font-size: 10.5px; color: var(--trust-pending); border: 1px solid rgba(var(--trust-pending-rgb), .35); background: rgba(var(--trust-pending-rgb), .08); margin-left: 4px; }
+  .tl { border-top: 1px solid var(--hairline); padding-top: 10px; display: flex; flex-direction: column; gap: 7px; }
+  .ev { display: flex; gap: 10px; font-size: 11.5px; align-items: baseline; }
+  .ev time { font-family: var(--mono); color: var(--ink-faint); font-size: 10.5px; flex: none; font-variant-numeric: tabular-nums; }
+  .ev .t { color: var(--ink-soft); }
+  .ev .raw { font-family: var(--mono); color: var(--ink-faint); font-size: 10px; }
+  .ev.is-failure .t, .ev.is-failure .raw { color: var(--trust-fail); }
+  .note { font-size: 11.5px; color: var(--ink-faint); line-height: 1.7; margin-top: 12px; max-width: 580px; }
+</style>
+</head>
+<body>
+  <h1>工作日志 · 语义着色（动宾分踢）</h1>
+  <p class="rule">chip 里<b>动词安静、宾语加重</b>——「调用工具」灰、对象名 mono+600 黑（innerText 逐字不变，只动结构）。
+  失败只染当行、只染真失败。</p>
+  <div class="card">
+    <div class="toolline">调用工具 <span class="tool-object">mock_echo</span> ×2 · 调用工具 <span class="tool-object">fta_solver</span><span class="pill-amber">mock</span> · Agent 日志 ×3</div>
+    <div class="tl">
+      <div class="ev"><time>02:00:10</time><span class="t">任务已创建</span><span class="raw">task_created</span></div>
+      <div class="ev"><time>02:00:11</time><span class="t">工具开始</span><span class="raw">tool_started</span></div>
+      <div class="ev is-failure"><time>02:00:12</time><span class="t">工具首跑失败</span><span class="raw">tool_failed</span></div>
+      <div class="ev"><time>02:00:13</time><span class="t">工具重试成功</span><span class="raw">tool_finished</span></div>
+      <div class="ev"><time>02:01:35</time><span class="t">任务完成</span><span class="raw">task_completed</span></div>
+    </div>
+  </div>
+  <p class="note">红=仅 task_failed / tool_failed / review_rejected / level:error；<b>task_cancelled 是中性用户动作，不染红</b>；
+  task_completed 行保持中性（completed 不给绿也不给红）。mock 标注走 amber pill（未核语义），逐 tool 如实标。</p>
+</body>
+</html>

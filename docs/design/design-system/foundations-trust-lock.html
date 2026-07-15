@@ -1,0 +1,51 @@
+<!-- @dsCard group="Foundations" name="信任色锁 · 五槽" -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>信任色锁 · 五槽</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; background: #faf7f2; color: #2b2622; padding: 24px; }
+  h1 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .rule { font-size: 12px; color: #6b6259; line-height: 1.7; margin-bottom: 18px; max-width: 560px; }
+  .rule b { color: #2b2622; }
+  table { border-collapse: collapse; width: 100%; max-width: 640px; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #ece5db; }
+  th { font-size: 11px; color: #a39d90; font-weight: 700; letter-spacing: .5px; }
+  .sw { display: inline-block; width: 34px; height: 20px; border-radius: 4px; vertical-align: middle; border: 1px solid rgba(0,0,0,.08); }
+  .dk { background: #211d19; }
+  code { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 11px; color: #6b6259; }
+  .floor { margin-top: 16px; font-size: 11.5px; color: #be3a3a; line-height: 1.7; }
+</style>
+</head>
+<body>
+  <h1>信任色锁 · 五槽（焊死红线）</h1>
+  <p class="rule">语义色只表状态、绝不被装饰借用。<b>clay=工作/进行/选中（全站唯一彩色语法）</b>；
+  装饰一律走中性暖阶（paper/sand），不碰五槽。注意力信号用形状+字重表达，零新色。</p>
+  <table>
+    <tr><th>槽</th><th>亮</th><th>暗</th><th>唯一许可语义</th><th>token</th></tr>
+    <tr><td><b>clay</b></td>
+        <td><span class="sw" style="background:#c15f3c"></span> <code>#c15f3c</code></td>
+        <td class="dk"><span class="sw" style="background:#d4714a"></span> <code style="color:#b0a698">#d4714a</code></td>
+        <td>工作 / 进行 / 选中</td><td><code>--clay</code></td></tr>
+    <tr><td><b>绿</b></td>
+        <td><span class="sw" style="background:#2e8f50"></span> <code>#2e8f50</code></td>
+        <td class="dk"><span class="sw" style="background:#4aa96c"></span> <code style="color:#b0a698">#4aa96c</code></td>
+        <td>仅真实（REAL）数据/结果</td><td><code>--trust-real</code></td></tr>
+    <tr><td><b>teal</b></td>
+        <td><span class="sw" style="background:#167d8b"></span> <code>#167d8b</code></td>
+        <td class="dk"><span class="sw" style="background:#3b9eae"></span> <code style="color:#b0a698">#3b9eae</code></td>
+        <td>仅人签（改变工程状态的唯一合法通道）</td><td><code>--trust-signed</code></td></tr>
+    <tr><td><b>红</b></td>
+        <td><span class="sw" style="background:#be3a3a"></span> <code>#be3a3a</code></td>
+        <td class="dk"><span class="sw" style="background:#d4645a"></span> <code style="color:#b0a698">#d4645a</code></td>
+        <td>仅真失败 / 驳回（取消是中性动作，不染红）</td><td><code>--trust-fail</code></td></tr>
+    <tr><td><b>amber</b></td>
+        <td><span class="sw" style="background:#a8761a"></span> <code>#a8761a</code></td>
+        <td class="dk"><span class="sw" style="background:#c99a3f"></span> <code style="color:#b0a698">#c99a3f</code></td>
+        <td>仅未核 / 待签 / 降级 / mock 标注</td><td><code>--trust-pending</code></td></tr>
+  </table>
+  <p class="floor">⚠ completed 绝不给绿（完成≠已核真）；暗色只做明度适配，语义与色相一个不动；绝不新增颜色槽。</p>
+</body>
+</html>

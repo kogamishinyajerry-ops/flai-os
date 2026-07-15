@@ -1,0 +1,55 @@
+<!-- @dsCard group="Foundations" name="暖纸阶 · 墨阶" -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>暖纸阶 · 墨阶</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: "PingFang SC", system-ui, sans-serif; background: #faf7f2; color: #2b2622; padding: 24px; }
+  h1 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .rule { font-size: 12px; color: #6b6259; line-height: 1.7; margin-bottom: 16px; max-width: 560px; }
+  .cols { display: flex; gap: 24px; flex-wrap: wrap; }
+  .panel { flex: 1 1 280px; border-radius: 12px; padding: 16px; border: 1px solid #ece5db; }
+  .panel.dark { background: #211d19; border-color: #3a332c; color: #ece5db; }
+  .panel h2 { font-size: 12px; margin-bottom: 10px; opacity: .7; }
+  .row { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; font-size: 11.5px; }
+  .sw { width: 44px; height: 22px; border-radius: 4px; border: 1px solid rgba(0,0,0,.08); flex: none; }
+  .dark .sw { border-color: rgba(255,255,255,.1); }
+  code { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 10.5px; opacity: .75; }
+</style>
+</head>
+<body>
+  <h1>暖纸阶 · 墨阶（中性组）</h1>
+  <p class="rule">暖白非冷灰、暗色是「夜航图纸」暖炭非纯黑。装饰用色只许取这里，绝不借语义槽。
+  hover/选中叠色方向随主题反转，必须走 token。</p>
+  <div class="cols">
+    <div class="panel" style="background:#faf7f2">
+      <h2>亮 · 纸</h2>
+      <div class="row"><span class="sw" style="background:#faf7f2"></span>page-bg <code>#faf7f2</code></div>
+      <div class="row"><span class="sw" style="background:#ffffff"></span>card-bg / surface-raised <code>#ffffff</code></div>
+      <div class="row"><span class="sw" style="background:#fbf9f3"></span>paper-cream <code>#fbf9f3</code></div>
+      <div class="row"><span class="sw" style="background:#f7f4ec"></span>paper-rail <code>#f7f4ec</code></div>
+      <div class="row"><span class="sw" style="background:#f1eee6"></span>paper-canvas-b <code>#f1eee6</code></div>
+      <div class="row"><span class="sw" style="background:#ece5db"></span>hairline <code>#ece5db</code></div>
+      <div class="row"><span class="sw" style="background:#2b2622"></span>ink <code>#2b2622</code></div>
+      <div class="row"><span class="sw" style="background:#4a443d"></span>ink-mid <code>#4a443d</code></div>
+      <div class="row"><span class="sw" style="background:#6b6259"></span>ink-soft <code>#6b6259</code></div>
+      <div class="row"><span class="sw" style="background:#a39d90"></span>ink-faint <code>#a39d90</code></div>
+    </div>
+    <div class="panel dark">
+      <h2>暗 · 夜航图纸</h2>
+      <div class="row"><span class="sw" style="background:#211d19"></span>page-bg <code>#211d19</code></div>
+      <div class="row"><span class="sw" style="background:#2a2521"></span>card-bg <code>#2a2521</code></div>
+      <div class="row"><span class="sw" style="background:#292420"></span>paper-cream <code>#292420</code></div>
+      <div class="row"><span class="sw" style="background:#272220"></span>paper-rail <code>#272220</code></div>
+      <div class="row"><span class="sw" style="background:#1e1a15"></span>paper-canvas-b <code>#1e1a15</code></div>
+      <div class="row"><span class="sw" style="background:#3a332c"></span>hairline <code>#3a332c</code></div>
+      <div class="row"><span class="sw" style="background:#ece5db"></span>ink <code>#ece5db</code></div>
+      <div class="row"><span class="sw" style="background:#cfc6b8"></span>ink-mid <code>#cfc6b8</code></div>
+      <div class="row"><span class="sw" style="background:#b0a698"></span>ink-soft <code>#b0a698</code></div>
+      <div class="row"><span class="sw" style="background:#978e81"></span>ink-faint <code>#978e81</code>（AA 复检提亮）</div>
+    </div>
+  </div>
+</body>
+</html>

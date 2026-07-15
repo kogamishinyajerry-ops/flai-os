@@ -77,7 +77,7 @@
         `.page-header h2`（即本 oracle 已纳入的 `/tasks/<id>` 选中态探针）；
       - WorkbenchSession `.sess-title-row h2`：「协作会话」四字是**会话版块
         类型标签**（同 TaskConsole `.cl-title` 一个语义层级），不是页标题——
-        真正的内容标题是其下 22px serif 的 `.sess-goal`；该 h2 已从裸 20px
+        真正的内容标题是其下 var(--fs-display)=24px serif 的 `.sess-goal`（桌面工艺批归 token）；该 h2 已从裸 20px
         魔数迁到 `var(--fs-h3)`（16px，版块标题档位，Task 9 R0 ④），但迁移
         目标 token 是 `--fs-h3` 而非 `--fs-title`，仍不进本 6-view 全集。
   ⑦ 失败态互斥：FeedbackPage 用 `page.route` 拦截反馈列表接口返 500，选中

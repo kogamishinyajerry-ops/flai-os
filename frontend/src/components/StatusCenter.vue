@@ -445,7 +445,8 @@ async function fixAcceptedSamples() {
 async function doReview(action) {
   const taskId = statusCenter.taskId; // 调用前捕获：await 期间任务可能被切换
   if (!taskId) return;
-  const label = action === "approve" ? "批准放行" : "拒绝";
+  // 措辞统一（W7）：按钮/弹窗同用「驳回」——同一动作一种中文（与 TaskDetail 对齐）。
+  const label = action === "approve" ? "批准放行" : "驳回";
   try {
     // 与 TaskDetail 同款二次确认：内联签发不降低宪法路径的操作摩擦
     await ElMessageBox.confirm(`确认${label}该任务？`, "签发确认", {

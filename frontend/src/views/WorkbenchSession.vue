@@ -376,7 +376,8 @@ onUnmounted(() => {
 }
 .sess-goal {
   font-family: var(--serif);
-  font-size: 22px;
+  /* 展示标题阶归位（W5）：22px 游离值并入 --fs-display，与方案卡目标句同阶 */
+  font-size: var(--fs-display);
   font-weight: 600;
   margin: 0 0 10px;
   color: var(--ink);

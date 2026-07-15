@@ -1,0 +1,44 @@
+<!-- @dsCard group="Foundations" name="字阶 · 双字体" -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>字阶 · 双字体</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  :root {
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "STSong", "Times New Roman", serif;
+    --sans: "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+    --mono: "SF Mono", ui-monospace, Menlo, "Cascadia Code", monospace;
+  }
+  body { font-family: var(--sans); background: #faf7f2; color: #2b2622; padding: 24px; }
+  h1 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .rule { font-size: 12px; color: #6b6259; line-height: 1.7; margin-bottom: 18px; max-width: 560px; }
+  .spec { display: flex; align-items: baseline; gap: 14px; padding: 9px 0; border-bottom: 1px solid #ece5db; }
+  .spec code { font-family: var(--mono); font-size: 10.5px; color: #a39d90; width: 150px; flex: none; }
+  .s-display-lg { font-family: var(--serif); font-size: 30px; font-weight: 600; }
+  .s-display { font-family: var(--serif); font-size: 24px; font-weight: 600; }
+  .s-title { font-family: var(--serif); font-size: 26px; font-weight: 600; }
+  .s-h3 { font-size: 16px; font-weight: 700; }
+  .s-body { font-size: 13.5px; }
+  .s-sm { font-size: 12.5px; color: #6b6259; }
+  .s-xs { font-size: 11.5px; color: #a39d90; }
+  .s-2xs { font-size: 10px; letter-spacing: .8px; text-transform: uppercase; font-weight: 700; color: #a39d90; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <h1>字阶 · 双字体</h1>
+  <p class="rule">衬线（Iowan/Songti）只给「大时刻」——hero 问候、目标句、页标题；正文/界面一律无衬线。
+  证据数字（计数/时长/尺寸）走 <b>.num-token</b>：mono + tabular-nums 防抖。</p>
+  <div class="spec"><code>--fs-display-lg 30px</code><span class="s-display-lg">下午好，王工。</span></div>
+  <div class="spec"><code>--fs-display 24px</code><span class="s-display">完成双通道供电的故障树分析</span></div>
+  <div class="spec"><code>--fs-title 26px</code><span class="s-title">今日</span></div>
+  <div class="spec"><code>--fs-h3 16px</code><span class="s-h3">产物</span></div>
+  <div class="spec"><code>--fs-body 13.5px</code><span class="s-body">任务在这里拆解、执行、留痕——签发权在你。</span></div>
+  <div class="spec"><code>--fs-sm 12.5px</code><span class="s-sm">次要说明与图例走这一档。</span></div>
+  <div class="spec"><code>--fs-xs 11.5px</code><span class="s-xs">faint 注脚 · 时间戳</span></div>
+  <div class="spec"><code>--fs-2xs 10px</code><span class="s-2xs">EYEBROW 眉标</span></div>
+  <div class="spec"><code>.num-token</code><span class="s-body">已跑 <span class="num">128</span> 步 · <span class="num">02:41</span> · <span class="num">37.5</span> MB</span></div>
+</body>
+</html>

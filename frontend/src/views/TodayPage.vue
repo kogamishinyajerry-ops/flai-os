@@ -23,7 +23,7 @@
 
       <!-- 版块 1：待你签发（amber 置顶，行动召唤最高优先） -->
       <section class="today-section">
-        <div class="today-section-head waiting">✍ 待你签发 · {{ waitingTasks.length }}</div>
+        <div class="today-section-head waiting">✍ 待你签发 · <span class="num-token">{{ waitingTasks.length }}</span></div>
         <div v-if="waitingTasks.length" class="today-list">
           <div
             v-for="t in waitingTasks"
@@ -52,7 +52,7 @@
 
       <!-- 版块 2：进行中 -->
       <section class="today-section">
-        <div class="today-section-head working">进行中 · {{ workingTasks.length }}</div>
+        <div class="today-section-head working">进行中 · <span class="num-token">{{ workingTasks.length }}</span></div>
         <div v-if="workingTasks.length" class="today-list">
           <div
             v-for="t in workingTasks"
@@ -71,7 +71,7 @@
             </span>
           </div>
         </div>
-        <EmptyState v-else variant="data" description="当前没有进行中的任务" />
+        <EmptyState v-else variant="data" tier="line" description="当前没有进行中的任务" />
       </section>
 
       <!-- 版块 3：今日交付（终态叙事卡）。animate 接 sealAnimateIds（批B Task 6）
@@ -81,12 +81,12 @@
            标注「显示最近 N 条」（诚实口径，canon 纪律）。 -->
       <section class="today-section">
         <div class="today-section-head">
-          今日交付 · {{ deliveryTasks.length }}<template v-if="deliveryTasks.length > DELIVERY_DISPLAY_CAP">（显示最近 {{ DELIVERY_DISPLAY_CAP }} 条）</template>
+          今日交付 · <span class="num-token">{{ deliveryTasks.length }}</span><template v-if="deliveryTasks.length > DELIVERY_DISPLAY_CAP">（显示最近 <span class="num-token">{{ DELIVERY_DISPLAY_CAP }}</span> 条）</template>
         </div>
         <div v-if="deliveryTasks.length" class="today-list">
           <DeliveryCard v-for="t in visibleDeliveryTasks" :key="t.id" :task="t" :animate="sealAnimateIds.has(t.id)" />
         </div>
-        <EmptyState v-else variant="data" description="今天还没有交付的任务" />
+        <EmptyState v-else variant="data" tier="line" description="今天还没有交付的任务" />
       </section>
 
       <!-- 版块 4：Agent 动态（4a 本周最近晋升 ≤5 条 + 4b 今日最活跃 Agent top3）。
@@ -105,7 +105,7 @@
               <span class="today-promo-sub">{{ formatRelativeTime(p.created_at) }} · 签发人 {{ p.confirmed_by }}</span>
             </div>
           </div>
-          <EmptyState v-else variant="data" description="本周暂无晋升" />
+          <EmptyState v-else variant="data" tier="line" description="本周暂无晋升" />
         </template>
 
         <div class="today-subhead">今日最活跃 Agent</div>
@@ -114,7 +114,7 @@
             {{ a.agent_id }} · {{ a.count }}
           </span>
         </div>
-        <EmptyState v-else variant="data" description="今天暂无任务" />
+        <EmptyState v-else variant="data" tier="line" description="今天暂无任务" />
         <div class="today-subhead-note">今日 · 近 100 条任务窗口内</div>
       </section>
 
@@ -362,7 +362,7 @@ onUnmounted(() => {
   margin: 0 auto;
 }
 .today-head {
-  margin-bottom: 18px;
+  margin-bottom: var(--space-4);
 }
 .today-title {
   font-family: var(--serif);
@@ -374,22 +374,22 @@ onUnmounted(() => {
 .today-error {
   color: var(--trust-fail);
   font-size: 12.5px;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 .today-skel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-3);
 }
 .today-section {
-  margin-bottom: 26px;
+  margin-bottom: var(--space-6);
 }
 .today-section-head {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 700;
   letter-spacing: 0.5px;
   color: var(--ink-faint);
-  margin-bottom: 10px;
+  margin-bottom: var(--space-2);
 }
 .today-section-head.waiting {
   color: var(--trust-pending);
@@ -400,13 +400,13 @@ onUnmounted(() => {
 .today-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-1);
 }
 .today-card {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--hairline-soft);
   border-radius: 10px;
   background: var(--card-bg);
@@ -455,7 +455,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 8px 14px;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--hairline-soft);
   border-radius: 10px;
   background: var(--card-bg);
@@ -473,22 +473,22 @@ onUnmounted(() => {
   font-size: 11px;
   font-weight: 700;
   color: var(--ink-faint);
-  margin: 16px 0 8px;
+  margin: var(--space-4) 0 var(--space-2);
 }
 .today-subhead-note {
   font-size: 10.5px;
   color: var(--ink-faint);
-  margin-top: 6px;
+  margin-top: var(--space-2);
 }
 .today-active-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .today-active-chip {
   font-size: 12px;
   color: var(--ink);
-  padding: 5px 10px;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--hairline-soft);
   border-radius: 999px;
   background: var(--card-bg);
@@ -496,7 +496,7 @@ onUnmounted(() => {
 .today-stats-bar {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
+  gap: var(--space-2);
 }
 @media (max-width: 520px) {
   .today-stats-bar {
@@ -506,8 +506,8 @@ onUnmounted(() => {
 .today-stat-tile {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-3);
   border: 1px solid var(--hairline-soft);
   border-radius: 10px;
   background: var(--card-bg);
@@ -517,6 +517,7 @@ onUnmounted(() => {
   font-size: 22px;
   font-weight: 700;
   color: var(--ink);
+  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
 }
 .today-stat-label {
@@ -528,8 +529,8 @@ onUnmounted(() => {
   font-size: 10.5px;
   color: var(--ink-faint);
   border-top: 1px dashed var(--hairline);
-  margin-top: 8px;
-  padding-top: 10px;
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
 }
 @media (prefers-reduced-motion: reduce) {
   .today-lamp.is-pulsing {

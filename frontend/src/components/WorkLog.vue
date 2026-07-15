@@ -27,7 +27,10 @@
     <div v-if="chips.length" class="worklog-toolline">
       <span v-for="(c, i) in chips" :key="c.key" class="worklog-tool">
         <span v-if="i > 0" class="worklog-tool-sep" aria-hidden="true">·</span>
-        {{ c.label }}<template v-if="c.count > 1"> ×{{ c.count }}</template>
+        <!-- 两级语义权重（W16 语法）：动词安静、仅对象名（工具 id）加重——
+             DOM 拆 span 但 innerText 逐字不变（e2e 文本断言面零扰动）。 -->
+        <template v-if="c.object">{{ c.label }} <span class="worklog-tool-object">{{ c.object }}</span></template>
+        <template v-else>{{ c.label }}</template><template v-if="c.count > 1"> ×{{ c.count }}</template>
         <span v-if="c.mock" class="pill-amber">mock</span>
       </span>
     </div>
@@ -45,10 +48,12 @@
           v-for="e in events"
           :key="e.event_id"
           :timestamp="formatTime(e.created_at)"
-          :color="LEVEL_COLOR[e.level] || LEVEL_COLOR.info"
+          :color="markerColor(e)"
           :class="{ 'fx-ink-in': isWorking }"
         >
-          <div class="event-type">
+          <!-- 失败态语义着色（W16「失败只染动词 token」）：仅译文状态词着玫红，
+               raw token/消息正文不动——着色预算精确到 token 粒度。 -->
+          <div class="event-type" :class="{ 'is-failure': isFailureEvent(e) }">
             {{ eventTypeLabel(e.event_type) }}
             <span class="event-type-raw">{{ e.event_type }}</span>
           </div>
@@ -159,6 +164,24 @@ function toolHasMock(toolId) {
 
 const TOOL_EVENT_TYPES = new Set(["tool_started", "tool_finished", "tool_failed"]);
 
+// 失败类事件判定：真失败语义（trust-fail 红）只认失败 token 与 error level——
+// 玫红只染译文状态词一处，不外溢整行（W16 着色预算）。取消（task_cancelled）
+// 是中性动作非真失败，**先于 level 兜底显式豁免**：毒丸隔离（runner.py
+// _quarantine_poison_candidate）会写 task_cancelled+level=error，若只靠枚举排除
+// 会被 OR 兜底重新卷进红槽（信任色锁：红=仅真失败/驳回，3-lens trust P1）。
+const FAILURE_EVENT_TYPES = new Set(["task_failed", "tool_failed", "review_rejected"]);
+function isFailureEvent(e) {
+  if (e.event_type === "task_cancelled") return false;
+  return FAILURE_EVENT_TYPES.has(e.event_type) || e.level === "error";
+}
+// 时间轴节点色与文字着色同一谓词（Codex R1 P1）：豁免路径（task_cancelled+
+// level=error 毒丸隔离）节点降中性蓝，绝不残留红点——红=仅真失败/驳回。
+function markerColor(e) {
+  if (isFailureEvent(e)) return LEVEL_COLOR[e.level] || LEVEL_COLOR.error;
+  if (e.level === "error") return LEVEL_COLOR.info;
+  return LEVEL_COLOR[e.level] || LEVEL_COLOR.info;
+}
+
 // 聚合 chips：相邻 tool_* 事件归工具组（组内再按 tool_id 分别计数），相邻
 // agent_log 归一组；其余事件类型各自成组（不与相邻同类合并）。
 const chips = computed(() => {
@@ -179,7 +202,10 @@ const chips = computed(() => {
       for (const [id, { started, total }] of byTool) {
         out.push({
           key: `tool:${out.length}:${id}`,
-          label: `调用工具 ${id}`,
+          // label=动词（安静）/ object=对象名（加重）分踢——模板拼接后
+          // innerText 仍为「调用工具 <id>」逐字不变。
+          label: "调用工具",
+          object: id,
           count: started || total,
           mock: toolHasMock(id),
         });
@@ -288,6 +314,13 @@ const rawLine = computed(() => {
   gap: 6px;
   white-space: nowrap;
 }
+/* 两级语义权重：动词（调用工具）承袭行内安静灰，对象名（工具 id）mono 加重——
+ * 「动词灰/仅对象名黑加粗」的 W16 语法。 */
+.worklog-tool-object {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--ink);
+}
 .worklog-tool-sep {
   color: var(--ink-faint);
 }
@@ -312,6 +345,13 @@ const rawLine = computed(() => {
 .event-type {
   font-weight: 600;
   font-size: 13px;
+}
+/* 失败只染动词：译文状态词玫红一处，raw token 与消息正文保持原色。 */
+.event-type.is-failure {
+  color: var(--trust-fail);
+}
+.event-type.is-failure .event-type-raw {
+  color: var(--ink-faint);
 }
 .event-message {
   color: var(--ink-soft);

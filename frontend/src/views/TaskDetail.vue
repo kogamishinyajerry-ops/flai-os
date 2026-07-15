@@ -8,10 +8,7 @@
       <SkeletonBlock height="26px" width="200px" />
       <SkeletonBlock height="14px" width="340px" />
       <SkeletonBlock height="76px" width="100%" />
-      <div class="io-panel">
-        <SkeletonBlock height="220px" width="100%" />
-        <SkeletonBlock height="220px" width="100%" />
-      </div>
+      <SkeletonBlock height="220px" width="100%" />
       <SkeletonBlock height="120px" width="100%" />
     </div>
 
@@ -22,6 +19,12 @@
           ← 返回协作会话
         </el-button>
       </div>
+      <!-- 桌面工艺批 W3：页级「主叙事 | 环境 rail」（Codex 环境仪表盘范式）。
+           容器查询驱动——组件自身宽 ≥780px 双栏（260px rail；≥1120px 提 300px），更窄宿主自动单列；
+           DOM 序=主列（含产物）先、rail（含来源）后，m2 的
+           a[href*='/download'] .first 指向产物下载的契约保持。 -->
+      <div class="td-grid">
+      <div class="td-main">
       <div class="page-header">
         <!-- 工作态流光带（P3，动效系统 v1）：v-if 绑真实 work-state，状态回落随之
              立即消失——诚实地板：流光=真的在跑。装饰性，不承载信息，故 aria-hidden。 -->
@@ -67,23 +70,6 @@
         <span>{{ formatTime(task.created_at) }}</span>
       </div>
 
-      <div class="task-meta-card">
-        <el-collapse class="task-meta-collapse">
-          <el-collapse-item title="任务信息（ID · 版本 · 时间）">
-            <el-descriptions :column="2" border class="task-descriptions">
-              <el-descriptions-item label="ID">{{ task.id }}</el-descriptions-item>
-              <el-descriptions-item label="Agent ID">{{ task.agent_id }}</el-descriptions-item>
-              <el-descriptions-item label="Agent 版本">{{ task.agent_version }}</el-descriptions-item>
-              <el-descriptions-item label="任务名称">{{ task.name || "—" }}</el-descriptions-item>
-              <el-descriptions-item label="创建人">{{ task.created_by }}</el-descriptions-item>
-              <el-descriptions-item label="创建时间">{{ formatTime(task.created_at) }}</el-descriptions-item>
-              <el-descriptions-item label="开始时间">{{ formatTime(task.started_at) }}</el-descriptions-item>
-              <el-descriptions-item label="结束时间">{{ formatTime(task.finished_at) }}</el-descriptions-item>
-            </el-descriptions>
-          </el-collapse-item>
-        </el-collapse>
-      </div>
-
       <el-alert
         v-if="task.error_message"
         type="error"
@@ -93,88 +79,43 @@
         class="section"
       />
 
-      <!-- 双面板：左栏=产物（签发前把要签的东西摆在眼前，放在「动作」之前——先看
-           产物，再决定放行，信任核心 P0-2），右栏=来源（输入文件/参数/执行方，
-           全部真实字段，无则显示"—"，诚实降级不编造）。左栏必须先于右栏出现在
-           DOM 中——e2e 取 a[href*='/download'] 的 .first 仍须指向产物下载链接。 -->
-      <div class="section">
-        <div class="io-panel">
-          <div class="section" v-if="artifacts.length">
-            <h3>产物<span v-if="isWaitingReview" class="artifact-review-hint">放行前请先审阅</span></h3>
-            <div v-for="a in artifacts" :key="a.fileId" class="artifact-card">
-              <div class="artifact-head">
-                <span class="artifact-name">{{ a.filename }}</span>
-                <span v-if="a.ext" class="artifact-ext-badge">.{{ a.ext }}</span>
-                <span v-if="!a.loading && a.size" class="artifact-size">
-                  <span class="num-token">{{ formatSize(a.size) }}</span><template v-if="artifactLineCount(a) != null"> · <span class="num-token">{{ artifactLineCount(a) }}</span> 行</template>
-                </span>
-                <a :href="downloadUrl(a.fileId)" download class="artifact-download">下载</a>
-              </div>
-              <div v-if="a.loading" class="artifact-body muted">加载中…</div>
-              <div v-else-if="a.error" class="artifact-body artifact-error">产物加载失败：{{ a.error }}</div>
-              <MarkdownLite
-                v-else-if="a.isText && (a.ext === 'md' || a.ext === 'markdown')"
-                :text="a.text"
-                class="artifact-body"
-              />
-              <pre v-else-if="a.isText" class="artifact-body artifact-pre">{{ a.text }}</pre>
-              <div v-else class="artifact-body muted">二进制文件，请下载后查看。</div>
-            </div>
+      <!-- 产物在主叙事列（签发前把要签的东西摆在眼前，放在「动作」之前——先看
+           产物，再决定放行，信任核心 P0-2）；来源/元数据迁至环境 rail（下方
+           aside，DOM 序在主列之后）——e2e 取 a[href*='/download'] 的 .first
+           仍指向产物下载链接。 -->
+      <div class="section" v-if="artifacts.length">
+        <h3>产物<span v-if="isWaitingReview" class="artifact-review-hint">放行前请先审阅</span></h3>
+        <div v-for="a in artifacts" :key="a.fileId" class="artifact-card">
+          <!-- 逐卡收起 affordance（W3）：默认全展开不变；多产物任务可手动收纳
+               已读卡。披露触发器=真 <button>（原生 Enter/Space，免 tabindex/
+               keydown 手写），下载 <a> 是其兄弟——嵌套可交互控件是非法 ARIA
+               结构，SR 会拍扁 button 后代（Codex R0 P2 + 3-lens P2 同修）。 -->
+          <div class="artifact-head">
+            <button
+              type="button"
+              class="artifact-toggle"
+              :aria-expanded="!a.collapsed"
+              @click="a.collapsed = !a.collapsed"
+            >
+              <span class="artifact-chevron" aria-hidden="true">{{ a.collapsed ? "▸" : "▾" }}</span>
+              <span class="artifact-name">{{ a.filename }}</span>
+              <span v-if="a.ext" class="artifact-ext-badge">.{{ a.ext }}</span>
+              <span v-if="!a.loading && a.size" class="artifact-size">
+                <span class="num-token">{{ formatSize(a.size) }}</span><template v-if="artifactLineCount(a) != null"> · <span class="num-token">{{ artifactLineCount(a) }}</span> 行</template>
+              </span>
+            </button>
+            <a :href="downloadUrl(a.fileId)" download class="artifact-download">下载</a>
           </div>
-
-          <div class="source-panel">
-            <h3>来源</h3>
-            <div class="source-block">
-              <div class="source-label">输入文件</div>
-              <template v-if="task.input_file_ids && task.input_file_ids.length">
-                <div v-for="(fid, idx) in task.input_file_ids" :key="fid" class="source-row">
-                  <span>输入文件 {{ idx + 1 }}</span>
-                  <a :href="downloadUrl(fid)" download class="source-download">下载</a>
-                </div>
-              </template>
-              <div v-else class="muted">无输入文件</div>
-            </div>
-            <div class="source-block">
-              <div class="source-label">输入参数</div>
-              <template v-if="inputEntries.length">
-                <div v-for="[k, v] in inputEntries" :key="k" class="source-row">
-                  <span class="source-param-key">{{ k }}</span>
-                  <span class="source-param-val">{{ v }}</span>
-                </div>
-              </template>
-              <div v-else class="muted">无参数</div>
-            </div>
-            <div class="source-block">
-              <div class="source-label">执行方</div>
-              <div>{{ task.agent_id || "—" }} · {{ task.agent_version || "—" }}</div>
-            </div>
-            <!-- B1：模型调用消耗诚实披露——零调用（hello 等无 LLM Agent）显示中性
-                 灰字；token 合计只对能折算出总数的行求和，凑不出来一律「未知」，
-                 绝不记 0（假绿死罪）。块内无 /download 链接，不干扰 m2 e2e 的
-                 a[href*='/download'] DOM 顺序取值。 -->
-            <div class="source-block model-usage">
-              <div class="source-label">模型调用</div>
-              <div v-if="modelCallsError" class="muted">模型调用加载失败：{{ modelCallsError }}</div>
-              <div v-else-if="modelCallStats.total === 0" class="muted">无模型调用</div>
-              <template v-else>
-                <div class="source-row model-usage-summary">
-                  <span>
-                    <span class="num-token">{{ modelCallStats.total }}</span> 次调用（成功 <span class="num-token">{{ modelCallStats.ok }}</span> · 失败
-                    <span class="num-token" :class="modelCallStats.failed > 0 ? 'model-usage-fail-count' : ''">{{ modelCallStats.failed }}</span>）
-                  </span>
-                </div>
-                <div class="source-row">
-                  <span>模型：{{ modelCallStats.names.length ? modelCallStats.names.join("、") : "未知" }}</span>
-                </div>
-                <div class="source-row">
-                  <span v-if="modelCallStats.tokenKnownCount > 0">tokens 合计 <span class="num-token">{{ modelCallStats.tokenSum.toLocaleString() }}</span></span>
-                  <span v-else class="muted">token 用量：未知</span>
-                </div>
-                <div v-if="modelCallStats.tokenKnownCount > 0 && modelCallStats.tokenMissingCount > 0" class="model-usage-note">
-                  部分调用上游未回报 token，合计为下界
-                </div>
-              </template>
-            </div>
+          <div v-show="!a.collapsed">
+            <div v-if="a.loading" class="artifact-body muted">加载中…</div>
+            <div v-else-if="a.error" class="artifact-body artifact-error">产物加载失败：{{ a.error }}</div>
+            <MarkdownLite
+              v-else-if="a.isText && (a.ext === 'md' || a.ext === 'markdown')"
+              :text="a.text"
+              class="artifact-body"
+            />
+            <pre v-else-if="a.isText" class="artifact-body artifact-pre">{{ a.text }}</pre>
+            <div v-else class="artifact-body muted">二进制文件，请下载后查看。</div>
           </div>
         </div>
       </div>
@@ -198,7 +139,8 @@
               <!-- 批准=人签，用信任锁的 teal（--trust-signed），绝不用绿（绿仅表真实结果）。
                    ref 供放行成功后的 teal burst 定位元素（动效系统 v1 E2，唯一 teal 许可点）。 -->
               <el-button ref="approveBtnEl" class="approve-btn" :loading="reviewing" @click="handleReview('approve')">批准放行</el-button>
-              <el-button type="danger" :loading="reviewing" @click="handleReview('reject')">拒绝</el-button>
+              <!-- 措辞统一（W7）：与 StatusCenter 速览同用「驳回」——同一动作一种中文。 -->
+              <el-button type="danger" :loading="reviewing" @click="handleReview('reject')">驳回</el-button>
             </el-form-item>
           </el-form>
         </el-card>
@@ -250,6 +192,85 @@
         </el-collapse-item>
         </el-collapse>
       </div>
+      </div><!-- /td-main -->
+
+      <!-- 环境 rail（W3，Codex 环境仪表盘范式）：任务元数据/来源/模型消耗从主叙事
+           流里抽出，成为常驻可参照的「执行环境对象」——宽宿主 sticky 随读随查，
+           窄宿主自动落主列之下。全部真实字段，无则「—」/「无 X」，诚实降级不编造。 -->
+      <aside class="td-rail">
+        <div class="task-meta-card">
+          <el-collapse class="task-meta-collapse">
+            <el-collapse-item title="任务信息（ID · 版本 · 时间）">
+              <el-descriptions :column="1" border class="task-descriptions">
+                <el-descriptions-item label="ID">{{ task.id }}</el-descriptions-item>
+                <el-descriptions-item label="Agent ID">{{ task.agent_id }}</el-descriptions-item>
+                <el-descriptions-item label="Agent 版本">{{ task.agent_version }}</el-descriptions-item>
+                <el-descriptions-item label="任务名称">{{ task.name || "—" }}</el-descriptions-item>
+                <el-descriptions-item label="创建人">{{ task.created_by }}</el-descriptions-item>
+                <el-descriptions-item label="创建时间">{{ formatTime(task.created_at) }}</el-descriptions-item>
+                <el-descriptions-item label="开始时间">{{ formatTime(task.started_at) }}</el-descriptions-item>
+                <el-descriptions-item label="结束时间">{{ formatTime(task.finished_at) }}</el-descriptions-item>
+              </el-descriptions>
+            </el-collapse-item>
+          </el-collapse>
+        </div>
+
+        <div class="source-panel">
+          <h3>来源</h3>
+          <div class="source-block">
+            <div class="source-label">输入文件</div>
+            <template v-if="task.input_file_ids && task.input_file_ids.length">
+              <div v-for="(fid, idx) in task.input_file_ids" :key="fid" class="source-row">
+                <span>输入文件 {{ idx + 1 }}</span>
+                <a :href="downloadUrl(fid)" download class="source-download">下载</a>
+              </div>
+            </template>
+            <div v-else class="muted">无输入文件</div>
+          </div>
+          <div class="source-block">
+            <div class="source-label">输入参数</div>
+            <template v-if="inputEntries.length">
+              <div v-for="[k, v] in inputEntries" :key="k" class="source-row">
+                <span class="source-param-key">{{ k }}</span>
+                <span class="source-param-val">{{ v }}</span>
+              </div>
+            </template>
+            <div v-else class="muted">无参数</div>
+          </div>
+          <div class="source-block">
+            <div class="source-label">执行方</div>
+            <div>{{ task.agent_id || "—" }} · {{ task.agent_version || "—" }}</div>
+          </div>
+          <!-- B1：模型调用消耗诚实披露——零调用（hello 等无 LLM Agent）显示中性
+               灰字；token 合计只对能折算出总数的行求和，凑不出来一律「未知」，
+               绝不记 0（假绿死罪）。块内无 /download 链接，且整个 rail 在 DOM 中
+               位于主列（产物）之后，不干扰 m2 e2e 的 a[href*='/download'] 顺序。 -->
+          <div class="source-block model-usage">
+            <div class="source-label">模型调用</div>
+            <div v-if="modelCallsError" class="muted">模型调用加载失败：{{ modelCallsError }}</div>
+            <div v-else-if="modelCallStats.total === 0" class="muted">无模型调用</div>
+            <template v-else>
+              <div class="source-row model-usage-summary">
+                <span>
+                  <span class="num-token">{{ modelCallStats.total }}</span> 次调用（成功 <span class="num-token">{{ modelCallStats.ok }}</span> · 失败
+                  <span class="num-token" :class="modelCallStats.failed > 0 ? 'model-usage-fail-count' : ''">{{ modelCallStats.failed }}</span>）
+                </span>
+              </div>
+              <div class="source-row">
+                <span>模型：{{ modelCallStats.names.length ? modelCallStats.names.join("、") : "未知" }}</span>
+              </div>
+              <div class="source-row">
+                <span v-if="modelCallStats.tokenKnownCount > 0">tokens 合计 <span class="num-token">{{ modelCallStats.tokenSum.toLocaleString() }}</span></span>
+                <span v-else class="muted">token 用量：未知</span>
+              </div>
+              <div v-if="modelCallStats.tokenKnownCount > 0 && modelCallStats.tokenMissingCount > 0" class="model-usage-note">
+                部分调用上游未回报 token，合计为下界
+              </div>
+            </template>
+          </div>
+        </div>
+      </aside>
+      </div><!-- /td-grid -->
     </template>
   </div>
 </template>
@@ -363,6 +384,7 @@ async function syncArtifacts(ids) {
         size: 0,
         loading: true,
         error: "",
+        collapsed: false, // 逐卡收起 affordance（W3）：默认展开，仅本地视图态
       });
       next.push(ph);
       toFetch.push(ph);
@@ -542,7 +564,7 @@ async function handleCancel() {
 }
 
 async function handleReview(action) {
-  const label = action === "approve" ? "批准放行" : "拒绝";
+  const label = action === "approve" ? "批准放行" : "驳回";
   try {
     await ElMessageBox.confirm(`确认${label}该任务？`, label, { type: "warning" });
   } catch {
@@ -609,14 +631,57 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* W3 容器查询：rail 布局由组件自身宽度决定——全页深链宿主（~1100px）双栏，
+ * 任务台中栏窄宿主（~850px）自动单列，不靠视口媒查猜宿主。 */
+.task-detail {
+  container-type: inline-size;
+}
 .td-skel {
   display: flex;
   flex-direction: column;
   gap: 18px;
 }
+/* 主叙事 | 环境 rail：默认单列（窄宿主/移动端）。断点按真实宿主几何定——
+   /tasks/:id 走任务台三栏，1440 视口下中栏≈820px（app-main 1112 − 列表栏 264 −
+   gap 24），故 ≥780 即双栏（260px rail，主列 ≥536——比旧 io-panel 对半分给产物
+   的 ~390 更宽）；≥1120（超宽屏/全宽宿主）rail 提到 300px。 */
+.td-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+}
+.td-main {
+  min-width: 0;
+}
+.td-rail {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+@container (min-width: 780px) {
+  .td-grid {
+    grid-template-columns: minmax(0, 1fr) 260px;
+  }
+  .td-rail {
+    position: sticky;
+    /* 让位固定态状态坞（StatusDock fixed top16+高32：占用视口 y≈16-48）——
+     * 初始位与 sticky 位都要清空该区，否则坞叠压元信息卡（Codex R0 P2）。
+     * 64/48 是坞几何推导值非间距阶，故 sticky top 用字面量。 */
+    top: 64px;
+    margin-top: var(--space-12);
+  }
+}
+@container (min-width: 1120px) {
+  .td-grid {
+    grid-template-columns: minmax(0, 1fr) 300px;
+  }
+}
 .page-header {
   position: relative;
   display: flex;
+  flex-wrap: wrap; /* 页头最多 7 元素并发（tag/pill/批量摘要/深链），既有不换行溢出 bug 修复 */
   align-items: center;
   gap: 12px;
   margin-bottom: 16px;
@@ -764,6 +829,32 @@ onUnmounted(() => {
   padding: 10px 16px;
   border-bottom: 1px solid var(--hairline);
   background: var(--paper-rail);
+  transition: background var(--motion-fast) var(--ease-out-soft);
+}
+.artifact-head:hover {
+  background: var(--hover-tint);
+}
+/* 披露触发器（真 button）：chrome 归零继承行样式，占满剩余宽度——命中区
+ * 覆盖整行除下载链接外的部分；焦点环走全局 focus-visible 语法。 */
+.artifact-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.artifact-chevron {
+  flex: none;
+  font-size: 11px;
+  color: var(--ink-faint);
 }
 .artifact-name {
   font-family: var(--mono, monospace);
@@ -792,18 +883,6 @@ onUnmounted(() => {
   border-radius: 5px;
   padding: 1px 6px;
   font-family: var(--mono, monospace);
-}
-/* 双面板：左产物/右来源，宽屏两栏、窄屏单列自适应。 */
-.io-panel {
-  display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
-  gap: 20px;
-  align-items: start;
-}
-@media (max-width: 760px) {
-  .io-panel {
-    grid-template-columns: 1fr;
-  }
 }
 .source-panel {
   border: 1px solid var(--hairline);

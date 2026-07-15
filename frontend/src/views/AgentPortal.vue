@@ -4,8 +4,7 @@
       <h2>Agent 门户</h2>
       <p class="page-sub">选择一个 Agent 创建任务</p>
       <p class="portal-legend">
-        卡片左侧色条 = Agent 类型；<b>状态</b>标签（草案态/试运行/已发布）表示发布程度；<b>成熟度</b>
-        L0→L3 表示可信程度（L0 为原型，勿依赖其结论）。悬停任一徽章可看释义。
+        色条 = Agent 类型 · 状态（草案态/试运行/已发布）= 发布程度 · 成熟度 L0→L3 = 可信程度（L0 为原型，勿依赖结论）· 悬停徽章可看释义
       </p>
     </div>
 
@@ -138,6 +137,10 @@
 
           <div v-if="evalTrend.length" class="gov-eval-trend">
             <div class="section-label">评测通过率（近 {{ evalTrend.length }} 次）</div>
+            <!-- 柱值数字（W7c）：与下方柱子逐一对位，无有效用例显 —，轻触不重构弹窗结构。 -->
+            <div class="gov-trend-vals">
+              <span v-for="run in evalTrend" :key="run.id" class="gov-trend-val num-token">{{ run.pct === null ? "—" : run.pct }}</span>
+            </div>
             <div class="gov-trend-bars">
               <span
                 v-for="run in evalTrend"
@@ -524,7 +527,7 @@ onMounted(load);
 
 <style scoped>
 .page-header {
-  margin-bottom: 20px;
+  margin-bottom: var(--space-5);
 }
 .page-header h2 {
   font-family: var(--serif);
@@ -538,43 +541,38 @@ onMounted(load);
   color: var(--ink-faint);
   font-size: 13px;
 }
+/* 图例降为一行安静小字（W7b）：此前是带底色/边框的说明块，与「色条=身份轴不是
+ * 信任轴」的降重方向不一致——文意保留，只褪去卡片化装饰。 */
 .portal-legend {
-  margin: 8px 0 0;
-  padding: 8px 12px;
-  background: var(--paper-rail);
-  border: 1px solid var(--hairline);
-  border-radius: 8px;
-  color: var(--ink-soft);
-  font-size: 12.5px;
-  line-height: 1.6;
-  max-width: 760px;
-}
-.portal-legend b {
-  color: var(--ink);
+  margin: var(--space-1) 0 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
 }
 .page-alert {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 .portal-skel-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
+  gap: var(--space-4);
 }
 .portal-skel-card {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 16px 18px;
+  padding: var(--space-4) 18px;
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 .agent-col {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 .agent-card {
+  position: relative; /* W7a：左侧类型色条改绝对定位，锚点搬到卡片本身 */
   height: 100%;
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   box-shadow: var(--shadow-card);
   /* P4 纸感抬升：统一走动效系统 tokens（--motion-fast + --ease-out-soft），
@@ -593,22 +591,29 @@ onMounted(load);
     transform: none;
   }
 }
+/* W7a：顶部饱和色条改左侧 3px 类型色条（修图例「色条」与实现「顶部通栏」的
+ * 文实不符）——categoryColor 逻辑不动，只挪几何位置，饱和度不升；绝对定位不
+ * 占正常流，card-inner 不必再为它预留高度。3px 为任务书钉死的具体值，无对应
+ * 间距阶（最小 --space-1 已是 4px）故保留字面量。 */
 .cat-bar {
-  height: 4px;
-  width: 100%;
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
 }
 .card-inner {
-  padding: 16px 18px 18px;
+  padding: var(--space-4) 18px 18px;
   display: flex;
   flex-direction: column;
-  height: calc(100% - 4px);
+  height: 100%;
   box-sizing: border-box;
 }
 .agent-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
   margin-bottom: 10px;
 }
 .agent-name {
@@ -618,7 +623,7 @@ onMounted(load);
 }
 .agent-meta {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   color: var(--ink-soft);
   font-size: 12px;
   font-family: var(--mono);
@@ -635,7 +640,7 @@ onMounted(load);
   font-size: 12px;
   font-weight: 600;
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
 }
 .gov-entry {
   border: none;
@@ -644,7 +649,7 @@ onMounted(load);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
-  padding: 2px 4px;
+  padding: 2px var(--space-1);
 }
 .gov-entry:hover,
 .gov-entry:focus-visible {
@@ -665,7 +670,7 @@ onMounted(load);
 }
 .agent-actions {
   margin-top: auto;
-  padding-top: 12px;
+  padding-top: var(--space-3);
   text-align: right;
 }
 .gov-panel {
@@ -677,7 +682,7 @@ onMounted(load);
   align-items: center;
   justify-content: space-between;
   padding-bottom: 14px;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
   border-bottom: 1px solid var(--hairline);
   color: var(--ink-soft);
   font-size: 13px;
@@ -703,7 +708,7 @@ onMounted(load);
   font-family: var(--mono, "SF Mono", ui-monospace, monospace);
 }
 .gov-drafts {
-  margin-top: 12px;
+  margin-top: var(--space-3);
   padding-top: 10px;
   border-top: 1px dashed var(--hairline);
 }
@@ -714,11 +719,11 @@ onMounted(load);
   word-break: break-word;
 }
 .gov-run-btn {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 .gov-promote-block {
   margin-top: 18px;
-  padding-top: 16px;
+  padding-top: var(--space-4);
   border-top: 1px solid var(--hairline);
 }
 .gov-promote-note {
@@ -728,21 +733,21 @@ onMounted(load);
 }
 .gov-promote-confirm {
   display: block;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 .gov-promote-errors {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
 }
 .gov-promote-submit {
   margin-top: 2px;
 }
-.gov-ladder { margin-bottom: 16px; }
+.gov-ladder { margin-bottom: var(--space-4); }
 .gov-ladder-track { display: flex; gap: 6px; margin: 6px 0 4px; }
 .gov-ladder-step {
-  flex: 1; text-align: center; padding: 5px 0; border-radius: 6px;
+  flex: 1; text-align: center; padding: 5px 0; border-radius: var(--radius-sm);
   font-size: 12px; font-weight: 700; color: var(--ink-faint);
   background: var(--paper-rail); border: 1px solid var(--hairline);
 }
@@ -752,9 +757,21 @@ onMounted(load);
 .gov-oos-tag { display: block; font-size: 9px; font-style: normal; font-weight: 500; }
 .gov-ladder-note { color: var(--ink-faint); font-size: 11px; }
 .gov-eval-trend { margin: 14px 0; }
+/* 柱值数字行（W7c）：与下方 .gov-trend-bars 逐一对位的 mono 微标数字，null 用 —。 */
+.gov-trend-vals {
+  display: flex;
+  gap: var(--space-1);
+}
+.gov-trend-val {
+  flex: 1;
+  text-align: center;
+  font-size: var(--fs-2xs);
+  color: var(--ink-faint);
+}
 .gov-trend-bars {
-  display: flex; align-items: flex-end; gap: 4px; height: 48px;
-  padding: 4px 0; margin-top: 4px;
+  display: flex; align-items: flex-end; gap: var(--space-1); height: 48px;
+  padding: var(--space-1) 0; margin-top: var(--space-1);
+  border-bottom: 1px solid var(--hairline); /* W7c：hairline 基线，柱子有零轴可读 */
 }
 .gov-trend-bar {
   flex: 1; min-height: 6px; background: var(--ink-mid); border-radius: 2px 2px 0 0;
@@ -764,27 +781,27 @@ onMounted(load);
   background: transparent; border: 1px dashed var(--hairline); min-height: 100%;
   opacity: 1;
 }
-.gov-cases-count { margin-top: 12px; color: var(--ink-soft); font-size: 12.5px; }
+.gov-cases-count { margin-top: var(--space-3); color: var(--ink-soft); font-size: 12.5px; }
 .gov-cases-count b { color: var(--ink); }
 .gov-promotion-timeline {
-  margin-top: 18px; padding-top: 12px; border-top: 1px dashed var(--hairline);
+  margin-top: 18px; padding-top: var(--space-3); border-top: 1px dashed var(--hairline);
 }
 .gov-promotion-card {
-  padding: 8px 0; border-bottom: 1px solid var(--hairline);
+  padding: var(--space-2) 0; border-bottom: 1px solid var(--hairline);
 }
 .gov-promotion-card:last-child { border-bottom: none; }
 .gov-promotion-head {
-  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-2);
 }
 .gov-promotion-jump { color: var(--ink); font-weight: 700; font-size: 13px; }
 .gov-promotion-meta { color: var(--ink-faint); font-size: 11.5px; }
 .gov-checks-list {
-  margin: 4px 0 0; padding-left: 16px; color: var(--ink-soft);
+  margin: var(--space-1) 0 0; padding-left: var(--space-4); color: var(--ink-soft);
   font-size: 11.5px; line-height: 1.7;
 }
 .gov-promotion-card.promote-burst {
   animation: promote-glow 1.5s var(--ease-out-soft, ease-out);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 @keyframes promote-glow {
   /* 直接用半透明 clay（--clay-softer 是不透明实色 hex，会闪成实块非微光）——

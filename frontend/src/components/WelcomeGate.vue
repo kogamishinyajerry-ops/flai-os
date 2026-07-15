@@ -1,5 +1,14 @@
 <template>
   <div class="welcome-gate" role="dialog" aria-modal="true" aria-labelledby="welcome-gate-title">
+    <!-- ≥900px 品牌氛围面（W6 登录门仪式感）：纯装饰，aria-hidden 让屏幕阅读器
+         直达下方真正的登录对话框；<900px 隐去，不占位不影响现状单卡布局。 -->
+    <div class="welcome-gate__brand fx-rise" aria-hidden="true">
+      <div class="welcome-gate__brand-inner">
+        <img class="welcome-gate__brand-art" :src="badgeArt" alt="" />
+        <p class="welcome-gate__tagline">机器提议，人签发。</p>
+        <p class="welcome-gate__tagline-sub">二所工程智能体运行底座——任务在这里拆解、执行、留痕。</p>
+      </div>
+    </div>
     <main class="welcome-gate__content fx-rise">
       <img class="welcome-gate__art" :src="badgeArt" alt="" />
       <h1 id="welcome-gate-title" class="welcome-gate__title">欢迎来到 FLAi-OS</h1>
@@ -88,6 +97,42 @@ async function submit() {
   text-align: center;
 }
 
+/* 品牌氛围面：<900px 不渲染（现状式单卡回落），≥900px 布局见文末 media query。 */
+.welcome-gate__brand {
+  display: none;
+}
+
+.welcome-gate__brand-inner {
+  display: flex;
+  max-width: 420px;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.welcome-gate__brand-art {
+  width: clamp(190px, 20vw, 300px);
+  height: auto;
+  margin: 0 0 var(--space-6);
+}
+
+.welcome-gate__tagline {
+  margin: 0 0 var(--space-3);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: clamp(32px, 3.2vw, 50px);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.2px;
+}
+
+.welcome-gate__tagline-sub {
+  margin: 0;
+  max-width: 34ch;
+  color: var(--ink-soft);
+  font-size: var(--fs-body);
+  line-height: 1.7;
+}
+
 .welcome-gate__art {
   width: 170px;
   max-width: 50vw;
@@ -161,5 +206,31 @@ async function submit() {
   color: var(--ink-faint);
   font-size: 12px;
   line-height: 1.6;
+}
+
+/* ≥900px 登录门仪式感（W6，docs/design/UI-DESKTOP-CRAFT.md）：左右分屏——
+   左=品牌氛围面（暖纸渐变+放大插画+标语），右=登录卡（原内容原样迁入，不改
+   动、不改样式）。<900px 本块整体不生效，回落现状单卡居中。 */
+@media (min-width: 900px) {
+  .welcome-gate {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    padding: 0;
+  }
+
+  .welcome-gate__brand {
+    display: flex;
+    box-sizing: border-box;
+    place-self: stretch;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-12) clamp(40px, 6vw, 96px);
+    background: linear-gradient(155deg, var(--paper-cream), var(--paper-canvas-b) 60%, var(--paper-rail));
+    border-right: 1px solid var(--hairline);
+  }
+
+  /* 品牌氛围面已放大陈列同一插画，卡内小徽标隐去避免两处重复视觉锚点。 */
+  .welcome-gate__art {
+    display: none;
+  }
 }
 </style>

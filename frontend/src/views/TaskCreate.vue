@@ -60,9 +60,12 @@
 
       <el-form-item label="输入参数">
         <div class="inputs-field">
+          <!-- 信任色锁（W7）：绿=仅真实结果，预填草案是「未核对」内容，不是已验证
+               的真结果——success 绿在此处会误读成「已确认」，改 warning（amber
+               未核语义）。文案逐字不动（m6 锚）。 -->
           <el-alert
             v-if="prefilledFromGuide"
-            type="success"
+            type="warning"
             :closable="false"
             show-icon
             class="prefill-note"

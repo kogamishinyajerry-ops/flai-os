@@ -321,17 +321,39 @@ onMounted(loadConvos);
   /* 批D token 地基：字体三元组（--serif 已有）+ 字号阶 + radius 阶 */
   --sans: "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
   --mono: "SF Mono", ui-monospace, Menlo, "Cascadia Code", monospace;
+  --fs-display-lg: 30px; /* hero 大时刻（对话空态主标题） */
+  --fs-display: 24px;    /* 方案卡目标句/协作目标等 serif 展示标题 */
   --fs-title: 26px;   /* 页标题（收口散落 20/22/25/27 四档） */
   --fs-h3: 16px;      /* 版块标题 */
   --fs-body: 13.5px;  /* 正文 */
   --fs-sm: 12.5px;    /* 次要 */
   --fs-xs: 11.5px;    /* faint/caption */
   --fs-2xs: 10px;     /* eyebrow/微标 */
+  --radius-xs: 4px;   /* kbd/微章 */
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;  /* 卡片主 */
   --radius-xl: 16px;
   --radius-pill: 999px;
+  /* 间距阶（桌面工艺批 W0）：4 基网格——新写/改写样式一律走 token；存量字面量
+   * 随各自工作项逐批归位，不做一次性全站 sed（改动可核可逆）。 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  /* z 阶（W0）：全站浮层层级唯一对表处，值=既有字面量原值归位（backdrop 25 <
+   * sidebar 30 < hamburger 40 < 监控浮窗 140 < 状态坞 150 < ⌘K 200），只立 SSOT
+   * 不改相对次序。 */
+  --z-backdrop: 25;
+  --z-sidebar: 30;
+  --z-hamburger: 40;
+  --z-float: 140;
+  --z-dock: 150;
+  --z-switcher: 200;
   --clay-deep: #a54e2f;
   --surface-raised: #ffffff;
   --sidebar-w: 264px;
@@ -374,7 +396,9 @@ onMounted(loadConvos);
   --border-clay-soft: #e6c9bb;
   --error-chip-border: #e6bcbc;
   --error-chip-bg: #faeeee;
-  --focus-ring-clay: #dcb6a4;
+  /* 焦点环≥3:1 对比（WCAG 焦点指示阈，Codex R1 P2）：直接用 clay 主锚
+   * （#c15f3c on #faf7f2 ≈3.9:1；柔化桃色 #dcb6a4 仅 ~1.6:1 不达标已弃）。 */
+  --focus-ring-clay: var(--clay);
   --review-chip-bg: #f9f2e2;
   /* hover/选中叠色：亮色=深色小叠加，暗色=亮色小叠加——方向相反，必须走 token */
   --hover-tint: rgba(43, 38, 34, 0.05);
@@ -437,7 +461,8 @@ onMounted(loadConvos);
   --border-clay-soft: #55402f;
   --error-chip-border: #5a3535;
   --error-chip-bg: #362323;
-  --focus-ring-clay: #8a5a42;
+  /* 暗主题同走 clay（#d4714a on #211d19 ≈4.0:1 ≥3:1；旧 #8a5a42 ~2.7 不达标）。 */
+  --focus-ring-clay: var(--clay);
   --review-chip-bg: rgba(201, 154, 63, 0.12);
   --hover-tint: rgba(255, 255, 255, 0.055);
   --select-tint-clay: rgba(212, 113, 74, 0.16);
@@ -544,12 +569,55 @@ onMounted(loadConvos);
   align-items: center;
   gap: 4px;
   padding: 1px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 12px;
   color: var(--trust-pending);
   border: 1px solid rgba(var(--trust-pending-rgb), 0.35);
   background: rgba(var(--trust-pending-rgb), 0.08);
   white-space: nowrap;
+}
+/* ── clay 主 CTA 共享语法（W0）：发送钮/开工钮/工作台钮三处真实消费本类（模板
+ * class 接入，各自只留尺寸/字重等结构属性）——「主操作唯一彩色语法」的 SSOT；
+ * hero 徽记是品牌标识非 CTA，独立保留自身渐变。一屏一主动作，次级动作走
+ * 描边/文字级（.is-secondary 形态见 GuidePage）。 */
+.cta-clay {
+  background: linear-gradient(160deg, var(--clay), var(--clay-deep));
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(var(--clay-rgb), 0.26);
+  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft), filter var(--motion-fast) var(--ease-out-soft), opacity var(--motion-fast) var(--ease-out-soft);
+}
+.cta-clay:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(var(--clay-rgb), 0.32);
+  filter: brightness(1.05);
+}
+.cta-clay:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.cta-clay:disabled {
+  cursor: not-allowed;
+}
+/* ── 全局键盘焦点语法（W0）：导航类可交互元素统一 clay 焦点环——修「暗色主题下
+ * 浏览器默认蓝 ring 撞暖色板」的既有可达性缺口。只在 :focus-visible（键盘寻航）
+ * 出现，鼠标点击不打扰；表单控件不在此列（EP 输入框/自绘 composer 已各有
+ * focus 语法，双环反而添噪）。 */
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
+  /* 焦点环必须瞬时出现（可达性）：个别基态 transition:all 会把 outline 也卷进
+   * 过渡（从 currentColor/medium 淡入=键盘寻航时环色漂移）——聚焦期间冻结过渡。 */
+  transition: none;
+}
+/* 证据数字/计数/时长统一等宽防抖（Claude/Codex 跨家族共性：行内证据 token）——
+ * 全局版供各页直接复用；TaskDetail 既有 scoped 同名类语义一致，共存无冲突。 */
+.num-token {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
 }
 /* ── 动效系统 v1 全局层（E3）：纸张过渡 + 入场工具类 + 按压微交互 ──
  * 全部 transform/opacity（零 layout），reduced-motion 一律静态降级。 */
@@ -605,6 +673,9 @@ onMounted(loadConvos);
   .fx-ink-in { animation: none; }
   .el-button:not(.is-disabled):active,
   .sb-new:active,
+  /* :not(:disabled) 保持与基态选择器同 specificity，静化才能盖赢 */
+  .cta-clay:active:not(:disabled),
+  .cta-clay:hover:not(:disabled),
   .nav-link:active { transform: none; }
 }
 
@@ -629,10 +700,10 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 16px 12px;
+  padding: var(--space-4) var(--space-3);
   background: linear-gradient(180deg, var(--paper-cream), var(--paper-rail));
   border-right: 1px solid var(--hairline);
-  z-index: 30;
+  z-index: var(--z-sidebar);
 }
 .sb-brand {
   display: flex;
@@ -647,28 +718,28 @@ body {
   justify-content: center;
   width: 30px;
   height: 30px;
-  border-radius: 9px;
-  background: linear-gradient(150deg, var(--clay), var(--clay-deep));
+  border-radius: var(--radius-md);
+  background: linear-gradient(160deg, var(--clay), var(--clay-deep));
   color: #fff;
   font-weight: 800;
-  font-size: 16px;
+  font-size: var(--fs-h3);
   box-shadow: 0 3px 10px rgba(var(--clay-rgb), 0.3);
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
-.brand-name { font-size: 16px; font-weight: 700; color: var(--ink); letter-spacing: 0.2px; }
-.brand-sub { font-size: 10.5px; color: var(--ink-faint); margin-top: 1px; }
+.brand-name { font-size: var(--fs-h3); font-weight: 700; color: var(--ink); letter-spacing: 0.2px; }
+.brand-sub { font-size: var(--fs-2xs); color: var(--ink-faint); margin-top: 1px; }
 
 .sb-new {
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 2px 0 8px;
-  padding: 9px 12px;
+  padding: 9px var(--space-3);
   border: 1px solid var(--border-clay-soft);
-  border-radius: 11px;
+  border-radius: var(--radius-lg);
   background: var(--surface-raised);
   color: var(--clay);
-  font-size: 13.5px;
+  font-size: var(--fs-body);
   font-weight: 600;
   cursor: pointer;
   box-shadow: var(--shadow-card);
@@ -679,15 +750,18 @@ body {
 .sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-link {
   display: block;
-  padding: 8px 12px;
-  border-radius: 9px;
-  font-size: 13.5px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-body);
   font-weight: 500;
   color: var(--ink-soft);
   cursor: pointer;
   transition: background var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
 }
-.nav-link:hover { background: rgba(var(--clay-rgb), 0.07); color: var(--ink); }
+/* hover 语法收口（W0，三分口径）：中性行 hover 一律 --hover-tint；选中态
+ * --select-tint-clay；clay 描边控件（is-secondary 等品牌色控件）自身 hover
+ * 复用 select-tint-clay 是刻意视觉选择——tint 跟随控件色相，非借用选中语义。 */
+.nav-link:hover { background: var(--hover-tint); color: var(--ink); }
 .nav-link.is-active { background: var(--clay-soft); color: var(--clay); font-weight: 600; }
 
 .sb-history {
@@ -698,7 +772,7 @@ body {
   flex-direction: column;
 }
 .sb-section-label {
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   font-weight: 700;
   letter-spacing: 0.8px;
   text-transform: uppercase;
@@ -712,8 +786,8 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 12px;
-  border-radius: 8px;
+  padding: 7px var(--space-3);
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background var(--motion-fast) var(--ease-out-soft);
 }
@@ -723,7 +797,7 @@ body {
 .convo-dot.plan { background: var(--clay); }
 .convo-dot.refuse { background: var(--trust-pending); }
 .convo-title {
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--ink-soft);
   white-space: nowrap;
   overflow: hidden;
@@ -734,18 +808,19 @@ body {
 .convo-time {
   flex: none;
   margin-left: auto;
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
   opacity: 0;
   transition: opacity var(--motion-fast) var(--ease-out-soft);
 }
 .convo-item:hover .convo-time { opacity: 1; }
-.convo-empty { font-size: 12px; color: var(--ink-faint); padding: 8px 12px; line-height: 1.5; }
+.convo-empty { font-size: var(--fs-sm); color: var(--ink-faint); padding: var(--space-2) var(--space-3); line-height: 1.5; }
 
 /* ── 「我的贡献」深链（批C task7）：贴合 .sb-identity 视觉 ── */
 .sb-mine {
   display: block; padding: 6px 10px; margin: 0 8px 4px; cursor: pointer;
-  color: var(--ink-soft); font-size: 12.5px; border-radius: 6px;
+  color: var(--ink-soft); font-size: var(--fs-sm); border-radius: var(--radius-sm);
 }
 .sb-mine:hover, .sb-mine.is-active { color: var(--ink); background: var(--paper-rail); }
 
@@ -755,11 +830,11 @@ body {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 12px;
+  padding: 7px var(--space-3);
   border: none;
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   background: none;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--ink-soft);
   cursor: pointer;
   transition: background var(--motion-fast) var(--ease-out-soft);
@@ -789,11 +864,11 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 7px 8px;
+  padding: 7px var(--space-2);
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   background: none;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-faint);
   cursor: pointer;
   transition: background var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
@@ -803,11 +878,11 @@ body {
   color: var(--ink-soft);
 }
 .sb-kbd {
-  font-size: 10px;
-  font-family: ui-monospace, monospace;
+  font-size: var(--fs-2xs);
+  font-family: var(--mono);
   padding: 0 4px;
   border: 1px solid var(--hairline);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   color: var(--ink-faint);
 }
 @media (prefers-reduced-motion: reduce) {
@@ -846,14 +921,14 @@ body {
     position: fixed;
     top: 12px;
     left: 12px;
-    z-index: 40;
+    z-index: var(--z-hamburger);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 40px;
     height: 40px;
     border: 1px solid var(--hairline);
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     background: var(--surface-raised);
     color: var(--ink-soft);
     cursor: pointer;
@@ -865,8 +940,9 @@ body {
     display: block;
     position: fixed;
     inset: 0;
-    z-index: 25;
-    background: rgba(43, 38, 34, 0.32);
+    z-index: var(--z-backdrop);
+    /* 与全站模态遮罩同 token：暗色下自动换黑基值（此前硬编码亮色值=暗色下过浅的隐性 bug） */
+    background: var(--scrim-backdrop);
   }
 }
 </style>

@@ -1,5 +1,8 @@
 __pycache__/
 .venv/
+# 无尾斜杠：同时命中目录与 worktree 本地指向兄弟检出的 symlink 形态
+# （symlink 不匹配 dir-only 规则，git status 会把它当未跟踪文件露出）
+node_modules
 node_modules/
 frontend/dist/
 data/uploads/*

@@ -18,7 +18,13 @@
     <!-- 版块2：我发起的任务（精确） -->
     <div class="me-section">
       <div class="section-label">最近发起的任务</div>
-      <EmptyState v-if="!loading && !loadError && !myTasks.length" description="你还没有发起任务" />
+      <!-- 首载骨架（A3 同款）：everLoaded 只在首次成功后置 true 且恒 true——跨
+           跨日定时刷新/换号刷新不回骨架，只有真·首次加载空窗期显示骨架。 -->
+      <div v-if="!everLoaded && !loadError" class="me-task-skel" role="status">
+        <span class="skel-sr">任务列表加载中…</span>
+        <SkeletonBlock v-for="i in 3" :key="i" height="38px" />
+      </div>
+      <EmptyState v-else-if="!loading && !loadError && !myTasks.length" description="你还没有发起任务" />
       <div v-else class="me-task-list">
         <router-link v-for="t in myTasks" :key="t.id" class="me-task-item" :to="`/tasks/${t.id}`">
           <span class="me-task-name">{{ t.name || t.agent_id }}</span>
@@ -62,6 +68,7 @@ import { ref, onMounted, onUnmounted, watch } from "vue";
 import { fetchMyContributions, fetchMyTasks } from "../api/me";
 import { request } from "../api/client";
 import EmptyState from "../components/EmptyState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { formatTime, statusLabel } from "../utils/format";
 import { currentUser } from "../stores/session";
 
@@ -70,6 +77,10 @@ const myTasks = ref([]);
 const team = ref(null);
 const loading = ref(true);
 const loadError = ref("");
+// 首载完成标记（A3 同款，与 loading 解耦）：loading 在跨日定时刷新/换号刷新时
+// 每次都会重置 true，若骨架直接绑 loading 会在这些静默刷新时闪回骨架——只在
+// 从未成功过时为 false，成功一次后恒 true。
+const everLoaded = ref(false);
 
 // 批B TodayPage 同款：本地周一零点（避免与后端窗口口径漂移）
 function weekStartIso() {
@@ -95,6 +106,7 @@ async function load() {
     contrib.value = c;
     myTasks.value = t;
     team.value = s;
+    everLoaded.value = true;
   } catch (err) {
     if (seq !== loadSeq) return;
     loadError.value = err.detail || err.message || "加载失败";
@@ -137,34 +149,37 @@ watch(() => currentUser.value?.username, (next, prev) => {
 </script>
 
 <style scoped>
-.page-header { margin-bottom: 20px; }
+.page-header { margin-bottom: var(--space-5); }
 .page-header h2 { font-family: var(--serif); font-size: var(--fs-title); font-weight: 600; letter-spacing: 0.2px; margin: 0 0 6px; }
 .page-sub { margin: 0; color: var(--ink-faint); font-size: 13px; }
-.page-alert { margin-bottom: 16px; }
-.me-overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+.page-alert { margin-bottom: var(--space-4); }
+.me-overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-3); margin-bottom: var(--space-6); }
 .me-stat {
-  display: flex; flex-direction: column; gap: 4px; padding: 16px 18px;
-  border: 1px solid var(--hairline); border-radius: 12px; background: var(--paper-rail);
+  display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-4) 18px;
+  border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--paper-rail);
 }
 .me-stat-num { font-size: 26px; font-weight: 700; color: var(--ink); font-family: var(--serif); }
 .me-stat-label { font-size: 12px; color: var(--ink-soft); }
 .me-section { margin-bottom: 22px; }
+.me-task-skel { display: flex; flex-direction: column; gap: var(--space-2); }
+/* 读屏专用（视觉裁剪，AT 可读；Codex R2 P2）。 */
+.skel-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .me-task-list { display: flex; flex-direction: column; gap: 6px; }
 .me-task-item {
-  display: flex; align-items: center; gap: 12px; padding: 10px 14px; cursor: pointer;
-  border: 1px solid var(--hairline); border-radius: 8px;
+  display: flex; align-items: center; gap: var(--space-3); padding: 10px 14px; cursor: pointer;
+  border: 1px solid var(--hairline); border-radius: var(--radius-md);
 }
 .me-task-item:hover { border-color: var(--clay-softer); }
 .me-task-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 13.5px; }
 .me-task-status { color: var(--ink-soft); font-size: 12px; }
 .me-task-time { color: var(--ink-faint); font-size: 11.5px; }
 .me-feedback-count { font-size: 18px; font-weight: 700; color: var(--ink); }
-.me-feedback-note { color: var(--ink-faint); font-size: 11.5px; margin-top: 4px; }
+.me-feedback-note { color: var(--ink-faint); font-size: 11.5px; margin-top: var(--space-1); }
 .me-team-bar { display: flex; gap: 18px; color: var(--ink-soft); font-size: 13px; }
 .me-team-note { color: var(--ink-faint); font-size: 11px; margin-top: 6px; }
 .me-honest-gap {
-  margin-top: 24px; padding: 12px 14px; border: 1px dashed var(--hairline);
-  border-radius: 8px; background: var(--paper-rail);
+  margin-top: var(--space-6); padding: var(--space-3) 14px; border: 1px dashed var(--hairline);
+  border-radius: var(--radius-md); background: var(--paper-rail);
   color: var(--ink-faint); font-size: 12px; line-height: 1.6;
 }
 

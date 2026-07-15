@@ -1,0 +1,47 @@
+<!-- @dsCard group="Components" name="空态三级纪律" -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>空态三级纪律</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  :root { --ink-soft: #6b6259; --ink-faint: #a39d90; --hairline: #ece5db; --clay: #c15f3c; }
+  body { font-family: "PingFang SC", system-ui, sans-serif; background: #faf7f2; color: #2b2622; padding: 24px; }
+  h1 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .rule { font-size: 12px; color: var(--ink-soft); line-height: 1.7; margin-bottom: 16px; max-width: 580px; }
+  .tiers { display: flex; flex-direction: column; gap: 14px; max-width: 560px; }
+  .tier { border: 1px solid var(--hairline); border-radius: 12px; padding: 14px 16px; background: #fff; }
+  .tier h2 { font-size: 11px; color: var(--ink-faint); font-weight: 700; letter-spacing: .5px; margin-bottom: 10px; }
+  .full { text-align: center; padding: 22px 16px; }
+  .art { width: 96px; height: 72px; margin: 0 auto 10px; border: 2px solid var(--clay); border-radius: 10px 14px 12px 10px / 12px 10px 14px 12px; position: relative; opacity: .75; }
+  .art::after { content: "✍"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 26px; }
+  .full p { font-size: 12.5px; color: var(--ink-soft); }
+  .empty-line { padding: 8px 0; font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; }
+  .note { font-size: 11.5px; color: var(--ink-faint); line-height: 1.7; margin-top: 12px; max-width: 580px; }
+</style>
+</head>
+<body>
+  <h1>空态三级纪律（一屏至多 1 张插画）</h1>
+  <p class="rule">行动召唤空态才配插画；纯数据空态一律 line 轻量单行——今日页 5 版块从 3 张插画收敛到 1 张。
+  文案逐字保留（e2e 锚点面），层级只由渲染路径表达。</p>
+  <div class="tiers">
+    <div class="tier">
+      <h2>TIER FULL · 行动召唤（variant=action，唯一插画位）</h2>
+      <div class="full"><div class="art"></div><p>没有等你签发的任务</p></div>
+    </div>
+    <div class="tier">
+      <h2>TIER LINE · 纯数据空态（tier="line"，无插画单行）</h2>
+      <div class="empty-line">当前没有进行中的任务</div>
+      <div class="empty-line">今天还没有交付的任务</div>
+      <div class="empty-line">本周暂无晋升</div>
+    </div>
+    <div class="tier">
+      <h2>TIER LOG · 日志类（variant=log，更小更安静，72px）</h2>
+      <div class="empty-line" style="text-align:center">暂无事件</div>
+    </div>
+  </div>
+  <p class="note">生产插画=AI 漫画线稿 PNG（暖白+clay 单强调、透明底；此处以 CSS 示意占位）。
+  插画浮动 loop 为纯装饰（transform-only，reduced-motion 静止）。tier 与 variant 正交：不传 tier 严格走原插画分支，既有调用方零改动。</p>
+</body>
+</html>
