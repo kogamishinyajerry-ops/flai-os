@@ -1,0 +1,65 @@
+id: requirement_intake_agent
+name: "需求接件评估 Agent（家底感知 + 待办登记）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: reasoning_assist
+summary: "接收部门新需求单,按路由四问做确定性工时账与资产清单初筛,LLM 生成评估叙述草稿,产出评估卡并登记待办队列——排产裁决永远在平台负责人,评估卡只是草稿。"
+description: >
+  把 docs/08 部门共建手册的「需求提交模板 + 路由四问」编进软件(ADR-0028):
+  平台部署后同事提新需求,本 Agent 对照 data/assets/assets.yaml 资产清单
+  SSOT 评估「家底能不能接住」,并把评估结果落入 data/requirement_backlog/
+  待办队列防遗忘。三层分工钉死:工时折算/安全等级处置线/资产初筛是确定性
+  代码;LLM 只做需求理解与评估叙述(且只能引用初筛候选集内的资产,清单外
+  资产一律视为不存在——凭模型记忆编造家底是幻觉源);立项/排产/拒绝的
+  裁决是人(requires_human_review=true,任务停 waiting_review)。资产清单
+  不可读时诚实 failed,绝不做「无家底盲评」。与 guide_agent 的关系:guide
+  分诊「现在用哪个已有 Agent」,本 Agent 评估「要不要为此立新项」,不串联。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: reasoning
+knowledge:
+  enabled: false
+  scopes: []
+tools:
+  - asset_catalog
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats:
+    - .md
+    - .json
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: true
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: true
+  sample_fields:
+    - inputs.req_name
+    - inputs.department
+    - outputs.weekly_saved_estimate
+    - outputs.asset_hits_count
+    - outputs.backlog_status
+limitations:
+  - "评估卡是 AI 辅助草稿,不是立项决定:排产/拒绝/改平台核的裁决在平台负责人(路由四问第 4 问,宪法第十条),任务强制停「等待人工审核」。"
+  - "资产覆盖判定只依据 data/assets/assets.yaml 登记的家底:清单没登记的资产按不存在处理,清单过期会漏判——评估卡透出清单版期,由人核对新鲜度。"
+  - "工时节省是按公开口径的保守估算(耗时中值×频次÷52×分环节替代比例),不是承诺;duration/frequency 未填时不估算,绝不猜数。"
+  - "不做适航/安全性结论:安全 A 级或未定级需求一律输出「辅助检索+草稿生成、签批留人」处置线,这是确定性规则,不由模型改写。"
+  - "不自动排产、不自动通知提出人:待办队列状态流转由人经 scripts/backlog_cli.py 操作。"

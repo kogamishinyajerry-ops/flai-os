@@ -1,0 +1,99 @@
+id: asset_catalog
+name: "资产清单读取与确定性初筛工具"
+version: 0.1.0
+type: python_adapter
+mock: false
+description: >
+  读取 data/assets/assets.yaml(资产清单 SSOT,ADR-0028)并做确定性关键词
+  初筛:需求文本对每条资产的 keywords/capabilities 做子串命中计分,按
+  (命中数降序, id 字典序) 稳定排序取 top_k。纯确定性——同输入必同输出,
+  不调模型、不做语义猜测;语义复核是 Agent 层 LLM 的事,且只能在本工具
+  返回的候选集内进行(清单外资产一律视为不存在)。清单文件缺失/畸形/
+  字段非法一律 status=failed(fail-closed),绝不返回空清单冒充"没有资产"。
+entrypoint: tools_impl.asset_catalog.adapter:run
+# 工具污点声明(ADR-0024):清单是仓内登记数据,产物 internal。
+output_classification: internal
+input_schema:
+  type: object
+  required:
+    - action
+  properties:
+    action:
+      type: string
+      enum:
+        - list
+        - match
+      description: list=返回全部资产;match=按需求文本初筛 top_k
+    text:
+      type: string
+      minLength: 1
+      maxLength: 20000
+      description: match 必填,需求全文(名称+流程+期望输出拼接)
+    top_k:
+      type: integer
+      minimum: 1
+      maximum: 16
+      description: match 可选,返回候选上限,缺省 6
+  additionalProperties: false
+output_schema:
+  type: object
+  required:
+    - status
+  properties:
+    status:
+      type: string
+      enum:
+        - success
+        - failed
+    catalog_version:
+      type: integer
+    catalog_updated:
+      type: string
+    assets:
+      type: array
+      items:
+        type: object
+        required:
+          - id
+          - name
+          - status
+          - kind
+          - honest_note
+        properties:
+          id:
+            type: string
+          name:
+            type: string
+          status:
+            type: string
+          kind:
+            type: string
+          capabilities:
+            type: array
+            items:
+              type: string
+          scenarios:
+            type: string
+          honest_note:
+            type: string
+          score:
+            type: integer
+          matched_keywords:
+            type: array
+            items:
+              type: string
+        additionalProperties: false
+    error_message:
+      type: string
+  additionalProperties: false
+runtime:
+  timeout_seconds: 30
+  max_parallel_jobs: 2
+  retry: 0
+safety:
+  require_workspace_isolation: false
+  allow_shell_command: false
+  save_raw_files: false
+owner:
+  maintainer: TBD
+  business_owner: TBD

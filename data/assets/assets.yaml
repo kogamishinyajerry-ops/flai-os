@@ -1,0 +1,168 @@
+# 资产清单 SSOT —— 需求接件评估的「家底感知」数据源（ADR-0028）
+#
+# 维护纪律：
+# - 本文件是 requirement_intake_agent 做资产覆盖判定的唯一数据源；不在此
+#   清单里的资产，评估时一律视为不存在（default-deny 精神：宁可漏报已有
+#   资产被人工纠正，不可让 LLM 凭记忆编造家底）。
+# - status 必须如实（宪法第五条：mock 冒充真实是唯一死罪）：
+#     live      = 已上线/生产在用（有真实用户在用）
+#     validated = 真实任务验证过，未常态化落岗
+#     demo      = 演示件（mock/占位数据，链路可看不可信）
+#     scaffold  = 链路真、数据假（如合成语料）
+#     planned   = 仅规划，未动工
+# - honest_note 写清该资产「不能说成什么」——它会随初筛结果注入评估
+#   prompt，是对模型的强制诚实约束。
+# - 涉外供应商产品一律泛化表述（如「国外供应商性能盘」），本文件会进
+#   LLM 上下文与评估卡，商密红线与上屏材料同级。
+# - 更新时机：新资产落地 / 状态跃迁（demo→validated→live）/ 季度盘点。
+#   updated 字段随手改，评估卡会带出清单版期供人核对新鲜度。
+
+version: 1
+updated: "2026-07-15"
+
+assets:
+  # ── 平台外独立资产（已运行/已验证的存量） ────────────────────
+  - id: engine_intel_kb
+    name: 发动机公开问题情报库
+    status: live
+    kind: external_project
+    capabilities: [情报检索, 历史案例, 条款检索]
+    keywords: [ECM, 情报, 案例, 检索, 历史, 故障, 先例, 适航指令, FRR, 快响, PMA, 取证, 风险, 通报]
+    scenarios: 跨型号找历史问题先例;条款与案例检索;快响/风险处置的依据检索
+    honest_note: 公开渠道数据 1.4 万余条;内网真实 ECM/EM 语料尚未接入,不能说成已能查内网档案
+
+  - id: feishu_assistant
+    name: 飞书智能助手
+    status: live
+    kind: external_project
+    capabilities: [群机器人, 日报汇总, 检索入口, 提醒]
+    keywords: [飞书, 群, 日报, 汇总, 催收, 提醒, 检索, 命令]
+    scenarios: 部内即时检索与汇总入口;把平台能力送到聊天窗口
+    honest_note: 生产运行 12 项命令;内网飞书策略可能限制部分能力,接内网系统需另评估
+
+  - id: apu_bleed_match_workflow
+    name: APU 引气匹配自动化工作流
+    status: validated
+    kind: external_project
+    capabilities: [性能盘调用, 自动出图, 匹配点计算, 报告生成]
+    keywords: [APU, 引气, 空调, 匹配, 出图, 特性线, 性能盘, 工况]
+    scenarios: APU 负载压气机特性与用气需求匹配;批量工况自动出图
+    honest_note: 真实任务验证过(引气匹配排查),未常态化交付到岗;依赖内网 Windows 盘运行环境
+
+  - id: performance_disk_automation
+    name: 性能盘自动化方法(国外供应商性能盘)
+    status: validated
+    kind: methodology
+    capabilities: [盘输入生成, 批量调用, 输出解析, 结果对比, 报告生成]
+    keywords: [性能盘, 推力, 选型, 批量, 工况, 匹配, 计算, 高原, 高温]
+    scenarios: 读工况→生成盘输入→调盘→解析对比→出报告的全流程自动化
+    honest_note: 同一套打法已在 3 款盘验证;尚未落到选型岗常态使用;平台内对应 Agent 仍是 mock(见 performance_disk_agent)
+
+  - id: control_sim_platform
+    name: 控制集成仿真平台
+    status: validated
+    kind: external_project
+    capabilities: [ICD 驱动建模, 控制逻辑仿真, 双转子模型, 接口验证]
+    keywords: [控制, ICD, 逻辑, 接口, 仿真, 建模, 起动, 保护, FADEC, 模型]
+    scenarios: 文字版控制系统接口文档转可仿真模型;控制策略评估
+    honest_note: 面向双转子涡扇+全权限数控的集成仿真已跑通;换域(燃油/其他系统)是方法论复用,需扩展开发
+
+  - id: cfd_reproduce_poc
+    name: CFD 自动化复现工作流
+    status: validated
+    kind: methodology
+    capabilities: [自动建模, 网格自适应, 批量计算, 自动后处理, 结果汇总]
+    keywords: [CFD, 仿真, 流场, 网格, 后处理, 汇总, 批量, 工况, 进气, 排气, 通风]
+    scenarios: 标准化 CFD 流程自动执行;仿真结果自动整理汇总
+    honest_note: 论文级标准算例复现验证过;工程精度校验未建立,物理仿真提速受算力约束——只可承诺"结果汇总/后处理"档,不可承诺求解提速
+
+  - id: apu_bay_thermal_poc
+    name: APU 舱热仿真案例
+    status: validated
+    kind: external_project
+    capabilities: [舱内热耦合仿真, 多部件热分析]
+    keywords: [APU, 舱, 热, 通风, 冷却, 温度, 耦合]
+    scenarios: APU 舱通风冷却类仿真的方法底子
+    honest_note: 多部件热耦合报告已出;批量自动化与真实型号工况标定未做
+
+  - id: fta_workbench
+    name: 故障树分析工作台
+    status: validated
+    kind: external_project
+    capabilities: [故障树绘制, 结构化推理, 失效模式组织, 人审放行]
+    keywords: [FMEA, FTA, 故障树, 失效, 模式, 可靠性, 安全性, 分析]
+    scenarios: FMEA/FTA 编制的结构化辅助;失效模式草稿与清单完整性检查
+    honest_note: 工作台与全链路人审流程真实;失效率数据以可靠性数据库为准,工具不产数值
+
+  - id: fault_match_poc
+    name: APU 故障归因匹配
+    status: scaffold
+    kind: external_project
+    capabilities: [故障特征匹配, 历史归因检索]
+    keywords: [故障, 归因, 告警, 特征, 磁堵, 滑油]
+    scenarios: 告警特征与历史案例的归因匹配
+    honest_note: 脚手架阶段,等待真实标定案例;不能说成已可用
+
+  - id: space_fitting_optimizer
+    name: 空间布置优化工具
+    status: validated
+    kind: external_project
+    capabilities: [安装架构寻优, 布置方案生成]
+    keywords: [布置, 安装, 空间, 管线, 架构, 杆系]
+    scenarios: 安装架构类空间寻优
+    honest_note: 单案例(APU 安装架构)验证过;管线路布置等新域是大幅扩展,接近新建
+
+  - id: process_digital_twin
+    name: 流程数字孪生框架
+    status: validated
+    kind: external_project
+    capabilities: [工程流程建模, 计算流程编排]
+    keywords: [流程, 孪生, 编排, 工程计算]
+    scenarios: 把标准化工程流程做成可执行数字流程
+    honest_note: 87 项测试的框架底子;工程计算节点是 stub,接真实计算需逐项开发
+
+  # ── 平台内已注册 Agent(FLAi-OS 底座上的插件) ────────────────
+  - id: platform_guide_agent
+    name: 平台导引编排 Agent
+    status: live
+    kind: platform_agent
+    capabilities: [多轮对话, 任务分诊, 草案预填]
+    keywords: [导引, 分诊, 推荐, 编排, 入口]
+    scenarios: 工程师不知道用哪个 Agent 时的统一入口
+    honest_note: 平台内真模型跑通;推荐质量随 Agent 生态丰富度增长
+
+  - id: platform_fta_agent
+    name: 平台故障树草案 Agent
+    status: live
+    kind: platform_agent
+    capabilities: [故障树草案生成, 人审放行]
+    keywords: [故障树, FTA, 草案, 安全性]
+    scenarios: 平台内故障树草案生成,强制人工放行
+    honest_note: 推理链路真实;草案非结论,签批留人
+
+  - id: platform_performance_disk_agent
+    name: 平台性能盘批量 Agent
+    status: demo
+    kind: platform_agent
+    capabilities: [批量 case 解析, 批量调用编排, 结果汇总]
+    keywords: [性能盘, 批量, 汇总, Excel]
+    scenarios: 上传需求表→批量调用→汇总报告的平台化闭环
+    honest_note: mock 占位公式,如实标注演示件;真实盘对接待内网环境(方法论已另行验证,见 performance_disk_automation)
+
+  - id: platform_knowledge_qa_agent
+    name: 平台知识问答 Agent
+    status: scaffold
+    kind: platform_agent
+    capabilities: [范围内检索, 出处引用, 归纳草稿]
+    keywords: [知识, 问答, 检索, 语料, 出处, 手册, 文档, 规范, 专家]
+    scenarios: 锁定知识范围内的检索归纳,零命中不作答
+    honest_note: 链路真实;当前绑定合成演示语料,真实语料待内网接入——不能说成已能答真实工程问题
+
+  - id: platform_numeric_agents
+    name: 平台数值计算 Agent 组(结构/控制/CFD)
+    status: validated
+    kind: platform_agent
+    capabilities: [数值求解, 结果判据评估, 双 Agent 校核]
+    keywords: [结构, 强度, 固有频率, 阶跃, 响应, 求解, 评估, 卡门涡街]
+    scenarios: solve→evaluate 双 Agent 数值工作流样板(两类数值范式已接入)
+    honest_note: 标准算例级验证;非工程精度背书,CFD 算例固定、拓展需数天

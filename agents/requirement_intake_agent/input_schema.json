@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "requirement_intake_agent 输入契约(需求单)",
+  "description": "字段对齐 docs/08 部门共建手册第四节「需求提交模板」,另加三个评估要素(duration/frequency/bottleneck,口径与 2026-07 部门问卷一致)与安全等级。所有文本字段设上限:需求单全文会拼进 LLM prompt,合计预算约 12K 字符(knowledge_qa 同款预算门纪律)。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["req_name", "submitter", "department", "current_flow", "expected_output"],
+  "properties": {
+    "req_name": {
+      "type": "string", "minLength": 2, "maxLength": 120,
+      "title": "需求名称"
+    },
+    "submitter": {
+      "type": "string", "minLength": 1, "maxLength": 40,
+      "title": "提出人"
+    },
+    "department": {
+      "type": "string", "minLength": 1, "maxLength": 60,
+      "title": "科室/部门"
+    },
+    "model_project": {
+      "type": "string", "maxLength": 60,
+      "title": "型号/项目(可选)"
+    },
+    "current_flow": {
+      "type": "string", "minLength": 10, "maxLength": 4000,
+      "title": "现状流程(一段话:现在怎么干、谁干、卡在哪)"
+    },
+    "input_desc": {
+      "type": "string", "maxLength": 1000,
+      "title": "输入是什么(文件/参数,样例脱敏责任在部门)"
+    },
+    "expected_output": {
+      "type": "string", "minLength": 2, "maxLength": 2000,
+      "title": "期望输出"
+    },
+    "pain_points": {
+      "type": "array", "maxItems": 12, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 2, "maxLength": 40 },
+      "title": "痛点(多选,自由短语)"
+    },
+    "duration": {
+      "type": "string",
+      "enum": ["几小时", "1-3天", "1周左右", "数周", "1个月以上"],
+      "title": "单次人工投入(不填则不估算工时)"
+    },
+    "frequency": {
+      "type": "string",
+      "enum": ["每周", "每月", "按阶段触发", "按项目偶发"],
+      "title": "重复频率(不填则不估算工时)"
+    },
+    "bottleneck": {
+      "type": "string",
+      "enum": ["前期资料整理", "结果整理", "建模/搭建流程", "计算分析", "试验对标", "需求理解"],
+      "title": "最耗时环节(决定替代比例档;不填按最保守 20% 计)"
+    },
+    "safety_level": {
+      "type": "string",
+      "enum": ["A级", "B级", "C级", "未定级"],
+      "title": "安全等级(不填按「未定级」= A 级纪律处置,fail-closed)"
+    },
+    "business_reviewer": {
+      "type": "string", "maxLength": 40,
+      "title": "业务审核人(谁为结果签字)"
+    },
+    "not_applicable": {
+      "type": "string", "maxLength": 1000,
+      "title": "不适用范围(提出人声明这个 AI 绝不该做什么)"
+    },
+    "sample_data_available": {
+      "type": "string",
+      "enum": ["能", "脱敏后能", "不能", "未知"],
+      "title": "样例数据能否提供"
+    }
+  }
+}

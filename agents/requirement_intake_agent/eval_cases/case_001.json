@@ -1,0 +1,35 @@
+{
+  "case_id": "req_intake_001_ecm_query",
+  "description": "真实需求样本(2026-07 部门问卷第 5 条,程稳/C929 查 ECM):高价值高频检索类需求,工时账=几小时×每周,A 级安全处置线必须出现。初筛期望只锚情报库——需求原文不含『飞书/检索』词面,飞书作为交付渠道是方案设计层判断,初筛器只对文本负责,不复现人工设计决策(能力边界如实)。期望值是确定性层的硬口径;LLM 叙述部分只约束结构(六节)不约束措辞。",
+  "inputs": {
+    "req_name": "查找 C929 项目与商发往来的 ECM",
+    "submitter": "程稳",
+    "department": "发动机集成",
+    "model_project": "C929",
+    "current_flow": "在 CDDS 上人工翻找与商发的 ECM,输入 ECM 名称或关键词逐条核对,大量人工整理资料,查阅历史文档困难。",
+    "input_desc": "ECM 名称或关键词",
+    "expected_output": "输入关键词后返回相关 ECM 条目清单与出处",
+    "pain_points": ["大量人工整理资料", "查阅历史文档困难"],
+    "duration": "几小时",
+    "frequency": "每周",
+    "bottleneck": "前期资料整理",
+    "safety_level": "A级",
+    "sample_data_available": "脱敏后能"
+  },
+  "expected": {
+    "deterministic": {
+      "weekly_hours": 2.6,
+      "weekly_saved": 1.3,
+      "safety_effective": "A级",
+      "safety_line_contains": "签批留人"
+    },
+    "asset_hits_must_include": ["engine_intel_kb"],
+    "card_must_contain": [
+      "需求接件评估卡",
+      "AI 辅助生成的需求评估草稿",
+      "签批留人",
+      "资产初筛(确定性关键词命中)"
+    ],
+    "backlog_status": "assessed"
+  }
+}

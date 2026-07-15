@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "requirement_intake_agent 输出契约(outputs[0] 汇总)",
+  "description": "workflow 返回 outputs[0] 的结构。评估内容本体在产物文件 assessment_card.md(人读)与 assessment.json(机读)里,此处只放可统计的汇总字段。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rid", "asset_hits_count", "backlog_status", "draft_chars"],
+  "properties": {
+    "rid": {
+      "type": "string",
+      "description": "需求登记号 = task_id,待办队列主键"
+    },
+    "weekly_hours_estimate": {
+      "type": ["number", "null"],
+      "description": "周均任务工时估算;duration/frequency 缺失时为 null(不猜数)"
+    },
+    "weekly_saved_estimate": {
+      "type": ["number", "null"],
+      "description": "保守可省工时估算(小时/周);同上可为 null"
+    },
+    "asset_hits_count": {
+      "type": "integer", "minimum": 0,
+      "description": "资产清单确定性初筛命中条数"
+    },
+    "backlog_status": {
+      "type": "string",
+      "enum": ["assessed", "already_registered"],
+      "description": "assessed=本次新登记;already_registered=同 rid 已在队列(幂等跳过)"
+    },
+    "draft_chars": {
+      "type": "integer", "minimum": 0,
+      "description": "LLM 评估叙述字符数"
+    }
+  }
+}
