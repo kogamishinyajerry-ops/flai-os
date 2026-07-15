@@ -56,6 +56,11 @@
       "default": false,
       "description": "true = 本工具是 Mock 实现（不触真实工程程序）。Mock 工具的一切输出在事件与样本中如实标注 mock=true，绝不冒充真实结果。"
     },
+    "interactive_safe": {
+      "type": "boolean",
+      "default": false,
+      "description": "交互面工具安全声明（ADR-0028 §6，**default-deny**）：true = 本工具可安全暴露给 interactive 型 Agent 的会话运行时（LLM 可在会话中途无逐轮人签驱动调用）。仅**纯数据类**工具（纯读/纯算、无外部副作用、output_classification=internal）方可显式标 true；任何起进程/写外部态/allow_shell_command=true/sensitive 输出的工具**不得**标 true。缺省=false=拒——ConversationService 注入期对交互 Agent 声明的每个工具 fail-closed 强制（interactive_safe is True 且 output_classification==internal，否则落库前拒本轮）。job 路径不读本字段（job 侧人签的是任务签发/判决，非逐次工具调用）。"
+    },
     "output_classification": {
       "type": "string",
       "enum": [

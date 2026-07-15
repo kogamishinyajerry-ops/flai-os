@@ -427,6 +427,54 @@ def test_transient_upstream_502_still_retryable(app_env) -> None:
     assert "可重试" in resp.json()["detail"]
 
 
+def test_conv_resource_permanent_failures_mapped_503_not_500(app_env) -> None:
+    """★R2-P2 tamper 锚（Codex R2）：交互工具/知识资源**永久性**失败（未注册/未白名单/源未接入/
+    语料摄取失败）从会话轮冒泡时，post_message 必映射为 **503 配置错**（与 ModelConfigError 同语义，
+    绝不谎报「可重试」），且零落库——此前逃逸成裸 HTTP 500（"服务器 bug"语义，掩盖真实配置问题）。
+    映射按**异常类型**判定（与抛出位置无关），故经 _RaisingStub 从会话轮内注入即等价于工具/知识
+    wrapper 冒泡路径。tamper：删 post_message 的 _CONV_RESOURCE_PERMANENT 捕获 → 逃逸成 500 → 本断言
+    503 红。"""
+    from backend.app.core.errors import (
+        KnowledgeSourceUnavailableError,
+        ToolNotRegisteredError,
+    )
+
+    client, app = app_env
+    for exc in (
+        ToolNotRegisteredError("工具未注册：cfd_result_read"),
+        KnowledgeSourceUnavailableError("scope ecm_frr_demo 源目录不存在"),
+    ):
+        conv_id = _open_conversation(client)
+        _inject(app, _RaisingStub(exc))
+        resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "帮我分析"})
+        assert resp.status_code == 503, f"{type(exc).__name__} 须映射 503，实得 {resp.status_code}"
+        detail = resp.json()["detail"]
+        assert "工具/知识资源不可用" in detail and "可重试" not in detail
+        got = client.get(f"/api/conversations/{conv_id}").json()
+        assert [m["role"] for m in got["messages"]] == [], "资源失败必须零落库（事务性单轮）"
+
+
+def test_conv_resource_transient_failures_mapped_502_retryable(app_env) -> None:
+    """R2-P2：交互工具**临时/契约**失败（入出参 schema 不过/工具超时）→ 502「可重试」+ 零落库
+    （模型生成的 payload 会变，重试有效；不与永久性配置错混桶谎报）。TimeoutError 是 builtin 非
+    FlaiError，须单列捕获——tamper：从 _CONV_RESOURCE_TRANSIENT 删 TimeoutError → 超时逃逸 500 →
+    本断言 502 红。"""
+    from backend.app.core.errors import ToolInputInvalidError
+
+    client, app = app_env
+    for exc in (
+        ToolInputInvalidError("工具入参未通过 input_schema 校验：缺 file_path"),
+        TimeoutError("工具 cfd_result_read 执行超时（360s）"),
+    ):
+        conv_id = _open_conversation(client)
+        _inject(app, _RaisingStub(exc))
+        resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "帮我分析"})
+        assert resp.status_code == 502, f"{type(exc).__name__} 须映射 502，实得 {resp.status_code}"
+        assert "可重试" in resp.json()["detail"]
+        got = client.get(f"/api/conversations/{conv_id}").json()
+        assert [m["role"] for m in got["messages"]] == [], "资源失败必须零落库（事务性单轮）"
+
+
 # ── 计划撤回轮清空会话级 recommendation（反方 P3-1）──────────────────────
 
 
