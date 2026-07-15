@@ -189,12 +189,12 @@ Gate 2（导入后，可并行）
 
 | 门 | ID | 项 | 状态 | 判据全绿？ | 证据链接 |
 |---|---|---|---|---|---|
-| Gate1 | P0-B1 | 备份调度+真 drill | ⬜ | — | — |
-| Gate1 | P0-B2 | DB 盘 fail-closed | ⬜ | — | — |
-| Gate1 | P0-B3 | 超时可配+延迟实测 | ⬜ | — | — |
-| Gate1 | P0-N1 | 结构声明收窄 | ⬜ | — | — |
-| Gate1 | P0-N2 | 交互 Agent 声明护栏 | ⬜ | — | — |
-| Gate1 | P0-M2† | worker 心跳上 health（owner 已裁定纳入 P0） | ⬜ | — | — |
+| Gate1 | P0-B1 | 备份调度+真 drill | 🔨 部分 | △ | `scripts/backup_restore.py` 已存在；待接目标机计划任务 + 一次真 drill PASS |
+| Gate1 | P0-B2 | DB 盘 fail-closed | ✅ 代码 | ✅ | `config.assert_local_db_path`+`db.get_conn` 单一边界；test_p0 + tamper 咬合；Codex R0-R2 收敛 |
+| Gate1 | P0-B3 | 超时可配+延迟实测 | 🔨 代码✅ | △ | `FLAI_LLM_TIMEOUT_S`+`measure_llm_latency.py`（test+tamper）；内网 p99 实测待目标机 |
+| Gate1 | P0-N1 | 结构声明收窄 | ✅ | ✅ | README 交互类边界 + 限制#21 标已修 |
+| Gate1 | P0-N2 | 交互 Agent 声明护栏 | ✅ 代码 | ✅ | `registry._load_one` 不变量；test_p0 + tamper 咬合；Codex R0-R2 收敛 |
+| Gate1 | P0-M2† | worker 心跳上 health（owner 已裁定纳入 P0） | ✅ 代码 | ✅ | `/api/readyz`+心跳 daemon；test_p0 + tamper 咬合；Codex R0-R2 收敛 |
 | Gate2 | T1-M1 | per-task reaper | ⬜ | — | — |
 | Gate2 | T1-M2 | worker 可观测 | ⬜ | — | — |
 | Gate2 | T1-M3 | 规模天花板量测 | ⬜ | — | — |
@@ -203,4 +203,6 @@ Gate 2（导入后，可并行）
 | Gate2 | T3-a | ConversationService 注入 tools/knowledge | ⬜ | — | — |
 | Gate2 | T3-b | 交互类零 diff 验证弹 | ⬜ | — | — |
 
+> **P0 本机 5 项执行状态（2026-07-14）**：N1/N2/B2/M2† 代码判据全绿——test + tamper 咬合 + Codex 命中即审三轮收敛（R0[5 P1]→R1[0 P1+2 P2]→R2[clean]），全量 pytest 946 绿（commit 栈 5fe6c5c→0a68a4c→1ecb802）。B3 旋钮+采样脚本就绪、内网 p99 实测待目标机；B1 备份脚本已存在、调度+真 drill 待目标机。**Gate1 完整收口仍需**：B1/B3 目标机步骤 + owner 具名终裁。
+>
 > **Gate 1 未全绿前，不可逆内网导入 = fail-closed 拒。** 这是本纲领的唯一硬门。
