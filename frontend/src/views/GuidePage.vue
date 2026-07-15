@@ -674,8 +674,10 @@ function canInlineSummon(agent, plan) {
     plan && Array.isArray(plan.agents) && plan.agents.length > 1 &&
     !!cached && cached.loaded === true &&
     cached.inputMode === "params" && // 文件型/none/未知一律走创建页（Codex R1-P1）
+    Object.keys(agent.prefilled_inputs || {}).length > 0 && // 空预填无可审阅，不提供（Codex R2-P2）
     prefillSatisfiesSchema(cached.schema, agent.prefilled_inputs || {}) &&
-    collectCarriedFiles().length === 0
+    collectCarriedFiles().length === 0 &&
+    pendingFiles.value.length === 0 // 未发送附件同样必经创建页过目（Codex R2-P2）
   );
 }
 
