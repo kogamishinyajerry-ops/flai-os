@@ -63,6 +63,10 @@ function buildTaskChannel(ch, taskId) {
   // modelCalls 请求序号（Task 12 修复 1，恢复 main 的 modelCallsSeq 语义）：挂在 channel
   // 上而非组件内——channel 按 key 池化跨组件复用,序号必须与 channel 同寿命。
   ch.modelCallsSeq = 0;
+  // detail 集合 opt-in（Codex R2-P1）：modelCalls 是详情层（速览/详情页）才消费的
+  // 重集合,轻订阅者（对话轴/工作台的实时行,只要 task+events 尾巴）不该为它买单。
+  // 订阅计数为 0 时 fetch 跳过 listModelCalls；首个 detail 订阅者 join 时补拉一次。
+  ch.modelCallsRefs = 0;
   ch.fetch = async (fresh) => {
     const offset = ch.state.events.value.length;
     const [task, tailEvents] = await Promise.all([
@@ -79,6 +83,7 @@ function buildTaskChannel(ch, taskId) {
     // 只让「最新一次发起」的结果落盘,迟到的旧响应（含旧错误）整包作废。错误诚实化
     // （修复 2）：main 原语义是失败时展示 modelCallsError,换轨时被静默吞掉误报「无
     // 模型调用」,此处恢复。
+    if (ch.modelCallsRefs === 0) return; // 无 detail 订阅者不打重查询（Codex R2-P1）
     const seq = ++ch.modelCallsSeq;
     listModelCalls(taskId)
       .then((modelCalls) => {
@@ -160,14 +165,25 @@ function clearTimer(ch) {
   if (ch.timer) { clearTimeout(ch.timer); ch.timer = null; }
 }
 
-export function acquireChannel(key) {
+export function acquireChannel(key, opts = {}) {
   let ch = channels.get(key);
   if (!ch) { ch = makeChannel(key); channels.set(key, ch); }
   ch.refCount += 1;
+  // detail 集合 opt-in（Codex R2-P1）：只有传 { modelCalls: true } 的订阅者（速览/
+  // 详情页）计入 modelCallsRefs；轻订阅者共享同一条 task 链但不触发 listModelCalls。
+  const wantsModelCalls = opts.modelCalls === true && typeof ch.modelCallsRefs === "number";
+  let needModelBackfill = false;
+  if (wantsModelCalls) {
+    ch.modelCallsRefs += 1;
+    // 首个 detail 订阅者加入时 channel 可能已 loaded 且 3s 内刚拉过（join 去重会
+    // 跳过补拉）——此时 modelCalls 从未被拉取,必须强制补一轮,否则详情层最长要
+    // 等下一 tick 才见到模型调用记录。
+    needModelBackfill = ch.modelCallsRefs === 1 && ch.state.loaded.value === true;
+  }
   const ensureScheduled = () => { if (ch.refCount > 0 && !ch.timer) schedule(ch); };
   // join 去重（liveFeedCore.shouldRefreshOnJoin）：channel 已 loaded 且 3s 内刚
   // 拉过时,join 不再补拉一次——链本身继续跑,排链兜底逻辑原样保留。
-  if (shouldRefreshOnJoin(ch.state.loaded.value, ch.lastFetchAt, Date.now())) {
+  if (shouldRefreshOnJoin(ch.state.loaded.value, ch.lastFetchAt, Date.now()) || needModelBackfill) {
     refresh(ch).finally(ensureScheduled);
   } else {
     ensureScheduled();
@@ -178,6 +194,7 @@ export function acquireChannel(key) {
     release: () => {
       if (released) return; // release 幂等,防组件双卸载把别人的引用计数扣穿
       released = true;
+      if (wantsModelCalls) ch.modelCallsRefs = Math.max(0, ch.modelCallsRefs - 1);
       ch.refCount = Math.max(0, ch.refCount - 1);
       if (ch.refCount === 0) {
         clearTimer(ch);

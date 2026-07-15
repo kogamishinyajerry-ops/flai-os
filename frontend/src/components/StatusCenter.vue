@@ -338,7 +338,7 @@ let peekHandle = null;
 let peekStops = [];
 function acquirePeekFeed(taskId) {
   if (peekHandle) return; // 已持有,幂等（ensurePeekLoaded 已按 id 去重,双保险）
-  peekHandle = acquireChannel(`task:${taskId}`);
+  peekHandle = acquireChannel(`task:${taskId}`, { modelCalls: true }); // 速览消费模型调用记录（detail opt-in）
   peekStops = [
     watch(peekHandle.state.task, (v) => {
       peekTask.value = v;

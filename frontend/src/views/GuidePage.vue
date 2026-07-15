@@ -682,6 +682,7 @@ let liveTimer = null;
 // stagelineText 给出，避免事件先到、快照未追平时「clay 脉动灯 + 任务完成」同屏矛盾。
 const STATE_EVENT_TYPES = new Set([
   "task_created",
+  "validation_failed",
   "review_requested",
   "review_approved",
   "review_rejected",
@@ -763,6 +764,12 @@ function syncLiveChannels() {
       watch(
         handle.state.events,
         (events) => {
+          // 只在 channel 自身快照仍是工作态时收旁白（Codex R2-P2）：失败路径上
+          // 终态事件前常跟着失败缘由消息（如 validation_failed→task_failed），
+          // 若照收，会话快照追平前会出现「clay 脉动灯 + 失败措辞」同屏矛盾。
+          // task 与 events 同一次 fetch 落地，此判定与事件尾巴同拍不追旧。
+          const snap = handle.state.task.value;
+          if (snap && !TASK_WORK_STATES.has(snap.status)) return;
           const note = latestProcessNote(events || []);
           if (note) stageNotes[id] = note;
         },
@@ -1491,6 +1498,13 @@ watch(
 .sa-head .agent-status { margin: 0; flex: 0 0 auto; }
 .sa-head .agent-actions { margin: 0; flex: 0 0 auto; }
 .sa-head .agent-cta { padding: 5px 11px; font-size: 12.5px; }
+/* 窄屏（嵌套 padding 后仅剩 ~170-220px）：状态槽整体落到第二行（Codex R2-P2），
+   身份行（灯+名+分工）保住可读性——不换行时名字会被压成空省略号或控件溢出卡外。 */
+@media (max-width: 640px) {
+  .sa-head { flex-wrap: wrap; row-gap: 4px; }
+  .sa-head .agent-status,
+  .sa-head .agent-actions { flex: 0 0 100%; justify-content: flex-start; }
+}
 .sa-elapsed {
   font-size: 12px;
   color: var(--ink-soft);

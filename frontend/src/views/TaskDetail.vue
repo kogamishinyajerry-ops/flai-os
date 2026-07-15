@@ -315,7 +315,7 @@ const simRunTitle = computed(() =>
 // 无需额外 watch taskId）。旧的自建 2s 轮询/baseline 守卫/modelCallsSeq 全部
 // 删除——防 stale 语义已由 channel 的 epoch guard 统一承接（liveFeedCore.
 // makeEpochGuard，release 时 bump epoch，在途响应整包作废）。
-const taskChannel = acquireChannel(`task:${taskId}`);
+const taskChannel = acquireChannel(`task:${taskId}`, { modelCalls: true }); // 详情页消费模型调用记录（detail opt-in）
 const { task, events, modelCalls, modelCallsError, loaded, error: loadError } = taskChannel.state;
 
 const reviewForm = reactive({ comment: "" });
