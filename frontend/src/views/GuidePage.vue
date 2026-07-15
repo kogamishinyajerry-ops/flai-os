@@ -114,21 +114,29 @@
               </div>
 
               <div class="section-label roster-label">召集的 Agent · {{ m.recommendation.agents.length }}</div>
+              <!-- codex 式子 agent 行（owner 定向：紧凑+实时感，不要大静卡）：
+                   一行一名成员——状态灯 + 名字 + 分工 + 右槽实时状态词/耗时秒表；
+                   次行=实时进度旁白（运行中 shimmer 扫光，事件驱动）或未召集时的
+                   预填摘要。过程可折，变更与决策必露。 -->
               <div class="agent-list">
                 <div
                   v-for="(a, ai) in m.recommendation.agents"
                   :key="ai"
-                  class="agent-card"
-                  :class="{ 'fx-rise': m.fresh }"
+                  class="agent-card sa-row"
+                  :class="{ 'fx-rise': m.fresh, 'is-live': !!agentTaskInfo(a) }"
                 >
-                  <div class="agent-main">
-                    <div class="agent-top">
-                      <span class="agent-name">{{ a.agent_name }}</span>
-                      <span class="agent-maturity">{{ a.maturity }} / {{ a.status }}</span>
-                    </div>
+                  <div class="sa-head">
+                    <span
+                      class="status-lamp"
+                      :class="{ 'is-pulsing': agentTaskInfo(a) && isWorkState(agentTaskInfo(a).latest.status) }"
+                      :style="{ background: agentTaskInfo(a) ? taskLampColor(agentTaskInfo(a).latest.status) : 'var(--hairline)' }"
+                    ></span>
+                    <span class="agent-name">{{ a.agent_name }}</span>
+                    <span v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</span>
+                    <span class="agent-maturity">{{ a.maturity }} / {{ a.status }}</span>
+                    <span class="sa-spacer"></span>
 
-                    <!-- B1 对话轴督战：该会话已为此 Agent 召集过任务才显示（诚实地板，
-                         未召集零占位）；点击直开任务速览，不逼人跳页看进度。 -->
+                    <!-- 右槽①已召集：实时状态词+秒表，点击直开速览（B1 对话轴督战原语义） -->
                     <div
                       v-if="agentTaskInfo(a)"
                       class="agent-status"
@@ -138,64 +146,62 @@
                       @keydown.enter.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
                       @keydown.space.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
                     >
-                      <span
-                        class="status-lamp"
-                        :class="{ 'is-pulsing': isWorkState(agentTaskInfo(a).latest.status) }"
-                        :style="{ background: taskLampColor(agentTaskInfo(a).latest.status) }"
-                      ></span>
                       <span class="status-word" :style="{ color: taskLampColor(agentTaskInfo(a).latest.status) }">
                         {{ statusLabel(agentTaskInfo(a).latest.status) }}
                       </span>
+                      <span v-if="elapsedText(agentTaskInfo(a).latest)" class="sa-elapsed">· {{ elapsedText(agentTaskInfo(a).latest) }}</span>
                       <span v-if="agentTaskInfo(a).extra > 0" class="status-extra">+{{ agentTaskInfo(a).extra }}</span>
-                      <!-- 行动召唤按态分级：待签发=amber 强 CTA（签发来找人）；其余=速览 -->
                       <span v-if="agentTaskInfo(a).latest.status === 'waiting_review'" class="status-peek is-review">审阅签发 →</span>
                       <span v-else class="status-peek">速览 →</span>
                     </div>
-
-                    <!-- 产物锚点行（Claude Artifact 卡片锚点哲学）：任务完成且真有产物
-                         才长出——点击同样直开速览（产物预览+签发同面板），零跳页。 -->
-                    <div
-                      v-if="agentTaskInfo(a) && agentTaskInfo(a).latest.status === 'completed' && (agentTaskInfo(a).latest.output_file_ids || []).length"
-                      class="status-artifact"
-                      role="button"
-                      tabindex="0"
-                      @click.stop="openTaskPeek(agentTaskInfo(a).latest.id)"
-                      @keydown.enter.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
-                      @keydown.space.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
-                    >
-                      <svg class="artifact-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
-                      <span class="artifact-count">{{ (agentTaskInfo(a).latest.output_file_ids || []).length }} 件产物</span>
-                      <span class="artifact-open">查看 ↗</span>
+                    <!-- 右槽②未召集：就绪徽 / 创建页 escape -->
+                    <div v-else-if="!summonedLocally(a)" class="agent-actions">
+                      <span v-if="agentBatchable(a, m.recommendation)" class="agent-readytag">✓ 参数已齐 · 待开工</span>
+                      <button v-else class="agent-cta" @click="createOneTask(a, m.recommendation)">去创建此任务</button>
                     </div>
+                    <span v-else class="agent-readytag">已召集 · 接入中…</span>
+                  </div>
 
-                    <p v-if="a.rationale" class="agent-rationale">{{ a.rationale }}</p>
-                    <p v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</p>
-                    <div v-if="inputCount(a)" class="agent-draft">
-                      <div class="draft-label">预填草案 · {{ inputCount(a) }} 个字段</div>
-                      <div class="draft-fields">
-                        <span v-for="(v, k) in a.prefilled_inputs" :key="k" class="draft-field">
-                          <span class="df-key">{{ k }}</span>
-                          <span class="df-val">{{ formatDraftVal(v) }}</span>
-                        </span>
-                      </div>
+                  <!-- 次行：实时旁白（已召集）——运行中=事件驱动 shimmer；终态=过去式盖章 -->
+                  <div
+                    v-if="agentTaskInfo(a)"
+                    class="sa-stageline"
+                    :class="{ 'is-running': agentTaskInfo(a).latest.status === 'running',
+                              'is-review': agentTaskInfo(a).latest.status === 'waiting_review' }"
+                  >{{ stagelineText(agentTaskInfo(a).latest) }}</div>
+                  <!-- 次行：未召集——理由 + 预填摘要一行收纳（过程可折） -->
+                  <template v-else>
+                    <div class="sa-subline">
+                      <span v-if="a.rationale" class="agent-rationale">{{ a.rationale }}</span>
+                      <span v-for="(v, k) in a.prefilled_inputs" :key="k" class="draft-field">
+                        <span class="df-key">{{ k }}</span>
+                        <span class="df-val">{{ formatDraftVal(v) }}</span>
+                      </span>
                     </div>
                     <p v-if="a.stripped_fields && a.stripped_fields.length" class="agent-stripped">
                       已剔除不合法字段：{{ a.stripped_fields.join("、") }}（未匹配该 Agent 的输入契约）
                     </p>
-                    <!-- 决策语法（disclosure grammar「变更与决策必露，过程可折」）：成员行
-                         零交互——就绪=纯展示徽（待开工），未就绪=创建页 escape（或直接回复
-                         导引补参数），已召集=督战 chip 即全部。唯一决策收敛到方案脚部的
-                         「照此方案开工」一键（人亲手点，导引绝不代召集）。 -->
-                    <div v-if="!agentTaskInfo(a) && !summonedLocally(a)" class="agent-actions">
-                      <span v-if="agentBatchable(a, m.recommendation)" class="agent-readytag">✓ 参数已齐 · 待开工</span>
-                      <template v-else>
-                        <button class="agent-cta" @click="createOneTask(a, m.recommendation)">去创建此任务</button>
-                        <!-- 提示按成员就绪分轴（CRS R0-P3）：参数齐但方案级不可开工（归档/附件）
-                             不能误导用户去修本已齐的参数 -->
-                        <span v-if="agentReady(a) === true" class="agent-unready-hint">参数已齐——本方案暂不可一键开工（会话已归档或有附件），可去创建页亲手提交。</span>
-                        <span v-else class="agent-unready-hint">参数未齐——直接回复导引补全，或去创建页填好后亲手提交。</span>
-                      </template>
+                    <!-- 提示按成员就绪分轴（CRS R0-P3）：参数齐但方案级不可开工（归档/附件）
+                         不能误导用户去修本已齐的参数 -->
+                    <div v-if="!summonedLocally(a) && !agentBatchable(a, m.recommendation)" class="sa-subline">
+                      <span v-if="agentReady(a) === true" class="agent-unready-hint">参数已齐——本方案暂不可一键开工（会话已归档或有附件），可去创建页亲手提交。</span>
+                      <span v-else class="agent-unready-hint">参数未齐——直接回复导引补全，或去创建页填好后亲手提交。</span>
                     </div>
+                  </template>
+
+                  <!-- 产物锚点行（Claude Artifact 卡片锚点哲学）：完成且真有产物才长出 -->
+                  <div
+                    v-if="agentTaskInfo(a) && agentTaskInfo(a).latest.status === 'completed' && (agentTaskInfo(a).latest.output_file_ids || []).length"
+                    class="status-artifact"
+                    role="button"
+                    tabindex="0"
+                    @click.stop="openTaskPeek(agentTaskInfo(a).latest.id)"
+                    @keydown.enter.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
+                    @keydown.space.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
+                  >
+                    <svg class="artifact-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    <span class="artifact-count">{{ (agentTaskInfo(a).latest.output_file_ids || []).length }} 件产物</span>
+                    <span class="artifact-open">查看 ↗</span>
                   </div>
                 </div>
               </div>
@@ -336,7 +342,7 @@ import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation } from "../api/conversations";
-import { createTask } from "../api/tasks";
+import { createTask, listTaskEvents } from "../api/tasks";
 import { listAgents, getAgent } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
 import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, formatTime } from "../utils/format";
@@ -660,6 +666,123 @@ function ensureAgentSchemasForMessages() {
         });
     }
   }
+}
+
+// ── 实时子 agent 行引擎（owner 定向「像 codex 子 agent」）────────────────────
+// 秒表：1s 离散文本替换（codex 灰阶纪律：活着的信号=文本活跳，零 spinner 通胀）；
+// 旁白：运行中任务 ~2.5s 轮询事件时间轴，取最新事件译成一行人话（事件驱动，
+// 不滚屏 raw——disclosure grammar「过程压成摘要行」）。两者都只在有工作态任务时运转。
+const nowTick = ref(Date.now());
+const stageNotes = reactive({}); // taskId -> 最新旁白（保留终态最后一句作盖章素材）
+let liveTimer = null;
+let stageBusy = false;
+
+const EVENT_VERB = {
+  task_created: "已创建，等待执行器领取",
+  validation_started: "校验输入契约…",
+  tool_started: "调用工具…",
+  tool_finished: "工具已返回",
+  agent_log: "运行中…",
+  review_requested: "产物就绪，等待人工放行",
+  review_approved: "人工已放行",
+  task_completed: "任务完成",
+  task_failed: "运行失败",
+};
+
+function describeEvent(ev) {
+  if (!ev) return "";
+  const payload = ev.payload || {};
+  if (typeof payload.stage === "string" && payload.stage) {
+    let txt = payload.stage;
+    if (payload.residual) txt += ` · 残差 ${payload.residual}`;
+    if (payload.iterations) txt += ` · 累计 ${payload.iterations} 次迭代`;
+    if (payload.result) txt += ` · ${payload.result}`;
+    return txt;
+  }
+  if (typeof ev.message === "string" && ev.message.trim()) return ev.message.trim();
+  return EVENT_VERB[ev.event_type] || ev.event_type || "";
+}
+
+async function pollRunningStages() {
+  if (stageBusy === true) return;
+  const running = conversationTasks.value.filter((t) => t.status === "running").slice(0, 3);
+  if (running.length === 0) return;
+  stageBusy = true;
+  try {
+    for (const t of running) {
+      try {
+        const events = await listTaskEvents(t.id);
+        const last = events && events.length ? events[events.length - 1] : null;
+        const note = describeEvent(last);
+        if (note) stageNotes[t.id] = note;
+      } catch {
+        /* 单任务事件拉取失败不打断秒表与其它行（下轮重试，不伪造旁白） */
+      }
+    }
+  } finally {
+    stageBusy = false;
+  }
+}
+
+function ensureLiveTicker() {
+  if (liveTimer) return;
+  let beat = 0;
+  liveTimer = setInterval(() => {
+    nowTick.value = Date.now();
+    beat += 1;
+    if (beat % 3 === 0) pollRunningStages(); // ~3s 一轮旁白，秒表仍 1s 活跳
+  }, 1000);
+}
+
+function stopLiveTicker() {
+  if (liveTimer) {
+    clearInterval(liveTimer);
+    liveTimer = null;
+  }
+}
+
+// 有任一工作态成员任务 → 引擎开；全部终态 → 引擎停（不空转）。
+watch(
+  () => conversationTasks.value.some((t) => TASK_WORK_STATES.has(t.status)),
+  (anyWork) => {
+    if (anyWork === true) {
+      ensureLiveTicker();
+      pollRunningStages();
+    } else {
+      stopLiveTicker();
+    }
+  },
+  { immediate: false }
+);
+onUnmounted(stopLiveTicker);
+
+function elapsedText(t) {
+  const startRaw = t.started_at || t.created_at || "";
+  const start = Date.parse(startRaw);
+  if (!Number.isFinite(start)) return "";
+  let end;
+  if (TASK_WORK_STATES.has(t.status)) {
+    end = nowTick.value;
+  } else {
+    end = Date.parse(t.finished_at || "");
+    if (!Number.isFinite(end)) return "";
+  }
+  const sec = Math.max(0, Math.round((end - start) / 1000));
+  if (sec < 60) return `${sec}s`;
+  return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`; // canon §三：秒补零
+}
+
+function stagelineText(t) {
+  if (t.status === "queued") return "排队中——等待执行器领取";
+  if (t.status === "running") return stageNotes[t.id] || "运行中…";
+  if (t.status === "waiting_review") return "产物已就绪——等待你审阅放行";
+  if (t.status === "completed") {
+    const dur = elapsedText(t);
+    return dur ? `任务完成 · 用时 ${dur}` : "任务完成"; // 时态即状态：过去式盖章
+  }
+  if (t.status === "failed") return "运行失败——点右侧速览看详情（如实透出，不静默）";
+  if (t.status === "cancelled") return "已取消";
+  return "";
 }
 
 // 成员级就绪（fail-closed）：params 型 + 预填非空 + 过当前契约（required 齐 + 原语校验）。
@@ -1277,9 +1400,76 @@ watch(
 .agent-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   margin-bottom: 6px;
 }
+
+/* codex 式子 agent 行：紧凑、实时、灰阶纪律（彩色只给状态灯与信任色语义）。
+   注意特异性：.agent-card 基类是 flex 且声明在后，必须用双类压制。 */
+.agent-card.sa-row {
+  display: block;
+  padding: 10px 14px;
+  gap: 0;
+}
+.agent-card.sa-row:hover { transform: none; }
+.sa-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.sa-head .agent-name { flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sa-head .agent-role { margin: 0; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sa-head .agent-maturity { margin-left: 0; }
+.sa-spacer { flex: 1 1 auto; min-width: 8px; }
+.sa-head .agent-status { margin: 0; flex: 0 0 auto; }
+.sa-head .agent-actions { margin: 0; flex: 0 0 auto; }
+.sa-head .agent-cta { padding: 5px 11px; font-size: 12.5px; }
+.sa-elapsed {
+  font-size: 12px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums; /* 秒表逐秒活跳不抖宽 */
+}
+
+/* 实时旁白行：事件驱动一行人话；运行中=灰阶 shimmer 扫光（活着的信号） */
+.sa-stageline {
+  margin: 6px 0 0 17px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.sa-stageline.is-running {
+  background: linear-gradient(100deg, var(--ink-soft) 30%, var(--clay) 50%, var(--ink-soft) 70%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: sa-shimmer 2.4s linear infinite;
+}
+.sa-stageline.is-review { color: var(--trust-pending); }
+@keyframes sa-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -20% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sa-stageline.is-running {
+    animation: none;
+    background: none;
+    color: var(--ink-soft);
+  }
+}
+
+/* 未召集次行：理由 + 预填 chips 单行收纳 */
+.sa-subline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 0 17px;
+}
+.sa-subline .agent-rationale { margin: 0; font-size: 12.5px; font-weight: 500; color: var(--ink-soft); }
+.sa-row .status-artifact { margin: 7px 0 0 17px; }
+.sa-row .agent-stripped { margin: 6px 0 0 17px; }
 .agent-card {
   display: flex;
   gap: 14px;
