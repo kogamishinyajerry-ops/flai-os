@@ -174,15 +174,16 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def cmd_show(args: argparse.Namespace) -> int:
     items, bad = _fold()
+    if bad > 0:
+        # 与 list 同一坏行警告契约(Codex R1-P2);警告在任何 return 之前发出
+        # (Codex R2-P2 verbatim):rid 缺席可能正是它的 assessed 行坏掉所致,
+        # 只报「不存在」会把账本损伤伪装成普通缺数据。
+        print(f"⚠ 跳过 {bad} 条无法解析/非法的队列行(账本写入已被保护,先人工核查)", file=sys.stderr)
     item = items.get(args.rid)
     if item is None:
         print(f"rid 不存在:{args.rid}", file=sys.stderr)
         return 1
     print(json.dumps(item, ensure_ascii=False, indent=2))
-    if bad > 0:
-        # 与 list 同一坏行警告契约(Codex R1-P2):show 的读者同样必须知道
-        # 有转移被回放层拒掉、账本当前处于写保护。
-        print(f"⚠ 跳过 {bad} 条无法解析/非法的队列行(账本写入已被保护,先人工核查)", file=sys.stderr)
     return 0
 
 
@@ -258,6 +259,10 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         try:
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)  # 只读,对账绝不写库
             try:
+                # 无条件探针(Codex R2-P2 verbatim):connect 不验 SQLite header,
+                # 空队列/全终态时循环零查询,坏库/缺 tasks 表会静默对账"成功"——
+                # 先强制一次 schema+可读探测,坏库在任何结论之前诊断退出。
+                conn.execute("SELECT status FROM tasks LIMIT 1").fetchone()
                 for rid, item in sorted(items.items()):
                     if item.get("status") in ("delivered", "rejected"):
                         continue  # 终态不动

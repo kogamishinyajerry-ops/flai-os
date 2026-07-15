@@ -212,3 +212,47 @@ def test_reconcile_corrupt_db_fails_zero_write(backlog_dir, tmp_path, capsys) ->
     assert "读取失败" in capsys.readouterr().err
     rows = (backlog_dir / "backlog.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(rows) == 1, "坏库诊断必须发生在任何账本写入之前(零写入)"
+
+
+# ── witness 9(R2-P2 verbatim):懒查询下坏库仍必须被探针咬住 ──────────────
+
+
+def test_reconcile_probes_db_even_with_terminal_only_ledger(backlog_dir, tmp_path, capsys) -> None:
+    """队列全终态(循环零查询)+ 坏库:无条件探针仍须诊断退出,
+    绝不返回 0 冒充『对账成功』。"""
+    _write_rows(backlog_dir, [
+        _assessed("t_done"),
+        _change("t_done", "assessed", "rejected"),
+    ])
+    fake_db = tmp_path / "corrupt.db"
+    fake_db.write_text("这不是 SQLite 文件", encoding="utf-8")
+    rc = cli.main(["reconcile", "--by", "严冬杰", "--db", str(fake_db)])
+    assert rc == 1
+    assert "读取失败" in capsys.readouterr().err
+
+
+def test_reconcile_probes_missing_tasks_table(backlog_dir, tmp_path, capsys) -> None:
+    """合法 SQLite 但缺 tasks 表(旧库/错库):探针必须咬住。"""
+    _write_rows(backlog_dir, [_assessed("t_done"), _change("t_done", "assessed", "rejected")])
+    db = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE misc (x TEXT)")
+    conn.commit(); conn.close()
+    rc = cli.main(["reconcile", "--by", "严冬杰", "--db", str(db)])
+    assert rc == 1
+    assert "读取失败" in capsys.readouterr().err
+
+
+# ── witness 10(R2-P2 verbatim):show 在 rid 缺席时仍须报坏行 ─────────────
+
+
+def test_show_warns_bad_rows_even_when_rid_missing(backlog_dir, capsys) -> None:
+    """rid 的 assessed 行本身坏掉 → fold 后 rid 缺席:show 只报『不存在』会把
+    账本损伤伪装成普通缺数据,坏行警告必须先于早退发出。"""
+    broken_assessed = json.dumps(_assessed("r_broken"), ensure_ascii=False)[:-10]  # 截断成坏行
+    _write_rows(backlog_dir, [broken_assessed])
+    rc = cli.main(["show", "r_broken"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "rid 不存在" in err
+    assert "队列行" in err, "坏行警告必须在缺席早退前发出"
