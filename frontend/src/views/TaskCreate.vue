@@ -49,8 +49,8 @@
           </el-tag>
         </div>
         <p class="agent-preview-summary">{{ selectedAgent.summary }}</p>
-        <div v-if="selectedAgent.limitations && selectedAgent.limitations.length" class="agent-preview-limits">
-          <span class="limits-label">不适用范围：</span>{{ selectedAgent.limitations.join("；") }}
+        <div v-if="agentLimitationText" class="agent-preview-limits">
+          <span class="limits-label">不适用范围：</span>{{ agentLimitationText }}
         </div>
       </el-card>
 
@@ -60,13 +60,16 @@
 
       <el-form-item label="输入参数">
         <div class="inputs-field">
+          <!-- amber 未核（Codex R2 + owner 裁决）：预填草案是 LLM 导引产物、未经人核对——信任色锁
+               里绿只给 REAL 实测，「带入成功」不是「内容可信」，success 绿会把未核草案烘托成已核。
+               warning=amber 恰是「未核，请人工核对」语义。 -->
           <el-alert
             v-if="prefilledFromGuide"
-            type="success"
+            type="warning"
             :closable="false"
             show-icon
             class="prefill-note"
-            title="已从智能导引带入预填草案，请核对并补全后再提交——签发权在你。"
+            title="已从智能导引带入预填草案（未核）：内容由 AI 导引生成，请逐项核对并补全后再提交——签发权在你。"
           />
 
           <!-- 表单模式：按 Agent input_schema 动态生成带标签+校验的字段 -->
@@ -177,6 +180,17 @@ const agents = ref([]);
 // 选中后只撞后端 409 死路（Codex P2 / ADR-0012）。
 const selectableAgents = computed(() => agents.value.filter((a) => a.mode !== "interactive"));
 const selectedAgent = ref(null);
+// CG-F：不适用范围逐条去尾标点再以「；」连接——各条常自带句末「。」，直接
+// join('；') 会渲染出「场景。；无」双标点。strip 每条尾部 。/./；/; 后再连接
+// （诚实：不改内容语义，只去冗余标点；空条过滤，全空则不渲染该行）。
+const agentLimitationText = computed(() => {
+  const items = selectedAgent.value?.limitations;
+  if (!Array.isArray(items) || !items.length) return "";
+  return items
+    .map((s) => String(s).replace(/[。.；;]+$/u, "").trim())
+    .filter(Boolean)
+    .join("；");
+});
 const agentLoadError = ref("");
 const agentsListError = ref("");
 const inputsJsonError = ref("");
@@ -475,6 +489,22 @@ onUnmounted(() => window.removeEventListener("resize", onResize));
 .task-create {
   max-width: 640px;
 }
+/* 创建面工作台外框（Gate2-T2 Face3）：把表单**外框与容器**从 EP 默认表单相 token 化
+   到卡语言——整张表单落在一张 surface-raised 纸面上（「工作台」质感）。字段控件本身
+   （el-input/number/switch/select）保留 EP 原语、内相不改，本处仅外框与容器 token 化
+   （CG-E1：headline 如实约束到实际改动范围，不 over-claim「字段区暖化」）。
+   box-sizing:border-box + 全内元素走 % / max-width，375px 下内距不撑破容器（不溢出）。 */
+.create-form {
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 22px 24px;
+  box-sizing: border-box;
+}
+@media (max-width: 640px) {
+  .create-form { padding: 16px 14px; }
+}
 .page-header { margin-bottom: 20px; }
 .page-header h2 {
   font-family: var(--serif);
@@ -486,9 +516,13 @@ onUnmounted(() => window.removeEventListener("resize", onResize));
 .inline-alert {
   margin-bottom: 16px;
 }
+/* Agent 预览卡（Face3）：worktable 内的 inset 面板——paper-rail 底与 surface-raised
+   工作台形成层次，hairline 边 + radius token 脱离 el-card 默认相。 */
 .agent-preview {
   margin-bottom: 16px;
   background: var(--paper-rail);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
 }
 .agent-preview-header {
   display: flex;

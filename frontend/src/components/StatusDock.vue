@@ -1,7 +1,7 @@
 <template>
   <!-- 全局状态坞（UI-PARADIGM.md 祈使句②「状态来找人」）：常驻每页右上，
        计数全部来自真实轮询（诚实地板——绝不估算）。点击任意处打开状态中心。 -->
-  <div class="status-dock" role="button" tabindex="0" aria-label="打开状态中心" @click="openInbox" @keydown.enter="openInbox" @keydown.space.prevent="openInbox">
+  <div class="status-dock" role="button" tabindex="0" aria-label="打开状态中心" @click="openInbox" @keydown.enter.prevent="openInbox" @keydown.space.prevent="openInbox">
     <span v-if="waitingCount > 0" class="dock-pill dock-pill-waiting" :class="{ 'dock-pulse-echo': pulseEcho }">
       ✍ 待你签发 {{ waitingCount }}
     </span>

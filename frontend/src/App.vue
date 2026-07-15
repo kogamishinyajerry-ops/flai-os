@@ -551,6 +551,55 @@ onMounted(loadConvos);
   background: rgba(var(--trust-pending-rgb), 0.08);
   white-space: nowrap;
 }
+/* ── 签发面 SSOT（Gate2-T2 A1 PREREQ）──
+ * 人签是「改变工程状态的唯一合法通道」。两处签发面（TaskDetail 详情人签
+ * review-card + StatusCenter 状态中心 peek-review-card）共享此一处工艺，结构上
+ * 不可分叉（复制必腐烂）——只改一面=观感分叉，本 SSOT 从机制上杜绝。
+ * 信任色锁：teal 边框走人签合法槽 rgba(var(--trust-signed-rgb),.25)，只 teal 不绿，
+ * 绝不映射 completed；surface/hairline/shadow 全走中性工艺层，不碰五色语义槽。 */
+.sign-surface {
+  background: var(--surface-raised);
+  border: 1px solid rgba(var(--trust-signed-rgb), 0.25);
+  /* CG-A：teal 顶饰条——把「人签=改变工程状态的唯一合法通道」的 teal 存在感做实。
+     只用 --trust-signed（信任色锁人签合法槽），绝不越色锁、绝不映射 completed；base
+     四边框仍保 rgba(var(--trust-signed-rgb),.25)（不改，batch-e S1 锚点）。 */
+  border-top: 3px solid var(--trust-signed);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 14px;
+}
+/* CG-C：签发意见框已剥离 EP 焦点态（下方 .sign-input textarea box-shadow:none），
+   容器须补偿焦点可见性（a11y）——镜像 GuidePage .composer-shell：落笔聚焦时 clay
+   焦点环 + 4px 柔光叠加 shadow-card。一处 focus-within 同治两签发面（SignPanel 根
+   即 .sign-surface）。信任色锁：clay=工作/输入语言合法，非五槽信任色。 */
+.sign-surface:focus-within {
+  border-color: var(--focus-ring-clay);
+  box-shadow: var(--shadow-card), 0 0 0 4px rgba(var(--clay-rgb), 0.08);
+}
+/* 签发意见框剥离 Element Plus chrome（镜像 GuidePage .composer-input 工艺）：
+ * 让签发意见从「填表控件」变成「落笔纸面」。本块全局非 scoped，故用普通后代
+ * 选择器（:deep 只在 <style scoped> 内被编译，写进全局块会成非法伪类被整条丢弃）；
+ * `textarea.el-textarea__inner`（元素+类）抬 specificity 压过 EP 的 `:focus` 态。 */
+.sign-input textarea.el-textarea__inner {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  font-family: inherit;
+}
+
+/* ── 焦点环成体系（Gate2-T2 A2）──
+ * 全站 role=button 裸元素（sc-item/status-dock/delivery-card/today/task-console/
+ * ap-item/agent-status 等 ~11 处）统一一处 clay 焦点地板，无隐形焦点。用
+ * --clay-softer 与既有 additive 环 .intent-card/.reframe-item 同色——一色成体系。
+ * 信任色锁：clay=工作语言合法，非五槽信任色。
+ * 诚实边界：属性选择器 [role="button"] 只治理裸 div，**不匹配原生 <button>**
+ * （gov-entry/send-btn/sc-close 等保留 UA/EP 可见环；Face4 的 gov-entry 环由其
+ * 自写 .gov-entry:focus-visible 消费同一 --clay-softer token，不依赖本地板）。
+ * additive 环因 scoped data-v 特异性更高而胜出（同色不同 offset，不双环）。 */
+[role="button"]:focus-visible {
+  outline: 2px solid var(--clay-softer);
+  outline-offset: 2px;
+}
 /* ── 动效系统 v1 全局层（E3）：纸张过渡 + 入场工具类 + 按压微交互 ──
  * 全部 transform/opacity（零 layout），reduced-motion 一律静态降级。 */
 /* 路由过渡刻意只用 opacity：动画期间容器带 transform 会成为后代

@@ -273,6 +273,7 @@
                 tabindex="0"
                 @click="pickAgent(a)"
                 @keydown.enter.prevent="pickAgent(a)"
+                @keydown.space.prevent="pickAgent(a)"
               >
                 <span class="ap-dot" :style="{ background: categoryColor(a.category) }"></span>
                 <span class="ap-main">
