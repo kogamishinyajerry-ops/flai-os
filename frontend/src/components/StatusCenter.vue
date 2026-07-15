@@ -148,7 +148,9 @@
             <div class="peek-label">签发</div>
             <div class="peek-review-note">批准即代表你作为工程师背书该产物——签发权在你，平台不代签。</div>
             <div class="peek-review-signer">签发人：{{ signerName }}（登录身份，不可代填）</div>
-            <el-input v-model="reviewComment" type="textarea" :rows="2" placeholder="意见（可选）" class="peek-review-input" />
+            <!-- 填空默认收纳（disclosure grammar：决策时刻只露决策本身）；要留意见的人自己展开 -->
+            <button v-if="!commentOpen" type="button" class="peek-comment-toggle" @click="commentOpen = true">附意见 ›</button>
+            <el-input v-else v-model="reviewComment" type="textarea" :rows="2" placeholder="意见（可选）" class="peek-review-input" />
             <div class="peek-review-actions">
               <!-- teal=人签唯一色；成功迸发=burstSigned 唯一许可点之一。
                    产物预览未完成首次尝试前禁批准（先看后签）；驳回是安全方向不设门。 -->
@@ -379,6 +381,7 @@ function releasePeekFeed() {
 // 打开抽屉懒补一次（onOpen），保证「一次具名全站免问」（Codex 审 P2）。
 const signerName = computed(() => displayName());
 const reviewComment = ref("");
+const commentOpen = ref(false); // 意见框默认收纳，签发决策面零填空
 const reviewing = ref(false);
 const peekApproveEl = ref(null);
 const acceptedSamples = ref([]);
@@ -460,7 +463,7 @@ async function doReview(action) {
       comment: reviewComment.value || null,
     });
     markTaskSeen(taskId); // 亲手签发=已看过：其后完成不得对签发者亮未读
-    reviewComment.value = ""; // 签发落定即清，绝不残留到下一个任务
+    reviewComment.value = ""; commentOpen.value = false; // 签发落定即清、意见框收回，绝不残留到下一个任务
     ElMessage.success(action === "approve" ? "已批准放行" : "已驳回");
     if (action === "approve") loadAcceptedSamples(taskId); // 静默旁路：失败不影响签发主流程
     // 续体绑定：await 期间抽屉可能已关/任务已切——只有还在看同一任务时才迸发+刷新
@@ -923,6 +926,17 @@ onUnmounted(() => {
   margin-bottom: 10px;
   line-height: 1.6;
 }
+.peek-comment-toggle {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.peek-comment-toggle:hover { color: var(--ink); }
 .peek-review-input {
   margin-bottom: 8px;
 }

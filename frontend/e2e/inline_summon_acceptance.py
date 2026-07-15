@@ -1,15 +1,18 @@
-"""对话轴「原地召集」验收（真浏览器）：单入口内联召集，宪法不破。
+"""对话轴「照此方案开工」验收（真浏览器）：提案→一键开工，决策面零填空。
 
-范式 2a 补刀（owner 2026-07-15 拍板）：多 Agent 方案 + 预填齐 + 无携带附件时，
-人可在方案卡上两击（原地召集 → 确认召集）完成召集，零跳页。验收面：
-  ① 预填齐 required 的 Agent 显示「原地召集」；**部分预填**的对照 Agent 不显示
-     （POST /api/tasks 不做即时校验，就绪门必须在提供入口前咬住——Codex R0-P1）；
-  ② 点「原地召集」只进入确认态——**此刻会话任务数=0（导引不代召集铁证）**；
-  ③ 点「再想想」退出确认态，任务数仍=0（反悔无副作用）；
-  ④ 重新武装 →「确认召集」→ 任务真实创建：agent_id / conversation_id / inputs 与预填一致；
-  ⑤ 零跳页：URL 仍 /?c=<conv>，督战 chip（.agent-status）原地亮起；
-  ⑥ e2e 锚点不破：「去创建此任务」按钮仍在（m9 back=chat 契约路径原样保留）；
-  ⑦ 会话归档（concluded）后重开：内联入口整体消失（只读会话不可召集——Codex R0-P2）。
+范式 2a 二刀（owner 2026-07-15 定向「像 Claude Desktop/Codex：去掉一切选择/填空面」，
+披露语法=agent-ui-design disclosure-grammar「决策必露且收敛为一」）：方案卡是一份
+完整提案，唯一决策=「照此方案开工」一键；成员行零交互（就绪=展示徽 / 未就绪=创建页
+escape / 已召集=督战 chip）。验收面：
+  ① 就绪成员（预填齐 required + params 型）零按钮、示「参数已齐 · 待开工」徽；
+     部分预填的对照成员保留「去创建此任务」escape（就绪门 Codex R0-R2 全承袭）；
+  ② 方案脚部出现「照此方案开工 · 召集 1 名就绪成员」主按钮；点击前会话任务数=0
+     （导引不代召集铁证：按钮渲染 ≠ 召集）；
+  ③ 点「照此方案开工」→ 只创建就绪成员的任务（数=1）：agent_id / conversation_id /
+     inputs 与预填一致；未就绪成员绝不被带上（fail-closed 不越权）；
+  ④ 零跳页：URL 仍 /?c=<conv>，督战 chip 原地亮起；开工按钮随「就绪待开工=0」消失；
+  ⑤ e2e 锚点不破：未就绪成员的「去创建此任务」仍在（m9 back=chat 契约路径原样保留）；
+  ⑥ 会话归档（concluded）后重开：开工按钮整体消失（只读会话不可召集）。
 
 自包含：自起后端（tmp DB）+ stub gateway + 真 chromium，不起 worker。
 
@@ -149,36 +152,31 @@ with sync_playwright() as p:
     conv_id = conv_list[0]["id"] if conv_list else None
     assert conv_id, "诚实失败：拿不到会话 id"
 
-    # ① 预填齐→有「原地召集」；部分预填的对照成员没有。
-    #    先 expect 等待（schema 预取是异步的，count() 不等待——Codex R1-P2）。
+    # ① 就绪成员=展示徽零按钮；未就绪对照保留创建页 escape。
+    #    先 expect 等待（schema 预取是异步的，count() 不等待）。
     hello_card = page.locator(".agent-card").nth(0)
     fta_card = page.locator(".agent-card").nth(1)
-    expect(hello_card.get_by_role("button", name="原地召集")).to_be_visible(timeout=8000)
+    expect(hello_card.locator(".agent-readytag")).to_be_visible(timeout=8000)
     check(
-        "①预填齐的成员显示「原地召集」",
-        hello_card.get_by_role("button", name="原地召集").count() == 1,
+        "①就绪成员示「参数已齐 · 待开工」徽且零按钮",
+        "参数已齐" in hello_card.locator(".agent-readytag").inner_text()
+        and hello_card.get_by_role("button", name="去创建此任务").count() == 0,
     )
     check(
-        "①对照：部分预填（top_event 有、其余 required 缺）不显示「原地召集」",
-        fta_card.get_by_role("button", name="原地召集").count() == 0,
+        "①对照：部分预填（top_event 有、其余 required 缺）保留「去创建此任务」",
+        fta_card.get_by_role("button", name="去创建此任务").count() == 1,
     )
-    page.screenshot(path=str(SHOTS / "1_plan_card_inline_cta.png"), full_page=True)
+    page.screenshot(path=str(SHOTS / "1_plan_card_open_cta.png"), full_page=True)
 
-    # ② 武装只进确认态，不产生任何任务（导引不代召集铁证）
-    hello_card.get_by_role("button", name="原地召集").click()
-    expect(hello_card.get_by_role("button", name="确认召集")).to_be_visible(timeout=3000)
-    check("②武装后出现「确认召集」确认态", True)
-    check("②武装 ≠ 召集：会话任务数仍为 0", conv_task_count(conv_id) == 0)
-    page.screenshot(path=str(SHOTS / "2_armed_confirm_row.png"), full_page=True)
+    # ② 开工主按钮在场且如实计数；渲染 ≠ 召集（任务数=0）
+    open_btn = page.locator(".open-plan-btn")
+    expect(open_btn).to_be_visible(timeout=3000)
+    check("②「照此方案开工」计数=1 名就绪成员", "1 名就绪成员" in open_btn.inner_text())
+    check("②按钮渲染 ≠ 召集：会话任务数仍为 0", conv_task_count(conv_id) == 0)
+    page.screenshot(path=str(SHOTS / "2_open_plan_cta.png"), full_page=True)
 
-    # ③ 反悔无副作用
-    hello_card.get_by_role("button", name="再想想").click()
-    expect(hello_card.get_by_role("button", name="原地召集")).to_be_visible(timeout=3000)
-    check("③「再想想」退出确认态，任务数仍为 0", conv_task_count(conv_id) == 0)
-
-    # ④ 确认召集 → 任务真实创建且归因正确
-    hello_card.get_by_role("button", name="原地召集").click()
-    hello_card.get_by_role("button", name="确认召集").click()
+    # ③ 一键开工 → 只创建就绪成员的任务
+    open_btn.click()
     deadline = time.time() + 8
     tasks: list[dict[str, Any]] = []
     while time.time() < deadline:
@@ -187,38 +185,40 @@ with sync_playwright() as p:
         if tasks:
             break
         time.sleep(0.4)
-    check("④确认召集后任务真实创建（数=1）", len(tasks) == 1)
+    check("③开工后只创建就绪成员的任务（数=1，未就绪绝不带上）", len(tasks) == 1)
     t = tasks[0] if tasks else {}
-    check("④agent_id 正确", t.get("agent_id") == "hello_agent", json.dumps(t, ensure_ascii=False)[:120])
-    check("④conversation_id 归本会话", t.get("conversation_id") == conv_id)
+    check("③agent_id 正确", t.get("agent_id") == "hello_agent", json.dumps(t, ensure_ascii=False)[:120])
+    check("③conversation_id 归本会话", t.get("conversation_id") == conv_id)
     detail = API.get(f"/api/tasks/{t['id']}").json() if t else {}
     check(
-        "④inputs 与预填一致",
+        "③inputs 与预填一致",
         (detail.get("inputs") or {}).get("name") == PREFILLED_NAME,
         json.dumps(detail.get("inputs"), ensure_ascii=False),
     )
 
-    # ⑤ 零跳页 + 督战 chip 原地亮起
-    check("⑤零跳页：URL 仍在对话轴 /?c=<conv>", f"c={conv_id}" in page.url, page.url)
+    # ④ 零跳页 + 督战 chip 原地亮起 + 开工按钮随就绪清零消失
+    check("④零跳页：URL 仍在对话轴 /?c=<conv>", f"c={conv_id}" in page.url, page.url)
     page.wait_for_selector(".agent-status", timeout=8000)
-    check("⑤督战 chip 原地亮起", page.locator(".agent-status").count() >= 1)
+    check("④督战 chip 原地亮起", page.locator(".agent-status").count() >= 1)
+    expect(page.locator(".open-plan-btn")).to_have_count(0, timeout=8000)
+    check("④就绪待开工=0 后开工按钮消失", page.locator(".open-plan-btn").count() == 0)
     page.screenshot(path=str(SHOTS / "3_summoned_live_chip.png"), full_page=True)
 
-    # ⑥ 既有锚点不破：创建页路径仍在（m9 契约原样）
+    # ⑤ 既有锚点不破：未就绪成员的创建页路径仍在（m9 契约原样）
     check(
-        "⑥「去创建此任务」按钮原样保留",
-        page.get_by_role("button", name="去创建此任务").count() >= 2,
+        "⑤未就绪成员「去创建此任务」按钮原样保留",
+        fta_card.get_by_role("button", name="去创建此任务").count() == 1,
     )
 
-    # ⑦ 归档会话重开 → 只读，不提供内联召集（创建必 409，入口就不该有）
+    # ⑥ 归档会话重开 → 只读，开工按钮整体消失（创建必 409，入口就不该有）
     resp = API.post(f"/api/conversations/{conv_id}/conclude")
-    check("⑦归档 API 生效", resp.status_code == 200, f"status={resp.status_code}")
+    check("⑥归档 API 生效", resp.status_code == 200, f"status={resp.status_code}")
     page.goto(BASE + f"/?c={conv_id}", wait_until="networkidle")
     page.wait_for_selector(".plan-card", timeout=8000)
     page.wait_for_timeout(800)  # schema 预取窗口——就绪也不该显示（status 门优先）
     check(
-        "⑦concluded 会话不提供「原地召集」（只读）",
-        page.get_by_role("button", name="原地召集").count() == 0,
+        "⑥concluded 会话不提供「照此方案开工」（只读）",
+        page.locator(".open-plan-btn").count() == 0,
     )
     page.screenshot(path=str(SHOTS / "4_concluded_readonly.png"), full_page=True)
 

@@ -182,26 +182,16 @@
                     <p v-if="a.stripped_fields && a.stripped_fields.length" class="agent-stripped">
                       已剔除不合法字段：{{ a.stripped_fields.join("、") }}（未匹配该 Agent 的输入契约）
                     </p>
-                    <!-- 原地召集（内联确认，零跳页）：多 Agent 方案 + 预填非空 + 无携带附件
-                         才提供；两次显式点击（原地召集→确认召集）均由人亲手完成，导引绝不
-                         代召集。创建走同一 POST /api/tasks（服务端校验 fail-closed），参数
-                         不全由 422 如实透出并引导走创建页补全。附件必须经创建页人工过目。 -->
-                    <div v-if="inlineArmed !== inlineKey(a, idx)" class="agent-actions">
-                      <button
-                        v-if="canInlineSummon(a, m.recommendation)"
-                        class="agent-cta agent-cta-inline"
-                        @click="armInlineSummon(a, idx)"
-                      >原地召集</button>
-                      <button class="agent-cta" @click="createOneTask(a, m.recommendation)">去创建此任务</button>
-                    </div>
-                    <div v-else class="inline-confirm">
-                      <span class="ic-note">以上方预填参数召集，任务归本会话——仍由你亲手确认。</span>
-                      <div class="ic-actions">
-                        <button class="agent-cta ic-go" :disabled="inlineBusy" @click="confirmInlineSummon(a, m.recommendation)">
-                          {{ inlineBusy ? "召集中…" : "确认召集" }}
-                        </button>
-                        <button class="ic-cancel" :disabled="inlineBusy" @click="inlineArmed = null">再想想</button>
-                      </div>
+                    <!-- 决策语法（disclosure grammar「变更与决策必露，过程可折」）：成员行
+                         零交互——就绪=纯展示徽（待开工），未就绪=创建页 escape（或直接回复
+                         导引补参数），已召集=督战 chip 即全部。唯一决策收敛到方案脚部的
+                         「照此方案开工」一键（人亲手点，导引绝不代召集）。 -->
+                    <div v-if="!agentTaskInfo(a)" class="agent-actions">
+                      <span v-if="agentBatchable(a, m.recommendation)" class="agent-readytag">✓ 参数已齐 · 待开工</span>
+                      <template v-else>
+                        <button class="agent-cta" @click="createOneTask(a, m.recommendation)">去创建此任务</button>
+                        <span class="agent-unready-hint">参数未齐——直接回复导引补全，或去创建页填好后亲手提交。</span>
+                      </template>
                     </div>
                   </div>
                 </div>
@@ -218,11 +208,17 @@
               </p>
 
               <div class="plan-foot">
+                <button
+                  v-if="openableCount(m.recommendation) > 0"
+                  class="open-plan-btn"
+                  :disabled="opening"
+                  @click="openPlan(m.recommendation)"
+                >{{ opening ? "召集中…" : `照此方案开工 · 召集 ${openableCount(m.recommendation)} 名就绪成员` }}</button>
                 <button class="workbench-btn" @click="openWorkbench">进入协作工作台 →</button>
                 <button type="button" class="plan-escape" @click="focusComposer">想调整方案？直接告诉导引 ↓</button>
                 <span class="plan-note">
-                  在工作台里看分工架构、逐个召集 Agent、追进度——签发权始终在你，
-                  每个任务都由你补全并<strong>亲手提交</strong>。
+                  开工由你亲手点下——导引绝不代召集；参数未齐的成员回复导引补全，或在创建页
+                  <strong>亲手提交</strong>。签发权始终在你：产物放行仍逐个由你批准。
                 </span>
               </div>
             </div>
@@ -590,8 +586,7 @@ function openWorkbench() {
 // 只在①多 Agent 方案（单 Agent 保留创建页 conclude_after 归档语义）②预填非空
 // ③会话无携带附件（附件必须经创建页人工过目）时提供；参数不全由 422 如实
 // 透出，引导走「去创建此任务」补全，绝不客户端猜校验。
-const inlineArmed = ref(null); // `${会话id}:${消息idx}:${agent_id}`（Codex R0-P1：跨会话绝不串态）
-const inlineBusy = ref(false);
+const opening = ref(false); // 「照此方案开工」进行中（单飞行防重）
 // 会话可写态（Codex R0-P2）：getConversation/createConversation 如实带出，concluded
 // 只读会话不提供内联召集（否则创建必 409）。未知（null）= fail-closed 不提供。
 const conversationStatus = ref(null);
@@ -600,14 +595,6 @@ const conversationStatus = ref(null);
 // 提供内联路径——schema 拉不到 / 未知一律 fail-closed 回创建页路径。
 const agentSchemaCache = reactive({}); // agent_id -> { loaded: true, schema: object|null }
 
-// 会话切换（含 resetToFresh 置空）即撤武装——确认态绝不跨会话存活。
-watch(conversationId, () => {
-  inlineArmed.value = null;
-});
-
-function inlineKey(agent, idx) {
-  return `${conversationId.value || "none"}:${idx}:${agent.agent_id}`;
-}
 
 function fieldMatchesSchema(propSchema, v) {
   // 轻量原语校验（string/number/integer/boolean/enum）：导引出案时已按当时 schema
@@ -666,58 +653,72 @@ function ensureAgentSchemasForMessages() {
   }
 }
 
-function canInlineSummon(agent, plan) {
+// 成员级就绪（fail-closed）：params 型 + 预填非空 + 过当前契约（required 齐 + 原语校验）。
+// Codex R0-R2 三轮收敛的全部门保留：file_upload/none/未知模式、空预填、契约漂移都不就绪。
+function agentReady(agent) {
   const cached = agentSchemaCache[agent.agent_id];
+  return (
+    !!cached && cached.loaded === true &&
+    cached.inputMode === "params" &&
+    Object.keys(agent.prefilled_inputs || {}).length > 0 &&
+    prefillSatisfiesSchema(cached.schema, agent.prefilled_inputs || {})
+  );
+}
+
+// 方案级可开工门：会话可写 + 多 Agent 方案 + 无携带/未发送附件（附件必经创建页过目）。
+function planOpenable(plan) {
   return (
     !!conversationId.value &&
     conversationStatus.value === "active" &&
     plan && Array.isArray(plan.agents) && plan.agents.length > 1 &&
-    !!cached && cached.loaded === true &&
-    cached.inputMode === "params" && // 文件型/none/未知一律走创建页（Codex R1-P1）
-    Object.keys(agent.prefilled_inputs || {}).length > 0 && // 空预填无可审阅，不提供（Codex R2-P2）
-    prefillSatisfiesSchema(cached.schema, agent.prefilled_inputs || {}) &&
     collectCarriedFiles().length === 0 &&
-    pendingFiles.value.length === 0 // 未发送附件同样必经创建页过目（Codex R2-P2）
+    pendingFiles.value.length === 0
   );
 }
 
-// 会话附件一有变动即撤武装：确认态是按「无携带附件」前提发出的，前提变了就得
-// 重新武装（Codex R1-P2：否则武装后再传附件可绕过「附件必经创建页过目」门）。
-watch(pendingFiles, () => {
-  inlineArmed.value = null;
-}, { deep: true });
-
-function armInlineSummon(agent, idx) {
-  inlineArmed.value = inlineKey(agent, idx);
+function agentBatchable(agent, plan) {
+  return planOpenable(plan) === true && agentReady(agent) === true;
 }
 
-async function confirmInlineSummon(agent, plan) {
-  if (inlineBusy.value === true) return;
-  // 确认时全门重验（fail-closed）：渲染后会话可能已归档 / 附件可能已加入 /
-  // 契约缓存可能已更新——任何一门不过就撤武装回按钮态（Codex R1-P2）。
-  if (canInlineSummon(agent, plan) !== true) {
-    ElMessage.error("条件已变化（会话归档 / 新增附件 / 契约变更），请重新确认或走「去创建此任务」。");
-    inlineArmed.value = null;
+function openableCount(plan) {
+  if (planOpenable(plan) !== true) return 0;
+  return plan.agents.filter((a) => agentReady(a) === true && !agentTaskInfo(a)).length;
+}
+
+// 「照此方案开工」：一键把全部就绪且未召集的成员按方案顺序召集（每个都是同一
+// POST /api/tasks，服务端校验 fail-closed）。这一键由人亲手点下=人召集；导引
+// 从未获得任何自动路径。逐个失败如实收集透出，绝不静默。
+async function openPlan(plan) {
+  if (opening.value === true) return;
+  if (planOpenable(plan) !== true) {
+    ElMessage.error("条件已变化（会话归档 / 新增附件），请刷新方案或走「去创建此任务」。");
     return;
   }
-  inlineBusy.value = true;
-  try {
-    await createTask({
-      agentId: agent.agent_id,
-      name: null,
-      inputs: agent.prefilled_inputs || {},
-      inputFileIds: [],
-      conversationId: conversationId.value,
-    });
-    ElMessage.success(`已召集「${agent.agent_name}」——任务已归入本会话`);
-    inlineArmed.value = null;
-    ensureConversationTasksFeed(); // 督战 chip 保鲜：召集即接上会话任务订阅
-  } catch (err) {
-    // fail-closed 如实透出（409 已归档 / 校验拒绝等），并引导走创建页路径，不静默
-    ElMessage.error(err.detail || err.message || "召集失败——请走「去创建此任务」补全参数后亲手提交");
-  } finally {
-    inlineBusy.value = false;
+  const targets = plan.agents.filter((a) => agentReady(a) === true && !agentTaskInfo(a));
+  if (targets.length === 0) return;
+  opening.value = true;
+  const failed = [];
+  for (const a of targets) {
+    try {
+      await createTask({
+        agentId: a.agent_id,
+        name: null,
+        inputs: a.prefilled_inputs || {},
+        inputFileIds: [],
+        conversationId: conversationId.value,
+      });
+    } catch (err) {
+      failed.push(`${a.agent_name}：${err.detail || err.message || "创建失败"}`);
+    }
   }
+  ensureConversationTasksFeed(); // 督战 chip 保鲜：召集即接上会话任务订阅
+  if (failed.length === 0) {
+    ElMessage.success(`已按方案召集 ${targets.length} 名成员——进度与签发都会来这里找你`);
+  } else {
+    // fail-closed 如实透出（409 已归档 / 校验拒绝等），不静默、不假报全成
+    ElMessage.error(`部分成员召集失败：${failed.join("；")}`);
+  }
+  opening.value = false;
 }
 
 function createOneTask(agent, plan) {
@@ -1448,42 +1449,45 @@ watch(
 }
 .agent-cta:hover::after { transform: translateX(2px); }
 
-/* 原地召集：与「去创建此任务」同级并排（次序在前=推荐路径），间距走 gap */
-.agent-actions { gap: 8px; }
-.agent-cta-inline::after { content: "⚡"; }
-.agent-cta:disabled {
-  opacity: 0.55;
-  cursor: default;
-  pointer-events: none;
+/* 决策收敛后的成员行（disclosure grammar：正常态不说话，异常态才有标签） */
+.agent-actions { gap: 10px; align-items: center; flex-wrap: wrap; }
+.agent-readytag {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
 }
-
-/* 内联确认行：召集是签发级动作，确认态给一句诚实说明 + 双按钮 */
-.inline-confirm {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.ic-note {
+.agent-unready-hint {
   font-size: 11.5px;
   line-height: 1.5;
   color: var(--ink-soft);
 }
-.ic-actions { display: flex; align-items: center; gap: 8px; }
-.ic-go {
-  background: var(--clay);
+
+/* 照此方案开工：整卡唯一主决策（clay 满底=工作态启动） */
+.open-plan-btn {
+  flex: 0 0 auto;
+  font-size: 13.5px;
+  font-weight: 700;
   color: #fff;
-  border-color: var(--clay);
-}
-.ic-go::after { content: "✓"; }
-.ic-cancel {
-  font-size: 12.5px;
-  color: var(--ink-soft);
-  background: transparent;
+  background: linear-gradient(160deg, var(--clay), var(--clay-deep));
   border: none;
+  border-radius: 10px;
+  padding: 10px 18px;
   cursor: pointer;
-  padding: 8px 6px;
+  box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.26);
+  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft), opacity var(--motion-fast) var(--ease-out-soft);
 }
-.ic-cancel:hover { color: var(--ink); }
+.open-plan-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(var(--clay-rgb), 0.32);
+}
+.open-plan-btn:disabled { opacity: 0.6; cursor: default; }
+/* 开工在场时，工作台入口降级为次级样式 */
+.plan-foot:has(.open-plan-btn) .workbench-btn {
+  background: transparent;
+  color: var(--clay);
+  border: 1px solid var(--border-clay-soft);
+  box-shadow: none;
+}
 
 .plan-alert {
   margin-top: 10px;
