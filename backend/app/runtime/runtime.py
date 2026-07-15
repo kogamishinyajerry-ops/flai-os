@@ -603,47 +603,74 @@ class AgentRuntime:
             self._record_failure_sample(conn, task, agent, error_message, data_classification)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
-        # 3) 成功：注册产物 + 样本沉淀（产物/样本继承任务级派生分级=文件∨知识∨工具
-        # 三轴，ADR-0021 D3 + Codex R0-P1 + ADR-0024/0025）。复用执行期已算并落库的
-        # data_classification（不重算，保产物/样本与落库任务级分级一致）。
+        # A2（Codex C1-P1-2 + R1-P1-a + R2-P1）★原子发布闸：物理产物先注册（**执行态**做，抛则可
+        # 回收），再由 repos.finalize_publish 在**同一 BEGIN IMMEDIATE** 内原子完成「attach 产物 +
+        # 记 success 样本 + 执行态→终态迁移」。R1 曾用 flip-first（先原子翻态、再事务外裸写产物/样本）：
+        # 翻态后产物注册若抛异常→任务卡死终态（completed 还可能放行下游=假绿），reaper 只认执行态够
+        # 不着。R2 逮的正是此，本次改为「物理 I/O 前置 + 元数据原子」：
+        #   1) _register_outputs 物理拷贝在**执行态**做——抛则任务留执行态、reaper/_mark_failed 回收；
+        #   2) finalize_publish 只做纯元数据 attach+sample+flip 于一个原子事务，绝不出现「终态但产物
+        #      缺失」。锁内 re-check 执行态：reaper 抢先→返 None→放弃发布，已注册产物行成 orphan（不在
+        #      任何终态任务 output_file_ids 内，全下游按 output_file_ids 过滤→永不引用=非脏）。
+        # 宪法「安全 gate 判定 is True/is False」+ fail-closed：仅 agent.yaml 显式声明 False 才免审
+        # →completed；缺失/畸形一律 waiting_review（错误方向=多审）。判定 is None 显式（焊死红线）。
+        # 诚实边界：不强杀僵尸线程（Python 做不到），只从机制上确保 finalize 返 None 后写不进任何终态。
+        requires_review = (agent.get("workflow") or {}).get("requires_human_review")
+        target_status = "completed" if requires_review is False else "waiting_review"
+
+        # 1) 物理产物注册在**执行态**做：磁盘 I/O 若抛异常，任务仍在执行态 → reaper/_mark_failed 可
+        # 回收（不卡死终态）。产物/样本继承任务级派生分级=文件∨知识∨工具三轴（ADR-0021 D3 + Codex
+        # R0-P1 + ADR-0024/0025）；复用执行期已落库的 data_classification（不重算，保口径一致）。
         output_file_ids = self._register_outputs(
             conn, task_id, output_dir, classification=data_classification
         )
-        repos.set_task_outputs(conn, task_id, output_file_ids)
 
-        # sim_run_ref 回填（P3.2 接缝，spec §4.3）：workflow 成功输出
-        # outputs[0].sim_run_ref（"module@run_id"）→ 回填 task.metadata.sim_run_ref
-        # （与 POST /tasks/{id}/sim-run-ref 人工关联同一 setter，metadata 标注非
-        # 状态迁移，不破「人是唯一签发者」）。标注非承重：畸形/回填失败只记
-        # warning 事件不摧毁已成功的任务——错误方向必须是「少标注」。
-        self._backfill_sim_run_ref(conn, task_id, agent_id, result)
-
-        # M10/ADR-0018 origin 白名单：只有用户任务落样。eval 跑批的输入本来就是
-        # 评测集，回灌样本库=循环喂养（评测数据冒充生产数据资产）；未知 origin
-        # 一律不落——错误方向必须是「少收一条」而非「污染资产」。
+        # 2) success 样本规格（M10/ADR-0018 origin 白名单：只有用户任务落样。eval 跑批输入本是评测集，
+        # 回灌样本库=循环喂养冒充生产资产；未知 origin 一律不落——错误方向「少收一条」而非污染资产）。
+        # None=不记样本。sample_spec 在 finalize_publish 的原子事务内 record（与 attach/flip 同落同滚）。
+        sample_spec: dict[str, Any] | None = None
         if (
             agent.get("data_asset", {}).get("collect_samples") is True
             and task.get("origin") == "user"
         ):
-            repos.record_sample(
-                conn,
-                task_id=task_id,
-                agent_id=agent_id,
-                agent_version=task["agent_version"],
-                input_json=task["inputs"],
-                output_json=result,
-                validation_status="success",
-                classification=data_classification,
-            )
+            sample_spec = {
+                "task_id": task_id,
+                "agent_id": agent_id,
+                "agent_version": task["agent_version"],
+                "input_json": task["inputs"],
+                "output_json": result,
+                "validation_status": "success",
+                "classification": data_classification,
+            }
 
-        # 宪法「安全 gate 判定一律 is True/is False」+ fail-closed（审计 P2）：
-        # 仅当 agent.yaml **显式声明 False** 才跳过人工审核；缺失/畸形（schema 之外
-        # 的任何原因）一律走 waiting_review——错误方向必须是「多审」而非「漏审」。
-        # 此前的 truthiness 判定在字段缺失时默认跳审（fail-open），安全依赖了
-        # agent.schema.json 的 required 耦合而非 gate 自证。
-        requires_review = (agent.get("workflow") or {}).get("requires_human_review")
-        if requires_review is not False:
-            repos.set_task_status(conn, task_id, "waiting_review")
+        # 3) 原子发布：attach 产物清单 + 记样本 + 翻终态合一 BEGIN IMMEDIATE。返 None=reaper 抢先置
+        # failed / 已并发推进到非执行态 → 放弃发布（已注册产物成 orphan，不 attach 到任何终态任务=非
+        # 脏，全下游按 output_file_ids 过滤永不引用），任务保持既有终态防污染。
+        finalized = repos.finalize_publish(
+            conn,
+            task_id,
+            target_status,
+            output_file_ids=output_file_ids,
+            sample_spec=sample_spec,
+        )
+        if finalized is None:
+            fresh_task = repos.get_task(conn, task_id)
+            logger.warning(
+                "任务 %s 未能原子发布（reaper 已置 failed 或已并发推进到非执行态）：放弃发布（已注册"
+                "产物成 orphan，不 attach 到任何终态任务=非脏，全下游按 output_file_ids 过滤永不引用），"
+                "任务保持既有终态防污染", task_id
+            )
+            return {"status": "failed", "task": fresh_task}
+
+        # 发布成功=任务现为 target_status（产物已 attach、样本已记，全原子）。以下为非承重标注/事件——
+        # 失败只记 warning 不摧毁已成功任务（错误方向=少标注）。sim_run_ref 回填（P3.2 接缝，spec
+        # §4.3）：workflow 成功输出 outputs[0].sim_run_ref（"module@run_id"）→ 回填
+        # task.metadata.sim_run_ref（与 POST /tasks/{id}/sim-run-ref 人工关联同一 setter，metadata
+        # 标注非状态迁移，不破「人是唯一签发者」）；畸形/回填失败只记 warning 事件。
+        self._backfill_sim_run_ref(conn, task_id, agent_id, result)
+
+        # 4) 终态展示性事件 + 返回（状态已在 finalize_publish 原子迁移，此处不再迁移，仅补事件）。
+        if target_status == "waiting_review":
             try:
                 repos.append_event(
                     conn, task_id=task_id, agent_id=agent_id, event_type="review_requested",
@@ -657,9 +684,6 @@ class AgentRuntime:
                 )
             return {"status": "waiting_review", "task": repos.get_task(conn, task_id)}
 
-        # docs/05 §2 强制规则：running 不得跳过 analyzing 直接进 completed。
-        repos.set_task_status(conn, task_id, "analyzing")
-        repos.set_task_status(conn, task_id, "completed")
         repos.append_event(
             conn, task_id=task_id, agent_id=agent_id, event_type="task_completed",
             level="info", message="任务完成",

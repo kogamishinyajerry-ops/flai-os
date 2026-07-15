@@ -187,18 +187,56 @@ def create_app(
 
     @app.get("/api/readyz")
     def readyz() -> JSONResponse:
-        """P0-M2†（导入准入门）：就绪探针——worker 心跳新鲜才 200，过期/缺失/畸形 503
-        （不再假 200）。外部 uptime 监控轮此端点即知 worker 死活；/api/health 仍是 API
-        存活探针（恒 200）。单 worker 串行下一条死 worker=全部门队列静默停摆，此端点把
-        MTTD 从数小时压到一个轮询周期。"""
+        """P0-M2†（导入准入门）+ Gate2-T1-M2（worker 可观测）：就绪探针。
+
+        ★就绪裁决（HTTP 200/503）= **仅 worker 心跳新鲜（进程存活，M2† fail-closed）**：
+        - worker 心跳过期/缺失/畸形 → 不就绪 503（`wf["fresh"] is True` 显式判定，宁误报死不假活）。
+
+        队列龄期（最老 queued/running 龄期、malformed）是**可观测 degraded 软信号**（body
+        `degraded`=true，HTTP 仍 **200**），**绝不参与 503 就绪 gate**。★Codex R1-P1-c 逮的根因：
+        单串行 worker 健康 drain 合法 backlog 时，排在后面的任务龄期会自然增长（合法长任务在前面
+        跑），且一条**合法长任务**（8 问 knowledge_qa 最坏 >1900s）与一条**挂死任务**在龄期上无法
+        区分——凭绝对龄期 503 会把健康 worker 误判 down、触发外部重启中断合法长任务。故解耦：503 只
+        留给心跳死（进程真 down）；龄期只作 operator 观测软信号。挂死任务的真正兜底 = 宽墙钟 reaper
+        （覆盖最大合法生命周期后回收，队列自愈），非 readyz 503。deploy 导入门看 HTTP 200（进程活即
+        可导入）；degraded 供 operator dashboard/告警。计数（queued/running/waiting_review）纯信息位。
+        判定全程 `is True`/`is False` 显式绝不 truthiness（焊死红线）。/api/health 仍是 API 存活探针
+        （恒 200）；外部 uptime 监控轮本端点。"""
         conn = conn_factory()
         try:
             wf = _worker_freshness(conn)
+            queue = repos.get_queue_depth(conn)
         finally:
             conn.close()
+        oldest_queued = queue["oldest_queued_age_s"]
+        oldest_running = queue["oldest_running_age_s"]
+        # degraded 软信号（观测，**不参与 503**）= queued 龄期超阈 ∨ 运行态龄期超阈 ∨ 任一龄期
+        # malformed。这是「worker 活着但队列有压力/疑似挂死」的运维提示，operator 据此排查——但绝不
+        # 据它判 worker down（单串行 worker 上合法长任务与挂死无法凭龄期区分，Codex R1-P1-c；挂死
+        # 兜底是宽墙钟 reaper 非 readyz）。is True/> 显式判定绝不 truthiness（焊死红线）。
+        degraded = (
+            queue["oldest_queued_malformed"] is True
+            or queue["oldest_running_malformed"] is True
+            or (oldest_queued is not None and oldest_queued > config.QUEUE_STALL_THRESHOLD_S)
+            or (oldest_running is not None and oldest_running > config.RUNNING_TASK_STALL_THRESHOLD_S)
+        )
+        # ★就绪（HTTP 200/503）仅由心跳进程存活裁决（M2† fail-closed）。is True 显式判定。
+        ready = wf["fresh"] is True
+        # status 三值：心跳死 → not_ready(503)；心跳活但队列有压力 → degraded(200)；否则 ready(200)。
+        if ready is False:
+            status_label = "not_ready"
+        elif degraded is True:
+            status_label = "degraded"
+        else:
+            status_label = "ready"
         return JSONResponse(
-            {"status": "ready" if wf["fresh"] else "degraded", "worker": wf},
-            status_code=200 if wf["fresh"] else 503,
+            {
+                "status": status_label,
+                "degraded": degraded,
+                "worker": wf,
+                "queue": queue,
+            },
+            status_code=200 if ready is True else 503,
         )
 
     app.include_router(auth_api.router)
