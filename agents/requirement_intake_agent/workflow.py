@@ -350,7 +350,12 @@ def _backlog_dir() -> Path:
 def _append_backlog(rid: str, inputs: dict[str, Any], det: dict[str, Any],
                     hits: list[dict[str, Any]]) -> str:
     """按 rid 幂等登记:同 rid 已有 assessed 行则跳过(返回 already_registered)。
-    单 worker 轮询模型下 append 无并发写;坏行跳过不炸(读取容错,写入严格)。"""
+    单 worker 轮询模型下 append 无并发写;坏行跳过不炸(读取容错,写入严格)。
+
+    时序注记(Codex R0-P1,ADR-0028「队列一致性」):本函数在 run() 成功路径
+    末尾执行——workflow 内任何失败都不会走到这里;残余窗口=run() 返回后
+    Runtime 侧失败(任务 failed 而登记已落),清理路径=backlog_cli reconcile
+    只读对账任务库,孤儿行机械补 rejected。"""
     directory = _backlog_dir()
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / _BACKLOG_FILE

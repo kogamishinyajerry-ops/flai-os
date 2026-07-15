@@ -14,6 +14,17 @@
   python scripts/backlog_cli.py list [--status assessed]
   python scripts/backlog_cli.py show <rid>
   python scripts/backlog_cli.py set-status <rid> <to> --by 姓名 [--note 备注]
+  python scripts/backlog_cli.py reconcile --by 姓名 [--db data/flai_os.db]
+
+一致性纪律(Codex R0 审查落地):
+- 回放校验源态:status_change 行的 from 必须等于该 rid 当前 folded 状态,
+  不符即坏行(并发双写产生的"个体合法、序列非法"转移在回放层被拒)。
+- 坏行 fail-closed:队列文件存在坏行时 set-status 拒绝写入(先修文件),
+  只读命令(list/show)照常但醒目提示。
+- reconcile 对账:workflow 在 run() 返回前登记,若之后 Runtime 侧失败
+  (产物注册炸/进程死),任务 failed 而 assessed 行成孤儿——reconcile 只读
+  任务库比对,把「任务已 failed 且队列仍活跃」的行补 status_change→rejected
+  (残余窗口的机械清理路径,ADR-0028)。
 """
 
 from __future__ import annotations
@@ -21,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,13 +83,22 @@ def _fold() -> tuple[dict[str, dict], int]:
             if rid not in items:  # 幂等:重复 assessed 只认第一条
                 items[rid] = dict(row)
         elif kind == "status_change":
-            if rid in items and row.get("to") in _STATUSES:
+            current = items.get(rid, {}).get("status")
+            # 回放三重校验(Codex R0-P2):档案在 + 目标态合法 + **源态匹配当前
+            # folded 状态**——并发双写各自"个体合法"的事件,序列上第二条的 from
+            # 已过期,回放层拒绝,状态机不变量在读路径也成立。
+            if (
+                rid in items
+                and row.get("to") in _STATUSES
+                and row.get("from") == current
+                and row.get("to") in _ALLOWED_TRANSITIONS.get(str(current), frozenset())
+            ):
                 items[rid]["status"] = row["to"]
                 items[rid]["last_change"] = {
                     "at": row.get("at"), "by": row.get("by"), "note": row.get("note"),
                 }
             else:
-                bad += 1  # 无档案的流转/非法目标态,按坏行计
+                bad += 1  # 无档案/非法目标/源态过期(并发写),一律坏行
         else:
             bad += 1
     return items, bad
@@ -127,7 +148,17 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 
 def cmd_set_status(args: argparse.Namespace) -> int:
-    items, _bad = _fold()
+    by = args.by.strip()
+    if by == "":
+        # argparse required 只保证参数在场,拦不住 --by ""(Codex R0-P2:匿名穿透)。
+        print("操作人不能为空:--by 必须是非空姓名(人是唯一签发者,匿名不可审计)", file=sys.stderr)
+        return 1
+    items, bad = _fold()
+    if bad > 0:
+        # 坏行=历史不完整,基于残缺历史写新转移只会加剧账本损伤(Codex R0-P2):
+        # fail-closed,先人工核查文件再流转。
+        print(f"队列文件存在 {bad} 条坏行,拒绝写入新流转——先人工核查 backlog.jsonl", file=sys.stderr)
+        return 1
     item = items.get(args.rid)
     if item is None:
         print(f"rid 不存在:{args.rid}(先经 requirement_intake_agent 评估建档)", file=sys.stderr)
@@ -146,14 +177,66 @@ def cmd_set_status(args: argparse.Namespace) -> int:
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "from": current,
         "to": args.to,
-        "by": args.by,
+        "by": by,
         "note": args.note or "",
     }
     path = _backlog_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    print(f"{args.rid}: {current} → {args.to}(by {args.by})")
+    print(f"{args.rid}: {current} → {args.to}(by {by})")
+    return 0
+
+
+def cmd_reconcile(args: argparse.Namespace) -> int:
+    """对账清理(Codex R0-P1 残余窗口):workflow 在 run() 返回前登记待办,
+    若之后 Runtime 侧失败(产物注册炸/进程死),任务 failed 而 assessed 行成
+    孤儿。本命令**只读**任务库比对:队列中仍活跃(非终态)的 rid,任务库里
+    已是 failed/cancelled → 补 status_change→rejected(note 注明对账来源)。
+    任务库连不上/rid 不在库中一律跳过并提示,绝不猜。"""
+    by = args.by.strip()
+    if by == "":
+        print("操作人不能为空:--by 必须是非空姓名", file=sys.stderr)
+        return 1
+    items, bad = _fold()
+    if bad > 0:
+        print(f"队列文件存在 {bad} 条坏行,拒绝对账写入——先人工核查 backlog.jsonl", file=sys.stderr)
+        return 1
+    db_path = Path(args.db)
+    if db_path.is_file() is False:
+        print(f"任务库不存在:{db_path}(用 --db 指定 flai_os.db 路径)", file=sys.stderr)
+        return 1
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)  # 只读打开,对账绝不写库
+    try:
+        cleaned = 0
+        skipped: list[str] = []
+        path = _backlog_path()
+        for rid, item in sorted(items.items()):
+            if item.get("status") in ("delivered", "rejected"):
+                continue  # 终态不动
+            row = conn.execute("SELECT status FROM tasks WHERE id = ?", (rid,)).fetchone()
+            if row is None:
+                skipped.append(rid)  # 库里没有(异地评估/库不同源):不猜,提示人工
+                continue
+            if row[0] in ("failed", "cancelled"):
+                record = {
+                    "kind": "status_change",
+                    "rid": rid,
+                    "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "from": item.get("status"),
+                    "to": "rejected",
+                    "by": by,
+                    "note": f"reconcile:对应任务终态={row[0]},孤儿档案清理(ADR-0028 残余窗口)",
+                }
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                cleaned += 1
+                print(f"{rid}: {item.get('status')} → rejected(任务 {row[0]},对账清理)")
+    finally:
+        conn.close()
+    if skipped:
+        print(f"⚠ {len(skipped)} 条 rid 不在任务库中,未动(人工核查):{'、'.join(skipped[:5])}", file=sys.stderr)
+    print(f"对账完成:清理 {cleaned} 条孤儿档案")
     return 0
 
 
@@ -175,6 +258,11 @@ def main(argv: list[str] | None = None) -> int:
     p_set.add_argument("--by", required=True, help="操作人姓名(人是唯一签发者,匿名不可审计)")
     p_set.add_argument("--note", default="")
     p_set.set_defaults(func=cmd_set_status)
+
+    p_rec = sub.add_parser("reconcile", help="对账清理:任务已 failed 的孤儿档案 → rejected(只读任务库)")
+    p_rec.add_argument("--by", required=True, help="执行对账的操作人姓名")
+    p_rec.add_argument("--db", default=str(_REPO_ROOT / "data" / "flai_os.db"), help="任务库路径(只读打开)")
+    p_rec.set_defaults(func=cmd_reconcile)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -44,6 +44,21 @@
 - **LLM 输出结构化 JSON 进队列**:把 GLM 的 JSON 可靠性押进关键路径;现设计
   结构化字段全部来自确定性代码,LLM 只产人读叙述,解析失败面为零。
 
+## 队列一致性(Codex R0 审查落地,2026-07-15)
+
+- **登记时序残余窗口(R0-P1)**:workflow 在 run() 返回前登记待办;若之后
+  Runtime 侧失败(产物注册异常/进程死),任务 failed 而 assessed 行成孤儿。
+  窗口不可在 Agent 层根除(登记必须发生在 workflow 内,两阶段提交对 JSONL
+  过重)。处置=**机械对账**:`backlog_cli.py reconcile --by 姓名`(只读打开
+  任务库,队列活跃行对应任务已 failed/cancelled → 补 status_change→rejected
+  并注明对账来源)。运维节奏:每周队列例检时顺手跑一次。
+- **回放源态校验(R0-P2)**:status_change 回放要求 from == 当前 folded 状态,
+  并发双写产生的"个体合法、序列非法"转移在读路径被拒(计坏行)。
+- **坏行 fail-closed(R0-P2)**:队列存在坏行时 set-status/reconcile 拒绝写入,
+  先人工核查;list/show 只读照常但醒目提示。
+- **具名不可空(R0-P2)**:`--by` strip 后为空即拒(argparse required 拦不住
+  空串,匿名流转不可审计)。
+
 ## 影响与风险
 
 - 评估质量上限=清单新鲜度:资产落地/状态跃迁不更新清单会漏判——运维纪律
