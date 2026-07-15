@@ -22,9 +22,46 @@ from ..core.errors import (
     ConversationConflictError,
     ConversationNotFoundError,
     FileNotFoundInStoreError,
+    InteractiveToolAdmissionError,
+    KnowledgeIngestError,
+    KnowledgeScopeDeniedError,
+    KnowledgeScopeNotRegisteredError,
+    KnowledgeSourceUnavailableError,
     ModelConfigError,
     ModelUpstreamError,
     NotInteractiveAgentError,
+    RegistryError,
+    ToolExecutionError,
+    ToolInputInvalidError,
+    ToolNotAllowedError,
+    ToolNotRegisteredError,
+    ToolOutputInvalidError,
+)
+
+# 交互工具/知识资源失败的 HTTP 映射（Codex R2-P2）：会话 workflow 里的工具/知识调用会冒泡这些
+# FlaiError 子类（wrapper 显式不吞、fail-closed 冒泡），而 post_message 此前只 catch Model* + ValueError
+# → 这些**预期**失败逃逸成裸 HTTP 500（"服务器 bug"语义），误导用户/掩盖真实配置问题。按语义分两桶：
+#
+# ①永久性（config/部署缺陷，重试无效须运维修复）→ 503，与 ModelConfigError 同语义（绝不谎报「可重试」
+# 误导用户反复点发送，PM 战略审 top）：工具未注册/未白名单/包 entrypoint 加载失败/注册表包完整性、
+# 知识 scope 未注册/被拒/源未接入/语料摄取失败。
+_CONV_RESOURCE_PERMANENT: tuple[type[BaseException], ...] = (
+    InteractiveToolAdmissionError,  # 交互面工具安全门拒（Codex R3-P2：typed 后不再裸 500）
+    ToolNotRegisteredError,
+    ToolNotAllowedError,
+    ToolExecutionError,        # errors.py：工具包 entrypoint 无法解析/加载=包配置错（永久）
+    RegistryError,             # 含 Duplicate*/Invalid*Package/InvalidScopePackage
+    KnowledgeScopeNotRegisteredError,
+    KnowledgeScopeDeniedError,
+    KnowledgeSourceUnavailableError,
+    KnowledgeIngestError,
+)
+# ②临时/契约（可幂等重试、本轮零落库）→ 502，与 ModelUpstreamError/ValueError 同桶：入/出参 schema
+# 不过（模型生成 payload 会变）、工具执行超时（builtin TimeoutError，非 FlaiError）。
+_CONV_RESOURCE_TRANSIENT: tuple[type[BaseException], ...] = (
+    ToolInputInvalidError,
+    ToolOutputInvalidError,
+    TimeoutError,
 )
 from ..storage import repos
 
@@ -115,6 +152,14 @@ def post_message(
     except (ConversationClosedError, ConversationConflictError) as exc:
         # 已结束 / 被并发轮抢先：如实 409。冲突轮零落库，可基于最新历史重试。
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except _CONV_RESOURCE_PERMANENT as exc:
+        # 交互工具/知识资源**永久性**失败（未注册/未白名单/源未接入/包或语料配置错，Codex R2-P2）：
+        # 与 ModelConfigError 同语义——重试无效，须运维修复配置，绝不谎报「可重试」。此前逃逸成裸 500。
+        raise HTTPException(
+            status_code=503,
+            detail=f"会话所需的工具/知识资源不可用：{type(exc).__name__}：{exc}。"
+            "此为部署/配置问题（非临时故障），请联系管理员核对工具注册/知识源接入后再试。",
+        ) from exc
     except ModelConfigError as exc:
         # 模型网关未配置（缺 FLAI_LLM_*）=永久性错误：重试无效，需运维配置后恢复。
         # 与临时上游故障分流，绝不谎报「可重试」误导用户反复点发送（PM 战略审 top）。
@@ -122,6 +167,13 @@ def post_message(
             status_code=503,
             detail=f"模型网关未配置，导引不可用：{exc}。此为部署配置问题（非临时故障），"
             "请联系管理员设置 FLAI_LLM_* 环境变量后再试。",
+        ) from exc
+    except _CONV_RESOURCE_TRANSIENT as exc:
+        # 交互工具/知识资源**临时/契约**失败（入出参 schema 不过/工具超时，Codex R2-P2）：本轮零落库，
+        # 可幂等重试。与 ModelUpstreamError 同桶，但先于其显式捕获（TimeoutError 非 FlaiError 需单列）。
+        raise HTTPException(
+            status_code=502,
+            detail=f"会话工具/知识调用本轮失败（可重试）：{type(exc).__name__}：{exc}",
         ) from exc
     except (ModelUpstreamError, ValueError) as exc:
         # 临时上游失败或 workflow 诚实抛错：本轮零落库（事务性单轮），可幂等重试。

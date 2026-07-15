@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "交互文档问答 Agent 单轮答复",
+  "description": "interactive 型 workflow.run() 每轮返回：assistant_message（带出处引用的归纳答复，或零命中标注）+ recommendation（本 Agent 恒 null——只会话答问、绝不产任务草案，人是唯一签发者）。ConversationService 落回 assistant_message 与 recommendation 快照；本 schema 记录形状契约（interactive 路径运行时不据此校验，与 job 路径 output 校验语义不同）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["assistant_message", "recommendation"],
+  "properties": {
+    "assistant_message": {
+      "type": "string",
+      "minLength": 1,
+      "description": "本轮答复正文：强制水印 + scope 声明 + 模型归纳答复（原样）+ 出处表；零命中时为确定性「语料零命中」标注（不调模型）。"
+    },
+    "recommendation": {
+      "type": "null",
+      "description": "恒 null：本 Agent 只会话答问，绝不产任务草案/召集计划（人是唯一签发者，LLM 不进判决链）。"
+    }
+  }
+}

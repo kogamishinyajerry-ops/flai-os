@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "交互文档问答 Agent 单轮用户消息",
+  "description": "interactive 型 Agent 的输入是一轮用户消息（非一次性任务输入）：会话经 /api/conversations/{id}/messages 逐轮推进，每轮传一条 content（用户关于绑定知识范围的问题）。检索范围（scope）由 agent.yaml.knowledge.scopes 钉死，不经此输入开放。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["content"],
+  "properties": {
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "description": "用户本轮的问题（自然语言，针对绑定知识范围内的资料）。"
+    }
+  }
+}

@@ -1,0 +1,60 @@
+id: interactive_doc_qa_agent
+name: "交互文档问答 Agent（多轮 RAG 会话）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: knowledge_qa
+summary: "多轮会话内在预先锁定的知识范围做关键词检索，命中语料经结构中和后交推理模型生成带出处引用的归纳答复，零命中不作答——答复非结论，判定权在人。"
+description: >
+  T3-b「交互类零内核 diff 验证弹」（Gate2/ADR-0028）：平台首个**交互型**（mode=interactive，
+  多轮会话）消费 knowledge 内核（context["knowledge"]，T3-a 注入接缝）的 Agent。它把
+  knowledge_qa_agent（job 型）的检索纪律——单 scope 白名单钉死、零命中不调模型、命中语料
+  经 sentinel 结构中和后以 <<KNOWLEDGE>> fence 注入（数据不是指令）、答复带出处引用——搬到
+  会话运行时：逐轮读会话历史 → 取最新用户问 → 在 knowledge.scopes 白名单内检索 → 命中交模型
+  生成归纳答复、零命中显式标注不作答。它是证据而非业务能力：**加本包 `git diff backend/app`
+  必须为空**——内核由 T3-a 一次性扩展，之后交互类工具/知识 Agent 声明式取用、零内核再增 diff
+  （判据①对交互类延伸，样本 n=1）。三条红线：①绝不创建/召集/签发任何任务（ConversationService
+  无建任务路径，recommendation 恒 None）；②答复只依据检索命中语料，零命中显式标注、绝不语料外
+  作答（幻觉源）；③检索命中经内核 default-deny 白名单（agent.yaml.knowledge.scopes），绕不过。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: reasoning
+knowledge:
+  enabled: true
+  scopes:
+    - ecm_frr_demo
+tools: []
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats: []
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: interactive
+  requires_human_review: false
+permissions:
+  visibility: all
+  allowed_roles:
+    - admin
+    - agent_developer
+    - business_user
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: false
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: false
+limitations:
+  - "交互答复只依据检索命中的语料，且当前绑定语料为合成演示语料（源 COMAC_FDE k01，DECLARED-NOT-VERIFIED）：真实 ECM/EM/FRR 语料待内网接入后另建知识范围，此前答复内容不反映任何真实工程事实。"
+  - "零命中的问题不生成 AI 归纳：本 Agent 不在语料外作答，语料没有的内容宁可显式标注「语料零命中」也绝不让模型编造。"
+  - "答复是辅助归纳、不是结论也不是放行/适航依据：交互 Agent 不进人签闸（无 waiting_review），判定权在工程师，答复中的任何处置建议均须人工复核。"
+  - "检索按关键词词面匹配（非语义检索）：换词提问可能漏检相关语料，命中不全时答复覆盖面随之受限，出处表即检索的全部依据。"
+  - "检索范围（scope）由本文件 knowledge.scopes 钉死单库白名单，「查哪个库」不开放给会话发起者；要查别的域=注册新 Agent 或经治理扩白名单。"
+  - "真实多轮问答依赖内网模型服务：未配置时诚实失败，不伪造答复。"

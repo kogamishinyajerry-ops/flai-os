@@ -12,6 +12,14 @@ description: >
 entrypoint: tools_impl.excel_case_parser.adapter:run
 # 工具污点声明（ADR-0024）：本工具不碰外部不可考数据，产物 internal。
 output_classification: internal
+# 交互面安全声明（ADR-0028 §6，default-deny）：★Codex R1-P1 撤回 = false。本工具输入是**裸
+# file_path 绝对路径**（下方 input_schema，caller 可控），adapter 直接 open(payload["file_path"])
+# **不做 File Store 容器校验/大小/哈希核对**（对照安全范式 backend/app/storage/file_integrity.py
+# 的 open_verified_file + runtime._open_input_files 按 file_id→受控根解析）。经 workflow 调用时
+# path 之所以安全，仅因 context.files 已过 _open_input_files 完整性闸；但 interactive_safe 暴露的是
+# adapter 的**直接调用面**（绕过 workflow），交互 Agent（LLM/用户可控）可传任意服务端可读 .xlsx，
+# 解析行原样回会话=泄漏面。故撤回；将来改为收 file_id（受控句柄）后方可重标 true。
+interactive_safe: false
 input_schema:
   type: object
   required:

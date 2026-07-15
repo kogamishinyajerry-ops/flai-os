@@ -113,7 +113,9 @@ def create_app(
                 scope_registry=asm.scope_registry,  # ADR-0021 知识轴派生分级用
             )
             conversation_service = ConversationService(
-                asm.agent_registry, asm.model_gateway, conn_factory, uploads_dir=uploads_dir,
+                asm.agent_registry, asm.model_gateway, conn_factory,
+                tool_registry=asm.tool_registry, uploads_dir=uploads_dir,
+                knowledge_service=asm.knowledge_service,  # ADR-0028 交互面工具/知识注入（T3，fail-closed 门在 post_message）
             )
 
             app.state.agent_registry = asm.agent_registry

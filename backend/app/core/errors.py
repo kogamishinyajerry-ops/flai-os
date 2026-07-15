@@ -36,6 +36,12 @@ class ToolNotAllowedError(FlaiError):
     不在白名单即不可调用——新注册工具绝不自动扩大存量 Agent 的权限面）。"""
 
 
+class InteractiveToolAdmissionError(FlaiError):
+    """交互面工具安全门（ADR-0028 §6）拒绝：交互 Agent 声明的工具未注册/未标 interactive_safe/
+    输出分级非 internal/带 shell·写盘·隔离等安全旗标——**部署配置级**永久失败（Codex R3-P2：
+    typed 异常令 API 层映射 503 配置错，而非裸 RuntimeError 逃逸成 500）。"""
+
+
 class ToolExecutionError(FlaiError):
     """工具包 entrypoint 无法解析/加载（模块不存在、函数名写错等包配置错误）。"""
 
