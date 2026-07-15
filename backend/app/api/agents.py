@@ -36,6 +36,10 @@ def _project(agent: dict[str, Any]) -> dict[str, Any]:
         "summary": agent.get("summary"),
         "limitations": agent.get("limitations", []),
         "mode": (agent.get("workflow", {}) or {}).get("mode"),
+        # 输入模式（params / file_upload / none）：前端「原地召集」就绪门需要它区分
+        # 纯参数型与文件型——file_upload 的 params schema 可为空 required，若只看
+        # required 会空洞通过（异源 Codex R1-P1）。additive 字段，创建页不依赖。
+        "input_mode": (agent.get("input", {}) or {}).get("type"),
     }
 
 

@@ -149,9 +149,11 @@ with sync_playwright() as p:
     conv_id = conv_list[0]["id"] if conv_list else None
     assert conv_id, "诚实失败：拿不到会话 id"
 
-    # ① 预填齐→有「原地召集」；预填空的对照成员没有
+    # ① 预填齐→有「原地召集」；部分预填的对照成员没有。
+    #    先 expect 等待（schema 预取是异步的，count() 不等待——Codex R1-P2）。
     hello_card = page.locator(".agent-card").nth(0)
     fta_card = page.locator(".agent-card").nth(1)
+    expect(hello_card.get_by_role("button", name="原地召集")).to_be_visible(timeout=8000)
     check(
         "①预填齐的成员显示「原地召集」",
         hello_card.get_by_role("button", name="原地召集").count() == 1,

@@ -197,7 +197,7 @@
                     <div v-else class="inline-confirm">
                       <span class="ic-note">以上方预填参数召集，任务归本会话——仍由你亲手确认。</span>
                       <div class="ic-actions">
-                        <button class="agent-cta ic-go" :disabled="inlineBusy" @click="confirmInlineSummon(a)">
+                        <button class="agent-cta ic-go" :disabled="inlineBusy" @click="confirmInlineSummon(a, m.recommendation)">
                           {{ inlineBusy ? "召集中…" : "确认召集" }}
                         </button>
                         <button class="ic-cancel" :disabled="inlineBusy" @click="inlineArmed = null">再想想</button>
@@ -609,16 +609,35 @@ function inlineKey(agent, idx) {
   return `${conversationId.value || "none"}:${idx}:${agent.agent_id}`;
 }
 
+function fieldMatchesSchema(propSchema, v) {
+  // 轻量原语校验（string/number/integer/boolean/enum）：导引出案时已按当时 schema
+  // 逐字段校验，这里补的是「会话恢复后 Agent 契约已升级」的漂移窗（Codex R1-P2）。
+  // 只做原语级判定，object/array 等复杂类型放行交服务端/worker 权威校验。
+  if (!propSchema || typeof propSchema !== "object") return false; // 键已不在当前契约里
+  if (Array.isArray(propSchema.enum)) return propSchema.enum.includes(v);
+  const t = propSchema.type;
+  if (t === "string") return typeof v === "string";
+  if (t === "number") return typeof v === "number" && Number.isFinite(v);
+  if (t === "integer") return typeof v === "number" && Number.isInteger(v);
+  if (t === "boolean") return typeof v === "boolean";
+  return true;
+}
+
 function prefillSatisfiesSchema(schema, prefilled) {
   // 就绪判据（纯函数，fail-closed）：schema 存在、required 明确、每个必填键在预填里
-  // 且非空白。这只是「提供内联入口」的门槛，不替代服务端/worker 的权威校验。
+  // 非空白、且每个预填键都通过当前契约的原语校验。这只是「提供内联入口」的门槛，
+  // 不替代服务端/worker 的权威校验。
   if (!schema || typeof schema !== "object") return false;
   const required = Array.isArray(schema.required) ? schema.required : null;
   if (required === null) return false;
-  return required.every((k) => {
-    const v = (prefilled || {})[k];
+  const props = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
+  const filled = prefilled || {};
+  const requiredOk = required.every((k) => {
+    const v = filled[k];
     return v !== undefined && v !== null && String(v).trim() !== "";
   });
+  const typesOk = Object.keys(filled).every((k) => fieldMatchesSchema(props[k], filled[k]));
+  return requiredOk === true && typesOk === true;
 }
 
 function ensureAgentSchemasForMessages() {
@@ -632,10 +651,16 @@ function ensureAgentSchemasForMessages() {
       agentSchemaCache[id] = { loaded: false, schema: null };
       getAgent(id)
         .then((detail) => {
-          agentSchemaCache[id] = { loaded: true, schema: (detail && detail.input_schema) || null };
+          agentSchemaCache[id] = {
+            loaded: true,
+            schema: (detail && detail.input_schema) || null,
+            // 输入模式：只有纯参数型（params）可走内联；file_upload 的 required
+            // 可为空数组，若不看模式会空洞通过后必失败「无输入文件」（Codex R1-P1）。
+            inputMode: (detail && detail.input_mode) || null,
+          };
         })
         .catch(() => {
-          agentSchemaCache[id] = { loaded: true, schema: null };
+          agentSchemaCache[id] = { loaded: true, schema: null, inputMode: null };
         });
     }
   }
@@ -648,20 +673,28 @@ function canInlineSummon(agent, plan) {
     conversationStatus.value === "active" &&
     plan && Array.isArray(plan.agents) && plan.agents.length > 1 &&
     !!cached && cached.loaded === true &&
+    cached.inputMode === "params" && // 文件型/none/未知一律走创建页（Codex R1-P1）
     prefillSatisfiesSchema(cached.schema, agent.prefilled_inputs || {}) &&
     collectCarriedFiles().length === 0
   );
 }
 
+// 会话附件一有变动即撤武装：确认态是按「无携带附件」前提发出的，前提变了就得
+// 重新武装（Codex R1-P2：否则武装后再传附件可绕过「附件必经创建页过目」门）。
+watch(pendingFiles, () => {
+  inlineArmed.value = null;
+}, { deep: true });
+
 function armInlineSummon(agent, idx) {
   inlineArmed.value = inlineKey(agent, idx);
 }
 
-async function confirmInlineSummon(agent) {
+async function confirmInlineSummon(agent, plan) {
   if (inlineBusy.value === true) return;
-  // 确认时再验一遍会话可写态（fail-closed：渲染后会话可能已被归档）
-  if (conversationStatus.value !== "active") {
-    ElMessage.error("本会话已归档（只读），不能再召集——如需继续，请开启新协作。");
+  // 确认时全门重验（fail-closed）：渲染后会话可能已归档 / 附件可能已加入 /
+  // 契约缓存可能已更新——任何一门不过就撤武装回按钮态（Codex R1-P2）。
+  if (canInlineSummon(agent, plan) !== true) {
+    ElMessage.error("条件已变化（会话归档 / 新增附件 / 契约变更），请重新确认或走「去创建此任务」。");
     inlineArmed.value = null;
     return;
   }
