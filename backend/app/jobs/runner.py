@@ -601,13 +601,25 @@ def run_worker_forever(
             # /api/readyz 误判健康但忙碌的 worker 为 503（假告警/误重启）。独立 daemon 恒按
             # _HEARTBEAT_INTERVAL 发心跳（不受 run_once 阻塞），令就绪度反映「worker 进程
             # 活着」而非「worker 空闲」；进程死则 daemon 随之死、心跳停 → readyz 如实 503。
+            hb_stop = threading.Event()
+
             def _heartbeat_daemon() -> None:
-                while True:
-                    time.sleep(_HEARTBEAT_INTERVAL_SECONDS)
+                # Event.wait 而非 sleep：停止时立即醒来退出，不再多发一拍心跳。
+                while not hb_stop.wait(_HEARTBEAT_INTERVAL_SECONDS):
                     runner.beat()
 
-            threading.Thread(target=_heartbeat_daemon, daemon=True, name="worker-heartbeat").start()
-            runner.run_forever()
+            hb_thread = threading.Thread(
+                target=_heartbeat_daemon, daemon=True, name="worker-heartbeat"
+            )
+            hb_thread.start()
+            try:
+                runner.run_forever()
+            finally:
+                # P2（Codex R1）：轮询一停（含 KeyboardInterrupt）即停心跳——否则 daemon 在
+                # 单实例锁释放后仍写心跳，/api/readyz 假 200（无 poller 却报就绪），且
+                # 重复调用泄漏心跳线程。stop event + join 保证线程随轮询终止。
+                hb_stop.set()
+                hb_thread.join(timeout=_HEARTBEAT_INTERVAL_SECONDS + 1.0)
     except WorkerAlreadyRunningError as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1

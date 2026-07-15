@@ -94,15 +94,18 @@ def main() -> int:
                 resp = httpx.post(endpoint, headers=headers, json=payload, timeout=args.timeout)
                 elapsed_ms = (time.monotonic() - t0) * 1000.0
                 ok = 200 <= resp.status_code < 300
-                record.update({"status": resp.status_code, "latency_ms": round(elapsed_ms, 1), "ok": ok})
+                # P2（Codex R1）：落盘全精度 latency_ms（不 round），令第三方从 JSONL 复算
+                # 的 p99 与本脚本 verdict（同用未 round 的 latencies）一致——否则边界样本
+                # （999.96ms round→1000.0ms）会令 verdict 与持久证据矛盾，破「可复算」承诺。
+                record.update({"status": resp.status_code, "latency_ms": elapsed_ms, "ok": ok})
                 if ok:
                     latencies.append(elapsed_ms)
             except httpx.HTTPError as exc:
                 elapsed_ms = (time.monotonic() - t0) * 1000.0
-                record.update({"status": None, "latency_ms": round(elapsed_ms, 1),
+                record.update({"status": None, "latency_ms": elapsed_ms,
                                "ok": False, "error": type(exc).__name__})
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            print(f"[{i + 1}/{args.samples}] status={record.get('status')} {record['latency_ms']}ms")
+            print(f"[{i + 1}/{args.samples}] status={record.get('status')} {elapsed_ms:.1f}ms")
 
     summary = summarize(latencies)
     print("\n=== 延迟汇总（仅成功请求）===")
