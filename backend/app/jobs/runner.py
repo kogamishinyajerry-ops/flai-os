@@ -13,6 +13,14 @@ P2-5 兜底纪律：run_once() 对单任务执行绝不裸抛——
   记错误日志并尽力追加 warning 事件，留痕失败也只记日志、绝不上抛。
 run_forever() 循环体再兜一层，防御 run_once 之外的意外（如 conn_factory
 自身故障）；KeyboardInterrupt 照旧干净退出，不被这层兜底吞掉。
+
+Gate2-T1-M1（per-task 墙钟 reaper · owner Q1 宽墙钟兜底）：run_once 不再同步直调 execute()，
+而是在 daemon 线程内跑、主循环 join(JobRunner 启动处据 tool_registry 派生的 per-task 墙钟——
+保证 ≥ 任何合法工具预算，见 _derive_wall_timeout_for_runtime）。超时即放弃等待、经
+_reap_timed_out_task 把任务从执行态置 failed 留痕，worker 立即认领下一条——
+一条挂死/死循环任务不再永久冻结整条串行队列。线程按期完成时逐分支回放上述
+既有 race/failed 兜底语义，不改既有行为。被放弃的执行线程 Python 无法强杀
+（ADR-0008 决策3），残余产物靠进程重启 recover_interrupted_tasks 回收。
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ from typing import Any, BinaryIO, Callable, Iterator
 
 import sqlite3
 
+from .. import config
 from ..config import WORKER_GENERATION
 from ..core.errors import IllegalTransitionError
 from ..storage import repos
@@ -336,6 +345,47 @@ def recover_interrupted_tasks(
     return recovered
 
 
+def _derive_wall_timeout_for_runtime(runtime: object) -> float:
+    """从 runtime.tool_registry 派生 per-task 墙钟（owner Q1 · A1 · Codex R1-P1-b 生命周期修）：
+    取全部工具 runtime.timeout_seconds 的 max=工具预算上界，**再加单任务最大串行 LLM 生命周期**
+    （config.DEFAULT_LLM_LIFECYCLE_BUDGET_S = LLM 超时×尝试数×最大串行调用数），经
+    config.derive_task_wall_timeout_s 兜底（+生成余量、硬地板、env 覆盖只上抬）。**保证墙钟 ≥
+    工具预算 + 串行 LLM 生命周期**——既不假杀单次长工具（cfd_solve_launch=360s），也不假杀串行多
+    调模型的合法长任务（knowledge_qa 8 问最坏 >1900s，Codex R1-P1-b 逮的正是旧墙钟只算单工具）。
+
+    tool_registry 不可读（缺失/list() 抛/空）→ 回退 config.TASK_WALL_TIMEOUT_S 兜底常量
+    （≥硬地板）。env 覆盖 < max_tool_budget 时启动 log 警告（不 fail：owner 可能有意，但其覆盖
+    低于工具预算、已被兜底上抬——提示避免静默）。畸形 timeout_seconds 跳过该工具、不炸派生。"""
+    registry = getattr(runtime, "tool_registry", None)
+    if registry is None:
+        return config.TASK_WALL_TIMEOUT_S
+    try:
+        tools = registry.list()
+    except Exception:
+        logger.warning(
+            "墙钟派生：tool_registry.list() 失败，回退兜底常量 %ss（不影响执行，继续轮询）",
+            config.TASK_WALL_TIMEOUT_S,
+        )
+        return config.TASK_WALL_TIMEOUT_S
+    max_budget = 0.0
+    for tool in tools or []:
+        try:
+            budget = float(((tool.get("runtime") or {}).get("timeout_seconds")) or 0.0)
+        except (TypeError, ValueError, AttributeError):
+            continue  # 畸形工具条目不参与 max，不炸派生（宁少算一个也绝不炸 worker 启动）
+        if budget > max_budget:
+            max_budget = budget
+    wall = config.derive_task_wall_timeout_s(max_budget, config.DEFAULT_LLM_LIFECYCLE_BUDGET_S)
+    override = config.TASK_WALL_TIMEOUT_ENV_OVERRIDE
+    if override is not None and override < max_budget:
+        logger.warning(
+            "FLAI_TASK_WALL_TIMEOUT_S=%ss 低于最大工具预算 %ss——env 覆盖只能上抬墙钟不能下压到"
+            "工具预算以下（防假杀合法长任务），已按挂死兜底派生墙钟 %ss",
+            override, max_budget, wall,
+        )
+    return wall
+
+
 class JobRunner:
     """轮询驱动：run_once() 拾取一条任务；run_forever() 常驻轮询。"""
 
@@ -344,12 +394,21 @@ class JobRunner:
         runtime: object,
         conn_factory: Callable[[], sqlite3.Connection],
         poll_interval: float = 1.0,
+        *,
+        wall_timeout_s: float | None = None,
     ) -> None:
         self._runtime = runtime
         self._conn_factory = conn_factory
         self._poll_interval = poll_interval
         self._last_beat_monotonic: float | None = None
         self._last_resolve_monotonic: float | None = None
+        # per-task 墙钟（owner Q1 · A1）：显式传入=直接用（测试注入极小墙钟触发 reaper）；否则据
+        # runtime.tool_registry 动态派生保证 ≥ 任何合法工具预算。启动处派生一次，run_once 复用
+        # （不每任务重扫 registry）。
+        self._wall_timeout_s = (
+            wall_timeout_s if wall_timeout_s is not None
+            else _derive_wall_timeout_for_runtime(runtime)
+        )
 
     def beat(self) -> None:
         """写 worker 心跳+代际（迁移 #7）。失败只记日志不上抛——心跳是部署
@@ -411,13 +470,147 @@ class JobRunner:
             return False
 
         task_id = task["id"]
+        agent_id = task.get("agent_id")
+        # M1 per-task 墙钟 reaper（Gate2-T1 · owner Q1）：在 daemon 线程内跑 execute()，主循环
+        # join(self._wall_timeout_s 派生墙钟)。超时→放弃等待、reaper 置 failed 留痕、立即 return True
+        # （下一轮认领下一条=队列继续，一条挂死任务不再永久冻结整条队列）；线程按期完成→
+        # 从 box 逐分支回放**既有**兜底语义（IllegalTransitionError→_record_race_warning /
+        # 其他 Exception→_mark_failed_best_effort），一字不改既有 race/failed 行为。
+        box: dict[str, Any] = {}
+
+        def _execute_in_thread() -> None:
+            try:
+                self._runtime.execute(task_id)
+            except IllegalTransitionError as exc:
+                box["race"] = exc
+            except Exception as exc:  # noqa: BLE001 - 兜底防炸 worker，交主循环回放既有语义
+                box["exc"] = exc
+
+        thread = threading.Thread(
+            target=_execute_in_thread, daemon=True, name=f"job-exec-{task_id}"
+        )
+        # thread.start() 可能抛（系统拒绝新线程/资源耗尽等）。此刻任务已被 claim_next_queued
+        # 推进到 validating（执行态），但既无执行线程也无 reaper 会再触达它——若不就地收口就会
+        # 永久搁浅在 validating（Codex R1-P2：run_forever 吞异常继续、该任务无人回收直到进程重启）。
+        # 故 start 失败即把这条已认领任务从执行态置 failed 留痕，worker 继续认领下一条。
         try:
-            self._runtime.execute(task_id)
-        except IllegalTransitionError as exc:
-            self._record_race_warning(task_id, task.get("agent_id"), exc)
-        except Exception as exc:  # noqa: BLE001 - 兜底防炸 worker，fail-closed 记录而非吞声
-            self._mark_failed_best_effort(task_id, exc)
+            thread.start()
+        except Exception as exc:  # noqa: BLE001 - 线程无法启动亦不得炸 worker
+            self._fail_thread_startup(task_id, exc)
+            return True
+        thread.join(self._wall_timeout_s)
+
+        if thread.is_alive() is True:
+            # 墙钟超时：执行线程仍在跑（Python 无法强杀，靠进程重启回收），reaper 把任务
+            # 从执行态置 failed 留痕。is_alive() 布尔直判，绝不 truthiness（焊死红线）。
+            self._reap_timed_out_task(task_id, self._wall_timeout_s)
+            return True
+
+        # 线程按期完成：逐分支回放既有兜底语义（不改既有行为）。
+        if "race" in box:
+            self._record_race_warning(task_id, agent_id, box["race"])
+        elif "exc" in box:
+            self._mark_failed_best_effort(task_id, box["exc"])
         return True
+
+    def _fail_thread_startup(self, task_id: str, exc: BaseException) -> None:
+        """执行线程 start() 失败时收口已认领任务（Codex R1-P2）：从执行态置 failed 留痕，防止
+        任务永久搁浅在 validating（无执行线程 + 无 reaper 触达）。与 _reap_timed_out_task 同款
+        best-effort/fail-closed——任何异常只记日志、绝不上抛炸 worker；经 fail_task_from_execution
+        白名单（仅执行态），非执行态返 None 则记 warning（不越人签/终态闸）。"""
+        error_message = (
+            f"任务执行线程无法启动（{type(exc).__name__}: {exc}）：已认领但未能开跑，就地置 failed"
+            "留痕防搁浅（worker 继续认领下一条）"
+        )
+        logger.error("任务 %s 执行线程 start() 失败：%s", task_id, error_message)
+        conn = self._conn_factory()
+        try:
+            try:
+                failed_task = repos.fail_task_from_execution(conn, task_id, error_message)
+            except Exception:
+                logger.exception(
+                    "线程启动失败收口再失败：任务 %s 无法置 failed（best-effort，worker 继续轮询）",
+                    task_id,
+                )
+                return
+            if failed_task is None:
+                logger.error(
+                    "任务 %s 线程启动失败但已处非执行态，fail_task_from_execution 拒绝覆盖"
+                    "（人签/终态保护）", task_id,
+                )
+        finally:
+            conn.close()
+
+    def _reap_timed_out_task(self, task_id: str, wall_s: float) -> None:
+        """M1 per-task 墙钟 reaper：执行超 wall_s 秒的任务从**执行态**置 failed 留痕，worker
+        立即认领下一条=队列继续。best-effort/fail-closed——任何异常只记日志，绝不上抛炸 worker。
+
+        焊死红线：
+        - 假绿死罪：只置 **failed（真失败/红）**，绝不把挂死任务标 completed/绿。
+        - 人是唯一签发者：经 fail_task_from_execution（白名单仅执行态 {validating,running,
+          parsing,analyzing}），对 waiting_review/终态返 None → reaper **拒绝**自动迁移、记
+          auto_fail_refused，绝不越人签闸。返值用 `is None` 显式判定，绝不 truthiness。
+        - 诚实边界：被放弃的执行线程可能仍在后台运行，Python 无法强杀（ADR-0008 决策3，同
+          tools/registry.py:177-183 措辞）；残余产物（task_events/tool_runs/输出文件）靠进程
+          重启 recover_interrupted_tasks 回收，且 failed 终态受 assert_transition 保护，僵尸
+          线程的后续状态写入不会翻转终态。
+        """
+        error_message = (
+            f"任务执行超墙钟上限（FLAI_TASK_WALL_TIMEOUT_S={wall_s}s）：已放弃等待，执行线程"
+            "可能仍在后台运行、未被强杀终止（诚实标注，见 ADR-0008 决策3）；真实工具可能已产生"
+            "外部副作用，残余产物靠进程重启回收，请人工核查"
+        )
+        conn = self._conn_factory()
+        try:
+            try:
+                failed_task = repos.fail_task_from_execution(conn, task_id, error_message)
+            except Exception:
+                logger.exception(
+                    "M1 reaper 兜底失败：任务 %s 无法置 failed（best-effort，worker 继续轮询）",
+                    task_id,
+                )
+                return
+
+            if failed_task is None:
+                # 任务已被推进到 waiting_review/终态：reaper 拒绝覆盖（人签/终态保护，fail-closed）。
+                refusal_message = (
+                    "任务墙钟超时但已处非执行态（如 waiting_review/终态），reaper 拒绝自动置 failed"
+                    "——waiting_review 只能由人工放行转出"
+                )
+                logger.error("M1 reaper：任务 %s %s", task_id, refusal_message)
+                try:
+                    repos.append_event(
+                        conn,
+                        task_id=task_id,
+                        event_type="warning",
+                        level="error",
+                        message=refusal_message,
+                        payload={"reaper": "wall_timeout", "action": "auto_fail_refused",
+                                 "wall_s": wall_s},
+                    )
+                except Exception:
+                    logger.exception(
+                        "M1 reaper：任务 %s 的 auto_fail_refused 事件写入失败，状态未被改动",
+                        task_id,
+                    )
+                return
+
+            try:
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=failed_task.get("agent_id"),
+                    event_type="task_failed",
+                    level="error",
+                    message=error_message,
+                    payload={"reaper": "wall_timeout", "wall_s": wall_s},
+                )
+            except Exception:
+                logger.exception(
+                    "M1 reaper：任务 %s 已置 failed，但 task_failed 事件写入失败", task_id
+                )
+        finally:
+            conn.close()
 
     def _record_race_warning(self, task_id: str, agent_id: str | None, exc: Exception) -> None:
         conn = self._conn_factory()

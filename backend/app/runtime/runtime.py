@@ -603,9 +603,34 @@ class AgentRuntime:
             self._record_failure_sample(conn, task, agent, error_message, data_classification)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
-        # 3) 成功：注册产物 + 样本沉淀（产物/样本继承任务级派生分级=文件∨知识∨工具
-        # 三轴，ADR-0021 D3 + Codex R0-P1 + ADR-0024/0025）。复用执行期已算并落库的
-        # data_classification（不重算，保产物/样本与落库任务级分级一致）。
+        # A2（Codex C1-P1-2 + R1-P1-a）★原子发布闸：先据 requires_review 定终态并**原子认领**
+        # 「执行态→终态」迁移（repos.claim_publish_transition），认领成功才注册/写产物+记样本。
+        # 旧守卫是「先 get_task 判 failed 再写」= read-then-act：判读与产物写入之间 M1 reaper 仍
+        # 可插入置 failed（TOCTOU 非原子，Codex R1 逮的正是此），产物/success 样本仍会污染已 failed
+        # 任务（假绿旁门）。改为 claim_publish_transition 在同一 BEGIN IMMEDIATE 内检查执行态+翻终态：
+        # 认领成功=任务已离执行态、reaper 的 fail_task_from_execution 白名单够不着 → 后续产物写入对
+        # 已 reaped 任务免疫；认领失败（reaper 抢先/已推进）→ 放弃**整个发布**（不注册产物/不写
+        # sim_run_ref/不记样本），任务保持既有终态。判定 is None 显式（焊死红线）。
+        # 宪法「安全 gate 判定 is True/is False」+ fail-closed：仅 agent.yaml 显式声明 False 才免审
+        # →completed；缺失/畸形一律 waiting_review（错误方向=多审）。诚实边界：不强杀僵尸线程（Python
+        # 做不到），只从机制上确保认领失败后它写不了任何产物/样本行。
+        requires_review = (agent.get("workflow") or {}).get("requires_human_review")
+        target_status = "completed" if requires_review is False else "waiting_review"
+        claimed = repos.claim_publish_transition(conn, task_id, target_status)
+        if claimed is None:
+            fresh_task = repos.get_task(conn, task_id)
+            logger.warning(
+                "任务 %s 未能认领发布迁移（reaper 已置 failed 或已并发推进到非执行态）：放弃整个产物"
+                "发布（不注册产物/不写 sim_run_ref/不记 success 样本），任务保持既有终态防污染", task_id
+            )
+            return {"status": "failed", "task": fresh_task}
+
+        # 认领成功=任务现为 target_status（非执行态），reaper 够不着 → 以下产物/引用/样本写入安全。
+        # 3) 注册产物 + 样本沉淀（产物/样本继承任务级派生分级=文件∨知识∨工具三轴，ADR-0021 D3 +
+        # Codex R0-P1 + ADR-0024/0025）。复用执行期已算并落库的 data_classification（不重算，保
+        # 产物/样本与落库任务级分级一致）。诚实边界：终态在认领时先落、产物随后 attach——同一 worker
+        # 进程内 execute() 同步完成后才进下一轮（resolver 等内部消费者读到时产物已齐）；外部 API 轮询
+        # 在 attach 完成前的极短窗口可能见「终态但 output_file_ids 未齐」，下一次读即一致。
         output_file_ids = self._register_outputs(
             conn, task_id, output_dir, classification=data_classification
         )
@@ -636,14 +661,8 @@ class AgentRuntime:
                 classification=data_classification,
             )
 
-        # 宪法「安全 gate 判定一律 is True/is False」+ fail-closed（审计 P2）：
-        # 仅当 agent.yaml **显式声明 False** 才跳过人工审核；缺失/畸形（schema 之外
-        # 的任何原因）一律走 waiting_review——错误方向必须是「多审」而非「漏审」。
-        # 此前的 truthiness 判定在字段缺失时默认跳审（fail-open），安全依赖了
-        # agent.schema.json 的 required 耦合而非 gate 自证。
-        requires_review = (agent.get("workflow") or {}).get("requires_human_review")
-        if requires_review is not False:
-            repos.set_task_status(conn, task_id, "waiting_review")
+        # 4) 终态展示性事件 + 返回（状态已在认领时原子迁移，此处不再迁移，仅补事件）。
+        if target_status == "waiting_review":
             try:
                 repos.append_event(
                     conn, task_id=task_id, agent_id=agent_id, event_type="review_requested",
@@ -657,9 +676,6 @@ class AgentRuntime:
                 )
             return {"status": "waiting_review", "task": repos.get_task(conn, task_id)}
 
-        # docs/05 §2 强制规则：running 不得跳过 analyzing 直接进 completed。
-        repos.set_task_status(conn, task_id, "analyzing")
-        repos.set_task_status(conn, task_id, "completed")
         repos.append_event(
             conn, task_id=task_id, agent_id=agent_id, event_type="task_completed",
             level="info", message="任务完成",

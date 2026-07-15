@@ -293,6 +293,102 @@ def list_tasks(
     return [_decode_task(r) for r in rows]
 
 
+def _age_seconds(raw_ts: Any) -> tuple[float | None, bool]:
+    """把一个时间戳文本解成「距今龄期秒」。返回 (age|None, malformed)。
+
+    合法 tz-aware ISO → (age, False)；naive/畸形/缺失 → (None, True) fail-closed。镜像
+    main._worker_freshness 的 naive/畸形处理：龄期参与 readyz degraded 裁决（M1↔M2† 协调
+    修），无法算龄即**绝不假报健康**——上报 malformed 让就绪端点 fail-closed 当停滞。
+    queued 龄期（入队时刻 updated_at）与运行态龄期（COALESCE(started_at,updated_at)）共用。"""
+    if raw_ts is None:
+        return None, True
+    try:
+        t = datetime.fromisoformat(str(raw_ts))
+    except (ValueError, TypeError):
+        return None, True
+    if t.tzinfo is None:
+        return None, True
+    age = (datetime.now(timezone.utc) - t).total_seconds()
+    return age, False
+
+
+# 执行态集合（与 fail_task_from_execution / runner._INTERRUPTED_STATUSES 同口径）：运行态龄期
+# 信号（A1）覆盖这四态——孤立挂死可发生在任一执行态（validating 卡校验、running 卡工具…）。
+_EXECUTION_STATES = ("validating", "running", "parsing", "analyzing")
+
+
+def get_queue_depth(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Gate2-T1-M2（worker 可观测完整版 · A1 运行态龄期 + C1-P2 单快照/入队龄期）：job 队列深度
+    + 最老 queued 龄期 + 最老运行态龄期。纯只读，**全部读在一次 BEGIN 快照事务内**（C1-P2-2）。
+
+    口径对齐 claim_next_queued（JobRunner 只认领 origin='user' 的 queued 任务）：queued/running/
+    waiting_review 计数与两个最老龄期都限 origin='user'，精确反映单串行 worker 的排干/执行停滞。
+
+    ★两条龄期信号（皆参与 readyz degraded 裁决）：
+    - oldest_queued_age_s：最老 queued 龄期，基于 **MIN(updated_at)=入队时刻**（C1-P2-1，非
+      created_at）。依赖任务 created 早、入队晚（resolver 满足依赖后才 created→queued 刷
+      updated_at，见 enqueue_dependent_task），用 created_at 会令其假老误报停滞；入队时刻才是
+      「在 queued 里等了多久」的真值。挂死冻结队列时此值无界增长（owner Q2 信号）。
+    - oldest_running_age_s：最老**执行态**任务龄期，基于 **MIN(COALESCE(started_at, updated_at))**
+      （A1 补 loop-auditor 孤立挂死盲点）。started_at 在 →running 时设（set_task_status），validating
+      态尚 NULL 故 COALESCE 回退 updated_at（认领→validating 时刻）。空 queued 队列+孤立挂死时，
+      心跳看不见、queued 龄期也看不见（队列空），唯运行态龄期能暴露→degraded。
+
+    龄期 fail-closed（无法算龄=绝不假报 healthy）：空集 →(None, False)；MIN 时间戳 naive/畸形
+    →(None, malformed=True)，由就绪端点当停滞 degrade（镜像 _worker_freshness 的 naive→不新鲜）。
+
+    ★单快照（C1-P2-2）：此前 count 与 MIN 分两条 autocommit 读有竞态——worker 在 count 后、MIN 前
+    认领掉唯一 queued → count=1 但 MIN=NULL → 假 malformed → 空队列假 503。全部读包进一次 BEGIN
+    （deferred read snapshot）令计数与 MIN 取自同一一致快照，杜绝该竞态。
+
+    ★免鉴权信息暴露面（charter §4「M2 health 鉴权面」）：结果经免鉴权 /api/readyz 暴露——计数纯
+    信息位不进就绪 gate；就绪裁决仍锚 worker 心跳新鲜度，龄期只能把 ready demote 成 degraded。"""
+    exec_ph = ", ".join("?" for _ in _EXECUTION_STATES)
+    conn.execute("BEGIN")  # 单快照读事务（C1-P2-2）：计数与 MIN 取自同一一致快照，杜绝竞态
+    try:
+        queued = conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE status = 'queued' AND origin = 'user'"
+        ).fetchone()[0]
+        waiting_review = conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE status = 'waiting_review' AND origin = 'user'"
+        ).fetchone()[0]
+        running = conn.execute(
+            f"SELECT COUNT(*) FROM tasks WHERE status IN ({exec_ph}) AND origin = 'user'",
+            _EXECUTION_STATES,
+        ).fetchone()[0]
+        oldest_queued_age_s: float | None = None
+        queued_malformed = False
+        if queued > 0:
+            # C1-P2-1：入队时刻 = MIN(updated_at)（queued 任务的 updated_at 在 created→queued 时刷）。
+            row = conn.execute(
+                "SELECT MIN(updated_at) FROM tasks WHERE status = 'queued' AND origin = 'user'"
+            ).fetchone()
+            oldest_queued_age_s, queued_malformed = _age_seconds(row[0] if row is not None else None)
+        oldest_running_age_s: float | None = None
+        running_malformed = False
+        if running > 0:
+            # A1：执行起始 = MIN(COALESCE(started_at, updated_at))（started_at 未设时回退 updated_at）。
+            row = conn.execute(
+                f"SELECT MIN(COALESCE(started_at, updated_at)) FROM tasks "
+                f"WHERE status IN ({exec_ph}) AND origin = 'user'",
+                _EXECUTION_STATES,
+            ).fetchone()
+            oldest_running_age_s, running_malformed = _age_seconds(row[0] if row is not None else None)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return {
+        "queued": queued,
+        "waiting_review": waiting_review,
+        "running": running,
+        "oldest_queued_age_s": oldest_queued_age_s,
+        "oldest_queued_malformed": queued_malformed,
+        "oldest_running_age_s": oldest_running_age_s,
+        "oldest_running_malformed": running_malformed,
+    }
+
+
 def set_task_status(
     conn: sqlite3.Connection,
     task_id: str,
@@ -636,6 +732,65 @@ def fail_task_from_execution(
             f"UPDATE tasks SET {set_clause} WHERE id = ?",
             (*updates.values(), task_id),
         )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id)
+
+
+def claim_publish_transition(
+    conn: sqlite3.Connection,
+    task_id: str,
+    target_status: str,
+) -> dict[str, Any] | None:
+    """Runner 发布成功产物**前**原子认领「执行态 → 终态」发布迁移（Codex R1-P1-a，与
+    fail_task_from_execution 对称、同一 BEGIN IMMEDIATE 防 TOCTOU）。
+
+    锁内检查 status 仍在执行态白名单 {validating,running,parsing,analyzing}：
+    - 是 → 按 target 翻终态并返回任务：
+        target='waiting_review'：execution→waiting_review 单跳（人签态，非执行态）；
+        target='completed'：execution→analyzing→completed 多跳（docs/05 §2「running 不得跳过
+        analyzing」；两跳在**同一事务**内原子完成，reaper 的 fail 事务无法在中途插入）。
+    - 否（reaper 已抢先置 failed / 已被并发推进到非执行态）→ 返回 None。
+
+    调用方据返回 None 放弃**整个产物发布**（不注册产物/不写 sim_run_ref/不记 success 样本），
+    杜绝被放弃的僵尸执行线程把产物/样本污染到 reaper 已置 failed 的任务（假绿旁门，Codex C1-P1-2
+    的 R1 加强：旧「先 get_task 判 failed 再写」是 read-then-act，判读与写入之间 reaper 可插入=
+    非原子）。认领成功=任务已离执行态、fail_task_from_execution 的执行态白名单够不着 → 后续产物
+    写入安全。target 白名单仅 {waiting_review, completed}，其余 raise（防误用）。返回 None 用
+    `is None` 显式判定于调用方，绝不 truthiness（焊死红线）。"""
+    if target_status not in ("waiting_review", "completed"):
+        raise ValueError(
+            f"claim_publish_transition 仅支持 waiting_review/completed，实得 {target_status!r}"
+        )
+    execution_states = frozenset(_EXECUTION_STATES)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        task = get_task(conn, task_id)
+        if task is None or task["status"] not in execution_states:
+            conn.execute("COMMIT")
+            return None
+        now = _now_iso()
+        if target_status == "completed":
+            # execution→analyzing→completed（同事务原子，满足 running 须过 analyzing 的审计轨）
+            if task["status"] != "analyzing":
+                assert_transition(task["status"], "analyzing")
+                conn.execute(
+                    "UPDATE tasks SET status = 'analyzing', updated_at = ? WHERE id = ?",
+                    (now, task_id),
+                )
+            assert_transition("analyzing", "completed")
+            conn.execute(
+                "UPDATE tasks SET status = 'completed', updated_at = ?, finished_at = ? WHERE id = ?",
+                (now, now, task_id),
+            )
+        else:  # waiting_review：execution→waiting_review 单跳
+            assert_transition(task["status"], "waiting_review")
+            conn.execute(
+                "UPDATE tasks SET status = 'waiting_review', updated_at = ? WHERE id = ?",
+                (now, task_id),
+            )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
