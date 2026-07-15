@@ -10,6 +10,9 @@ description: >
 entrypoint: tools_impl.mock_tools.adapter:run
 # 工具污点声明（ADR-0024）：本工具不碰外部不可考数据，产物 internal。
 output_classification: internal
+# 交互面安全声明（ADR-0028 §6，default-deny）：纯回显 Mock、无外部副作用、internal
+# 输出——数据类（mock）工具，可安全暴露给 interactive Agent 会话运行时。
+interactive_safe: true
 input_schema:
   type: object
   required:

@@ -137,21 +137,21 @@ class AgentRegistry:
                 "但 workflow.requires_human_review 非 True——判决型 job Agent 必须 review-gated"
                 "（协作运行时 F3 注册期不变量：LLM 判决必经人签，绝不自动流经依赖链）"
             )
-        # P0-N2（导入准入门，docs/PRODUCTION-READINESS-PROGRAM.md）：交互 Agent 声明护栏。
-        # 交互运行时（ConversationService）当前只注入 messages/model_gateway/agent_registry/
-        # agent_config 四键，**不注入 tool_registry/knowledge**——interactive Agent 声明了
-        # tools/knowledge 也静默拿不到，agent 以为有、实则空手产结论 = 假绿死罪。能力就绪前
-        # fail-closed 拒载（T3-a 落地注入后放宽本不变量）。同 job×profile：jsonschema 无法
-        # 表达跨字段条件（mode×tools/knowledge），故在扫描侧 Python 补。
-        if workflow.get("mode") == "interactive" and (
-            (data.get("tools") or [])
-            or (data.get("knowledge") or {}).get("enabled") is True
-        ):
-            raise InvalidPackageError(
-                f"{entry} workflow.mode=interactive 但声明了 tools/knowledge——交互运行时"
-                "尚未注入 tool_registry/knowledge，声明了也静默拿不到（假绿死罪）；能力就绪前"
-                "fail-closed 拒载（P0-N2；T3-a 落地后放宽）"
-            )
+        # P0-N2 放宽（T3-a/ADR-0028）：原无条件拒载「mode=interactive 且声明 tools/knowledge」
+        # 的注册期护栏在此退休——ConversationService 已注入 tool_registry+knowledge（default-deny
+        # 白名单镜像 job 路径，见 runtime/conversation.py），能力已布线，合法交互声明放行。
+        # 「仅当声明的 tools/knowledge 未被 ConversationService 接住才拒」结构上落不到本处：
+        # AgentRegistry 只持 agents_dir+schema_path，无 tool_registry/scope_registry 引用，
+        # _load_one 无法区分「畸形（不存在的 tool/scope）」与「合法（存在的）」。故 N2 整块移除，
+        # 畸形拦截由**已存在且 mode-agnostic** 的机制原地保住（并非移除防御，只是退休一层冗余）：
+        #   (a) 不存在/密级不符的 SCOPE → reconcile_agent_scopes（knowledge/scopes.py，装配期对账，
+        #       仅 gate on knowledge.enabled is True，与 mode 无关）→ deregister（bootstrap.assemble）；
+        #   (b) 不存在的 TOOL → 调用期 fail-closed：会话白名单放行（agent 声明了）→ tool_registry.call
+        #       → ToolNotRegisteredError（backend/app/tools/registry.py:108-109），诚实失败非假绿，
+        #       与 job 路径注册期同样无 tool 存在性校验、对称；
+        #   (c) knowledge.enabled 但服务未装配 → ConversationService.post_message 执行期 fail-closed
+        #       （镜像 runtime._execute 1b）。
+        # N2 移除**必须**与 T3-a 注入同批（先布线后放宽），否则重开「声明了却空手产结论」的假绿窗。
         return data
 
     def get(self, agent_id: str) -> dict[str, Any] | None:

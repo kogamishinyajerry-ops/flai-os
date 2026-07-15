@@ -125,8 +125,16 @@ def test_b3_summarize_empty_no_fabrication() -> None:
     assert s["n"] == 0 and s["p99_ms"] is None  # 空样本不伪造数字
 
 
-# ══ P0-N2：交互 Agent 声明护栏 ════════════════════════════════════════════
-# tamper：删 registry._load_one 的 N2 不变量 → 下面两 reject 变红（畸形交互包被接受）。
+# ══ P0-N2 放宽（T3-a/ADR-0028）：交互声明放行 + 畸形拦截由别处保住 ══════════
+# N2 注册期无条件拒载已退休——能力已由 ConversationService 注入布线（tool_registry+knowledge
+# default-deny，见 runtime/conversation.py）。畸形拦截**不依赖 N2**，差分式非侵入见证证明真正
+# 的守门者仍在（兼作常驻回归）：
+#  · reconcile_agent_scopes（knowledge/scopes.py）是 scope 守门者：scan-alone 放行未注册 scope 的
+#    交互 agent、scan+reconcile 才 deregister → reconcile load-bearing
+#    （test_n2_relaxed_interactive_unregistered_scope_deregistered）；
+#  · 调用期 ToolNotRegisteredError（backend/app/tools/registry.py:108-109）是 tool 守门者：会话白名单
+#    放行的不存在工具在 call 期诚实抛，与 job 路径对称、绝非静默成功
+#    （test_n2_relaxed_interactive_nonexistent_tool_calltime_rejected）。
 
 def _clone(src_id: str, agents_dir: Path, new_id: str | None = None) -> Path:
     dest = agents_dir / (new_id or src_id)
@@ -151,28 +159,87 @@ def _scan(agents_dir: Path) -> AgentRegistry:
     return reg
 
 
-def test_n2_interactive_with_tools_rejected(tmp_path: Path) -> None:
+def _scope_registry():
+    from backend.app.knowledge.scopes import ScopeRegistry
+
+    sr = ScopeRegistry(config.KNOWLEDGE_DIR, CONTRACTS_DIR / "knowledge_scope.schema.json")
+    sr.scan()
+    return sr
+
+
+def test_n2_relaxed_interactive_with_tools_registers(tmp_path: Path) -> None:
+    """N2 放宽：交互 Agent 声明**已注册**工具 → 注册期放行（原无条件拒载已退休）。
+    能力已由 ConversationService 注入（tool_registry default-deny 白名单），合法声明流通。"""
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
     pkg = _clone("guide_agent", agents_dir)
-    _patch_yaml(pkg, tools=["excel_case_parser"])  # interactive + 非空 tools
+    _patch_yaml(pkg, tools=["excel_case_parser"])  # interactive + 真实工具
     reg = _scan(agents_dir)
-    assert reg.get("guide_agent") is None  # fail-closed 拒载
-    assert any("interactive" in str(e) or "N2" in str(e) for e in reg.errors)
+    assert reg.get("guide_agent") is not None, "N2 放宽后合法交互工具声明必须放行"
+    assert not any("N2" in str(e) for e in reg.errors), "不应有 N2 拒载残留"
 
 
-def test_n2_interactive_with_knowledge_rejected(tmp_path: Path) -> None:
+def test_n2_relaxed_interactive_legal_knowledge_registers(tmp_path: Path) -> None:
+    """N2 放宽：交互 Agent 声明**已注册且密级兼容**的 scope（ecm_frr_demo=public_internal，
+    visibility=all 兼容）→ 经 scan+reconcile 注册通过。"""
+    from backend.app.knowledge.scopes import reconcile_agent_scopes
+
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
     pkg = _clone("guide_agent", agents_dir)
-    _patch_yaml(pkg, **{"knowledge.enabled": True, "knowledge.scopes": ["department"]})
+    _patch_yaml(pkg, **{"knowledge.enabled": True, "knowledge.scopes": ["ecm_frr_demo"]})
     reg = _scan(agents_dir)
-    assert reg.get("guide_agent") is None
-    assert any("interactive" in str(e) or "N2" in str(e) for e in reg.errors)
+    assert reg.get("guide_agent") is not None  # scan 放行
+    reconcile_agent_scopes(reg, _scope_registry())
+    assert reg.get("guide_agent") is not None, "合法 scope（public_internal+兼容 visibility）reconcile 后仍注册"
+
+
+def test_n2_relaxed_interactive_unregistered_scope_deregistered(tmp_path: Path) -> None:
+    """畸形-scope 拦截由 reconcile_agent_scopes 保住（非 N2）：交互 Agent 声明未注册 scope →
+    scan 放行（证 N2 已退休），scan+reconcile 才 deregister（证 reconcile 是 load-bearing 守门者）。
+    tamper：拆 reconcile 的 `if scope is None` 分支 → 末行断言变红。"""
+    from backend.app.knowledge.scopes import reconcile_agent_scopes
+
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    pkg = _clone("guide_agent", agents_dir)
+    _patch_yaml(pkg, **{"knowledge.enabled": True, "knowledge.scopes": ["does_not_exist_scope"]})
+    reg = _scan(agents_dir)
+    assert reg.get("guide_agent") is not None, "N2 退休：注册期不再拒交互+knowledge 声明"
+    reconcile_agent_scopes(reg, _scope_registry())
+    assert reg.get("guide_agent") is None, "未注册 scope 的交互 agent 必被 reconcile deregister（default-deny）"
+
+
+def test_n2_relaxed_interactive_nonexistent_tool_calltime_rejected() -> None:
+    """畸形-tool 拦截由调用期 ToolNotRegisteredError 保住（非 N2）：会话白名单放行 agent 声明的
+    工具，但不存在的工具在 tool_registry.call 期诚实抛（backend/app/tools/registry.py:108-109），
+    与 job 路径对称、绝非静默成功（假绿死罪）。差分见证：已注册工具不抛该错。"""
+    from backend.app.core.errors import ToolNotRegisteredError
+    from backend.app.runtime.conversation import _ConvToolRegistryContext
+    from backend.app.tools.registry import ToolRegistry
+
+    tool_reg = ToolRegistry(config.TOOLS_DIR, CONTRACTS_DIR / "tool.schema.json")
+    tool_reg.scan()
+
+    # 白名单放行不存在的工具（agent 声明了它）→ 调用期 registration 闸诚实拒
+    ctx_bad = _ConvToolRegistryContext(tool_reg, "conv_x", "some_agent", frozenset({"nonexistent_tool"}))
+    with pytest.raises(ToolNotRegisteredError):
+        ctx_bad.call("nonexistent_tool", {})
+
+    # 差分对照：真实已注册工具在白名单内 → 绝不抛 ToolNotRegisteredError（证 registration 闸
+    # 有判别力、不误伤真工具；入参契约等其他失败可接受，只证不是"未注册"）。
+    assert tool_reg.get("excel_case_parser") is not None, "前置：excel_case_parser 应已注册"
+    ctx_ok = _ConvToolRegistryContext(tool_reg, "conv_x", "some_agent", frozenset({"excel_case_parser"}))
+    try:
+        ctx_ok.call("excel_case_parser", {})
+    except ToolNotRegisteredError:
+        pytest.fail("已注册工具不应抛 ToolNotRegisteredError（registration 闸误伤真工具）")
+    except Exception:
+        pass  # 入参契约等其他失败可接受
 
 
 def test_n2_clean_interactive_registers(tmp_path: Path) -> None:
-    """正控：合规交互包（tools=[]/knowledge.enabled=false）照常注册——证 N2 有判别力非全拒。"""
+    """正控：合规交互包（tools=[]/knowledge.enabled=false）照常注册。"""
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
     _clone("guide_agent", agents_dir)
