@@ -23,7 +23,7 @@ import httpx
 import yaml
 from jsonschema import validate
 
-from ..config import CONTRACTS_DIR, LLM_TIMEOUT_S
+from ..config import CONTRACTS_DIR, LLM_MAX_ATTEMPTS_PER_CALL, LLM_TIMEOUT_S
 from ..core.errors import ModelConfigError, ModelUpstreamError, ProfileNotConfiguredError
 from ..storage import repos
 
@@ -145,11 +145,15 @@ class ModelGateway:
 
     def _post(self, base_url: str, path: str, payload: dict[str, Any], api_key: str | None) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        for attempt in range(2):
+        # 尝试数 = config.LLM_MAX_ATTEMPTS_PER_CALL（**墙钟派生的 SSOT**，Codex R1-P1-b）：墙钟按
+        # 「LLM_TIMEOUT_S × 本尝试数 × 最大串行调用数」派生，此处直读同一常量、绝不再硬编码 2，杜绝
+        # 两处漂移（墙钟假设 N 次、gateway 实际 M 次→合法重试被假杀）。除最后一次外都可重试（语义
+        # 等价旧「attempt==0 才重试」在 N=2 时的行为）。
+        for attempt in range(LLM_MAX_ATTEMPTS_PER_CALL):
             try:
                 resp = httpx.post(f"{base_url}{path}", json=payload, headers=headers, timeout=self._timeout_s)
             except httpx.TransportError as exc:
-                if attempt == 0:
+                if attempt < LLM_MAX_ATTEMPTS_PER_CALL - 1:
                     time.sleep(0.5)
                     continue
                 raise ModelUpstreamError(f"上游网络错误：{exc}") from exc
@@ -157,7 +161,7 @@ class ModelGateway:
                 # 非传输类 HTTPError 保持原有错误映射，但不属于可重试范围。
                 raise ModelUpstreamError(f"上游网络错误：{exc}") from exc
 
-            if resp.status_code in {502, 503, 504} and attempt == 0:
+            if resp.status_code in {502, 503, 504} and attempt < LLM_MAX_ATTEMPTS_PER_CALL - 1:
                 time.sleep(0.5)
                 continue
             break

@@ -37,10 +37,128 @@ BACKEND_PORT = int(os.environ.get("FLAI_BACKEND_PORT", "8620"))
 # 超时永远失败）。
 LLM_TIMEOUT_S = max(1.0, float(os.environ.get("FLAI_LLM_TIMEOUT_S", "120")))
 
+# 单次模型调用的最大尝试数（gateway 重试轮）——**墙钟派生的 SSOT**（gateway._post 的
+# `for attempt in range(...)` 直读本值，见 model_gateway/gateway.py）。墙钟必须覆盖每次调用
+# 的全部尝试（都超时=最坏 LLM_TIMEOUT_S × 尝试数），否则合法重试会被 reaper 假杀。下限夹 1。
+LLM_MAX_ATTEMPTS_PER_CALL = max(1, int(os.environ.get("FLAI_LLM_MAX_ATTEMPTS", "2")))
+
+# Gate2-T1-M1（Codex R1-P1-b 生命周期修）：单个任务在一次执行里可能**串行**发起多次模型调用
+# （如 knowledge_qa_agent 按 input maxItems 逐问检索+生成，每问一次 chat）。墙钟派生若只算「单次
+# 最长工具调用」会漏掉这条串行 LLM 生命周期——8 问的合法任务最坏 8×(LLM_TIMEOUT_S×尝试数) 远超
+# 只含单工具预算的旧墙钟，会被 reaper 假杀（Codex 逮的正是此）。本常量=墙钟派生假设的**单任务
+# 最大串行 LLM 调用数上界**（default 12，覆盖现役最深的 8 问 agent 并留 50% 余量）。任一 agent
+# 的实际串行调用数超过本值时，operator 须 export FLAI_MAX_LLM_CALLS_PER_TASK 上调，否则该 agent
+# 的合法长执行会被墙钟假杀。下限夹 1。
+MAX_SEQUENTIAL_LLM_CALLS_PER_TASK = max(
+    1, int(os.environ.get("FLAI_MAX_LLM_CALLS_PER_TASK", "12"))
+)
+
+# 单任务最大合法 LLM 生命周期预算（秒）=单次调用最坏耗时（超时×尝试数）× 最大串行调用数。
+# 墙钟派生把它加进「工具生命周期 + 生成余量」之上，**结构性保证墙钟 ≥ 任何 agent 的最大合法生命
+# 周期**（工具编排 + 串行 LLM 循环都不会被假杀，Codex R1-P1-b）。
+DEFAULT_LLM_LIFECYCLE_BUDGET_S = (
+    LLM_TIMEOUT_S * LLM_MAX_ATTEMPTS_PER_CALL * MAX_SEQUENTIAL_LLM_CALLS_PER_TASK
+)
+
+# 单任务最大串行【工具】调用数上界（Codex R2-P1 修）：一个 agent 可合法**串行**多次调工具——
+# performance_disk_agent 逐行调 performance_disk_mock（10s）+ parser（60s）+ writer（60s），1000 行
+# 批最坏 ≈10,120s，远超「只算单次最长工具预算」的旧墙钟（3,540s）→ 合法批被 reaper 假杀（Codex 逮的
+# 正是此，R1-P1-b 只补了串行 LLM 漏了串行工具）。墙钟派生的串行工具生命周期 = 单次最长工具预算 ×
+# 本值（保守上界：假设都调最长的那个工具；对循环较小工具的 agent 是安全过估，宁墙钟宽绝不假杀）。
+# 默认 32（现役 cfd 部署 max_tool_budget=360 时 360×32=11,520 ≥ 已知最坏 10,120，覆盖）。批量 agent
+# 串行工具数超本值时须 export FLAI_MAX_TOOL_CALLS_PER_TASK 上调（启动不自动逐 agent 探测=V0.2 债）。
+# 下限夹 1。
+MAX_SEQUENTIAL_TOOL_CALLS_PER_TASK = max(
+    1, int(os.environ.get("FLAI_MAX_TOOL_CALLS_PER_TASK", "32"))
+)
+
 # 异步评测队列并发配额（T1，GH #2）：worker 同时最多认领执行的 eval-run 数上限，
 # 超出的排队最终执行（非拒绝）。轻内核默认 2（case 数小、无 Redis/Celery）；
 # 内网可 export FLAI_EVAL_QUOTA 调整。下限夹 1（0/负会永久卡住队列）。
 DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
+
+# Gate2-T1-M1（per-task 墙钟 reaper · owner Q1 裁定重构为宽墙钟挂死兜底）：单个任务执行的
+# 墙钟上限秒。JobRunner 单串行 worker 主循环在 daemon 线程内跑 execute() 并 join(本值)——超时
+# 即放弃等待、把任务从执行态置 failed 留痕，worker 立即认领下一条（一条挂死任务不再永久冻结
+# 整条队列）。
+#
+# ★owner Q1：墙钟**不再是快回收旋钮**（旧默认 180s < cfd_solve_launch 工具预算 360s，会把合法
+# 长任务假杀）。改为**动态派生**并**保证墙钟 ≥ 任何合法工具预算**：真实 worker 在 runner 启动
+# 处读工具注册表全部 runtime.timeout_seconds 取 max，经 derive_task_wall_timeout_s() 兜底
+# （+生成余量、硬地板、env 覆盖只能上抬不能下压到工具预算以下）。config 此处只留 env 覆盖 +
+# 兜底常量 + 纯派生函数（无 tool_registry 可读时的 TASK_WALL_TIMEOUT_S 兜底默认）。
+#
+# env 覆盖语义变更（fail-safe）：FLAI_TASK_WALL_TIMEOUT_S 只能把墙钟**上抬**（owner 有意给长
+# 任务更多余量），绝不能下压到工具预算以下——否则又回到「合法工具被假杀」。故 derive 用 max()
+# 夹逼：env 覆盖 < max_tool_budget 时 env 被兜底忽略、runner 启动 log 警告（不 fail）。
+# 诚实边界：被放弃的执行线程 Python 无法强杀（ADR-0008 决策3），残余产物靠进程重启
+# recover_interrupted_tasks 回收。
+TASK_WALL_TIMEOUT_ENV_OVERRIDE: float | None = (
+    max(1.0, float(os.environ["FLAI_TASK_WALL_TIMEOUT_S"]))
+    if os.environ.get("FLAI_TASK_WALL_TIMEOUT_S") is not None
+    else None
+)
+# 生成余量：在最大工具预算之上再留一段给编排/LLM 生成/落库等工具外开销（默认 300s）。
+TASK_WALL_TIMEOUT_GENERATION_MARGIN_S = max(
+    1.0, float(os.environ.get("FLAI_TASK_WALL_MARGIN_S", "300"))
+)
+# 硬地板：即便工具预算很小，墙钟也不低于此值（默认 600s，防挂死任务被过快回收）。
+TASK_WALL_TIMEOUT_FLOOR_S = max(1.0, float(os.environ.get("FLAI_TASK_WALL_FLOOR_S", "600")))
+
+
+def derive_task_wall_timeout_s(
+    max_tool_budget_s: float, max_llm_lifecycle_s: float = 0.0
+) -> float:
+    """据「工具注册表最大 runtime.timeout_seconds」+「单任务最大串行 LLM 生命周期」派生 per-task
+    墙钟（纯函数，可单测/tamper）。
+
+    墙钟 = max(串行工具生命周期 + LLM 生命周期 + 生成余量, 硬地板, env 覆盖)。串行工具生命周期 =
+    单次最长工具预算 × MAX_SEQUENTIAL_TOOL_CALLS_PER_TASK（Codex R2-P1：覆盖 agent 串行多次调工具
+    的合法长任务，如 performance_disk 逐行调 mock；非仅单次最长工具 cfd=360s）。**结构性保证墙钟 ≥
+    串行工具生命周期 + 串行 LLM 生命周期**（余量非负）——工具循环 + LLM 循环均不被假杀。两项**相加**
+    而非取 max：一个任务可能既串行调工具又串行调模型，加总是安全上界（宁墙钟宽、绝不假杀合法任务）。
+    env 覆盖只入 max() 候选=只能上抬，绝不下压到预算以下（fail-safe，owner Q1）。
+    """
+    tool_lifecycle = max(0.0, max_tool_budget_s) * MAX_SEQUENTIAL_TOOL_CALLS_PER_TASK
+    budget_based = (
+        tool_lifecycle
+        + max(0.0, max_llm_lifecycle_s)
+        + TASK_WALL_TIMEOUT_GENERATION_MARGIN_S
+    )
+    candidates = [budget_based, TASK_WALL_TIMEOUT_FLOOR_S]
+    if TASK_WALL_TIMEOUT_ENV_OVERRIDE is not None:
+        candidates.append(TASK_WALL_TIMEOUT_ENV_OVERRIDE)
+    return max(candidates)
+
+
+# 兜底默认（无 tool_registry 可读时用；真实 worker 在 runner 启动处按 registry 派生覆盖）。
+# = derive(工具预算 0, 默认 LLM 生命周期)——即便无工具预算也覆盖最大串行 LLM 生命周期（Codex
+# R1-P1-b：fallback 不能退回只含地板的旧值，否则无 tool_registry 路径下 8 问 agent 仍被假杀）。
+TASK_WALL_TIMEOUT_S = derive_task_wall_timeout_s(0.0, DEFAULT_LLM_LIFECYCLE_BUDGET_S)
+
+# Gate2-T1-M2（worker 可观测 · owner Q2「运行态龄期→degraded」的正确实现，Codex R1-P1-c 修）：
+# 最老 queued 任务龄期超过本阈值 → /api/readyz body 的 **degraded 观测标记**置真（HTTP 仍 200，
+# **不再 503**）。★Codex R1-P1-c 逮的根因：单串行 worker 健康 drain 合法 backlog 时，排在后面的
+# 任务 queued 龄期会自然增长（合法长任务在前面跑），绝对龄期→503 会把健康 worker 误判 down、触发
+# 外部重启中断合法长任务。故解耦：**503 只留给心跳死（进程真 down，M2† fail-closed）**；队列/运行态
+# 龄期是**可观测 degraded 软信号**（200 + body degraded=true），供 operator dashboard/告警，绝不
+# 参与 HTTP 就绪 gate。挂死任务的真正兜底=宽墙钟 reaper（回收后队列自愈），非 readyz 503。
+# 默认 600s（> max_tool_budget 360s 避免正常排队即标 degraded）。内网按真实排队 p99 export
+# FLAI_QUEUE_STALL_THRESHOLD_S。下限夹 1s（0/负会令任何非空队列瞬间标 degraded=噪声）。
+QUEUE_STALL_THRESHOLD_S = max(1.0, float(os.environ.get("FLAI_QUEUE_STALL_THRESHOLD_S", "600")))
+
+# Gate2-T1-A1（运行态龄期观测信号 · 补 loop-auditor 孤立挂死盲点，Codex R1-P1-c 修）：最老
+# **执行态**任务（validating/running/parsing/analyzing）龄期超过本阈值 → /api/readyz body 的
+# **degraded 观测标记**置真（HTTP 仍 200，**不再 503**，同 QUEUE_STALL 的解耦理由）。「孤立挂死
+# 任务冻结单串行 worker」这一失败模式，心跳看不见（daemon 仍新鲜）、queued 龄期也看不见（队列空）
+# ——运行态龄期能把它以 degraded 软信号暴露给 operator，但**绝不能凭它 503**：单串行 worker 上，
+# 一条合法长任务（8 问 knowledge_qa 最坏 >1900s）与一条挂死任务在龄期上无法区分，凭龄期 503 会
+# 假杀合法长任务（Codex R1-P1-c）。真正兜底=宽墙钟 reaper（覆盖最大合法生命周期后回收）。默认
+# 600s 仅作 degraded 标记阈（保守早提示，不误 503）。内网按真实执行 p99 export
+# FLAI_RUNNING_TASK_STALL_THRESHOLD_S。下限夹 1s（0/负会令任何执行中任务瞬间标 degraded=噪声）。
+RUNNING_TASK_STALL_THRESHOLD_S = max(
+    1.0, float(os.environ.get("FLAI_RUNNING_TASK_STALL_THRESHOLD_S", "600"))
+)
 
 # worker 代际字符串（ADR-0021/Codex R2 审 P2）：放在纯 stdlib 的 config，
 # 让部署自检探针（deploy_selfcheck.py，号称免应用依赖）导入它时不连带拉
@@ -67,7 +185,20 @@ DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 # FLAI_LLM_TIMEOUT_S——**worker 可见行为变更**（worker 跑的 job 调 gateway._post）。
 # 旧 worker 留 60s 却写同代际会骗过 deploy_selfcheck.check_worker_generation（误绿），
 # 故 bump 逼 worker 重启到读 env 的新代码。
-WORKER_GENERATION = "collab-resolver+t2-eval-snapshot+b3-llm-timeout"
+# Gate2-T1-M1（per-task 墙钟 reaper）：worker 新增必需行为——run_once 在 daemon 线程内跑
+# execute() 并 join(派生墙钟)，超时置 failed 留痕。旧 worker 无 reaper 分支时，一条挂死任务
+# 永久冻结整条队列而心跳仍新鲜。故随此必需 worker 行为 bump 代际，逼 worker 重启到含 reaper
+# 的新代码，否则部署门 check_worker_generation 拦下。
+# Gate2-T1-M1 R2/R3（Codex R1/R2 命中即审修，worker 可见行为变更）：①墙钟派生纳入串行 LLM
+# **和工具**生命周期（derive 加 max_llm_lifecycle + max_tool_budget×MAX_SEQUENTIAL_TOOL_CALLS，
+# 8 问 agent / 1000 行工具批不再假杀，R1-P1-b + R2-P1-3）②发布走 repos.finalize_publish 原子发布
+# （物理 I/O 前置在执行态、attach 产物+记样本+翻终态合一 BEGIN IMMEDIATE，绝不卡死「终态但产物
+# 缺失」，僵尸线程不污染已 reaped 任务，R1-P1-a → R2-P1-1）③thread.start 失败即置 failed（不搁浅，
+# P2）+ _execute_in_thread catch BaseException + done sentinel（线程静默退出也保守置 failed 不搁浅，
+# R2-P1-2）。旧 worker 缺这些：墙钟太短假杀合法长任务 / 发布卡死终态或脏产物 / 线程异常退出后搁浅。
+# 故 bump 代际逼 worker 重启到 R3 新代码。（readyz 龄期已解耦为 200-degraded 观测标记、不再 503，
+# 见 QUEUE_STALL/RUNNING_TASK_STALL；这是 API 侧行为，随 API 前滚。）
+WORKER_GENERATION = "collab-resolver+t2-eval-snapshot+b3-llm-timeout+m1-reaper+r1fix-lifecycle-atomic+r2fix-toollifecycle-finalize-baseexc"
 
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。
 # monitor_adapter_recon 工具经此子进程调核起草 adapter 草案；未配置=核不可达=工具
