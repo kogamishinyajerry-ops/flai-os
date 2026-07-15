@@ -186,11 +186,14 @@
                          零交互——就绪=纯展示徽（待开工），未就绪=创建页 escape（或直接回复
                          导引补参数），已召集=督战 chip 即全部。唯一决策收敛到方案脚部的
                          「照此方案开工」一键（人亲手点，导引绝不代召集）。 -->
-                    <div v-if="!agentTaskInfo(a)" class="agent-actions">
+                    <div v-if="!agentTaskInfo(a) && !summonedLocally(a)" class="agent-actions">
                       <span v-if="agentBatchable(a, m.recommendation)" class="agent-readytag">✓ 参数已齐 · 待开工</span>
                       <template v-else>
                         <button class="agent-cta" @click="createOneTask(a, m.recommendation)">去创建此任务</button>
-                        <span class="agent-unready-hint">参数未齐——直接回复导引补全，或去创建页填好后亲手提交。</span>
+                        <!-- 提示按成员就绪分轴（CRS R0-P3）：参数齐但方案级不可开工（归档/附件）
+                             不能误导用户去修本已齐的参数 -->
+                        <span v-if="agentReady(a) === true" class="agent-unready-hint">参数已齐——本方案暂不可一键开工（会话已归档或有附件），可去创建页亲手提交。</span>
+                        <span v-else class="agent-unready-hint">参数未齐——直接回复导引补全，或去创建页填好后亲手提交。</span>
                       </template>
                     </div>
                   </div>
@@ -587,6 +590,10 @@ function openWorkbench() {
 // ③会话无携带附件（附件必须经创建页人工过目）时提供；参数不全由 422 如实
 // 透出，引导走「去创建此任务」补全，绝不客户端猜校验。
 const opening = ref(false); // 「照此方案开工」进行中（单飞行防重）
+// 本地已召集账（CRS R0-P2）：批量创建成功后 conversationTasks 轮询最长滞后 5s，
+// 期间 openableCount 若仍计入已成功成员，按钮复活可被二次点击造重复任务。
+// key=`${会话id}:${agent_id}`，跨会话天然隔离；feed 数据到位后与 agentTaskInfo 双保险。
+const locallySummoned = reactive({});
 // 会话可写态（Codex R0-P2）：getConversation/createConversation 如实带出，concluded
 // 只读会话不提供内联召集（否则创建必 409）。未知（null）= fail-closed 不提供。
 const conversationStatus = ref(null);
@@ -680,9 +687,15 @@ function agentBatchable(agent, plan) {
   return planOpenable(plan) === true && agentReady(agent) === true;
 }
 
+function summonedLocally(agent) {
+  return locallySummoned[`${conversationId.value}:${agent.agent_id}`] === true;
+}
+
 function openableCount(plan) {
   if (planOpenable(plan) !== true) return 0;
-  return plan.agents.filter((a) => agentReady(a) === true && !agentTaskInfo(a)).length;
+  return plan.agents.filter(
+    (a) => agentReady(a) === true && !agentTaskInfo(a) && !summonedLocally(a)
+  ).length;
 }
 
 // 「照此方案开工」：一键把全部就绪且未召集的成员按方案顺序召集（每个都是同一
@@ -694,29 +707,45 @@ async function openPlan(plan) {
     ElMessage.error("条件已变化（会话归档 / 新增附件），请刷新方案或走「去创建此任务」。");
     return;
   }
-  const targets = plan.agents.filter((a) => agentReady(a) === true && !agentTaskInfo(a));
+  // 会话 id 在进入循环前钉死（CRS R0-P1）：批量创建期间用户切换历史会话/新对话会
+  // 改写 conversationId，后续任务会错账到新会话。全程只用这枚不可变值；一旦检测到
+  // 会话已切换，剩余目标立即中止并如实上报（绝不把旧方案的任务写进别的会话）。
+  const approvedConvId = conversationId.value;
+  const targets = plan.agents.filter(
+    (a) => agentReady(a) === true && !agentTaskInfo(a) && !summonedLocally(a)
+  );
   if (targets.length === 0) return;
   opening.value = true;
   const failed = [];
-  for (const a of targets) {
+  let aborted = 0;
+  for (let i = 0; i < targets.length; i += 1) {
+    const a = targets[i];
+    if (conversationId.value !== approvedConvId) {
+      aborted = targets.length - i; // 会话已切换：剩余不再创建
+      break;
+    }
     try {
       await createTask({
         agentId: a.agent_id,
         name: null,
         inputs: a.prefilled_inputs || {},
         inputFileIds: [],
-        conversationId: conversationId.value,
+        conversationId: approvedConvId,
       });
+      locallySummoned[`${approvedConvId}:${a.agent_id}`] = true;
     } catch (err) {
       failed.push(`${a.agent_name}：${err.detail || err.message || "创建失败"}`);
     }
   }
   ensureConversationTasksFeed(); // 督战 chip 保鲜：召集即接上会话任务订阅
-  if (failed.length === 0) {
+  if (failed.length === 0 && aborted === 0) {
     ElMessage.success(`已按方案召集 ${targets.length} 名成员——进度与签发都会来这里找你`);
   } else {
-    // fail-closed 如实透出（409 已归档 / 校验拒绝等），不静默、不假报全成
-    ElMessage.error(`部分成员召集失败：${failed.join("；")}`);
+    // fail-closed 如实透出（409 已归档 / 校验拒绝 / 中途切会话），不静默、不假报全成
+    const parts = [];
+    if (failed.length > 0) parts.push(`失败：${failed.join("；")}`);
+    if (aborted > 0) parts.push(`会话已切换，剩余 ${aborted} 名未召集`);
+    ElMessage.error(`召集未全部完成——${parts.join("；")}`);
   }
   opening.value = false;
 }

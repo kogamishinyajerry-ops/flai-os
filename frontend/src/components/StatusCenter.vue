@@ -515,6 +515,7 @@ function onClosed() {
   artifactsFingerprint = null;
   artifactsLoading.value = false;
   reviewComment.value = ""; // 意见草稿不跨次会话残留（签发人姓名保留）
+  commentOpen.value = false; // 意见框收回：下次签发面回到零填空默认（CRS R0-P2）
   resetSampleFixState();
 }
 
@@ -531,6 +532,7 @@ function ensurePeekLoaded() {
   if (!id) return;
   resetSampleFixState();
   reviewComment.value = ""; // 切任务清草稿，绝不把上个任务的意见签到这个任务
+  commentOpen.value = false; // 切任务意见框同步收回（CRS R0-P2）
   peekArtifacts.value = []; // 换任务先清旧任务的产物预览，避免换代间隙闪烁旧内容
   artifactsFingerprint = null; // 重进同任务（含重开同任务）允许重试上次失败的产物预览
   artifactsLoading.value = false;
