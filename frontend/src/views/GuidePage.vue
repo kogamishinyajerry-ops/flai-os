@@ -182,8 +182,26 @@
                     <p v-if="a.stripped_fields && a.stripped_fields.length" class="agent-stripped">
                       已剔除不合法字段：{{ a.stripped_fields.join("、") }}（未匹配该 Agent 的输入契约）
                     </p>
-                    <div class="agent-actions">
+                    <!-- 原地召集（内联确认，零跳页）：多 Agent 方案 + 预填非空 + 无携带附件
+                         才提供；两次显式点击（原地召集→确认召集）均由人亲手完成，导引绝不
+                         代召集。创建走同一 POST /api/tasks（服务端校验 fail-closed），参数
+                         不全由 422 如实透出并引导走创建页补全。附件必须经创建页人工过目。 -->
+                    <div v-if="inlineArmed !== inlineKey(a, idx)" class="agent-actions">
+                      <button
+                        v-if="canInlineSummon(a, m.recommendation)"
+                        class="agent-cta agent-cta-inline"
+                        @click="armInlineSummon(a, idx)"
+                      >原地召集</button>
                       <button class="agent-cta" @click="createOneTask(a, m.recommendation)">去创建此任务</button>
+                    </div>
+                    <div v-else class="inline-confirm">
+                      <span class="ic-note">以上方预填参数召集，任务归本会话——仍由你亲手确认。</span>
+                      <div class="ic-actions">
+                        <button class="agent-cta ic-go" :disabled="inlineBusy" @click="confirmInlineSummon(a, m.recommendation)">
+                          {{ inlineBusy ? "召集中…" : "确认召集" }}
+                        </button>
+                        <button class="ic-cancel" :disabled="inlineBusy" @click="inlineArmed = null">再想想</button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -319,7 +337,8 @@ import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation } from "../api/conversations";
-import { listAgents } from "../api/agents";
+import { createTask } from "../api/tasks";
+import { listAgents, getAgent } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
 import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, formatTime } from "../utils/format";
 import { openTaskPeek } from "../stores/statusCenter";
@@ -502,6 +521,7 @@ async function send() {
     if (!conversationId.value) {
       const conv = await createConversation({ agentId: GUIDE_AGENT_ID });
       conversationId.value = conv.id;
+      conversationStatus.value = conv.status || "active";
       started.value = true;
       // URL 反映当前会话（可刷新/分享/回退），并让左栏历史即时收录这条新会话。
       router.replace({ path: "/", query: { c: conv.id } });
@@ -522,6 +542,7 @@ async function send() {
     });
     await scrollToBottom();
     ensureConversationTasksFeed(); // 本轮若刚给出 orchestrate 方案，开始为其召集状态保鲜
+    ensureAgentSchemasForMessages(); // 内联召集就绪判据的契约预取（fail-closed）
   } catch (err) {
     // 本轮失败：后端契约是「失败零落库」（幂等重试，ADR-0013），本地同样回滚
     // 乐观气泡并把原文还原到输入框——不在界面上留一条服务端不存在的幽灵消息，
@@ -560,6 +581,142 @@ function openWorkbench() {
   // 工作台里还要继续从蓝图召集 Agent；会话作协作锚点保持存续。
   if (conversationId.value) {
     router.push(`/workbench/${conversationId.value}`);
+  }
+}
+
+// ── 原地召集（对话轴内联确认，范式 2a 单入口）─────────────────────────
+// 宪法边界：导引绝不代召集——「原地召集」「确认召集」两次点击都由人亲手完成，
+// 走与创建页完全相同的 POST /api/tasks（服务端 jsonschema 校验 fail-closed）。
+// 只在①多 Agent 方案（单 Agent 保留创建页 conclude_after 归档语义）②预填非空
+// ③会话无携带附件（附件必须经创建页人工过目）时提供；参数不全由 422 如实
+// 透出，引导走「去创建此任务」补全，绝不客户端猜校验。
+const inlineArmed = ref(null); // `${会话id}:${消息idx}:${agent_id}`（Codex R0-P1：跨会话绝不串态）
+const inlineBusy = ref(false);
+// 会话可写态（Codex R0-P2）：getConversation/createConversation 如实带出，concluded
+// 只读会话不提供内联召集（否则创建必 409）。未知（null）= fail-closed 不提供。
+const conversationStatus = ref(null);
+// Agent 输入契约缓存（Codex R0-P1）：POST /api/tasks 不做即时 schema 校验（校验在
+// worker 运行期），故「预填就绪」必须由前端按 input_schema.required 逐键判定后才
+// 提供内联路径——schema 拉不到 / 未知一律 fail-closed 回创建页路径。
+const agentSchemaCache = reactive({}); // agent_id -> { loaded: true, schema: object|null }
+
+// 会话切换（含 resetToFresh 置空）即撤武装——确认态绝不跨会话存活。
+watch(conversationId, () => {
+  inlineArmed.value = null;
+});
+
+function inlineKey(agent, idx) {
+  return `${conversationId.value || "none"}:${idx}:${agent.agent_id}`;
+}
+
+function fieldMatchesSchema(propSchema, v) {
+  // 轻量原语校验（string/number/integer/boolean/enum）：导引出案时已按当时 schema
+  // 逐字段校验，这里补的是「会话恢复后 Agent 契约已升级」的漂移窗（Codex R1-P2）。
+  // 只做原语级判定，object/array 等复杂类型放行交服务端/worker 权威校验。
+  if (!propSchema || typeof propSchema !== "object") return false; // 键已不在当前契约里
+  if (Array.isArray(propSchema.enum)) return propSchema.enum.includes(v);
+  const t = propSchema.type;
+  if (t === "string") return typeof v === "string";
+  if (t === "number") return typeof v === "number" && Number.isFinite(v);
+  if (t === "integer") return typeof v === "number" && Number.isInteger(v);
+  if (t === "boolean") return typeof v === "boolean";
+  return true;
+}
+
+function prefillSatisfiesSchema(schema, prefilled) {
+  // 就绪判据（纯函数，fail-closed）：schema 存在、required 明确、每个必填键在预填里
+  // 非空白、且每个预填键都通过当前契约的原语校验。这只是「提供内联入口」的门槛，
+  // 不替代服务端/worker 的权威校验。
+  if (!schema || typeof schema !== "object") return false;
+  const required = Array.isArray(schema.required) ? schema.required : null;
+  if (required === null) return false;
+  const props = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
+  const filled = prefilled || {};
+  const requiredOk = required.every((k) => {
+    const v = filled[k];
+    return v !== undefined && v !== null && String(v).trim() !== "";
+  });
+  const typesOk = Object.keys(filled).every((k) => fieldMatchesSchema(props[k], filled[k]));
+  return requiredOk === true && typesOk === true;
+}
+
+function ensureAgentSchemasForMessages() {
+  // 方案卡出现（新回复或历史恢复）即预取成员 Agent 的输入契约；失败记 null=不就绪。
+  for (const m of messages.value) {
+    const plan = m && m.recommendation;
+    if (!plan || plan.decision !== "orchestrate" || !Array.isArray(plan.agents)) continue;
+    for (const a of plan.agents) {
+      const id = a.agent_id;
+      if (!id || id in agentSchemaCache) continue;
+      agentSchemaCache[id] = { loaded: false, schema: null };
+      getAgent(id)
+        .then((detail) => {
+          agentSchemaCache[id] = {
+            loaded: true,
+            schema: (detail && detail.input_schema) || null,
+            // 输入模式：只有纯参数型（params）可走内联；file_upload 的 required
+            // 可为空数组，若不看模式会空洞通过后必失败「无输入文件」（Codex R1-P1）。
+            inputMode: (detail && detail.input_mode) || null,
+          };
+        })
+        .catch(() => {
+          agentSchemaCache[id] = { loaded: true, schema: null, inputMode: null };
+        });
+    }
+  }
+}
+
+function canInlineSummon(agent, plan) {
+  const cached = agentSchemaCache[agent.agent_id];
+  return (
+    !!conversationId.value &&
+    conversationStatus.value === "active" &&
+    plan && Array.isArray(plan.agents) && plan.agents.length > 1 &&
+    !!cached && cached.loaded === true &&
+    cached.inputMode === "params" && // 文件型/none/未知一律走创建页（Codex R1-P1）
+    Object.keys(agent.prefilled_inputs || {}).length > 0 && // 空预填无可审阅，不提供（Codex R2-P2）
+    prefillSatisfiesSchema(cached.schema, agent.prefilled_inputs || {}) &&
+    collectCarriedFiles().length === 0 &&
+    pendingFiles.value.length === 0 // 未发送附件同样必经创建页过目（Codex R2-P2）
+  );
+}
+
+// 会话附件一有变动即撤武装：确认态是按「无携带附件」前提发出的，前提变了就得
+// 重新武装（Codex R1-P2：否则武装后再传附件可绕过「附件必经创建页过目」门）。
+watch(pendingFiles, () => {
+  inlineArmed.value = null;
+}, { deep: true });
+
+function armInlineSummon(agent, idx) {
+  inlineArmed.value = inlineKey(agent, idx);
+}
+
+async function confirmInlineSummon(agent, plan) {
+  if (inlineBusy.value === true) return;
+  // 确认时全门重验（fail-closed）：渲染后会话可能已归档 / 附件可能已加入 /
+  // 契约缓存可能已更新——任何一门不过就撤武装回按钮态（Codex R1-P2）。
+  if (canInlineSummon(agent, plan) !== true) {
+    ElMessage.error("条件已变化（会话归档 / 新增附件 / 契约变更），请重新确认或走「去创建此任务」。");
+    inlineArmed.value = null;
+    return;
+  }
+  inlineBusy.value = true;
+  try {
+    await createTask({
+      agentId: agent.agent_id,
+      name: null,
+      inputs: agent.prefilled_inputs || {},
+      inputFileIds: [],
+      conversationId: conversationId.value,
+    });
+    ElMessage.success(`已召集「${agent.agent_name}」——任务已归入本会话`);
+    inlineArmed.value = null;
+    ensureConversationTasksFeed(); // 督战 chip 保鲜：召集即接上会话任务订阅
+  } catch (err) {
+    // fail-closed 如实透出（409 已归档 / 校验拒绝等），并引导走创建页路径，不静默
+    ElMessage.error(err.detail || err.message || "召集失败——请走「去创建此任务」补全参数后亲手提交");
+  } finally {
+    inlineBusy.value = false;
   }
 }
 
@@ -669,6 +826,7 @@ function resetToFresh(clearError = true) {
   messages.value = [];
   started.value = false;
   conversationId.value = "";
+  conversationStatus.value = null;
   draft.value = "";
   pendingFiles.value = [];
   releaseConversationTasksFeed();
@@ -686,6 +844,7 @@ async function loadConversation(id) {
   try {
     const conv = await getConversation(id);
     conversationId.value = conv.id;
+    conversationStatus.value = conv.status || null; // 只读会话如实带出（Codex R0-P2）
     started.value = true;
     messages.value = (conv.messages || []).map((m) => ({
       role: m.role,
@@ -696,6 +855,7 @@ async function loadConversation(id) {
     }));
     await scrollToBottom();
     ensureConversationTasksFeed(); // 恢复的历史会话若已带 orchestrate 方案，立即接上订阅
+    ensureAgentSchemasForMessages(); // 历史方案卡同样预取输入契约（内联就绪判据）
   } catch (err) {
     pageError.value = err.detail || err.message || "会话加载失败";
   } finally {
@@ -1287,6 +1447,43 @@ watch(
   box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.22);
 }
 .agent-cta:hover::after { transform: translateX(2px); }
+
+/* 原地召集：与「去创建此任务」同级并排（次序在前=推荐路径），间距走 gap */
+.agent-actions { gap: 8px; }
+.agent-cta-inline::after { content: "⚡"; }
+.agent-cta:disabled {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* 内联确认行：召集是签发级动作，确认态给一句诚实说明 + 双按钮 */
+.inline-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ic-note {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.ic-actions { display: flex; align-items: center; gap: 8px; }
+.ic-go {
+  background: var(--clay);
+  color: #fff;
+  border-color: var(--clay);
+}
+.ic-go::after { content: "✓"; }
+.ic-cancel {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 8px 6px;
+}
+.ic-cancel:hover { color: var(--ink); }
 
 .plan-alert {
   margin-top: 10px;
