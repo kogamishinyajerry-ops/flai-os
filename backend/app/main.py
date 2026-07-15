@@ -11,12 +11,13 @@ import hashlib
 import os
 import sqlite3
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config
@@ -35,7 +36,30 @@ from .bootstrap import assemble
 from .logging_setup import configure_logging, reset_logging
 from .runtime.conversation import ConversationService
 from .runtime.runtime import AgentRuntime
+from .storage import repos
 from .storage.db import get_conn, init_db
+
+_WORKER_STALE_S = 60  # 与 deploy_selfcheck 同口径：心跳超 60s 视为 worker 已死/挂起
+
+
+def _worker_freshness(conn: sqlite3.Connection) -> dict[str, object]:
+    """P0-M2†（导入准入门）：worker 心跳新鲜度（复用 worker_heartbeats 表）。
+    naive/畸形时间戳一律 fail-closed 判不新鲜（宁误报死，不假报活）。"""
+    hb = repos.get_worker_heartbeat(conn)
+    if hb is None:
+        return {"present": False, "fresh": False, "age_s": None, "generation": None}
+    generation = hb.get("generation")
+    try:
+        beat_time = datetime.fromisoformat(str(hb.get("last_beat_at")))
+    except (ValueError, TypeError):
+        return {"present": True, "fresh": False, "age_s": None,
+                "generation": generation, "reason": "timestamp_malformed"}
+    if beat_time.tzinfo is None:
+        return {"present": True, "fresh": False, "age_s": None,
+                "generation": generation, "reason": "naive_timestamp"}
+    age = (datetime.now(timezone.utc) - beat_time).total_seconds()
+    fresh = -5.0 <= age <= float(_WORKER_STALE_S)
+    return {"present": True, "fresh": fresh, "age_s": round(age, 1), "generation": generation}
 
 
 def create_app(
@@ -65,6 +89,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        config.assert_local_db_path(db_path)  # P0-B2：DB 必须本地固定盘，否则 fail-closed 拒启
         for d in (db_path.parent, uploads_dir, task_runs_dir):
             d.mkdir(parents=True, exist_ok=True)
         # 进程日志 + 审计留痕（ADR-0023）：log_dir 派生 db_path.parent/logs——
@@ -159,6 +184,22 @@ def create_app(
                 str(db_path.resolve()).encode("utf-8")
             ).hexdigest()[:16],
         }
+
+    @app.get("/api/readyz")
+    def readyz() -> JSONResponse:
+        """P0-M2†（导入准入门）：就绪探针——worker 心跳新鲜才 200，过期/缺失/畸形 503
+        （不再假 200）。外部 uptime 监控轮此端点即知 worker 死活；/api/health 仍是 API
+        存活探针（恒 200）。单 worker 串行下一条死 worker=全部门队列静默停摆，此端点把
+        MTTD 从数小时压到一个轮询周期。"""
+        conn = conn_factory()
+        try:
+            wf = _worker_freshness(conn)
+        finally:
+            conn.close()
+        return JSONResponse(
+            {"status": "ready" if wf["fresh"] else "degraded", "worker": wf},
+            status_code=200 if wf["fresh"] else 503,
+        )
 
     app.include_router(auth_api.router)
     app.include_router(agents_api.router)

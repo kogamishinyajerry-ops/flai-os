@@ -25,7 +25,7 @@ import anyio.to_thread
 
 from .service import COOKIE_NAME, get_session_user
 
-_ALLOWLIST = {("POST", "/api/auth/login"), ("GET", "/api/health")}
+_ALLOWLIST = {("POST", "/api/auth/login"), ("GET", "/api/health"), ("GET", "/api/readyz")}
 
 # FastAPI 把 schema/docs 注册在 /api 之外（Codex 审 P2）——不纳入门则未登录
 # 者可拉取全量路由清单+请求模型，与「default-deny 防路由枚举」自相矛盾。

@@ -524,6 +524,7 @@ def _assemble_default_worker_runtime() -> tuple[Any, Any, Callable[[], sqlite3.C
     from ..runtime.runtime import AgentRuntime
     from ..storage.db import get_conn, init_db
 
+    config.assert_local_db_path(config.DB_PATH)  # P0-B2：DB 必须本地固定盘，否则 fail-closed 拒启
     config.ensure_dirs()
     init_db(config.DB_PATH)
 

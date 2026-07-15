@@ -92,7 +92,7 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 | **判据①「结构完成」** | 连续 2 个**不同模块类**接入内核**零 diff**（只加 `agents/` 包，`git diff backend/app` 可度量为空） | **结构上达成** | 第一发 FEA 梁固有频率 solve→evaluate（特征值问题·空间离散，`docs/superpowers/specs/2026-07-14-fea-shot-design.md`）+ 第二发二阶阶跃响应超调 solve→evaluate（初值问题 ODE·时间积分，`docs/…control-step-response-shot-design.md`）；两发均 `git diff backend/app` 为空、均 review-gated（profile=none+rhr=true）、均异源双/三轴审收敛 |
 | **判据②「生长完成」** | GLM 生长烟测：喂合成需求零澄清长出合规 Agent，判分人独立复验（探针+pytest 复跑，不采信被试自报） | **双 A 通过** | `docs/reviews/glm-growth-smoke-r1/` + `glm-growth-smoke-r2/`（R2 弱先例复合任务：违规召回 6/6、引用零捏造、D6 宪法陷阱守住） |
 
-**判据①诚实边界（归纳跳跃对冲，非静默）**：判据①证明的窄事实是「已验证 **2 类数值范式**（空间离散 BVP / 时间积分 IVP）无需改内核即可接入」= 插件架构成立；**未覆盖交互式/流式/多模态 I/O 等其他潜在模块类**，「结构完成」是基于此 2 类的归纳，不外推为「所有模块类都零 diff」。
+**判据①诚实边界（归纳跳跃对冲，非静默）**：判据①证明的窄事实是「已验证 **2 类数值范式**（空间离散 BVP / 时间积分 IVP）无需改内核即可接入」= 插件架构成立；**未覆盖交互式/流式/多模态 I/O 等其他潜在模块类**，「结构完成」是基于此 2 类的归纳，不外推为「所有模块类都零 diff」。**交互类专项边界（P0-N1，导入准入门 `docs/PRODUCTION-READINESS-PROGRAM.md`）**：交互类当前仅 guide_agent 单实例（chat-only，n=1），**通用性未验**；交互运行时（ConversationService）结构上**不注入 tool_registry/knowledge**——需工具调用/RAG 的交互 Agent 当前**非零 diff**（须先扩内核 T3-a），故已在注册期加 **P0-N2 护栏**（`registry.py`）fail-closed 拒载「声明了 tools/knowledge 却静默拿不到」的畸形交互包。结构声明如实收窄为：**job 数值/求解类骨架完成（2 发零 diff 成立）；交互类单实例已建、通用性未验**。
 
 **封板宣称边界**：双判据证明**结构层（内核可扩展性）+ 生长层（合成需求可长出合规 Agent）**，**不外推内网环境层**——M4 真实性能盘 Tool Adapter、角色轴、真实模型/鉴权/限流形态均待内网后锻验（公网≠内网）。封板=冻结当前已验证的结构+生长能力，非宣称内网即可生产运行。
 
@@ -208,9 +208,10 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 21. **模型网关超时硬编码 `timeout=60`，无环境旋钮**（`backend/app/model_gateway/gateway.py`
     的 httpx.post，2026-07-13 R2 生长烟测判卷时咬出）：本地/公网快模型无碍，但 M4 真实
     内网慢模型（长推理 Agent）场景会系统性超时。当时判卷补丁仅落沙箱、主仓未动（见
-    `docs/reviews/glm-growth-smoke-r2/r2_judgment.md`）。**列入 M4 punch list**：改为
-    `FLAI_LLM_TIMEOUT_S` 可配，走内核级入队全套仪式。与封板判据①②无关（不阻断封板）。
-    tracker：GitHub issue #7。
+    `docs/reviews/glm-growth-smoke-r2/r2_judgment.md`）。**已修（P0-B3，导入准入门）**：
+    `backend/app/model_gateway/gateway.py` 超时改读 `config.LLM_TIMEOUT_S`（env
+    `FLAI_LLM_TIMEOUT_S`，默认 120s）；内网延迟 p99 实测仍待目标机（见
+    `docs/PRODUCTION-READINESS-PROGRAM.md` P0-B3）。tracker：GitHub issue #7。
 
 ## 开发口径
 

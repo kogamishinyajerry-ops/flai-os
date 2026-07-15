@@ -137,6 +137,21 @@ class AgentRegistry:
                 "但 workflow.requires_human_review 非 True——判决型 job Agent 必须 review-gated"
                 "（协作运行时 F3 注册期不变量：LLM 判决必经人签，绝不自动流经依赖链）"
             )
+        # P0-N2（导入准入门，docs/PRODUCTION-READINESS-PROGRAM.md）：交互 Agent 声明护栏。
+        # 交互运行时（ConversationService）当前只注入 messages/model_gateway/agent_registry/
+        # agent_config 四键，**不注入 tool_registry/knowledge**——interactive Agent 声明了
+        # tools/knowledge 也静默拿不到，agent 以为有、实则空手产结论 = 假绿死罪。能力就绪前
+        # fail-closed 拒载（T3-a 落地注入后放宽本不变量）。同 job×profile：jsonschema 无法
+        # 表达跨字段条件（mode×tools/knowledge），故在扫描侧 Python 补。
+        if workflow.get("mode") == "interactive" and (
+            (data.get("tools") or [])
+            or (data.get("knowledge") or {}).get("enabled") is True
+        ):
+            raise InvalidPackageError(
+                f"{entry} workflow.mode=interactive 但声明了 tools/knowledge——交互运行时"
+                "尚未注入 tool_registry/knowledge，声明了也静默拿不到（假绿死罪）；能力就绪前"
+                "fail-closed 拒载（P0-N2；T3-a 落地后放宽）"
+            )
         return data
 
     def get(self, agent_id: str) -> dict[str, Any] | None:

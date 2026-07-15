@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 # 仓库根目录：backend/app/config.py -> parents[0]=app parents[1]=backend parents[2]=仓根
@@ -28,6 +29,13 @@ FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
 
 DB_PATH = Path(os.environ.get("FLAI_DB_PATH", str(DATA_DIR / "flai_os.db")))
 BACKEND_PORT = int(os.environ.get("FLAI_BACKEND_PORT", "8620"))
+
+# P0-B3（导入准入门，docs/PRODUCTION-READINESS-PROGRAM.md）：模型网关 HTTP 超时可配，
+# 替换 gateway 原硬编码 60s。主入口对话/导引全走 reasoning profile，内网大模型长推理
+# p99 可能 >60s；硬编码 60 会令每人首条消息 503（最伤采纳信心的 day-one 崩溃）。默认
+# 120s 保守值；内网按实测 p99 export FLAI_LLM_TIMEOUT_S。下限夹 1s（0/负会令请求立即
+# 超时永远失败）。
+LLM_TIMEOUT_S = max(1.0, float(os.environ.get("FLAI_LLM_TIMEOUT_S", "120")))
 
 # 异步评测队列并发配额（T1，GH #2）：worker 同时最多认领执行的 eval-run 数上限，
 # 超出的排队最终执行（非拒绝）。轻内核默认 2（case 数小、无 Redis/Celery）；
@@ -61,6 +69,38 @@ WORKER_GENERATION = "collab-resolver+t2-eval-snapshot"
 # monitor_adapter_recon 工具经此子进程调核起草 adapter 草案；未配置=核不可达=工具
 # fail-closed（绝不猜路径）。默认 None：本机开发/内网按实况 export FLAI_MONITOR_CORE_DIR。
 MONITOR_CORE_DIR = os.environ.get("FLAI_MONITOR_CORE_DIR") or None
+
+
+def assert_local_db_path(db_path: Path | str) -> None:
+    """P0-B2（导入准入门）：DB 必须落本地固定盘，否则启动 fail-closed 拒绝。
+
+    SQLite WAL 在网络盘（UNC/映射盘）上会静默腐化（README/DEPLOYMENT-SUPERVISION
+    明列），而 Windows 企业默认常把数据重定向到映射盘。别赌运维读到那行文档表格——
+    启动期主动拦，错误方向是多拦（fail-closed 可接受）。
+
+    拦已知网络盘形态（best-effort）：
+    - UNC 路径（``\\\\host\\share`` 或 ``//host/share``）：跨平台可判、可测。
+    - Windows 映射网络盘（盘符 GetDriveType==DRIVE_REMOTE）：仅 win32 可判；非 Windows
+      跳过（诚实占位，本机不可测；残余靠 DEPLOYMENT-SUPERVISION 文档兜）。
+    """
+    raw = str(db_path)
+    norm = raw.replace("\\", "/")
+    if norm.startswith("//"):
+        raise ValueError(
+            f"FLAI_DB_PATH 指向网络共享（UNC）路径：{raw!r}——SQLite WAL 在网络盘上会"
+            "静默腐化，必须落本地固定盘（P0-B2 fail-closed 拒启）"
+        )
+    if sys.platform == "win32":
+        import ctypes  # 局部 import：非 Windows 平台绝不触碰
+
+        drive = os.path.splitdrive(os.path.abspath(raw))[0]  # e.g. 'Z:'
+        if drive:
+            _DRIVE_REMOTE = 4
+            if ctypes.windll.kernel32.GetDriveTypeW(f"{drive}\\") == _DRIVE_REMOTE:
+                raise ValueError(
+                    f"FLAI_DB_PATH 指向映射网络盘 {drive}（DRIVE_REMOTE）：{raw!r}——"
+                    "SQLite WAL 会静默腐化，必须落本地固定盘（P0-B2 fail-closed 拒启）"
+                )
 
 
 def ensure_dirs() -> None:

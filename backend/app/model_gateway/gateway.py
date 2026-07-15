@@ -23,7 +23,7 @@ import httpx
 import yaml
 from jsonschema import validate
 
-from ..config import CONTRACTS_DIR
+from ..config import CONTRACTS_DIR, LLM_TIMEOUT_S
 from ..core.errors import ModelConfigError, ModelUpstreamError, ProfileNotConfiguredError
 from ..storage import repos
 
@@ -47,9 +47,17 @@ def _summarize(text: Any) -> str | None:
 class ModelGateway:
     """Model Gateway 唯一入口：chat/embed/vision 三方法 + 全量留痕（docs/04）。"""
 
-    def __init__(self, profiles_path: str | Path, conn_factory: Callable[[], Any] | None = None) -> None:
+    def __init__(
+        self,
+        profiles_path: str | Path,
+        conn_factory: Callable[[], Any] | None = None,
+        timeout_s: float | None = None,
+    ) -> None:
         self.profiles_path = Path(profiles_path)
         self.conn_factory = conn_factory
+        # P0-B3：HTTP 超时可配（构造期注入，测试可传显式值；默认取 config 的 env 派生值
+        # FLAI_LLM_TIMEOUT_S）。替换 _post 原硬编码 60s——内网慢模型 p99>60s 会令首条消息 503。
+        self._timeout_s = float(timeout_s) if timeout_s is not None else LLM_TIMEOUT_S
         self._profiles: dict[str, dict[str, Any]] = {}
         self._load_profiles()
 
@@ -139,7 +147,7 @@ class ModelGateway:
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         for attempt in range(2):
             try:
-                resp = httpx.post(f"{base_url}{path}", json=payload, headers=headers, timeout=60)
+                resp = httpx.post(f"{base_url}{path}", json=payload, headers=headers, timeout=self._timeout_s)
             except httpx.TransportError as exc:
                 if attempt == 0:
                     time.sleep(0.5)

@@ -29,7 +29,7 @@ from conftest import TEST_DISPLAY_NAME, TEST_PASSWORD, TEST_USERNAME, login, see
 
 TESTS_DIR = Path(__file__).resolve().parent
 
-_ALLOWLIST = {("POST", "/api/auth/login"), ("GET", "/api/health")}
+_ALLOWLIST = {("POST", "/api/auth/login"), ("GET", "/api/health"), ("GET", "/api/readyz")}  # readyz：P0-M2† 就绪探针，uptime 监控免鉴权轮询
 
 
 def _anon(app) -> TestClient:
