@@ -179,29 +179,30 @@
         </div>
       </div>
 
-      <div class="section" v-if="canCancel || isWaitingReview">
+      <!-- 取消（created/queued 态）：一般动作，保留通用「动作」版块标题。与人签面
+           互斥（不同状态），至多一个渲染。 -->
+      <div class="section" v-if="canCancel">
         <h3>动作</h3>
-        <el-button v-if="canCancel" type="danger" plain @click="handleCancel">取消任务</el-button>
+        <el-button type="danger" plain @click="handleCancel">取消任务</el-button>
+      </div>
 
-        <el-card v-if="isWaitingReview" shadow="never" class="review-card">
-          <el-form label-width="80px">
-            <el-form-item label="审核人">
-              <span class="review-signer">{{ signerName }}（登录身份，签发记名不可代填）</span>
-            </el-form-item>
-            <el-form-item label="意见">
-              <el-input v-model="reviewForm.comment" type="textarea" :rows="2" placeholder="可选" />
-            </el-form-item>
-            <div class="review-note">
-              批准即代表你作为工程师背书该产物——签发权在你，平台不代签。
-            </div>
-            <el-form-item>
-              <!-- 批准=人签，用信任锁的 teal（--trust-signed），绝不用绿（绿仅表真实结果）。
-                   ref 供放行成功后的 teal burst 定位元素（动效系统 v1 E2，唯一 teal 许可点）。 -->
-              <el-button ref="approveBtnEl" class="approve-btn" :loading="reviewing" @click="handleReview('approve')">批准放行</el-button>
-              <el-button type="danger" :loading="reviewing" @click="handleReview('reject')">拒绝</el-button>
-            </el-form-item>
-          </el-form>
-        </el-card>
+      <!-- 人签放行面（Gate2-T2 Face1）：平台最神圣动作——「签发」本身即 climax（serif
+           眉标由 SignPanel 提供），不再挂在通用「动作」版块标题下降格为 peer section
+           title（CG-A）。复用共享 SignPanel（CG-A/CG-B 治本 SSOT，与 StatusCenter 速览
+           面同工艺同文案，结构不可分叉）。签发 API/二次确认/记名/fail-closed 逻辑全留
+           本组件 handleReview，SignPanel 纯表现层。signPanelRef 供放行成功 teal burst
+           定位（动效系统 v1 E2，唯一 teal 许可点）。 -->
+      <div class="section" v-if="isWaitingReview">
+        <SignPanel
+          ref="signPanelRef"
+          class="review-card"
+          approve-class="approve-btn"
+          :signer-name="signerName"
+          v-model:comment="reviewForm.comment"
+          :reviewing="reviewing"
+          @approve="handleReview('approve')"
+          @reject="handleReview('reject')"
+        />
       </div>
 
       <div class="section">
@@ -269,6 +270,7 @@ import { statusLabel, statusTagType, formatTime, formatFileSize, TASK_WORK_STATE
 import MarkdownLite from "../components/MarkdownLite.vue";
 import WorkLog from "../components/WorkLog.vue";
 import CompletionSeal from "../components/CompletionSeal.vue";
+import SignPanel from "../components/SignPanel.vue";
 import { displayName } from "../stores/session";
 import { markTaskSeen } from "../utils/lastSeen";
 import { burstSigned } from "../effects/burst";
@@ -321,9 +323,9 @@ const { task, events, modelCalls, modelCallsError, loaded, error: loadError } = 
 const reviewForm = reactive({ comment: "" });
 const signerName = computed(() => displayName());
 const reviewing = ref(false);
-// 批准按钮元素（动效系统 v1 E2）：放行成功后 burstSigned(el) 的定位来源；
-// el-button 组件 ref 通过 .ref 暴露原生 DOM（element-plus expose 契约）。
-const approveBtnEl = ref(null);
+// 签发面组件 ref（动效系统 v1 E2）：放行成功后 burstSigned(el) 的定位来源；
+// SignPanel 经 getApproveNativeEl() 暴露批准键原生 DOM（唯一 teal 许可点）。
+const signPanelRef = ref(null);
 
 // 盖章动效仪式只属于亲历者（批A Task 9）：本次会话内亲眼观察到「活跃→终态」
 // 迁移才播；历史页面直开（首载即终态）sealAnimate 恒 false——一次性置真不
@@ -542,7 +544,7 @@ async function handleCancel() {
 }
 
 async function handleReview(action) {
-  const label = action === "approve" ? "批准放行" : "拒绝";
+  const label = action === "approve" ? "批准放行" : "驳回";
   try {
     await ElMessageBox.confirm(`确认${label}该任务？`, label, { type: "warning" });
   } catch {
@@ -555,7 +557,7 @@ async function handleReview(action) {
     // 人签放行成功时刻（唯一 teal 许可点，动效系统硬约束）：仅 approve 分支触发；
     // 驳回/失败绝不放庆祝动效。元素取不到（ref 未挂载等）burstSigned 自兜 null。
     if (action === "approve") {
-      burstSigned(approveBtnEl.value?.ref);
+      burstSigned(signPanelRef.value?.getApproveNativeEl());
     }
     ElMessage.success(`已${label}`);
     await pokeTask(taskId); // 带外补拉：不等下一 tick，动作结果立即回显
@@ -617,9 +619,17 @@ onUnmounted(() => {
 .page-header {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   margin-bottom: 16px;
+}
+/* CG-H：窄屏（≤640px）让标题独占一行，状态 tag/批量摘要/刷新等控件换行到其下——
+   否则挤在一行内 h2「任务详情」被断成「任务详/情」。 */
+@media (max-width: 640px) {
+  .page-header h2 {
+    flex: 1 0 100%;
+  }
 }
 /* 工作态流光带（动效系统 v1 P3）：v-if 已绑真实 work-state，此处只管视觉——
    静态 clay-soft 底线常显作 reduced-motion 兜底，::after 是流动的 clay 高光扫过，
@@ -693,7 +703,7 @@ onUnmounted(() => {
 .task-meta-card {
   margin-bottom: 16px;
   border: 1px solid var(--hairline);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--paper-rail);
   overflow: hidden;
 }
@@ -713,35 +723,13 @@ onUnmounted(() => {
   font-weight: 600;
   color: var(--ink);
 }
-.review-signer {
-  color: var(--ink-soft);
-  font-size: 13px;
-}
-
+/* 签发卡布局壳（Face1）：容器工艺由全局 .sign-surface 提供（teal 顶饰条/边框/圆角/
+   阴影/内距/焦点环），内层排版（眉标/背书句/签发人行/动作行/teal 批准键）由共享
+   SignPanel 提供。本处只留布局定位（间距、最大宽）——applies 到 SignPanel 根（Vue
+   child-root data-v 契约），两签发面工艺与文案不可分叉（CG-A/CG-B 治本 SSOT）。 */
 .review-card {
   margin-top: 12px;
   max-width: 480px;
-  background: var(--paper-rail);
-}
-/* 批准=人签，用信任锁 teal（--trust-signed）覆盖 Element Plus 按钮变量；绝不用绿。
-   hover/active 深调统一走 --trust-signed-deep（App.vue color-mix 派生，暗色下自动
-   变亮而非变暗），不再各自硬编码一份 teal——单一 SSOT，跨主题自动跟随。 */
-.approve-btn {
-  --el-button-bg-color: var(--trust-signed);
-  --el-button-border-color: var(--trust-signed);
-  --el-button-text-color: #fff;
-  --el-button-hover-bg-color: var(--trust-signed-deep);
-  --el-button-hover-border-color: var(--trust-signed-deep);
-  --el-button-hover-text-color: #fff;
-  --el-button-active-bg-color: var(--trust-signed-deep);
-  --el-button-active-border-color: var(--trust-signed-deep);
-}
-.review-note {
-  font-size: 12.5px;
-  color: var(--ink-soft);
-  line-height: 1.6;
-  margin: 0 0 12px;
-  padding-left: 80px;
 }
 .artifact-review-hint {
   margin-left: 10px;
@@ -751,7 +739,7 @@ onUnmounted(() => {
 }
 .artifact-card {
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--card-bg, var(--paper-surface));
   box-shadow: var(--shadow-card);
   margin-bottom: 12px;
@@ -807,7 +795,7 @@ onUnmounted(() => {
 }
 .source-panel {
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--card-bg, var(--paper-surface));
   box-shadow: var(--shadow-card);
   padding: 16px;

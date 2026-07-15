@@ -174,9 +174,11 @@ function removeAt(key, i) {
 .sf-remove:hover {
   color: var(--trust-fail, #be3a3a);
 }
+/* 对象列表子卡（Face3）：radius 收口到 token 阶（原 10px 魔数），与创建面卡语言
+   family 一致；paper-rail 底作 worktable 内的嵌套字段容器。 */
 .sf-objcard {
   border: 1px solid var(--hairline);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 12px 14px 4px;
   background: var(--paper-rail, #f7f4ef);
 }

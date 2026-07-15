@@ -143,19 +143,23 @@
             </template>
           </div>
 
-          <!-- 内联签发卡（祈使句④）：同一 review API，人具名，fail-closed 全承袭 -->
-          <div v-if="isPeekWaiting" class="peek-block peek-review-card">
-            <div class="peek-label">签发</div>
-            <div class="peek-review-note">批准即代表你作为工程师背书该产物——签发权在你，平台不代签。</div>
-            <div class="peek-review-signer">签发人：{{ signerName }}（登录身份，不可代填）</div>
-            <el-input v-model="reviewComment" type="textarea" :rows="2" placeholder="意见（可选）" class="peek-review-input" />
-            <div class="peek-review-actions">
-              <!-- teal=人签唯一色；成功迸发=burstSigned 唯一许可点之一。
-                   产物预览未完成首次尝试前禁批准（先看后签）；驳回是安全方向不设门。 -->
-              <el-button ref="peekApproveEl" class="peek-approve" :loading="reviewing" :disabled="artifactsPending" @click="doReview('approve')">批准放行</el-button>
-              <el-button type="danger" plain :loading="reviewing" @click="doReview('reject')">驳回</el-button>
-            </div>
-          </div>
+          <!-- 内联签发面（Gate2-T2 Face2）：复用共享 SignPanel（CG-A/CG-B 治本 SSOT，
+               与 TaskDetail 详情人签面同工艺同文案，结构不可分叉——消除两签发面观感与
+               文案分叉）。同一 review API、人具名、fail-closed、先看后签禁批
+               （artifactsPending）全承袭在本组件 doReview；SignPanel 纯表现层。
+               signPanelRef 供放行成功 teal burst 定位（唯一 teal 许可点之一）。 -->
+          <SignPanel
+            v-if="isPeekWaiting"
+            ref="signPanelRef"
+            class="peek-block peek-review-card"
+            approve-class="peek-approve"
+            :signer-name="signerName"
+            v-model:comment="reviewComment"
+            :reviewing="reviewing"
+            :approve-disabled="artifactsPending"
+            @approve="doReview('approve')"
+            @reject="doReview('reject')"
+          />
 
           <!-- 折叠工作日志（复用 WorkLog：默认一行，展开=叙事+聚合 chips） -->
           <div class="peek-block">
@@ -199,6 +203,7 @@ import WorkLog from "./WorkLog.vue";
 import MarkdownLite from "./MarkdownLite.vue";
 import InboxZero from "./artwork/InboxZero.vue";
 import CompletionSeal from "./CompletionSeal.vue";
+import SignPanel from "./SignPanel.vue";
 
 const router = useRouter();
 
@@ -380,7 +385,9 @@ function releasePeekFeed() {
 const signerName = computed(() => displayName());
 const reviewComment = ref("");
 const reviewing = ref(false);
-const peekApproveEl = ref(null);
+// 签发面组件 ref：放行成功 teal burst 定位来源（SignPanel getApproveNativeEl 暴露
+// 批准键原生 DOM，唯一 teal 许可点之一）。
+const signPanelRef = ref(null);
 const acceptedSamples = ref([]);
 const sampleFixResults = ref([]);
 const sampleFixing = ref(false);
@@ -442,7 +449,7 @@ async function fixAcceptedSamples() {
 async function doReview(action) {
   const taskId = statusCenter.taskId; // 调用前捕获：await 期间任务可能被切换
   if (!taskId) return;
-  const label = action === "approve" ? "批准放行" : "拒绝";
+  const label = action === "approve" ? "批准放行" : "驳回";
   try {
     // 与 TaskDetail 同款二次确认：内联签发不降低宪法路径的操作摩擦
     await ElMessageBox.confirm(`确认${label}该任务？`, "签发确认", {
@@ -466,7 +473,7 @@ async function doReview(action) {
     // 续体绑定：await 期间抽屉可能已关/任务已切——只有还在看同一任务时才迸发+刷新
     if (statusCenter.open && statusCenter.taskId === taskId) {
       if (action === "approve") {
-        burstSigned(peekApproveEl.value?.ref); // teal 迸发：人签成功唯一许可点
+        burstSigned(signPanelRef.value?.getApproveNativeEl()); // teal 迸发：人签成功唯一许可点
       }
       // 带外补拉（Task 4 同款）：不等下一轮询，channel 落地后 task watch
       // 自动回填 peekTask 并 patchInboxTask，不再本地二次拉取。await（Task 12
@@ -597,7 +604,7 @@ onUnmounted(() => {
   flex: none;
   border: 1px solid var(--hairline);
   background: var(--paper-rail);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   width: 28px;
   height: 28px;
   cursor: pointer;
@@ -650,7 +657,7 @@ onUnmounted(() => {
   gap: 10px;
   padding: 9px 12px;
   border: 1px solid var(--hairline-soft);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--paper-surface);
   cursor: pointer;
   transition: border-color var(--motion-fast) var(--ease-out-soft), transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
@@ -782,7 +789,7 @@ onUnmounted(() => {
   font-weight: 600;
   cursor: pointer;
   padding: 4px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .peek-fullpage:hover {
   background: rgba(var(--clay-rgb), 0.08);
@@ -797,7 +804,7 @@ onUnmounted(() => {
   gap: 12px;
   padding: 10px 12px;
   border: 1px solid var(--hairline);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--paper-rail);
   color: var(--ink-soft);
   font-size: 12.5px;
@@ -829,7 +836,7 @@ onUnmounted(() => {
 }
 .peek-artifact {
   border: 1px solid var(--hairline);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   margin-bottom: 10px;
   background: var(--card-bg);
@@ -904,45 +911,11 @@ onUnmounted(() => {
 .peek-muted {
   padding: 0;
 }
-.peek-review-card {
-  border: 1px solid rgba(var(--trust-signed-rgb), 0.25);
-  border-radius: 12px;
-  padding: 14px;
-  /* .03 太淡，暗色下几乎消失；提到 .06 保住「签发卡特殊感」 */
-  background: rgba(var(--trust-signed-rgb), 0.06);
-}
-.peek-review-signer {
-  margin-bottom: 8px;
-  color: var(--ink-soft);
-  font-size: 12px;
-}
-
-.peek-review-note {
-  font-size: 12px;
-  color: var(--ink-soft);
-  margin-bottom: 10px;
-  line-height: 1.6;
-}
-.peek-review-input {
-  margin-bottom: 8px;
-}
-.peek-review-actions {
-  display: flex;
-  gap: 10px;
-  margin-top: 4px;
-}
-/* teal=人签唯一合法通道色（信任色锁） */
-.peek-approve {
-  background: var(--trust-signed);
-  border-color: var(--trust-signed);
-  color: #fff;
-}
-.peek-approve:hover,
-.peek-approve:focus {
-  background: var(--trust-signed-deep);
-  border-color: var(--trust-signed-deep);
-  color: #fff;
-}
+/* 签发面（.peek-review-card）容器工艺 + 内层排版（眉标/背书句/签发人行/意见框/
+   动作行/teal 批准键）已全部收敛进共享 SignPanel + 全局 .sign-surface SSOT
+   （Gate2-T2 CG-A/CG-B 治本），与 TaskDetail 人签面同工艺同文案、结构不可分叉——
+   此处不再自持任何 peek-review-* 私有样式（模板上 class 保留 peek-review-card /
+   peek-approve 作语义与 e2e 选择器锚，观感由 SignPanel 统一提供）。 */
 .peek-model-line {
   font-size: 12px;
   color: var(--ink-soft);
