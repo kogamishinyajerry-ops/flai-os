@@ -11,6 +11,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from .. import config
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY,
@@ -280,6 +282,11 @@ _INDEX_DDL = (
 )
 
 
+# P0-B2（Codex 命中即审 P1-1）：每进程已校验过的 DB 路径 memo，避免 get_conn 每次
+# 重复校验（尤其 Windows GetDriveType 系统调用）。
+_VALIDATED_DB_PATHS: set[str] = set()
+
+
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
     """打开一个 sqlite3 连接：Row 工厂 + WAL + 外键约束 + 手动事务模式。
 
@@ -287,6 +294,15 @@ def get_conn(db_path: str | Path) -> sqlite3.Connection:
     默认 timeout=5.0（审计 P3——若有人改 connect 参数或依赖漂移，BEGIN IMMEDIATE
     竞争会立刻 database is locked）。显式声明使这一承载并发正确性的前提可见。
     """
+    # P0-B2（Codex 命中即审 P1-1）：DB-open 单一边界强制本地盘。init_db/worker/
+    # user_admin/deploy_selfcheck 全经此开库——在此拦保证任何入口都不会在网络盘上
+    # sqlite3.connect（会建 WAL 文件、静默腐化）。连接前置的 mkdir 类 I/O 由各启动点
+    # （main lifespan / worker）更早的 assert_local_db_path 拦；此处是覆盖全部 CLI 的
+    # 单一真源。每路径每进程只校一次（memo）。
+    key = str(db_path)
+    if key not in _VALIDATED_DB_PATHS:
+        config.assert_local_db_path(db_path)
+        _VALIDATED_DB_PATHS.add(key)
     conn = sqlite3.connect(str(db_path), isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")

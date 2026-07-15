@@ -50,6 +50,22 @@ def summarize(latencies_ms: list[float]) -> dict:
     }
 
 
+def gate_verdict(n_samples: int, latencies_ms: list[float], timeout_s: float) -> tuple[bool, str]:
+    """P0-B3 gate 判定（纯函数，可单测 + tamper）。**fail-closed**（Codex 命中即审 P1-4）：
+    任何失败/超时样本或零成功样本 → 不通过——被排除的恰是最慢的（超时请求），从幸存者算
+    p99 会假绿（19 快 + 1 超时 180s 会报 p99<120 假通过）。唯全部成功且 p99<超时才过。"""
+    n_fail = n_samples - len(latencies_ms)
+    if n_fail > 0:
+        return False, (f"indeterminate：{n_fail}/{n_samples} 请求失败/超时——被排除的样本恰是"
+                       "最慢的，从幸存者算 p99 会假绿；排查端点后重采样，勿宣称通过")
+    if not latencies_ms:
+        return False, "零成功样本，无法判定——先排查端点连通性"
+    p99_s = percentile(sorted(latencies_ms), 0.99) / 1000.0
+    if timeout_s > p99_s:
+        return True, f"通过：FLAI_LLM_TIMEOUT_S={timeout_s}s > 实测 p99={p99_s:.2f}s"
+    return False, f"不通过：配置超时 {timeout_s}s ≤ 实测 p99 {p99_s:.2f}s，须调大 FLAI_LLM_TIMEOUT_S"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="内网模型延迟采样（P0-B3 导入准入门）")
     parser.add_argument("-n", "--samples", type=int, default=20, help="请求次数（默认 20）")
@@ -91,17 +107,15 @@ def main() -> int:
     summary = summarize(latencies)
     print("\n=== 延迟汇总（仅成功请求）===")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    print(f"逐请求原始时延已落盘：{args.out}（可第三方复算）")
+    n_fail = args.samples - len(latencies)
+    print(f"逐请求原始时延已落盘：{args.out}（可第三方复算）；失败/超时 {n_fail}/{args.samples}")
     configured = os.environ.get("FLAI_LLM_TIMEOUT_S")
-    p99 = summary["p99_ms"]
-    if p99 is not None:
-        p99_s = p99 / 1000.0
-        cfg_s = float(configured) if configured else 120.0
-        verdict = "通过" if cfg_s > p99_s else "**不通过：配置超时 ≤ p99，须调大 FLAI_LLM_TIMEOUT_S**"
-        print(f"\nP0-B3 判据：FLAI_LLM_TIMEOUT_S={cfg_s}s vs 实测 p99={p99_s:.2f}s → {verdict}")
-    else:
-        print("\nP0-B3 判据：零成功样本，无法判定——先排查端点连通性")
-    return 0
+    cfg_s = float(configured) if configured else 120.0
+    passed, verdict = gate_verdict(args.samples, latencies, cfg_s)
+    print(f"\nP0-B3 判据 → {'✅ ' if passed else '❌ '}{verdict}")
+    # P1-5（Codex 命中即审）：exit 0 只留给通过的实测；不过/不确定一律非零，部署自动化
+    # 按退出码不会误标准入门绿。
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

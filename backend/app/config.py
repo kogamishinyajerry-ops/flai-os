@@ -63,7 +63,11 @@ DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 # T1/T2 分支与协作运行时分支各自独立 bump 代际；合并（feat/eval-async-queue → main）后
 # worker 同时具备 resolver + EvalRunner + 快照认领三项新行为，代际值须区别于两条父线
 # 各自的值——任一侧滞留旧码（缺 resolver 或缺快照认领）都要被 check_worker_generation 拦下。
-WORKER_GENERATION = "collab-resolver+t2-eval-snapshot"
+# P0-B3（导入准入门，Codex 命中即审 P1-2）：模型网关超时从硬编码 60s 改为可配
+# FLAI_LLM_TIMEOUT_S——**worker 可见行为变更**（worker 跑的 job 调 gateway._post）。
+# 旧 worker 留 60s 却写同代际会骗过 deploy_selfcheck.check_worker_generation（误绿），
+# 故 bump 逼 worker 重启到读 env 的新代码。
+WORKER_GENERATION = "collab-resolver+t2-eval-snapshot+b3-llm-timeout"
 
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。
 # monitor_adapter_recon 工具经此子进程调核起草 adapter 草案；未配置=核不可达=工具

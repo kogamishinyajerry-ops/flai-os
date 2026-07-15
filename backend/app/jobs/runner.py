@@ -596,6 +596,17 @@ def run_worker_forever(
                 threading.Thread(
                     target=eval_runner.run_forever, daemon=True, name="eval-worker"
                 ).start()
+            # P1-3（Codex 命中即审）：心跳 daemon 线程。run_forever 的 _beat_if_due 只在
+            # 任务间隙发心跳，而 B3 现允许 120s 模型请求，长任务会令心跳过 60s 陈旧，
+            # /api/readyz 误判健康但忙碌的 worker 为 503（假告警/误重启）。独立 daemon 恒按
+            # _HEARTBEAT_INTERVAL 发心跳（不受 run_once 阻塞），令就绪度反映「worker 进程
+            # 活着」而非「worker 空闲」；进程死则 daemon 随之死、心跳停 → readyz 如实 503。
+            def _heartbeat_daemon() -> None:
+                while True:
+                    time.sleep(_HEARTBEAT_INTERVAL_SECONDS)
+                    runner.beat()
+
+            threading.Thread(target=_heartbeat_daemon, daemon=True, name="worker-heartbeat").start()
             runner.run_forever()
     except WorkerAlreadyRunningError as exc:
         print(f"错误：{exc}", file=sys.stderr)
