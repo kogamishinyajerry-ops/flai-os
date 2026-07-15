@@ -214,9 +214,9 @@
                 <button
                   v-if="openableCount(m.recommendation) > 0"
                   class="open-plan-btn"
-                  :disabled="opening"
+                  :disabled="opening === conversationId"
                   @click="openPlan(m.recommendation)"
-                >{{ opening ? "召集中…" : `照此方案开工 · 召集 ${openableCount(m.recommendation)} 名就绪成员` }}</button>
+                >{{ opening === conversationId ? "召集中…" : `照此方案开工 · 召集 ${openableCount(m.recommendation)} 名就绪成员` }}</button>
                 <button class="workbench-btn" @click="openWorkbench">进入协作工作台 →</button>
                 <button type="button" class="plan-escape" @click="focusComposer">想调整方案？直接告诉导引 ↓</button>
                 <span class="plan-note">
@@ -589,7 +589,9 @@ function openWorkbench() {
 // 只在①多 Agent 方案（单 Agent 保留创建页 conclude_after 归档语义）②预填非空
 // ③会话无携带附件（附件必须经创建页人工过目）时提供；参数不全由 422 如实
 // 透出，引导走「去创建此任务」补全，绝不客户端猜校验。
-const opening = ref(false); // 「照此方案开工」进行中（单飞行防重）
+const opening = ref(null); // 「照此方案开工」进行中的会话 id（按会话作用域，CRS R1-P2：
+// 全局布尔会在切会话后把新会话的开工按钮一并禁死；API client 无超时，卡住的旧请求
+// 可无限期封锁新会话的唯一开工入口）
 // 本地已召集账（CRS R0-P2）：批量创建成功后 conversationTasks 轮询最长滞后 5s，
 // 期间 openableCount 若仍计入已成功成员，按钮复活可被二次点击造重复任务。
 // key=`${会话id}:${agent_id}`，跨会话天然隔离；feed 数据到位后与 agentTaskInfo 双保险。
@@ -702,7 +704,7 @@ function openableCount(plan) {
 // POST /api/tasks，服务端校验 fail-closed）。这一键由人亲手点下=人召集；导引
 // 从未获得任何自动路径。逐个失败如实收集透出，绝不静默。
 async function openPlan(plan) {
-  if (opening.value === true) return;
+  if (opening.value === conversationId.value && opening.value !== null) return;
   if (planOpenable(plan) !== true) {
     ElMessage.error("条件已变化（会话归档 / 新增附件），请刷新方案或走「去创建此任务」。");
     return;
@@ -715,7 +717,7 @@ async function openPlan(plan) {
     (a) => agentReady(a) === true && !agentTaskInfo(a) && !summonedLocally(a)
   );
   if (targets.length === 0) return;
-  opening.value = true;
+  opening.value = approvedConvId;
   const failed = [];
   let aborted = 0;
   for (let i = 0; i < targets.length; i += 1) {
@@ -747,7 +749,7 @@ async function openPlan(plan) {
     if (aborted > 0) parts.push(`会话已切换，剩余 ${aborted} 名未召集`);
     ElMessage.error(`召集未全部完成——${parts.join("；")}`);
   }
-  opening.value = false;
+  if (opening.value === approvedConvId) opening.value = null; // 只清本会话的忙态
 }
 
 function createOneTask(agent, plan) {
