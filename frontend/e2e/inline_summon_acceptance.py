@@ -2,12 +2,14 @@
 
 范式 2a 补刀（owner 2026-07-15 拍板）：多 Agent 方案 + 预填齐 + 无携带附件时，
 人可在方案卡上两击（原地召集 → 确认召集）完成召集，零跳页。验收面：
-  ① 预填非空的 Agent 显示「原地召集」；预填为空的对照 Agent 不显示（只留创建页路径）；
+  ① 预填齐 required 的 Agent 显示「原地召集」；**部分预填**的对照 Agent 不显示
+     （POST /api/tasks 不做即时校验，就绪门必须在提供入口前咬住——Codex R0-P1）；
   ② 点「原地召集」只进入确认态——**此刻会话任务数=0（导引不代召集铁证）**；
   ③ 点「再想想」退出确认态，任务数仍=0（反悔无副作用）；
   ④ 重新武装 →「确认召集」→ 任务真实创建：agent_id / conversation_id / inputs 与预填一致；
   ⑤ 零跳页：URL 仍 /?c=<conv>，督战 chip（.agent-status）原地亮起；
-  ⑥ e2e 锚点不破：「去创建此任务」按钮仍在（m9 back=chat 契约路径原样保留）。
+  ⑥ e2e 锚点不破：「去创建此任务」按钮仍在（m9 back=chat 契约路径原样保留）；
+  ⑦ 会话归档（concluded）后重开：内联入口整体消失（只读会话不可召集——Codex R0-P2）。
 
 自包含：自起后端（tmp DB）+ stub gateway + 真 chromium，不起 worker。
 
@@ -56,7 +58,8 @@ PREFILLED_NAME = "内联召集验收"
 
 
 class _StubGateway:
-    """两名成员：hello_agent 预填齐（应有原地召集）；fta_agent 预填空（对照，不应有）。"""
+    """两名成员：hello_agent 预填齐 required（应有原地召集）；fta_agent 只预填
+    top_event（required 还差 system_description/components——就绪门应咬住不提供）。"""
 
     def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         plan = {
@@ -75,7 +78,7 @@ class _StubGateway:
                     "agent_id": "fta_agent",
                     "role": "搭建并分析故障树",
                     "rationale": "参数未齐，走创建页补全",
-                    "prefilled_inputs": {},
+                    "prefilled_inputs": {"top_event": "供电完全丧失"},
                 },
             ],
         }
@@ -154,7 +157,7 @@ with sync_playwright() as p:
         hello_card.get_by_role("button", name="原地召集").count() == 1,
     )
     check(
-        "①对照：预填空的成员不显示「原地召集」",
+        "①对照：部分预填（top_event 有、其余 required 缺）不显示「原地召集」",
         fta_card.get_by_role("button", name="原地召集").count() == 0,
     )
     page.screenshot(path=str(SHOTS / "1_plan_card_inline_cta.png"), full_page=True)
@@ -204,6 +207,18 @@ with sync_playwright() as p:
         "⑥「去创建此任务」按钮原样保留",
         page.get_by_role("button", name="去创建此任务").count() >= 2,
     )
+
+    # ⑦ 归档会话重开 → 只读，不提供内联召集（创建必 409，入口就不该有）
+    resp = API.post(f"/api/conversations/{conv_id}/conclude")
+    check("⑦归档 API 生效", resp.status_code == 200, f"status={resp.status_code}")
+    page.goto(BASE + f"/?c={conv_id}", wait_until="networkidle")
+    page.wait_for_selector(".plan-card", timeout=8000)
+    page.wait_for_timeout(800)  # schema 预取窗口——就绪也不该显示（status 门优先）
+    check(
+        "⑦concluded 会话不提供「原地召集」（只读）",
+        page.get_by_role("button", name="原地召集").count() == 0,
+    )
+    page.screenshot(path=str(SHOTS / "4_concluded_readonly.png"), full_page=True)
 
     browser.close()
 

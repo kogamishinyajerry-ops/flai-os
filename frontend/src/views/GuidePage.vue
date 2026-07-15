@@ -338,7 +338,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation } from "../api/conversations";
 import { createTask } from "../api/tasks";
-import { listAgents } from "../api/agents";
+import { listAgents, getAgent } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
 import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, formatTime } from "../utils/format";
 import { openTaskPeek } from "../stores/statusCenter";
@@ -521,6 +521,7 @@ async function send() {
     if (!conversationId.value) {
       const conv = await createConversation({ agentId: GUIDE_AGENT_ID });
       conversationId.value = conv.id;
+      conversationStatus.value = conv.status || "active";
       started.value = true;
       // URL 反映当前会话（可刷新/分享/回退），并让左栏历史即时收录这条新会话。
       router.replace({ path: "/", query: { c: conv.id } });
@@ -541,6 +542,7 @@ async function send() {
     });
     await scrollToBottom();
     ensureConversationTasksFeed(); // 本轮若刚给出 orchestrate 方案，开始为其召集状态保鲜
+    ensureAgentSchemasForMessages(); // 内联召集就绪判据的契约预取（fail-closed）
   } catch (err) {
     // 本轮失败：后端契约是「失败零落库」（幂等重试，ADR-0013），本地同样回滚
     // 乐观气泡并把原文还原到输入框——不在界面上留一条服务端不存在的幽灵消息，
@@ -588,18 +590,65 @@ function openWorkbench() {
 // 只在①多 Agent 方案（单 Agent 保留创建页 conclude_after 归档语义）②预填非空
 // ③会话无携带附件（附件必须经创建页人工过目）时提供；参数不全由 422 如实
 // 透出，引导走「去创建此任务」补全，绝不客户端猜校验。
-const inlineArmed = ref(null); // `${消息idx}:${agent_id}`——同 Agent 出现在两张方案卡不串态
+const inlineArmed = ref(null); // `${会话id}:${消息idx}:${agent_id}`（Codex R0-P1：跨会话绝不串态）
 const inlineBusy = ref(false);
+// 会话可写态（Codex R0-P2）：getConversation/createConversation 如实带出，concluded
+// 只读会话不提供内联召集（否则创建必 409）。未知（null）= fail-closed 不提供。
+const conversationStatus = ref(null);
+// Agent 输入契约缓存（Codex R0-P1）：POST /api/tasks 不做即时 schema 校验（校验在
+// worker 运行期），故「预填就绪」必须由前端按 input_schema.required 逐键判定后才
+// 提供内联路径——schema 拉不到 / 未知一律 fail-closed 回创建页路径。
+const agentSchemaCache = reactive({}); // agent_id -> { loaded: true, schema: object|null }
+
+// 会话切换（含 resetToFresh 置空）即撤武装——确认态绝不跨会话存活。
+watch(conversationId, () => {
+  inlineArmed.value = null;
+});
 
 function inlineKey(agent, idx) {
-  return `${idx}:${agent.agent_id}`;
+  return `${conversationId.value || "none"}:${idx}:${agent.agent_id}`;
+}
+
+function prefillSatisfiesSchema(schema, prefilled) {
+  // 就绪判据（纯函数，fail-closed）：schema 存在、required 明确、每个必填键在预填里
+  // 且非空白。这只是「提供内联入口」的门槛，不替代服务端/worker 的权威校验。
+  if (!schema || typeof schema !== "object") return false;
+  const required = Array.isArray(schema.required) ? schema.required : null;
+  if (required === null) return false;
+  return required.every((k) => {
+    const v = (prefilled || {})[k];
+    return v !== undefined && v !== null && String(v).trim() !== "";
+  });
+}
+
+function ensureAgentSchemasForMessages() {
+  // 方案卡出现（新回复或历史恢复）即预取成员 Agent 的输入契约；失败记 null=不就绪。
+  for (const m of messages.value) {
+    const plan = m && m.recommendation;
+    if (!plan || plan.decision !== "orchestrate" || !Array.isArray(plan.agents)) continue;
+    for (const a of plan.agents) {
+      const id = a.agent_id;
+      if (!id || id in agentSchemaCache) continue;
+      agentSchemaCache[id] = { loaded: false, schema: null };
+      getAgent(id)
+        .then((detail) => {
+          agentSchemaCache[id] = { loaded: true, schema: (detail && detail.input_schema) || null };
+        })
+        .catch(() => {
+          agentSchemaCache[id] = { loaded: true, schema: null };
+        });
+    }
+  }
 }
 
 function canInlineSummon(agent, plan) {
+  const cached = agentSchemaCache[agent.agent_id];
   return (
     !!conversationId.value &&
+    conversationStatus.value === "active" &&
     plan && Array.isArray(plan.agents) && plan.agents.length > 1 &&
-    Object.keys(agent.prefilled_inputs || {}).length > 0 &&
+    !!cached && cached.loaded === true &&
+    prefillSatisfiesSchema(cached.schema, agent.prefilled_inputs || {}) &&
     collectCarriedFiles().length === 0
   );
 }
@@ -610,6 +659,12 @@ function armInlineSummon(agent, idx) {
 
 async function confirmInlineSummon(agent) {
   if (inlineBusy.value === true) return;
+  // 确认时再验一遍会话可写态（fail-closed：渲染后会话可能已被归档）
+  if (conversationStatus.value !== "active") {
+    ElMessage.error("本会话已归档（只读），不能再召集——如需继续，请开启新协作。");
+    inlineArmed.value = null;
+    return;
+  }
   inlineBusy.value = true;
   try {
     await createTask({
@@ -623,7 +678,7 @@ async function confirmInlineSummon(agent) {
     inlineArmed.value = null;
     ensureConversationTasksFeed(); // 督战 chip 保鲜：召集即接上会话任务订阅
   } catch (err) {
-    // fail-closed 如实透出：常见为 422 预填不全——引导走创建页补全，不静默
+    // fail-closed 如实透出（409 已归档 / 校验拒绝等），并引导走创建页路径，不静默
     ElMessage.error(err.detail || err.message || "召集失败——请走「去创建此任务」补全参数后亲手提交");
   } finally {
     inlineBusy.value = false;
@@ -736,6 +791,7 @@ function resetToFresh(clearError = true) {
   messages.value = [];
   started.value = false;
   conversationId.value = "";
+  conversationStatus.value = null;
   draft.value = "";
   pendingFiles.value = [];
   releaseConversationTasksFeed();
@@ -753,6 +809,7 @@ async function loadConversation(id) {
   try {
     const conv = await getConversation(id);
     conversationId.value = conv.id;
+    conversationStatus.value = conv.status || null; // 只读会话如实带出（Codex R0-P2）
     started.value = true;
     messages.value = (conv.messages || []).map((m) => ({
       role: m.role,
@@ -763,6 +820,7 @@ async function loadConversation(id) {
     }));
     await scrollToBottom();
     ensureConversationTasksFeed(); // 恢复的历史会话若已带 orchestrate 方案，立即接上订阅
+    ensureAgentSchemasForMessages(); // 历史方案卡同样预取输入契约（内联就绪判据）
   } catch (err) {
     pageError.value = err.detail || err.message || "会话加载失败";
   } finally {
