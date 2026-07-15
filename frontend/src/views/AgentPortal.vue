@@ -48,9 +48,12 @@
             </div>
 
             <div class="agent-tags">
+              <!-- CG-G 徽章语言收敛：cat-pill 从「描边缺失的实心 tint」补一层同色软描边，
+                   与 L0 成熟度 el-tag（plain=描边+浅底）语言一致（同描边+浅底）。只加描边、
+                   不改分类色相/饱和（owner 域）。 -->
               <span
                 class="cat-pill"
-                :style="{ color: categoryColor(agent.category), background: categoryColor(agent.category) + '18' }"
+                :style="{ color: categoryColor(agent.category), background: categoryColor(agent.category) + '18', border: '1px solid ' + categoryColor(agent.category) + '40' }"
                 :title="categoryTip(agent.category)"
               >{{ categoryLabel(agent.category) }}</span>
               <el-tag
@@ -60,7 +63,9 @@
                 size="small"
                 :title="maturityTip(agent.maturity)"
               >{{ agent.maturity }}</el-tag>
-              <button type="button" class="gov-entry" @click="openGovernance(agent)">治理</button>
+              <!-- CG-G 治理入口 affordance：从「混在徽章里的裸灰字」升为明确动作——clay 文字
+                   + '›'（clay=工作/动作语言合法，非五槽信任色）。e2e 仍按 .gov-entry 类选中。 -->
+              <button type="button" class="gov-entry" @click="openGovernance(agent)">查看治理 ›</button>
             </div>
             <div class="agent-meta">
               <span>{{ agent.id }}</span>
@@ -232,7 +237,12 @@
                 <el-collapse-item title="五门判定快照">
                   <ul class="gov-checks-list">
                     <li v-for="(check, name) in p.checks" :key="name">
-                      {{ name }}：{{ check && check.ok === true ? '✓' : '✗' }}
+                      <!-- CG Face4 微修：五门判定从裸 ✓/✗ 升为中性标记（信任色锁：门通过
+                           绝不染绿，pass/fail 只靠中性 ink 权重区分）。判据仍是 ok===true。 -->
+                      {{ name }}：<span
+                        class="gov-check-verdict"
+                        :class="check && check.ok === true ? 'is-pass' : 'is-fail'"
+                      >{{ check && check.ok === true ? '通过' : '未通过' }}</span>
                       <span v-if="check && check.detail"> · {{ check.detail }}</span>
                     </li>
                   </ul>
@@ -543,7 +553,7 @@ onMounted(load);
   padding: 8px 12px;
   background: var(--paper-rail);
   border: 1px solid var(--hairline);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--ink-soft);
   font-size: 12.5px;
   line-height: 1.6;
@@ -566,7 +576,7 @@ onMounted(load);
   gap: 10px;
   padding: 16px 18px;
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 .agent-col {
   margin-bottom: 16px;
@@ -574,7 +584,7 @@ onMounted(load);
 .agent-card {
   height: 100%;
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   box-shadow: var(--shadow-card);
   /* P4 纸感抬升：统一走动效系统 tokens（--motion-fast + --ease-out-soft），
@@ -635,21 +645,32 @@ onMounted(load);
   font-size: 12px;
   font-weight: 600;
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
 }
+/* CG-G：治理入口从裸灰字升为明确动作——clay 文字 + 600 权重 + '›'（模板内），
+   读作可点动作而非静态徽章。信任色锁：clay=工作/动作语言合法，非五槽信任色。 */
 .gov-entry {
   border: none;
   background: transparent;
-  color: var(--ink-mid);
+  color: var(--clay);
   font: inherit;
   font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
   padding: 2px 4px;
+  border-radius: var(--radius-sm);
 }
-.gov-entry:hover,
-.gov-entry:focus-visible {
-  color: var(--ink);
+.gov-entry:hover {
+  color: var(--clay-deep);
   text-decoration: underline;
+}
+/* gov-entry 是原生 <button>：A2 全局 [role="button"] 地板（属性选择器）不覆盖原生
+   button（诚实边界）——本处自写焦点环，消费与全站同一 --clay-softer token（一色成
+   体系），不依赖地板。信任色锁：clay=工作语言合法，非五槽信任色。 */
+.gov-entry:focus-visible {
+  color: var(--clay-deep);
+  outline: 2px solid var(--clay-softer);
+  outline-offset: 2px;
 }
 .agent-summary {
   color: var(--ink-soft);
@@ -742,7 +763,7 @@ onMounted(load);
 .gov-ladder { margin-bottom: 16px; }
 .gov-ladder-track { display: flex; gap: 6px; margin: 6px 0 4px; }
 .gov-ladder-step {
-  flex: 1; text-align: center; padding: 5px 0; border-radius: 6px;
+  flex: 1; text-align: center; padding: 5px 0; border-radius: var(--radius-sm);
   font-size: 12px; font-weight: 700; color: var(--ink-faint);
   background: var(--paper-rail); border: 1px solid var(--hairline);
 }
@@ -782,9 +803,13 @@ onMounted(load);
   margin: 4px 0 0; padding-left: 16px; color: var(--ink-soft);
   font-size: 11.5px; line-height: 1.7;
 }
+/* CG Face4 微修：五门判定中性标记（pass/fail 只靠中性 ink 权重区分，绝不染绿/红——
+   门快照是治理证据，不借信任语义色）。 */
+.gov-check-verdict { font-weight: 600; color: var(--ink); }
+.gov-check-verdict.is-fail { font-weight: 500; color: var(--ink-faint); }
 .gov-promotion-card.promote-burst {
   animation: promote-glow 1.5s var(--ease-out-soft, ease-out);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 @keyframes promote-glow {
   /* 直接用半透明 clay（--clay-softer 是不透明实色 hex，会闪成实块非微光）——
@@ -795,5 +820,28 @@ onMounted(load);
 }
 @media (prefers-reduced-motion: reduce) {
   .gov-promotion-card.promote-burst { animation: none; }
+}
+</style>
+
+<!-- 治理弹窗外壳暖化（Gate2-T2 Face4）：**非 scoped** 块——el-dialog(EP 2.9) 默认
+     teleport 到 body，scoped :deep 对 teleport 后内容命中不可靠（本仓无 :deep(.el-dialog)
+     先例可循），故改用唯一类名 .gov-dialog 作命名空间（只此弹窗持有），全局可靠命中
+     teleport 后的真实 DOM。仅暖化外壳中性层（header hairline 分隔 + surface-raised 底 +
+     serif 标题 + body 内距），脱离 EP 默认相；绝不碰弹窗内容语义色（trend-bar/ladder 等
+     batch-c 已抬升的中性版块）与 script 域（协作方 resumeInFlightRunIfAny 在 script）。 -->
+<style>
+.gov-dialog .el-dialog__header {
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface-raised);
+}
+.gov-dialog .el-dialog__title {
+  font-family: var(--serif);
+  font-size: var(--fs-h3);
+  font-weight: 600;
+  color: var(--ink);
+}
+.gov-dialog .el-dialog__body {
+  padding: 20px;
 }
 </style>
