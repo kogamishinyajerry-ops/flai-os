@@ -50,11 +50,16 @@
      一行+cat-bar 退役；Q5 原始事件 token 只活在展开态时间轴（折叠态=人话
      扫读面，「task_created」在折叠态绝迹）。
   ⑪R Codex R0 治理审修复批（R1）：折叠态工具行 mock 徽不等展开（真实性
-     明细随 tool 事件预载）+明细拉取失败亮「真实性未核」（unknown≠非 mock，
-     route-abort /api/tasks/*/tool_runs 实证）；⌘K 按显示名子串检索到未命名
-     任务行（搜索域=眼见标题 SSOT）；晋升 API 失败「今日最活跃」独立存活
-     （3-lens 回归 P2 定格）；⑫ /me 混合零值活体对表（待签清零后 waiting
+     投影随工具终结事件预载）+投影拉取失败亮「真实性未核」（unknown≠非 mock，
+     route-abort /api/tasks/*/tool_runs/summary 实证）；⌘K 按显示名子串检索到
+     未命名任务行（搜索域=眼见标题 SSOT）；晋升 API 失败「今日最活跃」独立
+     存活（3-lens 回归 P2 定格）；⑫ /me 混合零值活体对表（待签清零后 waiting
      格隐、>0 格照常——零值分支活体证据，非 tamper 孤证）。
+  ⑪R2 Codex R1 复审修复批（R2）：数据面换 summary.by_tool 有界投影（绝不为
+     折叠态搬整条执行轨迹）+ loaded 逐工具对账——投影 200 空表/缺行（运行中/
+     未执行）保持未核（⑪f″ 活体咬合「成功空表≠已核」）；三态 oracle 严格
+     数字镜像（_is_num：bool≠数、负数≠零）+ ⑬ route-fulfill 混合响应
+     （5/0/true/-2）直接咬三态 DOM。
 
 夹具口径（与 m9 同纪律）：temp DB 直写只为渲染路径提供 fixture，不冒充业务
 状态机行为（真实完成/放行链路由 m2 验收）。completed 任务配 tool_failed 事件
@@ -154,6 +159,13 @@ results: list[tuple[str, bool, str]] = []
 def check(name: str, ok: bool, detail: str = "") -> None:
     results.append((name, ok, detail))
     print(("PASS" if ok is True else "FAIL"), name, ("| " + detail if detail and ok is not True else ""))
+
+
+def _is_num(v) -> bool:
+    """JS `typeof v === "number"` 的严格 Python 镜像（Codex R1-P3）：bool 不是数
+    （JSON true → JS boolean → 前端显「—」；Python isinstance(True,int) 是陷阱），
+    int/float 才是。三态 oracle 必须与前端「仅 ===0 隐藏」严格同构。"""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _db(sql: str, params: tuple = ()) -> None:
@@ -275,7 +287,8 @@ with sync_playwright() as p:
     )
     cold_stats = API.get("/api/stats/overview", params={"since": since_iso}, timeout=10).json()
     stat_fields = ["tasks_completed", "reviews_approved", "curated_cases_total", "promotions"]
-    stats_all_zero = all(not cold_stats.get(f) for f in stat_fields)
+    # 严格镜像前端 visibleStats：仅「数字 0」不渲染——非数字是「—」格（≠全零）。
+    stats_all_zero = all(_is_num(cold_stats.get(f)) and cold_stats.get(f) == 0 for f in stat_fields)
     # 轻量行期望：进行中 1 + 今日交付 1 + Agent 动态合并 1 + （团队全 0 时再 +1）
     expected_lines = 3 + (1 if stats_all_zero else 0)
     lines = page.locator(".today .empty-line")
@@ -296,15 +309,15 @@ with sync_playwright() as p:
     for f in stat_fields:
         tile = page.locator(f'.today-stat-tile[data-stat="{f}"]')
         v = cold_stats.get(f)
-        if isinstance(v, int) and v > 0:
+        if _is_num(v) and v != 0:
             ok_f = tile.count() == 1 and tile.locator(".today-stat-num").inner_text().strip() == str(v)
-        elif isinstance(v, int):
+        elif _is_num(v):
             ok_f = tile.count() == 0
         else:
             ok_f = tile.count() == 1 and tile.locator(".today-stat-num").inner_text().strip() == "—"
         tiles_ok = tiles_ok and ok_f
         tiles_detail[f] = f"api={v} ui={'shown' if tile.count() else 'hidden'}"
-    check("③团队总量三态对表（>0 逐字相等 / ==0 不渲染 / 非数字显「—」）", tiles_ok is True, str(tiles_detail))
+    check("③团队总量三态对表（数字≠0 逐字 / 数字 0 不渲染 / 非数字「—」）", tiles_ok is True, str(tiles_detail))
     # Q3 方法论口径同屏唯一：页脚一行保留，版块内不再复述「近 100 条」note。
     check("③窗口口径只在页脚一行（today-subhead-note 退役）",
           page.locator(".today-subhead-note").count() == 0 and "基于最近 100 条任务窗口" in body)
@@ -761,17 +774,17 @@ with sync_playwright() as p:
     for f in me_fields:
         tile = page.locator(f'.me-stat[data-stat="{f}"]')
         v = me_contrib.get(f)
-        if isinstance(v, int) and v > 0:
+        if _is_num(v) and v != 0:
             ok_f = tile.count() == 1 and tile.locator(".me-stat-num").inner_text().strip() == str(v)
-        elif isinstance(v, int):
+        elif _is_num(v):
             ok_f = tile.count() == 0
         else:
             # 非数字/缺字段=数据不可用三态：格保留显「—」（≠0 隐藏），oracle
-            # 与前端「仅 ===0 隐藏」语义严格同构（Codex R0 P2 收紧）。
+            # 与前端「仅 ===0 隐藏」语义严格同构（Codex R0 P2 + R1-P3 收紧）。
             ok_f = tile.count() == 1 and tile.locator(".me-stat-num").inner_text().strip() == "—"
         me_ok = me_ok and ok_f
         me_detail[f] = f"api={v} ui={'shown' if tile.count() else 'hidden'}"
-    check("⑪Q2 /me 四格三态对表（>0 逐字 / ==0 隐 / 非数字「—」）", me_ok is True, str(me_detail))
+    check("⑪Q2 /me 四格三态对表（数字≠0 逐字 / 数字 0 隐 / 非数字「—」）", me_ok is True, str(me_detail))
     me_body = page.locator("body").inner_text()
     fb = me_contrib.get("feedback_count_approx")
     if isinstance(fb, int) and fb > 0:
@@ -886,9 +899,9 @@ with sync_playwright() as p:
           all(k in expanded_body for k in ("task_created", "tool_finished", "task_completed")))
     page.screenshot(path=str(SHOTS / "worklog_expanded_tokens_light.png"))
 
-    # ── ⑪f′ Q5 真实性未核诚实闸（Codex R0 P1）：tool_runs 拉取被掐 → 折叠
-    #    工具行必须亮「真实性未核」，绝不静默装「非 mock」───────────────────
-    ctx.route("**/api/tasks/*/tool_runs", lambda route: route.abort())
+    # ── ⑪f′ Q5 真实性未核诚实闸（Codex R0 P1，R1-P2 后数据面=summary 投影）：
+    #    真实性投影拉取被掐 → 折叠工具行必须亮「真实性未核」──────────────────
+    ctx.route("**/api/tasks/*/tool_runs/summary", lambda route: route.abort())
     page.goto(BASE + f"/tasks/{task_a}", wait_until="networkidle")
     try:
         page.wait_for_selector(".worklog-authenticity-unverified", timeout=8000)
@@ -898,10 +911,34 @@ with sync_playwright() as p:
         )
     except Exception:
         unverified_ok = False
-    check("⑪Q5 明细拉取失败→折叠工具行亮「真实性未核」（unknown≠非 mock）",
+    check("⑪Q5 投影拉取失败→折叠工具行亮「真实性未核」（unknown≠非 mock）",
           unverified_ok is True,
           page.locator(".worklog-toolline").inner_text() if page.locator(".worklog-toolline").count() else "(无工具行)")
-    ctx.unroute("**/api/tasks/*/tool_runs")
+    ctx.unroute("**/api/tasks/*/tool_runs/summary")
+
+    # ── ⑪f″ Q5 成功空表≠已核（Codex R1-P1）：投影 200 但 by_tool 缺当前工具
+    #    行（运行中/未执行的真实形态——run 行只在工具终结后落库）→ loaded 也
+    #    必须逐工具对账保持未核，绝不把「查无此行」呈现成「非 mock」──────────
+    ctx.route(
+        "**/api/tasks/*/tool_runs/summary",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json",
+            body=json.dumps({"total": 0, "mock_count": 0, "by_tool": []}),
+        ),
+    )
+    page.goto(BASE + f"/tasks/{task_a}", wait_until="networkidle")
+    try:
+        page.wait_for_selector(".worklog-authenticity-unverified", timeout=8000)
+        empty_unverified_ok = (
+            page.locator(".worklog-authenticity-unverified").count() == 1
+            and page.locator(".worklog-toolline .pill-amber").filter(has_text="mock").count() == 0
+        )
+    except Exception:
+        empty_unverified_ok = False
+    check("⑪Q5 投影 200 空表→折叠工具行仍未核（loaded 逐工具对账，空表绝非已核）",
+          empty_unverified_ok is True,
+          page.locator(".worklog-toolline").inner_text() if page.locator(".worklog-toolline").count() else "(无工具行)")
+    ctx.unroute("**/api/tasks/*/tool_runs/summary")
 
     # ── ⑪g Q1 ⌘K 眼见即可搜（Codex R0 P2）：结果行标题=注册表显示名，匹配域
     #    必须含同一 SSOT 产出——用只存在于显示名的子串检索（agent_id/goal/id
@@ -942,13 +979,49 @@ with sync_playwright() as p:
     for f in ("since_created", "total_created"):
         v2 = me2.get(f)
         tile2 = page.locator(f'.me-stat[data-stat="{f}"]')
-        ok2 = (isinstance(v2, int) and v2 > 0 and tile2.count() == 1
+        ok2 = (_is_num(v2) and v2 > 0 and tile2.count() == 1
                and tile2.locator(".me-stat-num").inner_text().strip() == str(v2))
         shown_ok = shown_ok and ok2
         shown_detail[f] = f"api={v2}"
+    waiting_api = me2.get("waiting_review")
     check("⑫Q2 /me 混合零值活体对表（waiting==0 格隐、>0 格逐字照常——同屏双分支）",
-          me2.get("waiting_review") == 0 and waiting_hidden is True and shown_ok is True,
-          f"waiting_api={me2.get('waiting_review')} hidden={waiting_hidden} {shown_detail}")
+          _is_num(waiting_api) and waiting_api == 0 and waiting_hidden is True and shown_ok is True,
+          f"waiting_api={waiting_api} hidden={waiting_hidden} {shown_detail}")
+
+    # ── ⑬ Q2 三态 oracle 活体咬合（Codex R1-P3）：route-fulfill 合成混合响应
+    #    （正数/数字 0/true/负数）直接咬三态 DOM——真实 API 恒非负整数，非数字
+    #    与负数分支此前无活体夹具；bool 陷阱（Python isinstance(True,int) 为真、
+    #    JS typeof true ≠ "number"）与「负数≠零值隐藏」在此定格────────────────
+    synth_me = {"since_created": 5, "since_completed": 0, "waiting_review": True,
+                "total_created": -2, "feedback_count_approx": 3}
+    ctx.route(
+        "**/api/me/contributions*",
+        lambda route: route.fulfill(status=200, content_type="application/json",
+                                    body=json.dumps(synth_me)),
+    )
+    page.goto(BASE + "/me", wait_until="networkidle")
+    try:
+        # 加载完成锚：合成值 5 上屏（加载骨架期四格皆「—」，5 只在 loaded 后出现）。
+        page.wait_for_selector('.me-stat[data-stat="since_created"] .me-stat-num:has-text("5")', timeout=8000)
+        tri_loaded = True
+    except Exception:
+        tri_loaded = False
+    tri_expect = {"since_created": "5", "since_completed": None, "waiting_review": "—", "total_created": "-2"}
+    tri_ok = tri_loaded
+    tri_detail = {"loaded": tri_loaded}
+    for f, want in tri_expect.items():
+        tile = page.locator(f'.me-stat[data-stat="{f}"]')
+        if want is None:
+            ok3 = tile.count() == 0
+            tri_detail[f] = f"want=hidden got={'hidden' if tile.count() == 0 else 'shown'}"
+        else:
+            got = tile.locator(".me-stat-num").inner_text().strip() if tile.count() == 1 else "(hidden)"
+            ok3 = tile.count() == 1 and got == want
+            tri_detail[f] = f"want={want} got={got}"
+        tri_ok = tri_ok and ok3
+    check("⑬Q2 三态活体对表（5 显/数字 0 隐/true→「—」/-2 照显——bool≠数、负数≠零）",
+          tri_ok is True, str(tri_detail))
+    ctx.unroute("**/api/me/contributions*")
 
     ctx.close()
 

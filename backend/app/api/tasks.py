@@ -569,9 +569,12 @@ def get_task_tool_runs_summary(task_id: str, request: Request) -> dict[str, Any]
     """工具调用留痕的有界计数投影（批次二 Codex R0-P2）：核验段只需要
     total/mock_count 两个数，全量 list_tool_runs 会把解码后的 input/output/
     raw_path 整条执行轨迹搬给前端（批量任务代价随 run 数无界增长，WorkLog
-    展开还会再来一次）。单条 COUNT 聚合 SQL，与 delivery_summary 同先例。
-    纯计数=元数据，严格少于 sensitive 遮蔽后的 tool_runs 行本身（redact_rows
-    保留 mock/status 元数据），故无需分级门分支——不开新的内容出场面。"""
+    展开还会再来一次）。聚合 SQL，与 delivery_summary 同先例。
+    by_tool（批次四 Codex R1-P2）：WorkLog 折叠态 mock 徽需要按 tool_id 的
+    分解（含逐工具对账「有事件无 run 行=真实性未核」），仍是有界元数据——
+    行数=distinct 工具数，tool_id 在 sensitive 遮蔽后的全量行里本就保留
+    （TOOL_RUN_CONTENT_KEYS 不含 tool_id），分级门论证与 total/mock_count
+    同构，不开新的内容出场面。"""
     conn = request.app.state.conn_factory()
     try:
         _get_task_or_404(conn, task_id)
@@ -581,7 +584,20 @@ def get_task_tool_runs_summary(task_id: str, request: Request) -> dict[str, Any]
             " FROM tool_runs WHERE task_id = ?",
             (task_id,),
         ).fetchone()
-        return {"total": row["total"], "mock_count": row["mock_count"]}
+        by_tool_rows = conn.execute(
+            "SELECT tool_id, COUNT(*) AS total,"
+            " COALESCE(SUM(CASE WHEN mock = 1 THEN 1 ELSE 0 END), 0) AS mock_count"
+            " FROM tool_runs WHERE task_id = ? GROUP BY tool_id ORDER BY tool_id",
+            (task_id,),
+        ).fetchall()
+        return {
+            "total": row["total"],
+            "mock_count": row["mock_count"],
+            "by_tool": [
+                {"tool_id": r["tool_id"], "total": r["total"], "mock_count": r["mock_count"]}
+                for r in by_tool_rows
+            ],
+        }
     finally:
         conn.close()
 

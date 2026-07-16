@@ -129,6 +129,28 @@ tamper 的生效路径必须亲证：破坏必须真实进入被测制品。
   **17 套 e2e ALL GREEN**（craft 86/86 在内，「[失败]（无）」）——R1 修复批
   与探针扩批被完整全量门夹住。
 
+### R1 复审（e649019，同渠道）
+
+**判决：CHANGES_REQUIRED**（1 P1/1 P2/1 P3；R0 七条核销 5/7——P1a/P2a/P2b/
+P3a/P3b RESOLVED，P1b/P2c 判 NOT-RESOLVED 并细化）。三条 grounded 复核全坐实：
+
+| # | 级 | Finding（复核锚点） | 处置（R2） |
+|---|---|---|---|
+| R1-P1 | P1 | WorkLog 任意 200 响应即 `loaded` 并撤未核徽——但 run 行只在工具**终结**时落库（registry.py `_record` 仅 finish/fail 路径），运行中首工具整个执行窗口被展示为「无 mock 也非未核」；⑪f 只盖已完成、⑪f′ 只盖网络失败，存在假绿 | ✅ **loaded≠已核**：`toolAuthenticityUnknown` 逐工具对账（有 tool 事件而 `by_tool` 无对应行 → 未核）；⑪f″ route-fulfill 200 空表活体咬合（T-R2a tamper 撤对账 → 恰 1 红实证）。「未执行 vs 运行中」不再细分第三态：前端无法可靠归因（时间轴的失败事件已自明），忠实包络不猜 |
+| R1-P2 | P2 | 每个 tool 事件都重拉全量 `/tool_runs`（含 input/output/raw_path，无分页），顺序 N 工具最坏 O(N²) 传输；seq 只防回写不降开销 | ✅ 后端 summary 扩 `by_tool` 有界投影（tool_id+计数纯元数据，行数=distinct 工具数；tool_id 在 sensitive 遮蔽后全量行本就保留，分级门论证同构延伸，pytest 对账扩展）；WorkLog 弃全量改投影，刷新降为**终结**事件计数驱动（started 时拉必空是白费）；卸载 seq++ 作废在飞响应 |
+| R1-P3 | P3 | 三态 oracle 零值分支 `elif isinstance(v,int)`：Python bool 是 int（true 被误判）、负数被当零隐藏，与前端 `typeof === "number" && === 0` 不同构；非数字分支无活体夹具 | ✅ `_is_num`（int/float 且非 bool）严格镜像三处同律（craft ③/⑪a/⑫ + batch_b，`stats_all_zero` 同步收紧）；⑬ route-fulfill 混合响应（5/0/true/-2）直接咬三态 DOM——bool 陷阱与负数分支活体定格 |
+
+### R2 修复批验证
+
+- 后端 test_audit_hardening **18/18**（summary by_tool 逐工具对账+零 run 空表断言扩展）；build 绿。
+- craft **88/88 ALL GREEN**（86→88：⑪f″「成功空表≠已核」+ ⑬ 三态活体，一次通过）。
+- **T-R2a tamper**：撤逐工具对账（`loaded` 恒判已核=R1-P1 原 bug）→ craft 恰 1 红
+  **87/88**（⑪f″ 咬，零旁伤），还原 cmp 校验+rebuild 复绿。⑬/⑪f″ 自身即
+  route-fulfill 故障注入，oracle 侧（_is_num）由 ⑬ 的 true/-2 夹具反向定格。
+- batch_b **10/10** · m2 **9/9**；终树 `verify_all.sh` 全量 **EXIT=0**
+  （**989+ pytest** 三 testpaths + node 21/21 + **17 套 e2e ALL GREEN**
+  含 craft 88/88，「[失败]（无）」）。
+
 ## 五、反采纳与边界（本批不做的决定）
 
 - **不换皮**：三明治深框/近单色是范本的品牌身份，FLAi-OS 暖白+clay 家族轴已裁决——复刻语法不复刻皮肤。

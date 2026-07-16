@@ -139,22 +139,33 @@ def test_trace_read_apis_expose_versions(app_env) -> None:
 
 
 def test_tool_runs_summary_bounded_counts(app_env) -> None:
-    """批次二 Codex R0-P2：/tasks/{id}/tool_runs/summary 只回 total/mock_count
-    两个计数（有界聚合），绝不带 input/output/raw_path 内容键——核验段的
-    数据面按需最小化。与真实 run（hello_agent 的 mock_echo，mock=1）对账。"""
+    """批次二 Codex R0-P2 + 批次四 Codex R1-P2：/tasks/{id}/tool_runs/summary
+    回 total/mock_count 两个计数 + by_tool 按工具分解（行数=distinct 工具数，
+    有界聚合），绝不带 input/output/raw_path 内容键——核验段与 WorkLog mock
+    徽的数据面按需最小化。与真实 run（hello_agent 的 mock_echo，mock=1）对账。"""
     client, app = app_env
     task = _create_and_run(client, app, "hello_agent", {"name": "计数投影"})
     assert task["status"] == "completed"
 
     summary = client.get(f"/api/tasks/{task['id']}/tool_runs/summary").json()
     runs = client.get(f"/api/tasks/{task['id']}/tool_runs").json()
-    assert set(summary.keys()) == {"total", "mock_count"}, "计数投影绝不外带内容键"
+    assert set(summary.keys()) == {"total", "mock_count", "by_tool"}, "计数投影绝不外带内容键"
     assert summary["total"] == len(runs) >= 1
     assert summary["mock_count"] == sum(1 for r in runs if r["mock"] is True) >= 1
+    # by_tool：逐条只含 tool_id+两计数（元数据，无内容键）；与全量行按工具对账。
+    assert len(summary["by_tool"]) >= 1
+    for entry in summary["by_tool"]:
+        assert set(entry.keys()) == {"tool_id", "total", "mock_count"}, "by_tool 绝不外带内容键"
+        tool_rows = [r for r in runs if r["tool_id"] == entry["tool_id"]]
+        assert entry["total"] == len(tool_rows) >= 1
+        assert entry["mock_count"] == sum(1 for r in tool_rows if r["mock"] is True)
+    assert {e["tool_id"] for e in summary["by_tool"]} == {r["tool_id"] for r in runs}
 
-    # 零 run 任务：0/0（不 404——任务在，计数就是 0）；未知任务 404。
+    # 零 run 任务：0/0/空表（不 404——任务在，计数就是 0）；未知任务 404。
     created = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "零run"}}).json()
-    assert client.get(f"/api/tasks/{created['id']}/tool_runs/summary").json() == {"total": 0, "mock_count": 0}
+    assert client.get(f"/api/tasks/{created['id']}/tool_runs/summary").json() == {
+        "total": 0, "mock_count": 0, "by_tool": [],
+    }
     assert client.get("/api/tasks/task_missing/tool_runs/summary").status_code == 404
 
 

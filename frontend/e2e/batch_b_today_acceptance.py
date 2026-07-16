@@ -218,19 +218,24 @@ with sync_playwright() as p:
     # 真值证实确为 0，缺格≠数据丢失）。比旧断言多验了「零值格确实不出现」分支。
     stat_fields = ["tasks_completed", "reviews_approved", "curated_cases_total", "promotions"]
 
+    def _is_num(x):
+        # JS `typeof x === "number"` 严格镜像（Codex R1-P3）：bool 不是数
+        # （Python isinstance(True,int) 是陷阱），负数≠零值隐藏。
+        return isinstance(x, (int, float)) and not isinstance(x, bool)
+
     def _stats_match():
         for f in stat_fields:
             tile = page.locator(f'.today-stat-tile[data-stat="{f}"]')
             v = body_json.get(f)
-            if isinstance(v, int) and v > 0:
+            if _is_num(v) and v != 0:
                 if tile.count() != 1 or tile.locator(".today-stat-num").inner_text().strip() != str(v):
                     return False
-            elif isinstance(v, int):
+            elif _is_num(v):
                 if tile.count() != 0:
                     return False
             else:
-                # 非数字/缺字段=数据不可用三态：格保留显「—」，与 ==0 隐格
-                # 不同律（Codex R0 P2 收紧，oracle 与前端语义严格同构）。
+                # 非数字/缺字段=数据不可用三态：格保留显「—」，与数字 0 隐格
+                # 不同律（Codex R0 P2 + R1-P3 收紧，oracle 与前端严格同构）。
                 if tile.count() != 1 or tile.locator(".today-stat-num").inner_text().strip() != "—":
                     return False
         return True
@@ -244,7 +249,7 @@ with sync_playwright() as p:
             out[f] = tile.locator(".today-stat-num").inner_text().strip() if tile.count() else "(隐藏)"
         return out
 
-    check("③团队总量条 === /api/stats/overview 三态对表（>0 逐字相等；==0 格不渲染；非数字「—」）",
+    check("③团队总量条 === /api/stats/overview 三态对表（数字≠0 逐字相等；数字 0 格不渲染；非数字「—」）",
           _stats_match() is True, f"page={_tiles_snapshot()} api={body_json} since={since_iso}")
     page.screenshot(path=str(SHOTS / "3_stats_bar_match.png"), full_page=True)
 

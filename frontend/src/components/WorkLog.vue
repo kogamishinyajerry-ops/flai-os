@@ -100,7 +100,7 @@
 // 竞态守卫，本组件必须无状态跟随，否则会显示已被父页判定为 stale 的快照。
 import { ref, computed, watch, onUnmounted } from "vue";
 import { TASK_WORK_STATES, formatDuration, taskElapsedMs, formatTime, LEVEL_COLOR, eventTypeLabel, deriveSignoff, signoffText } from "../utils/format";
-import { listToolRuns } from "../api/tasks";
+import { getToolRunsSummary } from "../api/tasks";
 import EmptyState from "./EmptyState.vue";
 
 const props = defineProps({
@@ -108,37 +108,43 @@ const props = defineProps({
   task: { type: Object, default: null },
 });
 
-// 本地状态：展开开关 + 工具运行明细（mock 徽标唯一数据源）。
-// 批次四 Q5 把折叠态升格为主扫读面（Codex R0 P1）：工具聚合行折叠常显，
-// mock 徽标数据必须随 tool 事件到账即预载，不能等展开——旧懒加载让折叠态
-// 把「未知」呈现成「非 mock」。状态机 idle|loading|loaded|failed；
-// 非 loaded 且有工具 chip 时，行尾亮 amber「真实性未核」。seq 守卫防慢响应回写。
+// 本地状态：展开开关 + 工具真实性投影（mock 徽标唯一数据源）。
+// 批次四 Q5 把折叠态升格为主扫读面（Codex R0 P1 + R1-P1/P2 收口）：
+// - 数据面走 /tool_runs/summary 的 by_tool 有界投影（tool_id+计数纯元数据），
+//   绝不为折叠态预载整条执行轨迹（input/output/raw_path 随 run 数无界增长）；
+// - 拉取由工具**终结**事件计数驱动（run 行只在工具结束/失败时落库，started
+//   时拉必空）；状态机 idle|loading|loaded|failed + seq 守卫防慢响应回写；
+// - loaded ≠ 已核：还要逐工具对账（见 toolAuthenticityUnknown）。
 const expanded = ref(false);
-const toolRuns = ref([]);
+const toolAuthByTool = ref(new Map());
 const toolRunsState = ref("idle");
 let toolRunsSeq = 0;
 
-async function loadToolRuns() {
+async function loadToolAuthenticity() {
   if (!props.task?.id) return;
   const seq = ++toolRunsSeq;
   toolRunsState.value = "loading";
   try {
-    const rows = await listToolRuns(props.task.id);
+    const summary = await getToolRunsSummary(props.task.id);
     if (seq !== toolRunsSeq) return;
-    toolRuns.value = rows;
+    const map = new Map();
+    for (const entry of Array.isArray(summary?.by_tool) ? summary.by_tool : []) {
+      map.set(entry.tool_id, entry);
+    }
+    toolAuthByTool.value = map;
     toolRunsState.value = "loaded";
   } catch {
     if (seq !== toolRunsSeq) return;
     // 诚实降级：失败=真实性未知（toolline 亮「真实性未核」），绝不静默装
     // 「非 mock」，也不报错阻塞正文；展开动作可触发一次重试。
-    toolRuns.value = [];
+    toolAuthByTool.value = new Map();
     toolRunsState.value = "failed";
   }
 }
 
 function toggleExpanded() {
   expanded.value = !expanded.value;
-  if (expanded.value && toolRunsState.value === "failed") loadToolRuns();
+  if (expanded.value && toolRunsState.value === "failed") loadToolAuthenticity();
 }
 
 const isWorking = computed(() => TASK_WORK_STATES.has(props.task?.status));
@@ -160,6 +166,8 @@ watch(isWorking, (working) => {
 }, { immediate: true });
 onUnmounted(() => {
   if (tickTimer !== null) clearInterval(tickTimer);
+  // 作废在飞的真实性投影请求（Codex R1-P2）：卸载后到达的响应不再回写。
+  toolRunsSeq++;
 });
 
 const elapsedMs = computed(() => taskElapsedMs(props.task, nowTick.value));
@@ -198,38 +206,38 @@ const summaryText = computed(() => {
   return list[list.length - 1].message || "";
 });
 
-// tool_runs 数据源只认 tool_id → mock 是否为 true，绝不从 agent_log payload 猜。
-const toolRunsByToolId = computed(() => {
-  const map = new Map();
-  for (const r of toolRuns.value || []) {
-    const bucket = map.get(r.tool_id) || [];
-    bucket.push(r);
-    map.set(r.tool_id, bucket);
-  }
-  return map;
-});
+// 真实性数据源只认 by_tool 投影的 tool_id → mock_count，绝不从 agent_log payload 猜。
 function toolHasMock(toolId) {
-  const runs = toolRunsByToolId.value.get(toolId);
-  return Array.isArray(runs) && runs.some((r) => r.mock === true);
+  const entry = toolAuthByTool.value.get(toolId);
+  return entry ? entry.mock_count > 0 : false;
 }
 
 const TOOL_EVENT_TYPES = new Set(["tool_started", "tool_finished", "tool_failed"]);
 
-// tool 事件计数涨了就（重）拉真实性明细：折叠态预载 + 工作态新工具跑完后
-// mock 徽跟上（旧懒加载一次性 latch，连展开态都不会刷新）。事件驱动、无轮询；
-// 计数不变（父页轮询整包替换同长数组）不触发。
-const toolEventCount = computed(
-  () => (props.events || []).filter((e) => TOOL_EVENT_TYPES.has(e.event_type)).length
+// 工具**终结**事件计数涨了才（重）拉投影（Codex R1-P2 刷新策略）：run 行只在
+// 工具结束/失败时落库，tool_started 时拉必空是白费；工作态每个工具跑完
+// mock 徽即跟上（旧懒加载一次性 latch，连展开态都不会刷新）。事件驱动、
+// 无轮询；计数不变（父页轮询整包替换同长数组）不触发。
+const toolTerminalCount = computed(
+  () => (props.events || []).filter(
+    (e) => e.event_type === "tool_finished" || e.event_type === "tool_failed"
+  ).length
 );
-watch(toolEventCount, (n) => {
-  if (n > 0) loadToolRuns();
+watch(toolTerminalCount, (n) => {
+  if (n > 0) loadToolAuthenticity();
 }, { immediate: true });
 
-// 折叠常显的诚实闸（mock 如实标注）：有工具 chip 而明细未就绪（加载中/失败）
-// 时亮「真实性未核」——未知绝不呈现成非 mock。amber=仅未核槽（信任色锁）。
-const toolAuthenticityUnknown = computed(
-  () => toolRunsState.value !== "loaded" && chips.value.some((c) => c.key.startsWith("tool:"))
-);
+// 折叠常显的诚实闸（mock 如实标注，Codex R0 P1 + R1-P1 收口）：
+// ① 有工具 chip 而投影未就绪（未拉/加载中/失败）→ 未核；
+// ② loaded 也要逐工具对账：run 行只在工具终结后落库，「有 tool 事件、无
+//    对应 by_tool 行」（运行中/未执行/无法归因）= 该工具真实性未知——
+//    成功空表绝不当「已核非 mock」。amber=仅未核槽（信任色锁）。
+const toolAuthenticityUnknown = computed(() => {
+  const toolChips = chips.value.filter((c) => c.key.startsWith("tool:"));
+  if (!toolChips.length) return false;
+  if (toolRunsState.value !== "loaded") return true;
+  return toolChips.some((c) => !toolAuthByTool.value.has(c.object));
+});
 
 // 失败类事件判定：真失败语义（trust-fail 红）只认失败 token 与 error level——
 // 玫红只染译文状态词一处，不外溢整行（W16 着色预算）。取消（task_cancelled）
