@@ -82,6 +82,18 @@ def _build_knowledge_dir(tmp_path):
         "b/manual.md": "乙版本手册：适用于 B 构型短舱。",
     }, confidentiality="public_internal")
     _write_scope(knowledge_dir, "empty_scope", {}, confidentiality="public_internal")
+    # source=mcp：注册合法（schema 允许）但 resolve_source_dir 判「未接入」→
+    # 端点应映射 503（Codex 治理审 R0 P2 异常映射补全），不再裸抛 500 泄栈。
+    mcp_scope = knowledge_dir / "mcp_scope"
+    mcp_scope.mkdir(parents=True)
+    (mcp_scope / "scope.yaml").write_text(
+        yaml.safe_dump({
+            "scope_id": "mcp_scope", "name": "mcp 未接入", "kind": "document",
+            "source": "mcp", "path_or_uri": "mcp://placeholder",
+            "confidentiality": "public_internal", "owner": "n7-test",
+        }, allow_unicode=True),
+        encoding="utf-8",
+    )
     return knowledge_dir
 
 
@@ -229,6 +241,37 @@ def test_api_empty_corpus_409(api_env) -> None:
     resp = _read(client, scope_id="empty_scope", chunk_id="x#0")
     assert resp.status_code == 409
     assert "语料为空" in resp.json()["detail"]
+
+
+def test_api_unavailable_source_503_no_500(api_env) -> None:
+    """Codex 治理审 R0 P2：source=mcp（未接入）应映射 503，绝不裸抛 500 泄栈/路径。"""
+    client, _app = api_env
+    resp = _read(client, scope_id="mcp_scope", chunk_id="x#0")
+    assert resp.status_code == 503, resp.text
+    # 泛化文案，不外发内部路径细节。
+    assert "mcp://" not in resp.json()["detail"]
+
+
+def test_api_unregistered_detail_does_not_echo_scope_id(api_env) -> None:
+    """P2：未注册 404 文案泛化，不回显 scope_id（防登录用户枚举受限知识域）。"""
+    resp = _read(api_env[0], scope_id="ghost_enum_probe", chunk_id="x#0")
+    assert resp.status_code == 404
+    assert "ghost_enum_probe" not in resp.json()["detail"]
+
+
+def test_api_restricted_detail_does_not_echo_confidentiality(api_env) -> None:
+    """P2：restricted 403 文案不回显具体密级值 repr。"""
+    resp = _read(api_env[0], scope_id="sec_scope", chunk_id="secret#0")
+    assert resp.status_code == 403
+    assert "'restricted'" not in resp.json()["detail"]
+
+
+def test_api_long_chunk_id_not_422(api_env) -> None:
+    """Codex 治理审 R0 P3：>200 字符的合法 chunk_id 不再被 API 固定 422（上限已提至 512）。
+    命中与否由语料定（这里预期 404 miss），但绝不是 422 参数拒绝。"""
+    long_id = "x" * 260 + "#0"
+    resp = _read(api_env[0], scope_id="pub_scope", chunk_id=long_id)
+    assert resp.status_code != 422, resp.text
 
 
 def test_api_unauthenticated_401(api_env) -> None:

@@ -91,8 +91,9 @@
     },
     "retry_of": {
       "type": ["string", "null"],
+      "minLength": 1,
       "maxLength": 64,
-      "description": "血缘注记（迁移 #12/评审 N4b）：本任务是对该 task_id 的「复制为新任务」重跑。纯元数据——不改队列/审计/产物管道语义，创建期仅校验目标任务存在（悬空即 404 拒）；null=非重跑任务。"
+      "description": "血缘注记（迁移 #12/评审 N4b）：本任务是对该 task_id 的「复制为新任务」重跑。纯元数据——不改队列/审计/产物管道语义，创建期仅校验目标任务存在（悬空即 404 拒）；空串被 API 422 拒，故投影恒为非空串或 null（minLength:1 消除 schema/API parity 漂移，Codex 治理审 R0 P3）；null=非重跑任务。"
     }
   }
 }

@@ -18,7 +18,12 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from ..core.errors import KnowledgeIngestError, KnowledgeScopeNotRegisteredError
+from ..core.errors import (
+    InvalidScopePackageError,
+    KnowledgeIngestError,
+    KnowledgeScopeNotRegisteredError,
+    KnowledgeSourceUnavailableError,
+)
 from ..knowledge.provenance import (
     ChunkProvenanceReader,
     ProvenanceAccessDeniedError,
@@ -32,7 +37,10 @@ router = APIRouter(prefix="/api", tags=["knowledge"])
 def read_chunk(
     request: Request,
     scope_id: str = Query(min_length=1, max_length=100),
-    chunk_id: str = Query(min_length=1, max_length=200),
+    # chunk_id 上限对齐真实生产者（Codex 治理审 R0 P3）：doc_id=文件 stem，长文件名
+    # 可产生 >200 字符的合法 chunk_id；上限设 512 覆盖现实 stem，短于 Service 侧无硬限
+    # 但 URL 长度足够。仍设上限=DoS-echo 自保。
+    chunk_id: str = Query(min_length=1, max_length=512),
     source: str | None = Query(default=None, min_length=1, max_length=500),
 ) -> dict[str, Any]:
     # 读取器按请求组装（零状态，成员是 app.state 单例）：API 只持有带密级门的
@@ -43,9 +51,15 @@ def read_chunk(
     try:
         chunk = reader.read(scope_id, chunk_id, source=source)
     except KnowledgeScopeNotRegisteredError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # 泛化对外文案（Codex 治理审 R0 P2）：不回显 scope_id repr，杜绝登录用户
+        # 借 404/403 差异 + 详情枚举受限知识域。精确原因留在服务端异常链（from exc）。
+        raise HTTPException(status_code=404, detail="知识范围不存在或未注册") from exc
     except ProvenanceAccessDeniedError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        # 泛化：只告知「受限不放行」，不回显具体密级值（P2）。
+        raise HTTPException(
+            status_code=403,
+            detail="该知识范围为受限密级，原文回源在角色轴落地前一律不放行",
+        ) from exc
     except ProvenanceAmbiguousError as exc:
         raise HTTPException(
             status_code=409,
@@ -53,6 +67,17 @@ def read_chunk(
                 f"chunk_id {chunk_id!r} 命中多个源文件，请带 source 参数消歧："
                 f"{exc.sources}"
             ),
+        ) from exc
+    except KnowledgeSourceUnavailableError as exc:
+        # 语料源未接入/目录缺失（Codex 治理审 R0 P2 异常映射补全）：稳定 503，
+        # 不外发内部路径细节（str(exc) 可能含目录），只给泛化可读文案。
+        raise HTTPException(
+            status_code=503, detail="该知识范围的语料源当前不可用"
+        ) from exc
+    except InvalidScopePackageError as exc:
+        # scope 配置非法（含 `../` 逃逸等安全违规）：稳定 409，绝不回显路径。
+        raise HTTPException(
+            status_code=409, detail="该知识范围配置无效，暂不可回源"
         ) from exc
     except KnowledgeIngestError as exc:
         # 语料为空/摄取失败：scope 在册但当前读不出内容——如实 409，不冒充 404

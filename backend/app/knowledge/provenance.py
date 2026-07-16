@@ -16,6 +16,19 @@ KnowledgeService 的信任边界（service.py docstring）规定：服务层零�
   诚实边界：department 粒度的「本部门人员」判定在 V0.1 无部门轴，放行口径=
   「任何登录用户」——与现状一致（knowledge_qa 草案产物本就对登录用户可见，
   草案里已含语料摘录），记录于 ADR-0029，不静默。
+
+诚实边界·密级快照（Codex 治理审 R0 P1-2，ADR-0029 §D3 补记）：
+- confidentiality 取自 **scope_registry 的启动期快照**（bootstrap.assemble 一次
+  装配，不随运行重扫——见 bootstrap.py「结构性漂移温床」注）；而 KnowledgeService
+  语料按内容指纹**自动刷新**。二者刷新生命周期不同 → 若运行中把 scope.yaml
+  的 confidentiality 由 public_internal 改成 restricted **且不重启**，本门读到的是
+  旧（宽松）快照、语料却已刷新为新内容，构成潜在越密级泄漏。
+- 这是**平台级既有属性**，非本回源通道独有：runtime._KnowledgeContext.search 的
+  白名单/密级判定同样源自该启动快照。V0.1 的运维口径=「scope 配置（含密级）在
+  启动期固定，收紧密级必须重启服务才生效」，与白名单同源同纪律。
+- 彻底修法（把密级策略摘要与语料 generation 原子绑定、漂移即 fail-closed）是
+  **知识轴平台级加固**，排 V0.2（ADR-0029 决策点记录）；本通道 V0.1 忠实沿用
+  平台唯一密级真源，不另立一套分叉判定。
 """
 
 from __future__ import annotations

@@ -161,7 +161,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, computed, onMounted, onUnmounted } from "vue";
+import { reactive, ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { listAgents, getAgent } from "../api/agents";
@@ -203,12 +203,18 @@ const uploadItems = ref([]);
 const prefillOrigin = ref("");
 // N4a 血缘：本次创建若来自「复制为新任务」，记原任务 id，提交时随 createTask 落库。
 const prefillRetryOf = ref(null);
+// N4a 诚实附件提示（Codex 治理审 R0 P1）：原任务的输入文件不随重试带入（前端无法
+// 分辨 kind=input/output，output 提交必 422=假绿），只记数量供横幅提示人重新添加。
+const prefillHadFileCount = ref(0);
 const prefillBannerText = computed(() => {
   if (prefillOrigin.value === "demo") {
     return "演示预填：Hello 示例 Agent 无业务含义——提交后可完整看到「排队 → 运行 → 产物落地」的真实生命周期。";
   }
   if (prefillOrigin.value === "retry") {
-    return `已带入失败任务的原始输入（血缘 ${prefillRetryOf.value || "—"}）——请核对修正后重新提交，平台不会自动重跑。`;
+    const fileNote = prefillHadFileCount.value > 0
+      ? `原任务有 ${prefillHadFileCount.value} 个输入文件未带入，请按需重新添加。`
+      : "";
+    return `已带入失败任务的原始输入（血缘 ${prefillRetryOf.value || "—"}）——请核对修正后重新提交，平台不会自动重跑。${fileNote}`;
   }
   return "已从智能导引带入预填草案，请核对并补全后再提交——签发权在你。";
 });
@@ -255,18 +261,34 @@ const form = reactive({
 // 导引草案的 inputs 种子：用于在 Agent schema 加载后灌进结构化表单（仅目标 Agent 匹配时）。
 let guidePrefill = null;
 
-if (["guide", "demo", "retry"].includes(route.query.from)) {
+// 预填草案消费（可重入，Codex 治理审 R0 P2-5）：既在 setup 首次调用，也由下方
+// watch 在「用户已在 /tasks/new、从全局 StatusCenter 再点重试只改 query 不重挂」
+// 时重新调用——否则新草案永不被消费、旧表单残留。重入前先清掉上一次预填派生态
+// （prefill 注入的 upload 项以 uid 前缀 guide_ 标识，只清这些不碰用户手加的）。
+function consumePrefillDraft() {
+  if (!["guide", "demo", "retry"].includes(route.query.from)) return;
+  guidePrefill = null;
+  prefillOrigin.value = "";
+  prefillRetryOf.value = null;
+  prefillHadFileCount.value = 0;
+  uploadItems.value = uploadItems.value.filter((i) => !String(i.uid).startsWith("guide_"));
   try {
     const raw = sessionStorage.getItem("flai_prefill");
     if (raw) {
       const draft = JSON.parse(raw);
-      if (draft && draft.agent_id === form.agentId && draft.inputs) {
+      const wantAgent =
+        typeof route.query.agent_id === "string" ? route.query.agent_id : form.agentId;
+      if (draft && draft.agent_id === wantAgent && draft.inputs) {
+        form.agentId = draft.agent_id; // 同路由重试可能切到别的 Agent，同步表单选择
         form.inputsText = JSON.stringify(draft.inputs, null, 2);
         guidePrefill = { agentId: draft.agent_id, inputs: draft.inputs };
         prefillOrigin.value = route.query.from;
-        // N4a：血缘与名称仅 retry 草案携带；名称尊重人未填时才带入（不覆盖手输）。
+        // N4a：血缘/附件数/名称仅 retry 草案携带；名称尊重人未填时才带入（不覆盖手输）。
         if (typeof draft.retry_of === "string" && draft.retry_of) {
           prefillRetryOf.value = draft.retry_of;
+        }
+        if (typeof draft.had_file_count === "number") {
+          prefillHadFileCount.value = draft.had_file_count;
         }
         if (typeof draft.name === "string" && draft.name && !form.name) {
           form.name = draft.name;
@@ -298,6 +320,7 @@ if (["guide", "demo", "retry"].includes(route.query.from)) {
     sessionStorage.removeItem("flai_prefill");
   }
 }
+consumePrefillDraft();
 
 async function loadAgents() {
   try {
@@ -488,6 +511,19 @@ async function handleSubmit() {
     submitting.value = false;
   }
 }
+
+// P2-5（Codex 治理审 R0）：已在 /tasks/new 时从全局 StatusCenter 再点「复制为新
+// 任务」，router.push 同路径只改 query、组件不重挂 → setup 不再跑、新草案不被消费。
+// 监听预填相关 query 变化，重挂之外的同路由再入时重新消费草案并重载 Agent 表单。
+// 无 immediate：首次进入由 setup 的 consumePrefillDraft() 处理，不重复消费。
+watch(
+  () => [route.query.from, route.query.agent_id],
+  () => {
+    if (!["guide", "demo", "retry"].includes(route.query.from)) return;
+    consumePrefillDraft();
+    if (form.agentId) handleAgentChange(form.agentId);
+  }
+);
 
 onMounted(() => {
   loadAgents();

@@ -19,6 +19,12 @@ interactive 运行时无此挂载点，Wave 2 需先补挂载点并另立 ADR）
 读文件、直接 import KnowledgeService、私接外部检索——一律拒绝合并。Engineering Memory
 仍无检索服务，"查到了东西"依旧按野路子处理。
 
+> **窄例外（ADR-0029，2026-07-15）**：**签发人核对引用原文**这一只读用途，新增
+> `knowledge.provenance.ChunkProvenanceReader` 为第二个合法持有者（唯一入口=
+> `GET /api/knowledge/chunk`）。它**自带密级门**（restricted/枚举外/未注册一律
+> fail-closed 拒），不做检索、不进 Agent 运行时、不被 workflow 持有。除此窄例外与
+> Runtime 装配外，直接持有 KnowledgeService 的禁令不变。密级快照边界见 ADR-0029 §D3。
+
 ## 2. Run Memory 的落地形态（V0.1 唯一实现）
 
 - `task_events`：任务生命周期与工具/模型调用事件流水，是运行记忆的"事实层"（见 `docs/05_Task_Event_Standard.md`）。

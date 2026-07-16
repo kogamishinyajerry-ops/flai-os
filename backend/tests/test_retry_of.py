@@ -77,3 +77,17 @@ def test_retry_of_overlong_rejected_422(app_env) -> None:
     client, _app = app_env
     resp = _create_hello(client, retry_of="x" * 65)
     assert resp.status_code == 422, resp.text
+
+
+def test_retry_of_schema_rejects_empty_string() -> None:
+    """Codex 治理审 R0 P3：schema minLength:1 消除 parity 漂移——
+    API 422 拒空串，schema 的 retry_of 子契约也必须拒空串、放行 null 与非空串。
+    隔离校验子契约，避免整对象缺 required 字段导致「因错误原因通过」。"""
+    import jsonschema
+    import pytest
+
+    subschema = _TASK_SCHEMA["properties"]["retry_of"]
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate("", subschema)  # 空串必拒
+    jsonschema.validate(None, subschema)  # null 放行（非重跑任务）
+    jsonschema.validate("t_origin_123", subschema)  # 合法非空串放行
