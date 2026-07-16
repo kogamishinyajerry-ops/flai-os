@@ -206,3 +206,80 @@
 （ADR-0025：NULL 分级+任何派生内容行→封）会遮蔽 events payload/message，
 签发行/工具 chip 全部消失。门在正确地咬；夹具必须讲自洽的故事（真实 runner
 对 internal 任务必落此戳）。这也是一次免费的门咬合实证：遮蔽路径真的工作。
+
+## 八、批次三来源与审计（2026-07-15，desktop-restudy 深度打磨）
+
+> 触发：owner「参考 agent-ui-design/design-sync/desktop-restudy/ 深度打磨 UI UX」。
+> 设计源：desktop-restudy 28 张样张卡（Claude Desktop × Codex Desktop 重研，
+> 1948 行，f279b9c），主控亲读 FLAi-OS 相关 17 张（axes-compare + cd-* 12 张 +
+> cx-foundations/saturation/done-paused/empty-states/question-card/env-rail/
+> composer/shell），跳过 plugins/popover/floating/subagents/review-diff 等无
+> 对应面样张。**抄结构不抄元素**红线继承：借语法，色板与人格仍是暖纸 + clay
+> + 信任色锁。
+
+对照审计结论（已合规项，零改动）：
+- 时间语义=绝对时间戳（家族轴）——批次二 F4 已落，本批只做行级延伸（G4）。
+- 工具聚合=纯文字行（cx-env-rail 五图复证）——W13 已落。
+- 诚实失败入叙事流/失败只染动词 token——W16 已落。
+- 空态不施压（cx-empty-states 站点空态）——全站空态无实心 CTA，已合规。
+- 环境 rail 空值=「—」诚实降级——W3 已落。
+- 时态双态（cd-collapsed-blocks：进行中现在时+脉动/完成过去式）——WorkLog
+  头行已双态，本批补三段式节奏（G2）。
+
+## 九、批次三工作项
+
+- **G1 折叠工作日志贴地形态**（cd-collapsed-blocks「折叠思考块=纯一行灰字，
+  无背景无图标」+ cx-env-rail/cx-shell worklog 上下发丝线三明治）：
+  `.worklog-head` 去盒化——背景透明、去边框盒/圆角，改上下 `--hairline-soft`
+  发丝线；头行文字 ink→ink-soft、600→500（灰字语法）；hover 回墨色保
+  可点性 affordance；▸ 旋转展开与既有交互面（class 名/点击锚）零变。
+- **G2 头行三段式 + 零值豁口**（cd-workflow-card 思考指示器三段式节奏的
+  诚实适配：状态词 · 时间 · 计量——计量轴用真实事件计数，不编 token）：
+  工作态头行 `正在处理 · 已 X · N 条事件`（N=0 时该段整段不出现）；完成态
+  头行既有 `已处理 X · N 条事件` 补零值豁口——N=0 时不再显示「0 条事件」
+  （cd-bg-tasks-panel「空值=em dash，不显示 0」规范）。
+- **G3 运行中行实时时长**（cd-bg-tasks-panel Running 卡字段序第二行=
+  类型+时长实时）：状态中心收件箱「运行中」行 sub 追加 `· 已 X` 活跳时长
+  （started_at 缺失=段不出现，不硬凑）；1s ticker 仅抽屉打开期间存活，
+  关闭即清——与 WorkLog F2 同「纯离散文本替换零动画」语法。
+- **G4 行级紧凑绝对时钟 SSOT**（家族轴「完成态=绝对时间戳」的行级形态，
+  cx-done-paused 操作条 13:12 语法）：utils/format 新增 `formatClockCompact
+  (iso, todayKey)`（同日 `HH:MM`、跨日 `MM-DD HH:MM`、非法/缺失=「—」；
+  todayKey 由调用方响应式供给——承袭 CompletionSeal 午夜翻页教训 R1-P3，
+  纯函数绝不裸读 new Date()）；CompletionSeal 落定时刻改走该 SSOT（输出
+  逐字不变，F4 探针=回归网）；状态中心「待你签发/最近落定」行的全量 locale
+  串（`2026/7/15 02:02:05`）收敛为紧凑时钟，todayKey 由 G3 ticker 派生。
+  **孪生面**（3-lens 孪生点漏改教训）：/me「我发起的任务」行同批收敛同
+  SSOT；午夜翻页逻辑抽取为 `useTodayKey` composable（CompletionSeal 原始
+  修复的 SSOT 化——只需日界的面用它，已有 1s ticker 的面由 nowTick 派生，
+  不重复挂表）。边界说明：任务详情 rail「任务信息」卡与工作日志时间轴保持
+  formatTime 全量精度——rail/时间轴是检视面（Codex rail 同哲学），行级
+  紧凑时钟只收敛扫读面；今日页 Agent 动态保持既裁决的相对时间语法。
+
+## 十、批次三红线·反采纳·验收
+
+红线继承批次一 §三、批次二 §七全部条款。本批反采纳（样张真理被有意拒绝，
+防止「照抄样张」压过项目宪法）：
+- **问题卡推荐徽/推荐项行底**（cx-question-card）——签发是人的裁决，平台
+  推荐任何方向=施压代签（红线「人是唯一签发者」），签发卡永不采纳。
+- **中断报「after Xs」时长**（cx-done-paused Paused 语法）——Codex 的 stop
+  是可 continue 的暂停（一等时间线条目+续跑胶囊）；FLAi-OS cancelled 是终态
+  无续跑，批次二「时刻不时长」裁决维持，F4' 探针不动。
+- **零彩色选中双灰**（cx-saturation）——clay=工作/进行/选中是焊死的信任
+  色锁槽位，家族轴已裁决 clay 锚，不迁移。
+- **workflow 进度点行**（cd-workflow-card 蓝实心/灰空心）——FLAi-OS 批量
+  任务无 per-item 中途真数据，凑点=编造（假绿死罪），summary 落库才有的
+  批量行已在核验段。
+- **rail 渐隐 mask**——批次二已裁决「无适用锚点」，维持。
+
+验收：
+1. craft 套件扩针（⑩ 系列）：G1 贴地样式谓词（背景透明+左右无边+上下发丝
+   线+字重 500）；G2 工作态三段 regex + 完成态零事件任务无「条事件」段；
+   G3 断轮询后 1s ticker 驱动行内时长仍递增（route-abort 列表端点）；
+   G4 状态中心行时间匹配紧凑时钟 regex 且无 locale 斜杠、Seal F4 探针原样
+   全绿（回归网）。
+2. tamper 自证 ≥4 处必咬：G1 盒化样式回种 / G2 零值豁口拆除（恒拼 0 条
+   事件）/ G3 ticker 拆除 / G4 行时间换回 formatTime。
+3. node 单测：formatClockCompact 同日补零/跨日/非法/缺失四象限。
+4. `verify_all.sh` 全绿；3-lens 对抗审 + Codex 治理审（native Pro sol-ultra，
+   cap 3）收敛后合并 push。

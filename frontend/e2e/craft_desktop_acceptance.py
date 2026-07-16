@@ -32,7 +32,14 @@
      分级真实遮蔽下签发行降级「签发记录不可用」（绝不谎报「未经签发」）；
      F4 盖章落定时刻（HH:MM 或 MM-DD HH:MM）+ cancelled 报中断时刻不报时长；
      F5 产物 >3 件折叠「显示另外 N 个」单向展开（前 3 恒渲）；F6 类型标签
-     「文档 · MD」（TaskDetail 与 StatusCenter 速览同 SSOT）。
+     「文档 · MD」（TaskDetail 与 StatusCenter 速览同 SSOT）；
+  ⑩ 批次三 G1-G4 深度打磨（契约=UI-DESKTOP-CRAFT.md 批次三，desktop-restudy）：
+     G1 工作日志头贴地（背景透明+左右无边+上下发丝线+灰字 500——盒装样式
+     回种必红）；G2 工作态头行三段式「正在处理 · 已 X · N 条事件」+ 完成态
+     零事件任务无「0 条事件」（零值豁口）；G3 状态中心运行中行活跳时长——
+     断列表轮询后行内「已 X」仍逐秒递增（纯 ticker 驱动）；G4 收件箱行级
+     紧凑时钟（同日 HH:MM/跨日 MM-DD HH:MM，locale 全量串绝迹）+ /me 任务行
+     孪生面同 SSOT（useTodayKey 响应式日界）。
 
 夹具口径（与 m9 同纪律）：temp DB 直写只为渲染路径提供 fixture，不冒充业务
 状态机行为（真实完成/放行链路由 m2 验收）。completed 任务配 tool_failed 事件
@@ -602,6 +609,91 @@ with sync_playwright() as p:
     vf = page.locator(".verify-card").inner_text()
     check("⑨F3'' 分级遮蔽下签发行诚实降级（不可用≠未经签发）",
           "签发记录不可用" in vf and "未经人工签发流程" not in vf, vf[:120])
+
+    # ══ ⑩ 批次三 G1-G4（desktop-restudy 深度打磨）═══════════════════════════
+
+    # ── ⑩a G1 工作日志头贴地形态（cd-collapsed-blocks 纯灰字+发丝线三明治）──
+    page.goto(BASE + f"/tasks/{task_a}", wait_until="networkidle")
+    page.wait_for_selector(".worklog-head", timeout=8000)
+    g1 = page.locator(".worklog-head").first.evaluate(
+        """el => { const s = getComputedStyle(el);
+             return { bg: s.backgroundColor, radius: s.borderRadius,
+                      top: s.borderTopWidth, bottom: s.borderBottomWidth,
+                      left: s.borderLeftWidth, right: s.borderRightWidth }; }"""
+    )
+    check("⑩G1 工作日志头贴地（背景透明+左右无边+上下发丝线+无圆角）",
+          g1["bg"] in ("rgba(0, 0, 0, 0)", "transparent") and g1["top"] == "1px"
+          and g1["bottom"] == "1px" and g1["left"] == "0px" and g1["right"] == "0px"
+          and g1["radius"] == "0px",
+          str(g1))
+    g1w = page.locator(".worklog-head-text").first.evaluate("el => getComputedStyle(el).fontWeight")
+    check("⑩G1 头行灰字语法（字重 500，非盒装标题 600）", g1w == "500", g1w)
+
+    # ── ⑩b G2 工作态头行三段式（状态词 · 时间 · 真实事件计数）────────────────
+    # task_d（running）种一条真实事件保证计量段有数据——三段式的计量轴用落库
+    # 事件计数，不编 token。
+    _db("INSERT INTO task_events (event_id, task_id, agent_id, event_type, level, message, payload_json, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        ("evt_craft_d1", task_d, "hello_agent", "agent_log", "info", "运行观察", "{}",
+         datetime.now(timezone.utc).isoformat()))
+    page.goto(BASE + f"/tasks/{task_d}", wait_until="networkidle")
+    page.wait_for_selector(".worklog-head-text", timeout=8000)
+    g2a = page.locator(".worklog-head-text").inner_text()
+    check("⑩G2 工作态头行三段式（正在处理 · 已 X · N 条事件）",
+          _re.match(r"^正在处理 · 已 .+ · \d+ 条事件$", g2a) is not None, g2a)
+
+    # 完成态零事件任务：头行绝不显示「0 条事件」（cd-bg-tasks-panel 零值不显示）。
+    resp_g = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "工艺批探针G"}})
+    assert resp_g.status_code < 300, resp_g.text
+    task_g = resp_g.json()["id"]
+    _db("UPDATE tasks SET status='completed', started_at=?, finished_at=? WHERE id=?",
+        ("2026-07-15T06:00:00+00:00", "2026-07-15T06:00:42+00:00", task_g))
+    _db("DELETE FROM task_events WHERE task_id=?", (task_g,))
+    page.goto(BASE + f"/tasks/{task_g}", wait_until="networkidle")
+    page.wait_for_selector(".worklog-head-text", timeout=8000)
+    g2b = page.locator(".worklog-head-text").inner_text()
+    check("⑩G2 完成态零事件头行无「条事件」段（零值豁口）",
+          g2b.startswith("已处理") and "条事件" not in g2b, g2b)
+
+    # ── ⑩c G3+G4 状态中心收件箱行级活面───────────────────────────────────────
+    page.locator(".status-dock").click()
+    page.wait_for_selector(".sc-group-label.working", timeout=8000)
+    working_sub = page.locator(".sc-group:has(.sc-group-label.working) .sc-item-sub").first
+    check("⑩G3 运行中行含活跳时长段（· 已 X）", "· 已 " in working_sub.inner_text(),
+          working_sub.inner_text())
+    # 掐断任务列表轮询：此后行内时长变化只可能来自组件内 1s ticker（与 F2 同
+    # 「解耦可证伪」姿势——轮询驱动的旧实现在此必冻结）。
+    ctx.route("**/api/tasks?*", lambda route: route.abort())
+    g3_samples = {working_sub.inner_text()}
+    for _ in range(3):
+        page.wait_for_timeout(1100)
+        g3_samples.add(working_sub.inner_text())
+    ctx.unroute("**/api/tasks?*")
+    check("⑩G3 断轮询后 3.3s 内行内时长仍逐秒递增（纯 ticker，≥3 个不同读数）",
+          len(g3_samples) >= 3, str(g3_samples))
+
+    # G4 行级紧凑时钟：待签行与最近落定行=同日 HH:MM（跨日 MM-DD HH:MM 前缀
+    # 兼容），locale 全量串（含 / 与秒位）绝迹。
+    wait_sub = page.locator(".sc-group:has(.sc-group-label.waiting) .sc-item-sub").first.inner_text()
+    check("⑩G4 待签行紧凑时钟（无 locale 斜杠串）",
+          _re.search(r"(\d{2}-\d{2} )?\d{2}:\d{2}$", wait_sub.strip()) is not None
+          and "/" not in wait_sub, wait_sub)
+    done_sub = page.locator(".sc-group:has(.sc-group-label:text('最近落定')) .sc-item-sub").first.inner_text()
+    check("⑩G4 最近落定行紧凑时钟（无 locale 斜杠串）",
+          _re.search(r"(\d{2}-\d{2} )?\d{2}:\d{2}$", done_sub.strip()) is not None
+          and "/" not in done_sub, done_sub)
+    page.screenshot(path=str(SHOTS / "statuscenter_inbox_live_light.png"))
+    page.locator(".sc-close").click()
+    page.wait_for_timeout(300)
+
+    # ── ⑩d G4 孪生面：/me 任务行同 SSOT 紧凑时钟（3-lens 孪生点漏改教训——
+    #    同一行级语法必须同批落到同类扫读面，绝不留一半 locale 串）────────────
+    page.goto(BASE + "/me", wait_until="networkidle")
+    page.wait_for_selector(".me-task-time", timeout=8000)
+    me_time = page.locator(".me-task-time").first.inner_text()
+    check("⑩G4 我的页任务行紧凑时钟（孪生面同 SSOT，无 locale 斜杠串）",
+          _re.search(r"^(\d{2}-\d{2} )?\d{2}:\d{2}$", me_time.strip()) is not None
+          and "/" not in me_time, me_time)
 
     ctx.close()
 

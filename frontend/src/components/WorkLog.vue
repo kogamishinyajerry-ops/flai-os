@@ -146,14 +146,20 @@ onUnmounted(() => {
 const elapsedMs = computed(() => taskElapsedMs(props.task, nowTick.value));
 
 const headText = computed(() => {
+  // 三段式节奏（批次三 G2，cd-workflow-card 思考指示器三段式的诚实适配）：
+  // 状态词 · 时间 · 计量——计量轴用真实事件计数（轮询到账即增），不编 token。
+  // 零值豁口（cd-bg-tasks-panel「空值不显示 0」）：N=0 该段整段不出现，
+  // 工作态/完成态同一规——绝不显示「0 条事件」。
+  const n = (props.events || []).length;
+  const eventsPart = n > 0 ? ` · ${n} 条事件` : "";
   if (isWorking.value) {
     // started_at 缺失（如 validating 早期）时不硬凑"已 —"，退化为纯进行态文案。
-    return elapsedMs.value === null ? "正在处理…" : `正在处理 · 已 ${formatDuration(elapsedMs.value)}`;
+    return elapsedMs.value === null ? "正在处理…" : `正在处理 · 已 ${formatDuration(elapsedMs.value)}${eventsPart}`;
   }
   if (elapsedMs.value === null) {
     return "尚未开始";
   }
-  return `已处理 ${formatDuration(elapsedMs.value)} · ${(props.events || []).length} 条事件`;
+  return `已处理 ${formatDuration(elapsedMs.value)}${eventsPart}`;
 });
 
 // 授权链口播：SSOT=utils/format deriveSignoff（null/redacted/完整 三态），
@@ -280,16 +286,19 @@ const rawLine = computed(() => {
 </script>
 
 <style scoped>
+/* 贴地形态（批次三 G1，cd-collapsed-blocks「折叠思考块=纯一行灰字，无背景
+   无图标」+ cx worklog 上下发丝线三明治）：去盒化——背景透明、无边框盒/圆角，
+   只留上下发丝线；折叠态默认只占一行安静灰字，hover 回墨保可点性 affordance。 */
 .worklog-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   cursor: pointer;
-  padding: 10px 14px;
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  background: var(--paper-rail);
+  padding: 9px 2px;
+  border-top: 1px solid var(--hairline-soft);
+  border-bottom: 1px solid var(--hairline-soft);
+  background: transparent;
 }
 .worklog-head-left {
   display: flex;
@@ -298,8 +307,12 @@ const rawLine = computed(() => {
   min-width: 0;
 }
 .worklog-head-text {
-  font-size: 13.5px;
-  font-weight: 600;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  transition: color var(--motion-fast) var(--ease-out-soft);
+}
+.worklog-head:hover .worklog-head-text {
   color: var(--ink);
 }
 .worklog-arrow {

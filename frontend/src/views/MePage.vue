@@ -29,7 +29,9 @@
         <router-link v-for="t in myTasks" :key="t.id" class="me-task-item" :to="`/tasks/${t.id}`">
           <span class="me-task-name">{{ t.name || t.agent_id }}</span>
           <span class="me-task-status">{{ statusLabel(t.status) }}</span>
-          <span class="me-task-time">{{ formatTime(t.created_at) }}</span>
+          <!-- 行级紧凑时钟（批次三 G4 孪生面）：与 StatusCenter 行/CompletionSeal
+               同 formatClockCompact SSOT——同屏扫读面绝不再现 locale 全量串。 -->
+          <span class="me-task-time">{{ formatClockCompact(t.created_at, todayKey) }}</span>
         </router-link>
       </div>
       <div v-if="contrib && contrib.total_created > myTasks.length" class="me-feedback-note">
@@ -69,8 +71,13 @@ import { fetchMyContributions, fetchMyTasks } from "../api/me";
 import { request } from "../api/client";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import { formatTime, statusLabel } from "../utils/format";
+import { formatClockCompact, statusLabel } from "../utils/format";
+import { useTodayKey } from "../composables/useTodayKey";
 import { currentUser } from "../stores/session";
+
+// 响应式日界（G4）：本页是静态拉取面（无轮询），跨午夜后紧凑时钟的同日判据
+// 必须能自行翻页——useTodayKey 卸载即清（与 CompletionSeal 同 SSOT）。
+const todayKey = useTodayKey();
 
 const contrib = ref(null);
 const myTasks = ref([]);

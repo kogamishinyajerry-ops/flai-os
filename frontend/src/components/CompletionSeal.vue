@@ -18,8 +18,9 @@
 <script setup>
 // 时长口径 SSOT=utils/format 的 taskElapsedMs+formatDuration（与 WorkLog 同源
 // 同取整）——绝不自建第二套 formatter，避免同屏「1h 0m」vs「59 分 59 秒」互相打脸。
-import { ref, computed, watch, onMounted, onUnmounted } from "vue";
-import { formatDuration, taskElapsedMs } from "../utils/format";
+import { ref, computed, watch, onMounted } from "vue";
+import { formatDuration, taskElapsedMs, formatClockCompact } from "../utils/format";
+import { useTodayKey } from "../composables/useTodayKey";
 import { burstNeutral } from "../effects/burst";
 
 const props = defineProps({ task: Object, animate: { type: Boolean, default: false } });
@@ -48,32 +49,17 @@ const statusWord = computed(() => {
 // 时间戳」）：同日 HH:MM、跨日 MM-DD HH:MM——时刻是「何时落定」的锚，与
 // 时长（工作量）语义正交；解析失败诚实不显示，不编时刻。
 // 跨午夜翻页（Codex R1-P3）：终态任务停轮询，computed 里裸读 new Date() 永不
-// 重算——页面跨过本地午夜后「昨日完成」仍显裸 HH:MM 会误读成今天。todayKey
-// 是响应式日界：单发 setTimeout 对准下一个本地午夜+1s 翻一次并再武装（零轮询，
-// 组件卸载即清）。
-const todayKey = ref(new Date().toDateString());
-let midnightTimer = null;
-function armMidnightFlip() {
-  const now = new Date();
-  const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 1);
-  midnightTimer = setTimeout(() => {
-    todayKey.value = new Date().toDateString();
-    armMidnightFlip();
-  }, nextMidnight.getTime() - now.getTime());
-}
-onMounted(armMidnightFlip);
-onUnmounted(() => {
-  if (midnightTimer !== null) clearTimeout(midnightTimer);
-});
+// 重算——页面跨过本地午夜后「昨日完成」仍显裸 HH:MM 会误读成今天。响应式
+// 日界抽取为 useTodayKey composable（本组件原始修复的 SSOT 化，MePage 行级
+// 时钟同用），语义零变：午夜+1s 单发翻页再武装、卸载即清。
+const todayKey = useTodayKey();
 
+// 时钟格式走 utils/format formatClockCompact SSOT（批次三 G4）：本地同日判据
+// 与 StatusCenter/MePage 行级时钟同一份，输出逐字不变；「—」译回 null 保
+// tail 拼接语义（凑不出时刻=该段不出现，不显示占位符）。
 const sealClock = computed(() => {
-  const iso = props.task?.finished_at;
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  if (d.toDateString() === todayKey.value) return hm;
-  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hm}`;
+  const v = formatClockCompact(props.task?.finished_at, todayKey.value);
+  return v === "—" ? null : v;
 });
 
 const tail = computed(() => {

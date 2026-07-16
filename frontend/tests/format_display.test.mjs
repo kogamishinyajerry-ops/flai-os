@@ -1,7 +1,7 @@
 // frontend/tests/format_display.test.mjs — 展示层格式化 SSOT 数字/签发口径。
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatDuration, formatTokens, deriveSignoff, signoffText } from "../src/utils/format.js";
+import { formatDuration, formatTokens, formatClockCompact, deriveSignoff, signoffText } from "../src/utils/format.js";
 
 test("formatDuration: 合法毫秒按 disclosure-grammar 输出秒/分秒/小时分钟", () => {
   assert.equal(formatDuration(0), "0 秒");
@@ -77,4 +77,21 @@ test("deriveSignoff: 无遮蔽标记的缺 reviewer=unknown（不编造受限，
 test("signoffText: 批准与驳回口播文案对称", () => {
   assert.equal(signoffText({ approved: true, reviewer: "王工" }), "✓ 由 王工 批准放行");
   assert.equal(signoffText({ approved: false, reviewer: "王工" }), "✕ 由 王工 驳回");
+});
+
+test("formatClockCompact: 同日 HH:MM 补零 / 跨日 MM-DD HH:MM（批次三 G4）", () => {
+  // todayKey 由调用方供给（响应式日界教训 R1-P3）——用固定 key 使断言与跑测时刻无关。
+  const sameDay = new Date(2026, 6, 15, 9, 5); // 本地 2026-07-15 09:05
+  const todayKey = sameDay.toDateString();
+  assert.equal(formatClockCompact(sameDay.toISOString(), todayKey), "09:05");
+  const otherDay = new Date(2026, 6, 3, 23, 7); // 本地 2026-07-03 23:07
+  assert.equal(formatClockCompact(otherDay.toISOString(), todayKey), "07-03 23:07");
+});
+
+test("formatClockCompact: 非法/缺失诚实降级为「—」", () => {
+  const todayKey = new Date().toDateString();
+  for (const value of [undefined, null, ""]) {
+    assert.equal(formatClockCompact(value, todayKey), "—");
+  }
+  assert.equal(formatClockCompact("not-a-date", todayKey), "—");
 });

@@ -38,7 +38,8 @@
               <span class="sc-lamp" :style="{ background: 'var(--trust-pending)' }"></span>
               <span class="sc-item-main">
                 <span class="sc-item-name">{{ t.name || t.id.slice(0, 12) }}</span>
-                <span class="sc-item-sub">{{ t.agent_id }} · {{ formatTime(t.created_at) }}</span>
+                <!-- 行级紧凑时钟（批次三 G4）：全量 locale 串收敛为同日 HH:MM/跨日 MM-DD HH:MM。 -->
+                <span class="sc-item-sub">{{ t.agent_id }} · {{ rowClock(t.created_at) }}</span>
               </span>
               <span class="sc-item-cta">审阅 →</span>
             </div>
@@ -57,7 +58,9 @@
               <span class="sc-lamp is-pulsing" :style="{ background: 'var(--clay)' }"></span>
               <span class="sc-item-main">
                 <span class="sc-item-name">{{ t.name || t.id.slice(0, 12) }}</span>
-                <span class="sc-item-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }}</span>
+                <!-- 活跳时长（批次三 G3，cd-bg-tasks-panel Running 卡「时长实时」）：
+                     started_at 缺失（queued/validating 早期）=段不出现，不硬凑。 -->
+                <span class="sc-item-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }}<template v-if="runElapsed(t)"> · 已 {{ runElapsed(t) }}</template></span>
               </span>
               <span class="sc-item-cta">速览 →</span>
             </div>
@@ -72,7 +75,7 @@
               <span class="sc-lamp" :style="{ background: taskLampColor(t.status) }"></span>
               <span class="sc-item-main">
                 <span class="sc-item-name">{{ t.name || t.id.slice(0, 12) }}</span>
-                <span class="sc-item-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }} · {{ formatTime(t.finished_at || t.created_at) }}</span>
+                <span class="sc-item-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }} · {{ rowClock(t.finished_at || t.created_at) }}</span>
               </span>
             </div>
           </div>
@@ -210,7 +213,10 @@ import { acquireChannel, pokeTask } from "../stores/liveFeed";
 import { reviewTask } from "../api/tasks";
 import { request } from "../api/client";
 import { downloadUrl, fetchOutputFile } from "../api/files";
-import { statusLabel, statusTagType, taskLampColor, formatTime, formatFileSize, formatTokens, artifactTypeLabel, TASK_WORK_STATES } from "../utils/format";
+// formatTime 保留给授权链行（N8）——签发决策面的检视级全量时间戳；行级扫读
+// 面（待签/落定行）走 formatClockCompact 紧凑时钟（批次三 G4 边界：检视面
+// 全量精度，扫读面紧凑）。
+import { statusLabel, statusTagType, taskLampColor, formatTime, formatClockCompact, formatDuration, taskElapsedMs, formatFileSize, formatTokens, artifactTypeLabel, TASK_WORK_STATES } from "../utils/format";
 import { displayName } from "../stores/session";
 import { markTaskSeen } from "../utils/lastSeen";
 import { buildRetryRoute } from "../utils/retryPrefill";
@@ -229,6 +235,37 @@ function openAllTasks() {
   closeCenter();
 }
 const drawerSize = window.innerWidth < 640 ? "100%" : "540px";
+
+// ── 收件箱行级活面（批次三 G3/G4）：1s ticker 仅抽屉打开期间存活、关闭即清
+// ——驱动「运行中」行活跳时长（cd-bg-tasks-panel Running 卡字段序「时长实时」）
+// 与 todayKey 响应式日界（formatClockCompact 同日判据——承袭 CompletionSeal
+// 午夜翻页教训 R1-P3，绝不裸读 new Date() 后永不重算）。纯离散文本替换零动画
+// （与 WorkLog F2 同语法，reduced-motion 无涉）。 ──
+const nowTick = ref(Date.now());
+let tickTimer = null;
+watch(() => statusCenter.open, (open) => {
+  if (open && tickTimer === null) {
+    nowTick.value = Date.now();
+    tickTimer = setInterval(() => { nowTick.value = Date.now(); }, 1000);
+  } else if (!open && tickTimer !== null) {
+    clearInterval(tickTimer);
+    tickTimer = null;
+  }
+}, { immediate: true });
+
+const todayKey = computed(() => new Date(nowTick.value).toDateString());
+// 行级紧凑时钟（G4）：同日 HH:MM、跨日 MM-DD HH:MM，SSOT=utils/format。
+function rowClock(iso) {
+  return formatClockCompact(iso, todayKey.value);
+}
+// 运行中行活跳时长（G3）：started_at 缺失/解析失败=空串（v-if 段不出现），
+// 诚实降级不硬凑「已 —」。
+function runElapsed(t) {
+  const ms = taskElapsedMs(t, nowTick.value);
+  if (ms == null) return "";
+  const text = formatDuration(ms);
+  return text === "—" ? "" : text;
+}
 
 // ── 收件箱数据（并轨 liveFeed 'tasks' channel：抽屉开 acquire、关 release——
 // 「关闭零后台消耗」语义原样保留：channel 无其他订阅者时自停,有订阅者（如
@@ -587,6 +624,10 @@ onUnmounted(() => {
   releasePeekFeed();
   artifactsFingerprint = null;
   resetSampleFixState();
+  if (tickTimer !== null) {
+    clearInterval(tickTimer); // ticker 安全网：抽屉开着被整组件卸载时不留游离计时器
+    tickTimer = null;
+  }
 });
 </script>
 

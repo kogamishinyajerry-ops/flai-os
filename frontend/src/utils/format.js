@@ -136,6 +136,21 @@ export const formatDuration = (ms) => {
   return `${seconds} 秒`;
 };
 
+// 紧凑绝对时钟（批次三 G4，家族轴「完成态=绝对时间戳」的行级形态）：同日
+// `HH:MM`、跨日 `MM-DD HH:MM`、非法/缺失=「—」。todayKey（toDateString() 串）
+// 由调用方**响应式供给**——承袭 CompletionSeal 午夜翻页教训（Codex R1-P3）：
+// 纯函数绝不裸读 new Date()，否则终态面停轮询后跨午夜永不重算，「昨日完成」
+// 的裸 HH:MM 会被误读成今天。SSOT：CompletionSeal 落定时刻与 StatusCenter
+// 收件箱行共用，绝不各自再造第二套同日判据。
+export const formatClockCompact = (iso, todayKey) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (d.toDateString() === todayKey) return hm;
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hm}`;
+};
+
 // token 用量 → 千位压缩（disclosure-grammar §三「判断依据精确 · 量级感受
 // 压缩」——token 属量级感受轴，1 位小数、整值去尾零：12345→12.3k、12000→12k、
 // 3400000→3.4M；<1000 保持精确）。SSOT：TaskDetail rail / DeliveryCard 尾行 /
