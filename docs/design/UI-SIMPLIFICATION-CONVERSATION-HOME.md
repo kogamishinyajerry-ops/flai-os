@@ -1,5 +1,11 @@
 # UI 简化设计 ——「对话即家，其余来找人」（UI-PARADIGM Phase 3 · 减法收口）
 
+> **状态注（2026-07-15，评审 N13）**：本文批 2「任务台并入状态中心抽屉（单
+> Surface）」已被其后的 owner 裁决推翻——现行 IA 是「对话（/）｜任务台（/tasks）」
+> 双 Surface（`frontend/src/router/index.js` 范式 Phase 2b）；批 1 方案卡减重已被
+> 桌面工艺批（W0-W8，2026-07-14 合 main）覆盖迭代。保留作设计考古；现行 SSOT =
+> `UI-PARADIGM.md` + `UI-DESKTOP-CRAFT.md`。
+>
 > 状态：设计已 owner 拍板方向（2026-07-12），待 spec 复核后进实现计划。
 > 关联：[[UI-PARADIGM.md]]（七祈使句 SSOT，本文是其 Phase 3）· MOTION-SYSTEM.md ·
 > 信任色锁 · 诚实地板 · [[reference_agentic_ui_live_traces]]（Claude/Codex 实机拉片）。

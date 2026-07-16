@@ -1,5 +1,12 @@
 # 「对话即家」UI 简化 实现计划（UI-PARADIGM Phase 3）
 
+> **状态注（2026-07-15，评审 N13）**：本计划已**部分失效，勿按复选框继续施工**。
+> 批 2「任务台并入状态中心抽屉（单 Surface）」被其后的 owner 裁决推翻——现行
+> IA 是「对话（/）｜任务台（/tasks）」双 Surface（见 `frontend/src/router/index.js`
+> 头注「范式 Phase 2b」）；批 1 密度削减已被桌面工艺批（2026-07-14 合入 main 的
+> W0-W8）迭代覆盖。本文保留作设计考古与裁决线索；现行 SSOT =
+> `UI-PARADIGM.md` + `UI-DESKTOP-CRAFT.md`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: 用 superpowers:subagent-driven-development 或
 > superpowers:executing-plans 逐任务实现。步骤用 `- [ ]` 复选框跟踪。
 > 设计 SSOT：`docs/design/UI-SIMPLIFICATION-CONVERSATION-HOME.md`。
