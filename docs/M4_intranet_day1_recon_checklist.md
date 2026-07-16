@@ -5,7 +5,7 @@
 > 「验证结果」栏由踏点当天现场填写，未填即未验证。
 >
 > 来源盘点方式：`grep -rn "待内网侦察" backend/ docs/ agents/ contracts/`
-> （2026-07-11 汇总；若代码更新以 grep 现扫为准）。
+> （2026-07-16 复核；若代码更新以 grep 现扫为准）。
 
 ## 使用方式
 
@@ -27,7 +27,7 @@
 | 1-2 | 鉴权方式是 `Authorization: Bearer <key>` | `profiles.yaml:13` | 同上（探针即用 Bearer 头；401/403 只是观测——可能是鉴权形态不符，也可能是 Key 错误/过期、模型 ACL、IP 白名单，需用已知有效凭据或与服务方确认后才能下结论） | |
 | 1-3 | 响应 body 是 JSON 且有 `choices[0].message.content`（网关必需）；`usage` 字段（网关允许缺失，缺则 token 消耗记 None） | `gateway.py`（chat 形状校验） | 探针输出逐层观测 | |
 | 1-4 | 中文往返正常（无编码/截断问题） | 隐含假设 | 探针后手工发一条中文 prompt 核对 | |
-| 1-5 | 60s 读超时够用（重推理模型延迟未知） | `.env.example` 本地经验注 | 用真实 reasoning 模型发一条复杂 prompt 计时 | |
+| 1-5 | 真实 reasoning 请求的延迟分布与安全 timeout 尚未知 | `backend/app/config.py`、`.env.example`、`docs/PRODUCTION-READINESS-PROGRAM.md` P0-B3 | 用目标模型重复发送代表性复杂 prompt，记录样本量、p50/p99/失败率；将 `FLAI_LLM_TIMEOUT_S` 配置为高于经确认的 p99 后复测 | |
 | 1-6 | 模型名（`FLAI_LLM_MODEL_REASONING/FAST`）在内网服务上真实存在 | `profiles.yaml:21` | 探针 + 服务方确认模型清单 | |
 | 1-7 | vision/embed profile 的报文形态（V0.1 只占位） | `gateway.py:289`、`docs/06:73-80` | 询问服务方是否提供，暂不接入，观测记回 docs/06 §6 | |
 

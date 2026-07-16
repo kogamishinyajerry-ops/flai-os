@@ -29,7 +29,7 @@ Task 9 补全③盖章动效）。
     --with "pydantic>2" --with jieba python frontend/e2e/batch_a_livefeed_acceptance.py
   # 首次需 playwright install chromium
 
-截图落 docs/reviews/batch-a-livefeed-shots/（每次重跑覆盖，保持证据与代码同步）。
+截图默认落临时 artifact；仅 UPDATE_GOLDENS=1 更新 docs/reviews/batch-a-livefeed-shots/。
 """
 from __future__ import annotations
 
@@ -43,11 +43,13 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
+from _artifacts import resolve_shots_dir
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 DIST = REPO / "frontend" / "dist"
-SHOTS = REPO / "docs" / "reviews" / "batch-a-livefeed-shots"
+SHOTS = resolve_shots_dir(REPO, "batch-a-livefeed-shots")
 
 if not (DIST / "index.html").is_file():
     sys.exit("诚实失败：frontend/dist 未构建。先执行  cd frontend && npm run build")

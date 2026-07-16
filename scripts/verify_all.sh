@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键执行前端构建、后端全量测试与五组浏览器验收；任一步失败立即汇总退出。
+# 一键执行前端构建、后端全量测试、前端纯函数核与 17 套浏览器验收；任一步失败立即汇总退出。
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -85,6 +85,14 @@ E2E_SCRIPTS=(
   "frontend/e2e/inline_summon_acceptance.py"
   "frontend/e2e/craft_desktop_acceptance.py"
 )
+
+if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+  echo "E2E 截图模式：显式更新 docs/reviews 金图"
+else
+  : "${FLAI_E2E_ARTIFACT_DIR:=$(mktemp -d "${TMPDIR:-/tmp}/flai-os-e2e.XXXXXX")}"
+  export FLAI_E2E_ARTIFACT_DIR
+  echo "E2E 临时产物目录：${FLAI_E2E_ARTIFACT_DIR}"
+fi
 
 for script in "${E2E_SCRIPTS[@]}"; do
   run_step "③ E2E ${script}" \

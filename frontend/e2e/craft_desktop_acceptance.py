@@ -53,7 +53,7 @@
     --with jsonschema --with pyyaml --with httpx --with python-multipart \
     --with "pydantic>2" --with jieba python frontend/e2e/craft_desktop_acceptance.py
 
-截图落 docs/reviews/craft-shots/。
+截图默认落临时 artifact；仅 UPDATE_GOLDENS=1 更新 docs/reviews/craft-shots/。
 """
 from __future__ import annotations
 
@@ -66,11 +66,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+from _artifacts import resolve_shots_dir
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 DIST = REPO / "frontend" / "dist"
-SHOTS = REPO / "docs" / "reviews" / "craft-shots"
+SHOTS = resolve_shots_dir(REPO, "craft-shots")
 
 if not (DIST / "index.html").is_file():
     sys.exit("诚实失败：frontend/dist 未构建。先执行  cd frontend && npm run build")
