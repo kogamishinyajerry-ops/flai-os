@@ -83,7 +83,7 @@
       </div>
 
       <!-- ═══ 任务速览视图 ═══ -->
-      <div v-else class="sc-body" v-loading="peekLoading">
+      <div v-else class="sc-body" :class="{ 'sc-sensitive': peekTask?.data_classification === 'sensitive' }" v-loading="peekLoading">
         <div v-if="peekError" class="sc-error">{{ peekError }}</div>
 
         <template v-if="peekTask">
@@ -94,6 +94,12 @@
             <el-tag :type="statusTagType(peekTask.status)">{{ statusLabel(peekTask.status) }}</el-tag>
             <span class="peek-agent">{{ peekTask.agent_id }} · {{ peekTask.agent_version || "—" }}</span>
             <button class="peek-fullpage" @click="goFullPage">打开完整页 ↗</button>
+          </div>
+
+          <!-- N9 敏感声明（ADR-0025）：形状+字重，零新色；框在 .sc-sensitive 整窗双线。 -->
+          <div v-if="peekTask.data_classification === 'sensitive'" class="peek-sensitive-decl">
+            <span aria-hidden="true">◆</span>
+            <span>敏感数据任务——产物按部门数据口径流转，不外发。</span>
           </div>
 
           <!-- 终态盖章：落定任务先给一行官宣（Codex「─ Worked for Xs ─」哲学） -->
@@ -115,6 +121,13 @@
           </div>
 
           <el-alert v-if="peekTask.error_message" type="error" :title="peekTask.error_message" show-icon :closable="false" class="peek-block" />
+
+          <!-- N4a 速览里的失败任务同样给下一步：与 TaskDetail 同源 util，
+               预填需人工核对亲手提交，绝不自动重跑。 -->
+          <div v-if="peekTask.status === 'failed'" class="peek-block peek-retry">
+            <button type="button" class="peek-retry-btn" @click="retryFromPeek">复制为新任务</button>
+            <span class="peek-retry-hint">带原输入进创建页，核对后重新提交。</span>
+          </div>
 
           <!-- 产物先于动作（信任核心 P0-2：先看要签的东西，再决定放行）。
                只要任务声明了产物就必渲染此区——加载中/失败都如实可见，
@@ -196,6 +209,7 @@ import { downloadUrl, fetchOutputFile } from "../api/files";
 import { statusLabel, statusTagType, taskLampColor, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
 import { displayName } from "../stores/session";
 import { markTaskSeen } from "../utils/lastSeen";
+import { buildRetryRoute } from "../utils/retryPrefill";
 import { burstSigned } from "../effects/burst";
 import WorkLog from "./WorkLog.vue";
 import MarkdownLite from "./MarkdownLite.vue";
@@ -492,6 +506,17 @@ function goFullPage() {
   backToInbox();
   closeCenter();
   if (id) router.push(`/tasks/${id}`);
+}
+
+// N4a：失败任务速览 → 复制为新任务（buildRetryRoute 写 flai_prefill 草案）。
+// 与 goFullPage 同款退场纪律：先同步卸 peek 子树再导航，堵选择器重影窗口。
+function retryFromPeek() {
+  const t = peekTask.value;
+  if (!t) return;
+  const target = buildRetryRoute(t);
+  backToInbox();
+  closeCenter();
+  router.push(target);
 }
 
 function onEsc(e) {
@@ -982,5 +1007,48 @@ onUnmounted(() => {
   .sc-item:hover {
     transform: none;
   }
+}
+
+/* N9 敏感整窗框（peek）：双线 ink 边框+声明行，形状/字重承载，零新色。 */
+.sc-body.sc-sensitive {
+  border: 3px double var(--ink);
+  border-radius: 14px;
+}
+.peek-sensitive-decl {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.6;
+  border-bottom: 1px solid var(--hairline);
+  padding-bottom: 6px;
+  margin-bottom: 10px;
+}
+.peek-sensitive-decl > span[aria-hidden] {
+  flex: none;
+  font-size: 9px;
+}
+/* N4a 速览失败重试行 */
+.peek-retry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.peek-retry-btn {
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--clay);
+  cursor: pointer;
+}
+.peek-retry-hint {
+  font-size: 12px;
+  color: var(--ink-faint);
 }
 </style>

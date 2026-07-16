@@ -1,7 +1,7 @@
 import { request } from "./client";
 
 // created_by 服务端从登录会话派生（ADR-0019 D5），前端不再发送任何身份文本。
-export const createTask = ({ agentId, name, inputs, inputFileIds, conversationId }) =>
+export const createTask = ({ agentId, name, inputs, inputFileIds, conversationId, retryOf }) =>
   request("/api/tasks", {
     method: "POST",
     json: {
@@ -11,6 +11,8 @@ export const createTask = ({ agentId, name, inputs, inputFileIds, conversationId
       input_file_ids: inputFileIds || [],
       // M8：由导引协作会话产出的任务带上会话 id，归到协作工作台的同一次会话下。
       conversation_id: conversationId || null,
+      // N4a/迁移#12：「复制为新任务」的血缘注记（纯元数据，指向不存在→后端 404）。
+      retry_of: retryOf || null,
     },
   });
 

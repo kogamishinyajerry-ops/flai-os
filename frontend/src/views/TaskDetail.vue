@@ -23,8 +23,14 @@
            容器查询驱动——组件自身宽 ≥780px 双栏（260px rail；≥1120px 提 300px），更窄宿主自动单列；
            DOM 序=主列（含产物）先、rail（含来源）后，m2 的
            a[href*='/download'] .first 指向产物下载的契约保持。 -->
-      <div class="td-grid">
+      <div class="td-grid" :class="{ 'td-sensitive': isSensitive }">
       <div class="td-main">
+      <!-- N9 敏感整窗声明（ADR-0025 执行期落库分级）：形状+字重承载，零新色
+           （Phase-2c 未读判例同款纪律）；框在 .td-sensitive 整窗双线。 -->
+      <div v-if="isSensitive" class="sensitive-decl">
+        <span class="sensitive-decl-mark" aria-hidden="true">◆</span>
+        <span>敏感数据任务——执行期接触了受限文件、语料或工具产出，产物及其内容请按部门数据口径流转，不外发。</span>
+      </div>
       <div class="page-header">
         <!-- 工作态流光带（P3，动效系统 v1）：v-if 绑真实 work-state，状态回落随之
              立即消失——诚实地板：流光=真的在跑。装饰性，不承载信息，故 aria-hidden。 -->
@@ -68,6 +74,13 @@
         <span>创建人 {{ task.created_by }}</span>
         <span class="ctx-dot">·</span>
         <span>{{ formatTime(task.created_at) }}</span>
+        <!-- N4a 血缘注记（迁移#12）：本任务由失败任务复制而来，深链回原任务。 -->
+        <template v-if="task.retry_of">
+          <span class="ctx-dot">·</span>
+          <router-link class="ctx-retry-link" :to="`/tasks/${task.retry_of}`">
+            重跑自 <span class="num-token">{{ task.retry_of }}</span>
+          </router-link>
+        </template>
       </div>
 
       <el-alert
@@ -78,6 +91,14 @@
         :closable="false"
         class="section"
       />
+
+      <!-- N4a 失败不是死胡同：一键把原输入带回创建页（血缘 retry_of 随行），
+           预填仍需人工核对亲手提交——绝不自动重跑。仅 failed（cancelled=
+           人为中止≠需要重试）。 -->
+      <div v-if="task.status === 'failed'" class="retry-row">
+        <el-button plain @click="retryAsNew">复制为新任务</el-button>
+        <span class="retry-hint">带原输入进创建页，核对修正后重新提交——平台不会自动重跑。</span>
+      </div>
 
       <!-- 产物在主叙事列（签发前把要签的东西摆在眼前，放在「动作」之前——先看
            产物，再决定放行，信任核心 P0-2）；来源/元数据迁至环境 rail（下方
@@ -307,11 +328,12 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { cancelTask, reviewTask } from "../api/tasks";
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import { readChunk } from "../api/knowledge";
+import { buildRetryRoute } from "../utils/retryPrefill";
 import { acquireChannel, pokeTask, onTransition } from "../stores/liveFeed";
 import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import EmptyState from "../components/EmptyState.vue";
@@ -326,6 +348,7 @@ import { markTaskSeen } from "../utils/lastSeen";
 import { burstSigned } from "../effects/burst";
 
 const route = useRoute();
+const router = useRouter();
 const taskId = route.params.taskId;
 
 // 仿真监控深链：读浮窗同款配置（未配置=null=按钮零渲染，e2e 不受扰）。
@@ -517,6 +540,13 @@ const isWaitingReview = computed(() => task.value?.status === "waiting_review");
 const isTerminal = computed(() => ["completed", "failed", "cancelled"].includes(task.value?.status));
 // 页头到席点：与 WorkLog 内部同一口径（TASK_WORK_STATES），紧邻状态 tag 左侧。
 const isTaskWorking = computed(() => TASK_WORK_STATES.has(task.value?.status));
+// N9 敏感整窗框：执行期落库的不可变分级（ADR-0025），sensitive 才亮框——
+// internal/null 零渲染，绝不把「未分级」冒充「已判非敏感」。
+const isSensitive = computed(() => task.value?.data_classification === "sensitive");
+// N4a 复制为新任务：仅 failed 提供（cancelled=人为中止≠需要重试）。
+function retryAsNew() {
+  if (task.value) router.push(buildRetryRoute(task.value));
+}
 
 // 来源面板「输入参数」：task.inputs 的 key→值摘要（值 JSON.stringify 截 80 字符），
 // 纯展示派生，不改任何签发/预填逻辑。
@@ -1051,6 +1081,48 @@ onUnmounted(() => {
   color: var(--trust-fail);
   font-size: 13px;
 }
+/* N9 敏感整窗框：双线 ink 边框 = 形状承载的分级信号（零新色，信任色五槽
+   不动）；声明行字重+菱形记号同一纪律。 */
+.td-grid.td-sensitive {
+  border: 3px double var(--ink);
+  border-radius: 16px;
+  padding: 16px;
+}
+.sensitive-decl {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.6;
+  border-bottom: 1px solid var(--hairline);
+  padding-bottom: 8px;
+}
+.sensitive-decl-mark {
+  flex: none;
+  font-size: 10px;
+}
+/* N4a 复制为新任务：失败告警下的下一步行——按钮+一句后果说明。 */
+.retry-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.retry-hint {
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+.ctx-retry-link {
+  color: var(--clay);
+  text-decoration: none;
+}
+.ctx-retry-link:hover {
+  text-decoration: underline;
+}
+
 /* N7 知识引用：rail 内静默披露行——mono 引用号 + 幽灵按钮，原文收在 hairline
    内衬里。错误态用 ink-soft 不用红：403/404/409 是口径说明不是系统故障，
    红只留给真失败（信任色锁）。 */

@@ -196,13 +196,19 @@ const submitting = ref(false);
 const uploadingFiles = ref(false);
 const submitError = ref("");
 const uploadItems = ref([]);
-// 预填来源（"" | guide | demo）：guide=导引草案（m6 锚文案逐字不动）；demo=
-// 首登引导的 Hello 演示（评审 N2）。两种预填都是「机器带入待人核」内容，
+// 预填来源（"" | guide | demo | retry）：guide=导引草案（m6 锚文案逐字不动）；
+// demo=首登引导的 Hello 演示（评审 N2）；retry=失败任务「复制为新任务」
+// （评审 N4a，带血缘 retry_of）。三种预填都是「机器带入待人核」内容，
 // 横幅一律 warning（amber 未核语义，信任色锁）。
 const prefillOrigin = ref("");
+// N4a 血缘：本次创建若来自「复制为新任务」，记原任务 id，提交时随 createTask 落库。
+const prefillRetryOf = ref(null);
 const prefillBannerText = computed(() => {
   if (prefillOrigin.value === "demo") {
     return "演示预填：Hello 示例 Agent 无业务含义——提交后可完整看到「排队 → 运行 → 产物落地」的真实生命周期。";
+  }
+  if (prefillOrigin.value === "retry") {
+    return `已带入失败任务的原始输入（血缘 ${prefillRetryOf.value || "—"}）——请核对修正后重新提交，平台不会自动重跑。`;
   }
   return "已从智能导引带入预填草案，请核对并补全后再提交——签发权在你。";
 });
@@ -249,7 +255,7 @@ const form = reactive({
 // 导引草案的 inputs 种子：用于在 Agent schema 加载后灌进结构化表单（仅目标 Agent 匹配时）。
 let guidePrefill = null;
 
-if (["guide", "demo"].includes(route.query.from)) {
+if (["guide", "demo", "retry"].includes(route.query.from)) {
   try {
     const raw = sessionStorage.getItem("flai_prefill");
     if (raw) {
@@ -258,6 +264,13 @@ if (["guide", "demo"].includes(route.query.from)) {
         form.inputsText = JSON.stringify(draft.inputs, null, 2);
         guidePrefill = { agentId: draft.agent_id, inputs: draft.inputs };
         prefillOrigin.value = route.query.from;
+        // N4a：血缘与名称仅 retry 草案携带；名称尊重人未填时才带入（不覆盖手输）。
+        if (typeof draft.retry_of === "string" && draft.retry_of) {
+          prefillRetryOf.value = draft.retry_of;
+        }
+        if (typeof draft.name === "string" && draft.name && !form.name) {
+          form.name = draft.name;
+        }
         if (typeof draft.conversation_id === "string") {
           prefillConversationId.value = draft.conversation_id;
           // 单 Agent 草案带 conclude_after：提交成功后归档本会话（后于创建，见下）。
@@ -449,6 +462,7 @@ async function handleSubmit() {
       inputs,
       inputFileIds: uploadItems.value.filter((i) => i.status === "done").map((i) => i.fileId),
       conversationId: prefillConversationId.value,
+      retryOf: prefillRetryOf.value,
     });
     // 单 Agent 导引流程：任务已创建成功，此刻再归档本会话（fire-and-forget，归档失败
     // 不影响已建任务；多 Agent 由工作台「结束协作」显式归档）。必须后于 createTask——
