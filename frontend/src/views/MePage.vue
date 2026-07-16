@@ -7,13 +7,22 @@
 
     <el-alert v-if="loadError" type="error" :title="loadError" show-icon :closable="false" class="page-alert" />
 
-    <!-- 版块1：贡献概览（精确） -->
-    <div class="me-overview">
-      <div class="me-stat"><span class="me-stat-num">{{ contrib?.since_created ?? "—" }}</span><span class="me-stat-label">本周发起</span></div>
-      <div class="me-stat"><span class="me-stat-num">{{ contrib?.since_completed ?? "—" }}</span><span class="me-stat-label">本周完成</span></div>
-      <div class="me-stat"><span class="me-stat-num">{{ contrib?.waiting_review ?? "—" }}</span><span class="me-stat-label">待我跟进</span></div>
-      <div class="me-stat"><span class="me-stat-num">{{ contrib?.total_created ?? "—" }}</span><span class="me-stat-label">累计发起</span></div>
+    <!-- 版块1：贡献概览（精确）。零值不显示（批次四 Q2）：已加载后 0 值格不渲染
+         ——0 不是信息；data-stat 语义锚供 e2e 按字段对表（不再用 :last-child 位置
+         定位）。未加载（contrib 为 null）保持四格「—」占位，不冒充有数据。 -->
+    <div v-if="!contrib || visibleMeStats.length" class="me-overview">
+      <template v-if="contrib">
+        <div v-for="s in visibleMeStats" :key="s.key" class="me-stat" :data-stat="s.key">
+          <span class="me-stat-num">{{ typeof s.value === "number" ? s.value : "—" }}</span><span class="me-stat-label">{{ s.label }}</span>
+        </div>
+      </template>
+      <template v-else>
+        <div v-for="s in ME_STAT_DEFS" :key="s.key" class="me-stat" :data-stat="s.key">
+          <span class="me-stat-num">—</span><span class="me-stat-label">{{ s.label }}</span>
+        </div>
+      </template>
     </div>
+    <EmptyState v-else variant="data" tier="line" description="还没有可统计的贡献——从对话发起第一个任务吧" />
 
     <!-- 版块2：我发起的任务（精确） -->
     <div class="me-section">
@@ -27,7 +36,8 @@
       <EmptyState v-else-if="!loading && !loadError && !myTasks.length" description="你还没有发起任务" />
       <div v-else class="me-task-list">
         <router-link v-for="t in myTasks" :key="t.id" class="me-task-item" :to="`/tasks/${t.id}`">
-          <span class="me-task-name">{{ t.name || t.agent_id }}</span>
+          <!-- 人话称呼（批次四 Q1）：缺名回退 Agent 显示名（原为裸 agent_id）。 -->
+          <span class="me-task-name">{{ taskDisplayName(t, agentNames.map) }}</span>
           <span class="me-task-status">{{ statusLabel(t.status) }}</span>
           <!-- 行级紧凑时钟（批次三 G4 孪生面）：与 StatusCenter 行/CompletionSeal
                同 formatClockCompact SSOT——同屏扫读面绝不再现 locale 全量串。 -->
@@ -39,40 +49,54 @@
       </div>
     </div>
 
-    <!-- 版块3：我的反馈（近似，显式标注） -->
+    <!-- 版块3：我的反馈（近似，显式标注）。零值收敛（批次四 Q2）：0 条时整段
+         收一行安静空态——计数与近似口径注只在真有数据时出现（诚实口径注是
+         「已显示数字」的限定语，没有数字就没有被限定对象）。 -->
     <div class="me-section">
       <div class="section-label">我的反馈</div>
-      <div class="me-feedback-count">{{ contrib?.feedback_count_approx ?? "—" }} 条</div>
-      <div class="me-feedback-note">按显示名近似统计（可能与同名者混计）——反馈无唯一身份列</div>
+      <template v-if="feedbackCount === null">
+        <div class="me-feedback-count">—</div>
+      </template>
+      <EmptyState v-else-if="feedbackCount === 0" variant="data" tier="line" description="还没有反馈记录" />
+      <template v-else>
+        <div class="me-feedback-count">{{ feedbackCount }} 条</div>
+        <div class="me-feedback-note" title="反馈无唯一身份列，按显示名匹配，可能与同名者混计">按显示名近似统计，可能与同名者混计</div>
+      </template>
     </div>
 
-    <!-- 版块4：团队总量（复用批B，无人际排名） -->
+    <!-- 版块4：团队总量（复用批B口径，无人际排名）。零值项不渲染（Q2，与今日页
+         团队总量同律）；全 0 收一行。 -->
     <div class="me-section">
       <div class="section-label">团队总量</div>
-      <div class="me-team-bar">
-        <span>本周完成 {{ team?.tasks_completed ?? "—" }}</span>
-        <span>本周签发 {{ team?.reviews_approved ?? "—" }}</span>
-        <span>累计固化 {{ team?.curated_cases_total ?? "—" }}</span>
-        <span>本周晋升 {{ team?.promotions ?? "—" }}</span>
+      <div v-if="!team || visibleTeamStats.length" class="me-team-bar">
+        <template v-if="team">
+          <span v-for="s in visibleTeamStats" :key="s.key" :data-stat="s.key">{{ s.label }} {{ typeof s.value === "number" ? s.value : "—" }}</span>
+        </template>
+        <template v-else>
+          <span v-for="s in TEAM_STAT_DEFS" :key="s.key">{{ s.label }} —</span>
+        </template>
       </div>
+      <EmptyState v-else variant="data" tier="line" description="本周还没有可统计的团队动态" />
       <div class="me-team-note">团队总量仅作氛围对照，不含任何人际排名</div>
     </div>
 
-    <!-- 版块5：诚实缺口条（显式上屏，非装饰） -->
+    <!-- 版块5：诚实缺口条（显式上屏，非装饰；批次四 Q3 压缩为一行——红线语义
+         「人是唯一签发者」与缺口事实保留，细节措辞收短）。 -->
     <div class="me-honest-gap">
-      签发 / 样本认可的个人归因待后续——签发唯一身份当前仅在审计轨留痕（人是唯一签发者），暂无应用数据读路径。此页只统计可精确归因的发起贡献。
+      此页只统计可精确归因的发起贡献；签发/样本认可的归因待后续（人是唯一签发者，签发身份现仅留审计轨）。
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { fetchMyContributions, fetchMyTasks } from "../api/me";
 import { request } from "../api/client";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import { formatClockCompact, statusLabel } from "../utils/format";
+import { formatClockCompact, statusLabel, taskDisplayName } from "../utils/format";
 import { useTodayKey } from "../composables/useTodayKey";
+import { useAgentNames } from "../stores/agentNames";
 import { currentUser } from "../stores/session";
 
 // 响应式日界（G4）：本页是静态拉取面（无轮询），跨午夜后紧凑时钟的同日判据
@@ -84,6 +108,43 @@ const myTasks = ref([]);
 const team = ref(null);
 const loading = ref(true);
 const loadError = ref("");
+
+// Agent 人话名册（批次四 Q1）：任务行缺名时回退注册表显示名。
+const agentNames = useAgentNames();
+
+// 零值不显示（批次四 Q2）：>0 才渲染；隐藏格的「确为 0」由 e2e 按 data-stat
+// 对照 /api/me/contributions 与 /api/stats/overview 真值核验。字段=后端投影，
+// 此处只做展示映射。
+const ME_STAT_DEFS = [
+  { key: "since_created", label: "本周发起" },
+  { key: "since_completed", label: "本周完成" },
+  { key: "waiting_review", label: "待我跟进" },
+  { key: "total_created", label: "累计发起" },
+];
+const visibleMeStats = computed(() => {
+  const c = contrib.value;
+  if (!c) return [];
+  // 仅「确为 0」隐藏；字段缺失/非数字=数据不可用，保格显「—」（与今日页同律）。
+  return ME_STAT_DEFS.map((d) => ({ ...d, value: c[d.key] })).filter((d) => !(typeof d.value === "number" && d.value === 0));
+});
+
+const TEAM_STAT_DEFS = [
+  { key: "tasks_completed", label: "本周完成" },
+  { key: "reviews_approved", label: "本周签发" },
+  { key: "curated_cases_total", label: "累计固化" },
+  { key: "promotions", label: "本周晋升" },
+];
+const visibleTeamStats = computed(() => {
+  const t = team.value;
+  if (!t) return [];
+  return TEAM_STAT_DEFS.map((d) => ({ ...d, value: t[d.key] })).filter((d) => !(typeof d.value === "number" && d.value === 0));
+});
+
+// 反馈计数三态：null=未加载（显「—」）/ 0=收敛空态 / >0 显示计数+近似口径注。
+const feedbackCount = computed(() => {
+  const v = contrib.value?.feedback_count_approx;
+  return typeof v === "number" ? v : null;
+});
 // 首载完成标记（A3 同款，与 loading 解耦）：loading 在跨日定时刷新/换号刷新时
 // 每次都会重置 true，若骨架直接绑 loading 会在这些静默刷新时闪回骨架——只在
 // 从未成功过时为 false，成功一次后恒 true。

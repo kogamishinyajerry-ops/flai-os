@@ -1,9 +1,12 @@
 <template>
+  <!-- data-task-id（批次四 Q1）：主文本改人话称呼后，e2e 定位改走本属性——
+       缺名任务不再有裸 id 字面可当定位串（batch_b_today 消费）。 -->
   <div
     v-if="task"
     class="delivery-card"
     role="button"
     tabindex="0"
+    :data-task-id="task.id"
     @click="openTask"
     @keydown.enter.prevent="openTask"
     @keydown.space.prevent="openTask"
@@ -11,7 +14,7 @@
     <CompletionSeal :task="task" :animate="animate" />
 
     <div class="delivery-meta">
-      <span class="delivery-name">{{ task.name || task.id.slice(0, 12) }}</span>
+      <span class="delivery-name">{{ taskDisplayName(task, agentNames.map) }}</span>
       <span class="delivery-sub">
         {{ task.agent_id }}<template v-if="task.agent_version"> · {{ task.agent_version }}</template>
         <template v-if="task.created_by"> · {{ task.created_by }}</template>
@@ -68,9 +71,13 @@ import { useRouter } from "vue-router";
 import CompletionSeal from "./CompletionSeal.vue";
 import { downloadUrl } from "../api/files";
 import { getDeliverySummary, listOutputFiles } from "../api/tasks";
-import { taskElapsedMs, formatDuration, formatTokens } from "../utils/format";
+import { taskElapsedMs, formatDuration, formatTokens, taskDisplayName } from "../utils/format";
+import { useAgentNames } from "../stores/agentNames";
 
 const props = defineProps({ task: Object, animate: { type: Boolean, default: false } });
+
+// Agent 人话名册（批次四 Q1）：缺名交付卡回退 Agent 显示名。
+const agentNames = useAgentNames();
 
 const router = useRouter();
 

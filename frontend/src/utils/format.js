@@ -151,6 +151,20 @@ export const formatClockCompact = (iso, todayKey) => {
   return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hm}`;
 };
 
+// 任务称呼（批次四 Q1，「人话优先」语法）：任务名 → Agent 注册表显示名 →
+// id 切片，三级**诚实降级**——名册缺位（未加载/拉取失败/查无此 agent）绝不
+// 编名字，回退与旧行为逐字一致（id 前 12 位）。SSOT：状态中心行/今日页行/
+// 任务台左栏/交付卡/协作 chip/⌘K/签发提醒 toast 共用；裸 task_id 只允许
+// 活在检视面（详情 rail/深链/反馈选择器）。agentNames 由 stores/agentNames
+// 名册（或调用方自备映射）供给。
+export const taskDisplayName = (task, agentNames) => {
+  if (!task) return "—";
+  if (task.name) return task.name;
+  const registryName = agentNames && task.agent_id ? agentNames[task.agent_id] : "";
+  if (registryName) return registryName;
+  return task.id ? task.id.slice(0, 12) : "—";
+};
+
 // token 用量 → 千位压缩（disclosure-grammar §三「判断依据精确 · 量级感受
 // 压缩」——token 属量级感受轴，1 位小数、整值去尾零：12345→12.3k、12000→12k、
 // 3400000→3.4M；<1000 保持精确）。SSOT：TaskDetail rail / DeliveryCard 尾行 /

@@ -1,11 +1,11 @@
 <template>
   <div class="agent-portal">
+    <!-- 图例句撤下（批次四 Q4，「行话进披露」）：类型/状态/成熟度的释义全部
+         已挂在对应徽章的 :title（categoryTip/agentStatusTip/maturityTip，含
+         L0「勿依赖其结论」诚实提示）——页头不再预讲一遍分类学。 -->
     <div class="page-header">
       <h2>Agent 门户</h2>
       <p class="page-sub">选择一个 Agent 创建任务</p>
-      <p class="portal-legend">
-        色条 = Agent 类型 · 状态（草案态/试运行/已发布）= 发布程度 · 成熟度 L0→L3 = 可信程度（L0 为原型，勿依赖结论）· 悬停徽章可看释义
-      </p>
     </div>
 
     <el-alert
@@ -34,7 +34,6 @@
     <el-row v-else :gutter="16" class="fx-stagger">
       <el-col v-for="agent in agents" :key="agent.id" :xs="24" :sm="12" :md="8" class="agent-col">
         <el-card class="agent-card" shadow="never" :body-style="{ padding: '0' }">
-          <div class="cat-bar" :style="{ background: categoryColor(agent.category) }"></div>
           <div class="card-inner">
             <div class="agent-card-header">
               <span class="agent-name">{{ agent.name }}</span>
@@ -50,6 +49,9 @@
                  退居其后——新手选 Agent 靠的是能力描述，不是标签体系。 -->
             <p class="agent-summary">{{ agent.summary }}</p>
 
+            <!-- 次级 meta 一行（批次四 Q4）：类型/成熟度/id·版本合并为一行
+                 安静小字——释义走 :title；id 字面保持可见 DOM（m10 has_text
+                 锚 + m2 body 断言），只降视觉权重不降可见性。 -->
             <div class="agent-tags">
               <span
                 class="cat-pill"
@@ -63,11 +65,8 @@
                 size="small"
                 :title="maturityTip(agent.maturity)"
               >{{ agent.maturity }}</el-tag>
+              <span class="agent-meta-token">{{ agent.id }} · v{{ agent.version }}</span>
               <button type="button" class="gov-entry" @click="openGovernance(agent)">治理</button>
-            </div>
-            <div class="agent-meta">
-              <span>{{ agent.id }}</span>
-              <span>v{{ agent.version }}</span>
             </div>
 
           <el-collapse v-if="agent.limitations && agent.limitations.length">
@@ -543,14 +542,6 @@ onMounted(load);
   color: var(--ink-faint);
   font-size: 13px;
 }
-/* 图例降为一行安静小字（W7b）：此前是带底色/边框的说明块，与「色条=身份轴不是
- * 信任轴」的降重方向不一致——文意保留，只褪去卡片化装饰。 */
-.portal-legend {
-  margin: var(--space-1) 0 0;
-  color: var(--ink-faint);
-  font-size: var(--fs-xs);
-  line-height: 1.5;
-}
 .page-alert {
   margin-bottom: var(--space-4);
 }
@@ -593,17 +584,6 @@ onMounted(load);
     transform: none;
   }
 }
-/* W7a：顶部饱和色条改左侧 3px 类型色条（修图例「色条」与实现「顶部通栏」的
- * 文实不符）——categoryColor 逻辑不动，只挪几何位置，饱和度不升；绝对定位不
- * 占正常流，card-inner 不必再为它预留高度。3px 为任务书钉死的具体值，无对应
- * 间距阶（最小 --space-1 已是 4px）故保留字面量。 */
-.cat-bar {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-}
 .card-inner {
   padding: var(--space-4) 18px 18px;
   display: flex;
@@ -623,19 +603,27 @@ onMounted(load);
   font-size: 15.5px;
   color: var(--ink);
 }
-.agent-meta {
-  display: flex;
-  gap: var(--space-3);
-  color: var(--ink-soft);
-  font-size: 12px;
-  font-family: var(--mono);
-  margin-bottom: 10px;
-}
 .agent-tags {
   display: flex;
   align-items: center;
   gap: 6px;
   margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+/* 释义可发现性（3-lens 诚实镜头 P2）：图例句撤下后，徽章 title 是 L0「勿依赖
+   其结论」等诚实提示的唯一入口——cursor:help + 虚线下划线给出「可悬停」
+   affordance，不再靠图例句口头宣布「悬停徽章可看释义」。 */
+.agent-tags .el-tag,
+.agent-tags .cat-pill {
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+/* id·版本 token（Q4 合并进 meta 行）：mono 弱字，可见但不喧宾。 */
+.agent-meta-token {
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  font-family: var(--mono);
 }
 .cat-pill {
   display: inline-block;

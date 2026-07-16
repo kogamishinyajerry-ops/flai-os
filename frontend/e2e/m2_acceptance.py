@@ -142,9 +142,14 @@ with sync_playwright() as p:
         if "已完成" in page.locator("body").inner_text():
             break
         time.sleep(1)
+    # 批次四 Q5：原始事件 token 移入 WorkLog 展开态（折叠态=人话扫读面）——
+    # 断言改走展开路径取 token（幂等守卫：已展开则不再点）。
+    if page.locator(".worklog-timeline").count() == 0:
+        page.locator(".worklog-head").first.click()
+        page.wait_for_selector(".worklog-timeline", timeout=3000)
     body = page.locator("body").inner_text()
     events_ok = all(k in body for k in ("task_created", "tool_started", "tool_finished", "task_completed"))
-    check("④任务事件时间轴可见且任务完成", "已完成" in body and events_ok, body[:500])
+    check("④任务事件时间轴（展开态）可见且任务完成", "已完成" in body and events_ok, body[:500])
     page.screenshot(path=str(SHOTS / "3_detail_events.png"), full_page=True)
 
     # ── ⑤下载输出（页面链接→真 HTTP 验内容）──
@@ -199,8 +204,12 @@ with sync_playwright() as p:
     page.get_by_role("button", name="批准放行").click()
     page.get_by_role("button", name="确定").click()  # ElMessageBox 二次确认
     page.wait_for_timeout(1500)
+    # 批次四 Q5：review_approved 原始 token 在展开态时间轴——同款展开守卫。
+    if page.locator(".worklog-timeline").count() == 0:
+        page.locator(".worklog-head").first.click()
+        page.wait_for_selector(".worklog-timeline", timeout=3000)
     body = page.locator("body").inner_text()
-    check("附加:人工批准→completed+review_approved 事件上时间轴",
+    check("附加:人工批准→completed+review_approved 事件上时间轴（展开态）",
           "已完成" in body and "review_approved" in body, body[:600])
     page.screenshot(path=str(SHOTS / "7_review_approved.png"), full_page=True)
 

@@ -21,9 +21,11 @@
     <template v-else>
       <div v-if="feedError" class="today-error">{{ feedError }}</div>
 
-      <!-- 版块 1：待你签发（amber 置顶，行动召唤最高优先） -->
+      <!-- 版块 1：待你签发（amber 置顶，行动召唤最高优先）。零值不显示（批次四
+           Q2，cd-bg-tasks-panel 语法全站化）：N=0 时组头不渲染「· 0」——版块
+           容器恒在（batch_b ① 钉五版块），只收计数后缀。 -->
       <section class="today-section">
-        <div class="today-section-head waiting">✍ 待你签发 · <span class="num-token">{{ waitingTasks.length }}</span></div>
+        <div class="today-section-head waiting">✍ 待你签发<template v-if="waitingTasks.length"> · <span class="num-token">{{ waitingTasks.length }}</span></template></div>
         <div v-if="waitingTasks.length" class="today-list">
           <div
             v-for="t in waitingTasks"
@@ -40,9 +42,13 @@
                  进入待签发队列的排队时长（诚实地板：文案不得暗示不存在的语义）。 -->
             <span class="today-lamp" :style="{ background: taskLampColor(t.status) }"></span>
             <span class="today-card-main">
-              <span class="today-card-name">{{ t.name || t.id.slice(0, 12) }}</span>
+              <!-- 人话称呼（批次四 Q1）：缺名回退 Agent 显示名，taskDisplayName
+                   三级诚实降级 SSOT；裸 id 退居详情 rail。 -->
+              <span class="today-card-name">{{ taskDisplayName(t, agentNames.map) }}</span>
+              <!-- meta 时钟（3-lens 可用性镜头 P2）：同 Agent 多个缺名任务主名
+                   相同，时钟是行级消歧锚（契约 §十二 Q1 承诺，与状态中心行同律）。 -->
               <span class="today-card-sub">
-                {{ t.agent_id }}<template v-if="elapsedText(t)"> · 运行 {{ elapsedText(t) }}</template>
+                {{ t.agent_id }} · {{ todayClock(t.created_at) }}<template v-if="elapsedText(t)"> · 运行 {{ elapsedText(t) }}</template>
               </span>
             </span>
           </div>
@@ -52,7 +58,7 @@
 
       <!-- 版块 2：进行中 -->
       <section class="today-section">
-        <div class="today-section-head working">进行中 · <span class="num-token">{{ workingTasks.length }}</span></div>
+        <div class="today-section-head working">进行中<template v-if="workingTasks.length"> · <span class="num-token">{{ workingTasks.length }}</span></template></div>
         <div v-if="workingTasks.length" class="today-list">
           <div
             v-for="t in workingTasks"
@@ -66,8 +72,8 @@
           >
             <span class="today-lamp" :class="{ 'is-pulsing': isWork(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
             <span class="today-card-main">
-              <span class="today-card-name">{{ t.name || t.id.slice(0, 12) }}</span>
-              <span class="today-card-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }}</span>
+              <span class="today-card-name">{{ taskDisplayName(t, agentNames.map) }}</span>
+              <span class="today-card-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }} · {{ todayClock(t.created_at) }}</span>
             </span>
           </div>
         </div>
@@ -81,7 +87,7 @@
            标注「显示最近 N 条」（诚实口径，canon 纪律）。 -->
       <section class="today-section">
         <div class="today-section-head">
-          今日交付 · <span class="num-token">{{ deliveryTasks.length }}</span><template v-if="deliveryTasks.length > DELIVERY_DISPLAY_CAP">（显示最近 <span class="num-token">{{ DELIVERY_DISPLAY_CAP }}</span> 条）</template>
+          今日交付<template v-if="deliveryTasks.length"> · <span class="num-token">{{ deliveryTasks.length }}</span></template><template v-if="deliveryTasks.length > DELIVERY_DISPLAY_CAP">（显示最近 <span class="num-token">{{ DELIVERY_DISPLAY_CAP }}</span> 条）</template>
         </div>
         <div v-if="deliveryTasks.length" class="today-list">
           <DeliveryCard v-for="t in visibleDeliveryTasks" :key="t.id" :task="t" :animate="sealAnimateIds.has(t.id)" />
@@ -96,6 +102,15 @@
       <section class="today-section">
         <div class="today-section-head">Agent 动态</div>
         <div v-if="promotionsError" class="today-error">{{ promotionsError }}</div>
+        <!-- 双空态合并（批次四 Q2）：晋升可读且两侧都空 → 收敛为一行安静空态——
+             两条并排的「暂无」是对新人的双倍噪音；任一侧有数据则各自照常。
+             「近 100 条窗口」口径由页脚一行统一声明（Q3 同屏去重），此处不再复述。 -->
+        <EmptyState
+          v-else-if="!recentPromotions.length && !topActiveAgents.length"
+          variant="data"
+          tier="line"
+          description="今天还没有 Agent 动态"
+        />
         <template v-else>
           <div v-if="recentPromotions.length" class="today-list">
             <div v-for="p in recentPromotions" :key="p.id" class="today-promo-row">
@@ -108,39 +123,35 @@
           <EmptyState v-else variant="data" tier="line" description="本周暂无晋升" />
         </template>
 
-        <div class="today-subhead">今日最活跃 Agent</div>
-        <div v-if="topActiveAgents.length" class="today-active-row">
-          <span v-for="a in topActiveAgents" :key="a.agent_id" class="today-active-chip">
-            {{ a.agent_id }} · {{ a.count }}
-          </span>
-        </div>
-        <EmptyState v-else variant="data" tier="line" description="今天暂无任务" />
-        <div class="today-subhead-note">今日 · 近 100 条任务窗口内</div>
+        <!-- 今日最活跃：数据源是本地 tasks channel，与晋升 API 无关——晋升出错
+             时必须仍独立可见（3-lens 回归镜头 P2：合并空态曾把它误嵌进
+             promotionsError 的 v-else 连坐隐藏）。仅「合并空态」已把两者一起
+             收敛的场景（无错且双空）不再重复渲染。 -->
+        <template v-if="promotionsError || recentPromotions.length || topActiveAgents.length">
+          <div class="today-subhead">今日最活跃 Agent</div>
+          <div v-if="topActiveAgents.length" class="today-active-row">
+            <span v-for="a in topActiveAgents" :key="a.agent_id" class="today-active-chip">
+              {{ a.agent_id }} · {{ a.count }}
+            </span>
+          </div>
+          <EmptyState v-else variant="data" tier="line" description="今天暂无任务" />
+        </template>
       </section>
 
-      <!-- 版块 5：团队总量条——四格横条，全中性 ink 色（信任色锁：绿/teal 只留给
-           REAL 结果/人签动作本身，不预支到统计数字）。 -->
+      <!-- 版块 5：团队总量条——全中性 ink 色（信任色锁：绿/teal 只留给 REAL
+           结果/人签动作本身，不预支到统计数字）。零值格不渲染（批次四 Q2）：
+           0 不是信息；data-stat 语义锚供 e2e 按字段对表（隐藏格由 API 真值
+           证实确为 0，绝不是数据丢失）。方法论括注降 title（Q3）。 -->
       <section class="today-section">
         <div class="today-section-head">团队总量</div>
         <div v-if="statsError" class="today-error">{{ statsError }}</div>
-        <div v-else-if="stats" class="today-stats-bar">
-          <div class="today-stat-tile">
-            <span class="today-stat-num">{{ stats.tasks_completed }}</span>
-            <span class="today-stat-label">本周完成</span>
-          </div>
-          <div class="today-stat-tile">
-            <span class="today-stat-num">{{ stats.reviews_approved }}</span>
-            <span class="today-stat-label">本周人签放行</span>
-          </div>
-          <div class="today-stat-tile">
-            <span class="today-stat-num">{{ stats.curated_cases_total }}</span>
-            <span class="today-stat-label">累计固化 case（按仓内固化文件计）</span>
-          </div>
-          <div class="today-stat-tile">
-            <span class="today-stat-num">{{ stats.promotions }}</span>
-            <span class="today-stat-label">本周晋升</span>
+        <div v-else-if="stats && visibleStats.length" class="today-stats-bar">
+          <div v-for="s in visibleStats" :key="s.key" class="today-stat-tile" :data-stat="s.key" :title="s.tip || null">
+            <span class="today-stat-num">{{ typeof s.value === "number" ? s.value : "—" }}</span>
+            <span class="today-stat-label">{{ s.label }}</span>
           </div>
         </div>
+        <EmptyState v-else-if="stats" variant="data" tier="line" description="本周还没有可统计的团队动态" />
         <SkeletonBlock v-else height="52px" width="100%" />
       </section>
     </template>
@@ -158,7 +169,9 @@ import { useRouter } from "vue-router";
 import { acquireChannel, onTransition } from "../stores/liveFeed";
 import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import { getStatsOverview, listGlobalPromotions } from "../api/stats";
-import { statusLabel, taskLampColor, taskElapsedMs, formatDuration, formatRelativeTime, TASK_WORK_STATES, MATURITY } from "../utils/format";
+import { statusLabel, taskLampColor, taskElapsedMs, formatDuration, formatRelativeTime, formatClockCompact, taskDisplayName, TASK_WORK_STATES, MATURITY } from "../utils/format";
+import { useAgentNames } from "../stores/agentNames";
+import { useTodayKey } from "../composables/useTodayKey";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import DeliveryCard from "../components/DeliveryCard.vue";
@@ -231,6 +244,31 @@ const stats = ref(null);
 const statsError = ref("");
 const promotions = ref([]);
 const promotionsError = ref("");
+
+// Agent 人话名册（批次四 Q1）：行级主文本缺名时回退注册表显示名。
+const agentNames = useAgentNames();
+
+// 行级紧凑时钟（消歧锚）：响应式日界走 useTodayKey SSOT（午夜翻页教训）。
+const todayKey = useTodayKey();
+const todayClock = (iso) => formatClockCompact(iso, todayKey.value);
+
+// 团队总量可见格（批次四 Q2 零值不显示）：仅渲染 >0 的格；隐藏格的「确为 0」
+// 由 e2e 按 data-stat 对照 /api/stats/overview 真值核验，不靠 DOM 残留自证。
+// 字段定义与 MePage 团队行同一后端投影（tasks_completed/reviews_approved/
+// curated_cases_total/promotions），此处只做展示映射不再造口径。
+const STAT_DEFS = [
+  { key: "tasks_completed", label: "本周完成" },
+  { key: "reviews_approved", label: "本周人签放行" },
+  { key: "curated_cases_total", label: "累计固化 case", tip: "按仓内固化文件计" },
+  { key: "promotions", label: "本周晋升" },
+];
+const visibleStats = computed(() => {
+  const s = stats.value;
+  if (!s) return [];
+  // 仅「确为 0」隐藏（3-lens 诚实镜头 P3 收紧）：字段缺失/非数字 ≠ 0——那是
+  // 数据不可用，格保留并显「—」占位，绝不与真 0 混为一谈静默消失。
+  return STAT_DEFS.map((d) => ({ ...d, value: s[d.key] })).filter((d) => !(typeof d.value === "number" && d.value === 0));
+});
 
 // 4a 空态文案「本周暂无晋升」要求本地按 weekStartMs 过滤（listGlobalPromotions
 // 本身是全局最近 N 条，无 since 参数）——直接掐前 5 条在晋升稀疏时会把「本周
@@ -474,11 +512,6 @@ onUnmounted(() => {
   font-weight: 700;
   color: var(--ink-faint);
   margin: var(--space-4) 0 var(--space-2);
-}
-.today-subhead-note {
-  font-size: 10.5px;
-  color: var(--ink-faint);
-  margin-top: var(--space-2);
 }
 .today-active-row {
   display: flex;

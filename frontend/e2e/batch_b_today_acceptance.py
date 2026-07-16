@@ -143,9 +143,9 @@ with sync_playwright() as p:
     page.get_by_role("button", name="提交任务").click()
     page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
     task_id = page.url.rsplit("/", 1)[-1]
-    # DeliveryCard 显示 task.name || task.id.slice(0,12)——本任务未设 name（新建表单
-    # 「姓名」字段是 hello_agent 的工具入参而非任务标题），故用短 id 作为定位串。
-    task_short_id = task_id[:12]
+    # 批次四 Q1：缺名任务主文本=Agent 显示名（不再显裸 id）——交付卡定位改走
+    # data-task-id 属性（DeliveryCard 根节点），不再依赖 id 切片字面。
+    delivery_sel = f'.delivery-card[data-task-id="{task_id}"]'
 
     deadline = time.time() + 30
     while time.time() < deadline:
@@ -192,7 +192,7 @@ with sync_playwright() as p:
     resp = approver.post(f"/api/tasks/{task_id}/review", json={"action": "approve", "comment": "批B今日工作台验收放行"})
     check("跨会话 API 批准放行请求成功", resp.status_code == 200, f"status={resp.status_code} body={resp.text[:200]}")
 
-    appeared = poke_wait(page, lambda: task_short_id in page.locator(".today-section", has_text="今日交付").inner_text(), 12)
+    appeared = poke_wait(page, lambda: page.locator(delivery_sel).count() == 1, 12)
     check("②12s 内任务出现在「今日交付」（零点击，页面自行同步）", appeared is True)
 
     try:
@@ -213,20 +213,34 @@ with sync_playwright() as p:
     overview = approver.get("/api/stats/overview", params={"since": since_iso}, timeout=10)
     check("httpx 直查 /api/stats/overview 成功", overview.status_code == 200, f"status={overview.status_code}")
     body_json = overview.json() if overview.status_code == 200 else {}
-    expected_nums = [
-        str(body_json.get("tasks_completed")),
-        str(body_json.get("reviews_approved")),
-        str(body_json.get("curated_cases_total")),
-        str(body_json.get("promotions")),
-    ]
+    # 批次四 Q2「零值不显示」后的语义对表（替代旧位置对表）：按 data-stat 逐字段
+    # 核——API>0 ⇒ 恰 1 格且数字逐字相等；API==0 ⇒ 该格不渲染（隐藏格由 API
+    # 真值证实确为 0，缺格≠数据丢失）。比旧断言多验了「零值格确实不出现」分支。
+    stat_fields = ["tasks_completed", "reviews_approved", "curated_cases_total", "promotions"]
 
-    def _page_nums():
-        return [t.strip() for t in page.locator(".today-stat-num").all_inner_texts()]
+    def _stats_match():
+        for f in stat_fields:
+            tile = page.locator(f'.today-stat-tile[data-stat="{f}"]')
+            v = body_json.get(f)
+            if isinstance(v, int) and v > 0:
+                if tile.count() != 1 or tile.locator(".today-stat-num").inner_text().strip() != str(v):
+                    return False
+            else:
+                if tile.count() != 0:
+                    return False
+        return True
 
-    poke_wait(page, lambda: _page_nums() == expected_nums, 15)
-    page_nums = _page_nums()
-    check("③团队总量条四格数字 === httpx 直查 /api/stats/overview（同 since，同源）",
-          page_nums == expected_nums, f"page={page_nums} api={expected_nums} since={since_iso}")
+    poke_wait(page, _stats_match, 15)
+
+    def _tiles_snapshot():
+        out = {}
+        for f in stat_fields:
+            tile = page.locator(f'.today-stat-tile[data-stat="{f}"]')
+            out[f] = tile.locator(".today-stat-num").inner_text().strip() if tile.count() else "(隐藏)"
+        return out
+
+    check("③团队总量条 === /api/stats/overview 语义对表（>0 逐字相等；==0 格不渲染）",
+          _stats_match() is True, f"page={_tiles_snapshot()} api={body_json} since={since_iso}")
     page.screenshot(path=str(SHOTS / "3_stats_bar_match.png"), full_page=True)
 
     # ── 断言④：新导航直开 /today（全新 browser context，非同一会话）——今日
@@ -236,7 +250,7 @@ with sync_playwright() as p:
     page2.goto(BASE + "/today", wait_until="networkidle")
     poke_wait(page2, lambda: page2.locator(".delivery-card").count() > 0, 10)
     delivery_text = page2.locator(".today-section", has_text="今日交付").inner_text()
-    has_task = task_short_id in delivery_text
+    has_task = page2.locator(delivery_sel).count() == 1
     has_seal_animate = page2.locator(".completion-seal.seal-animate").count() > 0
     check("④新导航直开 /today：今日交付里能看到该历史终态任务", has_task is True, delivery_text[:400])
     check("④新导航直开 /today：交付卡不播 .seal-animate（非亲历不放）", has_seal_animate is False)

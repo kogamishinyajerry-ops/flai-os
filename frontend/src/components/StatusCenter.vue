@@ -17,7 +17,7 @@
       <div class="sc-head">
         <template v-if="statusCenter.view === 'peek'">
           <button class="sc-back" @click="backToInbox">←</button>
-          <span class="sc-title sc-title-task">{{ peekTask?.name || statusCenter.taskId?.slice(0, 12) || "任务速览" }}</span>
+          <span class="sc-title sc-title-task">{{ peekTask ? taskDisplayName(peekTask, agentNames.map) : statusCenter.taskId?.slice(0, 12) || "任务速览" }}</span>
         </template>
         <template v-else>
           <span class="sc-title">状态中心</span>
@@ -32,12 +32,15 @@
 
         <!-- 待你签发：amber=仅待人核；行动召唤最高优先（工程师一进来先看要我处理的） -->
         <div class="sc-group">
-          <div class="sc-group-label waiting">✍ 待你签发 · <span class="num-token">{{ waitingTasks.length }}</span></div>
+          <!-- 零值不显示（批次四 Q2）：N=0 时组头不渲染「· 0」——0 不是信息。 -->
+          <div class="sc-group-label waiting">✍ 待你签发<template v-if="waitingTasks.length"> · <span class="num-token">{{ waitingTasks.length }}</span></template></div>
           <div v-if="waitingTasks.length" class="sc-list">
             <div v-for="t in waitingTasks" :key="t.id" class="sc-item" role="button" tabindex="0" @click="openTaskPeek(t.id)" @keydown.enter.prevent="openTaskPeek(t.id)" @keydown.space.prevent="openTaskPeek(t.id)">
               <span class="sc-lamp" :style="{ background: 'var(--trust-pending)' }"></span>
               <span class="sc-item-main">
-                <span class="sc-item-name">{{ t.name || t.id.slice(0, 12) }}</span>
+                <!-- 人话称呼（批次四 Q1）：缺名任务回退 Agent 显示名而非裸 id——
+                     taskDisplayName 三级诚实降级 SSOT，名册缺位仍显 id 切片。 -->
+                <span class="sc-item-name">{{ taskDisplayName(t, agentNames.map) }}</span>
                 <!-- 行级紧凑时钟（批次三 G4）：全量 locale 串收敛为同日 HH:MM/跨日 MM-DD HH:MM。 -->
                 <span class="sc-item-sub">{{ t.agent_id }} · {{ rowClock(t.created_at) }}</span>
               </span>
@@ -57,7 +60,7 @@
             <div v-for="t in workingTasks" :key="t.id" class="sc-item" role="button" tabindex="0" @click="openTaskPeek(t.id)" @keydown.enter.prevent="openTaskPeek(t.id)" @keydown.space.prevent="openTaskPeek(t.id)">
               <span class="sc-lamp is-pulsing" :style="{ background: 'var(--clay)' }"></span>
               <span class="sc-item-main">
-                <span class="sc-item-name">{{ t.name || t.id.slice(0, 12) }}</span>
+                <span class="sc-item-name">{{ taskDisplayName(t, agentNames.map) }}</span>
                 <!-- 活跳时长（批次三 G3，cd-bg-tasks-panel Running 卡「时长实时」）：
                      started_at 缺失（queued/validating 早期）=段不出现，不硬凑。 -->
                 <span class="sc-item-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }}<template v-if="runElapsed(t)"> · 已 {{ runElapsed(t) }}</template></span>
@@ -74,7 +77,7 @@
             <div v-for="t in recentDoneTasks" :key="t.id" class="sc-item" role="button" tabindex="0" @click="openTaskPeek(t.id)" @keydown.enter.prevent="openTaskPeek(t.id)" @keydown.space.prevent="openTaskPeek(t.id)">
               <span class="sc-lamp" :style="{ background: taskLampColor(t.status) }"></span>
               <span class="sc-item-main">
-                <span class="sc-item-name">{{ t.name || t.id.slice(0, 12) }}</span>
+                <span class="sc-item-name">{{ taskDisplayName(t, agentNames.map) }}</span>
                 <span class="sc-item-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }} · {{ rowClock(t.finished_at || t.created_at) }}</span>
               </span>
             </div>
@@ -82,7 +85,10 @@
         </div>
 
         <button type="button" class="sc-viewall" @click="openAllTasks">查看全部任务 →</button>
-        <div class="sc-foot-note">计数与清单来自最近任务窗口（100 条）真实轮询——窗口外不虚报。</div>
+        <!-- 诚实口径压缩（批次四 Q3；3-lens 诚实镜头 P2 补回「计数与清单」双重
+             范围声明——组头数字与列表内容都被窗口限定，压缩不丢范围界定）。
+             全句叙述形态只留任务台一处（m8 锚在彼侧）。 -->
+        <div class="sc-foot-note">口径：计数与清单均来自最近 100 条任务窗口，窗口外不虚报。</div>
       </div>
 
       <!-- ═══ 任务速览视图 ═══ -->
@@ -216,8 +222,9 @@ import { downloadUrl, fetchOutputFile } from "../api/files";
 // formatTime 保留给授权链行（N8）——签发决策面的检视级全量时间戳；行级扫读
 // 面（待签/落定行）走 formatClockCompact 紧凑时钟（批次三 G4 边界：检视面
 // 全量精度，扫读面紧凑）。
-import { statusLabel, statusTagType, taskLampColor, formatTime, formatClockCompact, formatDuration, taskElapsedMs, formatFileSize, formatTokens, artifactTypeLabel, TASK_WORK_STATES } from "../utils/format";
+import { statusLabel, statusTagType, taskLampColor, formatTime, formatClockCompact, formatDuration, taskElapsedMs, formatFileSize, formatTokens, artifactTypeLabel, taskDisplayName, TASK_WORK_STATES } from "../utils/format";
 import { displayName } from "../stores/session";
+import { useAgentNames } from "../stores/agentNames";
 import { markTaskSeen } from "../utils/lastSeen";
 import { buildRetryRoute } from "../utils/retryPrefill";
 import { burstSigned } from "../effects/burst";
@@ -227,6 +234,9 @@ import InboxZero from "./artwork/InboxZero.vue";
 import CompletionSeal from "./CompletionSeal.vue";
 
 const router = useRouter();
+
+// Agent 人话名册（批次四 Q1）：行级主文本缺名时回退注册表显示名。
+const agentNames = useAgentNames();
 
 // 「查看全部任务 →」：状态中心是任务总览的家（来找你）；要看更全的三栏视图 /
 // 历史全量时深链到 /tasks（范式 Phase 3：任务台降级为深链，不占主导航）。

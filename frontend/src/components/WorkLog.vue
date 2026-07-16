@@ -54,10 +54,9 @@
       </span>
     </div>
 
-    <!-- 原始事件 token 行：e2e 保命线（task_created/tool_started/tool_finished/
-         task_completed/review_approved 等英文 token 逐字可见），折叠态也常显，绝不 v-if 隐藏。 -->
-    <div v-if="rawLine" class="worklog-rawline">{{ rawLine }}</div>
-
+    <!-- 原始事件 token（批次四 Q5，「process 藏折叠里」）：英文 token 只活在
+         展开态时间轴的逐条 .event-type-raw 里（m2 断言同批改走展开路径）——
+         折叠态是给新人的扫读面，只留人话头行/工具聚合行/签发口播。 -->
     <div v-if="expanded" class="worklog-timeline">
       <EmptyState v-if="!events.length" variant="log" description="暂无事件" />
       <el-timeline v-else>
@@ -272,17 +271,6 @@ const chips = computed(() => {
   return out;
 });
 
-// 原始事件 token 行：按首次出现顺序去重，附计数；e2e 直接在 innerText 里找
-// 这些英文 token，折叠态也必须可见（不得 v-if="expanded" 隐藏）。
-const rawLine = computed(() => {
-  const order = [];
-  const counts = new Map();
-  for (const e of props.events || []) {
-    if (!counts.has(e.event_type)) order.push(e.event_type);
-    counts.set(e.event_type, (counts.get(e.event_type) || 0) + 1);
-  }
-  return order.map((t) => `${t} ×${counts.get(t)}`).join(" · ");
-});
 </script>
 
 <style scoped>
@@ -362,14 +350,6 @@ const rawLine = computed(() => {
 }
 .worklog-tool-sep {
   color: var(--ink-faint);
-}
-.worklog-rawline {
-  margin-top: 6px;
-  font-family: var(--mono, monospace);
-  font-size: 10.5px;
-  color: var(--ink-faint);
-  word-break: break-all;
-  padding-left: 2px;
 }
 .worklog-timeline {
   margin-top: 14px;

@@ -285,8 +285,10 @@ with sync_playwright() as p:
     alice_api = login_httpx(BASE, username="e2e_engineer", password="e2e-pass-flai")
     api_contrib = alice_api.get("/api/me/contributions", params={"since": since_iso}, timeout=10).json()
 
+    # 批次四 Q2：零值格不渲染后 :last-child 位置定位失义——改按 data-stat 语义锚
+    # 定位「累计发起」格（本链路 total_created ≥ 3 恒可见）。
     def _ui_total():
-        return page.inner_text(".me-overview .me-stat:last-child .me-stat-num").strip()
+        return page.inner_text('.me-overview .me-stat[data-stat="total_created"] .me-stat-num').strip()
 
     poke_wait(page, lambda: _ui_total() == str(api_contrib["total_created"]), 10)
     ui_total = _ui_total()

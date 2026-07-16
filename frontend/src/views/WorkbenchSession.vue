@@ -104,7 +104,10 @@
                     @click="goTask(t)"
                   >
                     <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
-                    <span class="chip-name">{{ t.name || t.id.slice(0, 12) }}</span>
+                    <span class="chip-name">{{ taskDisplayName(t, agentNames.map) }}</span>
+                    <!-- chip 时钟（3-lens 可用性镜头 P2）：同 Agent 分组内多个缺名
+                         任务主名必然相同，时钟是 chip 级唯一消歧锚。 -->
+                    <span class="chip-time">{{ sessClock(t.created_at) }}</span>
                     <span class="chip-status" :style="{ color: taskLampColor(t.status) }">{{ statusLabel(t.status) }}</span>
                     <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
                     <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
@@ -139,7 +142,8 @@
         <div class="task-chips">
           <div v-for="t in otherTasks" :key="t.id" :class="['task-chip', { review: t.status === 'waiting_review' }]" @click="goTask(t)">
             <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
-            <span class="chip-name">{{ t.name || t.agent_id }}</span>
+            <span class="chip-name">{{ taskDisplayName(t, agentNames.map) }}</span>
+            <span class="chip-time">{{ sessClock(t.created_at) }}</span>
             <span class="chip-status" :style="{ color: taskLampColor(t.status) }">{{ statusLabel(t.status) }}</span>
             <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
             <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
@@ -166,7 +170,9 @@ import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { concludeConversation } from "../api/conversations";
-import { categoryColor, categoryLabel, statusLabel, taskLampColor, TASK_WORK_STATES } from "../utils/format";
+import { categoryColor, categoryLabel, statusLabel, taskLampColor, taskDisplayName, formatClockCompact, TASK_WORK_STATES } from "../utils/format";
+import { useAgentNames } from "../stores/agentNames";
+import { useTodayKey } from "../composables/useTodayKey";
 import { markSeen } from "../utils/lastSeen";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
@@ -175,6 +181,14 @@ import SkeletonBlock from "../components/SkeletonBlock.vue";
 const route = useRoute();
 const router = useRouter();
 const sessionId = route.params.sessionId;
+
+// Agent 人话名册（批次四 Q1）：任务 chip 缺名时回退注册表显示名（roster 内外
+// 两处 chip 同一 SSOT，不再各自 fallback 裸 id / 裸 agent_id）。
+const agentNames = useAgentNames();
+
+// chip 级紧凑时钟（消歧锚）：useTodayKey 响应式日界 SSOT。
+const todayKey = useTodayKey();
+const sessClock = (iso) => formatClockCompact(iso, todayKey.value);
 
 const convHandle = acquireChannel(`conversation:${sessionId}`);
 const { conversation, memberTasks, loaded: convLoaded, error: loadError } = convHandle.state;
@@ -582,6 +596,17 @@ onUnmounted(() => {
   font-size: 13px;
   color: var(--ink);
   font-weight: 600;
+  /* 人话称呼后名字可达注册表全名长度（批次四 Q1）：chip 内单行截断防撑爆。 */
+  max-width: 260px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* chip 时钟（消歧锚）：安静弱字，不与状态词抢权重。 */
+.chip-time {
+  font-size: 11px;
+  color: var(--ink-faint);
+  flex: none;
 }
 .chip-status {
   font-size: 12px;

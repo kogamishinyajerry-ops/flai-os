@@ -30,13 +30,17 @@
 import { computed, h, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { TASK_WORK_STATES } from "../utils/format";
+import { TASK_WORK_STATES, taskDisplayName } from "../utils/format";
+import { useAgentNames } from "../stores/agentNames";
 import { openInbox } from "../stores/statusCenter";
 import { feedTasks, acquireTaskFeed, releaseTaskFeed } from "../stores/taskFeed";
 import { onTransition } from "../stores/liveFeed";
 import { setTitleBadge } from "../utils/titleBadge";
 
 const router = useRouter();
+
+// Agent 人话名册（批次四 Q1）：签发提醒 toast 的任务称呼与行级面同一 SSOT。
+const agentNames = useAgentNames();
 
 const workingCount = computed(() => feedTasks.value.filter((t) => TASK_WORK_STATES.has(t.status)).length);
 const waitingCount = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review").length);
@@ -89,7 +93,9 @@ function handleTransition(ev) {
   const last = echoedAt.get(ev.id);
   if (last && now - last < ECHO_DEDUPE_MS) return;
   echoedAt.set(ev.id, now);
-  const name = (ev.task && (ev.task.name || ev.task.id)) || ev.id;
+  // 人话称呼（批次四 Q1）：缺名回退 Agent 显示名；连名册都缺位时退 id 切片
+  // （旧行为是全量裸 id，比切片更不可读）。
+  const name = ev.task ? taskDisplayName(ev.task, agentNames.map) : ev.id.slice(0, 12);
   ElMessage({
     type: "warning",
     message: h(

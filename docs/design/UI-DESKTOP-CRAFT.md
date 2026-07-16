@@ -283,3 +283,71 @@
 3. node 单测：formatClockCompact 同日补零/跨日/非法/缺失四象限。
 4. `verify_all.sh` 全绿；3-lens 对抗审 + Codex 治理审（native Pro sol-ultra，
    cap 3）收敛后合并 push。
+
+# 批次四：新人极简批（Novice-Minimal，Q 系列）
+
+## 十一、批次四来源与诊断（2026-07-16）
+
+触发：owner「以 ChatGPT.app 和 Claude Desktop 的 UI/UX 最大化复刻优化页面；
+结合之前的全面审计，现在对新人用户过于困难，所有模块、Agent 都应该最小化、
+低噪音」。范本语料 = agent-ui-design `docs/styles/chatgpt.style.md`（稀疏近
+单色、一行安静状态代替卡片、工具贴对象不另起面板）+ `claude-desktop.style.md`
+（chat-first、折叠思考块默认折、边框语言、拟人低噪文案）+ 批次三已亲读的
+desktop-restudy 17 卡 + UI-PARADIGM 的 ChatGPT.app/Claude Desktop 拉片血统。
+
+诊断（fef203d 树最新 e2e 截图逐张过，新人视角）：
+
+| # | 噪音 | 证据 | 范本语法 |
+|---|---|---|---|
+| Q1 | 裸 `task_xxxxxxx` 当行级主文本（缺名任务 fallback=id 切片） | 状态中心/任务台/今日页行 | ChatGPT/Claude 从不让用户读内部 ID |
+| Q2 | 零值照登：「进行中 · 0」空组 + 0 值统计格 + 「0 条反馈」 | 今日页/我的贡献 | cd-bg-tasks-panel 零值不显示（批三 G2 已采，未全站化） |
+| Q3 | 方法论脚注轰炸：窗口句同屏两次、/me 三段归因说明、方案卡尾两句 | 任务台+状态中心同屏/MePage/GuidePage | 一行安静状态；说明降披露 |
+| Q4 | 门户图例句满行行话（色条=…L0→L3=…）+ 每卡 L0/治理/版本 | AgentPortal 页头+卡 | 卡=名+一句话+动作；分类学进披露 |
+| Q5 | 事件类型 mono 计数行（`task_created ×1 · …`）直接可见 | TaskDetail 时间轴脚注 | process 藏折叠里（cd-collapsed-blocks） |
+
+## 十二、批次四工作项（新人低噪五律 → Q1-Q5）
+
+语法总则（本批一切改动的判据）：**①人话优先**（可读名>机器 ID，ID 只活在
+检视面/深链）**②零值不显示**（0 不是信息；空组收敛为一行安静空态，绝不渲染
+「· 0」）**③一处一行**（同屏方法论脚注去重；诚实口径留一行小字，纯方法论
+括注降 title）**④行话进披露**（分类学/事件枚举默认不上首屏；诚实前置语义
+不动只降形态）**⑤稀疏即尊重**（每屏一主动作，说明 ≤1 行，其余靠披露）。
+
+- **Q1 任务称呼人话 SSOT**：`taskDisplayName(task, nameMap)`——`t.name` 优先；
+  缺名 fallback Agent 显示名（新增模块级 agents 名册缓存，一次拉取懒加载）；
+  名册缺失/拉取失败诚实回退 id 切片（绝不编名字）。行 meta 保 `agent_id ·
+  时钟`（技术锚+同名区分）。消费面：状态中心行×3+peek 标题、今日页行×2、
+  任务台左栏、/me 行。
+- **Q2 零值不显示全站化**：今日页组头计数 N=0 不渲染「· N」；团队总量 0 值
+  格隐藏、全 0 收敛一行；Agent 动态双空态（无晋升+无活跃）合并单行；/me
+  四格 tile 与「我的反馈」同律。空态文案与 batch_b/craft 断言原子同批。
+- **Q3 脚注收敛**：「最近任务窗口（100 条）…不虚报」诚实口径保留但同屏只出
+  现一次；/me 底部三段说明压一行+披露；方案卡 foot 两句压一行（红线字面
+  「亲手」「签发权」保持可见）；「（按仓内固化文件计）」类括注降 title 属性。
+- **Q4 门户/选择器最小化**：图例句撤下页头（释义走徽章 title）；卡主体=
+  名+状态徽+一句描述+CTA；类型/成熟度/`agent_id vX` 收一行次级 meta；
+  「不适用范围」披露保留（诚实前置）；composer popover 的 maturity/
+  limitations 字面不动（m11-A1 锚）。
+- **Q5 详情页开发者语言收折**：折叠态=人话扫读面（G1/G2 头行/工具聚合行/
+  签发口播），原始事件 token 只活在展开态时间轴的逐条 `.event-type-raw`；
+  聚合 mono 计数行（rawLine）**退役**——其逐类信息与头行「N 条事件」+
+  展开逐条 raw 重复（3-lens 裁决：退役而非移入，档案 §三 留痕）；
+  「核验/签发/授权链」信任核心面不动。
+- **Q6 池**：六路 grounded 扫描的额外候选，逐条过五律+锚点安全性后择优
+  纳入（清单与位点/锚点级明细=评审档案 `NOVICE-MINIMAL-B4-review-record.md`）。
+
+## 十三、批次四红线·反采纳·验收
+
+红线继承批次一 §三、二 §七、三 §十全部条款。本批反采纳：
+- **不换皮**——Claude Desktop 三明治深框/ChatGPT 近单色是它们的品牌身份；
+  FLAi-OS 暖白+clay 家族轴已裁决，复刻的是语法不是皮肤。
+- **不翻双 Surface 案**——「对话｜任务台」双 Surface 为 owner 现行裁决
+  （UI-SIMPLIFICATION 两文 N13 状态注），本批绝不重启「删任务台导航」。
+- **零值收敛 ≠ 事实隐藏**——0 本身不是待核事实；非零治理事实（未经真实
+  核验/mock 标注/已剔除字段/dropped 名）一个不收、一个不折。
+- **不重写 TaskDetail 整页**（简化设计 §九 YAGNI 维持）——Q5 只收 mono 行。
+
+验收：craft 套件扩 ⑪ 系列探针（Q1 人话 fallback+诚实回退/Q2 零值豁口/
+Q3 同屏唯一性/Q4 卡片最小形态/Q5 折叠态不含事件枚举）；tamper ≥4 处必咬；
+`verify_all.sh` 全绿；3-lens 对抗审 + Codex 治理审（native Pro sol-ultra，
+cap 3）收敛后按 standing 授权合并 push。

@@ -40,6 +40,15 @@
      断列表轮询后行内「已 X」仍逐秒递增（纯 ticker 驱动）；G4 收件箱行级
      紧凑时钟（同日 HH:MM/跨日 MM-DD HH:MM，locale 全量串绝迹）+ /me 任务行
      孪生面同 SSOT（useTodayKey 响应式日界）。
+  ⑪ 批次四 Q1-Q5 新人极简（契约=UI-DESKTOP-CRAFT.md 批次四）：
+     Q1 行级主文本人话称呼——缺名任务显 Agent 注册表显示名（裸 task_ 前缀
+     绝迹），名册拉取失败诚实回退 id 切片（route-abort /api/agents 实证，
+     绝不编名字）；Q2 零值不显示全站化——今日页组头零计数豁口/团队总量
+     零值格语义对表/我的页四格与反馈同律；Q3 方法论脚注一处一行（状态中心
+     口径短句/today-subhead-note 退役）；Q4 门户图例句撤下（释义走徽章
+     title，L0「勿依赖」诚实提示保留）+类型/成熟度/id·版本合并次级 meta
+     一行+cat-bar 退役；Q5 原始事件 token 只活在展开态时间轴（折叠态=人话
+     扫读面，「task_created」在折叠态绝迹）。
 
 夹具口径（与 m9 同纪律）：temp DB 直写只为渲染路径提供 fixture，不冒充业务
 状态机行为（真实完成/放行链路由 m2 验收）。completed 任务配 tool_failed 事件
@@ -245,28 +254,58 @@ with sync_playwright() as p:
     API = login_httpx(BASE)
     page = ctx.new_page()
 
-    # ── ③ W2 今日页空态纪律（空库冷开，先于建任务）──────────────────────
+    # ── ③ W2 今日页空态纪律（空库冷开，先于建任务）。批次四 Q2 后的冷态语法：
+    #      组头零计数不渲染「· 0」；Agent 动态双空态合并为一行；团队总量零值格
+    #      不渲染（期望值按 /api/stats/overview 真值分支——curated 计数来自仓内
+    #      固化文件，冷库不必为 0，硬编码会撒谎）──────────────────────────
     page.goto(BASE + "/today", wait_until="networkidle")
     page.wait_for_selector(".today-section", timeout=8000)
     imgs = page.locator(".today .el-empty__image img")
-    lines = page.locator(".today .empty-line")
     check("③插画空态恰 1 张（待签发=行动召唤）", imgs.count() == 1)
-    check("③纯数据空态 4 处全为轻量行", lines.count() == 4)
+
+    since_iso = page.evaluate(
+        "() => { const d = new Date(); d.setHours(0,0,0,0); "
+        "d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.toISOString(); }"
+    )
+    cold_stats = API.get("/api/stats/overview", params={"since": since_iso}, timeout=10).json()
+    stat_fields = ["tasks_completed", "reviews_approved", "curated_cases_total", "promotions"]
+    stats_all_zero = all(not cold_stats.get(f) for f in stat_fields)
+    # 轻量行期望：进行中 1 + 今日交付 1 + Agent 动态合并 1 + （团队全 0 时再 +1）
+    expected_lines = 3 + (1 if stats_all_zero else 0)
+    lines = page.locator(".today .empty-line")
+    check(f"③纯数据空态恰 {expected_lines} 行（Agent 动态双空态已合并为一行）",
+          lines.count() == expected_lines, f"count={lines.count()} stats_all_zero={stats_all_zero}")
     body = page.locator("body").inner_text()
-    texts = ["没有等你签发的任务", "当前没有进行中的任务", "今天还没有交付的任务", "本周暂无晋升", "今天暂无任务"]
-    check("③空态文案 5 段逐字不变", all(t in body for t in texts),
+    texts = ["没有等你签发的任务", "当前没有进行中的任务", "今天还没有交付的任务", "今天还没有 Agent 动态"]
+    check("③空态文案 4 段逐字不变（双空态合并文案）", all(t in body for t in texts),
           "缺:" + ",".join(t for t in texts if t not in body))
+    # Q2 零计数豁口：冷态三个组头绝不出现「· 0」。
+    heads = page.locator(".today-section-head").all_inner_texts()
+    check("③零值组头无「· 0」后缀（零不是信息）", all("· 0" not in h for h in heads), str(heads))
+    # Q2 团队总量零值格：API==0 ⇒ 格不渲染；>0 ⇒ 恰 1 格且数字逐字相等。
+    tiles_ok = True
+    tiles_detail = {}
+    for f in stat_fields:
+        tile = page.locator(f'.today-stat-tile[data-stat="{f}"]')
+        v = cold_stats.get(f)
+        if isinstance(v, int) and v > 0:
+            ok_f = tile.count() == 1 and tile.locator(".today-stat-num").inner_text().strip() == str(v)
+        else:
+            ok_f = tile.count() == 0
+        tiles_ok = tiles_ok and ok_f
+        tiles_detail[f] = f"api={v} ui={'shown' if tile.count() else 'hidden'}"
+    check("③团队总量零值格不渲染（语义对表 data-stat）", tiles_ok is True, str(tiles_detail))
+    # Q3 方法论口径同屏唯一：页脚一行保留，版块内不再复述「近 100 条」note。
+    check("③窗口口径只在页脚一行（today-subhead-note 退役）",
+          page.locator(".today-subhead-note").count() == 0 and "基于最近 100 条任务窗口" in body)
     line_color = lines.first.evaluate("el => getComputedStyle(el).color")
     check("③line 空态走 ink-soft（4.5:1 可读阈，非 faint）",
           line_color == resolved_color(page, "var(--ink-soft)"), line_color)
     page.screenshot(path=str(SHOTS / "today_empty_light.png"), full_page=True)
 
-    # ── ② W0 全局工具类（今日页真实实例上断言；CTA 探针在 ⑧ 导引页真实
-    #      .send-btn 上做——绝不造假元素）─────────────────────────────────
-    num = page.locator(".today-section-head .num-token").first
-    num_style = num.evaluate("el => { const s = getComputedStyle(el); return s.fontFamily + '|' + s.fontVariantNumeric; }")
-    check("②.num-token 走 mono+tabular-nums", ("Mono" in num_style or "monospace" in num_style) and "tabular-nums" in num_style,
-          num_style)
+    # ── ② W0 全局工具类：批次四 Q2 后冷态今日页无 .num-token 实例（零计数
+    #      收敛），断言迁往 ⑩c 状态中心（待签组头带真实计数处）；CTA 探针
+    #      仍在 ⑧ 导引页真实 .send-btn 上做——绝不造假元素。──────────────
 
     # ── ① W0 focus-visible（亮）────────────────────────────────────────
     # 焦点环契约=瞬时出现（focus-visible 块 transition:none 冻结基态 transition:all
@@ -658,6 +697,12 @@ with sync_playwright() as p:
     # ── ⑩c G3+G4 状态中心收件箱行级活面───────────────────────────────────────
     page.locator(".status-dock").click()
     page.wait_for_selector(".sc-group-label.working", timeout=8000)
+    # ② W0 全局工具类（自冷态今日页迁入——批次四 Q2 零计数收敛后，num-token
+    #   只在真实计数 >0 处出现；此刻待签组头带真实计数）。
+    num = page.locator(".sc-group-label .num-token").first
+    num_style = num.evaluate("el => { const s = getComputedStyle(el); return s.fontFamily + '|' + s.fontVariantNumeric; }")
+    check("②.num-token 走 mono+tabular-nums", ("Mono" in num_style or "monospace" in num_style) and "tabular-nums" in num_style,
+          num_style)
     working_sub = page.locator(".sc-group:has(.sc-group-label.working) .sc-item-sub").first
     check("⑩G3 运行中行含活跳时长段（· 已 X）", "· 已 " in working_sub.inner_text(),
           working_sub.inner_text())
@@ -694,6 +739,104 @@ with sync_playwright() as p:
     check("⑩G4 我的页任务行紧凑时钟（孪生面同 SSOT，无 locale 斜杠串）",
           _re.search(r"^(\d{2}-\d{2} )?\d{2}:\d{2}$", me_time.strip()) is not None
           and "/" not in me_time, me_time)
+
+    # ══ ⑪ 批次四 Q1-Q5（新人极简：人话称呼/零值不显示/脚注收敛/门户最小化/
+    #     token 进披露）═══════════════════════════════════════════════════════
+
+    # ── ⑪a Q2 /me 零值格与反馈同律（页已在 /me，夹具任务全由登录身份创建）──
+    me_contrib = API.get("/api/me/contributions", params={"since": since_iso}, timeout=10).json()
+    me_fields = ["since_created", "since_completed", "waiting_review", "total_created"]
+    me_ok = True
+    me_detail = {}
+    for f in me_fields:
+        tile = page.locator(f'.me-stat[data-stat="{f}"]')
+        v = me_contrib.get(f)
+        if isinstance(v, int) and v > 0:
+            ok_f = tile.count() == 1 and tile.locator(".me-stat-num").inner_text().strip() == str(v)
+        else:
+            ok_f = tile.count() == 0
+        me_ok = me_ok and ok_f
+        me_detail[f] = f"api={v} ui={'shown' if tile.count() else 'hidden'}"
+    check("⑪Q2 /me 四格零值不渲染（语义对表 data-stat）", me_ok is True, str(me_detail))
+    me_body = page.locator("body").inner_text()
+    fb = me_contrib.get("feedback_count_approx")
+    if isinstance(fb, int) and fb > 0:
+        fb_ok = f"{fb} 条" in me_body and "按显示名近似统计" in me_body
+    else:
+        fb_ok = "还没有反馈记录" in me_body and "按显示名近似统计" not in me_body
+    check("⑪Q2 /me 反馈零值收敛（0 条=一行空态且无近似口径注；>0 才显计数+口径）",
+          fb_ok is True, f"fb={fb}")
+    check("⑪Q3 /me 诚实缺口条压缩后红线语义在场（人是唯一签发者）",
+          page.locator(".me-honest-gap").count() == 1 and "人是唯一签发者" in me_body)
+
+    # ── ⑪b Q1 行级主文本人话称呼（夹具任务全部未命名——主名必须是注册表
+    #    显示名，裸 task_ 前缀绝迹；名册路径实证靠 ⑪c 的失败对照）──────────
+    page.locator(".status-dock").click()
+    page.wait_for_selector(".sc-item-name", timeout=8000)
+    sc_names = page.locator(".sc-item-name").all_inner_texts()
+    check("⑪Q1 状态中心行主名=Agent 显示名（含注册表全名，非裸 id）",
+          len(sc_names) > 0 and all(not n.strip().startswith("task_") for n in sc_names)
+          and any("Hello Agent" in n for n in sc_names), str(sc_names[:5]))
+    check("⑪Q3 状态中心口径短句（计数与清单双重范围声明保留，全句叙述只留任务台）",
+          page.locator(".sc-foot-note").inner_text().strip() == "口径：计数与清单均来自最近 100 条任务窗口，窗口外不虚报。",
+          page.locator(".sc-foot-note").inner_text())
+    page.screenshot(path=str(SHOTS / "statuscenter_human_names_light.png"))
+    page.locator(".sc-close").click()
+    page.wait_for_timeout(300)
+
+    # ── ⑪c Q1 名册缺位诚实回退（route-abort /api/agents → 整页重载重建模块
+    #    缓存 → 行主名必须回退 id 切片，绝不编名字）─────────────────────────
+    ctx.route("**/api/agents*", lambda route: route.abort())
+    page.goto(BASE + "/today", wait_until="networkidle")
+    page.wait_for_selector(".today-card-name", timeout=8000)
+    fallback_names = page.locator(".today-card-name").all_inner_texts()
+    check("⑪Q1 名册拉取失败→行主名诚实回退 id 切片（绝不编名字）",
+          len(fallback_names) > 0 and all(_re.match(r"^task_[0-9a-f]+$", n.strip()) for n in fallback_names),
+          str(fallback_names[:5]))
+    ctx.unroute("**/api/agents*")
+
+    # ── ⑪d Q1 名册恢复后今日页行主名人话（与 ⑪c 同页对照，证明差异只来自
+    #    名册可用性）＋ Q2 有数据时组头计数照常渲染──────────────────────────
+    page.goto(BASE + "/today", wait_until="networkidle")
+    page.wait_for_selector(".today-card-name", timeout=8000)
+    today_names = page.locator(".today-card-name").all_inner_texts()
+    check("⑪Q1 今日页行主名=Agent 显示名（名册恢复对照）",
+          len(today_names) > 0 and all(not n.strip().startswith("task_") for n in today_names)
+          and any("Hello Agent" in n for n in today_names), str(today_names[:5]))
+    waiting_head = page.locator(".today-section-head.waiting").inner_text()
+    check("⑪Q2 有数据时组头计数照常（零值豁口不误伤非零）",
+          _re.search(r"· \d+$", waiting_head.strip()) is not None, waiting_head)
+
+    # ── ⑪e Q4 门户最小化（图例句撤下/色条退役/次级 meta 一行/诚实提示进
+    #    title）──────────────────────────────────────────────────────────────
+    page.goto(BASE + "/portal", wait_until="networkidle")
+    page.wait_for_selector(".agent-card", timeout=8000)
+    portal_body = page.locator("body").inner_text()
+    check("⑪Q4 图例句撤下+色条退役（分类学不再预讲）",
+          page.locator(".portal-legend").count() == 0 and page.locator(".cat-bar").count() == 0)
+    meta_token = page.locator(".agent-meta-token").first.inner_text()
+    check("⑪Q4 id·版本收次级 meta 一行（字面仍可见 DOM）",
+          _re.search(r"^[a-z0-9_]+ · v\d", meta_token.strip()) is not None
+          and "hello_agent" in portal_body and "不适用范围" in portal_body, meta_token)
+    l0_tag = page.locator(".agent-tags .el-tag[title]").first
+    l0_tip = l0_tag.get_attribute("title") or ""
+    l0_cursor = l0_tag.evaluate("el => getComputedStyle(el).cursor")
+    check("⑪Q4 成熟度徽章 title 携诚实提示（L0 勿依赖其结论）+ help 光标可发现性",
+          "勿依赖" in l0_tip and l0_cursor == "help", f"tip={l0_tip} cursor={l0_cursor}")
+
+    # ── ⑪f Q5 原始事件 token 只活在展开态（折叠=人话扫读面）────────────────
+    page.goto(BASE + f"/tasks/{task_a}", wait_until="networkidle")
+    page.wait_for_selector(".worklog-head", timeout=8000)
+    collapsed_body = page.locator("body").inner_text()
+    check("⑪Q5 折叠态无原始 token（task_created 绝迹于扫读面）",
+          "task_created" not in collapsed_body, collapsed_body[collapsed_body.find("事件时间轴"):][:120])
+    if page.locator(".worklog-timeline").count() == 0:
+        page.locator(".worklog-head").first.click()
+        page.wait_for_selector(".worklog-timeline", timeout=3000)
+    expanded_body = page.locator("body").inner_text()
+    check("⑪Q5 展开态原始 token 在场（检视面证据不减）",
+          all(k in expanded_body for k in ("task_created", "tool_finished", "task_completed")))
+    page.screenshot(path=str(SHOTS / "worklog_collapsed_human_light.png"))
 
     ctx.close()
 

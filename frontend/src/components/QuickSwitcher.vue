@@ -67,12 +67,16 @@ import { useRouter } from "vue-router";
 import { listConversations } from "../api/conversations";
 import { listTasks } from "../api/tasks";
 import { listAgents } from "../api/agents";
-import { statusLabel, taskLampColor } from "../utils/format";
+import { statusLabel, taskLampColor, taskDisplayName, formatClockCompact } from "../utils/format";
+import { useTodayKey } from "../composables/useTodayKey";
 import { statusCenter, closeCenter } from "../stores/statusCenter";
 import { quickSwitcher, openQuickSwitcher, closeQuickSwitcher } from "../stores/quickSwitcher";
 import SkeletonBlock from "./SkeletonBlock.vue";
 
 const router = useRouter();
+
+// 响应式日界（⌘K 常驻挂载于 App 根，跨午夜后任务副行时钟同日判据需自翻页）。
+const todayKey = useTodayKey();
 
 const query = ref("");
 const loading = ref(false);
@@ -92,14 +96,31 @@ function convoTitle(c) {
   return `与 ${c.created_by || "你"} 的对话`;
 }
 
+// 任务标题人话化（批次四 Q1）：⌘K 面板已并行拉了 agents 三源之一，直接用它
+// 建 id→name 映射喂 taskDisplayName SSOT——零新增网络调用；agents 未返回/失败
+// 时映射为空，SSOT 自回退 id 切片。
+const agentNameById = computed(() => {
+  const m = {};
+  for (const a of agents.value) {
+    if (a && a.id && a.name) m[a.id] = a.name;
+  }
+  return m;
+});
+
 function itemTitle(type, item) {
   if (type === "conversation") return convoTitle(item);
-  if (type === "task") return item.name || item.id.slice(0, 12);
+  if (type === "task") return taskDisplayName(item, agentNameById.value);
   return item.name; // agent
 }
 function itemSub(type, item) {
   if (type === "conversation") return `${item.created_by || "你"} · ${item.id.slice(0, 8)}`;
-  if (type === "task") return item.agent_id || "";
+  // 任务副行带紧凑时钟（3-lens 可用性镜头 P2）：同 Agent 多个缺名任务标题
+  // 相同，时钟是 ⌘K 结果行的消歧锚。
+  if (type === "task") {
+    return [item.agent_id, formatClockCompact(item.created_at, todayKey.value)]
+      .filter((p) => p && p !== "—")
+      .join(" · ");
+  }
   return item.id; // agent
 }
 

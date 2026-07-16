@@ -1,7 +1,7 @@
 // frontend/tests/format_display.test.mjs — 展示层格式化 SSOT 数字/签发口径。
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatDuration, formatTokens, formatClockCompact, deriveSignoff, signoffText } from "../src/utils/format.js";
+import { formatDuration, formatTokens, formatClockCompact, deriveSignoff, signoffText, taskDisplayName } from "../src/utils/format.js";
 
 test("formatDuration: 合法毫秒按 disclosure-grammar 输出秒/分秒/小时分钟", () => {
   assert.equal(formatDuration(0), "0 秒");
@@ -94,4 +94,20 @@ test("formatClockCompact: 非法/缺失诚实降级为「—」", () => {
     assert.equal(formatClockCompact(value, todayKey), "—");
   }
   assert.equal(formatClockCompact("not-a-date", todayKey), "—");
+});
+
+test("taskDisplayName: 任务名 → 注册表显示名 → id 切片三级降级（批次四 Q1）", () => {
+  const names = { hello_agent: "Hello Agent（平台闭环验证示例）" };
+  const t = { id: "task_0123456789abcdef", agent_id: "hello_agent" };
+  assert.equal(taskDisplayName({ ...t, name: "人起的名" }, names), "人起的名");
+  assert.equal(taskDisplayName(t, names), "Hello Agent（平台闭环验证示例）");
+  // 名册缺位/查无此 agent——诚实回退 id 前 12 位，绝不编名字。
+  assert.equal(taskDisplayName(t, {}), "task_0123456");
+  assert.equal(taskDisplayName(t, undefined), "task_0123456");
+  assert.equal(taskDisplayName({ ...t, agent_id: "ghost" }, names), "task_0123456");
+});
+
+test("taskDisplayName: 空任务/缺 id 诚实降级为「—」", () => {
+  assert.equal(taskDisplayName(null, {}), "—");
+  assert.equal(taskDisplayName({ agent_id: "x" }, {}), "—");
 });

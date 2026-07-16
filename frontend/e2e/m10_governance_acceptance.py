@@ -240,7 +240,8 @@ with sync_playwright() as p:
             break
         time.sleep(1)
     page.locator(".status-dock").click()
-    # sc-item 主名回退任务 id（本任务未命名——「治理链样本」是 hello 的姓名参数非任务名）
+    # 批次四 Q1 后 sc-item 主名缺名时回退 Agent 显示名（不再是裸任务 id）；
+    # 本定位串命中的是 .sc-item-sub 里恒显的裸 agent_id，行为不受主名影响。
     sc_item = page.locator(".sc-item", has_text="governed_agent")
     expect(sc_item.first).to_be_visible(timeout=5000)
     sc_item.first.click()

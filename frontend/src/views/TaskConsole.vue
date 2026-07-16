@@ -34,14 +34,17 @@
           >
             <span class="cl-lamp" :style="{ background: 'var(--trust-pending)' }"></span>
             <span class="cl-main">
-              <span class="cl-name">{{ t.name || t.id.slice(0, 12) }}</span>
-              <span class="cl-sub">{{ t.agent_id }} · 需要你签发</span>
+              <!-- 人话称呼（批次四 Q1）：taskDisplayName 三级诚实降级 SSOT；
+                   meta 时钟=同名行消歧锚（3-lens 可用性镜头 P2）。 -->
+              <span class="cl-name">{{ taskDisplayName(t, agentNames.map) }}</span>
+              <span class="cl-sub">{{ t.agent_id }} · 需要你签发 · {{ consoleClock(t.created_at) }}</span>
             </span>
           </div>
         </template>
 
-        <!-- 全部任务（最近窗口）：状态徽章随 5s 轮询原地切换 -->
-        <div class="cl-group-label">最近任务 · {{ otherTasks.length }}</div>
+        <!-- 全部任务（最近窗口）：状态徽章随 5s 轮询原地切换。
+             零值不显示（批次四 Q2）：N=0 时不渲染「· 0」。 -->
+        <div class="cl-group-label">最近任务<template v-if="otherTasks.length"> · {{ otherTasks.length }}</template></div>
         <div
           v-for="t in otherTasks"
           :key="t.id"
@@ -55,8 +58,8 @@
         >
           <span class="cl-lamp" :class="{ 'is-pulsing': isWork(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
           <span class="cl-main">
-            <span class="cl-name" :class="{ 'is-unread': unseen(t) }">{{ t.name || t.id.slice(0, 12) }}</span>
-            <span class="cl-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }}</span>
+            <span class="cl-name" :class="{ 'is-unread': unseen(t) }">{{ taskDisplayName(t, agentNames.map) }}</span>
+            <span class="cl-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }} · {{ consoleClock(t.finished_at || t.created_at) }}</span>
           </span>
           <span v-if="unseen(t)" class="cl-unseen-dot" title="完成后你还没看过"></span>
         </div>
@@ -85,7 +88,9 @@
 // 选中=路由（/tasks/:taskId），深链/刷新/回退天然可用。
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { statusLabel, taskLampColor, TASK_WORK_STATES } from "../utils/format";
+import { statusLabel, taskLampColor, taskDisplayName, formatClockCompact, TASK_WORK_STATES } from "../utils/format";
+import { useAgentNames } from "../stores/agentNames";
+import { useTodayKey } from "../composables/useTodayKey";
 import { ensureTaskBaseline, markTaskSeen, taskHasUnseen } from "../utils/lastSeen";
 import { feedTasks, feedLoaded, feedError, acquireTaskFeed, releaseTaskFeed } from "../stores/taskFeed";
 import TaskDetail from "./TaskDetail.vue";
@@ -94,6 +99,13 @@ import SkeletonBlock from "../components/SkeletonBlock.vue";
 
 const route = useRoute();
 const router = useRouter();
+
+// Agent 人话名册（批次四 Q1）：左栏行主文本缺名时回退注册表显示名。
+const agentNames = useAgentNames();
+
+// 行级紧凑时钟（同名行消歧锚，与状态中心行同律）：useTodayKey 响应式日界。
+const todayKey = useTodayKey();
+const consoleClock = (iso) => formatClockCompact(iso, todayKey.value);
 
 const selectedId = computed(() => (typeof route.params.taskId === "string" ? route.params.taskId : ""));
 

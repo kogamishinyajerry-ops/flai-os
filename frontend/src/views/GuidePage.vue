@@ -240,9 +240,12 @@
                      互斥换装：主态接全局 .cta-clay（SSOT），次态走 .is-secondary。 -->
                 <button class="workbench-btn" :class="openableCount(m.recommendation) > 0 ? 'is-secondary' : 'cta-clay'" @click="openWorkbench">进入协作工作台 →</button>
                 <button type="button" class="plan-escape" @click="focusComposer">想调整方案？直接告诉导引 ↓</button>
+                <!-- 政策句压一行（批次四 Q3）：红线字面「亲手提交」「签发权」
+                     逐字保留（m6 ③ 锚）；动词分轴（3-lens P3）——开工=提交、
+                     放行=批准，不把两个动作混进一个动词；细则（参数未齐怎么办）
+                     随需在导引对话里自然出现，不在每张卡常驻复述。 -->
                 <span class="plan-note">
-                  开工由你亲手点下——导引绝不代召集；参数未齐的成员回复导引补全，或在创建页
-                  <strong>亲手提交</strong>。签发权始终在你：产物放行仍逐个由你批准。
+                  开工由你<strong>亲手提交</strong>，产物放行由你批准——签发权始终在你，导引不代召集、不代签。
                 </span>
               </div>
             </div>
