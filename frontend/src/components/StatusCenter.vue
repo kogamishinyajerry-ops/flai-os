@@ -140,7 +140,8 @@
                 <!-- Artifact 容器头（Claude 哲学）：名 + 类型徽 + 尺寸 + 动作——产物是一等公民 -->
                 <div class="peek-artifact-head">
                   <span class="peek-artifact-name">{{ a.filename }}</span>
-                  <span v-if="a.ext" class="peek-artifact-ext">.{{ a.ext }}</span>
+                  <!-- 类型标签（F6 同款，SSOT=utils/format artifactTypeLabel）：与 TaskDetail 产物卡同语法。 -->
+                  <span v-if="a.ext" class="peek-artifact-ext">{{ artifactTypeLabel(a.ext) }}</span>
                   <span v-if="a.size" class="peek-artifact-size">{{ formatFileSize(a.size) }}</span>
                   <a :href="downloadUrl(a.fileId)" download class="peek-artifact-dl">下载</a>
                 </div>
@@ -184,7 +185,8 @@
             <span v-if="peekModelStats.total === 0" class="peek-muted">无模型调用</span>
             <template v-else>
               <span>模型调用 {{ peekModelStats.total }} 次</span>
-              <span v-if="peekModelStats.tokenKnown > 0"> · tokens 合计 {{ peekModelStats.tokenSum.toLocaleString() }}<template v-if="peekModelStats.tokenMissing > 0">（部分未回报，为下界）</template></span>
+              <!-- token 千位压缩（F1，disclosure-grammar §三）：与 TaskDetail rail/DeliveryCard 同 SSOT。 -->
+              <span v-if="peekModelStats.tokenKnown > 0"> · tokens 合计 {{ formatTokens(peekModelStats.tokenSum) }}<template v-if="peekModelStats.tokenMissing > 0">（部分未回报，为下界）</template></span>
               <span v-else class="peek-muted"> · token 用量：未知</span>
             </template>
           </div>
@@ -208,7 +210,7 @@ import { acquireChannel, pokeTask } from "../stores/liveFeed";
 import { reviewTask } from "../api/tasks";
 import { request } from "../api/client";
 import { downloadUrl, fetchOutputFile } from "../api/files";
-import { statusLabel, statusTagType, taskLampColor, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
+import { statusLabel, statusTagType, taskLampColor, formatTime, formatFileSize, formatTokens, artifactTypeLabel, TASK_WORK_STATES } from "../utils/format";
 import { displayName } from "../stores/session";
 import { markTaskSeen } from "../utils/lastSeen";
 import { buildRetryRoute } from "../utils/retryPrefill";

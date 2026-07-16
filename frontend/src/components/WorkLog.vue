@@ -8,14 +8,33 @@
       <span class="worklog-arrow" :class="{ 'is-open': expanded }">▸</span>
     </div>
 
-    <!-- 授权链口播：放头行正下方，approved=teal / rejected=红，绝不用绿。 -->
+    <!-- 授权链口播：approved=teal / rejected=红，绝不用绿。措辞与谓词
+         SSOT=utils/format deriveSignoff+signoffText（与 VerificationCard 真同源，
+         3-lens paradigm P3 收口——此前「依据/已由」两处漂移）。redacted 态
+         （3-lens trust P1）：签发事件在场但 payload 被分级门遮蔽→中性「不可用」，
+         绝不呈现成「没签过」。 -->
     <div
-      v-if="signoff"
+      v-if="signoff && signoff.redacted"
+      class="worklog-signoff"
+      :style="{ color: 'var(--ink-faint)' }"
+    >
+      签发记录不可用（内容受限）
+    </div>
+    <!-- unknown（Codex R0-P2）：无遮蔽标记的缺字段=「不完整」，不编「受限」。 -->
+    <div
+      v-else-if="signoff && signoff.unknown"
+      class="worklog-signoff"
+      :style="{ color: 'var(--ink-faint)' }"
+    >
+      签发记录不完整
+    </div>
+    <div
+      v-else-if="signoff"
       class="worklog-signoff"
       :style="{ color: signoff.approved ? 'var(--trust-signed)' : 'var(--trust-fail)' }"
       :title="signoff.comment || undefined"
     >
-      {{ signoff.approved ? `✓ 依据 ${signoff.reviewer} 的批准放行` : `✕ 由 ${signoff.reviewer} 驳回` }}
+      {{ signoffText(signoff) }}
     </div>
 
     <!-- 过去式摘要：终态/审核事件优先，否则退化为最后一条事件消息。 -->
@@ -73,8 +92,8 @@
 // 折叠工作日志（Codex「已处理 13m54s ›」模式）。纯展示组件：全部派生数据用
 // computed 从 props 算，组件内绝不复制/缓存 events——父页有「轮询整包作废」
 // 竞态守卫，本组件必须无状态跟随，否则会显示已被父页判定为 stale 的快照。
-import { ref, computed } from "vue";
-import { TASK_WORK_STATES, formatDuration, taskElapsedMs, formatTime, LEVEL_COLOR, eventTypeLabel } from "../utils/format";
+import { ref, computed, watch, onUnmounted } from "vue";
+import { TASK_WORK_STATES, formatDuration, taskElapsedMs, formatTime, LEVEL_COLOR, eventTypeLabel, deriveSignoff, signoffText } from "../utils/format";
 import { listToolRuns } from "../api/tasks";
 import EmptyState from "./EmptyState.vue";
 
@@ -104,7 +123,27 @@ async function toggleExpanded() {
 }
 
 const isWorking = computed(() => TASK_WORK_STATES.has(props.task?.status));
-const elapsedMs = computed(() => taskElapsedMs(props.task, Date.now()));
+
+// 活跳计时（批次二 F2，Codex R7 运行态语法）：「已处理 Xm Xs」逐秒递增、纯
+// 离散文本替换（零动画——文本替换非运动，reduced-motion 无涉）。此前 elapsed
+// 只随轮询整包更新，8s 间隔内数字冻结，「正在工作」的披露失真。ticker 只在
+// 工作态存活：终态/卸载即清，绝不给已落定任务走表（诚实地板——taskElapsedMs
+// 对有 finished_at 的任务本就忽略 nowMs，双保险）。
+const nowTick = ref(Date.now());
+let tickTimer = null;
+watch(isWorking, (working) => {
+  if (working && tickTimer === null) {
+    tickTimer = setInterval(() => { nowTick.value = Date.now(); }, 1000);
+  } else if (!working && tickTimer !== null) {
+    clearInterval(tickTimer);
+    tickTimer = null;
+  }
+}, { immediate: true });
+onUnmounted(() => {
+  if (tickTimer !== null) clearInterval(tickTimer);
+});
+
+const elapsedMs = computed(() => taskElapsedMs(props.task, nowTick.value));
 
 const headText = computed(() => {
   if (isWorking.value) {
@@ -117,22 +156,9 @@ const headText = computed(() => {
   return `已处理 ${formatDuration(elapsedMs.value)} · ${(props.events || []).length} 条事件`;
 });
 
-// 授权链口播：倒序找最后一条 review_approved/review_rejected；无 payload.reviewer 则不渲染。
-const signoff = computed(() => {
-  const list = props.events || [];
-  for (let i = list.length - 1; i >= 0; i--) {
-    const e = list[i];
-    if (e.event_type === "review_approved" || e.event_type === "review_rejected") {
-      if (!e.payload?.reviewer) return null;
-      return {
-        approved: e.event_type === "review_approved",
-        reviewer: e.payload.reviewer,
-        comment: e.payload.comment || "",
-      };
-    }
-  }
-  return null;
-});
+// 授权链口播：SSOT=utils/format deriveSignoff（null/redacted/完整 三态），
+// 与 VerificationCard 同一份谓词——绝不各自再造第二份。
+const signoff = computed(() => deriveSignoff(props.events));
 
 // 过去式摘要：终态/审核类事件优先，否则退化为最后一条事件消息；都没有则不渲染。
 const TERMINAL_SUMMARY_TYPES = ["task_completed", "task_failed", "review_approved", "review_rejected", "task_cancelled"];

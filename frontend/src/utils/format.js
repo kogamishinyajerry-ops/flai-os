@@ -122,6 +122,9 @@ export const formatRelativeTime = (iso, nowMs = Date.now()) => {
 };
 
 // 毫秒 → 人话时长（工作态氛围展示用；非法/负值一律诚实降级为「—」，不编造）。
+// 数字格式对表（disclosure-grammar §三，批次二 F1）：<60s 纯秒；≥60s 分+秒
+// **补零两位**（`2 分 05 秒`——次级单位定宽，活跳递增时数字不抖）；小时档
+// 分钟补零同理（既有口径）。
 export const formatDuration = (ms) => {
   if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "—";
   const totalSeconds = Math.floor(ms / 1000);
@@ -129,9 +132,77 @@ export const formatDuration = (ms) => {
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
   if (hours > 0) return `${hours} 小时 ${String(minutes).padStart(2, "0")} 分`;
-  if (minutes > 0) return `${minutes} 分 ${seconds} 秒`;
+  if (minutes > 0) return `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒`;
   return `${seconds} 秒`;
 };
+
+// token 用量 → 千位压缩（disclosure-grammar §三「判断依据精确 · 量级感受
+// 压缩」——token 属量级感受轴，1 位小数、整值去尾零：12345→12.3k、12000→12k、
+// 3400000→3.4M；<1000 保持精确）。SSOT：TaskDetail rail / DeliveryCard 尾行 /
+// StatusCenter 速览三处共用，绝不各自再造。非法输入降级「—」与 formatDuration
+// 同款诚实口径（调用方通常已 v-if 守住，这里兜底不编数）。
+export const formatTokens = (n) => {
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 0) return "—";
+  const compress = (v) => {
+    const s = v.toFixed(1);
+    return s.endsWith(".0") ? s.slice(0, -2) : s;
+  };
+  if (n >= 1_000_000) return `${compress(n / 1_000_000)}M`;
+  if (n >= 1000) {
+    // 进位穿透守卫（3-lens 三镜头齐咬）：n∈[999950,999999] 时 toFixed(1) 会把
+    // k 档压成 "1000"（四位数假 k 值，不在格式表任何合法形态里）——以**渲染
+    // 结果本身**为判据升 M 档（同一套 toFixed 舍入，不会与判档规则再打架）。
+    const kStr = compress(n / 1000);
+    return kStr === "1000" ? `${compress(n / 1_000_000)}M` : `${kStr}k`;
+  }
+  return String(n);
+};
+
+// ── 产物类型标签（批次二 F6，Codex R6「文档 · MD」语法）：类型词查表+格式
+// 大写，未知扩展名归「文件」——只译类型词，格式永远如实透出。SSOT：TaskDetail
+// 产物卡与 StatusCenter 速览共用（3-lens 抓过孪生点漏改，绝不各自再造）。 ──
+const ARTIFACT_TYPE_WORD = {
+  md: "文档", markdown: "文档", txt: "文档", pdf: "文档", html: "文档", doc: "文档", docx: "文档",
+  csv: "数据", json: "数据", yaml: "数据", yml: "数据", xml: "数据", xlsx: "数据",
+  png: "图像", jpg: "图像", jpeg: "图像", svg: "图像", gif: "图像", webp: "图像",
+  zip: "归档", tar: "归档", gz: "归档",
+};
+export const artifactTypeLabel = (ext) => {
+  const e = String(ext || "").toLowerCase();
+  return `${ARTIFACT_TYPE_WORD[e] || "文件"} · ${e.toUpperCase()}`;
+};
+
+// ── 人工签发口播派生（批次二 F3 收口，3-lens trust P1 + Codex R0-P2）：
+// WorkLog 与 VerificationCard 唯一同源谓词+同一措辞（此前两处各自拼字符串，
+// 措辞漂移「依据/已由」被 paradigm 镜头抓获）。四态：
+// - null                → events 里**不存在** review_* 事件（真·未经签发流程）
+// - { redacted: true }  → 存在 review_* 事件且带后端遮蔽标记（ADR-0025
+//   redact_rows：payload→null + content_withheld=true）——绝不把「已签发但
+//   内容受限」呈现成「未经签发」（对已发生事实的确信性否定）
+// - { unknown: true }   → 存在 review_* 事件、无遮蔽标记但 payload 缺
+//   reviewer（畸形/存量数据）——只说「不完整」，**不编造「受限」这个没
+//   发生的原因**（Codex R0-P2：受限判定只认后端真标记，不从缺字段推断）
+// - { approved, reviewer, comment } → 完整签发记录
+export const deriveSignoff = (events) => {
+  const list = events || [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const e = list[i];
+    if (e.event_type === "review_approved" || e.event_type === "review_rejected") {
+      if (!e.payload?.reviewer) {
+        return e.content_withheld === true ? { redacted: true } : { unknown: true };
+      }
+      return {
+        approved: e.event_type === "review_approved",
+        reviewer: e.payload.reviewer,
+        comment: e.payload.comment || "",
+      };
+    }
+  }
+  return null;
+};
+// 完整记录的口播文案（对称句式；redacted/null 由调用方按各自版式渲染）。
+export const signoffText = (s) =>
+  s.approved ? `✓ 由 ${s.reviewer} 批准放行` : `✕ 由 ${s.reviewer} 驳回`;
 
 // 任务已耗时（毫秒）：无 started_at 诚实返回 null（不编造耗时）；
 // 有 started_at 则用 (finished_at 或 nowMs) - started_at；解析失败同样返回 null。

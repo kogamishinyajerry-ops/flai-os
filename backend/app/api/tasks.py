@@ -564,6 +564,28 @@ def list_task_tool_runs(task_id: str, request: Request) -> list[dict[str, Any]]:
         conn.close()
 
 
+@router.get("/tasks/{task_id}/tool_runs/summary")
+def get_task_tool_runs_summary(task_id: str, request: Request) -> dict[str, Any]:
+    """工具调用留痕的有界计数投影（批次二 Codex R0-P2）：核验段只需要
+    total/mock_count 两个数，全量 list_tool_runs 会把解码后的 input/output/
+    raw_path 整条执行轨迹搬给前端（批量任务代价随 run 数无界增长，WorkLog
+    展开还会再来一次）。单条 COUNT 聚合 SQL，与 delivery_summary 同先例。
+    纯计数=元数据，严格少于 sensitive 遮蔽后的 tool_runs 行本身（redact_rows
+    保留 mock/status 元数据），故无需分级门分支——不开新的内容出场面。"""
+    conn = request.app.state.conn_factory()
+    try:
+        _get_task_or_404(conn, task_id)
+        row = conn.execute(
+            "SELECT COUNT(*) AS total,"
+            " COALESCE(SUM(CASE WHEN mock = 1 THEN 1 ELSE 0 END), 0) AS mock_count"
+            " FROM tool_runs WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        return {"total": row["total"], "mock_count": row["mock_count"]}
+    finally:
+        conn.close()
+
+
 @router.get("/tasks/{task_id}/model_calls")
 def list_task_model_calls(task_id: str, request: Request) -> list[dict[str, Any]]:
     """任务的模型调用留痕（含 model_profile/model_name/token 用量，成败全量）。"""

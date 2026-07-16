@@ -18,7 +18,7 @@
 <script setup>
 // 时长口径 SSOT=utils/format 的 taskElapsedMs+formatDuration（与 WorkLog 同源
 // 同取整）——绝不自建第二套 formatter，避免同屏「1h 0m」vs「59 分 59 秒」互相打脸。
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { formatDuration, taskElapsedMs } from "../utils/format";
 import { burstNeutral } from "../effects/burst";
 
@@ -44,12 +44,48 @@ const statusWord = computed(() => {
   return null; // 非终态不盖章——盖章是落定的仪式，不预支
 });
 
+// 落定时刻（批次二 F4，Codex R7 完成态解锁语法+家族轴「完成态操作行=绝对
+// 时间戳」）：同日 HH:MM、跨日 MM-DD HH:MM——时刻是「何时落定」的锚，与
+// 时长（工作量）语义正交；解析失败诚实不显示，不编时刻。
+// 跨午夜翻页（Codex R1-P3）：终态任务停轮询，computed 里裸读 new Date() 永不
+// 重算——页面跨过本地午夜后「昨日完成」仍显裸 HH:MM 会误读成今天。todayKey
+// 是响应式日界：单发 setTimeout 对准下一个本地午夜+1s 翻一次并再武装（零轮询，
+// 组件卸载即清）。
+const todayKey = ref(new Date().toDateString());
+let midnightTimer = null;
+function armMidnightFlip() {
+  const now = new Date();
+  const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 1);
+  midnightTimer = setTimeout(() => {
+    todayKey.value = new Date().toDateString();
+    armMidnightFlip();
+  }, nextMidnight.getTime() - now.getTime());
+}
+onMounted(armMidnightFlip);
+onUnmounted(() => {
+  if (midnightTimer !== null) clearTimeout(midnightTimer);
+});
+
+const sealClock = computed(() => {
+  const iso = props.task?.finished_at;
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (d.toDateString() === todayKey.value) return hm;
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hm}`;
+});
+
 const tail = computed(() => {
   const status = props.task?.status;
-  if (!duration.value) return null;
-  if (status === "completed") return `工作 ${duration.value}`;
-  if (status === "failed") return `进行了 ${duration.value}`;
-  return null; // cancelled 不报时长：中断时刻的耗时没有工作量语义
+  const parts = [];
+  // cancelled 不报时长（中断的耗时没有工作量语义），但报中断时刻——时刻≠时长。
+  if (duration.value) {
+    if (status === "completed") parts.push(`工作 ${duration.value}`);
+    else if (status === "failed") parts.push(`进行了 ${duration.value}`);
+  }
+  if (sealClock.value) parts.push(sealClock.value);
+  return parts.length ? parts.join(" · ") : null;
 });
 
 // 中性尘埃迸发（动效系统 v1 E2 burstNeutral）：仅 completed 且父级判定「亲历
