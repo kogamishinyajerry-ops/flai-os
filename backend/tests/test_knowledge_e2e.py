@@ -179,9 +179,19 @@ def test_e2e_search_hits_with_provenance_and_events(app_env) -> None:
     ks = [e for e in events if e["event_type"] == "knowledge_search"]
     assert len(ks) == 1
     assert ks[0]["level"] == "info"
-    assert ks[0]["payload"]["scope_id"] == "probe_scope"
-    assert ks[0]["payload"]["hit_count"] == len(hits)
-    assert ks[0]["payload"]["hit_chunk_ids"] == [h["chunk_id"] for h in hits]
+    payload = ks[0]["payload"]
+    assert payload["scope_id"] == "probe_scope"
+    assert payload["hit_count"] == len(hits)
+    assert payload["hit_chunk_ids"] == [h["chunk_id"] for h in hits]
+    # 四钥 hit_citations 精确断言（Codex 治理审 R2 P1，防假绿）：删掉 runtime 里
+    # hit_citations 的构造代码必须让本断言 RED——逐命中 chunk_id/source/fingerprint
+    # 三钥齐全非空，且与 hits.json 出处逐一对齐（N7 一键回源+漂移比对的数据源）。
+    cits = payload["hit_citations"]
+    assert isinstance(cits, list) and len(cits) == len(hits)
+    for cit, h in zip(cits, hits):
+        assert cit["chunk_id"] == h["chunk_id"]
+        assert cit["source"] == h["source"] and cit["source"].strip() != ""
+        assert cit["fingerprint"] == h["fingerprint"] and cit["fingerprint"].strip() != ""
 
 
 def test_e2e_scope_not_in_whitelist_denied_with_event(app_env) -> None:

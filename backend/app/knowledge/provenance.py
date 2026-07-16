@@ -17,18 +17,17 @@ KnowledgeService 的信任边界（service.py docstring）规定：服务层零�
   「任何登录用户」——与现状一致（knowledge_qa 草案产物本就对登录用户可见，
   草案里已含语料摘录），记录于 ADR-0029，不静默。
 
-诚实边界·密级快照（Codex 治理审 R0 P1-2，ADR-0029 §D3 补记）：
-- confidentiality 取自 **scope_registry 的启动期快照**（bootstrap.assemble 一次
-  装配，不随运行重扫——见 bootstrap.py「结构性漂移温床」注）；而 KnowledgeService
-  语料按内容指纹**自动刷新**。二者刷新生命周期不同 → 若运行中把 scope.yaml
-  的 confidentiality 由 public_internal 改成 restricted **且不重启**，本门读到的是
-  旧（宽松）快照、语料却已刷新为新内容，构成潜在越密级泄漏。
-- 这是**平台级既有属性**，非本回源通道独有：runtime._KnowledgeContext.search 的
-  白名单/密级判定同样源自该启动快照。V0.1 的运维口径=「scope 配置（含密级）在
-  启动期固定，收紧密级必须重启服务才生效」，与白名单同源同纪律。
-- 彻底修法（把密级策略摘要与语料 generation 原子绑定、漂移即 fail-closed）是
-  **知识轴平台级加固**，排 V0.2（ADR-0029 决策点记录）；本通道 V0.1 忠实沿用
-  平台唯一密级真源，不另立一套分叉判定。
+密级判定=启动快照 ∩ 盘上现值（Codex 治理审 R0 P1-2 → R1 P1 双门 → R2 P1 诚实收窄）：
+- confidentiality 快照取自 scope_registry（bootstrap 一次装配、不重扫），语料按
+  指纹自刷新；单凭快照会在「运行中收紧密级但不重启」时读旧宽松值却回源新内容。
+- 故本门**回源时额外从盘上现读** confidentiality（_read_disk_confidentiality，
+  读/解析失败一律返回 None＝不可验证＝拒），与快照取交集：任一受限/未知/漂移即拒。
+- **闭合范围（诚实标注）**：此双门闭合的是**运营漂移窗口**（改配置未重启、随后
+  请求），这是现实运维场景。它**不是原子的**——盘读与语料读之间仍有理论 TOCTOU
+  （精确计时的并发 config-flip 可穿窗）。返回的 confidentiality 标签用盘上现值
+  （比旧快照准）。真正原子闭合（密级策略 generation × 语料快照同锁/同代际绑定）
+  是知识轴平台级工作，排 V0.2（ADR-0029 §D6）；平台级 _KnowledgeContext.search
+  的同源快照属性本次不改。不声称「消除所有 TOCTOU」，只声称「闭合运营漂移」。
 """
 
 from __future__ import annotations
@@ -42,6 +41,9 @@ from .scopes import ScopeRegistry
 from .service import KnowledgeService
 
 _ALLOWED_CONFIDENTIALITY = ("public_internal", "department")
+# scope.yaml 现读的字节上限（漂移检查用）：正常仅几百字节，64KiB 足够且杜绝
+# 超大配置读放大（Codex 治理审 R2 P2）。
+_SCOPE_YAML_MAX_BYTES = 64 * 1024
 
 
 class ProvenanceAccessDeniedError(Exception):
@@ -82,13 +84,16 @@ class ChunkProvenanceReader:
                 "（default-deny：未注册即不存在）"
             )
         conf = scope.get("confidentiality")
-        # 密级门取「启动快照 ∩ 盘上现值」的交集（Codex 治理审 R1 P1，fail-closed）：
+        # 密级门取「启动快照 ∩ 盘上现值」的交集（Codex 治理审 R1 P1 → R2 P1 诚实收窄）：
         # scope_registry 是启动期快照、不重扫，而 KnowledgeService 语料按指纹自刷新——
-        # 若运行中把 scope.yaml 由 public 改成 restricted 且不重启，仅凭快照会读旧
-        # 宽松值、却回源已刷新的新内容=越级泄漏。这里回源时**额外从盘上重读**当前
-        # 密级，快照与盘上任一为受限/不可验证即拒。「重启才生效」的运维约定不是
-        # 安全 gate；本回源通道（新暴露面、调用面最广）用盘上漂移检查真正闭合，
-        # 不依赖运维纪律。平台级 search 的同源属性仍排 V0.2（ADR-0029 §D6）。
+        # 仅凭快照会在「运行中把 scope.yaml 由 public 改成 restricted 且不重启」时读旧
+        # 宽松值、却回源已刷新的新内容。这里回源时**额外从盘上重读**当前密级，快照
+        # 与盘上任一为受限/不可验证即拒。
+        # 【诚实边界，R2 P1】此双门**闭合的是运营漂移窗口**（改了配置未重启，随后请求）——
+        # 这是现实运维场景。它**不是原子的**：盘读（此处）与语料读（下方 get_chunks_by_id）
+        # 之间仍有理论 TOCTOU（精确计时的并发 config-flip 可穿窗）。真正原子闭合=把密级
+        # 策略 generation 与语料快照在同一锁/不可变代际下绑定，是知识轴平台级工作，排
+        # V0.2（ADR-0029 §D6）。不声称「已消除所有 TOCTOU」，只声称「闭合运营漂移」。
         disk_conf = self._read_disk_confidentiality(scope_id)
         allowed_snapshot = conf == "public_internal" or conf == "department"
         allowed_disk = disk_conf == "public_internal" or disk_conf == "department"
@@ -113,22 +118,33 @@ class ChunkProvenanceReader:
             source=c.source,
             fingerprint=c.fingerprint,
             text=c.text,
-            confidentiality=conf,
+            # 返回**盘上现值**而非启动快照标签（Codex 治理审 R2 P1）：门已保证盘上
+            # 密级 ∈ 允许集，用它比旧快照更准（snapshot=public 盘上=department 的
+            # 允许集内漂移下，标签如实反映当前密级）。
+            confidentiality=disk_conf,
         )
 
     def _read_disk_confidentiality(self, scope_id: str) -> str | None:
         """从盘上 scope.yaml 现读 confidentiality（漂移检查用）。
 
-        fail-closed：目录缺失/读失败/解析失败/顶层非 dict/无该键 一律返回 None
-        （不可验证 = 视为不放行），绝不因读盘异常放宽密级判定。
-        """
+        fail-closed：目录缺失/读失败/解析失败/资源异常/顶层非 dict/无该键 一律返回
+        None（不可验证 = 视为不放行），绝不因读盘异常放宽密级判定。
+
+        资源自保（Codex 治理审 R2 P2）：先按字节上限截读（scope.yaml 正常仅几百字节，
+        64KiB 足够），杜绝超大配置文件的读放大；解析异常收容面含 ValueError（超长
+        整数）/RecursionError（深层 flow YAML）等 PyYAML 资源型异常，一律 → None，
+        绝不穿透成 500。"""
         scope_dir = self._scope_registry.scope_dir(scope_id)
         if scope_dir is None:
             return None
         yaml_path = scope_dir / "scope.yaml"
         try:
-            data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, yaml.YAMLError):
+            with open(yaml_path, "rb") as fh:
+                raw = fh.read(_SCOPE_YAML_MAX_BYTES + 1)
+            if len(raw) > _SCOPE_YAML_MAX_BYTES:
+                return None  # 异常巨大的 scope.yaml：拒绝解析（fail-closed）
+            data = yaml.safe_load(raw.decode("utf-8"))
+        except (OSError, UnicodeError, yaml.YAMLError, ValueError, RecursionError):
             return None
         if not isinstance(data, dict):
             return None

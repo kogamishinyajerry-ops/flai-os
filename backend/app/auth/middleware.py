@@ -50,7 +50,12 @@ class AuthGateMiddleware:
         # 面都稳定落在门内。root_path 为空（当前直服部署）时行为不变。
         raw_path: str = scope.get("path", "")
         root_path: str = scope.get("root_path", "") or ""
-        if root_path and raw_path.startswith(root_path):
+        # 只在 root_path 是 raw_path 的**路径段边界前缀**时剥离（Codex 治理审 R2 P1）：
+        # 裸 startswith 会让 root_path="/a" 误匹配 "/api/agents" → 剥成 "pi/agents" →
+        # 不再 startswith("/api/") → 误判非门内放行（实测绕过）。段边界=raw_path 恰
+        # 等于 root_path、或以 root_path + "/" 开头。root_path 非空却非段边界前缀
+        # （畸形/对抗场景）→ 不剥离，按裸 path 判 → 更可能落门内（fail-closed）。
+        if root_path and (raw_path == root_path or raw_path.startswith(root_path + "/")):
             path = raw_path[len(root_path):] or "/"
         else:
             path = raw_path

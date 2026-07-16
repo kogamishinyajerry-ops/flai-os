@@ -112,6 +112,33 @@ def test_skeleton_refuses_existing_dir(tmp_path) -> None:
     assert marker.read_text(encoding="utf-8") == before
 
 
+def test_skeleton_no_clobber_even_empty_target(tmp_path) -> None:
+    """Codex 治理审 R2 P2：目标为**空目录**时也绝不覆盖（os.mkdir 原子 no-clobber）。
+
+    旧 os.replace 实现会把空目标目录静默替换并返回 0——违反「绝不覆盖」契约。
+    预建空目标 → 运行必 return 2 且目标保持空（一个字节都不写进去）。"""
+    root = tmp_path / "agents"
+    (root / "empty_probe").mkdir(parents=True)  # 预建空目标目录
+    proc = _run("empty_probe", "--root", str(root))
+    assert proc.returncode == 2, proc.stderr
+    assert list((root / "empty_probe").iterdir()) == [], "空目标不得被写入（no-clobber）"
+
+
+def test_skeleton_package_mode_follows_umask_not_0700(tmp_path) -> None:
+    """R2 P2：产物包目录权限**随环境 umask**（与普通 os.mkdir 一致），而非 mkdtemp
+    强制的 0700（会锁死别的服务账号扫描）。与同环境参照目录比对，umask 无关。"""
+    import os as _os
+    import stat
+    root = tmp_path / "agents"
+    assert _run("mode_probe", "--root", str(root)).returncode == 0
+    pkg_mode = stat.S_IMODE((root / "mode_probe").stat().st_mode)
+    ref = tmp_path / "ref_dir"
+    _os.mkdir(ref)  # 同 umask 下的参照
+    ref_mode = stat.S_IMODE(ref.stat().st_mode)
+    assert pkg_mode == ref_mode, f"包权限 {oct(pkg_mode)} 应随 umask 同参照 {oct(ref_mode)}"
+    assert pkg_mode != 0o700 or ref_mode == 0o700  # 非无条件 0700（除非环境 umask 就那么严）
+
+
 def test_skeleton_refuses_illegal_id(tmp_path) -> None:
     root = tmp_path / "agents"
     for bad in ("Bad-ID", "1starts_with_digit", "ab", "有中文"):

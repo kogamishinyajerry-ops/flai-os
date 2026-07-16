@@ -23,6 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.auth import service as auth_service
+from backend.app.auth.middleware import AuthGateMiddleware
 from backend.app.auth.passwords import hash_password, verify_password
 from backend.app.storage.db import get_conn
 from conftest import TEST_DISPLAY_NAME, TEST_PASSWORD, TEST_USERNAME, login, seed_user
@@ -608,6 +609,46 @@ def test_prefix_mount_does_not_bypass_auth_gate(app_env):
         assert anon.get("/prefix/api/tasks").status_code == 401
         # allowlist 项在挂载前缀下仍正确放行（归一化后 app 内路径 = /api/health）
         assert anon.get("/prefix/api/health").status_code == 200
+
+
+def test_root_path_non_boundary_prefix_still_guards(app_env):
+    """Codex 治理审 R2 P1：root_path 非路径段边界前缀（如 '/a' vs '/api/...'）不得
+    被裸 startswith 误剥成绕门。手工构造 scope 直打中间件断言归一化不误伤。"""
+    import anyio
+
+    _client, app = app_env
+    mw = AuthGateMiddleware(lambda *a: None, app.state.conn_factory)
+
+    async def _probe(raw_path: str, root_path: str) -> int:
+        status = {"code": None}
+        sent = {"done": False}
+
+        async def receive():
+            return {"type": "http.request", "body": b""}
+
+        async def send(msg):
+            if msg["type"] == "http.response.start":
+                status["code"] = msg["status"]
+            sent["done"] = True
+
+        # downstream app：若被调用说明「放行到了处理器」，记 200 占位
+        async def downstream(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        mw.app = downstream
+        await mw(
+            {"type": "http", "path": raw_path, "root_path": root_path,
+             "method": "GET", "headers": []},
+            receive, send,
+        )
+        return status["code"]
+
+    # root_path='/a' 是 '/api/agents' 的裸前缀但非段边界——绝不能剥成 'pi/agents'
+    # 而放行；归一化后仍判为 /api 面 → 匿名 401。
+    assert anyio.run(_probe, "/api/agents", "/a") == 401
+    # 真段边界前缀正常剥离后仍守门。
+    assert anyio.run(_probe, "/prefix/api/agents", "/prefix") == 401
 
 
 # ── AC8/F6：测试世界无旁路的结构检查 ─────────────────────────────────────

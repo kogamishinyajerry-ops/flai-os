@@ -24,7 +24,6 @@ import os
 import re
 import shutil
 import sys
-import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -239,11 +238,11 @@ def main(argv: list[str] | None = None) -> int:
         "changelog.md": CHANGELOG_TEMPLATE.format(today=date.today().isoformat()),
         "prompt.md": PROMPT_TEMPLATE,
     }
-    # 最小可执行 eval 用例（Codex 治理审 R0 P2 → R1 P2 修正终态）：空 eval_cases/ 与
+    # 最小可执行 eval 用例（Codex 治理审 R0 P2 → R1/R3 P2/P3 修正）：空 eval_cases/ 与
     # docs/07 非空强制规则冲突且「最小合法包」名不副实。占位断言必须是
-    # **waiting_review**——脚手架固定 requires_human_review: true，成功执行的终态是
-    # 人签发前的 waiting_review 而非 completed（人是唯一签发者红线）；断言 completed
-    # 会让占位用例必然失败。如实标注待替换。
+    # **waiting_review**——脚手架固定 requires_human_review: true，成功自动执行后停在
+    # 人签发关口 waiting_review（非「终态」：docs/05 明确它只能由人工转出），而非
+    # completed（人是唯一签发者红线）；断言 completed 会让占位用例必然失败。如实标注待替换。
     eval_case = json.dumps(
         {
             "case_id": "case_001_placeholder",
@@ -272,24 +271,29 @@ def main(argv: list[str] | None = None) -> int:
     for key in ("input_schema.json", "output_schema.json"):
         jsonschema.Draft202012Validator.check_schema(json.loads(files[key]))
 
-    # ── 原子落盘（Codex 治理审 R0 P2 → R1 P2 唯一 staging）：先写同父目录下
-    # **每次调用唯一**的临时包（tempfile.mkdtemp，不再用固定名），全部成功后
-    # os.replace 原子改名到目标——磁盘满/权限错/中断只留可清理的临时目录，绝不
-    # 在正式路径留半截包。唯一 staging 名杜绝并发调用互相 rmtree（固定名的旧
-    # 缺陷）。目标已存在预检见上（exists()→return 2）；os.replace 到已存在的
-    # 非空目录会 OSError（POSIX rename 语义），此处目标预检已过，残留竞态窗口
-    # 对单用户本地脚手架工具可接受，不再引入跨平台目录锁。──
+    # ── 原子 no-clobber 落盘（Codex 治理审 R0→R1→R2 P2 终态）──
+    # os.mkdir(target) 是 POSIX **原子**操作：目标已存在即抛 FileExistsError——
+    # 彻底消除上面 exists() 预检与落盘之间的 TOCTOU 覆盖窗口（另一进程在窗口内建
+    # 了目标目录也**绝不会被静默覆盖**，兑现「绝不覆盖现有包」契约）。认领目录后
+    # 往其内写文件；任一步失败即 rmtree 清理认领的目录，不留半截包。目录 mode 用
+    # 环境 umask 默认（正常 → 0755，与仓内既有包一致），不再是 mkdtemp 强制的 0700
+    # （否则别的服务账号扫不到）。crash（kill -9）留下的半截目录会被下次运行的
+    # os.mkdir 如实拒（FileExistsError→return 2），需人工清理——诚实优于静默覆盖。
     target.parent.mkdir(parents=True, exist_ok=True)  # 包根目录（agents/）不存在则先建
-    staging = Path(tempfile.mkdtemp(prefix=f".{agent_id}.skeleton.", dir=target.parent))
     try:
-        (staging / "eval_cases").mkdir()
+        os.mkdir(target)  # 原子认领；mode 随 umask（≈0755）
+    except FileExistsError:
+        print(f"[拒绝] 目录已存在：{target}——脚手架绝不覆盖现有包（fail-closed）。",
+              file=sys.stderr)
+        return 2
+    try:
+        (target / "eval_cases").mkdir()
         for rel, content in files.items():
-            (staging / rel).write_text(content, encoding="utf-8")
-        (staging / "eval_cases" / "case_001_placeholder.json").write_text(
+            (target / rel).write_text(content, encoding="utf-8")
+        (target / "eval_cases" / "case_001_placeholder.json").write_text(
             eval_case, encoding="utf-8")
-        os.replace(staging, target)  # 同一文件系统内原子改名
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)  # 异常/中断不留半截临时包
+        shutil.rmtree(target, ignore_errors=True)  # 半截包不留（认领的目录一并清）
         raise
 
     print(f"已生成 Agent 包骨架：{target}")

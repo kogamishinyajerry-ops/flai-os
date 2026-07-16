@@ -57,11 +57,13 @@
 与语料代际同源」，策略/索引 generation 缓存 + 并发锁 + 请求限流一并落地。此为
 知识轴整体加固（收口「每次 GET 全量哈希语料」的 DoS 放大面，Codex 治理审 R0/R1
 P2-service），非单端点可闭合，故排 V0.2。
-**诚实记录增量风险（R1 P2）**：`get_chunks_by_id` 每次调用都对 scope 全部文件
+**诚实记录增量风险（R1→R2 P2）**：`get_chunks_by_id` 每次调用都对 scope 全部文件
 `read_bytes()`+SHA-256 建/校验 manifest（与 search 同源，非本端点新引入），但本
 GET 端点确实提供了**更廉价、可重复直接触发**的放大入口——「排 V0.2」不等于本端点
-当前零新增风险。V0.2 落地前，运维侧以「knowledge scope 语料规模有界 + 内网已登录
-员工受众 + M11 全站限速位（若启用）」为缓释，不谎称已消除。
+当前零新增风险。**当前无请求级限流**：仓内 M11 只有登录 PBKDF2 节流，**没有**全站
+请求限速位，语料规模也无强制上限——故 V0.2 加固前，缓释只靠「knowledge scope 语料
+现状规模有限 + 内网已登录员工受众」这一**运营现状**，不谎称已有技术门。scope.yaml
+现读侧已加 64KiB 字节上限（provenance），语料侧规模门排 V0.2。
 
 ### D7 与 docs/06 的关系（Codex 治理审 R0 P2）
 `docs/06_Knowledge_Memory_Standard.md` 原文规定「Runtime 是知识服务唯一通道，
@@ -80,9 +82,11 @@ source；带 `source` 精确匹配到单条才 200。绝不猜首个。
   `/prefix/api/*` 仍稳定落门内，path-based 门不再因挂载前缀被绕（实测咬合，
   `test_m11_auth.test_prefix_mount_does_not_bypass_auth_gate`）；
 - 只读 GET，无任何写路径；入参长度全部设上限（DoS-echo 同口径）；
-- **异常映射全覆盖**（R0+R1 P2）：ScopeNotRegistered→404 / AccessDenied→403 /
-  Ambiguous→409 / SourceUnavailable（含语料文件 OSError/UnicodeError）→503 /
-  InvalidScopePackage→409 / Ingest（空语料）→409，绝不裸抛 500 泄栈/路径。
+- **异常映射覆盖已知损坏族**（R0→R1→R2 P2，不声称"全覆盖"）：
+  ScopeNotRegistered→404 / AccessDenied→403 / Ambiguous→409 / Ingest（空语料）→409 /
+  InvalidScopePackage→409 / SourceUnavailable→503（含语料 OSError/UnicodeError/
+  ValueError/坏 Office 包 zipfile.BadZipFile）。解析器专属异常的彻底统一收容排 V0.2
+  摄取层加固；当前对已知损坏族 fail-closed 映射，不裸抛 500 泄栈/路径。
 
 ### D5′ 存在性可见的诚实边界（Codex 治理审 R1 P2）
 拒绝文案已泛化（不回显 scope_id/密级 repr），但**未消除存在性枚举**：未注册

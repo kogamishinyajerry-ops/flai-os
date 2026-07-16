@@ -82,6 +82,15 @@ def _build_knowledge_dir(tmp_path):
         "b/manual.md": "乙版本手册：适用于 B 构型短舱。",
     }, confidentiality="public_internal")
     _write_scope(knowledge_dir, "empty_scope", {}, confidentiality="public_internal")
+    # 损坏 .xlsx：注册合法、confidentiality public，但建索引时 openpyxl 抛
+    # zipfile.BadZipFile → 端点应映射 503（Codex 治理审 R2 P2），不裸抛 500。
+    # 需 ≥1 可解析文档陪同以过空语料门前的摄取（这里坏文件本身触发损坏族异常）。
+    _write_scope(knowledge_dir, "corrupt_scope", {
+        "ok.md": "一段正常可解析的语料，用于陪同损坏文件进入摄取。",
+    }, confidentiality="public_internal")
+    (knowledge_dir / "corrupt_scope" / "docs" / "broken.xlsx").write_bytes(
+        b"PK\x03\x04 this is not a real xlsx zip container"
+    )
     # source=mcp：注册合法（schema 允许）但 resolve_source_dir 判「未接入」→
     # 端点应映射 503（Codex 治理审 R0 P2 异常映射补全），不再裸抛 500 泄栈。
     mcp_scope = knowledge_dir / "mcp_scope"
@@ -273,6 +282,13 @@ def test_api_unavailable_source_503_no_500(api_env) -> None:
     assert resp.status_code == 503, resp.text
     # 泛化文案，不外发内部路径细节。
     assert "mcp://" not in resp.json()["detail"]
+
+
+def test_api_corrupt_office_file_503_no_500(api_env) -> None:
+    """Codex 治理审 R2 P2：损坏 .xlsx（zipfile.BadZipFile）应映射 503，不裸抛 500。"""
+    client, _app = api_env
+    resp = _read(client, scope_id="corrupt_scope", chunk_id="ok#0")
+    assert resp.status_code == 503, resp.text
 
 
 def test_api_unregistered_detail_does_not_echo_scope_id(api_env) -> None:

@@ -55,7 +55,9 @@
       </el-card>
 
       <el-form-item label="任务名称">
-        <el-input v-model="form.name" placeholder="可选，便于在历史中辨认" />
+        <!-- @input 清 nameWasPrefilled（R2 P2）：用户一旦手改任务名，即视为人工
+             输入，后续预填重入不再撤它。程序化预填赋值不触发 @input，flag 不误清。 -->
+        <el-input v-model="form.name" placeholder="可选，便于在历史中辨认" @input="onNameInput" />
       </el-form-item>
 
       <el-form-item label="输入参数">
@@ -262,16 +264,20 @@ const form = reactive({
 let guidePrefill = null;
 // 任务名是否由预填自动带入（vs 人工手输）：重入清理只撤自动带入的，不动手输。
 let nameWasPrefilled = false;
+// 用户手改任务名 → 转为人工输入，后续重入不再撤（R2 P2）。
+function onNameInput() {
+  nameWasPrefilled = false;
+}
 
 // 预填草案消费（可重入，Codex 治理审 R0 P2-5）：既在 setup 首次调用，也由下方
 // watch 在「用户已在 /tasks/new、从全局 StatusCenter 再点重试只改 query 不重挂」
 // 时重新调用——否则新草案永不被消费、旧表单残留。重入前先清掉上一次预填派生态
 // （prefill 注入的 upload 项以 uid 前缀 guide_ 标识，只清这些不碰用户手加的）。
-function consumePrefillDraft() {
-  if (!["guide", "demo", "retry"].includes(route.query.from)) return;
-  // 完整重置全部预填派生态（Codex 治理审 R1 P2）：重入前一律清空，绝不让上一份
-  // 草案的会话关联/归档标记/自动填入的任务名残留到下一份——retry 草案的
-  // conversation_id:null 靠「不覆盖」是漏的，必须显式清。
+// 无条件重置全部预填派生态（Codex 治理审 R1 P2 → R2 P2）：抽成独立函数，供
+// consumePrefillDraft 每次入口先调——**包括 from 不再是预填来源时**（retry URL
+// 回到普通 /tasks/new），否则 retry_of/名称/会话关联会残留。conversation_id:null
+// 靠「不覆盖」是漏的，必须显式清。
+function resetPrefillState() {
   guidePrefill = null;
   prefillOrigin.value = "";
   prefillRetryOf.value = null;
@@ -279,12 +285,17 @@ function consumePrefillDraft() {
   prefillConversationId.value = null;
   prefillConcludeAfter.value = false;
   // 自动预填的任务名先撤（nameWasPrefilled 标识区分人工输入 vs 自动带入）——
-  // 人工手输的名字绝不动。
+  // 人工手输的名字绝不动（用户编辑后 @input 已把 flag 置 false）。
   if (nameWasPrefilled) {
     form.name = "";
     nameWasPrefilled = false;
   }
   uploadItems.value = uploadItems.value.filter((i) => !String(i.uid).startsWith("guide_"));
+}
+
+function consumePrefillDraft() {
+  resetPrefillState(); // 无条件先重置——navigate away 也清干净
+  if (!["guide", "demo", "retry"].includes(route.query.from)) return;
   try {
     const raw = sessionStorage.getItem("flai_prefill");
     if (raw) {

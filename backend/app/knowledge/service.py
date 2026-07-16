@@ -15,6 +15,7 @@ chunking.ingest_dir 完全一致（rglob + 跳过点前缀分量），否则会�
 from __future__ import annotations
 
 import hashlib
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -138,10 +139,13 @@ class KnowledgeService:
         source_dir = resolve_source_dir(scope, self._scope_registry.scope_dir(scope_id))
         try:
             self._get_index(scope_id, source_dir)  # 命中即建/刷新缓存（manifest 失效判据同 search）
-        except (OSError, UnicodeError) as exc:
-            # 语料文件读/解码在建索引期失败（权限/损坏/编码）——收成领域异常，
-            # 上层 API 稳定映射 503，不外发路径/栈（KnowledgeIngestError 是空语料，
-            # 与此语义不同，故用 SourceUnavailable）。
+        except KnowledgeIngestError:
+            raise  # 空语料语义与「源损坏」不同（→409 而非 503），原样上抛
+        except (OSError, UnicodeError, ValueError, zipfile.BadZipFile) as exc:
+            # 语料文件读/解码/解析在建索引期失败（权限/编码/坏 int/损坏 Office 包等
+            # 已知损坏族，Codex 治理审 R1→R2 P2）——收成领域异常，上层 API 稳定映射
+            # 503，不外发路径/栈。ADR-0029 §D5 措辞已改为「覆盖已知损坏族」不再声称
+            # 全覆盖；解析器专属异常的彻底统一收容排 V0.2 摄取层加固。
             raise KnowledgeSourceUnavailableError(
                 f"scope {scope_id!r} 语料源读取失败（权限/损坏/编码）"
             ) from exc

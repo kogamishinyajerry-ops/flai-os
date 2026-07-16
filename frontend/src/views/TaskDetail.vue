@@ -590,7 +590,9 @@ const knowledgeCitations = computed(() => {
     if (Array.isArray(p.hit_citations) && p.hit_citations.length) {
       for (const cit of p.hit_citations) {
         if (!cit || !cit.chunk_id) continue;
-        const key = `${p.scope_id}::${cit.chunk_id}::${cit.source || ""}`;
+        // 键含 fingerprint（Codex 治理审 R2 P2）：同 scope/chunk/source 但不同
+        // 指纹＝任务内语料版本已变，各成一行，漂移提示不因去重被吞成假阴性。
+        const key = `${p.scope_id}::${cit.chunk_id}::${cit.source || ""}::${cit.fingerprint || ""}`;
         if (seen.has(key)) continue;
         seen.add(key);
         rows.push({
