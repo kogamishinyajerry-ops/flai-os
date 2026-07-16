@@ -193,17 +193,26 @@ with sync_playwright() as p:
     deadline = time.time() + 15
     promoted = False
     while time.time() < deadline:
-        if "L1" in page.locator(".gov-dialog").inner_text():
+        # 真成功信号（2026-07-15 竞态修复）：晋升块随 governanceAgent.maturity 刷成 L1
+        # 而消失——这只可能发生在 promote API 已响应（服务端 yaml 已写盘）之后。
+        # 旧判据 `"L1" in gov-dialog 文本` 平凡可满足（梯注「仅 L0→L1 机器化把关」/
+        # 按钮「申请晋升 L1」恒含该串），首轮 poll 即真 → ④' 磁盘读跑在后端写盘前，
+        # 机器负载高时竞态必咬（IndexError 实录见 verify_all_final.log 2026-07-15）。
+        if (page.locator(".gov-dialog").count() > 0
+                and page.locator(".gov-promote-submit").count() == 0):
             promoted = True
             break
         time.sleep(0.5)
-    check("④勾选确认→晋升成功→面板见 L1", promoted, page.locator(".gov-dialog").inner_text()[:300])
+    check("④勾选确认→晋升成功→面板见 L1",
+          promoted and "L1" in page.locator(".gov-dialog").inner_text(),
+          page.locator(".gov-dialog").inner_text()[:300])
 
-    # ④' 磁盘铁证：tmp 包 yaml 真实改写
+    # ④' 磁盘铁证：tmp 包 yaml 真实改写（detail 用 next+哨兵，缺行时如实显示而非 IndexError 炸检查器）
     yaml_after = _yaml.read_text(encoding="utf-8")
     check("④'agent.yaml maturity 行真实变 L1",
           re.search(r"^maturity: L1$", yaml_after, flags=re.MULTILINE) is not None,
-          [l for l in yaml_after.splitlines() if l.startswith("maturity")][0])
+          next((l for l in yaml_after.splitlines() if l.startswith("maturity")),
+               "【无 maturity 行】"))
 
     # ④'' 晋升区随 L1 消失（本批只支持 L0→L1）
     page.wait_for_timeout(1000)
