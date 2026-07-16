@@ -64,12 +64,12 @@
                的真结果——success 绿在此处会误读成「已确认」，改 warning（amber
                未核语义）。文案逐字不动（m6 锚）。 -->
           <el-alert
-            v-if="prefilledFromGuide"
+            v-if="prefillOrigin"
             type="warning"
             :closable="false"
             show-icon
             class="prefill-note"
-            title="已从智能导引带入预填草案，请核对并补全后再提交——签发权在你。"
+            :title="prefillBannerText"
           />
 
           <!-- 表单模式：按 Agent input_schema 动态生成带标签+校验的字段 -->
@@ -196,7 +196,16 @@ const submitting = ref(false);
 const uploadingFiles = ref(false);
 const submitError = ref("");
 const uploadItems = ref([]);
-const prefilledFromGuide = ref(false);
+// 预填来源（"" | guide | demo）：guide=导引草案（m6 锚文案逐字不动）；demo=
+// 首登引导的 Hello 演示（评审 N2）。两种预填都是「机器带入待人核」内容，
+// 横幅一律 warning（amber 未核语义，信任色锁）。
+const prefillOrigin = ref("");
+const prefillBannerText = computed(() => {
+  if (prefillOrigin.value === "demo") {
+    return "演示预填：Hello 示例 Agent 无业务含义——提交后可完整看到「排队 → 运行 → 产物落地」的真实生命周期。";
+  }
+  return "已从智能导引带入预填草案，请核对并补全后再提交——签发权在你。";
+});
 // P0 手机端响应式：窄屏（<640px）标签置顶，避免固定 label-width 挤压输入区导致横向溢出。
 const narrow = ref(false);
 function onResize() {
@@ -240,7 +249,7 @@ const form = reactive({
 // 导引草案的 inputs 种子：用于在 Agent schema 加载后灌进结构化表单（仅目标 Agent 匹配时）。
 let guidePrefill = null;
 
-if (route.query.from === "guide") {
+if (["guide", "demo"].includes(route.query.from)) {
   try {
     const raw = sessionStorage.getItem("flai_prefill");
     if (raw) {
@@ -248,7 +257,7 @@ if (route.query.from === "guide") {
       if (draft && draft.agent_id === form.agentId && draft.inputs) {
         form.inputsText = JSON.stringify(draft.inputs, null, 2);
         guidePrefill = { agentId: draft.agent_id, inputs: draft.inputs };
-        prefilledFromGuide.value = true;
+        prefillOrigin.value = route.query.from;
         if (typeof draft.conversation_id === "string") {
           prefillConversationId.value = draft.conversation_id;
           // 单 Agent 草案带 conclude_after：提交成功后归档本会话（后于创建，见下）。

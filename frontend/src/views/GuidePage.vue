@@ -29,6 +29,9 @@
           </div>
         </div>
       </div>
+      <!-- 首登三步引导（评审 N2）：只在起手空态出现；「去跑演示」只预填创建页、
+           「开始说」只聚焦输入框——全程零代发零代建（人是唯一发起者）。 -->
+      <OnboardingCard @demo="startDemoTask" @say="focusComposer" />
     </div>
 
     <el-alert
@@ -95,6 +98,13 @@
                   </div>
                 </div>
                 <p class="reframe-escape">或者直接在下方输入框，告诉导引你想怎么调整。</p>
+              </div>
+              <!-- 需求登记引导（评审 N6）：拒接 ≠ 需求消失。反馈通道是任务级的、挂不上
+                   无任务的需求，先给「复制摘要 → 找平台负责人登记」最短闭环；接件评估
+                   Agent（feat/requirement-intake-agent）合入后升级为一键登记进待办队列。 -->
+              <div class="refuse-keep">
+                <button type="button" class="refuse-copy" @click="copyRefusedNeed(idx)">复制需求摘要</button>
+                <span class="refuse-keep-note">接不住 ≠ 不重要——复制摘要发给平台负责人登记，平台会按家底口径统一评估排期。</span>
               </div>
             </div>
 
@@ -243,8 +253,14 @@
       <div v-if="sending" class="bubble-row assistant">
         <div class="ai-mark">导</div>
         <div class="ai-thinking">
-          <ThinkingInk />
-          <span class="tlabel">导引思考中…</span>
+          <div class="think-row">
+            <ThinkingInk />
+            <!-- 真耗时（评审 N3）：≥3s 才显示，快回合不闪数字；tabular-nums 逐秒活跳不抖宽。 -->
+            <span class="tlabel">导引思考中…<span v-if="thinkingSeconds >= 3" class="think-elapsed num-token">{{ thinkingSeconds }}s</span></span>
+          </div>
+          <!-- 诚实预期管理（评审 N3）：内网大模型单轮可达一两分钟（B3 超时旋钮按内网
+               p99 放宽后尤甚）——超 30s 给一行真话；绝不做假进度条（诚实地板）。 -->
+          <p v-if="thinkingSeconds >= 30" class="think-slow">内网大模型推理较慢——复杂需求可能要一两分钟。请留在本页稍候：本轮若失败，你的原话会退回输入框，不会丢。</p>
         </div>
       </div>
     </div>
@@ -357,6 +373,8 @@ import { resolvedTheme } from "../stores/theme";
 import ThinkingInk from "../components/artwork/ThinkingInk.vue";
 import IntentGlyph from "../components/artwork/IntentGlyph.vue";
 import MarkdownLite from "../components/MarkdownLite.vue";
+import OnboardingCard from "../components/OnboardingCard.vue";
+import { displayName } from "../stores/session";
 
 const router = useRouter();
 
@@ -496,6 +514,101 @@ function adoptReframe(text) {
   // 自己按发送——导引绝不代人发起这条消息（红线：人是唯一发起者）。
   draft.value = text;
   focusComposer();
+}
+
+// ── 导引轮次真耗时（评审 N3）────────────────────────────────────────────
+// 独立 1s 计时器（不共用实时行的 nowTick——那条由工作态任务门控启停，语义
+// 不同不硬并）；sending 结束即停表清零，零常驻空转。
+const sendStartedAt = ref(null);
+const sendNow = ref(0);
+let sendTimer = null;
+watch(sending, (s) => {
+  if (s === true) {
+    sendStartedAt.value = Date.now();
+    sendNow.value = Date.now();
+    sendTimer = setInterval(() => { sendNow.value = Date.now(); }, 1000);
+  } else {
+    if (sendTimer) { clearInterval(sendTimer); sendTimer = null; }
+    sendStartedAt.value = null;
+  }
+});
+onUnmounted(() => { if (sendTimer) clearInterval(sendTimer); });
+const thinkingSeconds = computed(() =>
+  sendStartedAt.value ? Math.max(0, Math.round((sendNow.value - sendStartedAt.value) / 1000)) : 0
+);
+
+// ── 演示任务预填（评审 N2）──────────────────────────────────────────────
+// 与导引草案同一 sessionStorage 契约（TaskCreate 按 from=demo 读取并给演示
+// 语境横幅）；inputs 示例值=登录显示名——是用户自己的名字不是编造工程数据，
+// 且创建页人可改可核后亲手提交（预填 ≠ 代建）。
+function startDemoTask() {
+  sessionStorage.setItem(
+    "flai_prefill",
+    JSON.stringify({
+      agent_id: "hello_agent",
+      inputs: { name: displayName() || "同事" },
+      files: [],
+      conversation_id: null,
+      conclude_after: false,
+    })
+  );
+  router.push({ path: "/tasks/new", query: { agent_id: "hello_agent", from: "demo" } });
+}
+
+// ── 复制需求摘要（评审 N6）──────────────────────────────────────────────
+// 内网 http 非 secure context，navigator.clipboard 大概率不可用——必须带
+// execCommand 兜底；两路都失败如实报错，绝不假报「已复制」。
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* 落入 execCommand 兜底 */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok === true;
+  } catch {
+    return false;
+  }
+}
+
+function precedingUserContent(idx) {
+  for (let i = idx - 1; i >= 0; i -= 1) {
+    if (messages.value[i].role === "user") return messages.value[i].content;
+  }
+  return "";
+}
+
+async function copyRefusedNeed(idx) {
+  const m = messages.value[idx];
+  const rec = (m && m.recommendation) || {};
+  const lines = ["【需求登记草稿】"];
+  const need = precedingUserContent(idx);
+  if (need) lines.push(`需求原文：${need}`);
+  if (rec.reason) lines.push(`平台初判：暂时接不住——${rec.reason}`);
+  if (Array.isArray(rec.residual_problems) && rec.residual_problems.length) {
+    lines.push("仍未解决的问题：");
+    for (const p of rec.residual_problems) lines.push(`- ${p}`);
+  }
+  if (Array.isArray(rec.reframe) && rec.reframe.length) {
+    lines.push("导引建议的重述方向：");
+    for (const r of rec.reframe) lines.push(`- ${r}`);
+  }
+  lines.push("（来自 FLAi-OS 导引对话——请平台负责人按家底口径评估排期）");
+  const ok = await copyText(lines.join("\n"));
+  if (ok === true) ElMessage.success("需求摘要已复制——发给平台负责人登记，别让它溜走");
+  else ElMessage.error("复制失败——请手动选取文字复制");
 }
 
 async function scrollToBottom() {
@@ -1333,15 +1446,33 @@ watch(
   margin-top: 0;
 }
 
-/* 思考指示 */
+/* 思考指示（N3 改双行容器：首行=墨滴+状态词+秒表，次行=慢等待诚实提示） */
 .ai-thinking {
   display: flex;
-  align-items: center;
-  gap: 5px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
   color: var(--ink-faint);
   font-size: 13.5px;
 }
+.think-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
 .ai-thinking .tlabel { margin-left: 6px; }
+.think-elapsed {
+  margin-left: 7px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.think-slow {
+  margin: 0 0 0 2px;
+  max-width: 460px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--ink-faint);
+}
 
 /* ── 协作方案 / 拒绝 卡片 ── */
 .plan-card {
@@ -1478,6 +1609,44 @@ watch(
   color: var(--ink-faint);
   font-size: 12px;
   line-height: 1.6;
+}
+
+/* 需求登记引导（N6）：refuse 卡尾的安静动作行——按钮走 hairline 中性描边
+ * （登记是保底动作不是主 CTA，不占 clay）。 */
+.refuse-keep {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--hairline);
+}
+.refuse-copy {
+  flex: none;
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 5px 11px;
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft);
+}
+.refuse-copy:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+.refuse-keep-note {
+  flex: 1 1 240px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+}
+@media (prefers-reduced-motion: reduce) {
+  .refuse-copy { transition: none; }
 }
 
 /* Agent roster 卡 */
