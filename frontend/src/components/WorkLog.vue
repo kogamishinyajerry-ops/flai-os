@@ -52,6 +52,13 @@
         <template v-else>{{ c.label }}</template><template v-if="c.count > 1"> ×{{ c.count }}</template>
         <span v-if="c.mock" class="pill-amber">mock</span>
       </span>
+      <!-- 真实性未核（Codex R0 P1）：明细未到账（加载中/拉取失败）时，工具行的
+           mock 标注不可作数——未知如实亮 amber，绝不静默装「非 mock」。 -->
+      <span
+        v-if="toolAuthenticityUnknown"
+        class="pill-amber worklog-authenticity-unverified"
+        title="工具真实性明细未到账（加载中或拉取失败）：此行 mock 标注暂不可作数"
+      >真实性未核</span>
     </div>
 
     <!-- 原始事件 token（批次四 Q5，「process 藏折叠里」）：英文 token 只活在
@@ -101,24 +108,37 @@ const props = defineProps({
   task: { type: Object, default: null },
 });
 
-// 仅有的两个本地状态：展开开关 + 懒加载的工具运行明细（用于 mock 徽标）。
+// 本地状态：展开开关 + 工具运行明细（mock 徽标唯一数据源）。
+// 批次四 Q5 把折叠态升格为主扫读面（Codex R0 P1）：工具聚合行折叠常显，
+// mock 徽标数据必须随 tool 事件到账即预载，不能等展开——旧懒加载让折叠态
+// 把「未知」呈现成「非 mock」。状态机 idle|loading|loaded|failed；
+// 非 loaded 且有工具 chip 时，行尾亮 amber「真实性未核」。seq 守卫防慢响应回写。
 const expanded = ref(false);
 const toolRuns = ref([]);
-let toolRunsRequested = false;
+const toolRunsState = ref("idle");
+let toolRunsSeq = 0;
 
-async function toggleExpanded() {
-  expanded.value = !expanded.value;
-  if (expanded.value && !toolRunsRequested) {
-    toolRunsRequested = true;
-    try {
-      toolRuns.value = await listToolRuns(props.task.id);
-    } catch {
-      // 诚实降级：懒加载失败只是不显示 mock 徽标，绝不报错阻塞展开内容。
-      // 复位请求标记：否则一次网络抖动后 mock 徽标永久丢失（把"未知"呈现成"非 mock"）。
-      toolRunsRequested = false;
-      toolRuns.value = [];
-    }
+async function loadToolRuns() {
+  if (!props.task?.id) return;
+  const seq = ++toolRunsSeq;
+  toolRunsState.value = "loading";
+  try {
+    const rows = await listToolRuns(props.task.id);
+    if (seq !== toolRunsSeq) return;
+    toolRuns.value = rows;
+    toolRunsState.value = "loaded";
+  } catch {
+    if (seq !== toolRunsSeq) return;
+    // 诚实降级：失败=真实性未知（toolline 亮「真实性未核」），绝不静默装
+    // 「非 mock」，也不报错阻塞正文；展开动作可触发一次重试。
+    toolRuns.value = [];
+    toolRunsState.value = "failed";
   }
+}
+
+function toggleExpanded() {
+  expanded.value = !expanded.value;
+  if (expanded.value && toolRunsState.value === "failed") loadToolRuns();
 }
 
 const isWorking = computed(() => TASK_WORK_STATES.has(props.task?.status));
@@ -194,6 +214,22 @@ function toolHasMock(toolId) {
 }
 
 const TOOL_EVENT_TYPES = new Set(["tool_started", "tool_finished", "tool_failed"]);
+
+// tool 事件计数涨了就（重）拉真实性明细：折叠态预载 + 工作态新工具跑完后
+// mock 徽跟上（旧懒加载一次性 latch，连展开态都不会刷新）。事件驱动、无轮询；
+// 计数不变（父页轮询整包替换同长数组）不触发。
+const toolEventCount = computed(
+  () => (props.events || []).filter((e) => TOOL_EVENT_TYPES.has(e.event_type)).length
+);
+watch(toolEventCount, (n) => {
+  if (n > 0) loadToolRuns();
+}, { immediate: true });
+
+// 折叠常显的诚实闸（mock 如实标注）：有工具 chip 而明细未就绪（加载中/失败）
+// 时亮「真实性未核」——未知绝不呈现成非 mock。amber=仅未核槽（信任色锁）。
+const toolAuthenticityUnknown = computed(
+  () => toolRunsState.value !== "loaded" && chips.value.some((c) => c.key.startsWith("tool:"))
+);
 
 // 失败类事件判定：真失败语义（trust-fail 红）只认失败 token 与 error level——
 // 玫红只染译文状态词一处，不外溢整行（W16 着色预算）。取消（task_cancelled）

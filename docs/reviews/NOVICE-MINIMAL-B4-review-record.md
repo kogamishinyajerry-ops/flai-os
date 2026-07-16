@@ -45,7 +45,9 @@ e2e 原子同批：
   m6 **14/14**（plan-note 新句）；**终树 verify_all 再全量 EXIT=0**（989 pytest
   + 17 套失败无）——两次全量夹住 3-lens 修复，中间态不背书。
 - 新截图：`craft-shots/statuscenter_human_names_light.png`（行级人话称呼）、
-  `craft-shots/worklog_collapsed_human_light.png`（折叠态无 token）；
+  `craft-shots/worklog_collapsed_human_light.png`（折叠态无 token+mock 徽——
+  R0 P3a 勘误：初版此图误在展开后截取，R1 已前移至展开前并另存
+  `worklog_expanded_tokens_light.png` 作展开态对照）；
   `today_empty_light.png` 随 ③ 重写重截。
 - tamper 战役（6 处，cp 备份+cmp 校验还原，每处 craft 全跑）：
 
@@ -97,7 +99,35 @@ tamper 的生效路径必须亲证：破坏必须真实进入被测制品。
 
 ## 四、Codex 治理审
 
-（回填）
+### R0（native Pro sol-ultra，`codex exec` 自足审查 prompt，diff fef203d..88d0e8b）
+
+**判决：CHANGES_REQUIRED**（2 P1 / 3 P2 / 2 P3）。审查方自跑 build + node 20/20 +
+8 套受影响 e2e 157/157 后出findings——全部 grounded 复核坐实，无一 over-claim：
+
+| # | 级 | Finding（复核锚点） | 处置 |
+|---|---|---|---|
+| P1a | P1 | `format.js` `agentNames[task.agent_id]` 裸下标读原型链——agent id 契约 `^[a-z][a-z0-9_]{2,63}$` 放行 `constructor`（Object.prototype 唯一小写键），空名册下捞出构造函数当名字渲染=编名字 | ✅ `Object.hasOwn` + `typeof string` 双闸（SSOT 单点，全消费面受保护）；node 新测试块（毒 id/own 命中/非字符串值/null-proto 名册四象限） |
+| P1b | P1 | `WorkLog.vue` mock 徽数据只在展开时懒加载且失败静默清空——批次四把折叠态升格主扫读面后，折叠工具行把「未知」呈现成「非 mock」（:43 注释承诺「折叠态也常显」代码未兑现） | ✅ 状态机 idle/loading/loaded/failed + tool 事件计数驱动预载（涨了即重拉，工作态新工具 mock 徽跟上）+ 非 loaded 且有工具 chip 亮 amber「真实性未核」（unknown≠非 mock）+ seq 守卫；craft ⑪f 折叠 mock 徽探针 + ⑪f′ route-abort 未核闸活体实证 |
+| P2a | P2 | QuickSwitcher 任务匹配域缺 taskDisplayName——眼见标题（注册表显示名）打进去搜不到 | ✅ 匹配域改 SSOT 产出（`taskDisplayName(t, agentNameById)`）；craft ⑪g 用只存在于显示名的子串「平台闭环」限定任务行命中（agent 行陪跑防假绿） |
+| P2b | P2 | QuickSwitcher `fetchAll` 无代数守卫，快开快关再开慢响应回写覆盖新数据 | ✅ fetchSeq 代数守卫（与父页「轮询整包作废」同律），loading 归属最新代 |
+| P2c | P2 | e2e oracle 把「非数字/缺字段」与「==0」混判 expect-hidden，与前端「仅 ===0 隐藏、非数字显—」三态语义脱钩；且 /me 夹具期四格全 >0，零值分支无活体证据 | ✅ craft ③/⑪a + batch_b `_stats_match` 三处同律改三态对表（>0 逐字 / ==0 隐 / 非数字「—」）；新增 ⑫ 套件末把待签任务全部落定→waiting==0 格隐、>0 格照常（同屏双分支活体咬合） |
+| P3a | P3 | `worklog_collapsed_human_light.png` 在展开动作之后截取——证据命名与内容不符 | ✅ 截图前移至展开前（真折叠态）+ 补 `worklog_expanded_tokens_light.png`；本档案 §二 截图行勘误 |
+| P3b | P3 | 3-lens 回归 P2 修复（今日最活跃独立于晋升错误分支）无探针定格 | ✅ craft ⑪d′ route-abort /api/promotions 活体重现故障态：错误行如实在场＋活跃 chips 独立存活 |
+
+### R1 修复批验证
+
+- node `node --test` **21/21**（20→21，+原型键象限块）；build 绿。
+- craft **86/86 ALL GREEN**（81→86：⑪d′/⑪f mock 徽/⑪f′ 未核闸/⑪g/⑫，全部一次通过）。
+- **R1 tamper 三连**（实码修复逐一 revert 式破坏，每轮 rebuild dist——血训纪律）：
+  T-R1a 撤 hasOwn 闸 → node 恰 1 红（原型键测试咬，20 pass/1 fail）；
+  T-R1b 撤事件驱动预载（改回展开才拉）→ craft 恰 1 红 85/86（证据 `pills=['真实性未核']`——tamper 态诚实亮未核，探针正确拒收）；
+  T-R1c 撤搜索域显示名 → craft 恰 1 红 85/86（`task_titles=[]`）。
+  三轮全部恰 1 红零旁伤，还原 cmp 校验 + 尾部 rebuild 复绿 86/86。
+  ⑪f′/⑪d′/⑫ 三探针自身即活体故障注入（route-abort/夹具翻转），咬合证据自带。
+- 受影响套件复跑全绿：m2 **9/9** · batch_b **10/10** · batch_c **13/13** · m10 **12/12**。
+- 终树 `verify_all.sh` 全量 **EXIT=0**：**989 pytest** + node **21/21** +
+  **17 套 e2e ALL GREEN**（craft 86/86 在内，「[失败]（无）」）——R1 修复批
+  与探针扩批被完整全量门夹住。
 
 ## 五、反采纳与边界（本批不做的决定）
 

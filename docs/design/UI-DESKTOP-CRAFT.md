@@ -333,6 +333,10 @@ desktop-restudy 17 卡 + UI-PARADIGM 的 ChatGPT.app/Claude Desktop 拉片血统
   聚合 mono 计数行（rawLine）**退役**——其逐类信息与头行「N 条事件」+
   展开逐条 raw 重复（3-lens 裁决：退役而非移入，档案 §三 留痕）；
   「核验/签发/授权链」信任核心面不动。
+  **折叠态升格的诚实义务**（Codex R0 P1 收口）：工具聚合行折叠常显 ⇒ mock
+  徽数据（tool_runs）必须随 tool 事件到账**预载**，不得等展开；明细未就绪
+  （加载中/拉取失败）时工具行尾亮 amber「真实性未核」——未知绝不呈现成
+  「非 mock」（mock 如实标注红线在主扫读面的落地形态）。
 - **Q6 池**：六路 grounded 扫描的额外候选，逐条过五律+锚点安全性后择优
   纳入（清单与位点/锚点级明细=评审档案 `NOVICE-MINIMAL-B4-review-record.md`）。
 

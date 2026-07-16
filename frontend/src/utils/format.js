@@ -160,8 +160,13 @@ export const formatClockCompact = (iso, todayKey) => {
 export const taskDisplayName = (task, agentNames) => {
   if (!task) return "—";
   if (task.name) return task.name;
-  const registryName = agentNames && task.agent_id ? agentNames[task.agent_id] : "";
-  if (registryName) return registryName;
+  // own-property + 字符串双闸（Codex R0 P1）：agent id 契约（^[a-z][a-z0-9_]{2,63}$）
+  // 放行 constructor/hasOwnProperty 这类原型键，裸下标会沿原型链捞出函数当
+  // 名字渲染=编名字。闸不过一律走 id 切片诚实回退。
+  if (agentNames && task.agent_id && Object.hasOwn(agentNames, task.agent_id)) {
+    const registryName = agentNames[task.agent_id];
+    if (typeof registryName === "string" && registryName) return registryName;
+  }
   return task.id ? task.id.slice(0, 12) : "—";
 };
 

@@ -111,3 +111,20 @@ test("taskDisplayName: 空任务/缺 id 诚实降级为「—」", () => {
   assert.equal(taskDisplayName(null, {}), "—");
   assert.equal(taskDisplayName({ agent_id: "x" }, {}), "—");
 });
+
+test("taskDisplayName: 原型键 agent id 绝不沿原型链编名字（Codex R0 P1）", () => {
+  const t = { id: "task_0123456789abcdef" };
+  // 契约 ^[a-z][a-z0-9_]{2,63}$ 全小写，Object.prototype 里唯一小写键=constructor：
+  // 空名册下裸下标会捞出 Object 构造函数当名字。后两行=普通 miss 对照。
+  assert.equal(taskDisplayName({ ...t, agent_id: "constructor" }, {}), "task_0123456");
+  assert.equal(taskDisplayName({ ...t, agent_id: "hasownproperty" }, {}), "task_0123456");
+  assert.equal(taskDisplayName({ ...t, agent_id: "valueof" }, {}), "task_0123456");
+  // own-property 命中且为字符串才放行：真有个叫 constructor 的注册 agent 照常人话。
+  assert.equal(taskDisplayName({ ...t, agent_id: "constructor" }, { constructor: "构造器 Agent" }), "构造器 Agent");
+  // 非字符串注册值（数据形状异常）不上屏，退 id 切片。
+  assert.equal(taskDisplayName({ ...t, agent_id: "a1" }, { a1: 42 }), "task_0123456");
+  // null-prototype 名册（Object.hasOwn 不依赖原型方法）照常工作。
+  const bare = Object.create(null);
+  bare.hello_agent = "Hello Agent（平台闭环验证示例）";
+  assert.equal(taskDisplayName({ ...t, agent_id: "hello_agent" }, bare), "Hello Agent（平台闭环验证示例）");
+});

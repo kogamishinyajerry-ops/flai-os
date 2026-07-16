@@ -49,6 +49,12 @@
      title，L0「勿依赖」诚实提示保留）+类型/成熟度/id·版本合并次级 meta
      一行+cat-bar 退役；Q5 原始事件 token 只活在展开态时间轴（折叠态=人话
      扫读面，「task_created」在折叠态绝迹）。
+  ⑪R Codex R0 治理审修复批（R1）：折叠态工具行 mock 徽不等展开（真实性
+     明细随 tool 事件预载）+明细拉取失败亮「真实性未核」（unknown≠非 mock，
+     route-abort /api/tasks/*/tool_runs 实证）；⌘K 按显示名子串检索到未命名
+     任务行（搜索域=眼见标题 SSOT）；晋升 API 失败「今日最活跃」独立存活
+     （3-lens 回归 P2 定格）；⑫ /me 混合零值活体对表（待签清零后 waiting
+     格隐、>0 格照常——零值分支活体证据，非 tamper 孤证）。
 
 夹具口径（与 m9 同纪律）：temp DB 直写只为渲染路径提供 fixture，不冒充业务
 状态机行为（真实完成/放行链路由 m2 验收）。completed 任务配 tool_failed 事件
@@ -282,7 +288,9 @@ with sync_playwright() as p:
     # Q2 零计数豁口：冷态三个组头绝不出现「· 0」。
     heads = page.locator(".today-section-head").all_inner_texts()
     check("③零值组头无「· 0」后缀（零不是信息）", all("· 0" not in h for h in heads), str(heads))
-    # Q2 团队总量零值格：API==0 ⇒ 格不渲染；>0 ⇒ 恰 1 格且数字逐字相等。
+    # Q2 团队总量三态对表（Codex R0 P2 收紧）：>0 ⇒ 恰 1 格数字逐字相等；
+    # ==0 ⇒ 格不渲染（零不是信息）；非数字/缺字段 ⇒ 格保留显「—」（数据不可用
+    # ≠0，3-lens 诚实 P3 的前端语义，oracle 不得把两态混为一谈）。
     tiles_ok = True
     tiles_detail = {}
     for f in stat_fields:
@@ -290,11 +298,13 @@ with sync_playwright() as p:
         v = cold_stats.get(f)
         if isinstance(v, int) and v > 0:
             ok_f = tile.count() == 1 and tile.locator(".today-stat-num").inner_text().strip() == str(v)
-        else:
+        elif isinstance(v, int):
             ok_f = tile.count() == 0
+        else:
+            ok_f = tile.count() == 1 and tile.locator(".today-stat-num").inner_text().strip() == "—"
         tiles_ok = tiles_ok and ok_f
         tiles_detail[f] = f"api={v} ui={'shown' if tile.count() else 'hidden'}"
-    check("③团队总量零值格不渲染（语义对表 data-stat）", tiles_ok is True, str(tiles_detail))
+    check("③团队总量三态对表（>0 逐字相等 / ==0 不渲染 / 非数字显「—」）", tiles_ok is True, str(tiles_detail))
     # Q3 方法论口径同屏唯一：页脚一行保留，版块内不再复述「近 100 条」note。
     check("③窗口口径只在页脚一行（today-subhead-note 退役）",
           page.locator(".today-subhead-note").count() == 0 and "基于最近 100 条任务窗口" in body)
@@ -753,11 +763,15 @@ with sync_playwright() as p:
         v = me_contrib.get(f)
         if isinstance(v, int) and v > 0:
             ok_f = tile.count() == 1 and tile.locator(".me-stat-num").inner_text().strip() == str(v)
-        else:
+        elif isinstance(v, int):
             ok_f = tile.count() == 0
+        else:
+            # 非数字/缺字段=数据不可用三态：格保留显「—」（≠0 隐藏），oracle
+            # 与前端「仅 ===0 隐藏」语义严格同构（Codex R0 P2 收紧）。
+            ok_f = tile.count() == 1 and tile.locator(".me-stat-num").inner_text().strip() == "—"
         me_ok = me_ok and ok_f
         me_detail[f] = f"api={v} ui={'shown' if tile.count() else 'hidden'}"
-    check("⑪Q2 /me 四格零值不渲染（语义对表 data-stat）", me_ok is True, str(me_detail))
+    check("⑪Q2 /me 四格三态对表（>0 逐字 / ==0 隐 / 非数字「—」）", me_ok is True, str(me_detail))
     me_body = page.locator("body").inner_text()
     fb = me_contrib.get("feedback_count_approx")
     if isinstance(fb, int) and fb > 0:
@@ -807,6 +821,25 @@ with sync_playwright() as p:
     check("⑪Q2 有数据时组头计数照常（零值豁口不误伤非零）",
           _re.search(r"· \d+$", waiting_head.strip()) is not None, waiting_head)
 
+    # ── ⑪d′ 回归闸（Codex R0 P3 + 3-lens 回归 P2 定格）：晋升 API 出错时
+    #    「今日最活跃」的本地数据必须独立存活——曾被 v-else 连坐隐藏的真回归，
+    #    修复后无探针定格，路由掐断即活体重现该故障态────────────────────────
+    ctx.route("**/api/promotions*", lambda route: route.abort())
+    page.goto(BASE + "/today", wait_until="networkidle")
+    try:
+        page.wait_for_selector(".today-error", timeout=8000)
+        promo_err_seen = page.locator(".today-error").count() == 1
+    except Exception:
+        promo_err_seen = False
+    active_alive = (
+        page.locator(".today-subhead", has_text="今日最活跃").count() == 1
+        and page.locator(".today-active-chip").count() >= 1
+    )
+    check("⑪Q_reg 晋升 API 失败→错误行如实在场＋「今日最活跃」独立存活（不连坐）",
+          promo_err_seen is True and active_alive is True,
+          f"err={promo_err_seen} active_chips={page.locator('.today-active-chip').count()}")
+    ctx.unroute("**/api/promotions*")
+
     # ── ⑪e Q4 门户最小化（图例句撤下/色条退役/次级 meta 一行/诚实提示进
     #    title）──────────────────────────────────────────────────────────────
     page.goto(BASE + "/portal", wait_until="networkidle")
@@ -824,19 +857,98 @@ with sync_playwright() as p:
     check("⑪Q4 成熟度徽章 title 携诚实提示（L0 勿依赖其结论）+ help 光标可发现性",
           "勿依赖" in l0_tip and l0_cursor == "help", f"tip={l0_tip} cursor={l0_cursor}")
 
-    # ── ⑪f Q5 原始事件 token 只活在展开态（折叠=人话扫读面）────────────────
+    # ── ⑪f Q5 原始事件 token 只活在展开态（折叠=人话扫读面）＋折叠态 mock
+    #    徽标不等展开（Codex R0 P1：真实性明细随 tool 事件到账预载）──────────
     page.goto(BASE + f"/tasks/{task_a}", wait_until="networkidle")
     page.wait_for_selector(".worklog-head", timeout=8000)
     collapsed_body = page.locator("body").inner_text()
     check("⑪Q5 折叠态无原始 token（task_created 绝迹于扫读面）",
           "task_created" not in collapsed_body, collapsed_body[collapsed_body.find("事件时间轴"):][:120])
+    # task_a 夹具两条 tool_runs 均 mock=1：折叠常显的工具聚合行必须带 amber
+    # mock 徽（旧懒加载只在展开后拉明细——折叠态把「未知」呈现成「非 mock」在此咬）。
+    try:
+        page.wait_for_selector(".worklog-toolline .pill-amber", timeout=8000)
+        mock_pill_texts = page.locator(".worklog-toolline .pill-amber").all_inner_texts()
+    except Exception:
+        mock_pill_texts = []
+    check("⑪Q5 折叠态工具行 mock 徽在场（真实性预载，不等展开；且非未核态）",
+          page.locator(".worklog-timeline").count() == 0
+          and any(t.strip() == "mock" for t in mock_pill_texts)
+          and page.locator(".worklog-authenticity-unverified").count() == 0,
+          f"pills={mock_pill_texts}")
+    # P3a 修正：折叠态证据截图必须先于展开动作（旧探针在展开后截图却命名 collapsed）。
+    page.screenshot(path=str(SHOTS / "worklog_collapsed_human_light.png"))
     if page.locator(".worklog-timeline").count() == 0:
         page.locator(".worklog-head").first.click()
         page.wait_for_selector(".worklog-timeline", timeout=3000)
     expanded_body = page.locator("body").inner_text()
     check("⑪Q5 展开态原始 token 在场（检视面证据不减）",
           all(k in expanded_body for k in ("task_created", "tool_finished", "task_completed")))
-    page.screenshot(path=str(SHOTS / "worklog_collapsed_human_light.png"))
+    page.screenshot(path=str(SHOTS / "worklog_expanded_tokens_light.png"))
+
+    # ── ⑪f′ Q5 真实性未核诚实闸（Codex R0 P1）：tool_runs 拉取被掐 → 折叠
+    #    工具行必须亮「真实性未核」，绝不静默装「非 mock」───────────────────
+    ctx.route("**/api/tasks/*/tool_runs", lambda route: route.abort())
+    page.goto(BASE + f"/tasks/{task_a}", wait_until="networkidle")
+    try:
+        page.wait_for_selector(".worklog-authenticity-unverified", timeout=8000)
+        unverified_ok = (
+            page.locator(".worklog-authenticity-unverified").count() == 1
+            and "真实性未核" in page.locator(".worklog-authenticity-unverified").inner_text()
+        )
+    except Exception:
+        unverified_ok = False
+    check("⑪Q5 明细拉取失败→折叠工具行亮「真实性未核」（unknown≠非 mock）",
+          unverified_ok is True,
+          page.locator(".worklog-toolline").inner_text() if page.locator(".worklog-toolline").count() else "(无工具行)")
+    ctx.unroute("**/api/tasks/*/tool_runs")
+
+    # ── ⑪g Q1 ⌘K 眼见即可搜（Codex R0 P2）：结果行标题=注册表显示名，匹配域
+    #    必须含同一 SSOT 产出——用只存在于显示名的子串检索（agent_id/goal/id
+    #    均不含「平台闭环」），命中未命名任务行才算修复─────────────────────
+    page.goto(BASE + "/today", wait_until="networkidle")
+    page.keyboard.press("ControlOrMeta+k")
+    page.wait_for_selector(".qs-input", timeout=8000)
+    page.locator(".qs-input").fill("平台闭环")
+    # 只认任务行命中（.qs-item-status 是任务行独有元素）：agent 行本就按
+    # a.name 可搜，若只断言任意行命中，未修复也会假绿。
+    task_row_title = ".qs-item:has(.qs-item-status) .qs-item-title"
+    try:
+        page.wait_for_selector(task_row_title, timeout=8000)
+        qs_task_titles = page.locator(task_row_title).all_inner_texts()
+    except Exception:
+        qs_task_titles = []
+    qs_task_hit = any("Hello Agent" in t for t in qs_task_titles)
+    check("⑪Q1 ⌘K 按显示名子串可检索到未命名任务行（搜索域=眼见标题 SSOT，非 agent 行陪跑）",
+          qs_task_hit is True, f"task_titles={qs_task_titles[:6]}")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(200)
+
+    # ── ⑫ Q2 /me 混合零值活体咬合（Codex R0 P2）：⑪a 夹具期四格全 >0，零值
+    #    分支只有 tamper 咬过、没有活体证据。把待签任务全部落定 → waiting_review
+    #    归真 0 → 同屏「>0 显格 / ==0 隐格」双分支对表（本探针居套件末，夹具
+    #    形变不影响任何后续断言；①' 暗主题块只看已完成的 task_a）──────────
+    _db("UPDATE tasks SET status='cancelled' WHERE status='waiting_review'")
+    me2 = API.get("/api/me/contributions", params={"since": since_iso}, timeout=10).json()
+    page.goto(BASE + "/me", wait_until="networkidle")
+    page.wait_for_selector(".me-stat", timeout=8000)
+    try:
+        page.wait_for_selector('.me-stat[data-stat="waiting_review"]', state="detached", timeout=8000)
+        waiting_hidden = True
+    except Exception:
+        waiting_hidden = False
+    shown_ok = True
+    shown_detail = {}
+    for f in ("since_created", "total_created"):
+        v2 = me2.get(f)
+        tile2 = page.locator(f'.me-stat[data-stat="{f}"]')
+        ok2 = (isinstance(v2, int) and v2 > 0 and tile2.count() == 1
+               and tile2.locator(".me-stat-num").inner_text().strip() == str(v2))
+        shown_ok = shown_ok and ok2
+        shown_detail[f] = f"api={v2}"
+    check("⑫Q2 /me 混合零值活体对表（waiting==0 格隐、>0 格逐字照常——同屏双分支）",
+          me2.get("waiting_review") == 0 and waiting_hidden is True and shown_ok is True,
+          f"waiting_api={me2.get('waiting_review')} hidden={waiting_hidden} {shown_detail}")
 
     ctx.close()
 

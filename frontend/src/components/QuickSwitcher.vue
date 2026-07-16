@@ -135,7 +135,9 @@ const filteredConversations = computed(() =>
   conversations.value.filter((c) => matches([convoTitle(c), c.created_by, c.id.slice(0, 8)])).slice(0, 6)
 );
 const filteredTasks = computed(() =>
-  tasks.value.filter((t) => matches([t.name, t.agent_id, t.id.slice(0, 8)])).slice(0, 6)
+  // 眼见即可搜（Codex R0 P2）：结果行标题已是 taskDisplayName 人话称呼，
+  // 匹配域必须含同一 SSOT 产出——否则用户照着看到的注册表显示名打字反而搜不到。
+  tasks.value.filter((t) => matches([taskDisplayName(t, agentNameById.value), t.agent_id, t.id.slice(0, 8)])).slice(0, 6)
 );
 const filteredAgents = computed(() =>
   agents.value.filter((a) => matches([a.name, a.id, a.id.slice(0, 8)])).slice(0, 6)
@@ -169,7 +171,11 @@ watch(selectedIndex, () => {
   });
 });
 
+// 拉取代数守卫（Codex R0 P2，与父页「轮询整包作废」同律）：面板快开快关再开
+// 会并发两轮 fetchAll，慢的旧响应后到会覆盖新数据——只认最新一代的回写。
+let fetchSeq = 0;
 async function fetchAll() {
+  const seq = ++fetchSeq;
   loading.value = true;
   try {
     const [convs, tks, ags] = await Promise.all([
@@ -177,11 +183,12 @@ async function fetchAll() {
       listTasks({ limit: 50 }).catch(() => []),
       listAgents().catch(() => []),
     ]);
+    if (seq !== fetchSeq) return;
     conversations.value = convs;
     tasks.value = tks;
     agents.value = ags;
   } finally {
-    loading.value = false;
+    if (seq === fetchSeq) loading.value = false;
   }
 }
 

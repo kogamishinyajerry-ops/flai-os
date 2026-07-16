@@ -225,8 +225,13 @@ with sync_playwright() as p:
             if isinstance(v, int) and v > 0:
                 if tile.count() != 1 or tile.locator(".today-stat-num").inner_text().strip() != str(v):
                     return False
-            else:
+            elif isinstance(v, int):
                 if tile.count() != 0:
+                    return False
+            else:
+                # 非数字/缺字段=数据不可用三态：格保留显「—」，与 ==0 隐格
+                # 不同律（Codex R0 P2 收紧，oracle 与前端语义严格同构）。
+                if tile.count() != 1 or tile.locator(".today-stat-num").inner_text().strip() != "—":
                     return False
         return True
 
@@ -239,7 +244,7 @@ with sync_playwright() as p:
             out[f] = tile.locator(".today-stat-num").inner_text().strip() if tile.count() else "(隐藏)"
         return out
 
-    check("③团队总量条 === /api/stats/overview 语义对表（>0 逐字相等；==0 格不渲染）",
+    check("③团队总量条 === /api/stats/overview 三态对表（>0 逐字相等；==0 格不渲染；非数字「—」）",
           _stats_match() is True, f"page={_tiles_snapshot()} api={body_json} since={since_iso}")
     page.screenshot(path=str(SHOTS / "3_stats_bar_match.png"), full_page=True)
 
