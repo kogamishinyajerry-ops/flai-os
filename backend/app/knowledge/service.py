@@ -63,7 +63,9 @@ class KnowledgeService:
     runtime._KnowledgeContext 层（与 _ToolRegistryContext/ToolRegistry 的分层
     完全同构）。绕过 context 直调本服务没有白名单保护：任何已注册 scope
     （无论密级）都能直接查到。因此除 Runtime 装配外，任何代码不得直接持有
-    KnowledgeService 实例。
+    KnowledgeService 实例。**ADR-0029 修订**：新增第二个合法持有者
+    provenance.ChunkProvenanceReader（自带密级门的只读回源通道，restricted/
+    未知密级一律拒）——除此二者外禁令不变。
     """
 
     def __init__(self, scope_registry: ScopeRegistry) -> None:
@@ -108,6 +110,29 @@ class KnowledgeService:
             )
             for hit in index.search(query, top_k=top_k)
         ]
+
+    def get_chunks_by_id(self, scope_id: str, chunk_id: str) -> list[Chunk]:
+        """按 chunk_id 取语料原文（评审 N7 引用回源），返回**全部**同 id 命中。
+
+        chunk_id = f"{doc_id}#{i}" 而 doc_id 取文件 stem——同 stem 不同路径的
+        文件会产生同 id chunk（模块 docstring 已声明的已知限制）。这里如实返回
+        全部匹配，让上层带 source 消歧或显式报歧义，绝不首个命中就当唯一真相。
+
+        - scope 未注册 → KnowledgeScopeNotRegisteredError（default-deny）；
+        - 语料为空 → KnowledgeIngestError（与 search 同口径 fail-closed）；
+        - 返回的是**当前语料**的 chunk：检索发生后语料若已更新，内容可能与
+          检索当时不同（fingerprint 供上层比对，本层不伪装时间机器）。
+        """
+        scope = self._scope_registry.get(scope_id)
+        if scope is None:
+            raise KnowledgeScopeNotRegisteredError(
+                f"knowledge scope {scope_id!r} 未在 Scope Registry 注册"
+                "（default-deny：未注册即不存在）"
+            )
+        source_dir = resolve_source_dir(scope, self._scope_registry.scope_dir(scope_id))
+        self._get_index(scope_id, source_dir)  # 命中即建/刷新缓存（manifest 失效判据同 search）
+        chunks = self._cache[scope_id][2]
+        return [c for c in chunks if c.chunk_id == chunk_id]
 
     def _get_index(self, scope_id: str, source_dir: Path) -> BM25Index:
         """取 scope 的 BM25 索引：manifest 与缓存一致则复用，否则重摄取重建。"""

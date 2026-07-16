@@ -72,6 +72,10 @@ class CreateTaskRequest(BaseModel):
     # input_binding：None=默认拷全部上游 output_file_ids；非 null 见 InputBinding（typed）。
     depends_on: list[str] = Field(default_factory=list, max_length=32)
     input_binding: InputBinding | None = Field(default=None)
+    # 迁移 #12（评审 N4b）：血缘注记——本任务是对哪个既有任务的「复制为新任务」
+    # 重跑。纯元数据：不入队逻辑、不管道产物、不改审计语义；创建期只校验目标
+    # 存在（防悬空血缘），供详情页渲染恢复链（failed 死端 → 最短恢复路径）。
+    retry_of: str | None = Field(default=None, max_length=64)
 
     @field_validator("inputs")
     @classmethod
@@ -110,6 +114,17 @@ class CreateTaskRequest(BaseModel):
             if fid in seen:
                 raise ValueError(f"输入文件 id 重复：{fid!r}（契约要求 uniqueItems）")
             seen.add(fid)
+        return v
+
+    @field_validator("retry_of")
+    @classmethod
+    def retry_of_sane(cls, v: str | None) -> str | None:
+        # 与 depends_on/input_file_ids 同口径钳成有界标识符（非空白、≤64）——
+        # 无界字符串会走 404 detail 回显放大（authenticated DoS 同型）。
+        if v is None:
+            return None
+        if not v.strip() or len(v) > 64:
+            raise ValueError(f"非法 retry_of task_id：{v!r}")
         return v
 
     @field_validator("depends_on")
@@ -242,6 +257,15 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                     status_code=422,
                     detail=f"input_binding 引用了 depends_on 之外的任务（越权）：{stray}",
                 )
+        # retry_of（迁移 #12）：血缘目标必须真实存在——悬空血缘会让详情页的恢复链
+        # 指向虚空（404 fail-closed，不静默落 NULL 冒充「非重跑」）。纯元数据不做
+        # 更多约束：不复位原任务、不搬产物，复制的 inputs 走本请求体正常校验。
+        if body.retry_of is not None:
+            retry_origin = repos.get_task(conn, body.retry_of)
+            if retry_origin is None:
+                raise HTTPException(
+                    status_code=404, detail=f"retry_of 指向的任务不存在：{body.retry_of}"
+                )
         create_kwargs = dict(
             task_id=task_id,
             agent_id=body.agent_id,
@@ -256,6 +280,7 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             # 持久化为普通 dict（repos.create_task json.dumps 落库）；None 保持 None。
             input_binding=body.input_binding.model_dump() if body.input_binding is not None else None,
             conversation_id=body.conversation_id,
+            retry_of=body.retry_of,
         )
         if body.conversation_id is not None:
             # 归属某导引会话：会话须真实存在（防悬空引用）**且仍 active**——归档后真只读

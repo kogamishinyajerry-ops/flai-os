@@ -88,6 +88,11 @@
     "input_binding": {
       "type": ["object", "null"],
       "description": "artifact→input 绑定（迁移 #9/协作运行时 §3.1）：声明上游产物如何映射为本任务输入。字段 from_tasks（string 数组，创建期 typed+有界≤32+去重）：非空=resolver 只从这些上游拷 output_file_ids 入 input_file_ids，其余上游仍参与依赖等待但产物不注入；空数组或 null=默认拷全部上游 output_file_ids。from_tasks 引用的上游必在 depends_on 内（越权引用创建期 422 拒）。"
+    },
+    "retry_of": {
+      "type": ["string", "null"],
+      "maxLength": 64,
+      "description": "血缘注记（迁移 #12/评审 N4b）：本任务是对该 task_id 的「复制为新任务」重跑。纯元数据——不改队列/审计/产物管道语义，创建期仅校验目标任务存在（悬空即 404 拒）；null=非重跑任务。"
     }
   }
 }

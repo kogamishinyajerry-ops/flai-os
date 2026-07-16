@@ -27,6 +27,7 @@ from .api import conversations as conversations_api
 from .api import feedback as feedback_api
 from .api import files as files_api
 from .api import governance as governance_api
+from .api import knowledge as knowledge_api
 from .api import me as me_api
 from .api import stats as stats_api
 from .api import tasks as tasks_api
@@ -210,6 +211,7 @@ def create_app(
     app.include_router(governance_api.router)
     app.include_router(stats_api.router)
     app.include_router(me_api.router)
+    app.include_router(knowledge_api.router)
 
     # M2 静态托管：frontend/dist 存在才注册（内网 Windows 免 node 部署；
     # 开发期 vite proxy 场景 dist 不在，静态路由整体缺席，行为与 M1 一致）。

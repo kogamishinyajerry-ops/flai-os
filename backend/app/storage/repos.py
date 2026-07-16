@@ -58,6 +58,9 @@ def _decode_task(row: sqlite3.Row) -> dict[str, Any]:
     # 缺省 None（默认拷全部上游 output）。存量库无此列时 dict(row) 无该键，兜默认。
     d["depends_on"] = json.loads(d["depends_on"]) if d.get("depends_on") else []
     d["input_binding"] = json.loads(d["input_binding"]) if d.get("input_binding") else None
+    # 迁移 #12：retry_of 血缘注记——存量库尚未迁移时 row 无该键，兜 None
+    # （投影键恒在，契约 parity 才稳定）。
+    d["retry_of"] = d.get("retry_of")
     return d
 
 
@@ -77,6 +80,7 @@ def create_task(
     created_by_username: str | None = None,
     depends_on: list[str] | None = None,
     input_binding: dict[str, Any] | None = None,
+    retry_of: str | None = None,
 ) -> dict[str, Any]:
     """建任务：初始态永远是 created（未入队）。
 
@@ -104,8 +108,9 @@ def create_task(
             (id, agent_id, agent_version, name, status, created_by,
              created_at, updated_at, started_at, finished_at,
              input_file_ids, output_file_ids, inputs_json, error_message, metadata_json,
-             conversation_id, origin, created_by_username, depends_on, input_binding)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             conversation_id, origin, created_by_username, depends_on, input_binding,
+             retry_of)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             task_id, agent_id, agent_version, name, "created", created_by,
@@ -120,6 +125,7 @@ def create_task(
             created_by_username,
             json.dumps(depends_on, ensure_ascii=False) if depends_on else None,
             json.dumps(input_binding, ensure_ascii=False) if input_binding else None,
+            retry_of,
         ),
     )
     return get_task(conn, task_id)  # type: ignore[return-value]

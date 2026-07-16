@@ -67,7 +67,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- 不可变唯一 username，区别于 created_by（display_name，可变且非唯一）。批C 个人贡献归因/
     -- 职责分离的身份主键——按 username 归因绝不撞名。可空：存量行留 NULL（自报时代之后才有的
     -- 追溯，不可从 display_name 反推，同迁移 #6 uploaded_by 口径）。
-    created_by_username TEXT
+    created_by_username TEXT,
+    -- retry_of（迁移 #12/评审 N4b）：「复制为新任务」的血缘注记——本任务复制自哪个
+    -- 既有任务。纯元数据：不改队列/审计/管道语义（inputs 由前端复制进请求体、附件仍走
+    -- kind=input 白名单），resolver/review/worker 均不读此列。可空 NULL=非重跑任务。
+    retry_of TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_events (
@@ -398,6 +402,13 @@ def init_db(db_path: str | Path) -> None:
             eval_cols = {row[1] for row in conn.execute("PRAGMA table_info(eval_runs)")}
             if "snapshot_handle" not in eval_cols:
                 conn.execute("ALTER TABLE eval_runs ADD COLUMN snapshot_handle TEXT")
+            # 迁移 #12（评审 N4b）：tasks.retry_of——「复制为新任务」血缘注记。可空：
+            # 存量/非重跑任务 NULL。纯元数据（见 DDL 注释），无需回填、无 worker 行为
+            # 变化（不 bump WORKER_GENERATION：旧 worker 忽略此列零语义损失）。同写锁
+            # 内探测补列，口径同前十一迁移。
+            task_cols_v12 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+            if "retry_of" not in task_cols_v12:
+                conn.execute("ALTER TABLE tasks ADD COLUMN retry_of TEXT")
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:
