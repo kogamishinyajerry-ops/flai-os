@@ -52,6 +52,10 @@ def test_skeleton_generates_registry_valid_package(tmp_path) -> None:
     import json as _json
     case = _json.loads(cases[0].read_text(encoding="utf-8"))
     assert case["checks"], "占位用例必须带 checks"
+    # R1 P2：requires_human_review=true 故成功终态是 waiting_review 而非 completed，
+    # 占位断言必须对齐真实终态（否则用例必然失败）。
+    status_checks = [c for c in case["checks"] if c.get("kind") == "status_is"]
+    assert status_checks and status_checks[0]["value"] == "waiting_review", status_checks
 
     # 装配层（最强 oracle）：真 AgentRegistry 扫描注册成功且零 errors。
     registry = AgentRegistry(root, AGENT_SCHEMA)

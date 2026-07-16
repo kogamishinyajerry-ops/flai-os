@@ -51,8 +51,10 @@ def read_chunk(
     try:
         chunk = reader.read(scope_id, chunk_id, source=source)
     except KnowledgeScopeNotRegisteredError as exc:
-        # 泛化对外文案（Codex 治理审 R0 P2）：不回显 scope_id repr，杜绝登录用户
-        # 借 404/403 差异 + 详情枚举受限知识域。精确原因留在服务端异常链（from exc）。
+        # 泛化对外文案（Codex 治理审 R0 P2）：不回显 scope_id repr。注意这**降低**
+        # 泄漏面但**未消除存在性枚举**——404(未注册)/403(受限)/404(缺 chunk) 状态码
+        # 仍可区分 scope 状态；这是刻意接受的边界（内网已登录员工受众 + 合法引用
+        # 持有者应看到真实原因），如实记于 ADR-0029 §D5′，不 over-claim「杜绝枚举」。
         raise HTTPException(status_code=404, detail="知识范围不存在或未注册") from exc
     except ProvenanceAccessDeniedError as exc:
         # 泛化：只告知「受限不放行」，不回显具体密级值（P2）。

@@ -42,7 +42,18 @@ class AuthGateMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        path: str = scope.get("path", "")
+        # 应用内相对路径归一化（Codex 治理审 R1 P1，实测咬合）：ASGI 子挂载
+        # （Starlette Mount("/prefix", app)）下，子 app 收到的 scope["path"] 含挂载
+        # 前缀（"/prefix/api/..."）而前缀落在 root_path。若直接按裸 path 判 startswith
+        # "/api/"，挂载后匿名请求会被误判为非 /api 面而放行——path-based 门不是
+        # fail-closed。这里先剥掉 root_path 取应用内相对路径，任何挂载前缀下 /api
+        # 面都稳定落在门内。root_path 为空（当前直服部署）时行为不变。
+        raw_path: str = scope.get("path", "")
+        root_path: str = scope.get("root_path", "") or ""
+        if root_path and raw_path.startswith(root_path):
+            path = raw_path[len(root_path):] or "/"
+        else:
+            path = raw_path
         method: str = scope.get("method", "").upper()
         guarded = path == "/api" or path.startswith("/api/") or path in _PROTECTED_NON_API
         if not guarded:

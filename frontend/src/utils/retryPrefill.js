@@ -24,5 +24,10 @@ export function buildRetryRoute(task) {
       retry_of: task.id,
     })
   );
-  return { path: "/tasks/new", query: { agent_id: task.agent_id, from: "retry" } };
+  // draft_id 一次性 nonce（Codex 治理审 R1 P2）：已在 /tasks/new 时对**同一 Agent**
+  // 再点重试，若目标 URL 与当前完全一致，vue-router 判 duplicate navigation 直接
+  // no-op、watch 不触发、新草案永不被消费。带上每次不同的 draft_id 使 URL 必变，
+  // 导航与 watch 都稳定触发。值只用于打破去重，不参与草案内容。
+  const draftId = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  return { path: "/tasks/new", query: { agent_id: task.agent_id, from: "retry", draft_id: draftId } };
 }

@@ -142,6 +142,9 @@ def test_unknown_confidentiality_denied_before_touching_corpus() -> None:
         def get(self, scope_id: str) -> dict[str, Any]:
             return {"scope_id": scope_id, "confidentiality": "secret_new_enum"}
 
+        def scope_dir(self, scope_id: str):
+            return None  # 盘上不可读 → disk_conf=None → 同拒（fail-closed）
+
     class _TrippedService:
         def get_chunks_by_id(self, *args: Any, **kwargs: Any) -> None:
             raise AssertionError("密级门必须先于语料读取拦截（门后才准触碰 service）")
@@ -149,6 +152,26 @@ def test_unknown_confidentiality_denied_before_touching_corpus() -> None:
     reader = ChunkProvenanceReader(_StubRegistry(), _TrippedService())  # type: ignore[arg-type]
     with pytest.raises(ProvenanceAccessDeniedError):
         reader.read("any_scope", "any#0")
+
+
+def test_confidentiality_drift_tightened_on_disk_denied(tmp_path) -> None:
+    """Codex 治理审 R1 P1：启动快照=public 但盘上 scope.yaml 已收紧为 restricted
+    且未重启 → 回源必拒（盘上漂移检查闭合越级泄漏，不靠「重启才生效」运维约定）。"""
+    knowledge_dir = _build_knowledge_dir(tmp_path)
+    registry = ScopeRegistry(knowledge_dir, _SCOPE_SCHEMA)
+    registry.scan()  # 快照此刻 pub_scope=public_internal
+    reader = ChunkProvenanceReader(registry, KnowledgeService(registry))
+    assert reader.read("pub_scope", "em#0") is not None  # 漂移前正常放行
+
+    # 盘上把密级收紧为 restricted，但不重扫 registry（模拟运行中改配置未重启）。
+    yaml_path = knowledge_dir / "pub_scope" / "scope.yaml"
+    import yaml as _yaml
+    data = _yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    data["confidentiality"] = "restricted"
+    yaml_path.write_text(_yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+
+    with pytest.raises(ProvenanceAccessDeniedError):
+        reader.read("pub_scope", "em#0")  # 快照 public、盘上 restricted → 拒
 
 
 def test_missing_chunk_returns_none(reader_env) -> None:

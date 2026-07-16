@@ -8,8 +8,11 @@
 
 ## 一、问题
 
-1. 检索事件（`knowledge_search` info event）与草案产物里已有出处四钥
-   （scope_id/chunk_id/source/fingerprint），但全平台没有任何「按钥取原文」的通道；
+1. 检索命中在草案产物里带出处四钥（scope_id/chunk_id/source/fingerprint），
+   但全平台没有任何「按钥取原文」的通道；`knowledge_search` 事件原先只落
+   scope_id + chunk_id 两钥（R1 P2 修正：现逐命中加落 `hit_citations` 携
+   source/fingerprint，签发面据此对同 stem 碰撞带 source 消歧、比对 fingerprint
+   漂移）；
 2. KnowledgeService 信任边界（service.py docstring，loop-auditor T5 被证对象）规定
    服务层零授权判定、除 Runtime 装配外不得直接持有——朴素地让 API 层直调服务
    会绕过密级门，restricted 语料原文直接外泄给任意登录用户；
@@ -39,18 +42,26 @@
 - **回源读的是当前语料，非检索时点快照**：检索后语料若更新，内容可能与草案
   引用时不同；fingerprint 供上层比对漂移，本层不伪装时间机器。chunk 不存在时
   404 detail 如实说明「语料可能在检索后被更新/删除」；
-- **密级快照 vs 语料自刷新（Codex 治理审 R0 P1-2）**：confidentiality 取自
-  scope_registry 启动期快照（不重扫），语料却按指纹自刷新——运行中把某 scope
-  由 public_internal 改成 restricted 且不重启，则密级门读旧快照、语料已刷新，
-  构成潜在越密级泄漏。这是**平台级既有属性**（`_KnowledgeContext.search` 的密级/
-  白名单判定同源自该启动快照），非本通道独有。V0.1 运维口径=**收紧密级必须
-  重启服务才生效**，与白名单同纪律；本通道忠实沿用平台唯一密级真源，不分叉。
+- **密级快照 vs 语料自刷新（Codex 治理审 R0 P1-2 → R1 P1 强化为真门）**：
+  confidentiality 取自 scope_registry 启动期快照（不重扫），语料却按指纹自刷新——
+  运行中把某 scope 由 public_internal 改成 restricted 且不重启，则快照读旧宽松值、
+  语料已刷新，构成潜在越密级泄漏。R0 曾按「运维需重启」文档化，R1 指出**文档约定
+  不是安全 gate**、不能闭合泄漏——故本回源通道（新暴露面、调用面最广）在 read 时
+  **额外从盘上现读** scope.yaml 密级，取「快照 ∩ 盘上」交集：任一为受限/漂移/
+  不可验证即 fail-closed 拒（`provenance._read_disk_confidentiality`）。这**真正闭合**
+  了收紧方向的泄漏，不依赖运维纪律。平台级 `_KnowledgeContext.search` 的同源快照
+  属性仍在（本次不改 search），排 §D6 的 V0.2 平台加固。
 
 ### D6 排 V0.2 的平台级加固（不在本 ADR 修）
 把密级策略摘要与语料 generation **原子绑定**——回源（及检索）时校验「策略快照
-与语料代际同源」，策略漂移/缺失/并发重扫一律 fail-closed 拒绝。此为知识轴整体
-加固（同时收口 D3 密级快照与「每次 GET 全量哈希语料」的 DoS 放大面，Codex 治理
-审 R0 P2-service），非单端点可闭合，故显式排 V0.2 队列并在此记录，不静默。
+与语料代际同源」，策略/索引 generation 缓存 + 并发锁 + 请求限流一并落地。此为
+知识轴整体加固（收口「每次 GET 全量哈希语料」的 DoS 放大面，Codex 治理审 R0/R1
+P2-service），非单端点可闭合，故排 V0.2。
+**诚实记录增量风险（R1 P2）**：`get_chunks_by_id` 每次调用都对 scope 全部文件
+`read_bytes()`+SHA-256 建/校验 manifest（与 search 同源，非本端点新引入），但本
+GET 端点确实提供了**更廉价、可重复直接触发**的放大入口——「排 V0.2」不等于本端点
+当前零新增风险。V0.2 落地前，运维侧以「knowledge scope 语料规模有界 + 内网已登录
+员工受众 + M11 全站限速位（若启用）」为缓释，不谎称已消除。
 
 ### D7 与 docs/06 的关系（Codex 治理审 R0 P2）
 `docs/06_Knowledge_Memory_Standard.md` 原文规定「Runtime 是知识服务唯一通道，
@@ -64,11 +75,26 @@ source；带 `source` 精确匹配到单条才 200。绝不猜首个。
 
 ### D5 传参与暴露面
 - chunk_id 含 `#`，一律走 **query 参数**（路径参数会被当 URL fragment 截断）；
-- 端点自动落在 M11 auth 中间件保护面内（allowlist 之外一律 401）；
-- 只读 GET，无任何写路径；入参长度全部设上限（DoS-echo 同口径）。
+- 端点落在 M11 auth 中间件保护面内（allowlist 之外一律 401）。**R1 P1 强化**：
+  中间件按 root_path 归一化应用内路径，ASGI 子挂载（`Mount("/prefix", app)`）下
+  `/prefix/api/*` 仍稳定落门内，path-based 门不再因挂载前缀被绕（实测咬合，
+  `test_m11_auth.test_prefix_mount_does_not_bypass_auth_gate`）；
+- 只读 GET，无任何写路径；入参长度全部设上限（DoS-echo 同口径）；
+- **异常映射全覆盖**（R0+R1 P2）：ScopeNotRegistered→404 / AccessDenied→403 /
+  Ambiguous→409 / SourceUnavailable（含语料文件 OSError/UnicodeError）→503 /
+  InvalidScopePackage→409 / Ingest（空语料）→409，绝不裸抛 500 泄栈/路径。
+
+### D5′ 存在性可见的诚实边界（Codex 治理审 R1 P2）
+拒绝文案已泛化（不回显 scope_id/密级 repr），但**未消除存在性枚举**：未注册
+scope 返 404、restricted 返 403、已注册但 chunk 缺失返另一种 404——登录用户仍可
+借状态码区分 scope 状态。这是**刻意接受的边界**：受众是内网已登录员工，且合法
+引用持有者应看到「受限不放行」而非「不存在」（诚实透明高于对内网员工的存在性
+隐藏）。故不追求不可区分响应；本节如实记录「降低泄漏面，非消除枚举」，代码注释
+同口径，不 over-claim。
 
 ## 三、验证
 
-`backend/tests/test_knowledge_provenance.py`（单元 9 + API 8）：密级门四态、
-门先于读哨兵、歧义/消歧/miss、401/403/404/409/422 映射、七字段形状。
-tamper T2（放宽门准 restricted）单元+API 双层 RED 实证必咬。
+`backend/tests/test_knowledge_provenance.py`（单元含密级门四态+盘上漂移拒+门先于
+读哨兵；API 含 401/403/404/409/422/503 映射+泛化文案+长 id+七字段）。tamper：放宽
+门准 restricted（单元+API 双 RED）、拆 503 映射（→500 RED），先红后绿零残留。
+子挂载绕过 fail-closed 见 `test_m11_auth`；四钥事件见 runtime 检索事件测试。

@@ -35,9 +35,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import yaml
+
 from ..core.errors import KnowledgeScopeNotRegisteredError
 from .scopes import ScopeRegistry
 from .service import KnowledgeService
+
+_ALLOWED_CONFIDENTIALITY = ("public_internal", "department")
 
 
 class ProvenanceAccessDeniedError(Exception):
@@ -78,12 +82,22 @@ class ChunkProvenanceReader:
                 "（default-deny：未注册即不存在）"
             )
         conf = scope.get("confidentiality")
-        allowed = conf == "public_internal" or conf == "department"
-        if allowed is not True:
+        # 密级门取「启动快照 ∩ 盘上现值」的交集（Codex 治理审 R1 P1，fail-closed）：
+        # scope_registry 是启动期快照、不重扫，而 KnowledgeService 语料按指纹自刷新——
+        # 若运行中把 scope.yaml 由 public 改成 restricted 且不重启，仅凭快照会读旧
+        # 宽松值、却回源已刷新的新内容=越级泄漏。这里回源时**额外从盘上重读**当前
+        # 密级，快照与盘上任一为受限/不可验证即拒。「重启才生效」的运维约定不是
+        # 安全 gate；本回源通道（新暴露面、调用面最广）用盘上漂移检查真正闭合，
+        # 不依赖运维纪律。平台级 search 的同源属性仍排 V0.2（ADR-0029 §D6）。
+        disk_conf = self._read_disk_confidentiality(scope_id)
+        allowed_snapshot = conf == "public_internal" or conf == "department"
+        allowed_disk = disk_conf == "public_internal" or disk_conf == "department"
+        if allowed_snapshot is not True or allowed_disk is not True:
             raise ProvenanceAccessDeniedError(
-                f"scope {scope_id!r} 密级 {conf!r}：原文回源在角色轴落地前一律拒绝"
-                "（fail-closed——restricted 与未知密级同拒）"
+                f"scope {scope_id!r} 密级不放行（快照={conf!r} 盘上={disk_conf!r}）："
+                "原文回源在角色轴落地前对 restricted/未知/漂移一律拒绝（fail-closed）"
             )
+        # 密级门通过才触碰语料（门先于读，与单元测试哨兵同款纪律）。
         matches = self._knowledge_service.get_chunks_by_id(scope_id, chunk_id)
         if source is not None:
             matches = [c for c in matches if c.source == source]
@@ -101,3 +115,22 @@ class ChunkProvenanceReader:
             text=c.text,
             confidentiality=conf,
         )
+
+    def _read_disk_confidentiality(self, scope_id: str) -> str | None:
+        """从盘上 scope.yaml 现读 confidentiality（漂移检查用）。
+
+        fail-closed：目录缺失/读失败/解析失败/顶层非 dict/无该键 一律返回 None
+        （不可验证 = 视为不放行），绝不因读盘异常放宽密级判定。
+        """
+        scope_dir = self._scope_registry.scope_dir(scope_id)
+        if scope_dir is None:
+            return None
+        yaml_path = scope_dir / "scope.yaml"
+        try:
+            data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, yaml.YAMLError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        value = data.get("confidentiality")
+        return value if isinstance(value, str) else None

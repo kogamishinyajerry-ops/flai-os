@@ -589,6 +589,27 @@ def test_duplicate_username_rejected(app_env):
         conn.close()
 
 
+# ── R1-P1：ASGI 子挂载下门仍 fail-closed（Codex 治理审实测咬合） ──────────
+
+
+def test_prefix_mount_does_not_bypass_auth_gate(app_env):
+    """子挂载到 /prefix 后，匿名访问 /prefix/api/* 必仍 401（root_path 归一化）。
+
+    实测锚（tamper 目标）：归一化前，子 app 中间件收到 scope.path=/prefix/api/...
+    被误判为非 /api 面放行；归一化后应稳定落门内。用 Starlette Mount 真挂载
+    conftest 的 app，验证匿名穿透被堵。"""
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    _client, app = app_env
+    parent = Starlette(routes=[Mount("/prefix", app=app)])
+    with TestClient(parent) as anon:
+        # /prefix/api/tasks：受保护 API，匿名必 401（而非因绕门到达处理器）
+        assert anon.get("/prefix/api/tasks").status_code == 401
+        # allowlist 项在挂载前缀下仍正确放行（归一化后 app 内路径 = /api/health）
+        assert anon.get("/prefix/api/health").status_code == 200
+
+
 # ── AC8/F6：测试世界无旁路的结构检查 ─────────────────────────────────────
 
 

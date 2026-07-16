@@ -18,7 +18,11 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..core.errors import KnowledgeIngestError, KnowledgeScopeNotRegisteredError
+from ..core.errors import (
+    KnowledgeIngestError,
+    KnowledgeScopeNotRegisteredError,
+    KnowledgeSourceUnavailableError,
+)
 from .bm25 import BM25Index
 from .chunking import Chunk, ingest_dir
 from .scopes import ScopeRegistry, resolve_source_dir
@@ -120,6 +124,8 @@ class KnowledgeService:
 
         - scope 未注册 → KnowledgeScopeNotRegisteredError（default-deny）；
         - 语料为空 → KnowledgeIngestError（与 search 同口径 fail-closed）；
+        - 源文件读/解码失败（权限/损坏编码等）→ KnowledgeSourceUnavailableError
+          （Codex 治理审 R1 P2：绝不让裸 OSError/UnicodeError 穿透成 API 500 泄栈）；
         - 返回的是**当前语料**的 chunk：检索发生后语料若已更新，内容可能与
           检索当时不同（fingerprint 供上层比对，本层不伪装时间机器）。
         """
@@ -130,7 +136,15 @@ class KnowledgeService:
                 "（default-deny：未注册即不存在）"
             )
         source_dir = resolve_source_dir(scope, self._scope_registry.scope_dir(scope_id))
-        self._get_index(scope_id, source_dir)  # 命中即建/刷新缓存（manifest 失效判据同 search）
+        try:
+            self._get_index(scope_id, source_dir)  # 命中即建/刷新缓存（manifest 失效判据同 search）
+        except (OSError, UnicodeError) as exc:
+            # 语料文件读/解码在建索引期失败（权限/损坏/编码）——收成领域异常，
+            # 上层 API 稳定映射 503，不外发路径/栈（KnowledgeIngestError 是空语料，
+            # 与此语义不同，故用 SourceUnavailable）。
+            raise KnowledgeSourceUnavailableError(
+                f"scope {scope_id!r} 语料源读取失败（权限/损坏/编码）"
+            ) from exc
         chunks = self._cache[scope_id][2]
         return [c for c in chunks if c.chunk_id == chunk_id]
 

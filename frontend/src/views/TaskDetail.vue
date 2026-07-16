@@ -320,7 +320,10 @@
                 <template v-else-if="citState(c.key).chunk">
                   <p class="citation-text">{{ citState(c.key).chunk.text }}</p>
                   <div class="citation-meta">{{ citState(c.key).chunk.source }} · 指纹 <span class="num-token">{{ citState(c.key).chunk.fingerprint }}</span></div>
-                  <div class="citation-note">显示的是当前语料——检索之后语料若被更新，内容可能与执行当时不同。</div>
+                  <!-- 漂移实证（R1 P2）：检索时指纹与回源现值不一致 → 如实警示，
+                       不假装「原文即检索所见」。amber 未核语义（形状+字重承载）。 -->
+                  <div v-if="citState(c.key).drifted" class="citation-note citation-drift">⚠ 语料在检索后已变动：检索时指纹 <span class="num-token">{{ c.searchFingerprint }}</span>，与当前不一致——请以当前原文为准重新核对。</div>
+                  <div v-else class="citation-note">显示的是当前语料——检索之后语料若被更新，内容可能与执行当时不同。</div>
                 </template>
               </div>
             </div>
@@ -572,21 +575,36 @@ const inputEntries = computed(() => {
   return Object.entries(inputs).map(([k, v]) => [k, summarizeInputValue(v)]);
 });
 
-// N7/ADR-0029 知识引用：knowledge_search info 事件（payload.hit_chunk_ids）→
-// 去重引用行（scope_id+chunk_id 为键，保首现顺序）。error 级事件无命中数组，
-// 天然跳过；events 来自 channel（append-only），行列表随轮询增量生长。
+// N7/ADR-0029 知识引用：knowledge_search info 事件 → 去重引用行。优先用
+// payload.hit_citations（四钥：chunk_id/source/fingerprint，Codex 治理审 R1 P2
+// 起内核逐命中携出处）——带 source 可对同 stem 碰撞一键消歧、带检索时 fingerprint
+// 可与回源现值比对漂移。旧事件只有 hit_chunk_ids 时降级为两钥（回源碰撞项停 409，
+// 诚实降级不假绿）。键含 source 使碰撞的两源各成一行、各自可回源。
 const knowledgeCitations = computed(() => {
   const seen = new Set();
   const rows = [];
   for (const e of events.value || []) {
     if (e.event_type !== "knowledge_search") continue;
     const p = e.payload || {};
-    if (!Array.isArray(p.hit_chunk_ids) || !p.scope_id) continue;
-    for (const chunkId of p.hit_chunk_ids) {
-      const key = `${p.scope_id}::${chunkId}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      rows.push({ key, scopeId: p.scope_id, chunkId });
+    if (!p.scope_id) continue;
+    if (Array.isArray(p.hit_citations) && p.hit_citations.length) {
+      for (const cit of p.hit_citations) {
+        if (!cit || !cit.chunk_id) continue;
+        const key = `${p.scope_id}::${cit.chunk_id}::${cit.source || ""}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({
+          key, scopeId: p.scope_id, chunkId: cit.chunk_id,
+          source: cit.source || null, searchFingerprint: cit.fingerprint || null,
+        });
+      }
+    } else if (Array.isArray(p.hit_chunk_ids)) {
+      for (const chunkId of p.hit_chunk_ids) {
+        const key = `${p.scope_id}::${chunkId}::`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({ key, scopeId: p.scope_id, chunkId, source: null, searchFingerprint: null });
+      }
     }
   }
   return rows;
@@ -594,7 +612,7 @@ const knowledgeCitations = computed(() => {
 
 // 引用行视图态与 computed 行列表分离持有：events 轮询重算不清空已拉取的原文。
 const citationStates = reactive({});
-const EMPTY_CITATION = Object.freeze({ open: false, loading: false, error: "", chunk: null });
+const EMPTY_CITATION = Object.freeze({ open: false, loading: false, error: "", chunk: null, drifted: false });
 function citState(key) {
   return citationStates[key] || EMPTY_CITATION;
 }
@@ -613,7 +631,7 @@ function citationErrorText(err) {
 async function toggleCitation(c) {
   let st = citationStates[c.key];
   if (!st) {
-    st = citationStates[c.key] = reactive({ open: false, loading: false, error: "", chunk: null });
+    st = citationStates[c.key] = reactive({ open: false, loading: false, error: "", chunk: null, drifted: false });
   }
   st.open = !st.open;
   if (st.open !== true) return; // 收起
@@ -621,7 +639,13 @@ async function toggleCitation(c) {
   st.loading = true;
   st.error = "";
   try {
-    st.chunk = await readChunk({ scopeId: c.scopeId, chunkId: c.chunkId });
+    // 带 source 消歧（有则传，同 stem 碰撞不再永远停 409）；回源后与检索时
+    // fingerprint 比对，漂移则如实标注（回源读的是当前语料）。
+    st.chunk = await readChunk({ scopeId: c.scopeId, chunkId: c.chunkId, source: c.source });
+    st.drifted =
+      c.searchFingerprint != null &&
+      st.chunk?.fingerprint != null &&
+      st.chunk.fingerprint !== c.searchFingerprint;
   } catch (err) {
     st.error = citationErrorText(err);
   } finally {
@@ -1215,6 +1239,11 @@ onUnmounted(() => {
 }
 .citation-error {
   color: var(--ink-soft);
+}
+/* 漂移警示：形状（⚠）+字重承载，用 amber 未核语义色（信任色锁 amber 槽）。 */
+.citation-drift {
+  color: var(--trust-pending, var(--ink-soft));
+  font-weight: 600;
 }
 .muted {
   color: var(--ink-faint);

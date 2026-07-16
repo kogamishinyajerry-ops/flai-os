@@ -260,6 +260,8 @@ const form = reactive({
 // 附件列表（status:done + fileId），提交时直接进 input_file_ids；人可移除。
 // 导引草案的 inputs 种子：用于在 Agent schema 加载后灌进结构化表单（仅目标 Agent 匹配时）。
 let guidePrefill = null;
+// 任务名是否由预填自动带入（vs 人工手输）：重入清理只撤自动带入的，不动手输。
+let nameWasPrefilled = false;
 
 // 预填草案消费（可重入，Codex 治理审 R0 P2-5）：既在 setup 首次调用，也由下方
 // watch 在「用户已在 /tasks/new、从全局 StatusCenter 再点重试只改 query 不重挂」
@@ -267,10 +269,21 @@ let guidePrefill = null;
 // （prefill 注入的 upload 项以 uid 前缀 guide_ 标识，只清这些不碰用户手加的）。
 function consumePrefillDraft() {
   if (!["guide", "demo", "retry"].includes(route.query.from)) return;
+  // 完整重置全部预填派生态（Codex 治理审 R1 P2）：重入前一律清空，绝不让上一份
+  // 草案的会话关联/归档标记/自动填入的任务名残留到下一份——retry 草案的
+  // conversation_id:null 靠「不覆盖」是漏的，必须显式清。
   guidePrefill = null;
   prefillOrigin.value = "";
   prefillRetryOf.value = null;
   prefillHadFileCount.value = 0;
+  prefillConversationId.value = null;
+  prefillConcludeAfter.value = false;
+  // 自动预填的任务名先撤（nameWasPrefilled 标识区分人工输入 vs 自动带入）——
+  // 人工手输的名字绝不动。
+  if (nameWasPrefilled) {
+    form.name = "";
+    nameWasPrefilled = false;
+  }
   uploadItems.value = uploadItems.value.filter((i) => !String(i.uid).startsWith("guide_"));
   try {
     const raw = sessionStorage.getItem("flai_prefill");
@@ -292,6 +305,7 @@ function consumePrefillDraft() {
         }
         if (typeof draft.name === "string" && draft.name && !form.name) {
           form.name = draft.name;
+          nameWasPrefilled = true; // 标记为自动带入，重入时可撤（人工手输不动）
         }
         if (typeof draft.conversation_id === "string") {
           prefillConversationId.value = draft.conversation_id;
@@ -517,7 +531,7 @@ async function handleSubmit() {
 // 监听预填相关 query 变化，重挂之外的同路由再入时重新消费草案并重载 Agent 表单。
 // 无 immediate：首次进入由 setup 的 consumePrefillDraft() 处理，不重复消费。
 watch(
-  () => [route.query.from, route.query.agent_id],
+  () => [route.query.from, route.query.agent_id, route.query.draft_id],
   () => {
     if (!["guide", "demo", "retry"].includes(route.query.from)) return;
     consumePrefillDraft();

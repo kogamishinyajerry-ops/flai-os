@@ -416,7 +416,15 @@ class _KnowledgeContext:
             message=f"知识检索完成（scope={scope_id}，命中 {len(hits)}）",
             payload={
                 "scope_id": scope_id, "query": query[:500], "top_k": top_k,
-                "hit_count": len(hits), "hit_chunk_ids": [h.chunk_id for h in hits],
+                "hit_count": len(hits),
+                # hit_chunk_ids 保留（既有消费方/测试锚）；hit_citations 携出处四钥
+                # （Codex 治理审 R1 P2）：签发面据此带 source 消歧同 stem 碰撞、比对
+                # fingerprint 漂移，使 N7 一键回源对碰撞项也可核（否则永远停在 409）。
+                "hit_chunk_ids": [h.chunk_id for h in hits],
+                "hit_citations": [
+                    {"chunk_id": h.chunk_id, "source": h.source, "fingerprint": h.fingerprint}
+                    for h in hits
+                ],
             },
         )
         # KnowledgeHit(frozen dataclass) → dict：workflow 侧拿纯数据，出处字段

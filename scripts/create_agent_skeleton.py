@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -238,15 +239,17 @@ def main(argv: list[str] | None = None) -> int:
         "changelog.md": CHANGELOG_TEMPLATE.format(today=date.today().isoformat()),
         "prompt.md": PROMPT_TEMPLATE,
     }
-    # 最小可执行 eval 用例（Codex 治理审 R0 P2）：空 eval_cases/ 与 docs/07 非空
-    # 强制规则冲突且「最小合法包」名不副实。占位一条 status_is=completed，如实标注
-    # 待替换——保证包一落地即有可跑用例，不是空壳。
+    # 最小可执行 eval 用例（Codex 治理审 R0 P2 → R1 P2 修正终态）：空 eval_cases/ 与
+    # docs/07 非空强制规则冲突且「最小合法包」名不副实。占位断言必须是
+    # **waiting_review**——脚手架固定 requires_human_review: true，成功执行的终态是
+    # 人签发前的 waiting_review 而非 completed（人是唯一签发者红线）；断言 completed
+    # 会让占位用例必然失败。如实标注待替换。
     eval_case = json.dumps(
         {
             "case_id": "case_001_placeholder",
-            "description": "脚手架占位用例（TODO：替换为真实输入与断言，参照 agents/hello_agent/eval_cases/）。",
+            "description": "脚手架占位用例（TODO：替换为真实输入与断言，参照 agents/hello_agent/eval_cases/）。requires_human_review=true 故成功终态为 waiting_review。",
             "inputs": {"example_input": "占位输入"},
-            "checks": [{"kind": "status_is", "value": "completed"}],
+            "checks": [{"kind": "status_is", "value": "waiting_review"}],
         },
         ensure_ascii=False,
         indent=2,
@@ -269,14 +272,16 @@ def main(argv: list[str] | None = None) -> int:
     for key in ("input_schema.json", "output_schema.json"):
         jsonschema.Draft202012Validator.check_schema(json.loads(files[key]))
 
-    # ── 原子落盘（Codex 治理审 R0 P2）：先写同父目录下临时包，全部成功后
-    # os.replace 原子改名到目标——磁盘满/权限错/中断只留可清理的临时目录，
-    # 绝不在正式路径留半截包（半截包会因目录已存在挡住后续重跑）。──
-    staging = target.parent / f".{agent_id}.skeleton.tmp"
-    if staging.exists():
-        shutil.rmtree(staging)
+    # ── 原子落盘（Codex 治理审 R0 P2 → R1 P2 唯一 staging）：先写同父目录下
+    # **每次调用唯一**的临时包（tempfile.mkdtemp，不再用固定名），全部成功后
+    # os.replace 原子改名到目标——磁盘满/权限错/中断只留可清理的临时目录，绝不
+    # 在正式路径留半截包。唯一 staging 名杜绝并发调用互相 rmtree（固定名的旧
+    # 缺陷）。目标已存在预检见上（exists()→return 2）；os.replace 到已存在的
+    # 非空目录会 OSError（POSIX rename 语义），此处目标预检已过，残留竞态窗口
+    # 对单用户本地脚手架工具可接受，不再引入跨平台目录锁。──
+    target.parent.mkdir(parents=True, exist_ok=True)  # 包根目录（agents/）不存在则先建
+    staging = Path(tempfile.mkdtemp(prefix=f".{agent_id}.skeleton.", dir=target.parent))
     try:
-        staging.mkdir(parents=True)
         (staging / "eval_cases").mkdir()
         for rel, content in files.items():
             (staging / rel).write_text(content, encoding="utf-8")
