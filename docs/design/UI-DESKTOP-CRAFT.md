@@ -116,3 +116,93 @@
    （今日页空态插画 3→≤1；CTA 渐变声明 3 按钮→1 utility 真接线（徽记独立）；
    App.vue 游离圆角值 0 残留）。
 4. 三镜头对抗审（trust/regression/paradigm）+ Codex 治理审收敛后合并。
+
+---
+
+# 批次二：细粒度还原（Fine-Grain，F1-F6）
+
+> 触发：owner「继续根据 agent-ui-design 里的新分析，进行更细粒度的 UI UX
+> 还原、美化」（2026-07-15，承接批次一 ultracode 管线）。
+> 设计源（批次一未消化的新拉片真值，均已主控亲读）：
+> `workbuddy-desktop.style.md` + `workbuddy-desktop-study.md`（kit11 成果卡
+> 语法：完成摘要→成品→做了什么→**校验方式自证段**→工件卡→双 affordance→
+> 操作行+绝对时间戳）· `disclosure-grammar.md` §三数字格式表/§四家族轴/§五
+> 动效即披露 · `codex-desktop-study.md` R6/R7（产物类型标签「文档 · MD」/
+> 「显示另外 N 个」折叠/「已处理 Xm Xs」活跳纯离散替换/完成态解锁三处同变+
+> 绝对时间戳）+ W14 §七完成态 typography/§十侧栏状态图标 ·
+> `claude-code-desktop-study.md` W15（Show N more 折叠行/mute-pill 正常态
+> 零装饰/chart.refilter 两速律）。
+> 原则不变：**抄语法不抄元素**，落在 FLAi-OS 暖纸+clay+信任色锁上。
+
+## 五、批次二诊断（2026-07-15 grounded：主控亲读四大件 + e2e 断言面扫描）
+
+| # | 缺口 | 真值出处 | 现状证据 |
+|---|---|---|---|
+| G1 | **数字格式违反 §三对表**：`formatDuration` ≥60s 秒不补零（`2 分 5 秒`）；token 三处面（TaskDetail rail `toLocaleString`、DeliveryCard 原始数、StatusCenter 速览 `toLocaleString`）均无千位压缩——「判断依据精确 · 量级感受压缩」轴上 token 属量级感受 | disclosure-grammar §三 | format.js:131-133；TaskDetail:263；DeliveryCard:130；StatusCenter:172 |
+| G2 | **运行态计时冻结**：WorkLog「已处理 X」由轮询驱动，8s 间隔内数字静止——R7 实证是「活跳递增，纯离散文本替换」 | codex R7 运行态语法表 | WorkLog.vue:107（`Date.now()` 无 ticker） |
+| G3 | **「校验方式」自证段整段缺失**：kit11 成果卡的签名段（教用户如何核验工作真伪）在 TaskDetail 无对应物——这是 kit11 语法与 FLAi-OS 假绿哲学的**天然接点**：mock 披露、人签记录、批量结果三条核验线索散落三处（WorkLog 展开态徽标/时间轴内口播/页头 tag），签发前无一眼汇总 | kit11 result card「校验方式」段 | TaskDetail 模板亲读：产物→动作之间无核验层 |
+| G4 | **完成态无绝对时间戳**：R7 完成态解锁=操作条浮现含绝对时刻（`13:12`）；CompletionSeal 只报时长，落定时刻埋在 rail 折叠的「任务信息」里 | codex R7 完成态解锁行 + §四家族轴（codex=绝对时间戳） | CompletionSeal.vue:47-53 |
+| G5 | **产物列表无尾部折叠**：R6 产物卡列表尾「显示另外 1 个 ⌄」/ W15「Show 3 more」；TaskDetail 全量平铺 | codex R6 §产物与账本装置 | TaskDetail:88（v-for 全渲染） |
+| G6 | **产物类型标签只有裸扩展名**：R6 语法是类型词+格式（`文档 · MD`）；现状 `.md` 裸后缀徽章 | codex R6 产物文件卡 | TaskDetail:102 |
+
+**考虑过、本批显式不做**（防 scope 蔓延，回执有据）：
+- Portal 类别 pill/成熟度徽章按 mute-pill 降装饰——与任务书 §12.6「分类色标
+  是门户视觉重点」冲突，类型轴是既裁决的身份披露，不动。
+- gov-trend 图表 refilter 两速律——治理弹窗每开一次拉一次、无 refilter 交互，
+  无适用场景。
+- 侧栏 lamp 形状语法（环/实心/沙漏）——lamp 已有 is-pulsing 形态区分工作态，
+  改形状动 TaskConsole/StatusCenter 双面 + e2e 断言面，收益/风险比不过关，
+  挂 retro 观察。
+- rail 渐隐 mask 截断——FLAi-OS 无对应「mono 活进程行」面（rawline 刻意
+  break-all 换行是 e2e 保命线），无适用锚点。
+
+## 六、批次二工作项
+
+- **F1 数字格式对表（SSOT 层）**：`formatDuration` ≥60s 档秒补零两位
+  （`2 分 05 秒`；<60s 纯秒、小时档既有补零口径不变）；新增 `formatTokens`
+  （<1000 精确；≥1000 千位压缩 1 位小数 `12.3k`，整值去尾零 `12k`；≥1e6 同
+  规则 `M` 档）——接入 TaskDetail rail / DeliveryCard 尾行 / StatusCenter
+  速览三处，「部分未报，下界」诚实注保留。
+- **F2 活跳计时**：WorkLog 工作态起 1s ticker 驱动 elapsed 重算（纯离散文本
+  替换，零动画=R7 语法；终态/卸载即清，reduced-motion 无涉——文本替换非运动）。
+- **F3 「核验」自证段（本批核心件）**：新组件 `VerificationCard.vue`，仅
+  completed/failed/waiting_review 渲染（cancelled 是中断、不进签发流、无
+  成果语义——显式排除），位置=产物之后、动作之前（签发前最后一眼）。
+  三行全部真实数据派生，绝不合成：①工具真实性（GET tool_runs：`N 次工具
+  调用 · 含 M 次 mock`+amber「未经真实核验」/`均为真实执行` 中性墨——**不给
+  绿**，绿解锁是性能盘真结果接入后的项目级决策/`无工具调用记录`/拉取失败
+  →`工具核验信息不可用` 诚实降级）；②人工签发（events 派生：teal `✓ 已由
+  X 批准放行`/红 `✕ 由 X 驳回`/amber `待人工签发`/中性 `未经人工签发流程`）；
+  ③批量结果（有 summary 事件才渲染：`成功 N · 失败 M`，failed>0 计数染红）。
+  与 WorkLog 展开态 signoff 同源同谓词（events），report 级与时间轴级双呈现
+  不矛盾——kit11 语法点即「核验线索必须在报告层有汇总位」。
+- **F4 完成态绝对时间戳**：CompletionSeal 尾部追加落定时刻（同日 `HH:MM`，
+  跨日 `MM-DD HH:MM`）；cancelled 保持不报时长（工作量语义），但报中断时刻
+  （时刻≠时长）。
+- **F5 产物尾部折叠**：>3 件产物默认渲染前 3 + 真 button「显示另外 N 个 ⌄」
+  （aria-expanded，单向展开）；m2 e2e 首下载锚不受扰（前 3 恒渲）。
+- **F6 产物类型标签**：ext 徽章升级为「类型词 · EXT」（md/txt/pdf/html→文档、
+  csv/json/yaml→数据、png/jpg/svg→图像、zip→归档、未知→文件）。
+
+## 七、批次二红线与验收
+
+红线继承批次一 §三全部条款，另加：
+- F3 三行内容**只准投影已落库数据**（tool_runs.mock / task_events / summary
+  payload），任何一行凑不出数据就整行降级或不渲染，绝不推断。
+- 「均为真实执行」是对 tool_runs 记录的忠实投影（runner 如实记 mock 位），
+  措辞限定在「记录」层（`无工具调用记录`），不越权声称运行时真相。
+
+验收：
+1. craft 套件扩针（fixture 直插 tool_runs/model_calls + 5 产物任务 +
+   review_approved 事件）：F1 补零/压缩、F2 活跳（断轮询后 3.3s 窗口 ≥3 个
+   不同读数——route abort 把「与轮询解耦」变成可证伪谓词）、F3 三行+amber
+   pill+teal 签发、F4 时刻 regex、F5 折叠展开、F6 类型词。
+2. tamper 自证 ≥4 处必咬：秒补零回退 / amber pill 拆除 / slice(0,3) 拆除 /
+   时刻拼接拆除。
+3. `verify_all.sh` 全绿（18 套）；3-lens 对抗审 + Codex 治理审收敛后合并 push。
+
+夹具教训（首跑实测，2026-07-15）：给任务种 tool_runs/model_calls 派生行时
+**必须同批种 `data_classification='internal'` 戳**——分级门 fail-closed 兜底
+（ADR-0025：NULL 分级+任何派生内容行→封）会遮蔽 events payload/message，
+签发行/工具 chip 全部消失。门在正确地咬；夹具必须讲自洽的故事（真实 runner
+对 internal 任务必落此戳）。这也是一次免费的门咬合实证：遮蔽路径真的工作。

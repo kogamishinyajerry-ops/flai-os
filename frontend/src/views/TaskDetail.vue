@@ -36,9 +36,12 @@
              复用 App.vue 全局 .pill-amber（工作台会话页同款用法）。 -->
         <span v-if="isWaitingReview" class="pill-amber">待你签发</span>
         <!-- 批量任务摘要（P2）：消解「全失败 case 仍显示绿色已完成」的误导——
-             ok/failed 计数取自最后一条 summary_generated 折叠事件，纯前端派生。 -->
+             ok/failed 计数取自最后一条 summary_generated 折叠事件，纯前端派生。
+             成功计数用中性 info 不给绿（3-lens trust P2 收口）：绿=仅真实 REAL
+             结果，mock 前提下 case 计数给绿即假 REAL——与下方核验段中性口径
+             同锁，同一数字同屏一种信任信号。 -->
         <template v-if="batchSummary">
-          <el-tag size="small" type="success">成功 {{ batchSummary.ok }}</el-tag>
+          <el-tag size="small" type="info">成功 {{ batchSummary.ok }}</el-tag>
           <el-tag size="small" :type="batchSummary.failed > 0 ? 'danger' : 'info'">
             失败 {{ batchSummary.failed }}
           </el-tag>
@@ -85,7 +88,7 @@
            仍指向产物下载链接。 -->
       <div class="section" v-if="artifacts.length">
         <h3>产物<span v-if="isWaitingReview" class="artifact-review-hint">放行前请先审阅</span></h3>
-        <div v-for="a in artifacts" :key="a.fileId" class="artifact-card">
+        <div v-for="a in visibleArtifacts" :key="a.fileId" class="artifact-card">
           <!-- 逐卡收起 affordance（W3）：默认全展开不变；多产物任务可手动收纳
                已读卡。披露触发器=真 <button>（原生 Enter/Space，免 tabindex/
                keydown 手写），下载 <a> 是其兄弟——嵌套可交互控件是非法 ARIA
@@ -99,7 +102,8 @@
             >
               <span class="artifact-chevron" aria-hidden="true">{{ a.collapsed ? "▸" : "▾" }}</span>
               <span class="artifact-name">{{ a.filename }}</span>
-              <span v-if="a.ext" class="artifact-ext-badge">.{{ a.ext }}</span>
+              <!-- 类型标签（F6，Codex R6「文档 · MD」语法）：类型词+格式，不再裸后缀。 -->
+            <span v-if="a.ext" class="artifact-ext-badge">{{ artifactTypeLabel(a.ext) }}</span>
               <span v-if="!a.loading && a.size" class="artifact-size">
                 <span class="num-token">{{ formatSize(a.size) }}</span><template v-if="artifactLineCount(a) != null"> · <span class="num-token">{{ artifactLineCount(a) }}</span> 行</template>
               </span>
@@ -118,7 +122,23 @@
             <div v-else class="artifact-body muted">二进制文件，请下载后查看。</div>
           </div>
         </div>
+        <!-- 产物尾部折叠（F5，Codex R6「显示另外 1 个 ⌄」/ Claude「Show 3 more」）：
+             >3 件默认渲染前 3，真 button 单向展开（展开后本次浏览不再收回——
+             与两家实拍一致）；前 3 恒渲染，m2 e2e 首下载锚不受扰。 -->
+        <button
+          v-if="hiddenArtifactCount > 0"
+          type="button"
+          class="artifact-more"
+          :aria-expanded="false"
+          @click="artifactsExpanded = true"
+        >显示另外 {{ hiddenArtifactCount }} 个 ⌄</button>
       </div>
+
+      <!-- 核验自证段（F3，kit11「校验方式」语法）：产物之后、动作之前——签发前
+           最后一眼看到「这活儿怎么核验」；完成态则作为成果报告的自证层。
+           class="section" 融入既有节奏（组件根 v-if 不渲染时 class 随之消失，
+           无幽灵 margin）。 -->
+      <VerificationCard class="section" :task="task" :events="events" :batch-summary="batchSummary" />
 
       <div class="section" v-if="canCancel || isWaitingReview">
         <h3>动作</h3>
@@ -260,7 +280,9 @@
                 <span>模型：{{ modelCallStats.names.length ? modelCallStats.names.join("、") : "未知" }}</span>
               </div>
               <div class="source-row">
-                <span v-if="modelCallStats.tokenKnownCount > 0">tokens 合计 <span class="num-token">{{ modelCallStats.tokenSum.toLocaleString() }}</span></span>
+                <!-- token 千位压缩（F1，disclosure-grammar §三）：消耗量属「量级感受」轴，
+                     12.3k 而非 12,345；精确轴（次数/行数/diff）不压缩。 -->
+                <span v-if="modelCallStats.tokenKnownCount > 0">tokens 合计 <span class="num-token">{{ formatTokens(modelCallStats.tokenSum) }}</span></span>
                 <span v-else class="muted">token 用量：未知</span>
               </div>
               <div v-if="modelCallStats.tokenKnownCount > 0 && modelCallStats.tokenMissingCount > 0" class="model-usage-note">
@@ -286,10 +308,11 @@ import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
-import { statusLabel, statusTagType, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
+import { statusLabel, statusTagType, formatTime, formatFileSize, formatTokens, artifactTypeLabel, TASK_WORK_STATES } from "../utils/format";
 import MarkdownLite from "../components/MarkdownLite.vue";
 import WorkLog from "../components/WorkLog.vue";
 import CompletionSeal from "../components/CompletionSeal.vue";
+import VerificationCard from "../components/VerificationCard.vue";
 import { displayName } from "../stores/session";
 import { markTaskSeen } from "../utils/lastSeen";
 import { burstSigned } from "../effects/burst";
@@ -448,6 +471,18 @@ const modelCallStats = computed(() => {
 
 // 尺寸格式化走 utils/format 的 formatFileSize SSOT（含 GB 档）——本地副本已删。
 const formatSize = formatFileSize;
+
+// ── 产物尾部折叠（F5）：>3 件默认渲染前 3；单向展开（本地视图态，轮询整包
+// 更新不影响——syncArtifacts 只动 artifacts 数组，展开位独立）。 ──
+const ARTIFACT_PREVIEW_COUNT = 3;
+const artifactsExpanded = ref(false);
+const visibleArtifacts = computed(() =>
+  artifactsExpanded.value ? artifacts.value : artifacts.value.slice(0, ARTIFACT_PREVIEW_COUNT),
+);
+const hiddenArtifactCount = computed(() => artifacts.value.length - visibleArtifacts.value.length);
+
+// 产物类型标签（F6）走 utils/format 的 artifactTypeLabel SSOT——StatusCenter
+// 速览同款徽章共用一份词表（3-lens 抓过孪生点漂移），本地副本已删。
 
 // 文本产物行数派生（纯前端展示，不影响下载/内容本身）：非文本或空文本一律
 // null，不渲染「· N 行」，绝不显示假的 0 行。
@@ -883,6 +918,22 @@ onUnmounted(() => {
   border-radius: 5px;
   padding: 1px 6px;
   font-family: var(--mono, monospace);
+}
+/* 产物尾部折叠链接（F5）：Codex 折叠行同款安静灰文字（非按钮面），hover 走
+   clay 工作色；button-reset 保真语义（Enter/Space 原生）。 */
+.artifact-more {
+  display: block;
+  margin: 2px 0 0;
+  padding: 4px 2px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.artifact-more:hover {
+  color: var(--clay);
 }
 .source-panel {
   border: 1px solid var(--hairline);

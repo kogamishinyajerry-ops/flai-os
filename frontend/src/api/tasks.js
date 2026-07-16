@@ -53,6 +53,10 @@ export const reviewTask = (taskId, { action, comment }) =>
 // 工具调用明细（只读端点，工作态氛围展示用）。
 export const listToolRuns = (taskId) => request(`/api/tasks/${taskId}/tool_runs`);
 
+// 工具调用计数投影（批次二 Codex R0-P2）：核验段只要 total/mock_count 两个数，
+// 有界聚合取代全量明细（批量任务的 input/output 轨迹不再整条搬运）。
+export const getToolRunsSummary = (taskId) => request(`/api/tasks/${taskId}/tool_runs/summary`);
+
 // 模型调用留痕（只读端点，消耗诚实披露用；字段=model_profile/model_name/status/
 // token_usage，token_usage 上游未回报时为 null，绝不补 0）。
 export const listModelCalls = (taskId) => request(`/api/tasks/${taskId}/model_calls`);

@@ -138,6 +138,26 @@ def test_trace_read_apis_expose_versions(app_env) -> None:
         assert client.get(f"/api/tasks/task_missing/{ep}").status_code == 404
 
 
+def test_tool_runs_summary_bounded_counts(app_env) -> None:
+    """批次二 Codex R0-P2：/tasks/{id}/tool_runs/summary 只回 total/mock_count
+    两个计数（有界聚合），绝不带 input/output/raw_path 内容键——核验段的
+    数据面按需最小化。与真实 run（hello_agent 的 mock_echo，mock=1）对账。"""
+    client, app = app_env
+    task = _create_and_run(client, app, "hello_agent", {"name": "计数投影"})
+    assert task["status"] == "completed"
+
+    summary = client.get(f"/api/tasks/{task['id']}/tool_runs/summary").json()
+    runs = client.get(f"/api/tasks/{task['id']}/tool_runs").json()
+    assert set(summary.keys()) == {"total", "mock_count"}, "计数投影绝不外带内容键"
+    assert summary["total"] == len(runs) >= 1
+    assert summary["mock_count"] == sum(1 for r in runs if r["mock"] is True) >= 1
+
+    # 零 run 任务：0/0（不 404——任务在，计数就是 0）；未知任务 404。
+    created = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "零run"}}).json()
+    assert client.get(f"/api/tasks/{created['id']}/tool_runs/summary").json() == {"total": 0, "mock_count": 0}
+    assert client.get("/api/tasks/task_missing/tool_runs/summary").status_code == 404
+
+
 def test_output_files_endpoint_projects_metadata_no_leak(app_env) -> None:
     """批B P1 修复：/tasks/{id}/output_files 只投影
     [{id, filename, size_bytes, data_classification}]，绝不含 path/sha256/uploaded_by。

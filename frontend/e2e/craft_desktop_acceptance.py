@@ -21,7 +21,18 @@
      task_completed 行不染（红=仅真失败，completed 不给绿也不给红）；
      ⑥' 红线边界：task_cancelled+level=error（毒丸隔离同款）绝不染红；
   ⑦ W3 驳回术语：waiting_review 详情页动作=「批准放行」+「驳回」（无「拒绝」）；
-  ⑧ W5 对话轴 markdown：助手气泡 "- " 列表渲染成真 ul>li；用户气泡保持纯文本。
+  ⑧ W5 对话轴 markdown：助手气泡 "- " 列表渲染成真 ul>li；用户气泡保持纯文本；
+  ⑨ 批次二 F1-F6 细粒度（契约=UI-DESKTOP-CRAFT.md 批次二）：
+     F1 数字对表——盖章「2 分 05 秒」秒补零 + rail「tokens 合计 12.3k」千位
+     压缩（原始 12345 绝迹）；F2 活跳计时——running 任务断轮询后 3.3s 窗口内
+     「已处理」文本仍逐秒变化（纯 ticker 驱动，非轮询）；F3 核验段——mock
+     任务 amber「未经真实核验」+teal 签发行（与 WorkLog 逐字同措辞 SSOT）/
+     waiting 任务「待人工签发」/ cancelled 不渲染 / 全真工具任务「均为真实
+     执行」中性 / 页头批量成功 tag 不给绿+核验批量行失败计数染红 / sensitive
+     分级真实遮蔽下签发行降级「签发记录不可用」（绝不谎报「未经签发」）；
+     F4 盖章落定时刻（HH:MM 或 MM-DD HH:MM）+ cancelled 报中断时刻不报时长；
+     F5 产物 >3 件折叠「显示另外 N 个」单向展开（前 3 恒渲）；F6 类型标签
+     「文档 · MD」（TaskDetail 与 StatusCenter 速览同 SSOT）。
 
 夹具口径（与 m9 同纪律）：temp DB 直写只为渲染路径提供 fixture，不冒充业务
 状态机行为（真实完成/放行链路由 m2 验收）。completed 任务配 tool_failed 事件
@@ -133,10 +144,18 @@ def _db(sql: str, params: tuple = ()) -> None:
 
 
 def flip_completed_with_artifact_and_events(task_id: str) -> None:
-    """夹具：completed+产物+事件流（tool_failed 后重试成功=合法业务态）。"""
+    """夹具：completed+产物+事件流（tool_failed 后重试成功=合法业务态）+签发链
+    +tool_runs（mock 位如实）+model_calls（token 用量）——批次二 F1/F3 探针面。
+    耗时 125s（02:00:00→02:02:05）刻意让秒位 <10：格式对表「2 分 05 秒」补零可探。"""
+    # data_classification='internal' 必须与 tool_runs/model_calls 同批种入：
+    # 分级门 fail-closed 兜底是「NULL 分级 + 任何派生内容行 → 封（遮蔽 events
+    # payload/message）」——真实 runner 对 internal 任务必落此戳（runtime.py
+    # set_task_data_classification），夹具不落就是讲了个不自洽的故事，门会
+    # 正确地咬（本批实测咬过一次：签发行/工具 chip payload 全被遮蔽）。
     _db(
-        "UPDATE tasks SET status='completed', output_file_ids=?, started_at=?, finished_at=? WHERE id=?",
-        (json.dumps(["file_probe_0001"]), "2026-07-15T02:00:00+00:00", "2026-07-15T02:01:35+00:00", task_id),
+        "UPDATE tasks SET status='completed', output_file_ids=?, started_at=?, finished_at=?,"
+        " data_classification='internal' WHERE id=?",
+        (json.dumps(["file_probe_0001"]), "2026-07-15T02:00:00+00:00", "2026-07-15T02:02:05+00:00", task_id),
     )
     rows = [
         ("evt_craft_1", "task_created", "info", "任务已创建", "{}"),
@@ -144,6 +163,8 @@ def flip_completed_with_artifact_and_events(task_id: str) -> None:
         ("evt_craft_3", "tool_failed", "error", "工具首跑失败", json.dumps({"tool_id": "mock_echo"})),
         ("evt_craft_4", "tool_started", "info", "工具重试", json.dumps({"tool_id": "mock_echo"})),
         ("evt_craft_5", "tool_finished", "info", "工具完成", json.dumps({"tool_id": "mock_echo"})),
+        ("evt_craft_5b", "review_requested", "info", "请求人工审核", "{}"),
+        ("evt_craft_5c", "review_approved", "info", "人工已批准", json.dumps({"reviewer": "验收工程师"})),
         ("evt_craft_6", "task_completed", "info", "任务完成", "{}"),
     ]
     for i, (eid, etype, level, msg, payload) in enumerate(rows):
@@ -151,6 +172,22 @@ def flip_completed_with_artifact_and_events(task_id: str) -> None:
             "INSERT INTO task_events (event_id, task_id, agent_id, event_type, level, message, payload_json, created_at)"
             " VALUES (?,?,?,?,?,?,?,?)",
             (eid, task_id, "hello_agent", etype, level, msg, payload, f"2026-07-15T02:00:{10 + i:02d}+00:00"),
+        )
+    # tool_runs：mock_echo 首跑失败+重试成功，两条均 mock=1（hello_agent 的
+    # mock 工具如实落库）——F3 工具行该报「2 次工具调用 · 含 2 次 mock」+amber。
+    for status, fin in (("failed", "2026-07-15T02:00:12+00:00"), ("success", "2026-07-15T02:00:14+00:00")):
+        _db(
+            "INSERT INTO tool_runs (task_id, tool_id, tool_version, mock, status, input_json, started_at, finished_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (task_id, "mock_echo", "0.1.0", 1, status, "{}", "2026-07-15T02:00:11+00:00", fin),
+        )
+    # model_calls：12000+345=12345 → F1 压缩「12.3k」（rail 断言 12,345/12345 绝迹）。
+    for tok in (12000, 345):
+        _db(
+            "INSERT INTO model_calls (task_id, agent_id, model_profile, model_name, status, token_usage_json, created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (task_id, "hello_agent", "default", "stub-model", "success",
+             json.dumps({"total_tokens": tok}), "2026-07-15T02:00:13+00:00"),
         )
 
 
@@ -403,6 +440,168 @@ with sync_playwright() as p:
     check("⑧代码字面量零误伤（Codex R2 原例：函数语法逐字 + 相邻 strong 仍成立）",
           "def f(**kwargs)：" in ai_text and "2 ** 3" in ai_text, ai_text[-140:])
     page.screenshot(path=str(SHOTS / "guide_markdown_light.png"), full_page=True)
+
+    # ══ ⑨ 批次二 F1-F6 细粒度探针 ══════════════════════════════════════════
+
+    # ── ⑨a/b F1+F4+F3 于 task A（completed·mock 工具·签发链·12345 tokens）──
+    page.goto(BASE + f"/tasks/{task_a}", wait_until="networkidle")
+    page.wait_for_selector(".completion-seal", timeout=8000)
+    seal_text = page.locator(".seal-text").inner_text()
+    check("⑨F1 盖章时长秒补零（125s→2 分 05 秒）", "2 分 05 秒" in seal_text, seal_text)
+    import re as _re
+    check("⑨F4 盖章落定时刻（绝对时间戳，同日 HH:MM/跨日 MM-DD HH:MM）",
+          _re.search(r"(\d{2}-\d{2} )?\d{2}:\d{2}$", seal_text.strip()) is not None, seal_text)
+    rail_usage = page.locator(".model-usage").inner_text()
+    check("⑨F1 rail tokens 千位压缩（12.3k 在场、原始 12345/12,345 绝迹）",
+          "12.3k" in rail_usage and "12345" not in rail_usage and "12,345" not in rail_usage,
+          rail_usage)
+    vcard = page.locator(".verify-card")
+    check("⑨F3 核验段在完成态渲染（工具/签发两行）", vcard.count() == 1 and vcard.locator(".verify-row").count() >= 2)
+    tool_row = vcard.locator(".verify-row").first.inner_text().replace("\n", " ")
+    check("⑨F3 mock 如实披露（2 次调用 · 含 2 次 mock + amber 未经真实核验）",
+          "2" in tool_row and "mock" in tool_row and vcard.locator(".pill-amber", has_text="未经真实核验").count() == 1,
+          tool_row)
+    sign_text = vcard.locator(".verify-signoff").inner_text()
+    sign_color = vcard.locator(".verify-signoff").evaluate("el => getComputedStyle(el).color")
+    check("⑨F3 签发行 teal（✓ 由 验收工程师 批准放行，与 WorkLog 同措辞 SSOT）",
+          "✓ 由 验收工程师 批准放行" in sign_text and sign_color == resolved_color(page, "var(--trust-signed)"),
+          f"{sign_text} / {sign_color}")
+    # 同措辞 SSOT 复核（3-lens paradigm P3）：WorkLog 口播与核验段逐字同串。
+    wl_sign = page.locator(".worklog-signoff").inner_text()
+    check("⑨F3 WorkLog 口播同措辞（deriveSignoff/signoffText 真同源）",
+          wl_sign.strip() == sign_text.strip(), f"worklog={wl_sign!r} verify={sign_text!r}")
+    page.screenshot(path=str(SHOTS / "verify_card_completed_light.png"), full_page=True)
+
+    # ── ⑨c F3 waiting_review：待签 amber；无 tool_runs → 「无工具调用记录」──
+    page.goto(BASE + f"/tasks/{task_b}", wait_until="networkidle")
+    page.wait_for_selector(".verify-card", timeout=8000)
+    vb = page.locator(".verify-card").inner_text()
+    pend_color = page.locator(".verify-pending").evaluate("el => getComputedStyle(el).color")
+    check("⑨F3 待签任务=「待人工签发」amber + 「无工具调用记录」诚实空",
+          "待人工签发" in vb and "无工具调用记录" in vb
+          and pend_color == resolved_color(page, "var(--trust-pending)"),
+          f"{vb[:80]} / {pend_color}")
+
+    # ── ⑨d F3 cancelled 不渲染（中断非成果，核验段零占位）──────────────────
+    page.goto(BASE + f"/tasks/{task_c}", wait_until="networkidle")
+    page.wait_for_selector(".td-grid", timeout=8000)
+    check("⑨F3 取消任务不渲染核验段", page.locator(".verify-card").count() == 0)
+
+    # ── ⑨e F2 活跳计时（running 任务·断轮询后纯 ticker 驱动）────────────────
+    resp_d = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "工艺批探针D"}})
+    assert resp_d.status_code < 300, resp_d.text
+    task_d = resp_d.json()["id"]
+    from datetime import datetime, timezone
+    _db("UPDATE tasks SET status='running', started_at=? WHERE id=?",
+        (datetime.now(timezone.utc).isoformat(), task_d))
+    page.goto(BASE + f"/tasks/{task_d}", wait_until="networkidle")
+    page.wait_for_selector(".worklog-head-text", timeout=8000)
+    head0 = page.locator(".worklog-head-text").inner_text()
+    check("⑨F2 运行态头行=「正在处理 · 已 X」", head0.startswith("正在处理"), head0)
+    # 掐断该任务的轮询通道（route abort）：此后文本变化只可能来自组件内 1s
+    # ticker——把「活跳与轮询解耦」变成可证伪谓词（轮询驱动的旧实现在此必冻结）。
+    ctx.route(f"**/api/tasks/{task_d}", lambda route: route.abort())
+    samples = {page.locator(".worklog-head-text").inner_text()}
+    for _ in range(3):
+        page.wait_for_timeout(1100)
+        samples.add(page.locator(".worklog-head-text").inner_text())
+    check("⑨F2 断轮询后 3.3s 内文本仍逐秒递增（纯 ticker，≥3 个不同读数）",
+          len(samples) >= 3, str(samples))
+    ctx.unroute(f"**/api/tasks/{task_d}")
+
+    # ── ⑨f F5+F6+F3 于 task E（5 件真实 .md 产物·真工具 run mock=0）─────────
+    file_ids = []
+    for i in range(5):
+        up = API.post(
+            "/api/files/upload",
+            files={"file": (f"report_{i}.md", f"# 报告 {i}\n\n第 {i} 份。\n".encode(), "text/markdown")},
+        )
+        assert up.status_code < 300, up.text
+        file_ids.append(up.json()["file_id"] if "file_id" in up.json() else up.json()["id"])
+    resp_e = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "工艺批探针E"}})
+    assert resp_e.status_code < 300, resp_e.text
+    task_e = resp_e.json()["id"]
+    # 同 flip 夹具口径：有 tool_runs 派生行必须配 internal 分级戳，否则分级门
+    # fail-closed 遮蔽 events/产物元数据（门正确，夹具要自洽）。
+    _db("UPDATE tasks SET status='completed', output_file_ids=?, started_at=?, finished_at=?,"
+        " data_classification='internal' WHERE id=?",
+        (json.dumps(file_ids), "2026-07-15T03:00:00+00:00", "2026-07-15T03:00:42+00:00", task_e))
+    _db("INSERT INTO tool_runs (task_id, tool_id, tool_version, mock, status, input_json, started_at, finished_at)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        (task_e, "real_writer", "1.0.0", 0, "success", "{}",
+         "2026-07-15T03:00:01+00:00", "2026-07-15T03:00:40+00:00"))
+    # 批量摘要事件（3-lens trust P2 探针面）：页头批量 tag 与核验段批量行同数据。
+    _db("INSERT INTO task_events (event_id, task_id, agent_id, event_type, level, message, payload_json, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        ("evt_craft_e1", task_e, "hello_agent", "agent_log", "info", "生成汇总",
+         json.dumps({"workflow_event_type": "summary_generated", "ok_count": 4, "failed_count": 1}),
+         "2026-07-15T03:00:41+00:00"))
+    page.goto(BASE + f"/tasks/{task_e}", wait_until="networkidle")
+    page.wait_for_selector(".artifact-card", timeout=8000)
+    n_cards = page.locator(".artifact-card").count()
+    more_btn = page.locator(".artifact-more")
+    check("⑨F5 >3 件产物默认渲染前 3 + 尾部折叠行", n_cards == 3 and more_btn.count() == 1
+          and "显示另外 2 个" in more_btn.inner_text(), f"cards={n_cards}")
+    badge = page.locator(".artifact-ext-badge").first.inner_text()
+    check("⑨F6 类型标签=「文档 · MD」（类型词+格式，非裸后缀）", badge == "文档 · MD", badge)
+    more_btn.click()
+    page.wait_for_timeout(200)
+    check("⑨F5 展开后 5 件全渲染 + 折叠行消失",
+          page.locator(".artifact-card").count() == 5 and page.locator(".artifact-more").count() == 0)
+    ve_tool = page.locator(".verify-card .verify-row").first.inner_text().replace("\n", " ")
+    check("⑨F3 全真工具任务=「1 次工具调用 · 均为真实执行」且无 amber、无绿",
+          "均为真实执行" in ve_tool
+          and page.locator(".verify-card .pill-amber").count() == 0,
+          ve_tool)
+    # 「均为真实执行」颜色红线：中性墨（ink-soft），绝不给绿——绿解锁是性能盘
+    # 真结果接入后的项目级决策（信任色锁：绿=仅 REAL）。
+    real_color = page.locator(".verify-card .verify-row").first.locator(".verify-text").evaluate(
+        "el => getComputedStyle(el).color")
+    check("⑨F3 「均为真实执行」中性墨不给绿",
+          real_color == resolved_color(page, "var(--ink-soft)"), real_color)
+    # 页头批量 tag 不给绿（3-lens trust P2）：成功计数=中性 info，绝无 success
+    # 绿 tag；核验段批量行同数据同屏一种信任信号（失败>0 计数染红）。
+    header = page.locator(".page-header")
+    check("⑨F3' 页头批量成功 tag 中性不给绿（同屏同数据一种信号）",
+          "成功 4" in header.inner_text() and header.locator(".el-tag--success").count() == 0)
+    vfail = page.locator(".verify-card .verify-fail-count")
+    check("⑨F3' 核验批量行失败计数染红（红=仅真失败）",
+          vfail.count() == 1 and vfail.evaluate("el => getComputedStyle(el).color") == resolved_color(page, "var(--trust-fail)"))
+    page.screenshot(path=str(SHOTS / "artifact_fold_verify_real_light.png"), full_page=True)
+
+    # ── ⑨g F4' cancelled 报中断时刻不报时长（3-lens trust P2 补针）＋
+    #    ⑨h F3'' 真实分级遮蔽下签发行诚实降级（3-lens trust P1 回归网）────────
+    # task_c 补 finished_at：真实后端 set_task_status 对任意终态（含 cancelled）
+    # 必写 finished_at（repos.is_terminal），夹具不写就是不自洽故事。无 started_at
+    # =从 created/queued 直接取消的合法路径 → 时长 null、时刻在场。
+    _db("UPDATE tasks SET finished_at=? WHERE id=?", ("2026-07-15T04:00:00+00:00", task_c))
+    page.goto(BASE + f"/tasks/{task_c}", wait_until="networkidle")
+    page.wait_for_selector(".completion-seal", timeout=8000)
+    seal_c = page.locator(".seal-text").inner_text()
+    check("⑨F4' 取消盖章=时刻不时长（已取消 · HH:MM，无「工作/进行了」）",
+          "已取消" in seal_c and _re.search(r"(\d{2}-\d{2} )?\d{2}:\d{2}$", seal_c.strip()) is not None
+          and "工作" not in seal_c and "进行了" not in seal_c, seal_c)
+    # 任务 F：completed+真实签发链+tool_runs+**sensitive 分级**——分级门在 events
+    # 端点真实遮蔽 payload（ADR-0025 redact_rows），签发行必须降级「签发记录
+    # 不可用（内容受限）」，绝不呈现「未经人工签发流程」（对已发生事实的否定）。
+    resp_f = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "工艺批探针F"}})
+    assert resp_f.status_code < 300, resp_f.text
+    task_f = resp_f.json()["id"]
+    _db("UPDATE tasks SET status='completed', started_at=?, finished_at=?, data_classification='sensitive' WHERE id=?",
+        ("2026-07-15T05:00:00+00:00", "2026-07-15T05:01:00+00:00", task_f))
+    _db("INSERT INTO task_events (event_id, task_id, agent_id, event_type, level, message, payload_json, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        ("evt_craft_f1", task_f, "hello_agent", "review_approved", "info", "人工已批准",
+         json.dumps({"reviewer": "验收工程师"}), "2026-07-15T05:00:30+00:00"))
+    _db("INSERT INTO tool_runs (task_id, tool_id, tool_version, mock, status, input_json, started_at, finished_at)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        (task_f, "real_writer", "1.0.0", 0, "success", "{}",
+         "2026-07-15T05:00:10+00:00", "2026-07-15T05:00:20+00:00"))
+    page.goto(BASE + f"/tasks/{task_f}", wait_until="networkidle")
+    page.wait_for_selector(".verify-card", timeout=8000)
+    vf = page.locator(".verify-card").inner_text()
+    check("⑨F3'' 分级遮蔽下签发行诚实降级（不可用≠未经签发）",
+          "签发记录不可用" in vf and "未经人工签发流程" not in vf, vf[:120])
 
     ctx.close()
 

@@ -68,7 +68,7 @@ import { useRouter } from "vue-router";
 import CompletionSeal from "./CompletionSeal.vue";
 import { downloadUrl } from "../api/files";
 import { getDeliverySummary, listOutputFiles } from "../api/tasks";
-import { taskElapsedMs, formatDuration } from "../utils/format";
+import { taskElapsedMs, formatDuration, formatTokens } from "../utils/format";
 
 const props = defineProps({ task: Object, animate: { type: Boolean, default: false } });
 
@@ -127,7 +127,8 @@ const modelCallText = computed(() => {
   if (s.mc_total === 0) return "无模型调用";
   if (s.token_known === 0) return `${s.mc_total} 次调用 · token 用量：未知`;
   const suffix = s.token_known < s.mc_total ? "（部分未报，下界）" : "";
-  return `${s.mc_total} 次调用 · tokens 合计 ${s.token_sum}${suffix}`;
+  // token 千位压缩（F1）：次数精确、消耗量压缩——disclosure-grammar §三两轴。
+  return `${s.mc_total} 次调用 · tokens 合计 ${formatTokens(s.token_sum)}${suffix}`;
 });
 
 const batchSummary = computed(() => {
