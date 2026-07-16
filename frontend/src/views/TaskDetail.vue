@@ -156,6 +156,12 @@
             <div class="review-note">
               批准即代表你作为工程师背书该产物——签发权在你，平台不代签。
             </div>
+            <!-- N8 授权链一行：把「为什么此刻停在你手里」讲成一句人话——
+                 全部字段真实（创建人/时刻来自任务行），无自动放行路径是
+                 宪法事实（人是唯一签发者），不是营销话术。 -->
+            <div class="review-chain">
+              授权链：{{ task.created_by }} 于 {{ formatTime(task.created_at) }} 创建本任务；除你此刻的批准外，平台没有任何自动放行路径。
+            </div>
             <el-form-item>
               <!-- 批准=人签，用信任锁的 teal（--trust-signed），绝不用绿（绿仅表真实结果）。
                    ref 供放行成功后的 teal burst 定位元素（动效系统 v1 E2，唯一 teal 许可点）。 -->
@@ -922,6 +928,13 @@ onUnmounted(() => {
 .review-note {
   font-size: 12.5px;
   color: var(--ink-soft);
+  line-height: 1.6;
+  margin: 0 0 12px;
+  padding-left: 80px;
+}
+.review-chain {
+  font-size: 12px;
+  color: var(--ink-faint);
   line-height: 1.6;
   margin: 0 0 12px;
   padding-left: 80px;

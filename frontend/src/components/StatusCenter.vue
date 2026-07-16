@@ -161,6 +161,8 @@
             <div class="peek-label">签发</div>
             <div class="peek-review-note">批准即代表你作为工程师背书该产物——签发权在你，平台不代签。</div>
             <div class="peek-review-signer">签发人：{{ signerName }}（登录身份，不可代填）</div>
+            <!-- N8 授权链一行（与 TaskDetail 同口径）：字段全真，无自动放行=宪法事实。 -->
+            <div class="peek-review-chain">授权链：{{ peekTask.created_by }} 于 {{ formatTime(peekTask.created_at) }} 创建本任务；除你此刻的批准外，平台没有任何自动放行路径。</div>
             <!-- 填空默认收纳（disclosure grammar：决策时刻只露决策本身）；要留意见的人自己展开 -->
             <button v-if="!commentOpen" type="button" class="peek-comment-toggle" @click="commentOpen = true">附意见 ›</button>
             <el-input v-else v-model="reviewComment" type="textarea" :rows="2" placeholder="意见（可选）" class="peek-review-input" />
@@ -951,6 +953,12 @@ onUnmounted(() => {
 .peek-review-note {
   font-size: 12px;
   color: var(--ink-soft);
+  margin-bottom: 10px;
+  line-height: 1.6;
+}
+.peek-review-chain {
+  font-size: 11.5px;
+  color: var(--ink-faint);
   margin-bottom: 10px;
   line-height: 1.6;
 }

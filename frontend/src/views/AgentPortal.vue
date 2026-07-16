@@ -46,6 +46,10 @@
               >{{ agentStatusLabel(agent.status) }}</el-tag>
             </div>
 
+            <!-- N8 能力语言前置：先一句人话「它替你干什么」，治理徽章/元数据
+                 退居其后——新手选 Agent 靠的是能力描述，不是标签体系。 -->
+            <p class="agent-summary">{{ agent.summary }}</p>
+
             <div class="agent-tags">
               <span
                 class="cat-pill"
@@ -65,8 +69,6 @@
               <span>{{ agent.id }}</span>
               <span>v{{ agent.version }}</span>
             </div>
-
-          <p class="agent-summary">{{ agent.summary }}</p>
 
           <el-collapse v-if="agent.limitations && agent.limitations.length">
             <el-collapse-item title="不适用范围">
