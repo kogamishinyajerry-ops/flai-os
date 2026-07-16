@@ -251,6 +251,16 @@ with sync_playwright() as p:
 
     check("③团队总量条 === /api/stats/overview 三态对表（数字≠0 逐字相等；数字 0 格不渲染；非数字「—」）",
           _stats_match() is True, f"page={_tiles_snapshot()} api={body_json} since={since_iso}")
+    # oracle 谓词自检（Codex R2-P3）：真实 API 恒非负整数，bool/负数分支在本套件
+    # 无活体夹具——用判定表直接咬谓词漂移（bool 排除被撤 / !=0 改回 >0）。
+    synth_tri = {"a": 5, "b": 0, "c": True, "d": -2}
+    expect_tri = {"a": "5", "b": None, "c": "—", "d": "-2"}
+    derived_tri = {
+        k: (str(v) if _is_num(v) and v != 0 else (None if _is_num(v) else "—"))
+        for k, v in synth_tri.items()
+    }
+    check("③三态谓词判定表自检（5/0/true/-2——bool≠数、负数≠零）",
+          derived_tri == expect_tri, f"derived={derived_tri}")
     page.screenshot(path=str(SHOTS / "3_stats_bar_match.png"), full_page=True)
 
     # ── 断言④：新导航直开 /today（全新 browser context，非同一会话）——今日

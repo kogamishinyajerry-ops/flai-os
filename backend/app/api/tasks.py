@@ -578,25 +578,22 @@ def get_task_tool_runs_summary(task_id: str, request: Request) -> dict[str, Any]
     conn = request.app.state.conn_factory()
     try:
         _get_task_or_404(conn, task_id)
-        row = conn.execute(
-            "SELECT COUNT(*) AS total,"
-            " COALESCE(SUM(CASE WHEN mock = 1 THEN 1 ELSE 0 END), 0) AS mock_count"
-            " FROM tool_runs WHERE task_id = ?",
-            (task_id,),
-        ).fetchone()
+        # 单次 GROUP BY 一致快照（Codex R2-P2）：全局计数由分组行求和派生，
+        # 不再第二次扫描——total/mock_count 与 by_tool 永远同一时刻的账。
         by_tool_rows = conn.execute(
             "SELECT tool_id, COUNT(*) AS total,"
             " COALESCE(SUM(CASE WHEN mock = 1 THEN 1 ELSE 0 END), 0) AS mock_count"
             " FROM tool_runs WHERE task_id = ? GROUP BY tool_id ORDER BY tool_id",
             (task_id,),
         ).fetchall()
+        by_tool = [
+            {"tool_id": r["tool_id"], "total": r["total"], "mock_count": r["mock_count"]}
+            for r in by_tool_rows
+        ]
         return {
-            "total": row["total"],
-            "mock_count": row["mock_count"],
-            "by_tool": [
-                {"tool_id": r["tool_id"], "total": r["total"], "mock_count": r["mock_count"]}
-                for r in by_tool_rows
-            ],
+            "total": sum(e["total"] for e in by_tool),
+            "mock_count": sum(e["mock_count"] for e in by_tool),
+            "by_tool": by_tool,
         }
     finally:
         conn.close()

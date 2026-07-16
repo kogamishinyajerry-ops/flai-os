@@ -146,10 +146,36 @@ P3a/P3b RESOLVED，P1b/P2c 判 NOT-RESOLVED 并细化）。三条 grounded 复�
 - craft **88/88 ALL GREEN**（86→88：⑪f″「成功空表≠已核」+ ⑬ 三态活体，一次通过）。
 - **T-R2a tamper**：撤逐工具对账（`loaded` 恒判已核=R1-P1 原 bug）→ craft 恰 1 红
   **87/88**（⑪f″ 咬，零旁伤），还原 cmp 校验+rebuild 复绿。⑬/⑪f″ 自身即
-  route-fulfill 故障注入，oracle 侧（_is_num）由 ⑬ 的 true/-2 夹具反向定格。
+  route-fulfill 故障注入。~~oracle 侧（_is_num）由 ⑬ 的 true/-2 夹具反向定格~~
+  ——**此句为 over-claim，R2 复审证伪**（⑬ 的 DOM 期望独立硬编码、不经
+  _is_num，谓词漂移当时并不会咬）；已按 R2-P3 verbatim 落判定表自检收口，
+  见「R2 复审」段。诚实勘误留痕，不删原句。
 - batch_b **10/10** · m2 **9/9**；终树 `verify_all.sh` 全量 **EXIT=0**
   （**989+ pytest** 三 testpaths + node 21/21 + **17 套 e2e ALL GREEN**
   含 craft 88/88，「[失败]（无）」）。
+
+### R2 复审（c0f966a，同渠道）——终轮
+
+**判决：APPROVE**（R1 核销：R1-P1 RESOLVED / R1-P2 RESOLVED / R1-P3 判
+NOT-RESOLVED——谓词与 DOM 行为正确，但「⑬ 反向定格 oracle」的档案声明不成立）。
+随附 2 P2 + 2 P3，全部在 verbatim 例外射程内，逐字落地不再走轮（cap 已满）：
+
+| # | 级 | Finding | verbatim 处置 |
+|---|---|---|---|
+| R2-P2a | P2 | 未核 tooltip 仍断言原因只有「加载中或拉取失败」——在空表/敏感归因断裂场景属错误归因 | ✅ 措辞改为不猜原因：「工具真实性尚无法逐项对账（记录未就绪、未执行或内容受限）」 |
+| R2-P2b | P2 | summary 每次执行两遍全表聚合；N 次终结观察累计 O(N²) 扫描 | ✅ 最小形：合并为单次 GROUP BY 一致快照，total/mock_count 由分组行求和派生（增量读取属设计项 → retro 池） |
+| R2-P3a | P3 | ⑬ 硬编码期望不经 _is_num，batch_b 的 _is_num 只接触非负整数——谓词漂移（撤 bool 排除/!=0 改回 >0）不会被咬 | ✅ 两套件各落谓词判定表自检（_is_num 三态推导 === 独立硬编码期望，5/0/true/-2）；档案 over-claim 划线勘误 |
+| R2-P3b | P3 | by_tool 测试单工具单 run，重复聚合行可通过 | ✅ 夹具扩 probe_tool_b×2（非 mock）：断言 tool_id 严格唯一≥2、逐组对账、probe 组恰 {2,0}、全局计数=分组求和 |
+
+留 retro 池（非 verbatim 射程）：summary 增量读取/可增量维护的汇总（R2-P2b
+后半）；⑪f″/敏感夹具的 title 字面断言（R2-P2a 后半）。
+
+**verbatim 批验证**：backend test_audit_hardening **18/18**（多工具唯一性扩展后）·
+node **21/21** · craft **89/89**（+⑬ 谓词自检）· batch_b **11/11**（+判定表自检）·
+终树 `verify_all.sh` 全量 **EXIT=0**（989 pytest + 17 套 e2e ALL GREEN，
+「[失败]（无）」）。**治理链收口：R0 CHANGES_REQUIRED(7) → R1 修复 →
+R1 复审 CHANGES_REQUIRED(3) → R2 修复 → R2 复审 APPROVE + verbatim 批
+（cap 3 用满，无遗留 P1；retro 池两项留痕于上）。**
 
 ## 五、反采纳与边界（本批不做的决定）
 

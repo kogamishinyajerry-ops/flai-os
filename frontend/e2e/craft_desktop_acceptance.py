@@ -1021,6 +1021,21 @@ with sync_playwright() as p:
         tri_ok = tri_ok and ok3
     check("⑬Q2 三态活体对表（5 显/数字 0 隐/true→「—」/-2 照显——bool≠数、负数≠零）",
           tri_ok is True, str(tri_detail))
+    # oracle 谓词自检（Codex R2-P3）：⑬ 的 DOM 期望独立硬编码、不经 _is_num——
+    # 此处用 _is_num 三态分支对同一合成值推导期望并与硬编码对表：谓词漂移
+    # （bool 排除被撤 / !=0 改回 >0）在此直接咬，不依赖 DOM 也不依赖真实 API
+    # 恰好非负的巧合。
+    derived = {}
+    for f in ("since_created", "since_completed", "waiting_review", "total_created"):
+        v = synth_me[f]
+        if _is_num(v) and v != 0:
+            derived[f] = str(v)
+        elif _is_num(v):
+            derived[f] = None
+        else:
+            derived[f] = "—"
+    check("⑬Q2 oracle 谓词自检（_is_num 三态推导 === 独立硬编码期望）",
+          derived == tri_expect, f"derived={derived} expect={tri_expect}")
     ctx.unroute("**/api/me/contributions*")
 
     ctx.close()

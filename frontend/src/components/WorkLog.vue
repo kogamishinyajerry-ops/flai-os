@@ -52,12 +52,13 @@
         <template v-else>{{ c.label }}</template><template v-if="c.count > 1"> ×{{ c.count }}</template>
         <span v-if="c.mock" class="pill-amber">mock</span>
       </span>
-      <!-- 真实性未核（Codex R0 P1）：明细未到账（加载中/拉取失败）时，工具行的
-           mock 标注不可作数——未知如实亮 amber，绝不静默装「非 mock」。 -->
+      <!-- 真实性未核（Codex R0 P1 + R1-P1 + R2-P2 措辞不猜原因）：投影未就绪
+           或逐工具对账缺行（记录未就绪/未执行/内容受限）时，工具行的 mock
+           标注不可作数——未知如实亮 amber，绝不静默装「非 mock」。 -->
       <span
         v-if="toolAuthenticityUnknown"
         class="pill-amber worklog-authenticity-unverified"
-        title="工具真实性明细未到账（加载中或拉取失败）：此行 mock 标注暂不可作数"
+        title="工具真实性尚无法逐项对账（记录未就绪、未执行或内容受限）：此行 mock 标注不可作数"
       >真实性未核</span>
     </div>
 

@@ -147,19 +147,47 @@ def test_tool_runs_summary_bounded_counts(app_env) -> None:
     task = _create_and_run(client, app, "hello_agent", {"name": "计数投影"})
     assert task["status"] == "completed"
 
+    # 多工具/多 run 夹具（Codex R2-P3）：真实 run（mock_echo，mock=1）之外再种
+    # 第二个工具两条非 mock run——「行数=distinct 工具数」必须在多工具态机械成立，
+    # 单工具单 run 夹具证不了分组唯一性。
+    conn = app.state.conn_factory()
+    try:
+        for i in range(2):
+            repos.record_tool_run(
+                conn,
+                task_id=task["id"],
+                tool_id="probe_tool_b",
+                tool_version="0.0.1",
+                mock=False,
+                status="success",
+                input_json={},
+                started_at=f"2026-07-16T00:00:0{i}+00:00",
+                finished_at=f"2026-07-16T00:00:0{i + 1}+00:00",
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
     summary = client.get(f"/api/tasks/{task['id']}/tool_runs/summary").json()
     runs = client.get(f"/api/tasks/{task['id']}/tool_runs").json()
     assert set(summary.keys()) == {"total", "mock_count", "by_tool"}, "计数投影绝不外带内容键"
-    assert summary["total"] == len(runs) >= 1
+    assert summary["total"] == len(runs) >= 3
     assert summary["mock_count"] == sum(1 for r in runs if r["mock"] is True) >= 1
-    # by_tool：逐条只含 tool_id+两计数（元数据，无内容键）；与全量行按工具对账。
-    assert len(summary["by_tool"]) >= 1
+    # by_tool：逐条只含 tool_id+两计数（元数据，无内容键）；与全量行按工具对账；
+    # tool_id 严格唯一（重复返回同一聚合行必炸）且集合与全量行一致（≥2 工具）。
+    tool_ids = [e["tool_id"] for e in summary["by_tool"]]
+    assert len(tool_ids) == len(set(tool_ids)) >= 2, "by_tool 行数必须=distinct 工具数"
+    assert set(tool_ids) == {r["tool_id"] for r in runs}
     for entry in summary["by_tool"]:
         assert set(entry.keys()) == {"tool_id", "total", "mock_count"}, "by_tool 绝不外带内容键"
         tool_rows = [r for r in runs if r["tool_id"] == entry["tool_id"]]
         assert entry["total"] == len(tool_rows) >= 1
         assert entry["mock_count"] == sum(1 for r in tool_rows if r["mock"] is True)
-    assert {e["tool_id"] for e in summary["by_tool"]} == {r["tool_id"] for r in runs}
+    probe_entry = next(e for e in summary["by_tool"] if e["tool_id"] == "probe_tool_b")
+    assert probe_entry == {"tool_id": "probe_tool_b", "total": 2, "mock_count": 0}
+    # 全局计数=分组求和（单查一致快照的派生关系）。
+    assert summary["total"] == sum(e["total"] for e in summary["by_tool"])
+    assert summary["mock_count"] == sum(e["mock_count"] for e in summary["by_tool"])
 
     # 零 run 任务：0/0/空表（不 404——任务在，计数就是 0）；未知任务 404。
     created = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "零run"}}).json()
