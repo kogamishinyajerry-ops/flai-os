@@ -3,11 +3,11 @@
        计数全部来自真实轮询（诚实地板——绝不估算）。点击任意处打开状态中心。 -->
   <div class="status-dock" role="button" tabindex="0" aria-label="打开状态中心" @click="openInbox" @keydown.enter="openInbox" @keydown.space.prevent="openInbox">
     <span v-if="waitingCount > 0" class="dock-pill dock-pill-waiting" :class="{ 'dock-pulse-echo': pulseEcho }">
-      ✍ 待你签发 {{ waitingCount }}
+      ✍ 待你签发 <span class="num-token">{{ waitingCount }}</span>
     </span>
     <span v-if="workingCount > 0" class="dock-pill dock-pill-working">
       <span class="work-pulse-dot"></span>
-      运行中 {{ workingCount }}
+      运行中 <span class="num-token">{{ workingCount }}</span>
     </span>
     <span class="dock-core" title="状态中心">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
@@ -27,18 +27,25 @@
 // 计数派生自 taskFeed 共享轮询源（范式 2c：与任务台左栏同一条链同一份数据）；
 // 「最近窗口 100 条」诚实口径、失败保留上次计数下 tick 自愈、从未成功不显示
 // pill（无数据不装有数据）全部由 store 层承袭。
-import { computed, h, onMounted, onUnmounted, ref } from "vue";
+import { computed, h, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { TASK_WORK_STATES } from "../utils/format";
 import { openInbox } from "../stores/statusCenter";
 import { feedTasks, acquireTaskFeed, releaseTaskFeed } from "../stores/taskFeed";
 import { onTransition } from "../stores/liveFeed";
+import { setTitleBadge } from "../utils/titleBadge";
 
 const router = useRouter();
 
 const workingCount = computed(() => feedTasks.value.filter((t) => TASK_WORK_STATES.has(t.status)).length);
 const waitingCount = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review").length);
+
+// N5 标签页召回：内网 http 无 Notification API，切走标签页后「待你签发」
+// 只能靠 title 徽章召回。计数与坞内 pill 同源（真实轮询），坞卸载即清零
+// ——绝不让残留徽章冒充仍有待签。
+watch(waitingCount, (v) => setTitleBadge(v), { immediate: true });
+onUnmounted(() => setTitleBadge(0));
 
 // 待签发即时回声（批A T10）：tasks channel 每次翻转经 liveFeed 总线广播,这里
 // 只订阅落地→waiting_review 的迁移。冷启动首拉的 from=null 噪声已在 channel

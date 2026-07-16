@@ -56,8 +56,8 @@
         <div class="sess-progress">
           <div class="prog-num">{{ summonedCount }} / {{ rosterAgents.length }}</div>
           <div class="prog-label">已召集 Agent</div>
-          <div class="prog-sub">{{ completedCount }} 个任务已完成 · 共 {{ memberTasks.length }} 个任务</div>
-          <span v-if="waitingReviewCount > 0" class="pill-amber">待你签发 {{ waitingReviewCount }}</span>
+          <div class="prog-sub"><span class="num-token">{{ completedCount }}</span> 个任务已完成 · 共 <span class="num-token">{{ memberTasks.length }}</span> 个任务</div>
+          <span v-if="waitingReviewCount > 0" class="pill-amber">待你签发 <span class="num-token">{{ waitingReviewCount }}</span></span>
         </div>
       </div>
 
@@ -88,7 +88,7 @@
                 <span class="member-pill" :style="{ color: categoryColor(a.category), background: categoryColor(a.category) + '18' }">
                   {{ categoryLabel(a.category) }}
                 </span>
-                <span v-if="tasksFor(a).length" class="member-state summoned">已召集 · {{ tasksFor(a).length }} 个任务</span>
+                <span v-if="tasksFor(a).length" class="member-state summoned">已召集 · <span class="num-token">{{ tasksFor(a).length }}</span> 个任务</span>
                 <span v-else class="member-state pending">尚未召集</span>
               </div>
               <p v-if="a.role" class="member-role"><strong>分工：</strong>{{ a.role }}</p>
@@ -408,6 +408,7 @@ onUnmounted(() => {
   font-size: 26px;
   font-weight: 800;
   color: var(--clay);
+  font-variant-numeric: tabular-nums; /* N11：计数跳动不横移 */
 }
 .prog-label {
   font-size: 12px;

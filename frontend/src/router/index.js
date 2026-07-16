@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
+import { setTitleBase } from "../utils/titleBadge";
 
 // 路由（任务书 §12.3 + 范式 Phase 2b 双 Surface）。组件懒加载保持首屏轻。
 // 2b 骨架手术：应用收敛为「对话（/）| 任务台（/tasks）」双 Surface——
@@ -27,7 +28,8 @@ const router = createRouter({
 });
 
 router.afterEach((to) => {
-  document.title = to.meta.title ? `${to.meta.title} · FLAi-OS` : "FLAi-OS";
+  // N5：经 titleBadge 合成（全应用唯一 title 写手），徽章计数不因路由切换丢失。
+  setTitleBase(to.meta.title ? `${to.meta.title} · FLAi-OS` : "FLAi-OS");
 });
 
 export default router;

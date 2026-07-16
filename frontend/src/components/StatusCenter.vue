@@ -32,7 +32,7 @@
 
         <!-- 待你签发：amber=仅待人核；行动召唤最高优先（工程师一进来先看要我处理的） -->
         <div class="sc-group">
-          <div class="sc-group-label waiting">✍ 待你签发 · {{ waitingTasks.length }}</div>
+          <div class="sc-group-label waiting">✍ 待你签发 · <span class="num-token">{{ waitingTasks.length }}</span></div>
           <div v-if="waitingTasks.length" class="sc-list">
             <div v-for="t in waitingTasks" :key="t.id" class="sc-item" role="button" tabindex="0" @click="openTaskPeek(t.id)" @keydown.enter.prevent="openTaskPeek(t.id)" @keydown.space.prevent="openTaskPeek(t.id)">
               <span class="sc-lamp" :style="{ background: 'var(--trust-pending)' }"></span>
@@ -51,7 +51,7 @@
 
         <!-- 进行中：clay 脉动=真实工作态 -->
         <div v-if="workingTasks.length" class="sc-group">
-          <div class="sc-group-label working">运行中 · {{ workingTasks.length }}</div>
+          <div class="sc-group-label working">运行中 · <span class="num-token">{{ workingTasks.length }}</span></div>
           <div class="sc-list">
             <div v-for="t in workingTasks" :key="t.id" class="sc-item" role="button" tabindex="0" @click="openTaskPeek(t.id)" @keydown.enter.prevent="openTaskPeek(t.id)" @keydown.space.prevent="openTaskPeek(t.id)">
               <span class="sc-lamp is-pulsing" :style="{ background: 'var(--clay)' }"></span>
@@ -107,7 +107,7 @@
 
           <div v-if="acceptedSamples.length || sampleFixResults.length" class="peek-block">
             <div v-if="acceptedSamples.length" class="sc-fix-row">
-              <span>{{ acceptedSamples.length }} 条样本已认可，可固化为评测用例</span>
+              <span><span class="num-token">{{ acceptedSamples.length }}</span> 条样本已认可，可固化为评测用例</span>
               <el-button
                 size="small"
                 class="sc-fix-sample-btn"
@@ -151,7 +151,7 @@
               </div>
               <!-- 截断必披露：签发背书的是全部产物，没看全就要说清楚 -->
               <div v-if="peekFileIds.length > peekArtifacts.length" class="peek-artifact-more">
-                仅预览前 {{ peekArtifacts.length }} 件，另有 {{ peekFileIds.length - peekArtifacts.length }} 件产物——请打开完整页审阅后再签发。
+                仅预览前 <span class="num-token">{{ peekArtifacts.length }}</span> 件，另有 <span class="num-token">{{ peekFileIds.length - peekArtifacts.length }}</span> 件产物——请打开完整页审阅后再签发。
               </div>
             </template>
           </div>
