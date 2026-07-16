@@ -268,6 +268,36 @@
               </div>
             </template>
           </div>
+          <!-- N7/ADR-0029 知识引用回源：执行期 knowledge_search 命中的语料块，
+               签发人一步核对原文。无检索的任务整块零渲染（不摆空态）；披露
+               触发器=真 <button>（W3 同款纪律）；块内无 /download 链接，不扰
+               m2 e2e 的产物链接 DOM 序锚点。 -->
+          <div class="source-block knowledge-citations" v-if="knowledgeCitations.length">
+            <div class="source-label">知识引用</div>
+            <div class="citation-hint">执行期知识检索命中的语料块——签发前可回源核对原文。</div>
+            <div v-for="c in knowledgeCitations" :key="c.key" class="citation-item">
+              <button
+                type="button"
+                class="citation-toggle"
+                :aria-expanded="citState(c.key).open ? 'true' : 'false'"
+                @click="toggleCitation(c)"
+              >
+                <span class="citation-chevron">{{ citState(c.key).open ? "▾" : "▸" }}</span>
+                <span class="citation-id">{{ c.chunkId }}</span>
+                <span class="citation-scope">{{ c.scopeId }}</span>
+                <span class="citation-action">{{ citState(c.key).open ? "收起" : "查看原文" }}</span>
+              </button>
+              <div v-if="citState(c.key).open" class="citation-body">
+                <div v-if="citState(c.key).loading" class="muted">原文加载中…</div>
+                <div v-else-if="citState(c.key).error" class="citation-note citation-error">{{ citState(c.key).error }}</div>
+                <template v-else-if="citState(c.key).chunk">
+                  <p class="citation-text">{{ citState(c.key).chunk.text }}</p>
+                  <div class="citation-meta">{{ citState(c.key).chunk.source }} · 指纹 <span class="num-token">{{ citState(c.key).chunk.fingerprint }}</span></div>
+                  <div class="citation-note">显示的是当前语料——检索之后语料若被更新，内容可能与执行当时不同。</div>
+                </template>
+              </div>
+            </div>
+          </div>
         </div>
       </aside>
       </div><!-- /td-grid -->
@@ -281,6 +311,7 @@ import { useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { cancelTask, reviewTask } from "../api/tasks";
 import { downloadUrl, fetchOutputFile } from "../api/files";
+import { readChunk } from "../api/knowledge";
 import { acquireChannel, pokeTask, onTransition } from "../stores/liveFeed";
 import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import EmptyState from "../components/EmptyState.vue";
@@ -504,6 +535,63 @@ const inputEntries = computed(() => {
   if (!inputs || typeof inputs !== "object") return [];
   return Object.entries(inputs).map(([k, v]) => [k, summarizeInputValue(v)]);
 });
+
+// N7/ADR-0029 知识引用：knowledge_search info 事件（payload.hit_chunk_ids）→
+// 去重引用行（scope_id+chunk_id 为键，保首现顺序）。error 级事件无命中数组，
+// 天然跳过；events 来自 channel（append-only），行列表随轮询增量生长。
+const knowledgeCitations = computed(() => {
+  const seen = new Set();
+  const rows = [];
+  for (const e of events.value || []) {
+    if (e.event_type !== "knowledge_search") continue;
+    const p = e.payload || {};
+    if (!Array.isArray(p.hit_chunk_ids) || !p.scope_id) continue;
+    for (const chunkId of p.hit_chunk_ids) {
+      const key = `${p.scope_id}::${chunkId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({ key, scopeId: p.scope_id, chunkId });
+    }
+  }
+  return rows;
+});
+
+// 引用行视图态与 computed 行列表分离持有：events 轮询重算不清空已拉取的原文。
+const citationStates = reactive({});
+const EMPTY_CITATION = Object.freeze({ open: false, loading: false, error: "", chunk: null });
+function citState(key) {
+  return citationStates[key] || EMPTY_CITATION;
+}
+
+// 错误文案按后果说话：403/404/409 的后端 detail 本就是给人看的中文如实口径
+//（受限拒绝/当前语料无此块/同名歧义），直接透出不二次翻译；403 追加一句
+// 防止被误读成「引用是编的」——拒的是原文外发，不是引用真实性。
+function citationErrorText(err) {
+  const detail = err?.detail || err?.message || "原文加载失败";
+  if (err?.status === 403) {
+    return `${detail}——引用本身真实存在，只是原文按密级不放行。`;
+  }
+  return detail;
+}
+
+async function toggleCitation(c) {
+  let st = citationStates[c.key];
+  if (!st) {
+    st = citationStates[c.key] = reactive({ open: false, loading: false, error: "", chunk: null });
+  }
+  st.open = !st.open;
+  if (st.open !== true) return; // 收起
+  if (st.chunk || st.loading) return; // 已有内容/在途不重拉；上次失败(chunk仍null)重开即重试
+  st.loading = true;
+  st.error = "";
+  try {
+    st.chunk = await readChunk({ scopeId: c.scopeId, chunkId: c.chunkId });
+  } catch (err) {
+    st.error = citationErrorText(err);
+  } finally {
+    st.loading = false;
+  }
+}
 
 // artifacts fingerprint 增量逻辑保留在组件内：syncArtifacts 自身按 fileId
 // 做 Map 合并去重（已有的不重拉），output_file_ids 每次轮询都是全新数组
@@ -962,6 +1050,86 @@ onUnmounted(() => {
 .artifact-error {
   color: var(--trust-fail);
   font-size: 13px;
+}
+/* N7 知识引用：rail 内静默披露行——mono 引用号 + 幽灵按钮，原文收在 hairline
+   内衬里。错误态用 ink-soft 不用红：403/404/409 是口径说明不是系统故障，
+   红只留给真失败（信任色锁）。 */
+.citation-hint {
+  font-size: 12px;
+  color: var(--ink-faint);
+  margin-bottom: 6px;
+}
+.citation-item {
+  border-top: 1px solid var(--hairline);
+  padding: 6px 0;
+}
+.citation-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.citation-chevron {
+  flex: none;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.citation-id {
+  font-family: var(--mono, monospace);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  word-break: break-all;
+}
+.citation-scope {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.citation-action {
+  margin-left: auto;
+  flex: none;
+  font-size: 12px;
+  color: var(--clay);
+}
+.citation-body {
+  margin: 6px 0 2px 18px;
+}
+.citation-text {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--paper-canvas-b, var(--paper-rail));
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 8px 10px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.citation-meta {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  font-family: var(--mono, monospace);
+  word-break: break-all;
+  margin-bottom: 4px;
+}
+.citation-note {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  line-height: 1.6;
+}
+.citation-error {
+  color: var(--ink-soft);
 }
 .muted {
   color: var(--ink-faint);
