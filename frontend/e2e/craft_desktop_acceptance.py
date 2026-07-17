@@ -1187,6 +1187,34 @@ with sync_playwright() as p:
     check("⑭C4 reduce 下补洞归零（窄屏侧栏 transition=0s；el-drawer 过渡/动画禁用）",
           (sb_dur == "0s" and drawer_probe.startswith("0s") and drawer_probe.endswith("|none")) is True,
           f"sidebar={sb_dur} drawer={drawer_probe}")
+    # ── ⑭C4′ 批次六 B6-1c：治理 el-dialog 的 dialog-fade 位移动画 reduce 归零
+    #    （B5 只测 drawer 分支的盲区；覆盖 .el-dialog 与 .el-overlay-dialog 双节点）。
+    #    判定式（TB6 tamper 揭穿稳态读数假绿后重设计）：dialog-fade 动画只在
+    #    enter/leave 瞬挂 .dialog-fade-enter-active（Vue 动画毕即摘类），稳态读
+    #    computed 恒 none、删保护也过——故运行时把该类强加回 .el-overlay 再读
+    #    级联：reduce 规则在位 → !important 压住=none；被撤 → dialog-fade-in 现形──
+    rpage.keyboard.press("Escape")
+    rpage.wait_for_timeout(300)
+    rpage.goto(BASE + "/portal", wait_until="networkidle")
+    rpage.locator(".gov-entry").first.click()
+    try:
+        rpage.wait_for_selector(".el-dialog", timeout=8000)
+        # 读操作包 try/finally：中途抛也必摘类，不把 enter-active 留在 DOM
+        # 污染同 rpage 后续检查（3-lens oracle 审 P2——外层 except 只兜 Python
+        # 侧，救不回浏览器里执行过半的副作用）。
+        dlg_probe = rpage.locator(".el-dialog").evaluate(
+            "el => { const ovd = el.closest('.el-overlay-dialog');"
+            " const ov = ovd ? ovd.closest('.el-overlay') : null;"
+            " if (!ovd || !ov) return '(no-ov)';"
+            " ov.classList.add('dialog-fade-enter-active');"
+            " try {"
+            "   return [getComputedStyle(el).transitionDuration.split(',')[0],"
+            "     getComputedStyle(el).animationName, getComputedStyle(ovd).animationName].join('|');"
+            " } finally { ov.classList.remove('dialog-fade-enter-active'); } }")
+    except Exception:
+        dlg_probe = "(no-dialog)"
+    check("⑭C4′ reduce 下治理 el-dialog 位移动画归零（dialog+overlay-dialog 双节点）",
+          (dlg_probe == "0s|none|none") is True, f"dlg={dlg_probe}")
     rpage.close()
 
     # ── ⑭e C5 ring-elevation 试点机制断言（transparent 边框保布局+1px 环）────
@@ -1291,13 +1319,25 @@ with sync_playwright() as p:
     page.wait_for_selector(".qs-item", timeout=8000)
     page.keyboard.press("Enter")
     page.wait_for_timeout(700)  # 导航 + 关闭 watcher 竞态窗口全落地
-    # 白名单断言（Codex R0 P2：仅排除旧按钮会让「焦点被任何别处偷走」也过）：
-    # 当前契约=浏览器默认落点 body（router 级 roving-focus 属全局设计，反采纳
-    # 入 retro——若未来引入，此断言应改为新落点并有意识更新）。
+    # 白名单断言（Codex R0 P2：仅排除旧按钮会让「焦点被任何别处偷走」也过）。
+    # 批次六 B6-2 有意识更新：router 级 roving focus 落地，导航后契约落点从
+    # body 改为 .app-main（tabindex=-1 程序化聚焦容器）——正是批五此处注释
+    # 预留的变更路径。
     nav_focus = page.evaluate(
         "() => document.activeElement === document.body ? '(body)' : String(document.activeElement.className)")
-    check("⑭C6″ 导航离场不回还（焦点=body 默认落点，绝不拽回搜索钮）",
-          (nav_focus == "(body)") is True, f"active={nav_focus}")
+    check("⑭C6″ 导航离场不回还（焦点=app-main roving 落点，绝不拽回搜索钮）",
+          ("app-main" in nav_focus) is True, f"active={nav_focus}")
+    # ── ⑭C6⁗ 路由播报配套（3-lens a11y 审 P2a）：focus-only 不是完整 WAI 方案
+    #    ——聚焦裸 main 时读屏只报 landmark，document.title 变化不播报。断言
+    #    aria-live 播报区文案与目的页 title 自洽（目的地无关判定式）─────────
+    #    （title 先剥 N5 徽章前缀「(N 待签) 」再比——titleBadge 是全应用唯一
+    #    title 写手，徽章态下裸 split 会误红）
+    ann_probe = json.loads(page.evaluate(
+        "() => JSON.stringify({a: (document.querySelector('.sr-announcer') || {}).textContent || '',"
+        " t: document.title.replace(/^\\(\\d+ 待签\\) /, '')})"))
+    check("⑭C6⁗ 导航后 aria-live 播报区文案=「已切换到＋目的页名」（与 title 自洽）",
+          (ann_probe["a"] == "已切换到" + ann_probe["t"].split(" · ")[0]) is True,
+          f"ann={ann_probe['a']!r} title={ann_probe['t']!r}")
 
     # ── ⑭g‴ C6 SC 导航出口同律（Codex R0 P2：openAllTasks 曾漏置空——统一
     #    closeForNavigation 出口后逐口验证）───────────────────────────────
@@ -1309,8 +1349,8 @@ with sync_playwright() as p:
     page.wait_for_timeout(600)
     sc_nav_focus = page.evaluate(
         "() => document.activeElement === document.body ? '(body)' : String(document.activeElement.className)")
-    check("⑭C6‴ SC「查看全部任务」导航离场不回还（焦点=body，不被拽回 dock）",
-          (sc_nav_focus == "(body)") is True, f"active={sc_nav_focus}")
+    check("⑭C6‴ SC「查看全部任务」导航离场不回还（焦点=app-main roving 落点，不被拽回 dock）",
+          ("app-main" in sc_nav_focus) is True, f"active={sc_nav_focus}")
 
     # ── ⑭a′ C2 「（自动重试中）」真声明锁（3-lens 诚实 P2）：feed 源挂起→
     #    超时错误行带自动重试标注、无「请稍后重试（自动重试中）」自相矛盾拼接，
@@ -1341,6 +1381,123 @@ with sync_playwright() as p:
           suffix_ok is True and contradiction_free is True and repoll_ok is True,
           f"err={feed_err[:70]} hits={feed_hits['n']}")
     ctx.unroute("**/api/tasks*")
+
+    # ── ⑮ 批次六 B6-4：Fitts / WCAG 2.2 SC 2.5.8 触达目标 census（24×24 CSS px
+    #    AA 地板；spacing 豁免=中心距 <24 才算拥挤、inline 文本流豁免——两豁免均
+    #    为 SC 2.5.8 例外的可计算近似，判定式焊死在此。已知近似边界：SC 2.5.8
+    #    的 user-agent control 豁免（原生未改样 checkbox/radio）未建模——方向
+    #    是过咬不漏咬（fail-closed 安全侧），全仓控件均自定义样式故当前无误报）──
+    TARGET_JS = """
+    () => {
+      const els = [...document.querySelectorAll("button, a, [role=button], input, select, textarea")]
+        .filter((el) => {
+          if (el.closest("[inert]")) return false;
+          const cs = getComputedStyle(el);
+          if (cs.visibility === "hidden" || cs.display === "none") return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        });
+      const centers = els.map((el) => {
+        const r = el.getBoundingClientRect();
+        return { el, cx: r.left + r.width / 2, cy: r.top + r.height / 2, r };
+      });
+      const viol = [];
+      for (const t of centers) {
+        if (t.r.width >= 24 && t.r.height >= 24) continue;
+        const cs = getComputedStyle(t.el);
+        if (cs.display === "inline") continue; // 行内文本流豁免
+        const crowded = centers.some((o) => o !== t && Math.hypot(o.cx - t.cx, o.cy - t.cy) < 24);
+        if (!crowded) continue; // spacing 豁免：24px 圆不与其他目标圆心相犯
+        viol.push(t.el.tagName.toLowerCase() + "." + String(t.el.className).split(" ").slice(0, 2).join(".")
+          + `(${Math.round(t.r.width)}x${Math.round(t.r.height)})`);
+      }
+      return viol;
+    }
+    """
+    fitts_all = {}
+    for _path in ("/today", "/me", "/portal"):
+        page.goto(BASE + _path, wait_until="networkidle")
+        page.wait_for_timeout(300)
+        v = page.evaluate(TARGET_JS)
+        if v:
+            fitts_all[_path] = v
+    check("⑮ 触达目标 census：/today /me /portal 全部 ≥24×24 或豁免（违规=0）",
+          (len(fitts_all) == 0) is True, str(fitts_all)[:220])
+
+    # ── ⑯ 批次六 B6-3：dock 带全页遮挡审计（B5 §七-b 缺陷族推广）：pill 必须
+    #    在场（DB 直翻造 waiting+running 各一）→ 六页枚举与 dock 矩形交叠的可点
+    #    元素，中心 elementFromPoint 命中 dock 子树=遮挡违规。已知局限（如实
+    #    声明）：单点中心采样——边角被咬但中心露出的部分遮挡不计，堵死需多点
+    #    采样（中心+四角内缩），列 retro────────────────────────────────────
+    # 夹具留痕可回滚（3-lens oracle 审 P2）：记住被翻的两条 id+原状态，六页
+    # 枚举完显式还原——后续新增 check 不被静默污染的任务状态坑到。
+    import sqlite3 as _sq
+    _c = _sq.connect(WORK / "flai_os.db")
+    _flip_a = _c.execute("SELECT id, status FROM tasks LIMIT 1").fetchone()
+    _c.execute("UPDATE tasks SET status='waiting_review' WHERE id=?", (_flip_a[0],))
+    _flip_b = _c.execute(
+        "SELECT id, status FROM tasks WHERE status != 'waiting_review' LIMIT 1").fetchone()
+    _c.execute("UPDATE tasks SET status='running' WHERE id=?", (_flip_b[0],))
+    _c.commit()
+    _c.close()
+    DOCK_JS = """
+    () => {
+      const dock = document.querySelector(".status-dock");
+      if (!dock) return ["(no-dock)"];
+      if (!dock.querySelector(".dock-pill")) return ["(no-pill)"]; // 审计前提 fail-loud
+      const dr = dock.getBoundingClientRect();
+      const out = [];
+      for (const el of document.querySelectorAll("button, a, [role=button]")) {
+        if (el.closest(".status-dock")) continue;
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height) continue;
+        if (r.right < dr.left || r.left > dr.right || r.bottom < dr.top || r.top > dr.bottom) continue;
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        if (hit && (hit === dock || dock.contains(hit))) {
+          out.push(el.tagName.toLowerCase() + "." + String(el.className).split(" ").slice(0, 2).join("."));
+        }
+      }
+      return out;
+    }
+    """
+    dock_all = {}
+    for _path in ("/today", "/me", "/", "/portal", "/tasks", "/feedback"):
+        page.goto(BASE + _path, wait_until="networkidle")
+        page.wait_for_timeout(400)
+        v = page.evaluate(DOCK_JS)
+        if v:
+            dock_all[_path] = v
+    _c = _sq.connect(WORK / "flai_os.db")
+    _c.execute("UPDATE tasks SET status=? WHERE id=?", (_flip_a[1], _flip_a[0]))
+    _c.execute("UPDATE tasks SET status=? WHERE id=?", (_flip_b[1], _flip_b[0]))
+    _c.commit()
+    _c.close()
+    check("⑯ dock 带全页遮挡审计（waiting+running pill 在场，六页可点元素零被拦）",
+          (len(dock_all) == 0) is True, str(dock_all)[:220])
+
+    # ── ⑮′ 批次六 B6-1b：附件上传分阶段真话活体锁（B5 修复的代码级验证升活体）：
+    #    挂起 upload 路由→发送带附件→thinking 区必须显「正在上传附件 1/1」而非
+    #    「导引思考中」（300s 宽限下网络耗时绝不冒充模型推理）─────────────────
+    _att = WORK / "b6_upload_probe.txt"
+    _att.write_text("批次六上传分阶段探针附件", encoding="utf-8")
+    def _hang_upload(route):
+        pass  # 挂起：等 uploadPhase 稳定在屏上受审
+    ctx.route("**/api/files/upload", _hang_upload)
+    page.goto(BASE + "/", wait_until="networkidle")
+    page.locator('.composer input[type="file"]').set_input_files(str(_att))
+    page.locator(".composer textarea").fill("上传分阶段探针")
+    page.get_by_role("button", name="发送").click()
+    try:
+        page.wait_for_selector(".tlabel", timeout=8000)
+        page.wait_for_timeout(400)
+        tlabel_txt = page.locator(".tlabel").inner_text()
+        upload_phase_ok = ("正在上传附件 1/1" in tlabel_txt) and ("导引思考中" not in tlabel_txt)
+    except Exception:
+        tlabel_txt, upload_phase_ok = "(无 thinking 区)", False
+    check("⑮′ 上传期 thinking 区显「正在上传附件 1/1」不冒充「导引思考中」",
+          upload_phase_ok is True, f"tlabel={tlabel_txt[:60]}")
+    ctx.unroute("**/api/files/upload")
+    page.goto(BASE + "/today", wait_until="domcontentloaded")  # 弃置挂起中的发送轮
 
     ctx.close()
 

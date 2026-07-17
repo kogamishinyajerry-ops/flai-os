@@ -1,3 +1,4 @@
+import { nextTick } from "vue";
 import { createRouter, createWebHistory } from "vue-router";
 import { setTitleBase } from "../utils/titleBadge";
 
@@ -22,14 +23,42 @@ const routes = [
   { path: "/feedback", name: "feedback", component: () => import("../views/FeedbackPage.vue"), meta: { title: "反馈" } },
 ];
 
+// 重挂判据（B6-2）：与 App.vue 的 page-turn :key 同式（pageKey||path）——
+// 任务台内选中切换、/?c= 回流等「同 Surface」导航不重挂。
+const keyOf = (r) => String(r.meta.pageKey || r.path);
+
 const router = createRouter({
   history: createWebHistory(),
   routes,
+  // 滚动契约（3-lens a11y 审 P2b）：roving focus 用 preventScroll，滚动归属
+  // 权在此处而非 focus 副作用——真翻页回顶；浏览器后退/前进还原既存位置；
+  // 同 pageKey 导航不动滚动（任务台选中一行不许跳顶）。
+  scrollBehavior(to, from, savedPosition) {
+    if (savedPosition) return savedPosition;
+    if (from.matched.length && keyOf(to) === keyOf(from)) return false;
+    return { top: 0 };
+  },
 });
 
-router.afterEach((to) => {
+router.afterEach((to, from) => {
   // N5：经 titleBadge 合成（全应用唯一 title 写手），徽章计数不因路由切换丢失。
   setTitleBase(to.meta.title ? `${to.meta.title} · FLAi-OS` : "FLAi-OS");
+
+  // roving focus（批次六 B6-2，router 级——批五反采纳单点实现的正确形态）：
+  // 页面真重挂时把焦点移交主区容器，键盘/读屏用户从新页内容起 Tab，不从
+  // body/文档顶重爬；同拍写 aria-live 播报（3-lens a11y 审 P2a：focus-only
+  // 读屏只报 landmark，title 变化不播报）。首载（from 无匹配）保留浏览器
+  // 默认焦点行为，也不播报。
+  if (!from.matched.length) return;
+  if (keyOf(to) === keyOf(from)) return;
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      const main = document.querySelector(".app-main");
+      if (main) main.focus({ preventScroll: true });
+      const ann = document.querySelector(".sr-announcer");
+      if (ann) ann.textContent = `已切换到${to.meta.title || "页面"}`;
+    });
+  });
 });
 
 export default router;

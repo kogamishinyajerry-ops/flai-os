@@ -39,9 +39,9 @@
             @keydown.enter.prevent="openTask(t.id)"
             @keydown.space.prevent="openTask(t.id)"
           >
-            <!-- lamp 走 taskLampColor SSOT（B-T3 审 P3）；耗时文案「运行」而非
-                 「等待」——taskElapsedMs 起点是 started_at，是任务总耗时不是
-                 进入待签发队列的排队时长（诚实地板：文案不得暗示不存在的语义）。 -->
+            <!-- lamp 走 taskLampColor SSOT（B-T3 审 P3）。耗时：待签行不再显示
+                 「运行 Xs」——taskElapsedMs 对停驻态返回 null（批次六 B6-5：
+                 无 finished_at 时墙钟端锚只属于工作态，待签期间膨胀的时长=假声明）。 -->
             <span class="today-lamp" :style="{ background: taskLampColor(t.status) }"></span>
             <span class="today-card-main">
               <!-- 人话称呼（批次四 Q1）：缺名回退 Agent 显示名，taskDisplayName

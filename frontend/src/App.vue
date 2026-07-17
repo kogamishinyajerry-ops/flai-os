@@ -75,7 +75,14 @@
       </div>
     </aside>
 
-    <main class="app-main">
+    <!-- 路由播报区（3-lens a11y 审 P2a）：focus-only 不是完整 WAI SPA 方案——
+         聚焦裸 main 读屏只报 landmark，title 变化不播报；aria-live 补上这层。
+         文案由 router afterEach 与 roving focus 同拍写入。 -->
+    <div class="sr-announcer" aria-live="polite"></div>
+
+    <!-- tabindex=-1：router afterEach 的 roving focus 落点（程序化聚焦容器，
+         不进 Tab 序不显焦点环）——导航后键盘用户从主区起 Tab（批次六 B6-2）。 -->
+    <main class="app-main" tabindex="-1">
       <!-- 路由纸张过渡（动效系统 E3）：key 用 route.path——路由/参数变化时重挂载
            并触发入场动画（副作用修正：TaskDetail/WorkbenchSession 在 setup 捕获
            params，实例复用会读到旧 id，重挂载天然修正）；query 变化不重挂载
@@ -922,6 +929,23 @@ body {
   box-sizing: border-box;
   padding: 28px 32px 48px;
   min-height: 100vh;
+}
+/* roving focus 容器态（B6-2）：程序化聚焦不显环——它不是可点目标，焦点环
+   语义留给真交互元素（craft ①' 焦点环断言面不受影响：Tab 序不含本容器）。 */
+.app-main:focus { outline: none; }
+
+/* 路由播报区：视觉隐藏但读屏可达（标准 visually-hidden 式；display:none/
+   visibility:hidden 会连 AT 一起藏掉，不可用）。 */
+.sr-announcer {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ── 窄屏汉堡 + 抽屉背板（宽屏隐藏；侧栏常驻） ── */

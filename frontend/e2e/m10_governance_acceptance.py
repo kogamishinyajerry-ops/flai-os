@@ -312,6 +312,46 @@ with sync_playwright() as p:
     check("⑨任务历史默认视图不含 eval 任务", "eval:case" not in hist and "governed_agent" in hist, hist[:400])
     page.screenshot(path=str(SHOTS / "7_history_isolated.png"), full_page=True)
 
+    # ── ⑩ 批次六 B6-1a：入队后首轮询失败→防重复入队闭环（B5 Codex R1 #5
+    #    修复的活体锁）。路由只断状态轮询 GET（/eval-runs/* 带尾段），POST
+    #    /eval-runs 与列表 GET 不受影响——正好夹住「POST 成功、首轮询失败」
+    #    的重复入队窗口：错误行+行内重试上屏，「跑评测」被 latestRunInFlight
+    #    压住（loading 已解除，禁用只能来自在跑判定）。──────────────────
+    page.goto(BASE + "/portal", wait_until="networkidle")
+    gov_card2 = page.locator(".agent-card", has_text="governed_agent")
+    gov_card2.locator(".gov-entry").click()
+    expect(page.locator(".gov-dialog")).to_be_visible(timeout=5000)
+    page.route("**/eval-runs/*", lambda r: r.abort())
+    page.locator(".gov-run-btn").click()
+    try:
+        page.wait_for_selector(".gov-resume-error", timeout=12000)
+        err_txt = page.locator(".gov-resume-error").inner_text()
+        page.wait_for_timeout(300)  # finally 解除 loading 后再验按钮禁用来源
+        btn_disabled = page.locator(".gov-run-btn").is_disabled()
+        retry_present = page.locator(".gov-resume-retry").count() == 1
+    except Exception:
+        err_txt, btn_disabled, retry_present = "(无错误行)", False, False
+    check("⑩入队后首轮询失败→错误行+行内重试在场+「跑评测」压住（绝不诱导重复入队）",
+          ("评测状态刷新失败" in err_txt) is True and btn_disabled is True and retry_present is True,
+          f"err={err_txt[:60]} disabled={btn_disabled} retry={retry_present}")
+    # 重试=同一恢复车道真闭环：恢复轮询→run 终态→错误行清除+按钮解锁
+    page.unroute("**/eval-runs/*")
+    page.locator(".gov-resume-retry").click()
+    try:
+        page.wait_for_selector(".gov-resume-error", state="detached", timeout=60000)
+        deadline = time.time() + 30
+        btn_enabled = False
+        while time.time() < deadline:
+            if page.locator(".gov-run-btn").is_enabled():
+                btn_enabled = True
+                break
+            time.sleep(0.5)
+    except Exception:
+        btn_enabled = False
+    check("⑩'行内重试恢复轮询到终态（错误行清除+「跑评测」解锁）",
+          btn_enabled is True)
+    page.keyboard.press("Escape")
+
     browser.close()
 
 failed = [r for r in results if r[1] is not True]

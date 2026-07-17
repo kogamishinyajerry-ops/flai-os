@@ -239,14 +239,20 @@ export const signoffText = (s) =>
   s.approved ? `✓ 由 ${s.reviewer} 批准放行` : `✕ 由 ${s.reviewer} 驳回`;
 
 // 任务已耗时（毫秒）：无 started_at 诚实返回 null（不编造耗时）；
-// 有 started_at 则用 (finished_at 或 nowMs) - started_at；解析失败同样返回 null。
+// 有 finished_at 用静止端锚；无 finished_at 时**只有工作态**才许拿 nowMs 当
+// 活端锚——waiting_review 等停驻态的墙钟不是运行时长，此前「运行 Xs」在待签
+// 期间持续膨胀=假声明（批次六 B6-5，诚实地板：不显示胜过显示膨胀的谎言）。
+// 真实「进入待签时刻」端锚需后端投影补 updated_at（schema parity 面，留 retro）。
 export const taskElapsedMs = (task, nowMs) => {
   if (!task || !task.started_at) return null;
   const startMs = Date.parse(task.started_at);
   if (Number.isNaN(startMs)) return null;
-  const endMs = task.finished_at ? Date.parse(task.finished_at) : nowMs;
-  if (Number.isNaN(endMs)) return null;
-  return endMs - startMs;
+  if (task.finished_at) {
+    const endMs = Date.parse(task.finished_at);
+    return Number.isNaN(endMs) ? null : endMs - startMs;
+  }
+  if (!_TASK_WORK_STATES.has(task.status)) return null;
+  return Number.isFinite(nowMs) ? nowMs - startMs : null;
 };
 
 // 文件尺寸 → 人话（B/KB/MB/GB 四档）；非法/非正值返回空串由调用方 v-if 省略。

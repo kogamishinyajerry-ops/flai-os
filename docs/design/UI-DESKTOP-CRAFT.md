@@ -443,3 +443,107 @@ m8_workbench/m8_orchestrator 原子扩：降灰元素 computed 色≠clay。node
 client.js 超时行为（stub fetch 悬挂→20s ApiError 超时分型）。tamper ≥5 处
 必咬（含 census 探针的回染 tamper、超时撤除 tamper）。`verify_all.sh` 全绿；
 3-lens+Codex 治理审（cap 3）收敛后按 standing 授权合并 push。
+
+---
+
+## 十五、批次六：retro 收账 + laws-of-ux 对表（B6-1 ~ B6-6）
+
+> 参照系新增：Open Design `craft/laws-of-ux.md`（具名研究→可执行指令的组合律层）
+> 与 `typography-hierarchy.md`。批五模式延续：取规则不取皮，只落可 oracle 化
+> 或可外科修复的条目；retro 队列（§十四收尾 + B5 评审记录 §八）优先清账。
+
+### B6-1 三处批五修复补 e2e 锁（诚实残差清账）
+
+- 评测防重复入队：路由注入评测状态 GET 失败 → 断言「跑评测」仍被
+  latestRunInFlight 压住 + resume 错误行/行内「重试」在场（批五修复的
+  niche 窗口=POST 成功后首轮询失败，探针直接夹到这个窗口上）。
+- 上传分阶段真话：挂起 upload 路由 + set_input_files → thinking 区显
+  「正在上传附件 1/1（名）…」而非「导引思考中」（把 GuidePage uploadPhase
+  从代码级验证升为活体断言）。
+- dialog reduce：rpage（reduce 语境）开 /portal 治理 el-dialog → computed
+  transition/animation 归零（收掉 ⑭d 只测 drawer 分支的盲区）。
+
+### B6-2 roving-focus（router 级，批五反采纳的正确形态）
+
+`router/index.js` afterEach（跳过判据=首载或 keyOf(to)===keyOf(from)，
+keyOf=pageKey||path 与 App.vue page-turn :key 同式——同路由 query 变化、
+任务台 /tasks↔/tasks/:id 同 pageKey 切换均不抢焦）→ nextTick+rAF 聚焦
+`.app-main`（tabindex="-1"，无视觉焦点环——程序化焦点管理容器不是可点目标）。
+键盘/读屏用户导航后从主区起 Tab，不再从 body/文档顶重爬。**探针有意识更新**：
+⑭C6″/⑭C6‴ 白名单断言从「=body」改「落点=app-main」——正是批五探针注释预留
+的变更路径（「若未来引入，此断言应改为新落点并有意识更新」）。
+
+**3-lens 采纳增补（a11y 审双 P2）**：
+- aria-live 播报区 `.sr-announcer`（visually-hidden）：focus-only 不是完整
+  WAI SPA 方案——聚焦裸 main 读屏只报 landmark，title 变化不播报；afterEach
+  与 roving focus 同拍写「已切换到＋页名」。探针 ⑭C6⁗（oracle 先行红→绿，
+  与 title 自洽判定、剥 N5 徽章前缀）。
+- router `scrollBehavior`：真翻页回顶 / 后退前进还原 savedPosition / 同
+  pageKey 不动滚动——滚动归属权收进 router，focus 保持 preventScroll 不再
+  背滚动副作用。**诚实标注：scrollBehavior 无独立探针**（回顶行为在 e2e
+  短页面上 vacuous，真实断言需长页夹具，列 retro）。
+
+### B6-3 dock 带全页遮挡审计（批五 §七-b 缺陷族推广）
+
+census 式探针：宽（1440）档遍历 /today、/me、/、/portal、/tasks、/feedback
+（workbench 已修有 m8 结构锁），枚举视口 dock 带矩形内的可点元素
+（button/a/[role=button]，非 dock 子树）→ 中心 elementFromPoint 命中
+.status-dock 子树=遮挡违规，断言=0。pill 必须在场（夹具保证 waiting/working
+计数非零）才算真审计。发现真碰撞→竖向让位同律修复。窄屏档 dock pill 隐藏
+（App 941 媒体块）无带可审，明说不测。
+
+### B6-4 Fitts / WCAG 2.2 SC 2.5.8 触达目标 census（⑮ 系列）
+
+laws-of-ux Fitts 条目 + accessibility-baseline 的 24×24 CSS px AA 地板：
+census JS 枚举可见交互元素（button/a/[role=button]/input/[tabindex≥0]），
+判定=rect ≥24×24 **或** 间距豁免（以元素中心 24px 半径圆内无其他交互元素
+中心——SC 2.5.8 spacing exception 的可计算近似）**或** 行内文本流豁免
+（display inline 且处于文本内容流——SC 2.5.8 inline exception）。
+/today、/me、/portal 三页断言违规=0；真违反项以 padding 增补修复
+（视觉尺寸不变者用 padding+负 margin 补偿）。豁免集与判定式焊死进探针，
+回缩 tamper 必咬。
+
+### B6-5 碎片清账
+
+- **elapsed 端锚（采纳修复）**：taskElapsedMs 无 finished_at 且状态 ∉
+  TASK_WORK_STATES → 返回 null。待签行「运行 Xs」此前以 now 为端锚持续
+  膨胀——任务停驻待签时墙钟不是运行时长，**不显示胜过显示膨胀的谎言**
+  （诚实地板）。消费者六处已按 safe-refactor 枚举：终态类走 finished_at
+  不受影响，工作态类在 TASK_WORK_STATES 内不受影响，waiting 行
+  （Today/StatusCenter）即修复面。node 三态单测锁定（working 增长/
+  waiting null/终态静止）。API 投影无 updated_at，真实「进入待签时刻」
+  端锚需后端契约字段=反采纳本批（schema parity gate 触碰面），留 retro。
+- **agentNames 重试上界（反采纳留痕）**：现行为=挂载门控单发防抖
+  （失败→loaded 不置位→下一个消费面挂载时至多再试一次），有意设计且
+  注释自陈，无重试风暴路径；加会话级计数上界=为未观测问题引入状态复杂度。
+  不改。
+
+### B6-6 tamper replay 脚本（B5-P3c 完整形态）
+
+`scripts/tamper_replay.sh`：隔离 git worktree（基 HEAD）重放核心 tamper
+（批五：census 回染 / 超时撤除 / reduce 侧栏撤洞；批六：roving 撤除 /
+Fitts 缩穿 / dialog-reduce 撤除 / portal 防重复入队撤除），每处 patch→
+rebuild→跑套件→断言**预期 FAIL 行**出现（grep 长前缀锚死消歧，如「⑩入队」
+防 ⑩' 串号——3-lens oracle 审 P2）→worktree 内 git checkout 复位；BITE-MISS
+即 exit 1（fail-closed）。产出=独立可复验的 tamper 证据，收掉 Codex
+B5-R0-P3/R1-#11 的 PARTIAL。脚本自身的验收=在含批六提交的 HEAD 上跑一轮
+全部咬合（重放基 HEAD，故须提交后验）。
+
+### 验收（批次六）
+
+B6-1 三探针 + ⑭C6″/⑭C6‴ 更新断言 + B6-3 dock 审计 + ⑮ 触达 census 全部
+先红后绿或 tamper 咬合；node 新增 elapsed 三态测；verify_all 全量 EXIT=0；
+3-lens 对抗审（沿批五授权模式）+ Codex 治理审 cap 3；评审记录
+CRAFT-RULES-B6-review-record.md；过审按 standing 授权合并 push。
+
+### retro 队列（批次六出账）
+
+- ⑯ dock 审计单点中心采样→多点（中心+四角内缩）堵部分遮挡假阴性
+  （3-lens oracle 审确认的已知局限）。
+- scrollBehavior 回顶无独立探针（需长页夹具才非 vacuous）。
+- 同 pageKey 导航（/tasks→/tasks/:id）焦点零管理——详情栏出现后键盘用户
+  需自行摸索（3-lens a11y 审 P3，非本批回归，任务台自身的焦点契约待定）。
+- roving focus 无「当前焦点在输入框则让位」守卫——今天全仓无 mount 期
+  autofocus 故不咬（3-lens correctness 审 P3，潜伏陷阱）。
+- 待签行真实端锚（距进入待签 Xs）需后端 updated_at 投影字段（承批五）。
+- 窄屏 dock 带布局（承批五）。
