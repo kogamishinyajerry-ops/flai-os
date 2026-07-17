@@ -97,7 +97,11 @@ def governance_env(tmp_path: Path) -> Iterator[GovernanceEnv]:
         yaml_text.replace("id: hello_agent", "id: governed_agent").replace(
             "requires_human_review: false",
             "requires_human_review: true",
-        ),
+        )
+        # ADR-0030 创建时点密级准入门：m11 分级传播测试要喂 sensitive/缺失记录
+        # 输入给本 agent，须显式持有 sensitive 准入才合法过门（缺省 internal 会
+        # 在创建期 400，传播链路根本跑不起来）。
+        + "\nclearance:\n  max_data_classification: sensitive\n",
         encoding="utf-8",
     )
     _write_eval_cases(agents_dir, _base_cases())

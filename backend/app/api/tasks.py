@@ -143,6 +143,76 @@ class CreateTaskRequest(BaseModel):
         return v
 
 
+class BatchTaskItem(BaseModel):
+    """批量召集单项（批七 §3-B6）。字段口径与 CreateTaskRequest 同源（各 validator
+    的理由注释见彼处，此处不复述）；差异仅一处：**after=同批下标依赖**替代
+    depends_on——批内成员的 task_id 生成于提交时，无法预先引用，故以下标声明、
+    创建时映射为真 depends_on。只允许引用更早条目 ⟹ 按构造即 DAG，零环检测。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    name: str | None = Field(default=None, max_length=200)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    input_file_ids: list[str] = Field(default_factory=list, max_length=64)
+    after: list[int] = Field(default_factory=list, max_length=32)
+
+    @field_validator("inputs")
+    @classmethod
+    def inputs_size_capped(cls, v: dict[str, Any]) -> dict[str, Any]:
+        import json as _json
+
+        size = len(_json.dumps(v, ensure_ascii=False).encode("utf-8"))
+        if size > _INPUTS_MAX_BYTES:
+            raise ValueError(
+                f"inputs 序列化后 {size} 字节，超过上限 {_INPUTS_MAX_BYTES}——大数据请走附件上传"
+            )
+        return v
+
+    @field_validator("name")
+    @classmethod
+    def name_non_blank_if_present(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("name 若提供则不得为空白——不命名请省略该字段（留 null）")
+        return stripped
+
+    @field_validator("input_file_ids")
+    @classmethod
+    def input_file_ids_sane_and_unique(cls, v: list[str]) -> list[str]:
+        seen: set[str] = set()
+        for fid in v:
+            if not fid.strip() or len(fid) > 64:
+                raise ValueError(f"非法输入文件 id：{fid!r}")
+            if fid in seen:
+                raise ValueError(f"输入文件 id 重复：{fid!r}（契约要求 uniqueItems）")
+            seen.add(fid)
+        return v
+
+    @field_validator("after")
+    @classmethod
+    def after_sane_and_unique(cls, v: list[int]) -> list[int]:
+        seen: set[int] = set()
+        for i in v:
+            if i < 0:
+                raise ValueError(f"after 下标不得为负：{i}")
+            if i in seen:
+                raise ValueError(f"after 下标重复：{i}")
+            seen.add(i)
+        return v
+
+
+class CreateTasksBatchRequest(BaseModel):
+    """批量召集请求（批七）：全有全无——任一项校验不过整批 422 逐项清单，绝不半建。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str | None = Field(default=None, max_length=100)
+    items: list[BatchTaskItem] = Field(min_length=1, max_length=32)
+
+
 class ReviewTaskRequest(BaseModel):
     """人工放行请求体（P1-B）。reviewer 已从请求体删除（ADR-0019 D5）：
     签发者=登录会话身份，服务端派生——「人是唯一的工程签发者」（宪法铁律六）
@@ -250,6 +320,20 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                         f"{rec.get('kind')!r}——上游产物须经依赖 resolver 管道注入，不得直引"
                     ),
                 )
+        # 批七 ADR-0030：创建时点密级准入 gate——Agent 密级上限不足以接这批材料
+        # 即 400 拒建（中性文案：策略拒绝非报警红）。单建路径；TaskCreate 手建同走
+        # 本函数即覆盖；batch 路径在 create_tasks_batch 同函数判定。
+        _allowed, _material_level, _agent_max = cgate.agent_clearance_allows(
+            conn, agent, body.input_file_ids
+        )
+        if _allowed is False:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"该专家的密级准入上限为「{_agent_max}」，无法处理「{_material_level}」级材料"
+                    "——请改派密级上限足够的 Agent 或移除受控输入（ADR-0030）"
+                ),
+            )
         if body.input_binding is not None:
             stray = [t for t in body.input_binding.from_tasks if t not in body.depends_on]
             if stray:
@@ -339,6 +423,141 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             },
         )
         return task
+    finally:
+        conn.close()
+
+
+@router.post("/tasks/batch")
+def create_tasks_batch(body: CreateTasksBatchRequest, request: Request) -> dict[str, Any]:
+    """批量召集（批七 §3-B6）：一次事务建整组任务 + after 下标映射真 depends_on。
+
+    全有全无：逐项静态校验先全部收集（agent 在场/未下线/非 interactive、after
+    下标合法、文件 kind allowlist、密级 gate），任一项不过 → 422 携逐项错误清单
+    （batch_errors），DB 零写入；全过 → BEGIN IMMEDIATE 单事务建 N 行（会话
+    active 复查在写锁内，与 conclude 串行化，同单建路径语义）。提交后无依赖项
+    入队（P2-4 原子例外）、带依赖项滞留 created 待 resolver——依赖同批同会话
+    按构造成立，单建路径的跨会话/跨 origin 校验在此无对应攻击面。
+    """
+    agent_registry = request.app.state.agent_registry
+    conn = request.app.state.conn_factory()
+    try:
+        created_by = request.state.user["display_name"]
+        created_by_username = request.state.user["username"]
+
+        errors: list[dict[str, Any]] = []
+        agents: list[dict[str, Any] | None] = []
+        for idx, item in enumerate(body.items):
+            item_errors: list[str] = []
+            agent = _get_agent_or_none(agent_registry, item.agent_id)
+            if agent is None:
+                item_errors.append(f"agent 不存在：{item.agent_id}")
+            elif agent.get("status") == "disabled":
+                item_errors.append(f"agent 已下线，禁止调用：{item.agent_id}")
+            elif (agent.get("workflow", {}) or {}).get("mode") == "interactive":
+                item_errors.append(
+                    f"agent {item.agent_id} 是导引类（interactive）Agent，请走 /api/conversations 对话"
+                )
+            for dep_idx in item.after:
+                if not (0 <= dep_idx < idx):
+                    item_errors.append(
+                        f"after 下标 {dep_idx} 非法：只能引用本批更早条目（0..{idx - 1}）——按构造即 DAG"
+                    )
+            for fid in item.input_file_ids:
+                rec = repos.get_file(conn, fid)
+                if rec is not None and rec.get("kind") != "input":
+                    item_errors.append(
+                        f"input_file_ids 只接受上传件（kind=input）：{fid} 的 kind={rec.get('kind')!r}"
+                    )
+            if agent is not None:
+                # 批七 ADR-0030 密级 gate（batch 路径，与 create_task 同函数同判定式）。
+                _allowed, _material_level, _agent_max = cgate.agent_clearance_allows(
+                    conn, agent, item.input_file_ids
+                )
+                if _allowed is False:
+                    item_errors.append(
+                        f"该专家的密级准入上限为「{_agent_max}」，无法处理「{_material_level}」级材料（ADR-0030）"
+                    )
+            agents.append(agent)
+            if item_errors:
+                errors.append({"index": idx, "agent_id": item.agent_id, "errors": item_errors})
+        if errors:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "整批未创建（全有全无）——逐项修正后重试",
+                    "batch_errors": errors,
+                },
+            )
+
+        task_ids = [f"task_{uuid.uuid4().hex}" for _ in body.items]
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if body.conversation_id is not None:
+                conv = repos.get_conversation(conn, body.conversation_id)
+                if conv is None:
+                    raise HTTPException(
+                        status_code=404, detail=f"归属的导引会话不存在：{body.conversation_id}"
+                    )
+                if conv["status"] != "active":
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"归属的导引会话已 {conv['status']}，不再接受新任务"
+                            f"（结束协作=真只读）：{body.conversation_id}"
+                        ),
+                    )
+            for idx, item in enumerate(body.items):
+                deps = [task_ids[d] for d in item.after]
+                repos.create_task(
+                    conn,
+                    task_id=task_ids[idx],
+                    agent_id=item.agent_id,
+                    agent_version=(agents[idx] or {}).get("version"),
+                    name=item.name,
+                    created_by=created_by,
+                    created_by_username=created_by_username,
+                    inputs=item.inputs,
+                    input_file_ids=item.input_file_ids,
+                    metadata={},
+                    depends_on=deps or None,
+                    input_binding=None,
+                    conversation_id=body.conversation_id,
+                    retry_of=None,
+                )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        # 提交后逐项收尾（同单建路径：事件在事务外 autocommit；set_task_status
+        # 自带 BEGIN IMMEDIATE）：无依赖入队，带依赖滞留 created 待 resolver。
+        out_tasks: list[dict[str, Any]] = []
+        for idx, item in enumerate(body.items):
+            deps = [task_ids[d] for d in item.after]
+            if deps:
+                task = repos.get_task(conn, task_ids[idx])
+                status_to = "created"
+                message = f"任务已创建（等待 {len(deps)} 个前置任务）：agent={item.agent_id}"
+            else:
+                task = repos.set_task_status(conn, task_ids[idx], "queued")
+                status_to = "queued"
+                message = f"任务已创建：agent={item.agent_id}"
+            repos.append_event(
+                conn,
+                task_id=task_ids[idx],
+                agent_id=item.agent_id,
+                event_type="task_created",
+                level="info",
+                message=message,
+                payload={
+                    "created_by": created_by,
+                    "status_from": "created",
+                    "status_to": status_to,
+                    "depends_on": deps,
+                    "batch_index": idx,
+                },
+            )
+            out_tasks.append(task)
+        return {"tasks": out_tasks}
     finally:
         conn.close()
 

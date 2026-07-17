@@ -229,7 +229,9 @@ def _validate_orchestrate(
     dropped: list[str] = []
     seen: set[str] = set()
     capped = False
-    for entry in raw_agents:
+    raw_to_final: dict[int, int] = {}
+    raw_afters: list[Any] = []
+    for raw_idx, entry in enumerate(raw_agents):
         if len(agents) >= _MAX_PLAN_AGENTS:
             capped = True
             break
@@ -249,6 +251,8 @@ def _validate_orchestrate(
         raw_inputs = entry.get("prefilled_inputs")
         raw_inputs = raw_inputs if isinstance(raw_inputs, dict) else {}
         prefilled, stripped = _clean_prefilled_inputs(registry, agent_id, raw_inputs)
+        raw_to_final[raw_idx] = len(agents)
+        raw_afters.append(entry.get("after"))
         agents.append(
             {
                 "agent_id": agent_id,
@@ -266,6 +270,35 @@ def _validate_orchestrate(
     if not agents:
         # orchestrate 却无任何真实 Agent 存活 = 幻觉召集，整份作废（fail-closed）。
         return None
+
+    # 批七 §S2-7：after 同批依赖（LLM 以其原始条目下标声明「本成员需要哪些更早
+    # 成员的产物」）。剥离降级纪律（fail-safe，绝不静默）：任一非法引用——非整数/
+    # 指向被剪条目/自引或前向引用（最终序）——则**整个 after 字段剥离为无依赖**
+    # 并记入该成员 stripped_fields（宁可扁平并行召集，也不虚构/半保留依赖图；
+    # 前端据 stripped_fields 显式口播降级）。合法引用经 raw→final 重映射，只许
+    # 指向最终列表更早条目 ⟹ 按构造无环，零环检测代码。
+    for final_idx, agent_entry in enumerate(agents):
+        raw_after = raw_afters[final_idx]
+        if raw_after is None:
+            agent_entry["after"] = []
+            continue
+        refs = raw_after if isinstance(raw_after, list) else None
+        mapped: list[int] = []
+        valid = refs is not None
+        for ref in refs or []:
+            if not isinstance(ref, int) or isinstance(ref, bool):
+                valid = False
+                break
+            tgt = raw_to_final.get(ref)
+            if tgt is None or tgt >= final_idx:
+                valid = False
+                break
+            mapped.append(tgt)
+        if valid is True and mapped:
+            agent_entry["after"] = sorted(set(mapped))
+        else:
+            agent_entry["after"] = []
+            agent_entry["stripped_fields"] = list(agent_entry.get("stripped_fields") or []) + ["after"]
 
     return {
         "decision": "orchestrate",

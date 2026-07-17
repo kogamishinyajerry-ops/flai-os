@@ -136,3 +136,54 @@ def redact_model_calls_by_task(
             cache[task_id] = sensitive
         out.append(redact_rows([row], MODEL_CALL_CONTENT_KEYS)[0] if sensitive else row)
     return out
+
+
+# ── 批七 ADR-0030：创建时点密级准入 gate ─────────────────────────────────────
+# 与上面的「运行中/出场面遮蔽」正交：本 gate 管「这个 Agent 有没有资格接这批
+# 材料」，在任务创建时点判定（四路复用：create_task / tasks:batch / 手建路径
+# 同走 create_task / 未来 teams summon）；执行期派生分级与出场遮蔽照旧归
+# ADR-0025 各函数，互不越权。
+
+_CLEARANCE_RANK = {"public": 0, "internal": 1, "sensitive": 2}
+
+
+def derive_input_material_level(
+    conn: sqlite3.Connection, input_file_ids: Sequence[str] | None
+) -> str:
+    """输入材料密级（创建时点）：无文件 → public（不携带任何受控材料）；
+    文件记录缺失 → sensitive（出处不可考，宁严勿洗白，与 runtime
+    _task_input_classification 同哲学）；全 internal → internal；
+    任一非 internal（含未知坏值，allowlist 判定）→ sensitive。"""
+    file_ids = list(input_file_ids or [])
+    if not file_ids:
+        return "public"
+    placeholders = ",".join("?" for _ in file_ids)
+    rows = conn.execute(
+        f"SELECT id, classification FROM files WHERE id IN ({placeholders})",
+        file_ids,
+    ).fetchall()
+    if len(rows) != len(file_ids):
+        return "sensitive"
+    if all(r[1] == "internal" for r in rows) is True:
+        return "internal"
+    if all(r[1] in ("internal", "public") for r in rows) is True:
+        return "internal"
+    return "sensitive"
+
+
+def agent_clearance_allows(
+    conn: sqlite3.Connection, agent: dict[str, Any], input_file_ids: Sequence[str] | None
+) -> tuple[bool, str, str]:
+    """ADR-0030 判定：max(输入材料密级) ≤ agent.clearance.max_data_classification。
+
+    clearance 整块缺省 = internal（fail-closed 取最严的向后兼容解释——存量包
+    默认拿不到 sensitive 材料）。未知坏值上限按 public（最低权限）兜底。
+    返回 (allowed, material_level, agent_max)；调用方判定必须 `is True/is False`。
+    """
+    agent_max = ((agent.get("clearance") or {}).get("max_data_classification")) or "internal"
+    material_level = derive_input_material_level(conn, input_file_ids)
+    allowed = (
+        _CLEARANCE_RANK.get(material_level, 2)
+        <= _CLEARANCE_RANK.get(agent_max, 0)
+    )
+    return allowed, material_level, agent_max

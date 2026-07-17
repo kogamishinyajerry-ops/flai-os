@@ -19,7 +19,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["agent_id", "agent_name", "category", "status", "maturity", "role", "rationale", "prefilled_inputs", "stripped_fields"],
+            "required": ["agent_id", "agent_name", "category", "status", "maturity", "role", "rationale", "prefilled_inputs", "stripped_fields", "after"],
             "properties": {
               "agent_id": { "type": "string", "description": "召集的 specialist Agent id（已校验真实/可召集）。" },
               "agent_name": { "type": "string", "description": "目标 Agent 显示名（取自 Registry）。" },
@@ -29,7 +29,8 @@
               "role": { "type": "string", "description": "该 Agent 在本次协作中的分工（LLM 提供）。" },
               "rationale": { "type": "string", "description": "召集它的理由（LLM 提供，仅参考）。" },
               "prefilled_inputs": { "type": "object", "description": "预填任务输入草案——只含目标 input_schema 声明且逐字段校验通过的字段，可能不完整，用户需补全后提交。" },
-              "stripped_fields": { "type": "array", "items": { "type": "string" }, "description": "LLM 提议但被剥离的字段名（未声明或违反字段 schema），如实记名。" }
+              "stripped_fields": { "type": "array", "items": { "type": "string" }, "description": "LLM 提议但被剥离的字段名（未声明或违反字段 schema）；after 引用非法被整体剥离时含 \"after\"，如实记名。" },
+              "after": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "产物依赖：本成员依赖的更早成员在最终 agents 列表中的下标（已按剪除重映射、去重升序；按构造只指向更早条目=DAG）。空数组=无依赖可并行。引用非法（幻觉/被剪/前向/自身/非整数）→ 整体剥离为 [] 并在 stripped_fields 记 \"after\"，绝不半保留。" }
             }
           }
         },
