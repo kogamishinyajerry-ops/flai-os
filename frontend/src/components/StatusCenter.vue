@@ -241,8 +241,8 @@ const agentNames = useAgentNames();
 // 「查看全部任务 →」：状态中心是任务总览的家（来找你）；要看更全的三栏视图 /
 // 历史全量时深链到 /tasks（范式 Phase 3：任务台降级为深链，不占主导航）。
 function openAllTasks() {
+  closeForNavigation();
   router.push("/tasks");
-  closeCenter();
 }
 const drawerSize = window.innerWidth < 640 ? "100%" : "540px";
 
@@ -567,13 +567,20 @@ async function doReview(action) {
   }
 }
 
+// 导航退场统一出口（Codex R0 审 P2：goFullPage/retryFromPeek 之外还有
+// openAllTasks 第四条导航路径漏置空）：导航离场不回还——焦点归新页面，
+// 回还只属于 Escape/点遮罩这类「放弃关闭」。所有导航出口一律走这里。
+function closeForNavigation() {
+  focusReturnEl = null;
+  backToInbox();
+  closeCenter();
+}
+
 function goFullPage() {
   const id = statusCenter.taskId;
   // 先同步切回 inbox 让 peek 子树立即响应式卸载——不等 el-drawer 的 0.3s 关闭
   // 过渡，堵死「批准放行」与 TaskDetail 同名按钮的瞬时选择器重影窗口（红线§e2e）
-  focusReturnEl = null; // 导航离场不回还（与 ⌘K activate 同律）：焦点归新页面
-  backToInbox();
-  closeCenter();
+  closeForNavigation();
   if (id) router.push(`/tasks/${id}`);
 }
 
@@ -583,9 +590,7 @@ function retryFromPeek() {
   const t = peekTask.value;
   if (!t) return;
   const target = buildRetryRoute(t);
-  focusReturnEl = null; // 导航离场不回还（与 goFullPage 同律）
-  backToInbox();
-  closeCenter();
+  closeForNavigation();
   router.push(target);
 }
 

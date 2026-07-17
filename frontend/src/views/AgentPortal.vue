@@ -192,6 +192,8 @@
             type="primary"
             class="gov-run-btn"
             :loading="governanceRunLoading"
+            :disabled="latestRunInFlight"
+            :title="latestRunInFlight && !governanceRunLoading ? '上一跑仍在进行或状态待确认——用行内「重试」刷新状态，不重复入队' : undefined"
             @click="runEvaluation"
           >跑评测</el-button>
 
@@ -298,6 +300,14 @@ const witnessedPromotionBurst = ref(false);
 let governanceEpoch = 0;
 
 const latestGovernanceRun = computed(() => governanceRuns.value[0] || null);
+// 「已知在跑」与「本会话轮询中」分离（Codex R0 审 P2）：恢复轮询失败会解除
+// loading，但最新 run 本地仍是 queued/running——后端允许并发触发（governance
+// API 无互斥），此时放开「跑评测」等于诱导对同一 agent 重复入队。旧 run 未
+// 确认终态前持续压住新评测入口；行内「重试」只重查状态，是唯一恢复动作。
+const latestRunInFlight = computed(() => {
+  const s = latestGovernanceRun.value?.status;
+  return s === "queued" || s === "running";
+});
 const MATURITY_LADDER = ["L0", "L1", "L2", "L3"];
 const maturityLadder = computed(() => {
   const current = governanceAgent.value?.maturity || "L0";

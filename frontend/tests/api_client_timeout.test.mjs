@@ -27,6 +27,30 @@ test("request: 挂起的 fetch 在 timeoutMs 到点必落地为超时分型（ti
   assert.ok(Date.now() - t0 < 5000, "超时必须按 timeoutMs 量级落地，不是无限等");
 });
 
+test("request: 响应头已到但 body 挂起→同样按超时分型落地（Codex R0 P2：body 读取必须在 abort 生命周期内）", async () => {
+  globalThis.fetch = (_path, init) =>
+    Promise.resolve({
+      ok: true,
+      json: () =>
+        new Promise((_resolve, reject) => {
+          // 模拟服务端发完响应头后 body 卡死：json() 永不落地，只对 abort 让路。
+          init.signal.addEventListener("abort", () => {
+            const e = new Error("The operation was aborted.");
+            e.name = "AbortError";
+            reject(e);
+          });
+        }),
+    });
+  await assert.rejects(
+    () => request("/api/hang-body", { timeoutMs: 80 }),
+    (err) =>
+      err instanceof ApiError &&
+      err.timeout === true &&
+      err.status === 0 &&
+      err.detail.includes("请求超时"),
+  );
+});
+
 test("request: 连接失败保持原分型（timeout=false，文案不混同）", async () => {
   globalThis.fetch = () => Promise.reject(new TypeError("Failed to fetch"));
   await assert.rejects(

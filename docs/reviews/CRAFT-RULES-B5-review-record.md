@@ -68,10 +68,10 @@
 | rP3 | `.el-overlay` reduce 归零的实际影响面（ElDialog/ElMessageBox 共 6 处）比注释宽；lens 已验证 Vue 对 duration=0 立即 resolve 不挂起 | **采纳注释修订** | App.vue 注释如实扩写影响面+不挂起结论；⑭d 只测了 drawer 分支→ElDialog/MessageBox reduce 覆盖进 retro 队列 |
 | uP3-1 | convo-dot.plan 6px 空心环可辨识度接近下限（且比默认实心点更暗） | **视觉抽检后留痕** | 见 §五-b |
 | uP3-3 | ring 试点与未改卡片（today-card/DeliveryCard）观感有缝 | **反采纳留痕** | spec §C5 已自陈刻意范围外（「叠加需重设计」），非疏漏 |
-| hP3 | m8⑤b/m9①b 的 "(none)" 兜底理论空真值不可达（无兜底元素先抛异常） | **记录在案** | 无改动；lens 已证不可达 |
+| hP3 | m8⑤b/m9①b 的 "(none)" 兜底理论空真值不可达（无兜底元素先抛异常） | ~~**记录在案**：无改动；lens 已证不可达~~ **勘误（Codex R0 P2 推翻）**：per-element 洞真实存在且已实际发生——m8 ⑤b 时点 chip-action 因人签流程（任务恒 waiting_review→走 chip-review 分支）**从未渲染过**，sentinel 一直把这个真覆盖空洞遮成绿。R1 修复：去 sentinel+在场先断言+running 翻转夹具（m9 同款渲染路径口径）让动作字真实上屏受审 | 见 §七 |
 | — | lens-honesty 诚实边界自陈：只读授权未重放 tamper 链 | **记录在案** | tamper 证据链由主会话亲跑（§三、§五-c），职责分工如实 |
 
-三镜「未命中/未见问题」维度同样入档：C3 降灰名单**真状态信号零丢失**（灯/字全在未动的 .status-lamp/.chip-lamp/.today-lamp 上）；check() 全 `is True`；QS grab 归因无误报面；WorkLog button 无 form 祖先/无嵌套交互元素；后端接口均有界、20s 默认安全（评测轮询单次 GET 短请求）；scoped CSS 零类名泄漏。
+三镜「未命中/未见问题」维度同样入档：C3 降灰名单**真状态信号零丢失**（灯/字全在未动的 .status-lamp/.chip-lamp/.today-lamp 上）；~~check() 全 `is True`~~（**勘误**：Codex R0 P1 抓出 5 处新探针传裸比较——实质为 bool 无假绿，但违 `is True` 显式家规且本句构成 over-claim；R1 已全部收紧为 `(...) is True` 形态）；QS grab 归因无误报面；WorkLog button 无 form 祖先/无嵌套交互元素；后端接口均有界、20s 默认安全（评测轮询单次 GET 短请求）；scoped CSS 零类名泄漏。
 
 ### 五-b 视觉抽检（uP3-1）
 
@@ -84,6 +84,9 @@
 | （oracle 先行 pre-fix 红） | ⑭C6′ / ⑭C6″ / ⑭C2′反矛盾 | pre-fix 代码即「篡改态」 | 三探针首跑精确 3 红（99/102），FAIL 明细逐字命中预测（dock 抢焦/搜索钮拽回/矛盾拼接原文） | 修复即恢复 |
 | T1′ | App.vue census 回染 | 同 T1（nav-link+section-head 染 clay） | 动态解析版 ⑭C3 双红（100/102），明细同 T1——oracle 重构后咬合力不减 | ✓（此轮 checkout 误抹未提交的 F9 注释，已当场发现重落——教训：**git-checkout 恢复只对无未提交改动的文件安全**） |
 | T7 | liveFeed.js schedule 入口 | `if (ch.state.error.value) return`（出错停轮——「自动重试中」变谎言的最短路径） | ⑭C2′ 精确 1 红 `hits=1`（101/102），轮询未二次开火被当场咬住 | ✓ |
+| （R1 oracle 先行红） | node body-hang 测试 / m8 ⑤b0 在场断言 | pre-fix 代码即「篡改态」 | body-hang 测试对修复前 client.js 咬合（文件级 ✖ 永不绿，独立复现 Codex P2）；m8 去 sentinel 后当场暴露 chip-action 从未渲染（wait 超时崩=fail-closed 咬合实录） | 修复即恢复 |
+| T11 | QuickSwitcher 分级口径回退 | 空态/降级条退回旧单一文案 | ⑭C2（全失败措辞）+⑭C2″（部分口径防夸大）双红（102/104），FAIL 明细直指夸大文案原文 | ✓（cp 备份+cmp 核验——本文件有未提交改动，git-checkout 恢复禁用） |
+| T12 | StatusCenter openAllTasks 出口回退 | 撤 closeForNavigation 回漏置空形态 | ⑭C6‴ 精确 1 红 `active=status-dock`（103/104），dock 抢焦当场复现 | ✓（同上 cmp 核验） |
 
 ## 六、反采纳与边界留痕（spec §十四 详述，此处摘要）
 
@@ -96,9 +99,35 @@
 
 ## 七、Codex 治理审（R0 起，cap=3）
 
-> （待填：轮次表 + findings + 裁决）
+### R0（gpt-5.6-sol ultra，read-only，diff e39ba1b..03d6f0c）：CHANGES_REQUIRED（1 P1 + 7 P2 + 3 P3）
+
+| # | finding | 裁决 | R1 落地 |
+|---|---|---|---|
+| P1 | 5 处新探针 check() 传裸比较（census×2/reduce/溢出/worklog），与记录「全 is True」声明冲突 | **采纳**（实质 bool 无假绿，但违显式家规+记录 over-claim） | 5 席位全部 `(...) is True` 收紧；§五 声明勘误留痕 |
+| P2 | client.js timer 在响应头到达即清除，body 读取不受 abort 保护——头到 body 挂=永久悬挂（Codex 已复现） | **采纳** | 整个 请求→头→body 纳入同一 abort 生命周期；新增 node body-hang 测试（oracle 先行：pre-fix 红→post-fix 80ms 落地绿） |
+| P2 | SC openAllTasks 漏第四条导航出口置空 | **采纳** | 抽取 closeForNavigation() 统一三出口；新探针 ⑭C6‴；T12 咬合 |
+| P2 | ⑭C6″ 仅排除旧按钮即绿（焦点被别处偷走也过）；建议导航后聚焦新页 main | **部分采纳** | 探针收紧为白名单断言（=body 默认落点）；router 级 roving-focus 属全局设计**反采纳入 retro**（单点实现制造不一致） |
+| P2 | AgentPortal resume 失败解除 loading 后主「跑评测」未按旧 run 在跑禁用，后端允许并发→重复入队 | **采纳** | latestRunInFlight computed（queued/running 即禁）+title 指路行内重试；「已知在跑」与「本会话轮询中」分离 |
+| P2 | GuidePage 附件顺序上传期显示「导引思考中」——300s 宽限下把网络耗时伪装成模型推理 | **采纳** | uploadPhase 分阶段真话「正在上传附件 X/Y（名）…」；上传收尾重锚 thinkingSeconds（秒数只算模型等待） |
+| P2 | m9①b/m8⑤b "(none)" sentinel per-element 空真值洞；记录「不可达」与代码相反 | **采纳（比 finding 更深）** | 去 sentinel+在场先断言；实测暴露 chip-action 在 m8 从未渲染（人签流程恒 waiting_review）→ running 翻转夹具（m9 同款口径、订阅回读不 reload）让其真实上屏；§五 hP3 勘误 |
+| P2 | QS 单源失败+其余真空 → 空态夸大成「搜索服务不可用」 | **采纳** | fetchFailedCount 分级：1-2 源=「部分」，3/3 才=「全部/服务不可用」；新探针 ⑭b′；T11 咬合 |
+| P3 | ⑭C1+⑭C2′ 真实时钟 ~46.5s+固定等待在繁忙 CI 抖红 | **部分采纳** | repoll 固定 6.5s→条件轮询（250ms×48 上限 12s，更快更稳）；测试专用短超时后门**反采纳**（生产代码纯净性>套件时长） |
+| P3 | .el-overlay-dialog/.el-dialog 的 dialog-fade 位移动画未被 reduce 归零，注释影响面再度 over-claim | **采纳** | reduce 块补两节点；注释修正；dialog reduce 探针入 retro |
+| P3 | tamper/全量声明无 diff 内证据物 | **部分采纳** | 新增 `CRAFT-RULES-B5-tamper-log.md`（本会话逐字 FAIL 行+计数存档；诚实边界：会话转录摘录非独立重放）；隔离 worktree replay 脚本入 retro |
+
+### 七-b R1 修复期新发现（超出 R0 findings 的真产品缺陷）
+
+**StatusDock 遮挡工作台头栏动作**：⑤b 夹具引入的 +10s 让 dock pill 必然渲染，⑥「结束协作」点击被 `dock-pill-waiting` 拦截（playwright 拦截日志+截图铁证：pill 直接压在「结束协作/刷新」文字上）。此前 m8 全绿靠 5s 轮询时差侥幸未撞——**既有 latent 遮挡，非本批引入**。修复：`.wb-back-actions` 宽屏（≥861px）常驻让出 200px dock 带（行为可预期不随 pill 闪变）；m8 ⑥ 现在在 pill 确定在场的条件下过点击=结构性回归锁。窄屏布局重排+dock 带全页审计入 retro。
+
+### R0 收尾验证
+
+craft **104/104**（+⑭C6‴/⑭b′，⑭C6″ 白名单化）· m8 **9/9**（+⑤b0）· m9 **11/11**（+①b0）· m10 12/12 · node **25/25**（+body-hang）· verify_all 第三轮全量 **EXIT=0**（17/17 e2e，失败=无）
 
 ## 八、残差与 retro 队列
 
+- **本批未被 e2e 锁定的修复（诚实标注）**：AgentPortal latestRunInFlight 禁用（niche=resume 失败窗口，代码级验证）；GuidePage uploadPhase 分阶段提示（无附件上传 e2e 流）；.el-overlay-dialog reduce 归零（⑭d 只测 drawer 分支）——三者探针入 retro。
+- router 级 roving-focus（导航后聚焦新页 main）——全局设计题，反采纳单点实现。
+- 窄屏（≤860px）dock 带避让布局重排；dock 带全页遮挡审计（本批只修了工作台头栏这处实测碰撞）。
+- tamper 隔离 worktree replay 脚本（P3c 完整形态）。
 - request-id 上屏（前置：后端结构化日志关联）。
 - summary 增量读（R2-P2b 后半）；⑪f″ 敏感夹具标题断言；agentNames 重试上界；TodayPage 待签行 elapsed 端锚；el-collapse reduced-motion 复核留痕（判「高度渐变非前庭触发」豁免）。

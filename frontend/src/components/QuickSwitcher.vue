@@ -27,8 +27,10 @@
           <template v-else>
             <!-- 诚实降级条（批次五 C2）：后端搜索源失败≠没有结果——必须让用户
                  知道下面的清单可能不完整；真失败=trust-fail 红槽，role=alert 播报。 -->
+            <!-- 分级口径（Codex R0 审 P2）：单源失败≠服务不可用——1-2 源失败说
+                 「部分」，3/3 全失败才说「全部」；空态文案同一分级（见下）。 -->
             <div v-if="fetchDegraded" class="qs-degraded" role="alert">
-              部分结果不可用（后端搜索请求失败）——以下显示可能不完整
+              {{ fetchFailedCount === 3 ? "后端搜索请求全部失败——以下显示可能不完整" : "部分结果不可用（后端搜索请求失败）——以下显示可能不完整" }}
             </div>
             <template v-for="group in renderGroups" :key="group.key">
               <div v-if="group.items.length" class="qs-group">
@@ -53,7 +55,7 @@
                 </div>
               </div>
             </template>
-            <div v-if="!flatItems.length" class="qs-empty">{{ fetchDegraded ? "搜索服务不可用（后端请求失败）——请稍后重试" : "没有匹配结果" }}</div>
+            <div v-if="!flatItems.length" class="qs-empty">{{ fetchFailedCount === 3 ? "搜索服务不可用（后端请求失败）——请稍后重试" : (fetchDegraded ? "没有匹配结果（部分来源不可用，结果可能不完整）" : "没有匹配结果") }}</div>
           </template>
         </div>
 
@@ -183,6 +185,7 @@ watch(selectedIndex, () => {
 // 不可区分（诚实地板violation）。失败源计数落 fetchDegraded，空态文案随之切换。
 let fetchSeq = 0;
 const fetchDegraded = ref(false);
+const fetchFailedCount = ref(0); // 分级口径（Codex R0 审 P2）：3=全失败，1-2=部分
 async function fetchAll() {
   const seq = ++fetchSeq;
   loading.value = true;
@@ -203,6 +206,7 @@ async function fetchAll() {
     tasks.value = tks || [];
     agents.value = ags || [];
     fetchDegraded.value = failed > 0;
+    fetchFailedCount.value = failed;
   } finally {
     if (seq === fetchSeq) loading.value = false;
   }

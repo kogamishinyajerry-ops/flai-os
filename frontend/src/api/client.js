@@ -56,32 +56,45 @@ export async function request(path, { method = "GET", json, formData, timeoutMs 
   init.signal = controller.signal;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  let resp;
+  const timeoutError = () =>
+    new ApiError(
+      0,
+      `请求超时（${Math.round(timeoutMs / 1000)} 秒无响应）——后端可能繁忙或已停止，请稍后重试`,
+      { timeout: true },
+    );
+
+  // 整个 请求→响应头→响应体 都在同一 abort 生命周期内（Codex R0 审 P2）：
+  // 服务端发完响应头后 body 卡死同样会无限悬挂——timer 必须活到 body 读完，
+  // 不能在 fetch() 返回响应头时就清掉。
   try {
-    resp = await fetch(path, init);
-  } catch (err) {
-    if (err && err.name === "AbortError") {
-      throw new ApiError(
-        0,
-        `请求超时（${Math.round(timeoutMs / 1000)} 秒无响应）——后端可能繁忙或已停止，请稍后重试`,
-        { timeout: true },
-      );
+    let resp;
+    try {
+      resp = await fetch(path, init);
+    } catch (err) {
+      if (err && err.name === "AbortError") throw timeoutError();
+      throw new ApiError(0, `无法连接后端服务（${err.message}）——请确认后端已启动`);
     }
-    throw new ApiError(0, `无法连接后端服务（${err.message}）——请确认后端已启动`);
+    if (!resp.ok) {
+      // 会话过期中途兜底（ADR-0019 D8）：任意接口 401 → 广播事件，App 重新亮
+      // 登录门。登录/探测接口自身除外——它们的 401 是登录门的正常输入。
+      if (
+        resp.status === 401 &&
+        path !== "/api/auth/login" &&
+        path !== "/api/auth/me"
+      ) {
+        window.dispatchEvent(new CustomEvent("flai:unauthorized"));
+      }
+      // parseDetail 内部自吞 json 异常（含 abort）回退 `HTTP <status>`——状态码
+      // 已知即如实报状态码，不折成超时分型。
+      throw new ApiError(resp.status, await parseDetail(resp));
+    }
+    try {
+      return await resp.json();
+    } catch (err) {
+      if (err && err.name === "AbortError") throw timeoutError();
+      throw err; // 非 abort 的解析错误保持原语义外抛（后端契约恒为 JSON）
+    }
   } finally {
     clearTimeout(timer);
   }
-  if (!resp.ok) {
-    // 会话过期中途兜底（ADR-0019 D8）：任意接口 401 → 广播事件，App 重新亮
-    // 登录门。登录/探测接口自身除外——它们的 401 是登录门的正常输入。
-    if (
-      resp.status === 401 &&
-      path !== "/api/auth/login" &&
-      path !== "/api/auth/me"
-    ) {
-      window.dispatchEvent(new CustomEvent("flai:unauthorized"));
-    }
-    throw new ApiError(resp.status, await parseDetail(resp));
-  }
-  return resp.json();
 }

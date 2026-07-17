@@ -686,10 +686,14 @@ button:focus-visible,
      transform 滑入全仓无自定义覆盖——第三方过渡同样要守 reduce（自建动效
      26 处均已降级，唯独组件库这层漏网）。
      注：.el-overlay 同时是 ElDialog（治理弹窗）与 ElMessageBox（5 处 confirm）
-     的底层——一并归零是刻意的；Vue whenTransitionEnds 对 duration=0 立即
-     resolve，@closed/afterLeave 回调照常触发，不会挂起（3-lens 回归已核）。 */
+     的底层——一并归零是刻意的；dialog 的位移动画实际挂在 .el-overlay-dialog
+     与 .el-dialog（dialog-fade 系列），只盖根节点盖不住（Codex R0 审 P3），
+     故一并列入。Vue whenTransitionEnds 对 duration=0 立即 resolve，
+     @closed/afterLeave 回调照常触发，不会挂起（3-lens 回归已核）。 */
   .el-drawer,
-  .el-overlay {
+  .el-overlay,
+  .el-overlay-dialog,
+  .el-dialog {
     transition: none !important;
     animation: none !important;
   }

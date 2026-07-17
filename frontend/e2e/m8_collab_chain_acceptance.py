@@ -178,18 +178,41 @@ with sync_playwright() as p:
 
     # ⑤b 批次五 C3 clay 预算：蓝图徽章/逐 chip 动作字/eyebrow/「已召集」常驻降灰
     #    ——工作台 clay 只留 chip 工作灯与进度大数字（computed 色直断，回染必咬）。
+    # ⑤b 前置夹具（Codex R0 P2 暴露的真覆盖空洞）：人签流程下召集产物恒为
+    # waiting_review→走 chip-review（amber 状态语义）分支，chip-action 从不渲染，
+    # 旧 "(none)" sentinel 把这个洞遮成了绿。直翻一条为 running（m9 同款「只为
+    # 渲染路径提供 fixture」口径，不冒充业务状态机）让「查看进度 →」真实上屏受审。
+    import sqlite3
+    _conn = sqlite3.connect(WORK / "flai_os.db")
+    _conn.execute("UPDATE tasks SET status='running' WHERE id IN (SELECT id FROM tasks LIMIT 1)")
+    _conn.commit()
+    _conn.close()
+    # 不 reload：会话 chips 走增量订阅（批A Task 6），翻转 ≤5s 自动上屏——
+    # reload 会改变滚动几何，让顶部 fixed dock pill 盖住 ⑥ 的点击目标。
+    page.wait_for_selector(".chip-action", timeout=15000)
     # 运行时解析 --clay（诚实 P2：硬编码字面量随调色静默过期→oracle 失咬）。
     clay_rgb = page.evaluate(
         "() => { const s = document.createElement('span'); s.style.color = 'var(--clay)';"
         " document.body.appendChild(s); const v = getComputedStyle(s).color; s.remove(); return v; }")
+    # 在场先断言（Codex R0 P2）："(none)" sentinel 会让被审元素被删除时静默跳过
+    # （per-element 空真值洞）——夹具已保证 running chip 带行内动作，缺席应当红。
+    check("⑤b0 chip-action 在场（夹具契约：任务 chip 带行内动作字）",
+          (page.locator(".chip-action").count() >= 1) is True,
+          f"count={page.locator('.chip-action').count()}")
     bp_c = page.locator(".bp-tag").first.evaluate("el => getComputedStyle(el).color")
-    act_c = (page.locator(".chip-action").first.evaluate("el => getComputedStyle(el).color")
-             if page.locator(".chip-action").count() else "(none)")
+    act_c = page.locator(".chip-action").first.evaluate("el => getComputedStyle(el).color")
     kick_c = page.locator(".sess-goal-kicker").first.evaluate("el => getComputedStyle(el).color")
     sum_c = page.locator(".member-state.summoned").first.evaluate("el => getComputedStyle(el).color")
-    clay_budget_ok = all(c != clay_rgb for c in (bp_c, act_c, kick_c, sum_c) if c != "(none)")
+    clay_budget_ok = all(c != clay_rgb for c in (bp_c, act_c, kick_c, sum_c))
     check("⑤b clay 预算：bp-tag/chip-action/kicker/已召集 全非 clay（降灰承载信息）",
           clay_budget_ok is True, f"clay={clay_rgb} bp={bp_c} act={act_c} kick={kick_c} sum={sum_c}")
+    # 夹具窗口收口：探针断言完即翻回召集原生态 waiting_review（同样等订阅
+    # 回读，不 reload），⑥ 起流程与夹具零耦合。
+    _conn = sqlite3.connect(WORK / "flai_os.db")
+    _conn.execute("UPDATE tasks SET status='waiting_review' WHERE status='running'")
+    _conn.commit()
+    _conn.close()
+    page.wait_for_selector(".chip-review", timeout=15000)
     page.screenshot(path=str(SHOTS / "3_session_after.png"), full_page=True)
 
     # ⑥ 结束协作 → 归档 + 召集入口消失（结束 = 真的结束；成员任务不受影响）

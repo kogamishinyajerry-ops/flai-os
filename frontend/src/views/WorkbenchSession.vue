@@ -355,6 +355,13 @@ onUnmounted(() => {
   gap: 4px;
   align-items: center;
 }
+/* dock 带避让（Codex R0 修复期暴露的既有遮挡，非本批引入）：StatusDock
+   fixed 右上（top:16/right:20/z:150），带 pill 时最宽 ~190px，正压在
+   「结束协作/刷新」上（m8 ⑥ 实测点击被拦 + 截图铁证）——宽屏常驻让出
+   dock 带宽，行为可预期不随 pill 数量闪变。窄屏由布局重排另行处理（retro）。 */
+@media (min-width: 861px) {
+  .wb-back-actions { margin-right: 200px; }
+}
 .sess-hero {
   display: flex;
   justify-content: space-between;

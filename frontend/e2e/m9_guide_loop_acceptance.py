@@ -151,11 +151,15 @@ with sync_playwright() as p:
     clay_rgb = page.evaluate(
         "() => { const s = document.createElement('span'); s.style.color = 'var(--clay)';"
         " document.body.appendChild(s); const v = getComputedStyle(s).color; s.remove(); return v; }")
+    # 在场先断言（Codex R0 P2）："(none)" sentinel 会让 agent-cta 被删除时静默
+    # 跳过——夹具方案卡两成员均参数未齐、必有召集钮，缺席应当红。
+    check("①b0 agent-cta 在场（夹具契约：方案卡未就绪成员有召集钮）",
+          (page.locator(".agent-cta").count() >= 1) is True,
+          f"count={page.locator('.agent-cta').count()}")
     rt_c = page.locator(".role-tag").first.evaluate("el => getComputedStyle(el).color")
-    cta_c = (page.locator(".agent-cta").first.evaluate("el => getComputedStyle(el).color")
-             if page.locator(".agent-cta").count() else "(none)")
+    cta_c = page.locator(".agent-cta").first.evaluate("el => getComputedStyle(el).color")
     check("①b clay 预算：role-tag/agent-cta 常驻非 clay（降灰）",
-          all(c != clay_rgb for c in (rt_c, cta_c) if c != "(none)") is True,
+          (rt_c != clay_rgb and cta_c != clay_rgb) is True,
           f"clay={clay_rgb} role_tag={rt_c} agent_cta={cta_c}")
     page.screenshot(path=str(SHOTS / "1_plan_card.png"), full_page=True)
 

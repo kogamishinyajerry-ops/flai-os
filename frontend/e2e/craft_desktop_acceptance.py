@@ -74,6 +74,12 @@
      挂起→标注在场+无「请稍后重试（自动重试中）」矛盾拼接+轮询二次开火）；
      census/m8⑤b/m9①b 的 clay 比对全部改运行时解析 var(--clay)（字面量随
      调色静默过期→oracle 失咬，诚实 P2）。
+  ⑭″ Codex R0 治理审修复批：⑭C6″ 收紧为白名单断言（焦点=body 默认落点，
+     roving-focus 属 router 级全局设计反采纳入 retro）；⑭C6‴ SC「查看全部
+     任务」导航出口同律（closeForNavigation 统一出口）；⑭b′ 降级分级口径
+     （单源失败=「部分」，3/3 全失败才=「服务不可用」）；⑭C2′ repoll 改条件
+     轮询（250ms×48 上限 12s，抗 CI 抖动）；check() 判定全部 `(...) is True`
+     显式形态（含 census/reduce/溢出/worklog 五处收紧）。
 
 夹具口径（与 m9 同纪律）：temp DB 直写只为渲染路径提供 fixture，不冒充业务
 状态机行为（真实完成/放行链路由 m2 验收）。completed 任务配 tool_failed 事件
@@ -1086,7 +1092,8 @@ with sync_playwright() as p:
     page.keyboard.press("ControlOrMeta+k")
     try:
         page.wait_for_selector(".qs-degraded", timeout=8000)
-        degraded_ok = "部分结果不可用" in page.locator(".qs-degraded").inner_text()
+        # 分级口径（Codex R0 P2）：3/3 全失败说「全部失败」不再说「部分」。
+        degraded_ok = "后端搜索请求全部失败" in page.locator(".qs-degraded").inner_text()
         qs_empty_txt = page.locator(".qs-empty").inner_text() if page.locator(".qs-empty").count() else ""
         empty_swap_ok = ("搜索服务不可用" in qs_empty_txt) and ("没有匹配结果" not in qs_empty_txt)
     except Exception:
@@ -1096,6 +1103,26 @@ with sync_playwright() as p:
     page.keyboard.press("Escape")
     for pat in ("**/api/conversations*", "**/api/tasks*", "**/api/agents*"):
         ctx.unroute(pat)
+    page.wait_for_timeout(400)
+
+    # ── ⑭b′ C2 分级口径（Codex R0 P2）：单源失败+其余源真无匹配→「部分来源
+    #    不可用」，绝不夸大成「搜索服务不可用」（1-2 源=部分，3/3 才=全部）──
+    ctx.route("**/api/conversations*", lambda route: route.abort())
+    page.keyboard.press("ControlOrMeta+k")
+    try:
+        page.wait_for_selector(".qs-degraded", timeout=8000)
+        deg2 = page.locator(".qs-degraded").inner_text()
+        page.locator(".qs-input").fill("绝无此匹配串xq9z")
+        page.wait_for_timeout(400)
+        empty2 = page.locator(".qs-empty").inner_text() if page.locator(".qs-empty").count() else "(无空态)"
+        partial_ok = ("部分" in deg2 and "全部失败" not in deg2
+                      and "部分来源不可用" in empty2 and "搜索服务不可用" not in empty2)
+    except Exception:
+        deg2, empty2, partial_ok = "(异常)", "(异常)", False
+    check("⑭C2″ 单源失败+真无匹配→部分口径（不夸大成整个服务不可用）",
+          partial_ok is True, f"bar={deg2[:40]} empty={empty2[:60]}")
+    page.keyboard.press("Escape")
+    ctx.unroute("**/api/conversations*")
     page.wait_for_timeout(400)
 
     # ── ⑭c C3 clay census oracle（内容区常驻可见的非豁免 clay ≤2/屏——
@@ -1138,10 +1165,10 @@ with sync_playwright() as p:
     page.goto(BASE + "/today", wait_until="networkidle")
     census_today = page.evaluate(CENSUS_JS)
     check("⑭C3 /today clay census ≤2（非豁免·own-属性归因）",
-          len(census_today) <= 2, str(census_today[:8]))
+          (len(census_today) <= 2) is True, str(census_today[:8]))
     page.goto(BASE + "/me", wait_until="networkidle")
     census_me = page.evaluate(CENSUS_JS)
-    check("⑭C3 /me clay census ≤2", len(census_me) <= 2, str(census_me[:8]))
+    check("⑭C3 /me clay census ≤2", (len(census_me) <= 2) is True, str(census_me[:8]))
 
     # ── ⑭d C4 reduced-motion 补洞（emulate_media 于 goto 前——JS matchMedia
     #    首评需命中；直测真实渲染元素，绕开 batch_d 手工注入节点的 scoped 坑）──
@@ -1158,7 +1185,7 @@ with sync_playwright() as p:
     except Exception:
         drawer_probe = "(no-drawer)"
     check("⑭C4 reduce 下补洞归零（窄屏侧栏 transition=0s；el-drawer 过渡/动画禁用）",
-          sb_dur == "0s" and drawer_probe.startswith("0s") and drawer_probe.endswith("|none"),
+          (sb_dur == "0s" and drawer_probe.startswith("0s") and drawer_probe.endswith("|none")) is True,
           f"sidebar={sb_dur} drawer={drawer_probe}")
     rpage.close()
 
@@ -1204,8 +1231,8 @@ with sync_playwright() as p:
         chip_probe = page.locator(".today-active-chip").first.evaluate(
             "el => { const cs = getComputedStyle(el); return cs.maxWidth + '|' + cs.textOverflow; }")
     check("⑭C5 溢出边界（220 字晋升名：ellipsis 生效+truncated+页面无横向溢出；胶囊 max-width 契约）",
-          promo_probe == "ellipsis|nowrap|true" and no_hscroll is True
-          and chip_probe == "220px|ellipsis",
+          (promo_probe == "ellipsis|nowrap|true" and no_hscroll is True
+           and chip_probe == "220px|ellipsis") is True,
           f"promo={promo_probe} hscroll_ok={no_hscroll} chip={chip_probe}")
     ctx.unroute("**/api/promotions*")
 
@@ -1218,7 +1245,7 @@ with sync_playwright() as p:
     page.wait_for_selector(".worklog-timeline", timeout=3000)
     ae_after = page.locator(".worklog-head").get_attribute("aria-expanded")
     check("⑭C6 worklog 折叠头=真 button + aria-expanded 携真态（false→true）",
-          wl_tag == "BUTTON" and ae_before == "false" and ae_after == "true",
+          (wl_tag == "BUTTON" and ae_before == "false" and ae_after == "true") is True,
           f"tag={wl_tag} {ae_before}→{ae_after}")
     page.goto(BASE + "/today", wait_until="networkidle")
     # 两个 .sb-foot-btn（搜索/主题）——定点取非主题钮，断言也按 title 精确核。
@@ -1264,10 +1291,26 @@ with sync_playwright() as p:
     page.wait_for_selector(".qs-item", timeout=8000)
     page.keyboard.press("Enter")
     page.wait_for_timeout(700)  # 导航 + 关闭 watcher 竞态窗口全落地
+    # 白名单断言（Codex R0 P2：仅排除旧按钮会让「焦点被任何别处偷走」也过）：
+    # 当前契约=浏览器默认落点 body（router 级 roving-focus 属全局设计，反采纳
+    # 入 retro——若未来引入，此断言应改为新落点并有意识更新）。
     nav_focus = page.evaluate(
-        "() => (document.activeElement && String(document.activeElement.className)) || '(body)'")
-    check("⑭C6″ 导航离场不回还（选中结果后焦点不被拽回搜索钮）",
-          ("sb-foot-btn" not in nav_focus) is True, f"active={nav_focus}")
+        "() => document.activeElement === document.body ? '(body)' : String(document.activeElement.className)")
+    check("⑭C6″ 导航离场不回还（焦点=body 默认落点，绝不拽回搜索钮）",
+          (nav_focus == "(body)") is True, f"active={nav_focus}")
+
+    # ── ⑭g‴ C6 SC 导航出口同律（Codex R0 P2：openAllTasks 曾漏置空——统一
+    #    closeForNavigation 出口后逐口验证）───────────────────────────────
+    page.goto(BASE + "/today", wait_until="networkidle")
+    page.locator(".status-dock").click()
+    page.wait_for_selector(".sc-viewall", timeout=8000)
+    page.locator(".sc-viewall").click()
+    page.wait_for_url("**/tasks", timeout=5000)
+    page.wait_for_timeout(600)
+    sc_nav_focus = page.evaluate(
+        "() => document.activeElement === document.body ? '(body)' : String(document.activeElement.className)")
+    check("⑭C6‴ SC「查看全部任务」导航离场不回还（焦点=body，不被拽回 dock）",
+          (sc_nav_focus == "(body)") is True, f"active={sc_nav_focus}")
 
     # ── ⑭a′ C2 「（自动重试中）」真声明锁（3-lens 诚实 P2）：feed 源挂起→
     #    超时错误行带自动重试标注、无「请稍后重试（自动重试中）」自相矛盾拼接，
@@ -1284,8 +1327,14 @@ with sync_playwright() as p:
         suffix_ok = "（自动重试中）" in feed_err
         contradiction_free = "请稍后重试（自动重试中）" not in feed_err
         base_n = feed_hits["n"]
-        page.wait_for_timeout(6500)  # liveFeed 轮询间隔 5s + 余量
-        repoll_ok = feed_hits["n"] > base_n
+        # 条件轮询替代固定等待（Codex R0 P3：固定 6.5s 在繁忙 CI 上抖红）：
+        # 250ms 步进最长 12s，二次开火即刻退出——更快也更稳。
+        repoll_ok = False
+        for _ in range(48):
+            page.wait_for_timeout(250)
+            if feed_hits["n"] > base_n:
+                repoll_ok = True
+                break
     except Exception:
         feed_err, suffix_ok, contradiction_free, repoll_ok = "(无自动重试错误行)", False, False, False
     check("⑭C2′ feed 超时→「自动重试中」真声明（在场+无自相矛盾拼接+轮询真二次开火）",

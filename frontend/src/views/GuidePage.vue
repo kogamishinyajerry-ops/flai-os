@@ -259,11 +259,14 @@
           <div class="think-row">
             <ThinkingInk />
             <!-- 真耗时（评审 N3）：≥3s 才显示，快回合不闪数字；tabular-nums 逐秒活跳不抖宽。 -->
-            <span class="tlabel">导引思考中…<span v-if="thinkingSeconds >= 3" class="think-elapsed num-token">{{ thinkingSeconds }}s</span></span>
+            <!-- 分阶段真话（Codex R0 审 P2）：附件上传期显示「正在上传附件 X/Y」，
+                 模型等待期才是「导引思考中」——300s 上传宽限下两者可能都以分钟计，
+                 不许互相冒名。秒数计时随阶段重锚，只算当前阶段耗时。 -->
+            <span class="tlabel">{{ uploadPhase || "导引思考中…" }}<span v-if="!uploadPhase && thinkingSeconds >= 3" class="think-elapsed num-token">{{ thinkingSeconds }}s</span></span>
           </div>
           <!-- 诚实预期管理（评审 N3）：内网大模型单轮可达一两分钟（B3 超时旋钮按内网
                p99 放宽后尤甚）——超 30s 给一行真话；绝不做假进度条（诚实地板）。 -->
-          <p v-if="thinkingSeconds >= 30" class="think-slow">内网大模型推理较慢——复杂需求可能要一两分钟。请留在本页稍候：本轮若失败，你的原话会退回输入框，不会丢。</p>
+          <p v-if="!uploadPhase && thinkingSeconds >= 30" class="think-slow">内网大模型推理较慢——复杂需求可能要一两分钟。请留在本页稍候：本轮若失败，你的原话会退回输入框，不会丢。</p>
         </div>
       </div>
     </div>
@@ -458,8 +461,14 @@ async function uploadPendingFiles() {
   // 保留在待发区——这是重试语义（重试同一句不重复上传）。若用户改发别的
   // 内容，这些附件会一并带上，但 chips 始终可见、可逐个移除，故不隐藏、
   // 不静默——是否带上由用户自己看着 chips 决定。
+  // 上传阶段如实报进度（Codex R0 审 P2）：上传宽限放宽到 300s 后，把网络
+  // 上传时间伪装成「导引思考中」是假声明——分阶段各说各话。
+  const todo = pendingFiles.value.filter((f) => f.status !== "done").length;
+  let nth = 0;
   for (const item of pendingFiles.value) {
     if (item.status === "done") continue;
+    nth += 1;
+    uploadPhase.value = `正在上传附件 ${nth}/${todo}（${item.name}）…`;
     item.status = "uploading";
     item.error = "";
     try {
@@ -472,6 +481,7 @@ async function uploadPendingFiles() {
       throw new Error(`附件「${item.name}」上传失败：${item.error}`);
     }
   }
+  uploadPhase.value = "";
   return pendingFiles.value.map((f) => f.fileId);
 }
 
@@ -523,6 +533,9 @@ function adoptReframe(text) {
 // 独立 1s 计时器（不共用实时行的 nowTick——那条由工作态任务门控启停，语义
 // 不同不硬并）；sending 结束即停表清零，零常驻空转。
 const sendStartedAt = ref(null);
+// 上传阶段提示（Codex R0 审 P2）：非空=正在顺序传附件，thinking 区显示真话
+// 「正在上传附件 X/Y…」而非「导引思考中」；空=进入模型等待阶段。
+const uploadPhase = ref("");
 const sendNow = ref(0);
 let sendTimer = null;
 watch(sending, (s) => {
@@ -645,6 +658,9 @@ async function send() {
   try {
     // 先传附件（已 done 的跳过，失败即中止——本轮消息不发送）
     const fileIds = await uploadPendingFiles();
+    // 上传收尾后重锚思考计时：thinkingSeconds 只讲模型等待的真话，不把
+    // 上传耗时算进「导引思考中 Ns」（Codex R0 审 P2 的分阶段诚实口径）。
+    sendStartedAt.value = Date.now();
     if (!conversationId.value) {
       const conv = await createConversation({ agentId: GUIDE_AGENT_ID });
       conversationId.value = conv.id;
@@ -683,6 +699,7 @@ async function send() {
     pageError.value = err.detail || err.message;
   } finally {
     sending.value = false;
+    uploadPhase.value = ""; // 上传中途失败的清扫口（成功路径在 uploadPendingFiles 尾清）
   }
 }
 
