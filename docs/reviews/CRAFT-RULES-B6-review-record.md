@@ -93,8 +93,20 @@ R0 过程两处工程故障如实留痕：①首启 codex 进程挂死于模型�
 ### replay 集换血（新三条件的直接后果，如实留痕）
 
 硬化后首轮验证 `timeout-cut` BITE-MISS——其咬合形态=FAIL ⑭C1 后下游崩溃
-（批五存档如此），与「必达 FAILED 汇总」契约不相容。按契约优先处置：撤出
-重放集（崩溃型 fail-closed 不冒充干净咬合，该规则族回归保护由 node
-api_client_timeout 4 例承担），换入批五 T3 降级条阉割（degrade-cut）。
-换血后全量验证：双套件 BASELINE-GREEN + 7/7 BITE-OK（RC=1 + 精确 FAIL 行
-+ FAILED 汇总三条件全举证）。
+（批五存档如此），与「必达 FAILED 汇总」契约不相容。初判按契约优先处置：撤出
+重放集换入批五 T3 降级条阉割（degrade-cut），7/7 验证通过——**此处置被 R2
+否决，见下**。
+
+### R2（审 e90f7ee）：CHANGES_REQUIRED——R1 三条全 RESOLVED，新 1P2
+
+R1 #1/#2/#3 均判 RESOLVED（⑭C7 条件轮询+request_finished+双 rAF；baseline
+build 包壳；记录引用 cea0075）。
+
+新 [P2]：timeout-cut 撤出违反 canonical spec——spec §十五明确要求「超时撤除」
+入重放集，脚本先行移除而未 amend 规格=治理漂移；「degrade-cut 可新增，不可
+静默替换」。**采纳其首选修法（verbatim 例外收口，不再走一轮）**：
+- 根因修：⑭C2 重试点击限时包 try（红而不崩）——⑭C1 红时 .today-retry 不存在，
+  裸 click 30s TimeoutError 曾崩掉整套件；包裹后套件必达 FAILED 汇总，
+  timeout-cut 满足干净咬合三条件，恢复入重放集；
+- degrade-cut 按裁定改列「新增」；重放集=8 处，spec §十五 B6-6 同步 amend；
+- 验证：craft 110/110（包裹后绿位无误红）+ 8 处全量重放（见下）。

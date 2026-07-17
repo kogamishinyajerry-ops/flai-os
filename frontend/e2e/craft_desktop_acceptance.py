@@ -1078,8 +1078,11 @@ with sync_playwright() as p:
     check("⑭C1 后端挂起→20s 硬超时落地（「请求超时」分型+行内重试钮+role=alert）",
           timeout_ok is True and role_ok is True, err_text[:90])
     ctx.unroute("**/api/promotions*")
-    page.locator(".today-retry").first.click()
+    # click 一并入 try 且限时（Codex R2 审 P2 根因修）：⑭C1 红（超时 UI 未出）
+    # 时 .today-retry 不存在，裸 click 30s TimeoutError 会崩掉整套件——红而不崩，
+    # 套件必达 FAILED 汇总，timeout-cut tamper 因此可入 replay 干净咬合契约。
     try:
+        page.locator(".today-retry").first.click(timeout=8000)
         page.wait_for_selector(".today-error", state="detached", timeout=8000)
         retry_ok = True
     except Exception:

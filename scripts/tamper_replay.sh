@@ -8,7 +8,7 @@
 # ——replay 自身 fail-closed。
 #
 # 用法：bash scripts/tamper_replay.sh [replay 名 ...]   # 缺省=全部
-#   可用名：census-redye degrade-cut reduce-sidebar roving-cut fitts-shrink
+#   可用名：census-redye timeout-cut degrade-cut reduce-sidebar roving-cut fitts-shrink
 #           dialog-reduce-cut portal-dup-enqueue
 # 约 5-6 分钟/处（build+整套 craft e2e）；portal-dup-enqueue 跑 m10 套件较快。
 #
@@ -104,6 +104,7 @@ suite_of() {
 expect_of() {
   case "$1" in
     census-redye)       echo 'FAIL ⑭C3' ;;
+    timeout-cut)        echo 'FAIL ⑭C1' ;;
     degrade-cut)        echo 'FAIL ⑭C2 ' ;;
     reduce-sidebar)     echo 'FAIL ⑭C4 ' ;;
     roving-cut)         echo 'FAIL ⑭C6″' ;;
@@ -123,10 +124,16 @@ i=s.rindex("</style>"); assert i>0
 open(p,"w").write(s[:i]+".nav-link, .today-section-head { color: var(--clay) !important; }\n"+s[i:])
 PY
       ;;
-    # 批五 T2（超时撤除）不入重放集：其咬合形态=FAIL ⑭C1 后下游 ⑭C2 点击
-    # 崩溃（批五逐字存档），与「必达 FAILED 汇总」的干净咬合契约不相容——
-    # 崩溃型 fail-closed 不冒充干净咬合；该规则族回归保护由 node
-    # tests/api_client_timeout.test.mjs 4 例承担。改用批五 T3（降级条阉割）。
+    # 批五 T2 超时撤除（Codex R2 审 P2 恢复）：⑭C2 重试点击已限时包 try（红而
+    # 不崩），套件在此 tamper 下也能达 FAILED 汇总，满足干净咬合三条件。
+    timeout-cut) cat <<'PY'
+p="frontend/src/api/client.js"; s=open(p).read()
+t="setTimeout(() => controller.abort(), timeoutMs)"; assert t in s
+open(p,"w").write(s.replace(t,"setTimeout(() => {}, timeoutMs)"))
+PY
+      ;;
+    # 批五 T3 降级条阉割（新增，非替换——Codex R2 审裁定 degrade-cut 可新增
+    # 不可静默替换 timeout-cut）。
     degrade-cut) cat <<'PY'
 p="frontend/src/components/QuickSwitcher.vue"; s=open(p).read()
 t="fetchDegraded.value = failed > 0;"; assert t in s
@@ -167,7 +174,7 @@ PY
   esac
 }
 
-ALL="census-redye degrade-cut reduce-sidebar roving-cut fitts-shrink dialog-reduce-cut portal-dup-enqueue"
+ALL="census-redye timeout-cut degrade-cut reduce-sidebar roving-cut fitts-shrink dialog-reduce-cut portal-dup-enqueue"
 NAMES="${*:-$ALL}"
 
 # 先验名合法性 + 汇总用到的套件，各跑一次 clean baseline（全绿才准开咬）。

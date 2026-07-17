@@ -521,8 +521,10 @@ census JS 枚举可见交互元素（button/a/[role=button]/input/[tabindex≥0]
 ### B6-6 tamper replay 脚本（B5-P3c 完整形态）
 
 `scripts/tamper_replay.sh`：隔离 git worktree（基 HEAD）重放核心 tamper
-（批五：census 回染 / 超时撤除 / reduce 侧栏撤洞；批六：roving 撤除 /
-Fitts 缩穿 / dialog-reduce 撤除 / portal 防重复入队撤除），每处 patch→
+（批五：census 回染 / 超时撤除 / 降级条阉割 / reduce 侧栏撤洞；批六：
+roving 撤除 / Fitts 缩穿 / dialog-reduce 撤除 / portal 防重复入队撤除，
+共 8 处。超时撤除的可重放性由 ⑭C2 重试点击限时包 try 保障——红而不崩、
+必达 FAILED 汇总；降级条阉割为 Codex R2 审后新增，非替换），每处 patch→
 rebuild→跑套件→断言**预期 FAIL 行**出现（grep 长前缀锚死消歧，如「⑩入队」
 防 ⑩' 串号——3-lens oracle 审 P2）→worktree 内 git checkout 复位；BITE-MISS
 即 exit 1（fail-closed）。产出=独立可复验的 tamper 证据，收掉 Codex
