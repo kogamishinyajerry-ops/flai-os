@@ -467,11 +467,20 @@ async function runEvaluation() {
   if (!agentId) return;
   governanceRunLoading.value = true;
   promotionErrors.value = [];
+  let enqueuedRun = null; // POST 成功即非 null——catch 据此区分「入队前/后」失败
   try {
     const queued = await request(`/api/agents/${agentId}/eval-runs`, {
       method: "POST",
       json: {}, // 发起人=登录会话身份，服务端派生（ADR-0019 D5）
     });
+    // 入队即本地落行（Codex R1 复审 P2）：POST 成功后若首轮询失败，
+    // latestGovernanceRun 必须已经是这条 queued——否则 finally 解锁 loading
+    // 后按钮重开=重复入队窗口。默认 status 兜底在前，服务端字段为准；
+    // loadGovernance 到达后整表被服务端行覆盖。
+    enqueuedRun = { status: "queued", ...queued };
+    if (governanceAgent.value?.id === agentId) {
+      governanceRuns.value = [enqueuedRun, ...governanceRuns.value.filter((r) => r.id !== enqueuedRun.id)];
+    }
     ElMessage.info("评测已入队，执行中…");
     const run = await pollEvalRunToTerminal(agentId, queued.id);
     if (governanceOpen.value && governanceAgent.value?.id === agentId) {
@@ -480,6 +489,12 @@ async function runEvaluation() {
       else if (run.status !== "aborted") ElMessage.warning(`评测收口为 ${run.status}`);
     }
   } catch (err) {
+    // 已入队后的失败（轮询/收口层）收敛到 resume 恢复链（与重开面板同一
+    // 车道）：错误行+行内「重试」上屏，按钮由 latestRunInFlight 压住——
+    // 绝不静默解锁诱导重复 POST。
+    if (enqueuedRun && governanceOpen.value && governanceAgent.value?.id === agentId) {
+      governanceResumeError.value = `评测状态刷新失败（${err.detail || err.message}）——所示结果可能已过期`;
+    }
     ElMessage.error(err.detail || err.message || "评测失败");
   } finally {
     governanceRunLoading.value = false;

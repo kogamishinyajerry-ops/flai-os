@@ -123,6 +123,23 @@
 
 craft **104/104**（+⑭C6‴/⑭b′，⑭C6″ 白名单化）· m8 **9/9**（+⑤b0）· m9 **11/11**（+①b0）· m10 12/12 · node **25/25**（+body-hang）· verify_all 第三轮全量 **EXIT=0**（17/17 e2e，失败=无）
 
+> 过程勘误留痕：第三轮 verify_all 首次触发时因 shell cwd 漂移（留在 frontend/）
+> 脚本未找到，而 `| tail` 管道把退出码吃成 0、后台通知谎报 completed——被
+> `git add` 的 pathspec 报错当场识破，已从仓根裸退出码重跑得真 EXIT=0。
+> 教训（入 canon）：后台长跑命令必须绝对路径起跑 + 不许让管道尾命令持有退出码。
+
+### R1 复审（commit 3d9cf75）：CHANGES_REQUIRED——10 RESOLVED / 2 PARTIAL
+
+R0 十二项处置中 10 项判 RESOLVED（含 4/9 两处反采纳理由被复审确认成立）；2 项 PARTIAL 收口如下：
+
+| # | R1 finding | 裁决 | R2 落地 |
+|---|---|---|---|
+| #5 | 新 POST 成功后首轮询失败：queued 从未写入本地 governanceRuns，finally 解锁→按钮重开=重复入队窗口仍在（「防重复入队」声明过宽） | **采纳（verbatim 思路）** | 入队即本地落行 `{status:"queued", ...queued}` unshift（服务端字段为准，loadGovernance 到达即覆盖）；入队后失败收敛到 resume 恢复链（governanceResumeError+行内重试上屏，latestRunInFlight 压钮）——两条失败路径同一恢复车道 |
+| #12 | 200px 横向预留只够单 pill：待签+运行中+监控+core 合法组合 ~360px 仍可遮挡 | **采纳（换方案）** | 横向预留废弃，改**竖向让位**：`.wb-back { margin-top: 28px }`（行顶 56px > dock 带底 ~48px），与 pill 数量彻底解耦、任意组合不遮；数学入注释 |
+| #11 | tamper 存档=会话摘录非独立重放 | P3 维持 PARTIAL | replay 脚本已在 retro 队列（R1 复审确认不阻塞） |
+
+R2 验证：m10 12/12 · eval_queue ✓ · eval_snapshot ✓ · m8 9/9（竖向让位后 ⑥ 照常过点击）· verify_all 第四轮全量 EXIT=0。
+
 ## 八、残差与 retro 队列
 
 - **本批未被 e2e 锁定的修复（诚实标注）**：AgentPortal latestRunInFlight 禁用（niche=resume 失败窗口，代码级验证）；GuidePage uploadPhase 分阶段提示（无附件上传 e2e 流）；.el-overlay-dialog reduce 归零（⑭d 只测 drawer 分支）——三者探针入 retro。

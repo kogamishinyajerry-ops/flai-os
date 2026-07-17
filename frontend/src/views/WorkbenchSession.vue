@@ -355,13 +355,12 @@ onUnmounted(() => {
   gap: 4px;
   align-items: center;
 }
-/* dock 带避让（Codex R0 修复期暴露的既有遮挡，非本批引入）：StatusDock
-   fixed 右上（top:16/right:20/z:150），带 pill 时最宽 ~190px，正压在
-   「结束协作/刷新」上（m8 ⑥ 实测点击被拦 + 截图铁证）——宽屏常驻让出
-   dock 带宽，行为可预期不随 pill 数量闪变。窄屏由布局重排另行处理（retro）。 */
-@media (min-width: 861px) {
-  .wb-back-actions { margin-right: 200px; }
-}
+/* dock 带避让（Codex R0 修复期暴露的既有遮挡 + R1 复审 P2 收口）：StatusDock
+   fixed 右上（top:16/z:150），「结束协作/刷新」正被 pill 压住（m8 ⑥ 实测点击
+   被拦+截图铁证）。横向预留兜不住合法极端（待签+运行中+监控+core 全家桶
+   ~360px），改竖向让位与 pill 数量彻底解耦：dock 带底 ≈ top16+pill高~32≈48px，
+   main padding-top 28px + 本 28px → 头栏行顶 56px > 48px，任意 pill 组合不遮。 */
+.wb-back { margin-top: 28px; }
 .sess-hero {
   display: flex;
   justify-content: space-between;
