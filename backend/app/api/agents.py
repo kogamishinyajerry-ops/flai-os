@@ -40,6 +40,11 @@ def _project(agent: dict[str, Any]) -> dict[str, Any]:
         # 纯参数型与文件型——file_upload 的 params schema 可为空 required，若只看
         # required 会空洞通过（异源 Codex R1-P1）。additive 字段，创建页不依赖。
         "input_mode": (agent.get("input", {}) or {}).get("type"),
+        # 批七 ADR-0030：专长身份轴与密级上限投影（additive，通用包两者皆缺省）。
+        # clearance 缺省语义=internal fail-closed——投影层如实回 None，缺省最严
+        # 的解释由消费方（密级 gate/前端 pill）按 ADR-0030 统一执行，不在此拍死。
+        "expertise": agent.get("expertise"),
+        "clearance": (agent.get("clearance", {}) or {}).get("max_data_classification"),
     }
 
 

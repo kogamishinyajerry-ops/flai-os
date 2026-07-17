@@ -108,3 +108,36 @@ def run(context):
 - 每次 `version` 升级，`changelog.md` 追加一条：日期、旧版本→新版本、改动摘要、改动类型（prompt/workflow/schema/tool依赖）。
 - `status` 或 `maturity` 变更同样记入 `changelog.md`（即使 `version` 未变），保留治理轨迹。
 - 禁止直接覆盖历史条目，只能追加。
+
+## 7. 专家身份/依据/密级契约（批七，ADR-0030）
+
+agent.yaml 三个可选 block：`expertise`（domain/specialty/usefulness_level/charter）·
+`evidence_policy`（required/kinds）· `clearance`（max_data_classification，缺省=internal
+fail-closed）。语义详见 ADR-0030。装载期不变量：L3 且 mode=job ⟹ `requires_human_review: true`；
+`evidence_policy.required: true` ⟹ output_schema.json 顶层含 `findings`。
+
+### 7.1 依据输出惯例（evidence_policy.required=true 的包）
+
+output_schema.json 顶层必含 `findings` 定义，惯例结构：
+
+```json
+{ "findings": [{ "claim": "…",
+    "evidence": [{ "kind": "regulation_clause|standard_clause|type_case|fault_case|knowledge_doc|calculation",
+                   "source_ref": "CCAR-25.853(a) / 合成排故记录#F-XXXX-NNNN",
+                   "quote": "…（≤300 字摘录）…",
+                   "resolved": false }],
+    "confidence": { "level": "high|medium|low", "basis": "双源(条款+机型实例)|单源|推断" } }],
+  "refusals": [{ "question": "…", "reason": "仅支持 X，Y 未集成",
+                 "suggestion": "一般使用 Y，当前平台未接入" }] }
+```
+
+三条不变量：
+1. `resolved=true` 只能由后端知识回源指纹校验置位（ADR-0029），绝不由 LLM 自报——未核依据全链 amber，自报置信度与任何绿色在契约层切断。
+2. `refusals` 非空 = 正常 completed（走人签），不是 failed——诚实拒答是履约。
+3. fault_history 域的包另加顶层 `cross_model_matches: [{model, fault_ref, similarity_basis, disposition_summary}]`，similarity_basis 必非空；「相似≠适用」提示由 UI 固定渲染。
+
+### 7.2 charter 防漂移纪律
+
+- charter 与 limitations/refusal 边界必须随 workflow 能力变更**同步修订**，changelog 逐条留痕。
+- 每个垂类包 eval_cases 必含 **≥1 超范围拒答 case**（charter 不漂移的唯一机器可判防线）+ **≥1 双依据 case**。
+- 效率倍数（如「10-15 分钟→30 秒」）属运营宣传口径，禁止写入 description/charter/UI 承诺（ADR-0030 解释条款）。

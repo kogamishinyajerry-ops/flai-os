@@ -155,6 +155,60 @@
       "minItems": 1,
       "items": { "type": "string", "minLength": 4 },
       "description": "不适用范围，强制 ≥1 条（宪法条款：每个 Agent 必须声明自己不做什么）。"
+    },
+    "expertise": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "specialty", "usefulness_level", "charter"],
+      "description": "专长身份轴（批七 ADR-0030）：业务垂类身份，与 category（AI 适配类型轴）、maturity（治理轴）正交。可选块：缺省=通用 Agent，门户不渲专长牌。",
+      "properties": {
+        "domain": {
+          "type": "string",
+          "enum": ["policy_qa", "standards_qa", "fault_history", "sys_calc", "cfd_sim", "test_data", "design_opt", "generic"],
+          "description": "业务垂类域（源自平台运作策划一/二/三阶段工具清单）。"
+        },
+        "specialty": { "type": "string", "minLength": 4, "maxLength": 80, "description": "一句话专长（门户/方案卡主展示位）。" },
+        "usefulness_level": {
+          "type": "string",
+          "enum": ["L1", "L2", "L3"],
+          "description": "有用性承诺阶梯（策划源料）：L1 帮我省事（比我快）/ L2 比我聪明（告诉我别人怎么做）/ L3 带我做（替我执行）。L3 且 mode=job 时 Registry 装载期强制 requires_human_review=true（人是唯一签发者）。"
+        },
+        "charter": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 300,
+          "description": "第一人称开场章程（「我会…；超出范围我会明说」）——与 limitations 成对，把「不会就说不会」从 prompt 祈祷升格为契约字段。运行时作为任务首条旁白事件写入。能力变更必须同步修订并记 changelog。"
+        }
+      }
+    },
+    "evidence_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required"],
+      "description": "依据纪律轴（批七 ADR-0030）：「每个推荐必须附带依据和置信度」的契约化。required=true 时 Registry 装载期校验包内 output_schema.json 顶层含 findings 定义，否则拒载。",
+      "properties": {
+        "required": { "type": "boolean" },
+        "kinds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["regulation_clause", "standard_clause", "type_case", "fault_case", "knowledge_doc", "calculation"] },
+          "description": "本 Agent 允许引用的依据类型白名单（default-deny）。"
+        }
+      }
+    },
+    "clearance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_data_classification"],
+      "description": "密级准入轴（批七 ADR-0030）：本 Agent 可处理材料的密级上限。整块缺省视同 internal（fail-closed 取最严的向后兼容解释——见 ADR-0030）。创建任务时点由密级 gate 判定，运行中材料密级变化仍归既有 classification gate 遮蔽。",
+      "properties": {
+        "max_data_classification": {
+          "type": "string",
+          "enum": ["public", "internal", "sensitive"],
+          "description": "可处理的最高密级。gate 判定：max(输入文件密级) ≤ 此值，判定式必须 is True。"
+        }
+      }
     }
   }
 }

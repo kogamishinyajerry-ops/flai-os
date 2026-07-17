@@ -152,6 +152,42 @@ class AgentRegistry:
                 "尚未注入 tool_registry/knowledge，声明了也静默拿不到（假绿死罪）；能力就绪前"
                 "fail-closed 拒载（P0-N2；T3-a 落地后放宽）"
             )
+
+        # 批七 ADR-0030 ①：L3「带我做」承诺 ⟹ 人在回路装载期不变量。既有
+        # job×LLM 不变量只咬调 LLM 的包；L3 是更强的能力承诺（替我执行），
+        # 即使 profile=none 的确定性 job 包也必须 review-gated——「带我做」
+        # 级别的产物没有免签通道（人是唯一签发者）。
+        expertise = data.get("expertise", {}) or {}
+        if (
+            expertise.get("usefulness_level") == "L3"
+            and workflow.get("mode") == "job"
+            and workflow.get("requires_human_review") is not True
+        ):
+            raise InvalidPackageError(
+                f"{entry} expertise.usefulness_level=L3（带我做）且 mode=job"
+                "但 workflow.requires_human_review 非 True——L3 承诺装载期强制人签"
+                "（ADR-0030：带我做级产物无免签通道）"
+            )
+        # 批七 ADR-0030 ②：依据纪律声明 ⟹ 输出契约结构落地校验。声明了
+        # 「推荐必附依据」却无 findings 输出结构 = 承诺无处兑现（假绿温床），
+        # 装载期读盘 spot-check，缺失即拒载。
+        evidence_policy = data.get("evidence_policy", {}) or {}
+        if evidence_policy.get("required") is True:
+            _out_name = (data.get("output") or {}).get("schema") or "output_schema.json"
+            _out_path = entry / _out_name
+            _findings_ok = False
+            if _out_path.is_file():
+                try:
+                    _out_doc = json.loads(_out_path.read_text(encoding="utf-8"))
+                    _findings_ok = "findings" in (_out_doc.get("properties") or {})
+                except (json.JSONDecodeError, OSError):
+                    _findings_ok = False
+            if _findings_ok is not True:
+                raise InvalidPackageError(
+                    f"{entry} evidence_policy.required=true 但 {_out_name} 缺失或顶层"
+                    "properties 无 findings 定义——依据承诺必须有输出结构承接"
+                    "（ADR-0030：无处兑现的承诺=假绿温床，fail-closed 拒载）"
+                )
         return data
 
     def get(self, agent_id: str) -> dict[str, Any] | None:
