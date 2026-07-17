@@ -360,7 +360,11 @@ onUnmounted(() => {
    被拦+截图铁证）。横向预留兜不住合法极端（待签+运行中+监控+core 全家桶
    ~360px），改竖向让位与 pill 数量彻底解耦：dock 带底 ≈ top16+pill高~32≈48px，
    main padding-top 28px + 本 28px → 头栏行顶 56px > 48px，任意 pill 组合不遮。 */
-.wb-back { margin-top: 28px; }
+@media (min-width: 861px) {
+  .wb-back { margin-top: 28px; }
+}
+/* 窄屏清零（Codex R2 审 P3，verbatim）：≤860px 时 App 主区已有 60px 顶距
+   且 dock pill 隐藏，无遮挡可让——无条件 28px 是纯多余下沉。 */
 .sess-hero {
   display: flex;
   justify-content: space-between;

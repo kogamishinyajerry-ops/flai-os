@@ -370,12 +370,22 @@ async function loadGovernance(agentId) {
       request(`/api/agents/${agentId}/curated_cases_count`),
     ]);
     if (epoch !== governanceEpoch) return;
-    governanceRuns.value = runs;
+    // 合并保留本地乐观 in-flight 行（Codex R2 审 P2，verbatim）：POST pending
+    // 期间关窗重开，旧列表快照晚于入队 unshift 提交会把 queued 行抹掉→按钮
+    // 重开=重复入队窗口。服务端响应缺失的本地 queued/running 行保留表头，
+    // 同 id 以服务端字段为准；下一次真实刷新（重试/终态 load）自然收敛。
+    const localInFlight = governanceRuns.value.filter(
+      (r) => (r.status === "queued" || r.status === "running") && !runs.some((s) => s.id === r.id),
+    );
+    governanceRuns.value = [...localInFlight, ...runs];
     governancePromotions.value = promotions;
     curatedCasesCount.value = casesCount?.count ?? null;
   } catch (err) {
     if (epoch !== governanceEpoch) return;
-    governanceRuns.value = [];
+    // 对称保留（同上）：load 失败也不许抹掉在飞行的 queued/running 行。
+    governanceRuns.value = governanceRuns.value.filter(
+      (r) => r.status === "queued" || r.status === "running",
+    );
     governancePromotions.value = [];
     curatedCasesCount.value = null;
     governanceLoadError.value = err.detail || err.message || "治理信息加载失败";

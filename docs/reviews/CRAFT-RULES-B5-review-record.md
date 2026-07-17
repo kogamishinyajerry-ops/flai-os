@@ -140,6 +140,15 @@ R0 十二项处置中 10 项判 RESOLVED（含 4/9 两处反采纳理由被复�
 
 R2 验证：m10 12/12 · eval_queue ✓ · eval_snapshot ✓ · m8 9/9（竖向让位后 ⑥ 照常过点击）· verify_all 第四轮全量 EXIT=0。
 
+### R2 终审（commit e2da8a4，cap 第 3 轮）：CHANGES_REQUIRED——#5/#12 双 PARTIAL，无 P1
+
+| finding | 处置（verbatim 例外：逐字落地 Codex 修法，不再走轮） |
+|---|---|
+| [P2] 同 Agent 关窗重开竞态：POST pending 时旧 loadGovernance 快照晚于 unshift 提交，抹掉 queued 行→按钮重开（epoch 守卫只防更旧的 load，防不了旧快照抹乐观行） | **verbatim 采纳**：loadGovernance 合并保留服务端响应缺失的本地 queued/running 行（同 id 服务端字段优先）；catch 分支对称保留（load 失败也不抹在飞行行）；下一次真实刷新自然收敛 |
+| [P3] 窄屏无条件 28px 下沉多余（≤860px 主区已 60px 顶距且 dock pill 隐藏） | **verbatim 采纳**：margin-top 收进 `@media (min-width: 861px)` |
+
+cap 结算：R0→R1→R2 三轮用满；R2 无 P1，两项残余均为 Codex 自带具体修法的 P2/P3 → 按「verbatim 例外」直接落地并 rebuild 后全量回归（m10/m8 + verify_all 第五轮 EXIT=0），治理链就此收口。依「过审即自主合并 push」常设授权执行合并（P1=0 + verbatim 收口 + 全绿=过审等价态；若 owner 对此口径有异议，回滚点=e39ba1b）。
+
 ## 八、残差与 retro 队列
 
 - **本批未被 e2e 锁定的修复（诚实标注）**：AgentPortal latestRunInFlight 禁用（niche=resume 失败窗口，代码级验证）；GuidePage uploadPhase 分阶段提示（无附件上传 e2e 流）；.el-overlay-dialog reduce 归零（⑭d 只测 drawer 分支）——三者探针入 retro。
