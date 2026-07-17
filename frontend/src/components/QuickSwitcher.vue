@@ -238,7 +238,12 @@ watch(
     focusReturnEl = document.activeElement;
     // 状态中心抽屉（el-drawer z-index 2000+）开着时先关掉——否则 ⌘K 面板(200)
     // 被抽屉遮罩盖住而焦点已被偷进不可见输入框。任意时刻只留一个顶层模态。
-    if (statusCenter.open) closeCenter();
+    // suppressFocusReturn：让位不是归位——不置旗的话 SC 关闭回还的 nextTick
+    // 排在本面板聚焦之后，焦点会被抢回 dock pill（⑭C6′ 实证咬合）。
+    if (statusCenter.open) {
+      statusCenter.suppressFocusReturn = true;
+      closeCenter();
+    }
     selectedIndex.value = 0;
     nextTick(() => inputRef.value?.focus());
     fetchAll();
@@ -246,6 +251,10 @@ watch(
 );
 
 function activate(type, item) {
+  // 导航离场不回还（3-lens 可用性 P2）：选中结果=用户去了新页面，焦点该落在
+  // 新页面而不是被 close watcher 拽回侧栏搜索钮；回还只属于 Escape/点遮罩
+  // 这类「放弃关闭」（⑭C6″ 实证咬合）。
+  focusReturnEl = null;
   if (type === "conversation") router.push(`/workbench/${item.id}`);
   else if (type === "task") router.push(`/tasks/${item.id}`);
   else if (type === "agent") router.push("/portal");

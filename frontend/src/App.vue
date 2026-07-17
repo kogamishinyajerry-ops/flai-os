@@ -684,7 +684,10 @@ button:focus-visible,
   .sidebar { transition: none !important; }
   /* 批次五 C4 补洞②：Element Plus el-drawer（状态中心）/el-overlay 内置
      transform 滑入全仓无自定义覆盖——第三方过渡同样要守 reduce（自建动效
-     26 处均已降级，唯独组件库这层漏网）。 */
+     26 处均已降级，唯独组件库这层漏网）。
+     注：.el-overlay 同时是 ElDialog（治理弹窗）与 ElMessageBox（5 处 confirm）
+     的底层——一并归零是刻意的；Vue whenTransitionEnds 对 duration=0 立即
+     resolve，@closed/afterLeave 回调照常触发，不会挂起（3-lens 回归已核）。 */
   .el-drawer,
   .el-overlay {
     transition: none !important;

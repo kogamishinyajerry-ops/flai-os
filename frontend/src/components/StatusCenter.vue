@@ -263,7 +263,11 @@ watch(() => statusCenter.open, (open) => {
   } else {
     const el = focusReturnEl;
     focusReturnEl = null;
-    if (el && typeof el.focus === "function" && document.contains(el)) {
+    if (statusCenter.suppressFocusReturn) {
+      // 跨模态让位（⌘K 互斥关闭本抽屉）：让位不是归位——跳过这一次回还，
+      // 否则本 nextTick 排在 ⌘K 聚焦之后会把焦点抢回 dock（3-lens 回归 P1）。
+      statusCenter.suppressFocusReturn = false;
+    } else if (el && typeof el.focus === "function" && document.contains(el)) {
       nextTick(() => el.focus());
     }
   }
@@ -567,6 +571,7 @@ function goFullPage() {
   const id = statusCenter.taskId;
   // 先同步切回 inbox 让 peek 子树立即响应式卸载——不等 el-drawer 的 0.3s 关闭
   // 过渡，堵死「批准放行」与 TaskDetail 同名按钮的瞬时选择器重影窗口（红线§e2e）
+  focusReturnEl = null; // 导航离场不回还（与 ⌘K activate 同律）：焦点归新页面
   backToInbox();
   closeCenter();
   if (id) router.push(`/tasks/${id}`);
@@ -578,6 +583,7 @@ function retryFromPeek() {
   const t = peekTask.value;
   if (!t) return;
   const target = buildRetryRoute(t);
+  focusReturnEl = null; // 导航离场不回还（与 goFullPage 同律）
   backToInbox();
   closeCenter();
   router.push(target);

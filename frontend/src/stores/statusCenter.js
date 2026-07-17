@@ -7,6 +7,10 @@ export const statusCenter = reactive({
   open: false,
   view: "inbox", // 'inbox' | 'peek'
   taskId: null,
+  // 跨模态互斥让位旗（3-lens 回归 P1）：⌘K 打开时互斥关闭本抽屉是「让位不是
+  // 归位」——置位后 StatusCenter 的关闭 watcher 跳过一次焦点回还并复位，否则
+  // 它的 nextTick 排在 ⌘K 聚焦之后，会把焦点从 qs-input 抢回 dock pill。
+  suppressFocusReturn: false,
 });
 
 export function openInbox() {

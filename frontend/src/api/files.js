@@ -4,8 +4,11 @@ export const uploadFile = (file, taskId) => {
   const formData = new FormData();
   formData.append("file", file);
   if (taskId) formData.append("task_id", taskId);
-  // 上传给宽限（批次五 C1）：附件体积可到 MB 级，内网慢链路 20s 偏紧，60s 兜底。
-  return request("/api/files/upload", { method: "POST", formData, timeoutMs: 60_000 });
+  // 上传宽限（批次五 C1，3-lens 双镜 P2 校准）：后端上限 FLAI_MAX_UPLOAD_MB
+  // 默认 100MB（backend/app/api/files.py），60s 隐含要求 ≥1.7MB/s——慢链路
+  // （VPN/拥塞 WiFi）传接近上限的附件会被硬掐成「从慢但能传完→直接判超时」。
+  // 300s 对应 ~0.33MB/s 地板，覆盖内网最差链路；上限外的真挂起仍会落地。
+  return request("/api/files/upload", { method: "POST", formData, timeoutMs: 300_000 });
 };
 
 // 下载走浏览器原生导航（FileResponse 附件头由后端给），不经 fetch。

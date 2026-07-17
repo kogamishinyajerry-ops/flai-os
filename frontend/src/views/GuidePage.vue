@@ -1907,10 +1907,12 @@ watch(
   font-size: 13px;
   font-weight: 600;
   /* clay 预算（批次五 C3）：未就绪成员的召集钮逐行重复，常驻降为中性描边；
-     hover 满血 clay 不变（主动作暗示保留在交互时刻）。 */
+     hover 满血 clay 不变（主动作暗示保留在交互时刻）。描边用 ink-faint 而非
+     hairline（3-lens 可用性 P2）：这是行内唯一推进 CTA，hairline 在纸面上
+     近乎无边缘对比，会与周围说明性灰字同权重——降 clay 不等于降可发现性。 */
   color: var(--ink-soft);
   background: transparent;
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--ink-faint);
   border-radius: 10px;
   padding: 8px 14px;
   cursor: pointer;

@@ -158,7 +158,10 @@
 
           <div class="gov-run-block">
             <div class="section-label">最近评测</div>
-            <div v-if="governanceResumeError" class="gov-resume-error" role="alert">{{ governanceResumeError }}</div>
+            <div v-if="governanceResumeError" class="gov-resume-error" role="alert">
+              {{ governanceResumeError }}
+              <button type="button" class="gov-resume-retry" :disabled="governanceRunLoading" @click="retryResume">重试</button>
+            </div>
             <div class="gov-run-summary">
               <template v-if="latestGovernanceRun">
                 通过 {{ latestGovernanceRun.passed }}/{{ latestGovernanceRun.total }} ·
@@ -434,11 +437,19 @@ async function resumeInFlightRunIfAny(agentId) {
     // 诚实降级（批次五 C2）：旧实现空 catch 静默复位——用户不知道恢复轮询已
     // 失败、面板显示的 run 可能是旧态。报错如实，恢复动作明说。
     if (governanceOpen.value && governanceAgent.value?.id === agentId) {
-      governanceResumeError.value = `评测状态刷新失败（${err.detail || err.message}）——所示结果可能已过期，可重开面板或再次跑评测`;
+      // 尾巴不再指路「再次跑评测」（3-lens 可用性 P2）：那个按钮语义是起新
+      // 评测，照着点会对同一 agent 多起一跑——恢复动作由行内「重试」钮承载。
+      governanceResumeError.value = `评测状态刷新失败（${err.detail || err.message}）——所示结果可能已过期`;
     }
   } finally {
     governanceRunLoading.value = false;
   }
+}
+
+// 行内重试=只重查刚才那次 run 的状态（resumeInFlightRunIfAny 幂等：失败后
+// latestGovernanceRun 仍是 queued/running 旧态，复调即恢复轮询）。
+function retryResume() {
+  if (governanceAgent.value) resumeInFlightRunIfAny(governanceAgent.value.id);
 }
 
 async function runEvaluation() {
@@ -694,6 +705,19 @@ onMounted(load);
   font-size: 12px;
   margin-bottom: 6px;
 }
+.gov-resume-retry {
+  margin-left: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.gov-resume-retry:hover { color: var(--clay); }
+.gov-resume-retry:disabled { opacity: 0.5; cursor: default; }
 .gov-run-summary {
   color: var(--ink);
   font-size: 13px;

@@ -147,13 +147,16 @@ with sync_playwright() as p:
 
     # ①b 批次五 C3 clay 预算：方案卡逐成员行的分工徽章/未就绪召集钮常驻降灰
     #    （clay 只留工作灯与主 CTA）——computed 色直断，回染必咬。
-    CLAY_RGB = ("rgb(193, 95, 60)", "rgb(212, 113, 74)")
+    # 运行时解析 --clay（诚实 P2：硬编码字面量随调色静默过期→oracle 失咬）。
+    clay_rgb = page.evaluate(
+        "() => { const s = document.createElement('span'); s.style.color = 'var(--clay)';"
+        " document.body.appendChild(s); const v = getComputedStyle(s).color; s.remove(); return v; }")
     rt_c = page.locator(".role-tag").first.evaluate("el => getComputedStyle(el).color")
     cta_c = (page.locator(".agent-cta").first.evaluate("el => getComputedStyle(el).color")
              if page.locator(".agent-cta").count() else "(none)")
     check("①b clay 预算：role-tag/agent-cta 常驻非 clay（降灰）",
-          all(c not in CLAY_RGB for c in (rt_c, cta_c) if c != "(none)"),
-          f"role_tag={rt_c} agent_cta={cta_c}")
+          all(c != clay_rgb for c in (rt_c, cta_c) if c != "(none)") is True,
+          f"clay={clay_rgb} role_tag={rt_c} agent_cta={cta_c}")
     page.screenshot(path=str(SHOTS / "1_plan_card.png"), full_page=True)
 
     # ② 对话流点 fta「去创建此任务」→ URL 带 back=chat

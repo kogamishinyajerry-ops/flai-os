@@ -68,6 +68,12 @@
      1px 环）+溢出边界（220 字晋升名 ellipsis+无横向溢出+胶囊 max-width）；
      C6 worklog 真 button/aria-expanded 翻转+焦点回还×2（⌘K→搜索钮/状态
      中心→dock）。
+  ⑭′ 3-lens 对抗审修复批：⑭C6′ 跨模态互斥焦点竞态（SC 开着按⌘K→焦点归
+     qs-input，suppressFocusReturn 让位旗——回归 P1 浏览器实证）；⑭C6″ 导航
+     离场不回还（选中结果后焦点归新页面）；⑭C2′「自动重试中」真声明锁（feed
+     挂起→标注在场+无「请稍后重试（自动重试中）」矛盾拼接+轮询二次开火）；
+     census/m8⑤b/m9①b 的 clay 比对全部改运行时解析 var(--clay)（字面量随
+     调色静默过期→oracle 失咬，诚实 P2）。
 
 夹具口径（与 m9 同纪律）：temp DB 直写只为渲染路径提供 fixture，不冒充业务
 状态机行为（真实完成/放行链路由 m2 验收）。completed 任务配 tool_failed 事件
@@ -1096,7 +1102,16 @@ with sync_playwright() as p:
     #    anti-ai-slop accent 预算的信任色锁适配；own-属性归因防继承连坐）──────
     CENSUS_JS = """
     () => {
-      const CLAY = ["193, 95, 60", "212, 113, 74"]; // --clay 亮/暗
+      // 运行时解析 --clay（3-lens 诚实 P2：硬编码字面量会随将来调色静默过期
+      // →census 失咬）。探针 span 与被测元素同 context 同主题，等值比较天然
+      // 正确；若 --clay 变量缺失，探针解析回退成继承 ink 色→census 大面积误
+      // 报——fail-loud 而非 silent-pass。
+      const probe = document.createElement("span");
+      probe.style.color = "var(--clay)";
+      document.body.appendChild(probe);
+      const m = getComputedStyle(probe).color.match(/\d+, \d+, \d+/);
+      probe.remove();
+      const CLAY = [m ? m[0] : "__no-clay-var__"];
       const EXEMPT = [".today-lamp", ".cl-lamp", ".sc-lamp", ".work-pulse-dot",
         ".work-flow-strip", ".cta-clay", ".nav-link.is-active", ".qs-item.is-selected",
         ".gov-ladder-step.current", ".status-dock", ".sc-shell", ".el-drawer",
@@ -1223,6 +1238,60 @@ with sync_playwright() as p:
     check("⑭C6 焦点回还（⌘K 关→搜索钮；状态中心关→dock）",
           qs_focus_back is True and sc_focus_back is True,
           f"qs={qs_focus_back} sc={sc_focus_back}")
+
+    # ── ⑭g′ C6 跨模态互斥焦点竞态（3-lens 回归 P1 浏览器实证）：SC 开着按 ⌘K
+    #    →焦点必须归 qs-input，不许被 SC 关闭回还抢回 dock。QS 打开时的互斥
+    #    closeCenter 是「让位不是归位」（QS 注释自陈的契约，此探针把它焊死）──
+    page.goto(BASE + "/today", wait_until="networkidle")
+    page.locator(".status-dock").click()
+    page.wait_for_selector(".sc-shell", timeout=8000)
+    page.keyboard.press("ControlOrMeta+k")
+    page.wait_for_selector(".qs-input", timeout=8000)
+    page.wait_for_timeout(600)  # 双方 nextTick + drawer 卸载全落地后再验尸
+    race_focus = page.evaluate(
+        "() => (document.activeElement && String(document.activeElement.className)) || '(body)'")
+    check("⑭C6′ 跨模态互斥：SC 开着按⌘K→焦点归 qs-input（不被 dock 回还抢走）",
+          ("qs-input" in race_focus) is True, f"active={race_focus}")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(400)
+
+    # ── ⑭g″ C6 导航离场不回还（3-lens 可用性 P2）：⌘K 选中结果回车导航后，
+    #    焦点不许被拽回侧栏搜索钮——回还只属于 Escape/点遮罩这类「放弃关闭」──
+    page.goto(BASE + "/today", wait_until="networkidle")
+    page.locator(".sb-foot-btn:not(.sb-theme)").click()
+    page.wait_for_selector(".qs-input", timeout=8000)
+    page.locator(".qs-input").fill("Hello")
+    page.wait_for_selector(".qs-item", timeout=8000)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(700)  # 导航 + 关闭 watcher 竞态窗口全落地
+    nav_focus = page.evaluate(
+        "() => (document.activeElement && String(document.activeElement.className)) || '(body)'")
+    check("⑭C6″ 导航离场不回还（选中结果后焦点不被拽回搜索钮）",
+          ("sb-foot-btn" not in nav_focus) is True, f"active={nav_focus}")
+
+    # ── ⑭a′ C2 「（自动重试中）」真声明锁（3-lens 诚实 P2）：feed 源挂起→
+    #    超时错误行带自动重试标注、无「请稍后重试（自动重试中）」自相矛盾拼接，
+    #    且轮询链在错误落地后真的二次开火（声明 ≤ 证据：不轮询就不许这么说）──
+    feed_hits = {"n": 0}
+    def _hang_feed(route):
+        feed_hits["n"] += 1  # 挂起：不 fulfill/abort/continue，等 client 20s 硬超时
+
+    ctx.route("**/api/tasks*", _hang_feed)
+    page.goto(BASE + "/today", wait_until="domcontentloaded")
+    try:
+        page.wait_for_selector(".today-error:has-text('自动重试中')", timeout=26000)
+        feed_err = page.locator(".today-error", has_text="自动重试中").first.inner_text()
+        suffix_ok = "（自动重试中）" in feed_err
+        contradiction_free = "请稍后重试（自动重试中）" not in feed_err
+        base_n = feed_hits["n"]
+        page.wait_for_timeout(6500)  # liveFeed 轮询间隔 5s + 余量
+        repoll_ok = feed_hits["n"] > base_n
+    except Exception:
+        feed_err, suffix_ok, contradiction_free, repoll_ok = "(无自动重试错误行)", False, False, False
+    check("⑭C2′ feed 超时→「自动重试中」真声明（在场+无自相矛盾拼接+轮询真二次开火）",
+          suffix_ok is True and contradiction_free is True and repoll_ok is True,
+          f"err={feed_err[:70]} hits={feed_hits['n']}")
+    ctx.unroute("**/api/tasks*")
 
     ctx.close()
 
