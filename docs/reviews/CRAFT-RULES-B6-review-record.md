@@ -68,7 +68,7 @@ trap 清理核验为空。首跑暴露两处 bash 3.2 兼容缺陷（declare -A 
 
 ### R0（审 44ca543+d51b3c4，native 20x Pro，read-only）：CHANGES_REQUIRED，3×P2 无 P1
 
-| # | 级 | finding | 处置（全部 verbatim 落地，修复批 6db94a3） |
+| # | 级 | finding | 处置（全部 verbatim 落地，修复批 cea0075——amend 后终值，替代记录初稿所引 6db94a3） |
 |---|---|---|---|
 | 1 | P2 | router afterEach 未检查第三参 failure——被取消/中止的导航仍改 title、抢焦、播报未到达页 | 修 `(to, from, failure) => { if (failure) return; ... }`；新增 ⑭C7 探针（确定性夹具：hold 住 /me 懒加载 chunk→「对话」导航胜出→释放 chunk 让被取消导航结算）。**oracle 先行红逐字命中**：`title='我的贡献 · FLAi-OS' ann='已切换到我的贡献'`（109/110）→ 修复后 110/110 |
 | 2 | P2 | ⑮ census 选择器漏 `[tabindex≥0]` 纯键盘目标——spec 声明与实现漂移，无 role 自定义目标整类逃逸 | 选择器扩 `a[href]`+`[tabindex]`+`native‖tabIndex>=0` 过滤；现状零新违规；**TB7 tamper 实证**：注入 10×10 `tabindex=0` span（crowded）→ ⑮ 红三页点名 `span.(10x10)` |
@@ -81,3 +81,20 @@ R0 过程两处工程故障如实留痕：①首启 codex 进程挂死于模型�
 本会话 3 个 PID 后重启，重启轮 155k tokens 正常收敛。②本 §五 与 tamper log
 的 R1 段落初稿曾被清理 PNG 抖动的 `git checkout -- docs/reviews` 误抹
 （未提交 md 与 PNG 同目录连坐）——按 cp 备份纪律缺失自省，重写后 amend 收口。
+
+### R1（审 cea0075）：CHANGES_REQUIRED——R0 三条 2 RESOLVED + 1 PARTIAL，新 1P2+2P3
+
+| # | 级 | finding | 处置（全部 verbatim 落地） |
+|---|---|---|---|
+| 1 | PARTIAL→P2 | ⑭C7 固定 300/600ms 代替同步——忙机下 c7_held 可能为空或 chunk 未完成，旧实现也可能以「对话」残留态假绿 | 条件轮询 c7_held 非空（空则 assert fail-loud）+ `expect_request_finished` 同步 chunk 真实完成 + 双 rAF 后取 oracle；收紧后 craft 110/110 |
+| 2 | P3 | baseline 裸 build 在 set -e 下失败会绕过 BASELINE-RED 分支 | `if ! (build)` 显式包壳，落 BASELINE-RED 带归因 |
+| 3 | P3 | 记录引用 amend 前对象 6db94a3（无分支包含，新 clone 无法定位） | 改引 cea0075 并注明替代关系 |
+
+### replay 集换血（新三条件的直接后果，如实留痕）
+
+硬化后首轮验证 `timeout-cut` BITE-MISS——其咬合形态=FAIL ⑭C1 后下游崩溃
+（批五存档如此），与「必达 FAILED 汇总」契约不相容。按契约优先处置：撤出
+重放集（崩溃型 fail-closed 不冒充干净咬合，该规则族回归保护由 node
+api_client_timeout 4 例承担），换入批五 T3 降级条阉割（degrade-cut）。
+换血后全量验证：双套件 BASELINE-GREEN + 7/7 BITE-OK（RC=1 + 精确 FAIL 行
++ FAILED 汇总三条件全举证）。

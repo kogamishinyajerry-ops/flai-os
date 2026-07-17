@@ -8,7 +8,7 @@
 # ——replay 自身 fail-closed。
 #
 # 用法：bash scripts/tamper_replay.sh [replay 名 ...]   # 缺省=全部
-#   可用名：census-redye timeout-cut reduce-sidebar roving-cut fitts-shrink
+#   可用名：census-redye degrade-cut reduce-sidebar roving-cut fitts-shrink
 #           dialog-reduce-cut portal-dup-enqueue
 # 约 5-6 分钟/处（build+整套 craft e2e）；portal-dup-enqueue 跑 m10 套件较快。
 #
@@ -54,7 +54,12 @@ failsum_of() { # 套件各自的 FAILED 汇总行（须真到达汇总，中途�
 
 baseline() { # $1=套件；clean HEAD 必须全绿——否则既有红会被误归因成 tamper 咬合
   echo "== baseline: $1 =="
-  (cd "$WT/frontend" && npm run build >/dev/null 2>&1)
+  # build 显式包住（Codex R1 审 P3）：set -e 下裸 build 失败会绕过 BASELINE-RED
+  # 分支，只留一个无法归因的裸 exit 1。
+  if ! (cd "$WT/frontend" && npm run build >/dev/null 2>&1); then
+    echo "BASELINE-RED: ${1} —— build 失败（node_modules 缺失或构建错误）"
+    exit 1
+  fi
   run_suite "$1"
   if [ "$RC" -eq 0 ] && grep -qF "$(green_of "$1")" <<<"$OUT"; then
     echo "BASELINE-GREEN: $1"
@@ -99,7 +104,7 @@ suite_of() {
 expect_of() {
   case "$1" in
     census-redye)       echo 'FAIL ⑭C3' ;;
-    timeout-cut)        echo 'FAIL ⑭C1' ;;
+    degrade-cut)        echo 'FAIL ⑭C2 ' ;;
     reduce-sidebar)     echo 'FAIL ⑭C4 ' ;;
     roving-cut)         echo 'FAIL ⑭C6″' ;;
     fitts-shrink)       echo 'FAIL ⑮ ' ;;
@@ -118,10 +123,14 @@ i=s.rindex("</style>"); assert i>0
 open(p,"w").write(s[:i]+".nav-link, .today-section-head { color: var(--clay) !important; }\n"+s[i:])
 PY
       ;;
-    timeout-cut) cat <<'PY'
-p="frontend/src/api/client.js"; s=open(p).read()
-t="setTimeout(() => controller.abort(), timeoutMs)"; assert t in s
-open(p,"w").write(s.replace(t,"setTimeout(() => {}, timeoutMs)"))
+    # 批五 T2（超时撤除）不入重放集：其咬合形态=FAIL ⑭C1 后下游 ⑭C2 点击
+    # 崩溃（批五逐字存档），与「必达 FAILED 汇总」的干净咬合契约不相容——
+    # 崩溃型 fail-closed 不冒充干净咬合；该规则族回归保护由 node
+    # tests/api_client_timeout.test.mjs 4 例承担。改用批五 T3（降级条阉割）。
+    degrade-cut) cat <<'PY'
+p="frontend/src/components/QuickSwitcher.vue"; s=open(p).read()
+t="fetchDegraded.value = failed > 0;"; assert t in s
+open(p,"w").write(s.replace(t,"fetchDegraded.value = false;"))
 PY
       ;;
     reduce-sidebar) cat <<'PY'
@@ -158,7 +167,7 @@ PY
   esac
 }
 
-ALL="census-redye timeout-cut reduce-sidebar roving-cut fitts-shrink dialog-reduce-cut portal-dup-enqueue"
+ALL="census-redye degrade-cut reduce-sidebar roving-cut fitts-shrink dialog-reduce-cut portal-dup-enqueue"
 NAMES="${*:-$ALL}"
 
 # 先验名合法性 + 汇总用到的套件，各跑一次 clean baseline（全绿才准开咬）。

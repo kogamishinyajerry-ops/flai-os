@@ -1351,13 +1351,21 @@ with sync_playwright() as p:
     c7_ctx.route("**/MePage*.js", lambda route: c7_held.append(route))
     c7_page.goto(BASE + "/today", wait_until="networkidle")
     c7_page.locator(".sb-mine").click()  # → /me（导航挂在被 hold 的 chunk 上）
-    c7_page.wait_for_timeout(300)
+    # 条件轮询取代固定 sleep（Codex R1 审 P2）：hold 是探针前提，空则 fail-loud
+    # ——chunk 已缓存/导航未发起时旧写法会以「对话」残留态假绿。
+    _c7_deadline = time.time() + 8
+    while not c7_held and time.time() < _c7_deadline:
+        c7_page.wait_for_timeout(100)
+    assert c7_held, "⑭C7 前提失败：MePage chunk 未被 hold（导航未发起或 chunk 已缓存）"
     c7_page.locator(".nav-link", has_text="对话").click()  # → / 胜出
     c7_page.wait_for_url(BASE + "/", timeout=5000)
-    c7_page.wait_for_timeout(400)
-    for _r in c7_held:
-        _r.continue_()  # 释放 chunk——被取消的 /me 导航此刻才结算 afterEach(failure)
-    c7_page.wait_for_timeout(600)
+    # 释放 chunk 并同步等该请求真实完成——被取消的 /me 导航此刻才结算
+    # afterEach(failure)；再等两拍 rAF 让 nextTick 链走完后才取 oracle。
+    with c7_page.expect_request_finished(lambda r: "MePage" in r.url, timeout=8000):
+        for _r in c7_held:
+            _r.continue_()
+    c7_page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+    c7_page.wait_for_timeout(200)
     c7_state = json.loads(c7_page.evaluate(
         "() => JSON.stringify({t: document.title,"
         " a: (document.querySelector('.sr-announcer') || {}).textContent || ''})"))
