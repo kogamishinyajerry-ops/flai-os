@@ -1,0 +1,19 @@
+{
+  "case_id": "case_001_dual_evidence",
+  "description": "合成条款与 XR-100 实例双依据问答：同一 finding 必须同时含 standard_clause 和 type_case。",
+  "conversation": [
+    {
+      "role": "user",
+      "content": "XR-100 的双通道传感差异检查有哪些标准条款和已有机型实例可供回源？"
+    }
+  ],
+  "expected": {
+    "findings_min": 1,
+    "one_finding_evidence_kinds_include": ["standard_clause", "type_case"],
+    "source_refs_include": ["QZ-AIR-SYN-210 §5.4.2（虚构条款）", "TC-XR100-017（虚构 XR-100 实例）"],
+    "confidence_basis": "双源(条款+机型实例)",
+    "resolved_all": false,
+    "refusals_empty": true
+  },
+  "notes": "全部条款、机型和实例均为合成虚构；只验证结构与诚实边界。"
+}

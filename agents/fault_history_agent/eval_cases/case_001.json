@@ -1,0 +1,21 @@
+{
+  "case_id": "case_001",
+  "description": "XR-100 热浸后间歇断电正常检索：应生成结构化 JSON 与 Markdown，并停 waiting_review。",
+  "inputs": {
+    "problem_description": "XR-100 连续运行两小时后间歇断电并出现母线复位，热浸时复现，冷却后恢复，怀疑接插件接触阻抗波动。",
+    "model_type": "XR-100"
+  },
+  "expected": {
+    "findings_min": 1,
+    "finding_evidence_kind": "fault_case",
+    "source_ref_contains": "SYN-FH-XR100-001",
+    "resolved_all": false,
+    "human_review_required": true
+  },
+  "checks": [
+    {"kind": "status_is", "value": "waiting_review"},
+    {"kind": "artifact_exists", "file": "fault_history.json"},
+    {"kind": "artifact_exists", "file": "fault_history.md"},
+    {"kind": "artifact_contains", "file": "fault_history.md", "value": "相似不等于适用"}
+  ]
+}

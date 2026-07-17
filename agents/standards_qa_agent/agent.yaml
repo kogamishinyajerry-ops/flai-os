@@ -1,0 +1,64 @@
+id: standards_qa_agent
+name: "专业标准问答 Agent"
+version: 0.1.0
+status: draft
+maturity: L0
+category: knowledge_qa
+summary: "面向专业规范与标准条款提供条款号溯源线索；能匹配合成机型实例时给出条款与实例双依据，冲突只并列不裁决。"
+description: >
+  批七 standards_qa 垂类专家包。当前交互运行时尚未注入知识源，因此只依据
+  prompt.md 内的合成条款/机型实例目录和用户明确提供的信息返回检索定位，
+  不复述或编造条款原文。结构化 recommendation 同步给出 findings/refusals；
+  每条依据均为 resolved=false。出现冲突条款时并列展示来源线索，绝不替人裁决。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: reasoning
+knowledge:
+  enabled: false
+  scopes: []
+tools: []
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats: []
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: interactive
+  requires_human_review: false
+permissions:
+  visibility: department_trial
+  allowed_roles:
+    - admin
+    - agent_developer
+    - business_user
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: false
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: false
+limitations:
+  - "条款冲突不裁决只并列：不判断哪个条款优先，也不替代标准责任人或工程师签字。"
+  - "合成条款库仅作结构演示：不代表任何真实规范、适航要求、机型状态或工程结论。"
+  - "知识源尚未接入：只返回条款号与机型实例索引线索，不提供条款原文或已核验摘录。"
+  - "未收录的标准、专业域或机型实例必须写入 refusals，不得用常识补齐。"
+  - "不自动创建任务、不签发处置建议，也不强制串联其他 Agent。"
+expertise:
+  domain: standards_qa
+  specialty: "专业规范与标准条款问答，条款号溯源，并列提供条款与机型实例双依据"
+  usefulness_level: L1
+  charter: "我给出的每条建议都带条款号出处；能找到已有机型实例时给双依据；条款冲突我并列不裁决。"
+evidence_policy:
+  required: true
+  kinds:
+    - standard_clause
+    - type_case
+clearance:
+  max_data_classification: internal

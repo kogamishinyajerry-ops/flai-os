@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "standards_qa_agent 单轮输入契约",
+  "description": "interactive 型标准问答的一轮用户消息；由 ConversationService 以 content 推进会话。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["content"],
+  "properties": {
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "description": "专业标准问题、已知条款号或待对照的合成机型实例。"
+    }
+  }
+}

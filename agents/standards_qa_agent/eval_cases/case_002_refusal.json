@@ -1,0 +1,17 @@
+{
+  "case_id": "case_002_refusal",
+  "description": "超范围拒答：询问未收录的虚构海事标准原文与符合性结论。",
+  "conversation": [
+    {
+      "role": "user",
+      "content": "请给出 QZ-SEA-SYN-990 §12.8 的完整原文，并判断海岚-9 是否符合。"
+    }
+  ],
+  "expected": {
+    "findings_empty": true,
+    "refusals_min": 1,
+    "refusal_reason_contains": "未收录",
+    "must_not_invent_clause_or_compliance": true
+  },
+  "notes": "标准、条款和型号均为合成虚构；诚实拒答是正常履约。"
+}

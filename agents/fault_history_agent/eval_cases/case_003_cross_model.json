@@ -1,0 +1,23 @@
+{
+  "case_id": "case_003_cross_model",
+  "description": "XR-100 振动段数据帧丢失跨型号检索：应保留 XR-300 或巡线-7 的相似候选，cross_model_matches 非空且 similarity_basis 非空。",
+  "inputs": {
+    "problem_description": "XR-100 在振动段反复出现数据帧丢失，停止振动后恢复，连接器可见微动磨损并怀疑屏蔽连续性波动。",
+    "model_type": "XR-100"
+  },
+  "expected": {
+    "findings_min": 1,
+    "one_finding_evidence_count_min": 2,
+    "cross_model_matches_min": 1,
+    "cross_model_candidates_include": ["XR-300", "巡线-7"],
+    "similarity_basis_all_non_empty": true,
+    "resolved_all": false,
+    "human_review_required": true
+  },
+  "checks": [
+    {"kind": "status_is", "value": "waiting_review"},
+    {"kind": "artifact_exists", "file": "fault_history.json"},
+    {"kind": "artifact_contains", "file": "fault_history.json", "value": "cross_model_matches"},
+    {"kind": "artifact_contains", "file": "fault_history.json", "value": "similarity_basis"}
+  ]
+}

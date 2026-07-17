@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "policy_qa_agent 结构化问答契约",
+  "description": "interactive workflow 返回的 recommendation 结构；assistant_message 取 answer。知识源未接入期间只允许未核验的目录/文号线索，resolved 恒为 false。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["answer", "findings", "refusals"],
+  "properties": {
+    "answer": {"type": "string", "minLength": 1, "maxLength": 4000},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "evidence", "confidence"],
+        "properties": {
+          "claim": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "source_ref", "quote", "resolved"],
+              "properties": {
+                "kind": {"const": "knowledge_doc"},
+                "source_ref": {"type": "string", "minLength": 1, "maxLength": 300},
+                "quote": {"type": "string", "minLength": 1, "maxLength": 300},
+                "resolved": {"const": false}
+              }
+            }
+          },
+          "confidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["level", "basis"],
+            "properties": {
+              "level": {"type": "string", "enum": ["high", "medium", "low"]},
+              "basis": {"type": "string", "enum": ["双源(制度+办理路径)", "单源", "推断"]}
+            }
+          }
+        }
+      }
+    },
+    "refusals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["question", "reason", "suggestion"],
+        "properties": {
+          "question": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "suggestion": {"type": "string", "minLength": 1, "maxLength": 1000}
+        }
+      }
+    }
+  }
+}

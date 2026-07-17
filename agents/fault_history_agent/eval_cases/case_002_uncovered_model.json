@@ -1,0 +1,20 @@
+{
+  "case_id": "case_002_uncovered_model",
+  "description": "未收录虚构型号拒答：不调用模型、不伪造其他型号覆盖，refusals 必须非空。",
+  "inputs": {
+    "problem_description": "海岚-9 在热浸后出现间歇断电，冷却后恢复。",
+    "model_type": "海岚-9"
+  },
+  "expected": {
+    "findings_empty": true,
+    "refusals_min": 1,
+    "cross_model_matches_empty": true,
+    "model_call_count": 0,
+    "human_review_required": true
+  },
+  "checks": [
+    {"kind": "status_is", "value": "waiting_review"},
+    {"kind": "artifact_exists", "file": "fault_history.json"},
+    {"kind": "artifact_contains", "file": "fault_history.json", "value": "未收录"}
+  ]
+}

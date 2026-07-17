@@ -1,0 +1,20 @@
+{
+  "case_id": "case_001",
+  "description": "合成质量制度目录正常问答：应给出制度与办理路径两条 knowledge_doc 线索，不编造条款原文。",
+  "conversation": [
+    {
+      "role": "user",
+      "content": "一个质量问题需要发起闭环，我应先按什么制度文号检索，并去哪里确认办理入口？"
+    }
+  ],
+  "expected": {
+    "findings_min": 1,
+    "finding_evidence_kinds": ["knowledge_doc"],
+    "finding_evidence_count_min": 2,
+    "source_refs_include": ["青岚质规〔虚构2026〕014号", "青岚流规〔虚构2026〕021号"],
+    "resolved_all": false,
+    "refusals_empty": true,
+    "must_not_claim_clause_text_verified": true
+  },
+  "notes": "全部文号与问题均为合成虚构；interactive case 由会话评测链执行。"
+}

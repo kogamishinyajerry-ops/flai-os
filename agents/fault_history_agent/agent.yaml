@@ -1,0 +1,72 @@
+id: fault_history_agent
+name: "历史故障检索 Agent"
+version: 0.1.0
+status: draft
+maturity: L0
+category: knowledge_qa
+summary: "从包内合成故障记录中检索相似历史案例，由推理模型仅做相关性排序与摘要，并给出跨型号参考；所有处置建议强制人工签发。"
+description: >
+  批七 fault_history 垂类专家包。workflow 先从包内 12 条全合成故障记录做
+  确定性候选检索，再把候选交给 reasoning 画像仅做相关性排序、相似依据说明
+  与处置摘要；模型不得新增案例或改写原始原因/处置。产物为 fault_history.json
+  和 fault_history.md，所有 evidence 为 unresolved，任务强制 waiting_review。
+  未收录型号或无相似候选时正常返回 refusals，不伪造案例。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: reasoning
+knowledge:
+  enabled: false
+  scopes: []
+tools: []
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats:
+    - .md
+    - .json
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: true
+permissions:
+  visibility: department_trial
+  allowed_roles:
+    - admin
+    - agent_developer
+    - business_user
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: false
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: true
+  sample_fields:
+    - inputs.problem_description
+    - inputs.model_type
+    - outputs.findings
+    - outputs.cross_model_matches
+    - outputs.refusals
+limitations:
+  - "相似≠适用：历史案例只提供排查参考，不代表当前故障具有同一原因或可直接复用同一处置。"
+  - "案例库为合成演示数据：不包含任何真实机型、厂商、故障记录、规章条款或维修结论。"
+  - "所有处置建议必须经人签发：任务强制停在 waiting_review，模型与 workflow 均无权批准实施。"
+  - "未收录型号明确拒答；当前只覆盖虚构型号 XR-100、XR-300 与巡线-7。"
+  - "只做结构化检索、候选排序与摘要，不做根因确认、适航判断、安全放行或维修指令签发。"
+expertise:
+  domain: fault_history
+  specialty: "历史故障与排故记录结构化检索，跨型号相似案例推荐"
+  usefulness_level: L2
+  charter: "我推荐历史相似故障的原因与处置供参考；相似不等于适用，处置建议必须经人签发；未收录型号我明说无法覆盖。"
+evidence_policy:
+  required: true
+  kinds:
+    - fault_case
+clearance:
+  max_data_classification: internal

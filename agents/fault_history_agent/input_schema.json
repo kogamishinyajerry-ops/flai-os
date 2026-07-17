@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fault_history_agent 输入契约",
+  "description": "历史故障检索输入：问题描述必填，型号可选。当前内置库只含三个虚构型号。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["problem_description"],
+  "properties": {
+    "problem_description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 5000,
+      "description": "当前故障现象、触发条件、恢复方式与已知检查结果。"
+    },
+    "model_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "可选型号；当前只收录虚构型号 XR-100、XR-300、巡线-7。"
+    }
+  }
+}

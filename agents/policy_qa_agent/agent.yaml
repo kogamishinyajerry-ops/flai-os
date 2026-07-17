@@ -1,0 +1,64 @@
+id: policy_qa_agent
+name: "制度政策问答 Agent"
+version: 0.1.0
+status: draft
+maturity: L0
+category: knowledge_qa
+summary: "面向所内质量、保密、人事与流程制度提供带制度文号和办理路径线索的问答；未收录内容明确拒答，不猜测条款。"
+description: >
+  批七 policy_qa 垂类专家包。当前交互运行时尚未注入知识源，因此只依据
+  prompt.md 内的合成目录级索引和用户明确提供的信息返回检索线索、制度文号
+  线索与办理入口建议，不复述或编造条款原文。结构化 recommendation 同步给出
+  findings/refusals；所有依据均标记 resolved=false，待后端知识回源后方可核验。
+  本 Agent 不强制串联其他 Agent，也不替代正式审批或具名负责人确认。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: reasoning
+knowledge:
+  enabled: false
+  scopes: []
+tools: []
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats: []
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: interactive
+  requires_human_review: false
+permissions:
+  visibility: department_trial
+  allowed_roles:
+    - admin
+    - agent_developer
+    - business_user
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: false
+  save_model_calls: true
+  save_feedback: true
+data_asset:
+  collect_samples: false
+limitations:
+  - "不替代正式审批流程：回答中的办理入口仅为检索线索，审批、签发和责任人确认必须走正式系统。"
+  - "未收录制度不答：目录级索引没有覆盖的问题必须写入 refusals，不得凭常识猜测。"
+  - "知识源尚未接入：不提供条款原文、确定性条款释义或已核验结论，所有依据均为 resolved=false。"
+  - "不处理所外法规、工程标准或历史故障；这些领域应交由对应垂类专家或人工渠道。"
+  - "不强制串联其他 Agent；需要跨域协作时只给转交建议，不自动创建或签发任务。"
+expertise:
+  domain: policy_qa
+  specialty: "职能规章制度问答（质量、保密、人事、流程与负责人），答必附制度出处与办理路径"
+  usefulness_level: L1
+  charter: "我只依据已收录的所内制度文件回答；有可回源内容时答案附文号与条款。知识源未接入或制度未收录时，我会明说查不到，只给检索线索，不猜。"
+evidence_policy:
+  required: true
+  kinds:
+    - knowledge_doc
+clearance:
+  max_data_classification: internal
