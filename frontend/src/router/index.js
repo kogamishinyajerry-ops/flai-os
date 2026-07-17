@@ -40,7 +40,11 @@ const router = createRouter({
   },
 });
 
-router.afterEach((to, from) => {
+router.afterEach((to, from, failure) => {
+  // 取消/中止的导航（重复导航、被后续导航打断、懒加载失败）不改 title、
+  // 不抢焦、不播报未到达的目的页（Codex R0 审 P2——afterEach 对失败导航
+  // 也会触发，failure 非空即整体让位）。
+  if (failure) return;
   // N5：经 titleBadge 合成（全应用唯一 title 写手），徽章计数不因路由切换丢失。
   setTitleBase(to.meta.title ? `${to.meta.title} · FLAi-OS` : "FLAi-OS");
 

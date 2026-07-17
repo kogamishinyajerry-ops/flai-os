@@ -29,6 +29,23 @@
 > 三 P2 修复（replay grep 长前缀锚死 / ⑭C4′ try-finally 摘类 / ⑯ 夹具回滚）。
 > 上表计数按当时基线如实保留。
 
+## Codex R0 修复批（基线 110 探针）
+
+**⑭C7 oracle 先行红**（failure 修复前 dist）→ 109/110：
+```
+FAIL ⑭C7 被取消的导航不改 title 不播报未到达页（failure 让位） | title='我的贡献 · FLAi-OS' ann='已切换到我的贡献'
+```
+（被 hold 的 /me chunk 释放后，取消导航把 title/播报改成未到达页——Codex
+R0 P2-1 缺陷逐字现形。）修复后 110/110。
+
+**TB7 tabindex 目标缩穿**（注入 10×10 `tabindex="0"` 无 role span + sb-foot
+缩穿制造 crowded）→ 109/110：
+```
+FAIL ⑮ 触达目标 census | {'/today': ['span.(10x10)', 'button.sb-foot-btn(10x10)', ...], '/me': [...], '/portal': [...]}
+```
+（Codex R0 P2-2 指出的逃逸类——选择器扩面后 span 被三页点名；扩面前此类
+目标完全不进 census。）
+
 ## TB1 roving 撤除（router afterEach 焦点选择器打歪 `.app-main`→`.app-main-x`）
 
 → 106/108：

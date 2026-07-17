@@ -56,6 +56,28 @@
 采纳修复的再验证：⑭C6⁗ oracle 先行红→绿；oracle 三 P2 修复随绿跑回归
 （⑯ 回滚夹具、⑭C4′ finally 在完好代码路径上行为不变）。
 
+## 四-b · replay 脚本独立验证（B6-6 验收）
+
+基 44ca543 隔离 worktree 全量 7 处（批五 3 + 批六 4）：`REPLAY ALL BITES OK`，
+每处 BITE-OK 逐字命中预期 FAIL 行；未知名入参 fail-loud exit 2；worktree
+trap 清理核验为空。首跑暴露两处 bash 3.2 兼容缺陷（declare -A / 多字节紧邻
+展开吞字节）→ 修复于 d51b3c4，验证在修复版上重跑。时长佐证：10 分钟实跑
+（主树 craft 单跑 ~96s × 7 + build，吻合，非秒退假绿）。
+
 ## 五 · Codex 治理审
 
-（待填）
+### R0（审 44ca543+d51b3c4，native 20x Pro，read-only）：CHANGES_REQUIRED，3×P2 无 P1
+
+| # | 级 | finding | 处置（全部 verbatim 落地，修复批 6db94a3） |
+|---|---|---|---|
+| 1 | P2 | router afterEach 未检查第三参 failure——被取消/中止的导航仍改 title、抢焦、播报未到达页 | 修 `(to, from, failure) => { if (failure) return; ... }`；新增 ⑭C7 探针（确定性夹具：hold 住 /me 懒加载 chunk→「对话」导航胜出→释放 chunk 让被取消导航结算）。**oracle 先行红逐字命中**：`title='我的贡献 · FLAi-OS' ann='已切换到我的贡献'`（109/110）→ 修复后 110/110 |
+| 2 | P2 | ⑮ census 选择器漏 `[tabindex≥0]` 纯键盘目标——spec 声明与实现漂移，无 role 自定义目标整类逃逸 | 选择器扩 `a[href]`+`[tabindex]`+`native‖tabIndex>=0` 过滤；现状零新违规；**TB7 tamper 实证**：注入 10×10 `tabindex=0` span（crowded）→ ⑮ 红三页点名 `span.(10x10)` |
+| 3 | P2 | replay 脚本 `‖ true` 吞退出码 + 无 clean baseline——既有红可被误归因成咬合 | baseline 前置（clean HEAD 两套件必须 RC=0+ALL GREEN 才准开咬）+ 咬合三条件（非零 RC + 精确 FAIL 行 + FAILED 汇总必达） |
+
+R0 修复批验证：craft 110/110，verify_all 第三轮 EXIT=0 `[失败]（无）`。
+
+R0 过程两处工程故障如实留痕：①首启 codex 进程挂死于模型列表刷新
+（`failed to refresh available models` 循环，94 分钟无输出）——精准 kill
+本会话 3 个 PID 后重启，重启轮 155k tokens 正常收敛。②本 §五 与 tamper log
+的 R1 段落初稿曾被清理 PNG 抖动的 `git checkout -- docs/reviews` 误抹
+（未提交 md 与 PNG 同目录连坐）——按 cp 备份纪律缺失自省，重写后 amend 收口。

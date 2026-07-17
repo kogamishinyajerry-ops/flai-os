@@ -1339,6 +1339,33 @@ with sync_playwright() as p:
           (ann_probe["a"] == "已切换到" + ann_probe["t"].split(" · ")[0]) is True,
           f"ann={ann_probe['a']!r} title={ann_probe['t']!r}")
 
+    # ── ⑭C7 取消导航让位（Codex R0 审 P2）：afterEach 对失败导航也触发——被
+    #    后续导航打断的那次绝不许改 title/播报未到达的目的页。夹具（确定性
+    #    编排，新 ctx 保证 MePage chunk 未缓存）：hold 住 /me 的懒加载 chunk
+    #    → 点 /feedback 胜出 → 释放 chunk 让被取消的 /me 导航结算 → 断言
+    #    title/播报仍是「反馈」──────────────────────────────────────────
+    c7_ctx = browser.new_context(viewport={"width": 1440, "height": 900}, color_scheme="light")
+    login_context(c7_ctx, BASE)
+    c7_page = c7_ctx.new_page()
+    c7_held = []
+    c7_ctx.route("**/MePage*.js", lambda route: c7_held.append(route))
+    c7_page.goto(BASE + "/today", wait_until="networkidle")
+    c7_page.locator(".sb-mine").click()  # → /me（导航挂在被 hold 的 chunk 上）
+    c7_page.wait_for_timeout(300)
+    c7_page.locator(".nav-link", has_text="对话").click()  # → / 胜出
+    c7_page.wait_for_url(BASE + "/", timeout=5000)
+    c7_page.wait_for_timeout(400)
+    for _r in c7_held:
+        _r.continue_()  # 释放 chunk——被取消的 /me 导航此刻才结算 afterEach(failure)
+    c7_page.wait_for_timeout(600)
+    c7_state = json.loads(c7_page.evaluate(
+        "() => JSON.stringify({t: document.title,"
+        " a: (document.querySelector('.sr-announcer') || {}).textContent || ''})"))
+    check("⑭C7 被取消的导航不改 title 不播报未到达页（failure 让位）",
+          (("我的贡献" not in c7_state["t"]) and (c7_state["a"] == "已切换到对话")) is True,
+          f"title={c7_state['t']!r} ann={c7_state['a']!r}")
+    c7_ctx.close()
+
     # ── ⑭g‴ C6 SC 导航出口同律（Codex R0 P2：openAllTasks 曾漏置空——统一
     #    closeForNavigation 出口后逐口验证）───────────────────────────────
     page.goto(BASE + "/today", wait_until="networkidle")
@@ -1389,8 +1416,12 @@ with sync_playwright() as p:
     #    是过咬不漏咬（fail-closed 安全侧），全仓控件均自定义样式故当前无误报）──
     TARGET_JS = """
     () => {
-      const els = [...document.querySelectorAll("button, a, [role=button], input, select, textarea")]
+      const els = [...document.querySelectorAll("button, a[href], [role=button], input, select, textarea, [tabindex]")]
         .filter((el) => {
+          // 纯 [tabindex] 键盘目标须 tabIndex>=0 才计入（Codex R0 审 P2：无
+          // role 的自定义键盘目标此前整类逃逸 census——规格声明与实现漂移）。
+          const native = el.matches("button, a[href], [role=button], input, select, textarea");
+          if (!native && el.tabIndex < 0) return false;
           if (el.closest("[inert]")) return false;
           const cs = getComputedStyle(el);
           if (cs.visibility === "hidden" || cs.display === "none") return false;

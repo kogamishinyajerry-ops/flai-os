@@ -31,8 +31,38 @@ cleanup() { git -C "$ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || true
 trap cleanup EXIT
 ln -s "$ROOT/frontend/node_modules" "$WT/frontend/node_modules"
 
-run_suite() { # $1=e2e 脚本相对路径；输出落 stdout，永不因套件红中断脚本流
-  (cd "$WT" && uv run "${UV_ARGS[@]}" python "$1" 2>&1) || true
+run_suite() { # $1=e2e 脚本相对路径；结果落全局 OUT/RC——不吞退出码（Codex R0 审 P2）
+  set +e
+  OUT="$( (cd "$WT" && uv run "${UV_ARGS[@]}" python "$1" 2>&1) )"
+  RC=$?
+  set -e
+}
+
+green_of() { # 套件各自的全绿汇总行
+  case "$1" in
+    *m10*) echo 'M10 ACCEPTANCE ALL GREEN' ;;
+    *) echo 'CRAFT DESKTOP ALL GREEN' ;;
+  esac
+}
+
+failsum_of() { # 套件各自的 FAILED 汇总行（须真到达汇总，中途崩不算干净咬合）
+  case "$1" in
+    *m10*) echo 'M10 ACCEPTANCE FAILED' ;;
+    *) echo 'CRAFT DESKTOP FAILED' ;;
+  esac
+}
+
+baseline() { # $1=套件；clean HEAD 必须全绿——否则既有红会被误归因成 tamper 咬合
+  echo "== baseline: $1 =="
+  (cd "$WT/frontend" && npm run build >/dev/null 2>&1)
+  run_suite "$1"
+  if [ "$RC" -eq 0 ] && grep -qF "$(green_of "$1")" <<<"$OUT"; then
+    echo "BASELINE-GREEN: $1"
+  else
+    echo "BASELINE-RED: ${1} —— clean HEAD 不绿（RC=${RC}），replay 前提不成立"
+    echo "$OUT" | tail -8
+    exit 1
+  fi
 }
 
 replay() { # $1=名 $2=套件 $3=预期 FAIL grep（fixed string） $4=python patch 源码
@@ -40,13 +70,14 @@ replay() { # $1=名 $2=套件 $3=预期 FAIL grep（fixed string） $4=python pa
   echo "== replay: $name =="
   (cd "$WT" && python3 -c "$patch")
   (cd "$WT/frontend" && npm run build >/dev/null 2>&1)
-  local out
-  out="$(run_suite "$suite")"
-  if grep -qF "$expect" <<<"$out"; then
-    echo "BITE-OK: ${name}（预期红命中：${expect}）"
+  run_suite "$suite"
+  # 咬合三条件同时成立（Codex R0 审 P2）：非零退出码 + 精确预期 FAIL 行 +
+  # 正常到达 FAILED 汇总（排除中途崩溃被当成咬合）。
+  if [ "$RC" -ne 0 ] && grep -qF "$expect" <<<"$OUT" && grep -qF "$(failsum_of "$suite")" <<<"$OUT"; then
+    echo "BITE-OK: ${name}（预期红命中：${expect}；RC=${RC}；已达 FAILED 汇总）"
   else
-    echo "BITE-MISS: $name —— 预期 FAIL 行未出现，tamper 未被咬住（假绿嫌疑）"
-    echo "$out" | tail -8
+    echo "BITE-MISS: ${name} —— 三条件（非零退出/预期 FAIL 行/FAILED 汇总）未同时成立（RC=${RC}）"
+    echo "$OUT" | tail -8
     exit 1
   fi
   (cd "$WT" && git checkout -- .)
@@ -129,11 +160,23 @@ PY
 
 ALL="census-redye timeout-cut reduce-sidebar roving-cut fitts-shrink dialog-reduce-cut portal-dup-enqueue"
 NAMES="${*:-$ALL}"
+
+# 先验名合法性 + 汇总用到的套件，各跑一次 clean baseline（全绿才准开咬）。
+NEED_CRAFT=0
+NEED_M10=0
+for n in $NAMES; do
+  [ -n "$(expect_of "$n")" ] || { echo "未知 replay 名：${n}（可用：${ALL}）"; exit 2; }
+  case "$(suite_of "$n")" in
+    *m10*) NEED_M10=1 ;;
+    *) NEED_CRAFT=1 ;;
+  esac
+done
+if [ "$NEED_CRAFT" -eq 1 ]; then baseline "$CRAFT"; fi
+if [ "$NEED_M10" -eq 1 ]; then baseline "$M10"; fi
+
 COUNT=0
 for n in $NAMES; do
-  EXPECT="$(expect_of "$n")"
-  [ -n "$EXPECT" ] || { echo "未知 replay 名：${n}（可用：${ALL}）"; exit 2; }
-  replay "$n" "$(suite_of "$n")" "$EXPECT" "$(patch_of "$n")"
+  replay "$n" "$(suite_of "$n")" "$(expect_of "$n")" "$(patch_of "$n")"
   COUNT=$((COUNT + 1))
 done
-echo "REPLAY ALL BITES OK（$COUNT 处全部预期红命中）"
+echo "REPLAY ALL BITES OK（$COUNT 处全部预期红命中，基线先行全绿）"
