@@ -158,6 +158,7 @@
 
           <div class="gov-run-block">
             <div class="section-label">最近评测</div>
+            <div v-if="governanceResumeError" class="gov-resume-error" role="alert">{{ governanceResumeError }}</div>
             <div class="gov-run-summary">
               <template v-if="latestGovernanceRun">
                 通过 {{ latestGovernanceRun.passed }}/{{ latestGovernanceRun.total }} ·
@@ -282,6 +283,8 @@ const curatedCasesCount = ref(null);
 const governanceLoading = ref(false);
 const governanceLoadError = ref("");
 const governanceRunLoading = ref(false);
+// 恢复轮询失败的诚实呈现（批次五 C2）：绝不静默——面板 run 数据可能过期。
+const governanceResumeError = ref("");
 const promotionConfirmed = ref(false);
 const promotionLoading = ref(false);
 const promotionErrors = ref([]);
@@ -374,6 +377,7 @@ function openGovernance(agent) {
   governancePromotions.value = [];
   curatedCasesCount.value = null;
   governanceLoadError.value = "";
+  governanceResumeError.value = "";
   promotionConfirmed.value = false;
   promotionErrors.value = [];
   witnessedPromotionBurst.value = false;
@@ -420,13 +424,18 @@ async function resumeInFlightRunIfAny(agentId) {
   const latest = latestGovernanceRun.value;
   if (!latest || (latest.status !== "queued" && latest.status !== "running")) return;
   governanceRunLoading.value = true;
+  governanceResumeError.value = "";
   try {
     const run = await pollEvalRunToTerminal(agentId, latest.id);
     if (run.status !== "aborted" && governanceOpen.value && governanceAgent.value?.id === agentId) {
       await loadGovernance(agentId);
     }
-  } catch {
-    // 请求层异常：静默复位 loading（下方 finally），用户可重试
+  } catch (err) {
+    // 诚实降级（批次五 C2）：旧实现空 catch 静默复位——用户不知道恢复轮询已
+    // 失败、面板显示的 run 可能是旧态。报错如实，恢复动作明说。
+    if (governanceOpen.value && governanceAgent.value?.id === agentId) {
+      governanceResumeError.value = `评测状态刷新失败（${err.detail || err.message}）——所示结果可能已过期，可重开面板或再次跑评测`;
+    }
   } finally {
     governanceRunLoading.value = false;
   }
@@ -679,6 +688,11 @@ onMounted(load);
 }
 .gov-run-block {
   margin-top: 2px;
+}
+.gov-resume-error {
+  color: var(--trust-fail);
+  font-size: 12px;
+  margin-bottom: 6px;
 }
 .gov-run-summary {
   color: var(--ink);

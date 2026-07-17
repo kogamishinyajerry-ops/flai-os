@@ -253,7 +253,20 @@ const drawerSize = window.innerWidth < 640 ? "100%" : "540px";
 // （与 WorkLog F2 同语法，reduced-motion 无涉）。 ──
 const nowTick = ref(Date.now());
 let tickTimer = null;
+// 焦点回还（批次五 C6，与 ⌘K 同律）：抽屉关闭把焦点送回触发元素（StatusDock
+// pill），键盘用户不落回 body。immediate 首评 open=false 时 focusReturnEl 为
+// null，静默跳过。
+let focusReturnEl = null;
 watch(() => statusCenter.open, (open) => {
+  if (open) {
+    focusReturnEl = document.activeElement;
+  } else {
+    const el = focusReturnEl;
+    focusReturnEl = null;
+    if (el && typeof el.focus === "function" && document.contains(el)) {
+      nextTick(() => el.focus());
+    }
+  }
   if (open && tickTimer === null) {
     nowTick.value = Date.now();
     tickTimer = setInterval(() => { nowTick.value = Date.now(); }, 1000);
@@ -735,16 +748,19 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   padding: 9px 12px;
-  border: 1px solid var(--hairline-soft);
+  /* ring-elevation 试点（批次五 C5，claude 复刻包「shadow 假装成 border」）：
+     transparent 边框占位保布局零位移，1px 暖环走 box-shadow——视觉比实边框
+     更轻；hover 换环色+叠卡影，厚度不变。 */
+  border: 1px solid transparent;
   border-radius: 10px;
   background: var(--paper-surface);
+  box-shadow: 0 0 0 1px var(--hairline-soft);
   cursor: pointer;
-  transition: border-color var(--motion-fast) var(--ease-out-soft), transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
+  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
 }
 .sc-item:hover {
-  border-color: var(--clay-softer);
   transform: translateY(-1px);
-  box-shadow: var(--shadow-card);
+  box-shadow: 0 0 0 1px var(--clay-softer), var(--shadow-card);
 }
 .sc-lamp {
   flex: none;

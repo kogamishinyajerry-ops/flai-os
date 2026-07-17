@@ -25,6 +25,11 @@
             <SkeletonBlock v-for="i in 4" :key="i" height="46px" />
           </div>
           <template v-else>
+            <!-- 诚实降级条（批次五 C2）：后端搜索源失败≠没有结果——必须让用户
+                 知道下面的清单可能不完整；真失败=trust-fail 红槽，role=alert 播报。 -->
+            <div v-if="fetchDegraded" class="qs-degraded" role="alert">
+              部分结果不可用（后端搜索请求失败）——以下显示可能不完整
+            </div>
             <template v-for="group in renderGroups" :key="group.key">
               <div v-if="group.items.length" class="qs-group">
                 <div class="qs-group-label">{{ group.label }}</div>
@@ -48,7 +53,7 @@
                 </div>
               </div>
             </template>
-            <div v-if="!flatItems.length" class="qs-empty">没有匹配结果</div>
+            <div v-if="!flatItems.length" class="qs-empty">{{ fetchDegraded ? "搜索服务不可用（后端请求失败）——请稍后重试" : "没有匹配结果" }}</div>
           </template>
         </div>
 
@@ -173,20 +178,31 @@ watch(selectedIndex, () => {
 
 // 拉取代数守卫（Codex R0 P2，与父页「轮询整包作废」同律）：面板快开快关再开
 // 会并发两轮 fetchAll，慢的旧响应后到会覆盖新数据——只认最新一代的回写。
+// 诚实降级（批次五 C2）：三源任一失败必须亮「结果可能不完整」——旧实现
+// .catch(()=>[]) 把后端故障伪装成「没有匹配结果」，故障与真无结果在 UI 上
+// 不可区分（诚实地板violation）。失败源计数落 fetchDegraded，空态文案随之切换。
 let fetchSeq = 0;
+const fetchDegraded = ref(false);
 async function fetchAll() {
   const seq = ++fetchSeq;
   loading.value = true;
+  let failed = 0;
+  const grab = (p) =>
+    p.catch(() => {
+      failed += 1;
+      return null;
+    });
   try {
     const [convs, tks, ags] = await Promise.all([
-      listConversations().catch(() => []),
-      listTasks({ limit: 50 }).catch(() => []),
-      listAgents().catch(() => []),
+      grab(listConversations()),
+      grab(listTasks({ limit: 50 })),
+      grab(listAgents()),
     ]);
     if (seq !== fetchSeq) return;
-    conversations.value = convs;
-    tasks.value = tks;
-    agents.value = ags;
+    conversations.value = convs || [];
+    tasks.value = tks || [];
+    agents.value = ags || [];
+    fetchDegraded.value = failed > 0;
   } finally {
     if (seq === fetchSeq) loading.value = false;
   }
@@ -204,10 +220,22 @@ function close() {
 // open()：面板可能被 open() 之外的入口唤起（如 App.vue 侧栏「搜索」按钮直
 // 接调 openQuickSwitcher），watch store.open 保证不管哪条路径打开都补齐同一套
 // 副作用；关状态中心抽屉的互斥逻辑同理搬进来统一生效。
+// 焦点回还（批次五 C6，WCAG 焦点管理）：面板打开偷走焦点，关闭必须送回
+// 触发元素——键盘用户不落回 body 从头 Tab。跨模态互斥关闭（closeCenter）
+// 不参与回还：那是让位不是归位。
+let focusReturnEl = null;
 watch(
   () => quickSwitcher.open,
   (isOpen) => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      const el = focusReturnEl;
+      focusReturnEl = null;
+      if (el && typeof el.focus === "function" && document.contains(el)) {
+        nextTick(() => el.focus());
+      }
+      return;
+    }
+    focusReturnEl = document.activeElement;
     // 状态中心抽屉（el-drawer z-index 2000+）开着时先关掉——否则 ⌘K 面板(200)
     // 被抽屉遮罩盖住而焦点已被偷进不可见输入框。任意时刻只留一个顶层模态。
     if (statusCenter.open) closeCenter();
@@ -374,6 +402,12 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
   text-align: center;
   color: var(--ink-faint);
   font-size: 13px;
+}
+/* 诚实降级条（批次五 C2）：真失败=trust-fail 红槽（信任色锁），安静小字不打断检索。 */
+.qs-degraded {
+  padding: 8px 12px 4px;
+  color: var(--trust-fail);
+  font-size: 12px;
 }
 .qs-loading {
   display: flex;

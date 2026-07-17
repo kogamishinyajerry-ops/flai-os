@@ -11,7 +11,9 @@
     <!-- 首拉失败态（治理审 R1 P2 修复）：feedError 且从未 loaded 过 → 只显错误块，
          绝不在没有真数据的情况下渲染五个空版块冒充「已加载」。已 loaded 后的轮询
          错误走 v-else 分支内部的顶部小字错误条，保旧值自愈，不打断已渲染内容。 -->
-    <div v-if="feedError && !feedLoaded" class="today-error">{{ feedError }}</div>
+    <!-- 错误三问（批次五 C2/C6）：liveFeed 5s 链持续在跑——「自动重试中」是
+         机制属实的「何为」声明；role=alert 让 AT 主动播报（inline 错误规）。 -->
+    <div v-if="feedError && !feedLoaded" class="today-error" role="alert">{{ feedError }}（自动重试中）</div>
 
     <!-- 首载骨架：只在「从未 loaded 且无错误」时撑轮廓，轮询期间/带旧值刷新绝不回骨架。 -->
     <div v-else-if="!feedLoaded" class="today-skel">
@@ -19,7 +21,7 @@
     </div>
 
     <template v-else>
-      <div v-if="feedError" class="today-error">{{ feedError }}</div>
+      <div v-if="feedError" class="today-error" role="alert">{{ feedError }}（自动重试中）</div>
 
       <!-- 版块 1：待你签发（amber 置顶，行动召唤最高优先）。零值不显示（批次四
            Q2，cd-bg-tasks-panel 语法全站化）：N=0 时组头不渲染「· 0」——版块
@@ -101,7 +103,12 @@
            否则「本周暂无晋升」空态文案可能在有更早晋升时误判有数据。 -->
       <section class="today-section">
         <div class="today-section-head">Agent 动态</div>
-        <div v-if="promotionsError" class="today-error">{{ promotionsError }}</div>
+        <!-- 晋升/统计只在挂载+零点拉取、无轮询——「自动重试中」在此是假声明，
+             诚实的「何为」=行内手动重试（批次五 C2）。 -->
+        <div v-if="promotionsError" class="today-error" role="alert">
+          {{ promotionsError }}
+          <button type="button" class="today-retry" @click="fetchPromotions">重试</button>
+        </div>
         <!-- 双空态合并（批次四 Q2）：晋升可读且两侧都空 → 收敛为一行安静空态——
              两条并排的「暂无」是对新人的双倍噪音；任一侧有数据则各自照常。
              「近 100 条窗口」口径由页脚一行统一声明（Q3 同屏去重），此处不再复述。 -->
@@ -144,7 +151,10 @@
            证实确为 0，绝不是数据丢失）。方法论括注降 title（Q3）。 -->
       <section class="today-section">
         <div class="today-section-head">团队总量</div>
-        <div v-if="statsError" class="today-error">{{ statsError }}</div>
+        <div v-if="statsError" class="today-error" role="alert">
+          {{ statsError }}
+          <button type="button" class="today-retry" @click="fetchStats">重试</button>
+        </div>
         <div v-else-if="stats && visibleStats.length" class="today-stats-bar">
           <div v-for="s in visibleStats" :key="s.key" class="today-stat-tile" :data-stat="s.key" :title="s.tip || null">
             <span class="today-stat-num">{{ typeof s.value === "number" ? s.value : "—" }}</span>
@@ -414,6 +424,24 @@ onUnmounted(() => {
   font-size: 12.5px;
   margin-bottom: var(--space-3);
 }
+/* 行内重试（批次五 C2）：原生 button 语义（键盘/焦点免费），视觉=安静文字链，
+   底色 ink-soft 不占 clay 预算（C3），hover 才亮 clay。 */
+.today-retry {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin-left: 6px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.today-retry:hover {
+  color: var(--clay);
+}
 .today-skel {
   display: flex;
   flex-direction: column;
@@ -432,8 +460,11 @@ onUnmounted(() => {
 .today-section-head.waiting {
   color: var(--trust-pending);
 }
+/* clay 预算（批次五 C3）：「运行中」组头不再染 clay——逐行工作灯已携同一
+   语义，组头+灯双重染色=同语义重复着色（一处一行的色彩版）；waiting 组头的
+   amber 是行动召唤主 CTA 版块语义（未核槽），保留不动。 */
 .today-section-head.working {
-  color: var(--clay);
+  color: var(--ink-mid);
 }
 .today-list {
   display: flex;
@@ -502,6 +533,10 @@ onUnmounted(() => {
   font-size: 13px;
   font-weight: 600;
   color: var(--ink);
+  /* 溢出边界（批次五 C5）：超长晋升标题截断，与同页 today-card-name 同律。 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .today-promo-sub {
   font-size: 11.5px;
@@ -525,6 +560,12 @@ onUnmounted(() => {
   border: 1px solid var(--hairline-soft);
   border-radius: 999px;
   background: var(--card-bg);
+  /* 溢出边界（批次五 C5）：超长 Agent 名会把胶囊撑满整行（比换行更破版），
+     参照 delivery-chip max-width 先例截断。 */
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .today-stats-bar {
   display: grid;

@@ -5,7 +5,10 @@
       <p class="page-sub">仅你本人可见 · 只统计可精确归因的贡献</p>
     </div>
 
-    <el-alert v-if="loadError" type="error" :title="loadError" show-icon :closable="false" class="page-alert" />
+    <!-- 错误三问（批次五 C2）：本页无轮询、纯手动加载——「何为」=显式重试钮。 -->
+    <el-alert v-if="loadError" type="error" :title="loadError" show-icon :closable="false" class="page-alert">
+      <el-button size="small" class="me-retry-btn" :disabled="loading" @click="load">重试</el-button>
+    </el-alert>
 
     <!-- 版块1：贡献概览（精确）。零值不显示（批次四 Q2）：已加载后 0 值格不渲染
          ——0 不是信息；data-stat 语义锚供 e2e 按字段对表（不再用 :last-child 位置
@@ -222,9 +225,12 @@ watch(() => currentUser.value?.username, (next, prev) => {
 .page-sub { margin: 0; color: var(--ink-faint); font-size: 13px; }
 .page-alert { margin-bottom: var(--space-4); }
 .me-overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-3); margin-bottom: var(--space-6); }
+/* ring-elevation 试点（批次五 C5）：与 StatusCenter .sc-item 同律——transparent
+   边框保布局，1px 环走 box-shadow。 */
 .me-stat {
   display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-4) 18px;
-  border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--paper-rail);
+  border: 1px solid transparent; border-radius: var(--radius-lg); background: var(--paper-rail);
+  box-shadow: 0 0 0 1px var(--hairline);
 }
 .me-stat-num { font-size: 26px; font-weight: 700; color: var(--ink); font-family: var(--serif); }
 .me-stat-label { font-size: 12px; color: var(--ink-soft); }
@@ -235,9 +241,10 @@ watch(() => currentUser.value?.username, (next, prev) => {
 .me-task-list { display: flex; flex-direction: column; gap: 6px; }
 .me-task-item {
   display: flex; align-items: center; gap: var(--space-3); padding: 10px 14px; cursor: pointer;
-  border: 1px solid var(--hairline); border-radius: var(--radius-md);
+  border: 1px solid transparent; border-radius: var(--radius-md);
+  box-shadow: 0 0 0 1px var(--hairline);
 }
-.me-task-item:hover { border-color: var(--clay-softer); }
+.me-task-item:hover { box-shadow: 0 0 0 1px var(--clay-softer); }
 .me-task-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 13.5px; }
 .me-task-status { color: var(--ink-soft); font-size: 12px; }
 .me-task-time { color: var(--ink-faint); font-size: 11.5px; }

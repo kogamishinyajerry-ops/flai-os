@@ -4,7 +4,8 @@ export const uploadFile = (file, taskId) => {
   const formData = new FormData();
   formData.append("file", file);
   if (taskId) formData.append("task_id", taskId);
-  return request("/api/files/upload", { method: "POST", formData });
+  // 上传给宽限（批次五 C1）：附件体积可到 MB 级，内网慢链路 20s 偏紧，60s 兜底。
+  return request("/api/files/upload", { method: "POST", formData, timeoutMs: 60_000 });
 };
 
 // 下载走浏览器原生导航（FileResponse 附件头由后端给），不经 fetch。

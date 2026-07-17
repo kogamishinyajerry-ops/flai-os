@@ -359,3 +359,87 @@ desktop-restudy 17 卡 + UI-PARADIGM 的 ChatGPT.app/Claude Desktop 拉片血统
 Q3 同屏唯一性/Q4 卡片最小形态/Q5 折叠态不含事件枚举）；tamper ≥4 处必咬；
 `verify_all.sh` 全绿；3-lens 对抗审 + Codex 治理审（native Pro sol-ultra，
 cap 3）收敛后按 standing 授权合并 push。
+
+## 十四、批次五工作项（craft 通用工艺规则对表 → C1-C6）
+
+> 源=Open Design 仓 `craft/` 通用规则（state-coverage/animation-discipline/
+> anti-ai-slop/accessibility-baseline，一手文献级）+ claude/openai 复刻包
+> token 精度参照。grounding=七路只读扫描（Workflow b5-ground-sweep，锚点级）。
+> 定性：营销页语法不进工作台，本批采的是**规则**（五态/时长/预算/降级）
+> 不是皮肤；FLAi-OS 暖白+clay 家族轴与信任色锁五槽不动。
+
+- **C1 请求超时纪律**（state-coverage 时长分档）：`api/client.js request()`
+  补 AbortController 硬超时——常规 API **20s** 默认；`postMessage`（内网
+  LLM 调用，「一两分钟」诚实口径已在案）显式 **180s**。超时=独立错误口径
+  「请求超时（Ns 无响应）——后端可能繁忙或已停止」，与连接失败（status=0
+  连接拒绝）区分。轮询链（liveFeed 链式 setTimeout）由此获得反悬挂兜底：
+  单次 fetch 挂起 20s 必落地→下一轮照常。**豁免留痕**：AgentPortal
+  `pollEvalRunToTerminal` 的「不设轮询硬超时」是有显式理由的在案设计
+  （单次 GET 仍受 20s 管），不动。**反采纳**：15s「比预期久」提示层——
+  与 20s 超时报错仅差 5s，两层提示=噪音；GuidePage 已有 3s 秒表/30s 诚实
+  提示两档，追加层不再引入。
+- **C2 错误三问+诚实降级**：①QuickSwitcher 三路 `.catch(()=>[])` 把后端
+  故障伪装成「没有匹配结果」=**不诚实降级**（本批最高优先）→ 失败标记
+  ref+结果区一行「部分结果不可用（后端搜索失败），显示可能不完整」，
+  全失败+空时错误行替代空态文案；②AgentPortal `catch{}` 静默块补错误
+  行（用户必须知道刚才那次点击失败了）；③轮询自愈面（today 三处错误行）
+  文案补「（自动重试中）」——「何为」由轮询机制如实承担；④MePage/
+  FeedbackPage（无轮询、纯手动刷新页）补「重试」按钮（inflight 置灰）。
+  **反采纳**：request-id 可复制错误标识——后端无日志关联基建，无关联的
+  ID=可复制的摆设（假绿家族），留 retro 记设计前提（需后端结构化日志先行）。
+  自动指数退避不引入：仓内一切重试=用户手动，一次一发已是诚实形态。
+- **C3 clay 每屏预算**（anti-ai-slop「accent ≤2」的信任色锁适配）：
+  **口径**=内容区常驻可见的**非状态语义** clay ≤2 处/屏；**豁免集（焊死）**
+  =工作态灯族（taskLampColor/work-pulse-dot/work-flow-strip）、当前选中
+  （nav-link.is-active/qs-item.is-selected/gov-ladder-step.current）、主 CTA
+  （.cta-clay）、状态汇总面（StatusCenter/StatusDock/门户治理阶梯——汇总
+  多灯是其存在目的）。**裁剪清单**（六屏）：GuidePage 方案卡 role-tag 徽章
+  底降灰、status-peek「速览→」降 ink-soft（hover 回 clay）、agent-cta 未就绪
+  描边降 hairline、reframe-num 圈降 ink-faint；侧栏 convo-dot.plan 实心 clay
+  点→空心描边点（形状承担语义）；WorkbenchSession bp-tag/chip-action/
+  member-state.summoned 降灰（prog-num 大数字保 clay=单一焦点）、
+  sess-goal-kicker 降灰；TaskDetail artifact-download/source-download/
+  citation-action/sim-link/ctx-retry-link 常驻 clay 文字→ink-soft+下划线
+  （hover clay，仓内已有反向先例）；TodayPage working 组头文字降灰（与
+  逐行工作灯同语义=双重染色，一处一行的色彩版）。
+- **C4 reduced-motion 补洞**（animation-discipline；现覆盖 26 块已近满，
+  只补真洞）：①App.vue 移动端 `.sidebar` translateX 过渡（907-918）纳入
+  reduce 块；②Element Plus `el-drawer`（状态中心）内置 transform 滑入无
+  任何覆盖→全局 reduce 块补 `.el-drawer/.el-overlay` 过渡禁用；③el-collapse
+  （4 处）复核后判「高度渐变非前庭触发」豁免留痕。
+- **C5 ring-elevation 试点 + 溢出双修**：①试点面=零阴影纯边框的
+  `.sc-item`（StatusCenter）与 `.me-stat`/`.me-task-item`（MePage）——
+  `border:1px solid transparent + box-shadow:0 0 0 1px var(--hairline-soft)`
+  （transparent 边框保布局零位移；hover 换环色不换厚度）；已带
+  --shadow-card 的卡族（delivery/today-card）不动（叠加需重设计=范围外）；
+  `.worklog-head` 有 e2e 边框断言**绝不触碰**。A/B 证据=craft-shots git
+  历史（before）vs 本批重截（after）。②溢出：`.today-promo-main` 补三件套
+  截断；`.today-active-chip` 补 max-width+ellipsis（参照 delivery-chip
+  160px 先例）。
+- **C6 ARIA 外科批**（accessibility-baseline「native-first/绝不发明 ARIA」）：
+  ①TodayPage 四处裸 div 错误行补 `role="alert"`（与 MePage el-alert 同规）；
+  ②WorkLog 折叠头 div→真 `<button>`（aria-expanded+键盘原生，参照仓内
+  artifact-toggle 范式；**保 .worklog-head 类名与四边框 CSS 显式覆盖**——
+  craft 有 border 逐值断言）；③QuickSwitcher/StatusCenter 关闭后焦点回还
+  触发元素（open 时记 activeElement，close 还焦）。**反采纳**：广撒
+  aria-live 常驻容器改造——无实机读屏验证=不可验证残差，且 WebAIM 2026
+  实证 ARIA 越多错越多；ElMessage 硬编码 role=alert（组件库 v2.9 层）
+  =仓外边界留痕，不自制 toast 替换。
+
+### 验收（批次五）
+
+craft 套件扩 **⑭ 系列**（挂 ⑬ 后 ctx 存活区）：⑭a 超时口径（route 延迟
+/fulfill 无响应→20s 超时错误文案+ApiError 分型）；⑭b QS 诚实降级
+（route.abort 三源→「部分结果不可用」在场，空态文案绝迹）；⑭c clay
+census oracle（/today、/me 逐元素 computed 色普查：own-色≠父继承、
+豁免集 closest 排除、常驻可见判定→非豁免 clay ≤2）；⑭d reduced-motion
+（`page.emulate_media(reduced_motion="reduce")` 于 goto **前**（JS matchMedia
+消费者首评需命中）→真实渲染元素 computed 断言——避开 batch_d 手工注入
+节点的 scoped-CSS 假绿坑）；⑭e ring 试点（sc-item/me-stat computed
+box-shadow 含 0 0 0 1px 且 border-color transparent+布局零位移）；⑭f 溢出
+（promo/chip 机制断言+fulfill 长名无横向溢出）；⑭g ARIA（role=alert 四处
+/worklog-head tagName==BUTTON+aria-expanded 翻转+边框断言不回归/焦点回还）。
+m8_workbench/m8_orchestrator 原子扩：降灰元素 computed 色≠clay。node 单测：
+client.js 超时行为（stub fetch 悬挂→20s ApiError 超时分型）。tamper ≥5 处
+必咬（含 census 探针的回染 tamper、超时撤除 tamper）。`verify_all.sh` 全绿；
+3-lens+Codex 治理审（cap 3）收敛后按 standing 授权合并 push。

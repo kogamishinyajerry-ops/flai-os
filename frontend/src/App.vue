@@ -677,6 +677,19 @@ button:focus-visible,
   .cta-clay:active:not(:disabled),
   .cta-clay:hover:not(:disabled),
   .nav-link:active { transform: none; }
+  /* 批次五 C4 补洞①：窄屏侧栏抽屉是纯 translateX 位移（前庭触发），reduce 下
+     瞬时开合（状态本身由 is-open 类与背板承担，无需动画传达）。!important：
+     基态 transition 声明在下方 max-width 块（源序更后、同 specificity），
+     无强断言会被其盖回。 */
+  .sidebar { transition: none !important; }
+  /* 批次五 C4 补洞②：Element Plus el-drawer（状态中心）/el-overlay 内置
+     transform 滑入全仓无自定义覆盖——第三方过渡同样要守 reduce（自建动效
+     26 处均已降级，唯独组件库这层漏网）。 */
+  .el-drawer,
+  .el-overlay {
+    transition: none !important;
+    animation: none !important;
+  }
 }
 
 body {
@@ -794,7 +807,10 @@ body {
 .convo-item:hover { background: var(--hover-tint); }
 .convo-item.is-active { background: var(--select-tint-clay); }
 .convo-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-faint); }
-.convo-dot.plan { background: var(--clay); }
+/* clay 预算（批次五 C3）：方案类会话点由「实心 clay」降为空心描边环——侧栏
+   历史会话无上限，逐条染 clay 会随条数稀释强调；形状（空心 vs 实心）承担
+   类型语义，inset 环零布局位移。 */
+.convo-dot.plan { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink-soft); }
 .convo-dot.refuse { background: var(--trust-pending); }
 .convo-title {
   font-size: var(--fs-sm);

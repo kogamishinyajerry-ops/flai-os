@@ -33,7 +33,10 @@
       </el-form-item>
     </el-form>
 
-    <el-alert v-if="tasksLoadError" type="error" :title="tasksLoadError" show-icon :closable="false" />
+    <!-- 错误三问（批次五 C2）：本页 loadTasks 仅挂载一次、无轮询——「何为」=显式重试。 -->
+    <el-alert v-if="tasksLoadError" type="error" :title="tasksLoadError" show-icon :closable="false">
+      <el-button size="small" :disabled="tasksLoading" @click="loadTasks">重试</el-button>
+    </el-alert>
 
     <!-- 反馈区块整体只在 taskId 首次从空变为有值时挂载一次（用户刚选定任务，
          内容确属「本次刚落地」）；切换到另一个任务时该 div 不重挂载（v-if 恒真、
@@ -60,7 +63,9 @@
         </el-form-item>
       </el-form>
 
-      <el-alert v-if="feedbackError" type="warning" :title="feedbackError" show-icon :closable="false" />
+      <el-alert v-if="feedbackError" type="warning" :title="feedbackError" show-icon :closable="false">
+        <el-button size="small" @click="loadFeedback">重试</el-button>
+      </el-alert>
 
       <h3 class="section-label">该任务已有反馈</h3>
       <EmptyState v-if="feedbackList.length === 0 && !feedbackError" description="暂无反馈" />

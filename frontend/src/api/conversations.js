@@ -27,6 +27,9 @@ export const postMessage = (conversationId, content, fileIds = []) =>
   request(`/api/conversations/${conversationId}/messages`, {
     method: "POST",
     json: { content, file_ids: fileIds },
+    // 慢操作显式超时（批次五 C1）：内网 LLM 推理「一两分钟」是在案诚实口径
+    // （GuidePage 30s 提示语），180s=口径+余量后硬止血，失败走既有回滚+还稿路。
+    timeoutMs: 180_000,
   });
 
 // 结束会话（active→concluded）：「确认草案去创建任务」时归档会话（ADR-0013）。

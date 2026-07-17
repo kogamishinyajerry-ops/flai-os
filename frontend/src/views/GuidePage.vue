@@ -1580,9 +1580,11 @@ watch(
   place-items: center;
   font-size: 11px;
   font-weight: 800;
-  color: var(--clay);
-  background: var(--clay-soft);
-  border: 1.5px solid var(--clay);
+  /* clay 预算（批次五 C3）：重述建议序号圈逐条重复，降中性——序号是结构
+     不是强调。 */
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1.5px solid var(--ink-faint);
 }
 .reframe-text {
   flex: 1 1 auto;
@@ -1794,9 +1796,13 @@ watch(
 .status-peek {
   font-size: 12px;
   font-weight: 700;
-  color: var(--clay);
+  /* clay 预算（批次五 C3）：逐行「速览→」常驻降灰，hover 回 clay 保操作暗示。 */
+  color: var(--ink-soft);
   margin-left: 2px;
   transition: color var(--motion-fast) var(--ease-out-soft);
+}
+.status-peek:hover {
+  color: var(--clay);
 }
 .agent-status:hover .status-peek {
   color: var(--clay-deep);
@@ -1844,13 +1850,15 @@ watch(
   color: var(--ink);
   margin: 0 0 6px;
 }
+/* clay 预算（批次五 C3）：分工徽章逐成员行重复出现，降灰承担信息不占强调
+   预算——方案卡的 clay 只留给工作态灯与主 CTA（开工/工作台钮）。 */
 .role-tag {
   display: inline-block;
   font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0.4px;
-  color: var(--clay);
-  background: var(--clay-soft);
+  color: var(--ink-soft);
+  background: var(--hover-tint);
   border-radius: 5px;
   padding: 1px 7px;
   margin-right: 8px;
@@ -1898,9 +1906,11 @@ watch(
   align-items: center;
   font-size: 13px;
   font-weight: 600;
-  color: var(--clay);
+  /* clay 预算（批次五 C3）：未就绪成员的召集钮逐行重复，常驻降为中性描边；
+     hover 满血 clay 不变（主动作暗示保留在交互时刻）。 */
+  color: var(--ink-soft);
   background: transparent;
-  border: 1px solid var(--border-clay-soft);
+  border: 1px solid var(--hairline);
   border-radius: 10px;
   padding: 8px 14px;
   cursor: pointer;

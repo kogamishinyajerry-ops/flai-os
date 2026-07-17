@@ -1058,14 +1058,18 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--ink-faint);
 }
+/* clay 预算（批次五 C3）：产物/来源/引用/仿真的次要动作链接逐行重复，常驻
+   降 ink-soft+下划线（链接语义由下划线承担），hover 回 clay——本页 clay 只留
+   给工作态灯/扫光与主动作。 */
 .artifact-download {
   margin-left: auto;
   font-size: 12.5px;
-  color: var(--clay);
-  text-decoration: none;
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .artifact-download:hover {
-  text-decoration: underline;
+  color: var(--clay);
 }
 .artifact-ext-badge {
   font-size: 11px;
@@ -1120,12 +1124,13 @@ onUnmounted(() => {
 }
 .source-download {
   margin-left: auto;
-  color: var(--clay);
+  color: var(--ink-soft);
   font-size: 12.5px;
-  text-decoration: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .source-download:hover {
-  text-decoration: underline;
+  color: var(--clay);
 }
 .source-param-key {
   font-family: var(--mono, monospace);
@@ -1206,11 +1211,12 @@ onUnmounted(() => {
   color: var(--ink-faint);
 }
 .ctx-retry-link {
-  color: var(--clay);
-  text-decoration: none;
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .ctx-retry-link:hover {
-  text-decoration: underline;
+  color: var(--clay);
 }
 
 /* N7 知识引用：rail 内静默披露行——mono 引用号 + 幽灵按钮，原文收在 hairline
@@ -1259,6 +1265,9 @@ onUnmounted(() => {
   margin-left: auto;
   flex: none;
   font-size: 12px;
+  color: var(--ink-soft);
+}
+.citation-action:hover {
   color: var(--clay);
 }
 .citation-body {
@@ -1329,12 +1338,13 @@ onUnmounted(() => {
 .sim-link {
   font-size: 13px;
   font-weight: 600;
-  color: var(--clay);
-  text-decoration: none;
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-underline-offset: 2px;
   white-space: nowrap;
   max-width: 100%;
 }
-.sim-link:hover { text-decoration: underline; }
+.sim-link:hover { color: var(--clay); }
 /* 只截 run 引用这一段（module@run_id 可长达 192 字符）：前缀与箭头恒可见，
    窄屏/移动端不外溢挤走控件（Codex 治理审 P2）；全值在 title。 */
 .sim-link-ref {

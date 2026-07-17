@@ -60,6 +60,14 @@
      未执行）保持未核（⑪f″ 活体咬合「成功空表≠已核」）；三态 oracle 严格
      数字镜像（_is_num：bool≠数、负数≠零）+ ⑬ route-fulfill 混合响应
      （5/0/true/-2）直接咬三态 DOM。
+  ⑭ 批次五 C1-C6（craft 通用工艺规则对表，契约=§十四）：C1 后端挂起→20s
+     硬超时分型（悬挂 handler 真实计时）+重试钮真恢复；C2 ⌘K 三源失败诚实
+     降级（故障≠无结果）；C3 clay census oracle（/today /me 非豁免常驻 ≤2，
+     own-属性归因）；C4 reduced-motion 补洞（emulate_media 于 goto 前直测
+     真实元素：窄屏侧栏+el-drawer 归零）；C5 ring 试点机制断言（透明边框+
+     1px 环）+溢出边界（220 字晋升名 ellipsis+无横向溢出+胶囊 max-width）；
+     C6 worklog 真 button/aria-expanded 翻转+焦点回还×2（⌘K→搜索钮/状态
+     中心→dock）。
 
 夹具口径（与 m9 同纪律）：temp DB 直写只为渲染路径提供 fixture，不冒充业务
 状态机行为（真实完成/放行链路由 m2 验收）。completed 任务配 tool_failed 事件
@@ -1037,6 +1045,184 @@ with sync_playwright() as p:
     check("⑬Q2 oracle 谓词自检（_is_num 三态推导 === 独立硬编码期望）",
           derived == tri_expect, f"derived={derived} expect={tri_expect}")
     ctx.unroute("**/api/me/contributions*")
+
+    # ══ ⑭ 批次五 C1-C6（craft 通用工艺规则对表——契约=UI-DESKTOP-CRAFT.md §十四）═
+
+    # ── ⑭a C1/C2 超时口径（后端挂起→20s 硬超时→分型文案+行内重试+role=alert）。
+    #    挂起≠拒绝：route.abort 走连接失败分支，只有「不 fulfill 不 abort 不
+    #    continue」的悬挂 handler 才踩超时分支——本探针真实计时 20s。──────────
+    def _hang(route):
+        pass  # 连接建立后永不响应（AbortController 20s 必落地）
+
+    ctx.route("**/api/promotions*", _hang)
+    page.goto(BASE + "/today", wait_until="domcontentloaded")
+    try:
+        page.wait_for_selector(".today-error", timeout=26000)
+        err_text = page.locator(".today-error").first.inner_text()
+        timeout_ok = ("请求超时" in err_text) and ("重试" in err_text)
+        role_ok = page.locator('.today-error[role="alert"]').count() >= 1
+    except Exception:
+        err_text, timeout_ok, role_ok = "(无错误行)", False, False
+    check("⑭C1 后端挂起→20s 硬超时落地（「请求超时」分型+行内重试钮+role=alert）",
+          timeout_ok is True and role_ok is True, err_text[:90])
+    ctx.unroute("**/api/promotions*")
+    page.locator(".today-retry").first.click()
+    try:
+        page.wait_for_selector(".today-error", state="detached", timeout=8000)
+        retry_ok = True
+    except Exception:
+        retry_ok = False
+    check("⑭C2 重试钮真恢复（unroute 后一击即清错误行）", retry_ok is True)
+
+    # ── ⑭b C2 ⌘K 诚实降级（三源全断→降级条在场+空态文案切换：故障≠无结果）──
+    for pat in ("**/api/conversations*", "**/api/tasks*", "**/api/agents*"):
+        ctx.route(pat, lambda route: route.abort())
+    page.keyboard.press("ControlOrMeta+k")
+    try:
+        page.wait_for_selector(".qs-degraded", timeout=8000)
+        degraded_ok = "部分结果不可用" in page.locator(".qs-degraded").inner_text()
+        qs_empty_txt = page.locator(".qs-empty").inner_text() if page.locator(".qs-empty").count() else ""
+        empty_swap_ok = ("搜索服务不可用" in qs_empty_txt) and ("没有匹配结果" not in qs_empty_txt)
+    except Exception:
+        degraded_ok, empty_swap_ok = False, False
+    check("⑭C2 ⌘K 三源失败→诚实降级条+空态文案切换（后端故障绝不伪装成无结果）",
+          degraded_ok is True and empty_swap_ok is True)
+    page.keyboard.press("Escape")
+    for pat in ("**/api/conversations*", "**/api/tasks*", "**/api/agents*"):
+        ctx.unroute(pat)
+    page.wait_for_timeout(400)
+
+    # ── ⑭c C3 clay census oracle（内容区常驻可见的非豁免 clay ≤2/屏——
+    #    anti-ai-slop accent 预算的信任色锁适配；own-属性归因防继承连坐）──────
+    CENSUS_JS = """
+    () => {
+      const CLAY = ["193, 95, 60", "212, 113, 74"]; // --clay 亮/暗
+      const EXEMPT = [".today-lamp", ".cl-lamp", ".sc-lamp", ".work-pulse-dot",
+        ".work-flow-strip", ".cta-clay", ".nav-link.is-active", ".qs-item.is-selected",
+        ".gov-ladder-step.current", ".status-dock", ".sc-shell", ".el-drawer",
+        ".el-message"].join(",");
+      const hasClay = (v) => !!v && CLAY.some((c) => v.includes(c));
+      const out = [];
+      for (const el of document.querySelectorAll("*")) {
+        if (!el.getClientRects().length) continue;
+        if (el.closest(EXEMPT)) continue;
+        const cs = getComputedStyle(el);
+        const pcs = el.parentElement ? getComputedStyle(el.parentElement) : null;
+        const ownColor = hasClay(cs.color) && (!pcs || cs.color !== pcs.color);
+        const bg = hasClay(cs.backgroundColor);
+        const bd = ["Top", "Right", "Bottom", "Left"].some((s) =>
+          parseFloat(cs["border" + s + "Width"]) > 0 && hasClay(cs["border" + s + "Color"]));
+        const ring = hasClay(cs.boxShadow);
+        if (ownColor || bg || bd || ring) {
+          out.push(el.tagName.toLowerCase() + "." + String(el.getAttribute("class") || "").split(" ").slice(0, 2).join("."));
+        }
+      }
+      return out;
+    }
+    """
+    page.goto(BASE + "/today", wait_until="networkidle")
+    census_today = page.evaluate(CENSUS_JS)
+    check("⑭C3 /today clay census ≤2（非豁免·own-属性归因）",
+          len(census_today) <= 2, str(census_today[:8]))
+    page.goto(BASE + "/me", wait_until="networkidle")
+    census_me = page.evaluate(CENSUS_JS)
+    check("⑭C3 /me clay census ≤2", len(census_me) <= 2, str(census_me[:8]))
+
+    # ── ⑭d C4 reduced-motion 补洞（emulate_media 于 goto 前——JS matchMedia
+    #    首评需命中；直测真实渲染元素，绕开 batch_d 手工注入节点的 scoped 坑）──
+    rpage = ctx.new_page()
+    rpage.emulate_media(reduced_motion="reduce")
+    rpage.set_viewport_size({"width": 800, "height": 900})
+    rpage.goto(BASE + "/today", wait_until="networkidle")
+    sb_dur = rpage.locator(".sidebar").evaluate("el => getComputedStyle(el).transitionDuration")
+    rpage.locator(".status-dock").click()
+    try:
+        rpage.wait_for_selector(".el-drawer", timeout=8000)
+        drawer_probe = rpage.locator(".el-drawer").evaluate(
+            "el => { const cs = getComputedStyle(el); return cs.transitionDuration + '|' + cs.animationName; }")
+    except Exception:
+        drawer_probe = "(no-drawer)"
+    check("⑭C4 reduce 下补洞归零（窄屏侧栏 transition=0s；el-drawer 过渡/动画禁用）",
+          sb_dur == "0s" and drawer_probe.startswith("0s") and drawer_probe.endswith("|none"),
+          f"sidebar={sb_dur} drawer={drawer_probe}")
+    rpage.close()
+
+    # ── ⑭e C5 ring-elevation 试点机制断言（transparent 边框保布局+1px 环）────
+    page.goto(BASE + "/me", wait_until="networkidle")
+    me_ring = page.locator(".me-stat[data-stat]").first.evaluate(
+        "el => { const cs = getComputedStyle(el); return cs.borderTopColor + '|' + cs.boxShadow; }")
+    me_ring_ok = me_ring.startswith("rgba(0, 0, 0, 0)") and ("0px 0px 0px 1px" in me_ring)
+    page.locator(".status-dock").click()
+    page.wait_for_selector(".sc-item", timeout=8000)
+    sc_ring = page.locator(".sc-item").first.evaluate(
+        "el => { const cs = getComputedStyle(el); return cs.borderTopColor + '|' + cs.boxShadow; }")
+    sc_ring_ok = sc_ring.startswith("rgba(0, 0, 0, 0)") and ("0px 0px 0px 1px" in sc_ring)
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(400)
+    check("⑭C5 ring 试点（me-stat/sc-item：边框透明+box-shadow 1px 环）",
+          me_ring_ok is True and sc_ring_ok is True, f"me={me_ring[:60]} sc={sc_ring[:60]}")
+
+    # ── ⑭f C5 溢出边界（fulfill 超长晋升名→截断生效+页面无横向溢出；胶囊
+    #    max-width 机制断言）────────────────────────────────────────────────
+    long_agent = "超长智能体名称边界探针" * 20  # ~220 字
+    synth_promo = [{
+        "id": "promo_overflow_probe", "agent_id": long_agent,
+        "from_maturity": "L0", "to_maturity": "L1",
+        "created_at": page.evaluate("() => new Date().toISOString()"),
+        "confirmed_by": "验收工程师",
+    }]
+    ctx.route(
+        "**/api/promotions*",
+        lambda route: route.fulfill(status=200, content_type="application/json",
+                                    body=json.dumps(synth_promo)),
+    )
+    page.goto(BASE + "/today", wait_until="networkidle")
+    try:
+        page.wait_for_selector(".today-promo-main", timeout=8000)
+        promo_probe = page.locator(".today-promo-main").first.evaluate(
+            "el => { const cs = getComputedStyle(el); return [cs.textOverflow, cs.whiteSpace, el.scrollWidth > el.clientWidth].join('|'); }")
+        no_hscroll = page.evaluate("() => document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    except Exception:
+        promo_probe, no_hscroll = "(no-promo)", False
+    chip_probe = ""
+    if page.locator(".today-active-chip").count():
+        chip_probe = page.locator(".today-active-chip").first.evaluate(
+            "el => { const cs = getComputedStyle(el); return cs.maxWidth + '|' + cs.textOverflow; }")
+    check("⑭C5 溢出边界（220 字晋升名：ellipsis 生效+truncated+页面无横向溢出；胶囊 max-width 契约）",
+          promo_probe == "ellipsis|nowrap|true" and no_hscroll is True
+          and chip_probe == "220px|ellipsis",
+          f"promo={promo_probe} hscroll_ok={no_hscroll} chip={chip_probe}")
+    ctx.unroute("**/api/promotions*")
+
+    # ── ⑭g C6 ARIA 外科批（真 button+aria-expanded 翻转；焦点回还×2）────────
+    page.goto(BASE + f"/tasks/{task_a}", wait_until="networkidle")
+    page.wait_for_selector(".worklog-head", timeout=8000)
+    wl_tag = page.locator(".worklog-head").evaluate("el => el.tagName")
+    ae_before = page.locator(".worklog-head").get_attribute("aria-expanded")
+    page.locator(".worklog-head").click()
+    page.wait_for_selector(".worklog-timeline", timeout=3000)
+    ae_after = page.locator(".worklog-head").get_attribute("aria-expanded")
+    check("⑭C6 worklog 折叠头=真 button + aria-expanded 携真态（false→true）",
+          wl_tag == "BUTTON" and ae_before == "false" and ae_after == "true",
+          f"tag={wl_tag} {ae_before}→{ae_after}")
+    page.goto(BASE + "/today", wait_until="networkidle")
+    # 两个 .sb-foot-btn（搜索/主题）——定点取非主题钮，断言也按 title 精确核。
+    page.locator(".sb-foot-btn:not(.sb-theme)").click()
+    page.wait_for_selector(".qs-input", timeout=8000)
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(350)
+    qs_focus_back = page.evaluate(
+        "() => !!(document.activeElement && document.activeElement.classList.contains('sb-foot-btn')"
+        " && !document.activeElement.classList.contains('sb-theme'))")
+    page.locator(".status-dock").click()
+    page.wait_for_selector(".sc-shell", timeout=8000)
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(450)
+    sc_focus_back = page.evaluate(
+        "() => !!(document.activeElement && document.activeElement.classList.contains('status-dock'))")
+    check("⑭C6 焦点回还（⌘K 关→搜索钮；状态中心关→dock）",
+          qs_focus_back is True and sc_focus_back is True,
+          f"qs={qs_focus_back} sc={sc_focus_back}")
 
     ctx.close()
 

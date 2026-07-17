@@ -175,6 +175,18 @@ with sync_playwright() as p:
     )
     check("⑤回会话：fta 已召集(1 任务)+进度 1/2+任务归本会话", summoned_ok,
           f"chips={page.locator('.task-chip').count()} body={body[-500:]}")
+
+    # ⑤b 批次五 C3 clay 预算：蓝图徽章/逐 chip 动作字/eyebrow/「已召集」常驻降灰
+    #    ——工作台 clay 只留 chip 工作灯与进度大数字（computed 色直断，回染必咬）。
+    CLAY_RGB = ("rgb(193, 95, 60)", "rgb(212, 113, 74)")
+    bp_c = page.locator(".bp-tag").first.evaluate("el => getComputedStyle(el).color")
+    act_c = (page.locator(".chip-action").first.evaluate("el => getComputedStyle(el).color")
+             if page.locator(".chip-action").count() else "(none)")
+    kick_c = page.locator(".sess-goal-kicker").first.evaluate("el => getComputedStyle(el).color")
+    sum_c = page.locator(".member-state.summoned").first.evaluate("el => getComputedStyle(el).color")
+    clay_budget_ok = all(c not in CLAY_RGB for c in (bp_c, act_c, kick_c, sum_c) if c != "(none)")
+    check("⑤b clay 预算：bp-tag/chip-action/kicker/已召集 全非 clay（降灰承载信息）",
+          clay_budget_ok, f"bp={bp_c} act={act_c} kick={kick_c} sum={sum_c}")
     page.screenshot(path=str(SHOTS / "3_session_after.png"), full_page=True)
 
     # ⑥ 结束协作 → 归档 + 召集入口消失（结束 = 真的结束；成员任务不受影响）

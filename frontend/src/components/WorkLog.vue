@@ -1,12 +1,16 @@
 <template>
   <div class="worklog">
-    <div class="worklog-head" @click="toggleExpanded">
-      <div class="worklog-head-left">
+    <!-- 真 button（批次五 C6，native-first）：旧裸 div 不可键盘聚焦/激活、不向
+         AT 暴露展开态——与仓内 artifact-toggle 真 button 范式对齐；Enter/Space
+         原生免费，aria-expanded 携真实状态。类名与四边框逐值覆盖保留（craft
+         有 border 断言面）。 -->
+    <button type="button" class="worklog-head" :aria-expanded="expanded ? 'true' : 'false'" @click="toggleExpanded">
+      <span class="worklog-head-left">
         <span v-if="isWorking" class="work-pulse-dot"></span>
         <span class="worklog-head-text">{{ headText }}</span>
-      </div>
+      </span>
       <span class="worklog-arrow" :class="{ 'is-open': expanded }">▸</span>
-    </div>
+    </button>
 
     <!-- 授权链口播：approved=teal / rejected=红，绝不用绿。措辞与谓词
          SSOT=utils/format deriveSignoff+signoffText（与 VerificationCard 真同源，
@@ -323,14 +327,23 @@ const chips = computed(() => {
    无图标」+ cx worklog 上下发丝线三明治）：去盒化——背景透明、无边框盒/圆角，
    只留上下发丝线；折叠态默认只占一行安静灰字，hover 回墨保可点性 affordance。 */
 .worklog-head {
+  /* button 化重置（批次五 C6）：UA 默认 outset 边框/字体/内边距全部显式归零，
+     四边框逐值与旧 div 形态一致（craft ①有 border 四边断言：上下 1px 左右 0）。 */
+  appearance: none;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   cursor: pointer;
   padding: 9px 2px;
+  border: 0;
   border-top: 1px solid var(--hairline-soft);
   border-bottom: 1px solid var(--hairline-soft);
+  border-radius: 0;
   background: transparent;
 }
 .worklog-head-left {

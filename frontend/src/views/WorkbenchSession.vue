@@ -385,7 +385,8 @@ onUnmounted(() => {
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--clay);
+  /* clay 预算（批次五 C3）：eyebrow 降灰，本屏 clay 焦点=进度大数字。 */
+  color: var(--ink-faint);
   margin-bottom: 4px;
 }
 .sess-goal {
@@ -457,12 +458,14 @@ onUnmounted(() => {
   font-size: 13px;
   line-height: 1.6;
 }
+/* clay 预算（批次五 C3）：蓝图分工徽章逐行重复，降灰——工作台的 clay 只留
+   给 chip 工作灯与进度大数字（单一焦点）。 */
 .bp-tag {
   display: inline-block;
   font-size: 11px;
   font-weight: 700;
-  color: var(--clay);
-  background: var(--clay-soft);
+  color: var(--ink-soft);
+  background: var(--hover-tint);
   border-radius: 4px;
   padding: 1px 6px;
   margin-right: 6px;
@@ -520,7 +523,8 @@ onUnmounted(() => {
   margin-left: auto;
 }
 .member-state.summoned {
-  color: var(--clay);
+  /* clay 预算（批次五 C3）：「已召集」是信息态非强调——工作态由 chip 灯承担。 */
+  color: var(--ink-mid);
 }
 .member-state.pending {
   color: var(--ink-faint);
@@ -621,8 +625,12 @@ onUnmounted(() => {
 .chip-action {
   font-size: 12px;
   font-weight: 700;
-  color: var(--clay);
+  /* clay 预算（批次五 C3）：逐 chip 动作字常驻降灰，hover 回 clay。 */
+  color: var(--ink-soft);
   margin-left: auto;
+}
+.task-chip:hover .chip-action {
+  color: var(--clay);
 }
 /* B2：chip 内速览微动作——不占用 chip-review/chip-action 的 margin-left:auto
    靠右位；两者都不存在时（如 completed/failed 且已有专属动作词）也保持贴右。 */
