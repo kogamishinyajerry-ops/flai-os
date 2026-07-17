@@ -110,3 +110,15 @@ build 包壳；记录引用 cea0075）。
   timeout-cut 满足干净咬合三条件，恢复入重放集；
 - degrade-cut 按裁定改列「新增」；重放集=8 处，spec §十五 B6-6 同步 amend；
 - 验证：craft 110/110（包裹后绿位无误红）+ 8 处全量重放（见下）。
+
+### 终局（edea627）
+
+基 edea627 全量重放：双套件 BASELINE-GREEN + **8/8 BITE-OK**（census/timeout/
+degrade/reduce/roving/fitts/dialog/portal，三条件全举证；timeout-cut 红而不崩
+达汇总——根因修实证）。craft 110/110 ×2（⑭C2 包裹与 ⑭C7 收紧后各一轮）。
+verify_all 第三轮（EXIT=0）后仅动 craft e2e/replay 脚本/docs，产品代码零变更
+——以 craft 双绿位为收口证据，如实声明未跑第四轮全量。
+
+**治理链闭环声明**：tamper 7 处（TB1-TB7，含两次揭穿探针自身假绿）+ replay
+8/8 独立可复跑 + verify_all ×3 EXIT=0 + 3-lens 13 findings 裁决 + Codex
+R0→R1→R2（P1=0 全程，R2 剩余 P2 verbatim 落地）。按 standing 授权合并 push。
