@@ -43,7 +43,7 @@ replay() { # $1=名 $2=套件 $3=预期 FAIL grep（fixed string） $4=python pa
   local out
   out="$(run_suite "$suite")"
   if grep -qF "$expect" <<<"$out"; then
-    echo "BITE-OK: $name（预期红命中：$expect）"
+    echo "BITE-OK: ${name}（预期红命中：${expect}）"
   else
     echo "BITE-MISS: $name —— 预期 FAIL 行未出现，tamper 未被咬住（假绿嫌疑）"
     echo "$out" | tail -8
@@ -55,65 +55,85 @@ replay() { # $1=名 $2=套件 $3=预期 FAIL grep（fixed string） $4=python pa
 CRAFT=frontend/e2e/craft_desktop_acceptance.py
 M10=frontend/e2e/m10_governance_acceptance.py
 
-declare -A SUITE EXPECT PATCH
+# macOS 自带 bash 3.2 无关联数组——case 查表零依赖。
+# EXPECT 消歧纪律：'FAIL ⑩' 是 ⑩ 与 ⑩' 两行共同前缀，⑩' 独立 flake 会误报
+# BITE-OK（3-lens oracle 审 P2）——一律长前缀/直嵌 prime 字符锚死。
+suite_of() {
+  case "$1" in
+    portal-dup-enqueue) echo "$M10" ;;
+    *) echo "$CRAFT" ;;
+  esac
+}
 
-# ── 批次五核心 ──────────────────────────────────────────────────────────
-SUITE[census-redye]=$CRAFT
-EXPECT[census-redye]='FAIL ⑭C3'
-PATCH[census-redye]='
+expect_of() {
+  case "$1" in
+    census-redye)       echo 'FAIL ⑭C3' ;;
+    timeout-cut)        echo 'FAIL ⑭C1' ;;
+    reduce-sidebar)     echo 'FAIL ⑭C4 ' ;;
+    roving-cut)         echo 'FAIL ⑭C6″' ;;
+    fitts-shrink)       echo 'FAIL ⑮ ' ;;
+    dialog-reduce-cut)  echo 'FAIL ⑭C4′' ;;
+    portal-dup-enqueue) echo 'FAIL ⑩入队' ;;
+    *) echo "" ;;
+  esac
+}
+
+patch_of() {
+  case "$1" in
+    # ── 批次五核心 ──
+    census-redye) cat <<'PY'
 p="frontend/src/App.vue"; s=open(p).read()
 i=s.rindex("</style>"); assert i>0
-open(p,"w").write(s[:i]+".nav-link, .today-section-head { color: var(--clay) !important; }\n"+s[i:])'
-
-SUITE[timeout-cut]=$CRAFT
-EXPECT[timeout-cut]='FAIL ⑭C1'
-PATCH[timeout-cut]='
+open(p,"w").write(s[:i]+".nav-link, .today-section-head { color: var(--clay) !important; }\n"+s[i:])
+PY
+      ;;
+    timeout-cut) cat <<'PY'
 p="frontend/src/api/client.js"; s=open(p).read()
 t="setTimeout(() => controller.abort(), timeoutMs)"; assert t in s
-open(p,"w").write(s.replace(t,"setTimeout(() => {}, timeoutMs)"))'
-
-SUITE[reduce-sidebar]=$CRAFT
-EXPECT[reduce-sidebar]='FAIL ⑭C4 '
-PATCH[reduce-sidebar]='
+open(p,"w").write(s.replace(t,"setTimeout(() => {}, timeoutMs)"))
+PY
+      ;;
+    reduce-sidebar) cat <<'PY'
 p="frontend/src/App.vue"; s=open(p).read()
 t=".sidebar { transition: none !important; }"; assert t in s
-open(p,"w").write(s.replace(t,""))'
-
-# ── 批次六 ─────────────────────────────────────────────────────────────
-SUITE[roving-cut]=$CRAFT
-EXPECT[roving-cut]='FAIL ⑭C6″'
-PATCH[roving-cut]='
+open(p,"w").write(s.replace(t,""))
+PY
+      ;;
+    # ── 批次六 ──
+    roving-cut) cat <<'PY'
 p="frontend/src/router/index.js"; s=open(p).read()
 t="document.querySelector(\".app-main\")"; assert t in s
-open(p,"w").write(s.replace(t,"document.querySelector(\".app-main-x\")"))'
-
-SUITE[fitts-shrink]=$CRAFT
-EXPECT[fitts-shrink]='FAIL ⑮ '
-PATCH[fitts-shrink]='
+open(p,"w").write(s.replace(t,"document.querySelector(\".app-main-x\")"))
+PY
+      ;;
+    fitts-shrink) cat <<'PY'
 p="frontend/src/App.vue"; s=open(p).read()
 i=s.rindex("</style>"); assert i>0
-open(p,"w").write(s[:i]+".sb-foot-btn { flex: 0 0 auto !important; width: 10px !important; height: 10px !important; padding: 0 !important; }\n"+s[i:])'
-
-SUITE[dialog-reduce-cut]=$CRAFT
-EXPECT[dialog-reduce-cut]='FAIL ⑭C4′'
-PATCH[dialog-reduce-cut]='
+open(p,"w").write(s[:i]+".sb-foot-btn { flex: 0 0 auto !important; width: 10px !important; height: 10px !important; padding: 0 !important; }\n"+s[i:])
+PY
+      ;;
+    dialog-reduce-cut) cat <<'PY'
 p="frontend/src/App.vue"; s=open(p).read()
 t=",\n  .el-overlay-dialog,\n  .el-dialog {"; assert t in s
-open(p,"w").write(s.replace(t," {"))'
-
-SUITE[portal-dup-enqueue]=$M10
-# 「⑩入队」长前缀锚死消歧：'FAIL ⑩' 是 ⑩ 与 ⑩' 两行共同前缀，⑩' 独立
-# flake 也会误报 BITE-OK（3-lens oracle 审 P2）。
-EXPECT[portal-dup-enqueue]='FAIL ⑩入队'
-PATCH[portal-dup-enqueue]='
+open(p,"w").write(s.replace(t," {"))
+PY
+      ;;
+    portal-dup-enqueue) cat <<'PY'
 p="frontend/src/views/AgentPortal.vue"; s=open(p).read()
 t=":disabled=\"latestRunInFlight\"\n"; assert t in s
-open(p,"w").write(s.replace(t,""))'
+open(p,"w").write(s.replace(t,""))
+PY
+      ;;
+  esac
+}
 
-ALL=(census-redye timeout-cut reduce-sidebar roving-cut fitts-shrink dialog-reduce-cut portal-dup-enqueue)
-NAMES=("${@:-${ALL[@]}}")
-for n in "${NAMES[@]}"; do
-  [[ -n "${SUITE[$n]:-}" ]] || { echo "未知 replay 名：$n（可用：${ALL[*]}）"; exit 2; }
-  replay "$n" "${SUITE[$n]}" "${EXPECT[$n]}" "${PATCH[$n]}"
+ALL="census-redye timeout-cut reduce-sidebar roving-cut fitts-shrink dialog-reduce-cut portal-dup-enqueue"
+NAMES="${*:-$ALL}"
+COUNT=0
+for n in $NAMES; do
+  EXPECT="$(expect_of "$n")"
+  [ -n "$EXPECT" ] || { echo "未知 replay 名：${n}（可用：${ALL}）"; exit 2; }
+  replay "$n" "$(suite_of "$n")" "$EXPECT" "$(patch_of "$n")"
+  COUNT=$((COUNT + 1))
 done
-echo "REPLAY ALL BITES OK（${#NAMES[@]} 处全部预期红命中）"
+echo "REPLAY ALL BITES OK（$COUNT 处全部预期红命中）"
