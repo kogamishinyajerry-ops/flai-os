@@ -511,6 +511,20 @@ class AgentRuntime:
             )
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
+        # 批八 loop-auditor F1：执行期 disabled 兜底。此前只重查「仍注册+版本漂移」
+        # ——滞留 created 的依赖任务在等待窗口内 agent 被禁用（版本不变）仍会执行，
+        # summon/create 时点的 disabled gate 形同虚设一半。禁用即诚实失败不硬跑
+        # （镜像 conversation.post_message 的既有语义）。
+        if agent.get("status") == "disabled":
+            msg = f"Agent 已下线，拒绝执行：{agent_id}——任务创建后成员被禁用，请改派或重建"
+            repos.set_task_data_classification(conn, task_id, "internal")
+            repos.set_task_status(conn, task_id, "failed", error_message=msg)
+            repos.append_event(
+                conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
+                level="error", message=msg,
+            )
+            return {"status": "failed", "task": repos.get_task(conn, task_id)}
+
         pkg_dir = self.agent_registry.package_dir(agent_id)
 
         # ADR-0025：执行期算一次任务级分级（文件∨知识∨工具三轴）并**落库为不可变列**。

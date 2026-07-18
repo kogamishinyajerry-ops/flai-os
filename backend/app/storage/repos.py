@@ -1549,3 +1549,94 @@ def get_worker_heartbeat(conn: sqlite3.Connection) -> dict[str, Any] | None:
         "SELECT * FROM worker_heartbeats WHERE worker_id = 'default'"
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+# ── 专家团队模板（批八/ADR-0031，迁移 #13）─────────────────────────────────
+
+
+def create_team(
+    conn: sqlite3.Connection,
+    *,
+    team_id: str,
+    name: str,
+    owner_user: str,
+    members: list[dict[str, Any]],
+    goal_template: str | None = None,
+    created_from_conversation_id: str | None = None,
+) -> dict[str, Any]:
+    """建团队蓝本 + 席位（单事务由调用方持有；本函数只执行 INSERT，不自 BEGIN——
+    与 create_task 同口径，事务边界归 API 层）。members 每项 =
+    {agent_id, agent_version_at_save, role, seq, after(list[int] 前序 seq)}；
+    合法性（agent 在场/非 interactive/after 仅引更小 seq/≤5 席）由 API 层对账后
+    传入，此处忠实落库。"""
+    now = _now_iso()
+    conn.execute(
+        """
+        INSERT INTO teams (id, name, goal_template, owner_user,
+                           created_from_conversation_id, created_at)
+        VALUES (?,?,?,?,?,?)
+        """,
+        (team_id, name, goal_template, owner_user, created_from_conversation_id, now),
+    )
+    for m in members:
+        conn.execute(
+            """
+            INSERT INTO team_members (team_id, agent_id, agent_version_at_save,
+                                      role, seq, after_json)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (
+                team_id,
+                m["agent_id"],
+                m["agent_version_at_save"],
+                m.get("role"),
+                m["seq"],
+                json.dumps(m.get("after") or [], ensure_ascii=False),
+            ),
+        )
+    return get_team(conn, team_id)  # type: ignore[return-value]
+
+
+def get_team(conn: sqlite3.Connection, team_id: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+    if row is None:
+        return None
+    team = dict(row)
+    team["members"] = list_team_members(conn, team_id)
+    return team
+
+
+def list_team_members(conn: sqlite3.Connection, team_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM team_members WHERE team_id = ? ORDER BY seq", (team_id,)
+    ).fetchall()
+    members: list[dict[str, Any]] = []
+    for r in rows:
+        m = dict(r)
+        raw_after = m.pop("after_json", None)
+        try:
+            decoded = json.loads(raw_after) if raw_after else []
+        except json.JSONDecodeError:
+            decoded = []
+        m["after"] = decoded if isinstance(decoded, list) else []
+        members.append(m)
+    return members
+
+
+def list_teams(
+    conn: sqlite3.Connection, *, owner_user: str | None = None, limit: int = 100
+) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if owner_user is not None:
+        clauses.append("owner_user = ?")
+        params.append(owner_user)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
+    rows = conn.execute(
+        f"SELECT * FROM teams {where} ORDER BY created_at DESC, id DESC LIMIT ?", params
+    ).fetchall()
+    teams = [dict(r) for r in rows]
+    for t in teams:
+        t["members"] = list_team_members(conn, t["id"])
+    return teams

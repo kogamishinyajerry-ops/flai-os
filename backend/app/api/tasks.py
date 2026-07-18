@@ -452,149 +452,170 @@ def create_tasks_batch(body: CreateTasksBatchRequest, request: Request) -> dict[
     active 复查在写锁内，与 conclude 串行化，同单建路径语义）。提交后无依赖项
     入队（P2-4 原子例外）、带依赖项滞留 created 待 resolver——依赖同批同会话
     按构造成立，单建路径的跨会话/跨 origin 校验在此无对应攻击面。
+
+    创建内核提取为 run_batch_creation（批八 §二-3）：teams summon 复用同一函数
+    ——密级 gate/事务原子/charter 事件零平行实现（ADR-0031）。
     """
-    agent_registry = request.app.state.agent_registry
     conn = request.app.state.conn_factory()
     try:
-        created_by = request.state.user["display_name"]
-        created_by_username = request.state.user["username"]
+        return run_batch_creation(
+            conn=conn,
+            agent_registry=request.app.state.agent_registry,
+            items=list(body.items),
+            conversation_id=body.conversation_id,
+            created_by=request.state.user["display_name"],
+            created_by_username=request.state.user["username"],
+        )
+    finally:
+        conn.close()
 
-        errors: list[dict[str, Any]] = []
-        agents: list[dict[str, Any] | None] = []
-        for idx, item in enumerate(body.items):
-            item_errors: list[str] = []
-            agent = _get_agent_or_none(agent_registry, item.agent_id)
-            if agent is None:
-                item_errors.append(f"agent 不存在：{item.agent_id}")
-            elif agent.get("status") == "disabled":
-                item_errors.append(f"agent 已下线，禁止调用：{item.agent_id}")
-            elif (agent.get("workflow", {}) or {}).get("mode") == "interactive":
+
+def run_batch_creation(
+    *,
+    conn: Any,
+    agent_registry: Any,
+    items: list[BatchTaskItem],
+    conversation_id: str | None,
+    created_by: str,
+    created_by_username: str,
+) -> dict[str, Any]:
+    """批量创建内核（批七 batch 端点原实现整体提取，语义零改动）：逐项静态校验
+    全收集（全有全无 422）→ BEGIN IMMEDIATE 单事务建行+入队+task_created/charter
+    事件 → 提交后取回投影。调用方持 conn 生命周期。"""
+    errors: list[dict[str, Any]] = []
+    agents: list[dict[str, Any] | None] = []
+    for idx, item in enumerate(items):
+        item_errors: list[str] = []
+        agent = _get_agent_or_none(agent_registry, item.agent_id)
+        if agent is None:
+            item_errors.append(f"agent 不存在：{item.agent_id}")
+        elif agent.get("status") == "disabled":
+            item_errors.append(f"agent 已下线，禁止调用：{item.agent_id}")
+        elif (agent.get("workflow", {}) or {}).get("mode") == "interactive":
+            item_errors.append(
+                f"agent {item.agent_id} 是导引类（interactive）Agent，请走 /api/conversations 对话"
+            )
+        for dep_idx in item.after:
+            if not (0 <= dep_idx < idx):
                 item_errors.append(
-                    f"agent {item.agent_id} 是导引类（interactive）Agent，请走 /api/conversations 对话"
+                    f"after 下标 {dep_idx} 非法：只能引用本批更早条目（0..{idx - 1}）——按构造即 DAG"
                 )
-            for dep_idx in item.after:
-                if not (0 <= dep_idx < idx):
-                    item_errors.append(
-                        f"after 下标 {dep_idx} 非法：只能引用本批更早条目（0..{idx - 1}）——按构造即 DAG"
-                    )
-            for fid in item.input_file_ids:
-                rec = repos.get_file(conn, fid)
-                if rec is not None and rec.get("kind") != "input":
-                    item_errors.append(
-                        f"input_file_ids 只接受上传件（kind=input）：{fid} 的 kind={rec.get('kind')!r}"
-                    )
-            if agent is not None:
-                # 批七 ADR-0030 密级 gate（batch 路径，与 create_task 同函数同判定式）。
-                _allowed, _material_level, _agent_max = cgate.agent_clearance_allows(
-                    conn, agent, item.input_file_ids
+        for fid in item.input_file_ids:
+            rec = repos.get_file(conn, fid)
+            if rec is not None and rec.get("kind") != "input":
+                item_errors.append(
+                    f"input_file_ids 只接受上传件（kind=input）：{fid} 的 kind={rec.get('kind')!r}"
                 )
-                if _allowed is False:
-                    item_errors.append(
-                        f"该专家的密级准入上限为「{_agent_max}」，无法处理「{_material_level}」级材料（ADR-0030）"
-                    )
-            agents.append(agent)
-            if item_errors:
-                errors.append({"index": idx, "agent_id": item.agent_id, "errors": item_errors})
-        if errors:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "message": "整批未创建（全有全无）——逐项修正后重试",
-                    "batch_errors": errors,
+        if agent is not None:
+            # 批七 ADR-0030 密级 gate（batch 路径，与 create_task 同函数同判定式）。
+            _allowed, _material_level, _agent_max = cgate.agent_clearance_allows(
+                conn, agent, item.input_file_ids
+            )
+            if _allowed is False:
+                item_errors.append(
+                    f"该专家的密级准入上限为「{_agent_max}」，无法处理「{_material_level}」级材料（ADR-0030）"
+                )
+        agents.append(agent)
+        if item_errors:
+            errors.append({"index": idx, "agent_id": item.agent_id, "errors": item_errors})
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "整批未创建（全有全无）——逐项修正后重试",
+                "batch_errors": errors,
+            },
+        )
+
+    task_ids = [f"task_{uuid.uuid4().hex}" for _ in items]
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if conversation_id is not None:
+            conv = repos.get_conversation(conn, conversation_id)
+            if conv is None:
+                raise HTTPException(
+                    status_code=404, detail=f"归属的导引会话不存在：{conversation_id}"
+                )
+            if conv["status"] != "active":
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"归属的导引会话已 {conv['status']}，不再接受新任务"
+                        f"（结束协作=真只读）：{conversation_id}"
+                    ),
+                )
+        for idx, item in enumerate(items):
+            deps = [task_ids[d] for d in item.after]
+            repos.create_task(
+                conn,
+                task_id=task_ids[idx],
+                agent_id=item.agent_id,
+                agent_version=(agents[idx] or {}).get("version"),
+                name=item.name,
+                created_by=created_by,
+                created_by_username=created_by_username,
+                inputs=item.inputs,
+                input_file_ids=item.input_file_ids,
+                metadata={},
+                depends_on=deps or None,
+                input_binding=None,
+                conversation_id=conversation_id,
+                retry_of=None,
+            )
+        # 入队与创建事件并入同一事务（Codex R0 P1-1：两阶段窗口下，收尾任一
+        # 写失败会让「行已存在但报错返回」——导引重试路径造重复任务；worker
+        # 也可能在创建事件落库前领走 root）。行未 COMMIT 前对外不可见，故此处
+        # 直写 created→queued（状态机首跳，assert_transition 平凡成立）无并发
+        # TOCTOU 面——set_task_status 的自带 BEGIN IMMEDIATE 不可嵌套，不复用。
+        _now = repos._now_iso()
+        for idx, item in enumerate(items):
+            deps = [task_ids[d] for d in item.after]
+            if deps:
+                status_to = "created"
+                message = f"任务已创建（等待 {len(deps)} 个前置任务）：agent={item.agent_id}"
+            else:
+                status_to = "queued"
+                message = f"任务已创建：agent={item.agent_id}"
+                conn.execute(
+                    "UPDATE tasks SET status = 'queued', updated_at = ? WHERE id = ?",
+                    (_now, task_ids[idx]),
+                )
+            repos.append_event(
+                conn,
+                task_id=task_ids[idx],
+                agent_id=item.agent_id,
+                event_type="task_created",
+                level="info",
+                message=message,
+                payload={
+                    "created_by": created_by,
+                    "status_from": "created",
+                    "status_to": status_to,
+                    "depends_on": deps,
+                    "batch_index": idx,
                 },
             )
-
-        task_ids = [f"task_{uuid.uuid4().hex}" for _ in body.items]
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            if body.conversation_id is not None:
-                conv = repos.get_conversation(conn, body.conversation_id)
-                if conv is None:
-                    raise HTTPException(
-                        status_code=404, detail=f"归属的导引会话不存在：{body.conversation_id}"
-                    )
-                if conv["status"] != "active":
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            f"归属的导引会话已 {conv['status']}，不再接受新任务"
-                            f"（结束协作=真只读）：{body.conversation_id}"
-                        ),
-                    )
-            for idx, item in enumerate(body.items):
-                deps = [task_ids[d] for d in item.after]
-                repos.create_task(
-                    conn,
-                    task_id=task_ids[idx],
-                    agent_id=item.agent_id,
-                    agent_version=(agents[idx] or {}).get("version"),
-                    name=item.name,
-                    created_by=created_by,
-                    created_by_username=created_by_username,
-                    inputs=item.inputs,
-                    input_file_ids=item.input_file_ids,
-                    metadata={},
-                    depends_on=deps or None,
-                    input_binding=None,
-                    conversation_id=body.conversation_id,
-                    retry_of=None,
-                )
-            # 入队与创建事件并入同一事务（Codex R0 P1-1：两阶段窗口下，收尾任一
-            # 写失败会让「行已存在但报错返回」——导引重试路径造重复任务；worker
-            # 也可能在创建事件落库前领走 root）。行未 COMMIT 前对外不可见，故此处
-            # 直写 created→queued（状态机首跳，assert_transition 平凡成立）无并发
-            # TOCTOU 面——set_task_status 的自带 BEGIN IMMEDIATE 不可嵌套，不复用。
-            _now = repos._now_iso()
-            for idx, item in enumerate(body.items):
-                deps = [task_ids[d] for d in item.after]
-                if deps:
-                    status_to = "created"
-                    message = f"任务已创建（等待 {len(deps)} 个前置任务）：agent={item.agent_id}"
-                else:
-                    status_to = "queued"
-                    message = f"任务已创建：agent={item.agent_id}"
-                    conn.execute(
-                        "UPDATE tasks SET status = 'queued', updated_at = ? WHERE id = ?",
-                        (_now, task_ids[idx]),
-                    )
+            # Codex R0 P2（charter 留痕）：expertise.charter 作为任务首条 agent_log
+            # 落库——前端首行口播渲染**持久化事件**而非实时注册表（包更新不得
+            # 改写历史任务「说过的话」，审计流有据）。不设 workflow_event_type：
+            # 旁白层直取 message 原文。
+            _charter = (((agents[idx] or {}).get("expertise") or {}).get("charter") or "").strip()
+            if _charter:
                 repos.append_event(
                     conn,
                     task_id=task_ids[idx],
                     agent_id=item.agent_id,
-                    event_type="task_created",
+                    event_type="agent_log",
                     level="info",
-                    message=message,
-                    payload={
-                        "created_by": created_by,
-                        "status_from": "created",
-                        "status_to": status_to,
-                        "depends_on": deps,
-                        "batch_index": idx,
-                    },
+                    message=_charter,
+                    payload={"charter_intro": True},
                 )
-                # Codex R0 P2（charter 留痕）：expertise.charter 作为任务首条 agent_log
-                # 落库——前端首行口播渲染**持久化事件**而非实时注册表（包更新不得
-                # 改写历史任务「说过的话」，审计流有据）。不设 workflow_event_type：
-                # 旁白层直取 message 原文。
-                _charter = (((agents[idx] or {}).get("expertise") or {}).get("charter") or "").strip()
-                if _charter:
-                    repos.append_event(
-                        conn,
-                        task_id=task_ids[idx],
-                        agent_id=item.agent_id,
-                        event_type="agent_log",
-                        level="info",
-                        message=_charter,
-                        payload={"charter_intro": True},
-                    )
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        out_tasks = [repos.get_task(conn, task_ids[idx]) for idx in range(len(body.items))]
-        return {"tasks": out_tasks}
-    finally:
-        conn.close()
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    out_tasks = [repos.get_task(conn, task_ids[idx]) for idx in range(len(items))]
+    return {"tasks": out_tasks}
 
 
 @router.get("/tasks")

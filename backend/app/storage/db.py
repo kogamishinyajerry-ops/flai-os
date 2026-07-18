@@ -263,6 +263,30 @@ CREATE TABLE IF NOT EXISTS worker_heartbeats (
     started_at TEXT NOT NULL,
     last_beat_at TEXT NOT NULL
 );
+
+-- 迁移 #13（批八/ADR-0031）：专家团队模板。teams=蓝本头（owner_user 取 username
+-- 唯一键，同 created_by_username 口径；created_from_conversation_id=血缘，会话可
+-- 后删故不设 FK）；team_members=席位（seq 主键轴，同 agent 可多席；after_json=
+-- 同团队内前序 seq 列表，仅可引用更小 seq → 按构造 DAG；agent_version_at_save=
+-- 保存时点版本快照，summon 对账基准防漂移伪史）。新表 IF NOT EXISTS 即幂等。
+CREATE TABLE IF NOT EXISTS teams (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    goal_template TEXT,
+    owner_user TEXT NOT NULL,
+    created_from_conversation_id TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS team_members (
+    team_id TEXT NOT NULL REFERENCES teams(id),
+    agent_id TEXT NOT NULL,
+    agent_version_at_save TEXT NOT NULL,
+    role TEXT,
+    seq INTEGER NOT NULL,
+    after_json TEXT,
+    PRIMARY KEY (team_id, seq)
+);
 """
 
 _INDEX_DDL = (
