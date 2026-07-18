@@ -295,19 +295,30 @@ with sync_playwright() as p:
         json.dumps({"status": t_fault.get("status"), "depends_on": t_fault.get("depends_on")}, ensure_ascii=False),
     )
 
-    # O2：等待接力行=空心灯（is-hollow 无 is-pulsing）+ 无秒表 + 上游名旁白
+    # O2：等待接力行=空心灯（is-hollow 无 is-pulsing）+ 无秒表 + 上游名旁白。
+    # 红而不崩（批六 replay 教训）：tamper 断依赖时等待相整体缺失，探针必须
+    # 逐条红、套件到达 FAILED 汇总，才算干净咬合（crash-type fail 不算）。
     hollow = page.locator(".status-lamp.is-hollow")
-    expect(hollow).to_be_visible(timeout=8000)
-    check("O2a 空心灯在场且无 is-pulsing", hollow.evaluate("el => !el.classList.contains('is-pulsing')") is True)
-    fault_card = page.locator(".agent-card", has=page.locator(".status-lamp.is-hollow"))
-    check("O2b 等待行无秒表 DOM", fault_card.locator(".sa-elapsed").count() == 0)
-    check("O2c 状态词=等待接力", "等待接力" in fault_card.locator(".status-word").inner_text())
-    stage = fault_card.locator(".sa-stageline")
-    check(
-        "O2d 旁白含上游人话名与自动接力承诺",
-        "等待〈" in stage.inner_text() and "就绪后自动接力" in stage.inner_text(),
-        stage.inner_text(),
-    )
+    try:
+        expect(hollow).to_be_visible(timeout=8000)
+        hollow_present = True
+    except Exception:
+        hollow_present = False
+    if hollow_present:
+        check("O2a 空心灯在场且无 is-pulsing", hollow.evaluate("el => !el.classList.contains('is-pulsing')") is True)
+        fault_card = page.locator(".agent-card", has=page.locator(".status-lamp.is-hollow"))
+        check("O2b 等待行无秒表 DOM", fault_card.locator(".sa-elapsed").count() == 0)
+        check("O2c 状态词=等待接力", "等待接力" in fault_card.locator(".status-word").inner_text())
+        stage = fault_card.locator(".sa-stageline")
+        check(
+            "O2d 旁白含上游人话名与自动接力承诺",
+            "等待〈" in stage.inner_text() and "就绪后自动接力" in stage.inner_text(),
+            stage.inner_text(),
+        )
+    else:
+        for probe in ("O2a 空心灯在场且无 is-pulsing", "O2b 等待行无秒表 DOM",
+                      "O2c 状态词=等待接力", "O2d 旁白含上游人话名与自动接力承诺"):
+            check(probe, False, "等待相缺失（空心灯未出现）")
 
     # O7（前置相）：squad 行在场、含等待段、无收束/全部完成类总结
     squad = page.locator(".sa-squad-line")
