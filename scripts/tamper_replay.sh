@@ -10,7 +10,9 @@
 # 用法：bash scripts/tamper_replay.sh [replay 名 ...]   # 缺省=全部
 #   可用名：census-redye timeout-cut degrade-cut reduce-sidebar roving-cut fitts-shrink
 #           dialog-reduce-cut portal-dup-enqueue
-# 约 5-6 分钟/处（build+整套 craft e2e）；portal-dup-enqueue 跑 m10 套件较快。
+#           b7-after-cut b7-hollow-pulse b7-fake-settle b7-gate-cut（批七编队投影）
+# 约 5-6 分钟/处（build+整套 craft e2e）；portal-dup-enqueue 跑 m10 套件较快；
+# b7-* 跑 batch_g 套件（~3 分钟/处）。
 #
 # 边界（如实声明）：
 # - 重放基 HEAD：未提交的工作区改动不在被测范围（这是特性——replay 证的是
@@ -41,6 +43,7 @@ run_suite() { # $1=e2e 脚本相对路径；结果落全局 OUT/RC——不吞�
 green_of() { # 套件各自的全绿汇总行
   case "$1" in
     *m10*) echo 'M10 ACCEPTANCE ALL GREEN' ;;
+    *batch_g*) echo 'BATCH-G SQUAD ALL GREEN' ;;
     *) echo 'CRAFT DESKTOP ALL GREEN' ;;
   esac
 }
@@ -48,6 +51,7 @@ green_of() { # 套件各自的全绿汇总行
 failsum_of() { # 套件各自的 FAILED 汇总行（须真到达汇总，中途崩不算干净咬合）
   case "$1" in
     *m10*) echo 'M10 ACCEPTANCE FAILED' ;;
+    *batch_g*) echo 'BATCH-G SQUAD FAILED' ;;
     *) echo 'CRAFT DESKTOP FAILED' ;;
   esac
 }
@@ -90,6 +94,7 @@ replay() { # $1=名 $2=套件 $3=预期 FAIL grep（fixed string） $4=python pa
 
 CRAFT=frontend/e2e/craft_desktop_acceptance.py
 M10=frontend/e2e/m10_governance_acceptance.py
+BATCHG=frontend/e2e/batch_g_squad_acceptance.py
 
 # macOS 自带 bash 3.2 无关联数组——case 查表零依赖。
 # EXPECT 消歧纪律：'FAIL ⑩' 是 ⑩ 与 ⑩' 两行共同前缀，⑩' 独立 flake 会误报
@@ -97,6 +102,7 @@ M10=frontend/e2e/m10_governance_acceptance.py
 suite_of() {
   case "$1" in
     portal-dup-enqueue) echo "$M10" ;;
+    b7-*) echo "$BATCHG" ;;
     *) echo "$CRAFT" ;;
   esac
 }
@@ -111,6 +117,10 @@ expect_of() {
     fitts-shrink)       echo 'FAIL ⑮ ' ;;
     dialog-reduce-cut)  echo 'FAIL ⑭C4′' ;;
     portal-dup-enqueue) echo 'FAIL ⑩入队' ;;
+    b7-after-cut)       echo 'FAIL O1c' ;;
+    b7-hollow-pulse)    echo 'FAIL O2a' ;;
+    b7-fake-settle)     echo 'FAIL O7e' ;;
+    b7-gate-cut)        echo 'FAIL O4a' ;;
     *) echo "" ;;
   esac
 }
@@ -171,24 +181,59 @@ t=":disabled=\"latestRunInFlight\"\n"; assert t in s
 open(p,"w").write(s.replace(t,""))
 PY
       ;;
+    # ── 批七编队投影（本轮执行会话已逐处实证咬合，此处登记为可复跑证据）──
+    b7-after-cut) cat <<'PY'
+p="backend/app/api/tasks.py"; s=open(p).read()
+t="                deps = [task_ids[d] for d in item.after]\n                repos.create_task("
+assert t in s
+open(p,"w").write(s.replace(t,"                deps = []\n                repos.create_task("))
+PY
+      ;;
+    b7-hollow-pulse) cat <<'PY'
+p="frontend/src/views/GuidePage.vue"; s=open(p).read()
+t="'is-pulsing': agentTaskInfo(a) && isWorkState(agentTaskInfo(a).latest.status),"
+assert s.count(t)==1
+open(p,"w").write(s.replace(t,"'is-pulsing': agentTaskInfo(a) && (isWorkState(agentTaskInfo(a).latest.status) || memberPhaseOf(a) === 'waiting_upstream'),"))
+PY
+      ;;
+    b7-fake-settle) cat <<'PY'
+p="frontend/src/utils/squad.js"; s=open(p).read()
+t="if (counts.settled === true && counts.waitingReview === 0) {"
+assert s.count(t)==1
+open(p,"w").write(s.replace(t,"if (counts.completed > 0) {"))
+PY
+      ;;
+    b7-gate-cut) cat <<'PY'
+p="backend/app/api/classification_gate.py"; s=open(p).read()
+t="""    allowed = (
+        _CLEARANCE_RANK.get(material_level, 2)
+        <= _CLEARANCE_RANK.get(agent_max, 0)
+    )"""
+assert t in s
+open(p,"w").write(s.replace(t,"    allowed = True"))
+PY
+      ;;
   esac
 }
 
-ALL="census-redye timeout-cut degrade-cut reduce-sidebar roving-cut fitts-shrink dialog-reduce-cut portal-dup-enqueue"
+ALL="census-redye timeout-cut degrade-cut reduce-sidebar roving-cut fitts-shrink dialog-reduce-cut portal-dup-enqueue b7-after-cut b7-hollow-pulse b7-fake-settle b7-gate-cut"
 NAMES="${*:-$ALL}"
 
 # 先验名合法性 + 汇总用到的套件，各跑一次 clean baseline（全绿才准开咬）。
 NEED_CRAFT=0
 NEED_M10=0
+NEED_BATCHG=0
 for n in $NAMES; do
   [ -n "$(expect_of "$n")" ] || { echo "未知 replay 名：${n}（可用：${ALL}）"; exit 2; }
   case "$(suite_of "$n")" in
     *m10*) NEED_M10=1 ;;
+    *batch_g*) NEED_BATCHG=1 ;;
     *) NEED_CRAFT=1 ;;
   esac
 done
 if [ "$NEED_CRAFT" -eq 1 ]; then baseline "$CRAFT"; fi
 if [ "$NEED_M10" -eq 1 ]; then baseline "$M10"; fi
+if [ "$NEED_BATCHG" -eq 1 ]; then baseline "$BATCHG"; fi
 
 COUNT=0
 for n in $NAMES; do
