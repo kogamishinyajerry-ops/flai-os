@@ -175,10 +175,15 @@
       <!-- 批七 §1.6 依据段（签发卡上方强制挂载）：findings 忠实投影；
            evidence_policy.required 但零依据 → amber 警示行（**不阻塞人签**——
            人是唯一签发者，警示只是把「没依据」摆在眼前）。拒答条 amber 非红。 -->
-      <div v-if="evidenceFindings.length || evidenceRefusals.length || evidenceRequiredMissing" class="section evidence-section">
+      <div v-if="evidenceFindings.length || evidenceRefusals.length || evidenceRequiredMissing || evidenceWithheld" class="section evidence-section">
         <h3>依据</h3>
         <div v-if="evidenceRequiredMissing" class="evidence-missing">
           本次输出未提供依据，请谨慎签发
+        </div>
+        <!-- 批八 withheld（O6，与 GuidePage/Workbench 同 store 口径）：密级受限
+             产物零下载零计数——静态遮蔽行，签发前经授权渠道核对。 -->
+        <div v-if="evidenceWithheld" class="evidence-withheld">
+          依据清单〔按密级隐藏〕——原文未拉取，签发前请经授权渠道核对
         </div>
         <EvidenceList v-if="evidenceFindings.length" :findings="evidenceFindings" />
         <ul v-if="evidenceRefusals.length" class="evidence-refusals">
@@ -403,6 +408,7 @@ import WorkLog from "../components/WorkLog.vue";
 import CompletionSeal from "../components/CompletionSeal.vue";
 import VerificationCard from "../components/VerificationCard.vue";
 import EvidenceList from "../components/EvidenceList.vue";
+import { ensureTaskEvidence, taskEvidenceWithheld } from "../stores/taskEvidence";
 import { useAgentNames } from "../stores/agentNames";
 import { displayName } from "../stores/session";
 import { markTaskSeen } from "../utils/lastSeen";
@@ -503,11 +509,25 @@ const evidenceData = computed(() => {
 });
 const evidenceFindings = computed(() => evidenceData.value?.findings || []);
 const evidenceRefusals = computed(() => evidenceData.value?.refusals || []);
+// 批八 withheld：与 GuidePage/Workbench 共用 taskEvidence store（listOutputFiles
+// 元数据判定，零下载）；task 快照到位即水合。
+const evidenceWithheld = computed(
+  () => task.value !== null && taskEvidenceWithheld(task.value.id) === true
+);
+watch(
+  task,
+  (t) => {
+    if (t) ensureTaskEvidence(t);
+  },
+  { immediate: true }
+);
 // 警示行判据：包声明 evidence_policy.required 且任务已到签发/完成面但零 findings。
+// withheld 时不报「未提供依据」——依据可能存在只是被遮蔽，误报会教用户错怪 agent。
 const evidenceRequiredMissing = computed(() => {
   const t = task.value;
   if (!t) return false;
   if (t.status !== "waiting_review" && t.status !== "completed") return false;
+  if (evidenceWithheld.value === true) return false;
   const meta = agentNamesStore.meta[t.agent_id];
   if (!meta || meta.evidenceRequired !== true) return false;
   return evidenceFindings.value.length === 0;
@@ -1310,6 +1330,16 @@ onUnmounted(() => {
 }
 /* 批七 §1.6：接力血缘 + 依据段 */
 .ctx-relay { color: var(--ink-faint); }
+/* 批八 withheld：中性虚线弱化（遮蔽是策略非异常，不占 amber/红） */
+.evidence-withheld {
+  display: inline-block;
+  margin: 0 0 10px;
+  padding: 6px 12px;
+  border: 1px dashed var(--hairline);
+  border-radius: 8px;
+  color: var(--ink-faint);
+  font-size: 13px;
+}
 .evidence-missing {
   display: inline-block;
   margin: 0 0 10px;

@@ -217,6 +217,12 @@
                     @keydown.enter.stop.prevent="toggleEvidence(agentTaskInfo(a).latest.id)"
                     @keydown.space.stop.prevent="toggleEvidence(agentTaskInfo(a).latest.id)"
                   >依据 {{ evidenceSummaryOf(a).total }} 条（{{ evidenceSummaryOf(a).verified }} 已核验 · {{ evidenceSummaryOf(a).unverified }} 未核）<template v-if="evidenceSummaryOf(a).level"> · 置信度 {{ evidenceSummaryOf(a).level }}（模型自评）</template></div>
+                  <!-- 批八 withheld（O6）：密级受限产物零下载零计数——静态遮蔽标记，
+                       不可点击展开（无内容可展），绝不编造「依据 N 条」。 -->
+                  <div
+                    v-if="agentTaskInfo(a) && evidenceWithheldOf(a)"
+                    class="sa-evidence-chip is-withheld"
+                  >依据清单〔按密级隐藏〕</div>
                   <EvidenceList
                     v-if="agentTaskInfo(a) && expandedEvidence.has(agentTaskInfo(a).latest.id) && evidenceOfTask(agentTaskInfo(a).latest.id)"
                     :findings="evidenceOfTask(agentTaskInfo(a).latest.id).findings"
@@ -302,6 +308,15 @@
                      互斥换装：主态接全局 .cta-clay（SSOT），次态走 .is-secondary。 -->
                 <button class="workbench-btn" :class="openableCount(m.recommendation) > 0 ? 'is-secondary' : 'cta-clay'" @click="openWorkbench">进入协作工作台 →</button>
                 <button type="button" class="plan-escape" @click="focusComposer">想调整方案？直接告诉导引 ↓</button>
+                <!-- 批八 O7：存为团队模板——仅 orchestrate 且会话 active（假入口=
+                     假承诺）；成员由服务端从方案快照抽取重验，前端不传成员。 -->
+                <button
+                  v-if="conversationStatus === 'active'"
+                  type="button"
+                  class="plan-escape save-team-btn"
+                  :disabled="savingTeam"
+                  @click="saveTeamFromPlan"
+                >{{ savingTeam ? "保存中…" : "存为团队模板（下次一键召集同套专家）" }}</button>
                 <!-- 政策句压一行（批次四 Q3）：红线字面「亲手提交」「签发权」
                      逐字保留（m6 ③ 锚）；动词分轴（3-lens P3）——开工=提交、
                      放行=批准，不把两个动作混进一个动词；细则（参数未齐怎么办）
@@ -453,10 +468,16 @@ import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation } from "../api/conversations";
+import { createTeam } from "../api/teams";
 import { createTask, createTasksBatch } from "../api/tasks";
 import { listAgents, getAgent } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
-import { ensureTaskEvidence, taskEvidenceOf, taskEvidenceSummary } from "../stores/taskEvidence";
+import {
+  ensureTaskEvidence,
+  taskEvidenceOf,
+  taskEvidenceSummary,
+  taskEvidenceWithheld,
+} from "../stores/taskEvidence";
 import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime } from "../utils/format";
 import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
 import { useAgentNames } from "../stores/agentNames";
@@ -1372,6 +1393,35 @@ function evidenceOfTask(taskId) {
   return taskEvidenceOf(taskId);
 }
 
+// 批八：存为团队模板——只传会话 id，成员由服务端从方案快照抽取重验（ADR-0031）。
+// 命名走浏览器原生输入（轻量；空名/取消即不保存），成败 toast 如实。
+const savingTeam = ref(false);
+async function saveTeamFromPlan() {
+  if (!conversationId.value || savingTeam.value) return;
+  const name = (window.prompt("给这套专家团队起个名字（下次可一键召集）：") || "").trim();
+  if (!name) return;
+  savingTeam.value = true;
+  try {
+    const team = await createTeam({ name, conversationId: conversationId.value });
+    ElMessage.success(`团队「${team.name}」已保存——在 Agent 门户的「专家团队」区随时召集`);
+  } catch (err) {
+    const detail = err.detail;
+    const msg =
+      (detail && detail.team_errors && detail.team_errors.join("；")) ||
+      (typeof detail === "string" ? detail : "") ||
+      err.message ||
+      "保存失败";
+    ElMessage.error(`团队未保存：${msg}`);
+  } finally {
+    savingTeam.value = false;
+  }
+}
+
+function evidenceWithheldOf(a) {
+  const info = agentTaskInfo(a);
+  return info !== null && taskEvidenceWithheld(info.latest.id) === true;
+}
+
 function evidenceSummaryOf(a) {
   const info = agentTaskInfo(a);
   if (!info) return null;
@@ -2145,6 +2195,12 @@ watch(
   cursor: pointer;
   font-variant-numeric: tabular-nums;
   transition: border-color var(--motion-fast) var(--ease-out-soft);
+}
+/* 批八 withheld：静态遮蔽标记——不可点（无内容可展），虚线弱化非警示 */
+.sa-evidence-chip.is-withheld {
+  cursor: default;
+  border-style: dashed;
+  color: var(--ink-faint);
 }
 .sa-evidence-chip:hover { border-color: var(--clay-softer); }
 .sa-evidence-chip.has-unverified {

@@ -1,0 +1,28 @@
+import { request } from "./client";
+
+// 批八 ADR-0031：团队蓝本必须源自导引会话方案——只传会话 id，成员由服务端
+// 从 recommendation 快照抽取并重验（前端绝不直传成员列表）。
+export const createTeam = ({ name, conversationId }) =>
+  request("/api/teams", {
+    method: "POST",
+    json: { name, conversation_id: conversationId },
+  });
+
+export const listTeams = () => request("/api/teams");
+
+export const getTeam = (teamId) => request(`/api/teams/${teamId}`);
+
+// 召集：items 逐席位补参；顺序无关（服务端按 seq 升序重排，绝不信任提交序）。
+// 对账不过 → 422 detail.summon_errors 逐席位清单（整单拒发零写入）。
+export const summonTeam = ({ teamId, items, conversationId }) =>
+  request(`/api/teams/${teamId}/summon`, {
+    method: "POST",
+    json: {
+      conversation_id: conversationId || null,
+      items: (items || []).map((it) => ({
+        seq: it.seq,
+        inputs: it.inputs || {},
+        input_file_ids: it.inputFileIds || [],
+      })),
+    },
+  });

@@ -17,7 +17,7 @@ export function useTaskEvidence() {
 export function ensureTaskEvidence(t) {
   if (!t || cache[t.id]) return;
   if (t.status !== "completed" && t.status !== "waiting_review") return;
-  const entry = reactive({ loaded: false, findings: [], refusals: [] });
+  const entry = reactive({ loaded: false, findings: [], refusals: [], withheld: false });
   cache[t.id] = entry;
   const ids = t.output_file_ids || [];
   if (ids.length === 0) {
@@ -31,6 +31,13 @@ export function ensureTaskEvidence(t) {
       // 后端落 sensitive_download_denied 审计（用户根本没有下载意图=假阳性审计
       // 事件），且 internal 件也省一次纯展示目的的全量 blob。密级遮蔽下诚实缺位：
       // 零 chip，不编计数。
+      // 批八 withheld 接线：存在密级受限的 JSON 产物 → 标 withheld，消费面渲
+      // 静态「按密级隐藏」标记——**绝不编造计数**（无内容即无 N）。与 internal
+      // 件可共存（如 hello_output.json + 受限依据件）：可读的照常解析展示，
+      // 受限的如实标遮蔽，两者都不隐瞒。
+      entry.withheld = (files || []).some(
+        (f) => /\.json$/i.test(f.filename || "") && f.data_classification !== "internal"
+      );
       const jf = (files || []).find(
         (f) => /\.json$/i.test(f.filename || "") && f.data_classification === "internal"
       );
@@ -59,6 +66,14 @@ export function ensureTaskEvidence(t) {
 export function taskEvidenceOf(taskId) {
   const e = cache[taskId];
   return e && e.loaded === true ? e : null;
+}
+
+// withheld 判据（批八）：有 JSON 产物但密级受限，未发起任何下载——消费面据此
+// 渲静态遮蔽标记（GuidePage chip / Workbench 收纳行 / TaskDetail 依据段三处
+// 同口径，O6 逐一断言）。
+export function taskEvidenceWithheld(taskId) {
+  const e = cache[taskId];
+  return e !== undefined && e.loaded === true && e.withheld === true;
 }
 
 // 依据摘要计数：置信度报最低档（诚实地板——多 finding 取最保守）。

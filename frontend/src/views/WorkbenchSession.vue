@@ -237,7 +237,7 @@ import { useAgentNames } from "../stores/agentNames";
 import { useTodayKey } from "../composables/useTodayKey";
 import { markSeen, ensureTaskBaseline, taskHasUnseen } from "../utils/lastSeen";
 import { memberPhase, squadCounts, squadLineText, relayOrderText } from "../utils/squad";
-import { ensureTaskEvidence, taskEvidenceSummary } from "../stores/taskEvidence";
+import { ensureTaskEvidence, taskEvidenceSummary, taskEvidenceWithheld } from "../stores/taskEvidence";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -370,6 +370,10 @@ function doneUnseen(a) {
 function doneEvidenceText(a) {
   const t = latestTaskFor(a);
   if (!t) return null;
+  // 批八 withheld（O6）：密级受限产物零下载零计数——静态遮蔽文案，绝不编 N。
+  if (taskEvidenceWithheld(t.id) === true) {
+    return { text: "依据〔按密级隐藏〕", unverified: 0 };
+  }
   const s = taskEvidenceSummary(t.id);
   if (!s) return null;
   return { text: `依据 ${s.total} 条${s.unverified > 0 ? `（${s.unverified} 未核）` : ""}`, unverified: s.unverified };

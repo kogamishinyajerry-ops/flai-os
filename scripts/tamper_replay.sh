@@ -11,6 +11,7 @@
 #   可用名：census-redye timeout-cut degrade-cut reduce-sidebar roving-cut fitts-shrink
 #           dialog-reduce-cut portal-dup-enqueue
 #           b7-after-cut b7-hollow-pulse b7-fake-settle b7-gate-cut（批七编队投影）
+#           b8-gate-cut b8-after-cut b8-order-cut b8-withheld-cut（批八 teams 实体）
 # 约 5-6 分钟/处（build+整套 craft e2e）；portal-dup-enqueue 跑 m10 套件较快；
 # b7-* 跑 batch_g 套件（~3 分钟/处）。
 #
@@ -44,6 +45,7 @@ green_of() { # 套件各自的全绿汇总行
   case "$1" in
     *m10*) echo 'M10 ACCEPTANCE ALL GREEN' ;;
     *batch_g*) echo 'BATCH-G SQUAD ALL GREEN' ;;
+    *batch_h*) echo 'BATCH-H TEAMS ALL GREEN' ;;
     *) echo 'CRAFT DESKTOP ALL GREEN' ;;
   esac
 }
@@ -52,6 +54,7 @@ failsum_of() { # 套件各自的 FAILED 汇总行（须真到达汇总，中途�
   case "$1" in
     *m10*) echo 'M10 ACCEPTANCE FAILED' ;;
     *batch_g*) echo 'BATCH-G SQUAD FAILED' ;;
+    *batch_h*) echo 'BATCH-H TEAMS FAILED' ;;
     *) echo 'CRAFT DESKTOP FAILED' ;;
   esac
 }
@@ -95,6 +98,7 @@ replay() { # $1=名 $2=套件 $3=预期 FAIL grep（fixed string） $4=python pa
 CRAFT=frontend/e2e/craft_desktop_acceptance.py
 M10=frontend/e2e/m10_governance_acceptance.py
 BATCHG=frontend/e2e/batch_g_squad_acceptance.py
+BATCHH=frontend/e2e/batch_h_teams_acceptance.py
 
 # macOS 自带 bash 3.2 无关联数组——case 查表零依赖。
 # EXPECT 消歧纪律：'FAIL ⑩' 是 ⑩ 与 ⑩' 两行共同前缀，⑩' 独立 flake 会误报
@@ -103,6 +107,7 @@ suite_of() {
   case "$1" in
     portal-dup-enqueue) echo "$M10" ;;
     b7-*) echo "$BATCHG" ;;
+    b8-*) echo "$BATCHH" ;;
     *) echo "$CRAFT" ;;
   esac
 }
@@ -121,6 +126,12 @@ expect_of() {
     b7-hollow-pulse)    echo 'FAIL O2a' ;;
     b7-fake-settle)     echo 'FAIL O7e' ;;
     b7-gate-cut)        echo 'FAIL O4a' ;;
+    # b8：O4a=版本漂移是 summon gate 独有校验（batch 复检面只盖 在场/下线/
+    # interactive）——gate 砍除后确定性放行 200。长前缀锚死消歧。
+    b8-gate-cut)        echo 'FAIL O4a 0.x-minor' ;;
+    b8-after-cut)       echo 'FAIL O3b 乱序提交依赖边仍正确' ;;
+    b8-order-cut)       echo 'FAIL O4b patch 漂移放行' ;;
+    b8-withheld-cut)    echo 'FAIL O6c 依据段遮蔽标记在场' ;;
     *) echo "" ;;
   esac
 }
@@ -213,27 +224,69 @@ assert t in s
 open(p,"w").write(s.replace(t,"    allowed = True"))
 PY
       ;;
+    # ── 批八 teams 实体（e2e 头部契约声明的四处投毒，登记为可复跑证据）──
+    # gate-cut：只砍 G1-G4 收集后的 raise（G5 的 raise 同文——以后随注释锚死
+    # 唯一性），块内局部替换 if errors: → if errors and False:。
+    b8-gate-cut) cat <<'PY'
+p="backend/app/api/teams.py"; s=open(p).read()
+t='''        if errors:
+            raise HTTPException(
+                status_code=422,
+                detail={"message": "召集未发起（对账不过，整单拒发）", "summon_errors": errors},
+            )
+
+        # seq 升序重排'''
+assert s.count(t)==1
+open(p,"w").write(s.replace(t,t.replace("if errors:","if errors and False:",1)))
+PY
+      ;;
+    b8-after-cut) cat <<'PY'
+p="backend/app/api/teams.py"; s=open(p).read()
+t='                    after=[pos_of_seq[d] for d in m["after"] if d in pos_of_seq],'
+assert s.count(t)==1
+open(p,"w").write(s.replace(t,"                    after=[],"))
+PY
+      ;;
+    b8-order-cut) cat <<'PY'
+p="backend/app/api/teams.py"; s=open(p).read()
+t="        ordered_seqs = sorted(member_by_seq)"
+assert s.count(t)==1
+open(p,"w").write(s.replace(t,"        ordered_seqs = [it.seq for it in body.items]"))
+PY
+      ;;
+    b8-withheld-cut) cat <<'PY'
+p="frontend/src/stores/taskEvidence.js"; s=open(p).read()
+t=r'''      entry.withheld = (files || []).some(
+        (f) => /\.json$/i.test(f.filename || "") && f.data_classification !== "internal"
+      );'''
+assert s.count(t)==1
+open(p,"w").write(s.replace(t,"      entry.withheld = false;"))
+PY
+      ;;
   esac
 }
 
-ALL="census-redye timeout-cut degrade-cut reduce-sidebar roving-cut fitts-shrink dialog-reduce-cut portal-dup-enqueue b7-after-cut b7-hollow-pulse b7-fake-settle b7-gate-cut"
+ALL="census-redye timeout-cut degrade-cut reduce-sidebar roving-cut fitts-shrink dialog-reduce-cut portal-dup-enqueue b7-after-cut b7-hollow-pulse b7-fake-settle b7-gate-cut b8-gate-cut b8-after-cut b8-order-cut b8-withheld-cut"
 NAMES="${*:-$ALL}"
 
 # 先验名合法性 + 汇总用到的套件，各跑一次 clean baseline（全绿才准开咬）。
 NEED_CRAFT=0
 NEED_M10=0
 NEED_BATCHG=0
+NEED_BATCHH=0
 for n in $NAMES; do
   [ -n "$(expect_of "$n")" ] || { echo "未知 replay 名：${n}（可用：${ALL}）"; exit 2; }
   case "$(suite_of "$n")" in
     *m10*) NEED_M10=1 ;;
     *batch_g*) NEED_BATCHG=1 ;;
+    *batch_h*) NEED_BATCHH=1 ;;
     *) NEED_CRAFT=1 ;;
   esac
 done
 if [ "$NEED_CRAFT" -eq 1 ]; then baseline "$CRAFT"; fi
 if [ "$NEED_M10" -eq 1 ]; then baseline "$M10"; fi
 if [ "$NEED_BATCHG" -eq 1 ]; then baseline "$BATCHG"; fi
+if [ "$NEED_BATCHH" -eq 1 ]; then baseline "$BATCHH"; fi
 
 COUNT=0
 for n in $NAMES; do

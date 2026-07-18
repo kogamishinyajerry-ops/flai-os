@@ -108,6 +108,84 @@
       </el-col>
     </el-row>
 
+    <!-- 批八：专家团队区块（保存自导引方案的可复用蓝本）。零团队零占位；
+         成员缺位/下线由服务端投影 present/disabled 预先置灰（权威判定仍在
+         summon 对账 gate，422 清单如实渲染）。 -->
+    <div v-if="teams.length" class="teams-section">
+      <div class="teams-header">
+        <h3>专家团队</h3>
+        <span class="teams-sub">保存自导引方案——召集前自动对账成员在岗与版本</span>
+      </div>
+      <div class="team-cards fx-stagger">
+        <div v-for="t in teams" :key="t.id" class="team-card">
+          <div class="team-head">
+            <span class="team-name">{{ t.name }}</span>
+            <span class="team-clearance" :title="'团队密级=成员上限最小值（仅展示口径；召集时仍按每位成员各自判定）'">密级 · {{ clearanceLabel(t.clearance_display) }}</span>
+          </div>
+          <p v-if="t.goal_template" class="team-goal">{{ t.goal_template }}</p>
+          <div class="team-chain">{{ teamChainText(t) }}</div>
+          <p v-if="teamUnready(t)" class="team-unready">{{ teamUnready(t) }}</p>
+          <div class="team-actions">
+            <el-button
+              type="primary"
+              size="small"
+              :disabled="!!teamUnready(t)"
+              @click="openSummon(t)"
+            >召集此团队</el-button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- summon 填参面板：逐席位按 input_schema 生成字段；文件型席位 fail-closed
+         禁提交（本面板只承接纯参数型）；对账失败清单中性渲染（策略拒绝非报警红）。 -->
+    <el-dialog v-model="summonOpen" :title="summonTarget ? `召集 · ${summonTarget.name}` : ''" width="640px" class="summon-dialog">
+      <div v-for="s in summonSeats" :key="s.seq" class="seat-block">
+        <div class="seat-head">
+          席位 {{ s.seq }} · {{ agentNameOf(s.agent_id) }}
+          <span v-if="s.role" class="seat-role">{{ s.role }}</span>
+          <span v-if="s.after.length" class="seat-after">等待席位 {{ s.after.join("、") }} 的产物</span>
+        </div>
+        <template v-if="s.schemaLoaded">
+          <p v-if="s.inputMode && s.inputMode !== 'params'" class="seat-note is-blocked">
+            该成员需要文件输入——本面板只承接纯参数席位，请从导引方案逐个创建。
+          </p>
+          <div v-for="f in s.fields" :key="f.key" class="seat-field">
+            <label class="seat-label">{{ f.key }}<span v-if="f.required" class="seat-required">*</span></label>
+            <el-input
+              v-if="f.kind === 'string'"
+              v-model="f.value"
+              :placeholder="f.description || ''"
+              size="small"
+            />
+            <el-input-number v-else-if="f.kind === 'number'" v-model="f.value" size="small" />
+            <el-input
+              v-else
+              v-model="f.value"
+              type="textarea"
+              :rows="2"
+              placeholder="JSON 值"
+              size="small"
+            />
+          </div>
+          <p v-if="!s.fields.length && s.inputMode === 'params'" class="seat-note">该席位无需参数。</p>
+        </template>
+        <p v-else class="seat-note">正在读取输入契约…</p>
+      </div>
+      <div v-if="summonErrors.length" class="summon-errors">
+        <p class="summon-errors-title">召集未发起（整单拒发，未创建任何任务）：</p>
+        <p v-for="(e, i) in summonErrors" :key="i" class="summon-error-line">{{ e }}</p>
+      </div>
+      <template #footer>
+        <el-button @click="summonOpen = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="summonReady !== true || summoning"
+          @click="submitSummon"
+        >{{ summoning ? "召集中…" : "亲手提交召集" }}</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog
       v-model="governanceOpen"
       :title="governanceAgent?.name || ''"
@@ -268,7 +346,8 @@
 import { ref, computed, onMounted, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { listAgents } from "../api/agents";
+import { listAgents, getAgent } from "../api/agents";
+import { listTeams, summonTeam as summonTeamApi } from "../api/teams";
 import { request } from "../api/client";
 import { burstNeutral } from "../effects/burst.js";
 import EmptyState from "../components/EmptyState.vue";
@@ -374,6 +453,150 @@ async function load() {
     loadError.value = err.detail || err.message;
   } finally {
     loading.value = false;
+  }
+  // 批八：团队列表并行拉取——失败不污染 Agent 门户主面（区块诚实缺席）。
+  try {
+    teams.value = await listTeams();
+  } catch {
+    teams.value = [];
+  }
+}
+
+// ── 批八：专家团队区块 + summon 填参面板 ─────────────────────────────────
+
+const teams = ref([]);
+const summonOpen = ref(false);
+const summonTarget = ref(null);
+const summonSeats = ref([]);
+const summonErrors = ref([]);
+const summoning = ref(false);
+
+function agentNameOf(agentId) {
+  const a = agents.value.find((x) => x.id === agentId);
+  return (a && a.name) || agentId;
+}
+
+function teamChainText(t) {
+  const parts = t.members.map((m) => agentNameOf(m.agent_id));
+  const hasRelay = t.members.some((m) => (m.after || []).length > 0);
+  return parts.join(hasRelay ? " → " : " · ");
+}
+
+// 预览级不可召集提示（服务端投影 present/disabled；权威判定在 summon gate）。
+function teamUnready(t) {
+  const gone = t.members.filter((m) => m.present !== true).map((m) => m.agent_id);
+  if (gone.length) return `成员已不在场：${gone.join("、")}——请从最新导引方案另存新团队`;
+  const off = t.members.filter((m) => m.disabled === true).map((m) => m.agent_id);
+  if (off.length) return `成员已下线：${off.join("、")}`;
+  return "";
+}
+
+function _fieldsFromSchema(schema) {
+  const props = (schema && schema.properties) || {};
+  const required = new Set(Array.isArray(schema && schema.required) ? schema.required : []);
+  return Object.entries(props).map(([key, p]) => {
+    const type = p && p.type;
+    const kind = type === "string" ? "string" : type === "number" || type === "integer" ? "number" : "json";
+    return {
+      key,
+      kind,
+      required: required.has(key),
+      description: (p && p.description) || "",
+      value: kind === "number" ? undefined : "",
+    };
+  });
+}
+
+function openSummon(t) {
+  summonTarget.value = t;
+  summonErrors.value = [];
+  summonOpen.value = true;
+  summonSeats.value = t.members.map((m) => ({
+    seq: m.seq,
+    agent_id: m.agent_id,
+    role: m.role,
+    after: m.after || [],
+    schemaLoaded: false,
+    inputMode: null,
+    fields: [],
+  }));
+  for (const seat of summonSeats.value) {
+    getAgent(seat.agent_id)
+      .then((detail) => {
+        seat.inputMode = (detail && detail.input_mode) || null;
+        seat.fields = _fieldsFromSchema(detail && detail.input_schema);
+        seat.schemaLoaded = true;
+      })
+      .catch(() => {
+        // 契约拉不到 fail-closed：席位标记为文件型同款「不可承接」，禁提交。
+        seat.inputMode = "unknown";
+        seat.fields = [];
+        seat.schemaLoaded = true;
+      });
+  }
+}
+
+// 就绪判据（fail-closed）：全部席位契约已载、均为纯参数型、必填字段全非空。
+const summonReady = computed(() => {
+  const seats = summonSeats.value;
+  if (!seats.length) return false;
+  for (const s of seats) {
+    if (s.schemaLoaded !== true) return false;
+    if (s.inputMode !== "params") return false;
+    for (const f of s.fields) {
+      if (!f.required) continue;
+      if (f.kind === "number") {
+        if (typeof f.value !== "number") return false;
+      } else if (!(typeof f.value === "string" && f.value.trim())) {
+        return false;
+      }
+    }
+  }
+  return true;
+});
+
+function _seatInputs(seat) {
+  const inputs = {};
+  for (const f of seat.fields) {
+    if (f.kind === "number") {
+      if (typeof f.value === "number") inputs[f.key] = f.value;
+    } else if (f.kind === "string") {
+      const v = (f.value || "").trim();
+      if (v) inputs[f.key] = v;
+    } else {
+      const raw = (f.value || "").trim();
+      if (!raw) continue;
+      inputs[f.key] = JSON.parse(raw); // 解析失败走 catch → 面板报错不提交
+    }
+  }
+  return inputs;
+}
+
+async function submitSummon() {
+  if (summonReady.value !== true || summoning.value) return;
+  summonErrors.value = [];
+  summoning.value = true;
+  try {
+    const items = summonSeats.value.map((s) => ({ seq: s.seq, inputs: _seatInputs(s) }));
+    const res = await summonTeamApi({ teamId: summonTarget.value.id, items });
+    for (const w of res.warnings || []) ElMessage.warning(w);
+    ElMessage.success(`已召集「${summonTarget.value.name}」全体 ${items.length} 名成员——进度在任务台跟进`);
+    summonOpen.value = false;
+    router.push({ path: "/tasks" });
+  } catch (err) {
+    const detail = err.detail;
+    const list =
+      (detail && (detail.summon_errors || (detail.batch_errors || []).flatMap((b) => b.errors))) || [];
+    summonErrors.value = list.length
+      ? list
+      : [
+          (typeof detail === "string" && detail) ||
+            (detail && detail.message) ||
+            err.message ||
+            "召集失败",
+        ];
+  } finally {
+    summoning.value = false;
   }
 }
 
@@ -935,4 +1158,40 @@ onMounted(load);
 @media (prefers-reduced-motion: reduce) {
   .gov-promotion-card.promote-burst { animation: none; }
 }
+
+/* ── 批八：专家团队区块 + summon 面板（信任色零新增；对账失败=中性） ── */
+.teams-section { margin-top: 28px; }
+.teams-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+.teams-header h3 { margin: 0; font-size: 16px; }
+.teams-sub { font-size: 12px; color: var(--ink-faint); }
+.team-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.team-card {
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.team-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.team-name { font-weight: 600; font-size: 14px; color: var(--ink); }
+.team-clearance { font-size: 11px; color: var(--ink-faint); white-space: nowrap; }
+.team-goal { margin: 0; font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; }
+.team-chain { font-size: 12px; color: var(--ink-soft); }
+.team-unready { margin: 0; font-size: 12px; color: var(--ink-faint); }
+.team-actions { margin-top: 2px; }
+.seat-block { padding: 10px 0; border-bottom: 1px solid var(--hairline-soft); }
+.seat-block:last-of-type { border-bottom: none; }
+.seat-head { font-size: 13px; font-weight: 600; color: var(--ink); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.seat-role { font-weight: 400; font-size: 12px; color: var(--ink-soft); }
+.seat-after { font-weight: 400; font-size: 11.5px; color: var(--ink-faint); }
+.seat-field { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.seat-label { flex: 0 0 auto; min-width: 120px; font-size: 12.5px; color: var(--ink-soft); }
+.seat-required { color: var(--trust-pending); margin-left: 2px; }
+.seat-note { margin: 6px 0 0; font-size: 12px; color: var(--ink-faint); }
+.seat-note.is-blocked { color: var(--trust-pending); }
+.summon-errors { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 8px; }
+.summon-errors-title { margin: 0 0 4px; font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.summon-error-line { margin: 2px 0 0; font-size: 12.5px; color: var(--ink-soft); }
 </style>
