@@ -77,3 +77,5 @@
   批八存在）；② 团队列表翻页 UI（端点分页已通，规模到了再长）。
 - 轮次统计：R0 9 条 + R1 4 条 + R2 7 条 = 20 findings，全部 grounded 复核
   属实并修复，0 驳回 0 遗留。
+- 合并执行（2026-07-18）：origin/main **256288c**（批八 7 commits + 与他会话
+  usage_report.py 增量的 merge commit；合并前该增量测试 18/18 同跑绿）。
