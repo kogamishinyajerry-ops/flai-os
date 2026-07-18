@@ -49,6 +49,16 @@
       <span v-if="extraCount > 0" class="delivery-chip delivery-chip-more">+{{ extraCount }}</span>
     </div>
 
+    <!-- 批七 §3-13 依据区（字段缺省渲染无，全存量 agent 向后兼容）：findings
+         摘要 chip + 拒答 amber 行——数据走 taskEvidence 模块缓存（与 GuidePage/
+         WorkbenchSession 同源，同任务零重复拉取）。 -->
+    <div v-if="evidenceSummary" class="delivery-evidence" :class="{ 'has-unverified': evidenceSummary.unverified > 0 }">
+      依据 {{ evidenceSummary.total }} 条（{{ evidenceSummary.verified }} 已核验 · {{ evidenceSummary.unverified }} 未核）<template v-if="evidenceSummary.level"> · 置信度 {{ evidenceSummary.level }}（模型自评）</template>
+    </div>
+    <div v-if="refusalCount > 0" class="delivery-refusals">
+      已如实说明：{{ refusalCount }} 项超出能力范围
+    </div>
+
     <div class="delivery-tail">
       <span class="delivery-tail-item">{{ modelCallText }}</span>
       <template v-if="batchSummary">
@@ -73,6 +83,7 @@ import { downloadUrl } from "../api/files";
 import { getDeliverySummary, listOutputFiles } from "../api/tasks";
 import { taskElapsedMs, formatDuration, formatTokens, taskDisplayName } from "../utils/format";
 import { useAgentNames } from "../stores/agentNames";
+import { ensureTaskEvidence, taskEvidenceOf, taskEvidenceSummary } from "../stores/taskEvidence";
 
 const props = defineProps({ task: Object, animate: { type: Boolean, default: false } });
 
@@ -144,10 +155,19 @@ const batchSummary = computed(() => {
   return { ok: s.batch_ok, failed: s.batch_failed };
 });
 
+// 批七依据区：模块级缓存拉取（终态数据静态，同任务全站只拉一次）。
+const evidenceSummary = computed(() => (props.task ? taskEvidenceSummary(props.task.id) : null));
+const refusalCount = computed(() => {
+  if (!props.task) return 0;
+  const ev = taskEvidenceOf(props.task.id);
+  return ev ? ev.refusals.length : 0;
+});
+
 onMounted(() => {
   const t = props.task;
   if (!t) return;
   loadArtifacts(t.id, t.output_file_ids);
+  ensureTaskEvidence(t);
   getDeliverySummary(t.id)
     .then((s) => { summary.value = s; })
     .catch(() => { summary.value = null; });
@@ -228,5 +248,19 @@ onMounted(() => {
 }
 .delivery-tail-fail {
   color: var(--trust-fail);
+}
+/* 批七依据区：含未核 amber（信任色锁：amber=未核唯一语义，任何情况不染绿）；
+   拒答 amber 非红——诚实拒答是履约不是失败。 */
+.delivery-evidence {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  margin: 2px 0;
+  font-variant-numeric: tabular-nums;
+}
+.delivery-evidence.has-unverified { color: var(--trust-pending); }
+.delivery-refusals {
+  font-size: 11.5px;
+  color: var(--trust-pending);
+  margin: 2px 0;
 }
 </style>

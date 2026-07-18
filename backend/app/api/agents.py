@@ -45,6 +45,9 @@ def _project(agent: dict[str, Any]) -> dict[str, Any]:
         # 的解释由消费方（密级 gate/前端 pill）按 ADR-0030 统一执行，不在此拍死。
         "expertise": agent.get("expertise"),
         "clearance": (agent.get("clearance", {}) or {}).get("max_data_classification"),
+        # 批七 §1.6：签发面「未提供依据请谨慎签发」警示行需要此旗标（additive；
+        # 判定 is True——非布尔坏值不当 required）。
+        "evidence_policy_required": (agent.get("evidence_policy", {}) or {}).get("required") is True,
     }
 
 

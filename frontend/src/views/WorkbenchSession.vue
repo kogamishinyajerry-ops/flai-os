@@ -56,7 +56,9 @@
         <div class="sess-progress">
           <div class="prog-num">{{ summonedCount }} / {{ rosterAgents.length }}</div>
           <div class="prog-label">已召集 Agent</div>
-          <div class="prog-sub"><span class="num-token">{{ completedCount }}</span> 个任务已完成 · 共 <span class="num-token">{{ memberTasks.length }}</span> 个任务</div>
+          <!-- 批七 §1.5：hero 进度句换 squad.js 分组计数句（O7 收束假绿禁令同源）。 -->
+          <div v-if="heroSquadLine" class="prog-sub">{{ heroSquadLine }}</div>
+          <div v-else class="prog-sub">尚无成员任务</div>
           <span v-if="waitingReviewCount > 0" class="pill-amber">待你签发 <span class="num-token">{{ waitingReviewCount }}</span></span>
         </div>
       </div>
@@ -77,10 +79,19 @@
           <div class="block-label">分工架构</div>
           <p v-if="plan.analysis" class="bp-line">{{ plan.analysis }}</p>
           <p v-if="plan.workflow" class="bp-line"><span class="bp-tag">协作方式</span>{{ plan.workflow }}</p>
+          <!-- 批七 §1.5：依赖拓扑一句话（depends_on 拓扑序，不画 DAG 图/泳道）。 -->
+          <p v-if="relayOrderLine" class="bp-line"><span class="bp-tag">接力顺序</span>{{ relayOrderLine }}</p>
         </div>
 
-        <div class="roster fx-stagger">
-          <div v-for="(a, ai) in rosterAgents" :key="ai" class="member">
+        <!-- 批七 §1.5 三组 roster：①正在进行=展开卡占面积 ②等待接力=单行收纳
+             （空心灯+灰字）③已完成=折叠单行（过去式+用时+依据缩略+未读环）；
+             未召集成员保留既有卡与召集动作（第四段，蓝图召集语义不变）。 -->
+        <div v-if="groupedMembers.active.length" class="rg-head">
+          <span class="rg-title">正在进行 · <span class="num-token">{{ groupedMembers.active.length }}</span></span>
+          <span v-if="anyActiveWork" class="work-pulse-dot"></span>
+        </div>
+        <div v-if="groupedMembers.active.length" class="roster fx-stagger">
+          <div v-for="a in groupedMembers.active" :key="a.agent_id" class="member">
             <div class="member-bar" :style="{ background: categoryColor(a.category) }"></div>
             <div class="member-inner">
               <div class="member-head">
@@ -88,27 +99,26 @@
                 <span class="member-pill" :style="{ color: categoryColor(a.category), background: categoryColor(a.category) + '18' }">
                   {{ categoryLabel(a.category) }}
                 </span>
-                <span v-if="tasksFor(a).length" class="member-state summoned">已召集 · <span class="num-token">{{ tasksFor(a).length }}</span> 个任务</span>
-                <span v-else class="member-state pending">尚未召集</span>
+                <span class="member-state summoned">已召集 · <span class="num-token">{{ tasksFor(a).length }}</span> 个任务</span>
               </div>
               <p v-if="a.role" class="member-role"><strong>分工：</strong>{{ a.role }}</p>
 
-              <!-- 已召集：成员任务（到席灯 + 状态 + 详情链接；waiting_review 醒目提示放行）；
+              <!-- 成员任务（到席灯 + 状态 + 详情链接；waiting_review 醒目提示放行）；
                    chip-lastword（B2）：该任务的「最近动态」=最后一条事件的 message 原文
                    （可能是机械上报文案，不承诺第一人称叙事；仅前 5 个已召集成员取，
-                   见 lastWordTargets）。 -->
-              <div v-if="tasksFor(a).length" class="task-chips">
+                   见 lastWordTargets）。批七：等待接力条目状态词换人话、灯空心不脉动。 -->
+              <div class="task-chips">
                 <div v-for="t in tasksFor(a)" :key="t.id" class="chip-group">
                   <div
                     :class="['task-chip', { review: t.status === 'waiting_review' }]"
                     @click="goTask(t)"
                   >
-                    <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
+                    <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status), 'is-hollow': chipStatusWord(t) === '等待接力' }" :style="{ background: chipStatusWord(t) === '等待接力' ? 'transparent' : taskLampColor(t.status) }"></span>
                     <span class="chip-name">{{ taskDisplayName(t, agentNames.map) }}</span>
                     <!-- chip 时钟（3-lens 可用性镜头 P2）：同 Agent 分组内多个缺名
                          任务主名必然相同，时钟是 chip 级唯一消歧锚。 -->
                     <span class="chip-time">{{ sessClock(t.created_at) }}</span>
-                    <span class="chip-status" :style="{ color: taskLampColor(t.status) }">{{ statusLabel(t.status) }}</span>
+                    <span class="chip-status" :style="{ color: chipStatusColor(t) }">{{ chipStatusWord(t) }}</span>
                     <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
                     <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
                     <!-- B2 速览接入（additive）：chip 本体点击仍走 goTask 跳详情；速览用 @click.stop 独立打开。 -->
@@ -117,10 +127,62 @@
                   <div v-if="taskLastWord[t.id]" class="chip-lastword">{{ taskLastWord[t.id] }}</div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
 
+        <div v-if="groupedMembers.waiting.length" class="rg-head">
+          <span class="rg-title">等待接力 · <span class="num-token">{{ groupedMembers.waiting.length }}</span></span>
+        </div>
+        <div
+          v-for="a in groupedMembers.waiting"
+          :key="'w-' + a.agent_id"
+          class="rg-line"
+        >
+          <span class="rg-lamp-hollow"></span>
+          <span class="rg-name">{{ a.agent_name }}</span>
+          <span class="rg-gray">{{ waitingLineFor(a) }}</span>
+          <span class="rg-spacer"></span>
+          <button type="button" class="chip-peek-btn" @click.stop="openTaskPeek(latestTaskFor(a).id)">速览</button>
+        </div>
+
+        <div v-if="groupedMembers.done.length" class="rg-head">
+          <span class="rg-title">已完成 · <span class="num-token">{{ groupedMembers.done.length }}</span></span>
+        </div>
+        <div
+          v-for="a in groupedMembers.done"
+          :key="'d-' + a.agent_id"
+          class="rg-line rg-done"
+          role="button"
+          tabindex="0"
+          @click="goTask(latestTaskFor(a))"
+          @keydown.enter.prevent="goTask(latestTaskFor(a))"
+        >
+          <span v-if="doneUnseen(a)" class="rg-unread-ring"></span>
+          <span class="rg-name" :class="{ 'is-unread': doneUnseen(a) }">{{ a.agent_name }}</span>
+          <span class="rg-gray">{{ doneLineFor(a) }}</span>
+          <span
+            v-if="doneEvidenceText(a)"
+            class="rg-evi"
+            :class="{ 'has-unverified': doneEvidenceText(a).unverified > 0 }"
+          >{{ doneEvidenceText(a).text }}</span>
+        </div>
+
+        <div v-if="groupedMembers.unsummoned.length" class="roster fx-stagger">
+          <div v-for="a in groupedMembers.unsummoned" :key="a.agent_id" class="member">
+            <div class="member-bar" :style="{ background: categoryColor(a.category) }"></div>
+            <div class="member-inner">
+              <div class="member-head">
+                <span class="member-name">{{ a.agent_name }}</span>
+                <span class="member-pill" :style="{ color: categoryColor(a.category), background: categoryColor(a.category) + '18' }">
+                  {{ categoryLabel(a.category) }}
+                </span>
+                <span class="member-state pending">尚未召集</span>
+              </div>
+              <p v-if="a.role" class="member-role"><strong>分工：</strong>{{ a.role }}</p>
               <!-- 未召集：会话进行中才可从蓝图召集（人签发；导引不代召集）；
                    会话已归档则只读，不再召集（结束协作 = 真的结束）。 -->
-              <div v-else-if="conversation.status === 'active'" class="member-action">
+              <div v-if="conversation.status === 'active'" class="member-action">
                 <el-button size="small" type="primary" plain @click="summon(a)">去创建此任务</el-button>
                 <span class="member-hint">用导引预填的草案创建任务，由你补全并亲手提交。</span>
               </div>
@@ -141,10 +203,10 @@
         <div class="block-label">其它归属本会话的任务</div>
         <div class="task-chips">
           <div v-for="t in otherTasks" :key="t.id" :class="['task-chip', { review: t.status === 'waiting_review' }]" @click="goTask(t)">
-            <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
+            <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status), 'is-hollow': chipStatusWord(t) === '等待接力' }" :style="{ background: chipStatusWord(t) === '等待接力' ? 'transparent' : taskLampColor(t.status) }"></span>
             <span class="chip-name">{{ taskDisplayName(t, agentNames.map) }}</span>
             <span class="chip-time">{{ sessClock(t.created_at) }}</span>
-            <span class="chip-status" :style="{ color: taskLampColor(t.status) }">{{ statusLabel(t.status) }}</span>
+            <span class="chip-status" :style="{ color: chipStatusColor(t) }">{{ chipStatusWord(t) }}</span>
             <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
             <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
           </div>
@@ -170,10 +232,12 @@ import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { concludeConversation } from "../api/conversations";
-import { categoryColor, categoryLabel, statusLabel, taskLampColor, taskDisplayName, formatClockCompact, TASK_WORK_STATES } from "../utils/format";
+import { categoryColor, categoryLabel, statusLabel, taskLampColor, taskDisplayName, formatClockCompact, TASK_WORK_STATES, taskElapsedMs } from "../utils/format";
 import { useAgentNames } from "../stores/agentNames";
 import { useTodayKey } from "../composables/useTodayKey";
-import { markSeen } from "../utils/lastSeen";
+import { markSeen, ensureTaskBaseline, taskHasUnseen } from "../utils/lastSeen";
+import { memberPhase, squadCounts, squadLineText, relayOrderText } from "../utils/squad";
+import { ensureTaskEvidence, taskEvidenceSummary } from "../stores/taskEvidence";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -207,6 +271,120 @@ const completedCount = computed(() => memberTasks.value.filter((t) => t.status =
 const otherTasks = computed(() => memberTasks.value.filter((t) => !rosterAgentIds.value.has(t.agent_id)));
 // 待签发常驻 pill：waiting_review 任务数（文案刻意避开"尚未召集"/"待人工放行"既有词，不占用锚点断言位）。
 const waitingReviewCount = computed(() => memberTasks.value.filter((t) => t.status === "waiting_review").length);
+
+// ── 批七 §1.5 三组 roster + hero 分组计数句 ─────────────────────────────────
+function latestTaskFor(a) {
+  const list = tasksFor(a);
+  return list.length ? list[0] : null; // channel 快照 created_at DESC，[0]=最新
+}
+
+// 成员按**最新任务**的相分组：①正在进行（含排队/待签发——人还有事要跟）
+// ②等待接力（waiting_upstream 派生态）③已完成（真终态，含失败/取消如实过去式）
+// ④未召集（既有卡与召集动作原样保留）。
+const groupedMembers = computed(() => {
+  const active = [];
+  const waiting = [];
+  const done = [];
+  const unsummoned = [];
+  for (const a of rosterAgents.value) {
+    const t = latestTaskFor(a);
+    if (!t) {
+      unsummoned.push(a);
+      continue;
+    }
+    const phase = memberPhase(t);
+    if (phase === "waiting_upstream") waiting.push(a);
+    else if (t.status === "completed" || t.status === "failed" || t.status === "cancelled") done.push(a);
+    else active.push(a);
+  }
+  return { active, waiting, done, unsummoned };
+});
+const anyActiveWork = computed(() =>
+  groupedMembers.value.active.some((a) => {
+    const t = latestTaskFor(a);
+    return t !== null && TASK_WORK_STATES.has(t.status);
+  })
+);
+
+// hero 分组计数句（squad.js 同一口径；O7 收束假绿禁令由 squadLineText 承接）。
+const heroSquadLine = computed(() => {
+  if (memberTasks.value.length === 0) return "";
+  return squadLineText(squadCounts(memberTasks.value), memberTasks.value, Date.now());
+});
+
+// 蓝图依赖拓扑一句话（不画图）：任一任务声明 depends_on 才渲。名字优先注册表
+// 人话名，回退任务显示名。
+const relayOrderLine = computed(() =>
+  relayOrderText(memberTasks.value, (t) => agentNames.map[t.agent_id] || taskDisplayName(t, agentNames.map))
+);
+
+function durTextOf(t) {
+  const ms = taskElapsedMs(t, Date.now());
+  if (ms === null) return "";
+  const sec = Math.max(0, Math.round(ms / 1000));
+  if (sec < 60) return `${sec}s`;
+  return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`;
+}
+
+// 等待接力单行灰字：上游名解析；上游真失败 → 中性暂停句（非红）。
+function waitingLineFor(a) {
+  const t = latestTaskFor(a);
+  if (!t) return "";
+  const byId = new Map(memberTasks.value.map((x) => [x.id, x]));
+  const ups = (t.depends_on || []).map((d) => byId.get(d)).filter(Boolean);
+  if (ups.some((u) => u.status === "failed" || u.status === "cancelled")) {
+    return "前序失败，接力已暂停 · 详情→";
+  }
+  const names = ups.map((u) => agentNames.map[u.agent_id] || u.agent_id.slice(0, 12));
+  return `等待〈${names.length ? names.join("、") : "上游成员"}〉的产物 · 就绪后自动接力`;
+}
+
+// 已完成折叠单行：过去式+用时（时态即状态；失败玫红词只给真失败）。
+function doneLineFor(a) {
+  const t = latestTaskFor(a);
+  if (!t) return "";
+  const extra = tasksFor(a).length - 1;
+  const suffix = extra > 0 ? ` · +${extra} 更早任务` : "";
+  if (t.status === "completed") {
+    const d = durTextOf(t);
+    return (d ? `已完成 · 用时 ${d}` : "已完成") + suffix;
+  }
+  if (t.status === "failed") return `失败 · 查看失败详情 →${suffix}`;
+  return `已取消${suffix}`;
+}
+
+function doneUnseen(a) {
+  const t = latestTaskFor(a);
+  return t !== null && taskHasUnseen(t) === true; // 完成未读 → 空心环（TaskConsole 同语法）
+}
+
+function doneEvidenceText(a) {
+  const t = latestTaskFor(a);
+  if (!t) return null;
+  const s = taskEvidenceSummary(t.id);
+  if (!s) return null;
+  return { text: `依据 ${s.total} 条${s.unverified > 0 ? `（${s.unverified} 未核）` : ""}`, unverified: s.unverified };
+}
+
+// task-chips 状态词映射（§1.5）：等待接力条目——该态 chip-lamp 不脉动（created
+// 本就非工作态）且状态词换人话。
+function chipStatusWord(t) {
+  return memberPhase(t) === "waiting_upstream" ? "等待接力" : statusLabel(t.status);
+}
+
+function chipStatusColor(t) {
+  return memberPhase(t) === "waiting_upstream" ? "var(--ink-soft)" : taskLampColor(t.status);
+}
+
+// 依据摘要拉取：终审面（completed/waiting_review）任务到位即拉（模块级缓存，
+// 与 GuidePage 共用同一份）。
+watch(
+  memberTasks,
+  (tasks) => {
+    for (const t of tasks || []) ensureTaskEvidence(t);
+  },
+  { immediate: true }
+);
 
 // 锚点卡：色点工作态脉动 + 单一直达动作词，口径统一取自 utils/format 的 TASK_WORK_STATES/taskLampColor。
 function isWorkState(status) {
@@ -331,6 +509,7 @@ function summon(agent) {
 
 onMounted(() => {
   markSeen(sessionId); // 进入会话即视为「已看过」，驱动首页未读徽章
+  ensureTaskBaseline(); // 批七 §1.5：已完成行未读空心环的基线（TaskConsole 同语法）
 });
 onUnmounted(() => {
   convHandle.release(); // refCount 归零则停链（其它订阅者仍持有时继续养着，都正确）
@@ -486,6 +665,67 @@ onUnmounted(() => {
   gap: 12px;
   margin-bottom: 16px;
 }
+/* ── 批七 §1.5 三组 roster ─────────────────────────────────────────────── */
+.rg-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  letter-spacing: 0.02em;
+}
+.rg-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 12px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 10px;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  background: var(--card-bg);
+}
+.rg-line.rg-done { cursor: pointer; }
+.rg-line.rg-done:hover { border-color: var(--hairline); }
+/* 空心灯（等待接力）：1px ink 描边圆，绝无脉动 */
+.rg-lamp-hollow {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--ink-soft);
+}
+/* 完成未读空心环（TaskConsole 未读语法复用） */
+.rg-unread-ring {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink);
+  background: transparent;
+}
+.rg-name { font-weight: 600; color: var(--ink); white-space: nowrap; }
+.rg-name.is-unread { font-weight: 700; }
+.rg-gray { color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rg-spacer { flex: 1 1 auto; }
+.rg-evi {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-variant-numeric: tabular-nums;
+}
+.rg-evi.has-unverified {
+  color: var(--trust-pending);
+  border-color: color-mix(in srgb, var(--trust-pending) 45%, transparent);
+}
+/* chip 空心灯（等待接力条目）：不脉动由模板保证（created 非工作态） */
+.chip-lamp.is-hollow { box-shadow: inset 0 0 0 1px var(--ink-soft); }
 .member {
   display: flex;
   align-items: stretch;

@@ -84,6 +84,17 @@
             重跑自 <span class="num-token">{{ task.retry_of }}</span>
           </router-link>
         </template>
+        <!-- 批七 §1.6 接力血缘行：depends_on 忠实投影（上游名经任务/名册解析，
+             解析失败回退 id 切片诚实不编）；与 retry_of 同区同语法。 -->
+        <template v-if="relayLineage.length">
+          <span class="ctx-dot">·</span>
+          <span class="ctx-relay">接力自：<router-link
+            v-for="(l, li) in relayLineage"
+            :key="l.id"
+            class="ctx-retry-link"
+            :to="`/tasks/${l.id}`"
+          >〈{{ l.name }}〉<template v-if="li < relayLineage.length - 1">、</template></router-link> →</span>
+        </template>
       </div>
 
       <el-alert
@@ -160,6 +171,22 @@
            class="section" 融入既有节奏（组件根 v-if 不渲染时 class 随之消失，
            无幽灵 margin）。 -->
       <VerificationCard class="section" :task="task" :events="events" :batch-summary="batchSummary" />
+
+      <!-- 批七 §1.6 依据段（签发卡上方强制挂载）：findings 忠实投影；
+           evidence_policy.required 但零依据 → amber 警示行（**不阻塞人签**——
+           人是唯一签发者，警示只是把「没依据」摆在眼前）。拒答条 amber 非红。 -->
+      <div v-if="evidenceFindings.length || evidenceRefusals.length || evidenceRequiredMissing" class="section evidence-section">
+        <h3>依据</h3>
+        <div v-if="evidenceRequiredMissing" class="evidence-missing">
+          本次输出未提供依据，请谨慎签发
+        </div>
+        <EvidenceList v-if="evidenceFindings.length" :findings="evidenceFindings" />
+        <ul v-if="evidenceRefusals.length" class="evidence-refusals">
+          <li v-for="(r, ri) in evidenceRefusals" :key="ri">
+            已如实说明超出范围：{{ r.reason }}<span v-if="r.suggestion" class="refusal-suggestion">{{ r.suggestion }}</span>
+          </li>
+        </ul>
+      </div>
 
       <div class="section" v-if="canCancel || isWaitingReview">
         <h3>动作</h3>
@@ -361,7 +388,7 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { cancelTask, reviewTask } from "../api/tasks";
+import { cancelTask, reviewTask, getTask } from "../api/tasks";
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import { readChunk } from "../api/knowledge";
 import { buildRetryRoute } from "../utils/retryPrefill";
@@ -375,6 +402,8 @@ import MarkdownLite from "../components/MarkdownLite.vue";
 import WorkLog from "../components/WorkLog.vue";
 import CompletionSeal from "../components/CompletionSeal.vue";
 import VerificationCard from "../components/VerificationCard.vue";
+import EvidenceList from "../components/EvidenceList.vue";
+import { useAgentNames } from "../stores/agentNames";
 import { displayName } from "../stores/session";
 import { markTaskSeen } from "../utils/lastSeen";
 import { burstSigned } from "../effects/burst";
@@ -448,6 +477,67 @@ const approveBtnEl = ref(null);
 // 真观察到的非终态字符串，null（未知前态）不算亲历。
 const sealAnimate = ref(false);
 let offTransition = null;
+
+// ── 批七 §1.6：依据段 + 接力血缘 ─────────────────────────────────────────
+const agentNamesStore = useAgentNames();
+
+// findings/refusals 从已拉取的 JSON 产物解析（§2.2 输出契约惯例）；无匹配
+// 产物/解析失败/密级遮蔽拒读 → null，段落零渲染（诚实缺位不编空态）。
+const evidenceData = computed(() => {
+  for (const a of artifacts.value) {
+    if (a.isText && /\.json$/i.test(a.filename || "") && a.text) {
+      try {
+        const d = JSON.parse(a.text);
+        if (Array.isArray(d.findings) || Array.isArray(d.refusals)) {
+          return {
+            findings: Array.isArray(d.findings) ? d.findings : [],
+            refusals: Array.isArray(d.refusals) ? d.refusals : [],
+          };
+        }
+      } catch {
+        /* 非依据结构的 JSON 产物：跳过 */
+      }
+    }
+  }
+  return null;
+});
+const evidenceFindings = computed(() => evidenceData.value?.findings || []);
+const evidenceRefusals = computed(() => evidenceData.value?.refusals || []);
+// 警示行判据：包声明 evidence_policy.required 且任务已到签发/完成面但零 findings。
+const evidenceRequiredMissing = computed(() => {
+  const t = task.value;
+  if (!t) return false;
+  if (t.status !== "waiting_review" && t.status !== "completed") return false;
+  const meta = agentNamesStore.meta[t.agent_id];
+  if (!meta || meta.evidenceRequired !== true) return false;
+  return evidenceFindings.value.length === 0;
+});
+
+// 接力血缘（depends_on 已在 GET 投影）：上游任务名逐个轻量解析（≤32，常态
+// 1-2 个）；拉取失败回退 id 切片（绝不编名字）。
+const relayLineage = ref([]);
+watch(
+  () => task.value?.depends_on,
+  async (deps) => {
+    const list = Array.isArray(deps) ? deps : [];
+    if (list.length === 0) {
+      relayLineage.value = [];
+      return;
+    }
+    if (relayLineage.value.length === list.length) return; // 已解析（depends_on 不可变）
+    const out = [];
+    for (const id of list) {
+      try {
+        const ut = await getTask(id);
+        out.push({ id, name: agentNamesStore.map[ut.agent_id] || ut.name || id.slice(0, 8) });
+      } catch {
+        out.push({ id, name: id.slice(0, 8) });
+      }
+    }
+    relayLineage.value = out;
+  },
+  { immediate: true }
+);
 
 // 产物内联查看（P0-2）：按 task.output_file_ids 拉取文件名+内容，增量同步、集合未变不重拉。
 const artifacts = ref([]);
@@ -1218,6 +1308,25 @@ onUnmounted(() => {
 .ctx-retry-link:hover {
   color: var(--clay);
 }
+/* 批七 §1.6：接力血缘 + 依据段 */
+.ctx-relay { color: var(--ink-faint); }
+.evidence-missing {
+  display: inline-block;
+  margin: 0 0 10px;
+  padding: 6px 12px;
+  border: 1px solid color-mix(in srgb, var(--trust-pending) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--trust-pending) 8%, transparent);
+  color: var(--trust-pending);
+  font-size: 13px;
+}
+.evidence-refusals {
+  margin: 10px 0 0;
+  padding: 0 0 0 18px;
+  font-size: 13px;
+  color: var(--trust-pending);
+}
+.evidence-refusals .refusal-suggestion { color: var(--ink-soft); margin-left: 6px; }
 
 /* N7 知识引用：rail 内静默披露行——mono 引用号 + 幽灵按钮，原文收在 hairline
    内衬里。错误态用 ink-soft 不用红：403/404/409 是口径说明不是系统故障，

@@ -63,7 +63,7 @@
                 <span class="sc-item-name">{{ taskDisplayName(t, agentNames.map) }}</span>
                 <!-- 活跳时长（批次三 G3，cd-bg-tasks-panel Running 卡「时长实时」）：
                      started_at 缺失（queued/validating 早期）=段不出现，不硬凑。 -->
-                <span class="sc-item-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }}<template v-if="runElapsed(t)"> · 已 {{ runElapsed(t) }}</template></span>
+                <span class="sc-item-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }}<template v-if="memberPhase(t) === 'waiting_upstream'"> <span class="sc-relay-note">(等待接力)</span></template><template v-if="runElapsed(t)"> · 已 {{ runElapsed(t) }}</template></span>
               </span>
               <span class="sc-item-cta">速览 →</span>
             </div>
@@ -223,6 +223,7 @@ import { downloadUrl, fetchOutputFile } from "../api/files";
 // 面（待签/落定行）走 formatClockCompact 紧凑时钟（批次三 G4 边界：检视面
 // 全量精度，扫读面紧凑）。
 import { statusLabel, statusTagType, taskLampColor, formatTime, formatClockCompact, formatDuration, taskElapsedMs, formatFileSize, formatTokens, artifactTypeLabel, taskDisplayName, TASK_WORK_STATES } from "../utils/format";
+import { memberPhase } from "../utils/squad";
 import { displayName } from "../stores/session";
 import { useAgentNames } from "../stores/agentNames";
 import { markTaskSeen } from "../utils/lastSeen";
@@ -301,7 +302,13 @@ function runElapsed(t) {
 const inboxTasks = ref([]);
 const inboxError = ref("");
 const waitingTasks = computed(() => inboxTasks.value.filter((t) => t.status === "waiting_review"));
-const workingTasks = computed(() => inboxTasks.value.filter((t) => TASK_WORK_STATES.has(t.status)));
+// 批七 §3-15：等待接力任务（created+depends_on 派生态）并入运行中组可见——
+// 行尾灰注标注，不脉动不计时（memberPhase 同口径，任务 status 是唯一真值）。
+const workingTasks = computed(() =>
+  inboxTasks.value.filter(
+    (t) => TASK_WORK_STATES.has(t.status) || memberPhase(t) === "waiting_upstream"
+  )
+);
 const recentDoneTasks = computed(() =>
   inboxTasks.value.filter((t) => ["completed", "failed", "cancelled"].includes(t.status)).slice(0, 5)
 );
@@ -804,6 +811,8 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 批七 §3-15：等待接力灰注（中性——未开工不是异常） */
+.sc-relay-note { color: var(--ink-faint); }
 .sc-item-cta {
   flex: none;
   font-size: 12px;

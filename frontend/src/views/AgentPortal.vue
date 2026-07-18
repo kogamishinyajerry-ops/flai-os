@@ -48,6 +48,14 @@
             <!-- N8 能力语言前置：先一句人话「它替你干什么」，治理徽章/元数据
                  退居其后——新手选 Agent 靠的是能力描述，不是标签体系。 -->
             <p class="agent-summary">{{ agent.summary }}</p>
+            <!-- 批七 §3-14：expertise.specialty 副文 + domain/密级/L1-L3 pill
+                 （注册表投影，存量包无声明零占位；治理弹窗不动）。 -->
+            <p v-if="agent.expertise && agent.expertise.specialty" class="agent-specialty">{{ agent.expertise.specialty }}</p>
+            <div v-if="agent.expertise || agent.clearance" class="agent-expert-pills">
+              <span v-if="agent.expertise && agent.expertise.domain" class="expert-pill">{{ domainLabel(agent.expertise.domain) }}</span>
+              <span v-if="agent.expertise && agent.expertise.usefulness_level" class="expert-pill" :title="usefulnessTip(agent.expertise.usefulness_level)">{{ agent.expertise.usefulness_level }} · {{ usefulnessLabel(agent.expertise.usefulness_level) }}</span>
+              <span v-if="agent.clearance" class="expert-pill" :class="{ 'is-sensitive': agent.clearance === 'sensitive' }">密级上限 · {{ clearanceLabel(agent.clearance) }}</span>
+            </div>
 
             <!-- 次级 meta 一行（批次四 Q4）：类型/成熟度/id·版本合并为一行
                  安静小字——释义走 :title；id 字面保持可见 DOM（m10 has_text
@@ -275,6 +283,29 @@ import {
   categoryTip,
   formatTime,
 } from "../utils/format";
+
+// 批七 §3-14：expertise/clearance 投影的人话映射（与 GuidePage pill 同词表）。
+const DOMAIN_LABEL_MAP = {
+  policy_qa: "制度",
+  standards_qa: "标准",
+  fault_history: "故障史",
+  sys_calc: "系统计算",
+  cfd_sim: "CFD 仿真",
+  test_data: "试验数据",
+  design_opt: "设计优化",
+  generic: "通用",
+};
+const domainLabel = (d) => DOMAIN_LABEL_MAP[d] || d;
+const USEFULNESS_LABEL = { L1: "帮我省事", L2: "比我聪明", L3: "带我做" };
+const usefulnessLabel = (l) => USEFULNESS_LABEL[l] || l;
+const usefulnessTip = (l) =>
+  ({
+    L1: "L1 帮我省事：机械劳动代劳，人全程可核对",
+    L2: "L2 比我聪明：给出人想不到的候选，采纳权在人",
+    L3: "L3 带我做：牵引式协作，产物必经人签发",
+  })[l] || "";
+const CLEARANCE_LABEL_MAP = { public: "公开", internal: "内部", sensitive: "敏感" };
+const clearanceLabel = (c) => CLEARANCE_LABEL_MAP[c] || c;
 
 const router = useRouter();
 const agents = ref([]);
@@ -706,6 +737,32 @@ onMounted(load);
   font-size: 13px;
   line-height: 1.5;
   min-height: 40px;
+}
+/* 批七 §3-14：specialty 副文 + 专家 pill（中性描边；敏感=amber 描边） */
+.agent-specialty {
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: -2px 0 6px;
+}
+.agent-expert-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.expert-pill {
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--hairline);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.expert-pill.is-sensitive {
+  border-color: color-mix(in srgb, var(--trust-pending) 55%, transparent);
+  color: var(--trust-pending);
 }
 .limitations-list {
   margin: 0;

@@ -126,6 +126,16 @@
               </div>
 
               <div class="section-label roster-label">召集的 Agent · {{ m.recommendation.agents.length }}</div>
+              <!-- L1 编队总览行（批七 §1.4）：纯 computed 聚合成员任务快照，零动画
+                   数字替换；a>0 行首 work-pulse-dot；待签发段 amber。收束态假绿
+                   禁令（O7 tamper 探针）：非全终态或有待签发绝不出「完成」类总结。 -->
+              <div v-if="squadSegs(m.recommendation)" class="sa-squad-line">
+                <span v-if="squadHasWork(m.recommendation)" class="work-pulse-dot"></span>
+                <template v-for="(seg, si) in squadSegs(m.recommendation)" :key="si">
+                  <span v-if="si > 0" class="squad-sep">·</span>
+                  <span class="squad-seg" :class="`tone-${seg.tone}`">{{ seg.text }}</span>
+                </template>
+              </div>
               <!-- codex 式子 agent 行（owner 定向：紧凑+实时感，不要大静卡）：
                    一行一名成员——状态灯 + 名字 + 分工 + 右槽实时状态词/耗时秒表；
                    次行=实时进度旁白（运行中 shimmer 扫光，事件驱动）或未召集时的
@@ -138,12 +148,25 @@
                   :class="{ 'fx-rise': m.fresh, 'is-live': !!agentTaskInfo(a) }"
                 >
                   <div class="sa-head">
+                    <!-- 六态灯（批七 T1/T4）：等待接力=空心灯（1px ink 描边，绝无
+                         is-pulsing，O2 探针）；接力翻转瞬间播 2 轮 sa-relay-echo 自停。
+                         灯的翻转只认 status（memberPhase 派生），事件只做旁白。 -->
                     <span
                       class="status-lamp"
-                      :class="{ 'is-pulsing': agentTaskInfo(a) && isWorkState(agentTaskInfo(a).latest.status) }"
-                      :style="{ background: agentTaskInfo(a) ? taskLampColor(agentTaskInfo(a).latest.status) : 'var(--hairline)' }"
+                      :class="{ 'is-pulsing': agentTaskInfo(a) && isWorkState(agentTaskInfo(a).latest.status),
+                                'is-hollow': memberPhaseOf(a) === 'waiting_upstream',
+                                'sa-relay-echo': agentTaskInfo(a) && relayEchoIds.has(agentTaskInfo(a).latest.id) }"
+                      :style="{ background: memberLampBg(a) }"
                     ></span>
                     <span class="agent-name">{{ a.agent_name }}</span>
+                    <!-- domain 徽 + 密级 pill（批七 §1.3-T1）：注册表 expertise/clearance
+                         忠实投影，存量包无声明零占位；敏感=amber 描边（信任色锁）。 -->
+                    <span v-if="domainLabelOf(a)" class="sa-domain-pill">{{ domainLabelOf(a) }}</span>
+                    <span
+                      v-if="clearanceOf(a)"
+                      class="sa-clearance-pill"
+                      :class="{ 'is-sensitive': clearanceOf(a) === 'sensitive' }"
+                    >{{ clearanceLabelOf(a) }}</span>
                     <span v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</span>
                     <span class="agent-maturity">{{ a.maturity }} / {{ a.status }}</span>
                     <span class="sa-spacer"></span>
@@ -158,8 +181,8 @@
                       @keydown.enter.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
                       @keydown.space.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
                     >
-                      <span class="status-word" :style="{ color: taskLampColor(agentTaskInfo(a).latest.status) }">
-                        {{ statusLabel(agentTaskInfo(a).latest.status) }}
+                      <span class="status-word" :style="{ color: memberStatusColor(a) }">
+                        {{ memberStatusWord(a) }}
                       </span>
                       <span v-if="elapsedText(agentTaskInfo(a).latest)" class="sa-elapsed">· {{ elapsedText(agentTaskInfo(a).latest) }}</span>
                       <span v-if="agentTaskInfo(a).extra > 0" class="status-extra">+{{ agentTaskInfo(a).extra }}</span>
@@ -179,8 +202,45 @@
                     v-if="agentTaskInfo(a)"
                     class="sa-stageline"
                     :class="{ 'is-running': isWorkState(agentTaskInfo(a).latest.status),
-                              'is-review': agentTaskInfo(a).latest.status === 'waiting_review' }"
-                  >{{ stagelineText(agentTaskInfo(a).latest) }}</div>
+                              'is-review': agentTaskInfo(a).latest.status === 'waiting_review',
+                              'is-waiting-upstream': memberPhaseOf(a) === 'waiting_upstream' }"
+                  >{{ stagelineFor(a) }}</div>
+                  <!-- T5 依据摘要 chip（批七 §1.3）：产物 findings 忠实计数——含未核
+                       整 chip amber 底纹；点击展开 EvidenceList。零 findings 零占位。 -->
+                  <div
+                    v-if="agentTaskInfo(a) && evidenceSummaryOf(a)"
+                    class="sa-evidence-chip"
+                    :class="{ 'has-unverified': evidenceSummaryOf(a).unverified > 0 }"
+                    role="button"
+                    tabindex="0"
+                    @click.stop="toggleEvidence(agentTaskInfo(a).latest.id)"
+                    @keydown.enter.stop.prevent="toggleEvidence(agentTaskInfo(a).latest.id)"
+                    @keydown.space.stop.prevent="toggleEvidence(agentTaskInfo(a).latest.id)"
+                  >依据 {{ evidenceSummaryOf(a).total }} 条（{{ evidenceSummaryOf(a).verified }} 已核验 · {{ evidenceSummaryOf(a).unverified }} 未核）<template v-if="evidenceSummaryOf(a).level"> · 置信度 {{ evidenceSummaryOf(a).level }}（模型自评）</template></div>
+                  <EvidenceList
+                    v-if="agentTaskInfo(a) && expandedEvidence.has(agentTaskInfo(a).latest.id) && evidenceOfTask(agentTaskInfo(a).latest.id)"
+                    :findings="evidenceOfTask(agentTaskInfo(a).latest.id).findings"
+                    class="sa-evidence-expand"
+                  />
+                  <!-- T6 拒答拍（批七）：refusals 非空的 completed 成员——amber 非红，
+                       诚实拒答是履约不是失败（O6 探针）。 -->
+                  <div
+                    v-if="agentTaskInfo(a) && agentTaskInfo(a).latest.status === 'completed' && refusalsOf(a).length"
+                    class="sa-refusal-line"
+                    role="button"
+                    tabindex="0"
+                    @click.stop="toggleRefusal(agentTaskInfo(a).latest.id)"
+                    @keydown.enter.stop.prevent="toggleRefusal(agentTaskInfo(a).latest.id)"
+                  >已如实说明：{{ refusalsOf(a).length }} 项超出能力范围 →</div>
+                  <ul
+                    v-if="agentTaskInfo(a) && expandedRefusals.has(agentTaskInfo(a).latest.id)"
+                    class="sa-refusal-detail"
+                  >
+                    <li v-for="(r, ri) in refusalsOf(a)" :key="ri">
+                      <span class="refusal-reason">{{ r.reason }}</span>
+                      <span v-if="r.suggestion" class="refusal-suggestion">{{ r.suggestion }}</span>
+                    </li>
+                  </ul>
                   <!-- 次行：未召集——理由 + 预填摘要一行收纳（过程可折） -->
                   <template v-else>
                     <div class="sa-subline">
@@ -369,10 +429,14 @@ import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation } from "../api/conversations";
-import { createTask } from "../api/tasks";
+import { createTask, createTasksBatch } from "../api/tasks";
 import { listAgents, getAgent } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
+import { ensureTaskEvidence, taskEvidenceOf, taskEvidenceSummary } from "../stores/taskEvidence";
 import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime } from "../utils/format";
+import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
+import { useAgentNames } from "../stores/agentNames";
+import EvidenceList from "../components/EvidenceList.vue";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";
@@ -908,6 +972,14 @@ function syncLiveChannels() {
           // 若照收，会话快照追平前会出现「clay 脉动灯 + 失败措辞」同屏矛盾。
           // task 与 events 同一次 fetch 落地，此判定与事件尾巴同拍不追旧。
           const snap = handle.state.task.value;
+          // 批七 O3 事件通道：channel 首见 dependency_resolved → 接力回波
+          // （playedRelay 抑制重复投递；状态沿通道先到也只播一次）。放在工作态
+          // 早退之前——事件史扫描不依赖当前快照状态。
+          if ((events || []).some(
+            (ev) => ev.payload && ev.payload.workflow_event_type === "dependency_resolved"
+          )) {
+            playRelayEcho(id);
+          }
           if (snap && !TASK_WORK_STATES.has(snap.status)) return;
           const note = latestProcessNote(events || []);
           if (note) stageNotes[id] = note;
@@ -1015,56 +1087,74 @@ function openableCount(plan) {
   ).length;
 }
 
-// 「照此方案开工」：一键把全部就绪且未召集的成员按方案顺序召集（每个都是同一
-// POST /api/tasks，服务端校验 fail-closed）。这一键由人亲手点下=人召集；导引
-// 从未获得任何自动路径。逐个失败如实收集透出，绝不静默。
+// 「照此方案开工」（批七 §3-B6 切 batch，owner 裁决本批切换）：一键把全部就绪
+// 且未召集的成员按方案顺序**原子召集**——单次 POST /api/tasks/batch，全有全无
+// （任一项非法整批 422 零写入，逐项错误清单如实透出，绝不半建）。这一键由人
+// 亲手点下=人召集；导引从未获得任何自动路径。方案 after（方案下标依赖）随行
+// 重映射为批内下标 → 服务端映射真 depends_on。
 async function openPlan(plan) {
   if (opening.value === conversationId.value && opening.value !== null) return;
   if (planOpenable(plan) !== true) {
     ElMessage.error("条件已变化（会话归档 / 新增附件），请刷新方案或走「去创建此任务」。");
     return;
   }
-  // 会话 id 在进入循环前钉死（CRS R0-P1）：批量创建期间用户切换历史会话/新对话会
-  // 改写 conversationId，后续任务会错账到新会话。全程只用这枚不可变值；一旦检测到
-  // 会话已切换，剩余目标立即中止并如实上报（绝不把旧方案的任务写进别的会话）。
+  // 会话 id 提前钉死（CRS R0-P1 语义保留）：原子端点下不存在「中途切会话」的
+  // 半建窗口，但请求发出前仍须复核未切换，绝不把旧方案的任务写进别的会话。
   const approvedConvId = conversationId.value;
-  const targets = plan.agents.filter(
-    (a) => agentReady(a) === true && !agentTaskInfo(a) && !summonedLocally(a)
-  );
+  // targets 保持方案顺序；after（方案下标）→ 批内下标重映射。引用成员不在本批
+  // （已召集/未就绪被跳过）→ 剥离该引用降级并行——跨批依赖 batch 契约表达不了，
+  // 猜测补链比诚实降级更坏（与 guide 后端剥离语义同一口径）。
+  const targets = [];
+  const planIdxToBatchIdx = new Map();
+  plan.agents.forEach((a, pi) => {
+    if (agentReady(a) === true && !agentTaskInfo(a) && !summonedLocally(a)) {
+      planIdxToBatchIdx.set(pi, targets.length);
+      targets.push({ a, pi });
+    }
+  });
   if (targets.length === 0) return;
   opening.value = approvedConvId;
-  const failed = [];
-  let aborted = 0;
-  for (let i = 0; i < targets.length; i += 1) {
-    const a = targets[i];
+  try {
     if (conversationId.value !== approvedConvId) {
-      aborted = targets.length - i; // 会话已切换：剩余不再创建
-      break;
+      ElMessage.error("会话已切换，本次召集未执行（未创建任何任务）。");
+      return;
     }
-    try {
-      await createTask({
-        agentId: a.agent_id,
-        name: null,
-        inputs: a.prefilled_inputs || {},
-        inputFileIds: [],
-        conversationId: approvedConvId,
-      });
-      locallySummoned[`${approvedConvId}:${a.agent_id}`] = true;
-    } catch (err) {
-      failed.push(`${a.agent_name}：${err.detail || err.message || "创建失败"}`);
-    }
-  }
-  ensureConversationTasksFeed(); // 督战 chip 保鲜：召集即接上会话任务订阅
-  if (failed.length === 0 && aborted === 0) {
+    const items = targets.map(({ a, pi }) => {
+      const myIdx = planIdxToBatchIdx.get(pi);
+      const after = (Array.isArray(a.after) ? a.after : [])
+        .map((ref) => planIdxToBatchIdx.get(ref))
+        .filter((x) => x !== undefined && x < myIdx);
+      return { agentId: a.agent_id, inputs: a.prefilled_inputs || {}, after };
+    });
+    await createTasksBatch({ conversationId: approvedConvId, items });
+    for (const { a } of targets) locallySummoned[`${approvedConvId}:${a.agent_id}`] = true;
+    ensureConversationTasksFeed(); // 督战 chip 保鲜：召集即接上会话任务订阅
     ElMessage.success(`已按方案召集 ${targets.length} 名成员——进度与签发都会来这里找你`);
-  } else {
-    // fail-closed 如实透出（409 已归档 / 校验拒绝 / 中途切会话），不静默、不假报全成
-    const parts = [];
-    if (failed.length > 0) parts.push(`失败：${failed.join("；")}`);
-    if (aborted > 0) parts.push(`会话已切换，剩余 ${aborted} 名未召集`);
-    ElMessage.error(`召集未全部完成——${parts.join("；")}`);
+  } catch (err) {
+    // 全有全无：整批 422 零写入。逐项错误清单必须清晰可读（R5 走查）——
+    // 玫红仅真失败；client 对非字符串 detail 会 JSON.stringify，这里解回结构。
+    let batchErrors = null;
+    if (typeof err.detail === "string" && err.detail.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(err.detail);
+        batchErrors = parsed?.detail?.batch_errors || parsed?.batch_errors || null;
+      } catch {
+        /* 保底走原文 */
+      }
+    }
+    if (Array.isArray(batchErrors) && batchErrors.length > 0) {
+      const lines = batchErrors.map((e) => {
+        const t = targets[e.index];
+        const who = t ? t.a.agent_name : `第 ${(e.index ?? 0) + 1} 项`;
+        return `${who}：${(e.errors || []).join("；")}`;
+      });
+      ElMessage.error(`召集未执行（全有全无，未创建任何任务）——${lines.join("；")}`);
+    } else {
+      ElMessage.error(`召集失败（未创建任何任务）：${err.detail || err.message || "请稍后重试"}`);
+    }
+  } finally {
+    if (opening.value === approvedConvId) opening.value = null; // 只清本会话的忙态
   }
-  if (opening.value === approvedConvId) opening.value = null; // 只清本会话的忙态
 }
 
 function createOneTask(agent, plan) {
@@ -1106,6 +1196,177 @@ function createOneTask(agent, plan) {
 // watch-diff acquire/release，同 StatusCenter.vue 的 ensurePeekLoaded 姿势。
 const conversationTasks = ref([]);
 
+// ── 批七编队投影状态（§1.3/§1.4）────────────────────────────────────────────
+const agentNames = useAgentNames(); // 名册+meta（domain/clearance/charter）懒加载单例
+const relayEchoIds = ref(new Set()); // 正在播接力回波的 task_id（2 轮自停）
+const playedRelay = new Set(); // 组件内重播抑制（O3）：同 task 只播一次
+let prevPhaseById = new Map(); // 上一帧 memberPhase 快照（接力翻转沿检测）
+const expandedEvidence = ref(new Set());
+const expandedRefusals = ref(new Set());
+
+function playRelayEcho(id) {
+  if (playedRelay.has(id)) return;
+  playedRelay.add(id);
+  const next = new Set(relayEchoIds.value);
+  next.add(id);
+  relayEchoIds.value = next;
+  setTimeout(() => {
+    const s = new Set(relayEchoIds.value);
+    s.delete(id);
+    relayEchoIds.value = s;
+  }, 3600); // flai-work-pulse 1.8s × 2 播完即停（StatusDock 同参）
+}
+
+// 接力翻转检测（T4/O3 双通道，同一 playedRelay 抑制）：①状态沿——上一帧
+// waiting_upstream、本帧已入活跃态（灯翻转本体，事件缺席时的兜底）；②事件
+// 通道——task channel 首见 dependency_resolved（快照窗跳过 waiting_upstream
+// 帧时状态沿永不触发，靠事件补位）。重复投递/两通道先后到达都只播一次。
+function detectRelayFlips(tasks) {
+  const nextMap = new Map();
+  for (const t of tasks) {
+    const phase = memberPhase(t);
+    nextMap.set(t.id, phase);
+    const was = prevPhaseById.get(t.id);
+    if (
+      was === "waiting_upstream" &&
+      phase !== "waiting_upstream" &&
+      phase !== "failed" &&
+      phase !== "cancelled"
+    ) {
+      playRelayEcho(t.id);
+    }
+  }
+  prevPhaseById = nextMap;
+}
+
+function memberPhaseOf(a) {
+  const info = agentTaskInfo(a);
+  return info ? memberPhase(info.latest) : null;
+}
+
+function memberLampBg(a) {
+  const info = agentTaskInfo(a);
+  if (!info) return "var(--hairline)";
+  if (memberPhase(info.latest) === "waiting_upstream") return "transparent"; // 空心灯
+  return taskLampColor(info.latest.status);
+}
+
+function memberStatusWord(a) {
+  const info = agentTaskInfo(a);
+  if (!info) return "";
+  return memberPhase(info.latest) === "waiting_upstream" ? "等待接力" : statusLabel(info.latest.status);
+}
+
+function memberStatusColor(a) {
+  const info = agentTaskInfo(a);
+  if (!info) return "var(--ink-soft)";
+  return memberPhase(info.latest) === "waiting_upstream"
+    ? "var(--ink-soft)"
+    : taskLampColor(info.latest.status);
+}
+
+// 等待接力旁白（T1/T4 文案表）：上游名经 agentNames 解析人话名；上游真失败
+// → 中性灰兜底句（非红——下游没失败，只是接不上力）。
+function upstreamNarration(t) {
+  const byId = new Map(conversationTasks.value.map((x) => [x.id, x]));
+  const ups = (t.depends_on || []).map((d) => byId.get(d)).filter(Boolean);
+  const anyFailed = ups.some((u) => u.status === "failed" || u.status === "cancelled");
+  if (anyFailed) return "前序失败，接力已暂停 · 详情→";
+  const names = ups.map((u) => agentNames.map[u.agent_id] || u.agent_id.slice(0, 12));
+  const label = names.length ? names.join("、") : "上游成员";
+  return `等待〈${label}〉的产物 · 就绪后自动接力`;
+}
+
+// T2 首行口播：任务尚无过程旁白时，以注册表 charter（第一人称章程）作开场句
+// ——来自 agent.yaml 忠实投影非编造；首条真实事件到达即被常规旁白替换。
+function stagelineFor(a) {
+  const info = agentTaskInfo(a);
+  if (!info) return "";
+  const t = info.latest;
+  if (memberPhase(t) === "waiting_upstream") return upstreamNarration(t);
+  if (t.status === "cancelled" && (t.depends_on || []).length > 0) return "已取消（上游未交付）";
+  if (TASK_WORK_STATES.has(t.status) && !stageNotes[t.id]) {
+    const charter = agentNames.meta[t.agent_id]?.charter;
+    if (charter) return charter;
+  }
+  return stagelineText(t);
+}
+
+// domain/密级 pill（注册表投影；domain 徽走中性描边不占彩色预算——信任色五槽
+// 已锁满，domain 不再引入新色轴；categoryColor 继续留在治理弹窗）。
+const DOMAIN_LABEL = {
+  policy_qa: "制度",
+  standards_qa: "标准",
+  fault_history: "故障史",
+  sys_calc: "系统计算",
+  cfd_sim: "CFD 仿真",
+  test_data: "试验数据",
+  design_opt: "设计优化",
+  generic: "通用",
+};
+const CLEARANCE_LABEL = { public: "公开", internal: "内部", sensitive: "敏感" };
+
+function domainLabelOf(a) {
+  const d = agentNames.meta[a.agent_id]?.domain;
+  return d ? DOMAIN_LABEL[d] || d : "";
+}
+
+function clearanceOf(a) {
+  return agentNames.meta[a.agent_id]?.clearance || "";
+}
+
+function clearanceLabelOf(a) {
+  const c = clearanceOf(a);
+  return c ? CLEARANCE_LABEL[c] || c : "";
+}
+
+function evidenceOfTask(taskId) {
+  return taskEvidenceOf(taskId);
+}
+
+function evidenceSummaryOf(a) {
+  const info = agentTaskInfo(a);
+  if (!info) return null;
+  return taskEvidenceSummary(info.latest.id);
+}
+
+function refusalsOf(a) {
+  const info = agentTaskInfo(a);
+  if (!info) return [];
+  const ev = taskEvidenceOf(info.latest.id);
+  return ev ? ev.refusals : [];
+}
+
+function toggleEvidence(taskId) {
+  const s = new Set(expandedEvidence.value);
+  if (s.has(taskId)) s.delete(taskId);
+  else s.add(taskId);
+  expandedEvidence.value = s;
+}
+
+function toggleRefusal(taskId) {
+  const s = new Set(expandedRefusals.value);
+  if (s.has(taskId)) s.delete(taskId);
+  else s.add(taskId);
+  expandedRefusals.value = s;
+}
+
+// L1 编队总览（§1.4）：成员任务快照聚合；无任何已召集任务时零占位不渲行。
+function squadTasksOf(plan) {
+  return plan.agents.map((a) => agentTaskInfo(a)).filter(Boolean).map((i) => i.latest);
+}
+
+function squadSegs(plan) {
+  const tasks = squadTasksOf(plan);
+  if (tasks.length === 0) return null;
+  return squadSegments(squadCounts(tasks), tasks, nowTick.value);
+}
+
+function squadHasWork(plan) {
+  const tasks = squadTasksOf(plan);
+  return tasks.some((t) => TASK_WORK_STATES.has(t.status));
+}
+
 // 会话任务快照每次落地 → 对账 task channel 持有集；有任一工作态成员任务 →
 // 秒表开，全部终态 → 秒表停（不空转）。必须声明在 conversationTasks 之后：
 // watch source 创建时即求值，TDZ 抛错会被 Vue callWithErrorHandling 吞成
@@ -1115,7 +1376,10 @@ watch(
   conversationTasks,
   (tasks) => {
     syncLiveChannels();
+    detectRelayFlips(tasks); // 批七 T4：waiting_upstream→活跃 状态沿 → 接力回波
+    for (const t of tasks) ensureTaskEvidence(t); // 批七 T5/T6：终审面成员拉依据摘要
     const anyWork = tasks.some((t) => TASK_WORK_STATES.has(t.status));
+    // 等待接力行虽无秒表，但编队行/等待旁白仍要随快照活现——工作态判定不变
     if (anyWork === true) ensureLiveTicker();
     else stopLiveTicker();
   },
@@ -1752,6 +2016,101 @@ watch(
 .sa-subline .agent-rationale { margin: 0; font-size: 12.5px; font-weight: 500; color: var(--ink-soft); }
 .sa-row .status-artifact { margin: 7px 0 0 17px; }
 .sa-row .agent-stripped { margin: 6px 0 0 17px; }
+
+/* ── 批七编队投影（§1.3/§1.4）───────────────────────────────────────────── */
+/* L1 编队总览行：纯文本聚合，数字 tabular-nums 零动画替换 */
+.sa-squad-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 8px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.sa-squad-line .squad-sep { color: var(--ink-faint); }
+.squad-seg.tone-clay { color: var(--clay); font-weight: 600; }
+.squad-seg.tone-amber { color: var(--trust-pending); font-weight: 600; }
+.squad-seg.tone-rose { color: var(--el-color-danger, #c04545); font-weight: 600; }
+
+/* 等待接力=空心灯（T1）：1px ink 描边圆，绝无 is-pulsing（O2 探针断言互斥） */
+.status-lamp.is-hollow {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--ink-soft);
+}
+/* 接力回波（T4）：复制 StatusDock dock-pulse-echo 参数（不提升作用域），
+   2 轮播完自停；触发一次性（组件内 Set 抑制重播） */
+.status-lamp.sa-relay-echo {
+  animation: flai-work-pulse var(--pulse-duration) ease-in-out 2;
+}
+.sa-stageline.is-waiting-upstream { color: var(--ink-soft); }
+
+/* domain 徽 + 密级 pill：中性描边（信任色五槽已锁满，domain 不引新色轴）；
+   敏感=amber 描边（amber=未核/受控语义槽） */
+.sa-domain-pill,
+.sa-clearance-pill {
+  flex: none;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--hairline);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.sa-clearance-pill.is-sensitive {
+  border-color: color-mix(in srgb, var(--trust-pending) 55%, transparent);
+  color: var(--trust-pending);
+}
+
+/* T5 依据摘要 chip：含未核整 chip amber 底纹；点击展开 EvidenceList */
+.sa-evidence-chip {
+  display: inline-flex;
+  align-items: center;
+  margin: 6px 0 0 17px;
+  padding: 4px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: border-color var(--motion-fast) var(--ease-out-soft);
+}
+.sa-evidence-chip:hover { border-color: var(--clay-softer); }
+.sa-evidence-chip.has-unverified {
+  border-color: color-mix(in srgb, var(--trust-pending) 45%, transparent);
+  background: color-mix(in srgb, var(--trust-pending) 8%, transparent);
+  color: var(--trust-pending);
+}
+.sa-evidence-expand {
+  margin: 8px 0 0 17px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 10px;
+  background: var(--surface-raised);
+}
+
+/* T6 拒答行：amber 非红——诚实拒答是履约不是失败（O6 探针） */
+.sa-refusal-line {
+  margin: 6px 0 0 17px;
+  font-size: 12.5px;
+  color: var(--trust-pending);
+  cursor: pointer;
+}
+.sa-refusal-detail {
+  margin: 4px 0 0 17px;
+  padding: 0 0 0 16px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+.sa-refusal-detail li { margin: 3px 0; }
+.sa-refusal-detail .refusal-suggestion { color: var(--ink-faint); margin-left: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .status-lamp.sa-relay-echo { animation: none; }
+}
 .agent-card {
   display: flex;
   gap: 14px;

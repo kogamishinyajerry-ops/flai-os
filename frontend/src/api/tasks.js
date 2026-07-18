@@ -16,6 +16,23 @@ export const createTask = ({ agentId, name, inputs, inputFileIds, conversationId
     },
   });
 
+// 批七 §3-B6：编队一键开工走原子 batch——全有全无（任一项非法整批 422 零写入，
+// detail.batch_errors 逐项透出），after=同批更早下标 → 服务端映射真 depends_on。
+export const createTasksBatch = ({ conversationId, items }) =>
+  request("/api/tasks/batch", {
+    method: "POST",
+    json: {
+      conversation_id: conversationId || null,
+      items: (items || []).map((it) => ({
+        agent_id: it.agentId,
+        name: it.name || null,
+        inputs: it.inputs || {},
+        input_file_ids: it.inputFileIds || [],
+        after: it.after || [],
+      })),
+    },
+  });
+
 export const listTasks = ({ status, agentId, limit, offset } = {}) => {
   const params = new URLSearchParams();
   if (status) params.set("status", status);
