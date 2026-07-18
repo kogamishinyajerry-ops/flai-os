@@ -26,7 +26,14 @@ export function ensureTaskEvidence(t) {
   }
   listOutputFiles(t.id)
     .then(async (files) => {
-      const jf = (files || []).find((f) => /\.json$/i.test(f.filename || ""));
+      // Codex R2 P1（verbatim，批B P1 同款先例）：internal-allowlist——非 internal
+      // 分级产物**不发起下载**。被动依据水合对 sensitive 文件盲调 /download 会在
+      // 后端落 sensitive_download_denied 审计（用户根本没有下载意图=假阳性审计
+      // 事件），且 internal 件也省一次纯展示目的的全量 blob。密级遮蔽下诚实缺位：
+      // 零 chip，不编计数。
+      const jf = (files || []).find(
+        (f) => /\.json$/i.test(f.filename || "") && f.data_classification === "internal"
+      );
       if (!jf) {
         entry.loaded = true;
         return;

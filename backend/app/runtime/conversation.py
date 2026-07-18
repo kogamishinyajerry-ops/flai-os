@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..core.errors import (
+    ClearanceDeniedError,
     ConversationClosedError,
     ConversationConflictError,
     ConversationNotFoundError,
@@ -286,6 +287,27 @@ class ConversationService:
             ]
             history.append({"role": "user", "content": content, "file_ids": file_ids})
             history = _window(history)
+            # 批七 Codex R2 P1（verbatim）：交互附件同受 ADR-0030 密级 gate——此前
+            # 仅任务路径强制，internal 上限的交互 Agent（policy_qa/standards_qa）可被
+            # 喂 sensitive 附件直进模型上下文。渲染前对**在窗全部附件**（本轮新提交
+            # + 历史在窗）复核 Agent 密级上限；已被清理的缺位文件只渲占位行、无内容
+            # 可越级，不参与判定（与 runtime 消费点复核同口径：只判在册记录，缺位
+            # 交由渲染器「读取失败」路径诚实兜底）。局部 import 避免 api↔runtime
+            # 模块环（runtime.py 消费点同款）。
+            from ..api import classification_gate as cgate
+
+            _window_ids = [fid for m in history for fid in (m.get("file_ids") or [])]
+            if _window_ids:
+                _present = {r["id"] for r in repos.list_files_by_ids(conn, _window_ids)}
+                _present_ids = [fid for fid in _window_ids if fid in _present]
+                _allowed, _material_level, _agent_max = cgate.agent_clearance_allows(
+                    conn, agent, _present_ids
+                )
+                if _allowed is False:
+                    raise ClearanceDeniedError(
+                        f"该专家的密级准入上限为「{_agent_max}」，无法处理「{_material_level}」"
+                        "级附件——请改派密级上限足够的 Agent 或移除受控附件（ADR-0030）"
+                    )
             history = self._render_history_attachments(conn, history)
 
             pkg_dir = self.agent_registry.package_dir(agent_id)

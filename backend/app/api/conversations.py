@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import classification_gate as cgate
 from ..core.errors import (
+    ClearanceDeniedError,
     ConversationClosedError,
     ConversationConflictError,
     ConversationNotFoundError,
@@ -115,6 +116,10 @@ def post_message(
     except (ConversationClosedError, ConversationConflictError) as exc:
         # 已结束 / 被并发轮抢先：如实 409。冲突轮零落库，可基于最新历史重试。
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ClearanceDeniedError as exc:
+        # 密级准入不足（ADR-0030，Codex R2 P1）：策略拒绝非报警红——与任务路径
+        # 创建门同 400 口径；本轮零落库、零 LLM 调用。
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ModelConfigError as exc:
         # 模型网关未配置（缺 FLAI_LLM_*）=永久性错误：重试无效，需运维配置后恢复。
         # 与临时上游故障分流，绝不谎报「可重试」误导用户反复点发送（PM 战略审 top）。

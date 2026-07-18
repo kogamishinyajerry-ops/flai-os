@@ -139,6 +139,78 @@ def test_batch_after_boolean_rejected_not_coerced(app_env):
     assert len(client.get("/api/tasks").json()) == before, "非法下标必须零写入"
 
 
+# ── 交互附件密级 gate（Codex R2 P1：会话路径与任务路径同受 ADR-0030）───────
+
+class _ConvStub:
+    """canned 回复网关；denied 路径不应触达（gate 在 LLM 调用前抛）。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def chat(self, profile, messages, **kw):
+        self.calls += 1
+        return {"content": "收到，能再说说输入数据的形态吗？", "token_usage": None,
+                "model_name": "stub", "finish_reason": "stop"}
+
+
+def test_interactive_attachment_sensitive_denied_zero_writes(app_env):
+    """internal 上限交互 Agent + sensitive 附件 → 400 密级拒绝，零落库零 LLM 调用
+    ——此前会话路径只查附件存在性，越级材料直进模型上下文（R2 P1 verbatim）。"""
+    client, app = app_env
+    stub = _ConvStub()
+    app.state.conversation_service.model_gateway = stub
+    fid = _seed_input_file(app, "conv-sens-file", "sensitive")
+    conv_id = client.post("/api/conversations", json={"agent_id": "guide_agent"}).json()["id"]
+    r = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "帮我看这份材料", "file_ids": [fid]},
+    )
+    assert r.status_code == 400, r.text
+    assert "密级准入上限" in r.json()["detail"]
+    assert stub.calls == 0, "gate 必须先于 LLM 调用（越级材料不得进上下文）"
+    msgs = client.get(f"/api/conversations/{conv_id}").json()["messages"]
+    assert msgs == [], "拒绝轮必须零落库"
+
+
+def test_interactive_attachment_internal_passes_gate(app_env):
+    """对照：internal 附件过 gate，会话正常推进（gate 有判别力非全拒）。"""
+    client, app = app_env
+    app.state.conversation_service.model_gateway = _ConvStub()
+    fid = _seed_input_file(app, "conv-int-file", "internal")
+    conv_id = client.post("/api/conversations", json={"agent_id": "guide_agent"}).json()["id"]
+    r = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "帮我看这份材料", "file_ids": [fid]},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_interactive_attachment_historical_rechecked(app_env):
+    """历史在窗附件同受复核：先以 internal 记录入会话，事后该文件被改级
+    sensitive（模拟上游改级/污染传播），下一轮即拒——gate 判的是**在窗全部**
+    附件而非仅本轮新提交。"""
+    client, app = app_env
+    app.state.conversation_service.model_gateway = _ConvStub()
+    fid = _seed_input_file(app, "conv-flip-file", "internal")
+    conv_id = client.post("/api/conversations", json={"agent_id": "guide_agent"}).json()["id"]
+    r1 = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "先看这份内部材料", "file_ids": [fid]},
+    )
+    assert r1.status_code == 200, r1.text
+    conn = app.state.conn_factory()
+    try:
+        conn.execute("UPDATE files SET classification = 'sensitive' WHERE id = ?", (fid,))
+        conn.commit()
+    finally:
+        conn.close()
+    r2 = client.post(
+        f"/api/conversations/{conv_id}/messages", json={"content": "继续分析"}
+    )
+    assert r2.status_code == 400, r2.text
+    assert "密级准入上限" in r2.json()["detail"]
+
+
 # ── 密级准入 gate（ADR-0030，O4 族）────────────────────────────────────────
 
 def test_clearance_gate_blocks_sensitive_input_on_create(app_env):
