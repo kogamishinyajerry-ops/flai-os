@@ -214,6 +214,9 @@ def test_qa_catalog_escape_degrades_to_refusal():
         assert reco["findings"] == [], f"{agent_id} 目录外出处竟被放行"
         assert len(reco["refusals"]) >= 1
         assert "白名单" in reco["refusals"][0]["reason"]
+        # retro-R1 P2：越界 ref 是模型可控文本，静态拒答文案不得复读原文
+        assert "REAL-2026-001" not in reco["refusals"][0]["reason"]
+        assert "GJB-XXXX" not in reco["refusals"][0]["reason"]
 
 
 def test_qa_catalog_prefix_smuggling_rejected():

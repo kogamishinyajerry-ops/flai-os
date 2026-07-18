@@ -208,6 +208,34 @@ def test_violation_kinds_not_enforced_by_schema_rejected(tmp_path: Path) -> None
         assert any("kinds" in e["error"] for e in reg.errors)
 
 
+def test_violation_evidence_items_not_homogeneous_object_rejected(tmp_path: Path) -> None:
+    """Codex retro-R1 P2：evidence items 缺 type:object（标量绕过 properties/
+    required 约束）或 tuple-schema（仅首槽受检）——两姿势均拒载。"""
+    obj_item = {
+        "type": "object",
+        "required": ["kind"],
+        "properties": {"kind": {"const": "fault_case"}, "resolved": {"const": False}},
+    }
+    no_type_item = {k: v for k, v in obj_item.items() if k != "type"}
+    for idx, ev_items in enumerate((no_type_item, [obj_item])):
+        agents_dir = tmp_path / f"agents_{idx}"
+        agents_dir.mkdir()
+        pkg = _clone("fta_agent", agents_dir, "fta_agent")
+        _patch_yaml(pkg, evidence_policy={"required": True, "kinds": ["fault_case"]})
+        out_path = pkg / "output_schema.json"
+        out_doc = json.loads(out_path.read_text(encoding="utf-8"))
+        out_doc.setdefault("properties", {})["findings"] = {
+            "type": "array",
+            "items": {"type": "object", "properties": {
+                "evidence": {"type": "array", "items": ev_items},
+            }},
+        }
+        out_path.write_text(json.dumps(out_doc, ensure_ascii=False), encoding="utf-8")
+        reg = _scan(agents_dir)
+        assert reg.get("fta_agent") is None, f"非同质 object evidence items（姿势 {idx}）竟被注册"
+        assert len(reg.errors) == 1
+
+
 def test_pathological_output_schema_quarantined_not_crash(tmp_path: Path) -> None:
     """Codex R2 P2：深嵌套 schema 令 json.loads RecursionError / 超体量 schema
     ——均隔离拒载不炸 scan（字节上界先挡 + RecursionError 兜底）。"""

@@ -59,7 +59,9 @@ def _enforce_catalog(payload: dict[str, Any]) -> None:
             ref = ev.get("source_ref", "")
             canonical = _canonical_ref(ref)
             if (canonical in _CATALOG) is False:
-                raise ValueError(f"依据出处越出合成目录白名单：{ref!r}（未收录必拒答）")
+                # 静态文案（Codex retro-R1 P2）：ref 是模型可控文本，进异常消息会
+                # 经拒答 reason 持久化上屏——越界出处只报事实不复读原文。
+                raise ValueError("依据出处越出合成目录白名单（未收录必拒答，原文不复读）")
             ev["source_ref"] = canonical
 
 

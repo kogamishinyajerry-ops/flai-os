@@ -205,24 +205,25 @@ class AgentRegistry:
                     # 字符串搜 '"evidence"' 又会被 description 里提一嘴骗过——改为
                     # 结构化路径校验：findings 是 array，且 items.properties 里真有
                     # evidence（array）与 resolved（依据行+核验态是 §2.2 输出契约的
-                    # 不可省核心；resolved 缺席=核验态无处落地）。items 为 list
-                    # （tuple-schema 写法）时取首元素。
+                    # 不可省核心；resolved 缺席=核验态无处落地）。
+                    # retro-R1 P2 收紧：items 必须是**同质 object schema**（dict 且
+                    # 显式 type:object）——tuple-schema（items 为数组）只检首槽=
+                    # 其余槽位不受约束；缺 type:object 时 JSON Schema 对标量忽略
+                    # properties/required（"anything" 也算合法依据行）。两个层级
+                    # （findings items / evidence items）同规则，fail-closed。
                     if isinstance(_fs, dict) and _fs.get("type") == "array":
                         _items = _fs.get("items")
-                        if isinstance(_items, list) and _items:
-                            _items = _items[0]
-                        if isinstance(_items, dict):
+                        if isinstance(_items, dict) and _items.get("type") == "object":
                             _props = _items.get("properties")
                             _ev = _props.get("evidence") if isinstance(_props, dict) else None
                             if isinstance(_ev, dict) and _ev.get("type") == "array":
                                 _ev_items = _ev.get("items")
-                                if isinstance(_ev_items, list) and _ev_items:
-                                    _ev_items = _ev_items[0]
-                                _ev_props = (
-                                    _ev_items.get("properties")
-                                    if isinstance(_ev_items, dict)
-                                    else None
-                                )
+                                _ev_props = None
+                                if (
+                                    isinstance(_ev_items, dict)
+                                    and _ev_items.get("type") == "object"
+                                ):
+                                    _ev_props = _ev_items.get("properties")
                                 _findings_ok = (
                                     isinstance(_ev_props, dict) and "resolved" in _ev_props
                                 )

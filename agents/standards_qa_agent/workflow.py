@@ -70,7 +70,10 @@ def _enforce_catalog(payload: dict[str, Any]) -> None:
                 allowed = frozenset()
             canonical = _canonical_ref(ref)
             if (canonical in allowed) is False:
-                raise ValueError(f"依据出处越出合成目录白名单：kind={kind!r} source_ref={ref!r}")
+                # 静态文案（Codex retro-R1 P2）：source_ref 是模型可控文本，不进
+                # 异常消息（会经拒答 reason 持久化上屏）；kind 是 schema enum
+                # 收过的封闭值，可报。
+                raise ValueError(f"依据出处越出合成目录白名单（kind={kind!r}，原文不复读）")
             ev["source_ref"] = _DISPLAY_FORM[canonical]
             kinds.add(kind)
         basis = ((finding.get("confidence") or {}).get("basis")) or ""
