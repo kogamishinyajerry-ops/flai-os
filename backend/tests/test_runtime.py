@@ -373,7 +373,131 @@ def test_model_gateway_context_emits_error_model_call_event_and_reraises(tmp_pat
         conn.close()
 
 
-# ── P2-2：工具契约可恢复失败（status:"failed"）如实记 tool_failed ─────────
+# ── 工具事件污点 + P2-2 契约可恢复失败 ──────────────────────────
+
+
+class _ToolEventRegistry:
+    """工具事件污点契约的最小 Registry 替身。
+
+    `get()` 对齐 ToolRegistry 的已注册 manifest 查询端口；`call()` 只提供
+    本组测试需要的成功输出。预期 mock 值来自独立的显式布尔参数，
+    不从运行时事件反推。
+    """
+
+    def __init__(self, *, mock: bool) -> None:
+        self._manifest = {"id": "event_tool", "mock": mock}
+
+    def get(self, tool_id: str) -> dict[str, Any] | None:
+        return self._manifest if tool_id == "event_tool" else None
+
+    def call(self, tool_id, payload, *, conn=None, task_id=None, tool_context=None):
+        return {"status": "success"}
+
+
+class _MissingManifestRegistry:
+    def get(self, tool_id: str) -> None:
+        return None
+
+    def call(self, tool_id, payload, *, conn=None, task_id=None, tool_context=None):
+        raise AssertionError("missing manifests must fail before registry.call")
+
+
+def test_tool_context_missing_manifest_fails_before_started_without_fake_real_provenance(
+    tmp_path: Path,
+) -> None:
+    from backend.app.core.errors import ToolNotRegisteredError
+    from backend.app.runtime.runtime import _ToolRegistryContext
+
+    conn = _make_conn(tmp_path)
+    try:
+        _make_task(conn, "task_tool_manifest_missing")
+        ctx = _ToolRegistryContext(
+            _MissingManifestRegistry(),
+            conn,
+            "task_tool_manifest_missing",
+            "hello_agent",
+            frozenset({"missing_tool"}),
+        )
+
+        with pytest.raises(ToolNotRegisteredError, match="未注册"):
+            ctx.call("missing_tool", {"message": "hello"})
+
+        events = repos.list_events(conn, "task_tool_manifest_missing")
+        assert [event["event_type"] for event in events] == ["tool_failed"]
+        payload = events[0]["payload"]
+        assert payload["registered"] is False
+        assert payload["mock"] is None
+        assert payload["denied"] == "not_registered"
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("manifest_mock", [True, False])
+def test_tool_context_success_events_preserve_registered_mock_provenance(
+    tmp_path: Path, manifest_mock: bool
+) -> None:
+    from backend.app.runtime.runtime import _ToolRegistryContext
+
+    conn = _make_conn(tmp_path)
+    try:
+        _make_task(conn, "task_tool_event_success")
+        ctx = _ToolRegistryContext(
+            _ToolEventRegistry(mock=manifest_mock),
+            conn,
+            "task_tool_event_success",
+            "hello_agent",
+            frozenset({"event_tool"}),
+        )
+
+        result = ctx.call("event_tool", {"message": "hello"})
+        assert result == {"status": "success"}
+
+        events = repos.list_events(conn, "task_tool_event_success")
+        assert [event["event_type"] for event in events] == ["tool_started", "tool_finished"]
+        assert events[0]["payload"]["mock"] is manifest_mock
+        assert events[1]["payload"]["mock"] is manifest_mock
+    finally:
+        conn.close()
+
+
+class _ExplodingToolRegistry:
+    def __init__(self, *, mock: bool) -> None:
+        self._manifest = {"id": "exploding_tool", "mock": mock}
+
+    def get(self, tool_id: str) -> dict[str, Any] | None:
+        return self._manifest if tool_id == "exploding_tool" else None
+
+    def call(self, tool_id, payload, *, conn=None, task_id=None, tool_context=None):
+        raise RuntimeError("工具异常（测试注入）")
+
+
+@pytest.mark.parametrize("manifest_mock", [True, False])
+def test_tool_context_exception_events_preserve_registered_mock_provenance(
+    tmp_path: Path, manifest_mock: bool
+) -> None:
+    from backend.app.runtime.runtime import _ToolRegistryContext
+
+    conn = _make_conn(tmp_path)
+    try:
+        _make_task(conn, "task_tool_event_exception")
+        ctx = _ToolRegistryContext(
+            _ExplodingToolRegistry(mock=manifest_mock),
+            conn,
+            "task_tool_event_exception",
+            "hello_agent",
+            frozenset({"exploding_tool"}),
+        )
+
+        with pytest.raises(RuntimeError, match="工具异常"):
+            ctx.call("exploding_tool", {"message": "hello"})
+
+        events = repos.list_events(conn, "task_tool_event_exception")
+        assert [event["event_type"] for event in events] == ["tool_started", "tool_failed"]
+        assert events[0]["payload"]["mock"] is manifest_mock
+        assert events[1]["payload"]["mock"] is manifest_mock
+        assert "工具异常" in events[1]["payload"]["error"]
+    finally:
+        conn.close()
 
 
 class _FailedStatusToolRegistry:
@@ -384,18 +508,30 @@ class _FailedStatusToolRegistry:
     故此处用 stub 构造（返回形状对齐 ToolRegistry.call 的输出契约）。
     """
 
+    def __init__(self, *, mock: bool) -> None:
+        self._manifest = {"id": "soft_fail_tool", "mock": mock}
+
+    def get(self, tool_id: str) -> dict[str, Any] | None:
+        return self._manifest if tool_id == "soft_fail_tool" else None
+
     def call(self, tool_id, payload, *, conn=None, task_id=None, tool_context=None):
         return {"status": "failed", "echoed": {}, "error_message": "case 级可恢复失败（测试注入）"}
 
 
-def test_tool_context_reports_tool_failed_on_failed_status(tmp_path: Path) -> None:
+@pytest.mark.parametrize("manifest_mock", [True, False])
+def test_tool_context_reports_tool_failed_on_failed_status(
+    tmp_path: Path, manifest_mock: bool
+) -> None:
     from backend.app.runtime.runtime import _ToolRegistryContext
 
     conn = _make_conn(tmp_path)
     try:
         _make_task(conn, "task_tool_softfail")
         ctx = _ToolRegistryContext(
-            _FailedStatusToolRegistry(), conn, "task_tool_softfail", "hello_agent",
+            _FailedStatusToolRegistry(mock=manifest_mock),
+            conn,
+            "task_tool_softfail",
+            "hello_agent",
             frozenset({"soft_fail_tool"}),
         )
 
@@ -405,9 +541,11 @@ def test_tool_context_reports_tool_failed_on_failed_status(tmp_path: Path) -> No
         events = repos.list_events(conn, "task_tool_softfail")
         event_types = [e["event_type"] for e in events]
         assert event_types == ["tool_started", "tool_failed"], "status:failed 不得误报 tool_finished"
+        assert events[0]["payload"]["mock"] is manifest_mock
         failed = events[-1]
         assert failed["level"] == "error"
         assert failed["payload"]["output_status"] == "failed"
+        assert failed["payload"]["mock"] is manifest_mock
         assert "case 级可恢复失败" in failed["payload"]["error"]
     finally:
         conn.close()

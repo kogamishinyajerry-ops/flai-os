@@ -223,6 +223,10 @@
                     v-if="agentTaskInfo(a) && evidenceWithheldOf(a)"
                     class="sa-evidence-chip is-withheld"
                   >依据清单〔按密级隐藏〕</div>
+                  <div
+                    v-if="agentTaskInfo(a) && evidenceIssueOf(a)"
+                    class="sa-evidence-chip has-unverified is-unavailable"
+                  >{{ evidenceIssueOf(a).text }}</div>
                   <EvidenceList
                     v-if="agentTaskInfo(a) && expandedEvidence.has(agentTaskInfo(a).latest.id) && evidenceOfTask(agentTaskInfo(a).latest.id)"
                     :findings="evidenceOfTask(agentTaskInfo(a).latest.id).findings"
@@ -478,6 +482,7 @@ import { uploadFile as apiUploadFile } from "../api/files";
 import {
   ensureTaskEvidence,
   taskEvidenceOf,
+  taskEvidenceIssue,
   taskEvidenceSummary,
   taskEvidenceWithheld,
 } from "../stores/taskEvidence";
@@ -1442,6 +1447,11 @@ async function saveTeamFromPlan() {
 function evidenceWithheldOf(a) {
   const info = agentTaskInfo(a);
   return info !== null && taskEvidenceWithheld(info.latest.id) === true;
+}
+
+function evidenceIssueOf(a) {
+  const info = agentTaskInfo(a);
+  return info !== null ? taskEvidenceIssue(info.latest.id) : null;
 }
 
 function evidenceSummaryOf(a) {

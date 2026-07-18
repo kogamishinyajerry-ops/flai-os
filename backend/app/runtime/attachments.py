@@ -37,8 +37,27 @@ _XLSX_MAX_COLS = 16
 _XLSX_MAX_UNCOMPRESSED_BYTES = 8 * 1024 * 1024
 _XLSX_MAX_COMPRESSION_RATIO = 200
 
-_TEXT_EXTS = {".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".log", ".xml", ".ini", ".py"}
+_TEXT_EXTS = {
+    ".txt",
+    ".text",
+    ".md",
+    ".markdown",
+    ".csv",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".log",
+    ".xml",
+    ".ini",
+    ".py",
+}
 _XLSX_EXTS = {".xlsx"}
+
+# File Service 的人工预览与会话附件注入必须共用同一解析器，避免「人看到一套、
+# Agent 注入另一套」。公开只读集合给 API 做格式判定；底层集合仍保留给本模块的
+# 既有代码，避免对外暴露可变对象。
+TEXT_PREVIEW_EXTENSIONS = frozenset(_TEXT_EXTS)
+XLSX_PREVIEW_EXTENSIONS = frozenset(_XLSX_EXTS)
 
 # 防注入规则行：随每个渲染批次注入，内核统一执行（tamper 目标：拆掉必有测试咬红）。
 ATTACHMENT_RULE_LINE = (
@@ -67,21 +86,50 @@ def _safe_filename_for_header(name: str) -> str:
     return _neutralize_sentinels(cleaned) or "unnamed"
 
 
-def _truncate(text: str, limit: int) -> str:
+def _truncate_with_flag(text: str, limit: int) -> tuple[str, bool]:
     if len(text) <= limit:
-        return text
+        return text, False
     kept = text[:limit]
-    return kept + f"\n……[截断：原文 {len(text)} 字符，仅展示前 {limit} 字符]"
+    return (
+        kept + f"\n……[截断：内容超出预览预算，仅展示前 {limit} 字符]",
+        True,
+    )
+
+
+def _truncate(text: str, limit: int) -> str:
+    return _truncate_with_flag(text, limit)[0]
+
+
+def _render_text_file_with_meta(handle: BinaryIO, limit: int) -> tuple[str, bool]:
+    # 只读渲染所需字节，不 read_bytes() 全量载入（反方审 P2：大文本每轮重渲染
+    # 的内存放大——xlsx 已 read_only 流式，文本路径此前却全量读，防御不对称）。
+    # UTF-8 最坏 4 字节/字符，读 limit*4 + 余量即保证够 limit 个字符可切；
+    # 额外探测 1 byte 只判定“仍有内容”，不把有限前缀长度冒充原文总字符数。
+    max_bytes = limit * 4 + 64
+    raw = handle.read(max_bytes)
+    has_more_bytes = handle.read(1) != b""
+    text = raw.decode("utf-8", errors="replace")
+    rendered, truncated = _truncate_with_flag(text, limit)
+    if has_more_bytes is True and truncated is False:
+        # 理论上 max_bytes 足以产生 >limit 个字符；保留该 fail-safe，避免未来预算
+        # 调整后长文件被误报为完整。
+        rendered = text[:limit] + f"\n……[截断：内容超出预览预算，仅展示前 {limit} 字符]"
+        truncated = True
+    return rendered, truncated
 
 
 def _render_text_file(handle: BinaryIO, limit: int) -> str:
-    # 只读渲染所需字节，不 read_bytes() 全量载入（反方审 P2：大文本每轮重渲染
-    # 的内存放大——xlsx 已 read_only 流式，文本路径此前却全量读，防御不对称）。
-    # UTF-8 最坏 4 字节/字符，读 limit*4 + 余量即保证够 limit 个字符可切。
-    max_bytes = limit * 4 + 64
-    raw = handle.read(max_bytes)
-    text = raw.decode("utf-8", errors="replace")
-    return _truncate(text, limit)
+    return _render_text_file_with_meta(handle, limit)[0]
+
+
+def render_text_handle(handle: BinaryIO, limit: int) -> str:
+    """从已通过完整性门的句柄生成有界文本预览。"""
+    return _render_text_file(handle, limit)
+
+
+def render_text_preview_handle(handle: BinaryIO, limit: int) -> tuple[str, bool]:
+    """返回有界文本及独立截断位；绝不从用户正文关键字猜测状态。"""
+    return _render_text_file_with_meta(handle, limit)
 
 
 def _xlsx_parse_budget_ok(handle: BinaryIO) -> tuple[bool, str]:
@@ -112,7 +160,7 @@ def _xlsx_parse_budget_ok(handle: BinaryIO) -> tuple[bool, str]:
     return True, ""
 
 
-def _render_xlsx_file(handle: BinaryIO, limit: int) -> str:
+def _render_xlsx_file_with_meta(handle: BinaryIO, limit: int) -> tuple[str, bool]:
     """xlsx 预览：仅活动 sheet 前 N 行 × M 列，制表符分隔；全 sheet 名单列出。
 
     read_only + 硬顶行列约束**展示量**；解析成本另由 `_xlsx_parse_budget_ok`
@@ -121,30 +169,57 @@ def _render_xlsx_file(handle: BinaryIO, limit: int) -> str:
     """
     ok, reason = _xlsx_parse_budget_ok(handle)
     if not ok:
-        return f"[未解析：xlsx 超出解析预算（{reason}）——请拆分文件，或在创建任务页上传交目标 Agent 处理]"
+        return (
+            f"[未解析：xlsx 超出解析预算（{reason}）——请拆分文件，或在创建任务页上传交目标 Agent 处理]",
+            False,
+        )
 
     import openpyxl  # 项目既有依赖（M3 工具链引入）
 
-    handle.seek(0)
-    wb = openpyxl.load_workbook(handle, read_only=True, data_only=True)
+    wb = None
     try:
+        handle.seek(0)
+        wb = openpyxl.load_workbook(handle, read_only=True, data_only=True)
         sheet_names = list(wb.sheetnames)
         ws = wb.active
         lines = [f"[xlsx 预览] sheets={sheet_names}，展示活动 sheet「{ws.title}」前 {_XLSX_MAX_ROWS} 行 × {_XLSX_MAX_COLS} 列："]
         truncated_rows = False
+        truncated_cols = False
         for row_no, row in enumerate(ws.iter_rows(values_only=True), start=1):
             if row_no > _XLSX_MAX_ROWS:
                 truncated_rows = True
                 break
             cells = ["" if v is None else str(v) for v in row[:_XLSX_MAX_COLS]]
             if len(row) > _XLSX_MAX_COLS:
+                truncated_cols = True
                 cells.append(f"…[+{len(row) - _XLSX_MAX_COLS} 列]")
             lines.append("\t".join(cells))
         if truncated_rows:
             lines.append(f"……[行截断：仅展示前 {_XLSX_MAX_ROWS} 行]")
-        return _truncate("\n".join(lines), limit)
+        rendered, truncated_chars = _truncate_with_flag("\n".join(lines), limit)
+        return rendered, truncated_rows is True or truncated_cols is True or truncated_chars is True
+    except Exception as exc:  # noqa: BLE001 - 单文件解析失败必须诚实隔离，不能令预览 500
+        return (
+            f"[未解析：xlsx 内容无效（{type(exc).__name__}）——请修复文件，或在创建任务页上传交目标 Agent 处理]",
+            False,
+        )
     finally:
-        wb.close()
+        if wb is not None:
+            wb.close()
+
+
+def _render_xlsx_file(handle: BinaryIO, limit: int) -> str:
+    return _render_xlsx_file_with_meta(handle, limit)[0]
+
+
+def render_xlsx_handle(handle: BinaryIO, limit: int) -> str:
+    """从已通过完整性门的句柄生成有解析预算的 xlsx 文本预览。"""
+    return _render_xlsx_file(handle, limit)
+
+
+def render_xlsx_preview_handle(handle: BinaryIO, limit: int) -> tuple[str, bool]:
+    """返回 xlsx 有界文本及独立截断位。"""
+    return _render_xlsx_file_with_meta(handle, limit)
 
 
 def render_one(
@@ -174,9 +249,9 @@ def render_one(
             expected_sha256=file_row.get("sha256"),
         ) as handle:
             if ext in _TEXT_EXTS:
-                return _render_text_file(handle, limit)
+                return render_text_handle(handle, limit)
             if ext in _XLSX_EXTS:
-                return _render_xlsx_file(handle, limit)
+                return render_xlsx_handle(handle, limit)
             return f"[未解析：{display_ext} 类型 V0.2 不支持内容解析（仅文本类与 .xlsx 预览；docx/pdf 为 V0.3 规划）——文件名与大小仍可作为需求线索]"
     except FileNotFoundError:
         return f"[读取失败：文件已不在磁盘（{display_name}）——请重新上传]"

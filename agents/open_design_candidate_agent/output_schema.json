@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "open_design_candidate_agent candidate-only output",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_only",
+    "release_effect",
+    "human_review_required",
+    "generator_mode",
+    "mock",
+    "production_daemon_used",
+    "fixture_id",
+    "fixture_sha256",
+    "request_sha256",
+    "response_sha256",
+    "design_reference_package_sha256",
+    "candidate_count",
+    "protocol_trace",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "open-design-candidate-output/v1"
+    },
+    "candidate_only": {
+      "const": true
+    },
+    "release_effect": {
+      "const": "none"
+    },
+    "human_review_required": {
+      "const": true
+    },
+    "generator_mode": {
+      "const": "fixture"
+    },
+    "mock": {
+      "const": true
+    },
+    "production_daemon_used": {
+      "const": false
+    },
+    "fixture_id": {
+      "const": "flai-task-review-assets-v1"
+    },
+    "fixture_sha256": {
+      "const": "ad145be4e55a5ab46d660daeed6555cd01667b7a02fad92cc98e3203bdc53898"
+    },
+    "request_sha256": {
+      "const": "c6a56a02c8b742bd28d34060b4712097d83bc6d15b1822cd3a2e791d66d85d56"
+    },
+    "response_sha256": {
+      "const": "a3734f515445b1ee8cee775da91bddd2659c4408ab67fad7d47610a68bfe5f9d"
+    },
+    "design_reference_package_sha256": {
+      "const": "38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94"
+    },
+    "candidate_count": {
+      "const": 2
+    },
+    "protocol_trace": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        {
+          "const": {
+            "operation": "create_project",
+            "access": "write",
+            "status": "success"
+          }
+        },
+        {
+          "const": {
+            "operation": "start_run",
+            "access": "write",
+            "status": "success"
+          }
+        },
+        {
+          "const": {
+            "operation": "get_run",
+            "access": "read",
+            "status": "succeeded"
+          }
+        },
+        {
+          "const": {
+            "operation": "get_artifact",
+            "access": "read",
+            "status": "success"
+          }
+        }
+      ],
+      "items": false
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "prefixItems": [
+        {
+          "const": {
+            "filename": "OPEN_DESIGN_REVIEW.md",
+            "media_type": "text/markdown",
+            "role": "review",
+            "sha256": "40fd8928e02ebd9ba88a33f7a09f499763935196c7e32dcb987de0473845d7ba"
+          }
+        },
+        {
+          "const": {
+            "filename": "flai-task-review-candidate.html",
+            "media_type": "text/html",
+            "role": "candidate",
+            "sha256": "e1242ccccb30758c184d798f50edc2b3fc0f38508c3f70f6a7c0238fa5e27db1"
+          }
+        },
+        {
+          "const": {
+            "filename": "flai-task-review-candidate.svg",
+            "media_type": "image/svg+xml",
+            "role": "candidate",
+            "sha256": "8424d13080e3b1d79cef1e9a60a0e7a1a019d8f3a7bea4103fe3c523534bbd48"
+          }
+        },
+        {
+          "const": {
+            "filename": "flai_design_reference_package.json",
+            "media_type": "application/json",
+            "role": "design_reference",
+            "sha256": "38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94"
+          }
+        },
+        {
+          "const": {
+            "filename": "open_design_candidates.json",
+            "media_type": "application/json",
+            "role": "candidate_index",
+            "sha256": "29f8f89d5ec647c6ca424142ba0f4c3020aec03a258811b6fab71354d4f35fd5"
+          }
+        },
+        {
+          "const": {
+            "filename": "open_design_provenance.json",
+            "media_type": "application/json",
+            "role": "provenance",
+            "sha256": "aee72e5df6cf1ab480791f36ab2d84e1addab448231503fa6c6dc346116a9688"
+          }
+        }
+      ],
+      "items": false
+    }
+  }
+}

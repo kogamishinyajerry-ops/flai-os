@@ -17,7 +17,24 @@
         <SkeletonBlock v-for="(w, i) in ['92%', '76%', '88%', '68%', '84%', '72%']" :key="i" height="40px" :width="w" />
       </div>
 
-      <template v-else>
+      <template v-if="feedLoaded">
+        <!-- 批八 B1：feed 首次成功后才显示计数，避免加载失败时把「未知」冒充 0。
+             这是普通互斥按钮组，不使用需要方向键/roving tabindex 的 tab 语义。 -->
+        <div v-if="feedLoaded" class="cl-filters" role="group" aria-label="按状态筛选任务">
+          <button
+            v-for="filter in TASK_FILTERS"
+            :key="filter.key"
+            type="button"
+            class="cl-filter"
+            :class="{ 'is-pressed': filterKey === filter.key }"
+            :aria-pressed="filterKey === filter.key"
+            :aria-label="`${filter.label}，${filterCounts[filter.key]} 条`"
+            @click="filterKey = filter.key"
+          >
+            {{ filter.label }} <span aria-hidden="true">· {{ filterCounts[filter.key] }}</span>
+          </button>
+        </div>
+
         <!-- 待你签发：amber 组置顶（行动召唤最高优先） -->
         <template v-if="waitingTasks.length">
           <div class="cl-group-label waiting">✍ 待你签发 · {{ waitingTasks.length }}</div>
@@ -42,9 +59,11 @@
           </div>
         </template>
 
-        <!-- 全部任务（最近窗口）：状态徽章随 5s 轮询原地切换。
-             零值不显示（批次四 Q2）：N=0 时不渲染「· 0」。 -->
-        <div class="cl-group-label">最近任务<template v-if="otherTasks.length"> · {{ otherTasks.length }}</template></div>
+        <!-- 全部视图保留「待你签发」置顶分组；专项筛选平铺为单一结果集。
+             分组计数包括 0，明确表达最近 100 条窗口内的真实结果。 -->
+        <div class="cl-group-label">
+          {{ resultGroupLabel }} · {{ otherTasks.length }}
+        </div>
         <div
           v-for="t in otherTasks"
           :key="t.id"
@@ -64,6 +83,9 @@
           <span v-if="unseen(t)" class="cl-unseen-dot" title="完成后你还没看过"></span>
         </div>
         <div v-if="feedLoaded && !feedTasks.length" class="cl-zero">还没有任务——从对话召集，或点上方「+ 新任务」。</div>
+        <div v-else-if="feedLoaded && filterKey !== 'all' && !otherTasks.length" class="cl-zero">
+          该筛选下暂无任务——最近任务窗口中的 {{ feedTasks.length }} 条均处于其他状态。
+        </div>
       </template>
 
       <div class="cl-foot-note">清单来自最近任务窗口（100 条）真实轮询——窗口外不虚报。</div>
@@ -92,6 +114,7 @@ import { statusLabel, taskLampColor, taskDisplayName, formatClockCompact, TASK_W
 import { useAgentNames } from "../stores/agentNames";
 import { useTodayKey } from "../composables/useTodayKey";
 import { ensureTaskBaseline, markTaskSeen, taskHasUnseen } from "../utils/lastSeen";
+import { TASK_FILTERS, countTasksByFilter, filterTasks } from "../utils/taskFilters";
 import { feedTasks, feedLoaded, feedError, acquireTaskFeed, releaseTaskFeed } from "../stores/taskFeed";
 import TaskDetail from "./TaskDetail.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -109,8 +132,23 @@ const consoleClock = (iso) => formatClockCompact(iso, todayKey.value);
 
 const selectedId = computed(() => (typeof route.params.taskId === "string" ? route.params.taskId : ""));
 
-const waitingTasks = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review"));
-const otherTasks = computed(() => feedTasks.value.filter((t) => t.status !== "waiting_review"));
+// 筛选只切当前 feed 的最近 100 条窗口，不另拉数据、不改变任务状态。
+const filterKey = ref("all");
+const filterCounts = computed(() => countTasksByFilter(feedTasks.value));
+const waitingTasks = computed(() =>
+  filterKey.value === "all" ? filterTasks(feedTasks.value, "waiting_review") : [],
+);
+const otherTasks = computed(() => {
+  if (filterKey.value !== "all") return filterTasks(feedTasks.value, filterKey.value);
+  return feedTasks.value.filter((task) => task.status !== "waiting_review");
+});
+const activeFilter = computed(() =>
+  TASK_FILTERS.find((filter) => filter.key === filterKey.value) || TASK_FILTERS[0],
+);
+const resultGroupLabel = computed(() => {
+  if (filterKey.value !== "all") return `${activeFilter.value.label}筛选结果`;
+  return waitingTasks.value.length ? "其他最近任务" : "最近任务";
+});
 
 function isWork(status) {
   return TASK_WORK_STATES.has(status);
@@ -172,6 +210,35 @@ onUnmounted(releaseTaskFeed);
   color: var(--trust-fail);
   font-size: 12px;
   margin-bottom: 10px;
+}
+.cl-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+.cl-filter {
+  min-block-size: var(--space-6);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
+}
+.cl-filter:hover {
+  background: var(--hover-tint);
+  color: var(--ink);
+}
+.cl-filter.is-pressed {
+  background: var(--select-tint-clay);
+  border-color: var(--clay);
+  color: var(--clay);
 }
 .cl-skel-list {
   display: flex;
@@ -274,7 +341,8 @@ onUnmounted(releaseTaskFeed);
     animation: none;
   }
   .cl-lamp,
-  .cl-item {
+  .cl-item,
+  .cl-filter {
     transition: none;
   }
 }

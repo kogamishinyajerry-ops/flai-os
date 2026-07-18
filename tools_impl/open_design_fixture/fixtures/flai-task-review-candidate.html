@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FLAi-OS Open Design 协议契约夹具</title>
+  <style>
+    :root {
+      --clay: #c15f3c;
+      --clay-deep: #a54e2f;
+      --ink: #2b2622;
+      --ink-soft: #6b6259;
+      --ink-faint: #a39d90;
+      --page-bg: #faf7f2;
+      --card-bg: #ffffff;
+      --paper-surface: #fdfcf9;
+      --hairline: #ece5db;
+      --trust-pending: #a8761a;
+      --radius-sm: 6px;
+      --radius-lg: 12px;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-6: 24px;
+      --shadow-card: 0 1px 2px rgba(43, 38, 34, 0.035), 0 4px 14px rgba(72, 58, 44, 0.05);
+      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "STSong", "Times New Roman", serif;
+      --sans: "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+      color-scheme: light;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: var(--space-6);
+      color: var(--ink);
+      background: var(--page-bg);
+      font-family: var(--sans);
+    }
+
+    .candidate {
+      width: min(680px, 100%);
+      overflow: hidden;
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-lg);
+      background: var(--card-bg);
+      box-shadow: var(--shadow-card);
+    }
+
+    .candidate__rule {
+      height: var(--space-1);
+      background: var(--hairline);
+    }
+
+    .candidate__body { padding: var(--space-6); }
+
+    .candidate__meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-2);
+      margin-bottom: var(--space-4);
+    }
+
+    .candidate__eyebrow {
+      color: var(--ink-faint);
+      font-size: 11.5px;
+      font-weight: 650;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .candidate__state {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: var(--space-1) var(--space-2);
+      border: 1px solid var(--trust-pending);
+      border-radius: 999px;
+      color: var(--trust-pending);
+      background: var(--paper-surface);
+      font-size: 11.5px;
+      font-weight: 650;
+    }
+
+    .candidate__state::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--trust-pending);
+      content: "";
+    }
+
+    h1 {
+      margin: 0 0 var(--space-3);
+      font-family: var(--serif);
+      font-size: clamp(25px, 5vw, 34px);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .candidate__lead {
+      max-width: 56ch;
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 13.5px;
+      line-height: 1.75;
+    }
+
+    .candidate__facts {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1px;
+      margin: var(--space-6) 0;
+      overflow: hidden;
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-sm);
+      background: var(--hairline);
+    }
+
+    .candidate__fact {
+      min-height: 92px;
+      padding: var(--space-3);
+      background: var(--paper-surface);
+    }
+
+    .candidate__fact-label {
+      display: block;
+      margin-bottom: var(--space-2);
+      color: var(--ink-faint);
+      font-size: 11.5px;
+    }
+
+    .candidate__fact-value {
+      font-size: 13.5px;
+      font-weight: 650;
+      line-height: 1.45;
+    }
+
+    .candidate__footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      padding-top: var(--space-4);
+      border-top: 1px solid var(--hairline);
+      color: var(--ink-faint);
+      font-size: 11.5px;
+    }
+
+    .candidate__next { color: var(--clay); font-weight: 650; }
+
+    @media (max-width: 560px) {
+      body { padding: var(--space-3); }
+      .candidate__body { padding: var(--space-4); }
+      .candidate__facts { grid-template-columns: 1fr; }
+      .candidate__footer { align-items: flex-start; flex-direction: column; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main class="candidate" data-candidate-only="true">
+    <div class="candidate__rule" aria-hidden="true"></div>
+    <section class="candidate__body" aria-labelledby="candidate-title">
+      <div class="candidate__meta">
+        <span class="candidate__eyebrow">Protocol contract fixture · mock</span>
+        <span class="candidate__state">待人工审核</span>
+      </div>
+      <h1 id="candidate-title">Open Design 接缝契约夹具</h1>
+      <p class="candidate__lead">这是手工编写的 machine-only 协议测试夹具，不是 Open Design 生产生成资产、产品 UI 素材或本轮视觉 QA 结论。它只验证待核内容与来源的传递，不发布、不渲染、不替代人工签发。</p>
+      <div class="candidate__facts" aria-label="候选资产约束">
+        <div class="candidate__fact">
+          <span class="candidate__fact-label">生成模式</span>
+          <span class="candidate__fact-value">fixture / mock</span>
+        </div>
+        <div class="candidate__fact">
+          <span class="candidate__fact-label">发布影响</span>
+          <span class="candidate__fact-value">无 · contract fixture only</span>
+        </div>
+        <div class="candidate__fact">
+          <span class="candidate__fact-label">下一道门</span>
+          <span class="candidate__fact-value">仅审核协议证据</span>
+        </div>
+      </div>
+      <footer class="candidate__footer">
+        <span>不进入产品 UI · 不作为视觉验收</span>
+        <span class="candidate__next">审核协议证据 →</span>
+      </footer>
+    </section>
+  </main>
+</body>
+</html>

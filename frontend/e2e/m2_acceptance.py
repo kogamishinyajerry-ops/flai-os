@@ -116,6 +116,8 @@ with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
     login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie，登录门不拦
+    page_requests: list[str] = []
+    page.on("request", lambda request: page_requests.append(request.url))
 
     # ── ①②门户：连接后端 + Agent 列表（两个 agent 卡片）──
     # M6 起首页 "/" 是智能导引，Agent 门户移至 /portal（ADR-0012 前端路由）。
@@ -153,6 +155,15 @@ with sync_playwright() as p:
     events_ok = all(k in body for k in ("task_created", "tool_started", "tool_finished", "task_completed"))
     check("④任务事件时间轴（展开态）可见且任务完成", "已完成" in body and events_ok, body[:500])
     page.screenshot(path=str(SHOTS / "3_detail_events.png"), full_page=True)
+
+    # ── ⑤a 有界预览：页面审阅只能打 /preview，不得为展示暗中拖 /download blob ──
+    preview_hits = [url for url in page_requests if f"/api/files/" in url and url.endswith("/preview")]
+    implicit_download_hits = [url for url in page_requests if f"/api/files/" in url and url.endswith("/download")]
+    check(
+        "⑤a产物在线审阅走有界 preview，点击前零 download",
+        bool(preview_hits) and not implicit_download_hits,
+        f"preview={preview_hits} download={implicit_download_hits}",
+    )
 
     # ── ⑤下载输出（页面链接→真 HTTP 验内容）──
     href = page.locator("a[href*='/download']").first.get_attribute("href")

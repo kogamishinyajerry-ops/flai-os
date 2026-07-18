@@ -1232,7 +1232,7 @@ onMounted(load);
   border: 1px solid var(--hairline);
   border-radius: 10px;
   padding: 14px 16px;
-  background: var(--surface);
+  background: var(--surface-raised);
   display: flex;
   flex-direction: column;
   gap: 7px;

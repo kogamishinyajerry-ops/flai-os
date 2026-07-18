@@ -1,0 +1,59 @@
+id: open_design_candidate_agent
+name: "Open Design 统一设计候选 Agent（可信夹具阶段）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: structured_gen
+summary: "读取 FLAi-OS 设计 SSOT 的锁定引用包，经 mock=true 的 Open Design 协议接缝回放手工 HTML/SVG 机器夹具；只验证候选链路，绝不作为产品资产、视觉 QA 或人签结论。"
+description: >
+  第一条 Open Design 可信接缝：零 LLM（model.profile=none），只调用
+  open_design_fixture_generate。工具按真实 Open Design MCP 的
+  create_project→start_run→get_run→get_artifact 顺序返回已锁定字节的手工
+  machine-only HTML/SVG 协议契约夹具，
+  同时携带 App.vue、UI-PARADIGM、MOTION-SYSTEM 源哈希与精确 token 投影。
+  所有产物 candidate_only=true、mock=true、release_effect=none；workflow 自校验
+  哈希与输出 schema 后才落盘，Runtime 成功后只能进入 waiting_review。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: none
+knowledge:
+  enabled: false
+  scopes: []
+tools:
+  - open_design_fixture_generate
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats:
+    - .html
+    - .svg
+    - .json
+    - .md
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: true
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: false
+  save_feedback: true
+data_asset:
+  collect_samples: false
+limitations:
+  - "夹具阶段恒为 mock=true：候选来自仓内锁定 HTML/SVG，不代表生产 Open Design daemon 真跑结果，不得冒充真实生成。"
+  - "HTML/SVG 是本包手工编写的 machine-only 协议测试夹具：不在产品 UI 渲染/发布，不是产品资产，也不是本轮视觉 QA 结论。"
+  - "只产生候选：release_effect=none；不会写入前端源码、不会发布资产、不会迁移状态，人是唯一签发者。"
+  - "设计 SSOT 任一源文件或 token 漂移即 fail-closed；更新引用包必须显式复核源哈希、包哈希、候选字节与版本。"
+  - "不执行 Electron、终端、插件、凭据或外部 Agent；未来生产 daemon 必须使用新的 mock=false tool id，绝不原地翻牌 fixture 工具。"

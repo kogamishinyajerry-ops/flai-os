@@ -237,7 +237,7 @@ import { useAgentNames } from "../stores/agentNames";
 import { useTodayKey } from "../composables/useTodayKey";
 import { markSeen, ensureTaskBaseline, taskHasUnseen } from "../utils/lastSeen";
 import { memberPhase, squadCounts, squadLineText, relayOrderText } from "../utils/squad";
-import { ensureTaskEvidence, taskEvidenceSummary, taskEvidenceWithheld } from "../stores/taskEvidence";
+import { ensureTaskEvidence, taskEvidenceIssue, taskEvidenceSummary, taskEvidenceWithheld } from "../stores/taskEvidence";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -370,10 +370,12 @@ function doneUnseen(a) {
 function doneEvidenceText(a) {
   const t = latestTaskFor(a);
   if (!t) return null;
+  const withheld = taskEvidenceWithheld(t.id) === true;
+  const issue = taskEvidenceIssue(t.id);
+  if (issue) return { text: withheld ? `${issue.text}·另有密级隐藏项` : issue.text, unverified: 1 };
   // 批八 withheld（O6）：密级受限产物零下载零计数——遮蔽文案绝不编 N。可读
   // internal 依据与受限件共存时两者都不隐瞒（Codex R2 P2：此前遮蔽即短路，
   // 收纳行吞掉了用户有权查看的可读计数，与 Guide/TaskDetail 口径不一致）。
-  const withheld = taskEvidenceWithheld(t.id) === true;
   const s = taskEvidenceSummary(t.id);
   if (withheld && !s) return { text: "依据〔按密级隐藏〕", unverified: 0 };
   if (!s) return null;

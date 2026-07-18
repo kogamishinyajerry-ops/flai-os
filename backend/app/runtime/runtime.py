@@ -28,6 +28,7 @@ from ..core.errors import (
     KnowledgeScopeDeniedError,
     ModelAccessDeniedError,
     ToolNotAllowedError,
+    ToolNotRegisteredError,
 )
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
@@ -119,10 +120,36 @@ class _ToolRegistryContext:
             )
             raise ToolNotAllowedError(message)
 
+        # tool.yaml 的 mock 是工具污点事实源。白名单只说明 Agent 获准请求某 id；
+        # registry manifest 缺失仍必须在 tool_started 之前 fail-closed，不能把
+        # “未知/未执行”默认记成 mock=false（会伪装成 non-mock/REAL provenance）。
+        tool_manifest = self._tool_registry.get(tool_id)
+        if tool_manifest is None:
+            message = f"工具 {tool_id} 未注册或 manifest 无效，拒绝调用"
+            repos.append_event(
+                self._conn,
+                task_id=self._task_id,
+                agent_id=self._agent_id,
+                event_type="tool_failed",
+                level="error",
+                message=message,
+                payload={
+                    "tool_id": tool_id,
+                    "denied": "not_registered",
+                    "registered": False,
+                    "mock": None,
+                },
+            )
+            raise ToolNotRegisteredError(message)
+        # ToolRegistry.scan() 已校验 mock 为 boolean；缺省按 schema default=false，
+        # 并用 `is True` 收窄，绝不对安全标记做 truthiness 判定。
+        tool_mock = tool_manifest.get("mock", False) is True
+
         repos.append_event(
             self._conn, task_id=self._task_id, agent_id=self._agent_id,
             event_type="tool_started", level="info",
-            message=f"开始调用工具 {tool_id}", payload={"tool_id": tool_id, "input": payload},
+            message=f"开始调用工具 {tool_id}",
+            payload={"tool_id": tool_id, "input": payload, "mock": tool_mock},
         )
         try:
             result = self._tool_registry.call(
@@ -133,7 +160,8 @@ class _ToolRegistryContext:
             repos.append_event(
                 self._conn, task_id=self._task_id, agent_id=self._agent_id,
                 event_type="tool_failed", level="error",
-                message=f"工具 {tool_id} 调用失败：{exc}", payload={"tool_id": tool_id, "error": str(exc)},
+                message=f"工具 {tool_id} 调用失败：{exc}",
+                payload={"tool_id": tool_id, "error": str(exc), "mock": tool_mock},
             )
             raise
         # P2-2：工具契约的可恢复失败（status:"failed"，不抛异常）如实记 tool_failed，
@@ -148,13 +176,19 @@ class _ToolRegistryContext:
                     "tool_id": tool_id,
                     "output_status": result.get("status"),
                     "error": error_summary,
+                    "mock": tool_mock,
                 },
             )
             return result
         repos.append_event(
             self._conn, task_id=self._task_id, agent_id=self._agent_id,
             event_type="tool_finished", level="info",
-            message=f"工具 {tool_id} 调用完成", payload={"tool_id": tool_id, "output_status": result.get("status")},
+            message=f"工具 {tool_id} 调用完成",
+            payload={
+                "tool_id": tool_id,
+                "output_status": result.get("status"),
+                "mock": tool_mock,
+            },
         )
         return result
 

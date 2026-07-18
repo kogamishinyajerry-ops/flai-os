@@ -1,0 +1,41 @@
+{
+  "schema_version": "open-design-fixture-request/v1",
+  "asset_request": {
+    "asset_id": "task-review-summary",
+    "formats": [
+      "html",
+      "svg"
+    ],
+    "intent": "以手工 machine-only 协议契约夹具验证 FLAi-OS 设计引用包传递；不是 Open Design 生产生成或视觉 QA",
+    "locale": "zh-CN"
+  },
+  "design_reference_package": {
+    "schema_version": "flai-design-reference-package/v1",
+    "package_sha256": "38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94"
+  },
+  "open_design_protocol": {
+    "operations": [
+      "create_project",
+      "start_run",
+      "get_run",
+      "get_artifact"
+    ],
+    "source": "apps/daemon/src/mcp.ts",
+    "source_sha256": "6f8f4a02984604418a829952114875a7ce364eb62abd36493dbd4c4e5b57341a",
+    "upstream_revision": "e06bff69",
+    "write_operations": [
+      "create_project",
+      "start_run"
+    ],
+    "read_operations": [
+      "get_run",
+      "get_artifact"
+    ]
+  },
+  "interaction_contract": {
+    "candidate_only": true,
+    "human_review_required": true,
+    "release_effect": "none",
+    "rendering": "static_no_script_no_iframe"
+  }
+}

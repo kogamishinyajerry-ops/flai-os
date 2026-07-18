@@ -1,0 +1,24 @@
+{
+  "schema_version": "open-design-fixture-response/v1",
+  "fixture_id": "flai-task-review-assets-v1",
+  "generator_mode": "fixture",
+  "design_reference_package_sha256": "38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94",
+  "candidates": [
+    {
+      "id": "flai-task-review-html",
+      "kind": "html",
+      "filename": "flai-task-review-candidate.html",
+      "media_type": "text/html",
+      "title": "FLAi-OS 协议契约 HTML 机器夹具",
+      "content_sha256": "e1242ccccb30758c184d798f50edc2b3fc0f38508c3f70f6a7c0238fa5e27db1"
+    },
+    {
+      "id": "flai-task-review-svg",
+      "kind": "svg",
+      "filename": "flai-task-review-candidate.svg",
+      "media_type": "image/svg+xml",
+      "title": "FLAi-OS 协议契约 SVG 机器夹具",
+      "content_sha256": "8424d13080e3b1d79cef1e9a60a0e7a1a019d8f3a7bea4103fe3c523534bbd48"
+    }
+  ]
+}

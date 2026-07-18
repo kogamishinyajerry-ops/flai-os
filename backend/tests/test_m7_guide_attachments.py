@@ -108,7 +108,8 @@ def test_render_text_file_verbatim(tmp_path) -> None:
 def test_render_truncates_long_text_with_banner(tmp_path) -> None:
     row = _file_row(tmp_path, "big.log", b"x" * 50_000)
     block = _render(tmp_path, [row])
-    assert "……[截断：原文 50000 字符，仅展示前" in block
+    assert "……[截断：内容超出预览预算，仅展示前" in block
+    assert "原文 50000 字符" not in block
     # 渲染结果受单文件上限约束（横幅等元信息之外，正文不超 _PER_FILE_CHARS）
     assert len(block) < 20_000
 

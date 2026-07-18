@@ -1,4 +1,4 @@
-import { request } from "./client";
+import { request } from "./client.js";
 
 export const uploadFile = (file, taskId) => {
   const formData = new FormData();
@@ -14,31 +14,18 @@ export const uploadFile = (file, taskId) => {
 // 下载走浏览器原生导航（FileResponse 附件头由后端给），不经 fetch。
 export const downloadUrl = (fileId) => `/api/files/${fileId}/download`;
 
-function parseContentDispositionName(cd) {
-  // 优先 RFC 5987 的 filename*=UTF-8''...，回退 filename="..."。
-  const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
-  if (star) {
-    try {
-      return decodeURIComponent(star[1]);
-    } catch {
-      /* 退回普通 filename */
-    }
-  }
-  const plain = /filename="?([^";]+)"?/i.exec(cd);
-  return plain ? plain[1].trim() : "";
-}
-
-const TEXT_EXTS = ["md", "markdown", "txt", "text", "json", "csv", "log", "yaml", "yml"];
-
-// 取输出文件的文件名 + 内容（供签发页内联查看要签的产物）。文本类读为字符串，
-// 二进制类只给文件名/大小（仍可下载）。同源请求，Content-Disposition 头可读。
-export async function fetchOutputFile(fileId) {
-  const resp = await fetch(downloadUrl(fileId));
-  if (!resp.ok) throw new Error(`下载失败（${resp.status}）`);
-  const filename = parseContentDispositionName(resp.headers.get("content-disposition") || "") || fileId.slice(0, 8);
-  const blob = await resp.blob();
-  const ext = filename.includes(".") ? filename.split(".").pop().toLowerCase() : "";
-  const isText = TEXT_EXTS.includes(ext);
-  const text = isText ? await blob.text() : null;
-  return { fileId, filename, ext, size: blob.size, isText, text };
+// 签发面只取后端有界、已过密级与完整性闸的预览 JSON。真实 blob 下载仅由上方
+// downloadUrl 对应的用户显式点击触发；页面加载/展开绝不暗中拉完整二进制。
+export async function fetchFilePreview(fileId) {
+  const body = await request(`/api/files/${fileId}/preview`);
+  return {
+    fileId: body.file_id,
+    filename: body.filename,
+    ext: body.extension,
+    size: body.size_bytes,
+    previewKind: body.preview_kind,
+    isText: body.is_text,
+    truncated: body.truncated,
+    text: body.text,
+  };
 }

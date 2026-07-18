@@ -163,7 +163,8 @@
                 <div v-if="a.error" class="peek-artifact-err">产物加载失败：{{ a.error }}</div>
                 <MarkdownLite v-else-if="a.isText && (a.ext === 'md' || a.ext === 'markdown')" :text="a.text" class="peek-artifact-body" />
                 <pre v-else-if="a.isText" class="peek-artifact-body peek-pre">{{ a.text }}</pre>
-                <div v-else class="peek-artifact-muted">二进制文件，请下载后查看。</div>
+                <div v-else class="peek-artifact-muted">该格式暂不支持在线预览；需要时请显式下载后查看。</div>
+                <div v-if="a.truncated" class="peek-artifact-truncated">预览已按安全预算截断；完整内容请下载查看。</div>
               </div>
               <!-- 截断必披露：签发背书的是全部产物，没看全就要说清楚 -->
               <div v-if="peekFileIds.length > peekArtifacts.length" class="peek-artifact-more">
@@ -224,7 +225,7 @@ import { statusCenter, openTaskPeek, backToInbox, closeCenter } from "../stores/
 import { acquireChannel, pokeTask } from "../stores/liveFeed";
 import { reviewTask } from "../api/tasks";
 import { request } from "../api/client";
-import { downloadUrl, fetchOutputFile } from "../api/files";
+import { downloadUrl, fetchFilePreview } from "../api/files";
 // formatTime 保留给授权链行（N8）——签发决策面的检视级全量时间戳；行级扫读
 // 面（待签/落定行）走 formatClockCompact 紧凑时钟（批次三 G4 边界：检视面
 // 全量精度，扫读面紧凑）。
@@ -411,7 +412,7 @@ async function syncPeekArtifacts(taskId, ids) {
   const out = [];
   for (const fid of targets) {
     try {
-      out.push(await fetchOutputFile(fid));
+      out.push(await fetchFilePreview(fid));
     } catch (err) {
       out.push({ fileId: fid, filename: fid.slice(0, 8), error: err.message, isText: false });
     }
@@ -1023,6 +1024,12 @@ onUnmounted(() => {
   padding: 10px 12px;
   color: var(--trust-fail);
   font-size: 12px;
+}
+
+.peek-artifact-truncated {
+  margin-top: var(--space-1);
+  color: var(--trust-pending);
+  font-size: var(--fs-xs);
 }
 .peek-artifact-more {
   font-size: 11.5px;

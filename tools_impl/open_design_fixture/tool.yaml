@@ -1,0 +1,497 @@
+id: open_design_fixture_generate
+name: "Open Design 本地可信夹具生成器"
+version: 0.1.0
+type: python_adapter
+mock: true
+description: >
+  以已锁定 SHA256 的本地 HTML/SVG 文本夹具复现 Open Design 的
+  create_project→start_run→get_run→get_artifact 生成接缝。HTML/SVG 是手工编写的
+  machine-only 协议契约夹具，不是生产生成资产或视觉 QA 结论；本工具不连接生产 daemon，
+  不执行外部 Agent，不渲染/发布资产；成功只产生待人工审核的协议证据。未来生产 daemon
+  必须使用新的 tool id，绝不把本 mock 包原地翻牌。
+entrypoint: tools_impl.open_design_fixture.adapter:run
+output_classification: internal
+input_schema:
+  type: object
+  required:
+    - schema_version
+    - asset_request
+    - design_reference_package
+    - open_design_protocol
+    - interaction_contract
+  properties:
+    schema_version:
+      const: open-design-fixture-request/v1
+    asset_request:
+      type: object
+      required:
+        - asset_id
+        - formats
+        - intent
+        - locale
+      properties:
+        asset_id:
+          const: task-review-summary
+        formats:
+          const:
+            - html
+            - svg
+        intent:
+          const: "以手工 machine-only 协议契约夹具验证 FLAi-OS 设计引用包传递；不是 Open Design 生产生成或视觉 QA"
+        locale:
+          const: zh-CN
+      additionalProperties: false
+    design_reference_package:
+      type: object
+      required:
+        - schema_version
+        - package_sha256
+      properties:
+        schema_version:
+          const: flai-design-reference-package/v1
+        package_sha256:
+          const: 38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94
+      additionalProperties: false
+    open_design_protocol:
+      type: object
+      required:
+        - operations
+        - source
+        - source_sha256
+        - upstream_revision
+        - write_operations
+        - read_operations
+      properties:
+        operations:
+          const:
+            - create_project
+            - start_run
+            - get_run
+            - get_artifact
+        source:
+          const: apps/daemon/src/mcp.ts
+        source_sha256:
+          const: 6f8f4a02984604418a829952114875a7ce364eb62abd36493dbd4c4e5b57341a
+        upstream_revision:
+          const: e06bff69
+        write_operations:
+          const:
+            - create_project
+            - start_run
+        read_operations:
+          const:
+            - get_run
+            - get_artifact
+      additionalProperties: false
+    interaction_contract:
+      type: object
+      required:
+        - candidate_only
+        - human_review_required
+        - release_effect
+        - rendering
+      properties:
+        candidate_only:
+          const: true
+        human_review_required:
+          const: true
+        release_effect:
+          const: none
+        rendering:
+          const: static_no_script_no_iframe
+      additionalProperties: false
+  additionalProperties: false
+output_schema:
+  type: object
+  required:
+    - status
+    - generator_mode
+    - mock
+    - production_daemon_used
+    - fixture_id
+    - fixture_sha256
+    - request_sha256
+    - response_sha256
+    - design_reference_package_sha256
+    - design_reference_package
+    - protocol_trace
+    - candidates
+    - error_message
+  properties:
+    status:
+      enum:
+        - success
+        - failed
+    generator_mode:
+      const: fixture
+    mock:
+      const: true
+    production_daemon_used:
+      const: false
+    fixture_id:
+      const: flai-task-review-assets-v1
+    fixture_sha256:
+      type: string
+      pattern: "^$|^[a-f0-9]{64}$"
+    request_sha256:
+      type: string
+      pattern: "^$|^[a-f0-9]{64}$"
+    response_sha256:
+      type: string
+      pattern: "^[a-f0-9]{64}$"
+    design_reference_package_sha256:
+      type: string
+      pattern: "^$|^[a-f0-9]{64}$"
+    design_reference_package:
+      type: object
+    protocol_trace:
+      type: array
+      prefixItems:
+        - const:
+            operation: create_project
+            access: write
+            status: success
+        - const:
+            operation: start_run
+            access: write
+            status: success
+        - const:
+            operation: get_run
+            access: read
+            status: succeeded
+        - const:
+            operation: get_artifact
+            access: read
+            status: success
+      items: false
+    candidates:
+      type: array
+      prefixItems:
+        - type: object
+          required:
+            - id
+            - kind
+            - filename
+            - media_type
+            - title
+            - content_sha256
+            - size_bytes
+            - content
+          properties:
+            id:
+              const: flai-task-review-html
+            kind:
+              const: html
+            filename:
+              const: flai-task-review-candidate.html
+            media_type:
+              const: text/html
+            title:
+              const: FLAi-OS 协议契约 HTML 机器夹具
+            content_sha256:
+              const: e1242ccccb30758c184d798f50edc2b3fc0f38508c3f70f6a7c0238fa5e27db1
+            size_bytes:
+              const: 5879
+            content:
+              const: |
+                <!doctype html>
+                <html lang="zh-CN">
+                <head>
+                  <meta charset="utf-8">
+                  <meta name="viewport" content="width=device-width, initial-scale=1">
+                  <title>FLAi-OS Open Design 协议契约夹具</title>
+                  <style>
+                    :root {
+                      --clay: #c15f3c;
+                      --clay-deep: #a54e2f;
+                      --ink: #2b2622;
+                      --ink-soft: #6b6259;
+                      --ink-faint: #a39d90;
+                      --page-bg: #faf7f2;
+                      --card-bg: #ffffff;
+                      --paper-surface: #fdfcf9;
+                      --hairline: #ece5db;
+                      --trust-pending: #a8761a;
+                      --radius-sm: 6px;
+                      --radius-lg: 12px;
+                      --space-1: 4px;
+                      --space-2: 8px;
+                      --space-3: 12px;
+                      --space-4: 16px;
+                      --space-6: 24px;
+                      --shadow-card: 0 1px 2px rgba(43, 38, 34, 0.035), 0 4px 14px rgba(72, 58, 44, 0.05);
+                      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "STSong", "Times New Roman", serif;
+                      --sans: "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+                      color-scheme: light;
+                    }
+
+                    * { box-sizing: border-box; }
+
+                    body {
+                      min-height: 100vh;
+                      margin: 0;
+                      display: grid;
+                      place-items: center;
+                      padding: var(--space-6);
+                      color: var(--ink);
+                      background: var(--page-bg);
+                      font-family: var(--sans);
+                    }
+
+                    .candidate {
+                      width: min(680px, 100%);
+                      overflow: hidden;
+                      border: 1px solid var(--hairline);
+                      border-radius: var(--radius-lg);
+                      background: var(--card-bg);
+                      box-shadow: var(--shadow-card);
+                    }
+
+                    .candidate__rule {
+                      height: var(--space-1);
+                      background: var(--hairline);
+                    }
+
+                    .candidate__body { padding: var(--space-6); }
+
+                    .candidate__meta {
+                      display: flex;
+                      flex-wrap: wrap;
+                      align-items: center;
+                      justify-content: space-between;
+                      gap: var(--space-2);
+                      margin-bottom: var(--space-4);
+                    }
+
+                    .candidate__eyebrow {
+                      color: var(--ink-faint);
+                      font-size: 11.5px;
+                      font-weight: 650;
+                      letter-spacing: 0.08em;
+                      text-transform: uppercase;
+                    }
+
+                    .candidate__state {
+                      display: inline-flex;
+                      align-items: center;
+                      gap: var(--space-2);
+                      padding: var(--space-1) var(--space-2);
+                      border: 1px solid var(--trust-pending);
+                      border-radius: 999px;
+                      color: var(--trust-pending);
+                      background: var(--paper-surface);
+                      font-size: 11.5px;
+                      font-weight: 650;
+                    }
+
+                    .candidate__state::before {
+                      width: 7px;
+                      height: 7px;
+                      border-radius: 50%;
+                      background: var(--trust-pending);
+                      content: "";
+                    }
+
+                    h1 {
+                      margin: 0 0 var(--space-3);
+                      font-family: var(--serif);
+                      font-size: clamp(25px, 5vw, 34px);
+                      font-weight: 600;
+                      letter-spacing: -0.02em;
+                    }
+
+                    .candidate__lead {
+                      max-width: 56ch;
+                      margin: 0;
+                      color: var(--ink-soft);
+                      font-size: 13.5px;
+                      line-height: 1.75;
+                    }
+
+                    .candidate__facts {
+                      display: grid;
+                      grid-template-columns: repeat(3, minmax(0, 1fr));
+                      gap: 1px;
+                      margin: var(--space-6) 0;
+                      overflow: hidden;
+                      border: 1px solid var(--hairline);
+                      border-radius: var(--radius-sm);
+                      background: var(--hairline);
+                    }
+
+                    .candidate__fact {
+                      min-height: 92px;
+                      padding: var(--space-3);
+                      background: var(--paper-surface);
+                    }
+
+                    .candidate__fact-label {
+                      display: block;
+                      margin-bottom: var(--space-2);
+                      color: var(--ink-faint);
+                      font-size: 11.5px;
+                    }
+
+                    .candidate__fact-value {
+                      font-size: 13.5px;
+                      font-weight: 650;
+                      line-height: 1.45;
+                    }
+
+                    .candidate__footer {
+                      display: flex;
+                      align-items: center;
+                      justify-content: space-between;
+                      gap: var(--space-3);
+                      padding-top: var(--space-4);
+                      border-top: 1px solid var(--hairline);
+                      color: var(--ink-faint);
+                      font-size: 11.5px;
+                    }
+
+                    .candidate__next { color: var(--clay); font-weight: 650; }
+
+                    @media (max-width: 560px) {
+                      body { padding: var(--space-3); }
+                      .candidate__body { padding: var(--space-4); }
+                      .candidate__facts { grid-template-columns: 1fr; }
+                      .candidate__footer { align-items: flex-start; flex-direction: column; }
+                    }
+
+                    @media (prefers-reduced-motion: reduce) {
+                      *, *::before, *::after { scroll-behavior: auto; }
+                    }
+                  </style>
+                </head>
+                <body>
+                  <main class="candidate" data-candidate-only="true">
+                    <div class="candidate__rule" aria-hidden="true"></div>
+                    <section class="candidate__body" aria-labelledby="candidate-title">
+                      <div class="candidate__meta">
+                        <span class="candidate__eyebrow">Protocol contract fixture · mock</span>
+                        <span class="candidate__state">待人工审核</span>
+                      </div>
+                      <h1 id="candidate-title">Open Design 接缝契约夹具</h1>
+                      <p class="candidate__lead">这是手工编写的 machine-only 协议测试夹具，不是 Open Design 生产生成资产、产品 UI 素材或本轮视觉 QA 结论。它只验证待核内容与来源的传递，不发布、不渲染、不替代人工签发。</p>
+                      <div class="candidate__facts" aria-label="候选资产约束">
+                        <div class="candidate__fact">
+                          <span class="candidate__fact-label">生成模式</span>
+                          <span class="candidate__fact-value">fixture / mock</span>
+                        </div>
+                        <div class="candidate__fact">
+                          <span class="candidate__fact-label">发布影响</span>
+                          <span class="candidate__fact-value">无 · contract fixture only</span>
+                        </div>
+                        <div class="candidate__fact">
+                          <span class="candidate__fact-label">下一道门</span>
+                          <span class="candidate__fact-value">仅审核协议证据</span>
+                        </div>
+                      </div>
+                      <footer class="candidate__footer">
+                        <span>不进入产品 UI · 不作为视觉验收</span>
+                        <span class="candidate__next">审核协议证据 →</span>
+                      </footer>
+                    </section>
+                  </main>
+                </body>
+                </html>
+          additionalProperties: false
+        - type: object
+          required:
+            - id
+            - kind
+            - filename
+            - media_type
+            - title
+            - content_sha256
+            - size_bytes
+            - content
+          properties:
+            id:
+              const: flai-task-review-svg
+            kind:
+              const: svg
+            filename:
+              const: flai-task-review-candidate.svg
+            media_type:
+              const: image/svg+xml
+            title:
+              const: FLAi-OS 协议契约 SVG 机器夹具
+            content_sha256:
+              const: 8424d13080e3b1d79cef1e9a60a0e7a1a019d8f3a7bea4103fe3c523534bbd48
+            size_bytes:
+              const: 2322
+            content:
+              const: |
+                <svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420" role="img" aria-labelledby="title desc">
+                  <title id="title">FLAi-OS Open Design 协议契约夹具</title>
+                  <desc id="desc">手工编写的 machine-only 协议测试 SVG；不是 Open Design 生产生成资产、产品素材或视觉 QA 结论。</desc>
+                  <rect width="960" height="420" fill="#faf7f2"/>
+                  <rect x="80" y="58" width="800" height="304" rx="12" fill="#ffffff" stroke="#ece5db"/>
+                  <path d="M92 58h776a12 12 0 0 1 12 12v2H80v-2a12 12 0 0 1 12-12Z" fill="#ece5db"/>
+                  <text x="120" y="116" fill="#a39d90" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15" font-weight="600" letter-spacing="1.4">PROTOCOL CONTRACT FIXTURE · MOCK</text>
+                  <rect x="692" y="92" width="148" height="34" rx="17" fill="#fdfcf9" stroke="#a8761a" stroke-opacity="0.45"/>
+                  <circle cx="712" cy="109" r="4" fill="#a8761a"/>
+                  <text x="724" y="114" fill="#a8761a" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="600">待人工审核</text>
+                  <text x="120" y="180" fill="#2b2622" font-family="Songti SC, STSong, serif" font-size="40" font-weight="600">Open Design 接缝契约夹具</text>
+                  <text x="120" y="218" fill="#6b6259" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="17">machine-only · 非生产生成 · 非产品资产 · 非视觉 QA 结论</text>
+                  <line x1="120" y1="252" x2="840" y2="252" stroke="#ece5db"/>
+                  <text x="120" y="290" fill="#a39d90" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="14">生成模式</text>
+                  <text x="120" y="320" fill="#2b2622" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="18" font-weight="600">fixture / mock</text>
+                  <text x="378" y="290" fill="#a39d90" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="14">发布影响</text>
+                  <text x="378" y="320" fill="#2b2622" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="18" font-weight="600">无 · contract only</text>
+                  <text x="650" y="290" fill="#a39d90" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="14">下一步</text>
+                  <text x="650" y="320" fill="#c15f3c" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="18" font-weight="600">审核协议证据 →</text>
+                </svg>
+          additionalProperties: false
+      items: false
+    error_message:
+      type:
+        - string
+        - "null"
+  additionalProperties: false
+  allOf:
+    - if:
+        properties:
+          status:
+            const: success
+      then:
+        properties:
+          fixture_sha256:
+            const: ad145be4e55a5ab46d660daeed6555cd01667b7a02fad92cc98e3203bdc53898
+          request_sha256:
+            const: c6a56a02c8b742bd28d34060b4712097d83bc6d15b1822cd3a2e791d66d85d56
+          design_reference_package_sha256:
+            const: 38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94
+          design_reference_package:
+            const: {"schema_version":"flai-design-reference-package/v1","sources":{"app_tokens":{"path":"frontend/src/App.vue","sha256":"a0a2c365d8775b3c4cbdf30d255d50c606b1b6123a9355391636af17a0488a9c"},"motion_system":{"path":"docs/design/MOTION-SYSTEM.md","sha256":"8942f2d781e90b80af07fe61ac8697d9a3a6f7f46ce254d04ceadfa1b858bb9a"},"ui_paradigm":{"path":"docs/design/UI-PARADIGM.md","sha256":"6985d3ce38d9667d4a351c44499f0cd4685257adca956fb6475e0ca6247677b9"}},"theme":"light","token_allowlist":["--clay","--clay-deep","--ink","--ink-soft","--ink-faint","--page-bg","--card-bg","--paper-surface","--hairline","--trust-real","--trust-signed","--trust-fail","--trust-pending","--focus-ring-clay","--radius-sm","--radius-lg","--space-1","--space-2","--space-3","--space-4","--space-6","--shadow-card","--serif","--sans"],"tokens":{"--card-bg":"#ffffff","--clay":"#c15f3c","--clay-deep":"#a54e2f","--focus-ring-clay":"var(--clay)","--hairline":"#ece5db","--ink":"#2b2622","--ink-faint":"#a39d90","--ink-soft":"#6b6259","--page-bg":"#faf7f2","--paper-surface":"#fdfcf9","--radius-lg":"12px","--radius-sm":"6px","--sans":"\"PingFang SC\", \"Microsoft YaHei\", system-ui, -apple-system, sans-serif","--serif":"\"Iowan Old Style\", \"Palatino Linotype\", Palatino, \"Songti SC\", \"STSong\", \"Times New Roman\", serif","--shadow-card":"0 1px 2px rgba(43, 38, 34, 0.035), 0 4px 14px rgba(72, 58, 44, 0.05)","--space-1":"4px","--space-2":"8px","--space-3":"12px","--space-4":"16px","--space-6":"24px","--trust-fail":"#be3a3a","--trust-pending":"#a8761a","--trust-real":"#2e8f50","--trust-signed":"#167d8b"},"trust_color_constraints":{"--clay":"work_or_selected_only","--trust-fail":"true_failure_or_rejection_only","--trust-pending":"unverified_degraded_or_waiting_review_only","--trust-real":"real_evidence_only","--trust-signed":"human_signed_only","cancelled":"neutral_no_trust_color","completed":"neutral_no_trust_color","human_is_only_signer":true}}
+          response_sha256:
+            const: a3734f515445b1ee8cee775da91bddd2659c4408ab67fad7d47610a68bfe5f9d
+          protocol_trace:
+            minItems: 4
+            maxItems: 4
+          candidates:
+            minItems: 2
+            maxItems: 2
+          error_message:
+            type: "null"
+      else:
+        properties:
+          protocol_trace:
+            maxItems: 0
+          candidates:
+            maxItems: 0
+          error_message:
+            type: string
+            minLength: 1
+runtime:
+  timeout_seconds: 10
+  max_parallel_jobs: 1
+  retry: 0
+safety:
+  require_workspace_isolation: false
+  allow_shell_command: false
+  save_raw_files: false
+owner:
+  maintainer: TBD
+  business_owner: TBD

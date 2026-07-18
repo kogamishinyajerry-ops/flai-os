@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Open Design fixture response descriptor",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "fixture_id",
+    "generator_mode",
+    "design_reference_package_sha256",
+    "candidates"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "open-design-fixture-response/v1"
+    },
+    "fixture_id": {
+      "const": "flai-task-review-assets-v1"
+    },
+    "generator_mode": {
+      "const": "fixture"
+    },
+    "design_reference_package_sha256": {
+      "const": "38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94"
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "filename",
+          "media_type",
+          "title",
+          "content_sha256"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{2,63}$"
+          },
+          "kind": {
+            "enum": [
+              "html",
+              "svg"
+            ]
+          },
+          "filename": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{2,95}\\.(html|svg)$"
+          },
+          "media_type": {
+            "enum": [
+              "image/svg+xml",
+              "text/html"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 80
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    }
+  }
+}

@@ -55,6 +55,9 @@
     <div v-if="evidenceSummary" class="delivery-evidence" :class="{ 'has-unverified': evidenceSummary.unverified > 0 }">
       依据 {{ evidenceSummary.total }} 条（{{ evidenceSummary.verified }} 已核验 · {{ evidenceSummary.unverified }} 未核）<template v-if="evidenceSummary.level"> · 置信度 {{ evidenceSummary.level }}（模型自评）</template>
     </div>
+    <div v-if="evidenceIssue" class="delivery-evidence has-unverified">
+      {{ evidenceIssue.text }}
+    </div>
     <div v-if="refusalCount > 0" class="delivery-refusals">
       已如实说明：{{ refusalCount }} 项超出能力范围
     </div>
@@ -83,7 +86,7 @@ import { downloadUrl } from "../api/files";
 import { getDeliverySummary, listOutputFiles } from "../api/tasks";
 import { taskElapsedMs, formatDuration, formatTokens, taskDisplayName } from "../utils/format";
 import { useAgentNames } from "../stores/agentNames";
-import { ensureTaskEvidence, taskEvidenceOf, taskEvidenceSummary } from "../stores/taskEvidence";
+import { ensureTaskEvidence, taskEvidenceIssue, taskEvidenceOf, taskEvidenceSummary } from "../stores/taskEvidence";
 
 const props = defineProps({ task: Object, animate: { type: Boolean, default: false } });
 
@@ -157,6 +160,7 @@ const batchSummary = computed(() => {
 
 // 批七依据区：模块级缓存拉取（终态数据静态，同任务全站只拉一次）。
 const evidenceSummary = computed(() => (props.task ? taskEvidenceSummary(props.task.id) : null));
+const evidenceIssue = computed(() => (props.task ? taskEvidenceIssue(props.task.id) : null));
 const refusalCount = computed(() => {
   if (!props.task) return 0;
   const ev = taskEvidenceOf(props.task.id);

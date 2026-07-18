@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420" role="img" aria-labelledby="title desc">
+  <title id="title">FLAi-OS Open Design 协议契约夹具</title>
+  <desc id="desc">手工编写的 machine-only 协议测试 SVG；不是 Open Design 生产生成资产、产品素材或视觉 QA 结论。</desc>
+  <rect width="960" height="420" fill="#faf7f2"/>
+  <rect x="80" y="58" width="800" height="304" rx="12" fill="#ffffff" stroke="#ece5db"/>
+  <path d="M92 58h776a12 12 0 0 1 12 12v2H80v-2a12 12 0 0 1 12-12Z" fill="#ece5db"/>
+  <text x="120" y="116" fill="#a39d90" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15" font-weight="600" letter-spacing="1.4">PROTOCOL CONTRACT FIXTURE · MOCK</text>
+  <rect x="692" y="92" width="148" height="34" rx="17" fill="#fdfcf9" stroke="#a8761a" stroke-opacity="0.45"/>
+  <circle cx="712" cy="109" r="4" fill="#a8761a"/>
+  <text x="724" y="114" fill="#a8761a" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="600">待人工审核</text>
+  <text x="120" y="180" fill="#2b2622" font-family="Songti SC, STSong, serif" font-size="40" font-weight="600">Open Design 接缝契约夹具</text>
+  <text x="120" y="218" fill="#6b6259" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="17">machine-only · 非生产生成 · 非产品资产 · 非视觉 QA 结论</text>
+  <line x1="120" y1="252" x2="840" y2="252" stroke="#ece5db"/>
+  <text x="120" y="290" fill="#a39d90" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="14">生成模式</text>
+  <text x="120" y="320" fill="#2b2622" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="18" font-weight="600">fixture / mock</text>
+  <text x="378" y="290" fill="#a39d90" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="14">发布影响</text>
+  <text x="378" y="320" fill="#2b2622" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="18" font-weight="600">无 · contract only</text>
+  <text x="650" y="290" fill="#a39d90" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="14">下一步</text>
+  <text x="650" y="320" fill="#c15f3c" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="18" font-weight="600">审核协议证据 →</text>
+</svg>

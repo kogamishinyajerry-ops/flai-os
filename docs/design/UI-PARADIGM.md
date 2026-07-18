@@ -54,7 +54,8 @@ Owner 判定 Phase 1 装饰层不改变骨架认知，拍板重构方向：**双
 
 ## Phase 2b（已交付）——骨架手术
 
-- **导航塌缩**：三入口 → 「对话 | 任务台」双 Surface（App.vue NAV）；
+- **导航塌缩**：三入口 → 「对话 | 今日」双 Surface（App.vue NAV；「今日」内聚
+  TaskConsole 的任务台能力）；
   /workbench 重定向 /tasks 保深链；WorkbenchHome/TaskHistory 退役删除。
 - **任务台三栏**（views/TaskConsole.vue）：左=任务列表（待签发 amber 组
   置顶 + 状态徽章随 5s 轮询原地切换 + 诚实脚注）；中+右=TaskDetail 完整

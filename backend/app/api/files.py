@@ -15,6 +15,12 @@ from starlette.datastructures import MutableHeaders
 
 from ..core.errors import FileIntegrityError
 from ..logging_setup import audit_event
+from ..runtime.attachments import (
+    TEXT_PREVIEW_EXTENSIONS,
+    XLSX_PREVIEW_EXTENSIONS,
+    render_text_preview_handle,
+    render_xlsx_preview_handle,
+)
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
 
@@ -261,8 +267,20 @@ async def upload_file(
         conn.close()
 
 
-@router.get("/files/{file_id}/download")
-def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
+def _gated_verified_handle(
+    request: Request,
+    file_id: str,
+    *,
+    denied_action: str,
+    access_label: str,
+) -> tuple[dict[str, Any], BinaryIO]:
+    """Resolve a file through the shared classification and integrity gates.
+
+    Both download and preview use this exact sequence: record existence,
+    internal-only classification, authoritative root selection, and an already
+    verified handle.  A future gate change therefore cannot accidentally leave
+    preview as a weaker side door.
+    """
     conn = request.app.state.conn_factory()
     try:
         record = repos.get_file(conn, file_id)
@@ -279,7 +297,7 @@ def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
         # actor=唯一 username（Codex R0 P2-4：display_name 非唯一，同名账户无法归因），
         # display_name 作附加字段留人可读线索。
         audit_event(
-            "sensitive_download_denied",
+            denied_action,
             actor=request.state.user["username"],
             outcome="denied",
             file_id=file_id,
@@ -289,7 +307,7 @@ def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
         raise HTTPException(
             status_code=403,
             detail=(
-                f"文件分级 {record['classification']!r} 未开放下载：角色授权体系"
+                f"文件分级 {record['classification']!r} 未开放{access_label}：角色授权体系"
                 "未建立前非 internal 数据一律 fail-closed 拒绝（ADR-0021）"
             ),
         )
@@ -320,6 +338,17 @@ def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
             status_code=409,
             detail="文件完整性校验失败：磁盘内容与登记指纹不符",
         ) from exc
+    return record, handle
+
+
+@router.get("/files/{file_id}/download")
+def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
+    record, handle = _gated_verified_handle(
+        request,
+        file_id,
+        denied_action="sensitive_download_denied",
+        access_label="下载",
+    )
 
     try:
         return _VerifiedFileResponse(
@@ -330,3 +359,71 @@ def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
     except BaseException:
         handle.close()
         raise
+
+
+# 「先看一眼是什么」的人工审阅预算。完整内容只能由用户显式点击下载获取。
+_PREVIEW_CHARS = 8_000
+
+
+def _preview_response(
+    record: dict[str, Any],
+    *,
+    extension: str,
+    preview_kind: str,
+    is_text: bool,
+    truncated: bool,
+    text: str | None,
+) -> dict[str, Any]:
+    return {
+        "file_id": record["id"],
+        "filename": record["filename"],
+        "size_bytes": record["size_bytes"],
+        "extension": extension,
+        "preview_kind": preview_kind,
+        "is_text": is_text,
+        "truncated": truncated,
+        "text": text,
+    }
+
+
+@router.get("/files/{file_id}/preview")
+def preview_file(file_id: str, request: Request) -> dict[str, Any]:
+    """Return verified metadata plus a bounded text/xlsx preview.
+
+    Unsupported formats never expose bytes, but still pass classification and
+    integrity checks before their metadata is returned.  This endpoint never
+    redirects to download and never reads a full binary blob for presentation.
+    """
+    record, handle = _gated_verified_handle(
+        request,
+        file_id,
+        denied_action="sensitive_preview_denied",
+        access_label="预览",
+    )
+    extension_with_dot = Path(record["filename"] or "").suffix.lower()
+    extension = extension_with_dot.removeprefix(".")
+    try:
+        if extension_with_dot in TEXT_PREVIEW_EXTENSIONS:
+            text, truncated = render_text_preview_handle(handle, _PREVIEW_CHARS)
+        elif extension_with_dot in XLSX_PREVIEW_EXTENSIONS:
+            text, truncated = render_xlsx_preview_handle(handle, _PREVIEW_CHARS)
+        else:
+            return _preview_response(
+                record,
+                extension=extension,
+                preview_kind="unsupported",
+                is_text=False,
+                truncated=False,
+                text=None,
+            )
+    finally:
+        handle.close()
+
+    return _preview_response(
+        record,
+        extension=extension,
+        preview_kind="text",
+        is_text=True,
+        truncated=truncated,
+        text=text,
+    )

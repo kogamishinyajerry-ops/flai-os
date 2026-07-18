@@ -70,14 +70,14 @@ const levelLabel = (l) => LEVEL[l] || l;
 .ev-source { font-weight: 600; color: var(--ink); }
 .ev-quote { color: var(--ink-soft); }
 .ev-quote.is-code {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--mono);
   font-size: 12px;
-  background: var(--surface-sunken, rgba(0, 0, 0, 0.04));
+  background: var(--paper-rail);
   border: 1px solid var(--hairline-soft);
   border-radius: 5px;
   padding: 1px 6px;
 }
-.ev-withheld { color: var(--ink-soft); background: var(--surface-sunken, rgba(0, 0, 0, 0.04)); border-radius: 5px; padding: 1px 8px; }
+.ev-withheld { color: var(--ink-soft); background: var(--paper-rail); border-radius: 5px; padding: 1px 8px; }
 /* 已核验=中性墨 ✓（绝不绿）；未核=amber（信任色锁：amber=未核/待签唯一语义） */
 .ev-verified { color: var(--ink-soft); }
 .ev-unverified {

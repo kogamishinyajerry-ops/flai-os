@@ -348,6 +348,11 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
 .qs-input::placeholder {
   color: var(--ink-faint);
 }
+.qs-input:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
 .qs-results {
   flex: 1 1 auto;
   overflow-y: auto;

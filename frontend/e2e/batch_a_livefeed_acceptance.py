@@ -191,13 +191,16 @@ with sync_playwright() as p:
     resp = approver.post(f"/api/tasks/{task_id}/review", json={"action": "approve", "comment": "跨会话放行验收"})
     check("跨会话 API 批准放行请求成功", resp.status_code == 200, f"status={resp.status_code} body={resp.text[:200]}")
 
-    poke_deadline = time.time() + 12
-    seen_completed = False
-    while time.time() < poke_deadline:
-        if "已完成" in page.locator("body").inner_text():
-            seen_completed = True
-            break
-        time.sleep(0.5)
+    # 批八 TaskConsole 新增「已完成 · 0」筛选 chip 后，body 级字符串会在任务仍
+    # waiting_review 时产生假阳性。②必须盯任务详情的终态盖章这一精确产品事实，
+    # 不能把同屏筛选标签冒充状态迁移完成。
+    try:
+        page.locator(".completion-seal", has_text="已完成").wait_for(
+            state="visible", timeout=12_000
+        )
+        seen_completed = True
+    except Exception:
+        seen_completed = False
     body = page.locator("body").inner_text()
     check("②跨会话放行免手动刷新：12s 内页面自行出现「已完成」（零点击）",
           seen_completed is True, body[:400])

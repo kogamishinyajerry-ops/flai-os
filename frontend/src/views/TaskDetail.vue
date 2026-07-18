@@ -151,7 +151,8 @@
               class="artifact-body"
             />
             <pre v-else-if="a.isText" class="artifact-body artifact-pre">{{ a.text }}</pre>
-            <div v-else class="artifact-body muted">二进制文件，请下载后查看。</div>
+            <div v-else class="artifact-body muted">该格式暂不支持在线预览；需要时请显式下载后查看。</div>
+            <div v-if="a.truncated" class="artifact-preview-note">预览已按安全预算截断；下载可查看完整内容。</div>
           </div>
         </div>
         <!-- 产物尾部折叠（F5，Codex R6「显示另外 1 个 ⌄」/ Claude「Show 3 more」）：
@@ -175,8 +176,11 @@
       <!-- 批七 §1.6 依据段（签发卡上方强制挂载）：findings 忠实投影；
            evidence_policy.required 但零依据 → amber 警示行（**不阻塞人签**——
            人是唯一签发者，警示只是把「没依据」摆在眼前）。拒答条 amber 非红。 -->
-      <div v-if="evidenceFindings.length || evidenceRefusals.length || evidenceRequiredMissing || evidenceWithheld" class="section evidence-section">
+      <div v-if="evidenceFindings.length || evidenceRefusals.length || evidenceRequiredMissing || evidenceWithheld || evidencePreviewTruncated" class="section evidence-section">
         <h3>依据</h3>
+        <div v-if="evidencePreviewTruncated" class="evidence-missing">
+          依据文件的在线预览已按安全预算截断——这里不把未展示部分判作“无依据”；请下载原文件后再签发。
+        </div>
         <div v-if="evidenceRequiredMissing" class="evidence-missing">
           本次输出未提供依据，请谨慎签发
         </div>
@@ -394,7 +398,7 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { cancelTask, reviewTask, getTask } from "../api/tasks";
-import { downloadUrl, fetchOutputFile } from "../api/files";
+import { downloadUrl, fetchFilePreview } from "../api/files";
 import { readChunk } from "../api/knowledge";
 import { buildRetryRoute } from "../utils/retryPrefill";
 import { acquireChannel, pokeTask, onTransition } from "../stores/liveFeed";
@@ -509,6 +513,9 @@ const evidenceData = computed(() => {
 });
 const evidenceFindings = computed(() => evidenceData.value?.findings || []);
 const evidenceRefusals = computed(() => evidenceData.value?.refusals || []);
+const evidencePreviewTruncated = computed(() =>
+  artifacts.value.some((artifact) => artifact.ext === "json" && artifact.truncated === true)
+);
 // 批八 withheld：与 GuidePage/Workbench 共用 taskEvidence store（listOutputFiles
 // 元数据判定，零下载）；task 快照到位即水合。
 const evidenceWithheld = computed(
@@ -528,6 +535,7 @@ const evidenceRequiredMissing = computed(() => {
   if (!t) return false;
   if (t.status !== "waiting_review" && t.status !== "completed") return false;
   if (evidenceWithheld.value === true) return false;
+  if (evidencePreviewTruncated.value === true) return false;
   const meta = agentNamesStore.meta[t.agent_id];
   if (!meta || meta.evidenceRequired !== true) return false;
   return evidenceFindings.value.length === 0;
@@ -589,7 +597,7 @@ async function syncArtifacts(ids) {
   artifacts.value = next;
   for (const ph of toFetch) {
     try {
-      Object.assign(ph, await fetchOutputFile(ph.fileId), { loading: false, error: "" });
+      Object.assign(ph, await fetchFilePreview(ph.fileId), { loading: false, error: "" });
     } catch (err) {
       ph.loading = false;
       ph.error = err.detail || err.message || "加载失败";
@@ -1285,6 +1293,13 @@ onUnmounted(() => {
 .artifact-error {
   color: var(--trust-fail);
   font-size: 13px;
+}
+
+.artifact-preview-note {
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--hairline-soft);
+  color: var(--trust-pending);
+  font-size: var(--fs-xs);
 }
 /* N9 敏感整窗框：双线 ink 边框 = 形状承载的分级信号（零新色，信任色五槽
    不动）；声明行字重+菱形记号同一纪律。 */

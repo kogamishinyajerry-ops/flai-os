@@ -6,7 +6,8 @@
 // 本模块只忠实转读绝不改写。
 import { reactive } from "vue";
 import { listOutputFiles } from "../api/tasks";
-import { fetchOutputFile } from "../api/files";
+import { fetchFilePreview } from "../api/files";
+import { projectEvidencePreview } from "./taskEvidenceCore.js";
 
 const cache = reactive({}); // taskId -> {loaded, findings, refusals}
 
@@ -17,7 +18,14 @@ export function useTaskEvidence() {
 export function ensureTaskEvidence(t) {
   if (!t || cache[t.id]) return;
   if (t.status !== "completed" && t.status !== "waiting_review") return;
-  const entry = reactive({ loaded: false, findings: [], refusals: [], withheld: false });
+  const entry = reactive({
+    loaded: false,
+    findings: [],
+    refusals: [],
+    withheld: false,
+    truncated: false,
+    error: "",
+  });
   cache[t.id] = entry;
   const ids = t.output_file_ids || [];
   if (ids.length === 0) {
@@ -45,21 +53,17 @@ export function ensureTaskEvidence(t) {
         entry.loaded = true;
         return;
       }
-      const res = await fetchOutputFile(jf.id);
-      let data = {};
-      if (res.isText && res.text) {
-        try {
-          data = JSON.parse(res.text);
-        } catch {
-          data = {}; // 非 JSON 产物=无依据结构，诚实空
-        }
-      }
-      entry.findings = Array.isArray(data.findings) ? data.findings : [];
-      entry.refusals = Array.isArray(data.refusals) ? data.refusals : [];
+      const res = await fetchFilePreview(jf.id);
+      const projection = projectEvidencePreview(res);
+      entry.findings = projection.findings;
+      entry.refusals = projection.refusals;
+      entry.truncated = projection.truncated;
+      entry.error = projection.error;
       entry.loaded = true;
     })
     .catch(() => {
-      entry.loaded = true; // 拿不到=不渲 chip（诚实缺位）
+      entry.error = "preview_request_failed";
+      entry.loaded = true;
     });
 }
 
@@ -74,6 +78,20 @@ export function taskEvidenceOf(taskId) {
 export function taskEvidenceWithheld(taskId) {
   const e = cache[taskId];
   return e !== undefined && e.loaded === true && e.withheld === true;
+}
+
+// 截断、解析失败和请求失败都属于 amber 未核，而不是“零依据”或任务失败。
+// 三个摘要消费面共用该投影，避免网络/格式问题被静默折叠成空结果。
+export function taskEvidenceIssue(taskId) {
+  const e = cache[taskId];
+  if (e === undefined || e.loaded !== true) return null;
+  if (e.truncated === true) {
+    return Object.freeze({ kind: "truncated", text: "依据摘要〔预览已截断，待核〕" });
+  }
+  if (typeof e.error === "string" && e.error.length > 0) {
+    return Object.freeze({ kind: "unavailable", text: "依据摘要〔暂不可用，待核〕" });
+  }
+  return null;
 }
 
 // 依据摘要计数：置信度报最低档（诚实地板——多 finding 取最保守）。
