@@ -98,3 +98,18 @@ export async function request(path, { method = "GET", json, formData, timeoutMs 
     clearTimeout(timer);
   }
 }
+
+// 结构化 detail 解包（批八 Codex R1/R2）：FastAPI object 型 detail 在 parseDetail
+// 里被整体 JSON.stringify——需要结构化清单（summon_errors/batch_errors/team_errors）
+// 的调用方用本函数解回；非 JSON / 无 detail 键则原样返回，绝不吞原文。
+export function unwrapDetail(errDetail) {
+  if (typeof errDetail === "string" && errDetail.trim().startsWith("{")) {
+    try {
+      const parsed = JSON.parse(errDetail);
+      return (parsed && parsed.detail) || parsed;
+    } catch {
+      /* 非 JSON：原样返回 */
+    }
+  }
+  return errDetail;
+}

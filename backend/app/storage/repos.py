@@ -1624,7 +1624,11 @@ def list_team_members(conn: sqlite3.Connection, team_id: str) -> list[dict[str, 
 
 
 def list_teams(
-    conn: sqlite3.Connection, *, owner_user: str | None = None, limit: int = 100
+    conn: sqlite3.Connection,
+    *,
+    owner_user: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     clauses: list[str] = []
     params: list[Any] = []
@@ -1632,9 +1636,10 @@ def list_teams(
         clauses.append("owner_user = ?")
         params.append(owner_user)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params.append(limit)
+    params.extend([limit, offset])
     rows = conn.execute(
-        f"SELECT * FROM teams {where} ORDER BY created_at DESC, id DESC LIMIT ?", params
+        f"SELECT * FROM teams {where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+        params,
     ).fetchall()
     teams = [dict(r) for r in rows]
     for t in teams:

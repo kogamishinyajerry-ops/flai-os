@@ -471,6 +471,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation } from "../api/conversations";
 import { createTeam } from "../api/teams";
+import { unwrapDetail } from "../api/client";
 import { createTask, createTasksBatch } from "../api/tasks";
 import { listAgents, getAgent } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
@@ -1423,10 +1424,13 @@ async function saveTeamFromPlan() {
     const team = await createTeam({ name, conversationId: conversationId.value });
     ElMessage.success(`团队「${team.name}」已保存——在 Agent 门户的「专家团队」区随时召集`);
   } catch (err) {
-    const detail = err.detail;
+    // Codex R2 P2：object 型 detail 被 client 整体 stringify——解包后才拿得到
+    // team_errors 逐席位清单（同 summon 处理），否则 toast 渲生 JSON。
+    const detail = unwrapDetail(err.detail);
     const msg =
       (detail && detail.team_errors && detail.team_errors.join("；")) ||
       (typeof detail === "string" ? detail : "") ||
+      (detail && detail.message) ||
       err.message ||
       "保存失败";
     ElMessage.error(`团队未保存：${msg}`);

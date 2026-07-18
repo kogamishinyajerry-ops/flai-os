@@ -161,11 +161,21 @@ def create_team(body: CreateTeamRequest, request: Request) -> dict[str, Any]:
 
 
 @router.get("/teams")
-def list_teams(request: Request) -> list[dict[str, Any]]:
+def list_teams(request: Request, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+    """列表（新→旧）。分页参数（Codex R2 P2）：repos 默认 LIMIT 100 此前是静默
+    截断——超过 100 份蓝本后旧团队从 UI 永久失联；limit/offset 显式暴露翻页能力
+    （门户当前只取首页，翻页 UI 随规模需要再长）。"""
+    if not (1 <= limit <= 500):
+        raise HTTPException(status_code=422, detail="limit 取值 1..500")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset 不得为负")
     agent_registry = request.app.state.agent_registry
     conn = request.app.state.conn_factory()
     try:
-        return [_team_projection(t, agent_registry) for t in repos.list_teams(conn)]
+        return [
+            _team_projection(t, agent_registry)
+            for t in repos.list_teams(conn, limit=limit, offset=offset)
+        ]
     finally:
         conn.close()
 

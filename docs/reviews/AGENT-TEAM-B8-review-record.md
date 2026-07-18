@@ -51,6 +51,29 @@
 
 修后自证：backend 13/13；batch_h e2e 26/26；verify_all EXIT=0。
 
+### R2（2026-07-18，cap 第 3 轮）——1 P1 + 6 P2，全部按审查方 suggested fix 直接落地
+
+| # | 级 | finding | 修复 |
+|---|----|---------|------|
+| 1 | P1 | 上传 await 期间浏览器返回离开门户——unmount 不改捕获引用，守卫恒过，离开后仍建任务再被 router.push 拽回 | **verbatim**（审查方原文 "Invalidate the operation from onUnmounted"）：onUnmounted 收起 summonOpen → 既有 await 后守卫如实中止 |
+| 2 | P2 | params/file_upload 席位 schema=null（后端读取失败/损坏）被真值判断放行——召出注定 runtime 失败的任务 | seatSupported 对两型强制非空 schema（全部 agent 包随包携带 input_schema.json，null=异常态 fail-closed） |
+| 3 | P2 | 摘要行含任一依赖即全串箭头——多根/分叉拓扑被虚构成串行链 | 箭头仅真线性链（每位恰接力上一位）；否则 · 并列，真实边在面板逐席位展示 |
+| 4 | P2 | GET /api/teams 静默 LIMIT 100——超百份蓝本后旧团队 UI 永久失联 | 端点显式 limit(1..500)/offset 分页 + repos OFFSET + 越界 422；门户取首页，翻页 UI 随规模再长（残留项②） |
+| 5 | P2 | 存团队失败 toast 渲生 JSON（team_errors 分支永不命中，同 R0#7 根因） | client.js 提炼 `unwrapDetail` 统一解包，save/summon 两处共用 |
+| 6 | P2 | Workbench 收纳行遮蔽即短路——可读 internal 依据与受限件共存时吞掉用户有权查看的计数（与 Guide/TaskDetail 口径不一致） | 共存渲染：`依据 N 条·另有密级隐藏项`；仅受限 → 纯遮蔽文案 |
+| 7 | P2 | 对话框定宽 640px 无 max-width——375px 窄视口控件/页脚溢出屏外 | `width="min(640px, 92vw)"` |
+
+修后自证：backend 14/14（+1 分页回归）；batch_h e2e 26/26；verify_all EXIT=0；tamper b8-* 复放见 tamper-log。
+
 ## 三 · 收口
 
-（待填：终局 verdict / 合并 SHA / 残留项去向）
+- cap=3 用尽（R0→R1→R2）。R2 终轮 1 P1 的修复由审查方逐字给出 → **verbatim
+  例外**落地（不再走轮，commit 注明）；6 P2 亦全部按 suggested fix 直接落地，
+  修后零未清 finding、全量 gate 绿、tamper 4/4 咬合——依「过审即自主合并 push」
+  常设授权执行合并。owner 复核点（如有异议可 revert）：R2 P1 的 onUnmounted
+  失效化落法、file 席位上传 UI 无端到端覆盖（诚实残差见 R0 段）。
+- 残留项（retro 队列）：① verify_all.ps1 存量 E2E 列表滞后整体对齐
+  （m9/m10/m11/cfd_flow/batch_a/batch_b/eval×2 均缺，成对脚本契约早破，先于
+  批八存在）；② 团队列表翻页 UI（端点分页已通，规模到了再长）。
+- 轮次统计：R0 9 条 + R1 4 条 + R2 7 条 = 20 findings，全部 grounded 复核
+  属实并修复，0 驳回 0 遗留。

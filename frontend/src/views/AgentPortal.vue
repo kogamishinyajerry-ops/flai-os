@@ -146,7 +146,7 @@
     <el-dialog
       v-model="summonOpen"
       :title="summonTarget ? `召集 · ${summonTarget.name}` : ''"
-      width="640px"
+      width="min(640px, 92vw)"
       class="summon-dialog"
       :close-on-click-modal="!summoning"
       :close-on-press-escape="!summoning"
@@ -354,12 +354,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from "vue";
+import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { listAgents, getAgent } from "../api/agents";
 import { listTeams, summonTeam as summonTeamApi } from "../api/teams";
-import { request } from "../api/client";
+import { request, unwrapDetail } from "../api/client";
 import { burstNeutral } from "../effects/burst.js";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -490,10 +490,19 @@ function agentNameOf(agentId) {
   return (a && a.name) || agentId;
 }
 
+// 摘要行拓扑诚实（Codex R2 P2）：箭头只在**真线性链**（每位成员恰好接力上一位）
+// 时使用；含依赖但非线性（多根/分叉/汇聚）用 · 并列——绝不虚构不存在的依赖边，
+// 真实边在召集面板逐席位「等待席位 N 的产物」如实展示。
 function teamChainText(t) {
   const parts = t.members.map((m) => agentNameOf(m.agent_id));
-  const hasRelay = t.members.some((m) => (m.after || []).length > 0);
-  return parts.join(hasRelay ? " → " : " · ");
+  const linear =
+    t.members.length > 1 &&
+    t.members.every((m, i) => {
+      const after = m.after || [];
+      if (i === 0) return after.length === 0;
+      return after.length === 1 && after[0] === t.members[i - 1].seq;
+    });
+  return parts.join(linear ? " → " : " · ");
 }
 
 // 预览级不可召集提示（服务端投影 present/disabled；权威判定在 summon gate）。
@@ -547,6 +556,10 @@ function openSummon(t) {
 // 或 schema 结构超出 SchemaForm 覆盖面（renderable=false）→ fail-closed 不可承接。
 function seatSupported(s) {
   if (!["params", "file_upload", "none"].includes(s.inputMode)) return false;
+  // params/file_upload 席位必须有可读 schema（Codex R2 P2）：全部 agent 包都
+  // 随包携带 input_schema.json，null=后端读取失败/损坏——放行会召出注定
+  // runtime 失败的任务，fail-closed 禁提交。
+  if ((s.inputMode === "params" || s.inputMode === "file_upload") && !s.schema) return false;
   if (s.schema && s.renderable !== true) return false;
   return true;
 }
@@ -580,6 +593,13 @@ function seatFileSelect(seat, uploadItem) {
 function removeSeatFile(seat, item) {
   seat.uploadItems = seat.uploadItems.filter((i) => i.uid !== item.uid);
 }
+
+// 路由离开=取消语义（Codex R2 P1 verbatim：from onUnmounted invalidate）：上传
+// await 期间用浏览器返回离开门户，捕获引用不变、守卫恒过——卸载时显式收起
+// 对话框，使 await 后守卫如实中止，不在用户离开后背地里建任务再拽回 /tasks。
+onUnmounted(() => {
+  summonOpen.value = false;
+});
 
 async function submitSummon() {
   if (summonReady.value !== true || summoning.value) return;
@@ -622,17 +642,9 @@ async function submitSummon() {
     summonOpen.value = false;
     router.push({ path: "/tasks" });
   } catch (err) {
-    let detail = err.detail;
-    // Codex R0 P2：api client 对 object 型 FastAPI detail 统一 JSON.stringify 整个
-    // body——先解回结构再取 summon_errors/batch_errors，否则对账清单永远渲成生 JSON。
-    if (typeof detail === "string" && detail.trim().startsWith("{")) {
-      try {
-        const parsed = JSON.parse(detail);
-        detail = (parsed && parsed.detail) || parsed;
-      } catch {
-        /* 非 JSON 原样保留 */
-      }
-    }
+    // Codex R0 P2：api client 对 object 型 FastAPI detail 统一 JSON.stringify——
+    // 解回结构再取 summon_errors/batch_errors，否则对账清单永远渲成生 JSON。
+    const detail = unwrapDetail(err.detail);
     const list =
       (detail &&
         typeof detail === "object" &&

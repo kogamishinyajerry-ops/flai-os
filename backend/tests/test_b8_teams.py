@@ -309,3 +309,18 @@ def test_summon_long_role_clamped_to_task_name_limit(app_env):
     )
     assert r2.status_code == 200, r2.text
     assert r2.json()["tasks"][0]["name"] == long_role[:200]
+
+
+def test_list_teams_pagination(app_env):
+    """R2 P2：列表分页——limit/offset 生效（新→旧序），非法参数 422。"""
+    client, app = app_env
+    for i in range(3):
+        conv_id = _mk_conv_with_plan(app, _PLAN, conv_id=f"conv_b8_pg{i}")
+        r = client.post("/api/teams", json={"name": f"分页团队{i}", "conversation_id": conv_id})
+        assert r.status_code == 200, r.text
+    page = client.get("/api/teams", params={"limit": 2, "offset": 1}).json()
+    assert len(page) == 2
+    full = client.get("/api/teams").json()
+    assert [t["id"] for t in page] == [t["id"] for t in full[1:3]]
+    assert client.get("/api/teams", params={"limit": 0}).status_code == 422
+    assert client.get("/api/teams", params={"offset": -1}).status_code == 422

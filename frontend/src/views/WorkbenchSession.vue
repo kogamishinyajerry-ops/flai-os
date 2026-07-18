@@ -370,13 +370,15 @@ function doneUnseen(a) {
 function doneEvidenceText(a) {
   const t = latestTaskFor(a);
   if (!t) return null;
-  // 批八 withheld（O6）：密级受限产物零下载零计数——静态遮蔽文案，绝不编 N。
-  if (taskEvidenceWithheld(t.id) === true) {
-    return { text: "依据〔按密级隐藏〕", unverified: 0 };
-  }
+  // 批八 withheld（O6）：密级受限产物零下载零计数——遮蔽文案绝不编 N。可读
+  // internal 依据与受限件共存时两者都不隐瞒（Codex R2 P2：此前遮蔽即短路，
+  // 收纳行吞掉了用户有权查看的可读计数，与 Guide/TaskDetail 口径不一致）。
+  const withheld = taskEvidenceWithheld(t.id) === true;
   const s = taskEvidenceSummary(t.id);
+  if (withheld && !s) return { text: "依据〔按密级隐藏〕", unverified: 0 };
   if (!s) return null;
-  return { text: `依据 ${s.total} 条${s.unverified > 0 ? `（${s.unverified} 未核）` : ""}`, unverified: s.unverified };
+  const base = `依据 ${s.total} 条${s.unverified > 0 ? `（${s.unverified} 未核）` : ""}`;
+  return { text: withheld ? `${base}·另有密级隐藏项` : base, unverified: s.unverified };
 }
 
 // task-chips 状态词映射（§1.5）：等待接力条目——该态 chip-lamp 不脉动（created
