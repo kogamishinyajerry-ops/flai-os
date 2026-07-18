@@ -55,3 +55,5 @@
   b8-after-cut 锚点已随 try 块缩进同步，b8-gate-cut 在 material_errors 独立
   列表下咬合不变（gate errors 死变量不混流）。同轮 verify_all EXIT=0
   （1057 pytest）。
+- 合并候选终验（基线 c3adc8e，R1+R2 修复全落）：4 case 复放 **BITE-OK 4/4，
+  REPLAY-EXIT=0**，基线 26/26 先行全绿；同 HEAD verify_all EXIT=0。
