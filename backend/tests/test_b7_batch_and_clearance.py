@@ -125,6 +125,20 @@ def test_batch_self_or_forward_after_rejected(app_env):
     assert "after 下标" in str(r.json()["detail"])
 
 
+def test_batch_after_boolean_rejected_not_coerced(app_env):
+    """Codex R1 P2：非严格 list[int] 会把 JSON false 静默强转 0——伪造出提交者
+    没写的依赖边。StrictInt 下布尔/字符串下标必须 422，且零写入。"""
+    client, _ = app_env
+    before = len(client.get("/api/tasks").json())
+    for bad in ([False], [True], ["0"]):
+        r = client.post("/api/tasks/batch", json={"items": [
+            _mk_item("上游"),
+            _mk_item("下游", after=bad),
+        ]})
+        assert r.status_code == 422, f"after={bad!r} 竟未被拒"
+    assert len(client.get("/api/tasks").json()) == before, "非法下标必须零写入"
+
+
 # ── 密级准入 gate（ADR-0030，O4 族）────────────────────────────────────────
 
 def test_clearance_gate_blocks_sensitive_input_on_create(app_env):

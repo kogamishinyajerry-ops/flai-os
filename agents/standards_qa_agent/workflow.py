@@ -27,6 +27,35 @@ def _question(messages: list[dict[str, Any]]) -> str:
     return "本轮标准问题"
 
 
+# 合成目录白名单（Codex R1 P2）：prompt.md 的两条虚构条款 + 三条虚构实例是
+# 唯一合法出处。schema 的 source_ref 接受任意字符串——模型编造目录外条款号/
+# 实例号也能过校验；此处按 kind 分轴确定性收口，越界整轮降级拒答。另核
+# 「双源(条款+机型实例)」宣称：basis 写双源但 evidence 未同时含两 kind =
+# 假权威，同样拒。
+_CLAUSE_CATALOG = frozenset({"QZ-AIR-SYN-210", "QZ-AIR-SYN-330"})
+_CASE_CATALOG = frozenset({"TC-XR100-017", "TC-XR300-008", "TC-XL7-004"})
+
+
+def _enforce_catalog(payload: dict[str, Any]) -> None:
+    for finding in payload.get("findings", []):
+        kinds: set[str] = set()
+        for ev in finding.get("evidence", []):
+            kind = ev.get("kind")
+            ref = ev.get("source_ref", "")
+            if kind == "standard_clause":
+                allowed = _CLAUSE_CATALOG
+            elif kind == "type_case":
+                allowed = _CASE_CATALOG
+            else:
+                allowed = frozenset()
+            if any(entry in ref for entry in allowed) is False:
+                raise ValueError(f"依据出处越出合成目录白名单：kind={kind!r} source_ref={ref!r}")
+            kinds.add(kind)
+        basis = ((finding.get("confidence") or {}).get("basis")) or ""
+        if basis == "双源(条款+机型实例)" and ({"standard_clause", "type_case"} <= kinds) is False:
+            raise ValueError("宣称双源但 evidence 未同时含条款与机型实例（假权威）")
+
+
 def _parse_payload(raw: str) -> dict[str, Any]:
     text = raw.strip()
     if text.startswith("```"):
@@ -44,6 +73,7 @@ def _parse_payload(raw: str) -> dict[str, Any]:
         raise ValueError("结构化问答顶层必须是对象")
     schema = json.loads(_load_text("output_schema.json"))
     validate(payload, schema)
+    _enforce_catalog(payload)
     return payload
 
 

@@ -163,6 +163,19 @@ def test_malformed_output_schema_quarantined_not_crash(tmp_path: Path) -> None:
     assert reg.get("policy_qa_agent") is not None, "坏包隔离失败殃及健康包"
 
 
+def test_non_utf8_output_schema_quarantined_not_crash(tmp_path: Path) -> None:
+    """Codex R1 P2：非 UTF-8 的 output_schema.json（UnicodeDecodeError 逃逸面）
+    同样隔离进 errors，不炸整个 scan。"""
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    bad = _clone("fta_agent", agents_dir, "bad_agent")
+    _patch_yaml(bad, id="bad_agent", evidence_policy={"required": True, "kinds": ["fault_case"]})
+    (bad / "output_schema.json").write_bytes(b"\xff\xfe\x00broken")
+    reg = _scan(agents_dir)  # 不得抛 UnicodeDecodeError
+    assert reg.get("bad_agent") is None
+    assert any("bad_agent" in e["path"] for e in reg.errors)
+
+
 def test_violation_evidence_string_match_bypass_rejected(tmp_path: Path) -> None:
     """Codex R0 P2：findings 里塞名为 evidence/resolved 的**兄弟键**（items 无约束）
     ——旧字符串搜索会放行，结构化路径校验必须拒载。"""

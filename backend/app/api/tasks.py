@@ -10,7 +10,7 @@ import uuid
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from . import classification_gate as cgate
 from ..core.errors import IllegalTransitionError
@@ -155,7 +155,9 @@ class BatchTaskItem(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     inputs: dict[str, Any] = Field(default_factory=dict)
     input_file_ids: list[str] = Field(default_factory=list, max_length=64)
-    after: list[int] = Field(default_factory=list, max_length=32)
+    # StrictInt（Codex R1 P2）：非严格 list[int] 会把 JSON 的 false/true 静默强转
+    # 0/1、"3" 强转 3——伪造出提交者没写的依赖边；下标必须字面整数，其余 422。
+    after: list[StrictInt] = Field(default_factory=list, max_length=32)
 
     @field_validator("inputs")
     @classmethod

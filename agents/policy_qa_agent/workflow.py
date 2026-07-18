@@ -27,6 +27,26 @@ def _question(messages: list[dict[str, Any]]) -> str:
     return "本轮制度问题"
 
 
+# 合成目录白名单（Codex R1 P2）：prompt.md 的四条虚构文号是唯一合法依据出处。
+# schema 的 source_ref 只约束「任意字符串」——模型编造目录外文号（含仿真实
+# 文号）也能过 schema 校验；此处确定性收口，兑现「未收录必拒答」承诺：
+# 任一 evidence 不含白名单文号 → ValueError → 整轮降级显式拒答。
+_CATALOG = frozenset({
+    "青岚质规〔虚构2026〕014号",
+    "青岚保规〔虚构2026〕006号",
+    "青岚人规〔虚构2026〕009号",
+    "青岚流规〔虚构2026〕021号",
+})
+
+
+def _enforce_catalog(payload: dict[str, Any]) -> None:
+    for finding in payload.get("findings", []):
+        for ev in finding.get("evidence", []):
+            ref = ev.get("source_ref", "")
+            if any(entry in ref for entry in _CATALOG) is False:
+                raise ValueError(f"依据出处越出合成目录白名单：{ref!r}（未收录必拒答）")
+
+
 def _parse_payload(raw: str) -> dict[str, Any]:
     text = raw.strip()
     if text.startswith("```"):
@@ -44,6 +64,7 @@ def _parse_payload(raw: str) -> dict[str, Any]:
         raise ValueError("结构化问答顶层必须是对象")
     schema = json.loads(_load_text("output_schema.json"))
     validate(payload, schema)
+    _enforce_catalog(payload)
     return payload
 
 

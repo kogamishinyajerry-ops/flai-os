@@ -41,15 +41,16 @@ class _Events:
 class _Gateway:
     """canned 回复网关；未预期调用（拒答路径不该调模型）时 fail-loud。"""
 
-    def __init__(self, content: str | None = None) -> None:
+    def __init__(self, content: str | None = None, finish_reason: str | None = "stop") -> None:
         self._content = content
+        self._finish_reason = finish_reason
         self.calls: list[list[dict[str, Any]]] = []
 
     def chat(self, profile: str, messages: list[dict[str, Any]], **kw: Any) -> dict[str, Any]:
         if self._content is None:
             raise AssertionError("该路径不应调用模型（拒答须在确定性层完成）")
         self.calls.append(messages)
-        return {"content": self._content, "finish_reason": "stop"}
+        return {"content": self._content, "finish_reason": self._finish_reason}
 
 
 def _agent_config(agent_id: str) -> dict[str, Any]:
@@ -151,14 +152,15 @@ def test_interactive_qa_invalid_payload_degrades_to_refusal(agent_id):
 
 def test_standards_dual_evidence_payload_passes_through():
     wf = _load_wf("standards_qa_agent")
+    # 出处取自 prompt.md 合成目录（Codex R1 P2 白名单收口后，目录外出处不再放行）
     payload = {
         "answer": "定位到条款与机型实例线索，供人工核对。",
         "findings": [{
-            "claim": "紧固件防松要求见合成标准 SYN-STD-201 §4.2；SYN-TYPE-XR100-07 有同类实例。",
+            "claim": "双通道测量差异监视见 QZ-AIR-SYN-210 §5.4.2；TC-XR100-017 有同类实例。",
             "evidence": [
-                {"kind": "standard_clause", "source_ref": "SYN-STD-201 §4.2",
+                {"kind": "standard_clause", "source_ref": "QZ-AIR-SYN-210 §5.4.2（虚构条款）",
                  "quote": "合成条款检索线索（非原文）", "resolved": False},
-                {"kind": "type_case", "source_ref": "SYN-TYPE-XR100-07",
+                {"kind": "type_case", "source_ref": "TC-XR100-017（虚构 XR-100 实例）",
                  "quote": "合成机型实例检索线索（非原文）", "resolved": False},
             ],
             "confidence": {"level": "medium", "basis": "双源(条款+机型实例)"},
@@ -174,6 +176,88 @@ def test_standards_dual_evidence_payload_passes_through():
     assert len(reco["findings"]) == 1
     kinds = {ev["kind"] for ev in reco["findings"][0]["evidence"]}
     assert kinds == {"standard_clause", "type_case"}, "双依据（条款+机型实例）须原样保留"
+
+
+def test_qa_catalog_escape_degrades_to_refusal():
+    """Codex R1 P2：schema 只约束 source_ref 为任意字符串——模型编造目录外
+    文号/条款号也能过校验；确定性目录白名单必须把它降级为显式拒答。"""
+    escape_payloads = {
+        "policy_qa_agent": {
+            "answer": "按 REAL-2026-001 号文办理即可。",
+            "findings": [{
+                "claim": "编造的真实文号结论。",
+                "evidence": [{"kind": "knowledge_doc", "source_ref": "REAL-2026-001",
+                              "quote": "合成目录线索", "resolved": False}],
+                "confidence": {"level": "high", "basis": "单源"},
+            }],
+            "refusals": [],
+        },
+        "standards_qa_agent": {
+            "answer": "按 GJB-XXXX §1.1 执行。",
+            "findings": [{
+                "claim": "编造的目录外条款结论。",
+                "evidence": [{"kind": "standard_clause", "source_ref": "GJB-XXXX §1.1",
+                              "quote": "合成目录线索；条款原文未接入", "resolved": False}],
+                "confidence": {"level": "low", "basis": "单源"},
+            }],
+            "refusals": [],
+        },
+    }
+    for agent_id, payload in escape_payloads.items():
+        wf = _load_wf(agent_id)
+        result = wf.run({
+            "messages": [{"role": "user", "content": "有什么依据？"}],
+            "model_gateway": _Gateway(content=json.dumps(payload, ensure_ascii=False)),
+            "agent_config": _agent_config(agent_id),
+        })
+        reco = result["recommendation"]
+        assert reco["findings"] == [], f"{agent_id} 目录外出处竟被放行"
+        assert len(reco["refusals"]) >= 1
+        assert "白名单" in reco["refusals"][0]["reason"]
+
+
+def test_standards_dual_source_claim_without_both_kinds_refused():
+    """宣称「双源(条款+机型实例)」但 evidence 只有条款 = 假权威——确定性拒。"""
+    wf = _load_wf("standards_qa_agent")
+    payload = {
+        "answer": "双源确认。",
+        "findings": [{
+            "claim": "双通道差异监视要求。",
+            "evidence": [{"kind": "standard_clause", "source_ref": "QZ-AIR-SYN-210 §5.4.2",
+                          "quote": "合成目录线索；条款原文未接入", "resolved": False}],
+            "confidence": {"level": "medium", "basis": "双源(条款+机型实例)"},
+        }],
+        "refusals": [],
+    }
+    result = wf.run({
+        "messages": [{"role": "user", "content": "双通道差异的标准依据？"}],
+        "model_gateway": _Gateway(content=json.dumps(payload, ensure_ascii=False)),
+        "agent_config": _agent_config("standards_qa_agent"),
+    })
+    reco = result["recommendation"]
+    assert reco["findings"] == []
+    assert len(reco["refusals"]) >= 1
+
+
+def test_fault_abnormal_finish_reason_fails_honestly(tmp_path):
+    """Codex R1 P2：finish_reason 白名单——content_filter 等异常收尾即便内容可解析
+    也不得写成成功报告（knowledge_qa 同款口径）。"""
+    wf = _load_wf("fault_history_agent")
+    problem = "XR-100 连续运行两小时后间歇断电并母线复位，热浸复现，冷却后恢复。"
+    probe = wf._select_candidates(
+        wf._load_json("data", "fault_cases.json")["cases"], problem, "XR-100"
+    )
+    assert len(probe) >= 1
+    ranked_reply = json.dumps({"ranked": [
+        {"fault_ref": probe[0]["fault_ref"], "similarity_basis": "标签重合",
+         "disposition_summary": "合成处置摘要。"}
+    ]}, ensure_ascii=False)
+    result = wf.run(_fault_ctx(tmp_path, _Gateway(content=ranked_reply, finish_reason="content_filter"), {
+        "problem_description": problem, "model_type": "XR-100",
+    }))
+    assert result["status"] == "failed"
+    assert "finish_reason" in result["error_message"]
+    assert not (tmp_path / "fault_history.json").exists()
 
 
 def test_qa_llm_cannot_self_report_resolved_true():

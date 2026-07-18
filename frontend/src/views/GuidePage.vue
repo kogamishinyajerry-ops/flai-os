@@ -241,8 +241,10 @@
                       <span v-if="r.suggestion" class="refusal-suggestion">{{ r.suggestion }}</span>
                     </li>
                   </ul>
-                  <!-- 次行：未召集——理由 + 预填摘要一行收纳（过程可折） -->
-                  <template v-else>
+                  <!-- 次行：未召集——理由 + 预填摘要一行收纳（过程可折）。
+                       Codex R1 P1：显式 !agentTaskInfo 判据——v-else 会挂到上方
+                       最近的 v-if（拒答展开 ul），已召集成员未展开拒答时误渲此块。 -->
+                  <template v-if="!agentTaskInfo(a)">
                     <div class="sa-subline">
                       <span v-if="a.rationale" class="agent-rationale">{{ a.rationale }}</span>
                       <span v-for="(v, k) in a.prefilled_inputs" :key="k" class="draft-field">
@@ -952,14 +954,24 @@ function describeEvent(ev) {
 }
 
 // 从事件尾巴取最新「过程」旁白（状态迁移类跳过，见 STATE_EVENT_TYPES）。
+// Codex R1 P2：validation_started 是开工 bootstrap——它总在 charter_intro 之后
+// 立刻出现，若同权处理，T2 承诺的 charter 开场句会在入场瞬间被「校验输入
+// 契约…」顶掉、永不上屏。故 bootstrap 仅作兜底：charter 或任何实质过程旁白
+// （工具/阶段/业务 agent_log）在场时优先；无 charter 的任务行为不变。
 function latestProcessNote(events) {
+  let bootstrap = "";
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const ev = events[i];
     if (STATE_EVENT_TYPES.has(ev.event_type)) continue;
     const note = describeEvent(ev);
-    if (note) return note;
+    if (!note) continue;
+    if (ev.event_type === "validation_started") {
+      if (!bootstrap) bootstrap = note;
+      continue;
+    }
+    return note;
   }
-  return "";
+  return bootstrap;
 }
 
 // taskId -> { handle, stops }：每个工作态最新任务持一条共享 task channel。

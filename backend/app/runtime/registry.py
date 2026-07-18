@@ -212,7 +212,7 @@ class AgentRegistry:
                                 _findings_ok = (
                                     isinstance(_ev_props, dict) and "resolved" in _ev_props
                                 )
-                except (json.JSONDecodeError, OSError, AttributeError, TypeError):
+                except (json.JSONDecodeError, UnicodeError, OSError, AttributeError, TypeError):
                     # 防御性兜底：畸形 schema 一律判不合格走拒载，不崩 scan。
                     _findings_ok = False
             if _findings_ok is not True:

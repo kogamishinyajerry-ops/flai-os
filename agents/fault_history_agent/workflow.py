@@ -309,8 +309,13 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     raw = result.get("content")
     if not isinstance(raw, str) or not raw.strip():
         return _fail("排序模型返回空内容，无可核验结果可存（诚实失败）")
-    if result.get("finish_reason") == "length":
-        return _fail("排序模型输出被截断，拒绝把不完整排序写成报告")
+    # finish_reason 白名单（Codex R1 P2，knowledge_qa 同款口径）：只盯 length 会
+    # 漏 content_filter 等异常收尾；非 None（桩/部分网关不回传，缺省按正常）且
+    # 不是字面 "stop" 的一律诚实失败——被过滤/截断的排序不写成报告。非字符串
+    # （畸形上游回传数组/对象）同样按异常收尾。
+    _finish = result.get("finish_reason")
+    if _finish is not None and (isinstance(_finish, str) is False or _finish != "stop"):
+        return _fail(f"排序模型未正常收尾（finish_reason={_finish!r}），拒绝把不完整排序写成报告")
     try:
         ranked = _parse_ranking(raw, candidates)
     except (json.JSONDecodeError, ValueError) as exc:
