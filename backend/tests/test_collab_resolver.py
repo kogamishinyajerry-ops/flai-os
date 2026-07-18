@@ -362,6 +362,12 @@ def test_E2E_taint_chain_sensitive_upstream_derives_downstream(runtime_env):
     runtime = runtime_env["runtime"]
     runner = JobRunner(runtime, cf)
 
+    # ADR-0030（批七）：B 消费 sensitive 管道产物须合法持有 sensitive 准入——
+    # 消费点密级复核对 internal 缺省上限会如实拒执行（那是另一条测试的职责，
+    # test_b7_batch_and_clearance）。本测试的对象是 ADR-0025 派生传播语义，
+    # 故给本 registry 实例的 hello 显式授 sensitive（in-memory，不动包文件）。
+    runtime.agent_registry.get("hello_agent")["clearance"] = {"max_data_classification": "sensitive"}
+
     # A 的 sensitive 输入：真字节落 uploads_dir/{fid}/input.txt，可过 _open_input_files 校验
     in_fid = str(uuid.uuid4())
     payload = "机密上游输入\n".encode("utf-8")

@@ -158,16 +158,16 @@ class AgentRegistry:
         # 即使 profile=none 的确定性 job 包也必须 review-gated——「带我做」
         # 级别的产物没有免签通道（人是唯一签发者）。
         expertise = data.get("expertise", {}) or {}
-        if (
-            expertise.get("usefulness_level") == "L3"
-            and workflow.get("mode") == "job"
-            and workflow.get("requires_human_review") is not True
-        ):
-            raise InvalidPackageError(
-                f"{entry} expertise.usefulness_level=L3（带我做）且 mode=job"
-                "但 workflow.requires_human_review 非 True——L3 承诺装载期强制人签"
-                "（ADR-0030：带我做级产物无免签通道）"
-            )
+        if expertise.get("usefulness_level") == "L3":
+            # 3-lens P2 收紧：L3 ⟹ mode=job 且 rhr=True。interactive 运行时根本
+            # 没有 waiting_review 状态机——L3 承诺挂在 interactive 包上=永久没有
+            # 人签闸可兑现，同样拒载（不止咬「job 且未开 rhr」一种姿势）。
+            if workflow.get("mode") != "job" or workflow.get("requires_human_review") is not True:
+                raise InvalidPackageError(
+                    f"{entry} expertise.usefulness_level=L3（带我做）要求 workflow.mode=job"
+                    "且 requires_human_review=True——L3 承诺装载期强制人签，interactive"
+                    "运行时无人签闸不可承载 L3（ADR-0030：带我做级产物无免签通道）"
+                )
         # 批七 ADR-0030 ②：依据纪律声明 ⟹ 输出契约结构落地校验。声明了
         # 「推荐必附依据」却无 findings 输出结构 = 承诺无处兑现（假绿温床），
         # 装载期读盘 spot-check，缺失即拒载。
@@ -179,13 +179,21 @@ class AgentRegistry:
             if _out_path.is_file():
                 try:
                     _out_doc = json.loads(_out_path.read_text(encoding="utf-8"))
-                    _findings_ok = "findings" in (_out_doc.get("properties") or {})
+                    _fs = (_out_doc.get("properties") or {}).get("findings")
+                    # 3-lens P2 收紧：仅「顶层有 findings 键」无判别力——空 schema
+                    # `{}` 接受任意值即可骗过门。最低结构承诺：findings 是 array 且
+                    # 其定义里真出现 evidence 与 resolved（依据行+核验态是 §2.2 输出
+                    # 契约的不可省核心；resolved 缺席=核验态无处落地）。
+                    if isinstance(_fs, dict) and _fs.get("type") == "array":
+                        _fs_text = json.dumps(_fs, ensure_ascii=False)
+                        _findings_ok = ('"evidence"' in _fs_text) and ('"resolved"' in _fs_text)
                 except (json.JSONDecodeError, OSError):
                     _findings_ok = False
             if _findings_ok is not True:
                 raise InvalidPackageError(
-                    f"{entry} evidence_policy.required=true 但 {_out_name} 缺失或顶层"
-                    "properties 无 findings 定义——依据承诺必须有输出结构承接"
+                    f"{entry} evidence_policy.required=true 但 {_out_name} 缺失、顶层"
+                    "properties 无 findings、或 findings 非 array/缺 evidence+resolved"
+                    "结构——依据承诺必须有可核验的输出结构承接"
                     "（ADR-0030：无处兑现的承诺=假绿温床，fail-closed 拒载）"
                 )
         return data

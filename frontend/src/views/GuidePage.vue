@@ -1119,17 +1119,30 @@ async function openPlan(plan) {
       ElMessage.error("会话已切换，本次召集未执行（未创建任何任务）。");
       return;
     }
+    // 跨轮引用剥离必须计数披露（3-lens P2）：guide 后端的剥离有 stripped_fields
+    // 上屏记名，这里的客户端降级不能是纯静默——诚实记名标准前后端一致。
+    let crossRoundDrops = 0;
     const items = targets.map(({ a, pi }) => {
       const myIdx = planIdxToBatchIdx.get(pi);
-      const after = (Array.isArray(a.after) ? a.after : [])
-        .map((ref) => planIdxToBatchIdx.get(ref))
-        .filter((x) => x !== undefined && x < myIdx);
+      const after = [];
+      for (const ref of Array.isArray(a.after) ? a.after : []) {
+        const mapped = planIdxToBatchIdx.get(ref);
+        if (mapped !== undefined && mapped < myIdx) after.push(mapped);
+        else crossRoundDrops += 1;
+      }
       return { agentId: a.agent_id, inputs: a.prefilled_inputs || {}, after };
     });
     await createTasksBatch({ conversationId: approvedConvId, items });
     for (const { a } of targets) locallySummoned[`${approvedConvId}:${a.agent_id}`] = true;
     ensureConversationTasksFeed(); // 督战 chip 保鲜：召集即接上会话任务订阅
-    ElMessage.success(`已按方案召集 ${targets.length} 名成员——进度与签发都会来这里找你`);
+    if (crossRoundDrops > 0) {
+      ElMessage.warning(
+        `已召集 ${targets.length} 名成员；${crossRoundDrops} 条依赖指向已召集/未就绪成员，` +
+        "本批无法表达已改为并行——需要严格接力请一次性召集全部成员"
+      );
+    } else {
+      ElMessage.success(`已按方案召集 ${targets.length} 名成员——进度与签发都会来这里找你`);
+    }
   } catch (err) {
     // 全有全无：整批 422 零写入。逐项错误清单必须清晰可读（R5 走查）——
     // 玫红仅真失败；client 对非字符串 detail 会 JSON.stringify，这里解回结构。

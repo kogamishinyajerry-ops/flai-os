@@ -756,6 +756,32 @@ class AgentRuntime:
     ) -> list[tuple[dict[str, Any], BinaryIO]]:
         """校验所有签发输入并持有句柄至 workflow 返回；任一失败即整体拒绝执行。"""
         verified: list[tuple[dict[str, Any], BinaryIO]] = []
+        # 批七 3-lens P1：消费点密级复核（ADR-0030）——创建时点 gate 只见直提交
+        # 文件；带 depends_on 的下游任务创建时 input_file_ids=[]（材料级=public 恒
+        # 过门），resolver 事后把上游产物（可能 sensitive）管道注入 input_file_ids。
+        # 与 K1/K2/provenance 同款「生产侧+消费侧双端强制」：消费动作上对**管道
+        # 注入的产物（kind=output）**重跑同一判定函数，低密级上限 Agent 绝不吃到
+        # 越级产物。边界如实声明：直提交输入（kind=input）由创建门全 API 路径判
+        # 定（create/batch 同函数），此处不重判——避免把 ADR-0025 存量派生语义
+        # （repos 直写的传播链测试/legacy 行）追溯性打失败；记录缺失走下方逐文件
+        # 完整性校验的精确报错，不被 derive 的「缺失=sensitive」兜底遮蔽。
+        from ..api import classification_gate as cgate
+
+        _piped_ids = []
+        for _fid in task.get("input_file_ids", []):
+            _rec = repos.get_file(conn, _fid)
+            if _rec is not None and _rec.get("kind") == "output":
+                _piped_ids.append(_fid)
+        if _piped_ids:
+            _agent = self.agent_registry.get(task.get("agent_id")) or {}
+            _allowed, _material_level, _agent_max = cgate.agent_clearance_allows(
+                conn, _agent, _piped_ids
+            )
+            if _allowed is False:
+                raise FileIntegrityError(
+                    f"输入材料密级复核失败：管道注入产物材料级「{_material_level}」超出该 Agent"
+                    f"密级准入上限「{_agent_max}」——上游产物同受 ADR-0030 约束（消费点复核，fail-closed）"
+                )
         try:
             for file_id in task.get("input_file_ids", []):
                 record = repos.get_file(conn, file_id)

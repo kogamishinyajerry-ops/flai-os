@@ -294,7 +294,9 @@ def _validate_orchestrate(
                 valid = False
                 break
             mapped.append(tgt)
-        if valid is True and mapped:
+        if valid is True:
+            # 显式空列表=合法「无依赖」声明，与缺省同义——绝不记 stripped（3-lens
+            # P2：把合法空值当剥离会向用户口播虚假降级告警，违反如实记名）。
             agent_entry["after"] = sorted(set(mapped))
         else:
             agent_entry["after"] = []

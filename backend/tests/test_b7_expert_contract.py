@@ -110,11 +110,54 @@ def test_control_evidence_required_with_findings_registers(tmp_path: Path) -> No
     _patch_yaml(pkg, evidence_policy={"required": True, "kinds": ["fault_case"]})
     out_path = pkg / "output_schema.json"
     out_doc = json.loads(out_path.read_text(encoding="utf-8"))
-    out_doc.setdefault("properties", {})["findings"] = {"type": "array"}
+    # 3-lens P2 收紧后：正控须给出最低可核验结构（array + evidence + resolved），
+    # 仅 {"type": "array"} 已不再够格（无判别力的空承诺同样拒载）。
+    out_doc.setdefault("properties", {})["findings"] = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "evidence": {
+                    "type": "array",
+                    "items": {"type": "object", "properties": {"resolved": {"const": False}}},
+                }
+            },
+        },
+    }
     out_path.write_text(json.dumps(out_doc, ensure_ascii=False), encoding="utf-8")
     reg = _scan(agents_dir)
     assert reg.get("fta_agent") is not None
     assert reg.errors == []
+
+
+def test_violation_evidence_findings_vacuous_schema_rejected(tmp_path: Path) -> None:
+    """3-lens P2：findings 给空 schema `{}` 或缺 evidence/resolved 结构=无判别力的
+    假承诺——同样拒载（仅顶层有键不算兑现）。"""
+    for weak in ({}, {"type": "array"}, {"type": "object"}):
+        agents_dir = tmp_path / f"agents_{len(str(weak))}"
+        agents_dir.mkdir()
+        pkg = _clone("fta_agent", agents_dir, "fta_agent")
+        _patch_yaml(pkg, evidence_policy={"required": True, "kinds": ["fault_case"]})
+        out_path = pkg / "output_schema.json"
+        out_doc = json.loads(out_path.read_text(encoding="utf-8"))
+        out_doc.setdefault("properties", {})["findings"] = weak
+        out_path.write_text(json.dumps(out_doc, ensure_ascii=False), encoding="utf-8")
+        reg = _scan(agents_dir)
+        assert reg.get("fta_agent") is None, f"弱 schema {weak!r} 竟被注册"
+        assert len(reg.errors) == 1
+
+
+def test_violation_l3_interactive_rejected(tmp_path: Path) -> None:
+    """3-lens P2：L3 挂 interactive 包=永久没有人签闸可兑现（会话运行时无
+    waiting_review 状态机）——装载期同样拒载，不止咬 job 未开 rhr 一种姿势。"""
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    pkg = _clone("policy_qa_agent", agents_dir, "policy_qa_agent")
+    _patch_yaml(pkg, **{"expertise.usefulness_level": "L3"})
+    reg = _scan(agents_dir)
+    assert reg.get("policy_qa_agent") is None, "L3+interactive 竟被注册——人签闸无处兑现"
+    assert len(reg.errors) == 1
+    assert "L3" in reg.errors[0]["error"]
 
 
 def test_exempt_evidence_not_required_registers(tmp_path: Path) -> None:

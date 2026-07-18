@@ -212,3 +212,84 @@ def test_guide_after_non_int_stripped():
     assert result is not None
     assert result["agents"][1]["after"] == []
     assert "after" in result["agents"][1]["stripped_fields"]
+
+
+def test_guide_after_explicit_empty_is_legal_not_stripped():
+    """3-lens P2：显式 `"after": []` 是合法「无依赖」声明——绝不当剥离记名，
+    否则前端会向用户口播虚假的「已剔除不合法字段」降级告警。"""
+    wf = _load_wf()
+    result = wf._validate_orchestrate(
+        _plan([_entry("a_one"), _entry("a_two", after=[])]), _NoSchemaRegistry(), _CANDS
+    )
+    assert result is not None
+    assert result["agents"][1]["after"] == []
+    assert "after" not in result["agents"][1]["stripped_fields"]
+
+
+# ── 消费点密级复核（3-lens P1，ADR-0030 双端强制）─────────────────────────────
+
+def test_clearance_reenforced_at_consumption_point(app_env):
+    """resolver 管道注入旁路：下游创建时 input_file_ids=[]（材料级 public 恒过
+    创建门），事后被注入 sensitive 上游产物——消费点必须重跑同一判定拒执行。"""
+    import pytest
+
+    from backend.app.core.errors import FileIntegrityError
+
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        rec = repos.create_file(
+            conn,
+            file_id="file_b7_piped_sens",
+            task_id=None,
+            kind="output",
+            filename="piped.json",
+            path="/nonexistent/piped.json",
+            size_bytes=10,
+            sha256="0" * 64,
+            classification="sensitive",
+        )
+        task = {
+            "id": "task_b7_downstream",
+            "agent_id": "hello_agent",  # 无 clearance 声明 → 缺省上限 internal
+            "input_file_ids": [rec["id"]],
+            "depends_on": ["task_b7_upstream"],
+        }
+        with pytest.raises(FileIntegrityError, match="密级复核失败"):
+            app.state.runtime._open_input_files(conn, task)
+    finally:
+        conn.close()
+
+
+def test_clearance_consumption_point_lets_internal_reach_provenance(app_env):
+    """对照（gate 有判别力非全拒）：internal 材料过密级复核，失败发生在后续
+    完整性/来源链校验（报错不含密级字样）——证明消费点复核只咬越级不误杀。"""
+    import pytest
+
+    from backend.app.core.errors import FileIntegrityError
+
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        rec = repos.create_file(
+            conn,
+            file_id="file_b7_piped_int",
+            task_id=None,
+            kind="output",
+            filename="piped_int.json",
+            path="/nonexistent/piped_int.json",
+            size_bytes=10,
+            sha256="0" * 64,
+            classification="internal",
+        )
+        task = {
+            "id": "task_b7_downstream2",
+            "agent_id": "hello_agent",
+            "input_file_ids": [rec["id"]],
+            "depends_on": [],  # 产物未声明依赖 → 应撞 provenance 校验而非密级门
+        }
+        with pytest.raises(FileIntegrityError) as exc:
+            app.state.runtime._open_input_files(conn, task)
+        assert "密级复核" not in str(exc.value)
+    finally:
+        conn.close()

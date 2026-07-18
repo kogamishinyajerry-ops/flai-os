@@ -73,7 +73,8 @@ WORK = Path(tempfile.mkdtemp(prefix="flai_batch_g_"))
 # fault 语料命中词（agents/fault_history_agent/data/fault_cases.json 的 tags）
 FAULT_PROBLEM = "XR-100 连续运行两小时后间歇断电并出现母线复位，热浸时复现，冷却后恢复，怀疑接插件接触阻抗波动。"
 REFUSE_PROBLEM = "海岚-9 在热浸后出现间歇断电，冷却后恢复。"
-RANK_SLEEP_S = 6.0  # 排序窗人为放宽：给 O11 reduced-motion 与运行态断言一个稳定观察窗
+RANK_SLEEP_S = 8.0  # 排序窗人为放宽：给 O11 reduced-motion 与运行态断言一个稳定观察窗
+# （3-lens P3：wait_status 轮询+双上下文开销会吃掉窗口前段，8s > 两个 6s expect 预算）
 
 
 class _ConvStub:
