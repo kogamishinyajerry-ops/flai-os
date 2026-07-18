@@ -309,6 +309,28 @@
                 </span>
               </div>
             </div>
+
+            <!-- 垂类问答依据卡（批七 Codex R0 P1 接线）：policy_qa/standards_qa 的
+                 recommendation 无 decision 键，形状 = {answer, findings, refusals}。
+                 findings 走 EvidenceList（全链无绿，未核 amber）；refusals 逐条
+                 如实渲染——拒答是承诺的一部分，不藏。双空不渲（schema 已拒双空）。 -->
+            <div
+              v-else-if="qaRecommendation(m.recommendation)"
+              class="plan-card qa-evidence-card"
+              :class="{ 'fx-rise': m.fresh }"
+            >
+              <div v-if="(m.recommendation.findings || []).length" class="plan-section">
+                <div class="section-label">依据清单 · {{ m.recommendation.findings.length }}</div>
+                <EvidenceList :findings="m.recommendation.findings" />
+              </div>
+              <div v-if="(m.recommendation.refusals || []).length" class="plan-section">
+                <div class="section-label">未覆盖 · 拒答 {{ m.recommendation.refusals.length }}</div>
+                <div v-for="(r, ri) in m.recommendation.refusals" :key="ri" class="qa-refusal">
+                  <p class="qa-refusal-reason">{{ r.reason }}</p>
+                  <p v-if="r.suggestion" class="qa-refusal-suggestion">{{ r.suggestion }}</p>
+                </div>
+              </div>
+            </div>
           </div>
         </template>
       </div>
@@ -726,7 +748,10 @@ async function send() {
     // 上传耗时算进「导引思考中 Ns」（Codex R0 审 P2 的分阶段诚实口径）。
     sendStartedAt.value = Date.now();
     if (!conversationId.value) {
-      const conv = await createConversation({ agentId: GUIDE_AGENT_ID });
+      // Codex R0 P1：Agent 门户「开始对话」携 ?agent=<id> 直达该垂类交互包
+      //（policy_qa/standards_qa）；无参默认导引。id 合法性由后端建会接口
+      // 判定（不存在/非 interactive → 如实报错，不静默回退导引）。
+      const conv = await createConversation({ agentId: targetAgentId.value });
       conversationId.value = conv.id;
       conversationStatus.value = conv.status || "active";
       started.value = true;
@@ -1290,18 +1315,16 @@ function upstreamNarration(t) {
   return `等待〈${label}〉的产物 · 就绪后自动接力`;
 }
 
-// T2 首行口播：任务尚无过程旁白时，以注册表 charter（第一人称章程）作开场句
-// ——来自 agent.yaml 忠实投影非编造；首条真实事件到达即被常规旁白替换。
+// T2 首行口播：charter 开场句已由后端在创建期落成持久化事件（agent_log +
+// charter_intro，Codex R0 P2）——经常规事件通道进 stageNotes，与其余旁白同源。
+// 不再回退读当前注册表元数据：包升级会让在途旧任务「被念出」新 charter
+//（时点漂移伪史），审计事件流里却无此句。
 function stagelineFor(a) {
   const info = agentTaskInfo(a);
   if (!info) return "";
   const t = info.latest;
   if (memberPhase(t) === "waiting_upstream") return upstreamNarration(t);
   if (t.status === "cancelled" && (t.depends_on || []).length > 0) return "已取消（上游未交付）";
-  if (TASK_WORK_STATES.has(t.status) && !stageNotes[t.id]) {
-    const charter = agentNames.meta[t.agent_id]?.charter;
-    if (charter) return charter;
-  }
   return stagelineText(t);
 }
 
@@ -1365,8 +1388,11 @@ function toggleRefusal(taskId) {
 }
 
 // L1 编队总览（§1.4）：成员任务快照聚合；无任何已召集任务时零占位不渲行。
+// Codex R0 P1：聚合方案成员的**全部**会话任务，不再各取最新一条——同 Agent
+// 多任务时，最新条已终态会让旧任务还在跑/待签的编队被谎报「协作已收束」。
 function squadTasksOf(plan) {
-  return plan.agents.map((a) => agentTaskInfo(a)).filter(Boolean).map((i) => i.latest);
+  const ids = new Set(plan.agents.map((a) => a.agent_id));
+  return conversationTasks.value.filter((t) => ids.has(t.agent_id));
 }
 
 function squadSegs(plan) {
@@ -1475,6 +1501,23 @@ function resetToFresh(clearError = true) {
   pendingFiles.value = [];
   releaseConversationTasksFeed();
   if (clearError) pageError.value = "";
+}
+
+// 门户直达的目标交互 Agent（Codex R0 P1）：?agent=<id> 只影响**新建**会话；
+// 恢复历史会话（?c）时 agent 已绑定在会话记录里，本参数不参与。
+const targetAgentId = computed(() => {
+  const a = route.query.agent;
+  return typeof a === "string" && a ? a : GUIDE_AGENT_ID;
+});
+
+// 垂类问答 recommendation 判据：无 decision 键（refuse/orchestrate 是导引专属）
+// 且真带 findings/refusals 数组、至少一边非空——双空已被包 schema 拒收。
+function qaRecommendation(rec) {
+  if (!rec || rec.decision) return false;
+  const f = Array.isArray(rec.findings) ? rec.findings : null;
+  const r = Array.isArray(rec.refusals) ? rec.refusals : null;
+  if (f === null && r === null) return false;
+  return (f || []).length > 0 || (r || []).length > 0;
 }
 
 // 恢复在途标记：?c 深链（含 2a 回流）落地时 getConversation 在途的窗口里，
@@ -2630,6 +2673,14 @@ kbd {
   color: var(--clay);
   cursor: pointer;
 }
+
+/* 垂类问答依据卡（Codex R0 P1 接线）：中性纸面，依据行交给 EvidenceList
+   （全链无绿）；拒答块灰字如实，不作警示红——拒答是承诺兑现非故障。 */
+.qa-evidence-card { display: flex; flex-direction: column; gap: 14px; }
+.qa-refusal { display: flex; flex-direction: column; gap: 2px; margin: 0 0 8px; }
+.qa-refusal:last-child { margin-bottom: 0; }
+.qa-refusal-reason { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink); }
+.qa-refusal-suggestion { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-soft); }
 </style>
 <style>
 .agent-pick .ap-zero { font-size: 12px; color: var(--ink-faint); padding: 4px 14px 8px; }

@@ -14,11 +14,21 @@
     "artifacts"
   ],
   "properties": {
-    "problem_description": {"type": "string", "minLength": 1, "maxLength": 5000},
+    "problem_description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 5000
+    },
     "requested_model_type": {
       "oneOf": [
-        {"type": "string", "minLength": 1, "maxLength": 80},
-        {"type": "null"}
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "findings": {
@@ -26,31 +36,73 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["claim", "evidence", "confidence"],
+        "required": [
+          "claim",
+          "evidence",
+          "confidence"
+        ],
         "properties": {
-          "claim": {"type": "string", "minLength": 1, "maxLength": 1200},
+          "claim": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1200
+          },
           "evidence": {
             "type": "array",
             "minItems": 1,
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["kind", "source_ref", "quote", "resolved"],
+              "required": [
+                "kind",
+                "source_ref",
+                "quote",
+                "resolved"
+              ],
               "properties": {
-                "kind": {"const": "fault_case"},
-                "source_ref": {"type": "string", "minLength": 1, "maxLength": 300},
-                "quote": {"type": "string", "minLength": 1, "maxLength": 300},
-                "resolved": {"const": false}
+                "kind": {
+                  "const": "fault_case"
+                },
+                "source_ref": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                },
+                "quote": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                },
+                "resolved": {
+                  "const": false
+                }
               }
             }
           },
           "confidence": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["level", "basis"],
+            "required": [
+              "level",
+              "basis"
+            ],
             "properties": {
-              "level": {"type": "string", "enum": ["high", "medium", "low"]},
-              "basis": {"type": "string", "enum": ["多案例", "单源", "推断"]}
+              "level": {
+                "type": "string",
+                "enum": [
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              "basis": {
+                "type": "string",
+                "enum": [
+                  "多案例",
+                  "单源",
+                  "推断"
+                ]
+              }
             }
           }
         }
@@ -61,11 +113,27 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["question", "reason", "suggestion"],
+        "required": [
+          "question",
+          "reason",
+          "suggestion"
+        ],
         "properties": {
-          "question": {"type": "string", "minLength": 1, "maxLength": 1000},
-          "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
-          "suggestion": {"type": "string", "minLength": 1, "maxLength": 1000}
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "suggestion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
         }
       }
     },
@@ -74,21 +142,66 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["model", "fault_ref", "similarity_basis", "disposition_summary"],
+        "required": [
+          "model",
+          "fault_ref",
+          "similarity_basis",
+          "disposition_summary"
+        ],
         "properties": {
-          "model": {"type": "string", "minLength": 1, "maxLength": 80},
-          "fault_ref": {"type": "string", "minLength": 1, "maxLength": 160},
-          "similarity_basis": {"type": "string", "minLength": 1, "maxLength": 500},
-          "disposition_summary": {"type": "string", "minLength": 1, "maxLength": 1000}
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "fault_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "similarity_basis": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "disposition_summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
         }
       }
     },
-    "human_review_required": {"const": true},
+    "human_review_required": {
+      "const": true
+    },
     "artifacts": {
       "type": "array",
       "minItems": 2,
-      "items": {"type": "string", "enum": ["fault_history.json", "fault_history.md"]},
+      "items": {
+        "type": "string",
+        "enum": [
+          "fault_history.json",
+          "fault_history.md"
+        ]
+      },
       "uniqueItems": true
     }
-  }
+  },
+  "anyOf": [
+    {
+      "properties": {
+        "findings": {
+          "minItems": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "refusals": {
+          "minItems": 1
+        }
+      }
+    }
+  ]
 }

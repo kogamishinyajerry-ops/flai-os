@@ -147,6 +147,67 @@ def test_violation_evidence_findings_vacuous_schema_rejected(tmp_path: Path) -> 
         assert len(reg.errors) == 1
 
 
+def test_malformed_output_schema_quarantined_not_crash(tmp_path: Path) -> None:
+    """Codex R0 P1：output_schema.json 顶层非 object（`[]` 是合法 JSON）→ 该包
+    隔离进 reg.errors，scan 不崩、同目录健康包照常注册（一个坏包不炸全场）。"""
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    bad = _clone("fta_agent", agents_dir, "bad_agent")
+    _patch_yaml(bad, id="bad_agent", evidence_policy={"required": True, "kinds": ["fault_case"]})
+    (bad / "output_schema.json").write_text("[]", encoding="utf-8")
+    good = _clone("policy_qa_agent", agents_dir, "policy_qa_agent")
+    assert good.is_dir()
+    reg = _scan(agents_dir)  # 不得抛 AttributeError
+    assert reg.get("bad_agent") is None
+    assert any("bad_agent" in e["path"] for e in reg.errors)
+    assert reg.get("policy_qa_agent") is not None, "坏包隔离失败殃及健康包"
+
+
+def test_violation_evidence_string_match_bypass_rejected(tmp_path: Path) -> None:
+    """Codex R0 P2：findings 里塞名为 evidence/resolved 的**兄弟键**（items 无约束）
+    ——旧字符串搜索会放行，结构化路径校验必须拒载。"""
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    pkg = _clone("fta_agent", agents_dir, "fta_agent")
+    _patch_yaml(pkg, evidence_policy={"required": True, "kinds": ["fault_case"]})
+    out_path = pkg / "output_schema.json"
+    out_doc = json.loads(out_path.read_text(encoding="utf-8"))
+    out_doc.setdefault("properties", {})["findings"] = {
+        "type": "array",
+        "x-evidence": "evidence",
+        "x-resolved": "resolved",
+    }
+    out_path.write_text(json.dumps(out_doc, ensure_ascii=False), encoding="utf-8")
+    reg = _scan(agents_dir)
+    assert reg.get("fta_agent") is None, "兄弟键字面命中 evidence/resolved 竟骗过装载门"
+    assert len(reg.errors) == 1
+
+
+def test_qa_output_schemas_reject_both_empty(tmp_path: Path) -> None:
+    """Codex R0 P1：三垂类包 output schema 拒收 findings 与 refusals 双空——
+    「无依据也无拒答」的裸结论违反 evidence-required/refuse-if-uncovered 承诺。"""
+    import jsonschema
+    import pytest
+    for pkg_id in ("policy_qa_agent", "standards_qa_agent"):
+        sch = json.loads((AGENTS_DIR / pkg_id / "output_schema.json").read_text(encoding="utf-8"))
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({"answer": "无依据裸结论", "findings": [], "refusals": []}, sch)
+    fh = json.loads((AGENTS_DIR / "fault_history_agent" / "output_schema.json").read_text(encoding="utf-8"))
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            {
+                "problem_description": "x",
+                "requested_model_type": None,
+                "findings": [],
+                "refusals": [],
+                "cross_model_matches": [],
+                "human_review_required": True,
+                "artifacts": ["fault_history_report.json", "fault_history_report.md"],
+            },
+            fh,
+        )
+
+
 def test_violation_l3_interactive_rejected(tmp_path: Path) -> None:
     """3-lens P2：L3 挂 interactive 包=永久没有人签闸可兑现（会话运行时无
     waiting_review 状态机）——装载期同样拒载，不止咬 job 未开 rhr 一种姿势。"""

@@ -71,6 +71,51 @@ def test_batch_all_or_nothing_zero_writes(app_env):
     assert after == before, "全有全无：任一项非法必须零写入，绝不半建"
 
 
+def test_batch_emits_creation_and_charter_events(app_env):
+    """Codex R0 P1/P2：batch 每项落 task_created 事件（status_to 如实）；有 charter
+    的 agent 另落 charter_intro 开场白事件（创建时点快照，防包升级伪史）；
+    无 charter 的 agent 绝不发空开场白。"""
+    client, _ = app_env
+    r = client.post("/api/tasks/batch", json={"items": [
+        {"agent_id": "fault_history_agent", "name": "检索", "inputs": {"problem_description": "液压压力波动"}},
+        _mk_item("下游", after=[0]),
+    ]})
+    assert r.status_code == 200
+    tasks = r.json()["tasks"]
+
+    ev0 = client.get(f"/api/tasks/{tasks[0]['id']}/events").json()
+    created0 = [e for e in ev0 if e["event_type"] == "task_created"]
+    assert len(created0) == 1
+    assert created0[0]["payload"]["status_to"] == "queued"
+    charter0 = [e for e in ev0 if (e.get("payload") or {}).get("charter_intro") is True]
+    assert len(charter0) == 1, "fault_history_agent 声明了 charter，batch 创建须落开场白事件"
+    assert "相似不等于适用" in charter0[0]["message"]
+
+    ev1 = client.get(f"/api/tasks/{tasks[1]['id']}/events").json()
+    created1 = [e for e in ev1 if e["event_type"] == "task_created"]
+    assert len(created1) == 1
+    assert created1[0]["payload"]["status_to"] == "created"
+    assert [e for e in ev1 if (e.get("payload") or {}).get("charter_intro")] == [], (
+        "hello_agent 无 charter，不得编造开场白"
+    )
+
+
+def test_single_create_emits_charter_event(app_env):
+    """单建路径与 batch 同款：charter 持久化为创建期事件。"""
+    client, _ = app_env
+    r = client.post("/api/tasks", json={
+        "agent_id": "fault_history_agent",
+        "name": "单建检索",
+        "inputs": {"problem_description": "液压压力波动"},
+    })
+    assert r.status_code == 200
+    task_id = r.json()["id"]
+    events = client.get(f"/api/tasks/{task_id}/events").json()
+    charter = [e for e in events if (e.get("payload") or {}).get("charter_intro") is True]
+    assert len(charter) == 1
+    assert "相似不等于适用" in charter[0]["message"]
+
+
 def test_batch_self_or_forward_after_rejected(app_env):
     client, _ = app_env
     r = client.post("/api/tasks/batch", json={"items": [

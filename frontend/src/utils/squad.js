@@ -17,6 +17,11 @@ export function memberPhase(t) {
 export function squadCounts(tasks) {
   const c = {
     total: tasks.length,
+    // 「N 位专家」计人不计任务（Codex R0 P1 配套）：同 Agent 多任务时任务数
+    // 会虚增专家数；无 agent_id 的降级快照按任务数如实回退。
+    experts: tasks.every((t) => t.agent_id)
+      ? new Set(tasks.map((t) => t.agent_id)).size
+      : tasks.length,
     running: 0, // 真工作态（running/validating/parsing/analyzing）
     queued: 0,
     waitingUpstream: 0,
@@ -55,7 +60,7 @@ export function squadSegments(counts, tasks, now) {
     if (counts.failed > 0) segs.push({ text: `${counts.failed} 失败`, tone: "rose" });
     return segs;
   }
-  const segs = [{ text: `${counts.total} 位专家协作`, tone: "neutral" }];
+  const segs = [{ text: `${counts.experts ?? counts.total} 位专家协作`, tone: "neutral" }];
   if (counts.running > 0) segs.push({ text: `${counts.running} 运行中`, tone: "clay" });
   if (counts.queued > 0) segs.push({ text: `${counts.queued} 已入队`, tone: "neutral" });
   if (counts.waitingUpstream > 0) segs.push({ text: `${counts.waitingUpstream} 等待接力`, tone: "neutral" });

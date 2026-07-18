@@ -179,15 +179,41 @@ class AgentRegistry:
             if _out_path.is_file():
                 try:
                     _out_doc = json.loads(_out_path.read_text(encoding="utf-8"))
+                    # Codex R0 P1：schema 顶层可以是任意 JSON（`[]`/`"x"` 均合法
+                    # JSON）——非 dict 直接判不合格并隔离，绝不让 AttributeError
+                    # 崩掉整个 scan（一个坏包炸全场=可用性投毒面）。
+                    if not isinstance(_out_doc, dict):
+                        raise InvalidPackageError(
+                            f"{entry} {_out_name} 顶层必须是 object（JSON Schema 文档）"
+                        )
                     _fs = (_out_doc.get("properties") or {}).get("findings")
-                    # 3-lens P2 收紧：仅「顶层有 findings 键」无判别力——空 schema
-                    # `{}` 接受任意值即可骗过门。最低结构承诺：findings 是 array 且
-                    # 其定义里真出现 evidence 与 resolved（依据行+核验态是 §2.2 输出
-                    # 契约的不可省核心；resolved 缺席=核验态无处落地）。
+                    # 3-lens P2 收紧 + Codex R0 P2：仅「顶层有 findings 键」无判别力，
+                    # 字符串搜 '"evidence"' 又会被 description 里提一嘴骗过——改为
+                    # 结构化路径校验：findings 是 array，且 items.properties 里真有
+                    # evidence（array）与 resolved（依据行+核验态是 §2.2 输出契约的
+                    # 不可省核心；resolved 缺席=核验态无处落地）。items 为 list
+                    # （tuple-schema 写法）时取首元素。
                     if isinstance(_fs, dict) and _fs.get("type") == "array":
-                        _fs_text = json.dumps(_fs, ensure_ascii=False)
-                        _findings_ok = ('"evidence"' in _fs_text) and ('"resolved"' in _fs_text)
-                except (json.JSONDecodeError, OSError):
+                        _items = _fs.get("items")
+                        if isinstance(_items, list) and _items:
+                            _items = _items[0]
+                        if isinstance(_items, dict):
+                            _props = _items.get("properties")
+                            _ev = _props.get("evidence") if isinstance(_props, dict) else None
+                            if isinstance(_ev, dict) and _ev.get("type") == "array":
+                                _ev_items = _ev.get("items")
+                                if isinstance(_ev_items, list) and _ev_items:
+                                    _ev_items = _ev_items[0]
+                                _ev_props = (
+                                    _ev_items.get("properties")
+                                    if isinstance(_ev_items, dict)
+                                    else None
+                                )
+                                _findings_ok = (
+                                    isinstance(_ev_props, dict) and "resolved" in _ev_props
+                                )
+                except (json.JSONDecodeError, OSError, AttributeError, TypeError):
+                    # 防御性兜底：畸形 schema 一律判不合格走拒载，不崩 scan。
                     _findings_ok = False
             if _findings_ok is not True:
                 raise InvalidPackageError(

@@ -254,7 +254,9 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
 
     problem: str = inputs["problem_description"].strip()
     raw_model_type = inputs.get("model_type")
-    model_type = raw_model_type.strip() if isinstance(raw_model_type, str) else None
+    # Codex R0 P2：全空白 model_type 归一为 None（未指定），不落入「型号未收录」
+    # 拒答分支——空串不是型号。
+    model_type = (raw_model_type.strip() or None) if isinstance(raw_model_type, str) else None
 
     library = _load_json("data", "fault_cases.json")
     cases = library.get("cases")

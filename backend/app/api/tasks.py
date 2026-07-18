@@ -422,6 +422,19 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                 "depends_on": body.depends_on or [],
             },
         )
+        # 批七 Codex R0 P2-2：charter 开场白持久化为事件（batch 路径同款）——前端
+        # 旁白不再回退 registry 元数据（时点漂移：包升级后旧任务会念新 charter）。
+        _charter = ((agent.get("expertise") or {}).get("charter") or "").strip()
+        if _charter:
+            repos.append_event(
+                conn,
+                task_id=task_id,
+                agent_id=body.agent_id,
+                event_type="agent_log",
+                level="info",
+                message=_charter,
+                payload={"charter_intro": True},
+            )
         return task
     finally:
         conn.close()
@@ -524,39 +537,59 @@ def create_tasks_batch(body: CreateTasksBatchRequest, request: Request) -> dict[
                     conversation_id=body.conversation_id,
                     retry_of=None,
                 )
+            # 入队与创建事件并入同一事务（Codex R0 P1-1：两阶段窗口下，收尾任一
+            # 写失败会让「行已存在但报错返回」——导引重试路径造重复任务；worker
+            # 也可能在创建事件落库前领走 root）。行未 COMMIT 前对外不可见，故此处
+            # 直写 created→queued（状态机首跳，assert_transition 平凡成立）无并发
+            # TOCTOU 面——set_task_status 的自带 BEGIN IMMEDIATE 不可嵌套，不复用。
+            _now = repos._now_iso()
+            for idx, item in enumerate(body.items):
+                deps = [task_ids[d] for d in item.after]
+                if deps:
+                    status_to = "created"
+                    message = f"任务已创建（等待 {len(deps)} 个前置任务）：agent={item.agent_id}"
+                else:
+                    status_to = "queued"
+                    message = f"任务已创建：agent={item.agent_id}"
+                    conn.execute(
+                        "UPDATE tasks SET status = 'queued', updated_at = ? WHERE id = ?",
+                        (_now, task_ids[idx]),
+                    )
+                repos.append_event(
+                    conn,
+                    task_id=task_ids[idx],
+                    agent_id=item.agent_id,
+                    event_type="task_created",
+                    level="info",
+                    message=message,
+                    payload={
+                        "created_by": created_by,
+                        "status_from": "created",
+                        "status_to": status_to,
+                        "depends_on": deps,
+                        "batch_index": idx,
+                    },
+                )
+                # Codex R0 P2（charter 留痕）：expertise.charter 作为任务首条 agent_log
+                # 落库——前端首行口播渲染**持久化事件**而非实时注册表（包更新不得
+                # 改写历史任务「说过的话」，审计流有据）。不设 workflow_event_type：
+                # 旁白层直取 message 原文。
+                _charter = (((agents[idx] or {}).get("expertise") or {}).get("charter") or "").strip()
+                if _charter:
+                    repos.append_event(
+                        conn,
+                        task_id=task_ids[idx],
+                        agent_id=item.agent_id,
+                        event_type="agent_log",
+                        level="info",
+                        message=_charter,
+                        payload={"charter_intro": True},
+                    )
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-        # 提交后逐项收尾（同单建路径：事件在事务外 autocommit；set_task_status
-        # 自带 BEGIN IMMEDIATE）：无依赖入队，带依赖滞留 created 待 resolver。
-        out_tasks: list[dict[str, Any]] = []
-        for idx, item in enumerate(body.items):
-            deps = [task_ids[d] for d in item.after]
-            if deps:
-                task = repos.get_task(conn, task_ids[idx])
-                status_to = "created"
-                message = f"任务已创建（等待 {len(deps)} 个前置任务）：agent={item.agent_id}"
-            else:
-                task = repos.set_task_status(conn, task_ids[idx], "queued")
-                status_to = "queued"
-                message = f"任务已创建：agent={item.agent_id}"
-            repos.append_event(
-                conn,
-                task_id=task_ids[idx],
-                agent_id=item.agent_id,
-                event_type="task_created",
-                level="info",
-                message=message,
-                payload={
-                    "created_by": created_by,
-                    "status_from": "created",
-                    "status_to": status_to,
-                    "depends_on": deps,
-                    "batch_index": idx,
-                },
-            )
-            out_tasks.append(task)
+        out_tasks = [repos.get_task(conn, task_ids[idx]) for idx in range(len(body.items))]
         return {"tasks": out_tasks}
     finally:
         conn.close()

@@ -10,12 +10,14 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 5000,
-      "description": "当前故障现象、触发条件、恢复方式与已知检查结果。"
+      "pattern": "\\S",
+      "description": "当前故障现象、触发条件、恢复方式与已知检查结果（不得全空白）。"
     },
     "model_type": {
       "type": "string",
       "minLength": 1,
       "maxLength": 80,
+      "pattern": "\\S",
       "description": "可选型号；当前只收录虚构型号 XR-100、XR-300、巡线-7。"
     }
   }

@@ -382,8 +382,10 @@ function createTaskFor(agent) {
 }
 
 // interactive 型（导引）不是一次性任务——引到对话入口（M6/ADR-0012）。
-function startConversationFor() {
-  router.push({ path: "/" });
+function startConversationFor(agent) {
+  // Codex R0 P1：携带所选交互 Agent id——否则 GuidePage 恒建 guide_agent，
+  // 新增垂类问答包（policy_qa/standards_qa）从可见入口永远够不着。
+  router.push({ path: "/", query: { agent: agent.id } });
 }
 
 function verdictLabel(verdict) {

@@ -143,7 +143,7 @@
           <span class="rg-name">{{ a.agent_name }}</span>
           <span class="rg-gray">{{ waitingLineFor(a) }}</span>
           <span class="rg-spacer"></span>
-          <button type="button" class="chip-peek-btn" @click.stop="openTaskPeek(latestTaskFor(a).id)">速览</button>
+          <button type="button" class="chip-peek-btn" @click.stop="openTaskPeek(focusTaskFor(a).id)">速览</button>
         </div>
 
         <div v-if="groupedMembers.done.length" class="rg-head">
@@ -278,32 +278,40 @@ function latestTaskFor(a) {
   return list.length ? list[0] : null; // channel 快照 created_at DESC，[0]=最新
 }
 
-// 成员按**最新任务**的相分组：①正在进行（含排队/待签发——人还有事要跟）
-// ②等待接力（waiting_upstream 派生态）③已完成（真终态，含失败/取消如实过去式）
-// ④未召集（既有卡与召集动作原样保留）。
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
+// 成员行的代表任务：优先**最新的未收官任务**（等待组的速览/旁白必须指向真正
+// 悬着的那件事），全终态才回退最新任务。
+function focusTaskFor(a) {
+  const list = tasksFor(a);
+  return list.find((t) => !TERMINAL_STATUSES.has(t.status)) || (list.length ? list[0] : null);
+}
+
+// 成员按**全部任务**的相分组（Codex R0 P1：会话允许同一 Agent 多任务，只看
+// 最新一条会让「新任务已完成、旧依赖任务还悬着」的成员被折进已完成，把在办
+// 工作藏起来）：①正在进行=任一任务未收官且非纯等待（含排队/待签发——人还有
+// 事要跟）②等待接力=未收官的全是 waiting_upstream 派生态 ③已完成=**全部**
+// 任务真终态（含失败/取消如实过去式）④未召集（既有卡与召集动作原样保留）。
 const groupedMembers = computed(() => {
   const active = [];
   const waiting = [];
   const done = [];
   const unsummoned = [];
   for (const a of rosterAgents.value) {
-    const t = latestTaskFor(a);
-    if (!t) {
+    const list = tasksFor(a);
+    if (!list.length) {
       unsummoned.push(a);
       continue;
     }
-    const phase = memberPhase(t);
-    if (phase === "waiting_upstream") waiting.push(a);
-    else if (t.status === "completed" || t.status === "failed" || t.status === "cancelled") done.push(a);
+    const open = list.filter((t) => !TERMINAL_STATUSES.has(t.status));
+    if (open.length === 0) done.push(a);
+    else if (open.every((t) => memberPhase(t) === "waiting_upstream")) waiting.push(a);
     else active.push(a);
   }
   return { active, waiting, done, unsummoned };
 });
 const anyActiveWork = computed(() =>
-  groupedMembers.value.active.some((a) => {
-    const t = latestTaskFor(a);
-    return t !== null && TASK_WORK_STATES.has(t.status);
-  })
+  groupedMembers.value.active.some((a) => tasksFor(a).some((t) => TASK_WORK_STATES.has(t.status)))
 );
 
 // hero 分组计数句（squad.js 同一口径；O7 收束假绿禁令由 squadLineText 承接）。
@@ -327,8 +335,9 @@ function durTextOf(t) {
 }
 
 // 等待接力单行灰字：上游名解析；上游真失败 → 中性暂停句（非红）。
+// 代表任务=focusTaskFor（悬着的那条，而非可能已收官的最新条）。
 function waitingLineFor(a) {
-  const t = latestTaskFor(a);
+  const t = focusTaskFor(a);
   if (!t) return "";
   const byId = new Map(memberTasks.value.map((x) => [x.id, x]));
   const ups = (t.depends_on || []).map((d) => byId.get(d)).filter(Boolean);

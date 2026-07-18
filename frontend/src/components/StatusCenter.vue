@@ -58,7 +58,13 @@
           <div class="sc-group-label working">运行中 · <span class="num-token">{{ workingTasks.length }}</span></div>
           <div class="sc-list">
             <div v-for="t in workingTasks" :key="t.id" class="sc-item" role="button" tabindex="0" @click="openTaskPeek(t.id)" @keydown.enter.prevent="openTaskPeek(t.id)" @keydown.space.prevent="openTaskPeek(t.id)">
-              <span class="sc-lamp is-pulsing" :style="{ background: 'var(--clay)' }"></span>
+              <!-- Codex R0 P2：等待接力行灯=空心不脉动（clay 脉动=真在干活唯一
+                   语义；阻塞 created 冒充活跃工作=灯语假绿）。 -->
+              <span
+                class="sc-lamp"
+                :class="memberPhase(t) === 'waiting_upstream' ? 'is-hollow' : 'is-pulsing'"
+                :style="memberPhase(t) === 'waiting_upstream' ? {} : { background: 'var(--clay)' }"
+              ></span>
               <span class="sc-item-main">
                 <span class="sc-item-name">{{ taskDisplayName(t, agentNames.map) }}</span>
                 <!-- 活跳时长（批次三 G3，cd-bg-tasks-panel Running 卡「时长实时」）：
@@ -785,6 +791,12 @@ onUnmounted(() => {
   width: 8px;
   height: 8px;
   border-radius: 50%;
+}
+/* 等待接力=空心静灯（与 WorkbenchSession .rg-lamp-hollow 同语法）：
+   未开工不是异常也不是工作，绝不脉动。 */
+.sc-lamp.is-hollow {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--ink-soft);
 }
 .sc-lamp.is-pulsing {
   animation: flai-work-pulse var(--pulse-duration) ease-in-out infinite;
