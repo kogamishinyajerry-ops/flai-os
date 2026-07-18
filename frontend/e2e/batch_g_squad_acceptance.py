@@ -382,20 +382,30 @@ with sync_playwright() as p:
     echo_count = page.evaluate("() => window.__echoCount")
     check("O3 接力回波恰播一次", echo_count == 1, f"echoCount={echo_count}")
 
-    # O5：依据 chip amber 未核 + 展开 EvidenceList 全链无绿
+    # O5：依据 chip amber 未核 + 展开 EvidenceList 全链无绿。红而不崩：tamper
+    # 卡死上游（如断依赖后任务永滞 created）时终审面整体缺失，逐条红到汇总。
     chip = page.locator(".sa-evidence-chip")
-    expect(chip).to_be_visible(timeout=10000)
-    chip_text = chip.inner_text()
-    check("O5a 依据 chip 计数在场且含未核", ("依据" in chip_text) and ("未核" in chip_text), chip_text)
-    check("O5b 含未核整 chip 走 amber 语义类", chip.evaluate("el => el.classList.contains('has-unverified')") is True)
-    chip.click()
-    expand = page.locator(".sa-evidence-expand")
-    expect(expand).to_be_visible(timeout=4000)
-    check("O5c 展开后未核徽逐条在场", expand.locator(".ev-unverified").count() >= 1)
-    ev_colors = expand.evaluate(
-        """el => Array.from(el.querySelectorAll('*')).map(n => getComputedStyle(n).color)"""
-    )
-    check("O5d 依据区计算色无绿（绿仅 REAL 实测）", not any(is_greenish(c) for c in ev_colors))
+    try:
+        expect(chip).to_be_visible(timeout=10000)
+        chip_present = True
+    except Exception:
+        chip_present = False
+    if chip_present:
+        chip_text = chip.inner_text()
+        check("O5a 依据 chip 计数在场且含未核", ("依据" in chip_text) and ("未核" in chip_text), chip_text)
+        check("O5b 含未核整 chip 走 amber 语义类", chip.evaluate("el => el.classList.contains('has-unverified')") is True)
+        chip.click()
+        expand = page.locator(".sa-evidence-expand")
+        expect(expand).to_be_visible(timeout=4000)
+        check("O5c 展开后未核徽逐条在场", expand.locator(".ev-unverified").count() >= 1)
+        ev_colors = expand.evaluate(
+            """el => Array.from(el.querySelectorAll('*')).map(n => getComputedStyle(n).color)"""
+        )
+        check("O5d 依据区计算色无绿（绿仅 REAL 实测）", not any(is_greenish(c) for c in ev_colors))
+    else:
+        for probe in ("O5a 依据 chip 计数在场且含未核", "O5b 含未核整 chip 走 amber 语义类",
+                      "O5c 展开后未核徽逐条在场", "O5d 依据区计算色无绿（绿仅 REAL 实测）"):
+            check(probe, False, "依据 chip 未出现（成员未达终审面）")
 
     # O7（待签相）：待你签发 amber 段在场 + 仍无收束措辞
     squad_text2 = page.locator(".sa-squad-line").inner_text()
