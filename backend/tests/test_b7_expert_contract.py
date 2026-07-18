@@ -110,19 +110,20 @@ def test_control_evidence_required_with_findings_registers(tmp_path: Path) -> No
     _patch_yaml(pkg, evidence_policy={"required": True, "kinds": ["fault_case"]})
     out_path = pkg / "output_schema.json"
     out_doc = json.loads(out_path.read_text(encoding="utf-8"))
-    # 3-lens P2 收紧后：正控须给出最低可核验结构（array + evidence + resolved）；
-    # R2 P2 再紧：kinds 声明非空 ⟹ evidence kind 必须 const/enum ⊆ 白名单；
-    # retro P2 再紧：kind 还必须列入 evidence item 的 required。
+    # 逐轮收紧后的最低正控结构：array + evidence（required 且 minItems 1）+
+    # resolved（required）+ kind（const ⊆ kinds 且 required）+ 两层同质 object。
     out_doc.setdefault("properties", {})["findings"] = {
         "type": "array",
         "items": {
             "type": "object",
+            "required": ["evidence"],
             "properties": {
                 "evidence": {
                     "type": "array",
+                    "minItems": 1,
                     "items": {
                         "type": "object",
-                        "required": ["kind"],
+                        "required": ["kind", "resolved"],
                         "properties": {
                             "kind": {"const": "fault_case"},
                             "resolved": {"const": False},
@@ -190,22 +191,72 @@ def test_violation_kinds_not_enforced_by_schema_rejected(tmp_path: Path) -> None
         _patch_yaml(pkg, evidence_policy={"required": True, "kinds": ["fault_case"]})
         out_path = pkg / "output_schema.json"
         out_doc = json.loads(out_path.read_text(encoding="utf-8"))
+        # 夹具满足空洞判据（evidence required+minItems / resolved required），
+        # 使拒载理由**只**落在 kinds 白名单轴上（错误消息断言有判别力）。
         ev_props = {"resolved": {"const": False}}
         if kind_schema is not None:
             ev_props["kind"] = kind_schema
         ev_items = {"type": "object", "properties": ev_props}
-        if kind_required is True:
-            ev_items["required"] = ["kind"]
+        ev_items["required"] = ["kind", "resolved"] if kind_required is True else ["resolved"]
         out_doc.setdefault("properties", {})["findings"] = {
             "type": "array",
-            "items": {"type": "object", "properties": {
-                "evidence": {"type": "array", "items": ev_items},
+            "items": {"type": "object", "required": ["evidence"], "properties": {
+                "evidence": {"type": "array", "minItems": 1, "items": ev_items},
             }},
         }
         out_path.write_text(json.dumps(out_doc, ensure_ascii=False), encoding="utf-8")
         reg = _scan(agents_dir)
         assert reg.get("fta_agent") is None, f"kind 姿势 {kind_schema!r}/required={kind_required} 竟被注册"
         assert any("kinds" in e["error"] for e in reg.errors)
+
+
+def test_violation_required_without_kinds_rejected(tmp_path: Path) -> None:
+    """Codex retro-R2 P2：required=true 但 manifest 未声明 kinds（agent.schema.json
+    允许省略）——省略即整体跳过白名单校验，default-deny 失效，装载期拒。"""
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    pkg = _clone("policy_qa_agent", agents_dir, "policy_qa_agent")
+    data = yaml.safe_load((pkg / "agent.yaml").read_text(encoding="utf-8"))
+    data["evidence_policy"].pop("kinds")
+    (pkg / "agent.yaml").write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    reg = _scan(agents_dir)
+    assert reg.get("policy_qa_agent") is None, "required=true 无 kinds 竟被注册"
+    assert any("kinds" in e["error"] for e in reg.errors)
+
+
+def test_violation_vacuous_evidence_requirements_rejected(tmp_path: Path) -> None:
+    """Codex retro-R2 P2：结构在场但空洞——evidence 可省略（不在 required）/
+    可空（无 minItems）/ resolved 可省略（不在依据行 required）三姿势均放行
+    `{}` 或「有 kind 无核验态」的依据行，必须拒载。"""
+    def _findings(items_required, min_items, ev_required):
+        ev = {"type": "array", "items": {
+            "type": "object", "required": ev_required,
+            "properties": {"kind": {"const": "fault_case"}, "resolved": {"const": False}},
+        }}
+        if min_items is not None:
+            ev["minItems"] = min_items
+        items = {"type": "object", "properties": {"evidence": ev}}
+        if items_required is not None:
+            items["required"] = items_required
+        return {"type": "array", "items": items}
+
+    cases = [
+        _findings(None, 1, ["kind", "resolved"]),          # evidence 可省略
+        _findings(["evidence"], None, ["kind", "resolved"]),  # 可空数组
+        _findings(["evidence"], 1, ["kind"]),              # resolved 可省略
+    ]
+    for idx, findings_schema in enumerate(cases):
+        agents_dir = tmp_path / f"agents_{idx}"
+        agents_dir.mkdir()
+        pkg = _clone("fta_agent", agents_dir, "fta_agent")
+        _patch_yaml(pkg, evidence_policy={"required": True, "kinds": ["fault_case"]})
+        out_path = pkg / "output_schema.json"
+        out_doc = json.loads(out_path.read_text(encoding="utf-8"))
+        out_doc.setdefault("properties", {})["findings"] = findings_schema
+        out_path.write_text(json.dumps(out_doc, ensure_ascii=False), encoding="utf-8")
+        reg = _scan(agents_dir)
+        assert reg.get("fta_agent") is None, f"空洞姿势 {idx} 竟被注册"
+        assert len(reg.errors) == 1
 
 
 def test_violation_evidence_items_not_homogeneous_object_rejected(tmp_path: Path) -> None:

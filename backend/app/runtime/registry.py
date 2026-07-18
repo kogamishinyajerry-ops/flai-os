@@ -177,6 +177,15 @@ class AgentRegistry:
         # 装载期读盘 spot-check，缺失即拒载。
         evidence_policy = data.get("evidence_policy", {}) or {}
         if evidence_policy.get("required") is True:
+            # retro-R2 P2：required=true ⟹ kinds 必须声明且非空——agent.schema.json
+            # 允许省略 kinds，省略即跳过 kind 白名单校验=default-deny 语义整体
+            # 失效（无白名单的「必附依据」等于任何 kind 都收）。
+            _kinds_decl = evidence_policy.get("kinds")
+            if not (isinstance(_kinds_decl, list) and _kinds_decl):
+                raise InvalidPackageError(
+                    f"{entry} evidence_policy.required=true 但未声明非空 kinds 白名单"
+                    "——default-deny 语义要求显式列出允许的依据类型（ADR-0030）"
+                )
             _out_name = (data.get("output") or {}).get("schema") or "output_schema.json"
             _out_path = entry / _out_name
             _findings_ok = False
@@ -224,20 +233,42 @@ class AgentRegistry:
                                     and _ev_items.get("type") == "object"
                                 ):
                                     _ev_props = _ev_items.get("properties")
+                                # retro-R2 P2：结构在场还不够——evidence 可省略/可空、
+                                # resolved 可省略的 schema 会放行 `{}` 或「有 kind 无
+                                # 核验态」的依据行（必附依据沦为可选装饰）。三处
+                                # 空洞判据：finding 必须 required 含 evidence、
+                                # evidence 必须 minItems>=1、依据行必须 required 含
+                                # resolved。
+                                _items_required = _items.get("required")
+                                _ev_in_required = (
+                                    isinstance(_items_required, list)
+                                    and "evidence" in _items_required
+                                )
+                                _min_items = _ev.get("minItems")
+                                _min_items_ok = isinstance(_min_items, int) and _min_items >= 1
+                                _ev_item_required = (
+                                    _ev_items.get("required")
+                                    if isinstance(_ev_items, dict)
+                                    else None
+                                )
+                                _resolved_required = (
+                                    isinstance(_ev_item_required, list)
+                                    and "resolved" in _ev_item_required
+                                )
                                 _findings_ok = (
-                                    isinstance(_ev_props, dict) and "resolved" in _ev_props
+                                    isinstance(_ev_props, dict)
+                                    and "resolved" in _ev_props
+                                    and _ev_in_required is True
+                                    and _min_items_ok is True
+                                    and _resolved_required is True
                                 )
                                 # Codex R2 P2：evidence_policy.kinds 白名单装载期强制
                                 # ——manifest 宣称 default-deny 白名单，但 schema 若放
                                 # 任意 kind（或根本不约束 kind），白名单只是装饰。
-                                # kinds 声明非空 ⟹ schema 的 evidence.items.properties
-                                # .kind 必须 const/enum 且 ⊆ 声明列表，否则拒载。
-                                _kinds_decl = evidence_policy.get("kinds")
-                                if (
-                                    _findings_ok is True
-                                    and isinstance(_kinds_decl, list)
-                                    and _kinds_decl
-                                ):
+                                # kinds 声明（required=true 时已强制非空）⟹ schema 的
+                                # evidence.items.properties.kind 必须 const/enum 且 ⊆
+                                # 声明列表，否则拒载。
+                                if _findings_ok is True:
                                     _kind_schema = _ev_props.get("kind")
                                     _schema_kinds = None
                                     if isinstance(_kind_schema, dict):
@@ -272,8 +303,9 @@ class AgentRegistry:
                 raise InvalidPackageError(
                     f"{entry} evidence_policy.required=true 但 {_out_name} 缺失、顶层"
                     "properties 无 findings、或 findings 非 array/缺 evidence+resolved"
-                    "结构——依据承诺必须有可核验的输出结构承接"
-                    "（ADR-0030：无处兑现的承诺=假绿温床，fail-closed 拒载）"
+                    "结构/依据可省略可空（evidence 必须 required 且 minItems>=1，"
+                    "依据行必须 required 含 resolved）——依据承诺必须有可核验的输出"
+                    "结构承接（ADR-0030：无处兑现的承诺=假绿温床，fail-closed 拒载）"
                 )
         return data
 
