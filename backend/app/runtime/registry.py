@@ -182,16 +182,17 @@ class AgentRegistry:
             _findings_ok = False
             if _out_path.is_file():
                 try:
-                    # 体量上界（Codex R2 P2）：深嵌套 schema 会让 json.loads 抛
-                    # RecursionError（except 同步兜住）；先设字节上界把「病态大
-                    # schema」在解析前挡下——正常输出契约远小于此。
-                    _raw_schema = _out_path.read_bytes()
-                    if len(_raw_schema) > _OUT_SCHEMA_MAX_BYTES:
+                    # 体量上界（Codex R2 P2 + retro P2）：深嵌套 schema 会让
+                    # json.loads 抛 RecursionError（except 同步兜住）；字节上界把
+                    # 「病态大 schema」挡在解析前——且必须 **stat 先判再读**：
+                    # read_bytes 后再比长度，超大文件已整块进内存（护的就是内存，
+                    # 判定不能建立在先耗尽它之上）。
+                    if _out_path.stat().st_size > _OUT_SCHEMA_MAX_BYTES:
                         raise InvalidPackageError(
                             f"{entry} {_out_name} 超过 {_OUT_SCHEMA_MAX_BYTES} 字节上界"
                             "（病态 schema，fail-closed 拒载）"
                         )
-                    _out_doc = json.loads(_raw_schema.decode("utf-8"))
+                    _out_doc = json.loads(_out_path.read_bytes().decode("utf-8"))
                     # Codex R0 P1：schema 顶层可以是任意 JSON（`[]`/`"x"` 均合法
                     # JSON）——非 dict 直接判不合格并隔离，绝不让 AttributeError
                     # 崩掉整个 scan（一个坏包炸全场=可用性投毒面）。
@@ -243,13 +244,24 @@ class AgentRegistry:
                                             _schema_kinds = [_kind_schema["const"]]
                                         elif isinstance(_kind_schema.get("enum"), list):
                                             _schema_kinds = _kind_schema["enum"]
-                                    if _schema_kinds is None or (
-                                        set(_schema_kinds) <= set(_kinds_decl)
-                                    ) is False:
+                                    # retro P2：kind 还必须在 evidence item 的
+                                    # required 里——enum 约束但可省略 kind 的
+                                    # schema 照样接受「无 kind 依据行」，白名单
+                                    # 判定被空值绕过。
+                                    _ev_required = _ev_items.get("required")
+                                    _kind_required = (
+                                        isinstance(_ev_required, list) and "kind" in _ev_required
+                                    )
+                                    if (
+                                        _schema_kinds is None
+                                        or (set(_schema_kinds) <= set(_kinds_decl)) is False
+                                        or _kind_required is False
+                                    ):
                                         raise InvalidPackageError(
                                             f"{entry} evidence_policy.kinds={_kinds_decl} 但 "
                                             f"{_out_name} 的 evidence kind 未以 const/enum 约束"
-                                            f"在白名单内（实际={_schema_kinds}）——default-deny"
+                                            f"在白名单内或未列入 required（实际={_schema_kinds},"
+                                            f" required 含 kind={_kind_required}）——default-deny"
                                             " 白名单必须由输出契约强制（ADR-0030）"
                                         )
                 except (json.JSONDecodeError, UnicodeError, OSError, AttributeError, TypeError, RecursionError):

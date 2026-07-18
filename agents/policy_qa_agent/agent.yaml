@@ -1,6 +1,6 @@
 id: policy_qa_agent
 name: "制度政策问答 Agent"
-version: 0.1.0
+version: 0.1.1  # 版本史见 changelog.md
 status: draft
 maturity: L0
 category: knowledge_qa

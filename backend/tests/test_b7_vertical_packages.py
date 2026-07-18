@@ -247,6 +247,10 @@ def test_qa_catalog_prefix_smuggling_rejected():
         "agent_config": _agent_config("policy_qa_agent"),
     })
     assert len(result2["recommendation"]["findings"]) == 1, "合法注解形被误拒（白名单过紧）"
+    # retro P1：命中后 source_ref 归一重写为目录规范形——模型自带注解（可藏
+    # 伪造文号）不落库不上屏
+    ref_out = result2["recommendation"]["findings"][0]["evidence"][0]["source_ref"]
+    assert ref_out == "青岚质规〔虚构2026〕014号", f"source_ref 未归一重写：{ref_out!r}"
 
 
 def test_qa_refusal_reason_sanitized_and_schema_valid():

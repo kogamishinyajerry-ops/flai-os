@@ -111,7 +111,8 @@ def test_control_evidence_required_with_findings_registers(tmp_path: Path) -> No
     out_path = pkg / "output_schema.json"
     out_doc = json.loads(out_path.read_text(encoding="utf-8"))
     # 3-lens P2 收紧后：正控须给出最低可核验结构（array + evidence + resolved）；
-    # R2 P2 再紧：kinds 声明非空 ⟹ evidence kind 必须 const/enum ⊆ 白名单。
+    # R2 P2 再紧：kinds 声明非空 ⟹ evidence kind 必须 const/enum ⊆ 白名单；
+    # retro P2 再紧：kind 还必须列入 evidence item 的 required。
     out_doc.setdefault("properties", {})["findings"] = {
         "type": "array",
         "items": {
@@ -121,6 +122,7 @@ def test_control_evidence_required_with_findings_registers(tmp_path: Path) -> No
                     "type": "array",
                     "items": {
                         "type": "object",
+                        "required": ["kind"],
                         "properties": {
                             "kind": {"const": "fault_case"},
                             "resolved": {"const": False},
@@ -172,13 +174,17 @@ def test_malformed_output_schema_quarantined_not_crash(tmp_path: Path) -> None:
 def test_violation_kinds_not_enforced_by_schema_rejected(tmp_path: Path) -> None:
     """Codex R2 P2：manifest 声明 kinds=[fault_case] 但 schema 放行别的 kind
     （或不约束 kind）——default-deny 白名单沦为装饰，装载期拒载。"""
-    for kind_schema in (
-        {"const": "knowledge_doc"},                       # 越出白名单
-        {"type": "string", "enum": ["fault_case", "calculation"]},  # 超集
-        {"type": "string"},                               # 不约束
-        None,                                             # 缺席
-    ):
-        agents_dir = tmp_path / f"agents_{abs(hash(str(kind_schema))) % 10_000}"
+    # (kind_schema, kind_in_required)：前四种约束逃逸 + retro P2 第五种
+    # ——enum 合法子集但 kind 可省略（空值绕白名单）。
+    cases = [
+        ({"const": "knowledge_doc"}, True),                       # 越出白名单
+        ({"type": "string", "enum": ["fault_case", "calculation"]}, True),  # 超集
+        ({"type": "string"}, True),                               # 不约束
+        (None, True),                                             # 缺席
+        ({"const": "fault_case"}, False),                         # 合法值但未 required
+    ]
+    for idx, (kind_schema, kind_required) in enumerate(cases):
+        agents_dir = tmp_path / f"agents_{idx}"
         agents_dir.mkdir()
         pkg = _clone("fta_agent", agents_dir, "fta_agent")
         _patch_yaml(pkg, evidence_policy={"required": True, "kinds": ["fault_case"]})
@@ -187,15 +193,18 @@ def test_violation_kinds_not_enforced_by_schema_rejected(tmp_path: Path) -> None
         ev_props = {"resolved": {"const": False}}
         if kind_schema is not None:
             ev_props["kind"] = kind_schema
+        ev_items = {"type": "object", "properties": ev_props}
+        if kind_required is True:
+            ev_items["required"] = ["kind"]
         out_doc.setdefault("properties", {})["findings"] = {
             "type": "array",
             "items": {"type": "object", "properties": {
-                "evidence": {"type": "array", "items": {"type": "object", "properties": ev_props}},
+                "evidence": {"type": "array", "items": ev_items},
             }},
         }
         out_path.write_text(json.dumps(out_doc, ensure_ascii=False), encoding="utf-8")
         reg = _scan(agents_dir)
-        assert reg.get("fta_agent") is None, f"kind 约束 {kind_schema!r} 竟被注册"
+        assert reg.get("fta_agent") is None, f"kind 姿势 {kind_schema!r}/required={kind_required} 竟被注册"
         assert any("kinds" in e["error"] for e in reg.errors)
 
 

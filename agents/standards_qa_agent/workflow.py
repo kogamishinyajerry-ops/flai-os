@@ -37,6 +37,16 @@ def _question(messages: list[dict[str, Any]]) -> str:
 _CLAUSE_CATALOG = frozenset({"QZ-AIR-SYN-210 §5.4.2", "QZ-AIR-SYN-330 §7.1.3"})
 _CASE_CATALOG = frozenset({"TC-XR100-017", "TC-XR300-008", "TC-XL7-004"})
 
+# 归一后的展示规范形（Codex retro P1）：命中即整串替换——保留 prompt 自带的
+# 「（虚构…）」诚实注解，剔除模型夹带的任何自由注解文本。
+_DISPLAY_FORM = {
+    "QZ-AIR-SYN-210 §5.4.2": "QZ-AIR-SYN-210 §5.4.2（虚构条款）",
+    "QZ-AIR-SYN-330 §7.1.3": "QZ-AIR-SYN-330 §7.1.3（虚构条款）",
+    "TC-XR100-017": "TC-XR100-017（虚构 XR-100 实例）",
+    "TC-XR300-008": "TC-XR300-008（虚构 XR-300 实例）",
+    "TC-XL7-004": "TC-XL7-004（虚构 巡线-7 实例）",
+}
+
 _TRAILING_ANNOTATION = re.compile(r"[（(][^（）()]*[）)]\s*$")
 
 
@@ -45,6 +55,8 @@ def _canonical_ref(ref: str) -> str:
 
 
 def _enforce_catalog(payload: dict[str, Any]) -> None:
+    """越界拒 + 归一重写（Codex retro P1）：伪造注解「条目（真实依据 REAL-xxx）」
+    不得随原串持久化上屏——命中后 source_ref 就地替换为规范展示形。"""
     for finding in payload.get("findings", []):
         kinds: set[str] = set()
         for ev in finding.get("evidence", []):
@@ -56,8 +68,10 @@ def _enforce_catalog(payload: dict[str, Any]) -> None:
                 allowed = _CASE_CATALOG
             else:
                 allowed = frozenset()
-            if (_canonical_ref(ref) in allowed) is False:
+            canonical = _canonical_ref(ref)
+            if (canonical in allowed) is False:
                 raise ValueError(f"依据出处越出合成目录白名单：kind={kind!r} source_ref={ref!r}")
+            ev["source_ref"] = _DISPLAY_FORM[canonical]
             kinds.add(kind)
         basis = ((finding.get("confidence") or {}).get("basis")) or ""
         if basis == "双源(条款+机型实例)" and ({"standard_clause", "type_case"} <= kinds) is False:
@@ -85,8 +99,9 @@ def _parse_payload(raw: str) -> dict[str, Any]:
     return payload
 
 
-# 拒答 reason 消毒（Codex R2 P2）：str(ValidationError) 内嵌违规实例全文——超长
-# 模型输出会让 reason 突破 schema 长度上限，且把被拒文本原样持久化。首行+截断。
+# 拒答 reason 消毒（Codex R2 P2 + retro P2 再紧）：ValidationError 首行以违规
+# 实例 repr 开头，「首行+截断」仍泄前 300 字符——改用校验器元数据构造 reason，
+# 绝不引用实例值；其余异常走首行截断兜底。
 _REASON_MAX_CHARS = 300
 
 
@@ -95,6 +110,13 @@ def _sanitize_reason(reason: str) -> str:
     if len(first_line) > _REASON_MAX_CHARS:
         first_line = first_line[: _REASON_MAX_CHARS] + "…（已截断）"
     return first_line
+
+
+def _contract_error_reason(exc: Exception) -> str:
+    if isinstance(exc, ValidationError):
+        path = "/".join(str(p) for p in exc.absolute_path) or "<根>"
+        return f"模型输出未通过结构化依据契约：字段 {path} 违反 {exc.validator} 约束"
+    return _sanitize_reason(f"模型输出未通过结构化依据契约：{exc}")
 
 
 def _refusal(question: str, reason: str) -> dict[str, Any]:
@@ -137,6 +159,6 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
         try:
             payload = _parse_payload(raw)
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-            payload = _refusal(question, f"模型输出未通过结构化依据契约：{exc}")
+            payload = _refusal(question, _contract_error_reason(exc))
 
     return {"assistant_message": payload["answer"], "recommendation": payload}

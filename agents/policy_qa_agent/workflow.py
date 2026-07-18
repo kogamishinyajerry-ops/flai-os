@@ -50,11 +50,17 @@ def _canonical_ref(ref: str) -> str:
 
 
 def _enforce_catalog(payload: dict[str, Any]) -> None:
+    """越界拒 + **归一重写**（Codex retro P1）：仅剥注解判白名单还不够——
+    「白名单条目（真实依据 REAL-xxx）」的伪造注解会随原串持久化并被
+    EvidenceList 整串展示。命中后把 source_ref 就地替换为目录规范形，
+    模型自带的任何注解文本一律不落库不上屏。"""
     for finding in payload.get("findings", []):
         for ev in finding.get("evidence", []):
             ref = ev.get("source_ref", "")
-            if (_canonical_ref(ref) in _CATALOG) is False:
+            canonical = _canonical_ref(ref)
+            if (canonical in _CATALOG) is False:
                 raise ValueError(f"依据出处越出合成目录白名单：{ref!r}（未收录必拒答）")
+            ev["source_ref"] = canonical
 
 
 def _parse_payload(raw: str) -> dict[str, Any]:
@@ -78,9 +84,11 @@ def _parse_payload(raw: str) -> dict[str, Any]:
     return payload
 
 
-# 拒答 reason 消毒（Codex R2 P2）：str(ValidationError) 会内嵌违规实例全文——
-# 超长模型输出会让 reason 突破 output_schema 的长度上限，且把**被拒的模型
-# 文本**原样持久化进会话（拒了又存=没拒干净）。只取首行并截断。
+# 拒答 reason 消毒（Codex R2 P2 + retro P2 再紧）：str(ValidationError) 首行就以
+# 违规实例的 repr 开头——「首行+截断」仍会把被拒模型文本的前 300 字符持久化
+# 上屏。ValidationError 一律改用**校验器元数据**（字段路径+违反的约束名）构造
+# reason，绝不引用实例值；其余异常走首行截断兜底（JSONDecodeError 等消息本身
+# 不含模型正文）。
 _REASON_MAX_CHARS = 300
 
 
@@ -89,6 +97,13 @@ def _sanitize_reason(reason: str) -> str:
     if len(first_line) > _REASON_MAX_CHARS:
         first_line = first_line[: _REASON_MAX_CHARS] + "…（已截断）"
     return first_line
+
+
+def _contract_error_reason(exc: Exception) -> str:
+    if isinstance(exc, ValidationError):
+        path = "/".join(str(p) for p in exc.absolute_path) or "<根>"
+        return f"模型输出未通过结构化依据契约：字段 {path} 违反 {exc.validator} 约束"
+    return _sanitize_reason(f"模型输出未通过结构化依据契约：{exc}")
 
 
 def _refusal(question: str, reason: str) -> dict[str, Any]:
@@ -134,6 +149,6 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
         try:
             payload = _parse_payload(raw)
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-            payload = _refusal(question, f"模型输出未通过结构化依据契约：{exc}")
+            payload = _refusal(question, _contract_error_reason(exc))
 
     return {"assistant_message": payload["answer"], "recommendation": payload}
