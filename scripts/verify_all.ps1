@@ -83,7 +83,9 @@ $E2EScripts = @(
     "frontend/e2e/batch_c_rewards_acceptance.py",
     "frontend/e2e/batch_d_visual_acceptance.py",
     "frontend/e2e/inline_summon_acceptance.py",
-    "frontend/e2e/craft_desktop_acceptance.py"
+    "frontend/e2e/craft_desktop_acceptance.py",
+    "frontend/e2e/batch_g_squad_acceptance.py",
+    "frontend/e2e/batch_h_teams_acceptance.py"
 )
 
 foreach ($E2EScript in $E2EScripts) {

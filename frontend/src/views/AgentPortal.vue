@@ -137,8 +137,10 @@
       </div>
     </div>
 
-    <!-- summon 填参面板：逐席位按 input_schema 生成字段；文件型席位 fail-closed
-         禁提交（本面板只承接纯参数型）；对账失败清单中性渲染（策略拒绝非报警红）。 -->
+    <!-- summon 填参面板（Codex R0 P2×2 重构）：逐席位复用 SchemaForm/validateInputs
+         （枚举/整数/数组约束由控件与校验兜住，不再手搓字段）；file_upload 席位复用
+         TaskCreate 上传流（提交时才上传，提交前移除零服务端残留）；契约拉取失败或
+         结构过复杂 fail-closed 禁提交；对账失败清单中性渲染（策略拒绝非报警红）。 -->
     <el-dialog v-model="summonOpen" :title="summonTarget ? `召集 · ${summonTarget.name}` : ''" width="640px" class="summon-dialog">
       <div v-for="s in summonSeats" :key="s.seq" class="seat-block">
         <div class="seat-head">
@@ -147,28 +149,27 @@
           <span v-if="s.after.length" class="seat-after">等待席位 {{ s.after.join("、") }} 的产物</span>
         </div>
         <template v-if="s.schemaLoaded">
-          <p v-if="s.inputMode && s.inputMode !== 'params'" class="seat-note is-blocked">
-            该成员需要文件输入——本面板只承接纯参数席位，请从导引方案逐个创建。
+          <p v-if="!seatSupported(s)" class="seat-note is-blocked">
+            该成员的输入契约本面板无法承接（拉取失败或结构过复杂）——请从导引方案逐个创建。
           </p>
-          <div v-for="f in s.fields" :key="f.key" class="seat-field">
-            <label class="seat-label">{{ f.key }}<span v-if="f.required" class="seat-required">*</span></label>
-            <el-input
-              v-if="f.kind === 'string'"
-              v-model="f.value"
-              :placeholder="f.description || ''"
-              size="small"
-            />
-            <el-input-number v-else-if="f.kind === 'number'" v-model="f.value" size="small" />
-            <el-input
-              v-else
-              v-model="f.value"
-              type="textarea"
-              :rows="2"
-              placeholder="JSON 值"
-              size="small"
-            />
-          </div>
-          <p v-if="!s.fields.length && s.inputMode === 'params'" class="seat-note">该席位无需参数。</p>
+          <template v-else>
+            <SchemaForm v-if="s.schema" :schema="s.schema" :model="s.values" :disabled="summoning" />
+            <div v-if="s.inputMode === 'file_upload'" class="seat-upload">
+              <el-upload :auto-upload="false" :show-file-list="false" multiple :on-change="(f) => seatFileSelect(s, f)">
+                <el-button size="small">选择材料文件</el-button>
+              </el-upload>
+              <div v-for="item in s.uploadItems" :key="item.uid" class="seat-upload-item">
+                <span class="seat-upload-name">{{ item.name }}</span>
+                <el-tag v-if="item.status === 'pending'" size="small">待上传</el-tag>
+                <el-tag v-else-if="item.status === 'uploading'" type="info" size="small">上传中…</el-tag>
+                <el-tag v-else-if="item.status === 'done'" type="success" size="small">已上传</el-tag>
+                <el-tag v-else type="danger" size="small">失败：{{ item.error }}</el-tag>
+                <el-button size="small" text :disabled="summoning" @click="removeSeatFile(s, item)">移除</el-button>
+              </div>
+              <p class="seat-note">材料在提交召集时才上传，提交前移除零服务端残留；该席位至少需要一份材料文件。</p>
+            </div>
+            <p v-if="s.inputMode !== 'file_upload' && !s.fieldCount" class="seat-note">该席位无需参数。</p>
+          </template>
         </template>
         <p v-else class="seat-note">正在读取输入契约…</p>
       </div>
@@ -352,6 +353,9 @@ import { request } from "../api/client";
 import { burstNeutral } from "../effects/burst.js";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
+import SchemaForm from "../components/SchemaForm.vue";
+import { parseSchema, blankInputs, collectInputs, validateInputs } from "../utils/schemaForm";
+import { uploadFile as apiUploadFile } from "../api/files";
 import {
   statusTagType,
   agentStatusLabel,
@@ -491,22 +495,6 @@ function teamUnready(t) {
   return "";
 }
 
-function _fieldsFromSchema(schema) {
-  const props = (schema && schema.properties) || {};
-  const required = new Set(Array.isArray(schema && schema.required) ? schema.required : []);
-  return Object.entries(props).map(([key, p]) => {
-    const type = p && p.type;
-    const kind = type === "string" ? "string" : type === "number" || type === "integer" ? "number" : "json";
-    return {
-      key,
-      kind,
-      required: required.has(key),
-      description: (p && p.description) || "",
-      value: kind === "number" ? undefined : "",
-    };
-  });
-}
-
 function openSummon(t) {
   summonTarget.value = t;
   summonErrors.value = [];
@@ -518,58 +506,69 @@ function openSummon(t) {
     after: m.after || [],
     schemaLoaded: false,
     inputMode: null,
-    fields: [],
+    schema: null,
+    renderable: false,
+    fieldCount: 0,
+    values: {},
+    uploadItems: [],
   }));
   for (const seat of summonSeats.value) {
     getAgent(seat.agent_id)
       .then((detail) => {
-        seat.inputMode = (detail && detail.input_mode) || null;
-        seat.fields = _fieldsFromSchema(detail && detail.input_schema);
+        // input_mode 缺失（agent 无 input 段）按 none=无输入席位。
+        seat.inputMode = (detail && detail.input_mode) || "none";
+        seat.schema = (detail && detail.input_schema) || null;
+        const parsed = parseSchema(seat.schema);
+        seat.renderable = parsed.renderable;
+        seat.fieldCount = parsed.fields.length;
+        seat.values = blankInputs(seat.schema, null);
         seat.schemaLoaded = true;
       })
       .catch(() => {
-        // 契约拉不到 fail-closed：席位标记为文件型同款「不可承接」，禁提交。
+        // 契约拉不到 fail-closed：席位标记「不可承接」，禁提交。
         seat.inputMode = "unknown";
-        seat.fields = [];
         seat.schemaLoaded = true;
       });
   }
 }
 
-// 就绪判据（fail-closed）：全部席位契约已载、均为纯参数型、必填字段全非空。
+// 席位可承接判据：params/file_upload/none 三型均可（Codex R0 P2：file 席位此前
+// 一刀切禁提交，含文件成员的合法团队永远召不动=死入口）；契约拉取失败（unknown）
+// 或 schema 结构超出 SchemaForm 覆盖面（renderable=false）→ fail-closed 不可承接。
+function seatSupported(s) {
+  if (!["params", "file_upload", "none"].includes(s.inputMode)) return false;
+  if (s.schema && s.renderable !== true) return false;
+  return true;
+}
+
+// 就绪判据（fail-closed）：全部席位契约已载且可承接、schema 约束校验全过
+// （validateInputs：必填/数字界/枚举控件化——Codex R0 P2）、file 席位至少一份材料。
 const summonReady = computed(() => {
   const seats = summonSeats.value;
   if (!seats.length) return false;
   for (const s of seats) {
     if (s.schemaLoaded !== true) return false;
-    if (s.inputMode !== "params") return false;
-    for (const f of s.fields) {
-      if (!f.required) continue;
-      if (f.kind === "number") {
-        if (typeof f.value !== "number") return false;
-      } else if (!(typeof f.value === "string" && f.value.trim())) {
-        return false;
-      }
-    }
+    if (!seatSupported(s)) return false;
+    if (s.schema && validateInputs(s.schema, s.values).length > 0) return false;
+    if (s.inputMode === "file_upload" && s.uploadItems.length === 0) return false;
   }
   return true;
 });
 
-function _seatInputs(seat) {
-  const inputs = {};
-  for (const f of seat.fields) {
-    if (f.kind === "number") {
-      if (typeof f.value === "number") inputs[f.key] = f.value;
-    } else if (f.kind === "string") {
-      const v = (f.value || "").trim();
-      if (v) inputs[f.key] = v;
-    } else {
-      const raw = (f.value || "").trim();
-      if (!raw) continue;
-      inputs[f.key] = JSON.parse(raw); // 解析失败走 catch → 面板报错不提交
-    }
-  }
-  return inputs;
+let seatUploadSeq = 0;
+function seatFileSelect(seat, uploadItem) {
+  seat.uploadItems.push({
+    uid: uploadItem.uid ?? `su_${++seatUploadSeq}`,
+    name: uploadItem.name,
+    status: "pending",
+    raw: uploadItem.raw,
+    error: "",
+    id: null,
+  });
+}
+
+function removeSeatFile(seat, item) {
+  seat.uploadItems = seat.uploadItems.filter((i) => i.uid !== item.uid);
 }
 
 async function submitSummon() {
@@ -577,16 +576,51 @@ async function submitSummon() {
   summonErrors.value = [];
   summoning.value = true;
   try {
-    const items = summonSeats.value.map((s) => ({ seq: s.seq, inputs: _seatInputs(s) }));
+    // 文件席位材料：提交时才上传（同 TaskCreate uploadPendingFiles 语义），任一
+    // 失败即中止整单——绝不带残缺材料发起召集。
+    for (const s of summonSeats.value) {
+      for (const item of s.uploadItems) {
+        if (item.status === "done" && item.id) continue;
+        item.status = "uploading";
+        item.error = "";
+        try {
+          const rec = await apiUploadFile(item.raw);
+          item.id = rec.id;
+          item.status = "done";
+        } catch (e) {
+          item.status = "error";
+          item.error = (e && (e.detail || e.message)) || "上传失败";
+          throw new Error(`席位 ${s.seq} 材料「${item.name}」上传失败——未发起召集`);
+        }
+      }
+    }
+    const items = summonSeats.value.map((s) => {
+      const it = { seq: s.seq, inputs: s.schema ? collectInputs(s.schema, s.values) : {} };
+      if (s.uploadItems.length) it.input_file_ids = s.uploadItems.map((i) => i.id);
+      return it;
+    });
     const res = await summonTeamApi({ teamId: summonTarget.value.id, items });
     for (const w of res.warnings || []) ElMessage.warning(w);
     ElMessage.success(`已召集「${summonTarget.value.name}」全体 ${items.length} 名成员——进度在任务台跟进`);
     summonOpen.value = false;
     router.push({ path: "/tasks" });
   } catch (err) {
-    const detail = err.detail;
+    let detail = err.detail;
+    // Codex R0 P2：api client 对 object 型 FastAPI detail 统一 JSON.stringify 整个
+    // body——先解回结构再取 summon_errors/batch_errors，否则对账清单永远渲成生 JSON。
+    if (typeof detail === "string" && detail.trim().startsWith("{")) {
+      try {
+        const parsed = JSON.parse(detail);
+        detail = (parsed && parsed.detail) || parsed;
+      } catch {
+        /* 非 JSON 原样保留 */
+      }
+    }
     const list =
-      (detail && (detail.summon_errors || (detail.batch_errors || []).flatMap((b) => b.errors))) || [];
+      (detail &&
+        typeof detail === "object" &&
+        (detail.summon_errors || (detail.batch_errors || []).flatMap((b) => b.errors))) ||
+      [];
     summonErrors.value = list.length
       ? list
       : [
@@ -1186,11 +1220,11 @@ onMounted(load);
 .seat-head { font-size: 13px; font-weight: 600; color: var(--ink); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .seat-role { font-weight: 400; font-size: 12px; color: var(--ink-soft); }
 .seat-after { font-weight: 400; font-size: 11.5px; color: var(--ink-faint); }
-.seat-field { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-.seat-label { flex: 0 0 auto; min-width: 120px; font-size: 12.5px; color: var(--ink-soft); }
-.seat-required { color: var(--trust-pending); margin-left: 2px; }
 .seat-note { margin: 6px 0 0; font-size: 12px; color: var(--ink-faint); }
 .seat-note.is-blocked { color: var(--trust-pending); }
+.seat-upload { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.seat-upload-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.seat-upload-name { color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
 .summon-errors { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 8px; }
 .summon-errors-title { margin: 0 0 4px; font-size: 12.5px; font-weight: 600; color: var(--ink); }
 .summon-error-line { margin: 2px 0 0; font-size: 12.5px; color: var(--ink-soft); }

@@ -242,9 +242,9 @@ PY
       ;;
     b8-after-cut) cat <<'PY'
 p="backend/app/api/teams.py"; s=open(p).read()
-t='                    after=[pos_of_seq[d] for d in m["after"] if d in pos_of_seq],'
+t='                        after=[pos_of_seq[d] for d in m["after"] if d in pos_of_seq],'
 assert s.count(t)==1
-open(p,"w").write(s.replace(t,"                    after=[],"))
+open(p,"w").write(s.replace(t,"                        after=[],"))
 PY
       ;;
     b8-order-cut) cat <<'PY'

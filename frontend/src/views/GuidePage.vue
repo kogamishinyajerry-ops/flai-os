@@ -309,9 +309,11 @@
                 <button class="workbench-btn" :class="openableCount(m.recommendation) > 0 ? 'is-secondary' : 'cta-clay'" @click="openWorkbench">进入协作工作台 →</button>
                 <button type="button" class="plan-escape" @click="focusComposer">想调整方案？直接告诉导引 ↓</button>
                 <!-- 批八 O7：存为团队模板——仅 orchestrate 且会话 active（假入口=
-                     假承诺）；成员由服务端从方案快照抽取重验，前端不传成员。 -->
+                     假承诺）；成员由服务端从方案快照抽取重验，前端不传成员。
+                     仅最新方案卡（Codex R0 P1）：服务端读最新快照，历史卡渲此
+                     按钮=以旧卡之名存新名单。 -->
                 <button
-                  v-if="conversationStatus === 'active'"
+                  v-if="conversationStatus === 'active' && idx === latestPlanIdx"
                   type="button"
                   class="plan-escape save-team-btn"
                   :disabled="savingTeam"
@@ -1396,6 +1398,18 @@ function evidenceOfTask(taskId) {
 // 批八：存为团队模板——只传会话 id，成员由服务端从方案快照抽取重验（ADR-0031）。
 // 命名走浏览器原生输入（轻量；空名/取消即不保存），成败 toast 如实。
 const savingTeam = ref(false);
+
+// 最新方案卡下标（Codex R0 P1）：POST /api/teams 只读会话**最新** recommendation
+// 快照——多轮会话里历史方案卡若也渲存团队按钮，点历史卡会以旧卡之名存下最新
+// 名单（所见非所存）。故入口只长在最新 orchestrate 卡上。
+const latestPlanIdx = computed(() => {
+  const list = messages.value;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const r = list[i] && list[i].recommendation;
+    if (r && r.decision === "orchestrate") return i;
+  }
+  return -1;
+});
 async function saveTeamFromPlan() {
   if (!conversationId.value || savingTeam.value) return;
   const name = (window.prompt("给这套专家团队起个名字（下次可一键召集）：") || "").trim();

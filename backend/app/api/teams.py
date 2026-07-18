@@ -19,7 +19,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from .tasks import BatchTaskItem, run_batch_creation
 from ..storage import repos
@@ -43,8 +43,12 @@ def _team_projection(team: dict[str, Any], agent_registry: Any) -> dict[str, Any
     for m in team["members"]:
         agent = agent_registry.get(m["agent_id"])
         clearance = _agent_clearance(agent) if agent is not None else None
-        if clearance is not None:
-            min_rank = min(min_rank, _CLEARANCE_RANK.get(clearance, 1))
+        # 缺位成员按最保守 internal 参与取 min（Codex R0 P3：此前跳过缺位成员，
+        # 全员缺位或缺位+高位组合会虚标 sensitive——注释口径与代码不一致）。
+        min_rank = min(
+            min_rank,
+            _CLEARANCE_RANK.get(clearance, 1) if clearance is not None else _CLEARANCE_RANK["internal"],
+        )
         members.append(
             {
                 "seq": m["seq"],
@@ -238,8 +242,12 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
                 detail={"message": "召集未发起（对账不过，整单拒发）", "summon_errors": errors},
             )
 
-        # G1-G4：逐席位对账（读 registry 现势）。
+        # G1-G4：逐席位对账（读 registry 现势）。pinned_versions 记对账时点观察
+        # 到的现势版本，随后传入 run_batch_creation 钉版本校验（Codex R0 P1：
+        # 闭「对账后 registry 热切换不兼容版→新版被盖进任务→runtime 漂移复检
+        # 恒过」的 TOCTOU 旁路）。
         warnings: list[str] = []
+        pinned_versions: dict[str, str] = {}
         for m in team["members"]:
             agent = agent_registry.get(m["agent_id"])
             label = f"席位 {m['seq']}（{m['agent_id']}）"
@@ -261,6 +269,7 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
                     )
                 else:
                     warnings.append(f"{label}：版本 {saved} → {current}（patch 变化，放行）")
+            pinned_versions[m["agent_id"]] = current
         if errors:
             raise HTTPException(
                 status_code=422,
@@ -271,18 +280,37 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
         ordered_seqs = sorted(member_by_seq)
         pos_of_seq = {seq: pos for pos, seq in enumerate(ordered_seqs)}
         item_by_seq = {it.seq: it for it in body.items}
+        # 材料校验（Codex R0 P2）：SummonItem 不带 BatchTaskItem 的尺寸/文件 id
+        # validator，超限 inputs / 空白重复 file id / 超长 role 会在此构造时抛
+        # ValidationError——逐席位捕获译成结构化 422（material_errors 独立列表，
+        # 不与上方 gate 的 errors 混流），绝不放大成 500。
         batch_items: list[BatchTaskItem] = []
+        material_errors: list[str] = []
         for seq in ordered_seqs:
             m = member_by_seq[seq]
             it = item_by_seq[seq]
-            batch_items.append(
-                BatchTaskItem(
-                    agent_id=m["agent_id"],
-                    name=(m.get("role") or None),
-                    inputs=it.inputs,
-                    input_file_ids=it.input_file_ids,
-                    after=[pos_of_seq[d] for d in m["after"] if d in pos_of_seq],
+            try:
+                batch_items.append(
+                    BatchTaskItem(
+                        agent_id=m["agent_id"],
+                        name=(m.get("role") or None),
+                        inputs=it.inputs,
+                        input_file_ids=it.input_file_ids,
+                        after=[pos_of_seq[d] for d in m["after"] if d in pos_of_seq],
+                    )
                 )
+            except ValidationError as exc:
+                first = (exc.errors() or [{}])[0]
+                material_errors.append(
+                    f"席位 {seq}（{m['agent_id']}）：材料不合法——{str(first.get('msg') or exc)[:200]}"
+                )
+        if material_errors:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "召集未发起（材料校验不过，整单拒发）",
+                    "summon_errors": material_errors,
+                },
             )
         result = run_batch_creation(
             conn=conn,
@@ -291,6 +319,7 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
             conversation_id=body.conversation_id,
             created_by=request.state.user["display_name"],
             created_by_username=request.state.user["username"],
+            pinned_versions=pinned_versions,
         )
         result["team_id"] = team_id
         result["warnings"] = warnings

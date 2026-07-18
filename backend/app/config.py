@@ -67,7 +67,9 @@ DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 # FLAI_LLM_TIMEOUT_S——**worker 可见行为变更**（worker 跑的 job 调 gateway._post）。
 # 旧 worker 留 60s 却写同代际会骗过 deploy_selfcheck.check_worker_generation（误绿），
 # 故 bump 逼 worker 重启到读 env 的新代码。
-WORKER_GENERATION = "collab-resolver+t2-eval-snapshot+b3-llm-timeout"
+# 批八（Codex R0 P1）：runtime._execute 新增执行期 disabled 兜底——worker 可见
+# 行为变更（缺此分支的旧 worker 会硬跑已禁用 agent 的滞留任务），bump 逼重启。
+WORKER_GENERATION = "collab-resolver+t2-eval-snapshot+b3-llm-timeout+b8-disabled-gate"
 
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。
 # monitor_adapter_recon 工具经此子进程调核起草 adapter 草案；未配置=核不可达=工具

@@ -210,3 +210,78 @@ def test_execute_disabled_agent_fails_honestly_O9(app_env):
         assert "已下线" in (task.get("error_message") or "")
     finally:
         agent["status"] = "active"
+
+
+# ── Codex R0 修复回归（P1 钉版本 / P2 材料校验 / P3 缺位密级展示）──────────
+
+def test_summon_oversized_inputs_translated_422_not_500(app_env):
+    """SummonItem 不带 BatchTaskItem 的 inputs 尺寸 validator——构造时的
+    ValidationError 必须译成结构化 422（材料不合法清单），绝不放大成 500。"""
+    client, app = app_env
+    team = _save_team(client, app)
+    before = _task_count(client)
+    r = client.post(
+        f"/api/teams/{team['id']}/summon",
+        json={"items": [
+            {"seq": 0, "inputs": {"name": "x" * (300 * 1024)}},
+            {"seq": 1, "inputs": {"name": "b"}},
+        ]},
+    )
+    assert r.status_code == 422, r.text
+    assert "材料不合法" in r.text
+    assert _task_count(client) == before, "材料校验不过必须零写入"
+
+
+def test_run_batch_creation_pinned_version_mismatch_rejects(app_env):
+    """钉版本校验（Codex R0 P1）：对账时点观察到的版本与创建时 registry 现势不一
+    致 → 整批 422 零写入——闭「对账后热切换新版被盖进任务→runtime 漂移复检恒过」
+    的 TOCTOU 旁路。"""
+    import pytest
+    from fastapi import HTTPException
+
+    from backend.app.api.tasks import BatchTaskItem, run_batch_creation
+
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            run_batch_creation(
+                conn=conn,
+                agent_registry=app.state.agent_registry,
+                items=[BatchTaskItem(agent_id="hello_agent", inputs={"name": "x"})],
+                conversation_id=None,
+                created_by="tester",
+                created_by_username="tester",
+                pinned_versions={"hello_agent": "9.9.9"},
+            )
+        assert exc_info.value.status_code == 422
+        assert "版本在对账后发生变化" in str(exc_info.value.detail)
+    finally:
+        conn.close()
+    # 版本一致 → 正常放行（pinned 校验不误伤）
+    conn = app.state.conn_factory()
+    try:
+        current = app.state.agent_registry.get("hello_agent").get("version")
+        result = run_batch_creation(
+            conn=conn,
+            agent_registry=app.state.agent_registry,
+            items=[BatchTaskItem(agent_id="hello_agent", inputs={"name": "x"})],
+            conversation_id=None,
+            created_by="tester",
+            created_by_username="tester",
+            pinned_versions={"hello_agent": current},
+        )
+        assert len(result["tasks"]) == 1
+    finally:
+        conn.close()
+
+
+def test_projection_missing_member_counts_as_internal(app_env):
+    """缺位成员按最保守 internal 参与团队密级 min（Codex R0 P3）：全员卸载后
+    clearance_display 必须落 internal，不得虚标 sensitive。"""
+    client, app = app_env
+    team = _save_team(client, app)
+    app.state.agent_registry.deregister("hello_agent", "b8 P3 测试卸载")
+    detail = client.get(f"/api/teams/{team['id']}").json()
+    assert all(m["present"] is False for m in detail["members"])
+    assert detail["clearance_display"] == "internal"

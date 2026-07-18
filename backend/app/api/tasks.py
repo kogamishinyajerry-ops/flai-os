@@ -478,15 +478,32 @@ def run_batch_creation(
     conversation_id: str | None,
     created_by: str,
     created_by_username: str,
+    pinned_versions: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """批量创建内核（批七 batch 端点原实现整体提取，语义零改动）：逐项静态校验
     全收集（全有全无 422）→ BEGIN IMMEDIATE 单事务建行+入队+task_created/charter
-    事件 → 提交后取回投影。调用方持 conn 生命周期。"""
+    事件 → 提交后取回投影。调用方持 conn 生命周期。
+
+    pinned_versions（批八 Codex R0 P1）：调用方（teams summon）在对账 gate 时点
+    观察到的 {agent_id: version}。此处对**同一次 registry 读取的对象**做钉版本
+    校验并从同对象盖章 agent_version——registry 若在对账后热切换到不兼容新版，
+    本校验 422 拒发，闭合「新注册表版本被盖进任务→runtime 漂移复检恒过」的
+    TOCTOU 旁路。None=不校验（batch 直建端点无对账语义，行为不变）。"""
     errors: list[dict[str, Any]] = []
     agents: list[dict[str, Any] | None] = []
     for idx, item in enumerate(items):
         item_errors: list[str] = []
         agent = _get_agent_or_none(agent_registry, item.agent_id)
+        if (
+            agent is not None
+            and pinned_versions is not None
+            and item.agent_id in pinned_versions
+            and (agent.get("version") or "") != pinned_versions[item.agent_id]
+        ):
+            item_errors.append(
+                f"agent 版本在对账后发生变化：{item.agent_id} "
+                f"{pinned_versions[item.agent_id]} → {agent.get('version') or ''}——请重新召集"
+            )
         if agent is None:
             item_errors.append(f"agent 不存在：{item.agent_id}")
         elif agent.get("status") == "disabled":

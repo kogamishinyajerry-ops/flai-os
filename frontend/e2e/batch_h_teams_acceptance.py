@@ -309,15 +309,16 @@ with sync_playwright() as p:
     dlg = page.locator(".summon-dialog")
     expect(dlg).to_be_visible(timeout=8000)
     seat_blocks = dlg.locator(".seat-block")
-    expect(seat_blocks.nth(1).locator(".seat-field input").first).to_be_visible(timeout=8000)
-    check("O3a 面板逐席位渲染字段", seat_blocks.count() == 2 and dlg.locator(".seat-field").count() >= 2,
-          f"seats={seat_blocks.count()} fields={dlg.locator('.seat-field').count()}")
+    # R0 修后席位字段由 SchemaForm 渲染（控件化约束）：hello.name=text 输入；
+    # fault.problem_description maxLength 5000>500 → textarea。
+    expect(seat_blocks.nth(1).locator(".schema-form textarea").first).to_be_visible(timeout=8000)
+    check("O3a 面板逐席位渲染字段", seat_blocks.count() == 2 and dlg.locator(".schema-form .sf-item").count() >= 2,
+          f"seats={seat_blocks.count()} fields={dlg.locator('.schema-form .sf-item').count()}")
     submit = dlg.locator(".el-dialog__footer .el-button--primary")
     check("O3c 参数未齐禁提交（fail-closed）", submit.is_disabled() is True)
-    seat_blocks.nth(0).locator(".seat-field input").first.fill("UI上游")
+    seat_blocks.nth(0).locator(".schema-form input").first.fill("UI上游")
     check("O3c2 仅一席就绪仍禁提交", submit.is_disabled() is True)
-    # 字段序=schema properties 序：fault 的 problem_description 在前（required）
-    seat_blocks.nth(1).locator(".seat-field input").first.fill(FAULT_PROBLEM)
+    seat_blocks.nth(1).locator(".schema-form textarea").first.fill(FAULT_PROBLEM)
     expect(submit).to_be_enabled(timeout=4000)
     submit.click()
     page.wait_for_url("**/tasks", timeout=8000)
