@@ -53,5 +53,23 @@ schema 补 after，语义均忠实非放水）。
   （FAIL O1c）/ b7-hollow-pulse（FAIL O2a）/ b7-fake-settle（FAIL O7e）/
   b7-gate-cut（FAIL O4a）四处全部三条件干净咬合（非零 RC + 精确 FAIL 行 +
   FAILED 汇总必达）。
-- [ ] Codex 治理审 R0（86gs gpt-5.6-sol ultra，cap=3）
-- [ ] 过审合并 push（「过审即自主合并push」常设授权）
+- [x] **Codex 治理审 R0**（86gs gpt-5.6-sol ultra）：CHANGES_REQUIRED，6P1+4P2
+  全部 grounded 证实并修复（S4e af146e5）——batch 事务原子性/registry 隔离不崩/
+  门户直达垂类交互包/QA 双空拒收/工作台全任务分组/编队全任务收束判据 +
+  结构化路径校验/charter 持久化事件/空心灯/空白输入归一。修后 verify_all
+  全量 EXIT=0。
+- [x] **Codex 治理审 R1**：CHANGES_REQUIRED，1P1+5P2 全落（S4f 8d3ad98）——
+  未召集块 v-else 劫持（真回归）+ QA 目录白名单/StrictInt 下标/charter 上屏
+  优先级/finish_reason 白名单/UnicodeError 隔离。修后 verify_all 全量
+  EXIT=0（1034 pytest + 18 套 e2e）。（首次 R1 因 codex 侧 context 压缩中断，
+  重跑出裁决；两轮共新增 10 条回归测试。）
+- [x] **Codex 治理审 R2（cap=3 终轮）**：仍报 2P1+5P2，两 P1 grounded 证实：
+  ①交互附件不过密级 gate（post_message 只查存在性，clearance 仅任务路径
+  强制——internal 上限交互 agent 可被喂 sensitive 附件进模型上下文）；
+  ②taskEvidence 被动依据水合对 sensitive 产物盲调下载 → 伪造
+  sensitive_download_denied 审计事件（listOutputFiles 已回传
+  data_classification 可跳过，仓内 tasks.py:893 有同款先例修法）。
+- [ ] **cap 用尽仍有 P1 → owner 裁决**（本行代填裁决结果）：修复后合并 /
+  带已知问题合并+快跟 / 其它。R2 的 5 条 P2（目录白名单子串匹配收严 /
+  evidence_policy.kinds 装载期未强制 / 拒答 reason 越长度上限 / QA
+  finish_reason / RecursionError 隔离）进 retro 队列。
