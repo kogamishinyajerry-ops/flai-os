@@ -37,4 +37,10 @@
 ## 独立重放（基 HEAD worktree）
 
 - 批五/六存量 8 case：S3 新基线（6262d73）BITE-OK 8/8，基线先行全绿（O12 收口）。
-- 批七 4 case：S4a′ 硬化后复放——结果见本文件同目录 review-record §Codex 前置。
+- 批七 4 case（S4a′/S4a″ 两轮硬化后）：**BITE-OK 4/4，EXIT=0**——
+  b7-after-cut（FAIL O1c）/b7-hollow-pulse（FAIL O2a）/b7-fake-settle（FAIL O7e）/
+  b7-gate-cut（FAIL O4a），全部达 FAILED 汇总（干净咬合三条件成立）。
+  过程教训如实留档：①TB1 首轮为 crash-type（等待相/终审面双缺失连环崩），
+  O2、O5 两块先后改红而不崩才达干净咬合；②首轮重放的退出码被管道尾 grep
+  吃掉误报 EXIT=0（批六㊞教训同源重犯）——重放命令一律日志落文件、退出码
+  单独回显。
