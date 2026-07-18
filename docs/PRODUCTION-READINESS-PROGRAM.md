@@ -2,6 +2,10 @@
 
 > **文档性质**：不可逆导入前的治理契约。V0.1 已封板（`v0.1.0-sealed`, commit `1e3cebc`，双判据齐）证明了**结构可扩展 + 生长层能长 Agent**，但封板显式**不外推内网环境层与运行韧性**。本纲领填补的正是封板免验的那部分——把"是否准备好成为雷打不动的不可逆底座"从主观判断变成**可证伪判据**。
 >
+> **版本口径（2026-07-18）**：`v0.1.0-sealed` 是不可变历史基线；当前主线含封板后
+> 增量，统一称 **V0.2-dev**。开发机 `verify_all` 全绿只能证明当前代码门，不会自动
+> 把 B1/B3 目标机证据或 owner 终裁补成绿色。
+>
 > **哲学（镜像封板铁律）**：
 > - **假绿死罪**：声明 ≤ 证据等级；判据判定一律 `is True`/`is False`，绝不 truthiness；不可验证残差显式标注。
 > - **fail-closed**：准入判据未全绿 → 不允许不可逆导入（拒，不猜）。
@@ -52,15 +56,15 @@
 
 ### P0-B3 · 模型网关超时可配 + 内网延迟实测
 
-- **缺口**：`timeout=60` 硬编码，仅 1 次重试，无环境旋钮。**主入口对话/导引全走 reasoning profile**——内网大模型 p99>60s 时每人首条消息即 503 = 最伤采纳信心的 day-one 崩溃。
-- **证据**：`backend/app/model_gateway/gateway.py:142`（✔ 主控 issue #7 firsthand）；封板已列为"不阻断封板"（`README.md:208-213`）。
+- **缺口**：代码侧已提供 `FLAI_LLM_TIMEOUT_S`（默认 120s）和可复算采样工具，但**目标机 reasoning 模型的 p99 尚未实测**；默认值不是内网结论。若真实 p99 高于配置值，主入口对话/导引仍会超时失败。
+- **证据**：`backend/app/config.py`、`backend/app/model_gateway/gateway.py`、`backend/tests/test_p0_admission_gate.py` 与 `scripts/measure_llm_latency.py` 已证明旋钮和采样机制存在；目标机 JSONL 采样记录仍为空缺。
 - **判据（is True）**：
   1. `gateway.py` timeout 读 `FLAI_LLM_TIMEOUT_S`（默认保守值，如 120s）。
   2. 导入前用**采样工具**实测内网目标模型延迟（≥N 次请求，产出 p50/p99），配置超时 > 实测 p99。
 - **验证 / tamper**：单测证超时可配（读 `FLAI_LLM_TIMEOUT_S` 生效）。**tamper 咬合**：回退硬编码 `timeout=60` → 超时可配单测必变红（证旋钮 load-bearing）。
-- **反空洞（gate-design 审 BLOCK#1，✔ 亲核）**：p99 记录必须由采样工具产出逐请求原始时延（时间戳级、落盘、可第三方复算），**非手写汇总数字**。现存 `scripts/probe_llm_gateway.py` 自认"只打印原始观测、不写记录"、`timeout=15.0` 单发不测延迟，故本项须扩探针/新增采样脚本，"实测记录"才有工具支撑。
+- **反空洞（gate-design 审 BLOCK#1，✔ 亲核）**：p99 记录必须由 `scripts/measure_llm_latency.py` 产出逐请求原始时延（时间戳级、落盘、可第三方复算），**非手写汇总数字**；任何失败/超时样本均使 gate 非零退出，不能只用成功幸存者制造假绿。`scripts/probe_llm_gateway.py` 仍只用于单次协议观测，不能替代该采样证据。
 - **诚实边界**：证首消息不因超时崩 + 延迟画像可复核；**不证**模型质量、不证并发下延迟劣化（→ P1-M3 压测覆盖）。
-- **工时**：~0.5 天（旋钮方案 issue #7 已定）+ 一次目标机延迟量测。
+- **工时**：代码侧已完成；剩余为一次目标机代表性延迟量测、timeout 配置复核与证据归档。
 
 ### P0-N1 · 结构声明收窄（文档，非代码 —— 但 import-blocking）
 

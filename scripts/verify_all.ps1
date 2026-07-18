@@ -1,5 +1,5 @@
-# 一键执行前端构建、后端全量测试与五组浏览器验收；任一步失败立即汇总退出。
-# DECLARED-NOT-VERIFIED：本脚本在 macOS 开发机上无法实测，Windows 内网首跑时验证。
+# 一键执行前端构建、后端全量测试、前端纯函数核与 19 套浏览器验收；任一步失败立即汇总退出。
+# macOS pwsh 只验证脚本对称性；Windows 内网目标机运行仍为 DECLARED-NOT-VERIFIED。
 $ErrorActionPreference = "Stop"
 
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -74,14 +74,44 @@ Invoke-Step -Name "② 全量 pytest -n auto（三个 testpaths）" -Action {
         python -m pytest -q -n auto
 }
 
+# node --test 不带路径参数，按 Node 默认规则发现 frontend/tests/ 下的测试。
+Invoke-Step -Name "①b 前端纯函数核 node --test" -Action {
+    Push-Location "frontend"
+    try {
+        node --test
+    } finally {
+        Pop-Location
+    }
+}
+
+if ($env:UPDATE_GOLDENS -eq "1") {
+    Write-Host "E2E 截图模式：显式更新 docs/reviews 金图"
+} else {
+    if ([string]::IsNullOrWhiteSpace($env:FLAI_E2E_ARTIFACT_DIR)) {
+        $env:FLAI_E2E_ARTIFACT_DIR = Join-Path `
+            ([System.IO.Path]::GetTempPath()) `
+            ("flai-os-e2e-" + [guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Force $env:FLAI_E2E_ARTIFACT_DIR | Out-Null
+    }
+    Write-Host "E2E 临时产物目录：$env:FLAI_E2E_ARTIFACT_DIR"
+}
+
 $E2EScripts = @(
     "frontend/e2e/m2_acceptance.py",
     "frontend/e2e/m6_guide_acceptance.py",
     "frontend/e2e/m8_collab_chain_acceptance.py",
     "frontend/e2e/m8_guide_orchestrator_acceptance.py",
     "frontend/e2e/m8_workbench_acceptance.py",
+    "frontend/e2e/m9_guide_loop_acceptance.py",
+    "frontend/e2e/m10_governance_acceptance.py",
+    "frontend/e2e/m11_auth_acceptance.py",
+    "frontend/e2e/cfd_flow_acceptance.py",
+    "frontend/e2e/batch_a_livefeed_acceptance.py",
+    "frontend/e2e/batch_b_today_acceptance.py",
     "frontend/e2e/batch_c_rewards_acceptance.py",
     "frontend/e2e/batch_d_visual_acceptance.py",
+    "frontend/e2e/eval_queue_acceptance.py",
+    "frontend/e2e/eval_snapshot_acceptance.py",
     "frontend/e2e/inline_summon_acceptance.py",
     "frontend/e2e/craft_desktop_acceptance.py",
     "frontend/e2e/batch_g_squad_acceptance.py",

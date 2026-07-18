@@ -48,19 +48,19 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 
 ## 4. 各层职责表
 
-| 层 | 职责 | V0.1 状态 |
+| 层 | 职责 | 当前本地实现（V0.2-dev） |
 |---|---|---|
 | Web UI 工程智能体门户 | 工程师使用入口：Agent 列表、任务创建、任务详情、历史、反馈 | 里程碑2 交付 |
 | FastAPI Backend | 唯一后端入口，聚合以下所有子模块的 API | 里程碑1 交付 |
 | Agent Registry | 扫描 `agents/*/agent.yaml`，用 `contracts/agent.schema.json` 校验，暴露 `GET /api/agents` | 里程碑1 |
 | Task Center | 任务创建/查询/取消，关联 Agent 版本、模型版本、工具版本、输入输出文件 | 里程碑1 |
-| Admin Console | 版本与权限管理 | V0.1 最小占位，不做复杂权限 |
+| Admin Console | 版本、鉴权与治理管理 | 已有会话鉴权、评测晋升和治理面；RBAC/对象级授权未实现 |
 | Agent Runtime | 加载 Agent Package，构造 context，执行 `workflow.py`，捕获异常，更新任务状态 | 里程碑1 |
 | Job Runner / Event Log | SQLite 任务表轮询 + 任务生命周期事件记录 | 里程碑1 |
-| Model Gateway | 屏蔽具体模型，统一 `chat/embed/vision` profile 接口，记录 model_calls | 里程碑1 最小接口，真实模型接入待内网侦察 |
+| Model Gateway | 屏蔽具体模型，统一 `chat/embed/vision` profile 接口，记录 model_calls | OpenAI 兼容 HTTP 真调用已实现；内网端点、模型名、鉴权与延迟仍待目标机侦察 |
 | Tool Registry | 扫描 `tools_impl/*/tool.yaml`，用 `contracts/tool.schema.json` 校验，统一 `call(tool_id, payload, context)` 入口 | 里程碑1 |
-| RAG Service | 检索增强生成，接 Obsidian/知识库 | V0.1 占位槽位，不实现 |
-| Memory Service | Knowledge/Engineering/Run 三类记忆 | V0.1 占位槽位，不实现 |
+| Knowledge Service | 检索增强生成，按 scope 提供 BM25 与 default-deny 挂载 | job 模式已有 file_dir×document 真实现；interactive/Obsidian/MCP/向量检索未接入 |
+| Memory Service | Knowledge/Engineering/Run 三类记忆 | Knowledge 已实现；Engineering 主要由 ADR 承载，Run 由事件/样本局部承载，统一记忆模块仍未完成 |
 | File Service | 上传/下载、原始输入输出落盘、与 task_id 关联 | 里程碑1 |
 | 具体模型（GLM 5.x 等） | 内网 GPU 部署，Agent 绝不直接调用 | 接入方式待内网侦察 |
 | 具体工具（性能盘等） | 封装在 Tool Package 内，Agent 绝不直接调用 | 里程碑3起逐步接入 |

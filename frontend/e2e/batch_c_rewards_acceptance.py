@@ -25,7 +25,7 @@ promote 流程照抄 m10_governance_acceptance.py。
     --with jsonschema --with pyyaml --with httpx --with python-multipart \
     --with "pydantic>2" --with jieba python frontend/e2e/batch_c_rewards_acceptance.py
 
-截图落 docs/reviews/batch-c-shots/（每次重跑覆盖，保持证据与代码同步）。
+截图默认落临时 artifact；仅 UPDATE_GOLDENS=1 更新 docs/reviews/batch-c-shots/。
 """
 from __future__ import annotations
 
@@ -40,11 +40,13 @@ import time
 import uuid
 from pathlib import Path
 
+from _artifacts import resolve_shots_dir
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 DIST = REPO / "frontend" / "dist"
-SHOTS = REPO / "docs" / "reviews" / "batch-c-shots"
+SHOTS = resolve_shots_dir(REPO, "batch-c-shots")
 
 if not (DIST / "index.html").is_file():
     sys.exit("诚实失败：frontend/dist 未构建。先执行  cd frontend && npm run build")

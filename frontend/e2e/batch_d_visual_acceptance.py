@@ -90,7 +90,7 @@
     --with jsonschema --with pyyaml --with httpx --with python-multipart \
     --with "pydantic>2" --with jieba python frontend/e2e/batch_d_visual_acceptance.py
 
-截图落 docs/reviews/batch-d-shots/（每次重跑覆盖，保持证据与代码同步）：
+截图默认落临时 artifact；仅 UPDATE_GOLDENS=1 更新 docs/reviews/batch-d-shots/：
   亮/暗 × 桌面/375px × {portal, tasks_new, task_detail, workbench}（Task 9 R0
   新增 workbench）共 16 张。
 """
@@ -106,11 +106,13 @@ import time
 import uuid
 from pathlib import Path
 
+from _artifacts import resolve_shots_dir
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 DIST = REPO / "frontend" / "dist"
-SHOTS = REPO / "docs" / "reviews" / "batch-d-shots"
+SHOTS = resolve_shots_dir(REPO, "batch-d-shots")
 
 if not (DIST / "index.html").is_file():
     sys.exit("诚实失败：frontend/dist 未构建。先执行  cd frontend && npm run build")

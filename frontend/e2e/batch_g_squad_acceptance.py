@@ -32,7 +32,7 @@ prompt 提取 fault_ref），数字判据全在 workflow 确定性层。
     --with jsonschema --with pyyaml --with httpx --with python-multipart \
     --with "pydantic>2" --with jieba --with openpyxl python frontend/e2e/batch_g_squad_acceptance.py
 
-截图落 docs/reviews/batch-g-squad-shots/。
+截图默认落临时 artifact；仅 UPDATE_GOLDENS=1 更新 docs/reviews/batch-g-squad-shots/。
 """
 from __future__ import annotations
 
@@ -45,13 +45,15 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+
+from _artifacts import resolve_shots_dir
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 DIST = REPO / "frontend" / "dist"
-SHOTS = REPO / "docs" / "reviews" / "batch-g-squad-shots"
+SHOTS = resolve_shots_dir(REPO, "batch-g-squad-shots")
 
 if not (DIST / "index.html").is_file():
     sys.exit("诚实失败：frontend/dist 未构建。先执行  cd frontend && npm run build")

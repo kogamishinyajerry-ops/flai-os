@@ -1,6 +1,10 @@
-# FLAi-OS Kernel V0.1
+# FLAi-OS — V0.1 sealed / V0.2-dev
 
-二所工程智能体运行底座。当前 **本地可交付里程碑 M0-M3/M5/M6/M7/M8 + CFD 集成 + 协作运行时 forge（声明式任务依赖+确定性 artifact→input 管道）+ 封板双判据（判据①结构完成、判据②生长完成）均已收口**（审查存档见 `docs/reviews/` 与 `docs/superpowers/specs/`），唯一悬置 M4（真实性能盘 Tool Adapter，需内网环境）。**V0.1 已封板（SEALED 2026-07-14，双判据齐：判据①结构完成 2 类范式零内核 diff + 判据②生长完成双 A）**，下一相=内网导入（M4）。封板状态与诚实边界见下方专节。
+二所工程智能体运行底座。`v0.1.0-sealed` 保留 2026-07-14 已封板内核的不可变
+历史；当前主线已包含鉴权、治理、数据分级、协作运行时和专家团队等封板后增量，开发
+口径统一为 **V0.2-dev**。这不等于已经允许不可逆内网导入：Gate 1 仍缺目标机备份
+恢复 drill、真实模型延迟 p99 与具名 owner 终裁，M4 真实性能盘 Tool Adapter 也仍
+依赖内网事实。封板状态与诚实边界见下方专节。
 
 ## 是什么 / 不是什么
 
@@ -41,8 +45,8 @@
   +-----+---------+----------+----------+----------+
   |               |          |          |          |
   v               v          v          v          v
-Model Gateway   RAG       Memory      Tool       File Service
-                Service   Service     Registry
+Model Gateway   Knowledge Memory      Tool       File Service
+                (BM25)    Service     Registry
   |                         |          |
   v                         v          v
 GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
@@ -83,9 +87,12 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 | CFD 集成（增补） | CFD solve→evaluate 多 Agent 工作流接入（st_oracle 判据，ADR-0026） | **完成** |
 | 协作运行时 forge（增补） | 声明式任务依赖（tasks.depends_on/input_binding）+ 确定性 artifact→input 管道（resolver 纯确定性零 LLM，K1/K2 签发见证闸，上游须人签 completed 才放行下游）；十态不变量零改动 | **完成**（异源多轮审收敛，`docs/superpowers/specs/2026-07-13-collab-runtime-forge-design.md`） |
 
+封板后的鉴权（ADR-0019）、治理与分级能力、UI 批次及专家团队模板（ADR-0031）属于
+V0.2-dev 增量；它们不回写 `v0.1.0-sealed` 的历史含义，也不替代 Gate 1 目标机证据。
+
 ## 封板状态：**已封板 V0.1（SEALED 2026-07-14）**
 
-冻结 V0.1 内核转内网导入的门槛=**两个可证伪判据**均满足。**两判据结构上均已满足 + loop-auditor 封板前里程碑终检达 APPROVE-SEAL 条件（裁决 FLAG 无 BLOCK，机制与证据独立复核扎实，3 文档级 FLAG 已处置）→ owner 终裁封板**。V0.1 内核冻结，下一相=内网导入（M4 真实性能盘 Tool Adapter + 角色轴内网后锻）。tag：`v0.1.0-sealed`。
+V0.1 内核的封板门槛=**两个可证伪判据**均满足。**两判据结构上均已满足 + loop-auditor 封板前里程碑终检达 APPROVE-SEAL 条件（裁决 FLAG 无 BLOCK，机制与证据独立复核扎实，3 文档级 FLAG 已处置）→ owner 终裁封板**。tag：`v0.1.0-sealed`。该 tag 只证明封板时的结构与生长能力；当前 V0.2-dev 主线进入内网前仍须通过 `docs/PRODUCTION-READINESS-PROGRAM.md` 的 Gate 1，不能把“已封板”写成“已获准导入”。
 
 | 封板判据 | 定义（可证伪） | 状态 | 证据 |
 |---|---|---|---|
@@ -94,9 +101,9 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 
 **判据①诚实边界（归纳跳跃对冲，非静默）**：判据①证明的窄事实是「已验证 **2 类数值范式**（空间离散 BVP / 时间积分 IVP）无需改内核即可接入」= 插件架构成立；**未覆盖交互式/流式/多模态 I/O 等其他潜在模块类**，「结构完成」是基于此 2 类的归纳，不外推为「所有模块类都零 diff」。**交互类专项边界（P0-N1，导入准入门 `docs/PRODUCTION-READINESS-PROGRAM.md`）**：交互类当前仅 guide_agent 单实例（chat-only，n=1），**通用性未验**；交互运行时（ConversationService）结构上**不注入 tool_registry/knowledge**——需工具调用/RAG 的交互 Agent 当前**非零 diff**（须先扩内核 T3-a），故已在注册期加 **P0-N2 护栏**（`registry.py`）fail-closed 拒载「声明了 tools/knowledge 却静默拿不到」的畸形交互包。结构声明如实收窄为：**job 数值/求解类骨架完成（2 发零 diff 成立）；交互类单实例已建、通用性未验**。
 
-**封板宣称边界**：双判据证明**结构层（内核可扩展性）+ 生长层（合成需求可长出合规 Agent）**，**不外推内网环境层**——M4 真实性能盘 Tool Adapter、角色轴、真实模型/鉴权/限流形态均待内网后锻验（公网≠内网）。封板=冻结当前已验证的结构+生长能力，非宣称内网即可生产运行。
+**封板宣称边界**：双判据证明**结构层（内核可扩展性）+ 生长层（合成需求可长出合规 Agent）**，**不外推内网环境层**——M4 真实性能盘 Tool Adapter、目标机真实模型端点、RBAC/对象级授权、目标限流形态仍待内网后锻验（公网≠内网）；现有登录鉴权不能替代这些证据。封板=冻结当前已验证的结构+生长能力，非宣称内网即可生产运行。
 
-## V0.1 已知限制（诚实清单，非缺陷否认）
+## 已知限制（V0.1 封板基线 + 当前 V0.2-dev，诚实清单）
 
 1. **任务 inputs 已是 schema 驱动结构化表单**（P0-1，2026-07-10）：创建任务页按
    `input_schema.json` 自动渲染字段（string/integer/boolean/enum/array 及
@@ -104,8 +111,8 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
    或含未覆盖类型时诚实降级为 JSON 直填。
 2. **前端 bundle ~1MB**：Element Plus 全量引入未做按需 tree-shaking；内网静态
    托管场景（无公网带宽约束）接受此体积。
-3. **零前端单测**：前端验证靠 `frontend/e2e/m2_acceptance.py` 真浏览器走查 +
-   后端 200+ 项 API 契约测试兜底；组件级单测暂缺。
+3. **前端组件级单测仍缺**：`frontend/tests/` 已有由 `node --test` 执行的纯函数核
+   测试，开发全量门另跑 19 套真浏览器 E2E；Vue 组件级测试仍未建立。
 4. **feedback.message 无长度上限**：追加式日志表，事件 payload 摘要已截 200，
    落库全文不限长。
 5. **孤儿文件/任务产物残留窗口**：附件已改为提交任务时才上传（选中/移除不产生
@@ -143,24 +150,25 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
     开簿前有解压总量/压缩比预算探测挡 zip bomb），docx/pdf 等只列文件名（V0.3）；
     渲染预算单文件 16K/单轮 24K 字符、新消息优先，超预算部分对导引不可见（截断
     显式标注）。导引仍不接知识库、不调工具——完整解析是目标 specialist Agent 的
-    事；知识检索是 V0.2 规划项。
+    事；Knowledge BM25 已用于 job 模式，interactive 会话仍无挂载点。
 11. **导引推荐的确定性校验只保证 shape 合法，不保证是模型真实意图**（M7 敌意审
     P1 残余风险）：若 LLM 输出一个 agent_id 真实、字段 schema-valid 的推荐块——
     无论被附件说服还是引用/复述攻击块——校验层会把它当合法推荐产出卡片。缓解：
     ①附件正文的定界符已中和，降低「逐字复述」触发；②幻觉 agent_id / 非法字段
     仍拒；③**人在创建页复核 + 亲手提交是最终防线**（全程零自动签发）。工程师应
     把推荐卡片当建议核对，尤其 top_event/system_description 等自由文本字段。
-12. **会话附件 file_id 无归属校验，内容会流向模型后端**（M7 敌意审 P2）：引用任意
+12. **会话附件 file_id 无对象级归属校验，内容会流向模型后端**（M7 敌意审 P2）：引用任意
     已存在的 file_id（可以是别的任务/会话遗留的）都会让该文件全文被渲染进模型
-    上下文。与「V0.1 全局无鉴权」同源，但**若模型后端是外部厂商 API，这是一条
-    「平台内任意文件→第三方」的新通路，触发只需知道 file_id**。内网自托管模型下
+    上下文。M11 已增加会话鉴权，但尚无文件所有权/角色授权；因此**任一已登录用户若
+    知道 file_id，仍可能形成「平台内其他文件→模型后端」通路**。内网自托管模型下
     风险受限于内网边界；接外部模型前必须复核此通路（EAR/商密敏感场景尤然）。会话级
     file 归属校验是 V0.2 项。
 13. **会话历史发模型前截窗**：最近 40 条/60K 字符（全量历史仍完整落库可查），
     超窗信息对模型不可见；「超窗摘要」是 V0.2 项。
-14. **全局无鉴权**：所有 API（含文件下载、人工放行）不做身份认证，内网可信环境
-    权衡 + 任务书 §15「不要一开始做复杂权限系统」；具名字段（created_by/reviewer）
-    是留痕不是认证。权限体系是 V0.2+ 项。
+14. **已有会话鉴权，尚无角色/对象级授权**（M11/ADR-0019）：`/api` 面默认要求有效
+    session，created_by/reviewer 从会话身份派生；但所有 active 账户仍是同一宽权限层，
+    尚无 RBAC、职责分离或任务/文件对象级授权，自审也未被角色策略禁止。真实 restricted
+    数据入场前必须补齐授权模型，不能把“已登录”外推成“有权访问”。
 15. **卡死任务回收仅覆盖「进程重启」时点**（R4 批收窄）：worker 启动时持单实例
     文件锁（跨平台，拒绝并行第二个 worker），并把上次进程遗留的执行态任务
     （validating/running/parsing/analyzing）置 failed、留 `worker_interrupted`
@@ -174,18 +182,18 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
     最小落点，「失败→评测用例」的自动管道是 V0.2 项。
 17. **knowledge 检索的边界**（ADR-0015 诚实清单）：①只挂 job 模式
     （`context["knowledge"]`），interactive 会话无挂载点（与工具同态，Wave 2
-    另立 ADR）；②密级静态门只约束**注册期** scope↔agent 声明一致性——V0.1 全局
-    无鉴权（见 #14），调用期不核对主体身份，真实 restricted 语料上内网前鉴权层
-    是硬前置；③source 仅 file_dir、kind 仅 document，obsidian/mcp/向量检索
+    另立 ADR）；②密级静态门只约束**注册期** scope↔agent 声明一致性——M11 会话门
+    只确认“谁已登录”，调用期仍不核对主体角色与语料密级，真实 restricted 语料入场前
+    授权层是硬前置；③source 仅 file_dir、kind 仅 document，obsidian/mcp/向量检索
     待内网侦察，调用即显式"未接入"错误；④索引缓存 per-进程（API 与 worker 各建
     各的，以文件指纹 manifest 失效，语料改动后两边下次检索各自重建，无跨进程
     一致性保证——检索是无状态读，最坏后果是短暂读到旧语料版本）；⑤PDF/纯图片
     语料不支持，scope 源目录含不支持格式会整 scope 拒检索（fail-closed）。
-18. **协作是「逐个召集」不是「一键起 N 个任务」**（M8/ADR-0016）：导引编排官给出的
-    orchestrate 计划里，各 Agent 的预填草案是**部分**输入（导引只填对话/附件里已明确
-    的字段，不替用户编工程数据），故工作台按蓝图**逐个**召集——每个任务仍要人在创建页
-    补全 required 字段并亲手提交。这是「人是唯一签发者 + 不编造工程数据」的必然，不是
-    缺陷；真正的一键批量起任务与「人是唯一签发者」冲突，不做。
+18. **协作批量创建已经接入，但不是自动签发**（M8/批七/ADR-0031）：导引编排官只用
+    对话与附件中已明确的值预填草案，不替用户编工程数据；人在界面显式点击“照此方案开工”
+    或召集团队后，系统才通过 `run_batch_creation` 以单事务创建全部就绪项，任一项非法则
+    整批 422、零写入。创建任务不等于验收、判定或签发；任务产物仍须沿既有评测与人工
+    签发链完成，所以批量创建没有改变“人是唯一签发者”的红线。
 19. **协作会话 GC 未完备**（M8/ADR-0016）：单 Agent 计划确认沿用 M6 归档（conclude）；
     多 Agent 会话保持 active 作协作锚点，工作台已有**显式「结束协作」按钮**归档会话
     （归档后只读、不再从蓝图召集，已建任务不受影响）；但**无主会话与孤儿附件的
@@ -205,13 +213,11 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
     私有挂点实现，`backend/app/api/files.py` 导入期哨兵保证升级破坏必炸、绝不
     静默降级为未验直出；③worker 单实例锁与 O_NOFOLLOW 的 Windows 分支本机未实测，
     列入 M4 内网侦察清单。
-21. **模型网关超时硬编码 `timeout=60`，无环境旋钮**（`backend/app/model_gateway/gateway.py`
-    的 httpx.post，2026-07-13 R2 生长烟测判卷时咬出）：本地/公网快模型无碍，但 M4 真实
-    内网慢模型（长推理 Agent）场景会系统性超时。当时判卷补丁仅落沙箱、主仓未动（见
-    `docs/reviews/glm-growth-smoke-r2/r2_judgment.md`）。**已修（P0-B3，导入准入门）**：
-    `backend/app/model_gateway/gateway.py` 超时改读 `config.LLM_TIMEOUT_S`（env
-    `FLAI_LLM_TIMEOUT_S`，默认 120s）；内网延迟 p99 实测仍待目标机（见
-    `docs/PRODUCTION-READINESS-PROGRAM.md` P0-B3）。tracker：GitHub issue #7。
+21. **模型网关超时已有环境旋钮，目标值仍待内网证据**（P0-B3）：
+    `backend/app/model_gateway/gateway.py` 读取 `config.LLM_TIMEOUT_S`（env
+    `FLAI_LLM_TIMEOUT_S`，默认 120s），已消除旧的硬编码 60s；但默认值不是目标机
+    结论。导入前仍须对真实 reasoning 模型采样 p50/p99，并把 timeout 配置为高于
+    经确认的 p99（见 `docs/PRODUCTION-READINESS-PROGRAM.md` P0-B3）。
 
 ## 开发口径
 
@@ -235,9 +241,10 @@ bash scripts/dev_start_backend.sh
 bash scripts/dev_start_worker.sh
 ```
 
-内网 Windows 部署用同目录下同名 `.ps1`（头注 DECLARED-NOT-VERIFIED，本机未测，行为与 `.sh` 保持一致）。
+内网 Windows 部署用同目录下同名 `.ps1`。macOS `pwsh` 可验证脚本对称执行，但不能
+替代 Windows 目标机证据；Windows 首跑前仍标记 `DECLARED-NOT-VERIFIED`。
 
-### 环境变量一览（全部 FLAI_* 前缀，V0.1 不自动加载 .env——须在启动前 export 或写入进程环境）
+### 环境变量一览（全部 FLAI_* 前缀；运行时不自动加载 .env，须在启动前 export 或写入进程环境）
 
 | 变量 | 默认值 | 用途 | M4 内网必填？ |
 | --- | --- | --- | --- |
@@ -248,9 +255,9 @@ bash scripts/dev_start_worker.sh
 | `FLAI_LLM_API_KEY` | 空 | 模型服务鉴权 Key | 必填 |
 | `FLAI_LLM_MODEL_REASONING` | 空 | reasoning profile 模型名 | 必填 |
 | `FLAI_LLM_MODEL_FAST` | 空 | fast profile 模型名（当前生产 Agent 仅用 reasoning/none，接入 fast profile 时才必填） | 按需 |
+| `FLAI_LLM_TIMEOUT_S` | `120` | 模型上游 HTTP 超时秒数；目标机须按真实 reasoning 请求 p99 配置，不能把默认值当结论 | 可选但必须核对 |
 
-跑测试（串行基准命令；加 `--with pytest-xdist ... -n auto` 可并行——2026-07-11
-本机实测 514 例全量：串行 ~25s → `-n auto` ~7s）：
+跑测试（串行基准命令；开发全量门使用 `pytest-xdist -n auto`）：
 
 ```bash
 uv run --no-project --with pytest --with jsonschema --with pyyaml \
@@ -258,12 +265,22 @@ uv run --no-project --with pytest --with jsonschema --with pyyaml \
   --with openpyxl --with jieba python -m pytest -q
 ```
 
-一键全量验证（前端构建 + 全量 pytest：tests/ + tools_impl/ + backend/tests 共三个
-testpaths(-n auto) + 5 套浏览器 e2e，任一步失败即止并打印汇总）：
+开发/CI 一键全量验证（前端构建 + 全量 pytest：tests/ + tools_impl/ + backend/tests
+三个 testpaths、`node --test` 前端纯函数核 + 19 套浏览器 E2E，任一步失败即止并打印
+汇总）：
 
 ```bash
 bash scripts/verify_all.sh
 ```
+
+日常运行默认把截图写到命令打印的临时 artifact 目录，不改 `docs/reviews/`；即使自定义
+`FLAI_E2E_ARTIFACT_DIR` 也不允许落入仓内金图目录。只有审查者明确执行
+`UPDATE_GOLDENS=1 bash scripts/verify_all.sh` 才刷新金图。Windows 开发门使用
+`pwsh -File scripts/verify_all.ps1`，覆盖清单与 shell 入口由契约测试保持一致。
+
+目标机部署门与开发全量门分离：离线包携带预构建 `frontend/dist/`，现场运行 API、
+worker 与 `scripts/deploy_selfcheck.py`；部署自检通过也不能替代开发机 `verify_all`
+的业务正确性证据，更不能替代 Gate 1 的备份 drill、模型 p99 和 owner 终裁。
 
 前端（M2）：
 
