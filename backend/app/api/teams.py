@@ -293,7 +293,11 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
                 batch_items.append(
                     BatchTaskItem(
                         agent_id=m["agent_id"],
-                        name=(m.get("role") or None),
+                        # role→任务名收口到 200（Codex R1 P2）：导引 role 上限 2000、
+                        # BatchTaskItem.name 上限 200——不收口则长 role 团队存得进但
+                        # 每次召集都被材料校验拒发（合法蓝本永久死锁）。蓝本存储的
+                        # role 原文不动（展示轴），只在盖任务名时截断。
+                        name=((m.get("role") or "").strip()[:200] or None),
                         inputs=it.inputs,
                         input_file_ids=it.input_file_ids,
                         after=[pos_of_seq[d] for d in m["after"] if d in pos_of_seq],

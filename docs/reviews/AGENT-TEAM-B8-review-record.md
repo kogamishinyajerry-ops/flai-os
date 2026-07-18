@@ -40,6 +40,17 @@
 
 诚实标注（未验证残差）：file 席位上传 UI 复用 TaskCreate 既有流水（uploadPendingFiles 同语义），但 e2e stub 注册表无 file_upload 型 agent，该 UI 路径无端到端覆盖——API 侧 input_file_ids 路径已有 O5a/O5b 盖（sensitive 材料整单拒发）。
 
+### R1（2026-07-18）——2 P1 + 2 P2，全部指向 R0 修复轮新面，逐条采纳
+
+| # | 级 | finding | 复核结论 | 修复 |
+|---|----|---------|----------|------|
+| 1 | P1 | api/teams.js 映射读 camelCase 别名 `inputFileIds`，submitSummon 传 `input_file_ids`——file 席位上传后仍发空列表，任务无材料注定失败且文件孤挂 | 属实（R0 修复轮引入的键名错位） | 映射对齐 wire 键名 `input_file_ids` |
+| 2 | P1 | 上传 await 期间取消按钮/关闭控件仍活——关掉只是隐藏，submitSummon 恢复后照发；切开另一团队还会以新 reactive 状态背地里提交 | 属实（async 恢复竞态） | 召集中封死三条关闭路径（modal/esc/×+取消禁用）+ 提交前快照捕获 target/seats、await 后引用不一致即中止 |
+| 3 | P2 | latestPlanIdx 向后搜任意历史 orchestrate 卡——后端每个 assistant 轮整体替换 recommendation（含替换成空），方案被 refuse/无方案轮取代后旧卡仍渲 Save（点了 422） | 属实 | 判据改「最后一条 assistant 轮」：非 orchestrate → 全部卡不渲入口 |
+| 4 | P2 | 导引 role 上限 2000 > BatchTaskItem.name 上限 200——长 role 团队存得进但每次召集被材料校验拒发（合法蓝本永久死锁） | 属实 | summon 盖任务名时收口 `strip()[:200]`（蓝本存储 role 原文不动）；回归测试钉死 |
+
+修后自证：backend 13/13；batch_h e2e 26/26；verify_all EXIT=0。
+
 ## 三 · 收口
 
 （待填：终局 verdict / 合并 SHA / 残留项去向）

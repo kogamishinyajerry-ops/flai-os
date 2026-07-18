@@ -50,3 +50,8 @@
   基线先行 26/26 全绿（日志：BASELINE-GREEN + REPLAY ALL BITES OK）。
 - 同日全量 gate：`bash scripts/verify_all.sh` EXIT=0（1054 pytest + 19 e2e
   套件含 batch_h，失败（无））。
+- Codex R0 修复轮后（基线 240c378，含 SchemaForm 面板重构 + material_errors
+  分流 + after= 行缩进变化）：4 case 复放 **BITE-OK 4/4，REPLAY-EXIT=0**——
+  b8-after-cut 锚点已随 try 块缩进同步，b8-gate-cut 在 material_errors 独立
+  列表下咬合不变（gate errors 死变量不混流）。同轮 verify_all EXIT=0
+  （1057 pytest）。

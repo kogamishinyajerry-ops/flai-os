@@ -22,7 +22,9 @@ export const summonTeam = ({ teamId, items, conversationId }) =>
       items: (items || []).map((it) => ({
         seq: it.seq,
         inputs: it.inputs || {},
-        input_file_ids: it.inputFileIds || [],
+        // 键名与 wire 格式同名（Codex R1 P1：此前读 camelCase 别名，调用方传
+        // input_file_ids 被静默丢弃——file 席位上传后仍发空列表）。
+        input_file_ids: it.input_file_ids || [],
       })),
     },
   });

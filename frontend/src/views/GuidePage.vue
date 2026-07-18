@@ -1399,14 +1399,18 @@ function evidenceOfTask(taskId) {
 // 命名走浏览器原生输入（轻量；空名/取消即不保存），成败 toast 如实。
 const savingTeam = ref(false);
 
-// 最新方案卡下标（Codex R0 P1）：POST /api/teams 只读会话**最新** recommendation
-// 快照——多轮会话里历史方案卡若也渲存团队按钮，点历史卡会以旧卡之名存下最新
-// 名单（所见非所存）。故入口只长在最新 orchestrate 卡上。
+// 最新方案卡下标（Codex R0 P1 + R1 P2）：POST /api/teams 只读会话**当前**
+// recommendation 快照，且后端每个 assistant 轮都会整体替换它（含替换成空）。
+// 故判据=最后一条 assistant 轮：它是 orchestrate → 该卡渲入口；它是 refuse/
+// 无方案 → 全部历史卡都不渲（旧方案已被替换，存了也是 422/所见非所存）。
 const latestPlanIdx = computed(() => {
   const list = messages.value;
   for (let i = list.length - 1; i >= 0; i--) {
-    const r = list[i] && list[i].recommendation;
-    if (r && r.decision === "orchestrate") return i;
+    const m = list[i];
+    if (m && m.role === "assistant") {
+      const r = m.recommendation;
+      return r && r.decision === "orchestrate" ? i : -1;
+    }
   }
   return -1;
 });

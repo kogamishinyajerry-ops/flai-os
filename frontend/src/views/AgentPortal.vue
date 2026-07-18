@@ -141,7 +141,17 @@
          （枚举/整数/数组约束由控件与校验兜住，不再手搓字段）；file_upload 席位复用
          TaskCreate 上传流（提交时才上传，提交前移除零服务端残留）；契约拉取失败或
          结构过复杂 fail-closed 禁提交；对账失败清单中性渲染（策略拒绝非报警红）。 -->
-    <el-dialog v-model="summonOpen" :title="summonTarget ? `召集 · ${summonTarget.name}` : ''" width="640px" class="summon-dialog">
+    <!-- 召集中封死全部关闭路径（Codex R1 P1）：上传 await 期间关掉对话框只是
+         隐藏，submitSummon 恢复后仍会发起召集——「取消了却背地里建了任务」。 -->
+    <el-dialog
+      v-model="summonOpen"
+      :title="summonTarget ? `召集 · ${summonTarget.name}` : ''"
+      width="640px"
+      class="summon-dialog"
+      :close-on-click-modal="!summoning"
+      :close-on-press-escape="!summoning"
+      :show-close="!summoning"
+    >
       <div v-for="s in summonSeats" :key="s.seq" class="seat-block">
         <div class="seat-head">
           席位 {{ s.seq }} · {{ agentNameOf(s.agent_id) }}
@@ -178,7 +188,7 @@
         <p v-for="(e, i) in summonErrors" :key="i" class="summon-error-line">{{ e }}</p>
       </div>
       <template #footer>
-        <el-button @click="summonOpen = false">取消</el-button>
+        <el-button :disabled="summoning" @click="summonOpen = false">取消</el-button>
         <el-button
           type="primary"
           :disabled="summonReady !== true || summoning"
@@ -575,10 +585,14 @@ async function submitSummon() {
   if (summonReady.value !== true || summoning.value) return;
   summonErrors.value = [];
   summoning.value = true;
+  // 快照捕获（Codex R1 P1 纵深）：上传 await 期间用户若仍设法关闭/切换团队，
+  // 恢复后绝不以新 reactive 状态背地里发起——目标或席位引用变了即中止。
+  const target = summonTarget.value;
+  const seats = summonSeats.value;
   try {
     // 文件席位材料：提交时才上传（同 TaskCreate uploadPendingFiles 语义），任一
     // 失败即中止整单——绝不带残缺材料发起召集。
-    for (const s of summonSeats.value) {
+    for (const s of seats) {
       for (const item of s.uploadItems) {
         if (item.status === "done" && item.id) continue;
         item.status = "uploading";
@@ -594,14 +608,17 @@ async function submitSummon() {
         }
       }
     }
-    const items = summonSeats.value.map((s) => {
+    if (summonOpen.value !== true || summonTarget.value !== target || summonSeats.value !== seats) {
+      return; // 上传期间被取消/切换——如实中止，不发起召集
+    }
+    const items = seats.map((s) => {
       const it = { seq: s.seq, inputs: s.schema ? collectInputs(s.schema, s.values) : {} };
       if (s.uploadItems.length) it.input_file_ids = s.uploadItems.map((i) => i.id);
       return it;
     });
-    const res = await summonTeamApi({ teamId: summonTarget.value.id, items });
+    const res = await summonTeamApi({ teamId: target.id, items });
     for (const w of res.warnings || []) ElMessage.warning(w);
-    ElMessage.success(`已召集「${summonTarget.value.name}」全体 ${items.length} 名成员——进度在任务台跟进`);
+    ElMessage.success(`已召集「${target.name}」全体 ${items.length} 名成员——进度在任务台跟进`);
     summonOpen.value = false;
     router.push({ path: "/tasks" });
   } catch (err) {

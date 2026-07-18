@@ -285,3 +285,27 @@ def test_projection_missing_member_counts_as_internal(app_env):
     detail = client.get(f"/api/teams/{team['id']}").json()
     assert all(m["present"] is False for m in detail["members"])
     assert detail["clearance_display"] == "internal"
+
+
+def test_summon_long_role_clamped_to_task_name_limit(app_env):
+    """R1 P2：导引 role 上限 2000 > 任务名上限 200——召集时收口截断，长 role
+    团队不得变成「存得进、永远召不动」的死蓝本。"""
+    client, app = app_env
+    long_role = "监" * 500
+    conv_id = _mk_conv_with_plan(
+        app,
+        [
+            {"agent_id": "hello_agent", "role": long_role},
+            {"agent_id": "hello_agent", "role": "下游", "after": [0]},
+        ],
+        conv_id="conv_b8_longrole",
+    )
+    r = client.post("/api/teams", json={"name": "长分工团队", "conversation_id": conv_id})
+    assert r.status_code == 200, r.text
+    team_id = r.json()["id"]
+    r2 = client.post(
+        f"/api/teams/{team_id}/summon",
+        json={"items": [{"seq": 0, "inputs": {"name": "a"}}, {"seq": 1, "inputs": {"name": "b"}}]},
+    )
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["tasks"][0]["name"] == long_role[:200]
