@@ -69,7 +69,12 @@ schema 补 after，语义均忠实非放水）。
   ②taskEvidence 被动依据水合对 sensitive 产物盲调下载 → 伪造
   sensitive_download_denied 审计事件（listOutputFiles 已回传
   data_classification 可跳过，仓内 tasks.py:893 有同款先例修法）。
-- [ ] **cap 用尽仍有 P1 → owner 裁决**（本行代填裁决结果）：修复后合并 /
-  带已知问题合并+快跟 / 其它。R2 的 5 条 P2（目录白名单子串匹配收严 /
-  evidence_policy.kinds 装载期未强制 / 拒答 reason 越长度上限 / QA
-  finish_reason / RecursionError 隔离）进 retro 队列。
+- [x] **owner 裁决（2026-07-18）：修复后合并**。两 P1 按 Codex Suggested fix
+  逐字落地（verbatim 例外，S4h aee1d68）：①post_message 渲染前对在窗全部
+  附件复核密级 gate（ClearanceDeniedError→400，零落库零 LLM 调用，+3 回归
+  含历史附件改级复核）；②taskEvidence internal-allowlist（非 internal 产物
+  不发起下载，杜绝 sensitive_download_denied 假阳性审计）。修后 verify_all
+  全量 EXIT=0（1037 pytest + 18 套 e2e）。**已合并 push
+  origin/main 96b7e10→aee1d68（批七全链收口）**。R2 的 5 条 P2（目录白名单
+  子串匹配收严 / evidence_policy.kinds 装载期未强制 / 拒答 reason 越长度上限 /
+  QA finish_reason / RecursionError 隔离）进 retro 队列。
