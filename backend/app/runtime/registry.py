@@ -21,6 +21,10 @@ from jsonschema import ValidationError, validate
 
 from ..core.errors import DuplicateAgentIdError, InvalidPackageError
 
+# output_schema.json 字节上界（Codex R2 P2）：正常输出契约在 KB 量级；病态大/
+# 深嵌套 schema（json.loads 可 RecursionError）解析前先挡。
+_OUT_SCHEMA_MAX_BYTES = 512 * 1024
+
 # docs/02 §1 目录形态：除 agent.yaml 外的强制文件/目录（固定名，标准包形态图示）。
 _REQUIRED_FILES: tuple[str, ...] = (
     "prompt.md",
@@ -178,7 +182,16 @@ class AgentRegistry:
             _findings_ok = False
             if _out_path.is_file():
                 try:
-                    _out_doc = json.loads(_out_path.read_text(encoding="utf-8"))
+                    # 体量上界（Codex R2 P2）：深嵌套 schema 会让 json.loads 抛
+                    # RecursionError（except 同步兜住）；先设字节上界把「病态大
+                    # schema」在解析前挡下——正常输出契约远小于此。
+                    _raw_schema = _out_path.read_bytes()
+                    if len(_raw_schema) > _OUT_SCHEMA_MAX_BYTES:
+                        raise InvalidPackageError(
+                            f"{entry} {_out_name} 超过 {_OUT_SCHEMA_MAX_BYTES} 字节上界"
+                            "（病态 schema，fail-closed 拒载）"
+                        )
+                    _out_doc = json.loads(_raw_schema.decode("utf-8"))
                     # Codex R0 P1：schema 顶层可以是任意 JSON（`[]`/`"x"` 均合法
                     # JSON）——非 dict 直接判不合格并隔离，绝不让 AttributeError
                     # 崩掉整个 scan（一个坏包炸全场=可用性投毒面）。
@@ -212,7 +225,34 @@ class AgentRegistry:
                                 _findings_ok = (
                                     isinstance(_ev_props, dict) and "resolved" in _ev_props
                                 )
-                except (json.JSONDecodeError, UnicodeError, OSError, AttributeError, TypeError):
+                                # Codex R2 P2：evidence_policy.kinds 白名单装载期强制
+                                # ——manifest 宣称 default-deny 白名单，但 schema 若放
+                                # 任意 kind（或根本不约束 kind），白名单只是装饰。
+                                # kinds 声明非空 ⟹ schema 的 evidence.items.properties
+                                # .kind 必须 const/enum 且 ⊆ 声明列表，否则拒载。
+                                _kinds_decl = evidence_policy.get("kinds")
+                                if (
+                                    _findings_ok is True
+                                    and isinstance(_kinds_decl, list)
+                                    and _kinds_decl
+                                ):
+                                    _kind_schema = _ev_props.get("kind")
+                                    _schema_kinds = None
+                                    if isinstance(_kind_schema, dict):
+                                        if "const" in _kind_schema:
+                                            _schema_kinds = [_kind_schema["const"]]
+                                        elif isinstance(_kind_schema.get("enum"), list):
+                                            _schema_kinds = _kind_schema["enum"]
+                                    if _schema_kinds is None or (
+                                        set(_schema_kinds) <= set(_kinds_decl)
+                                    ) is False:
+                                        raise InvalidPackageError(
+                                            f"{entry} evidence_policy.kinds={_kinds_decl} 但 "
+                                            f"{_out_name} 的 evidence kind 未以 const/enum 约束"
+                                            f"在白名单内（实际={_schema_kinds}）——default-deny"
+                                            " 白名单必须由输出契约强制（ADR-0030）"
+                                        )
+                except (json.JSONDecodeError, UnicodeError, OSError, AttributeError, TypeError, RecursionError):
                     # 防御性兜底：畸形 schema 一律判不合格走拒载，不崩 scan。
                     _findings_ok = False
             if _findings_ok is not True:

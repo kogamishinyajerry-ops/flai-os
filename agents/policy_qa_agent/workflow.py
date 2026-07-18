@@ -8,6 +8,7 @@ output_schema.json 的模型结果都会降级为显式拒答，绝不把自由�
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -27,10 +28,12 @@ def _question(messages: list[dict[str, Any]]) -> str:
     return "本轮制度问题"
 
 
-# 合成目录白名单（Codex R1 P2）：prompt.md 的四条虚构文号是唯一合法依据出处。
-# schema 的 source_ref 只约束「任意字符串」——模型编造目录外文号（含仿真实
-# 文号）也能过 schema 校验；此处确定性收口，兑现「未收录必拒答」承诺：
-# 任一 evidence 不含白名单文号 → ValueError → 整轮降级显式拒答。
+# 合成目录白名单（Codex R1 P2 + R2 P2 收严）：prompt.md 的四条虚构文号是唯一
+# 合法依据出处。schema 的 source_ref 只约束「任意字符串」——模型编造目录外
+# 文号也能过 schema 校验。R2 收严：子串包含会被「REAL-2026-001 / 青岚质规
+# 〔虚构2026〕014号」这类夹带通过（UI 会整串展示伪造前缀）——改为**规范化
+# 精确匹配**：剥去尾部一段（…）注解后必须整串等于目录条目，越界 →
+# ValueError → 整轮降级显式拒答。
 _CATALOG = frozenset({
     "青岚质规〔虚构2026〕014号",
     "青岚保规〔虚构2026〕006号",
@@ -38,12 +41,19 @@ _CATALOG = frozenset({
     "青岚流规〔虚构2026〕021号",
 })
 
+_TRAILING_ANNOTATION = re.compile(r"[（(][^（）()]*[）)]\s*$")
+
+
+def _canonical_ref(ref: str) -> str:
+    """剥去尾部一段括注（prompt 自带「（虚构…）」注解形态）后取整串。"""
+    return _TRAILING_ANNOTATION.sub("", ref.strip()).strip()
+
 
 def _enforce_catalog(payload: dict[str, Any]) -> None:
     for finding in payload.get("findings", []):
         for ev in finding.get("evidence", []):
             ref = ev.get("source_ref", "")
-            if any(entry in ref for entry in _CATALOG) is False:
+            if (_canonical_ref(ref) in _CATALOG) is False:
                 raise ValueError(f"依据出处越出合成目录白名单：{ref!r}（未收录必拒答）")
 
 
@@ -68,19 +78,37 @@ def _parse_payload(raw: str) -> dict[str, Any]:
     return payload
 
 
+# 拒答 reason 消毒（Codex R2 P2）：str(ValidationError) 会内嵌违规实例全文——
+# 超长模型输出会让 reason 突破 output_schema 的长度上限，且把**被拒的模型
+# 文本**原样持久化进会话（拒了又存=没拒干净）。只取首行并截断。
+_REASON_MAX_CHARS = 300
+
+
+def _sanitize_reason(reason: str) -> str:
+    first_line = (reason or "").strip().splitlines()[0] if (reason or "").strip() else "未知原因"
+    if len(first_line) > _REASON_MAX_CHARS:
+        first_line = first_line[: _REASON_MAX_CHARS] + "…（已截断）"
+    return first_line
+
+
 def _refusal(question: str, reason: str) -> dict[str, Any]:
     answer = "本轮未形成可校验的制度依据结构，因此不提供制度结论。请按正式制度库或职能窗口复核。"
-    return {
+    payload = {
         "answer": answer,
         "findings": [],
         "refusals": [
             {
                 "question": question,
-                "reason": reason,
+                "reason": _sanitize_reason(reason),
                 "suggestion": "请提供已收录的合成目录文号，或转正式制度库/对应职能窗口查询。",
             }
         ],
     }
+    # 兜底自证（Codex R2 P2）：拒答 payload 本身必须过包内 output_schema——
+    # ConversationService 不复验 recommendation，这里是最后一道门；不合格即
+    # 诚实抛错（宁失败不落畸形拒答）。
+    validate(payload, json.loads(_load_text("output_schema.json")))
+    return payload
 
 
 def run(context: dict[str, Any]) -> dict[str, Any]:
@@ -96,9 +124,16 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("制度问答模型返回空内容，无法继续对话（诚实失败）")
 
     question = _question(messages)
-    try:
-        payload = _parse_payload(raw)
-    except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-        payload = _refusal(question, f"模型输出未通过结构化依据契约：{exc}")
+    # finish_reason 白名单（Codex R2 P2，knowledge_qa/fault_history 同款口径）：
+    # length 截断、content_filter 过滤等异常收尾即便 JSON 恰好可解析，也不得
+    # 当完整结论展示——解析前先判，异常收尾直接降级拒答。非字符串同异常。
+    _finish = result.get("finish_reason")
+    if _finish is not None and (isinstance(_finish, str) is False or _finish != "stop"):
+        payload = _refusal(question, f"模型输出未正常收尾（finish_reason={_finish!r}），不采信本轮结论")
+    else:
+        try:
+            payload = _parse_payload(raw)
+        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+            payload = _refusal(question, f"模型输出未通过结构化依据契约：{exc}")
 
     return {"assistant_message": payload["answer"], "recommendation": payload}

@@ -216,6 +216,89 @@ def test_qa_catalog_escape_degrades_to_refusal():
         assert "白名单" in reco["refusals"][0]["reason"]
 
 
+def test_qa_catalog_prefix_smuggling_rejected():
+    """Codex R2 P2：子串匹配可被「伪造前缀 / 白名单条目」夹带通过（UI 整串
+    展示伪造文号）——规范化精确匹配必须拒；合法注解形（条目+（虚构…）尾注）
+    仍放行。"""
+    wf = _load_wf("policy_qa_agent")
+    smuggled = {
+        "answer": "按 REAL-2026-001 办理。",
+        "findings": [{
+            "claim": "夹带伪造前缀。",
+            "evidence": [{"kind": "knowledge_doc",
+                          "source_ref": "REAL-2026-001 / 青岚质规〔虚构2026〕014号",
+                          "quote": "合成目录线索", "resolved": False}],
+            "confidence": {"level": "high", "basis": "单源"},
+        }],
+        "refusals": [],
+    }
+    result = wf.run({
+        "messages": [{"role": "user", "content": "质量问题怎么办理？"}],
+        "model_gateway": _Gateway(content=json.dumps(smuggled, ensure_ascii=False)),
+        "agent_config": _agent_config("policy_qa_agent"),
+    })
+    assert result["recommendation"]["findings"] == [], "夹带伪造前缀竟过白名单"
+    # 合法注解形对照：条目 +（…）尾注放行
+    annotated = json.loads(json.dumps(smuggled, ensure_ascii=False))
+    annotated["findings"][0]["evidence"][0]["source_ref"] = "青岚质规〔虚构2026〕014号（质量问题闭环）"
+    result2 = wf.run({
+        "messages": [{"role": "user", "content": "质量问题怎么办理？"}],
+        "model_gateway": _Gateway(content=json.dumps(annotated, ensure_ascii=False)),
+        "agent_config": _agent_config("policy_qa_agent"),
+    })
+    assert len(result2["recommendation"]["findings"]) == 1, "合法注解形被误拒（白名单过紧）"
+
+
+def test_qa_refusal_reason_sanitized_and_schema_valid():
+    """Codex R2 P2：超长非法输出触发降级时，reason 不得内嵌被拒模型全文、
+    不得突破 output_schema 长度上限；拒答 payload 自身必过 schema。"""
+    from jsonschema import validate as _validate
+    wf = _load_wf("policy_qa_agent")
+    huge = {"answer": "x" * 5000, "findings": [], "refusals": []}  # answer 超 maxLength=4000
+    result = wf.run({
+        "messages": [{"role": "user", "content": "问题"}],
+        "model_gateway": _Gateway(content=json.dumps(huge, ensure_ascii=False)),
+        "agent_config": _agent_config("policy_qa_agent"),
+    })
+    reco = result["recommendation"]
+    assert reco["findings"] == []
+    reason = reco["refusals"][0]["reason"]
+    assert len(reason) <= 320, f"reason 未截断：{len(reason)} 字符"
+    assert "x" * 100 not in reason, "被拒模型文本泄入 reason"
+    schema = json.loads(
+        (REPO_ROOT / "agents" / "policy_qa_agent" / "output_schema.json").read_text(encoding="utf-8")
+    )
+    _validate(reco, schema)
+
+
+def test_qa_abnormal_finish_reason_degrades_to_refusal():
+    """Codex R2 P2：finish_reason=length/content_filter 时即便 JSON 可解析也不
+    采信——两 QA 包解析前先判，降级显式拒答（fault/knowledge 同款口径）。"""
+    valid_payload = {
+        "answer": "看似完整的结论。",
+        "findings": [{
+            "claim": "目录线索。",
+            "evidence": [{"kind": "knowledge_doc", "source_ref": "青岚质规〔虚构2026〕014号",
+                          "quote": "合成目录线索", "resolved": False}],
+            "confidence": {"level": "low", "basis": "单源"},
+        }],
+        "refusals": [],
+    }
+    for agent_id in ("policy_qa_agent", "standards_qa_agent"):
+        wf = _load_wf(agent_id)
+        for fr in ("length", "content_filter"):
+            result = wf.run({
+                "messages": [{"role": "user", "content": "问题"}],
+                "model_gateway": _Gateway(
+                    content=json.dumps(valid_payload, ensure_ascii=False), finish_reason=fr
+                ),
+                "agent_config": _agent_config(agent_id),
+            })
+            reco = result["recommendation"]
+            assert reco["findings"] == [], f"{agent_id} finish_reason={fr} 竟采信 findings"
+            assert "finish_reason" in reco["refusals"][0]["reason"]
+
+
 def test_standards_dual_source_claim_without_both_kinds_refused():
     """宣称「双源(条款+机型实例)」但 evidence 只有条款 = 假权威——确定性拒。"""
     wf = _load_wf("standards_qa_agent")

@@ -110,8 +110,8 @@ def test_control_evidence_required_with_findings_registers(tmp_path: Path) -> No
     _patch_yaml(pkg, evidence_policy={"required": True, "kinds": ["fault_case"]})
     out_path = pkg / "output_schema.json"
     out_doc = json.loads(out_path.read_text(encoding="utf-8"))
-    # 3-lens P2 收紧后：正控须给出最低可核验结构（array + evidence + resolved），
-    # 仅 {"type": "array"} 已不再够格（无判别力的空承诺同样拒载）。
+    # 3-lens P2 收紧后：正控须给出最低可核验结构（array + evidence + resolved）；
+    # R2 P2 再紧：kinds 声明非空 ⟹ evidence kind 必须 const/enum ⊆ 白名单。
     out_doc.setdefault("properties", {})["findings"] = {
         "type": "array",
         "items": {
@@ -119,7 +119,13 @@ def test_control_evidence_required_with_findings_registers(tmp_path: Path) -> No
             "properties": {
                 "evidence": {
                     "type": "array",
-                    "items": {"type": "object", "properties": {"resolved": {"const": False}}},
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"const": "fault_case"},
+                            "resolved": {"const": False},
+                        },
+                    },
                 }
             },
         },
@@ -161,6 +167,64 @@ def test_malformed_output_schema_quarantined_not_crash(tmp_path: Path) -> None:
     assert reg.get("bad_agent") is None
     assert any("bad_agent" in e["path"] for e in reg.errors)
     assert reg.get("policy_qa_agent") is not None, "坏包隔离失败殃及健康包"
+
+
+def test_violation_kinds_not_enforced_by_schema_rejected(tmp_path: Path) -> None:
+    """Codex R2 P2：manifest 声明 kinds=[fault_case] 但 schema 放行别的 kind
+    （或不约束 kind）——default-deny 白名单沦为装饰，装载期拒载。"""
+    for kind_schema in (
+        {"const": "knowledge_doc"},                       # 越出白名单
+        {"type": "string", "enum": ["fault_case", "calculation"]},  # 超集
+        {"type": "string"},                               # 不约束
+        None,                                             # 缺席
+    ):
+        agents_dir = tmp_path / f"agents_{abs(hash(str(kind_schema))) % 10_000}"
+        agents_dir.mkdir()
+        pkg = _clone("fta_agent", agents_dir, "fta_agent")
+        _patch_yaml(pkg, evidence_policy={"required": True, "kinds": ["fault_case"]})
+        out_path = pkg / "output_schema.json"
+        out_doc = json.loads(out_path.read_text(encoding="utf-8"))
+        ev_props = {"resolved": {"const": False}}
+        if kind_schema is not None:
+            ev_props["kind"] = kind_schema
+        out_doc.setdefault("properties", {})["findings"] = {
+            "type": "array",
+            "items": {"type": "object", "properties": {
+                "evidence": {"type": "array", "items": {"type": "object", "properties": ev_props}},
+            }},
+        }
+        out_path.write_text(json.dumps(out_doc, ensure_ascii=False), encoding="utf-8")
+        reg = _scan(agents_dir)
+        assert reg.get("fta_agent") is None, f"kind 约束 {kind_schema!r} 竟被注册"
+        assert any("kinds" in e["error"] for e in reg.errors)
+
+
+def test_pathological_output_schema_quarantined_not_crash(tmp_path: Path) -> None:
+    """Codex R2 P2：深嵌套 schema 令 json.loads RecursionError / 超体量 schema
+    ——均隔离拒载不炸 scan（字节上界先挡 + RecursionError 兜底）。"""
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    bad = _clone("fta_agent", agents_dir, "bad_agent")
+    _patch_yaml(bad, id="bad_agent", evidence_policy={"required": True, "kinds": ["fault_case"]})
+    (bad / "output_schema.json").write_text("[" * 200_000, encoding="utf-8")  # 触字节上界前即畸形
+    good = _clone("policy_qa_agent", agents_dir, "policy_qa_agent")
+    assert good.is_dir()
+    reg = _scan(agents_dir)
+    assert reg.get("bad_agent") is None
+    assert any("bad_agent" in e["path"] for e in reg.errors)
+    assert reg.get("policy_qa_agent") is not None
+
+    # 超大 schema（> 512KB）单独验字节上界分支
+    agents_dir2 = tmp_path / "agents2"
+    agents_dir2.mkdir()
+    big = _clone("fta_agent", agents_dir2, "big_agent")
+    _patch_yaml(big, id="big_agent", evidence_policy={"required": True, "kinds": ["fault_case"]})
+    (big / "output_schema.json").write_text(
+        '{"properties": {"pad": "' + "x" * (600 * 1024) + '"}}', encoding="utf-8"
+    )
+    reg2 = _scan(agents_dir2)
+    assert reg2.get("big_agent") is None
+    assert any("字节上界" in e["error"] for e in reg2.errors)
 
 
 def test_non_utf8_output_schema_quarantined_not_crash(tmp_path: Path) -> None:
