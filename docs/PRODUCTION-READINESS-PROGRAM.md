@@ -6,6 +6,13 @@
 > 增量，统一称 **V0.2-dev**。开发机 `verify_all` 全绿只能证明当前代码门，不会自动
 > 把 B1/B3 目标机证据或 owner 终裁补成绿色。
 >
+> **开发排期重排（2026-07-19，不改变 Gate 1）**：封板声明范围内的信任机制供给
+> 已足，当前先补真实使用的复利采集口。P2.4 浏览器验收后冻结 P2.5–P2.8，直到 N10 真人新手走查
+> `n >= 2` 与 M4 信号包同时到位；M4 前的**产品功能建设**只做判断采集、真人走查、
+> 现场侦察和低成本叙事，Gate 1 闭合、生产阻断缺陷与安全修复不受此冻结。详细边界见
+> `docs/COMPOUNDING-M4-REBASELINE.md`。这道排期门不能替代本文
+> P0 全绿 + 具名 owner 终裁的不可逆导入硬门，反之 Gate 1 通过也不会伪造真人信号。
+>
 > **哲学（镜像封板铁律）**：
 > - **假绿死罪**：声明 ≤ 证据等级；判据判定一律 `is True`/`is False`，绝不 truthiness；不可验证残差显式标注。
 > - **fail-closed**：准入判据未全绿 → 不允许不可逆导入（拒，不猜）。
@@ -108,7 +115,8 @@
 
 ## 2. 第二道门：底座成熟纲领（P1 — 导入后排期，每项带判据；"雷打不动 + 极致"的应有之义）
 
-三条 track 对应三域，导入后可并行推进。**每条 track 收口宣称 verified 前走 §4 验证纪律。**
+三条 track 对应三域。导入后 T1 可先行；T2/T3 仍须等待 N10 `n >= 2` 与 M4 信号包
+双条件，解锁后才可并行推进。**每条 track 收口宣称 verified 前走 §4 验证纪律。**
 
 ### Track T1 · 运维韧性（护住"出事能不能救"三问）
 
@@ -120,16 +128,24 @@
 
 > 证据锚：M1 `runner.py:300-335`（回收仅覆盖进程重启）◐；M2 `main.py:129-155`（health payload 无 worker 信号 ✔）；M3 无任何 load 测试（grep 负）◐。
 
-### Track T2 · 极致美学（走用户既定设计工序，不套通用组件默认相）
+### Track T2 · 极致美学（冻结候选，待真人信号重排）
 
-**设计工序（焊死，镜像 workshop 工作流）**：拉片参考（74 张真机拉片 + GuidePage 自证标杆）→ 蓝图 → **四角色对抗审（ultracode）** → headless 像素级验（无横向溢出 light/dark×desktop/375 + 焦点环 + 诚实地板动效）→ auto-open 自证。
+> 本节保存 2026-07-14 审计形成的候选债，不代表当前继续施工。先按
+> `docs/N10-NOVICE-WALKTHROUGH.md` 取得至少两份真人原始记录，再由阻塞、焦虑和误解
+> 证据重排范围；P2.5–P2.8 与本 track 一并冻结。下述工序只在双信号解锁后用于验证
+> 被真实问题选中的切片。
+
+**候选设计工序（解冻后）**：拉片参考（74 张真机拉片 + GuidePage 自证标杆）→ 蓝图 → **四角色对抗审（ultracode）** → headless 像素级验（无横向溢出 light/dark×desktop/375 + 焦点环 + 诚实地板动效）→ auto-open 自证。
 
 | ID | 判据 | 验证 | 诚实边界 |
 |---|---|---|---|
 | **A1** hero 手术（四面） | **两处签发面必须同工艺同批**：`TaskDetail:186` 人签 review-card + `components/StatusCenter.vue:147` `.peek-review-card`（同款 el-input 签发 ✔ 亲核）——只改一处两签发面观感分叉；加 `TaskCreate` schema 表单 + `AgentPortal` 治理弹窗，四面重做到 GuidePage 同工艺，脱离 el-form/el-descriptions/el-dialog 默认相 | 像素基线（绝对 maxDiffPixels）+ 四角色审收敛 + 四态皆设计 + auto-open | 每面"完成"=**核心交互区**达 GuidePage 工艺（签发动作区/schema 字段区/信任叙事区）;边缘 chrome（面包屑/次要元数据/分页）可留 EP 暖化，不算 gating |
 | **A2** 焦点环成体系 | 全站 `role=button` 有克制 bespoke `:focus-visible`（纳入 clay 语言），无隐形焦点 | 截图/单测证每个可聚焦元素有可见环；可作 A1 手术横切子项一并做 | 键盘可达已广泛接线（14 个 role=button 元素接 keydown，遍及 6 文件；~2 处仅 enter 无 space，轻微不对称 ✔）;本项补"环的设计一致性 + 补齐不对称" |
 
-> **优先级**：aesthetics-auditor 点名 **人签 review-card 收益最大**——平台最神圣的动作现长得像填表（`TaskDetail:186` label-width:80 el-form ◐）。A1 从人签卡起手。
+> **历史假设，非现行优先级**：aesthetics-auditor 曾点名人签 review-card 为候选高收益面
+> （`TaskDetail:186` label-width:80 el-form ◐）；是否仍应从此起手，须由 N10 真人证据
+> 复核，不能凭旧审计直接开工。
+>
 > 证据锚：token 体系已罕见地深（App.vue :root 全 token 化，信任色锁真 token 化，暗色整面翻转过 AA ◐）——**骨架不重造，只补最后一公里**。
 
 ### Track T3 · 交互类结构补证（架构决策 + 判据①对交互类的延伸）
@@ -177,12 +193,17 @@ Gate 1（导入前，fail-closed；收口=P0全绿 + owner 具名终裁）
    P0-N2  交互声明护栏        ─┤
    P0-M2† worker 心跳(已纳入)  ─┘
                               │
+        M4 前仪器：判断采集 + N10 真人走查 + M4 现场侦察
+                              │
                           【内网导入】
                               │
 Gate 2（导入后，可并行）
    T1 运维韧性（最先——护住"能不能救"）
-   T2 极致美学（用户高频面，人签卡起手）
-   T3 交互结构（V0.2 架构；不阻断导入）
+                              │
+   【产品重建设计排期门：N10 n>=2 + M4 信号包，两者均须真实】
+          ├─ T2 极致美学（按真人问题重排，不预设 hero）
+          ├─ T3 交互结构（V0.2 架构；不阻断导入）
+          └─ P2.5–P2.8 / 课题空间 spec / 评审梯子 R1+
                               │
    P2 Backlog（登记，按需/夹带清）
 ```
@@ -202,10 +223,10 @@ Gate 2（导入后，可并行）
 | Gate2 | T1-M1 | per-task reaper | ⬜ | — | — |
 | Gate2 | T1-M2 | worker 可观测 | ⬜ | — | — |
 | Gate2 | T1-M3 | 规模天花板量测 | ⬜ | — | — |
-| Gate2 | T2-A1 | hero 手术（四面，含两签发面） | ⬜ | — | — |
-| Gate2 | T2-A2 | 焦点环成体系 | ⬜ | — | — |
-| Gate2 | T3-a | ConversationService 注入 tools/knowledge | ⬜ | — | — |
-| Gate2 | T3-b | 交互类零 diff 验证弹 | ⬜ | — | — |
+| Gate2 | T2-A1 | hero 手术（四面，含两签发面） | ⏸ 冻结 | — | 待 N10 `n>=2` + M4 信号包后按真人证据重排 |
+| Gate2 | T2-A2 | 焦点环成体系 | ⏸ 冻结 | — | 待 N10 `n>=2` + M4 信号包后按真人证据重排 |
+| Gate2 | T3-a | ConversationService 注入 tools/knowledge | ⏸ 冻结 | — | 待 N10 `n>=2` + M4 信号包后另立安全 spec |
+| Gate2 | T3-b | 交互类零 diff 验证弹 | ⏸ 冻结 | — | 依赖 T3-a 解冻并通过 |
 
 > **P0 本机 5 项执行状态（2026-07-14）**：N1/N2/B2/M2† 代码判据全绿——test + tamper 咬合 + Codex 命中即审三轮收敛（R0[5 P1]→R1[0 P1+2 P2]→R2[clean]），全量 pytest 946 绿（commit 栈 5fe6c5c→0a68a4c→1ecb802）。B3 旋钮+采样脚本就绪、内网 p99 实测待目标机；B1 备份脚本已存在、调度+真 drill 待目标机。**Gate1 完整收口仍需**：B1/B3 目标机步骤 + owner 具名终裁。
 >
