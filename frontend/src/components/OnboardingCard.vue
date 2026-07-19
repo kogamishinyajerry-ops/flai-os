@@ -8,6 +8,13 @@
       <span class="ob-title">第一次用？三步看懂这个平台</span>
       <button type="button" class="ob-dismiss" @click="dismiss">不再显示</button>
     </div>
+    <div class="ob-mobile-summary">
+      <span>先跑演示，或直接说需求；结果仍由你亲手签发。</span>
+      <div class="ob-mobile-actions">
+        <button type="button" class="ob-step-btn" @click="$emit('demo')">跑演示</button>
+        <button type="button" class="ob-step-btn is-quiet" @click="$emit('say')">直接说</button>
+      </div>
+    </div>
     <ol class="ob-steps">
       <li class="ob-step">
         <span class="ob-num">1</span>
@@ -72,6 +79,7 @@ function dismiss() {
   gap: 10px;
   margin-bottom: 10px;
 }
+.ob-mobile-summary { display: none; }
 .ob-title {
   flex: 1 1 auto;
   font-size: 12.5px;
@@ -163,5 +171,29 @@ function dismiss() {
 }
 @media (prefers-reduced-motion: reduce) {
   .ob-step-btn { transition: none; }
+}
+@media (max-width: 640px) {
+  .onboarding-card {
+    margin-top: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+  }
+  .ob-head { margin-bottom: var(--space-1); }
+  .ob-steps,
+  .ob-foot { display: none; }
+  .ob-mobile-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--ink-soft);
+    font-size: var(--fs-xs);
+    line-height: 1.45;
+  }
+  .ob-mobile-summary > span { flex: 1 1 auto; }
+  .ob-mobile-actions {
+    flex: none;
+    display: flex;
+    gap: var(--space-1);
+  }
+  .ob-step-btn { padding: 4px 8px; }
 }
 </style>

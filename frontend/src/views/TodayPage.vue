@@ -630,5 +630,8 @@ onUnmounted(() => {
   .today-card {
     transition: none;
   }
+  .today-card:hover {
+    transform: none;
+  }
 }
 </style>

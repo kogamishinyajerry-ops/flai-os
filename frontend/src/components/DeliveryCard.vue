@@ -267,4 +267,8 @@ onMounted(() => {
   color: var(--trust-pending);
   margin: 2px 0;
 }
+@media (prefers-reduced-motion: reduce) {
+  .delivery-card { transition: none; }
+  .delivery-card:hover { transform: none; }
+}
 </style>

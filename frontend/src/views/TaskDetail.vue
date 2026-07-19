@@ -207,7 +207,7 @@
 
       <div class="section" v-if="canCancel || isWaitingReview">
         <h3>动作</h3>
-        <el-button v-if="canCancel" type="danger" plain @click="handleCancel">取消任务</el-button>
+        <el-button v-if="canCancel" plain @click="handleCancel">取消任务</el-button>
 
         <el-card v-if="isWaitingReview" shadow="never" class="review-card">
           <el-form label-width="80px">
@@ -248,7 +248,7 @@
              一件不删，展开即完整表单+历史）。 -->
         <el-collapse class="feedback-collapse">
         <el-collapse-item name="fb" :title="feedbackList.length ? `反馈（${feedbackList.length}）` : '反馈'">
-        <el-alert v-if="feedbackError" type="warning" :title="feedbackError" show-icon :closable="false" />
+        <el-alert v-if="feedbackError" type="error" :title="feedbackError" show-icon :closable="false" />
         <el-form label-width="80px" class="feedback-form">
           <el-form-item label="评价">
             <el-radio-group v-model="feedbackForm.rating">
@@ -272,7 +272,7 @@
         <EmptyState v-if="feedbackList.length === 0 && !feedbackError" description="暂无反馈" :image-size="84" />
         <ul v-else class="feedback-list">
           <li v-for="f in feedbackList" :key="f.id">
-            <el-tag size="small" :type="f.rating === 'good' ? 'success' : 'danger'">
+            <el-tag size="small" type="info">
               {{ f.rating === "good" ? "可用" : "不可用" }}
             </el-tag>
             <span class="feedback-category">{{ categoryLabel(f.category) }}</span>
@@ -880,7 +880,7 @@ async function handleCancel() {
   }
   try {
     await cancelTask(taskId);
-    ElMessage.success("任务已取消");
+    ElMessage({ message: "任务已取消", type: "info" });
     await pokeTask(taskId); // 带外补拉：不等下一 tick，动作结果立即回显
   } catch (err) {
     ElMessage.error(err.detail || err.message);
@@ -903,7 +903,11 @@ async function handleReview(action) {
     if (action === "approve") {
       burstSigned(approveBtnEl.value?.ref);
     }
-    ElMessage.success(`已${label}`);
+    if (action === "approve") {
+      ElMessage({ message: `已${label}`, type: "info", customClass: "trust-message-signed" });
+    } else {
+      ElMessage({ message: `已${label}`, type: "error" });
+    }
     await pokeTask(taskId); // 带外补拉：不等下一 tick，动作结果立即回显
   } catch (err) {
     ElMessage.error(err.detail || err.message);
@@ -925,7 +929,7 @@ async function handleSubmitFeedback() {
       category: feedbackForm.category,
       message: feedbackForm.message || null,
     });
-    ElMessage.success("反馈已提交");
+    ElMessage({ message: "反馈已提交", type: "info" });
     feedbackForm.message = "";
     await loadFeedback();
   } catch (err) {

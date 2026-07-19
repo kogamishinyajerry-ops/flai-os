@@ -255,6 +255,7 @@
                     tabindex="0"
                     @click.stop="toggleRefusal(agentTaskInfo(a).latest.id)"
                     @keydown.enter.stop.prevent="toggleRefusal(agentTaskInfo(a).latest.id)"
+                    @keydown.space.stop.prevent="toggleRefusal(agentTaskInfo(a).latest.id)"
                   >已如实说明：{{ refusalsOf(a).length }} 项超出能力范围 →</div>
                   <ul
                     v-if="agentTaskInfo(a) && expandedRefusals.has(agentTaskInfo(a).latest.id)"
@@ -401,7 +402,7 @@
           :title="f.status === 'error' ? f.error : ''"
         >
           📎 {{ f.name }}{{ f.status === "error" ? "（上传失败）" : "" }}
-          <span class="chip-x" @click="removePendingFile(f)">×</span>
+          <button type="button" class="chip-x" :aria-label="`移除附件 ${f.name}`" @click="removePendingFile(f)">×</button>
         </span>
       </div>
       <div class="composer-shell">
@@ -442,6 +443,7 @@
                 tabindex="0"
                 @click="pickAgent(a)"
                 @keydown.enter.prevent="pickAgent(a)"
+                @keydown.space.prevent="pickAgent(a)"
               >
                 <span class="ap-dot" :style="{ background: categoryColor(a.category) }"></span>
                 <span class="ap-main">
@@ -454,7 +456,7 @@
                   <span v-if="a.limitations && a.limitations.length" class="ap-limit">{{ a.limitations[0] }}</span>
                 </span>
               </div>
-              <a class="ap-portal-link" @click="$router.push('/portal')">浏览完整门户 →</a>
+              <button type="button" class="ap-portal-link" @click="$router.push('/portal')">浏览完整门户 →</button>
             </div>
           </el-popover>
           <el-input
@@ -755,7 +757,7 @@ async function copyRefusedNeed(idx) {
   }
   lines.push("（来自 FLAi-OS 导引对话——请平台负责人按家底口径评估排期）");
   const ok = await copyText(lines.join("\n"));
-  if (ok === true) ElMessage.success("需求摘要已复制——发给平台负责人登记，别让它溜走");
+  if (ok === true) ElMessage({ message: "需求摘要已复制——发给平台负责人登记，别让它溜走", type: "info" });
   else ElMessage.error("复制失败——请手动选取文字复制");
 }
 
@@ -1235,7 +1237,7 @@ async function openPlan(plan) {
         "本批无法表达已改为并行——需要严格接力请一次性召集全部成员"
       );
     } else {
-      ElMessage.success(`已按方案召集 ${targets.length} 名成员——进度与签发都会来这里找你`);
+      ElMessage({ message: `已按方案召集 ${targets.length} 名成员——进度与签发都会来这里找你`, type: "info" });
     }
   } catch (err) {
     // 全有全无：整批 422 零写入。逐项错误清单必须清晰可读（R5 走查）——
@@ -1459,7 +1461,7 @@ async function saveTeamFromPlan() {
   savingTeam.value = true;
   try {
     const team = await createTeam({ name, conversationId: conversationId.value });
-    ElMessage.success(`团队「${team.name}」已保存——在 Agent 门户的「专家团队」区随时召集`);
+    ElMessage({ message: `团队「${team.name}」已保存——在 Agent 门户的「专家团队」区随时召集`, type: "info" });
   } catch (err) {
     // Codex R2 P2：object 型 detail 被 client 整体 stringify——解包后才拿得到
     // team_errors 逐席位清单（同 summon 处理），否则 toast 渲生 JSON。
@@ -1811,8 +1813,8 @@ watch(
   box-shadow: var(--shadow-card-hover);
 }
 .intent-card:focus-visible {
-  outline: 2px solid var(--clay-softer);
-  outline-offset: 1px;
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
 }
 .intent-accent {
   flex: 0 0 auto;
@@ -2062,8 +2064,8 @@ watch(
   border-color: var(--hairline-soft);
 }
 .reframe-item:focus-visible {
-  outline: 2px solid var(--clay-softer);
-  outline-offset: 1px;
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
 }
 .reframe-num {
   flex: 0 0 auto;
@@ -2245,7 +2247,7 @@ watch(
 .sa-squad-line .squad-sep { color: var(--ink-faint); }
 .squad-seg.tone-clay { color: var(--clay); font-weight: 600; }
 .squad-seg.tone-amber { color: var(--trust-pending); font-weight: 600; }
-.squad-seg.tone-rose { color: var(--el-color-danger, #c04545); font-weight: 600; }
+.squad-seg.tone-rose { color: var(--trust-fail); font-weight: 600; }
 
 /* 等待接力=空心灯（T1）：1px ink 描边圆，绝无 is-pulsing（O2 探针断言互斥） */
 .status-lamp.is-hollow {
@@ -2629,6 +2631,10 @@ watch(
 }
 .file-chip.error { color: var(--trust-fail); border-color: var(--error-chip-border); background: var(--error-chip-bg); }
 .chip-x {
+  appearance: none;
+  border: none;
+  background: transparent;
+  font: inherit;
   cursor: pointer;
   color: var(--ink-faint);
   font-weight: 700;
@@ -2755,6 +2761,15 @@ watch(
 @media (prefers-reduced-motion: reduce) {
   .composer-hint .keys { transition: none; }
   .send-spin { animation: none; }
+  .intent-card,
+  .agent-card,
+  .agent-cta::after,
+  .plan-escape { transition: none; }
+  .intent-card:hover,
+  .intent-card:focus-visible,
+  .agent-card:hover,
+  .agent-cta:hover::after,
+  .plan-escape:hover { transform: none; }
 }
 
 /* 诚实地板句（Claude「can make mistakes」哲学）：常驻同一 composer 容器内，
@@ -2772,6 +2787,29 @@ kbd {
 }
 
 @media (max-width: 640px) {
+  .guide-page.is-empty {
+    min-height: 0;
+    justify-content: flex-start;
+  }
+  .guide-hero { padding: var(--space-2) 0 var(--space-3); }
+  .hero-intents {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+  }
+  .intent-card {
+    min-width: 0;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+  .intent-example {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .composer { margin-top: var(--space-2); }
+  .composer-hint .keys { display: none; }
   .ai-body { max-width: calc(100% - 44px); }
   .plan-goal-title { font-size: 21px; }
   .agent-maturity { display: none; }
@@ -2828,9 +2866,14 @@ kbd {
 }
 .agent-pick .ap-portal-link {
   display: block;
+  width: 100%;
   padding: 8px 14px 2px;
   margin-top: 4px;
+  border: none;
   border-top: 1px solid var(--hairline-soft);
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
   font-size: 12px;
   font-weight: 600;
   color: var(--clay);

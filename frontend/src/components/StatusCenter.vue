@@ -239,7 +239,7 @@
 // 共用同一条链——同 taskId 同屏时全站只此一条该任务详情轮询）。本组件不再
 // 自建任何 setTimeout 轮询/epoch 守卫，全部由 channel 统一承接。签发链路与
 // TaskDetail 完全同源（reviewTask API），只是把「去哪签」变成了「签发来找你」。
-import { ref, computed, watch, nextTick, onUnmounted } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { statusCenter, openTaskPeek, backToInbox, closeCenter } from "../stores/statusCenter";
@@ -274,7 +274,10 @@ function openAllTasks() {
   closeForNavigation();
   router.push("/tasks");
 }
-const drawerSize = window.innerWidth < 640 ? "100%" : "540px";
+const viewportWidth = ref(window.innerWidth);
+const syncViewportWidth = () => { viewportWidth.value = window.innerWidth; };
+const drawerSize = computed(() => viewportWidth.value < 640 ? "100%" : "540px");
+onMounted(() => window.addEventListener("resize", syncViewportWidth));
 
 // ── 收件箱行级活面（批次三 G3/G4）：1s ticker 仅抽屉打开期间存活、关闭即清
 // ——驱动「运行中」行活跳时长（cd-bg-tasks-panel Running 卡字段序「时长实时」）
@@ -613,7 +616,11 @@ async function doReview(action) {
     });
     markTaskSeen(taskId); // 亲手签发=已看过：其后完成不得对签发者亮未读
     reviewComment.value = ""; commentOpen.value = false; // 签发落定即清、意见框收回，绝不残留到下一个任务
-    ElMessage.success(action === "approve" ? "已批准放行" : "已驳回");
+    if (action === "approve") {
+      ElMessage({ message: "已批准放行", type: "info", customClass: "trust-message-signed" });
+    } else {
+      ElMessage({ message: "已驳回", type: "error" });
+    }
     if (action === "approve") loadAcceptedSamples(taskId); // 静默旁路：失败不影响签发主流程
     // 续体绑定：await 期间抽屉可能已关/任务已切——只有还在看同一任务时才迸发+刷新
     if (statusCenter.open && statusCenter.taskId === taskId) {
@@ -720,6 +727,7 @@ watch(
 );
 
 onUnmounted(() => {
+  window.removeEventListener("resize", syncViewportWidth);
   releaseInboxFeed(); // 安全网：正常路径已在 onClosed 释放,release() 本身幂等
   releasePeekFeed();
   artifactsFingerprint = null;

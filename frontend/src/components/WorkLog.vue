@@ -371,6 +371,9 @@ const chips = computed(() => {
 .worklog-arrow.is-open {
   transform: rotate(90deg);
 }
+@media (prefers-reduced-motion: reduce) {
+  .worklog-arrow { transition: none; }
+}
 .worklog-signoff {
   font-size: 12.5px;
   font-weight: 600;

@@ -134,7 +134,7 @@
             <span class="upload-name">{{ item.name }}</span>
             <el-tag v-if="item.status === 'pending'" size="small">待上传</el-tag>
             <el-tag v-else-if="item.status === 'uploading'" type="info" size="small">上传中…</el-tag>
-            <el-tag v-else-if="item.status === 'done'" type="success" size="small">已上传</el-tag>
+            <el-tag v-else-if="item.status === 'done'" type="info" size="small">已上传</el-tag>
             <el-tag v-else type="danger" size="small">失败：{{ item.error }}</el-tag>
             <el-button size="small" text :disabled="submitting" @click="removeUploadItem(item)">移除</el-button>
           </div>
@@ -518,7 +518,7 @@ async function handleSubmit() {
     if (prefillConcludeAfter.value && prefillConversationId.value) {
       concludeConversation(prefillConversationId.value).catch(() => {});
     }
-    ElMessage.success("任务已创建");
+    ElMessage({ message: "任务已创建", type: "info" });
     await playSubmitRise();
     // 范式 2a 对话轴闭环：从导引来（back=chat）且会话仍活跃 → 回流对话，任务卡
     // 在流里原地亮起（Claude 式零跳页）。单 Agent conclude_after 已归档会话，

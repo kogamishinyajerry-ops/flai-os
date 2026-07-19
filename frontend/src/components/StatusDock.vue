@@ -257,11 +257,13 @@ onUnmounted(() => {
 }
 @media (prefers-reduced-motion: reduce) {
   .dock-pill,
-  .dock-core {
+  .dock-core,
+  .dock-monitor {
     transition: none;
   }
   .status-dock:hover .dock-pill,
-  .status-dock:hover .dock-core {
+  .status-dock:hover .dock-core,
+  .dock-monitor:hover {
     transform: none;
   }
   .dock-pill-waiting.dock-pulse-echo {

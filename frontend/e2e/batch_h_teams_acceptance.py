@@ -160,7 +160,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(("PASS" if ok is True else "FAIL"), name, ("| " + detail if detail and ok is not True else ""))
 
 
-from _auth import login_context, login_httpx, seed_user  # noqa: E402
+from _auth import E2E_USERNAME, login_context, login_httpx, seed_user  # noqa: E402
 
 seed_user(WORK / "flai_os.db", "王工")
 API = login_httpx(BASE)
@@ -207,8 +207,14 @@ with sync_playwright() as p:
     expect(page.locator(".plan-card").last).to_be_visible(timeout=15000)
     save_btn = page.locator(".save-team-btn")
     expect(save_btn).to_be_visible(timeout=8000)
-    page.once("dialog", lambda d: d.accept("接力验收团队"))
+    page.once("dialog", lambda d: d.accept("接力验收团队 · 移动端超长名称用于验证换行与密级标签不重叠"))
     save_btn.click()
+    try:
+        expect(page.locator(".el-message--info")).to_be_visible(timeout=3000)
+        check("P2.2a 保存团队回声为中性 info（不借 REAL 绿）",
+              page.locator(".el-message--success").count() == 0)
+    except Exception as exc:
+        check("P2.2a 保存团队回声为中性 info（不借 REAL 绿）", False, str(exc)[:160])
     time.sleep(1.5)
     teams = API.get("/api/teams").json()
     check("O1a 团队已保存", len(teams) == 1, json.dumps(teams, ensure_ascii=False)[:200])
@@ -220,6 +226,208 @@ with sync_playwright() as p:
     page.screenshot(path=str(SHOTS / "1_plan_saved.png"))
     conv_id = page.url.split("c=")[-1] if "c=" in page.url else ""
     team_id = team.get("id", "")
+
+    # ── P2.2：B8 双主题 × 390/430 真布局 + 类别色 AA ─────────────────────
+    page.goto(BASE + "/portal")
+    expect(page.locator(".teams-section")).to_be_visible(timeout=8000)
+    for theme in ("light", "dark"):
+        for width in (430, 390):
+            page.set_viewport_size({"width": width, "height": 844})
+            page.evaluate("theme => document.documentElement.setAttribute('data-theme', theme)", theme)
+            # 等既有 fx-stagger/fx-rise 完整落定再量与截图；动画中间帧不是布局证据。
+            page.wait_for_timeout(500)
+            metrics = page.evaluate(
+                """() => {
+                  const root = getComputedStyle(document.documentElement);
+                  const card = document.querySelector('.team-card');
+                  const head = document.querySelector('.team-head');
+                  const teamsHead = document.querySelector('.teams-header');
+                  const name = document.querySelector('.team-name');
+                  const clearance = document.querySelector('.team-clearance');
+                  const pill = document.querySelector('.cat-pill');
+                  const ctx = document.createElement('canvas').getContext('2d', {willReadFrequently: true});
+                  ctx.canvas.width = 1; ctx.canvas.height = 1;
+                  const rgba = (css, under) => {
+                    ctx.clearRect(0, 0, 1, 1);
+                    if (under) { ctx.fillStyle = under; ctx.fillRect(0, 0, 1, 1); }
+                    ctx.fillStyle = css; ctx.fillRect(0, 0, 1, 1);
+                    return [...ctx.getImageData(0, 0, 1, 1).data];
+                  };
+                  const lum = (rgb) => {
+                    const c = rgb.slice(0, 3).map(v => { const s = v / 255; return s <= .04045 ? s / 12.92 : ((s + .055) / 1.055) ** 2.4; });
+                    return .2126 * c[0] + .7152 * c[1] + .0722 * c[2];
+                  };
+                  const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
+                  const cardBg = getComputedStyle(card).backgroundColor;
+                  const fg = rgba(getComputedStyle(pill).color);
+                  const pillBg = rgba(getComputedStyle(pill).backgroundColor, cardBg);
+                  const trust = ['--trust-real','--trust-signed','--trust-fail','--trust-pending','--clay']
+                    .map(t => rgba(root.getPropertyValue(t).trim()).slice(0, 3).join(','));
+                  const nr = name.getBoundingClientRect(), cr = clearance.getBoundingClientRect();
+                  const sameLineOverlap = Math.max(nr.top, cr.top) < Math.min(nr.bottom, cr.bottom)
+                    && Math.max(nr.left, cr.left) < Math.min(nr.right, cr.right);
+                  return {
+                    docOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+                    cardInside: card.getBoundingClientRect().left >= 0 && card.getBoundingClientRect().right <= innerWidth + 0.5,
+                    cardSurface: rgba(cardBg).slice(0, 3).join(','),
+                    expectedSurface: rgba(root.getPropertyValue('--surface-raised').trim()).slice(0, 3).join(','),
+                    headOverflow: Math.max(head.scrollWidth - head.clientWidth, teamsHead.scrollWidth - teamsHead.clientWidth),
+                    sameLineOverlap,
+                    categoryContrast: ratio(fg, pillBg),
+                    categoryUsesTrust: trust.includes(fg.slice(0, 3).join(',')),
+                  };
+                }"""
+            )
+            ok = (
+                metrics["docOverflow"] <= 1
+                and metrics["cardInside"] is True
+                and metrics["cardSurface"] == metrics["expectedSurface"]
+                and metrics["headOverflow"] <= 1
+                and metrics["sameLineOverlap"] is False
+                and metrics["categoryContrast"] >= 4.5
+                and metrics["categoryUsesTrust"] is False
+            )
+            check(f"P2.2b portal {theme} {width}px 无溢出/表面同源/类别 AA", ok, json.dumps(metrics, ensure_ascii=False))
+            page.screenshot(path=str(SHOTS / f"p22_portal_{theme}_{width}.png"), full_page=True)
+
+    # 真开 file_upload 团队召集面板并注入长文件名：仅量真实 Element Plus upload
+    # DOM，不提交召集。临时团队在量完后删除，不污染后续 O2/O3 的团队定位与任务账。
+    file_team_id = "team_p22_mobile_file"
+    conn = app.state.conn_factory()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        repos.create_team(
+            conn,
+            team_id=file_team_id,
+            name="移动端材料席位布局验收",
+            owner_user=E2E_USERNAME,
+            members=[{
+                "agent_id": "performance_disk_agent",
+                "agent_version_at_save": "0.1.0",
+                "role": "上传长文件名材料",
+                "seq": 0,
+                "after": [],
+            }],
+            goal_template="只验证召集面板材料行在窄屏如实重排",
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+    long_upload = WORK / ("p22-mobile-" + "very-long-material-name-" * 8 + ".xlsx")
+    long_upload.write_bytes(b"layout-only")
+    try:
+        page.set_viewport_size({"width": 390, "height": 844})
+        page.goto(BASE + "/portal")
+        file_card = page.locator(".team-card").filter(has_text="移动端材料席位布局验收")
+        expect(file_card).to_be_visible(timeout=8000)
+        file_card.locator(".team-actions .el-button").click()
+        file_dlg = page.locator(".summon-dialog")
+        expect(file_dlg).to_be_visible(timeout=8000)
+        expect(file_dlg.locator("input[type=file]")).to_be_attached(timeout=8000)
+        file_dlg.locator("input[type=file]").set_input_files(str(long_upload))
+        upload_row = file_dlg.locator(".seat-upload-item")
+        expect(upload_row).to_be_visible(timeout=4000)
+        # el-tag 带 zoom-in 进场；等实际控件宽度落定再量，0px 中间帧不是布局证据。
+        expect(upload_row.locator(".el-tag")).to_be_visible(timeout=2000)
+        page.wait_for_timeout(100)
+        upload_metrics = upload_row.evaluate(
+            """el => {
+              const dlg=document.querySelector('.summon-dialog');
+              const name=el.querySelector('.seat-upload-name');
+              const dr=dlg.getBoundingClientRect(), er=el.getBoundingClientRect(), nr=name.getBoundingClientRect();
+              const controlRects = [...el.querySelectorAll('.el-tag,.el-button')].map(node => {
+                const r=node.getBoundingClientRect();
+                return {kind:node.className,left:r.left,right:r.right,width:r.width};
+              });
+              return {
+                docOverflow: document.documentElement.scrollWidth-document.documentElement.clientWidth,
+                rowOverflow: el.scrollWidth-el.clientWidth,
+                dialogInside: dr.left >= 0 && dr.right <= innerWidth + .5,
+                rowInside: er.left >= dr.left - .5 && er.right <= dr.right + .5,
+                nameShrunk: nr.width > 0 && name.scrollWidth > name.clientWidth,
+                controlRects,
+                controlsInside: controlRects.every(r => r.width > 0 && r.left >= dr.left - .5 && r.right <= dr.right + .5),
+              };
+            }"""
+        )
+        check(
+            "P2.2c 窄屏召集面板长文件行真重排且无溢出",
+            upload_metrics["docOverflow"] <= 1
+            and upload_metrics["rowOverflow"] <= 1
+            and upload_metrics["dialogInside"] is True
+            and upload_metrics["rowInside"] is True
+            and upload_metrics["nameShrunk"] is True
+            and upload_metrics["controlsInside"] is True,
+            json.dumps(upload_metrics, ensure_ascii=False),
+        )
+        file_dlg.locator(".el-dialog__footer .el-button").first.click()
+    except Exception as exc:
+        check("P2.2c 窄屏召集面板长文件行真重排且无溢出", False, str(exc)[:200])
+    finally:
+        conn = app.state.conn_factory()
+        try:
+            conn.execute("DELETE FROM team_members WHERE team_id = ?", (file_team_id,))
+            conn.execute("DELETE FROM teams WHERE id = ?", (file_team_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    # 从桌面挂载后再缩窄，精确咬住旧 const window.innerWidth 假响应。
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(BASE + "/portal")
+    expect(page.locator(".teams-section")).to_be_visible(timeout=8000)
+    page.set_viewport_size({"width": 430, "height": 844})
+    page.locator(".status-dock").click()
+    expect(page.locator(".status-center-drawer")).to_be_visible(timeout=5000)
+    drawer_430 = round(page.locator(".status-center-drawer").evaluate("el => el.getBoundingClientRect().width"))
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.wait_for_timeout(100)
+    drawer_390 = round(page.locator(".status-center-drawer").evaluate("el => el.getBoundingClientRect().width"))
+    check("P2.2d 状态抽屉随 430→390 实时重算", drawer_430 == 430 and drawer_390 == 390,
+          f"430={drawer_430}, 390={drawer_390}")
+    page.locator(".sc-close").click()
+
+    # 起手 composer 必须在 390×844 首屏内；扩展 onboarding 已收成移动摘要。
+    page.goto(BASE + "/")
+    expect(page.locator(".composer-shell")).to_be_visible(timeout=8000)
+    composer_metrics = page.locator(".composer-shell").evaluate(
+        "el => { const r=el.getBoundingClientRect(); return {top:r.top,bottom:r.bottom,h:innerHeight,overflow:document.documentElement.scrollWidth-document.documentElement.clientWidth}; }"
+    )
+    check("P2.2e 390×844 起手 composer 首屏可达且无横溢出",
+          composer_metrics["top"] >= 0 and composer_metrics["bottom"] <= composer_metrics["h"] and composer_metrics["overflow"] <= 1,
+          json.dumps(composer_metrics, ensure_ascii=False))
+
+    # 自绘意图卡真按 Space：只预填并把焦点交给 composer，绝不代发消息。
+    intent = page.locator(".intent-card").first
+    before_bubbles = page.locator(".bubble-row").count()
+    intent.focus()
+    page.keyboard.press("Space")
+    intent_space = page.locator(".composer-input textarea").evaluate(
+        "el => ({value:el.value, active:document.activeElement===el})"
+    )
+    check(
+        "P2.2f 意图卡 Space 真激活且只预填不代发",
+        bool(intent_space["value"].strip())
+        and intent_space["active"] is True
+        and page.locator(".bubble-row").count() == before_bubbles,
+        json.dumps(intent_space, ensure_ascii=False),
+    )
+
+    if conv_id:
+        for width in (430, 390):
+            page.set_viewport_size({"width": width, "height": 844})
+            page.goto(BASE + f"/workbench/{conv_id}")
+            expect(page.locator(".wb-session")).to_be_visible(timeout=8000)
+            wb_overflow = page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
+            check(f"P2.2g workbench {width}px 无横向溢出", wb_overflow <= 1, f"overflow={wb_overflow}")
+    else:
+        check("P2.2g workbench 430px 无横向溢出", False, "conv_id 缺失")
+        check("P2.2g workbench 390px 无横向溢出", False, "conv_id 缺失")
+
+    page.set_viewport_size({"width": 1440, "height": 900})
 
     # ── O2：G2 disable → 门户预览置灰 + API 整单 422 零写入 ────────────────
     HELLO["status"] = "disabled"
@@ -344,6 +552,97 @@ with sync_playwright() as p:
         done = wait_status(ui_down["id"], {"waiting_review", "completed", "failed", "cancelled"}, timeout_s=60.0)
         check("O3e resolver 接力至下游 waiting_review（rhr 人签闸）", done.get("status") == "waiting_review",
               json.dumps({"status": done.get("status"), "err": done.get("error_message")}, ensure_ascii=False)[:250])
+
+    # ── P2.2：真实 reduced-motion hover/focus 证据 ────────────────────────
+    rctx = browser.new_context(viewport={"width": 390, "height": 844})
+    login_context(rctx, BASE)
+    rctx.add_init_script("localStorage.setItem('flai.simMonitorHub', 'http://127.0.0.1:9')")
+    rpage = rctx.new_page()
+    rpage.emulate_media(reduced_motion="reduce")
+    try:
+        rpage.goto(BASE + "/")
+        expect(rpage.locator(".intent-card").first).to_be_visible(timeout=8000)
+        rpage.locator(".intent-card").first.hover()
+        intent_transform = rpage.locator(".intent-card").first.evaluate("el => getComputedStyle(el).transform")
+        expect(rpage.locator(".sim-pill")).to_be_visible(timeout=5000)
+        rpage.locator(".sim-pill").hover()
+        sim_transform = rpage.locator(".sim-pill").evaluate("el => getComputedStyle(el).transform")
+        rpage.keyboard.press("Meta+k")
+        expect(rpage.locator(".qs-input")).to_be_visible(timeout=5000)
+        expect(rpage.locator(".qs-item").first).to_be_visible(timeout=5000)
+        qs_focus = rpage.locator(".qs-input").evaluate(
+            """el => {
+              const s=getComputedStyle(el), p=document.createElement('span');
+              p.style.color='var(--focus-ring-clay)'; document.body.appendChild(p);
+              const want=getComputedStyle(p).color; p.remove();
+              return {active:document.activeElement===el,w:s.outlineWidth,st:s.outlineStyle,c:s.outlineColor,off:s.outlineOffset,want};
+            }"""
+        )
+        rpage.keyboard.press("Escape")
+        # 二次打开时人为挂起三源 fetch，复现“旧 flatItems 尚在、options 因 loading
+        # 已卸载”的窗口；aria-activedescendant 此时必须省略，不能指向幽灵 option。
+        rpage.evaluate(
+            """() => {
+              window.__p22OriginalFetch = window.fetch;
+              window.fetch = (...args) => {
+                const url=String(args[0]);
+                if (url.includes('/api/conversations') || url.includes('/api/tasks') || url.includes('/api/agents')) {
+                  return new Promise(() => {});
+                }
+                return window.__p22OriginalFetch(...args);
+              };
+            }"""
+        )
+        rpage.keyboard.press("Meta+k")
+        expect(rpage.locator(".qs-input")).to_be_visible(timeout=5000)
+        qs_loading_active = rpage.locator(".qs-input").get_attribute("aria-activedescendant")
+        rpage.keyboard.press("Escape")
+        rpage.evaluate("() => { window.fetch=window.__p22OriginalFetch; delete window.__p22OriginalFetch; }")
+        check("P2.2h reduce 下 intent/sim hover 位移归零",
+              intent_transform == "none" and sim_transform == "none",
+              f"intent={intent_transform}, sim={sim_transform}")
+        check("P2.2i QuickSwitcher 真焦点=2px token ring/offset 2",
+              qs_focus["active"] is True and qs_focus["w"] == "2px" and qs_focus["st"] == "solid"
+              and qs_focus["c"] == qs_focus["want"] and qs_focus["off"] == "2px",
+              json.dumps(qs_focus, ensure_ascii=False))
+        check("P2.2j QuickSwitcher loading 不指向幽灵 option", qs_loading_active is None,
+              f"aria-activedescendant={qs_loading_active!r}")
+
+        rpage.goto(BASE + f"/workbench/{conv_id}")
+        expect(rpage.locator(".member").first).to_be_visible(timeout=8000)
+        rpage.locator(".member").first.hover()
+        member_transform = rpage.locator(".member").first.evaluate("el => getComputedStyle(el).transform")
+        check("P2.2k reduce 下 Workbench member hover 位移归零", member_transform == "none", member_transform)
+
+        rpage.goto(BASE + "/today")
+        expect(rpage.locator(".today-card").first).to_be_visible(timeout=8000)
+        expect(rpage.locator(".delivery-card").first).to_be_visible(timeout=8000)
+        rpage.locator(".today-card").first.hover()
+        today_transform = rpage.locator(".today-card").first.evaluate("el => getComputedStyle(el).transform")
+        rpage.locator(".delivery-card").first.hover()
+        delivery_transform = rpage.locator(".delivery-card").first.evaluate("el => getComputedStyle(el).transform")
+        check("P2.2l reduce 下 Today/Delivery hover 位移归零",
+              today_transform == "none" and delivery_transform == "none",
+              f"today={today_transform}, delivery={delivery_transform}")
+
+        rpage.goto(BASE + f"/tasks/{ui_up['id']}")
+        expect(rpage.locator(".worklog-head")).to_be_visible(timeout=8000)
+        rpage.locator(".worklog-head").click()
+        arrow_duration = rpage.locator(".worklog-arrow").evaluate("el => getComputedStyle(el).transitionDuration")
+        check("P2.2m reduce 下 WorkLog 箭头保留状态但零过渡", arrow_duration == "0s", arrow_duration)
+    except Exception as exc:
+        for name in (
+            "P2.2h reduce 下 intent/sim hover 位移归零",
+            "P2.2i QuickSwitcher 真焦点=2px token ring/offset 2",
+            "P2.2j QuickSwitcher loading 不指向幽灵 option",
+            "P2.2k reduce 下 Workbench member hover 位移归零",
+            "P2.2l reduce 下 Today/Delivery hover 位移归零",
+            "P2.2m reduce 下 WorkLog 箭头保留状态但零过渡",
+        ):
+            if not any(r[0] == name for r in results):
+                check(name, False, str(exc)[:180])
+    finally:
+        rctx.close()
 
     # ── O6：withheld 被动面（GuidePage）——零下载 + 遮蔽标记 + 无编造计数 ──
     # 对 O3 的 UI 下游任务注入 sensitive JSON 产物（模拟受限依据产物）。

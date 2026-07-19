@@ -63,7 +63,7 @@
         </el-form-item>
       </el-form>
 
-      <el-alert v-if="feedbackError" type="warning" :title="feedbackError" show-icon :closable="false">
+      <el-alert v-if="feedbackError" type="error" :title="feedbackError" show-icon :closable="false">
         <el-button size="small" @click="loadFeedback">重试</el-button>
       </el-alert>
 
@@ -71,7 +71,7 @@
       <EmptyState v-if="feedbackList.length === 0 && !feedbackError" description="暂无反馈" />
       <ul v-else class="feedback-list">
         <li v-for="f in feedbackList" :key="f.id">
-          <el-tag size="small" :type="f.rating === 'good' ? 'success' : 'danger'">
+          <el-tag size="small" type="info">
             {{ f.rating === "good" ? "可用" : "不可用" }}
           </el-tag>
           <span class="feedback-category">{{ categoryLabel(f.category) }}</span>
@@ -150,7 +150,7 @@ async function handleSubmit() {
       category: feedbackForm.category,
       message: feedbackForm.message || null,
     });
-    ElMessage.success("反馈已提交");
+    ElMessage({ message: "反馈已提交", type: "info" });
     feedbackForm.message = "";
     await loadFeedback();
   } catch (err) {

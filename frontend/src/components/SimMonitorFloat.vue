@@ -338,6 +338,7 @@ onUnmounted(() => {
 .sim-frame { flex: 1; border: none; width: 100%; background: var(--paper-rail); }
 @media (prefers-reduced-motion: reduce) {
   .sim-pill { transition: none; }
+  .sim-pill:hover { transform: none; }
   .sim-dot.work { animation: none; }
 }
 /* 窄屏（转正门槛清单项）：<900px 抬高避开 GuidePage 底部悬浮 composer，

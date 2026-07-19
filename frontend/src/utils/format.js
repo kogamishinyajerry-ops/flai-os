@@ -38,8 +38,13 @@ export const taskLampColor = (status) => {
   return "var(--ink-faint)";
 };
 
-// 事件 level → timeline 颜色
-export const LEVEL_COLOR = { info: "#409EFF", warning: "#E6A23C", error: "#F56C6C" };
+// 事件 level → timeline 颜色。禁止复用 Element Plus 默认蓝/橙/红旁路：普通
+// info 中性，warning=未核，error=真失败，仍落在全局信任锁内。
+export const LEVEL_COLOR = {
+  info: "var(--ink-soft)",
+  warning: "var(--trust-pending)",
+  error: "var(--trust-fail)",
+};
 
 // 事件类型 → 人话标签（详情页时间轴不再直显开发术语；未知类型回退原串）。
 export const EVENT_TYPE_LABEL = {
@@ -71,14 +76,15 @@ export const eventTypeLabel = (t) => EVENT_TYPE_LABEL[t] ?? t;
 // 否则绿药丸会被误读成「已验证」。故四类统一落在冷调 蓝/靛/紫/梅 弧段——
 // reasoning_assist 由旧琥珀(撞 amber)、knowledge_qa 由旧绿(撞 REAL) 迁出。
 export const AGENT_CATEGORY = {
-  tool_automation: { label: "工具自动化型", color: "#2f6fb3", tip: "编排工具批量作业，如性能盘计算" },
-  knowledge_qa: { label: "知识问答型", color: "#4a6bb0", tip: "基于受控知识范围回答工程问题" },
-  structured_gen: { label: "结构化生成型", color: "#7c5cbf", tip: "按规则生成结构化产物，如控制逻辑" },
-  reasoning_assist: { label: "推理辅助型", color: "#b45a86", tip: "LLM 辅助推理出草案，结论需人工确认" },
+  tool_automation: { label: "工具自动化型", color: "var(--category-tool-automation)", tip: "编排工具批量作业，如性能盘计算" },
+  knowledge_qa: { label: "知识问答型", color: "var(--category-knowledge-qa)", tip: "基于受控知识范围回答工程问题" },
+  structured_gen: { label: "结构化生成型", color: "var(--category-structured-gen)", tip: "按规则生成结构化产物，如控制逻辑" },
+  reasoning_assist: { label: "推理辅助型", color: "var(--category-reasoning-assist)", tip: "LLM 辅助推理出草案，结论需人工确认" },
 };
 
 export const categoryLabel = (c) => AGENT_CATEGORY[c]?.label ?? c ?? "未分类";
-export const categoryColor = (c) => AGENT_CATEGORY[c]?.color ?? "#8a8f99";
+export const categoryColor = (c) => AGENT_CATEGORY[c]?.color ?? "var(--category-unknown)";
+export const categoryTint = (c) => `color-mix(in srgb, ${categoryColor(c)} 10%, transparent)`;
 export const categoryTip = (c) => AGENT_CATEGORY[c]?.tip ?? "";
 
 // Agent 发布状态（agent.schema status）→ 中文标签 + 释义（门户不再直显英文 draft）。

@@ -12,10 +12,15 @@
             placeholder="搜索会话、任务、Agent…"
             autocomplete="off"
             spellcheck="false"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-controls="qs-results"
+            aria-expanded="true"
+            :aria-activedescendant="activeOptionId"
           />
         </div>
 
-        <div class="qs-results" ref="resultsRef">
+        <div id="qs-results" class="qs-results" ref="resultsRef" role="listbox" aria-label="搜索结果">
           <!-- 骨架语言对齐全站（W7，低优先级样式项）：面板每次打开都是新挂载/
                重拉（关闭即整体卸载），不是同页静默轮询，不需要 A3 的 everLoaded
                防闪烁——直接绑 loading 即可。骨架根是 aria-hidden，必须保留
@@ -40,6 +45,9 @@
                   :key="group.key + '-' + entry.item.id"
                   class="qs-item"
                   :class="{ 'is-selected': entry.globalIndex === selectedIndex }"
+                  :id="`qs-option-${entry.globalIndex}`"
+                  role="option"
+                  :aria-selected="entry.globalIndex === selectedIndex"
                   @click="activate(group.key, entry.item)"
                   @mouseenter="selectedIndex = entry.globalIndex"
                 >
@@ -165,6 +173,14 @@ const renderGroups = computed(() => {
   });
 });
 const flatItems = computed(() => groups.value.flatMap((g) => g.items.map((item) => ({ type: g.key, item }))));
+// aria-activedescendant 只能指向当前真实挂载的 option。面板二次打开时旧结果仍在
+// 内存，但 loading 分支会卸载全部 option；若只看 flatItems，读屏会收到悬空 id。
+const activeOptionId = computed(() => {
+  if (loading.value || selectedIndex.value < 0 || selectedIndex.value >= flatItems.value.length) {
+    return undefined;
+  }
+  return `qs-option-${selectedIndex.value}`;
+});
 
 watch(query, () => {
   selectedIndex.value = 0;

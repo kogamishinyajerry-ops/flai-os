@@ -98,7 +98,7 @@
             <div class="member-inner">
               <div class="member-head">
                 <span class="member-name">{{ a.agent_name }}</span>
-                <span class="member-pill" :style="{ color: categoryColor(a.category), background: categoryColor(a.category) + '18' }">
+                <span class="member-pill" :style="{ color: categoryColor(a.category), background: categoryTint(a.category) }">
                   {{ categoryLabel(a.category) }}
                 </span>
                 <span class="member-state summoned">已召集 · <span class="num-token">{{ tasksFor(a).length }}</span> 个任务</span>
@@ -113,18 +113,21 @@
                 <div v-for="t in tasksFor(a)" :key="t.id" class="chip-group">
                   <div
                     :class="['task-chip', { review: t.status === 'waiting_review' }]"
-                    @click="goTask(t)"
                   >
-                    <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status), 'is-hollow': chipStatusWord(t) === '等待接力' }" :style="{ background: chipStatusWord(t) === '等待接力' ? 'transparent' : taskLampColor(t.status) }"></span>
-                    <span class="chip-name">{{ taskDisplayName(t, agentNames.map) }}</span>
-                    <!-- chip 时钟（3-lens 可用性镜头 P2）：同 Agent 分组内多个缺名
-                         任务主名必然相同，时钟是 chip 级唯一消歧锚。 -->
-                    <span class="chip-time">{{ sessClock(t.created_at) }}</span>
-                    <span class="chip-status" :style="{ color: chipStatusColor(t) }">{{ chipStatusWord(t) }}</span>
-                    <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
-                    <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
-                    <!-- B2 速览接入（additive）：chip 本体点击仍走 goTask 跳详情；速览用 @click.stop 独立打开。 -->
-                    <button type="button" class="chip-peek-btn" @click.stop="openTaskPeek(t.id)">速览</button>
+                    <!-- 主跳转和速览是两个同级原生按钮，避免 role=button 容器里再嵌套
+                         button 的无效交互树；Enter/Space 由原生按钮语义统一承接。 -->
+                    <button type="button" class="task-chip-main" @click="goTask(t)">
+                      <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status), 'is-hollow': chipStatusWord(t) === '等待接力' }" :style="{ background: chipStatusWord(t) === '等待接力' ? 'transparent' : taskLampColor(t.status) }"></span>
+                      <span class="chip-name">{{ taskDisplayName(t, agentNames.map) }}</span>
+                      <!-- chip 时钟（3-lens 可用性镜头 P2）：同 Agent 分组内多个缺名
+                           任务主名必然相同，时钟是 chip 级唯一消歧锚。 -->
+                      <span class="chip-time">{{ sessClock(t.created_at) }}</span>
+                      <span class="chip-status" :style="{ color: chipStatusColor(t) }">{{ chipStatusWord(t) }}</span>
+                      <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
+                      <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
+                    </button>
+                    <!-- B2 速览接入（additive）：与主跳转并列，独立打开状态抽屉。 -->
+                    <button type="button" class="chip-peek-btn" @click="openTaskPeek(t.id)">速览</button>
                   </div>
                   <div v-if="taskLastWord[t.id]" class="chip-lastword">{{ taskLastWord[t.id] }}</div>
                 </div>
@@ -159,6 +162,7 @@
           tabindex="0"
           @click="goTask(latestTaskFor(a))"
           @keydown.enter.prevent="goTask(latestTaskFor(a))"
+          @keydown.space.prevent="goTask(latestTaskFor(a))"
         >
           <span v-if="doneUnseen(a)" class="rg-unread-ring"></span>
           <span class="rg-name" :class="{ 'is-unread': doneUnseen(a) }">{{ a.agent_name }}</span>
@@ -176,7 +180,7 @@
             <div class="member-inner">
               <div class="member-head">
                 <span class="member-name">{{ a.agent_name }}</span>
-                <span class="member-pill" :style="{ color: categoryColor(a.category), background: categoryColor(a.category) + '18' }">
+                <span class="member-pill" :style="{ color: categoryColor(a.category), background: categoryTint(a.category) }">
                   {{ categoryLabel(a.category) }}
                 </span>
                 <span class="member-state pending">尚未召集</span>
@@ -204,14 +208,20 @@
       <div v-if="otherTasks.length" class="sess-block">
         <div class="block-label">其它归属本会话的任务</div>
         <div class="task-chips">
-          <div v-for="t in otherTasks" :key="t.id" :class="['task-chip', { review: t.status === 'waiting_review' }]" @click="goTask(t)">
+          <button
+            v-for="t in otherTasks"
+            :key="t.id"
+            type="button"
+            :class="['task-chip', { review: t.status === 'waiting_review' }]"
+            @click="goTask(t)"
+          >
             <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status), 'is-hollow': chipStatusWord(t) === '等待接力' }" :style="{ background: chipStatusWord(t) === '等待接力' ? 'transparent' : taskLampColor(t.status) }"></span>
             <span class="chip-name">{{ taskDisplayName(t, agentNames.map) }}</span>
             <span class="chip-time">{{ sessClock(t.created_at) }}</span>
             <span class="chip-status" :style="{ color: chipStatusColor(t) }">{{ chipStatusWord(t) }}</span>
             <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
             <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
-          </div>
+          </button>
         </div>
       </div>
 
@@ -234,7 +244,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { concludeConversation } from "../api/conversations";
-import { categoryColor, categoryLabel, statusLabel, taskLampColor, taskDisplayName, formatClockCompact, TASK_WORK_STATES, taskElapsedMs } from "../utils/format";
+import { categoryColor, categoryTint, categoryLabel, statusLabel, taskLampColor, taskDisplayName, formatClockCompact, TASK_WORK_STATES, taskElapsedMs } from "../utils/format";
 import { useAgentNames } from "../stores/agentNames";
 import { useTodayKey } from "../composables/useTodayKey";
 import { markSeen, ensureTaskBaseline, taskHasUnseen } from "../utils/lastSeen";
@@ -515,7 +525,7 @@ async function concludeSession() {
   }
   try {
     await concludeConversation(sessionId);
-    ElMessage.success("协作已归档");
+    ElMessage({ message: "协作已归档", type: "info" });
     pokeConversation(sessionId); // 带外补拉：不等下一 tick，归档结果立即回显
   } catch (err) {
     ElMessage.error(err.detail || err.message || "结束协作失败");
@@ -855,9 +865,25 @@ onUnmounted(() => {
   border: 1px solid var(--hairline);
   border-radius: 8px;
   background: var(--paper-cream);
-  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   /* P4 微抬：hover 加一丝纸张离桌感，只用 transform/opacity，token 与全站动效系统对齐。 */
   transition: border-color var(--motion-fast) var(--ease-out-soft), transform var(--motion-fast) var(--ease-out-soft);
+}
+.task-chip-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 .task-chip:hover {
   border-color: var(--clay-softer);
@@ -934,6 +960,8 @@ onUnmounted(() => {
 @media (prefers-reduced-motion: reduce) {
   .chip-lamp.is-pulsing { animation: none; }
   .task-chip:hover { transform: none; }
+  .member { transition: none; }
+  .member:hover { transform: none; }
 }
 .sess-foot {
   margin-top: 18px;
@@ -945,5 +973,36 @@ onUnmounted(() => {
 }
 @media (max-width: 640px) {
   .sess-hero { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .sess-meta { flex-wrap: wrap; }
+  .rg-line {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .rg-name {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .rg-gray {
+    flex: 1 1 100%;
+    order: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .rg-spacer { display: none; }
+  .rg-evi { margin-left: auto; }
+  .task-chip {
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+  .task-chip-main {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+  .chip-name {
+    flex: 1 1 140px;
+    min-width: 0;
+    max-width: 100%;
+  }
 }
 </style>

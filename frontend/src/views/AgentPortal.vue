@@ -63,7 +63,7 @@
             <div class="agent-tags">
               <span
                 class="cat-pill"
-                :style="{ color: categoryColor(agent.category), background: categoryColor(agent.category) + '18' }"
+                :style="{ color: categoryColor(agent.category), background: categoryTint(agent.category) }"
                 :title="categoryTip(agent.category)"
               >{{ categoryLabel(agent.category) }}</span>
               <el-tag
@@ -172,7 +172,7 @@
                 <span class="seat-upload-name">{{ item.name }}</span>
                 <el-tag v-if="item.status === 'pending'" size="small">待上传</el-tag>
                 <el-tag v-else-if="item.status === 'uploading'" type="info" size="small">上传中…</el-tag>
-                <el-tag v-else-if="item.status === 'done'" type="success" size="small">已上传</el-tag>
+                <el-tag v-else-if="item.status === 'done'" type="info" size="small">已上传</el-tag>
                 <el-tag v-else type="danger" size="small">失败：{{ item.error }}</el-tag>
                 <el-button size="small" text :disabled="summoning" @click="removeSeatFile(s, item)">移除</el-button>
               </div>
@@ -373,6 +373,7 @@ import {
   maturityTip,
   categoryLabel,
   categoryColor,
+  categoryTint,
   categoryTip,
   formatTime,
 } from "../utils/format";
@@ -638,7 +639,7 @@ async function submitSummon() {
     });
     const res = await summonTeamApi({ teamId: target.id, items });
     for (const w of res.warnings || []) ElMessage.warning(w);
-    ElMessage.success(`已召集「${target.name}」全体 ${items.length} 名成员——进度在任务台跟进`);
+    ElMessage({ message: `已召集「${target.name}」全体 ${items.length} 名成员——进度在任务台跟进`, type: "info" });
     summonOpen.value = false;
     router.push({ path: "/tasks" });
   } catch (err) {
@@ -814,8 +815,10 @@ async function runEvaluation() {
     const run = await pollEvalRunToTerminal(agentId, queued.id);
     if (governanceOpen.value && governanceAgent.value?.id === agentId) {
       await loadGovernance(agentId);
-      if (run.status === "completed") ElMessage.success("评测完成");
-      else if (run.status !== "aborted") ElMessage.warning(`评测收口为 ${run.status}`);
+      if (run.status === "completed") ElMessage({ message: "评测完成", type: "info" });
+      // aborted 是人为中止，不染红；其余非 completed 终态代表评测执行/证据链
+      // 真失败（当前后端为 error，未知新增终态也 fail-closed），必须走 fail 红槽。
+      else if (run.status !== "aborted") ElMessage.error(`评测收口失败：${run.status}`);
     }
   } catch (err) {
     // 已入队后的失败（轮询/收口层）收敛到 resume 恢复链（与重开面板同一
@@ -866,7 +869,7 @@ async function promoteToL1() {
         // confirmed_by=登录会话身份，服务端派生（ADR-0019 D5）——记名不可代填
       },
     });
-    ElMessage.success("已晋升 L1");
+    ElMessage({ message: "已晋升 L1", type: "info" });
     // 续体绑定：await 期间弹窗可能已切到别的 agent——只有还在看同一 agent 时才回写
     if (governanceOpen.value && governanceAgent.value?.id === agentId) {
       promotionConfirmed.value = false;
@@ -1227,7 +1230,7 @@ onMounted(load);
 .teams-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
 .teams-header h3 { margin: 0; font-size: 16px; }
 .teams-sub { font-size: 12px; color: var(--ink-faint); }
-.team-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.team-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 14px; }
 .team-card {
   border: 1px solid var(--hairline);
   border-radius: 10px;
@@ -1238,7 +1241,7 @@ onMounted(load);
   gap: 7px;
 }
 .team-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.team-name { font-weight: 600; font-size: 14px; color: var(--ink); }
+.team-name { min-width: 0; overflow-wrap: anywhere; font-weight: 600; font-size: 14px; color: var(--ink); }
 .team-clearance { font-size: 11px; color: var(--ink-faint); white-space: nowrap; }
 .team-goal { margin: 0; font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; }
 .team-chain { font-size: 12px; color: var(--ink-soft); }
@@ -1257,4 +1260,16 @@ onMounted(load);
 .summon-errors { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 8px; }
 .summon-errors-title { margin: 0 0 4px; font-size: 12.5px; font-weight: 600; color: var(--ink); }
 .summon-error-line { margin: 2px 0 0; font-size: 12.5px; color: var(--ink-soft); }
+@media (max-width: 640px) {
+  .teams-header,
+  .team-head,
+  .seat-upload-item { flex-wrap: wrap; }
+  .teams-sub { flex: 1 1 100%; }
+  .team-clearance { white-space: normal; }
+  .seat-upload-name {
+    flex: 1 1 160px;
+    min-width: 0;
+    max-width: none;
+  }
+}
 </style>

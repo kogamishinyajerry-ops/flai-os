@@ -304,6 +304,13 @@ onMounted(loadConvos);
   --trust-signed: #167d8b; /* teal：仅人签 */
   --trust-fail: #be3a3a;   /* 红：仅真失败/驳回 */
   --trust-pending: #a8761a;/* amber：仅未核/降级 */
+  /* Agent 类别是身份轴，不是信任轴。五色均避开信任槽，并以正文用途按
+   * --card-bg 实测 AA；暗色块只做同色相提亮，禁止组件内再拼 hex。 */
+  --category-tool-automation: #2f6fb3;
+  --category-knowledge-qa: #4a6bb0;
+  --category-structured-gen: #7452b8;
+  --category-reasoning-assist: #a84b78;
+  --category-unknown: #665f57;
   --pulse-duration: 1.8s;
   /* elevation：暖调柔阴影（纯工艺层，中性 ink 色不碰语义槽）——静止态极轻、hover 抬升。
    * 卡片从"只有边框的扁平"升为"有纸感的浮起"，是本轮 UI 抬升的主手段。*/
@@ -371,6 +378,43 @@ onMounted(loadConvos);
   --el-color-primary-light-8: #f0d9cc;
   --el-color-primary-light-9: #f6e7de;
   --el-color-primary-dark-2: #a54e2f;
+  /* Element Plus 语义色必须桥接信任锁：success 仅供 REAL；warning=未核；
+   * danger/error=真失败或驳回；info=中性。业务完成提示不得调用 success。 */
+  --el-color-success: var(--trust-real);
+  --el-color-success-light-3: color-mix(in srgb, var(--trust-real) 70%, white);
+  --el-color-success-light-5: color-mix(in srgb, var(--trust-real) 50%, white);
+  --el-color-success-light-7: color-mix(in srgb, var(--trust-real) 30%, white);
+  --el-color-success-light-8: color-mix(in srgb, var(--trust-real) 20%, white);
+  --el-color-success-light-9: color-mix(in srgb, var(--trust-real) 10%, white);
+  --el-color-success-dark-2: color-mix(in srgb, var(--trust-real) 80%, black);
+  --el-color-warning: var(--trust-pending);
+  --el-color-warning-light-3: color-mix(in srgb, var(--trust-pending) 70%, white);
+  --el-color-warning-light-5: color-mix(in srgb, var(--trust-pending) 50%, white);
+  --el-color-warning-light-7: color-mix(in srgb, var(--trust-pending) 30%, white);
+  --el-color-warning-light-8: color-mix(in srgb, var(--trust-pending) 20%, white);
+  --el-color-warning-light-9: color-mix(in srgb, var(--trust-pending) 10%, white);
+  --el-color-warning-dark-2: color-mix(in srgb, var(--trust-pending) 80%, black);
+  --el-color-danger: var(--trust-fail);
+  --el-color-danger-light-3: color-mix(in srgb, var(--trust-fail) 70%, white);
+  --el-color-danger-light-5: color-mix(in srgb, var(--trust-fail) 50%, white);
+  --el-color-danger-light-7: color-mix(in srgb, var(--trust-fail) 30%, white);
+  --el-color-danger-light-8: color-mix(in srgb, var(--trust-fail) 20%, white);
+  --el-color-danger-light-9: color-mix(in srgb, var(--trust-fail) 10%, white);
+  --el-color-danger-dark-2: color-mix(in srgb, var(--trust-fail) 80%, black);
+  --el-color-error: var(--trust-fail);
+  --el-color-error-light-3: color-mix(in srgb, var(--trust-fail) 70%, white);
+  --el-color-error-light-5: color-mix(in srgb, var(--trust-fail) 50%, white);
+  --el-color-error-light-7: color-mix(in srgb, var(--trust-fail) 30%, white);
+  --el-color-error-light-8: color-mix(in srgb, var(--trust-fail) 20%, white);
+  --el-color-error-light-9: color-mix(in srgb, var(--trust-fail) 10%, white);
+  --el-color-error-dark-2: color-mix(in srgb, var(--trust-fail) 80%, black);
+  --el-color-info: var(--ink-soft);
+  --el-color-info-light-3: color-mix(in srgb, var(--ink-soft) 70%, white);
+  --el-color-info-light-5: color-mix(in srgb, var(--ink-soft) 50%, white);
+  --el-color-info-light-7: color-mix(in srgb, var(--ink-soft) 30%, white);
+  --el-color-info-light-8: color-mix(in srgb, var(--ink-soft) 20%, white);
+  --el-color-info-light-9: color-mix(in srgb, var(--ink-soft) 10%, white);
+  --el-color-info-dark-2: color-mix(in srgb, var(--ink-soft) 80%, black);
   /* Element Plus 框架中性层暖化：EP 默认冷灰边框/填充（#dcdfe6/#ebeef5/#f5f7fa）与
    * 暖白基调撞色，统一映到暖 hairline/paper 阶（明度对齐 EP 原值，纯中性、绝不碰
    * 语义槽）。一处覆盖，全站 el-table/el-descriptions/el-input/el-timeline/el-collapse
@@ -446,6 +490,11 @@ onMounted(loadConvos);
   --trust-signed: #3b9eae;
   --trust-fail: #d4645a;
   --trust-pending: #c99a3f;
+  --category-tool-automation: #79b5ec;
+  --category-knowledge-qa: #91ade8;
+  --category-structured-gen: #b79be7;
+  --category-reasoning-assist: #e08eb9;
+  --category-unknown: #b0a698;
   /* 阴影：浅底投深影公式在暗底失效，改黑基调重算 */
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 14px rgba(0, 0, 0, 0.4);
   --shadow-card-hover: 0 2px 6px rgba(0, 0, 0, 0.4), 0 12px 30px rgba(0, 0, 0, 0.5);
@@ -510,44 +559,45 @@ onMounted(loadConvos);
   --el-disabled-bg-color: #2b2620;
   --el-disabled-text-color: #5f574c;
   --el-disabled-border-color: #3a332c;
-  /* EP 语境四族：全梯度朝暗底混（light-N = 主色向 --page-bg 混 N 成，与 EP
-   * dark 梯度同构）——只补 8/9 会让 danger 按钮 hover/plain tag 边框（light-3/5）
-   * 继承亮色奶油值（Codex 异源审 P2）。 */
-  --el-color-success: #67c23a;
-  --el-color-success-light-3: color-mix(in srgb, #67c23a 70%, #211d19);
-  --el-color-success-light-5: color-mix(in srgb, #67c23a 50%, #211d19);
-  --el-color-success-light-7: color-mix(in srgb, #67c23a 30%, #211d19);
-  --el-color-success-light-8: #2a3a24;
-  --el-color-success-light-9: #253321;
-  --el-color-success-dark-2: color-mix(in srgb, #67c23a 80%, white);
-  --el-color-warning: #e6a23c;
-  --el-color-warning-light-3: color-mix(in srgb, #e6a23c 70%, #211d19);
-  --el-color-warning-light-5: color-mix(in srgb, #e6a23c 50%, #211d19);
-  --el-color-warning-light-7: color-mix(in srgb, #e6a23c 30%, #211d19);
-  --el-color-warning-light-8: #3e3423;
-  --el-color-warning-light-9: #362e20;
-  --el-color-warning-dark-2: color-mix(in srgb, #e6a23c 80%, white);
-  --el-color-danger: #f56c6c;
-  --el-color-danger-light-3: color-mix(in srgb, #f56c6c 70%, #211d19);
-  --el-color-danger-light-5: color-mix(in srgb, #f56c6c 50%, #211d19);
-  --el-color-danger-light-7: color-mix(in srgb, #f56c6c 30%, #211d19);
-  --el-color-danger-light-8: #422a2a;
-  --el-color-danger-light-9: #392525;
-  --el-color-danger-dark-2: color-mix(in srgb, #f56c6c 80%, white);
-  --el-color-error: #f56c6c;
-  --el-color-error-light-3: color-mix(in srgb, #f56c6c 70%, #211d19);
-  --el-color-error-light-5: color-mix(in srgb, #f56c6c 50%, #211d19);
-  --el-color-error-light-7: color-mix(in srgb, #f56c6c 30%, #211d19);
-  --el-color-error-light-8: #422a2a;
-  --el-color-error-light-9: #392525;
-  --el-color-error-dark-2: color-mix(in srgb, #f56c6c 80%, white);
-  --el-color-info: #909399;
-  --el-color-info-light-3: color-mix(in srgb, #909399 70%, #211d19);
-  --el-color-info-light-5: color-mix(in srgb, #909399 50%, #211d19);
-  --el-color-info-light-7: color-mix(in srgb, #909399 30%, #211d19);
-  --el-color-info-light-8: #33322f;
-  --el-color-info-light-9: #2d2c2a;
-  --el-color-info-dark-2: color-mix(in srgb, #909399 80%, white);
+  /* 暗色仍桥接同一信任 token；梯度只向暗画布混，不另开一套 EP 语义。 */
+  --el-color-success-light-3: color-mix(in srgb, var(--trust-real) 70%, var(--page-bg));
+  --el-color-success-light-5: color-mix(in srgb, var(--trust-real) 50%, var(--page-bg));
+  --el-color-success-light-7: color-mix(in srgb, var(--trust-real) 30%, var(--page-bg));
+  --el-color-success-light-8: color-mix(in srgb, var(--trust-real) 20%, var(--page-bg));
+  --el-color-success-light-9: color-mix(in srgb, var(--trust-real) 10%, var(--page-bg));
+  --el-color-success-dark-2: color-mix(in srgb, var(--trust-real) 80%, white);
+  --el-color-warning-light-3: color-mix(in srgb, var(--trust-pending) 70%, var(--page-bg));
+  --el-color-warning-light-5: color-mix(in srgb, var(--trust-pending) 50%, var(--page-bg));
+  --el-color-warning-light-7: color-mix(in srgb, var(--trust-pending) 30%, var(--page-bg));
+  --el-color-warning-light-8: color-mix(in srgb, var(--trust-pending) 20%, var(--page-bg));
+  --el-color-warning-light-9: color-mix(in srgb, var(--trust-pending) 10%, var(--page-bg));
+  --el-color-warning-dark-2: color-mix(in srgb, var(--trust-pending) 80%, white);
+  --el-color-danger-light-3: color-mix(in srgb, var(--trust-fail) 70%, var(--page-bg));
+  --el-color-danger-light-5: color-mix(in srgb, var(--trust-fail) 50%, var(--page-bg));
+  --el-color-danger-light-7: color-mix(in srgb, var(--trust-fail) 30%, var(--page-bg));
+  --el-color-danger-light-8: color-mix(in srgb, var(--trust-fail) 20%, var(--page-bg));
+  --el-color-danger-light-9: color-mix(in srgb, var(--trust-fail) 10%, var(--page-bg));
+  --el-color-danger-dark-2: color-mix(in srgb, var(--trust-fail) 80%, white);
+  --el-color-error-light-3: color-mix(in srgb, var(--trust-fail) 70%, var(--page-bg));
+  --el-color-error-light-5: color-mix(in srgb, var(--trust-fail) 50%, var(--page-bg));
+  --el-color-error-light-7: color-mix(in srgb, var(--trust-fail) 30%, var(--page-bg));
+  --el-color-error-light-8: color-mix(in srgb, var(--trust-fail) 20%, var(--page-bg));
+  --el-color-error-light-9: color-mix(in srgb, var(--trust-fail) 10%, var(--page-bg));
+  --el-color-error-dark-2: color-mix(in srgb, var(--trust-fail) 80%, white);
+  --el-color-info-light-3: color-mix(in srgb, var(--ink-soft) 70%, var(--page-bg));
+  --el-color-info-light-5: color-mix(in srgb, var(--ink-soft) 50%, var(--page-bg));
+  --el-color-info-light-7: color-mix(in srgb, var(--ink-soft) 30%, var(--page-bg));
+  --el-color-info-light-8: color-mix(in srgb, var(--ink-soft) 20%, var(--page-bg));
+  --el-color-info-light-9: color-mix(in srgb, var(--ink-soft) 10%, var(--page-bg));
+  --el-color-info-dark-2: color-mix(in srgb, var(--ink-soft) 80%, white);
+}
+
+/* 人签回声仍走 Element Plus 容器，但颜色由 teal 信任槽显式接管；普通完成提示
+ * 全部使用中性 info，拒绝借 success 绿。 */
+.trust-message-signed {
+  --el-message-bg-color: color-mix(in srgb, var(--trust-signed) 10%, var(--surface-raised));
+  --el-message-border-color: color-mix(in srgb, var(--trust-signed) 45%, var(--hairline));
+  --el-message-text-color: var(--trust-signed);
 }
 /* 批D：统一 eyebrow 小标题（收口 7 种散写）；语义色由使用处覆盖（waiting=trust-pending/working=clay） */
 .section-label {
