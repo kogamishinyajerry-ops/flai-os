@@ -194,12 +194,13 @@ def test_readyz_200_when_fresh(app_env) -> None:
     client, app = app_env
     conn = app.state.conn_factory()
     try:
-        repos.beat_worker_heartbeat(conn, generation="test-gen")
+        repos.beat_worker_heartbeat(conn, generation=config.WORKER_GENERATION)
     finally:
         conn.close()
     r = client.get("/api/readyz")
     assert r.status_code == 200
     assert r.json()["worker"]["fresh"] is True
+    assert r.json()["worker"]["generation_ready"] is True
 
 
 def test_readyz_503_when_stale(app_env) -> None:

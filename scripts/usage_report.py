@@ -22,6 +22,15 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+from backend.app.storage.outcome_schema import (  # noqa: E402
+    OUTCOME_SCHEMA_WITNESS_KEYS as _OUTCOME_SCHEMA_WITNESS_KEYS,
+)
+from backend.app.storage.outcome_schema import (  # noqa: E402
+    outcome_schema_witnesses as _outcome_schema_witnesses,
+)
+
 DEFAULT_DB = Path(os.environ.get("FLAI_DB_PATH", str(REPO / "data" / "flai_os.db")))
 STALL_HOURS = 48
 
@@ -261,6 +270,133 @@ def build_report(db_path: Path, days: int, now: dt.datetime | None = None) -> di
         else:
             report["model_calls"] = "未知（model_calls 表结构不含所需列）"
 
+        # ---- 签发产物流转 lower-bound（ADR-0036） ----
+        # capture_started 是逐权威产物 observation cohort 起点，不是 outcome。
+        # 无 marker 时无法区分“没有行为”与“还没有可观测产物”，必须报未知而非 0。
+        outcome_cols = _columns(conn, "artifact_outcome_events")
+        required_outcome_cols = {
+            "id", "event_type", "source_task_id", "source_file_id",
+            "review_event_id", "actor_username", "downstream_task_id",
+            "delivered_bytes", "schema_version", "created_at",
+        }
+        outcome_schema_witnesses = _outcome_schema_witnesses(conn)
+        outcome_schema_ready = all(
+            outcome_schema_witnesses.get(key) is True
+            for key in _OUTCOME_SCHEMA_WITNESS_KEYS
+        )
+        if (
+            outcome_schema_ready is True
+            and required_outcome_cols <= outcome_cols
+            and {"id", "origin"} <= task_cols
+        ):
+            first_capture = _one(
+                conn,
+                "SELECT MIN(outcome.created_at) "
+                "FROM artifact_outcome_events AS outcome "
+                "JOIN tasks AS source ON source.id = outcome.source_task_id "
+                "WHERE source.origin = 'user' "
+                "AND outcome.event_type = 'capture_started'",
+            )
+            if first_capture is None:
+                report["artifact_outcomes"] = {
+                    "status": "unknown_no_instrumented_artifacts",
+                    "observation_started_at": "未知（尚无逐权威产物 capture_started）",
+                    "capture_started": "未知（尚无 instrumentation cohort，不以 0 充数）",
+                    "full_download": "未知（尚无 instrumentation cohort，不以 0 充数）",
+                    "pipeline_handoff": "未知（尚无 instrumentation cohort，不以 0 充数）",
+                    "note": "capture_started 只表示采集生效，不是 outcome；不历史回填",
+                }
+            else:
+                first_capture_dt = _parse_ts(first_capture)
+                if first_capture_dt is None:
+                    report["artifact_outcomes"] = {
+                        "status": "unknown_invalid_capture_timestamp",
+                        "observation_started_at": "未知（capture_started 时间戳不可解析）",
+                        "capture_started": "未知（采集起点不可验证）",
+                        "full_download": "未知（采集起点不可验证）",
+                        "pipeline_handoff": "未知（采集起点不可验证）",
+                        "note": "拒绝跨不可验证采集起点编造结果计数",
+                    }
+                else:
+                    requested_since_dt = now - dt.timedelta(days=days)
+                    effective_dt = max(requested_since_dt, first_capture_dt)
+                    effective_since = effective_dt.isoformat(timespec="seconds")
+
+                    def outcome_counts(event_type: str, *, require_downstream: bool = False) -> dict:
+                        downstream_join = (
+                            "JOIN tasks AS downstream "
+                            "ON downstream.id = outcome.downstream_task_id "
+                            "AND downstream.origin = 'user' "
+                            if require_downstream else ""
+                        )
+                        row = conn.execute(
+                            "SELECT COUNT(*) AS events, "
+                            "COUNT(DISTINCT outcome.source_file_id) AS artifacts, "
+                            "COUNT(DISTINCT outcome.source_task_id) AS source_tasks"
+                            + (
+                                ", COUNT(DISTINCT outcome.downstream_task_id) AS downstream_tasks "
+                                if require_downstream else " "
+                            )
+                            + "FROM artifact_outcome_events AS outcome "
+                            "JOIN tasks AS source ON source.id = outcome.source_task_id "
+                            "AND source.origin = 'user' "
+                            + downstream_join
+                            + "WHERE outcome.event_type = ? AND outcome.created_at >= ?",
+                            (event_type, effective_since),
+                        ).fetchone()
+                        result = {
+                            "events": int(row["events"]),
+                            "distinct_artifacts": int(row["artifacts"]),
+                            "distinct_source_tasks": int(row["source_tasks"]),
+                        }
+                        if require_downstream:
+                            result["distinct_downstream_tasks"] = int(row["downstream_tasks"])
+                        return result
+
+                    capture_counts = outcome_counts("capture_started")
+                    download_counts = outcome_counts("full_download")
+                    download_counts["distinct_actors"] = int(_one(
+                        conn,
+                        "SELECT COUNT(DISTINCT outcome.actor_username) "
+                        "FROM artifact_outcome_events AS outcome "
+                        "JOIN tasks AS source ON source.id = outcome.source_task_id "
+                        "AND source.origin = 'user' "
+                        "WHERE outcome.event_type = 'full_download' "
+                        "AND outcome.created_at >= ? "
+                        "AND outcome.actor_username IS NOT NULL",
+                        (effective_since,),
+                    ) or 0)
+                    handoff_counts = outcome_counts(
+                        "pipeline_handoff", require_downstream=True
+                    )
+                    report["artifact_outcomes"] = {
+                        "status": "measured",
+                        "schema_witnesses": outcome_schema_witnesses,
+                        "observation_started_at": str(first_capture),
+                        "requested_window_start": since,
+                        "effective_window_start": effective_since,
+                        "requested_window_fully_covered": first_capture_dt <= requested_since_dt,
+                        "capture_started": capture_counts,
+                        "full_download": {
+                            "delivered_events_lower_bound": download_counts.pop("events"),
+                            **download_counts,
+                        },
+                        "pipeline_handoff": {
+                            "flowed_events_lower_bound": handoff_counts.pop("events"),
+                            **handoff_counts,
+                        },
+                        "note": (
+                            "仅统计逐权威产物 capture_started 之后的 user-origin 事件；"
+                            "full_download=完整正文已交付，不代表采用（仅 200 GET）；"
+                            "pipeline_handoff=产物已流入下游任务，不代表被读取或采用"
+                        ),
+                    }
+        else:
+            report["artifact_outcomes"] = (
+                "未知（artifact_outcome_events exact schema witness 未通过或 tasks 结构缺失；"
+                "拒绝从 loose lookalike/缺 trigger 的库计数）"
+            )
+
         # ---- 反馈 ----
         if {"created_at"} <= _columns(conn, "feedback"):
             report["feedback_count"] = _one(conn, "SELECT COUNT(*) FROM feedback WHERE created_at >= ?", (since,))
@@ -295,7 +431,14 @@ def render_md(report: dict) -> str:
     else:
         lines += [f"## 任务：{tasks}", ""]
     lines += [f"## 人签：{report['reviews']}", "", f"## 漏斗：{report['funnel']}", ""]
-    lines += [f"## 模型调用：{report['model_calls']}", "", f"## 反馈条数：{report['feedback_count']}", ""]
+    lines += [
+        f"## 模型调用：{report['model_calls']}",
+        "",
+        f"## 签发产物流转（lower-bound）：{report['artifact_outcomes']}",
+        "",
+        f"## 反馈条数：{report['feedback_count']}",
+        "",
+    ]
     lines += ["> 只读报告；eval 跑批（origin≠user）不计入使用量；缺失结构显式标注「未知」，绝不以 0 充数。"]
     return "\n".join(lines)
 

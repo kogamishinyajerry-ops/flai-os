@@ -6,7 +6,7 @@ import hashlib
 import os
 import uuid
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Callable
 
 import anyio
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
@@ -42,8 +42,22 @@ for _hook in ("_handle_simple", "_handle_single_range", "_handle_multiple_ranges
 class _VerifiedFileResponse(FileResponse):
     """保留 FileResponse 的响应头/Range 语义，但正文只读完整性校验后的句柄。"""
 
-    def __init__(self, handle: BinaryIO, *, path: str, filename: str) -> None:
+    def __init__(
+        self,
+        handle: BinaryIO,
+        *,
+        path: str,
+        filename: str,
+        expected_full_bytes: int | None = None,
+        on_full_body_sent: Callable[[int], None] | None = None,
+        outcome_actor: str | None = None,
+        outcome_file_id: str | None = None,
+    ) -> None:
         self._verified_handle = handle
+        self._expected_full_bytes = expected_full_bytes
+        self._on_full_body_sent = on_full_body_sent
+        self._outcome_actor = outcome_actor
+        self._outcome_file_id = outcome_file_id
         super().__init__(
             path,
             filename=filename,
@@ -57,6 +71,33 @@ class _VerifiedFileResponse(FileResponse):
             # 覆盖正常结束、Range、HEAD、客户端断连及 send 异常，句柄不会泄漏。
             self._verified_handle.close()
 
+    def _capture_completed_body(self, delivered_bytes: int) -> None:
+        """Post-send telemetry is best-effort and can never rewrite the response.
+
+        This method runs only after the final ASGI body ``send`` returned.  Its
+        database callback and audit fallback are both isolated: the client has
+        already received the authoritative bytes, so a later DB/logging fault
+        must not turn that successful delivery into an apparent HTTP failure.
+        """
+        callback = self._on_full_body_sent
+        if callback is None:
+            return
+        try:
+            callback(delivered_bytes)
+        except Exception:  # post-send DB failure: warning only, never re-raise
+            try:
+                audit_event(
+                    "artifact_outcome_capture_failed",
+                    actor=self._outcome_actor or "system",
+                    outcome="warning",
+                    reason="post_send_db_failure",
+                    file_id=self._outcome_file_id,
+                )
+            except Exception:
+                # Logging failure is also post-send; do not corrupt the already
+                # delivered response or leak DB exception text into audit data.
+                pass
+
     async def _handle_simple(
         self, send: Any, send_header_only: bool, send_pathsend: bool
     ) -> None:
@@ -69,12 +110,28 @@ class _VerifiedFileResponse(FileResponse):
             return
 
         more_body = True
+        delivered_bytes = 0
         while more_body:
             chunk = await anyio.to_thread.run_sync(
                 self._verified_handle.read, self.chunk_size
             )
             more_body = len(chunk) == self.chunk_size
             await send({"type": "http.response.body", "body": chunk, "more_body": more_body})
+            delivered_bytes += len(chunk)
+
+        # Only the complete simple 200 path can reach this point.  Range bodies
+        # use separate handlers; HEAD returned above; a failed/interrupted send
+        # raised before here.  Equality to the authoritative expected size is
+        # mandatory—short/extra bodies are not recorded as delivery.
+        if (
+            self.status_code == 200
+            and self._expected_full_bytes is not None
+            and delivered_bytes == self._expected_full_bytes
+            and self._on_full_body_sent is not None
+        ):
+            await anyio.to_thread.run_sync(
+                self._capture_completed_body, delivered_bytes
+            )
 
     async def _handle_single_range(
         self,
@@ -350,11 +407,45 @@ def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
         access_label="下载",
     )
 
+    # Only output artifacts can belong to the signed outcome cohort.  The
+    # callback opens its own connection because FileResponse streams after this
+    # sync endpoint has returned.  record_full_download_outcome re-witnesses the
+    # capture marker and provenance under BEGIN IMMEDIATE; legacy/input files
+    # truthfully no-op.  Repeated complete downloads remain repeated deliveries.
+    on_full_body_sent: Callable[[int], None] | None = None
+    if (
+        record["kind"] == "output"
+        and request.method == "GET"
+        # Any Range request is explicitly outside full_download semantics,
+        # even when If-Range makes Starlette fall back to a simple 200 body.
+        and "range" not in request.headers
+    ):
+        conn_factory = request.app.state.conn_factory
+        actor_username = request.state.user["username"]
+
+        def _record(delivered_bytes: int) -> None:
+            conn = conn_factory()
+            try:
+                repos.record_full_download_outcome(
+                    conn,
+                    source_file_id=file_id,
+                    actor_username=actor_username,
+                    delivered_bytes=delivered_bytes,
+                )
+            finally:
+                conn.close()
+
+        on_full_body_sent = _record
+
     try:
         return _VerifiedFileResponse(
             handle,
             path=record["path"],
             filename=record["filename"],
+            expected_full_bytes=record["size_bytes"],
+            on_full_body_sent=on_full_body_sent,
+            outcome_actor=request.state.user["username"],
+            outcome_file_id=file_id,
         )
     except BaseException:
         handle.close()

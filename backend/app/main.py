@@ -46,6 +46,12 @@ from .storage.p23_schema import (
     P23_SCHEMA_WITNESS_KEYS as _P23_SCHEMA_WITNESS_KEYS,
 )
 from .storage.p23_schema import p23_schema_witnesses as _p23_schema_witnesses
+from .storage.outcome_schema import (
+    OUTCOME_SCHEMA_WITNESS_KEYS as _OUTCOME_SCHEMA_WITNESS_KEYS,
+)
+from .storage.outcome_schema import (
+    outcome_schema_witnesses as _outcome_schema_witnesses,
+)
 from .storage.review_schema import (
     JUDGMENT_SCHEMA_WITNESS_KEYS as _JUDGMENT_SCHEMA_WITNESS_KEYS,
 )
@@ -175,6 +181,7 @@ def create_app(
             try:
                 p23_schema_witnesses = _p23_schema_witnesses(conn)
                 judgment_schema_witnesses = _judgment_schema_witnesses(conn)
+                outcome_schema_witnesses = _outcome_schema_witnesses(conn)
             finally:
                 conn.close()
         except sqlite3.Error:
@@ -183,6 +190,9 @@ def create_app(
             }
             judgment_schema_witnesses = {
                 key: False for key in _JUDGMENT_SCHEMA_WITNESS_KEYS
+            }
+            outcome_schema_witnesses = {
+                key: False for key in _OUTCOME_SCHEMA_WITNESS_KEYS
             }
         return {
             "status": "ok",
@@ -210,8 +220,12 @@ def create_app(
             # M4 前判断资产化代际：活 API 已接结构化人签账本。具体表、索引与只追加
             # trigger 必须另由 exact schema witnesses 证明，不能只凭此布尔位假绿。
             "judgment_capture_axis": True,
+            # ADR-0036 活 API 代际 + exact served-DB schema 双见证。worker 侧
+            # pipeline writer 另由 WORKER_GENERATION 心跳咬合，拒绝新 API/DB 配旧 worker。
+            "outcome_telemetry_axis": True,
             "p23_schema_witnesses": p23_schema_witnesses,
             "judgment_schema_witnesses": judgment_schema_witnesses,
+            "outcome_schema_witnesses": outcome_schema_witnesses,
             # T2/#5 不可变快照代际标记（Codex R0 审 P1 同款范式）：见证「活着的 API
             # 进程」跑的是 enqueue 冻结快照的代码。分离部署偏斜（DB 已迁移出 eval_snapshots
             # 表、worker 已更新，API 仍是 T1 旧码不冻结）时旧 API 无此位 → 部署自检 FAIL，
@@ -239,6 +253,7 @@ def create_app(
             wf = _worker_freshness(conn)
             p23_schema_witnesses = _p23_schema_witnesses(conn)
             judgment_schema_witnesses = _judgment_schema_witnesses(conn)
+            outcome_schema_witnesses = _outcome_schema_witnesses(conn)
         finally:
             conn.close()
         p23_schema_ready = all(
@@ -249,10 +264,21 @@ def create_app(
             judgment_schema_witnesses.get(key) is True
             for key in _JUDGMENT_SCHEMA_WITNESS_KEYS
         )
+        outcome_schema_ready = all(
+            outcome_schema_witnesses.get(key) is True
+            for key in _OUTCOME_SCHEMA_WITNESS_KEYS
+        )
+        worker_generation_ready = (
+            wf.get("generation") == config.WORKER_GENERATION
+        )
+        wf["generation_ready"] = worker_generation_ready
+        wf["expected_generation"] = config.WORKER_GENERATION
         ready = (
             wf["fresh"] is True
+            and worker_generation_ready is True
             and p23_schema_ready is True
             and judgment_schema_ready is True
+            and outcome_schema_ready is True
         )
         return JSONResponse(
             {
@@ -261,6 +287,7 @@ def create_app(
                 "structured_question_axis": True,
                 "search_addressing_axis": True,
                 "judgment_capture_axis": True,
+                "outcome_telemetry_axis": True,
                 "p23": {
                     "runtime_generation": True,
                     "schema_ready": p23_schema_ready,
@@ -270,6 +297,12 @@ def create_app(
                     "runtime_generation": True,
                     "schema_ready": judgment_schema_ready,
                     "schema_witnesses": judgment_schema_witnesses,
+                },
+                "outcome_telemetry": {
+                    "runtime_generation": True,
+                    "schema_ready": outcome_schema_ready,
+                    "schema_witnesses": outcome_schema_witnesses,
+                    "worker_generation_ready": worker_generation_ready,
                 },
             },
             status_code=200 if ready is True else 503,

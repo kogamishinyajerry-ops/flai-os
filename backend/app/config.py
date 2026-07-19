@@ -69,7 +69,13 @@ DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 # 故 bump 逼 worker 重启到读 env 的新代码。
 # 批八（Codex R0 P1）：runtime._execute 新增执行期 disabled 兜底——worker 可见
 # 行为变更（缺此分支的旧 worker 会硬跑已禁用 agent 的滞留任务），bump 逼重启。
-WORKER_GENERATION = "collab-resolver+t2-eval-snapshot+b3-llm-timeout+b8-disabled-gate"
+# ADR-0036：resolver 的 enqueue 事务新增 exact pipeline_handoff 结果见证。旧 worker
+# 虽能继续入队，却不会写 flow ledger，会让 API/DB 新代际在真实使用中静默漏数；
+# 因而必须 bump，readyz/deploy_selfcheck 以心跳代际拒绝混版。
+WORKER_GENERATION = (
+    "collab-resolver+t2-eval-snapshot+b3-llm-timeout+b8-disabled-gate"
+    "+adr36-outcome-flow"
+)
 
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。
 # monitor_adapter_recon 工具经此子进程调核起草 adapter 草案；未配置=核不可达=工具

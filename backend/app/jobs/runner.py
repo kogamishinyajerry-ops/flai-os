@@ -248,7 +248,9 @@ def _resolve_one_candidate(conn: sqlite3.Connection, task: dict[str, Any]) -> bo
             rec = repos.get_file(conn, fid)
             if rec is None or rec.get("kind") != "output" or rec.get("task_id") != u["id"]:
                 invalid.append(fid)
-            else:
+            elif fid not in piped:
+                # 精确 transfer set：legacy manifest 若重复列同一 file_id，只向下游
+                # 合并一次，也只允许 outcome ledger 记一次 file→downstream handoff。
                 piped.append(fid)
     if invalid:
         return repos.cancel_dependent_task(
@@ -263,6 +265,9 @@ def _resolve_one_candidate(conn: sqlite3.Connection, task: dict[str, Any]) -> bo
         ) is not None
     return repos.enqueue_dependent_task(
         conn, task_id, piped,
+        # enqueue 的既有 BEGIN IMMEDIATE 会在 input_file_ids 写入后、COMMIT 前，
+        # 仅为有 capture_started 的人签产物追加 exact pipeline_handoff；确定性
+        # profile=none 合法产物无 capture，仍正常流转且绝不伪造 outcome。
         event={  # R2 P2：dependency_resolved 事件与 created→queued 同事务原子写
             "agent_id": task.get("agent_id"), "event_type": "agent_log",
             "level": "info",

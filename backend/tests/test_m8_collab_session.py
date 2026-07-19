@@ -61,6 +61,13 @@ def _make_pre_m8_tasks_db(db_path) -> None:
         legacy_cols = ", ".join(
             r[1] for r in conn.execute("PRAGMA table_info(tasks)") if r[1] != "conversation_id"
         )
+        # This fixture deliberately creates a temporary schema state with no
+        # ``tasks`` table between DROP and RENAME.  Modern ledgers have guards
+        # on other tables that reference ``tasks``; normal ALTER TABLE schema
+        # reparsing would reject that artificial gap before the legacy table can
+        # be renamed back.  Production migration only uses ADD COLUMN and never
+        # needs this compatibility mode.
+        conn.execute("PRAGMA legacy_alter_table=ON")
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(f"CREATE TABLE tasks_legacy AS SELECT {legacy_cols} FROM tasks")
         conn.execute("DROP TABLE tasks")

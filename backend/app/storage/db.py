@@ -134,6 +134,51 @@ CREATE TABLE IF NOT EXISTS files (
     uploaded_by TEXT
 );
 
+-- M4 前置结果遥测（ADR-0036）：只为新代码上线后的人签权威产物建立
+-- observation cohort，绝不扫描/回填历史。capture_started 仅表示采集器从该产物
+-- 开始生效，不是使用结果；full_download / pipeline_handoff 才是两个 lower-bound
+-- flow signal，且分别只能解释为「完整正文已交付」/「已流入下游任务」。
+CREATE TABLE IF NOT EXISTS artifact_outcome_events (
+    id TEXT PRIMARY KEY NOT NULL,
+    event_type TEXT NOT NULL CHECK (
+        event_type IN ('capture_started', 'full_download', 'pipeline_handoff')
+    ),
+    source_task_id TEXT NOT NULL REFERENCES tasks(id),
+    source_file_id TEXT NOT NULL REFERENCES files(id),
+    review_event_id TEXT NOT NULL REFERENCES task_events(event_id),
+    actor_username TEXT,
+    downstream_task_id TEXT REFERENCES tasks(id),
+    delivered_bytes INTEGER,
+    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    created_at TEXT NOT NULL,
+    CHECK (
+        (
+            event_type = 'capture_started'
+            AND actor_username IS NULL
+            AND downstream_task_id IS NULL
+            AND delivered_bytes IS NULL
+        )
+        OR (
+            event_type = 'full_download'
+            AND actor_username IS NOT NULL
+            AND length(trim(actor_username, char(
+                9,10,11,12,13,28,29,30,31,32,133,160,5760,
+                8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,
+                8232,8233,8239,8287,12288
+            ))) > 0
+            AND downstream_task_id IS NULL
+            AND delivered_bytes IS NOT NULL
+            AND delivered_bytes >= 0
+        )
+        OR (
+            event_type = 'pipeline_handoff'
+            AND actor_username IS NULL
+            AND downstream_task_id IS NOT NULL
+            AND delivered_bytes IS NULL
+        )
+    )
+);
+
 CREATE TABLE IF NOT EXISTS feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT NOT NULL,
@@ -699,6 +744,264 @@ _JUDGMENT_MANAGED_TRIGGERS = (
     "trg_task_human_decisions_no_update",
     "trg_task_human_decisions_no_delete",
     "trg_task_human_decisions_no_conflicting_insert",
+)
+
+_OUTCOME_OBJECT_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_artifact_outcomes_source_created "
+    "ON artifact_outcome_events(source_file_id, created_at, id)",
+    "CREATE INDEX IF NOT EXISTS idx_artifact_outcomes_downstream_created "
+    "ON artifact_outcome_events(downstream_task_id, created_at, id) "
+    "WHERE downstream_task_id IS NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_outcomes_one_capture "
+    "ON artifact_outcome_events(source_file_id, review_event_id) "
+    "WHERE event_type = 'capture_started'",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_outcomes_one_handoff "
+    "ON artifact_outcome_events(source_file_id, review_event_id, downstream_task_id) "
+    "WHERE event_type = 'pipeline_handoff'",
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_artifact_outcomes_source_witness
+    BEFORE INSERT ON artifact_outcome_events
+    WHEN NOT EXISTS (
+        SELECT 1
+        FROM tasks AS source_task
+        JOIN files AS source_file
+          ON source_file.id = NEW.source_file_id
+         AND source_file.task_id = source_task.id
+         AND source_file.kind = 'output'
+        JOIN task_events AS review_event
+          ON review_event.event_id = NEW.review_event_id
+         AND review_event.task_id = source_task.id
+         AND review_event.event_type = 'review_approved'
+        WHERE source_task.id = NEW.source_task_id
+          AND source_task.origin = 'user'
+          AND EXISTS (
+              SELECT 1
+              FROM json_each(
+                  CASE
+                      WHEN json_valid(source_task.output_file_ids)
+                       AND json_type(source_task.output_file_ids) = 'array'
+                      THEN source_task.output_file_ids ELSE '[]'
+                  END
+              ) AS output_ref
+              WHERE output_ref.type = 'text'
+                AND output_ref.value = NEW.source_file_id
+          )
+    )
+    BEGIN
+        SELECT RAISE(
+            ABORT,
+            'outcome requires user source, authoritative output, and exact approval event'
+        );
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_artifact_outcomes_capture_precedes_flow
+    BEFORE INSERT ON artifact_outcome_events
+    WHEN NEW.event_type IN ('full_download', 'pipeline_handoff')
+         AND NOT EXISTS (
+             SELECT 1
+             FROM artifact_outcome_events AS capture
+             WHERE capture.event_type = 'capture_started'
+               AND capture.source_task_id = NEW.source_task_id
+               AND capture.source_file_id = NEW.source_file_id
+               AND capture.review_event_id = NEW.review_event_id
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'outcome flow requires prior capture_started witness');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_artifact_outcomes_download_bytes
+    BEFORE INSERT ON artifact_outcome_events
+    WHEN NEW.event_type = 'full_download'
+         AND NOT EXISTS (
+             SELECT 1 FROM files
+             WHERE id = NEW.source_file_id
+               AND size_bytes = NEW.delivered_bytes
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'full_download bytes must equal authoritative file size');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_artifact_outcomes_downstream_witness
+    BEFORE INSERT ON artifact_outcome_events
+    WHEN NEW.event_type = 'pipeline_handoff'
+         AND NOT EXISTS (
+             SELECT 1
+             FROM tasks AS downstream
+             WHERE downstream.id = NEW.downstream_task_id
+               AND downstream.origin = 'user'
+               AND EXISTS (
+                   SELECT 1
+                   FROM json_each(
+                       CASE
+                           WHEN json_valid(downstream.depends_on)
+                            AND json_type(downstream.depends_on) = 'array'
+                           THEN downstream.depends_on ELSE '[]'
+                       END
+                   ) AS upstream_ref
+                   WHERE upstream_ref.type = 'text'
+                     AND upstream_ref.value = NEW.source_task_id
+               )
+               AND EXISTS (
+                   SELECT 1
+                   FROM json_each(
+                       CASE
+                           WHEN json_valid(downstream.input_file_ids)
+                            AND json_type(downstream.input_file_ids) = 'array'
+                           THEN downstream.input_file_ids ELSE '[]'
+                       END
+                   ) AS input_ref
+                   WHERE input_ref.type = 'text'
+                     AND input_ref.value = NEW.source_file_id
+               )
+         )
+    BEGIN
+        SELECT RAISE(
+            ABORT,
+            'pipeline_handoff requires exact user downstream dependency and input file'
+        );
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_artifact_outcomes_no_update
+    BEFORE UPDATE ON artifact_outcome_events
+    BEGIN
+        SELECT RAISE(ABORT, 'artifact_outcome_events is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_artifact_outcomes_no_delete
+    BEFORE DELETE ON artifact_outcome_events
+    BEGIN
+        SELECT RAISE(ABORT, 'artifact_outcome_events is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_artifact_outcomes_no_conflicting_insert
+    BEFORE INSERT ON artifact_outcome_events
+    WHEN EXISTS (
+        SELECT 1
+        FROM artifact_outcome_events AS existing
+        WHERE existing.id = NEW.id
+           OR (NEW.rowid <> -1 AND existing.rowid = NEW.rowid)
+           OR (
+               NEW.event_type = 'capture_started'
+               AND existing.event_type = 'capture_started'
+               AND existing.source_file_id = NEW.source_file_id
+               AND existing.review_event_id = NEW.review_event_id
+           )
+           OR (
+               NEW.event_type = 'pipeline_handoff'
+               AND existing.event_type = 'pipeline_handoff'
+               AND existing.source_file_id = NEW.source_file_id
+               AND existing.review_event_id = NEW.review_event_id
+               AND existing.downstream_task_id = NEW.downstream_task_id
+           )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'artifact_outcome_events is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_witnessed_artifact_files_no_update
+    BEFORE UPDATE ON files
+    WHEN EXISTS (
+        SELECT 1 FROM artifact_outcome_events
+        WHERE source_file_id = OLD.id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'outcome-witnessed file is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_witnessed_artifact_tasks_preserve_source
+    BEFORE UPDATE ON tasks
+    WHEN EXISTS (
+        SELECT 1
+        FROM artifact_outcome_events AS outcome
+        WHERE outcome.source_task_id = OLD.id
+          AND (
+              NEW.origin <> 'user'
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(
+                      CASE
+                          WHEN json_valid(NEW.output_file_ids)
+                           AND json_type(NEW.output_file_ids) = 'array'
+                          THEN NEW.output_file_ids ELSE '[]'
+                      END
+                  ) AS output_ref
+                  WHERE output_ref.type = 'text'
+                    AND output_ref.value = outcome.source_file_id
+              )
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'outcome-witnessed source task provenance is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_witnessed_artifact_tasks_preserve_handoff
+    BEFORE UPDATE ON tasks
+    WHEN EXISTS (
+        SELECT 1
+        FROM artifact_outcome_events AS outcome
+        WHERE outcome.event_type = 'pipeline_handoff'
+          AND outcome.downstream_task_id = OLD.id
+          AND (
+              NEW.origin <> 'user'
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(
+                      CASE
+                          WHEN json_valid(NEW.depends_on)
+                           AND json_type(NEW.depends_on) = 'array'
+                          THEN NEW.depends_on ELSE '[]'
+                      END
+                  ) AS upstream_ref
+                  WHERE upstream_ref.type = 'text'
+                    AND upstream_ref.value = outcome.source_task_id
+              )
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(
+                      CASE
+                          WHEN json_valid(NEW.input_file_ids)
+                           AND json_type(NEW.input_file_ids) = 'array'
+                          THEN NEW.input_file_ids ELSE '[]'
+                      END
+                  ) AS input_ref
+                  WHERE input_ref.type = 'text'
+                    AND input_ref.value = outcome.source_file_id
+              )
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'outcome-witnessed downstream handoff is immutable');
+    END
+    """,
+)
+
+_OUTCOME_MANAGED_INDEXES = (
+    "idx_artifact_outcomes_source_created",
+    "idx_artifact_outcomes_downstream_created",
+    "idx_artifact_outcomes_one_capture",
+    "idx_artifact_outcomes_one_handoff",
+)
+
+_OUTCOME_MANAGED_TRIGGERS = (
+    "trg_artifact_outcomes_source_witness",
+    "trg_artifact_outcomes_capture_precedes_flow",
+    "trg_artifact_outcomes_download_bytes",
+    "trg_artifact_outcomes_downstream_witness",
+    "trg_artifact_outcomes_no_update",
+    "trg_artifact_outcomes_no_delete",
+    "trg_artifact_outcomes_no_conflicting_insert",
+    "trg_witnessed_artifact_files_no_update",
+    "trg_witnessed_artifact_tasks_preserve_source",
+    "trg_witnessed_artifact_tasks_preserve_handoff",
 )
 
 _INDEX_DDL = (
@@ -2020,6 +2323,52 @@ def init_db(db_path: str | Path) -> None:
             from .review_schema import assert_judgment_schema
 
             assert_judgment_schema(conn)
+        # Outcome ledger is likewise evidence-bearing once the first cohort
+        # marker exists.  A missing managed guard on a nonempty ledger means the
+        # historical protection window is unknowable; never silently recreate
+        # the guard and report green.  Empty/new ledgers may converge below.
+        outcome_table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'artifact_outcome_events'"
+        ).fetchone() is not None
+        outcome_managed_names = (
+            *_OUTCOME_MANAGED_TRIGGERS,
+            *_OUTCOME_MANAGED_INDEXES,
+        )
+        outcome_object_placeholders = ",".join(
+            "?" for _ in outcome_managed_names
+        )
+        existing_outcome_objects = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type IN ('trigger', 'index') "
+                f"AND name IN ({outcome_object_placeholders})",
+                outcome_managed_names,
+            )
+        }
+        outcome_was_nonempty = bool(
+            outcome_table_exists
+            and conn.execute(
+                "SELECT EXISTS(SELECT 1 FROM artifact_outcome_events LIMIT 1)"
+            ).fetchone()[0]
+            == 1
+        )
+        if not outcome_table_exists and existing_outcome_objects:
+            raise sqlite3.IntegrityError(
+                "outcome schema residue exists without artifact_outcome_events table"
+            )
+        if (
+            outcome_was_nonempty
+            and existing_outcome_objects != set(outcome_managed_names)
+        ):
+            raise sqlite3.IntegrityError(
+                "nonempty outcome ledger is missing a managed append-only witness"
+            )
+        if outcome_was_nonempty:
+            from .outcome_schema import assert_outcome_schema
+
+            assert_outcome_schema(conn)
         conn.executescript(_DDL)
         # 迁移 #1（ADR-0013）：model_calls.conversation_id——导引会话的模型调用归因。
         # 并发启动安全（Codex R1-P1）：API 进程与 Job Runner 进程都在启动时调
@@ -2182,12 +2531,25 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
             for index_name in _JUDGMENT_MANAGED_INDEXES:
                 conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+            outcome_has_rows = conn.execute(
+                "SELECT EXISTS(SELECT 1 FROM artifact_outcome_events LIMIT 1)"
+            ).fetchone()[0] == 1
+            if not outcome_has_rows:
+                for trigger_name in _OUTCOME_MANAGED_TRIGGERS:
+                    conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+                for index_name in _OUTCOME_MANAGED_INDEXES:
+                    conn.execute(f"DROP INDEX IF EXISTS {index_name}")
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:
                 conn.execute(statement)
             for statement in _JUDGMENT_OBJECT_DDL:
                 conn.execute(statement)
+            for statement in _OUTCOME_OBJECT_DDL:
+                conn.execute(statement)
+            from .outcome_schema import assert_outcome_schema
+
+            assert_outcome_schema(conn)
             _assert_p23_identity_table_shapes(conn)
             _assert_p23_schema_object_sets(conn)
             _assert_p23_historical_rows(conn)

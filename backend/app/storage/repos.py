@@ -35,6 +35,11 @@ _REVIEW_REASON_CODES = frozenset({
     "other",
 })
 _ADVISORY_OUTCOMES = frozenset({"clear", "concerns", "abstain"})
+_ARTIFACT_OUTCOME_EVENT_TYPES = frozenset({
+    "capture_started",
+    "full_download",
+    "pipeline_handoff",
+})
 
 
 class InvalidReviewError(ValueError):
@@ -339,9 +344,11 @@ def enqueue_dependent_task(
             return None
         existing = json.loads(row["input_file_ids"]) if row["input_file_ids"] else []
         merged = list(existing)
+        newly_piped: list[str] = []
         for fid in piped_input_file_ids:
             if fid not in merged:
                 merged.append(fid)
+                newly_piped.append(fid)
         assert_transition("created", "queued")
         now = _now_iso()
         conn.execute(
@@ -349,6 +356,23 @@ def enqueue_dependent_task(
             "WHERE id = ? AND status = 'created'",
             (json.dumps(merged, ensure_ascii=False), now, task_id),
         )
+        # ADR-0036：管道 flow signal 与 created→queued、精确 input_file_ids 写入
+        # 共用本事务。仅对新 instrumentation cohort（已有 capture_started）的
+        # 人签产物记账；legacy/确定性无 capture 的合法管道照常运行但不冒充可观测。
+        # 任一 telemetry insert 失败会走本函数统一 ROLLBACK，绝不留下已入队却无
+        # handoff witness 的半态。full_download 可重复；这里则由 downstream 状态
+        # 复查 + DB 精确唯一键共同保证 source file→downstream 幂等。
+        for file_id in newly_piped:
+            capture = get_artifact_capture_witness(conn, file_id)
+            if capture is not None:
+                append_artifact_outcome_event(
+                    conn,
+                    event_type="pipeline_handoff",
+                    source_task_id=capture["source_task_id"],
+                    source_file_id=file_id,
+                    review_event_id=capture["review_event_id"],
+                    downstream_task_id=task_id,
+                )
         if event is not None:
             append_event(conn, task_id=task_id, **event)
         conn.execute("COMMIT")
@@ -601,7 +625,7 @@ def apply_human_review(
             "paired_advice_id": paired_advice_id,
         }
         if approve:
-            append_event(
+            review_event = append_event(
                 conn,
                 task_id=task_id,
                 agent_id=task.get("agent_id"),
@@ -611,6 +635,20 @@ def apply_human_review(
                 + (f"；{sample_rows} 条样本标记为工程师认可" if sample_rows else ""),
                 payload=payload,
             )
+            # ADR-0036 cohort 起点：只在**新** user-origin 人工批准事务里，按当时
+            # 冻结的权威 output 清单逐件落 capture_started。它只表示 instrumentation
+            # active，不是 outcome；绝不扫描旧 review event 反向回填。插入与人签同
+            # 事务，故 marker 必绑定 exact review_approved event_id，任一坏 provenance
+            # 会让本次批准整体 fail-closed 回滚。
+            if task.get("origin") == "user":
+                for output_file_id in dict.fromkeys(task.get("output_file_ids") or []):
+                    append_artifact_outcome_event(
+                        conn,
+                        event_type="capture_started",
+                        source_task_id=task_id,
+                        source_file_id=output_file_id,
+                        review_event_id=review_event["event_id"],
+                    )
         else:
             append_event(
                 conn,
@@ -657,6 +695,138 @@ def has_review_approved_event(conn: sqlite3.Connection, task_id: str) -> bool:
         (task_id,),
     ).fetchone()
     return row is not None
+
+
+# ── artifact outcome telemetry（ADR-0036）──────────────────────────────
+
+def _decode_artifact_outcome(row: sqlite3.Row) -> dict[str, Any]:
+    return dict(row)
+
+
+def append_artifact_outcome_event(
+    conn: sqlite3.Connection,
+    *,
+    event_type: str,
+    source_task_id: str,
+    source_file_id: str,
+    review_event_id: str,
+    actor_username: str | None = None,
+    downstream_task_id: str | None = None,
+    delivered_bytes: int | None = None,
+) -> dict[str, Any]:
+    """Append one physically witnessed artifact-flow fact.
+
+    Python validates the public repository call shape; SQLite independently
+    re-witnesses the user-origin source, authoritative output manifest, exact
+    review event, capture cohort, byte count, and downstream dependency.  The
+    table remains append-only even for ``INSERT OR REPLACE`` / explicit rowid.
+    """
+    if event_type not in _ARTIFACT_OUTCOME_EVENT_TYPES:
+        raise ValueError(f"未知产物结果事件：{event_type}")
+    if not all(
+        isinstance(value, str) and bool(value.strip())
+        for value in (source_task_id, source_file_id, review_event_id)
+    ):
+        raise ValueError("结果事件必须绑定非空 source task/file/review event")
+    if event_type == "capture_started":
+        if actor_username is not None or downstream_task_id is not None or delivered_bytes is not None:
+            raise ValueError("capture_started 只能表示 instrumentation active")
+    elif event_type == "full_download":
+        if (
+            not isinstance(actor_username, str)
+            or not actor_username.strip()
+            or downstream_task_id is not None
+            or not isinstance(delivered_bytes, int)
+            or isinstance(delivered_bytes, bool)
+            or delivered_bytes < 0
+        ):
+            raise ValueError("full_download 需要具名 actor 与非负完整交付字节数")
+    elif (
+        actor_username is not None
+        or not isinstance(downstream_task_id, str)
+        or not downstream_task_id.strip()
+        or delivered_bytes is not None
+    ):
+        raise ValueError("pipeline_handoff 需要 exact downstream task，且不得携带 actor/bytes")
+
+    outcome_id = f"outcome_{uuid.uuid4().hex}"
+    created_at = _now_iso()
+    conn.execute(
+        """
+        INSERT INTO artifact_outcome_events
+            (id, event_type, source_task_id, source_file_id, review_event_id,
+             actor_username, downstream_task_id, delivered_bytes,
+             schema_version, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+        """,
+        (
+            outcome_id,
+            event_type,
+            source_task_id,
+            source_file_id,
+            review_event_id,
+            actor_username,
+            downstream_task_id,
+            delivered_bytes,
+            created_at,
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM artifact_outcome_events WHERE id = ?", (outcome_id,)
+    ).fetchone()
+    if row is None:  # defensive: INSERT success must have produced one row
+        raise sqlite3.IntegrityError("artifact outcome insert produced no row")
+    return _decode_artifact_outcome(row)
+
+
+def get_artifact_capture_witness(
+    conn: sqlite3.Connection, source_file_id: str
+) -> dict[str, Any] | None:
+    """Return the unique per-artifact cohort marker, never infer/backfill one."""
+    row = conn.execute(
+        """
+        SELECT * FROM artifact_outcome_events
+        WHERE event_type = 'capture_started' AND source_file_id = ?
+        LIMIT 1
+        """,
+        (source_file_id,),
+    ).fetchone()
+    return _decode_artifact_outcome(row) if row is not None else None
+
+
+def record_full_download_outcome(
+    conn: sqlite3.Connection,
+    *,
+    source_file_id: str,
+    actor_username: str,
+    delivered_bytes: int,
+) -> dict[str, Any] | None:
+    """Record a completed 200 body for an already-instrumented signed output.
+
+    A missing capture marker means legacy/non-instrumented artifact: return None
+    truthfully instead of creating a retrospective cohort marker.  Repeated real
+    deliveries intentionally append repeated events.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        capture = get_artifact_capture_witness(conn, source_file_id)
+        if capture is None:
+            conn.execute("COMMIT")
+            return None
+        outcome = append_artifact_outcome_event(
+            conn,
+            event_type="full_download",
+            source_task_id=capture["source_task_id"],
+            source_file_id=source_file_id,
+            review_event_id=capture["review_event_id"],
+            actor_username=actor_username,
+            delivered_bytes=delivered_bytes,
+        )
+        conn.execute("COMMIT")
+        return outcome
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def task_output_is_signed_off(conn: sqlite3.Connection, task: dict[str, Any]) -> bool:
