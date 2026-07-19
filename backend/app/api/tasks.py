@@ -9,7 +9,7 @@ import json
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from . import classification_gate as cgate
@@ -638,6 +638,7 @@ def run_batch_creation(
 @router.get("/tasks")
 def list_tasks(
     request: Request,
+    response: Response,
     status: str | None = None,
     agent_id: str | None = None,
     conversation_id: str | None = None,
@@ -649,6 +650,7 @@ def list_tasks(
     limit: int = Query(default=100, ge=1, le=500, description="每页条数（1-500）"),
     offset: int = Query(default=0, ge=0, description="跳过条数（最近任务流分页语义，无总数计数）"),
 ) -> list[dict[str, Any]]:
+    response.headers["Cache-Control"] = "no-store"
     conn = request.app.state.conn_factory()
     try:
         rows = repos.list_tasks(
@@ -824,6 +826,74 @@ def list_events(
         if cgate.is_sensitive_task(conn, task):
             return cgate.redact_rows(events, cgate.EVENT_CONTENT_KEYS)
         return events
+    finally:
+        conn.close()
+
+
+@router.get("/tasks/{task_id}/live-snapshot")
+def get_task_live_snapshot(
+    task_id: str,
+    request: Request,
+    response: Response,
+    after_sequence: int = Query(default=0, ge=0),
+    anchor_event_id: str | None = Query(default=None, min_length=1),
+) -> dict[str, Any]:
+    """Authoritative task snapshot plus an exact per-task event cursor.
+
+    This is an additive P2.1 seam: existing ``/tasks/{id}`` and ``/events``
+    response shapes stay unchanged.  Non-zero cursors require the exact last
+    ``event_id``.  Any drift returns ``resync_required=true`` and no delta, so
+    the client must discard incremental work and request sequence zero.
+    """
+    # This response is live authority, not reusable content.  A cache hit must
+    # never be recorded by the client as a fresh connection success.
+    response.headers["Cache-Control"] = "no-store"
+    if after_sequence > 0 and anchor_event_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="after_sequence 非零时必须提供 anchor_event_id",
+        )
+    if after_sequence == 0 and anchor_event_id is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="after_sequence 为零时不得提供 anchor_event_id",
+        )
+
+    conn = request.app.state.conn_factory()
+    try:
+        # A single read transaction keeps task, cursor, and event tail on one
+        # SQLite snapshot even while the Job Runner appends in another process.
+        conn.execute("BEGIN")
+        task = repos.get_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+        event_snapshot = repos.get_task_event_snapshot(
+            conn,
+            task_id,
+            after_sequence=after_sequence,
+            anchor_event_id=anchor_event_id,
+        )
+        sensitive = cgate.is_sensitive_task(conn, task)
+        projected_task = cgate.redact_task_row(task) if sensitive else task
+        if sensitive and event_snapshot["events"]:
+            redacted = cgate.redact_rows(
+                [item["event"] for item in event_snapshot["events"]],
+                cgate.EVENT_CONTENT_KEYS,
+            )
+            event_snapshot["events"] = [
+                {"sequence": item["sequence"], "event": event}
+                for item, event in zip(event_snapshot["events"], redacted, strict=True)
+            ]
+        conn.commit()
+        return {
+            "schema_version": "task-live-snapshot/v1",
+            "task": projected_task,
+            **event_snapshot,
+        }
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
     finally:
         conn.close()
 

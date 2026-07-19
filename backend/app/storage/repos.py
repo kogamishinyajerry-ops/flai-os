@@ -835,6 +835,79 @@ def list_events(
     return [_decode_event(r) for r in rows]
 
 
+def get_task_event_snapshot(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    after_sequence: int = 0,
+    anchor_event_id: str | None = None,
+) -> dict[str, Any]:
+    """Return an anchored, per-task sequenced view of the append-only event log.
+
+    ``task_events.id`` remains internal.  The public sequence is the stable
+    one-based ordinal inside one task's append-only log; ``event_id`` is the
+    exact anchor that detects deletion, compaction, or a stale client cursor.
+    Existing event rows and their public schema are not changed.
+    """
+    count_row = conn.execute(
+        "SELECT COUNT(*) AS n FROM task_events WHERE task_id = ?",
+        (task_id,),
+    ).fetchone()
+    sequence = int(count_row["n"])
+    last_row = conn.execute(
+        "SELECT event_id FROM task_events WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    cursor_event_id = str(last_row["event_id"]) if last_row is not None else None
+    cursor = {"sequence": sequence, "event_id": cursor_event_id}
+    base = {"sequence": after_sequence, "event_id": anchor_event_id}
+
+    if after_sequence > sequence:
+        return {
+            "base": base,
+            "cursor": cursor,
+            "events": [],
+            "resync_required": True,
+            "resync_reason": "cursor_ahead",
+        }
+
+    if after_sequence > 0:
+        anchor_row = conn.execute(
+            """
+            SELECT event_id FROM task_events
+            WHERE task_id = ? ORDER BY id ASC LIMIT 1 OFFSET ?
+            """,
+            (task_id, after_sequence - 1),
+        ).fetchone()
+        if anchor_row is None or str(anchor_row["event_id"]) != anchor_event_id:
+            return {
+                "base": base,
+                "cursor": cursor,
+                "events": [],
+                "resync_required": True,
+                "resync_reason": "anchor_mismatch",
+            }
+
+    rows = conn.execute(
+        """
+        SELECT * FROM task_events
+        WHERE task_id = ? ORDER BY id ASC LIMIT -1 OFFSET ?
+        """,
+        (task_id, after_sequence),
+    ).fetchall()
+    events = [
+        {"sequence": after_sequence + index, "event": _decode_event(row)}
+        for index, row in enumerate(rows, start=1)
+    ]
+    return {
+        "base": base,
+        "cursor": cursor,
+        "events": events,
+        "resync_required": False,
+        "resync_reason": None,
+    }
+
+
 # ── files ──────────────────────────────────────────────────────────────
 
 def create_file(

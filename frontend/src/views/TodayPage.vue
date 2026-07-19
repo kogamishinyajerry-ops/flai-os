@@ -13,16 +13,22 @@
          错误走 v-else 分支内部的顶部小字错误条，保旧值自愈，不打断已渲染内容。 -->
     <!-- 错误三问（批次五 C2/C6）：liveFeed 5s 链持续在跑——「自动重试中」是
          机制属实的「何为」声明；role=alert 让 AT 主动播报（inline 错误规）。 -->
-    <div v-if="feedError && !feedLoaded" class="today-error" role="alert">{{ feedErrorDisplay }}</div>
+    <ConnectionTruthNotice
+      :loaded="feedLoaded"
+      :connection="feedConnection"
+      :last-success-at="feedLastSuccessAt"
+      :stale="feedStale"
+      :resyncing="feedResyncing"
+      :error="feedSyncError || feedError"
+      @retry="pokeTasks"
+    />
 
     <!-- 首载骨架：只在「从未 loaded 且无错误」时撑轮廓，轮询期间/带旧值刷新绝不回骨架。 -->
-    <div v-else-if="!feedLoaded" class="today-skel">
+    <div v-if="!feedLoaded && !feedError" class="today-skel">
       <SkeletonBlock v-for="(w, i) in ['70%', '92%', '84%', '76%', '88%', '64%']" :key="i" height="52px" :width="w" />
     </div>
 
-    <template v-else>
-      <div v-if="feedError" class="today-error" role="alert">{{ feedErrorDisplay }}</div>
-
+    <template v-if="feedLoaded">
       <!-- 版块 1：待你签发（amber 置顶，行动召唤最高优先）。零值不显示（批次四
            Q2，cd-bg-tasks-panel 语法全站化）：N=0 时组头不渲染「· 0」——版块
            容器恒在（batch_b ① 钉五版块），只收计数后缀。 -->
@@ -176,7 +182,7 @@
 // 卸载即 release（channel 无其它订阅者时自停）。
 import { computed, onUnmounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import { acquireChannel, onTransition } from "../stores/liveFeed";
+import { acquireChannel, onTransition, pokeTasks } from "../stores/liveFeed";
 import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import { getStatsOverview, listGlobalPromotions } from "../api/stats";
 import { statusLabel, taskLampColor, taskElapsedMs, formatDuration, formatRelativeTime, formatClockCompact, taskDisplayName, TASK_WORK_STATES, MATURITY } from "../utils/format";
@@ -185,18 +191,21 @@ import { useTodayKey } from "../composables/useTodayKey";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import DeliveryCard from "../components/DeliveryCard.vue";
+import ConnectionTruthNotice from "../components/ConnectionTruthNotice.vue";
 
 const router = useRouter();
 
 const tasksChannel = acquireChannel("tasks");
-const { tasks: feedTasks, loaded: feedLoaded, error: feedError } = tasksChannel.state;
-
-// feed 错误展示（3-lens 可用性 P3）：超时分型文案自带「……请稍后重试」收尾，
-// 与轮询链的「（自动重试中）」硬拼成「请稍后重试（自动重试中）」自相矛盾——
-// 剥掉手动重试尾巴再挂自动标注（⑭C2′ 反矛盾断言咬合）。
-const feedErrorDisplay = computed(() =>
-  feedError.value ? feedError.value.replace(/，?请稍后重试$/, "") + "（自动重试中）" : ""
-);
+const {
+  tasks: feedTasks,
+  loaded: feedLoaded,
+  error: feedError,
+  connection: feedConnection,
+  lastSuccessAt: feedLastSuccessAt,
+  stale: feedStale,
+  resyncing: feedResyncing,
+  syncError: feedSyncError,
+} = tasksChannel.state;
 
 const maturityLabel = (m) => MATURITY[m]?.label ?? m;
 

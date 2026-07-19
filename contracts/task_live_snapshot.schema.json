@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/task_live_snapshot.schema.json",
+  "title": "FLAi-OS task live snapshot envelope",
+  "description": "任务权威快照与每任务 append-only 事件游标。任何 gap、错锚或未知版本都必须放弃增量并从 sequence=0 重取。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task",
+    "base",
+    "cursor",
+    "events",
+    "resync_required",
+    "resync_reason"
+  ],
+  "properties": {
+    "schema_version": { "const": "task-live-snapshot/v1" },
+    "task": { "$ref": "https://flai-os.local/contracts/task.schema.json" },
+    "base": { "$ref": "#/$defs/cursor" },
+    "cursor": { "$ref": "#/$defs/cursor" },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sequence", "event"],
+        "properties": {
+          "sequence": { "type": "integer", "minimum": 1 },
+          "event": { "$ref": "https://flai-os.local/contracts/event.schema.json" }
+        }
+      }
+    },
+    "resync_required": { "type": "boolean" },
+    "resync_reason": {
+      "type": ["string", "null"],
+      "enum": ["anchor_mismatch", "cursor_ahead", null]
+    }
+  },
+  "$defs": {
+    "cursor": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sequence", "event_id"],
+          "properties": {
+            "sequence": { "const": 0 },
+            "event_id": { "type": "null" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sequence", "event_id"],
+          "properties": {
+            "sequence": { "type": "integer", "minimum": 1 },
+            "event_id": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "resync_required": { "const": true } },
+        "required": ["resync_required"]
+      },
+      "then": {
+        "properties": {
+          "events": { "maxItems": 0 },
+          "resync_reason": { "type": "string" }
+        }
+      },
+      "else": {
+        "properties": { "resync_reason": { "type": "null" } }
+      }
+    }
+  ]
+}

@@ -86,6 +86,34 @@ CREATE TABLE IF NOT EXISTS task_events (
     created_at TEXT NOT NULL
 );
 
+-- P2.1 live cursor v1 derives per-task sequence from immutable insertion
+-- order.  Enforce that premise in SQLite so UPDATE/DELETE cannot silently
+-- renumber COUNT+OFFSET cursors while an old anchor still appears valid.
+CREATE TRIGGER IF NOT EXISTS trg_task_events_no_update
+BEFORE UPDATE ON task_events
+BEGIN
+    SELECT RAISE(ABORT, 'task_events is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_task_events_no_delete
+BEFORE DELETE ON task_events
+BEGIN
+    SELECT RAISE(ABORT, 'task_events is append-only');
+END;
+
+-- SQLite INSERT OR REPLACE can perform an implicit uniqueness-conflict delete.
+-- Reject the conflicting INSERT before that algorithm can rewrite an existing
+-- event, including callers that explicitly target the internal integer id.
+CREATE TRIGGER IF NOT EXISTS trg_task_events_no_conflicting_insert
+BEFORE INSERT ON task_events
+WHEN EXISTS (
+    SELECT 1 FROM task_events
+    WHERE event_id = NEW.event_id OR (NEW.id IS NOT NULL AND id = NEW.id)
+)
+BEGIN
+    SELECT RAISE(ABORT, 'task_events is append-only');
+END;
+
 -- classification（迁移 #6/ADR-0021）：internal|sensitive 数据分级轴。DDL DEFAULT
 -- 只服务存量回填（mock 期数据全 internal 是如实标注）；新写入走 repos 必填 kwarg。
 -- uploaded_by 仅上传端点记登录身份；runtime 产物/eval 复制件非人工标注场景留 NULL。
@@ -335,6 +363,7 @@ def get_conn(db_path: str | Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA recursive_triggers=ON")
     conn.execute("PRAGMA busy_timeout=5000")
     return conn
 

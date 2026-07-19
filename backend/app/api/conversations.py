@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import classification_gate as cgate
@@ -93,7 +93,10 @@ def list_conversations(
 
 
 @router.get("/conversations/{conversation_id}")
-def get_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
+def get_conversation(
+    conversation_id: str, request: Request, response: Response
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
     service = request.app.state.conversation_service
     try:
         return service.get(conversation_id)
@@ -164,11 +167,14 @@ def list_conversation_model_calls(conversation_id: str, request: Request) -> lis
 
 
 @router.get("/conversations/{conversation_id}/tasks")
-def list_conversation_tasks(conversation_id: str, request: Request) -> list[dict[str, Any]]:
+def list_conversation_tasks(
+    conversation_id: str, request: Request, response: Response
+) -> list[dict[str, Any]]:
     """协作会话的成员任务（M8/ADR-0016）：导引把一次会话的计划分流成 N 个人签发
     任务，各任务记 conversation_id 归到此会话下；协作工作台据此聚合展示进度与产物。
     仅读——每个任务仍由人在创建页亲手签发（人是唯一签发者，本端点不创建任何任务）。
     """
+    response.headers["Cache-Control"] = "no-store"
     conn = request.app.state.conn_factory()
     try:
         if repos.get_conversation(conn, conversation_id) is None:

@@ -28,7 +28,18 @@
 
       <!-- ═══ 收件箱视图 ═══ -->
       <div v-if="statusCenter.view === 'inbox'" class="sc-body">
-        <div v-if="inboxError" class="sc-error">{{ inboxError }}</div>
+        <ConnectionTruthNotice
+          :loaded="inboxLoaded"
+          :connection="inboxConnection"
+          :last-success-at="inboxLastSuccessAt"
+          :stale="inboxStale"
+          :resyncing="inboxResyncing"
+          :error="inboxSyncError || inboxError"
+          compact
+          @retry="pokeTasks"
+        />
+
+        <template v-if="inboxLoaded">
 
         <!-- 待你签发：amber=仅待人核；行动召唤最高优先（工程师一进来先看要我处理的） -->
         <div class="sc-group">
@@ -95,11 +106,21 @@
              范围声明——组头数字与列表内容都被窗口限定，压缩不丢范围界定）。
              全句叙述形态只留任务台一处（m8 锚在彼侧）。 -->
         <div class="sc-foot-note">口径：计数与清单均来自最近 100 条任务窗口，窗口外不虚报。</div>
+        </template>
       </div>
 
       <!-- ═══ 任务速览视图 ═══ -->
       <div v-else class="sc-body" :class="{ 'sc-sensitive': peekTask?.data_classification === 'sensitive' }" v-loading="peekLoading">
-        <div v-if="peekError" class="sc-error">{{ peekError }}</div>
+        <ConnectionTruthNotice
+          :loaded="peekLoaded"
+          :connection="peekConnection"
+          :last-success-at="peekLastSuccessAt"
+          :stale="peekStale"
+          :resyncing="peekResyncing"
+          :error="peekSyncError || peekError"
+          compact
+          @retry="resnapshotTask(statusCenter.taskId)"
+        />
 
         <template v-if="peekTask">
           <!-- 状态带：工作态流光（真实态绑定）+ 状态 tag -->
@@ -222,7 +243,7 @@ import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { statusCenter, openTaskPeek, backToInbox, closeCenter } from "../stores/statusCenter";
-import { acquireChannel, pokeTask } from "../stores/liveFeed";
+import { acquireChannel, pokeTask, pokeTasks, resnapshotTask } from "../stores/liveFeed";
 import { reviewTask } from "../api/tasks";
 import { request } from "../api/client";
 import { downloadUrl, fetchFilePreview } from "../api/files";
@@ -240,6 +261,7 @@ import WorkLog from "./WorkLog.vue";
 import MarkdownLite from "./MarkdownLite.vue";
 import InboxZero from "./artwork/InboxZero.vue";
 import CompletionSeal from "./CompletionSeal.vue";
+import ConnectionTruthNotice from "./ConnectionTruthNotice.vue";
 
 const router = useRouter();
 
@@ -308,6 +330,12 @@ function runElapsed(t) {
 // refresh,故打开抽屉的即时性不倒退,无需本组件额外拉一次） ──
 const inboxTasks = ref([]);
 const inboxError = ref("");
+const inboxLoaded = ref(false);
+const inboxConnection = ref("idle");
+const inboxLastSuccessAt = ref(null);
+const inboxStale = ref(true);
+const inboxResyncing = ref(false);
+const inboxSyncError = ref("");
 const waitingTasks = computed(() => inboxTasks.value.filter((t) => t.status === "waiting_review"));
 // 批七 §3-15：等待接力任务（created+depends_on 派生态）并入运行中组可见——
 // 行尾灰注标注，不脉动不计时（memberPhase 同口径，任务 status 是唯一真值）。
@@ -330,6 +358,12 @@ function acquireInboxFeed() {
     // channel 的 error 语义与旧 refreshInbox 一致：仅首载失败才置位,已 loaded
     // 后的失败保旧值下 tick 自愈（liveFeed.js refresh()）。
     watch(tasksHandle.state.error, (v) => { inboxError.value = v; }, { immediate: true }),
+    watch(tasksHandle.state.loaded, (v) => { inboxLoaded.value = v; }, { immediate: true }),
+    watch(tasksHandle.state.connection, (v) => { inboxConnection.value = v; }, { immediate: true }),
+    watch(tasksHandle.state.lastSuccessAt, (v) => { inboxLastSuccessAt.value = v; }, { immediate: true }),
+    watch(tasksHandle.state.stale, (v) => { inboxStale.value = v; }, { immediate: true }),
+    watch(tasksHandle.state.resyncing, (v) => { inboxResyncing.value = v; }, { immediate: true }),
+    watch(tasksHandle.state.syncError, (v) => { inboxSyncError.value = v; }, { immediate: true }),
   ];
 }
 function releaseInboxFeed() {
@@ -362,6 +396,12 @@ const peekArtifacts = ref([]);
 const peekModelCalls = ref([]);
 const peekLoading = ref(false);
 const peekError = ref("");
+const peekLoaded = ref(false);
+const peekConnection = ref("idle");
+const peekLastSuccessAt = ref(null);
+const peekStale = ref(true);
+const peekResyncing = ref(false);
+const peekSyncError = ref("");
 
 const isPeekWorking = computed(() => peekTask.value && TASK_WORK_STATES.has(peekTask.value.status));
 const isPeekWaiting = computed(() => peekTask.value?.status === "waiting_review");
@@ -454,6 +494,12 @@ function acquirePeekFeed(taskId) {
       { immediate: true },
     ),
     watch(peekHandle.state.error, (v) => { peekError.value = v; }, { immediate: true }),
+    watch(peekHandle.state.loaded, (v) => { peekLoaded.value = v; }, { immediate: true }),
+    watch(peekHandle.state.connection, (v) => { peekConnection.value = v; }, { immediate: true }),
+    watch(peekHandle.state.lastSuccessAt, (v) => { peekLastSuccessAt.value = v; }, { immediate: true }),
+    watch(peekHandle.state.stale, (v) => { peekStale.value = v; }, { immediate: true }),
+    watch(peekHandle.state.resyncing, (v) => { peekResyncing.value = v; }, { immediate: true }),
+    watch(peekHandle.state.syncError, (v) => { peekSyncError.value = v; }, { immediate: true }),
   ];
 }
 function releasePeekFeed() {
@@ -470,6 +516,12 @@ function releasePeekFeed() {
   peekModelCalls.value = [];
   peekLoading.value = false;
   peekError.value = "";
+  peekLoaded.value = false;
+  peekConnection.value = "idle";
+  peekLastSuccessAt.value = null;
+  peekStale.value = true;
+  peekResyncing.value = false;
+  peekSyncError.value = "";
 }
 
 // ── 签发（宪法路径：与 TaskDetail 同一 API，人具名 fail-closed） ──

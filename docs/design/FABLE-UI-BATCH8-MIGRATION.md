@@ -89,7 +89,7 @@ invalid-input witness，再进入实现。
 
 | 阶段 | 目标 | 先决条件与机械退出门 |
 |---|---|---|
-| P2.1 断连诚实度 | 借鉴 JerryAgent，把 `connection`、`lastSuccessAt` 和旧快照提示投影到现有阅读轴 | 不改 task/event 公共响应；冷断连零假数据、暖断连标旧、重连整包覆盖，并有 Node + E2E witness |
+| P2.1 断连诚实度（已实现，待全量门） | 借鉴 JerryAgent，把 `connection`、`lastSuccessAt`、旧快照提示与 task exact cursor 投影到现有阅读轴 | 旧 task/event 响应不改；additive live-snapshot 提供 gap 检测；冷断连零假数据、暖断连标旧、重连 sequence-zero 覆盖，并有 Node + contract + E2E witness |
 | P2.2 视觉信任债 | 收口 Element Plus 旁路语义色、Agent 类别色暗色对比和残留 reduced-motion 位移 | 不新增信任色；light/dark 对比可测；desktop/narrow/focus/reduced-motion 四态通过应用内浏览器复核 |
 | P2.3 结构化问题 | 为普通澄清建立 Question/Answer 合同 | Question 与 task review API、状态机、权限完全分离；过期/重复回答 fail-closed |
 | P2.4 服务端寻址 | 在 B2 中实现会话/任务/产物可定位搜索 | 先以唯一 `username` 建 owner 合同与迁移 ADR；再决定 FTS5、分页、权限过滤和 inputs/output filename 范围 |

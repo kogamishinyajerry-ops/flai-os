@@ -1,4 +1,4 @@
-import { request } from "./client";
+import { request } from "./client.js";
 
 // created_by 服务端从登录会话派生（ADR-0019 D5），前端不再发送任何身份文本。
 export const createTask = ({ agentId, name, inputs, inputFileIds, conversationId, retryOf }) =>
@@ -40,10 +40,19 @@ export const listTasks = ({ status, agentId, limit, offset } = {}) => {
   if (limit != null) params.set("limit", String(limit));
   if (offset != null) params.set("offset", String(offset));
   const qs = params.toString();
-  return request(`/api/tasks${qs ? `?${qs}` : ""}`);
+  return request(`/api/tasks${qs ? `?${qs}` : ""}`, { cache: "no-store" });
 };
 
 export const getTask = (taskId) => request(`/api/tasks/${taskId}`);
+export const getTaskLiveSnapshot = (
+  taskId,
+  { afterSequence = 0, anchorEventId = null } = {},
+) => {
+  const params = new URLSearchParams();
+  params.set("after_sequence", String(afterSequence));
+  if (anchorEventId !== null) params.set("anchor_event_id", anchorEventId);
+  return request(`/api/tasks/${taskId}/live-snapshot?${params.toString()}`, { cache: "no-store" });
+};
 // 分页拉取到取尽（ADR-0013 审计修复）：此前单页 5000 封顶，但 parser 契约上限
 // max_rows=5000 时批量任务可产 ~2 万事件——尾部的 summary_generated/task_completed
 // 恰在最需要它的场景被静默截断。页大小 2000 对齐后端默认；短尾页即终止。

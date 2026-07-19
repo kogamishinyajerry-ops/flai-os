@@ -12,6 +12,16 @@
       </div>
     </div>
 
+    <ConnectionTruthNotice
+      :loaded="convLoaded"
+      :connection="convConnection"
+      :last-success-at="convLastSuccessAt"
+      :stale="convStale"
+      :resyncing="convResyncing"
+      :error="convSyncError || loadError"
+      @retry="pokeConversation(sessionId)"
+    />
+
     <!-- 三态降级：加载中 / 出错 / 就绪。批A Task 6：loading 现由 channel 的
          loaded 派生（首次拉取失败时 loaded 恒为 false，见 liveFeed.js
          refresh()）——补 !loadError 条件，否则失败态会被挡在「加载中」分支
@@ -27,15 +37,7 @@
       <SkeletonBlock height="72px" width="100%" />
     </div>
 
-    <el-alert
-      v-else-if="loadError"
-      type="error"
-      :title="loadError"
-      show-icon
-      :closable="false"
-    />
-
-    <template v-else-if="conversation">
+    <template v-if="conversation">
       <!-- 会话头 -->
       <div class="sess-hero">
         <div class="sess-hero-main">
@@ -241,6 +243,7 @@ import { ensureTaskEvidence, taskEvidenceIssue, taskEvidenceSummary, taskEvidenc
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
+import ConnectionTruthNotice from "../components/ConnectionTruthNotice.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -255,7 +258,17 @@ const todayKey = useTodayKey();
 const sessClock = (iso) => formatClockCompact(iso, todayKey.value);
 
 const convHandle = acquireChannel(`conversation:${sessionId}`);
-const { conversation, memberTasks, loaded: convLoaded, error: loadError } = convHandle.state;
+const {
+  conversation,
+  memberTasks,
+  loaded: convLoaded,
+  error: loadError,
+  connection: convConnection,
+  lastSuccessAt: convLastSuccessAt,
+  stale: convStale,
+  resyncing: convResyncing,
+  syncError: convSyncError,
+} = convHandle.state;
 const loading = computed(() => !convLoaded.value);
 
 const plan = computed(() => conversation.value?.recommendation || null);

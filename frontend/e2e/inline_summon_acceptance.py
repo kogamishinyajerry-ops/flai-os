@@ -13,6 +13,8 @@ escape / 已召集=督战 chip）。验收面：
   ④ 零跳页：URL 仍 /?c=<conv>，督战 chip 原地亮起；开工按钮随「就绪待开工=0」消失；
   ⑤ e2e 锚点不破：未就绪成员的「去创建此任务」仍在（m9 back=chat 契约路径原样保留）；
   ⑥ 会话归档（concluded）后重开：开工按钮整体消失（只读会话不可召集）。
+  ⑦ conversation task ledger 首载失败时 fail-closed：不把未知当“尚未召集”，
+     批量与单项创建入口均隐藏；真实账恢复后才开放。
 
 自包含：自起后端（tmp DB）+ stub gateway + 真 chromium，不起 worker。
 
@@ -146,6 +148,16 @@ with sync_playwright() as p:
 
     # 方案卡起手
     page.goto(BASE + "/", wait_until="networkidle")
+
+    def _abort_task_ledger(route) -> None:
+        path = route.request.url.split("?", 1)[0]
+        if route.request.method == "GET" and "/api/conversations/" in path and path.endswith("/tasks"):
+            route.abort()
+        else:
+            route.continue_()
+
+    # 在方案出现前先掐断会话任务账，证明 cold unknown 不会被解释成“零任务”。
+    page.route("**/api/conversations/*/tasks*", _abort_task_ledger)
     page.locator(".composer textarea").fill("跑一遍示例链验证内联召集")
     page.get_by_role("button", name="发送").click()
     expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
@@ -153,6 +165,33 @@ with sync_playwright() as p:
     conv_list = convs if isinstance(convs, list) else convs.get("items", [])
     conv_id = conv_list[0]["id"] if conv_list else None
     assert conv_id, "诚实失败：拿不到会话 id"
+
+    expect(page.locator(".connection-truth", has_text="当前无法同步")).to_be_visible(timeout=8000)
+    check(
+        "⑦任务账 cold failure 时显示尚未核对，批量与单项创建均 fail-closed",
+        page.get_by_text("任务账尚未核对", exact=True).count() >= 1
+        and page.locator(".open-plan-btn").count() == 0
+        and page.get_by_role("button", name="去创建此任务").count() == 0,
+    )
+    page.unroute("**/api/conversations/*/tasks*", _abort_task_ledger)
+    page.locator(".connection-retry").click()
+    expect(page.locator(".connection-truth")).to_have_count(0, timeout=8000)
+
+    # 首次账已成功（真实零任务）后再次断连：旧的“零”只能只读展示，不能继续
+    # 授权依赖负结论的创建动作，因为断连期间另一会话可能已经召集。
+    page.route("**/api/conversations/*/tasks*", _abort_task_ledger)
+    expect(page.locator(".connection-truth", has_text="当前显示上次成功快照")).to_be_visible(
+        timeout=8000
+    )
+    check(
+        "⑦任务账 warm stale 时旧零值只读，批量与单项创建继续 fail-closed",
+        page.get_by_text("任务账尚未核对", exact=True).count() >= 1
+        and page.locator(".open-plan-btn").count() == 0
+        and page.get_by_role("button", name="去创建此任务").count() == 0,
+    )
+    page.unroute("**/api/conversations/*/tasks*", _abort_task_ledger)
+    page.locator(".connection-retry").click()
+    expect(page.locator(".connection-truth")).to_have_count(0, timeout=8000)
 
     # ① 就绪成员=展示徽零按钮；未就绪对照保留创建页 escape。
     #    先 expect 等待（schema 预取是异步的，count() 不等待）。

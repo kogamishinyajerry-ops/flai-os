@@ -1,7 +1,10 @@
 <template>
   <!-- 全局状态坞（UI-PARADIGM.md 祈使句②「状态来找人」）：常驻每页右上，
        计数全部来自真实轮询（诚实地板——绝不估算）。点击任意处打开状态中心。 -->
-  <div class="status-dock" role="button" tabindex="0" aria-label="打开状态中心" @click="openInbox" @keydown.enter="openInbox" @keydown.space.prevent="openInbox">
+  <div class="status-dock" role="button" tabindex="0" :aria-label="dockLabel" @click="openInbox" @keydown.enter="openInbox" @keydown.space.prevent="openInbox">
+    <span v-if="syncIssue" class="dock-pill dock-pill-sync">
+      {{ feedResyncing ? "正在重同步" : "同步中断" }}
+    </span>
     <span v-if="waitingCount > 0" class="dock-pill dock-pill-waiting" :class="{ 'dock-pulse-echo': pulseEcho }">
       ✍ 待你签发 <span class="num-token">{{ waitingCount }}</span>
     </span>
@@ -9,7 +12,7 @@
       <span class="work-pulse-dot"></span>
       运行中 <span class="num-token">{{ workingCount }}</span>
     </span>
-    <span class="dock-core" title="状态中心">
+    <span class="dock-core" :class="{ 'has-sync-issue': syncIssue }" :title="dockLabel">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
     </span>
     <!-- 仿真监控发现入口（转正批）：仅在浮窗已配置（同 localStorage 开关，默认关
@@ -33,7 +36,15 @@ import { ElMessage } from "element-plus";
 import { TASK_WORK_STATES, taskDisplayName } from "../utils/format";
 import { useAgentNames } from "../stores/agentNames";
 import { openInbox } from "../stores/statusCenter";
-import { feedTasks, acquireTaskFeed, releaseTaskFeed } from "../stores/taskFeed";
+import {
+  feedTasks,
+  feedLoaded,
+  feedConnection,
+  feedStale,
+  feedResyncing,
+  acquireTaskFeed,
+  releaseTaskFeed,
+} from "../stores/taskFeed";
 import { onTransition } from "../stores/liveFeed";
 import { setTitleBadge } from "../utils/titleBadge";
 
@@ -44,6 +55,13 @@ const agentNames = useAgentNames();
 
 const workingCount = computed(() => feedTasks.value.filter((t) => TASK_WORK_STATES.has(t.status)).length);
 const waitingCount = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review").length);
+const syncIssue = computed(() =>
+  feedConnection.value === "disconnected" && (feedLoaded.value || feedStale.value)
+);
+const dockLabel = computed(() => syncIssue.value
+  ? `打开状态中心；${feedResyncing.value ? "正在重新核对完整快照" : "任务同步已中断"}`
+  : "打开状态中心"
+);
 
 // N5 标签页召回：内网 http 无 Notification API，切走标签页后「待你签发」
 // 只能靠 title 徽章召回。计数与坞内 pill 同源（真实轮询），坞卸载即清零
@@ -186,6 +204,15 @@ onUnmounted(() => {
   color: var(--clay);
   border: 1px solid rgba(var(--clay-rgb), 0.3);
   background: var(--surface-raised);
+}
+.dock-pill-sync {
+  color: var(--trust-pending);
+  border: 1px solid rgba(var(--trust-pending-rgb), 0.45);
+  background: var(--surface-raised);
+}
+.dock-core.has-sync-issue {
+  color: var(--trust-pending);
+  border-color: var(--trust-pending);
 }
 .dock-core {
   display: inline-flex;

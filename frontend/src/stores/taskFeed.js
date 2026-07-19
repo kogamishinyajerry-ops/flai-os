@@ -6,6 +6,11 @@ import { acquireChannel } from "./liveFeed";
 export const feedTasks = ref([]);
 export const feedLoaded = ref(false);
 export const feedError = ref("");
+export const feedConnection = ref("idle");
+export const feedLastSuccessAt = ref(null);
+export const feedStale = ref(true);
+export const feedResyncing = ref(false);
+export const feedSyncError = ref("");
 
 let handle = null;
 let stops = [];
@@ -18,6 +23,11 @@ export function acquireTaskFeed() {
       watch(handle.state.tasks, (v) => { feedTasks.value = v; }, { immediate: true }),
       watch(handle.state.loaded, (v) => { feedLoaded.value = v; }, { immediate: true }),
       watch(handle.state.error, (v) => { feedError.value = v; }, { immediate: true }),
+      watch(handle.state.connection, (v) => { feedConnection.value = v; }, { immediate: true }),
+      watch(handle.state.lastSuccessAt, (v) => { feedLastSuccessAt.value = v; }, { immediate: true }),
+      watch(handle.state.stale, (v) => { feedStale.value = v; }, { immediate: true }),
+      watch(handle.state.resyncing, (v) => { feedResyncing.value = v; }, { immediate: true }),
+      watch(handle.state.syncError, (v) => { feedSyncError.value = v; }, { immediate: true }),
     ];
   }
   refCount += 1;

@@ -1,6 +1,14 @@
 <template>
   <div class="task-detail">
-    <el-alert v-if="loadError" type="error" :title="loadError" show-icon :closable="false" />
+    <ConnectionTruthNotice
+      :loaded="loaded"
+      :connection="connection"
+      :last-success-at="lastSuccessAt"
+      :stale="stale"
+      :resyncing="resyncing"
+      :error="syncError || loadError"
+      @retry="resnapshotTask(taskId)"
+    />
 
     <!-- 首载骨架（A3）：只在「从未 loaded 且无错误」时撑主区轮廓，轮询期间/
          带旧值刷新绝不回骨架；失败态走上面 el-alert，骨架不吞错误。 -->
@@ -401,7 +409,7 @@ import { cancelTask, reviewTask, getTask } from "../api/tasks";
 import { downloadUrl, fetchFilePreview } from "../api/files";
 import { readChunk } from "../api/knowledge";
 import { buildRetryRoute } from "../utils/retryPrefill";
-import { acquireChannel, pokeTask, onTransition } from "../stores/liveFeed";
+import { acquireChannel, pokeTask, resnapshotTask, onTransition } from "../stores/liveFeed";
 import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -412,6 +420,7 @@ import WorkLog from "../components/WorkLog.vue";
 import CompletionSeal from "../components/CompletionSeal.vue";
 import VerificationCard from "../components/VerificationCard.vue";
 import EvidenceList from "../components/EvidenceList.vue";
+import ConnectionTruthNotice from "../components/ConnectionTruthNotice.vue";
 import { ensureTaskEvidence, taskEvidenceWithheld } from "../stores/taskEvidence";
 import { useAgentNames } from "../stores/agentNames";
 import { displayName } from "../stores/session";
@@ -462,7 +471,19 @@ const simRunTitle = computed(() =>
 // 删除——防 stale 语义已由 channel 的 epoch guard 统一承接（liveFeedCore.
 // makeEpochGuard，release 时 bump epoch，在途响应整包作废）。
 const taskChannel = acquireChannel(`task:${taskId}`, { modelCalls: true }); // 详情页消费模型调用记录（detail opt-in）
-const { task, events, modelCalls, modelCallsError, loaded, error: loadError } = taskChannel.state;
+const {
+  task,
+  events,
+  modelCalls,
+  modelCallsError,
+  loaded,
+  error: loadError,
+  connection,
+  lastSuccessAt,
+  stale,
+  resyncing,
+  syncError,
+} = taskChannel.state;
 
 const reviewForm = reactive({ comment: "" });
 const signerName = computed(() => displayName());

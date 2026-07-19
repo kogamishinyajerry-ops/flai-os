@@ -43,6 +43,17 @@
       class="page-alert"
     />
 
+    <ConnectionTruthNotice
+      :loaded="convFeedLoaded"
+      :connection="convFeedConnection"
+      :last-success-at="convFeedLastSuccessAt"
+      :stale="convFeedStale"
+      :resyncing="convFeedResyncing"
+      :error="convFeedSyncError"
+      compact
+      @retry="retryConversationFeed"
+    />
+
     <!-- 会话流 -->
     <div v-if="messages.length || sending" ref="streamEl" class="thread">
       <div v-for="(m, idx) in messages" :key="idx" :class="['bubble-row', m.role]">
@@ -190,6 +201,9 @@
                       <span v-else class="status-peek">速览 →</span>
                     </div>
                     <!-- 右槽②未召集：就绪徽 / 创建页 escape -->
+                    <div v-else-if="!conversationTaskLedgerCurrent()" class="agent-actions">
+                      <span class="agent-readytag">任务账尚未核对</span>
+                    </div>
                     <div v-else-if="!summonedLocally(a)" class="agent-actions">
                       <span v-if="agentBatchable(a, m.recommendation)" class="agent-readytag">✓ 参数已齐 · 待开工</span>
                       <button v-else class="agent-cta" @click="createOneTask(a, m.recommendation)">去创建此任务</button>
@@ -497,6 +511,7 @@ import ThinkingInk from "../components/artwork/ThinkingInk.vue";
 import IntentGlyph from "../components/artwork/IntentGlyph.vue";
 import MarkdownLite from "../components/MarkdownLite.vue";
 import OnboardingCard from "../components/OnboardingCard.vue";
+import ConnectionTruthNotice from "../components/ConnectionTruthNotice.vue";
 import { displayName } from "../stores/session";
 
 const router = useRouter();
@@ -1146,8 +1161,17 @@ function summonedLocally(agent) {
   return locallySummoned[`${conversationId.value}:${agent.agent_id}`] === true;
 }
 
+function conversationTaskLedgerCurrent() {
+  return (
+    convFeedLoaded.value === true
+    && convFeedConnection.value === "connected"
+    && convFeedStale.value === false
+    && convFeedResyncing.value === false
+  );
+}
+
 function openableCount(plan) {
-  if (planOpenable(plan) !== true) return 0;
+  if (planOpenable(plan) !== true || conversationTaskLedgerCurrent() !== true) return 0;
   return plan.agents.filter(
     (a) => agentReady(a) === true && !agentTaskInfo(a) && !summonedLocally(a)
   ).length;
@@ -1160,6 +1184,10 @@ function openableCount(plan) {
 // 重映射为批内下标 → 服务端映射真 depends_on。
 async function openPlan(plan) {
   if (opening.value === conversationId.value && opening.value !== null) return;
+  if (conversationTaskLedgerCurrent() !== true) {
+    ElMessage.warning("任务账尚未核对，暂不创建任务；请等待同步或重试。");
+    return;
+  }
   if (planOpenable(plan) !== true) {
     ElMessage.error("条件已变化（会话归档 / 新增附件），请刷新方案或走「去创建此任务」。");
     return;
@@ -1237,6 +1265,10 @@ async function openPlan(plan) {
 }
 
 function createOneTask(agent, plan) {
+  if (conversationTaskLedgerCurrent() !== true) {
+    ElMessage.warning("任务账尚未核对，暂不开放创建；请等待同步或重试。");
+    return;
+  }
   // 人确认接缝：把某个被召集 Agent 的预填草案交给创建任务页，由人补全后亲手
   // 提交（导引绝不代签）。走 sessionStorage 而非 URL，避免工程数据进查询串。
   // M7：会话附件随草案带走，创建页以「已上传」状态入列，人可移除。
@@ -1526,6 +1558,12 @@ let convTasksHandle = null;
 let convTasksStop = null;
 let convTasksHandleFor = null; // 当前持有订阅所属的 conversationId（null=未订阅）
 let feedDisposed = false; // 组件已卸载：拒绝 await 续体的迟到 acquire（Codex R2-P1）
+const convFeedLoaded = ref(false);
+const convFeedConnection = ref("idle");
+const convFeedLastSuccessAt = ref(null);
+const convFeedStale = ref(true);
+const convFeedResyncing = ref(false);
+const convFeedSyncError = ref("");
 
 function hasOrchestratePlan() {
   return messages.value.some(
@@ -1556,6 +1594,16 @@ function releaseConversationTasksFeed() {
   }
   convTasksHandleFor = null;
   conversationTasks.value = [];
+  convFeedLoaded.value = false;
+  convFeedConnection.value = "idle";
+  convFeedLastSuccessAt.value = null;
+  convFeedStale.value = true;
+  convFeedResyncing.value = false;
+  convFeedSyncError.value = "";
+}
+
+function retryConversationFeed() {
+  return convTasksHandleFor ? pokeConversation(convTasksHandleFor) : Promise.resolve();
 }
 
 // 只在真出现 orchestrate 方案时订阅（幂等：目标未变则不重新 acquire；目标
@@ -1575,9 +1623,24 @@ function ensureConversationTasksFeed() {
   convTasksHandleFor = id;
   convTasksHandle = acquireChannel(`conversation:${id}`);
   convTasksStop = watch(
-    convTasksHandle.state.memberTasks,
-    (v) => {
-      if (convTasksHandleFor === id) conversationTasks.value = v;
+    [
+      convTasksHandle.state.memberTasks,
+      convTasksHandle.state.loaded,
+      convTasksHandle.state.connection,
+      convTasksHandle.state.lastSuccessAt,
+      convTasksHandle.state.stale,
+      convTasksHandle.state.resyncing,
+      convTasksHandle.state.syncError,
+    ],
+    ([tasks, loaded, connection, lastSuccessAt, stale, resyncing, syncError]) => {
+      if (convTasksHandleFor !== id) return;
+      conversationTasks.value = tasks;
+      convFeedLoaded.value = loaded;
+      convFeedConnection.value = connection;
+      convFeedLastSuccessAt.value = lastSuccessAt;
+      convFeedStale.value = stale;
+      convFeedResyncing.value = resyncing;
+      convFeedSyncError.value = syncError;
     },
     { immediate: true }
   );

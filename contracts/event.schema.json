@@ -65,18 +65,42 @@
       "description": "日志级别，供前端时间轴着色与告警过滤。"
     },
     "message": {
-      "type": "string",
+      "type": ["string", "null"],
       "minLength": 1,
       "description": "人类可读的一句话事件描述（门户时间轴直接展示）。"
     },
     "payload": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "结构化附加信息（如工具入参摘要、模型 profile 名、原始堆栈）。含敏感内容时必须脱敏；MOCK 工具产生的事件必须在 payload 中显式标注 mock=true，绝不冒充真实结果。"
+    },
+    "content_withheld": {
+      "type": "boolean",
+      "description": "true 表示敏感任务事件的 message/payload 已由统一读取门遮蔽；事件身份、类型、级别与时间仍可审计。"
     },
     "created_at": {
       "type": "string",
       "format": "date-time",
       "description": "ISO 8601 时间戳，事件写入即定，不可修改（只追加）。"
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "content_withheld": { "const": true } },
+        "required": ["content_withheld"]
+      },
+      "then": {
+        "properties": {
+          "message": { "type": "null" },
+          "payload": { "type": "null" }
+        }
+      },
+      "else": {
+        "properties": {
+          "message": { "type": "string", "minLength": 1 },
+          "payload": { "type": "object" }
+        }
+      }
+    }
+  ]
 }

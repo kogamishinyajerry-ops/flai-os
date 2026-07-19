@@ -9,7 +9,16 @@
         <el-button size="small" text type="primary" @click="$router.push('/tasks/new')">+ 新任务</el-button>
       </div>
 
-      <div v-if="feedError" class="cl-error">{{ feedError }}</div>
+      <ConnectionTruthNotice
+        :loaded="feedLoaded"
+        :connection="feedConnection"
+        :last-success-at="feedLastSuccessAt"
+        :stale="feedStale"
+        :resyncing="feedResyncing"
+        :error="feedSyncError || feedError"
+        compact
+        @retry="pokeTasks"
+      />
 
       <!-- 首载骨架（A3）：只在「从未 loaded 且无错误」时撑轮廓，轮询期间/带旧值
            刷新绝不回骨架；失败态走上面 cl-error，骨架不吞错误。 -->
@@ -115,10 +124,23 @@ import { useAgentNames } from "../stores/agentNames";
 import { useTodayKey } from "../composables/useTodayKey";
 import { ensureTaskBaseline, markTaskSeen, taskHasUnseen } from "../utils/lastSeen";
 import { TASK_FILTERS, countTasksByFilter, filterTasks } from "../utils/taskFilters";
-import { feedTasks, feedLoaded, feedError, acquireTaskFeed, releaseTaskFeed } from "../stores/taskFeed";
+import {
+  feedTasks,
+  feedLoaded,
+  feedError,
+  feedConnection,
+  feedLastSuccessAt,
+  feedStale,
+  feedResyncing,
+  feedSyncError,
+  acquireTaskFeed,
+  releaseTaskFeed,
+} from "../stores/taskFeed";
+import { pokeTasks } from "../stores/liveFeed";
 import TaskDetail from "./TaskDetail.vue";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
+import ConnectionTruthNotice from "../components/ConnectionTruthNotice.vue";
 
 const route = useRoute();
 const router = useRouter();

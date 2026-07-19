@@ -1,4 +1,4 @@
-import { request } from "./client";
+import { request } from "./client.js";
 
 // 导引会话（M6，ADR-0012）。会话由 ConversationService 驱动，与一次性 tasks 正交。
 // created_by 服务端从登录会话派生（ADR-0019 D5），前端不再发送。
@@ -9,7 +9,7 @@ export const createConversation = ({ agentId }) =>
   });
 
 export const getConversation = (conversationId) =>
-  request(`/api/conversations/${conversationId}`);
+  request(`/api/conversations/${conversationId}`, { cache: "no-store" });
 
 // 会话列表（M8 协作工作台首页用来罗列协作会话）。
 export const listConversations = ({ createdBy, limit, offset } = {}) => {
@@ -39,4 +39,4 @@ export const concludeConversation = (conversationId) =>
 // 协作会话成员任务（M8/ADR-0016）：一次会话分流出的 N 个人签发任务，协作工作台
 // 据此聚合展示。仅读——任务仍由人在创建页亲手签发。
 export const listConversationTasks = (conversationId) =>
-  request(`/api/conversations/${conversationId}/tasks`);
+  request(`/api/conversations/${conversationId}/tasks`, { cache: "no-store" });

@@ -1,6 +1,6 @@
 # JerryAgent → FLAi-OS 可信交互映射
 
-> 状态：Phase 1 完成只读映射；composer 持久化、事件序列、断连投影与结构化问题均未进入运行时。
+> 状态：P2.1 已落地断连投影与 task live-snapshot 连续游标；composer 持久化和结构化问题仍未进入运行时。
 > 来源基线：`/Users/Zhuanz/projects/meta/jerryagent`，只读审计 HEAD
 > `3c1adcb0cee0726993d21f1d6ffb729b241d39dc`；该工作树本身有用户未提交改动，
 > 因而只把可在源码与测试中复核的行为当参考，不搬运整文件。
@@ -25,8 +25,8 @@ JerryAgent 的高价值成果有四层：
 | JerryAgent 原则 | FLAi-OS 当前事实 | 本轮裁决 |
 |---|---|---|
 | 服务端投影是 SSOT | `liveFeed` 每轮替换 task snapshot，events 按 offset 追加 | 保留服务端事实；不在客户端合成 demo/运行态 |
-| 严格 sequence + gap recovery | 公共 event 只有 UUID `event_id`，不暴露 SQLite 顺序或 revision | 不能把数组位置/UUID 冒充 sequence；本轮不做假 gap detector |
-| 断连显式 stale | 冷启动错误可见；成功后轮询失败保留旧真值但没有统一 stale 标识 | 下一独立切片增加 connection/lastSuccessAt；旧快照必须标旧 |
+| 严格 sequence + gap recovery | 旧 event API 仍只有 UUID；新增 task live-snapshot 以每任务序数 + exact event anchor 提供 additive cursor | gap/重复/跨 task/错锚整批拒绝并强制 sequence-zero resnapshot；旧 API 不改形 |
+| 断连显式 stale | channel 投影 connection/lastSuccessAt/stale/resyncing；阅读面共用 amber 提示 | 冷失败零假数据；暖失败保旧快照并标旧；恢复先完整重取 |
 | 问题与批准分离 | Guide 澄清是普通 assistant 文本；Task `waiting_review` 才有 `/review` | 不从 `recommendation=null` 猜 QuestionPanel；批准只留在具名审核面 |
 | 会话草稿隔离 | Guide 仍是内存草稿 | 本轮只冻结合同；sessionStorage 实现经故障注入后延期，不宣称已采用 |
 | 一条阅读轴与渐进披露 | Guide 主轴、今日任务台、StatusDock、内联产物/签发已存在 | 继续收敛，不再新造平行 dashboard 或第二决定源 |
@@ -51,31 +51,33 @@ tombstone）和 network outcome / draft ownership 分轴事件，再按以下合
 - 发送期间切换用户、会话或 Agent，不得由旧异步续体清新上下文草稿。
 - 附件 `File` 仍只在内存，不宣称跨刷新恢复。
 
-## 4. 下一阶段的最窄运行时切片
+## 4. P2.1 已采用的最窄运行时切片
 
-先做断连诚实度，不立即上 SSE：
+P2.1 保持轮询、不引入 SSE，采用如下合同：
 
-1. `liveFeed` 增加 `connection: idle | connected | disconnected` 与
-   `lastSuccessAt`，不改变 task/event 公共响应。
+1. `liveFeed` 增加 `connection: idle | connected | disconnected`、`lastSuccessAt`、
+   `stale` 与 `resyncing`；既有 task/event 公共响应不变。
 2. 冷断连保持空值与错误；暖断连可保留最后真实 snapshot，但页面必须显示“旧快照”。
-3. 恢复连接后立即拉一次权威 snapshot；任何路径都禁止 demo fallback。
-4. Node/E2E 覆盖冷断连、暖断连、恢复、并发 refresh 与零 fake 数据。
+3. 新增 additive `task-live-snapshot/v1`；恢复连接后立即 sequence-zero 重取权威 snapshot，
+   任何路径都禁止 demo fallback。
+4. resync generation 防止在途旧请求吞掉显式全量重取；sequence-zero replace 抑制普通
+   transition，避免把离线状态变化补播成亲历完成。
+5. Node/contract/E2E 覆盖冷断连、暖断连、gap、并发 resnapshot 与零 fake 数据。
 
-严格 `seq gap` 另行裁决。若采用 JerryAgent 方案，必须先批准公开的单调 `revision/sequence`
-和 snapshot cursor，定义删除/压缩、重放、分页与版本迁移，再实现 SSE 和 gap→resnapshot。
-在此之前，offset 只能描述“追加尾段”，不能在 UI 或文档中宣称可检测缺口。
+严格 cursor 的 append-only、删除/压缩、分页与版本边界由
+`ADR-0032-task-live-snapshot-cursor.md` 冻结。未来若引入 compaction 或 SSE 必须升级 stream
+generation/schema，不能静默复用 v1 ordinal。
 
 结构化澄清同理：先新增明确的 question kind、选项/自由文本回答合同与过期语义，再做
 QuestionPanel。它仍不得复用 task review API，也不得让 LLM 获得签发权。
 
 ## 5. 机械验收
 
-Phase 1 只验证本映射文档不越过当前运行时事实；仓内没有 composer persistence 测试或
-交付声明。重启该切片时，invalid-first 测试必须至少覆盖：存储全程不可用下连续 accepted、
+composer 部分仍只冻结文档，不存在 persistence 交付声明。重启该切片时，invalid-first 测试必须至少覆盖：存储全程不可用下连续 accepted、
 目标键 conflict/unreadable、fresh→created 多段迁移、A→B→A、身份切换、跨实例 busy
 释放，以及服务端已接纳但草稿 CAS 被 supersede 的权威消息刷新。
 
-后续 disconnected slice 至少应新增：
+P2.1 disconnected slice 已覆盖：
 
 - warm failure 保留最后真实 snapshot 且 `disconnected=true`；
 - cold failure 不渲染任务或模型生成 fallback；

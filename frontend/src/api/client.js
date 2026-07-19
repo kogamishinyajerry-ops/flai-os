@@ -39,8 +39,12 @@ async function parseDetail(resp) {
   }
 }
 
-export async function request(path, { method = "GET", json, formData, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+export async function request(
+  path,
+  { method = "GET", json, formData, timeoutMs = DEFAULT_TIMEOUT_MS, cache } = {},
+) {
   const init = { method, headers: {} };
+  if (cache !== undefined) init.cache = cache;
   if (json !== undefined) {
     init.headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(json);

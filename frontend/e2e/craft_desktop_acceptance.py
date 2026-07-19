@@ -727,12 +727,21 @@ with sync_playwright() as p:
           _re.match(r"^正在处理 · 已 .+ · \d+ 条事件$", g2a) is not None, g2a)
 
     # 完成态零事件任务：头行绝不显示「0 条事件」（cd-bg-tasks-panel 零值不显示）。
-    resp_g = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "工艺批探针G"}})
-    assert resp_g.status_code < 300, resp_g.text
-    task_g = resp_g.json()["id"]
-    _db("UPDATE tasks SET status='completed', started_at=?, finished_at=? WHERE id=?",
-        ("2026-07-15T06:00:00+00:00", "2026-07-15T06:00:42+00:00", task_g))
-    _db("DELETE FROM task_events WHERE task_id=?", (task_g,))
+    # 旧数据兼容夹具：直接种一条 pre-event-era completed task，表达历史上合法存在
+    # 的零事件行。P2.1 起 task_events 由 DB trigger 机械只追加，测试也不得删事件造状态。
+    task_g = "task_craft_zero_event"
+    _db(
+        "INSERT INTO tasks "
+        "(id, agent_id, agent_version, name, status, created_by, created_at, updated_at, "
+        "started_at, finished_at, inputs_json, metadata_json, origin, data_classification) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            task_g, "hello_agent", "0.1.0", "工艺批探针G", "completed", "验收工程师",
+            "2026-07-15T06:00:00+00:00", "2026-07-15T06:00:42+00:00",
+            "2026-07-15T06:00:00+00:00", "2026-07-15T06:00:42+00:00",
+            "{}", "{}", "user", "internal",
+        ),
+    )
     page.goto(BASE + f"/tasks/{task_g}", wait_until="networkidle")
     page.wait_for_selector(".worklog-head-text", timeout=8000)
     g2b = page.locator(".worklog-head-text").inner_text()
@@ -1402,10 +1411,10 @@ with sync_playwright() as p:
     ctx.route("**/api/tasks*", _hang_feed)
     page.goto(BASE + "/today", wait_until="domcontentloaded")
     try:
-        page.wait_for_selector(".today-error:has-text('自动重试中')", timeout=26000)
-        feed_err = page.locator(".today-error", has_text="自动重试中").first.inner_text()
-        suffix_ok = "（自动重试中）" in feed_err
-        contradiction_free = "请稍后重试（自动重试中）" not in feed_err
+        page.wait_for_selector(".today .connection-truth:has-text('系统会自动重试')", timeout=26000)
+        feed_err = page.locator(".today .connection-truth", has_text="系统会自动重试").first.inner_text()
+        suffix_ok = "系统会自动重试" in feed_err
+        contradiction_free = "请稍后重试" not in feed_err
         base_n = feed_hits["n"]
         # 条件轮询替代固定等待（Codex R0 P3：固定 6.5s 在繁忙 CI 上抖红）：
         # 250ms 步进最长 12s，二次开火即刻退出——更快也更稳。
