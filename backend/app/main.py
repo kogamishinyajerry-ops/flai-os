@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import secrets
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -29,6 +30,7 @@ from .api import files as files_api
 from .api import governance as governance_api
 from .api import knowledge as knowledge_api
 from .api import me as me_api
+from .api import search as search_api
 from .api import stats as stats_api
 from .api import tasks as tasks_api
 from .api import teams as teams_api
@@ -143,6 +145,9 @@ def create_app(
 
     app = FastAPI(title="FLAi-OS Backend", lifespan=lifespan)
     app.state.login_throttle = LoginThrottle()  # 进程内节流（ADR-0019 D6），实例随 app
+    # P2.4 cursor 是短生命周期 UI 分页凭证。单实例部署进程内随机 HMAC key
+    # 阻止客户端改写 snapshot/keyset；服务重启后旧 cursor 响亮 422，重新搜索即可。
+    app.state.search_cursor_signing_key = secrets.token_bytes(32)
 
     # 中间件栈序（后 add 者在外层）：会话门先 add（内层），CORS 后 add（外层）——
     # 401 响应也必须带 CORS 头，否则浏览器只报跨域、看不到「未登录」真话。
@@ -189,6 +194,9 @@ def create_app(
             # schema witnesses 每次从服务实际连接的库读取，只证明三张表的
             # identity/约束/索引/触发器合同，不宣称存量 owner 或 Question 数据完整。
             "structured_question_axis": True,
+            # P2.4 活进程代际：精确 owner、稳定消息/产物地址、服务端有界搜索已接线。
+            # 这不是 DB schema 完整性见证，只用于阻断新 QuickSwitcher 连上旧 API。
+            "search_addressing_axis": True,
             "p23_schema_witnesses": p23_schema_witnesses,
             # T2/#5 不可变快照代际标记（Codex R0 审 P1 同款范式）：见证「活着的 API
             # 进程」跑的是 enqueue 冻结快照的代码。分离部署偏斜（DB 已迁移出 eval_snapshots
@@ -228,6 +236,7 @@ def create_app(
                 "status": "ready" if ready is True else "degraded",
                 "worker": wf,
                 "structured_question_axis": True,
+                "search_addressing_axis": True,
                 "p23": {
                     "runtime_generation": True,
                     "schema_ready": p23_schema_ready,
@@ -246,6 +255,7 @@ def create_app(
     app.include_router(governance_api.router)
     app.include_router(stats_api.router)
     app.include_router(me_api.router)
+    app.include_router(search_api.router)
     app.include_router(knowledge_api.router)
     app.include_router(teams_api.router)
 

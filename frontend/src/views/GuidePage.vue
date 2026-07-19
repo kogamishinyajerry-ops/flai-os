@@ -64,7 +64,13 @@
 
     <!-- 会话流 -->
     <div v-if="messages.length || sending" ref="streamEl" class="thread">
-      <div v-for="(m, idx) in messages" :key="m.message_id || idx" :class="['bubble-row', m.role]">
+      <div
+        v-for="(m, idx) in messages"
+        :key="m.message_id || idx"
+        :class="['bubble-row', m.role]"
+        :data-message-id="m.message_id || undefined"
+        :tabindex="m.message_id ? -1 : undefined"
+      >
 
         <!-- 用户消息：靠右暖气泡 -->
         <div v-if="m.role === 'user'" class="user-bubble" :class="{ 'fx-ink-in': m.fresh }">
@@ -572,6 +578,10 @@ const routeConversationId = computed(() => {
   const value = route.query.c;
   return typeof value === "string" ? value : "";
 });
+const messageAnchorId = computed(() => {
+  const value = route.query.m;
+  return typeof value === "string" ? value : "";
+});
 const conversationWriteDecision = computed(() => conversationWriteEligibility({
   routeConversationId: routeConversationId.value,
   loadedConversationId: conversationId.value,
@@ -956,6 +966,33 @@ async function scrollToBottom() {
   if (last) last.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
 }
 
+let lastMessageAnchorAttemptKey = "";
+let lastMessageAnchorFocusedKey = "";
+async function focusRequestedMessage(id = conversationId.value) {
+  const targetId = messageAnchorId.value;
+  if (!targetId || !id || routeConversationId.value !== id) return false;
+  const attemptKey = `${id}:${targetId}`;
+  if (lastMessageAnchorFocusedKey === attemptKey) return true;
+  await nextTick();
+  if (messageAnchorId.value !== targetId || routeConversationId.value !== id) return false;
+  const target = Array.from(streamEl.value?.querySelectorAll(".bubble-row[data-message-id]") || [])
+    .find((element) => element.dataset.messageId === targetId);
+  if (!target) {
+    if (lastMessageAnchorAttemptKey !== attemptKey) {
+      ElMessage.warning("消息定位失效：该消息不在当前会话快照中");
+    }
+    lastMessageAnchorAttemptKey = attemptKey;
+    return false;
+  }
+  const reduceMotion = typeof window.matchMedia === "function"
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches === true;
+  target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+  target.focus({ preventScroll: true });
+  lastMessageAnchorAttemptKey = attemptKey;
+  lastMessageAnchorFocusedKey = attemptKey;
+  return true;
+}
+
 async function reconcileConversationSnapshot(id, isCurrent = () => true) {
   if (conversationRuntimeGate.currentSession() !== id || isCurrent() !== true) return false;
   const snapshotToken = conversationRuntimeGate.begin("snapshot");
@@ -978,7 +1015,10 @@ async function reconcileConversationSnapshot(id, isCurrent = () => true) {
     conversationLoadState.value = "ready";
     started.value = true;
     mergeConversationSnapshot(conv);
-    await scrollToBottom();
+    // 精确消息深链优先于“滚到最新”。目标过期时只亮 amber 警告，不把焦点
+    // 偷到另一条消息，也不假装父会话就是请求的目标。
+    if (messageAnchorId.value) await focusRequestedMessage(id);
+    else await scrollToBottom();
     if (
       !conversationRuntimeGate.isCurrent(snapshotToken, id)
       || isCurrent() !== true
@@ -2194,6 +2234,8 @@ function resetToFresh(clearError = true, { sessionId = "" } = {}) {
   uploadPhase.value = "";
   draft.value = "";
   pendingFiles.value = [];
+  lastMessageAnchorAttemptKey = "";
+  lastMessageAnchorFocusedKey = "";
   releaseConversationTasksFeed();
   if (clearError) pageError.value = "";
 }
@@ -2272,6 +2314,21 @@ watch(
       resetToFresh();
     }
   }
+);
+
+// 同一会话内只改变 ?m 不会重挂 Guide；等可信快照 ready 后再定位。
+watch(
+  () => route.query.m,
+  (nextAnchor, previousAnchor) => {
+    if (nextAnchor !== previousAnchor) lastMessageAnchorFocusedKey = "";
+    if (
+      conversationLoadState.value === "ready"
+      && conversationId.value
+      && messageAnchorId.value
+    ) {
+      void focusRequestedMessage(conversationId.value);
+    }
+  },
 );
 </script>
 
@@ -2415,7 +2472,15 @@ watch(
   padding: 20px 2px 8px;
 }
 
-.bubble-row { display: flex; scroll-margin-top: 84px; }
+.bubble-row {
+  display: flex;
+  scroll-margin-top: 84px;
+}
+.bubble-row:focus {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 4px;
+  border-radius: var(--radius-xs);
+}
 .bubble-row.user { justify-content: flex-end; }
 .bubble-row.assistant { justify-content: flex-start; }
 

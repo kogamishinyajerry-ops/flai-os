@@ -1,5 +1,5 @@
 <template>
-  <div class="task-detail">
+  <div ref="taskDetailEl" class="task-detail">
     <ConnectionTruthNotice
       :loaded="loaded"
       :connection="connection"
@@ -128,7 +128,12 @@
            仍指向产物下载链接。 -->
       <div class="section" v-if="artifacts.length">
         <h3>产物<span v-if="isWaitingReview" class="artifact-review-hint">放行前请先审阅</span></h3>
-        <div v-for="a in visibleArtifacts" :key="a.fileId" class="artifact-card">
+        <div
+          v-for="a in visibleArtifacts"
+          :key="a.fileId"
+          class="artifact-card"
+          :data-file-id="a.fileId"
+        >
           <!-- 逐卡收起 affordance（W3）：默认全展开不变；多产物任务可手动收纳
                已读卡。披露触发器=真 <button>（原生 Enter/Space，免 tabindex/
                keydown 手写），下载 <a> 是其兄弟——嵌套可交互控件是非法 ARIA
@@ -402,7 +407,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onUnmounted } from "vue";
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { cancelTask, reviewTask, getTask } from "../api/tasks";
@@ -430,6 +435,11 @@ import { burstSigned } from "../effects/burst";
 const route = useRoute();
 const router = useRouter();
 const taskId = route.params.taskId;
+const taskDetailEl = ref(null);
+const artifactAnchorId = computed(() => {
+  const value = route.query.file;
+  return typeof value === "string" ? value : "";
+});
 
 // 仿真监控深链：读浮窗同款配置（未配置=null=按钮零渲染，e2e 不受扰）。
 const simHubBase = (() => {
@@ -682,6 +692,57 @@ const visibleArtifacts = computed(() =>
   artifactsExpanded.value ? artifacts.value : artifacts.value.slice(0, ARTIFACT_PREVIEW_COUNT),
 );
 const hiddenArtifactCount = computed(() => artifacts.value.length - visibleArtifacts.value.length);
+
+let lastArtifactAnchorAttemptKey = "";
+let lastArtifactAnchorFocusedKey = "";
+async function focusRequestedArtifact() {
+  const fileId = artifactAnchorId.value;
+  if (!fileId || loaded.value !== true || !task.value) return false;
+  const attemptKey = `${task.value.id}:${fileId}`;
+  const outputIds = Array.isArray(task.value.output_file_ids) ? task.value.output_file_ids : [];
+  // 只信任务快照的 output_file_ids；搜索投影过期时绝不借同名卡或下载接口兜底。
+  if (!outputIds.includes(fileId)) {
+    if (lastArtifactAnchorAttemptKey !== attemptKey) {
+      ElMessage.warning("产物定位失效：该文件已不在当前任务的产物清单中");
+    }
+    lastArtifactAnchorAttemptKey = attemptKey;
+    return false;
+  }
+  if (lastArtifactAnchorFocusedKey === attemptKey) return true;
+  const artifactIndex = artifacts.value.findIndex((artifact) => artifact.fileId === fileId);
+  if (artifactIndex < 0) return false;
+  if (artifactIndex >= ARTIFACT_PREVIEW_COUNT) artifactsExpanded.value = true;
+  artifacts.value[artifactIndex].collapsed = false;
+  await nextTick();
+  if (artifactAnchorId.value !== fileId || task.value?.id !== taskId) return false;
+  const target = Array.from(taskDetailEl.value?.querySelectorAll(".artifact-card[data-file-id]") || [])
+    .find((element) => element.dataset.fileId === fileId);
+  if (!target) return false;
+  const focusTarget = target.querySelector(".artifact-toggle");
+  if (!focusTarget) return false;
+  const reduceMotion = typeof window.matchMedia === "function"
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches === true;
+  target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+  focusTarget.focus({ preventScroll: true });
+  lastArtifactAnchorAttemptKey = attemptKey;
+  lastArtifactAnchorFocusedKey = attemptKey;
+  return true;
+}
+
+watch(
+  [
+    () => route.query.file,
+    () => loaded.value,
+    () => task.value?.id,
+    () => (task.value?.output_file_ids || []).join("|"),
+    () => artifacts.value.map((artifact) => artifact.fileId).join("|"),
+  ],
+  (nextValues, previousValues) => {
+    if (nextValues[0] !== previousValues?.[0]) lastArtifactAnchorFocusedKey = "";
+    if (artifactAnchorId.value) void focusRequestedArtifact();
+  },
+  { immediate: true },
+);
 
 // 产物类型标签（F6）走 utils/format 的 artifactTypeLabel SSOT——StatusCenter
 // 速览同款徽章共用一份词表（3-lens 抓过孪生点漂移），本地副本已删。
@@ -1156,6 +1217,10 @@ onUnmounted(() => {
   box-shadow: var(--shadow-card);
   margin-bottom: 12px;
   overflow: hidden;
+}
+.artifact-card:focus-within {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 3px;
 }
 .artifact-head {
   display: flex;

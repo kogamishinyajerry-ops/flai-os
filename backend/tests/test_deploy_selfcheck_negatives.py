@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -370,6 +371,97 @@ def test_live_eval_snapshot_axis_truthy_not_true_fails(monkeypatch) -> None:
 def test_live_eval_snapshot_axis_true_passes(monkeypatch) -> None:
     _fake_http(monkeypatch, payload={"eval_snapshot_axis": True})
     assert deploy_selfcheck.check_live_eval_snapshot_generation("http://x").ok is True
+
+
+# ---- P2.4 check_live_search_addressing_generation（服务侧检索代际, is True）----
+
+def test_live_search_addressing_axis_missing_fails(monkeypatch) -> None:
+    """旧 API 即使其余代际标记齐全，也不能证明 P2.4 服务侧检索已部署。"""
+    _fake_http(monkeypatch, payload={"status": "ok", "structured_question_axis": True})
+    check = deploy_selfcheck.check_live_search_addressing_generation("http://x")
+    assert check.ok is False
+    assert "search_addressing_axis" in check.detail
+
+
+def test_live_search_addressing_axis_false_fails(monkeypatch) -> None:
+    _fake_http(monkeypatch, payload={"search_addressing_axis": False})
+    assert deploy_selfcheck.check_live_search_addressing_generation("http://x").ok is False
+
+
+def test_live_search_addressing_axis_truthy_non_bool_fails(monkeypatch) -> None:
+    """字符串与整数均不得穿过安全 gate。"""
+    for truthy in ("true", 1, "1", [True], {"enabled": True}):
+        _fake_http(monkeypatch, payload={"search_addressing_axis": truthy})
+        check = deploy_selfcheck.check_live_search_addressing_generation("http://x")
+        assert check.ok is False, f"search_addressing_axis={truthy!r} 不是布尔 True，必 FAIL"
+
+
+def test_live_search_addressing_axis_unreachable_or_non_json_fails(monkeypatch) -> None:
+    _fake_http(monkeypatch, raises=OSError("refused"))
+    assert deploy_selfcheck.check_live_search_addressing_generation("http://x").ok is False
+    _fake_http(monkeypatch, body=b"not-json")
+    assert deploy_selfcheck.check_live_search_addressing_generation("http://x").ok is False
+
+
+def test_live_search_addressing_axis_non_object_json_fails(monkeypatch) -> None:
+    _fake_http(monkeypatch, body=b"[]")
+    check = deploy_selfcheck.check_live_search_addressing_generation("http://x")
+    assert check.ok is False
+
+
+def test_live_search_addressing_axis_true_passes(monkeypatch) -> None:
+    _fake_http(monkeypatch, payload={"search_addressing_axis": True})
+    assert deploy_selfcheck.check_live_search_addressing_generation("http://x").ok is True
+
+
+def test_main_fails_when_search_addressing_generation_fails(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """部署命令必须真正挂载 P2.4 检查，不能只留下一个未调用的 helper。"""
+    db = tmp_path / "probe.db"
+    db.touch()
+
+    def passing(*_args) -> deploy_selfcheck.Check:
+        return deploy_selfcheck.Check("stub", True, "ok")
+
+    for name in (
+        "check_tables",
+        "check_active_user",
+        "check_classification_axis",
+        "check_p23_schema",
+        "check_worker_generation",
+        "check_health",
+        "check_model_gateway_config",
+        "check_live_classification_generation",
+        "check_live_created_by_username_generation",
+        "check_live_structured_question_generation",
+        "check_live_eval_snapshot_generation",
+        "check_db_identity",
+        "check_auth_generation",
+        "check_frontend_dist",
+        "check_writable_dirs",
+    ):
+        monkeypatch.setattr(deploy_selfcheck, name, passing)
+
+    observed: list[str] = []
+
+    def failing_search(base_url: str) -> deploy_selfcheck.Check:
+        observed.append(base_url)
+        return deploy_selfcheck.Check("P2.4 search", False, "marker missing")
+
+    monkeypatch.setattr(
+        deploy_selfcheck,
+        "check_live_search_addressing_generation",
+        failing_search,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["deploy_selfcheck.py", "--base-url", "http://probe", "--db", str(db)],
+    )
+
+    assert deploy_selfcheck.main() == 1
+    assert observed == ["http://probe"]
 
 
 # ---------- 9. check_auth_generation（default-deny 见证） ----------

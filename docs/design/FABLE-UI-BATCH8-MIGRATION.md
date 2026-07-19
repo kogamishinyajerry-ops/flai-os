@@ -31,10 +31,10 @@ Fable 批八候选来自：
 | 片段 | 产品意图 | 候选主要问题 | 迁移裁决 |
 |---|---|---|---|
 | A 对话呼吸 | 真 SSE、停止、首轮起题 | 无 180 秒/心跳期限；停止按钮有无效窗口；真实断连未测；会修改 gateway、Runtime、DB | 先重写协议与无效输入测试，再实现；禁止直接搬运 |
-| B 寻址 | 服务端消息搜索、窗口外补齐、任务状态 chips | 在途先闪“无结果”；消息不能定位；`cancelled` 被归为“失败”；无新增浏览器验收 | 仅 B1 状态筛选进入本轮；取消独立中性。B2 搜索延期，不能把候选 LIKE 方案当完成 |
+| B 寻址 | 服务端消息搜索、窗口外补齐、任务状态 chips | 在途先闪“无结果”；消息不能定位；`cancelled` 被归为“失败”；无新增浏览器验收 | B1 已在受控迁移完成；B2 进入 P2.4 后按 [ADR-0034](../adr/ADR-0034-exact-addressing-search.md) 重写，候选 LIKE 方案仍不计完成 |
 | C 产物一等公民 | 文本/xlsx 有界预览、真实 403/409 文案 | 前端先完整下载二进制再请求预览；预览失败静默；会与可信 withheld 面冲突 | 本轮按 metadata/preview-first 重做；保留 withheld，并证明显式下载前 `/download` 请求数为 0 |
 | D 请签路由 | 可选点名、收件箱置顶 | 新持久字段与 task schema；触及人签路由；名册失败伪装为空；文案过诺“专属分组” | 本 Goal 不迁移；另开安全/契约变更切片 |
-| E 整理小件 | 可测 Markdown、标题/归档整理 | Markdown 提取可独立验收；重命名无 UI 入口；标题需 DB/API；候选未收口 | 先迁移纯解析 SSOT；标题另随 A 的会话协议验收 |
+| E 整理小件 | 可测 Markdown、标题/归档整理 | Markdown 提取可独立验收；重命名无 UI 入口；标题需 DB/API；候选未收口 | 先迁移纯解析 SSOT；标题、重命名与归档统一留待 P2.6 |
 
 ## 3. 迁移顺序
 
@@ -92,7 +92,7 @@ invalid-input witness，再进入实现。
 | P2.1 断连诚实度（已完成，`b79592e`） | 借鉴 JerryAgent，把 `connection`、`lastSuccessAt`、旧快照提示与 task exact cursor 投影到现有阅读轴 | 旧 task/event 响应不改；additive live-snapshot 提供 gap 检测；冷断连零假数据、暖断连标旧、重连 sequence-zero 覆盖，并有 Node + contract + E2E witness |
 | P2.2 视觉信任债（已完成，`6e2baeb`） | 收口 Element Plus 旁路语义色、Agent 类别色暗色对比和残留 reduced-motion 位移 | 不新增信任色；light/dark 对比可测；desktop/narrow/focus/reduced-motion 四态通过应用内浏览器复核 |
 | P2.3 结构化问题（已完成，阶段冻结） | 为普通澄清建立 Question/Answer 合同 | Question 与 task review API、状态机、权限完全分离；exact owner、严格 envelope、稳定消息锚、原子回答、过期/重复/并发回答、schema 漂移均 fail-closed |
-| P2.4 服务端寻址（下一阶段） | 在 B2 中实现会话/任务/产物可定位搜索 | exact `username` owner 已完成；下一步先冻结 title/archive/search projection 与权限、分页、深链合同，再决定 FTS5 或跨 Windows 的确定性索引 |
+| P2.4 服务端寻址（进行中） | 在 B2 中实现会话/消息/任务/产物的只读可定位搜索 | 按 [ADR-0034](../adr/ADR-0034-exact-addressing-search.md) 使用单 scope、有界 50k SQLite literal scan 与 snapshot keyset cursor；不依赖 FTS、不迁移 P2.3 schema，title/archive 写语义后移 P2.6 |
 | P2.5 具名审核收件箱 | 把“点名请签”做成真正的收件箱而非全量排序 | 所有 task 创建入口同一契约；候选审核、人签与发布批准仍是三个状态；同名 display name 反例必须拒绝 |
 | P2.6 会话生命周期 | 标题、重命名、归档和历史分组 | owner 轴完成迁移；API/UI/审计事件和并发更新契约均有无效输入测试 |
 | P2.7 Open Design 生产 adapter | 新增独立 `mock=false` daemon tool，真实生成统一候选 | loopback、有界轮询、路径/内容清洗、exact provenance；成功只到 `waiting_review`，不写源码、不自动晋升 |
@@ -114,7 +114,8 @@ invalid-input witness，再进入实现。
 - Open Design candidate-only machine fixture 接缝。
 
 候选中的 SSE/停止、LIKE 搜索、display-name 判权、点名请签、标题/归档与五张被覆写截图均
-未迁入。JerryAgent composer persistence 原型也在终审故障注入后撤出。最新稳定 cut 快照的
+未迁入；P2.4 的检索是独立合同与重写实现，不追认候选 LIKE 代码。JerryAgent composer
+persistence 原型也在终审故障注入后撤出。最新稳定 cut 快照的
 定向证据为：后端 137/137、前端 Node 49/49、M6 14/14、frontend build 通过、双轴终审无
 P0–P2；最终发布门仍以 `bash scripts/verify_all.sh` 的当次退出码为准。
 
@@ -131,5 +132,9 @@ P0–P2；最终发布门仍以 `bash scripts/verify_all.sh` 的当次退出码�
   1480/1480、Node 102/102、20/20 条浏览器 E2E 脚本全部通过。M2 精确 selector
   曾连续 10 次 10/10；加入“侧栏已有完成统计、当前任务仍 queued”的真实负例及有限正数
   timeout 审查后，又连续 3 次 11/11，最终全量门为 11/11。
-- P2.4 尚未开始实现；只允许在 P2.3 阶段冻结之后开启，不得借下一阶段 schema 或 UI
-  扩面掩盖前一阶段债务。
+- P2.4 已冻结 ADR-0034 并开始实现：现有 QuickSwitcher 分别请求
+  `conversation/message/task/artifact` 单 scope；会话/消息只认 exact username，任务只搜
+  `origin='user'` 的认证全局元数据且永不搜索输入/错误/正文，产物只认父任务
+  `output_file_ids` 精确成员。v1 采用无迁移、无 FTS 依赖的 50k 有界 literal scan、
+  principal/query/filter/limit/snapshot 绑定游标与 `no-store`；只复用现有 token 和页面，
+  不新增侧栏。代码与阶段验收仍在进行中，尚不宣称 P2.4 浏览器或全量门通过。

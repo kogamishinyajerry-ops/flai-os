@@ -61,7 +61,7 @@
      数字镜像（_is_num：bool≠数、负数≠零）+ ⑬ route-fulfill 混合响应
      （5/0/true/-2）直接咬三态 DOM。
   ⑭ 批次五 C1-C6（craft 通用工艺规则对表，契约=§十四）：C1 后端挂起→20s
-     硬超时分型（悬挂 handler 真实计时）+重试钮真恢复；C2 ⌘K 三源失败诚实
+     硬超时分型（悬挂 handler 真实计时）+重试钮真恢复；C2 ⌘K 四个服务端检索轴失败诚实
      降级（故障≠无结果）；C3 clay census oracle（/today /me 非豁免常驻 ≤2，
      own-属性归因）；C4 reduced-motion 补洞（emulate_media 于 goto 前直测
      真实元素：窄屏侧栏+el-drawer 归零）；C5 ring 试点机制断言（透明边框+
@@ -1100,43 +1100,55 @@ with sync_playwright() as p:
         retry_ok = False
     check("⑭C2 重试钮真恢复（unroute 后一击即清错误行）", retry_ok is True)
 
-    # ── ⑭b C2 ⌘K 诚实降级（三源全断→降级条在场+空态文案切换：故障≠无结果）──
-    for pat in ("**/api/conversations*", "**/api/tasks*", "**/api/agents*"):
-        ctx.route(pat, lambda route: route.abort())
+    # ── ⑭b C2 ⌘K 诚实降级（P2.4 四个服务端检索轴全断：逐轴故障在场，
+    #    故障绝不伪装为“没有匹配结果”；Agent 仍是本地名册轴，不混入分母）──
+    ctx.route("**/api/search?*", lambda route: route.abort())
     page.keyboard.press("ControlOrMeta+k")
     try:
+        page.locator(".qs-input").fill("绝无此匹配串xq9z")
         page.wait_for_selector(".qs-degraded", timeout=8000)
-        # 分级口径（Codex R0 P2）：3/3 全失败说「全部失败」不再说「部分」。
-        degraded_ok = "后端搜索请求全部失败" in page.locator(".qs-degraded").inner_text()
-        qs_empty_txt = page.locator(".qs-empty").inner_text() if page.locator(".qs-empty").count() else ""
-        empty_swap_ok = ("搜索服务不可用" in qs_empty_txt) and ("没有匹配结果" not in qs_empty_txt)
+        degraded_txt = page.locator(".qs-degraded").inner_text()
+        error_states = page.locator(".qs-scope-state.is-error")
+        degraded_ok = "4 个检索来源暂不可用" in degraded_txt
+        error_text = " ".join(error_states.all_inner_texts())
+        empty_swap_ok = error_states.count() == 4 and "没有匹配结果" not in error_text
     except Exception:
         degraded_ok, empty_swap_ok = False, False
-    check("⑭C2 ⌘K 三源失败→诚实降级条+空态文案切换（后端故障绝不伪装成无结果）",
+    check("⑭C2 ⌘K 四轴失败→逐轴诚实故障（后端故障绝不伪装成无结果）",
           degraded_ok is True and empty_swap_ok is True)
     page.keyboard.press("Escape")
-    for pat in ("**/api/conversations*", "**/api/tasks*", "**/api/agents*"):
-        ctx.unroute(pat)
+    ctx.unroute("**/api/search?*")
     page.wait_for_timeout(400)
 
-    # ── ⑭b′ C2 分级口径（Codex R0 P2）：单源失败+其余源真无匹配→「部分来源
-    #    不可用」，绝不夸大成「搜索服务不可用」（1-2 源=部分，3/3 才=全部）──
-    ctx.route("**/api/conversations*", lambda route: route.abort())
+    # ── ⑭b′ C2 分级口径：只让 message 轴失败，其余三轴真实返回空页；必须
+    #    精确显示一个来源不可用，并保留其它来源“无匹配”的真结果。─────────
+    def _abort_message_search(route):
+        if "scope=message" in route.request.url:
+            route.abort()
+        else:
+            route.continue_()
+
+    ctx.route("**/api/search?*", _abort_message_search)
     page.keyboard.press("ControlOrMeta+k")
     try:
+        page.locator(".qs-input").fill("绝无此匹配串xq9z")
         page.wait_for_selector(".qs-degraded", timeout=8000)
         deg2 = page.locator(".qs-degraded").inner_text()
-        page.locator(".qs-input").fill("绝无此匹配串xq9z")
-        page.wait_for_timeout(400)
-        empty2 = page.locator(".qs-empty").inner_text() if page.locator(".qs-empty").count() else "(无空态)"
-        partial_ok = ("部分" in deg2 and "全部失败" not in deg2
-                      and "部分来源不可用" in empty2 and "搜索服务不可用" not in empty2)
+        error_states = page.locator(".qs-scope-state.is-error")
+        empty_states = page.locator(".qs-scope-state").filter(has_text="此来源没有匹配结果")
+        state_text = " ".join(page.locator(".qs-scope-state").all_inner_texts())
+        partial_ok = ("1 个检索来源暂不可用" in deg2
+                      and error_states.count() == 1
+                      and "此来源暂不可用" in error_states.inner_text()
+                      and empty_states.count() == 4
+                      and "搜索服务不可用" not in state_text)
+        empty2 = state_text
     except Exception:
         deg2, empty2, partial_ok = "(异常)", "(异常)", False
-    check("⑭C2″ 单源失败+真无匹配→部分口径（不夸大成整个服务不可用）",
+    check("⑭C2″ message 单轴失败+其余真空→精确部分口径（不夸大成整个服务不可用）",
           partial_ok is True, f"bar={deg2[:40]} empty={empty2[:60]}")
     page.keyboard.press("Escape")
-    ctx.unroute("**/api/conversations*")
+    ctx.unroute("**/api/search?*")
     page.wait_for_timeout(400)
 
     # ── ⑭c C3 clay census oracle（内容区常驻可见的非豁免 clay ≤2/屏——

@@ -1,0 +1,318 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/search-page.schema.json",
+  "title": "FLAi-OS bounded search/addressing page",
+  "description": "P2.4 read-only navigation projection. Each response contains exactly one authority-scoped result kind; opaque cursors are bound to the principal, normalized query, scope, filters, limit, and snapshot.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope",
+    "query",
+    "snapshot_at",
+    "items",
+    "has_more",
+    "next_cursor"
+  ],
+  "properties": {
+    "schema_version": { "const": "search-page/v1" },
+    "scope": {
+      "type": "string",
+      "enum": ["conversation", "message", "task", "artifact"]
+    },
+    "query": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]{2,128}$"
+    },
+    "snapshot_at": { "$ref": "#/$defs/timestamp" },
+    "items": {
+      "type": "array",
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/search_item" }
+    },
+    "has_more": { "type": "boolean" },
+    "next_cursor": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "has_more": { "const": true } },
+        "required": ["has_more"]
+      },
+      "then": {
+        "properties": {
+          "next_cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      },
+      "else": {
+        "properties": { "next_cursor": { "type": "null" } }
+      }
+    }
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "scope": { "const": "conversation" },
+        "items": {
+          "items": { "$ref": "#/$defs/conversation_item" }
+        }
+      }
+    },
+    {
+      "properties": {
+        "scope": { "const": "message" },
+        "items": {
+          "items": { "$ref": "#/$defs/message_item" }
+        }
+      }
+    },
+    {
+      "properties": {
+        "scope": { "const": "task" },
+        "items": {
+          "items": { "$ref": "#/$defs/task_item" }
+        }
+      }
+    },
+    {
+      "properties": {
+        "scope": { "const": "artifact" },
+        "items": {
+          "items": { "$ref": "#/$defs/artifact_item" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{2,63}$"
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "file_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "match_kind": {
+      "type": "string",
+      "enum": ["exact_id", "id_prefix", "text_prefix", "text_contains"]
+    },
+    "task_status": {
+      "type": "string",
+      "enum": [
+        "created",
+        "queued",
+        "validating",
+        "running",
+        "waiting_review",
+        "parsing",
+        "analyzing",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "search_item": {
+      "oneOf": [
+        { "$ref": "#/$defs/conversation_item" },
+        { "$ref": "#/$defs/message_item" },
+        { "$ref": "#/$defs/task_item" },
+        { "$ref": "#/$defs/artifact_item" }
+      ]
+    },
+    "conversation_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "agent_id",
+        "status",
+        "created_at",
+        "match_kind"
+      ],
+      "properties": {
+        "kind": { "const": "conversation" },
+        "id": {
+          "type": "string",
+          "pattern": "^conv_[a-f0-9]{32}$"
+        },
+        "agent_id": { "$ref": "#/$defs/agent_id" },
+        "status": {
+          "type": "string",
+          "enum": ["active", "concluded"]
+        },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "match_kind": { "$ref": "#/$defs/match_kind" }
+      }
+    },
+    "message_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "conversation_id",
+        "conversation_agent_id",
+        "role",
+        "snippet",
+        "snippet_truncated",
+        "created_at",
+        "match_kind"
+      ],
+      "properties": {
+        "kind": { "const": "message" },
+        "id": {
+          "type": "string",
+          "pattern": "^msg_[a-f0-9]{32}$"
+        },
+        "conversation_id": {
+          "type": "string",
+          "pattern": "^conv_[a-f0-9]{32}$"
+        },
+        "conversation_agent_id": { "$ref": "#/$defs/agent_id" },
+        "role": {
+          "type": "string",
+          "enum": ["user", "assistant"]
+        },
+        "snippet": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "snippet_truncated": { "type": "boolean" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "match_kind": { "$ref": "#/$defs/match_kind" }
+      }
+    },
+    "task_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "name",
+        "agent_id",
+        "status",
+        "data_classification",
+        "content_withheld",
+        "created_at",
+        "match_kind"
+      ],
+      "properties": {
+        "kind": { "const": "task" },
+        "id": { "$ref": "#/$defs/task_id" },
+        "name": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "agent_id": { "$ref": "#/$defs/agent_id" },
+        "status": { "$ref": "#/$defs/task_status" },
+        "data_classification": {
+          "type": ["string", "null"],
+          "enum": ["internal", "sensitive", null]
+        },
+        "content_withheld": { "type": "boolean" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "match_kind": { "$ref": "#/$defs/match_kind" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "data_classification": { "const": "internal" } },
+            "required": ["data_classification"]
+          },
+          "then": {
+            "properties": { "content_withheld": { "const": false } }
+          },
+          "else": {
+            "properties": { "content_withheld": { "const": true } }
+          }
+        }
+      ]
+    },
+    "artifact_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "filename",
+        "task_id",
+        "task_name",
+        "size_bytes",
+        "data_classification",
+        "content_withheld",
+        "created_at",
+        "match_kind"
+      ],
+      "properties": {
+        "kind": { "const": "artifact" },
+        "id": { "$ref": "#/$defs/file_id" },
+        "filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_id": { "$ref": "#/$defs/task_id" },
+        "task_name": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "data_classification": {
+          "type": ["string", "null"],
+          "enum": ["internal", "sensitive", null]
+        },
+        "content_withheld": { "type": "boolean" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "match_kind": { "$ref": "#/$defs/match_kind" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "data_classification": { "const": "internal" } },
+            "required": ["data_classification"]
+          },
+          "then": {
+            "properties": { "content_withheld": { "const": false } }
+          },
+          "else": {
+            "properties": { "content_withheld": { "const": true } }
+          }
+        }
+      ]
+    }
+  }
+}

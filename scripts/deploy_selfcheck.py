@@ -32,6 +32,8 @@
     8d. health 含 eval_snapshot_axis=true（T2/#5 运行进程代际，Codex R0 审 P1：enqueue
         须冻结不可变快照——旧 API 未重启会入队无 handle 的 run、worker 回退活磁盘执行，
         「评的就是晋升的那版」不可变保证静默失效。配合 WORKER_GENERATION bump 双向见证）
+    8e. health 含 search_addressing_axis=true（P2.4 运行进程代际：仅数据库/前端已更新、
+        API 仍是旧进程时，服务侧检索与稳定深链均不可用；只接受布尔 True）
     9. health.db_identity = 探针侧库路径指纹（Codex R1 审 P2：两侧 FLAI_DB_PATH
        不一致时，探针查有账户的库 A、服务连空库 B，其余全 PASS 却无人能登录）
     10. 未认证 GET /api/agents → 401（鉴权代际见证：200=裸奔旧代际，404=旧代码，
@@ -389,6 +391,27 @@ def check_live_eval_snapshot_generation(base_url: str) -> Check:
     )
 
 
+def check_live_search_addressing_generation(base_url: str) -> Check:
+    """P2.4 服务侧检索代际见证，只接受显式布尔真。"""
+    name = "运行进程 P2.4 服务侧检索代际"
+    url = f"{base_url}/api/health"
+    try:
+        _, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check(name, False, f"{url} 不可达或非 JSON：{exc}")
+    if not isinstance(payload, dict):
+        return Check(name, False, f"{url} JSON 根节点不是对象，fail-closed")
+    if payload.get("search_addressing_axis") is True:
+        return Check(name, True, "活进程自报 search_addressing_axis=true")
+    return Check(
+        name,
+        False,
+        "health 无 search_addressing_axis=true——运行中 API 是 P2.4 服务侧检索之前的旧进程，"
+        "fail-closed",
+    )
+
+
 def check_auth_generation(base_url: str) -> Check:
     """鉴权代际见证：匿名打有数据的端点，401 才是新代际的证词。
 
@@ -475,6 +498,7 @@ def main() -> int:
     checks.append(check_live_created_by_username_generation(base_url))
     checks.append(check_live_structured_question_generation(base_url))
     checks.append(check_live_eval_snapshot_generation(base_url))
+    checks.append(check_live_search_addressing_generation(base_url))
     checks.append(check_db_identity(base_url, db_path))
     checks.append(check_auth_generation(base_url))
     checks.append(check_frontend_dist())
