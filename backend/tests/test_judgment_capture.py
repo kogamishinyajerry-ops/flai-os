@@ -80,8 +80,114 @@ def test_machine_advice_is_recorded_as_candidate_not_human_action(conn) -> None:
     assert advice["doubts"] == [
         {"code": "insufficient_evidence", "detail": "缺少来源见证"}
     ]
+    assert advice["evidence_file_ids"] == []
     assert advice["schema_version"] == 1
     assert conn.execute("SELECT COUNT(*) FROM task_human_decisions").fetchone()[0] == 0
+
+
+def test_machine_advice_preserves_same_task_evidence_file_pointers(conn) -> None:
+    task = _task(conn)
+    evidence_file_id = "file_review_evidence"
+    repos.create_file(
+        conn,
+        file_id=evidence_file_id,
+        task_id=task["id"],
+        kind="output",
+        filename="review-evidence.json",
+        path="/non-reading-test/review-evidence.json",
+        size_bytes=0,
+        sha256="0" * 64,
+        classification="internal",
+    )
+    repos.set_task_outputs(conn, task["id"], [evidence_file_id])
+    call = _model_call(conn, task["id"])
+
+    advice = repos.record_review_advice(
+        conn,
+        task_id=task["id"],
+        model_call_id=call["id"],
+        advisor_id="r0_review_advisor",
+        advisor_version="0.1.0",
+        model_profile="review",
+        model_name="model-a",
+        advisory_outcome="concerns",
+        doubts=[{"code": "method_error", "detail": "方法与证据不一致"}],
+        evidence_file_ids=[evidence_file_id],
+    )
+
+    assert advice["evidence_file_ids"] == [evidence_file_id]
+
+
+def test_repository_rejects_foreign_or_duplicate_evidence_file_pointers(conn) -> None:
+    source = _task(conn, "task_evidence_source")
+    target = _task(conn, "task_evidence_target")
+    evidence_file_id = "file_foreign_evidence"
+    repos.create_file(
+        conn,
+        file_id=evidence_file_id,
+        task_id=source["id"],
+        kind="output",
+        filename="foreign.json",
+        path="/non-reading-test/foreign.json",
+        size_bytes=0,
+        sha256="0" * 64,
+        classification="internal",
+    )
+    repos.set_task_outputs(conn, source["id"], [evidence_file_id])
+    call = _model_call(conn, target["id"])
+
+    for evidence_file_ids in (
+        [evidence_file_id],
+        [evidence_file_id, evidence_file_id],
+    ):
+        with pytest.raises(ValueError, match="证据"):
+            repos.record_review_advice(
+                conn,
+                task_id=target["id"],
+                model_call_id=call["id"],
+                advisor_id="r0_review_advisor",
+                advisor_version="0.1.0",
+                model_profile="review",
+                model_name="model-a",
+                advisory_outcome="clear",
+                doubts=[],
+                evidence_file_ids=evidence_file_ids,
+            )
+
+    assert conn.execute("SELECT COUNT(*) FROM task_review_advice").fetchone()[0] == 0
+
+
+def test_database_rejects_foreign_evidence_file_pointer(conn) -> None:
+    source = _task(conn, "task_db_evidence_source")
+    target = _task(conn, "task_db_evidence_target")
+    evidence_file_id = "file_db_foreign_evidence"
+    repos.create_file(
+        conn,
+        file_id=evidence_file_id,
+        task_id=source["id"],
+        kind="output",
+        filename="foreign.json",
+        path="/non-reading-test/foreign.json",
+        size_bytes=0,
+        sha256="0" * 64,
+        classification="internal",
+    )
+    repos.set_task_outputs(conn, source["id"], [evidence_file_id])
+    call = _model_call(conn, target["id"])
+
+    with pytest.raises(sqlite3.IntegrityError, match="evidence references"):
+        conn.execute(
+            """
+            INSERT INTO task_review_advice
+                (id, task_id, model_call_id, advisor_id, advisor_version,
+                 model_profile, model_name, advisory_outcome, doubts_json,
+                 evidence_file_ids_json, schema_version, created_at)
+            VALUES ('advice_foreign_evidence', ?, ?, 'r0_review_advisor',
+                    '0.1.0', 'review', 'model-a', 'clear', '[]', ?, 1,
+                    '2026-07-19T00:00:00+00:00')
+            """,
+            (target["id"], call["id"], f'["{evidence_file_id}"]'),
+        )
 
 
 @pytest.mark.parametrize("human_word", ["approve", "reject"])
@@ -239,6 +345,46 @@ def test_machine_advice_is_mechanically_append_only(conn, operation: str) -> Non
             )
 
 
+def test_machine_advice_replace_cannot_bypass_via_hidden_rowid(conn) -> None:
+    source = _task(conn, "task_rowid_source")
+    source_call = _model_call(conn, source["id"])
+    advice = repos.record_review_advice(
+        conn,
+        task_id=source["id"],
+        model_call_id=source_call["id"],
+        advisor_id="r0_review_advisor",
+        advisor_version="0.1.0",
+        model_profile="review",
+        model_name="model-a",
+        advisory_outcome="clear",
+        doubts=[],
+    )
+    target = _task(conn, "task_rowid_target")
+    target_call = _model_call(conn, target["id"])
+    hidden_rowid = conn.execute(
+        "SELECT rowid FROM task_review_advice WHERE id = ?", (advice["id"],)
+    ).fetchone()[0]
+    conn.execute("PRAGMA recursive_triggers=OFF")
+
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO task_review_advice
+                (rowid, id, task_id, model_call_id, advisor_id, advisor_version,
+                 model_profile, model_name, advisory_outcome, doubts_json,
+                 schema_version, created_at)
+            VALUES (?, 'advice_rowid_replacement', ?, ?, 'r0_review_advisor',
+                    '0.1.0', 'review', 'model-a', 'clear', '[]', 1,
+                    '2026-07-19T00:00:00+00:00')
+            """,
+            (hidden_rowid, target["id"], target_call["id"]),
+        )
+
+    assert conn.execute(
+        "SELECT id FROM task_review_advice WHERE rowid = ?", (hidden_rowid,)
+    ).fetchone()[0] == advice["id"]
+
+
 @pytest.mark.parametrize("operation", ["update", "delete", "replace"])
 def test_model_call_becomes_append_only_after_advice_witnesses_it(
     conn, operation: str
@@ -328,6 +474,46 @@ def test_human_decision_is_mechanically_append_only_across_all_unique_keys(
             )
 
 
+def test_human_decision_replace_cannot_bypass_via_hidden_rowid(conn) -> None:
+    source = _task(conn, "decision_rowid_source")
+    _to_waiting_review(conn, source["id"])
+    repos.apply_human_review(
+        conn,
+        source["id"],
+        action="approve",
+        reviewer="终裁工程师",
+        reviewer_username="final_reviewer",
+        reason_code=None,
+        comment=None,
+    )
+    decision = repos.get_human_decision(conn, source["id"])
+    assert decision is not None
+    hidden_rowid = conn.execute(
+        "SELECT rowid FROM task_human_decisions WHERE id = ?", (decision["id"],)
+    ).fetchone()[0]
+    target = _task(conn, "decision_rowid_target")
+    _to_waiting_review(conn, target["id"])
+    conn.execute("PRAGMA recursive_triggers=OFF")
+
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO task_human_decisions
+                (rowid, id, task_id, paired_advice_id, action, reason_code,
+                 comment, reviewer_username, reviewer_display_name,
+                 schema_version, created_at)
+            VALUES (?, 'decision_rowid_replacement', ?, NULL, 'approve', NULL,
+                    NULL, 'replacement', '替换者', 1,
+                    '2026-07-19T00:00:00+00:00')
+            """,
+            (hidden_rowid, target["id"]),
+        )
+
+    assert conn.execute(
+        "SELECT id FROM task_human_decisions WHERE rowid = ?", (hidden_rowid,)
+    ).fetchone()[0] == decision["id"]
+
+
 @pytest.mark.parametrize(
     ("outcome", "doubts_json"),
     [
@@ -345,6 +531,8 @@ def test_human_decision_is_mechanically_append_only_across_all_unique_keys(
             '[{"code":"method_error","detail":"合法文本","extra":true}]',
         ),
         ("concerns", '[{"code":"method_error","detail":"   "}]'),
+        ("concerns", '[{"code":"method_error","detail":"\\n\\t\\r"}]'),
+        ("concerns", '[{"code":"method_error","detail":"\u2003"}]'),
     ],
 )
 def test_database_rejects_invalid_advice_outcome_doubt_contract(
@@ -543,6 +731,37 @@ def test_database_rejects_human_decision_for_non_waiting_review_task(
         )
 
 
+@pytest.mark.parametrize(
+    ("comment", "reviewer_username", "reviewer_display_name"),
+    [
+        ("\n\t\r", "reviewer", "终裁工程师"),
+        ("\u2003", "reviewer", "终裁工程师"),
+        ("具体原因", "\n\t", "终裁工程师"),
+        ("具体原因", "reviewer", "\u2003"),
+    ],
+)
+def test_database_rejects_whitespace_only_human_decision_fields(
+    conn,
+    comment: str,
+    reviewer_username: str,
+    reviewer_display_name: str,
+) -> None:
+    task = _task(conn)
+    _to_waiting_review(conn, task["id"])
+
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+        conn.execute(
+            """
+            INSERT INTO task_human_decisions
+                (id, task_id, paired_advice_id, action, reason_code, comment,
+                 reviewer_username, reviewer_display_name, schema_version, created_at)
+            VALUES ('decision_whitespace', ?, NULL, 'reject', 'other', ?, ?, ?,
+                    1, '2026-07-19T00:00:00+00:00')
+            """,
+            (task["id"], comment, reviewer_username, reviewer_display_name),
+        )
+
+
 def test_judgment_ledger_primary_ids_are_never_nullable(conn) -> None:
     task = _task(conn)
     call = _model_call(conn, task["id"])
@@ -706,6 +925,44 @@ def test_init_refuses_to_recreate_missing_table_beside_nonempty_ledger(
         assert connection.execute(
             "SELECT COUNT(*) FROM task_review_advice"
         ).fetchone()[0] == 1
+    finally:
+        connection.close()
+
+
+def test_init_refuses_to_recreate_dropped_populated_advice_table(
+    tmp_path,
+) -> None:
+    """被删的是唯一有数据的表时，空的另一表不能让启动误判为从未启用。"""
+    db_path = tmp_path / "dropped-populated-advice.db"
+    init_db(db_path)
+    connection = get_conn(db_path)
+    try:
+        task = _task(connection)
+        call = _model_call(connection, task["id"])
+        repos.record_review_advice(
+            connection,
+            task_id=task["id"],
+            model_call_id=call["id"],
+            advisor_id="r0_review_advisor",
+            advisor_version="0.1.0",
+            model_profile="review",
+            model_name="model-a",
+            advisory_outcome="clear",
+            doubts=[],
+        )
+        connection.execute("DROP TABLE task_review_advice")
+    finally:
+        connection.close()
+
+    with pytest.raises(sqlite3.IntegrityError, match="schema residue"):
+        init_db(db_path)
+
+    connection = get_conn(db_path)
+    try:
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'task_review_advice'"
+        ).fetchone() is None
     finally:
         connection.close()
 

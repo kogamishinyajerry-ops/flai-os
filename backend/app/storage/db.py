@@ -193,6 +193,10 @@ CREATE TABLE IF NOT EXISTS task_review_advice (
     doubts_json TEXT NOT NULL CHECK (
         json_valid(doubts_json) AND json_type(doubts_json) = 'array'
     ),
+    evidence_file_ids_json TEXT NOT NULL DEFAULT '[]' CHECK (
+        json_valid(evidence_file_ids_json)
+        AND json_type(evidence_file_ids_json) = 'array'
+    ),
     schema_version INTEGER NOT NULL CHECK (schema_version = 1),
     created_at TEXT NOT NULL
 );
@@ -209,8 +213,20 @@ CREATE TABLE IF NOT EXISTS task_human_decisions (
         )
     ),
     comment TEXT CHECK (comment IS NULL OR length(comment) <= 2000),
-    reviewer_username TEXT NOT NULL CHECK (length(trim(reviewer_username)) > 0),
-    reviewer_display_name TEXT NOT NULL CHECK (length(trim(reviewer_display_name)) > 0),
+    reviewer_username TEXT NOT NULL CHECK (
+        length(trim(reviewer_username, char(
+            9,10,11,12,13,28,29,30,31,32,133,160,5760,
+            8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,
+            8232,8233,8239,8287,12288
+        ))) > 0
+    ),
+    reviewer_display_name TEXT NOT NULL CHECK (
+        length(trim(reviewer_display_name, char(
+            9,10,11,12,13,28,29,30,31,32,133,160,5760,
+            8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,
+            8232,8233,8239,8287,12288
+        ))) > 0
+    ),
     schema_version INTEGER NOT NULL CHECK (schema_version = 1),
     created_at TEXT NOT NULL,
     CHECK (
@@ -219,7 +235,11 @@ CREATE TABLE IF NOT EXISTS task_human_decisions (
     ),
     CHECK (
         reason_code <> 'other'
-        OR (comment IS NOT NULL AND length(trim(comment)) > 0)
+        OR (comment IS NOT NULL AND length(trim(comment, char(
+            9,10,11,12,13,28,29,30,31,32,133,160,5760,
+            8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,
+            8232,8233,8239,8287,12288
+        ))) > 0)
     )
 );
 
@@ -485,13 +505,60 @@ _JUDGMENT_OBJECT_DDL = (
                    FROM json_each(doubt.value) AS field
                    WHERE field.key = 'detail'
                      AND field.type = 'text'
-                     AND length(trim(field.value)) > 0
+                     AND length(trim(field.value, char(
+                         9,10,11,12,13,28,29,30,31,32,133,160,5760,
+                         8192,8193,8194,8195,8196,8197,8198,8199,
+                         8200,8201,8202,8232,8233,8239,8287,12288
+                     ))) > 0
                      AND length(field.value) <= 2000
                )
         )
     )
     BEGIN
         SELECT RAISE(ABORT, 'invalid advice doubts contract');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_review_advice_validate_evidence
+    BEFORE INSERT ON task_review_advice
+    WHEN (
+        json_array_length(NEW.evidence_file_ids_json) > 50
+        OR (
+            SELECT COUNT(*) FROM json_each(NEW.evidence_file_ids_json)
+        ) <> (
+            SELECT COUNT(DISTINCT value)
+            FROM json_each(NEW.evidence_file_ids_json)
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM json_each(NEW.evidence_file_ids_json) AS ref
+            WHERE ref.type <> 'text'
+               OR length(ref.value) = 0
+               OR length(ref.value) > 100
+               OR NOT EXISTS (
+                   SELECT 1 FROM files WHERE id = ref.value
+               )
+               OR NOT EXISTS (
+                   SELECT 1
+                   FROM tasks AS task
+                   WHERE task.id = NEW.task_id
+                     AND (
+                         EXISTS (
+                             SELECT 1 FROM json_each(task.input_file_ids) AS input_ref
+                             WHERE input_ref.type = 'text'
+                               AND input_ref.value = ref.value
+                         )
+                         OR EXISTS (
+                             SELECT 1 FROM json_each(task.output_file_ids) AS output_ref
+                             WHERE output_ref.type = 'text'
+                               AND output_ref.value = ref.value
+                         )
+                     )
+               )
+        )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'invalid advice evidence references');
     END
     """,
     """
@@ -513,7 +580,9 @@ _JUDGMENT_OBJECT_DDL = (
     BEFORE INSERT ON task_review_advice
     WHEN EXISTS (
         SELECT 1 FROM task_review_advice
-        WHERE id = NEW.id OR model_call_id = NEW.model_call_id
+        WHERE rowid = NEW.rowid
+           OR id = NEW.id
+           OR model_call_id = NEW.model_call_id
     )
     BEGIN
         SELECT RAISE(ABORT, 'task_review_advice is append-only');
@@ -600,7 +669,9 @@ _JUDGMENT_OBJECT_DDL = (
     BEFORE INSERT ON task_human_decisions
     WHEN EXISTS (
         SELECT 1 FROM task_human_decisions
-        WHERE id = NEW.id OR task_id = NEW.task_id
+        WHERE rowid = NEW.rowid
+           OR id = NEW.id
+           OR task_id = NEW.task_id
     )
     BEGIN
         SELECT RAISE(ABORT, 'task_human_decisions is append-only');
@@ -616,6 +687,7 @@ _JUDGMENT_MANAGED_INDEXES = (
 _JUDGMENT_MANAGED_TRIGGERS = (
     "trg_task_review_advice_model_call_witness",
     "trg_task_review_advice_validate_doubts",
+    "trg_task_review_advice_validate_evidence",
     "trg_task_review_advice_no_update",
     "trg_task_review_advice_no_delete",
     "trg_task_review_advice_no_conflicting_insert",
@@ -1909,6 +1981,34 @@ def init_db(db_path: str | Path) -> None:
                 judgment_table_names,
             )
         }
+        judgment_managed_object_names = (
+            *_JUDGMENT_MANAGED_TRIGGERS,
+            *_JUDGMENT_MANAGED_INDEXES,
+        )
+        object_placeholders = ",".join(
+            "?" for _ in judgment_managed_object_names
+        )
+        existing_judgment_objects = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type IN ('trigger', 'index') "
+                f"AND name IN ({object_placeholders})",
+                judgment_managed_object_names,
+            )
+        }
+        # 一旦任一受管表/对象存在，说明判断账本代际已经开始落地。此时缺少任一
+        # 物理账本可能意味着整表证据被删；不得让 `_DDL` 静默补回一张空表。
+        judgment_schema_residue = bool(
+            existing_judgment_tables or existing_judgment_objects
+        )
+        if (
+            judgment_schema_residue
+            and existing_judgment_tables != set(judgment_table_names)
+        ):
+            raise sqlite3.IntegrityError(
+                "judgment schema residue is missing a required table"
+            )
         judgment_was_nonempty = any(
             conn.execute(
                 f"SELECT EXISTS(SELECT 1 FROM {table_name} LIMIT 1)"
@@ -1917,10 +2017,6 @@ def init_db(db_path: str | Path) -> None:
             for table_name in existing_judgment_tables
         )
         if judgment_was_nonempty:
-            if existing_judgment_tables != set(judgment_table_names):
-                raise sqlite3.IntegrityError(
-                    "nonempty judgment ledger is missing a required table"
-                )
             from .review_schema import assert_judgment_schema
 
             assert_judgment_schema(conn)

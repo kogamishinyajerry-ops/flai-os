@@ -20,7 +20,9 @@
 ### 1. 两张只追加表，物理隔离
 
 - `task_review_advice` 只记录机器顾问候选：真实 `model_call_id`、advisor/model 快照、
-  `clear | concerns | abstain` 与结构化疑点。它没有任务状态迁移能力，也不使用
+  `clear | concerns | abstain`、结构化疑点与同任务 `evidence_file_ids` 指针。指针只可
+  引用任务冻结输入或权威输出中的真实文件；空数组诚实表示本条意见没有可定位文件，
+  不得用自由文本路径冒充稳定证据。它没有任务状态迁移能力，也不使用
   `approve/reject` 词汇。
 - `task_human_decisions` 只记录具名人工终裁：exact username、显示名快照、
   `approve | reject`、结构化理由、可选说明与可空 `paired_advice_id`。一项任务最多一条

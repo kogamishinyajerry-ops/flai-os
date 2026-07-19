@@ -20,9 +20,9 @@ spec = importlib.util.spec_from_file_location("usage_report", SCRIPT)
 usage_report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(usage_report)
 
-NOW = dt.datetime(2026, 7, 18, 12, 0, 0)
-RECENT = "2026-07-17T10:00:00"
-OLD = "2026-05-01T10:00:00"
+NOW = dt.datetime(2026, 7, 18, 12, 0, 0, tzinfo=dt.timezone.utc)
+RECENT = "2026-07-17T10:00:00+00:00"
+OLD = "2026-05-01T10:00:00+00:00"
 
 
 def make_db(tmp_path: Path) -> Path:
@@ -35,7 +35,10 @@ def make_db(tmp_path: Path) -> Path:
         CREATE TABLE tasks (id TEXT PRIMARY KEY, agent_id TEXT, status TEXT, created_by TEXT,
                             created_by_username TEXT, created_at TEXT, updated_at TEXT,
                             finished_at TEXT, conversation_id TEXT, origin TEXT);
-        CREATE TABLE task_events (id INTEGER PRIMARY KEY, event_type TEXT, created_at TEXT);
+        CREATE TABLE task_events (id INTEGER PRIMARY KEY, task_id TEXT,
+                                  event_type TEXT, created_at TEXT);
+        CREATE TABLE task_human_decisions (id TEXT PRIMARY KEY, task_id TEXT,
+                                           reason_code TEXT, created_at TEXT);
         CREATE TABLE conversations (id TEXT PRIMARY KEY, created_by TEXT, created_at TEXT);
         CREATE TABLE model_calls (id INTEGER PRIMARY KEY, status TEXT, created_at TEXT);
         CREATE TABLE feedback (id INTEGER PRIMARY KEY, created_at TEXT);
@@ -55,13 +58,22 @@ def make_db(tmp_path: Path) -> Path:
     ]
     conn.executemany("INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
     conn.executemany(
-        "INSERT INTO task_events (event_type, created_at) VALUES (?,?)",
-        [("review_approved", RECENT), ("review_rejected", RECENT), ("review_approved", OLD)],
+        "INSERT INTO task_events (task_id, event_type, created_at) VALUES (?,?,?)",
+        [
+            ("t1", "review_approved", RECENT),
+            ("t3", "review_rejected", RECENT),
+            ("t4", "review_approved", OLD),
+            ("t5", "review_approved", RECENT),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO task_human_decisions VALUES ('d1', 't1', NULL, ?)",
+        (RECENT,),
     )
     conn.execute("INSERT INTO conversations VALUES ('c1', '用户一', ?)", (RECENT,))
     conn.executemany(
         "INSERT INTO model_calls (status, created_at) VALUES (?,?)",
-        [("succeeded", RECENT), ("failed", RECENT)],
+        [("success", RECENT), ("failed", RECENT)],
     )
     conn.execute("INSERT INTO feedback (created_at) VALUES (?)", (RECENT,))
     conn.commit()
@@ -78,7 +90,16 @@ def test_counts_window_and_eval_isolation(tmp_path):
     assert tasks["by_creator"] == {"u1": 2, "u2": 1}
     assert tasks["completed_median_s"] == 300.0
     assert tasks["stalled_waiting_review"] == 1       # t2 updated 超 48h
-    assert report["reviews"] == {"approved": 1, "rejected": 1}
+    assert report["reviews"]["approved"] == 1
+    assert report["reviews"]["rejected"] == 1
+    assert report["reviews"]["judgment_coverage"] == {
+        "status": "measured",
+        "structured": 1,
+        "legacy_unstructured": 1,
+        "structured_ratio": 0.5,
+        "by_reject_reason": {},
+        "note": "legacy_unstructured 仅计无结构化 decision 的既有 review event；不反推 reason",
+    }
     assert report["funnel"]["conversations"] == 1
     assert report["funnel"]["conversations_with_tasks"] == 1
     assert report["funnel"]["completed"] == 1
@@ -98,6 +119,14 @@ def test_missing_columns_honest_unknown(tmp_path):
     report = usage_report.build_report(db, days=14, now=NOW)
     assert isinstance(report["tasks"], str) and "未知" in report["tasks"]
     assert isinstance(report["reviews"], str) and "未知" in report["reviews"]
+
+
+def test_naive_injected_clock_is_interpreted_as_utc_not_local_time(tmp_path):
+    naive_now = dt.datetime(2026, 7, 18, 12, 0, 0)
+    report = usage_report.build_report(make_db(tmp_path), days=14, now=naive_now)
+
+    assert report["generated_at"] == "2026-07-18T12:00:00+00:00"
+    assert report["tasks"]["created"] == 3
 
 
 def test_missing_db_fails_closed(tmp_path):

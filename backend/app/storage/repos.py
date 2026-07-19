@@ -83,6 +83,12 @@ def _decode_task(row: sqlite3.Row) -> dict[str, Any]:
 def _decode_review_advice(row: sqlite3.Row) -> dict[str, Any]:
     result = dict(row)
     _decode_json(result, "doubts_json", "doubts", default=[])
+    _decode_json(
+        result,
+        "evidence_file_ids_json",
+        "evidence_file_ids",
+        default=[],
+    )
     return result
 
 
@@ -97,6 +103,7 @@ def record_review_advice(
     model_name: str | None,
     advisory_outcome: str,
     doubts: list[dict[str, Any]],
+    evidence_file_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """写入一条机器顾问候选；本接口没有任何任务状态迁移能力。
 
@@ -127,10 +134,31 @@ def record_review_advice(
         raise ValueError("clear 顾问结论不得携带疑点")
     if advisory_outcome == "concerns" and not normalized_doubts:
         raise ValueError("concerns 顾问结论至少需要一条疑点")
+    if evidence_file_ids is None:
+        evidence_file_ids = []
+    if not isinstance(evidence_file_ids, list) or len(evidence_file_ids) > 50:
+        raise ValueError("证据指针必须是至多 50 个 file_id 的列表")
+    if len(set(evidence_file_ids)) != len(evidence_file_ids) or not all(
+        isinstance(file_id, str)
+        and bool(file_id.strip())
+        and len(file_id) <= 100
+        for file_id in evidence_file_ids
+    ):
+        raise ValueError("证据 file_id 必须非空、唯一且不超过 100 字符")
 
     task = get_task(conn, task_id)
     if task is None:
         raise TaskNotFoundError(f"任务不存在：{task_id}")
+    authoritative_file_ids = set(task["input_file_ids"]) | set(
+        task["output_file_ids"]
+    )
+    if not set(evidence_file_ids).issubset(authoritative_file_ids):
+        raise ValueError("证据 file_id 必须属于同任务的冻结输入或权威输出")
+    persisted_file_ids = {
+        row["id"] for row in list_files_by_ids(conn, evidence_file_ids)
+    }
+    if persisted_file_ids != set(evidence_file_ids):
+        raise ValueError("证据 file_id 必须引用真实文件记录")
     model_call = conn.execute(
         """
         SELECT task_id, agent_id, model_profile, model_name, status
@@ -157,8 +185,8 @@ def record_review_advice(
         INSERT INTO task_review_advice
             (id, task_id, model_call_id, advisor_id, advisor_version,
              model_profile, model_name, advisory_outcome, doubts_json,
-             schema_version, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+             evidence_file_ids_json, schema_version, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
         """,
         (
             advice_id,
@@ -170,6 +198,7 @@ def record_review_advice(
             model_name,
             advisory_outcome,
             json.dumps(normalized_doubts, ensure_ascii=False, sort_keys=True),
+            json.dumps(evidence_file_ids, ensure_ascii=False),
             created_at,
         ),
     )

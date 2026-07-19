@@ -42,14 +42,24 @@ def _parse_ts(value: object) -> dt.datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return (
+            parsed.replace(tzinfo=dt.timezone.utc)
+            if parsed.tzinfo is None
+            else parsed.astimezone(dt.timezone.utc)
+        )
     except ValueError:
         return None
 
 
 def build_report(db_path: Path, days: int, now: dt.datetime | None = None) -> dict:
     """汇总使用数据。now 可注入（测试确定性）。"""
-    now = now or dt.datetime.now()
+    now = now or dt.datetime.now(dt.timezone.utc)
+    now = (
+        now.replace(tzinfo=dt.timezone.utc)
+        if now.tzinfo is None
+        else now.astimezone(dt.timezone.utc)
+    )
     since = (now - dt.timedelta(days=days)).isoformat(timespec="seconds")
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
@@ -122,17 +132,92 @@ def build_report(db_path: Path, days: int, now: dt.datetime | None = None) -> di
             report["tasks"] = "未知（tasks 表结构不含所需列）"
 
         # ---- 人签活跃度 ----
-        if {"event_type", "created_at"} <= _columns(conn, "task_events"):
-            report["reviews"] = {
+        event_cols = _columns(conn, "task_events")
+        if (
+            {"task_id", "event_type", "created_at"} <= event_cols
+            and {"id", "origin"} <= task_cols
+        ):
+            reviews: dict = {
                 "approved": _one(
-                    conn, "SELECT COUNT(*) FROM task_events WHERE event_type = 'review_approved' AND created_at >= ?", (since,)
+                    conn,
+                    "SELECT COUNT(*) FROM task_events AS event "
+                    "JOIN tasks AS task ON task.id = event.task_id "
+                    "WHERE task.origin = 'user' "
+                    "AND event.event_type = 'review_approved' "
+                    "AND event.created_at >= ?",
+                    (since,),
                 ),
                 "rejected": _one(
-                    conn, "SELECT COUNT(*) FROM task_events WHERE event_type = 'review_rejected' AND created_at >= ?", (since,)
+                    conn,
+                    "SELECT COUNT(*) FROM task_events AS event "
+                    "JOIN tasks AS task ON task.id = event.task_id "
+                    "WHERE task.origin = 'user' "
+                    "AND event.event_type = 'review_rejected' "
+                    "AND event.created_at >= ?",
+                    (since,),
                 ),
             }
+            decision_cols = _columns(conn, "task_human_decisions")
+            if {"task_id", "reason_code", "created_at"} <= decision_cols:
+                structured = _one(
+                    conn,
+                    "SELECT COUNT(*) FROM task_events AS event "
+                    "JOIN tasks AS task ON task.id = event.task_id "
+                    "JOIN task_human_decisions AS decision "
+                    "ON decision.task_id = event.task_id "
+                    "WHERE task.origin = 'user' "
+                    "AND event.event_type IN ('review_approved', 'review_rejected') "
+                    "AND event.created_at >= ?",
+                    (since,),
+                )
+                legacy = _one(
+                    conn,
+                    "SELECT COUNT(*) FROM task_events AS event "
+                    "JOIN tasks AS task ON task.id = event.task_id "
+                    "LEFT JOIN task_human_decisions AS decision "
+                    "ON decision.task_id = event.task_id "
+                    "WHERE task.origin = 'user' "
+                    "AND event.event_type IN ('review_approved', 'review_rejected') "
+                    "AND event.created_at >= ? "
+                    "AND decision.task_id IS NULL",
+                    (since,),
+                )
+                denominator = int(structured or 0) + int(legacy or 0)
+                reviews["judgment_coverage"] = {
+                    "status": (
+                        "measured"
+                        if denominator > 0
+                        else "unknown_no_review_samples"
+                    ),
+                    "structured": structured,
+                    "legacy_unstructured": legacy,
+                    "structured_ratio": (
+                        round(int(structured or 0) / denominator, 4)
+                        if denominator > 0
+                        else "未知（窗口内无具名人签样本）"
+                    ),
+                    "by_reject_reason": {
+                        str(row["reason_code"]): row["n"]
+                        for row in conn.execute(
+                            "SELECT decision.reason_code, COUNT(*) AS n "
+                            "FROM task_human_decisions AS decision "
+                            "JOIN tasks AS task ON task.id = decision.task_id "
+                            "WHERE task.origin = 'user' "
+                            "AND decision.created_at >= ? "
+                            "AND decision.reason_code IS NOT NULL "
+                            "GROUP BY decision.reason_code ORDER BY n DESC",
+                            (since,),
+                        )
+                    },
+                    "note": "legacy_unstructured 仅计无结构化 decision 的既有 review event；不反推 reason",
+                }
+            else:
+                reviews["judgment_coverage"] = (
+                    "未知（task_human_decisions 结构未在位；不把旧人签冒充结构化样本）"
+                )
+            report["reviews"] = reviews
         else:
-            report["reviews"] = "未知（task_events 表结构不含所需列）"
+            report["reviews"] = "未知（task_events/tasks 表结构不含所需列）"
 
         # ---- 对话/漏斗 ----
         conv_ok = {"created_at", "created_by"} <= _columns(conn, "conversations")
@@ -163,7 +248,7 @@ def build_report(db_path: Path, days: int, now: dt.datetime | None = None) -> di
             calls: dict = {
                 "total": _one(conn, "SELECT COUNT(*) FROM model_calls WHERE created_at >= ?", (since,)),
                 "failed": _one(
-                    conn, "SELECT COUNT(*) FROM model_calls WHERE created_at >= ? AND status != 'succeeded'", (since,)
+                    conn, "SELECT COUNT(*) FROM model_calls WHERE created_at >= ? AND status != 'success'", (since,)
                 ),
             }
             token_col = next((c for c in ("total_tokens", "tokens_total", "usage_total_tokens") if c in mc_cols), None)
