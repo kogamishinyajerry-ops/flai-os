@@ -116,7 +116,11 @@ def test_review_response_matches_task_schema(
 
     resp = client.post(
         f"/api/tasks/{task_id}/review",
-        json={"action": action, "comment": "响应体对账"},
+        json={
+            "action": action,
+            "reason_code": "other" if action == "reject" else None,
+            "comment": "响应体对账",
+        },
     )
     assert resp.status_code == 200
     body = resp.json()

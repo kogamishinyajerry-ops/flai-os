@@ -6,7 +6,7 @@
 覆盖：
   §12.3 六条——①前端连 FastAPI ②Agent 列表 ③创建任务 ④任务事件
   ⑤下载输出 ⑥提交反馈；
-  附加——任务历史 / SPA 深链刷新 / **waiting_review 人工放行 UI 全链**
+  附加——任务历史 / SPA 深链刷新 / **waiting_review 人工批准与结构化驳回 UI 全链**
   （宪法「人是唯一签发者」的界面落点：tmp 复制 hello_agent 为
   requires_human_review=true 的 review_agent 驱动出该状态）。
 
@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import socket
@@ -123,7 +124,14 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
     login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie，登录门不拦
     page_requests: list[str] = []
+    review_request_bodies: list[str] = []
     page.on("request", lambda request: page_requests.append(request.url))
+    page.on(
+        "request",
+        lambda request: review_request_bodies.append(request.post_data or "")
+        if request.method == "POST" and request.url.endswith("/review")
+        else None,
+    )
 
     # ── ①②门户：连接后端 + Agent 列表（两个 agent 卡片）──
     # M6 起首页 "/" 是智能导引，Agent 门户移至 /portal（ADR-0012 前端路由）。
@@ -254,6 +262,84 @@ with sync_playwright() as p:
     check("附加:人工批准→completed+review_approved 事件上时间轴（展开态）",
           task_status_text(page) == "已完成" and "review_approved" in body, body[:600])
     page.screenshot(path=str(SHOTS / "7_review_approved.png"), full_page=True)
+
+    # ── 附加：waiting_review 结构化驳回（判断资产化 UI/API 全链）──
+    # 保留上面的批准见证，另起一个全新任务：先证明无原因时前端 fail-closed、
+    # 零 review POST；再选择「证据不足」完成驳回，并从持久事件 API 核对结构化原因。
+    page.goto(BASE + "/tasks/new?agent_id=review_agent", wait_until="networkidle")
+    expect(page.locator(".agent-preview")).to_be_visible(timeout=5000)
+    page.locator('input[placeholder="请填写姓名"]').first.fill("待结构化驳回")
+    page.get_by_role("button", name="提交任务").click()
+    page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
+    reject_task_id = page.url.rsplit("/", 1)[-1]
+
+    reject_ready_in_time = wait_for_condition(
+        lambda: task_status_text(page) == "等待人工审核",
+        timeout_seconds=30,
+    )
+    check(
+        "附加:驳回样本进入 waiting_review",
+        reject_ready_in_time is True and page.locator(".review-card").is_visible(),
+        page.locator("body").inner_text()[:400],
+    )
+
+    requests_before_reject = len(review_request_bodies)
+    page.get_by_role("button", name="驳回", exact=True).click()
+    expect(page.get_by_role("dialog", name="选择驳回原因")).to_be_visible(timeout=3000)
+    page.get_by_role("button", name="确认驳回", exact=True).click()
+    expect(page.get_by_text("请选择驳回原因", exact=True)).to_be_visible(timeout=3000)
+    # 给浏览器请求事件一个明确观察窗：若 UI 错把无原因请求发出，此处必须咬红。
+    page.wait_for_timeout(250)
+    check(
+        "附加:未选驳回原因时可见校验且零 review 请求",
+        len(review_request_bodies) == requests_before_reject,
+        f"before={requests_before_reject} after={len(review_request_bodies)}",
+    )
+
+    # Element Plus 的原生 input 被自绘圆点覆盖；点击可见 label 才是用户真实路径。
+    page.locator(".el-dialog .el-radio", has_text="证据不足").click()
+    expect(page.get_by_role("radio", name="证据不足", exact=True)).to_be_checked()
+    page.get_by_role("button", name="确认驳回", exact=True).click()
+    rejected_in_time = wait_for_condition(
+        lambda: task_status_text(page) == "失败",
+        timeout_seconds=15,
+        poll_seconds=0.2,
+    )
+
+    reject_payloads = []
+    for raw in review_request_bodies[requests_before_reject:]:
+        try:
+            reject_payloads.append(json.loads(raw))
+        except json.JSONDecodeError:
+            reject_payloads.append({"_invalid_json": raw})
+    check(
+        "附加:选择证据不足后仅发送一次结构化驳回请求",
+        reject_payloads == [{
+            "action": "reject",
+            "reason_code": "insufficient_evidence",
+            "comment": None,
+            "paired_advice_id": None,
+        }],
+        f"payloads={reject_payloads}",
+    )
+
+    events_resp = page.request.get(BASE + f"/api/tasks/{reject_task_id}/events")
+    reject_events = events_resp.json() if events_resp.ok else []
+    persisted_rejections = [
+        event for event in reject_events
+        if event.get("event_type") == "review_rejected"
+    ]
+    persisted_reason_ok = (
+        len(persisted_rejections) == 1
+        and persisted_rejections[0].get("payload", {}).get("reason_code")
+        == "insufficient_evidence"
+    )
+    check(
+        "附加:人工驳回→failed 且 review_rejected 持久事件保留 reason_code",
+        rejected_in_time is True and events_resp.ok is True and persisted_reason_ok,
+        f"status={task_status_text(page)} http={events_resp.status} events={persisted_rejections}",
+    )
+    page.screenshot(path=str(SHOTS / "8_review_rejected.png"), full_page=True)
 
     browser.close()
 

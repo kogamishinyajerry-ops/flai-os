@@ -36,6 +36,9 @@ _AUDIT_ALLOWED_FIELDS = frozenset({
     # actor 同类已入白名单）；self_review_basis='username'|'display_name' 标注自审
     # 判定的证据等级（精确 vs legacy 近似）。二者皆枚举/受控标识，无自由文本。
     "created_by_username", "self_review_basis",
+    # 判断资产化：结构化原因是冻结枚举，decision/advice id 是 opaque id；三者可
+    # 进入独立 audit.log。自由文本 comment/doubts 仍不在白名单，防敏感内容回流。
+    "decision_id", "reason_code", "paired_advice_id",
 })
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"

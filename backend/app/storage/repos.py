@@ -26,6 +26,19 @@ _EVENT_SCHEMA_PATH = CONTRACTS_DIR / "event.schema.json"
 _event_schema_cache: dict[str, Any] | None = None
 _QUESTION_ID_RE = re.compile(r"^q_[a-f0-9]{32}$")
 _MESSAGE_ID_RE = re.compile(r"^msg_[a-f0-9]{32}$")
+_REVIEW_REASON_CODES = frozenset({
+    "source_doubt",
+    "method_error",
+    "conclusion_overreach",
+    "insufficient_evidence",
+    "classification_issue",
+    "other",
+})
+_ADVISORY_OUTCOMES = frozenset({"clear", "concerns", "abstain"})
+
+
+class InvalidReviewError(ValueError):
+    """人工终裁请求违反判断账本合同；API 层可安全映射为显式 422。"""
 
 
 def _now_iso() -> str:
@@ -65,6 +78,114 @@ def _decode_task(row: sqlite3.Row) -> dict[str, Any]:
     # （投影键恒在，契约 parity 才稳定）。
     d["retry_of"] = d.get("retry_of")
     return d
+
+
+def _decode_review_advice(row: sqlite3.Row) -> dict[str, Any]:
+    result = dict(row)
+    _decode_json(result, "doubts_json", "doubts", default=[])
+    return result
+
+
+def record_review_advice(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    model_call_id: int,
+    advisor_id: str,
+    advisor_version: str,
+    model_profile: str,
+    model_name: str | None,
+    advisory_outcome: str,
+    doubts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """写入一条机器顾问候选；本接口没有任何任务状态迁移能力。
+
+    advisor_id/model_profile/model_name 必须与 model_calls 原始 provenance
+    null-safe 精确一致。model_calls 当前没有 agent version 列，故
+    advisor_version 仍是调用方从冻结 Agent manifest 提供的快照，不能被本表反推。
+    """
+    if advisory_outcome not in _ADVISORY_OUTCOMES:
+        raise ValueError(f"未知机器顾问结论：{advisory_outcome}")
+    if not all(isinstance(value, str) and value.strip() for value in (
+        task_id, advisor_id, advisor_version, model_profile
+    )):
+        raise ValueError("顾问记录的任务、顾问与模型标识必须非空")
+    if not isinstance(doubts, list) or len(doubts) > 20:
+        raise ValueError("机器疑点必须是至多 20 条的列表")
+    normalized_doubts: list[dict[str, str]] = []
+    for doubt in doubts:
+        if not isinstance(doubt, dict) or set(doubt) != {"code", "detail"}:
+            raise ValueError("每条机器疑点必须且只能包含 code/detail")
+        code = doubt.get("code")
+        detail = doubt.get("detail")
+        if code not in _REVIEW_REASON_CODES:
+            raise ValueError(f"未知机器疑点代码：{code}")
+        if not isinstance(detail, str) or not detail.strip() or len(detail) > 2000:
+            raise ValueError("机器疑点说明必须为 1-2000 字符的非空文本")
+        normalized_doubts.append({"code": code, "detail": detail})
+    if advisory_outcome == "clear" and normalized_doubts:
+        raise ValueError("clear 顾问结论不得携带疑点")
+    if advisory_outcome == "concerns" and not normalized_doubts:
+        raise ValueError("concerns 顾问结论至少需要一条疑点")
+
+    task = get_task(conn, task_id)
+    if task is None:
+        raise TaskNotFoundError(f"任务不存在：{task_id}")
+    model_call = conn.execute(
+        """
+        SELECT task_id, agent_id, model_profile, model_name, status
+        FROM model_calls
+        WHERE id = ?
+        """,
+        (model_call_id,),
+    ).fetchone()
+    if model_call is None or model_call["task_id"] != task_id or model_call["status"] != "success":
+        raise ValueError("顾问记录必须绑定同任务的一次成功模型调用")
+    if (
+        model_call["agent_id"] != advisor_id
+        or model_call["model_profile"] != model_profile
+        or model_call["model_name"] != model_name
+    ):
+        raise ValueError(
+            "顾问记录的 advisor/model 快照必须与模型调用 exact provenance 一致"
+        )
+
+    advice_id = f"advice_{uuid.uuid4().hex}"
+    created_at = _now_iso()
+    conn.execute(
+        """
+        INSERT INTO task_review_advice
+            (id, task_id, model_call_id, advisor_id, advisor_version,
+             model_profile, model_name, advisory_outcome, doubts_json,
+             schema_version, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+        """,
+        (
+            advice_id,
+            task_id,
+            model_call_id,
+            advisor_id,
+            advisor_version,
+            model_profile,
+            model_name,
+            advisory_outcome,
+            json.dumps(normalized_doubts, ensure_ascii=False, sort_keys=True),
+            created_at,
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM task_review_advice WHERE id = ?", (advice_id,)
+    ).fetchone()
+    return _decode_review_advice(row)
+
+
+def get_human_decision(
+    conn: sqlite3.Connection, task_id: str
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM task_human_decisions WHERE task_id = ?", (task_id,)
+    ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def create_task(
@@ -347,7 +468,10 @@ def apply_human_review(
     *,
     action: str,
     reviewer: str,
+    reviewer_username: str,
+    reason_code: str | None,
     comment: str | None,
+    paired_advice_id: str | None = None,
 ) -> tuple[dict[str, Any], int]:
     """人工签发（approve/reject）的原子落库（Codex 增量2审 R4 P1）。
 
@@ -365,8 +489,24 @@ def apply_human_review(
     返回 (最终任务行, 回填样本行数)。非 waiting_review 由 assert_transition 抛
     IllegalTransitionError（调用方按并发竞态转 409；含另一 review 已并发转出的场景）。
     """
+    if action not in {"approve", "reject"}:
+        raise InvalidReviewError(f"未知人工终裁动作：{action}")
+    if not isinstance(reviewer, str) or not reviewer.strip():
+        raise InvalidReviewError("人工终裁显示名必须非空")
+    if not isinstance(reviewer_username, str) or not reviewer_username.strip():
+        raise InvalidReviewError("人工终裁 username 必须非空")
+    if comment is not None and len(comment) > 2000:
+        raise InvalidReviewError("人工终裁说明不得超过 2000 字符")
+    if action == "approve" and reason_code is not None:
+        raise InvalidReviewError("批准不得携带驳回原因")
+    if action == "reject" and reason_code not in _REVIEW_REASON_CODES:
+        raise InvalidReviewError("驳回必须携带受支持的结构化原因")
+    if reason_code == "other" and (comment is None or not comment.strip()):
+        raise InvalidReviewError("驳回原因为 other 时必须填写非空说明")
+
     approve = action == "approve"
     new_status = "completed" if approve else "failed"
+    decision_id = f"decision_{uuid.uuid4().hex}"
     conn.execute("BEGIN IMMEDIATE")
     try:
         task = get_task(conn, task_id)
@@ -376,13 +516,43 @@ def apply_human_review(
         # （并发二次 review 命中已转出任务时在此抛 IllegalTransitionError）。
         assert_transition(task["status"], new_status)
         now = _now_iso()
+        if paired_advice_id is not None:
+            paired = conn.execute(
+                "SELECT 1 FROM task_review_advice WHERE id = ? AND task_id = ?",
+                (paired_advice_id, task_id),
+            ).fetchone()
+            if paired is None:
+                raise InvalidReviewError(
+                    "paired_advice_id 必须引用同任务的机器顾问记录"
+                )
+        conn.execute(
+            """
+            INSERT INTO task_human_decisions
+                (id, task_id, paired_advice_id, action, reason_code, comment,
+                 reviewer_username, reviewer_display_name, schema_version, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+            """,
+            (
+                decision_id,
+                task_id,
+                paired_advice_id,
+                action,
+                reason_code,
+                comment,
+                reviewer_username,
+                reviewer,
+                now,
+            ),
+        )
         updates: dict[str, Any] = {
             "status": new_status,
             "updated_at": now,
             "finished_at": now,  # completed/failed 均 terminal
         }
         if not approve:
-            updates["error_message"] = f"人工拒绝（reviewer={reviewer}）" + (
+            updates["error_message"] = (
+                f"人工拒绝（reviewer={reviewer}；reason={reason_code}）"
+            ) + (
                 f"：{comment}" if comment else ""
             )
         set_clause = ", ".join(f"{k} = ?" for k in updates)
@@ -394,7 +564,13 @@ def apply_human_review(
         # primitive（其裸 UPDATE 不自开事务，参与本 BEGIN IMMEDIATE，故与迁移同事务原子）。
         sample_rows = set_sample_review_outcome(conn, task_id, accepted=approve)
         # signer 事件，与迁移同事务（「无事件=没发生」在人签路径落地）。
-        payload = {"reviewer": reviewer, "comment": comment}
+        payload = {
+            "reviewer": reviewer,
+            "comment": comment,
+            "decision_id": decision_id,
+            "reason_code": reason_code,
+            "paired_advice_id": paired_advice_id,
+        }
         if approve:
             append_event(
                 conn,

@@ -439,6 +439,12 @@ def _make_legacy_db(db_path) -> None:
             if r[1] != "conversation_id"
         )
         conn.execute("BEGIN IMMEDIATE")
+        # 当前 DDL 的判断资产 trigger 直接见证 model_calls provenance。该 fixture
+        # 要模拟的是 pre-ADR-0013 老库（当时也不存在判断账本），故重建母表前先
+        # 移除这条新代际 trigger；下一次 init_db 会按 canonical DDL 权威重建。
+        conn.execute(
+            "DROP TRIGGER IF EXISTS trg_task_review_advice_model_call_witness"
+        )
         conn.execute(f"CREATE TABLE model_calls_legacy AS SELECT {legacy_cols} FROM model_calls")
         conn.execute("DROP TABLE model_calls")
         conn.execute("ALTER TABLE model_calls_legacy RENAME TO model_calls")

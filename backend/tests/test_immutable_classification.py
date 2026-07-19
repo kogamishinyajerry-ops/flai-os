@@ -554,7 +554,10 @@ def test_review_and_cancel_seal_sensitive_task_row(tmp_path: Path) -> None:
         finally:
             conn.close()
         # review reject → 响应任务行 error_message 遮蔽（reject_reason 亦经门）
-        rv = client.post("/api/tasks/rv/review", json={"action": "reject", "comment": "no"}).json()
+        rv = client.post(
+            "/api/tasks/rv/review",
+            json={"action": "reject", "reason_code": "other", "comment": "no"},
+        ).json()
         assert rv.get("content_withheld") is True and rv["error_message"] is None
         # cancel → 响应任务行遮蔽
         cx = client.post("/api/tasks/cx/cancel").json()

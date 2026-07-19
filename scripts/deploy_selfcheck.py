@@ -14,6 +14,8 @@
         conversation_questions canonical table shape，以及三表所有登记索引/
         触发器的完整 SQL。未知列、索引、触发器 fail-closed；只证结构，
         不宣称存量 owner 或 Question 数据完整。
+    4c. 判断资产 SQLite schema 见证：人签决策/机器建议两张物理隔离
+        账本、必需索引与只追加 trigger 均按精确结构校验，不只看对象名。
     5. worker 心跳+代际（Codex R1 审 P1）：Job Runner 是独立进程——API 换新而
        worker 未重启时，旧 worker 落库走 DDL DEFAULT 洗白派生分级。要求心跳
        60 秒内新鲜且代际=当前 WORKER_GENERATION。**部署顺序：先起 API+worker
@@ -34,6 +36,8 @@
         「评的就是晋升的那版」不可变保证静默失效。配合 WORKER_GENERATION bump 双向见证）
     8e. health 含 search_addressing_axis=true（P2.4 运行进程代际：仅数据库/前端已更新、
         API 仍是旧进程时，服务侧检索与稳定深链均不可用；只接受布尔 True）
+    8f. health 含 judgment_capture_axis=true 且服务侧判断账本 schema
+        witnesses 全部严格 ``is True``（旧 API/旧库/同名空 trigger 均拒绝）
     9. health.db_identity = 探针侧库路径指纹（Codex R1 审 P2：两侧 FLAI_DB_PATH
        不一致时，探针查有账户的库 A、服务连空库 B，其余全 PASS 却无人能登录）
     10. 未认证 GET /api/agents → 401（鉴权代际见证：200=裸奔旧代际，404=旧代码，
@@ -70,6 +74,12 @@ from backend.app.storage.p23_schema import (  # noqa: E402
 from backend.app.storage.p23_schema import (  # noqa: E402
     p23_schema_witnesses as _p23_schema_witnesses,
 )
+from backend.app.storage.review_schema import (  # noqa: E402
+    JUDGMENT_SCHEMA_WITNESS_KEYS as _JUDGMENT_SCHEMA_WITNESS_KEYS,
+)
+from backend.app.storage.review_schema import (  # noqa: E402
+    judgment_schema_witnesses as _judgment_schema_witnesses,
+)
 
 WORKER_GENERATION = config.WORKER_GENERATION
 _WORKER_STALE_SECONDS = 60
@@ -86,6 +96,8 @@ REQUIRED_TABLES = frozenset({
     # P2.3 结构化提问持久化；列/索引/触发器由独立 schema
     # witness 继续校验，不只靠表名假绿。
     "conversation_questions",
+    # M4 前判断资产：人签与机器建议物理隔离的只追加账本。
+    "task_review_advice", "task_human_decisions",
 })
 
 _HTTP_TIMEOUT = 10
@@ -95,6 +107,12 @@ _P23_SCHEMA_WITNESS_LABELS = {
     "question_table_shape": "conversation_questions canonical table shape",
     "required_indexes": "required indexes",
     "required_triggers": "required triggers",
+}
+_JUDGMENT_SCHEMA_WITNESS_LABELS = {
+    "advice_table_shape": "task_review_advice canonical table shape",
+    "human_decision_table_shape": "task_human_decisions canonical table shape",
+    "required_indexes": "required judgment indexes",
+    "required_triggers": "required append-only judgment triggers",
 }
 
 
@@ -175,6 +193,27 @@ def check_p23_schema(conn: sqlite3.Connection) -> Check:
         "P2.3 结构化提问 schema",
         True,
         "P2.3 schema witnesses complete (structure only; no historical data claim)",
+    )
+
+
+def check_judgment_schema(conn: sqlite3.Connection) -> Check:
+    """Judgment-ledger table/index/trigger witness, never outcome quality."""
+    witnesses = _judgment_schema_witnesses(conn)
+    missing_labels = [
+        _JUDGMENT_SCHEMA_WITNESS_LABELS.get(key, key)
+        for key in _JUDGMENT_SCHEMA_WITNESS_KEYS
+        if witnesses.get(key) is not True
+    ]
+    if missing_labels:
+        return Check(
+            "判断资产只追加 schema",
+            False,
+            f"schema witness 缺失 {missing_labels}——旧库、迁移未完或结构被破坏",
+        )
+    return Check(
+        "判断资产只追加 schema",
+        True,
+        "judgment schema witnesses complete (structure only; no outcome claim)",
     )
 
 
@@ -412,6 +451,44 @@ def check_live_search_addressing_generation(base_url: str) -> Check:
     )
 
 
+def check_live_judgment_generation(base_url: str) -> Check:
+    """Judgment live-code and served-DB witnesses; accept exact booleans only."""
+    name = "运行进程判断资产代际"
+    url = f"{base_url}/api/health"
+    try:
+        _, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check(name, False, f"{url} 不可达或非 JSON：{exc}")
+    if not isinstance(payload, dict):
+        return Check(name, False, f"{url} JSON 根节点不是对象，fail-closed")
+    if payload.get("judgment_capture_axis") is not True:
+        return Check(
+            name,
+            False,
+            "health 无 judgment_capture_axis=true——运行中 API 未接入"
+            "结构化判断账本，fail-closed",
+        )
+    witnesses = payload.get("judgment_schema_witnesses")
+    if not isinstance(witnesses, dict):
+        return Check(name, False, "health 缺 judgment_schema_witnesses 结构见证")
+    missing = [
+        key for key in _JUDGMENT_SCHEMA_WITNESS_KEYS
+        if witnesses.get(key) is not True
+    ]
+    if missing:
+        return Check(
+            name,
+            False,
+            f"活服务实际连库的 judgment schema witness 缺失 {missing}",
+        )
+    return Check(
+        name,
+        True,
+        "活进程自报 judgment_capture_axis=true，且服务侧 schema witnesses 全在位",
+    )
+
+
 def check_auth_generation(base_url: str) -> Check:
     """鉴权代际见证：匿名打有数据的端点，401 才是新代际的证词。
 
@@ -476,6 +553,7 @@ def main() -> int:
             for fn in (
                 check_tables, check_active_user, check_classification_axis,
                 check_p23_schema,
+                check_judgment_schema,
                 check_worker_generation,
             ):
                 try:
@@ -488,7 +566,7 @@ def main() -> int:
     else:
         for name in (
             "核心表齐全", "≥1 活跃账户", "数据分级轴（ADR-0021）",
-            "P2.3 结构化提问 schema", "worker 心跳代际",
+            "P2.3 结构化提问 schema", "判断资产只追加 schema", "worker 心跳代际",
         ):
             checks.append(Check(name, False, "跳过：DB 文件缺失"))
 
@@ -499,6 +577,7 @@ def main() -> int:
     checks.append(check_live_structured_question_generation(base_url))
     checks.append(check_live_eval_snapshot_generation(base_url))
     checks.append(check_live_search_addressing_generation(base_url))
+    checks.append(check_live_judgment_generation(base_url))
     checks.append(check_db_identity(base_url, db_path))
     checks.append(check_auth_generation(base_url))
     checks.append(check_frontend_dist())

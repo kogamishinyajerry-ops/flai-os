@@ -216,7 +216,11 @@ def _reviewed_sample(
     assert result["status"] == "waiting_review"
     reviewed = env.client.post(
         f"/api/tasks/{task_id}/review",
-        json={"action": action, "comment": "M10 测试"},
+        json={
+            "action": action,
+            "reason_code": "other" if action == "reject" else None,
+            "comment": "M10 测试",
+        },
     )
     assert reviewed.status_code == 200, reviewed.text
     samples = _samples_for_task(env, task_id)

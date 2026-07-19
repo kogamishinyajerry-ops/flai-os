@@ -10,7 +10,7 @@ import uuid
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from . import classification_gate as cgate
 from ..core.errors import IllegalTransitionError
@@ -223,7 +223,28 @@ class ReviewTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: Literal["approve", "reject"]
-    comment: str | None = None
+    reason_code: Literal[
+        "source_doubt",
+        "method_error",
+        "conclusion_overreach",
+        "insufficient_evidence",
+        "classification_issue",
+        "other",
+    ] | None = None
+    comment: str | None = Field(default=None, max_length=2000)
+    paired_advice_id: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def require_reject_reason(self) -> "ReviewTaskRequest":
+        if self.action == "reject" and self.reason_code is None:
+            raise ValueError("驳回必须选择结构化原因")
+        if self.action == "approve" and self.reason_code is not None:
+            raise ValueError("批准不得携带驳回原因")
+        if self.reason_code == "other" and (
+            self.comment is None or not self.comment.strip()
+        ):
+            raise ValueError("驳回原因为 other 时必须填写非空说明")
+        return self
 
 
 class SetSimRunRefRequest(BaseModel):
@@ -775,14 +796,25 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             )
 
         reviewer = request.state.user["display_name"]  # ADR-0019 D5：签发者=认证身份
+        reviewer_username = request.state.user["username"]
         try:
             # Codex 增量2审 R4 P1：状态迁移 + 样本标签回填 + signer 事件三者**同一事务
             # 原子落库**（此前三次分离提交，crash 窗口可留下 status=completed 却无
             # review_approved 事件的任务，resolver 见 status 即放行下游）。approve→completed
             # + review_approved / reject→failed + review_rejected；样本 approve→1/reject→0。
             task, _sample_rows = repos.apply_human_review(
-                conn, task_id, action=body.action, reviewer=reviewer, comment=body.comment
+                conn,
+                task_id,
+                action=body.action,
+                reviewer=reviewer,
+                reviewer_username=reviewer_username,
+                reason_code=body.reason_code,
+                comment=body.comment,
+                paired_advice_id=body.paired_advice_id,
             )
+            decision = repos.get_human_decision(conn, task_id)
+            if decision is None:  # 原子事务已承诺 decision 必在；缺失必须显式咬红。
+                raise RuntimeError("人工终裁事务提交后缺少 judgment decision witness")
         except IllegalTransitionError as exc:
             # R1 复审 P2：两个 review 请求并发命中同一 waiting_review 任务时，
             # 后到者可通过预检但在状态机层被拒——这是正常并发竞态，
@@ -791,6 +823,10 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
                 status_code=409,
                 detail=f"任务已被并发的人工审核动作转出 waiting_review，本次不生效：{exc}",
             ) from exc
+        except repos.InvalidReviewError as exc:
+            # 配对候选由持久态决定，无法只靠 Pydantic 请求模型验证。明确 422，
+            # repository 已在同一事务内回滚，绝不把用户可修正的引用错误冒泡为 500。
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         # 治理签发审计（M12-2c）：人工放行/拒绝是「人是唯一签发者」红线的落点，
         # 是平台最安全承重的动作——此前只落 task_event（应用数据），无篡改抗性的
@@ -803,7 +839,6 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
         # 不拦截**（硬性职责分离 403 是 owner 待定的角色轴策略，task #17）。
         created_by = task.get("created_by")
         created_by_username = task.get("created_by_username")
-        reviewer_username = request.state.user["username"]
         if created_by_username is not None:
             self_review = bool(reviewer_username == created_by_username)
             self_review_basis = "username"  # 精确身份，不撞名
@@ -819,6 +854,9 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             created_by_username=created_by_username if created_by_username is not None else "(legacy-null)",
             self_review=self_review,
             self_review_basis=self_review_basis,
+            decision_id=decision["id"],
+            reason_code=decision["reason_code"],
+            paired_advice_id=decision["paired_advice_id"],
         )
         return cgate.redact_task_row_if_sensitive(conn, task)  # ADR-0025 一致封闭
     finally:

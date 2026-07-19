@@ -46,6 +46,12 @@ from .storage.p23_schema import (
     P23_SCHEMA_WITNESS_KEYS as _P23_SCHEMA_WITNESS_KEYS,
 )
 from .storage.p23_schema import p23_schema_witnesses as _p23_schema_witnesses
+from .storage.review_schema import (
+    JUDGMENT_SCHEMA_WITNESS_KEYS as _JUDGMENT_SCHEMA_WITNESS_KEYS,
+)
+from .storage.review_schema import (
+    judgment_schema_witnesses as _judgment_schema_witnesses,
+)
 
 _WORKER_STALE_S = 60  # 与 deploy_selfcheck 同口径：心跳超 60s 视为 worker 已死/挂起
 
@@ -168,11 +174,15 @@ def create_app(
             conn = conn_factory()
             try:
                 p23_schema_witnesses = _p23_schema_witnesses(conn)
+                judgment_schema_witnesses = _judgment_schema_witnesses(conn)
             finally:
                 conn.close()
         except sqlite3.Error:
             p23_schema_witnesses = {
                 key: False for key in _P23_SCHEMA_WITNESS_KEYS
+            }
+            judgment_schema_witnesses = {
+                key: False for key in _JUDGMENT_SCHEMA_WITNESS_KEYS
             }
         return {
             "status": "ok",
@@ -197,7 +207,11 @@ def create_app(
             # P2.4 活进程代际：精确 owner、稳定消息/产物地址、服务端有界搜索已接线。
             # 这不是 DB schema 完整性见证，只用于阻断新 QuickSwitcher 连上旧 API。
             "search_addressing_axis": True,
+            # M4 前判断资产化代际：活 API 已接结构化人签账本。具体表、索引与只追加
+            # trigger 必须另由 exact schema witnesses 证明，不能只凭此布尔位假绿。
+            "judgment_capture_axis": True,
             "p23_schema_witnesses": p23_schema_witnesses,
+            "judgment_schema_witnesses": judgment_schema_witnesses,
             # T2/#5 不可变快照代际标记（Codex R0 审 P1 同款范式）：见证「活着的 API
             # 进程」跑的是 enqueue 冻结快照的代码。分离部署偏斜（DB 已迁移出 eval_snapshots
             # 表、worker 已更新，API 仍是 T1 旧码不冻结）时旧 API 无此位 → 部署自检 FAIL，
@@ -224,23 +238,38 @@ def create_app(
         try:
             wf = _worker_freshness(conn)
             p23_schema_witnesses = _p23_schema_witnesses(conn)
+            judgment_schema_witnesses = _judgment_schema_witnesses(conn)
         finally:
             conn.close()
         p23_schema_ready = all(
             p23_schema_witnesses.get(key) is True
             for key in _P23_SCHEMA_WITNESS_KEYS
         )
-        ready = wf["fresh"] is True and p23_schema_ready is True
+        judgment_schema_ready = all(
+            judgment_schema_witnesses.get(key) is True
+            for key in _JUDGMENT_SCHEMA_WITNESS_KEYS
+        )
+        ready = (
+            wf["fresh"] is True
+            and p23_schema_ready is True
+            and judgment_schema_ready is True
+        )
         return JSONResponse(
             {
                 "status": "ready" if ready is True else "degraded",
                 "worker": wf,
                 "structured_question_axis": True,
                 "search_addressing_axis": True,
+                "judgment_capture_axis": True,
                 "p23": {
                     "runtime_generation": True,
                     "schema_ready": p23_schema_ready,
                     "schema_witnesses": p23_schema_witnesses,
+                },
+                "judgment_capture": {
+                    "runtime_generation": True,
+                    "schema_ready": judgment_schema_ready,
+                    "schema_witnesses": judgment_schema_witnesses,
                 },
             },
             status_code=200 if ready is True else 503,

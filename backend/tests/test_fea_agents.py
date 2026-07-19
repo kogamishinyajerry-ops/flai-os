@@ -240,7 +240,15 @@ def test_chain_solve_signoff_then_evaluate(env):
     # 3) 人工签发 solve → completed + review_approved 事件（K1 签发见证达成）
     conn = cf()
     try:
-        repos.apply_human_review(conn, "solve1", action="approve", reviewer="工程师张三", comment=None)
+        repos.apply_human_review(
+            conn,
+            "solve1",
+            action="approve",
+            reviewer="工程师张三",
+            reviewer_username="zhangsan",
+            reason_code=None,
+            comment=None,
+        )
         assert repos.get_task(conn, "solve1")["status"] == "completed"
     finally:
         conn.close()
@@ -264,7 +272,15 @@ def test_chain_solve_signoff_then_evaluate(env):
     # 6) 人工签发 evaluate → completed；评估 passed=True（悬臂 n=10 误差 8.6e-5%）
     conn = cf()
     try:
-        repos.apply_human_review(conn, "eval1", action="approve", reviewer="工程师张三", comment=None)
+        repos.apply_human_review(
+            conn,
+            "eval1",
+            action="approve",
+            reviewer="工程师张三",
+            reviewer_username="zhangsan",
+            reason_code=None,
+            comment=None,
+        )
         eval_task = repos.get_task(conn, "eval1")
         assert eval_task["status"] == "completed"
         out_files = repos.list_files_by_ids(conn, eval_task.get("output_file_ids") or [])

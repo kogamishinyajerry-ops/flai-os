@@ -798,7 +798,13 @@ def test_R4_apply_human_review_atomic_happy_path(dbf):
         _mk(conn, "t")
         _drive(conn, "t", "waiting_review")
         task, sample_rows = repos.apply_human_review(
-            conn, "t", action="approve", reviewer="张三", comment=None
+            conn,
+            "t",
+            action="approve",
+            reviewer="张三",
+            reviewer_username="zhangsan",
+            reason_code=None,
+            comment=None,
         )
         assert task["status"] == "completed"
         assert sample_rows == 0  # 本任务无样本
@@ -816,13 +822,31 @@ def test_R4_review_event_failure_rolls_back_transition(dbf, monkeypatch):
     try:
         _mk(conn, "t")
         _drive(conn, "t", "waiting_review")
+        sample = repos.record_sample(
+            conn,
+            task_id="t",
+            agent_id="a",
+            agent_version="1.0.0",
+            input_json={},
+            output_json={},
+            accepted_by_engineer=None,
+            classification="internal",
+        )
 
         def _boom(*a, **k):
             raise RuntimeError("signer 事件写入炸")
 
         monkeypatch.setattr(repos, "append_event", _boom)
         with pytest.raises(RuntimeError):
-            repos.apply_human_review(conn, "t", action="approve", reviewer="张三", comment=None)
+            repos.apply_human_review(
+                conn,
+                "t",
+                action="approve",
+                reviewer="张三",
+                reviewer_username="zhangsan",
+                reason_code=None,
+                comment=None,
+            )
         monkeypatch.undo()
 
         t = repos.get_task(conn, "t")
@@ -830,6 +854,8 @@ def test_R4_review_event_failure_rolls_back_transition(dbf, monkeypatch):
         assert not any(
             e["event_type"] == "review_approved" for e in repos.list_events(conn, "t")
         )
+        assert repos.get_human_decision(conn, "t") is None
+        assert repos.get_sample(conn, sample["id"])["accepted_by_engineer"] is None
     finally:
         conn.close()
 
@@ -892,7 +918,15 @@ def test_K1_signed_via_review_approved_releases(dbf):
         _mk(conn, "llm_up", agent_id="llm_up_agent")
         _attach_output(conn, "llm_up")
         _drive(conn, "llm_up", "waiting_review")  # LLM 型停人签闸
-        repos.apply_human_review(conn, "llm_up", action="approve", reviewer="张三", comment=None)
+        repos.apply_human_review(
+            conn,
+            "llm_up",
+            action="approve",
+            reviewer="张三",
+            reviewer_username="zhangsan",
+            reason_code=None,
+            comment=None,
+        )
         _mk(conn, "down", depends_on=["llm_up"])
     finally:
         conn.close()

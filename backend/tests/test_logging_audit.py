@@ -181,6 +181,9 @@ def test_task_approval_is_audited_as_signoff(app_env):
     assert r["actor"] == TEST_USERNAME  # 唯一身份（P2-4）
     assert r["created_by"] == TEST_DISPLAY_NAME
     assert r["self_review"] is True  # is True，不认 truthy
+    assert r["decision_id"].startswith("decision_")
+    assert r["reason_code"] is None
+    assert r["paired_advice_id"] is None
 
 
 def test_task_rejection_by_non_creator_audited_not_self_review(app_env):
@@ -189,7 +192,12 @@ def test_task_rejection_by_non_creator_audited_not_self_review(app_env):
     client, app = app_env
     task_id = _make_waiting_review_task(app, created_by="另一位工程师")
     resp = client.post(
-        f"/api/tasks/{task_id}/review", json={"action": "reject", "comment": "不合格-secret-xyz"}
+        f"/api/tasks/{task_id}/review",
+        json={
+            "action": "reject",
+            "reason_code": "other",
+            "comment": "不合格-secret-xyz",
+        },
     )
     assert resp.status_code == 200, resp.text
     hit = [r for r in _audit_records(app)
@@ -199,5 +207,8 @@ def test_task_rejection_by_non_creator_audited_not_self_review(app_env):
     assert r["outcome"] == "rejected"
     assert r["self_review"] is False
     assert r["created_by"] == "另一位工程师"
+    assert r["decision_id"].startswith("decision_")
+    assert r["reason_code"] == "other"
+    assert r["paired_advice_id"] is None
     audit_text = (Path(app.state.db_path).parent / "logs" / "audit.log").read_text("utf-8")
     assert "不合格-secret-xyz" not in audit_text, "自由文本 comment 绝不入审计轴"

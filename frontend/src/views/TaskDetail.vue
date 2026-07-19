@@ -220,7 +220,15 @@
               <span class="review-signer">{{ signerName }}（登录身份，签发记名不可代填）</span>
             </el-form-item>
             <el-form-item label="意见">
-              <el-input v-model="reviewForm.comment" type="textarea" :rows="2" placeholder="可选" />
+              <el-input
+                v-model="reviewForm.comment"
+                type="textarea"
+                :rows="2"
+                :maxlength="REVIEW_COMMENT_MAX_LENGTH"
+                show-word-limit
+                :disabled="reviewing"
+                placeholder="可选"
+              />
             </el-form-item>
             <div class="review-note">
               批准即代表你作为工程师背书该产物——签发权在你，平台不代签。
@@ -234,9 +242,9 @@
             <el-form-item>
               <!-- 批准=人签，用信任锁的 teal（--trust-signed），绝不用绿（绿仅表真实结果）。
                    ref 供放行成功后的 teal burst 定位元素（动效系统 v1 E2，唯一 teal 许可点）。 -->
-              <el-button ref="approveBtnEl" class="approve-btn" :loading="reviewing" @click="handleReview('approve')">批准放行</el-button>
+              <el-button ref="approveBtnEl" class="approve-btn" :loading="reviewing" :disabled="reviewSettled" @click="handleReview('approve')">批准放行</el-button>
               <!-- 措辞统一（W7）：与 StatusCenter 速览同用「驳回」——同一动作一种中文。 -->
-              <el-button type="danger" :loading="reviewing" @click="handleReview('reject')">驳回</el-button>
+              <el-button type="danger" :loading="reviewing" :disabled="reviewSettled" @click="openRejectDialog">驳回</el-button>
             </el-form-item>
           </el-form>
         </el-card>
@@ -403,6 +411,57 @@
       </aside>
       </div><!-- /td-grid -->
     </template>
+
+    <el-dialog
+      v-model="rejectDialogOpen"
+      title="选择驳回原因"
+      width="min(520px, 92vw)"
+      :close-on-click-modal="!reviewing"
+      :close-on-press-escape="!reviewing"
+      :show-close="!reviewing"
+      destroy-on-close
+      @closed="resetRejectDialog"
+    >
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="驳回原因" :error="rejectReasonError">
+          <el-radio-group
+            ref="rejectReasonGroupEl"
+            v-model="rejectForm.reasonCode"
+            class="review-reason-group"
+            :disabled="reviewing"
+            @change="onRejectReasonChange"
+          >
+            <el-radio
+              v-for="option in REVIEW_REASON_OPTIONS"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item
+          :label="rejectForm.reasonCode === 'other' ? '具体原因' : '补充说明（可选）'"
+          :error="rejectCommentError"
+        >
+          <el-input
+            ref="rejectCommentEl"
+            v-model="rejectForm.comment"
+            type="textarea"
+            :rows="4"
+            :maxlength="REVIEW_COMMENT_MAX_LENGTH"
+            show-word-limit
+            :disabled="reviewing"
+            :placeholder="rejectForm.reasonCode === 'other' ? '请说明具体原因' : '可补充判断依据'"
+            @input="rejectCommentError = ''"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="reviewing" @click="rejectDialogOpen = false">再看看</el-button>
+        <el-button type="danger" :loading="reviewing" @click="submitReject">确认驳回</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -428,6 +487,12 @@ import EvidenceList from "../components/EvidenceList.vue";
 import ConnectionTruthNotice from "../components/ConnectionTruthNotice.vue";
 import { ensureTaskEvidence, taskEvidenceWithheld } from "../stores/taskEvidence";
 import { useAgentNames } from "../stores/agentNames";
+import {
+  REVIEW_COMMENT_MAX_LENGTH,
+  REVIEW_REASON_OPTIONS,
+  isReviewContextCurrent,
+  validateReviewDecision,
+} from "../utils/reviewCore.js";
 import { displayName } from "../stores/session";
 import { markTaskSeen } from "../utils/lastSeen";
 import { burstSigned } from "../effects/burst";
@@ -496,8 +561,26 @@ const {
 } = taskChannel.state;
 
 const reviewForm = reactive({ comment: "" });
+// 驳回使用独立草稿：取消驳回后，负面原因绝不能悄悄成为随后批准的意见。
+const rejectForm = reactive({ reasonCode: "", comment: "" });
 const signerName = computed(() => displayName());
 const reviewing = ref(false);
+// POST 成功后，即使带外补拉暂时断连，也不能让旧 waiting_review 快照重新开放
+// 第二次签发。真实状态由服务端响应已落定；后续 live snapshot 只负责调和展示。
+const reviewSettled = ref(false);
+const rejectDialogOpen = ref(false);
+const rejectReasonError = ref("");
+const rejectCommentError = ref("");
+const rejectReasonGroupEl = ref(null);
+const rejectCommentEl = ref(null);
+watch(() => route.params.taskId, (nextId, previousId) => {
+  if (nextId === previousId) return;
+  // RouterView 正常以 taskId 为 key 重挂；此守卫同时覆盖其它宿主未来复用同一
+  // 实例的路径，避免上一任务的终裁锁误锁新任务。
+  reviewSettled.value = false;
+  rejectDialogOpen.value = false;
+  resetRejectDialog();
+});
 // 批准按钮元素（动效系统 v1 E2）：放行成功后 burstSigned(el) 的定位来源；
 // el-button 组件 ref 通过 .ref 暴露原生 DOM（element-plus expose 契约）。
 const approveBtnEl = ref(null);
@@ -781,6 +864,11 @@ const batchSummary = computed(() => {
 
 const canCancel = computed(() => ["created", "queued"].includes(task.value?.status));
 const isWaitingReview = computed(() => task.value?.status === "waiting_review");
+watch(isWaitingReview, (waiting) => {
+  // 另一签发者或其它可信入口已落定时，当前结构化驳回草稿立即失效；不让
+  // 对旧 waiting_review 快照打开的对话框继续提交。
+  if (!waiting) rejectDialogOpen.value = false;
+});
 const isTerminal = computed(() => ["completed", "failed", "cancelled"].includes(task.value?.status));
 // 页头到席点：与 WorkLog 内部同一口径（TASK_WORK_STATES），紧邻状态 tag 左侧。
 const isTaskWorking = computed(() => TASK_WORK_STATES.has(task.value?.status));
@@ -948,20 +1036,92 @@ async function handleCancel() {
   }
 }
 
-async function handleReview(action) {
-  const label = action === "approve" ? "批准放行" : "驳回";
-  try {
-    await ElMessageBox.confirm(`确认${label}该任务？`, label, { type: "warning" });
-  } catch {
+function resetRejectDialog() {
+  rejectForm.reasonCode = "";
+  rejectForm.comment = "";
+  rejectReasonError.value = "";
+  rejectCommentError.value = "";
+}
+
+function openRejectDialog() {
+  if (reviewing.value || reviewSettled.value) return;
+  rejectReasonError.value = "";
+  rejectCommentError.value = "";
+  // 已写在外层的通用意见只在打开瞬间复制；之后两个草稿彼此隔离。
+  rejectForm.comment = reviewForm.comment;
+  rejectDialogOpen.value = true;
+}
+
+function onRejectReasonChange() {
+  rejectReasonError.value = "";
+  if (rejectForm.reasonCode !== "other") rejectCommentError.value = "";
+}
+
+function focusRejectField(field) {
+  nextTick(() => {
+    if (field === "reasonCode") {
+      const root = rejectReasonGroupEl.value?.$el || rejectReasonGroupEl.value;
+      root?.querySelector?.("input")?.focus();
+    } else if (field === "comment") {
+      rejectCommentEl.value?.focus?.();
+    }
+  });
+}
+
+async function submitReject() {
+  const validation = validateReviewDecision({
+    action: "reject",
+    reasonCode: rejectForm.reasonCode,
+    comment: rejectForm.comment,
+  });
+  if (validation.ok !== true) {
+    if (validation.field === "reasonCode") rejectReasonError.value = validation.message;
+    if (validation.field === "comment") rejectCommentError.value = validation.message;
+    focusRejectField(validation.field);
     return;
   }
+  const accepted = await handleReview("reject", {
+    reasonCode: validation.reasonCode,
+    comment: validation.comment,
+    skipConfirm: true,
+  });
+  if (accepted) rejectDialogOpen.value = false;
+}
+
+async function handleReview(
+  action,
+  { reasonCode = null, comment = reviewForm.comment, skipConfirm = false } = {},
+) {
+  if (reviewing.value || reviewSettled.value) return false;
+  const label = action === "approve" ? "批准放行" : "驳回";
   reviewing.value = true;
   try {
-    await reviewTask(taskId, { action, comment: reviewForm.comment || null });
+    if (!skipConfirm) {
+      try {
+        await ElMessageBox.confirm(`确认${label}该任务？`, label, { type: "warning" });
+      } catch {
+        return false;
+      }
+    }
+    if (!isReviewContextCurrent({
+      expectedTaskId: taskId,
+      currentTaskId: route.params.taskId,
+      waiting: isWaitingReview.value,
+      visible: task.value?.id === taskId,
+    })) {
+      return false;
+    }
+    await reviewTask(taskId, {
+      action,
+      reasonCode,
+      comment,
+      pairedAdviceId: null,
+    });
+    if (route.params.taskId === taskId) reviewSettled.value = true;
     markTaskSeen(taskId); // 亲手签发=已看过：其后完成不得对签发者亮未读
     // 人签放行成功时刻（唯一 teal 许可点，动效系统硬约束）：仅 approve 分支触发；
     // 驳回/失败绝不放庆祝动效。元素取不到（ref 未挂载等）burstSigned 自兜 null。
-    if (action === "approve") {
+    if (action === "approve" && route.params.taskId === taskId) {
       burstSigned(approveBtnEl.value?.ref);
     }
     if (action === "approve") {
@@ -969,9 +1129,20 @@ async function handleReview(action) {
     } else {
       ElMessage({ message: `已${label}`, type: "error" });
     }
+    reviewForm.comment = "";
+    rejectForm.comment = "";
     await pokeTask(taskId); // 带外补拉：不等下一 tick，动作结果立即回显
+    return true;
   } catch (err) {
+    if (err.status === 409 && route.params.taskId === taskId) {
+      // 并发签发已把服务端状态转出 waiting_review：这是“已落定待调和”，
+      // 不是邀请重试。先锁住旧快照，再强制全量调和。
+      reviewSettled.value = true;
+      rejectDialogOpen.value = false;
+      await resnapshotTask(taskId);
+    }
     ElMessage.error(err.detail || err.message);
+    return false;
   } finally {
     reviewing.value = false;
   }
@@ -1014,6 +1185,8 @@ onMounted(() => {
   });
 });
 onUnmounted(() => {
+  rejectDialogOpen.value = false;
+  resetRejectDialog();
   taskChannel.release(); // refCount 归零则停链（其它订阅者仍持有时继续养着，都正确）
   if (offTransition) offTransition();
 });
@@ -1177,6 +1350,15 @@ onUnmounted(() => {
   max-width: 480px;
   background: var(--paper-rail);
 }
+.review-reason-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-4);
+  width: 100%;
+}
+.review-reason-group :deep(.el-radio) {
+  margin-right: 0;
+}
 /* 批准=人签，用信任锁 teal（--trust-signed）覆盖 Element Plus 按钮变量；绝不用绿。
    hover/active 深调统一走 --trust-signed-deep（App.vue color-mix 派生，暗色下自动
    变亮而非变暗），不再各自硬编码一份 teal——单一 SSOT，跨主题自动跟随。 */
@@ -1203,6 +1385,11 @@ onUnmounted(() => {
   line-height: 1.6;
   margin: 0 0 12px;
   padding-left: 80px;
+}
+@media (max-width: 640px) {
+  .review-reason-group {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .artifact-review-hint {
   margin-left: 10px;

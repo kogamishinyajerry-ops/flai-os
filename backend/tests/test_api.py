@@ -475,10 +475,22 @@ def test_review_approve_e2e_full_chain(review_app_env) -> None:
     assert "review_requested" in event_types
     approved_events = [e for e in events if e["event_type"] == "review_approved"]
     assert len(approved_events) == 1
-    assert approved_events[0]["payload"] == {
-        "reviewer": TEST_DISPLAY_NAME,
-        "comment": "结果核对无误",
-    }
+    payload = approved_events[0]["payload"]
+    assert payload["reviewer"] == TEST_DISPLAY_NAME
+    assert payload["comment"] == "结果核对无误"
+    assert payload["reason_code"] is None
+    assert payload["paired_advice_id"] is None
+    assert payload["decision_id"].startswith("decision_")
+    conn = app.state.conn_factory()
+    try:
+        decision = conn.execute(
+            "SELECT * FROM task_human_decisions WHERE task_id = ?", (task_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert decision["id"] == payload["decision_id"]
+    assert decision["reviewer_username"] == "test_engineer"
+    assert decision["reviewer_display_name"] == TEST_DISPLAY_NAME
 
 
 def test_review_audit_self_review_basis_is_username_exact(review_app_env, caplog) -> None:
@@ -507,7 +519,11 @@ def test_review_reject_e2e_full_chain(review_app_env) -> None:
 
     review_resp = client.post(
         f"/api/tasks/{task_id}/review",
-        json={"action": "reject", "comment": "输出与图纸不符"},
+        json={
+            "action": "reject",
+            "reason_code": "method_error",
+            "comment": "输出与图纸不符",
+        },
     )
     assert review_resp.status_code == 200
     rejected = review_resp.json()
@@ -519,7 +535,151 @@ def test_review_reject_e2e_full_chain(review_app_env) -> None:
     rejected_events = [e for e in events if e["event_type"] == "review_rejected"]
     assert len(rejected_events) == 1
     assert rejected_events[0]["payload"]["reviewer"] == TEST_DISPLAY_NAME
+    assert rejected_events[0]["payload"]["reason_code"] == "method_error"
+    assert rejected_events[0]["payload"]["paired_advice_id"] is None
+    assert rejected_events[0]["payload"]["decision_id"].startswith("decision_")
     assert rejected_events[0]["level"] == "warning"
+
+
+def test_review_reject_requires_structured_reason_before_any_write(review_app_env) -> None:
+    """判断采集入口 fail-closed：缺结构化原因的 reject 在请求层 422，且任务、
+    人工终裁与 signer 事件均保持未发生。自由评论不得被当成原因代码猜测回填。
+    """
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+
+    response = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "reject", "comment": "输出与图纸不符"},
+    )
+
+    assert response.status_code == 422
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
+    events = client.get(f"/api/tasks/{task_id}/events").json()
+    assert not any(event["event_type"] == "review_rejected" for event in events)
+
+
+def test_review_approve_forbids_rejection_reason(review_app_env) -> None:
+    """批准不借用驳回原因轴；混合语义必须在请求层拒绝，不能污染判断账本。"""
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+
+    response = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "approve", "reason_code": "method_error"},
+    )
+
+    assert response.status_code == 422
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
+
+
+@pytest.mark.parametrize("comment", [None, "", "   "])
+def test_review_other_reason_requires_nonblank_comment(review_app_env, comment) -> None:
+    """`other` 不得成为无信息逃生口：必须同时留下非空解释。"""
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+
+    response = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "reject", "reason_code": "other", "comment": comment},
+    )
+
+    assert response.status_code == 422
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
+
+
+def test_review_comment_is_bounded_before_any_write(review_app_env) -> None:
+    """判断文本有明确 2000 字符预算，避免审计链与任务错误列被无界放大。"""
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+
+    response = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "approve", "comment": "x" * 2001},
+    )
+
+    assert response.status_code == 422
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
+
+
+def test_review_missing_paired_advice_is_explicit_422_and_zero_write(
+    review_app_env,
+) -> None:
+    """客户端给出不存在的候选配对时 fail-closed；不得冒泡 500 或留下半笔终裁。"""
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+
+    response = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "approve", "paired_advice_id": "advice_missing"},
+    )
+
+    assert response.status_code == 422
+    assert "paired_advice_id" in response.json()["detail"]
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
+    events = client.get(f"/api/tasks/{task_id}/events").json()
+    assert not any(event["event_type"] == "review_approved" for event in events)
+    conn = app.state.conn_factory()
+    try:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM task_human_decisions WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 0
+
+
+def test_review_foreign_task_paired_advice_is_explicit_422_and_zero_write(
+    review_app_env,
+) -> None:
+    """存在但属于另一任务的机器候选同样不可配对，且不得推进终裁事务。"""
+    from backend.app.storage import repos
+
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+    foreign_response = client.post(
+        "/api/tasks",
+        json={"agent_id": "review_agent", "inputs": {"name": "另一任务"}},
+    )
+    assert foreign_response.status_code == 200
+    foreign_task_id = foreign_response.json()["id"]
+    conn = app.state.conn_factory()
+    try:
+        call = repos.record_model_call(
+            conn,
+            task_id=foreign_task_id,
+            agent_id="r0_review_advisor",
+            model_profile="review",
+            model_name="model-a",
+            status="success",
+        )
+        advice = repos.record_review_advice(
+            conn,
+            task_id=foreign_task_id,
+            model_call_id=call["id"],
+            advisor_id="r0_review_advisor",
+            advisor_version="0.1.0",
+            model_profile="review",
+            model_name="model-a",
+            advisory_outcome="clear",
+            doubts=[],
+        )
+    finally:
+        conn.close()
+
+    response = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "approve", "paired_advice_id": advice["id"]},
+    )
+
+    assert response.status_code == 422
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
+    conn = app.state.conn_factory()
+    try:
+        assert repos.get_human_decision(conn, task_id) is None
+    finally:
+        conn.close()
 
 
 def test_review_non_waiting_review_task_409(client: TestClient) -> None:

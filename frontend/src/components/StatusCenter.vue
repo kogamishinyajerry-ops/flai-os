@@ -203,12 +203,22 @@
             <div class="peek-review-chain">授权链：{{ peekTask.created_by }} 于 {{ formatTime(peekTask.created_at) }} 创建本任务；除你此刻的批准外，平台没有任何自动放行路径。</div>
             <!-- 填空默认收纳（disclosure grammar：决策时刻只露决策本身）；要留意见的人自己展开 -->
             <button v-if="!commentOpen" type="button" class="peek-comment-toggle" @click="commentOpen = true">附意见 ›</button>
-            <el-input v-else v-model="reviewComment" type="textarea" :rows="2" placeholder="意见（可选）" class="peek-review-input" />
+            <el-input
+              v-else
+              v-model="reviewComment"
+              type="textarea"
+              :rows="2"
+              :maxlength="REVIEW_COMMENT_MAX_LENGTH"
+              show-word-limit
+              :disabled="reviewing"
+              placeholder="意见（可选）"
+              class="peek-review-input"
+            />
             <div class="peek-review-actions">
               <!-- teal=人签唯一色；成功迸发=burstSigned 唯一许可点之一。
                    产物预览未完成首次尝试前禁批准（先看后签）；驳回是安全方向不设门。 -->
-              <el-button ref="peekApproveEl" class="peek-approve" :loading="reviewing" :disabled="artifactsPending" @click="doReview('approve')">批准放行</el-button>
-              <el-button type="danger" plain :loading="reviewing" @click="doReview('reject')">驳回</el-button>
+              <el-button ref="peekApproveEl" class="peek-approve" :loading="reviewing" :disabled="artifactsPending || peekReviewSettled" @click="doReview('approve')">批准放行</el-button>
+              <el-button type="danger" plain :loading="reviewing" :disabled="peekReviewSettled" @click="openPeekRejectDialog">驳回</el-button>
             </div>
           </div>
 
@@ -231,6 +241,58 @@
       </div>
     </div>
   </el-drawer>
+
+  <el-dialog
+    v-model="peekRejectDialogOpen"
+    title="选择驳回原因"
+    width="min(520px, 92vw)"
+    append-to-body
+    :close-on-click-modal="!reviewing"
+    :close-on-press-escape="!reviewing"
+    :show-close="!reviewing"
+    destroy-on-close
+    @closed="resetPeekRejectDialog"
+  >
+    <el-form label-position="top" @submit.prevent>
+      <el-form-item label="驳回原因" :error="peekRejectReasonError">
+        <el-radio-group
+          ref="peekRejectReasonGroupEl"
+          v-model="peekRejectReasonCode"
+          class="peek-review-reason-group"
+          :disabled="reviewing"
+          @change="onPeekRejectReasonChange"
+        >
+          <el-radio
+            v-for="option in REVIEW_REASON_OPTIONS"
+            :key="option.value"
+            :value="option.value"
+          >
+            {{ option.label }}
+          </el-radio>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item
+        :label="peekRejectReasonCode === 'other' ? '具体原因' : '补充说明（可选）'"
+        :error="peekRejectCommentError"
+      >
+        <el-input
+          ref="peekRejectCommentEl"
+          v-model="peekRejectComment"
+          type="textarea"
+          :rows="4"
+          :maxlength="REVIEW_COMMENT_MAX_LENGTH"
+          show-word-limit
+          :disabled="reviewing"
+          :placeholder="peekRejectReasonCode === 'other' ? '请说明具体原因' : '可补充判断依据'"
+          @input="peekRejectCommentError = ''"
+        />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button :disabled="reviewing" @click="peekRejectDialogOpen = false">再看看</el-button>
+      <el-button type="danger" :loading="reviewing" @click="submitPeekReject">确认驳回</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -257,6 +319,12 @@ import { useAgentNames } from "../stores/agentNames";
 import { markTaskSeen } from "../utils/lastSeen";
 import { buildRetryRoute } from "../utils/retryPrefill";
 import { burstSigned } from "../effects/burst";
+import {
+  REVIEW_COMMENT_MAX_LENGTH,
+  REVIEW_REASON_OPTIONS,
+  isReviewContextCurrent,
+  validateReviewDecision,
+} from "../utils/reviewCore.js";
 import WorkLog from "./WorkLog.vue";
 import MarkdownLite from "./MarkdownLite.vue";
 import InboxZero from "./artwork/InboxZero.vue";
@@ -534,7 +602,20 @@ const signerName = computed(() => displayName());
 const reviewComment = ref("");
 const commentOpen = ref(false); // 意见框默认收纳，签发决策面零填空
 const reviewing = ref(false);
+const reviewSettledTaskId = ref(null);
+const peekReviewSettled = computed(() => reviewSettledTaskId.value === statusCenter.taskId);
+const peekRejectDialogOpen = ref(false);
+const peekRejectReasonCode = ref("");
+const peekRejectComment = ref("");
+const peekRejectReasonError = ref("");
+const peekRejectCommentError = ref("");
+const peekRejectReasonGroupEl = ref(null);
+const peekRejectCommentEl = ref(null);
 const peekApproveEl = ref(null);
+watch(isPeekWaiting, (waiting) => {
+  // 速览开着时若其它签发入口先落定，当前 reject dialog 立刻失效。
+  if (!waiting) peekRejectDialogOpen.value = false;
+});
 const acceptedSamples = ref([]);
 const sampleFixResults = ref([]);
 const sampleFixing = ref(false);
@@ -593,29 +674,101 @@ async function fixAcceptedSamples() {
   }
 }
 
-async function doReview(action) {
+function resetPeekRejectDialog() {
+  peekRejectReasonCode.value = "";
+  peekRejectComment.value = "";
+  peekRejectReasonError.value = "";
+  peekRejectCommentError.value = "";
+}
+
+function openPeekRejectDialog() {
+  if (reviewing.value || peekReviewSettled.value) return;
+  peekRejectReasonError.value = "";
+  peekRejectCommentError.value = "";
+  // 与详情页同律：外层通用意见只复制一次，取消驳回不会污染随后批准。
+  peekRejectComment.value = reviewComment.value;
+  peekRejectDialogOpen.value = true;
+}
+
+function onPeekRejectReasonChange() {
+  peekRejectReasonError.value = "";
+  if (peekRejectReasonCode.value !== "other") peekRejectCommentError.value = "";
+}
+
+function focusPeekRejectField(field) {
+  nextTick(() => {
+    if (field === "reasonCode") {
+      const root = peekRejectReasonGroupEl.value?.$el || peekRejectReasonGroupEl.value;
+      root?.querySelector?.("input")?.focus();
+    } else if (field === "comment") {
+      peekRejectCommentEl.value?.focus?.();
+    }
+  });
+}
+
+async function submitPeekReject() {
+  const validation = validateReviewDecision({
+    action: "reject",
+    reasonCode: peekRejectReasonCode.value,
+    comment: peekRejectComment.value,
+  });
+  if (validation.ok !== true) {
+    if (validation.field === "reasonCode") peekRejectReasonError.value = validation.message;
+    if (validation.field === "comment") peekRejectCommentError.value = validation.message;
+    focusPeekRejectField(validation.field);
+    return;
+  }
+  const accepted = await doReview("reject", {
+    reasonCode: validation.reasonCode,
+    comment: validation.comment,
+    skipConfirm: true,
+  });
+  if (accepted) peekRejectDialogOpen.value = false;
+}
+
+async function doReview(
+  action,
+  { reasonCode = null, comment = reviewComment.value, skipConfirm = false } = {},
+) {
   const taskId = statusCenter.taskId; // 调用前捕获：await 期间任务可能被切换
-  if (!taskId) return;
+  if (!taskId || reviewing.value || peekReviewSettled.value) return false;
+  // 意见与原因和 taskId 一起在第一个 await 前冻结；抽屉关闭/任务切换不会把
+  // 新任务草稿错签到旧请求，也不会让关闭清理改变在途判断资产。
+  const decision = {
+    action,
+    reasonCode,
+    comment,
+    pairedAdviceId: null,
+  };
   // 措辞统一（W7）：按钮/弹窗同用「驳回」——同一动作一种中文（与 TaskDetail 对齐）。
   const label = action === "approve" ? "批准放行" : "驳回";
-  try {
-    // 与 TaskDetail 同款二次确认：内联签发不降低宪法路径的操作摩擦
-    await ElMessageBox.confirm(`确认${label}该任务？`, "签发确认", {
-      confirmButtonText: `确认${label}`,
-      cancelButtonText: "再看看",
-      type: "warning",
-    });
-  } catch {
-    return; // 用户取消
-  }
   reviewing.value = true;
   try {
-    await reviewTask(taskId, {
-      action,
-      comment: reviewComment.value || null,
-    });
+    if (!skipConfirm) {
+      try {
+        // 与 TaskDetail 同款二次确认：内联签发不降低宪法路径的操作摩擦
+        await ElMessageBox.confirm(`确认${label}该任务？`, "签发确认", {
+          confirmButtonText: `确认${label}`,
+          cancelButtonText: "再看看",
+          type: "warning",
+        });
+      } catch {
+        return false; // 用户取消
+      }
+    }
+    if (!isReviewContextCurrent({
+      expectedTaskId: taskId,
+      currentTaskId: statusCenter.taskId,
+      waiting: isPeekWaiting.value,
+      visible: statusCenter.open && statusCenter.view === "peek" && peekTask.value?.id === taskId,
+    })) {
+      return false;
+    }
+    const reviewedTask = await reviewTask(taskId, decision);
+    reviewSettledTaskId.value = taskId;
     markTaskSeen(taskId); // 亲手签发=已看过：其后完成不得对签发者亮未读
     reviewComment.value = ""; commentOpen.value = false; // 签发落定即清、意见框收回，绝不残留到下一个任务
+    peekRejectComment.value = "";
     if (action === "approve") {
       ElMessage({ message: "已批准放行", type: "info", customClass: "trust-message-signed" });
     } else {
@@ -624,6 +777,11 @@ async function doReview(action) {
     if (action === "approve") loadAcceptedSamples(taskId); // 静默旁路：失败不影响签发主流程
     // 续体绑定：await 期间抽屉可能已关/任务已切——只有还在看同一任务时才迸发+刷新
     if (statusCenter.open && statusCenter.taskId === taskId) {
+      // review POST 已返回权威任务行，先原地收口旧 waiting_review 卡；随后
+      // live snapshot 仍会按 cursor/gap 规则补齐事件。即使补拉临时断连，也绝不
+      // 把可重复签发的旧按钮重新开放。
+      peekTask.value = reviewedTask;
+      patchInboxTask(reviewedTask);
       if (action === "approve") {
         burstSigned(peekApproveEl.value?.ref); // teal 迸发：人签成功唯一许可点
       }
@@ -633,8 +791,19 @@ async function doReview(action) {
       // 显示 waiting_review 时二次点击提交，触发后端 409。
       await pokeTask(taskId);
     }
+    return true;
   } catch (err) {
+    if (err.status === 409) {
+      // 服务端已被并发签发转出 waiting_review：锁住当前旧投影并强制从零调和，
+      // 不把正常竞态包装成可重复提交的失败。
+      reviewSettledTaskId.value = taskId;
+      if (statusCenter.open && statusCenter.taskId === taskId) {
+        peekRejectDialogOpen.value = false;
+        await resnapshotTask(taskId);
+      }
+    }
     ElMessage.error(err.detail || err.message || "签发失败");
+    return false;
   } finally {
     reviewing.value = false;
   }
@@ -690,6 +859,9 @@ function onClosed() {
   artifactsLoading.value = false;
   reviewComment.value = ""; // 意见草稿不跨次会话残留（签发人姓名保留）
   commentOpen.value = false; // 意见框收回：下次签发面回到零填空默认（CRS R0-P2）
+  peekRejectDialogOpen.value = false;
+  resetPeekRejectDialog();
+  reviewSettledTaskId.value = null;
   resetSampleFixState();
 }
 
@@ -703,6 +875,11 @@ function ensurePeekLoaded() {
   if (id === peekLoadedFor) return;
   if (peekLoadedFor) releasePeekFeed(); // 换代前先释放旧任务的 channel 订阅
   peekLoadedFor = id;
+  // 包括 peek→inbox 的 null 换代：teleport 到 body 的 dialog 不能越过视图边界
+  // 残留，终裁锁也只属于刚才那一个 taskId。
+  peekRejectDialogOpen.value = false;
+  resetPeekRejectDialog();
+  reviewSettledTaskId.value = null;
   if (!id) return;
   resetSampleFixState();
   reviewComment.value = ""; // 切任务清草稿，绝不把上个任务的意见签到这个任务
@@ -1144,6 +1321,15 @@ onUnmounted(() => {
 .peek-review-input {
   margin-bottom: 8px;
 }
+.peek-review-reason-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-4);
+  width: 100%;
+}
+.peek-review-reason-group :deep(.el-radio) {
+  margin-right: 0;
+}
 .peek-review-actions {
   display: flex;
   gap: 10px;
@@ -1166,6 +1352,11 @@ onUnmounted(() => {
   color: var(--ink-soft);
   border-top: 1px dashed var(--hairline);
   padding-top: 10px;
+}
+@media (max-width: 640px) {
+  .peek-review-reason-group {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .sc-lamp.is-pulsing {

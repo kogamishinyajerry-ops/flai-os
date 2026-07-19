@@ -177,6 +177,52 @@ CREATE TABLE IF NOT EXISTS model_calls (
     created_at TEXT NOT NULL
 );
 
+-- 判断资产化：机器顾问候选与人工终裁物理隔离。机器表只表达
+-- clear/concerns/abstain，绝不承载 approve/reject 人签动作。
+CREATE TABLE IF NOT EXISTS task_review_advice (
+    id TEXT PRIMARY KEY NOT NULL,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    model_call_id INTEGER NOT NULL UNIQUE REFERENCES model_calls(id),
+    advisor_id TEXT NOT NULL,
+    advisor_version TEXT NOT NULL,
+    model_profile TEXT NOT NULL,
+    model_name TEXT,
+    advisory_outcome TEXT NOT NULL CHECK (
+        advisory_outcome IN ('clear', 'concerns', 'abstain')
+    ),
+    doubts_json TEXT NOT NULL CHECK (
+        json_valid(doubts_json) AND json_type(doubts_json) = 'array'
+    ),
+    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task_human_decisions (
+    id TEXT PRIMARY KEY NOT NULL,
+    task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id),
+    paired_advice_id TEXT REFERENCES task_review_advice(id),
+    action TEXT NOT NULL CHECK (action IN ('approve', 'reject')),
+    reason_code TEXT CHECK (
+        reason_code IS NULL OR reason_code IN (
+            'source_doubt', 'method_error', 'conclusion_overreach',
+            'insufficient_evidence', 'classification_issue', 'other'
+        )
+    ),
+    comment TEXT CHECK (comment IS NULL OR length(comment) <= 2000),
+    reviewer_username TEXT NOT NULL CHECK (length(trim(reviewer_username)) > 0),
+    reviewer_display_name TEXT NOT NULL CHECK (length(trim(reviewer_display_name)) > 0),
+    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    created_at TEXT NOT NULL,
+    CHECK (
+        (action = 'approve' AND reason_code IS NULL)
+        OR (action = 'reject' AND reason_code IS NOT NULL)
+    ),
+    CHECK (
+        reason_code <> 'other'
+        OR (comment IS NOT NULL AND length(trim(comment)) > 0)
+    )
+);
+
 CREATE TABLE IF NOT EXISTS samples (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT NOT NULL,
@@ -385,6 +431,203 @@ CREATE TABLE IF NOT EXISTS team_members (
     PRIMARY KEY (team_id, seq)
 );
 """
+
+_JUDGMENT_OBJECT_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_task_review_advice_task_created "
+    "ON task_review_advice(task_id, created_at, id)",
+    "CREATE INDEX IF NOT EXISTS idx_task_human_decisions_paired_advice "
+    "ON task_human_decisions(paired_advice_id) "
+    "WHERE paired_advice_id IS NOT NULL",
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_review_advice_model_call_witness
+    BEFORE INSERT ON task_review_advice
+    WHEN NOT EXISTS (
+        SELECT 1
+        FROM model_calls
+        WHERE id = NEW.model_call_id
+          AND task_id = NEW.task_id
+          AND status = 'success'
+          AND agent_id IS NEW.advisor_id
+          AND model_profile IS NEW.model_profile
+          AND model_name IS NEW.model_name
+    )
+    BEGIN
+        SELECT RAISE(
+            ABORT,
+            'advice requires same-task successful model call with exact provenance'
+        );
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_review_advice_validate_doubts
+    BEFORE INSERT ON task_review_advice
+    WHEN (
+        (NEW.advisory_outcome = 'clear' AND json_array_length(NEW.doubts_json) <> 0)
+        OR (NEW.advisory_outcome = 'concerns' AND json_array_length(NEW.doubts_json) = 0)
+        OR json_array_length(NEW.doubts_json) > 20
+        OR EXISTS (
+            SELECT 1
+            FROM json_each(NEW.doubts_json) AS doubt
+            WHERE doubt.type <> 'object'
+               OR (SELECT COUNT(*) FROM json_each(doubt.value)) <> 2
+               OR NOT EXISTS (
+                   SELECT 1
+                   FROM json_each(doubt.value) AS field
+                   WHERE field.key = 'code'
+                     AND field.type = 'text'
+                     AND field.value IN (
+                         'source_doubt', 'method_error', 'conclusion_overreach',
+                         'insufficient_evidence', 'classification_issue', 'other'
+                     )
+               )
+               OR NOT EXISTS (
+                   SELECT 1
+                   FROM json_each(doubt.value) AS field
+                   WHERE field.key = 'detail'
+                     AND field.type = 'text'
+                     AND length(trim(field.value)) > 0
+                     AND length(field.value) <= 2000
+               )
+        )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'invalid advice doubts contract');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_review_advice_no_update
+    BEFORE UPDATE ON task_review_advice
+    BEGIN
+        SELECT RAISE(ABORT, 'task_review_advice is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_review_advice_no_delete
+    BEFORE DELETE ON task_review_advice
+    BEGIN
+        SELECT RAISE(ABORT, 'task_review_advice is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_review_advice_no_conflicting_insert
+    BEFORE INSERT ON task_review_advice
+    WHEN EXISTS (
+        SELECT 1 FROM task_review_advice
+        WHERE id = NEW.id OR model_call_id = NEW.model_call_id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'task_review_advice is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_witnessed_model_calls_no_update
+    BEFORE UPDATE ON model_calls
+    WHEN EXISTS (
+        SELECT 1 FROM task_review_advice
+        WHERE model_call_id = OLD.id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'witnessed model_call is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_witnessed_model_calls_no_delete
+    BEFORE DELETE ON model_calls
+    WHEN EXISTS (
+        SELECT 1 FROM task_review_advice
+        WHERE model_call_id = OLD.id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'witnessed model_call is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_witnessed_model_calls_no_conflicting_insert
+    BEFORE INSERT ON model_calls
+    WHEN EXISTS (
+        SELECT 1
+        FROM task_review_advice AS advice
+        JOIN model_calls AS model_call ON model_call.id = advice.model_call_id
+        WHERE model_call.id = NEW.id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'witnessed model_call is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_human_decisions_pair_same_task
+    BEFORE INSERT ON task_human_decisions
+    WHEN NEW.paired_advice_id IS NOT NULL
+         AND NOT EXISTS (
+             SELECT 1 FROM task_review_advice
+             WHERE id = NEW.paired_advice_id AND task_id = NEW.task_id
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'paired advice must belong to same task');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_human_decisions_waiting_review_witness
+    BEFORE INSERT ON task_human_decisions
+    WHEN NOT EXISTS (
+             SELECT 1 FROM task_human_decisions
+             WHERE id = NEW.id OR task_id = NEW.task_id
+         )
+         AND NOT EXISTS (
+             SELECT 1 FROM tasks
+             WHERE id = NEW.task_id AND status = 'waiting_review'
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'human decision requires waiting_review task');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_human_decisions_no_update
+    BEFORE UPDATE ON task_human_decisions
+    BEGIN
+        SELECT RAISE(ABORT, 'task_human_decisions is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_human_decisions_no_delete
+    BEFORE DELETE ON task_human_decisions
+    BEGIN
+        SELECT RAISE(ABORT, 'task_human_decisions is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_human_decisions_no_conflicting_insert
+    BEFORE INSERT ON task_human_decisions
+    WHEN EXISTS (
+        SELECT 1 FROM task_human_decisions
+        WHERE id = NEW.id OR task_id = NEW.task_id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'task_human_decisions is append-only');
+    END
+    """,
+)
+
+_JUDGMENT_MANAGED_INDEXES = (
+    "idx_task_review_advice_task_created",
+    "idx_task_human_decisions_paired_advice",
+)
+
+_JUDGMENT_MANAGED_TRIGGERS = (
+    "trg_task_review_advice_model_call_witness",
+    "trg_task_review_advice_validate_doubts",
+    "trg_task_review_advice_no_update",
+    "trg_task_review_advice_no_delete",
+    "trg_task_review_advice_no_conflicting_insert",
+    "trg_witnessed_model_calls_no_update",
+    "trg_witnessed_model_calls_no_delete",
+    "trg_witnessed_model_calls_no_conflicting_insert",
+    "trg_task_human_decisions_pair_same_task",
+    "trg_task_human_decisions_waiting_review_witness",
+    "trg_task_human_decisions_no_update",
+    "trg_task_human_decisions_no_delete",
+    "trg_task_human_decisions_no_conflicting_insert",
+)
 
 _INDEX_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id)",
@@ -1651,6 +1894,36 @@ def init_db(db_path: str | Path) -> None:
     """
     conn = get_conn(db_path)
     try:
+        # 在任何 CREATE/收敛动作之前先看现场：若已有任一非空判断账本，则两张
+        # 表和全部 canonical 对象必须原本就在位。否则 `_DDL` 补一张被删的表、
+        # 或后文重建 no-op trigger 后再报绿，会掩盖历史保护窗已经断裂的事实。
+        judgment_table_names = (
+            "task_review_advice",
+            "task_human_decisions",
+        )
+        existing_judgment_tables = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name IN (?, ?)",
+                judgment_table_names,
+            )
+        }
+        judgment_was_nonempty = any(
+            conn.execute(
+                f"SELECT EXISTS(SELECT 1 FROM {table_name} LIMIT 1)"
+            ).fetchone()[0]
+            == 1
+            for table_name in existing_judgment_tables
+        )
+        if judgment_was_nonempty:
+            if existing_judgment_tables != set(judgment_table_names):
+                raise sqlite3.IntegrityError(
+                    "nonempty judgment ledger is missing a required table"
+                )
+            from .review_schema import assert_judgment_schema
+
+            assert_judgment_schema(conn)
         conn.executescript(_DDL)
         # 迁移 #1（ADR-0013）：model_calls.conversation_id——导引会话的模型调用归因。
         # 并发启动安全（Codex R1-P1）：API 进程与 Job Runner 进程都在启动时调
@@ -1783,6 +2056,24 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute(
                     "ALTER TABLE conversations ADD COLUMN created_by_username TEXT"
                 )
+            # 非空判断账本已经承载不可回溯证据。若启动前其受管 trigger/index
+            # 缺失或被替成 no-op，历史期间是否发生过 UPDATE/DELETE/REPLACE 已不可知；
+            # 此时自动“修好再报绿”会制造假绿。只允许空账本自动收敛；非空账本先
+            # 按当前 canonical contract 完整见证，失败即停机等待取证/人工迁移。
+            judgment_has_rows = any(
+                conn.execute(
+                    f"SELECT EXISTS(SELECT 1 FROM {table_name} LIMIT 1)"
+                ).fetchone()[0]
+                == 1
+                for table_name in (
+                    "task_review_advice",
+                    "task_human_decisions",
+                )
+            )
+            if judgment_has_rows:
+                from .review_schema import assert_judgment_schema
+
+                assert_judgment_schema(conn)
             # Converge every P2.3 managed object, not just missing names.  This
             # repairs stale/no-op trigger bodies and wrong-column/predicate indexes
             # on restart.  All names are static module constants; the write lock
@@ -1791,9 +2082,15 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
             for index_name in _P23_MANAGED_INDEXES:
                 conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+            for trigger_name in _JUDGMENT_MANAGED_TRIGGERS:
+                conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+            for index_name in _JUDGMENT_MANAGED_INDEXES:
+                conn.execute(f"DROP INDEX IF EXISTS {index_name}")
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:
+                conn.execute(statement)
+            for statement in _JUDGMENT_OBJECT_DDL:
                 conn.execute(statement)
             _assert_p23_identity_table_shapes(conn)
             _assert_p23_schema_object_sets(conn)
@@ -1805,6 +2102,11 @@ def init_db(db_path: str | Path) -> None:
             from .p23_schema import assert_p23_schema
 
             assert_p23_schema(conn)
+            # 判断账本与 P2.3 一样按完整 SQL 语义见证；同名 no-op trigger
+            # 或宽松 lookalike table 都不能被启动路径误报为可信。
+            from .review_schema import assert_judgment_schema
+
+            assert_judgment_schema(conn)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

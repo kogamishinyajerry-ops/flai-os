@@ -1,4 +1,5 @@
 import { request } from "./client.js";
+import { buildReviewPayload } from "../utils/reviewCore.js";
 
 // created_by 服务端从登录会话派生（ADR-0019 D5），前端不再发送任何身份文本。
 export const createTask = ({ agentId, name, inputs, inputFileIds, conversationId, retryOf }) =>
@@ -71,11 +72,15 @@ export const listTaskEvents = async (taskId, { offset = 0 } = {}) => {
 export const cancelTask = (taskId) =>
   request(`/api/tasks/${taskId}/cancel`, { method: "POST" });
 
-// 人工放行（P1-B）。签发者=登录会话身份，服务端派生（ADR-0019 D5），前端不发。
-export const reviewTask = (taskId, { action, comment }) =>
+// 人工签发。签发者/建议者身份均由服务端登录会话派生；客户端只传判断资产
+// 合同的四个字段，绝不发送 reviewer/advisor 文本。
+export const reviewTask = (
+  taskId,
+  decision,
+) =>
   request(`/api/tasks/${taskId}/review`, {
     method: "POST",
-    json: { action, comment: comment || null },
+    json: buildReviewPayload(decision),
   });
 
 // 工具调用明细（只读端点，工作态氛围展示用）。

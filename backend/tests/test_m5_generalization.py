@@ -333,7 +333,11 @@ def test_fta_reject_marks_sample_not_accepted(app_env) -> None:
 
     review = client.post(
         f"/api/tasks/{task_id}/review",
-        json={"action": "reject", "comment": "割集候选不完整，退回"},
+        json={
+            "action": "reject",
+            "reason_code": "insufficient_evidence",
+            "comment": "割集候选不完整，退回",
+        },
     )
     assert review.status_code == 200
     assert review.json()["status"] == "failed"
