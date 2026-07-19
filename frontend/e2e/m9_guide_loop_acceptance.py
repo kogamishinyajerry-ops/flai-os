@@ -119,8 +119,12 @@ def flip_task_completed_with_artifact(task_id: str) -> None:
 
     conn = sqlite3.connect(WORK / "flai_os.db")
     conn.execute(
-        "UPDATE tasks SET status='completed', output_file_ids=?, started_at=?, finished_at=? WHERE id=?",
-        (json.dumps(["file_probe_0001"]), "2026-07-11T02:00:00+00:00", "2026-07-11T02:01:35+00:00", task_id),
+        "UPDATE tasks SET output_file_ids=? WHERE id=?",
+        (json.dumps(["file_probe_0001"]), task_id),
+    )
+    conn.execute(
+        "UPDATE tasks SET status='completed', started_at=?, finished_at=? WHERE id=?",
+        ("2026-07-11T02:00:00+00:00", "2026-07-11T02:01:35+00:00", task_id),
     )
     conn.commit()
     conn.close()

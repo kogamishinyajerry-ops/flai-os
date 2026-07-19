@@ -11,6 +11,10 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
+from ..storage.review_schema import (
+    JUDGMENT_SCHEMA_WITNESS_KEYS,
+    judgment_schema_witnesses,
+)
 from ._since import parse_since_utc
 
 router = APIRouter(prefix="/api", tags=["stats"])
@@ -34,11 +38,21 @@ def stats_overview(request: Request, since: str | None = None) -> dict[str, Any]
             " AND origin = 'user' AND finished_at IS NOT NULL AND finished_at >= ?",
             (since,),
         ).fetchone()[0]
-        reviews_approved = conn.execute(
-            "SELECT COUNT(*) FROM task_events WHERE event_type = 'review_approved'"
-            " AND created_at >= ?",
-            (since,),
-        ).fetchone()[0]
+        judgment_witnesses = judgment_schema_witnesses(conn)
+        judgment_ready = all(
+            judgment_witnesses.get(key) is True
+            for key in JUDGMENT_SCHEMA_WITNESS_KEYS
+        )
+        if judgment_ready is True:
+            reviews_approved: int | str = conn.execute(
+                "SELECT COUNT(*) FROM task_human_decisions AS decision "
+                "JOIN tasks AS task ON task.id = decision.task_id "
+                "WHERE task.origin = 'user' AND decision.action = 'approve' "
+                "AND decision.created_at >= ?",
+                (since,),
+            ).fetchone()[0]
+        else:
+            reviews_approved = "未知（判断账本不可信）"
         promotions = conn.execute(
             "SELECT COUNT(*) FROM promotions WHERE created_at >= ?", (since,)
         ).fetchone()[0]

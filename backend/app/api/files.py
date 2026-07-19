@@ -400,6 +400,22 @@ def _gated_verified_handle(
 
 @router.get("/files/{file_id}/download")
 def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
+    # The cohort boundary is request entry, before path resolution, hashing, or
+    # any other potentially blocking integrity work.  Approval that happens
+    # while those gates run is intentionally too late for this delivery; a
+    # later request will observe the new capture.  Querying by opaque file id
+    # reveals nothing and the normal existence/classification gates still own
+    # every user-visible response.
+    capture_witness: dict[str, Any] | None = None
+    if request.method == "GET" and "range" not in request.headers:
+        cohort_conn = request.app.state.conn_factory()
+        try:
+            capture_witness = repos.get_artifact_capture_witness(
+                cohort_conn, file_id
+            )
+        finally:
+            cohort_conn.close()
+
     record, handle = _gated_verified_handle(
         request,
         file_id,
@@ -408,10 +424,7 @@ def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
     )
 
     # Only output artifacts that are already in the signed outcome cohort when
-    # this response is constructed can produce a delivery fact.  Snapshot the
-    # exact capture/review witness before streaming: discovering a marker only
-    # after the body was sent would retroactively admit a request that started
-    # while the artifact was unsigned.  The callback opens its own connection
+    # this request entered can produce a delivery fact.  The callback opens its own connection
     # because FileResponse streams after this sync endpoint has returned, then
     # SQLite revalidates the snapshotted witness on insert.  Legacy/input files
     # truthfully no-op.  Repeated complete downloads remain repeated deliveries.
@@ -423,37 +436,29 @@ def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
             # Any Range request is explicitly outside full_download semantics,
             # even when If-Range makes Starlette fall back to a simple 200 body.
             and "range" not in request.headers
+            and capture_witness is not None
         ):
             conn_factory = request.app.state.conn_factory
             actor_username = request.state.user["username"]
-            witness_conn = conn_factory()
-            try:
-                capture_witness = repos.get_artifact_capture_witness(
-                    witness_conn, file_id
-                )
-            finally:
-                witness_conn.close()
+            source_task_id = capture_witness["source_task_id"]
+            source_file_id = capture_witness["source_file_id"]
+            review_event_id = capture_witness["review_event_id"]
 
-            if capture_witness is not None:
-                source_task_id = capture_witness["source_task_id"]
-                source_file_id = capture_witness["source_file_id"]
-                review_event_id = capture_witness["review_event_id"]
+            def _record(delivered_bytes: int) -> None:
+                conn = conn_factory()
+                try:
+                    repos.record_full_download_outcome(
+                        conn,
+                        source_task_id=source_task_id,
+                        source_file_id=source_file_id,
+                        review_event_id=review_event_id,
+                        actor_username=actor_username,
+                        delivered_bytes=delivered_bytes,
+                    )
+                finally:
+                    conn.close()
 
-                def _record(delivered_bytes: int) -> None:
-                    conn = conn_factory()
-                    try:
-                        repos.record_full_download_outcome(
-                            conn,
-                            source_task_id=source_task_id,
-                            source_file_id=source_file_id,
-                            review_event_id=review_event_id,
-                            actor_username=actor_username,
-                            delivered_bytes=delivered_bytes,
-                        )
-                    finally:
-                        conn.close()
-
-                on_full_body_sent = _record
+            on_full_body_sent = _record
 
         return _VerifiedFileResponse(
             handle,

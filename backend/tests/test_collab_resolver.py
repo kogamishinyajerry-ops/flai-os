@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _PATHS = {
     "waiting_review": ["queued", "validating", "running", "waiting_review"],
-    "completed_reviewed": ["queued", "validating", "running", "waiting_review", "completed"],
+    "completed_reviewed": ["queued", "validating", "running", "waiting_review"],
     "completed_auto": ["queued", "validating", "running", "analyzing", "completed"],
     "failed": ["queued", "validating", "failed"],
     "cancelled": ["cancelled"],
@@ -89,6 +89,54 @@ def _mk(conn, task_id, *, depends_on=None, inputs=None, input_file_ids=None,
 def _drive(conn, task_id, key):
     for s in _PATHS[key]:
         repos.set_task_status(conn, task_id, s)
+    if key == "completed_reviewed":
+        repos.apply_human_review(
+            conn,
+            task_id,
+            action="approve",
+            reviewer="测试评审员",
+            reviewer_username="test_reviewer",
+            reason_code=None,
+            comment="resolver fixture sign-off",
+        )
+
+
+def _append_pre_cutover_review_approved(conn, task_id: str) -> str:
+    """Seed one exact legacy signer row plus its immutable cutover witness."""
+    trigger_names = (
+        "trg_structured_review_events_decision_witness",
+        "trg_structured_review_events_capture_witness",
+        "trg_task_review_event_witnesses_validate_insert",
+    )
+    trigger_sql = {
+        name: conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+            (name,),
+        ).fetchone()[0]
+        for name in trigger_names
+    }
+    for name in trigger_names:
+        conn.execute(f'DROP TRIGGER "{name}"')
+    event_id = f"legacy-review-{uuid.uuid4().hex}"
+    cur = conn.execute(
+        "INSERT INTO task_events "
+        "(event_id, task_id, agent_id, event_type, level, message, payload_json, created_at) "
+        "VALUES (?, ?, 'hello_agent', 'review_approved', 'info', "
+        "'legacy signer witness', '{}', '2026-07-19T00:00:00+00:00')",
+        (event_id, task_id),
+    )
+    conn.execute(
+        "INSERT INTO task_review_event_witnesses "
+        "(event_id, event_internal_id, task_id, agent_id, event_type, level, "
+        "message, payload_json, created_at, decision_id, witness_kind, schema_version) "
+        "SELECT event_id, id, task_id, agent_id, event_type, level, message, "
+        "payload_json, created_at, NULL, 'legacy_pre_instrumentation', 1 "
+        "FROM task_events WHERE id = ?",
+        (cur.lastrowid,),
+    )
+    for name in trigger_names:
+        conn.execute(trigger_sql[name])
+    return event_id
 
 
 def _attach_output(conn, task_id, *, classification="internal", name="out.txt"):
@@ -143,7 +191,15 @@ def test_T1_waiting_review_upstream_blocks_then_completed_releases(dbf):
     conn = dbf()
     try:
         assert repos.get_task(conn, "down")["status"] == "created"  # 未签 → 下游卡住
-        repos.set_task_status(conn, "up", "completed")  # 模拟人工放行 waiting_review→completed
+        repos.apply_human_review(
+            conn,
+            "up",
+            action="approve",
+            reviewer="测试评审员",
+            reviewer_username="test_reviewer",
+            reason_code=None,
+            comment="T1 fixture sign-off",
+        )
     finally:
         conn.close()
 
@@ -543,7 +599,12 @@ def test_R1_invalid_piped_output_id_cancels_downstream(dbf):
             path=f"/tmp/{bad_fid}", size_bytes=1, sha256="a" * 64, classification="internal",
         )
         repos.set_task_outputs(conn, "up", [bad_fid])
-        _drive(conn, "up", "completed_reviewed")
+        # Legacy corruption fixture: modern apply_human_review correctly refuses
+        # to capture a non-output manifest, so reproduce the pre-instrumentation
+        # row as auto-completed plus its historical signer event.  Resolver must
+        # still reject the bad file instead of trusting status/event alone.
+        _drive(conn, "up", "completed_auto")
+        _append_pre_cutover_review_approved(conn, "up")
         _mk(conn, "down", depends_on=["up"])
     finally:
         conn.close()

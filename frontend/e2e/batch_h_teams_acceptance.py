@@ -645,25 +645,42 @@ with sync_playwright() as p:
         rctx.close()
 
     # ── O6：withheld 被动面（GuidePage）——零下载 + 遮蔽标记 + 无编造计数 ──
-    # 对 O3 的 UI 下游任务注入 sensitive JSON 产物（模拟受限依据产物）。
+    # 建独立未封印任务，先绑定 sensitive JSON 再落终态。测试夹具不得在 O3 已完成
+    # 任务上签后追加产物，否则正是在复现「用户签 A、事后换成 B」的禁止路径。
     sens_path = WORK / "ev.json"
     sens_path.write_text(json.dumps({"findings": [{"claim": "机密", "evidence": []}]}), encoding="utf-8")
+    withheld_task_id = "task_b8_withheld_probe"
     conn = app.state.conn_factory()
     try:
+        repos.create_task(
+            conn,
+            task_id=withheld_task_id,
+            agent_id="hello_agent",
+            agent_version=HELLO["version"],
+            name="受限依据被动面探针",
+            created_by="王工",
+            created_by_username=E2E_USERNAME,
+            inputs={},
+            input_file_ids=[],
+            metadata={},
+            # UI-only evidence projection probe; keep it outside JobRunner's
+            # user-task candidate set so the fixture can walk the legal state
+            # chain deterministically while the suite worker is live.
+            origin="eval",
+        )
         repos.create_file(
-            conn, file_id="f_ev_b8", task_id=ui_up["id"], kind="output",
+            conn, file_id="f_ev_b8", task_id=withheld_task_id, kind="output",
             filename="evidence_report.json", path=str(sens_path),
             size_bytes=sens_path.stat().st_size,
             sha256=hashlib.sha256(sens_path.read_bytes()).hexdigest(),
             classification="sensitive",
         )
-        cur = conn.execute("SELECT output_file_ids FROM tasks WHERE id = ?", (ui_up["id"],)).fetchone()
-        existing = json.loads(cur[0]) if cur and cur[0] else []
-        conn.execute(
-            "UPDATE tasks SET output_file_ids = ? WHERE id = ?",
-            (json.dumps(existing + ["f_ev_b8"]), ui_up["id"]),
-        )
-        conn.commit()
+        repos.set_task_outputs(conn, withheld_task_id, ["f_ev_b8"])
+        repos.set_task_data_classification(conn, withheld_task_id, "sensitive")
+        for status in ("queued", "validating", "running", "analyzing", "completed"):
+            repos.set_task_status(conn, withheld_task_id, status)
+    except Exception:
+        raise
     finally:
         conn.close()
     downloads: list[str] = []
@@ -678,13 +695,13 @@ with sync_playwright() as p:
     time.sleep(2.5)
     ev_downloads = [u for u in downloads if "f_ev_b8" in u]
     check("O6a 被动列表面零受限下载请求", len(ev_downloads) == 0, str(ev_downloads))
-    files_meta = API.get(f"/api/tasks/{ui_up['id']}/output_files").json()
+    files_meta = API.get(f"/api/tasks/{withheld_task_id}/output_files").json()
     check("O6b 元数据面如实带分级（withheld 判据数据源）",
           any(f["id"] == "f_ev_b8" and f["data_classification"] == "sensitive" for f in files_meta),
           json.dumps(files_meta, ensure_ascii=False)[:200])
     # TaskDetail 依据段遮蔽行（store 同源；产物区的主动拉取是用户意图面，不计入被动零下载）
     pre = len([u for u in downloads if "f_ev_b8" in u])
-    page.goto(BASE + f"/tasks/{ui_up['id']}")
+    page.goto(BASE + f"/tasks/{withheld_task_id}")
     try:
         expect(page.locator(".evidence-withheld")).to_be_visible(timeout=8000)
         check("O6c 依据段遮蔽标记在场", True)

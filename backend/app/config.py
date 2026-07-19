@@ -44,8 +44,11 @@ DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 
 # ADR-0036 API 代际。布尔 axis 只能区分“接过/没接过”功能，无法阻止初版
 # outcome API 在 DB 已迁到收紧版后继续存活并以旧的 post-send cohort 发现逻辑漏过
-# 部署门。精确字符串同时覆盖 pre-stream snapshot、decision-bound capture 与父级冻结。
-OUTCOME_TELEMETRY_GENERATION = "adr36-decision-bound-prestream-snapshot-v2"
+# 部署门。精确字符串同时覆盖 request-entry snapshot、decision-bound capture、
+# review seal、逐 review-event exact bytes/internal-id witness、独立事件形态/SQLite
+# storage-class/canonical-UTC 重验、父级 rowid+updated_at signed snapshot、判断轴合取
+# 与每轮 live deep provenance。
+OUTCOME_TELEMETRY_GENERATION = "adr36-signed-review-event-canonical-time-v8"
 
 # worker 代际字符串（ADR-0021/Codex R2 审 P2）：放在纯 stdlib 的 config，
 # 让部署自检探针（deploy_selfcheck.py，号称免应用依赖）导入它时不连带拉

@@ -30,6 +30,12 @@ from backend.app.storage.outcome_schema import (  # noqa: E402
 from backend.app.storage.outcome_schema import (  # noqa: E402
     outcome_schema_witnesses as _outcome_schema_witnesses,
 )
+from backend.app.storage.review_schema import (  # noqa: E402
+    JUDGMENT_SCHEMA_WITNESS_KEYS as _JUDGMENT_SCHEMA_WITNESS_KEYS,
+)
+from backend.app.storage.review_schema import (  # noqa: E402
+    judgment_schema_witnesses as _judgment_schema_witnesses,
+)
 
 DEFAULT_DB = Path(os.environ.get("FLAI_DB_PATH", str(REPO / "data" / "flai_os.db")))
 STALL_HOURS = 48
@@ -100,37 +106,46 @@ def build_report(db_path: Path, days: int, now: dt.datetime | None = None) -> di
         # ---- 任务面（origin='user' 才算真实使用；eval 跑批不计） ----
         task_cols = _columns(conn, "tasks")
         if {"status", "created_at", "origin"} <= task_cols:
-            base = "FROM tasks WHERE origin = 'user' AND created_at >= ?"
+            base = (
+                "FROM tasks WHERE origin = 'user' "
+                "AND created_at >= ? AND created_at <= ?"
+            )
             by_status = {
                 r["status"]: r["n"]
-                for r in conn.execute(f"SELECT status, COUNT(*) AS n {base} GROUP BY status", (since,))
+                for r in conn.execute(
+                    f"SELECT status, COUNT(*) AS n {base} GROUP BY status",
+                    (since, generated_at_bound),
+                )
             }
             tasks: dict = {"created": sum(by_status.values()), "by_status": by_status}
 
             ident = "created_by_username" if "created_by_username" in task_cols else "created_by"
             tasks["distinct_creators"] = _one(
-                conn, f"SELECT COUNT(DISTINCT {ident}) {base} AND {ident} IS NOT NULL", (since,)
+                conn,
+                f"SELECT COUNT(DISTINCT {ident}) {base} AND {ident} IS NOT NULL",
+                (since, generated_at_bound),
             )
             tasks["by_creator"] = {
                 str(r["who"]): r["n"]
                 for r in conn.execute(
                     f"SELECT {ident} AS who, COUNT(*) AS n {base} AND {ident} IS NOT NULL "
                     "GROUP BY who ORDER BY n DESC LIMIT 10",
-                    (since,),
+                    (since, generated_at_bound),
                 )
             }
             tasks["by_agent"] = {
                 str(r["agent_id"]): r["n"]
                 for r in conn.execute(
                     f"SELECT agent_id, COUNT(*) AS n {base} GROUP BY agent_id ORDER BY n DESC LIMIT 10",
-                    (since,),
+                    (since, generated_at_bound),
                 )
             }
 
             durations: list[float] = []
             for r in conn.execute(
-                f"SELECT created_at, finished_at {base} AND status = 'completed' AND finished_at IS NOT NULL",
-                (since,),
+                f"SELECT created_at, finished_at {base} AND status = 'completed' "
+                "AND finished_at IS NOT NULL AND finished_at <= ?",
+                (since, generated_at_bound, generated_at_bound),
             ):
                 t0, t1 = _parse_ts(r["created_at"]), _parse_ts(r["finished_at"])
                 if t0 and t1 and t1 >= t0:
@@ -142,8 +157,9 @@ def build_report(db_path: Path, days: int, now: dt.datetime | None = None) -> di
             if "updated_at" in task_cols:
                 tasks["stalled_waiting_review"] = _one(
                     conn,
-                    "SELECT COUNT(*) FROM tasks WHERE origin = 'user' AND status = 'waiting_review' AND updated_at < ?",
-                    (stall_cutoff,),
+                    "SELECT COUNT(*) FROM tasks WHERE origin = 'user' "
+                    "AND status = 'waiting_review' AND created_at <= ? AND updated_at < ?",
+                    (generated_at_bound, stall_cutoff),
                 )
             report["tasks"] = tasks
         else:
@@ -155,97 +171,124 @@ def build_report(db_path: Path, days: int, now: dt.datetime | None = None) -> di
             {"task_id", "event_type", "created_at"} <= event_cols
             and {"id", "origin"} <= task_cols
         ):
-            reviews: dict = {
-                "approved": _one(
-                    conn,
-                    "SELECT COUNT(*) FROM task_events AS event "
-                    "JOIN tasks AS task ON task.id = event.task_id "
-                    "WHERE task.origin = 'user' "
-                    "AND event.event_type = 'review_approved' "
-                    "AND event.created_at >= ?",
-                    (since,),
-                ),
-                "rejected": _one(
-                    conn,
-                    "SELECT COUNT(*) FROM task_events AS event "
-                    "JOIN tasks AS task ON task.id = event.task_id "
-                    "WHERE task.origin = 'user' "
-                    "AND event.event_type = 'review_rejected' "
-                    "AND event.created_at >= ?",
-                    (since,),
-                ),
-            }
-            decision_cols = _columns(conn, "task_human_decisions")
-            if {"task_id", "reason_code", "created_at"} <= decision_cols:
-                structured = _one(
-                    conn,
-                    "SELECT COUNT(*) FROM task_events AS event "
-                    "JOIN tasks AS task ON task.id = event.task_id "
-                    "JOIN task_human_decisions AS decision "
-                    "ON decision.task_id = event.task_id "
-                    "WHERE task.origin = 'user' "
-                    "AND event.event_type IN ('review_approved', 'review_rejected') "
-                    "AND event.created_at >= ?",
-                    (since,),
-                )
-                legacy = _one(
-                    conn,
-                    "SELECT COUNT(*) FROM task_events AS event "
-                    "JOIN tasks AS task ON task.id = event.task_id "
-                    "LEFT JOIN task_human_decisions AS decision "
-                    "ON decision.task_id = event.task_id "
-                    "WHERE task.origin = 'user' "
-                    "AND event.event_type IN ('review_approved', 'review_rejected') "
-                    "AND event.created_at >= ? "
-                    "AND decision.task_id IS NULL",
-                    (since,),
-                )
-                denominator = int(structured or 0) + int(legacy or 0)
-                reviews["judgment_coverage"] = {
-                    "status": (
-                        "measured"
-                        if denominator > 0
-                        else "unknown_no_review_samples"
+            judgment_schema_witnesses = _judgment_schema_witnesses(conn)
+            judgment_schema_ready = all(
+                judgment_schema_witnesses.get(key) is True
+                for key in _JUDGMENT_SCHEMA_WITNESS_KEYS
+            )
+            if judgment_schema_ready is not True:
+                report["reviews"] = {
+                    "status": "unknown_untrusted_judgment_ledger",
+                    "schema_witnesses": judgment_schema_witnesses,
+                    "note": (
+                        "判断账本结构或持久 provenance 未通过可信见证；"
+                        "不输出可能重复、孤立或被改写的人签计数"
                     ),
-                    "structured": structured,
-                    "legacy_unstructured": legacy,
-                    "structured_ratio": (
-                        round(int(structured or 0) / denominator, 4)
-                        if denominator > 0
-                        else "未知（窗口内无具名人签样本）"
-                    ),
-                    "by_reject_reason": {
-                        str(row["reason_code"]): row["n"]
-                        for row in conn.execute(
-                            "SELECT decision.reason_code, COUNT(*) AS n "
-                            "FROM task_human_decisions AS decision "
-                            "JOIN tasks AS task ON task.id = decision.task_id "
-                            "WHERE task.origin = 'user' "
-                            "AND decision.created_at >= ? "
-                            "AND decision.reason_code IS NOT NULL "
-                            "GROUP BY decision.reason_code ORDER BY n DESC",
-                            (since,),
-                        )
-                    },
-                    "note": "legacy_unstructured 仅计无结构化 decision 的既有 review event；不反推 reason",
                 }
             else:
-                reviews["judgment_coverage"] = (
-                    "未知（task_human_decisions 结构未在位；不把旧人签冒充结构化样本）"
-                )
-            report["reviews"] = reviews
+                reviews: dict = {
+                    "status": "measured",
+                    "schema_witnesses": judgment_schema_witnesses,
+                    "approved": _one(
+                        conn,
+                        "SELECT COUNT(*) FROM task_human_decisions AS decision "
+                        "JOIN tasks AS task ON task.id = decision.task_id "
+                        "WHERE task.origin = 'user' "
+                        "AND decision.action = 'approve' "
+                        "AND decision.created_at >= ? AND decision.created_at <= ?",
+                        (since, generated_at_bound),
+                    ),
+                    "rejected": _one(
+                        conn,
+                        "SELECT COUNT(*) FROM task_human_decisions AS decision "
+                        "JOIN tasks AS task ON task.id = decision.task_id "
+                        "WHERE task.origin = 'user' "
+                        "AND decision.action = 'reject' "
+                        "AND decision.created_at >= ? AND decision.created_at <= ?",
+                        (since, generated_at_bound),
+                    ),
+                }
+                decision_cols = _columns(conn, "task_human_decisions")
+                if {"task_id", "reason_code", "created_at"} <= decision_cols:
+                    structured = _one(
+                        conn,
+                        "SELECT COUNT(*) FROM task_human_decisions AS decision "
+                        "JOIN tasks AS task ON task.id = decision.task_id "
+                        "WHERE task.origin = 'user' "
+                        "AND decision.created_at >= ? AND decision.created_at <= ?",
+                        (since, generated_at_bound),
+                    )
+                    legacy = _one(
+                        conn,
+                        "SELECT COUNT(*) "
+                        "FROM task_review_event_witnesses AS witness "
+                        "JOIN tasks AS task ON task.id = witness.task_id "
+                        "WHERE task.origin = 'user' "
+                        "AND witness.witness_kind = 'legacy_pre_instrumentation' "
+                        "AND witness.created_at >= ? AND witness.created_at <= ?",
+                        (since, generated_at_bound),
+                    )
+                    denominator = int(structured or 0) + int(legacy or 0)
+                    reviews["judgment_coverage"] = {
+                        "status": (
+                            "measured"
+                            if denominator > 0
+                            else "unknown_no_review_samples"
+                        ),
+                        "structured": structured,
+                        "legacy_unstructured": legacy,
+                        "structured_ratio": (
+                            round(int(structured or 0) / denominator, 4)
+                            if denominator > 0
+                            else "未知（窗口内无具名人签样本）"
+                        ),
+                        "by_reject_reason": {
+                            str(row["reason_code"]): row["n"]
+                            for row in conn.execute(
+                                "SELECT decision.reason_code, COUNT(*) AS n "
+                                "FROM task_human_decisions AS decision "
+                                "JOIN tasks AS task ON task.id = decision.task_id "
+                                "WHERE task.origin = 'user' "
+                                "AND decision.created_at >= ? "
+                                "AND decision.created_at <= ? "
+                                "AND decision.reason_code IS NOT NULL "
+                                "GROUP BY decision.reason_code ORDER BY n DESC",
+                                (since, generated_at_bound),
+                            )
+                        },
+                        "note": (
+                            "approved/rejected 仅计 exact decision-bound 终裁；"
+                            "legacy_unstructured 仅是严格代际切换前封存的 review "
+                            "event 记录，不并入可信人签总数，也不反推 reason"
+                        ),
+                    }
+                else:
+                    reviews["judgment_coverage"] = (
+                        "未知（task_human_decisions 结构未在位；不把旧人签冒充结构化样本）"
+                    )
+                report["reviews"] = reviews
         else:
             report["reviews"] = "未知（task_events/tasks 表结构不含所需列）"
 
         # ---- 对话/漏斗 ----
         conv_ok = {"created_at", "created_by"} <= _columns(conn, "conversations")
-        conv_count = _one(conn, "SELECT COUNT(*) FROM conversations WHERE created_at >= ?", (since,)) if conv_ok else None
+        conv_count = (
+            _one(
+                conn,
+                "SELECT COUNT(*) FROM conversations "
+                "WHERE created_at >= ? AND created_at <= ?",
+                (since, generated_at_bound),
+            )
+            if conv_ok
+            else None
+        )
         if conv_ok and isinstance(report.get("tasks"), dict):
             conv_with_tasks = _one(
                 conn,
                 "SELECT COUNT(DISTINCT conversation_id) FROM tasks "
-                "WHERE origin = 'user' AND conversation_id IS NOT NULL AND created_at >= ?",
-                (since,),
+                "WHERE origin = 'user' AND conversation_id IS NOT NULL "
+                "AND created_at >= ? AND created_at <= ?",
+                (since, generated_at_bound),
             )
             by_status = report["tasks"]["by_status"]
             report["funnel"] = {
@@ -264,14 +307,27 @@ def build_report(db_path: Path, days: int, now: dt.datetime | None = None) -> di
         mc_cols = _columns(conn, "model_calls")
         if {"status", "created_at"} <= mc_cols:
             calls: dict = {
-                "total": _one(conn, "SELECT COUNT(*) FROM model_calls WHERE created_at >= ?", (since,)),
+                "total": _one(
+                    conn,
+                    "SELECT COUNT(*) FROM model_calls "
+                    "WHERE created_at >= ? AND created_at <= ?",
+                    (since, generated_at_bound),
+                ),
                 "failed": _one(
-                    conn, "SELECT COUNT(*) FROM model_calls WHERE created_at >= ? AND status != 'success'", (since,)
+                    conn,
+                    "SELECT COUNT(*) FROM model_calls "
+                    "WHERE created_at >= ? AND created_at <= ? AND status != 'success'",
+                    (since, generated_at_bound),
                 ),
             }
             token_col = next((c for c in ("total_tokens", "tokens_total", "usage_total_tokens") if c in mc_cols), None)
             calls["tokens"] = (
-                _one(conn, f"SELECT SUM({token_col}) FROM model_calls WHERE created_at >= ?", (since,))
+                _one(
+                    conn,
+                    f"SELECT SUM({token_col}) FROM model_calls "
+                    "WHERE created_at >= ? AND created_at <= ?",
+                    (since, generated_at_bound),
+                )
                 if token_col
                 else "未知（model_calls 无总 token 列）"
             )
@@ -420,7 +476,12 @@ def build_report(db_path: Path, days: int, now: dt.datetime | None = None) -> di
 
         # ---- 反馈 ----
         if {"created_at"} <= _columns(conn, "feedback"):
-            report["feedback_count"] = _one(conn, "SELECT COUNT(*) FROM feedback WHERE created_at >= ?", (since,))
+            report["feedback_count"] = _one(
+                conn,
+                "SELECT COUNT(*) FROM feedback "
+                "WHERE created_at >= ? AND created_at <= ?",
+                (since, generated_at_bound),
+            )
         else:
             report["feedback_count"] = "未知（feedback 表结构不含所需列）"
 

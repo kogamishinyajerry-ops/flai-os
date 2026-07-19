@@ -14,8 +14,8 @@
         conversation_questions canonical table shape，以及三表所有登记索引/
         触发器的完整 SQL。未知列、索引、触发器 fail-closed；只证结构，
         不宣称存量 owner 或 Question 数据完整。
-    4c. 判断资产 SQLite schema 见证：人签决策/机器建议两张物理隔离
-        账本、必需索引与只追加 trigger 均按精确结构校验，不只看对象名。
+    4c. 判断资产 SQLite schema 见证：机器建议、人签决策与逐 review-event 封存三张
+        物理隔离账本、必需索引、只追加 trigger 与 persisted provenance 均严格校验。
     4d. ADR-0036 产物流转 SQLite schema 见证：逐权威产物 cohort、重复交付与
         exact handoff 所需表/索引/trigger 全 SQL 校验；额外 UNIQUE 也拒绝。
     5. worker 心跳+代际（Codex R1 审 P1）：Job Runner 是独立进程——API 换新而
@@ -124,8 +124,13 @@ _P23_SCHEMA_WITNESS_LABELS = {
 _JUDGMENT_SCHEMA_WITNESS_LABELS = {
     "advice_table_shape": "task_review_advice canonical table shape",
     "human_decision_table_shape": "task_human_decisions canonical table shape",
+    "review_event_witness_table_shape": (
+        "task_review_event_witnesses canonical table shape"
+    ),
     "required_indexes": "required judgment indexes",
     "required_triggers": "required append-only judgment triggers",
+    "rowid_integrity": "persisted judgment/model-call positive internal identities",
+    "provenance_integrity": "persisted judgment/model-call provenance and review witness",
 }
 _OUTCOME_SCHEMA_WITNESS_LABELS = {
     "outcome_table_shape": "artifact_outcome_events canonical table shape",
@@ -216,7 +221,7 @@ def check_p23_schema(conn: sqlite3.Connection) -> Check:
 
 
 def check_judgment_schema(conn: sqlite3.Connection) -> Check:
-    """Judgment-ledger table/index/trigger witness, never outcome quality."""
+    """Judgment-ledger structure and persisted provenance, never review quality."""
     witnesses = _judgment_schema_witnesses(conn)
     missing_labels = [
         _JUDGMENT_SCHEMA_WITNESS_LABELS.get(key, key)
@@ -232,7 +237,7 @@ def check_judgment_schema(conn: sqlite3.Connection) -> Check:
     return Check(
         "判断资产只追加 schema",
         True,
-        "judgment schema witnesses complete (structure only; no outcome claim)",
+        "judgment witnesses complete (structure + persisted provenance; no quality claim)",
     )
 
 

@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 from backend.app.storage import repos
+from backend.app.storage import db as db_mod
 from backend.app.storage.db import get_conn, init_db
 from backend.app.storage.review_schema import (
     JUDGMENT_SCHEMA_WITNESS_KEYS,
@@ -55,6 +56,21 @@ def _model_call(conn: sqlite3.Connection, task_id: str) -> dict:
 def _to_waiting_review(conn: sqlite3.Connection, task_id: str) -> None:
     for status in ("queued", "validating", "running", "waiting_review"):
         repos.set_task_status(conn, task_id, status)
+
+
+def _drop_mutate_restore(
+    conn: sqlite3.Connection,
+    trigger_name: str,
+    mutation_sql: str,
+    parameters: tuple = (),
+) -> None:
+    trigger_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+        (trigger_name,),
+    ).fetchone()[0]
+    conn.execute(f'DROP TRIGGER "{trigger_name}"')
+    conn.execute(mutation_sql, parameters)
+    conn.execute(trigger_sql)
 
 
 def test_machine_advice_is_recorded_as_candidate_not_human_action(conn) -> None:
@@ -514,6 +530,71 @@ def test_human_decision_replace_cannot_bypass_via_hidden_rowid(conn) -> None:
     ).fetchone()[0] == decision["id"]
 
 
+def test_nonpositive_judgment_rowids_are_rejected_without_poisoning_new_writes(
+    conn,
+) -> None:
+    with pytest.raises(sqlite3.IntegrityError, match="model call internal rowid"):
+        conn.execute(
+            "INSERT INTO model_calls "
+            "(id, task_id, conversation_id, agent_id, model_profile, model_name, "
+            " status, created_at) VALUES (-1, NULL, NULL, 'advisor', 'review', "
+            " 'model-a', 'success', '2026-07-19T00:00:00+00:00')"
+        )
+
+    task = _task(conn, "judgment-rowid-task")
+    call = _model_call(conn, task["id"])
+    with pytest.raises(sqlite3.IntegrityError, match="advice internal rowid"):
+        conn.execute(
+            """
+            INSERT INTO task_review_advice
+                (rowid, id, task_id, model_call_id, advisor_id, advisor_version,
+                 model_profile, model_name, advisory_outcome, doubts_json,
+                 evidence_file_ids_json, schema_version, created_at)
+            VALUES (-1, 'negative-advice', ?, ?, 'r0_review_advisor', '0.1.0',
+                    'review', 'model-a', 'clear', '[]', '[]', 1,
+                    '2026-07-19T00:00:00+00:00')
+            """,
+            (task["id"], call["id"]),
+        )
+    repos.record_review_advice(
+        conn,
+        task_id=task["id"],
+        model_call_id=call["id"],
+        advisor_id="r0_review_advisor",
+        advisor_version="0.1.0",
+        model_profile="review",
+        model_name="model-a",
+        advisory_outcome="clear",
+        doubts=[],
+    )
+
+    decision_task = _task(conn, "decision-rowid-task")
+    _to_waiting_review(conn, decision_task["id"])
+    with pytest.raises(sqlite3.IntegrityError, match="decision internal rowid"):
+        conn.execute(
+            """
+            INSERT INTO task_human_decisions
+                (rowid, id, task_id, paired_advice_id, action, reason_code,
+                 comment, reviewer_username, reviewer_display_name,
+                 schema_version, created_at)
+            VALUES (-1, 'negative-decision', ?, NULL, 'approve', NULL, NULL,
+                    'reviewer', '终裁工程师', 1,
+                    '2026-07-19T00:00:00+00:00')
+            """,
+            (decision_task["id"],),
+        )
+    repos.apply_human_review(
+        conn,
+        decision_task["id"],
+        action="approve",
+        reviewer="终裁工程师",
+        reviewer_username="reviewer",
+        reason_code=None,
+        comment=None,
+    )
+    _model_call(conn, task["id"])
+
+
 @pytest.mark.parametrize(
     ("outcome", "doubts_json"),
     [
@@ -714,7 +795,8 @@ def test_database_rejects_human_decision_for_non_waiting_review_task(
 ) -> None:
     task = _task(conn)
     if task_status == "completed":
-        _to_waiting_review(conn, task["id"])
+        for status in ("queued", "validating", "running", "analyzing"):
+            repos.set_task_status(conn, task["id"], status)
         repos.set_task_status(conn, task["id"], "completed")
 
     with pytest.raises(sqlite3.IntegrityError, match="waiting_review"):
@@ -797,6 +879,556 @@ def test_fresh_database_has_exact_judgment_schema_witnesses(conn) -> None:
     witnesses = judgment_schema_witnesses(conn)
     assert tuple(witnesses) == JUDGMENT_SCHEMA_WITNESS_KEYS
     assert all(value is True for value in witnesses.values())
+
+
+def test_judgment_witness_rejects_persisted_nonpositive_model_call_rowid(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "negative-model-call-rowid.db"
+    init_db(db_path)
+    connection = get_conn(db_path)
+    trigger_name = "trg_model_calls_positive_rowid"
+    try:
+        trigger_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+            (trigger_name,),
+        ).fetchone()[0]
+        connection.execute(f"DROP TRIGGER {trigger_name}")
+        connection.execute(
+            "INSERT INTO model_calls "
+            "(id, task_id, conversation_id, agent_id, model_profile, model_name, "
+            " status, created_at) VALUES (-1, NULL, NULL, 'advisor', 'review', "
+            " 'model-a', 'success', '2026-07-19T00:00:00+00:00')"
+        )
+        connection.execute(trigger_sql)
+        witnesses = judgment_schema_witnesses(connection)
+        assert witnesses["required_triggers"] is True
+        assert witnesses["rowid_integrity"] is False
+    finally:
+        connection.close()
+
+    with pytest.raises(sqlite3.IntegrityError, match="rowid_integrity"):
+        init_db(db_path)
+
+
+def test_judgment_provenance_detects_witnessed_model_call_rewrite(conn) -> None:
+    task = _task(conn, "provenance-model-call")
+    call = _model_call(conn, task["id"])
+    repos.record_review_advice(
+        conn,
+        task_id=task["id"],
+        model_call_id=call["id"],
+        advisor_id="r0_review_advisor",
+        advisor_version="0.1.0",
+        model_profile="review",
+        model_name="model-a",
+        advisory_outcome="clear",
+        doubts=[],
+    )
+    _drop_mutate_restore(
+        conn,
+        "trg_witnessed_model_calls_no_update",
+        "UPDATE model_calls SET status = 'failed' WHERE id = ?",
+        (call["id"],),
+    )
+
+    witnesses = judgment_schema_witnesses(conn)
+    assert witnesses["required_triggers"] is True
+    assert witnesses["provenance_integrity"] is False
+
+
+def test_witnessed_model_call_rejects_sibling_update_or_replace(conn) -> None:
+    task = _task(conn, "provenance-model-call-sibling")
+    witnessed = _model_call(conn, task["id"])
+    repos.record_review_advice(
+        conn,
+        task_id=task["id"],
+        model_call_id=witnessed["id"],
+        advisor_id="r0_review_advisor",
+        advisor_version="0.1.0",
+        model_profile="review",
+        model_name="model-a",
+        advisory_outcome="clear",
+        doubts=[],
+    )
+    sibling = repos.record_model_call(
+        conn,
+        task_id=task["id"],
+        agent_id="r0_review_advisor",
+        model_profile="review",
+        model_name="model-a",
+        status="success",
+        response_summary="forged sibling payload",
+    )
+    original = tuple(
+        conn.execute(
+            "SELECT * FROM model_calls WHERE id = ?", (witnessed["id"],)
+        ).fetchone()
+    )
+
+    conn.execute("PRAGMA recursive_triggers = OFF")
+    with pytest.raises(sqlite3.IntegrityError, match="witnessed model_call"):
+        conn.execute(
+            "UPDATE OR REPLACE model_calls SET id = ? WHERE id = ?",
+            (witnessed["id"], sibling["id"]),
+        )
+
+    assert tuple(
+        conn.execute(
+            "SELECT * FROM model_calls WHERE id = ?", (witnessed["id"],)
+        ).fetchone()
+    ) == original
+
+
+def test_judgment_provenance_detects_invalid_advice_content(conn) -> None:
+    task = _task(conn, "provenance-advice")
+    call = _model_call(conn, task["id"])
+    advice = repos.record_review_advice(
+        conn,
+        task_id=task["id"],
+        model_call_id=call["id"],
+        advisor_id="r0_review_advisor",
+        advisor_version="0.1.0",
+        model_profile="review",
+        model_name="model-a",
+        advisory_outcome="concerns",
+        doubts=[{"code": "method_error", "detail": "原始疑点"}],
+    )
+    _drop_mutate_restore(
+        conn,
+        "trg_task_review_advice_no_update",
+        "UPDATE task_review_advice "
+        "SET doubts_json = '[{\"code\":\"bogus\",\"detail\":\"\"}]', "
+        "evidence_file_ids_json = '[\"missing-file\"]' WHERE id = ?",
+        (advice["id"],),
+    )
+
+    witnesses = judgment_schema_witnesses(conn)
+    assert witnesses["required_triggers"] is True
+    assert witnesses["provenance_integrity"] is False
+
+
+def test_judgment_provenance_detects_cross_task_decision_pair(conn) -> None:
+    source = _task(conn, "provenance-decision-source")
+    source_call = _model_call(conn, source["id"])
+    source_advice = repos.record_review_advice(
+        conn,
+        task_id=source["id"],
+        model_call_id=source_call["id"],
+        advisor_id="r0_review_advisor",
+        advisor_version="0.1.0",
+        model_profile="review",
+        model_name="model-a",
+        advisory_outcome="clear",
+        doubts=[],
+    )
+    foreign = _task(conn, "provenance-decision-foreign")
+    foreign_call = _model_call(conn, foreign["id"])
+    foreign_advice = repos.record_review_advice(
+        conn,
+        task_id=foreign["id"],
+        model_call_id=foreign_call["id"],
+        advisor_id="r0_review_advisor",
+        advisor_version="0.1.0",
+        model_profile="review",
+        model_name="model-a",
+        advisory_outcome="clear",
+        doubts=[],
+    )
+    _to_waiting_review(conn, source["id"])
+    repos.apply_human_review(
+        conn,
+        source["id"],
+        action="approve",
+        reviewer="终裁工程师",
+        reviewer_username="final_reviewer",
+        reason_code=None,
+        comment="同意",
+        paired_advice_id=source_advice["id"],
+    )
+    _drop_mutate_restore(
+        conn,
+        "trg_task_human_decisions_no_update",
+        "UPDATE task_human_decisions SET paired_advice_id = ? WHERE task_id = ?",
+        (foreign_advice["id"], source["id"]),
+    )
+
+    witnesses = judgment_schema_witnesses(conn)
+    assert witnesses["required_triggers"] is True
+    assert witnesses["provenance_integrity"] is False
+
+
+def test_structured_review_event_is_unique_per_human_decision(conn) -> None:
+    task = _task(conn, "provenance-unique-review-event")
+    _to_waiting_review(conn, task["id"])
+    repos.apply_human_review(
+        conn,
+        task["id"],
+        action="reject",
+        reviewer="终裁工程师",
+        reviewer_username="final_reviewer",
+        reason_code="method_error",
+        comment="方法不成立",
+    )
+    decision = repos.get_human_decision(conn, task["id"])
+    assert decision is not None
+
+    with pytest.raises(sqlite3.IntegrityError, match="structured review event"):
+        repos.append_event(
+            conn,
+            task_id=task["id"],
+            agent_id=task["agent_id"],
+            event_type="review_rejected",
+            level="warning",
+            message="duplicate signer event",
+            payload={
+                "reviewer": decision["reviewer_display_name"],
+                "reviewer_username": decision["reviewer_username"],
+                "comment": decision["comment"],
+                "decision_id": decision["id"],
+                "reason_code": decision["reason_code"],
+                "paired_advice_id": decision["paired_advice_id"],
+            },
+        )
+
+
+def test_post_cutover_review_event_without_decision_is_rejected(conn) -> None:
+    task = _task(conn, "post-cutover-legacy-review")
+    with pytest.raises(sqlite3.IntegrityError, match="structured review event"):
+        repos.append_event(
+            conn,
+            task_id=task["id"],
+            agent_id=task["agent_id"],
+            event_type="review_approved",
+            level="info",
+            message="forged legacy signer",
+            payload={},
+        )
+
+    assert conn.execute(
+        "SELECT COUNT(*) FROM task_events WHERE task_id = ?",
+        (task["id"],),
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM task_review_event_witnesses WHERE task_id = ?",
+        (task["id"],),
+    ).fetchone()[0] == 0
+
+
+def test_review_event_snapshot_detects_time_message_and_internal_id_rewrite(
+    conn,
+) -> None:
+    task = _task(conn, "provenance-review-event-snapshot")
+    _to_waiting_review(conn, task["id"])
+    repos.apply_human_review(
+        conn,
+        task["id"],
+        action="approve",
+        reviewer="终裁工程师",
+        reviewer_username="final_reviewer",
+        reason_code=None,
+        comment=None,
+    )
+    _drop_mutate_restore(
+        conn,
+        "trg_task_events_no_update",
+        "UPDATE task_events SET id = id + 10000, message = 'forged signer', "
+        "created_at = '2999-01-01T00:00:00+00:00' "
+        "WHERE task_id = ? AND event_type = 'review_approved'",
+        (task["id"],),
+    )
+
+    witnesses = judgment_schema_witnesses(conn)
+    assert witnesses["required_triggers"] is True
+    assert witnesses["provenance_integrity"] is False
+
+
+def test_review_event_witness_is_append_only(conn) -> None:
+    task = _task(conn, "review-event-witness-append-only")
+    _to_waiting_review(conn, task["id"])
+    repos.apply_human_review(
+        conn,
+        task["id"],
+        action="approve",
+        reviewer="终裁工程师",
+        reviewer_username="final_reviewer",
+        reason_code=None,
+        comment=None,
+    )
+    witness = conn.execute(
+        "SELECT * FROM task_review_event_witnesses WHERE task_id = ?",
+        (task["id"],),
+    ).fetchone()
+    assert witness is not None
+
+    for sql in (
+        "UPDATE task_review_event_witnesses SET message = 'forged' WHERE event_id = ?",
+        "DELETE FROM task_review_event_witnesses WHERE event_id = ?",
+    ):
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute(sql, (witness["event_id"],))
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute(
+            "INSERT OR REPLACE INTO task_review_event_witnesses "
+            "(event_id, event_internal_id, task_id, agent_id, event_type, level, "
+            "message, payload_json, created_at, decision_id, witness_kind, schema_version) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'forged', ?, ?, ?, ?, 1)",
+            (
+                witness["event_id"],
+                witness["event_internal_id"],
+                witness["task_id"],
+                witness["agent_id"],
+                witness["event_type"],
+                witness["level"],
+                witness["payload_json"],
+                witness["created_at"],
+                witness["decision_id"],
+                witness["witness_kind"],
+            ),
+        )
+
+
+def test_decision_storage_rejects_blob_timestamp_and_deep_witnesses_bypass(
+    conn,
+) -> None:
+    task = _task(conn, "decision-blob-time")
+    _to_waiting_review(conn, task["id"])
+    values = (
+        "decision_blob_time",
+        task["id"],
+        sqlite3.Binary(b"2026-07-19T00:00:00+00:00"),
+    )
+    insert_sql = (
+        "INSERT INTO task_human_decisions "
+        "(id, task_id, paired_advice_id, action, reason_code, comment, "
+        " reviewer_username, reviewer_display_name, schema_version, created_at) "
+        "VALUES (?, ?, NULL, 'reject', 'method_error', NULL, "
+        "'reviewer', '终裁工程师', 1, ?)"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="decision storage"):
+        conn.execute(insert_sql, values)
+
+    trigger_name = "trg_task_human_decisions_validate_storage"
+    trigger_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+        (trigger_name,),
+    ).fetchone()[0]
+    conn.execute(f'DROP TRIGGER "{trigger_name}"')
+    conn.execute(insert_sql, values)
+    conn.execute(trigger_sql)
+
+    assert conn.execute(
+        "SELECT typeof(created_at) FROM task_human_decisions WHERE id = ?",
+        (values[0],),
+    ).fetchone()[0] == "blob"
+    witnesses = judgment_schema_witnesses(conn)
+    assert witnesses["required_triggers"] is True
+    assert witnesses["provenance_integrity"] is False
+
+
+def test_decision_storage_rejects_noncanonical_text_timestamp_and_deep_bypass(
+    conn,
+) -> None:
+    task = _task(conn, "decision-noncanonical-time")
+    _to_waiting_review(conn, task["id"])
+    decision_id = "decision_noncanonical_time"
+    noncanonical = "2026-07-19 00:00:00+00:00"
+    insert_sql = (
+        "INSERT INTO task_human_decisions "
+        "(id, task_id, paired_advice_id, action, reason_code, comment, "
+        " reviewer_username, reviewer_display_name, schema_version, created_at) "
+        "VALUES (?, ?, NULL, 'approve', NULL, NULL, "
+        "'reviewer', '终裁工程师', 1, ?)"
+    )
+    values = (decision_id, task["id"], noncanonical)
+
+    with pytest.raises(sqlite3.IntegrityError, match="decision storage"):
+        conn.execute(insert_sql, values)
+
+    trigger_name = "trg_task_human_decisions_validate_storage"
+    trigger_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+        (trigger_name,),
+    ).fetchone()[0]
+    conn.execute(f'DROP TRIGGER "{trigger_name}"')
+    conn.execute(insert_sql, values)
+    conn.execute(trigger_sql)
+    repos.append_event(
+        conn,
+        task_id=task["id"],
+        agent_id=task["agent_id"],
+        event_type="review_approved",
+        level="info",
+        message="exact approval with poisoned decision time",
+        payload={
+            "reviewer": "终裁工程师",
+            "reviewer_username": "reviewer",
+            "comment": None,
+            "decision_id": decision_id,
+            "reason_code": None,
+            "paired_advice_id": None,
+        },
+    )
+    conn.execute(
+        "UPDATE tasks SET status = 'completed', updated_at = ?, finished_at = ?, "
+        "error_message = NULL WHERE id = ?",
+        (noncanonical, noncanonical, task["id"]),
+    )
+
+    assert conn.execute(
+        "SELECT status FROM tasks WHERE id = ?", (task["id"],)
+    ).fetchone()[0] == "completed"
+    witnesses = judgment_schema_witnesses(conn)
+    assert witnesses["required_triggers"] is True
+    assert witnesses["provenance_integrity"] is False
+
+
+def test_judgment_provenance_detects_missing_structured_event_witness(conn) -> None:
+    task = _task(conn, "provenance-orphaned-review-event")
+    _to_waiting_review(conn, task["id"])
+    repos.apply_human_review(
+        conn,
+        task["id"],
+        action="approve",
+        reviewer="终裁工程师",
+        reviewer_username="final_reviewer",
+        reason_code=None,
+        comment=None,
+    )
+    _drop_mutate_restore(
+        conn,
+        "trg_task_review_event_witnesses_no_delete",
+        "DELETE FROM task_review_event_witnesses WHERE task_id = ?",
+        (task["id"],),
+    )
+
+    witnesses = judgment_schema_witnesses(conn)
+    assert witnesses["required_triggers"] is True
+    assert witnesses["provenance_integrity"] is False
+
+
+def test_judgment_provenance_rejects_duplicate_review_payload_keys(conn) -> None:
+    task = _task(conn, "provenance-duplicate-review-json")
+    _to_waiting_review(conn, task["id"])
+    repos.apply_human_review(
+        conn,
+        task["id"],
+        action="approve",
+        reviewer="终裁工程师",
+        reviewer_username="final_reviewer",
+        reason_code=None,
+        comment=None,
+    )
+    decision = repos.get_human_decision(conn, task["id"])
+    assert decision is not None
+    duplicate_payload = (
+        '{"decision_id":"' + decision["id"] + '",'
+        '"reviewer":"终裁工程师",'
+        '"reviewer_username":"final_reviewer",'
+        '"comment":null,"reason_code":null,"paired_advice_id":null,'
+        '"decision_id":"forged-decision","reviewer":"Mallory"}'
+    )
+    _drop_mutate_restore(
+        conn,
+        "trg_task_events_no_update",
+        "UPDATE task_events SET payload_json = ? "
+        "WHERE task_id = ? AND event_type = 'review_approved'",
+        (duplicate_payload, task["id"]),
+    )
+
+    witnesses = judgment_schema_witnesses(conn)
+    assert witnesses["required_triggers"] is True
+    assert witnesses["provenance_integrity"] is False
+
+
+def test_reviewed_terminal_fields_are_frozen_and_deep_witnessed(conn) -> None:
+    task = _task(conn, "provenance-reviewed-terminal")
+    _to_waiting_review(conn, task["id"])
+    repos.apply_human_review(
+        conn,
+        task["id"],
+        action="reject",
+        reviewer="终裁工程师",
+        reviewer_username="final_reviewer",
+        reason_code="method_error",
+        comment="方法不成立",
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="review task provenance"):
+        conn.execute(
+            "UPDATE tasks SET updated_at = '2999-01-01T00:00:00+00:00', "
+            "finished_at = '2999-01-01T00:00:00+00:00', "
+            "error_message = 'forged display' WHERE id = ?",
+            (task["id"],),
+        )
+
+    _drop_mutate_restore(
+        conn,
+        "trg_review_package_tasks_provenance_immutable",
+        "UPDATE tasks SET updated_at = '2999-01-01T00:00:00+00:00', "
+        "finished_at = '2999-01-01T00:00:00+00:00', "
+        "error_message = 'forged display' WHERE id = ?",
+        (task["id"],),
+    )
+    witnesses = judgment_schema_witnesses(conn)
+    assert witnesses["provenance_integrity"] is False
+
+
+def test_judgment_provenance_accepts_normal_review_and_manifest_evolution(
+    conn,
+) -> None:
+    task = _task(conn, "provenance-normal-reject")
+    evidence_id = "provenance-evidence"
+    repos.create_file(
+        conn,
+        file_id=evidence_id,
+        task_id=task["id"],
+        kind="output",
+        filename="evidence.txt",
+        path="/tmp/evidence.txt",
+        size_bytes=1,
+        sha256="a" * 64,
+        classification="internal",
+    )
+    repos.set_task_outputs(conn, task["id"], [evidence_id])
+    call = _model_call(conn, task["id"])
+    advice = repos.record_review_advice(
+        conn,
+        task_id=task["id"],
+        model_call_id=call["id"],
+        advisor_id="r0_review_advisor",
+        advisor_version="0.1.0",
+        model_profile="review",
+        model_name="model-a",
+        advisory_outcome="concerns",
+        doubts=[{"code": "source_doubt", "detail": "需人工确认"}],
+        evidence_file_ids=[evidence_id],
+    )
+    repos.set_task_outputs(conn, task["id"], [])
+    _to_waiting_review(conn, task["id"])
+    repos.apply_human_review(
+        conn,
+        task["id"],
+        action="reject",
+        reviewer="终裁工程师",
+        reviewer_username="final_reviewer",
+        reason_code="source_doubt",
+        comment="证据不足",
+        paired_advice_id=advice["id"],
+    )
+
+    approved = _task(conn, "provenance-normal-approve")
+    _to_waiting_review(conn, approved["id"])
+    repos.apply_human_review(
+        conn,
+        approved["id"],
+        action="approve",
+        reviewer="另一终裁工程师",
+        reviewer_username="second_reviewer",
+        reason_code=None,
+        comment=None,
+    )
+
+    assert judgment_schema_witnesses(conn)["provenance_integrity"] is True
 
 
 def test_judgment_schema_witness_rejects_same_name_noop_trigger(conn) -> None:
@@ -1048,7 +1680,8 @@ def test_init_does_not_invent_decisions_for_legacy_completed_tasks(tmp_path) -> 
     connection = get_conn(db_path)
     try:
         task = _task(connection, "legacy_reviewed_task")
-        _to_waiting_review(connection, task["id"])
+        for status in ("queued", "validating", "running", "analyzing"):
+            repos.set_task_status(connection, task["id"], status)
         repos.set_task_status(connection, task["id"], "completed")
         assert repos.get_human_decision(connection, task["id"]) is None
     finally:
@@ -1063,5 +1696,80 @@ def test_init_does_not_invent_decisions_for_legacy_completed_tasks(tmp_path) -> 
         assert connection.execute(
             "SELECT COUNT(*) FROM task_review_advice"
         ).fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+def test_init_seals_pre_judgment_review_event_without_inventing_decision(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "pre-judgment-review-event.db"
+    init_db(db_path)
+    connection = get_conn(db_path)
+    task = _task(connection, "legacy-signer-task")
+    for status in ("queued", "validating", "running", "analyzing", "completed"):
+        repos.set_task_status(connection, task["id"], status)
+
+    for trigger_name in (
+        "trg_structured_review_events_decision_witness",
+        "trg_structured_review_events_capture_witness",
+    ):
+        connection.execute(f'DROP TRIGGER "{trigger_name}"')
+    legacy_row = (
+        "legacy-signer-event",
+        task["id"],
+        task["agent_id"],
+        "review_approved",
+        "info",
+        "historical signer record",
+        "{}",
+        "2026-07-18T00:00:00+00:00",
+    )
+    connection.execute(
+        "INSERT INTO task_events "
+        "(event_id, task_id, agent_id, event_type, level, message, payload_json, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        legacy_row,
+    )
+    for trigger_name in db_mod._JUDGMENT_MANAGED_TRIGGERS:
+        connection.execute(f'DROP TRIGGER IF EXISTS "{trigger_name}"')
+    for index_name in db_mod._JUDGMENT_MANAGED_INDEXES:
+        connection.execute(f'DROP INDEX IF EXISTS "{index_name}"')
+    connection.execute("DROP TABLE task_review_event_witnesses")
+    connection.execute("DROP TABLE task_human_decisions")
+    connection.execute("DROP TABLE task_review_advice")
+    connection.close()
+
+    init_db(db_path)
+    connection = get_conn(db_path)
+    try:
+        persisted = connection.execute(
+            "SELECT event_id, task_id, agent_id, event_type, level, message, "
+            "payload_json, created_at FROM task_events WHERE event_id = ?",
+            (legacy_row[0],),
+        ).fetchone()
+        assert tuple(persisted) == legacy_row
+        witness = connection.execute(
+            "SELECT witness_kind, decision_id, event_internal_id "
+            "FROM task_review_event_witnesses WHERE event_id = ?",
+            (legacy_row[0],),
+        ).fetchone()
+        assert tuple(witness[:2]) == ("legacy_pre_instrumentation", None)
+        assert witness[2] > 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM task_human_decisions"
+        ).fetchone()[0] == 0
+        assert all(judgment_schema_witnesses(connection).values()) is True
+    finally:
+        connection.close()
+
+    init_db(db_path)
+    connection = get_conn(db_path)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM task_review_event_witnesses "
+            "WHERE event_id = 'legacy-signer-event'"
+        ).fetchone()[0] == 1
+        assert all(judgment_schema_witnesses(connection).values()) is True
     finally:
         connection.close()

@@ -14,6 +14,7 @@ import sys
 import threading
 from pathlib import Path
 
+from backend.app.storage import repos
 from backend.app.storage.db import init_db
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -25,8 +26,92 @@ spec.loader.exec_module(usage_report)
 
 NOW = dt.datetime(2026, 7, 18, 12, 0, 0, tzinfo=dt.timezone.utc)
 RECENT = "2026-07-17T10:00:00+00:00"
+DECISION_AT = "2026-07-17T10:05:00+00:00"
 FUTURE = "2026-07-19T10:00:00+00:00"
 OLD = "2026-05-01T10:00:00+00:00"
+
+
+def _insert_outcome(
+    conn: sqlite3.Connection,
+    *,
+    outcome_id: str,
+    event_type: str,
+    source_file_id: str,
+    created_at: str,
+    actor_username: str | None = None,
+    downstream_task_id: str | None = None,
+    delivered_bytes: int | None = None,
+) -> None:
+    task_snapshot, file_snapshot = repos._artifact_outcome_parent_snapshots(
+        conn,
+        event_type=event_type,
+        source_task_id="t1",
+        source_file_id=source_file_id,
+        review_event_id="e1",
+    )
+    conn.execute(
+        "INSERT INTO artifact_outcome_events "
+        "(id, event_type, source_task_id, source_file_id, review_event_id, "
+        " source_task_witness_json, source_file_witness_json, actor_username, "
+        " downstream_task_id, delivered_bytes, schema_version, created_at) "
+        "VALUES (?, ?, 't1', ?, 'e1', ?, ?, ?, ?, ?, 1, ?)",
+        (
+            outcome_id,
+            event_type,
+            source_file_id,
+            task_snapshot,
+            file_snapshot,
+            actor_username,
+            downstream_task_id,
+            delivered_bytes,
+            created_at,
+        ),
+    )
+
+
+def _insert_pre_cutover_review_events(
+    conn: sqlite3.Connection,
+    rows: list[tuple[str, str, str, str, str, str, str, str]],
+) -> None:
+    """Seed exact historical review rows as if strict instrumentation migrated them.
+
+    Runtime must never gain a legacy write path.  The fixture therefore removes
+    the three current-generation insert guards only around the historical rows,
+    writes their byte-exact immutable witnesses, then restores the canonical SQL.
+    """
+    trigger_names = (
+        "trg_structured_review_events_decision_witness",
+        "trg_structured_review_events_capture_witness",
+        "trg_task_review_event_witnesses_validate_insert",
+    )
+    trigger_sql = {
+        name: conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+            (name,),
+        ).fetchone()[0]
+        for name in trigger_names
+    }
+    for name in trigger_names:
+        conn.execute(f'DROP TRIGGER "{name}"')
+    conn.executemany(
+        "INSERT INTO task_events "
+        "(event_id, task_id, agent_id, event_type, level, message, payload_json, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        rows,
+    )
+    event_ids = [row[0] for row in rows]
+    placeholders = ",".join("?" for _ in event_ids)
+    conn.execute(
+        "INSERT INTO task_review_event_witnesses "
+        "(event_id, event_internal_id, task_id, agent_id, event_type, level, "
+        " message, payload_json, created_at, decision_id, witness_kind, schema_version) "
+        "SELECT event_id, id, task_id, agent_id, event_type, level, message, "
+        "payload_json, created_at, NULL, 'legacy_pre_instrumentation', 1 "
+        f"FROM task_events WHERE event_id IN ({placeholders})",
+        event_ids,
+    )
+    for name in trigger_names:
+        conn.execute(trigger_sql[name])
 
 
 def make_db(tmp_path: Path, *, include_outcomes: bool = True) -> Path:
@@ -38,10 +123,10 @@ def make_db(tmp_path: Path, *, include_outcomes: bool = True) -> Path:
         [("u1", "用户一", "x", 1, OLD), ("u2", "用户二", "x", 0, OLD)],
     )
     rows = [
-        # t1 starts waiting_review so the canonical human-decision witness accepts d1;
-        # it is moved to completed below after the decision row is persisted.
-        ("t1", "a1", "0.1.0", "waiting_review", "用户一", "u1", RECENT, RECENT,
-         "2026-07-17T10:05:00", "c1", "user", "[]", '["f1", "f2"]', None),
+        # t1 is sealed only after its output file rows exist; the canonical
+        # human-decision witness then accepts d1 and moves it to completed.
+        ("t1", "a1", "0.1.0", "running", "用户一", "u1", RECENT, RECENT,
+         None, "c1", "user", "[]", '["f1", "f2"]', None),
         ("t2", "a1", "0.1.0", "waiting_review", "用户一", "u1", RECENT,
          "2026-07-14T10:00:00", None, None, "user", '["f2"]', "[]", '["t1"]'),
         ("t3", "a2", "0.1.0", "failed", "用户二", "u2", RECENT, RECENT,
@@ -69,35 +154,45 @@ def make_db(tmp_path: Path, *, include_outcomes: bool = True) -> Path:
             ("ef1", "t5", "output", "ef1.txt", "/tmp/ef1", 10, "c" * 64, RECENT, "internal", None),
         ],
     )
-    conn.executemany(
+    conn.execute("UPDATE tasks SET status = 'waiting_review' WHERE id = 't1'")
+    conn.execute(
+        "INSERT INTO task_human_decisions "
+        "(id, task_id, paired_advice_id, action, reason_code, comment, "
+        " reviewer_username, reviewer_display_name, schema_version, created_at) "
+        "VALUES ('d1', 't1', NULL, 'approve', NULL, NULL, 'u1', '用户一', 1, ?)",
+        (DECISION_AT,),
+    )
+    conn.execute(
         "INSERT INTO task_events "
         "(event_id, task_id, agent_id, event_type, level, message, payload_json, created_at) "
         "VALUES (?,?,?,?,?,?,?,?)",
-        [
+        (
+            "e1",
+            "t1",
+            "a1",
+            "review_approved",
+            "info",
+            "approved",
             (
-                "e1",
-                "t1",
-                "a1",
-                "review_approved",
-                "info",
-                "approved",
-                '{"decision_id":"d1"}',
-                RECENT,
+                '{"reviewer":"用户一","reviewer_username":"u1",'
+                '"comment":null,"decision_id":"d1","reason_code":null,'
+                '"paired_advice_id":null}'
             ),
+            RECENT,
+        ),
+    )
+    _insert_pre_cutover_review_events(
+        conn,
+        [
             ("e3", "t3", "a2", "review_rejected", "warning", "rejected", "{}", RECENT),
             ("e4", "t4", "a1", "review_approved", "info", "approved", "{}", OLD),
             ("ee1", "t5", "a1", "review_approved", "info", "approved", "{}", RECENT),
         ],
     )
     conn.execute(
-        "INSERT INTO task_human_decisions "
-        "(id, task_id, paired_advice_id, action, reason_code, comment, "
-        " reviewer_username, reviewer_display_name, schema_version, created_at) "
-        "VALUES ('d1', 't1', NULL, 'approve', NULL, NULL, 'u1', '用户一', 1, ?)",
-        (RECENT,),
-    )
-    conn.execute(
-        "UPDATE tasks SET status = 'completed' WHERE id = 't1'"
+        "UPDATE tasks SET status = 'completed', updated_at = ?, "
+        "finished_at = ?, error_message = NULL WHERE id = 't1'",
+        (DECISION_AT, DECISION_AT),
     )
     conn.execute(
         "INSERT INTO conversations "
@@ -113,16 +208,38 @@ def make_db(tmp_path: Path, *, include_outcomes: bool = True) -> Path:
         "INSERT INTO feedback (task_id, created_at) VALUES ('t1', ?)", (RECENT,)
     )
     if include_outcomes:
-        conn.executemany(
-            "INSERT INTO artifact_outcome_events VALUES (?,?,?,?,?,?,?,?,?,?)",
-            [
-                ("o1", "capture_started", "t1", "f1", "e1", None, None, None, 1, RECENT),
-                ("o2", "capture_started", "t1", "f2", "e1", None, None, None, 1, RECENT),
-                # 同一产物两次真实完整交付必须保留为两个 event，distinct artifact 仍为 1。
-                ("o3", "full_download", "t1", "f1", "e1", "u1", None, 10, 1, RECENT),
-                ("o4", "full_download", "t1", "f1", "e1", "u1", None, 10, 1, RECENT),
-                ("o5", "pipeline_handoff", "t1", "f2", "e1", None, "t2", None, 1, RECENT),
-            ],
+        _insert_outcome(
+            conn,
+            outcome_id="o1",
+            event_type="capture_started",
+            source_file_id="f1",
+            created_at=RECENT,
+        )
+        _insert_outcome(
+            conn,
+            outcome_id="o2",
+            event_type="capture_started",
+            source_file_id="f2",
+            created_at=RECENT,
+        )
+        # 同一产物两次真实完整交付必须保留为两个 event，distinct artifact 仍为 1。
+        for outcome_id in ("o3", "o4"):
+            _insert_outcome(
+                conn,
+                outcome_id=outcome_id,
+                event_type="full_download",
+                source_file_id="f1",
+                actor_username="u1",
+                delivered_bytes=10,
+                created_at=RECENT,
+            )
+        _insert_outcome(
+            conn,
+            outcome_id="o5",
+            event_type="pipeline_handoff",
+            source_file_id="f2",
+            downstream_task_id="t2",
+            created_at=RECENT,
         )
     conn.commit()
     conn.close()
@@ -139,14 +256,18 @@ def test_counts_window_and_eval_isolation(tmp_path):
     assert tasks["completed_median_s"] == 300.0
     assert tasks["stalled_waiting_review"] == 1       # t2 updated 超 48h
     assert report["reviews"]["approved"] == 1
-    assert report["reviews"]["rejected"] == 1
+    assert report["reviews"]["rejected"] == 0
     assert report["reviews"]["judgment_coverage"] == {
         "status": "measured",
         "structured": 1,
         "legacy_unstructured": 1,
         "structured_ratio": 0.5,
         "by_reject_reason": {},
-        "note": "legacy_unstructured 仅计无结构化 decision 的既有 review event；不反推 reason",
+        "note": (
+            "approved/rejected 仅计 exact decision-bound 终裁；"
+            "legacy_unstructured 仅是严格代际切换前封存的 review event "
+            "记录，不并入可信人签总数，也不反推 reason"
+        ),
     }
     assert report["funnel"]["conversations"] == 1
     assert report["funnel"]["conversations_with_tasks"] == 1
@@ -193,6 +314,72 @@ def test_counts_window_and_eval_isolation(tmp_path):
     }
 
 
+def test_legacy_event_on_structured_task_stays_out_of_trusted_decision_counts(
+    tmp_path,
+):
+    db = make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    _insert_pre_cutover_review_events(
+        conn,
+        [
+            (
+                "e1-legacy-sibling",
+                "t1",
+                "a1",
+                "review_approved",
+                "info",
+                "historical unstructured sibling",
+                "{}",
+                RECENT,
+            )
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    reviews = usage_report.build_report(db, days=14, now=NOW)["reviews"]
+    assert reviews["approved"] == 1
+    assert reviews["rejected"] == 0
+    assert reviews["judgment_coverage"]["structured"] == 1
+    assert reviews["judgment_coverage"]["legacy_unstructured"] == 2
+    assert reviews["judgment_coverage"]["structured_ratio"] == 0.3333
+
+
+def test_unwitnessed_post_cutover_legacy_event_makes_report_unknown(tmp_path):
+    db = make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    trigger_names = (
+        "trg_structured_review_events_decision_witness",
+        "trg_structured_review_events_capture_witness",
+    )
+    trigger_sql = {
+        name: conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+            (name,),
+        ).fetchone()[0]
+        for name in trigger_names
+    }
+    for name in trigger_names:
+        conn.execute(f'DROP TRIGGER "{name}"')
+    conn.execute(
+        "INSERT INTO task_events "
+        "(event_id, task_id, agent_id, event_type, level, message, payload_json, created_at) "
+        "VALUES ('post-cutover-forged-legacy', 't1', 'a1', 'review_approved', "
+        "'info', 'forged', '{}', ?)",
+        (RECENT,),
+    )
+    for name in trigger_names:
+        conn.execute(trigger_sql[name])
+    conn.commit()
+    conn.close()
+
+    reviews = usage_report.build_report(db, days=14, now=NOW)["reviews"]
+    assert reviews["status"] == "unknown_untrusted_judgment_ledger"
+    assert reviews["schema_witnesses"]["required_triggers"] is True
+    assert reviews["schema_witnesses"]["provenance_integrity"] is False
+    assert "approved" not in reviews
+
+
 def test_missing_columns_honest_unknown(tmp_path):
     db = tmp_path / "bare.db"
     conn = sqlite3.connect(db)
@@ -215,12 +402,39 @@ def test_outcome_table_without_capture_is_unknown_not_fake_zero(tmp_path):
     assert "未知" in report["artifact_outcomes"]["pipeline_handoff"]
 
 
+def test_untrusted_judgment_ledger_never_emits_measured_review_counts(tmp_path):
+    db = make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    trigger_name = "trg_task_human_decisions_no_delete"
+    trigger_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+        (trigger_name,),
+    ).fetchone()[0]
+    conn.execute(f"DROP TRIGGER {trigger_name}")
+    conn.execute("DELETE FROM task_human_decisions WHERE id = 'd1'")
+    conn.execute(trigger_sql)
+    conn.commit()
+    conn.close()
+
+    report = usage_report.build_report(db, days=14, now=NOW)
+
+    reviews = report["reviews"]
+    assert reviews["status"] == "unknown_untrusted_judgment_ledger"
+    assert reviews["schema_witnesses"]["required_triggers"] is True
+    assert reviews["schema_witnesses"]["provenance_integrity"] is False
+    assert "approved" not in reviews
+    assert "rejected" not in reviews
+
+
 def test_future_first_capture_is_unknown_not_measured(tmp_path):
     db = make_db(tmp_path, include_outcomes=False)
     conn = sqlite3.connect(db)
-    conn.execute(
-        "INSERT INTO artifact_outcome_events VALUES (?,?,?,?,?,?,?,?,?,?)",
-        ("o_future", "capture_started", "t1", "f1", "e1", None, None, None, 1, FUTURE),
+    _insert_outcome(
+        conn,
+        outcome_id="o_future",
+        event_type="capture_started",
+        source_file_id="f1",
+        created_at=FUTURE,
     )
     conn.commit()
     conn.close()
@@ -237,9 +451,14 @@ def test_future_first_capture_is_unknown_not_measured(tmp_path):
 def test_future_outcome_is_excluded_from_point_in_time_counts(tmp_path):
     db = make_db(tmp_path)
     conn = sqlite3.connect(db)
-    conn.execute(
-        "INSERT INTO artifact_outcome_events VALUES (?,?,?,?,?,?,?,?,?,?)",
-        ("o_future", "full_download", "t1", "f1", "e1", "u2", None, 10, 1, FUTURE),
+    _insert_outcome(
+        conn,
+        outcome_id="o_future",
+        event_type="full_download",
+        source_file_id="f1",
+        actor_username="u2",
+        delivered_bytes=10,
+        created_at=FUTURE,
     )
     conn.commit()
     conn.close()
@@ -255,25 +474,111 @@ def test_future_outcome_is_excluded_from_point_in_time_counts(tmp_path):
     }
 
 
+def test_future_rows_are_excluded_from_every_time_windowed_section(tmp_path):
+    db = make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO tasks "
+        "(id, agent_id, agent_version, status, created_by, created_by_username, "
+        " created_at, updated_at, origin, input_file_ids, output_file_ids) "
+        "VALUES ('future-task', 'a1', '0.1.0', 'waiting_review', '未来用户', 'future', "
+        " ?, ?, 'user', '[]', '[]')",
+        (FUTURE, FUTURE),
+    )
+    conn.execute(
+        "INSERT INTO task_human_decisions "
+        "(id, task_id, paired_advice_id, action, reason_code, comment, "
+        " reviewer_username, reviewer_display_name, schema_version, created_at) "
+        "VALUES ('future-decision', 'future-task', NULL, 'reject', "
+        "'insufficient_evidence', NULL, 'future', '未来用户', 1, ?)",
+        (FUTURE,),
+    )
+    conn.execute(
+        "INSERT INTO task_events "
+        "(event_id, task_id, agent_id, event_type, level, message, payload_json, created_at) "
+        "VALUES ('future-review', 'future-task', 'a1', 'review_rejected', "
+        "'warning', 'future', ?, ?)",
+        (
+            '{"reviewer":"未来用户","reviewer_username":"future",'
+            '"comment":null,"decision_id":"future-decision",'
+            '"reason_code":"insufficient_evidence","paired_advice_id":null}',
+            FUTURE,
+        ),
+    )
+    conn.execute(
+        "UPDATE tasks SET status = 'failed', updated_at = ?, finished_at = ?, "
+        "error_message = '人工拒绝（reviewer=未来用户；reason=insufficient_evidence）' "
+        "WHERE id = 'future-task'",
+        (FUTURE, FUTURE),
+    )
+    conn.execute(
+        "INSERT INTO conversations "
+        "(id, agent_id, status, created_by, created_by_username, created_at, updated_at) "
+        "VALUES ('future-conv', 'a1', 'active', '未来用户', 'future', ?, ?)",
+        (FUTURE, FUTURE),
+    )
+    conn.execute(
+        "INSERT INTO model_calls (model_profile, status, created_at) "
+        "VALUES ('reasoning', 'failed', ?)",
+        (FUTURE,),
+    )
+    conn.execute(
+        "INSERT INTO feedback (task_id, created_at) VALUES ('future-task', ?)",
+        (FUTURE,),
+    )
+    conn.commit()
+    conn.close()
+
+    report = usage_report.build_report(db, days=14, now=NOW)
+
+    assert report["tasks"]["created"] == 3
+    assert report["tasks"]["by_status"] == {
+        "completed": 1,
+        "waiting_review": 1,
+        "failed": 1,
+    }
+    assert report["reviews"]["approved"] == 1
+    assert report["reviews"]["rejected"] == 0
+    assert report["reviews"]["judgment_coverage"]["by_reject_reason"] == {}
+    assert report["funnel"]["conversations"] == 1
+    assert report["funnel"]["conversations_with_tasks"] == 1
+    assert report["model_calls"]["total"] == 2
+    assert report["model_calls"]["failed"] == 1
+    assert report["feedback_count"] == 1
+
+
+def test_completed_median_excludes_tasks_finished_after_report_snapshot(tmp_path):
+    db = make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO tasks "
+        "(id, agent_id, agent_version, status, created_by, created_by_username, "
+        " created_at, updated_at, finished_at, origin, input_file_ids, output_file_ids) "
+        "VALUES ('future-finished-task', 'a1', '0.1.0', 'completed', "
+        "'用户一', 'u1', ?, ?, ?, 'user', '[]', '[]')",
+        (RECENT, FUTURE, FUTURE),
+    )
+    conn.commit()
+    conn.close()
+
+    report = usage_report.build_report(db, days=14, now=NOW)
+
+    assert report["tasks"]["completed_median_s"] == 300.0
+
+
 def test_same_second_pre_generation_outcome_is_not_lost_by_display_truncation(
     tmp_path,
 ):
     db = make_db(tmp_path)
     conn = sqlite3.connect(db)
-    conn.execute(
-        "INSERT INTO artifact_outcome_events VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (
-            "o_same_second",
-            "full_download",
-            "t1",
-            "f1",
-            "e1",
-            "u2",
-            None,
-            10,
-            1,
-            "2026-07-18T12:00:00.500000+00:00",
-        ),
+    _insert_outcome(
+        conn,
+        outcome_id="o_same_second",
+        event_type="full_download",
+        source_file_id="f1",
+        actor_username="u2",
+        delivered_bytes=10,
+        created_at="2026-07-18T12:00:00.500000+00:00",
     )
     conn.commit()
     conn.close()
@@ -317,20 +622,14 @@ def test_report_reads_one_wal_snapshot_during_concurrent_outcome_write(
             assert reader_reached_outcomes.wait(timeout=5)
             write_conn = real_connect(db, timeout=5)
             try:
-                write_conn.execute(
-                    "INSERT INTO artifact_outcome_events VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        "o_concurrent",
-                        "full_download",
-                        "t1",
-                        "f1",
-                        "e1",
-                        "u2",
-                        None,
-                        10,
-                        1,
-                        RECENT,
-                    ),
+                _insert_outcome(
+                    write_conn,
+                    outcome_id="o_concurrent",
+                    event_type="full_download",
+                    source_file_id="f1",
+                    actor_username="u2",
+                    delivered_bytes=10,
+                    created_at=RECENT,
                 )
                 write_conn.commit()
             finally:

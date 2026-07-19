@@ -446,17 +446,15 @@ def _make_legacy_db(db_path) -> None:
     """造 pre-ADR-0013 老库：重建 model_calls 为不含 conversation_id 的旧形状。
 
     不用 `ALTER TABLE ... DROP COLUMN`（需 SQLite ≥3.35，超出仓声明的环境下限，
-    Codex R2-P3）——改用任何版本都支持的 rebuild-rename（AS SELECT 丢约束无妨，
-    迁移探测只看列名）。"""
+    Codex R2-P3）——改用任何版本都支持的 rebuild-rename。显式保留旧表的
+    INTEGER PRIMARY KEY 与 NOT NULL 约束；判断资产账本已用 model_calls(id) 作
+    provenance 外键，测试夹具不能用 ``CREATE TABLE AS`` 伪造一个现实中不存在的
+    无主键母表。"""
     from backend.app.storage import db as db_mod
 
     db_mod.init_db(db_path)
     conn = db_mod.get_conn(db_path)
     try:
-        legacy_cols = ", ".join(
-            r[1] for r in conn.execute("PRAGMA table_info(model_calls)")
-            if r[1] != "conversation_id"
-        )
         conn.execute("BEGIN IMMEDIATE")
         # 当前 DDL 的判断资产 trigger 直接见证 model_calls provenance。该 fixture
         # 要模拟的是 pre-ADR-0013 老库（当时也不存在判断账本），故重建母表前先
@@ -464,7 +462,37 @@ def _make_legacy_db(db_path) -> None:
         conn.execute(
             "DROP TRIGGER IF EXISTS trg_task_review_advice_model_call_witness"
         )
-        conn.execute(f"CREATE TABLE model_calls_legacy AS SELECT {legacy_cols} FROM model_calls")
+        conn.execute(
+            """
+            CREATE TABLE model_calls_legacy (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT,
+                agent_id TEXT,
+                model_profile TEXT NOT NULL,
+                model_name TEXT,
+                status TEXT NOT NULL,
+                request_summary TEXT,
+                response_summary TEXT,
+                error_message TEXT,
+                token_usage_json TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO model_calls_legacy (
+                id, task_id, agent_id, model_profile, model_name, status,
+                request_summary, response_summary, error_message,
+                token_usage_json, created_at
+            )
+            SELECT
+                id, task_id, agent_id, model_profile, model_name, status,
+                request_summary, response_summary, error_message,
+                token_usage_json, created_at
+            FROM model_calls
+            """
+        )
         conn.execute("DROP TABLE model_calls")
         conn.execute("ALTER TABLE model_calls_legacy RENAME TO model_calls")
         conn.execute("COMMIT")
@@ -583,6 +611,45 @@ def test_migration_concurrent_init_db_sweep(tmp_path) -> None:
             th.join(timeout=30)
         assert errors == [], f"round {round_no}: 并发 init_db 崩溃 {errors!r}"
         assert "conversation_id" in _model_calls_columns(db_path)
+
+
+def test_init_db_extends_busy_budget_only_for_schema_lock(monkeypatch, tmp_path) -> None:
+    """Deep O(N) preflight may hold the initializer lock beyond request-write budget.
+
+    API and worker can start together, so acquiring the one schema-convergence
+    lock gets a larger bounded budget; ordinary runtime writes retain 5 seconds.
+    """
+    from backend.app.storage import db as db_mod
+
+    observed: list[int] = []
+    real_get_conn = db_mod.get_conn
+
+    class _ConnectionProbe:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, params=()):
+            normalized = " ".join(str(sql).strip().split()).lower()
+            if normalized.startswith("pragma busy_timeout="):
+                observed.append(int(normalized.rsplit("=", 1)[1]))
+            return self._inner.execute(sql, params)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(
+        db_mod,
+        "get_conn",
+        lambda path: _ConnectionProbe(real_get_conn(path)),
+    )
+
+    db_mod.init_db(tmp_path / "init-lock-budget.db")
+
+    assert observed == [
+        db_mod._INIT_BUSY_TIMEOUT_MS,
+        db_mod._DEFAULT_BUSY_TIMEOUT_MS,
+    ]
+    assert db_mod._INIT_BUSY_TIMEOUT_MS > db_mod._DEFAULT_BUSY_TIMEOUT_MS
 
 
 def test_get_conn_waits_for_short_pre_wal_write_lock(tmp_path) -> None:

@@ -549,7 +549,11 @@ def test_review_and_cancel_seal_sensitive_task_row(tmp_path: Path) -> None:
         seed_and_login(client, db_path)
         conn = get_conn(db_path)
         try:
-            _mktask(conn, "rv", classification="sensitive", status="waiting_review", err=None)
+            # Enter the review seal through a legal status-only transition.  The
+            # production trigger correctly rejects changing classification in
+            # the same statement that first enters waiting_review.
+            _mktask(conn, "rv", classification="sensitive", status="running", err=None)
+            repos.set_task_status(conn, "rv", "waiting_review")
             _mktask(conn, "cx", classification="sensitive", status="queued", err="机密取消前文本")
         finally:
             conn.close()

@@ -112,10 +112,17 @@ CREATE TRIGGER IF NOT EXISTS trg_task_events_no_conflicting_insert
 BEFORE INSERT ON task_events
 WHEN EXISTS (
     SELECT 1 FROM task_events
-    WHERE event_id = NEW.event_id OR (NEW.id IS NOT NULL AND id = NEW.id)
+    WHERE event_id = NEW.event_id OR (NEW.id <> -1 AND id = NEW.id)
 )
 BEGIN
     SELECT RAISE(ABORT, 'task_events is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_task_events_positive_rowid
+AFTER INSERT ON task_events
+WHEN NEW.rowid <= 0
+BEGIN
+    SELECT RAISE(ABORT, 'task event internal rowid must be positive');
 END;
 
 -- classification（迁移 #6/ADR-0021）：internal|sensitive 数据分级轴。DDL DEFAULT
@@ -146,6 +153,8 @@ CREATE TABLE IF NOT EXISTS artifact_outcome_events (
     source_task_id TEXT NOT NULL REFERENCES tasks(id),
     source_file_id TEXT NOT NULL REFERENCES files(id),
     review_event_id TEXT NOT NULL REFERENCES task_events(event_id),
+    source_task_witness_json TEXT,
+    source_file_witness_json TEXT,
     actor_username TEXT,
     downstream_task_id TEXT REFERENCES tasks(id),
     delivered_bytes INTEGER,
@@ -285,6 +294,51 @@ CREATE TABLE IF NOT EXISTS task_human_decisions (
             8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,
             8232,8233,8239,8287,12288
         ))) > 0)
+    )
+);
+
+-- ADR-0035 fixed point: every persisted signer event receives an immutable,
+-- byte-exact snapshot.  ``legacy_pre_instrumentation`` rows are written only
+-- once by init_db while upgrading a database that predates the strict review
+-- event generation; runtime inserts are limited by a canonical trigger to
+-- ``structured_v1``.  Keeping the task_events internal integer identity in the
+-- witness closes drop-guard -> rowid rewrite -> restore false-green paths.
+CREATE TABLE IF NOT EXISTS task_review_event_witnesses (
+    event_id TEXT PRIMARY KEY NOT NULL REFERENCES task_events(event_id),
+    event_internal_id INTEGER NOT NULL UNIQUE CHECK (event_internal_id > 0),
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    agent_id TEXT,
+    event_type TEXT NOT NULL CHECK (
+        event_type IN ('review_approved', 'review_rejected')
+    ),
+    level TEXT NOT NULL,
+    message TEXT NOT NULL,
+    payload_json TEXT NOT NULL CHECK (
+        json_valid(payload_json) AND json_type(payload_json) = 'object'
+    ),
+    created_at TEXT NOT NULL,
+    decision_id TEXT UNIQUE REFERENCES task_human_decisions(id),
+    witness_kind TEXT NOT NULL CHECK (
+        witness_kind IN ('legacy_pre_instrumentation', 'structured_v1')
+    ),
+    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    CHECK (
+        (witness_kind = 'legacy_pre_instrumentation' AND decision_id IS NULL)
+        OR (witness_kind = 'structured_v1' AND decision_id IS NOT NULL)
+    ),
+    CHECK (
+        typeof(event_id) = 'text'
+        AND typeof(event_internal_id) = 'integer'
+        AND typeof(task_id) = 'text'
+        AND typeof(agent_id) IN ('null', 'text')
+        AND typeof(event_type) = 'text'
+        AND typeof(level) = 'text'
+        AND typeof(message) = 'text'
+        AND typeof(payload_json) = 'text'
+        AND typeof(created_at) = 'text'
+        AND typeof(decision_id) IN ('null', 'text')
+        AND typeof(witness_kind) = 'text'
+        AND typeof(schema_version) = 'integer'
     )
 );
 
@@ -607,6 +661,34 @@ _JUDGMENT_OBJECT_DDL = (
     END
     """,
     """
+    CREATE TRIGGER IF NOT EXISTS trg_task_review_advice_validate_storage
+    BEFORE INSERT ON task_review_advice
+    WHEN (NEW.id IS NOT NULL AND typeof(NEW.id) <> 'text')
+         OR typeof(NEW.task_id) <> 'text'
+         OR typeof(NEW.model_call_id) <> 'integer'
+         OR typeof(NEW.advisor_id) <> 'text'
+         OR typeof(NEW.advisor_version) <> 'text'
+         OR typeof(NEW.model_profile) <> 'text'
+         OR typeof(NEW.model_name) NOT IN ('null', 'text')
+         OR typeof(NEW.advisory_outcome) <> 'text'
+         OR typeof(NEW.doubts_json) <> 'text'
+         OR typeof(NEW.evidence_file_ids_json) <> 'text'
+         OR typeof(NEW.schema_version) <> 'integer'
+         OR NOT (
+             typeof(NEW.created_at) = 'text'
+             AND (
+                 NEW.created_at GLOB
+                     '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]+00:00'
+                 OR NEW.created_at GLOB
+                     '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'
+             )
+             AND julianday(NEW.created_at) IS NOT NULL
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'invalid advice storage classes or timestamp');
+    END
+    """,
+    """
     CREATE TRIGGER IF NOT EXISTS trg_task_review_advice_no_update
     BEFORE UPDATE ON task_review_advice
     BEGIN
@@ -625,12 +707,20 @@ _JUDGMENT_OBJECT_DDL = (
     BEFORE INSERT ON task_review_advice
     WHEN EXISTS (
         SELECT 1 FROM task_review_advice
-        WHERE rowid = NEW.rowid
+        WHERE (NEW.rowid <> -1 AND rowid = NEW.rowid)
            OR id = NEW.id
            OR model_call_id = NEW.model_call_id
     )
     BEGIN
         SELECT RAISE(ABORT, 'task_review_advice is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_review_advice_positive_rowid
+    AFTER INSERT ON task_review_advice
+    WHEN NEW.rowid <= 0
+    BEGIN
+        SELECT RAISE(ABORT, 'advice internal rowid must be positive');
     END
     """,
     """
@@ -662,10 +752,30 @@ _JUDGMENT_OBJECT_DDL = (
         SELECT 1
         FROM task_review_advice AS advice
         JOIN model_calls AS model_call ON model_call.id = advice.model_call_id
-        WHERE model_call.id = NEW.id
+        WHERE NEW.id <> -1 AND model_call.id = NEW.id
     )
     BEGIN
         SELECT RAISE(ABORT, 'witnessed model_call is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_witnessed_model_calls_no_conflicting_update
+    BEFORE UPDATE ON model_calls
+    WHEN NEW.id IS NOT OLD.id
+         AND EXISTS (
+             SELECT 1 FROM task_review_advice
+             WHERE model_call_id = NEW.id
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'witnessed model_call is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_model_calls_positive_rowid
+    AFTER INSERT ON model_calls
+    WHEN NEW.id <= 0
+    BEGIN
+        SELECT RAISE(ABORT, 'model call internal rowid must be positive');
     END
     """,
     """
@@ -678,6 +788,32 @@ _JUDGMENT_OBJECT_DDL = (
          )
     BEGIN
         SELECT RAISE(ABORT, 'paired advice must belong to same task');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_human_decisions_validate_storage
+    BEFORE INSERT ON task_human_decisions
+    WHEN (NEW.id IS NOT NULL AND typeof(NEW.id) <> 'text')
+         OR typeof(NEW.task_id) <> 'text'
+         OR typeof(NEW.paired_advice_id) NOT IN ('null', 'text')
+         OR typeof(NEW.action) <> 'text'
+         OR typeof(NEW.reason_code) NOT IN ('null', 'text')
+         OR typeof(NEW.comment) NOT IN ('null', 'text')
+         OR typeof(NEW.reviewer_username) <> 'text'
+         OR typeof(NEW.reviewer_display_name) <> 'text'
+         OR typeof(NEW.schema_version) <> 'integer'
+         OR NOT (
+             typeof(NEW.created_at) = 'text'
+             AND (
+                 NEW.created_at GLOB
+                     '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]+00:00'
+                 OR NEW.created_at GLOB
+                     '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'
+             )
+             AND julianday(NEW.created_at) IS NOT NULL
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'invalid decision storage classes or timestamp');
     END
     """,
     """
@@ -714,12 +850,222 @@ _JUDGMENT_OBJECT_DDL = (
     BEFORE INSERT ON task_human_decisions
     WHEN EXISTS (
         SELECT 1 FROM task_human_decisions
-        WHERE rowid = NEW.rowid
+        WHERE (NEW.rowid <> -1 AND rowid = NEW.rowid)
            OR id = NEW.id
            OR task_id = NEW.task_id
     )
     BEGIN
         SELECT RAISE(ABORT, 'task_human_decisions is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_human_decisions_positive_rowid
+    AFTER INSERT ON task_human_decisions
+    WHEN NEW.rowid <= 0
+    BEGIN
+        SELECT RAISE(ABORT, 'decision internal rowid must be positive');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_review_event_witnesses_validate_insert
+    BEFORE INSERT ON task_review_event_witnesses
+    WHEN NEW.witness_kind IS NOT 'structured_v1'
+         OR NEW.decision_id IS NULL
+         OR NOT (
+             typeof(NEW.created_at) = 'text'
+             AND (
+                 NEW.created_at GLOB
+                     '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]+00:00'
+                 OR NEW.created_at GLOB
+                     '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'
+             )
+             AND julianday(NEW.created_at) IS NOT NULL
+         )
+         OR NOT EXISTS (
+             SELECT 1
+             FROM task_events AS review
+             JOIN task_human_decisions AS decision
+               ON decision.id = NEW.decision_id
+              AND decision.task_id = review.task_id
+             JOIN tasks AS task ON task.id = decision.task_id
+             WHERE review.event_id = NEW.event_id
+               AND review.id = NEW.event_internal_id
+               AND review.task_id IS NEW.task_id
+               AND review.agent_id IS NEW.agent_id
+               AND review.event_type IS NEW.event_type
+               AND review.level IS NEW.level
+               AND review.message IS NEW.message
+               AND review.payload_json IS NEW.payload_json
+               AND review.created_at IS NEW.created_at
+               AND review.agent_id IS task.agent_id
+               AND review.event_type = CASE decision.action
+                   WHEN 'approve' THEN 'review_approved'
+                   ELSE 'review_rejected'
+               END
+               AND review.level = CASE decision.action
+                   WHEN 'approve' THEN 'info'
+                   ELSE 'warning'
+               END
+               AND json_type(review.payload_json, '$.decision_id') = 'text'
+               AND json_extract(review.payload_json, '$.decision_id') IS decision.id
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'invalid structured review event witness');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_review_event_witnesses_no_update
+    BEFORE UPDATE ON task_review_event_witnesses
+    BEGIN
+        SELECT RAISE(ABORT, 'task_review_event_witnesses is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_review_event_witnesses_no_delete
+    BEFORE DELETE ON task_review_event_witnesses
+    BEGIN
+        SELECT RAISE(ABORT, 'task_review_event_witnesses is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_review_event_witnesses_no_conflicting_insert
+    BEFORE INSERT ON task_review_event_witnesses
+    WHEN EXISTS (
+        SELECT 1 FROM task_review_event_witnesses
+        WHERE event_id = NEW.event_id
+           OR event_internal_id = NEW.event_internal_id
+           OR (
+               NEW.decision_id IS NOT NULL
+               AND decision_id = NEW.decision_id
+           )
+           OR (NEW.rowid <> -1 AND rowid = NEW.rowid)
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'task_review_event_witnesses is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_review_event_witnesses_positive_rowid
+    AFTER INSERT ON task_review_event_witnesses
+    WHEN NEW.rowid <= 0
+    BEGIN
+        SELECT RAISE(ABORT, 'review event witness internal rowid must be positive');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_structured_review_events_decision_witness
+    BEFORE INSERT ON task_events
+    WHEN NEW.event_type IN ('review_approved', 'review_rejected')
+         AND (
+             typeof(NEW.payload_json) <> 'text'
+             OR json_valid(NEW.payload_json) IS NOT 1
+             OR json_type(
+                 CASE WHEN json_valid(NEW.payload_json)
+                      THEN NEW.payload_json ELSE '{}'
+                 END
+             ) IS NOT 'object'
+             OR (SELECT COUNT(*) FROM json_each(NEW.payload_json)) <> 6
+             OR (
+                 SELECT COUNT(DISTINCT key)
+                 FROM json_each(NEW.payload_json)
+             ) <> 6
+             OR EXISTS (
+                 SELECT 1 FROM json_each(NEW.payload_json) AS field
+                 WHERE field.key NOT IN (
+                     'reviewer', 'reviewer_username', 'comment',
+                     'decision_id', 'reason_code', 'paired_advice_id'
+                 )
+             )
+             OR NOT EXISTS (
+                 SELECT 1
+                 FROM task_human_decisions AS decision
+                 JOIN tasks AS task ON task.id = decision.task_id
+                 WHERE decision.task_id = NEW.task_id
+                   AND task.status = 'waiting_review'
+                   AND NEW.agent_id IS task.agent_id
+                   AND NEW.event_type = CASE decision.action
+                       WHEN 'approve' THEN 'review_approved'
+                       ELSE 'review_rejected'
+                   END
+                   AND NEW.level = CASE decision.action
+                       WHEN 'approve' THEN 'info'
+                       ELSE 'warning'
+                   END
+                   AND json_type(NEW.payload_json, '$.decision_id') = 'text'
+                   AND json_extract(NEW.payload_json, '$.decision_id') IS decision.id
+                   AND json_type(NEW.payload_json, '$.reviewer') = 'text'
+                   AND json_extract(NEW.payload_json, '$.reviewer')
+                       IS decision.reviewer_display_name
+                   AND json_type(
+                       NEW.payload_json, '$.reviewer_username'
+                   ) = 'text'
+                   AND json_extract(
+                       NEW.payload_json, '$.reviewer_username'
+                   ) IS decision.reviewer_username
+                   AND (
+                       (decision.comment IS NULL
+                        AND json_type(NEW.payload_json, '$.comment') = 'null')
+                       OR (decision.comment IS NOT NULL
+                           AND json_type(NEW.payload_json, '$.comment') = 'text'
+                           AND json_extract(NEW.payload_json, '$.comment')
+                               IS decision.comment)
+                   )
+                   AND (
+                       (decision.reason_code IS NULL
+                        AND json_type(NEW.payload_json, '$.reason_code') = 'null')
+                       OR (decision.reason_code IS NOT NULL
+                           AND json_type(NEW.payload_json, '$.reason_code') = 'text'
+                           AND json_extract(NEW.payload_json, '$.reason_code')
+                               IS decision.reason_code)
+                   )
+                   AND (
+                       (decision.paired_advice_id IS NULL
+                        AND json_type(
+                            NEW.payload_json, '$.paired_advice_id'
+                        ) = 'null')
+                       OR (decision.paired_advice_id IS NOT NULL
+                           AND json_type(
+                               NEW.payload_json, '$.paired_advice_id'
+                           ) = 'text'
+                           AND json_extract(
+                               NEW.payload_json, '$.paired_advice_id'
+                           ) IS decision.paired_advice_id)
+                   )
+             )
+             OR EXISTS (
+                 SELECT 1
+                 FROM task_events AS existing
+                 WHERE existing.event_type IN (
+                     'review_approved', 'review_rejected'
+                 )
+                   AND json_valid(existing.payload_json) = 1
+                   AND json_type(existing.payload_json) = 'object'
+                   AND json_extract(existing.payload_json, '$.decision_id')
+                       IS json_extract(NEW.payload_json, '$.decision_id')
+             )
+         )
+    BEGIN
+        SELECT RAISE(
+            ABORT,
+            'invalid or duplicate structured review event'
+        );
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_structured_review_events_capture_witness
+    AFTER INSERT ON task_events
+    WHEN NEW.event_type IN ('review_approved', 'review_rejected')
+    BEGIN
+        INSERT INTO task_review_event_witnesses (
+            event_id, event_internal_id, task_id, agent_id, event_type,
+            level, message, payload_json, created_at, decision_id,
+            witness_kind, schema_version
+        ) VALUES (
+            NEW.event_id, NEW.id, NEW.task_id, NEW.agent_id, NEW.event_type,
+            NEW.level, NEW.message, NEW.payload_json, NEW.created_at,
+            json_extract(NEW.payload_json, '$.decision_id'),
+            'structured_v1', 1
+        );
     END
     """,
 )
@@ -733,17 +1079,30 @@ _JUDGMENT_MANAGED_TRIGGERS = (
     "trg_task_review_advice_model_call_witness",
     "trg_task_review_advice_validate_doubts",
     "trg_task_review_advice_validate_evidence",
+    "trg_task_review_advice_validate_storage",
     "trg_task_review_advice_no_update",
     "trg_task_review_advice_no_delete",
     "trg_task_review_advice_no_conflicting_insert",
+    "trg_task_review_advice_positive_rowid",
     "trg_witnessed_model_calls_no_update",
     "trg_witnessed_model_calls_no_delete",
     "trg_witnessed_model_calls_no_conflicting_insert",
+    "trg_witnessed_model_calls_no_conflicting_update",
+    "trg_model_calls_positive_rowid",
     "trg_task_human_decisions_pair_same_task",
+    "trg_task_human_decisions_validate_storage",
     "trg_task_human_decisions_waiting_review_witness",
     "trg_task_human_decisions_no_update",
     "trg_task_human_decisions_no_delete",
     "trg_task_human_decisions_no_conflicting_insert",
+    "trg_task_human_decisions_positive_rowid",
+    "trg_task_review_event_witnesses_validate_insert",
+    "trg_task_review_event_witnesses_no_update",
+    "trg_task_review_event_witnesses_no_delete",
+    "trg_task_review_event_witnesses_no_conflicting_insert",
+    "trg_task_review_event_witnesses_positive_rowid",
+    "trg_structured_review_events_decision_witness",
+    "trg_structured_review_events_capture_witness",
 )
 
 _OUTCOME_OBJECT_DDL = (
@@ -755,11 +1114,49 @@ _OUTCOME_OBJECT_DDL = (
     "ON artifact_outcome_events(downstream_task_id, created_at, id) "
     "WHERE downstream_task_id IS NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_outcomes_one_capture "
-    "ON artifact_outcome_events(source_file_id, review_event_id) "
+    "ON artifact_outcome_events(source_file_id) "
     "WHERE event_type = 'capture_started'",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_outcomes_one_handoff "
-    "ON artifact_outcome_events(source_file_id, review_event_id, downstream_task_id) "
+    "ON artifact_outcome_events(source_file_id, downstream_task_id) "
     "WHERE event_type = 'pipeline_handoff'",
+    # task_events carries the exact review_approved parent of every capture.
+    # These definitions intentionally duplicate the fresh-schema DDL above so
+    # empty-ledger convergence can drop/recreate them, while nonempty evidence
+    # is preflighted before any repair.  Keep the SQL bodies byte-equivalent
+    # after whitespace normalization: outcome_schema compares exact digests.
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_events_no_update
+    BEFORE UPDATE ON task_events
+    BEGIN
+        SELECT RAISE(ABORT, 'task_events is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_events_no_delete
+    BEFORE DELETE ON task_events
+    BEGIN
+        SELECT RAISE(ABORT, 'task_events is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_events_no_conflicting_insert
+    BEFORE INSERT ON task_events
+    WHEN EXISTS (
+        SELECT 1 FROM task_events
+        WHERE event_id = NEW.event_id OR (NEW.id <> -1 AND id = NEW.id)
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'task_events is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_task_events_positive_rowid
+    AFTER INSERT ON task_events
+    WHEN NEW.rowid <= 0
+    BEGIN
+        SELECT RAISE(ABORT, 'task event internal rowid must be positive');
+    END
+    """,
     """
     CREATE TRIGGER IF NOT EXISTS trg_artifact_outcomes_source_witness
     BEFORE INSERT ON artifact_outcome_events
@@ -774,28 +1171,76 @@ _OUTCOME_OBJECT_DDL = (
           ON review_event.event_id = NEW.review_event_id
          AND review_event.task_id = source_task.id
          AND review_event.event_type = 'review_approved'
+        JOIN task_review_event_witnesses AS review_witness
+          ON review_witness.event_id = review_event.event_id
+         AND review_witness.event_internal_id = review_event.id
+         AND review_witness.task_id = review_event.task_id
+         AND review_witness.agent_id IS review_event.agent_id
+         AND review_witness.event_type = review_event.event_type
+         AND review_witness.level = review_event.level
+         AND review_witness.message = review_event.message
+         AND review_witness.payload_json = review_event.payload_json
+         AND review_witness.created_at = review_event.created_at
+         AND review_witness.witness_kind = 'structured_v1'
+         AND review_witness.schema_version = 1
+        JOIN task_human_decisions AS decision
+          ON decision.id = review_witness.decision_id
+         AND decision.task_id = source_task.id
+         AND decision.action = 'approve'
         WHERE source_task.id = NEW.source_task_id
           AND source_task.origin = 'user'
           AND source_task.status = 'completed'
-          AND EXISTS (
-              SELECT 1
-              FROM task_human_decisions AS decision
-              WHERE decision.task_id = source_task.id
-                AND decision.action = 'approve'
-                AND json_type(
-                    CASE
-                        WHEN json_valid(review_event.payload_json)
-                        THEN review_event.payload_json ELSE '{}'
-                    END,
-                    '$.decision_id'
-                ) = 'text'
-                AND decision.id = json_extract(
-                    CASE
-                        WHEN json_valid(review_event.payload_json)
-                        THEN review_event.payload_json ELSE '{}'
-                    END,
-                    '$.decision_id'
-                )
+          AND NEW.source_task_witness_json IS json_object(
+              'agent_id', source_task.agent_id,
+              'agent_version', source_task.agent_version,
+              'conversation_id', source_task.conversation_id,
+              'created_at', source_task.created_at,
+              'created_by', source_task.created_by,
+              'created_by_username', source_task.created_by_username,
+              'data_classification', source_task.data_classification,
+              'depends_on', source_task.depends_on,
+              'error_message', source_task.error_message,
+              'finished_at', source_task.finished_at,
+              'id', source_task.id,
+              'input_binding', source_task.input_binding,
+              'input_file_ids', source_task.input_file_ids,
+              'inputs_json', source_task.inputs_json,
+              'metadata_json', source_task.metadata_json,
+              'name', source_task.name,
+              'origin', source_task.origin,
+              'output_file_ids', source_task.output_file_ids,
+              'retry_of', source_task.retry_of,
+              'rowid', source_task.rowid,
+              'started_at', source_task.started_at,
+              'status', source_task.status,
+              'updated_at', source_task.updated_at
+          )
+          AND NEW.source_file_witness_json IS json_object(
+              'classification', source_file.classification,
+              'created_at', source_file.created_at,
+              'filename', source_file.filename,
+              'id', source_file.id,
+              'kind', source_file.kind,
+              'path', source_file.path,
+              'rowid', source_file.rowid,
+              'sha256', source_file.sha256,
+              'size_bytes', source_file.size_bytes,
+              'task_id', source_file.task_id,
+              'uploaded_by', source_file.uploaded_by
+          )
+          AND json_type(
+              CASE
+                  WHEN json_valid(review_event.payload_json)
+                  THEN review_event.payload_json ELSE '{}'
+              END,
+              '$.decision_id'
+          ) = 'text'
+          AND decision.id = json_extract(
+              CASE
+                  WHEN json_valid(review_event.payload_json)
+                  THEN review_event.payload_json ELSE '{}'
+              END,
+              '$.decision_id'
           )
           AND EXISTS (
               SELECT 1
@@ -818,6 +1263,65 @@ _OUTCOME_OBJECT_DDL = (
     END
     """,
     """
+    CREATE TRIGGER IF NOT EXISTS trg_artifact_outcomes_validate_shape
+    BEFORE INSERT ON artifact_outcome_events
+    WHEN typeof(NEW.id) <> 'text'
+         OR typeof(NEW.event_type) <> 'text'
+         OR typeof(NEW.source_task_id) <> 'text'
+         OR typeof(NEW.source_file_id) <> 'text'
+         OR typeof(NEW.review_event_id) <> 'text'
+         OR typeof(NEW.source_task_witness_json) <> 'text'
+         OR json_valid(NEW.source_task_witness_json) IS NOT 1
+         OR json_type(NEW.source_task_witness_json) IS NOT 'object'
+         OR typeof(NEW.source_file_witness_json) <> 'text'
+         OR json_valid(NEW.source_file_witness_json) IS NOT 1
+         OR json_type(NEW.source_file_witness_json) IS NOT 'object'
+         OR typeof(NEW.schema_version) <> 'integer'
+         OR NEW.schema_version IS NOT 1
+         OR NOT (
+             typeof(NEW.created_at) = 'text'
+             AND (
+                 NEW.created_at GLOB
+                     '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]+00:00'
+                 OR NEW.created_at GLOB
+                     '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'
+             )
+             AND julianday(NEW.created_at) IS NOT NULL
+         )
+         OR NEW.event_type NOT IN (
+             'capture_started', 'full_download', 'pipeline_handoff'
+         )
+         OR NOT (
+             (
+                 NEW.event_type = 'capture_started'
+                 AND NEW.actor_username IS NULL
+                 AND NEW.downstream_task_id IS NULL
+                 AND NEW.delivered_bytes IS NULL
+             )
+             OR (
+                 NEW.event_type = 'full_download'
+                 AND typeof(NEW.actor_username) = 'text'
+                 AND length(trim(NEW.actor_username, char(
+                     9,10,11,12,13,28,29,30,31,32,133,160,5760,
+                     8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,
+                     8232,8233,8239,8287,12288
+                 ))) > 0
+                 AND NEW.downstream_task_id IS NULL
+                 AND typeof(NEW.delivered_bytes) = 'integer'
+                 AND NEW.delivered_bytes >= 0
+             )
+             OR (
+                 NEW.event_type = 'pipeline_handoff'
+                 AND NEW.actor_username IS NULL
+                 AND typeof(NEW.downstream_task_id) = 'text'
+                 AND NEW.delivered_bytes IS NULL
+             )
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'invalid outcome event shape');
+    END
+    """,
+    """
     CREATE TRIGGER IF NOT EXISTS trg_artifact_outcomes_capture_precedes_flow
     BEFORE INSERT ON artifact_outcome_events
     WHEN NEW.event_type IN ('full_download', 'pipeline_handoff')
@@ -828,6 +1332,8 @@ _OUTCOME_OBJECT_DDL = (
                AND capture.source_task_id = NEW.source_task_id
                AND capture.source_file_id = NEW.source_file_id
                AND capture.review_event_id = NEW.review_event_id
+               AND capture.source_task_witness_json IS NEW.source_task_witness_json
+               AND capture.source_file_witness_json IS NEW.source_file_witness_json
          )
     BEGIN
         SELECT RAISE(ABORT, 'outcome flow requires prior capture_started witness');
@@ -908,18 +1414,16 @@ _OUTCOME_OBJECT_DDL = (
         SELECT 1
         FROM artifact_outcome_events AS existing
         WHERE existing.id = NEW.id
-           OR existing.rowid = NEW.rowid
+           OR (NEW.rowid <> -1 AND existing.rowid = NEW.rowid)
            OR (
                NEW.event_type = 'capture_started'
                AND existing.event_type = 'capture_started'
                AND existing.source_file_id = NEW.source_file_id
-               AND existing.review_event_id = NEW.review_event_id
            )
            OR (
                NEW.event_type = 'pipeline_handoff'
                AND existing.event_type = 'pipeline_handoff'
                AND existing.source_file_id = NEW.source_file_id
-               AND existing.review_event_id = NEW.review_event_id
                AND existing.downstream_task_id = NEW.downstream_task_id
            )
     )
@@ -933,6 +1437,22 @@ _OUTCOME_OBJECT_DDL = (
     WHEN NEW.rowid <= 0
     BEGIN
         SELECT RAISE(ABORT, 'artifact outcome internal rowid must be positive');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_files_positive_rowid
+    AFTER INSERT ON files
+    WHEN NEW.rowid <= 0
+    BEGIN
+        SELECT RAISE(ABORT, 'file internal rowid must be positive');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_tasks_positive_rowid
+    AFTER INSERT ON tasks
+    WHEN NEW.rowid <= 0
+    BEGIN
+        SELECT RAISE(ABORT, 'task internal rowid must be positive');
     END
     """,
     """
@@ -963,7 +1483,10 @@ _OUTCOME_OBJECT_DDL = (
     WHEN EXISTS (
         SELECT 1
         FROM files AS existing
-        WHERE (existing.id = NEW.id OR existing.rowid = NEW.rowid)
+        WHERE (
+            existing.id = NEW.id
+            OR (NEW.rowid <> -1 AND existing.rowid = NEW.rowid)
+        )
           AND EXISTS (
               SELECT 1 FROM artifact_outcome_events
               WHERE source_file_id = existing.id
@@ -974,28 +1497,316 @@ _OUTCOME_OBJECT_DDL = (
     END
     """,
     """
+    CREATE TRIGGER IF NOT EXISTS trg_witnessed_artifact_files_no_conflicting_update
+    BEFORE UPDATE OF id, rowid ON files
+    WHEN EXISTS (
+        SELECT 1
+        FROM files AS existing
+        WHERE existing.rowid <> OLD.rowid
+          AND (existing.id = NEW.id OR existing.rowid = NEW.rowid)
+          AND EXISTS (
+              SELECT 1 FROM artifact_outcome_events
+              WHERE source_file_id = existing.id
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'outcome-witnessed file is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_review_package_files_no_update
+    BEFORE UPDATE ON files
+    WHEN EXISTS (
+        SELECT 1
+        FROM tasks AS review_task
+        WHERE (
+            review_task.status = 'waiting_review'
+            OR EXISTS (
+                SELECT 1 FROM task_human_decisions AS decision
+                WHERE decision.task_id = review_task.id
+            )
+        )
+          AND EXISTS (
+              SELECT 1
+              FROM json_each(
+                  CASE
+                      WHEN json_valid(review_task.output_file_ids)
+                       AND json_type(review_task.output_file_ids) = 'array'
+                      THEN review_task.output_file_ids ELSE '[]'
+                  END
+              ) AS output_ref
+              WHERE output_ref.type = 'text'
+                AND output_ref.value = OLD.id
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'human review package file is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_review_package_files_no_delete
+    BEFORE DELETE ON files
+    WHEN EXISTS (
+        SELECT 1
+        FROM tasks AS review_task
+        WHERE (
+            review_task.status = 'waiting_review'
+            OR EXISTS (
+                SELECT 1 FROM task_human_decisions AS decision
+                WHERE decision.task_id = review_task.id
+            )
+        )
+          AND EXISTS (
+              SELECT 1
+              FROM json_each(
+                  CASE
+                      WHEN json_valid(review_task.output_file_ids)
+                       AND json_type(review_task.output_file_ids) = 'array'
+                      THEN review_task.output_file_ids ELSE '[]'
+                  END
+              ) AS output_ref
+              WHERE output_ref.type = 'text'
+                AND output_ref.value = OLD.id
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'human review package file is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_review_package_files_no_conflicting_insert
+    BEFORE INSERT ON files
+    WHEN EXISTS (
+        SELECT 1
+        FROM files AS existing
+        WHERE (
+            existing.id = NEW.id
+            OR (NEW.rowid <> -1 AND existing.rowid = NEW.rowid)
+        )
+          AND EXISTS (
+              SELECT 1
+              FROM tasks AS review_task
+              WHERE (
+                  review_task.status = 'waiting_review'
+                  OR EXISTS (
+                      SELECT 1 FROM task_human_decisions AS decision
+                      WHERE decision.task_id = review_task.id
+                  )
+              )
+                AND EXISTS (
+                    SELECT 1
+                    FROM json_each(
+                        CASE
+                            WHEN json_valid(review_task.output_file_ids)
+                             AND json_type(review_task.output_file_ids) = 'array'
+                            THEN review_task.output_file_ids ELSE '[]'
+                        END
+                    ) AS output_ref
+                    WHERE output_ref.type = 'text'
+                      AND output_ref.value = existing.id
+                )
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'human review package file is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_review_package_files_no_conflicting_update
+    BEFORE UPDATE OF id, rowid ON files
+    WHEN EXISTS (
+        SELECT 1
+        FROM files AS existing
+        WHERE existing.rowid <> OLD.rowid
+          AND (existing.id = NEW.id OR existing.rowid = NEW.rowid)
+          AND EXISTS (
+              SELECT 1
+              FROM tasks AS review_task
+              WHERE (
+                  review_task.status = 'waiting_review'
+                  OR EXISTS (
+                      SELECT 1 FROM task_human_decisions AS decision
+                      WHERE decision.task_id = review_task.id
+                  )
+              )
+                AND EXISTS (
+                    SELECT 1
+                    FROM json_each(
+                        CASE
+                            WHEN json_valid(review_task.output_file_ids)
+                             AND json_type(review_task.output_file_ids) = 'array'
+                            THEN review_task.output_file_ids ELSE '[]'
+                        END
+                    ) AS output_ref
+                    WHERE output_ref.type = 'text'
+                      AND output_ref.value = existing.id
+                )
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'human review package file is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_review_package_files_no_late_insert
+    BEFORE INSERT ON files
+    WHEN NEW.kind = 'output'
+         AND EXISTS (
+             SELECT 1
+             FROM tasks AS review_task
+             WHERE review_task.id = NEW.task_id
+               AND (
+                   review_task.status = 'waiting_review'
+                   OR EXISTS (
+                       SELECT 1 FROM task_human_decisions AS decision
+                       WHERE decision.task_id = review_task.id
+                   )
+               )
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'cannot add output files to a sealed review package');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_review_package_files_no_late_move
+    BEFORE UPDATE OF task_id, kind ON files
+    WHEN NEW.kind = 'output'
+         AND EXISTS (
+             SELECT 1
+             FROM tasks AS review_task
+             WHERE review_task.id = NEW.task_id
+               AND (
+                   review_task.status = 'waiting_review'
+                   OR EXISTS (
+                       SELECT 1 FROM task_human_decisions AS decision
+                       WHERE decision.task_id = review_task.id
+                   )
+               )
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'cannot move output files into a sealed review package');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_review_package_tasks_provenance_immutable
+    BEFORE UPDATE ON tasks
+    WHEN (
+        OLD.status = 'waiting_review'
+        OR NEW.status = 'waiting_review'
+        OR EXISTS (
+            SELECT 1 FROM task_human_decisions AS decision
+            WHERE decision.task_id = OLD.id
+        )
+    )
+    AND (
+        NEW.id IS NOT OLD.id
+        OR NEW.rowid IS NOT OLD.rowid
+        OR NEW.agent_id IS NOT OLD.agent_id
+        OR NEW.agent_version IS NOT OLD.agent_version
+        OR NEW.name IS NOT OLD.name
+        OR NEW.created_by IS NOT OLD.created_by
+        OR NEW.created_at IS NOT OLD.created_at
+        OR NEW.started_at IS NOT OLD.started_at
+        OR NEW.input_file_ids IS NOT OLD.input_file_ids
+        OR NEW.output_file_ids IS NOT OLD.output_file_ids
+        OR NEW.inputs_json IS NOT OLD.inputs_json
+        OR NEW.metadata_json IS NOT OLD.metadata_json
+        OR NEW.conversation_id IS NOT OLD.conversation_id
+        OR NEW.origin IS NOT OLD.origin
+        OR NEW.data_classification IS NOT OLD.data_classification
+        OR NEW.depends_on IS NOT OLD.depends_on
+        OR NEW.input_binding IS NOT OLD.input_binding
+        OR NEW.created_by_username IS NOT OLD.created_by_username
+        OR NEW.retry_of IS NOT OLD.retry_of
+        OR (
+            OLD.status = 'waiting_review'
+            AND NEW.status IS NOT OLD.status
+            AND NOT EXISTS (
+                SELECT 1
+                FROM task_human_decisions AS decision
+                WHERE decision.task_id = OLD.id
+                  AND (
+                      (decision.action = 'approve' AND NEW.status = 'completed')
+                      OR (decision.action = 'reject' AND NEW.status = 'failed')
+                  )
+                  AND NEW.updated_at IS decision.created_at
+                  AND NEW.finished_at IS decision.created_at
+                  AND NEW.error_message IS CASE decision.action
+                      WHEN 'approve' THEN NULL
+                      ELSE '人工拒绝（reviewer='
+                           || decision.reviewer_display_name
+                           || '；reason=' || decision.reason_code || '）'
+                           || CASE WHEN decision.comment IS NULL THEN ''
+                                   ELSE '：' || decision.comment END
+                  END
+            )
+        )
+        OR (
+            (
+                NEW.updated_at IS NOT OLD.updated_at
+                OR NEW.finished_at IS NOT OLD.finished_at
+                OR NEW.error_message IS NOT OLD.error_message
+            )
+            AND NOT (
+                OLD.status IS NOT 'waiting_review'
+                AND NEW.status = 'waiting_review'
+                AND NEW.finished_at IS OLD.finished_at
+                AND NEW.error_message IS OLD.error_message
+            )
+            AND NOT (
+                OLD.status = 'waiting_review'
+                AND EXISTS (
+                    SELECT 1
+                    FROM task_human_decisions AS decision
+                    WHERE decision.task_id = OLD.id
+                      AND (
+                          (decision.action = 'approve'
+                           AND NEW.status = 'completed')
+                          OR (decision.action = 'reject'
+                              AND NEW.status = 'failed')
+                      )
+                      AND NEW.updated_at IS decision.created_at
+                      AND NEW.finished_at IS decision.created_at
+                      AND NEW.error_message IS CASE decision.action
+                          WHEN 'approve' THEN NULL
+                          ELSE '人工拒绝（reviewer='
+                               || decision.reviewer_display_name
+                               || '；reason=' || decision.reason_code || '）'
+                               || CASE WHEN decision.comment IS NULL THEN ''
+                                       ELSE '：' || decision.comment END
+                      END
+                )
+            )
+        )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'sealed review task provenance is immutable');
+    END
+    """,
+    """
     CREATE TRIGGER IF NOT EXISTS trg_terminal_tasks_output_manifest_immutable
     BEFORE UPDATE OF output_file_ids ON tasks
-    WHEN (OLD.status IN ('completed', 'failed', 'cancelled')
-          OR NEW.status IN ('completed', 'failed', 'cancelled'))
+    WHEN (OLD.status IN ('waiting_review', 'completed', 'failed', 'cancelled')
+          OR NEW.status IN ('waiting_review', 'completed', 'failed', 'cancelled'))
          AND NEW.output_file_ids IS NOT OLD.output_file_ids
     BEGIN
-        SELECT RAISE(ABORT, 'terminal task output manifest is immutable');
+        SELECT RAISE(ABORT, 'sealed review or terminal task output manifest is immutable');
     END
     """,
     """
     CREATE TRIGGER IF NOT EXISTS trg_terminal_tasks_identity_status_immutable
-    BEFORE UPDATE OF id, status ON tasks
+    BEFORE UPDATE OF id, status, rowid ON tasks
     WHEN (
         OLD.status IN ('completed', 'failed', 'cancelled')
         AND (
             NEW.id IS NOT OLD.id
+            OR NEW.rowid IS NOT OLD.rowid
             OR NEW.status IS NOT OLD.status
         )
     )
     OR (
         NEW.status IN ('completed', 'failed', 'cancelled')
-        AND NEW.id IS NOT OLD.id
+        AND (NEW.id IS NOT OLD.id OR NEW.rowid IS NOT OLD.rowid)
     )
     BEGIN
         SELECT RAISE(ABORT, 'terminal task identity and status are immutable');
@@ -1016,10 +1827,128 @@ _OUTCOME_OBJECT_DDL = (
         SELECT 1
         FROM tasks AS existing
         WHERE existing.status IN ('completed', 'failed', 'cancelled')
+          AND (
+              existing.id = NEW.id
+              OR (NEW.rowid <> -1 AND existing.rowid = NEW.rowid)
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'terminal task is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_terminal_tasks_no_conflicting_update
+    BEFORE UPDATE OF id, rowid ON tasks
+    WHEN EXISTS (
+        SELECT 1
+        FROM tasks AS existing
+        WHERE existing.rowid <> OLD.rowid
+          AND existing.status IN ('completed', 'failed', 'cancelled')
           AND (existing.id = NEW.id OR existing.rowid = NEW.rowid)
     )
     BEGIN
         SELECT RAISE(ABORT, 'terminal task is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_review_package_tasks_identity_immutable
+    BEFORE UPDATE OF id, rowid ON tasks
+    WHEN (OLD.status = 'waiting_review' OR NEW.status = 'waiting_review')
+         AND (NEW.id IS NOT OLD.id OR NEW.rowid IS NOT OLD.rowid)
+    BEGIN
+        SELECT RAISE(ABORT, 'sealed review task identity is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_review_package_tasks_no_delete
+    BEFORE DELETE ON tasks
+    WHEN OLD.status = 'waiting_review'
+    BEGIN
+        SELECT RAISE(ABORT, 'sealed review task is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_review_package_tasks_no_conflicting_insert
+    BEFORE INSERT ON tasks
+    WHEN EXISTS (
+        SELECT 1
+        FROM tasks AS existing
+        WHERE existing.status = 'waiting_review'
+          AND (
+              existing.id = NEW.id
+              OR (NEW.rowid <> -1 AND existing.rowid = NEW.rowid)
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'sealed review task is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_review_package_tasks_no_conflicting_update
+    BEFORE UPDATE OF id, rowid ON tasks
+    WHEN EXISTS (
+        SELECT 1
+        FROM tasks AS existing
+        WHERE existing.rowid <> OLD.rowid
+          AND existing.status = 'waiting_review'
+          AND (existing.id = NEW.id OR existing.rowid = NEW.rowid)
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'sealed review task is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_waiting_review_exit_requires_human_witness
+    BEFORE UPDATE OF status ON tasks
+    WHEN OLD.status = 'waiting_review'
+         AND NEW.status IS NOT OLD.status
+         AND NOT EXISTS (
+             SELECT 1
+             FROM task_human_decisions AS decision
+             JOIN task_events AS review_event
+               ON review_event.task_id = decision.task_id
+              AND review_event.event_type = CASE decision.action
+                  WHEN 'approve' THEN 'review_approved'
+                  WHEN 'reject' THEN 'review_rejected'
+                  ELSE ''
+              END
+             JOIN task_review_event_witnesses AS event_witness
+               ON event_witness.event_id = review_event.event_id
+              AND event_witness.event_internal_id = review_event.id
+              AND event_witness.task_id = review_event.task_id
+              AND event_witness.agent_id IS review_event.agent_id
+              AND event_witness.event_type = review_event.event_type
+              AND event_witness.level = review_event.level
+              AND event_witness.message = review_event.message
+              AND event_witness.payload_json = review_event.payload_json
+              AND event_witness.created_at = review_event.created_at
+              AND event_witness.decision_id = decision.id
+              AND event_witness.witness_kind = 'structured_v1'
+             WHERE decision.task_id = OLD.id
+               AND (
+                   (decision.action = 'approve' AND NEW.status = 'completed')
+                   OR (decision.action = 'reject' AND NEW.status = 'failed')
+               )
+               AND json_type(
+                   CASE
+                       WHEN json_valid(review_event.payload_json)
+                       THEN review_event.payload_json ELSE '{}'
+                   END,
+                   '$.decision_id'
+               ) = 'text'
+               AND decision.id = json_extract(
+                   CASE
+                       WHEN json_valid(review_event.payload_json)
+                       THEN review_event.payload_json ELSE '{}'
+                   END,
+                   '$.decision_id'
+               )
+         )
+    BEGIN
+        SELECT RAISE(
+            ABORT,
+            'waiting_review exit requires exact human decision and review event'
+        );
     END
     """,
     """
@@ -1031,9 +1960,35 @@ _OUTCOME_OBJECT_DDL = (
         WHERE outcome.source_task_id = OLD.id
           AND (
               NEW.id IS NOT OLD.id
+              OR NEW.rowid IS NOT OLD.rowid
               OR NEW.origin IS NOT 'user'
               OR NEW.status IS NOT 'completed'
               OR NEW.output_file_ids IS NOT OLD.output_file_ids
+              OR outcome.source_task_witness_json IS NOT json_object(
+                  'agent_id', NEW.agent_id,
+                  'agent_version', NEW.agent_version,
+                  'conversation_id', NEW.conversation_id,
+                  'created_at', NEW.created_at,
+                  'created_by', NEW.created_by,
+                  'created_by_username', NEW.created_by_username,
+                  'data_classification', NEW.data_classification,
+                  'depends_on', NEW.depends_on,
+                  'error_message', NEW.error_message,
+                  'finished_at', NEW.finished_at,
+                  'id', NEW.id,
+                  'input_binding', NEW.input_binding,
+                  'input_file_ids', NEW.input_file_ids,
+                  'inputs_json', NEW.inputs_json,
+                  'metadata_json', NEW.metadata_json,
+                  'name', NEW.name,
+                  'origin', NEW.origin,
+                  'output_file_ids', NEW.output_file_ids,
+                  'retry_of', NEW.retry_of,
+                  'rowid', NEW.rowid,
+                  'started_at', NEW.started_at,
+                  'status', NEW.status,
+                  'updated_at', NEW.updated_at
+              )
           )
     )
     BEGIN
@@ -1050,6 +2005,7 @@ _OUTCOME_OBJECT_DDL = (
           AND outcome.downstream_task_id = OLD.id
           AND (
               NEW.id IS NOT OLD.id
+              OR NEW.rowid IS NOT OLD.rowid
               OR NEW.origin IS NOT 'user'
               OR NOT EXISTS (
                   SELECT 1
@@ -1100,7 +2056,29 @@ _OUTCOME_OBJECT_DDL = (
     WHEN EXISTS (
         SELECT 1
         FROM tasks AS existing
-        WHERE (existing.id = NEW.id OR existing.rowid = NEW.rowid)
+        WHERE (
+            existing.id = NEW.id
+            OR (NEW.rowid <> -1 AND existing.rowid = NEW.rowid)
+        )
+          AND EXISTS (
+              SELECT 1
+              FROM artifact_outcome_events AS outcome
+              WHERE outcome.source_task_id = existing.id
+                 OR outcome.downstream_task_id = existing.id
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'outcome-witnessed task is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_witnessed_artifact_tasks_no_conflicting_update
+    BEFORE UPDATE OF id, rowid ON tasks
+    WHEN EXISTS (
+        SELECT 1
+        FROM tasks AS existing
+        WHERE existing.rowid <> OLD.rowid
+          AND (existing.id = NEW.id OR existing.rowid = NEW.rowid)
           AND EXISTS (
               SELECT 1
               FROM artifact_outcome_events AS outcome
@@ -1122,8 +2100,42 @@ _OUTCOME_MANAGED_INDEXES = (
     "idx_artifact_outcomes_one_handoff",
 )
 
+_OUTCOME_SHARED_PARENT_TRIGGERS = (
+    "trg_task_events_no_update",
+    "trg_task_events_no_delete",
+    "trg_task_events_no_conflicting_insert",
+    "trg_task_events_positive_rowid",
+)
+
+_OUTCOME_REVIEW_SEAL_TRIGGERS = (
+    "trg_files_positive_rowid",
+    "trg_tasks_positive_rowid",
+    "trg_review_package_files_no_update",
+    "trg_review_package_files_no_delete",
+    "trg_review_package_files_no_conflicting_insert",
+    "trg_review_package_files_no_conflicting_update",
+    "trg_review_package_files_no_late_insert",
+    "trg_review_package_files_no_late_move",
+    "trg_review_package_tasks_provenance_immutable",
+    "trg_terminal_tasks_output_manifest_immutable",
+    "trg_terminal_tasks_identity_status_immutable",
+    "trg_terminal_tasks_no_delete",
+    "trg_terminal_tasks_no_conflicting_insert",
+    "trg_terminal_tasks_no_conflicting_update",
+    "trg_review_package_tasks_identity_immutable",
+    "trg_review_package_tasks_no_delete",
+    "trg_review_package_tasks_no_conflicting_insert",
+    "trg_review_package_tasks_no_conflicting_update",
+    "trg_waiting_review_exit_requires_human_witness",
+)
+
+# Outcome-exclusive objects are residue only when the outcome table generation
+# itself exists.  The task-event append-only guards predate ADR-0036 (P2.1), so
+# they are required witnesses but must never make a legitimate legacy database
+# look like a half-deleted outcome schema.
 _OUTCOME_MANAGED_TRIGGERS = (
     "trg_artifact_outcomes_source_witness",
+    "trg_artifact_outcomes_validate_shape",
     "trg_artifact_outcomes_capture_precedes_flow",
     "trg_artifact_outcomes_download_bytes",
     "trg_artifact_outcomes_downstream_witness",
@@ -1134,14 +2146,18 @@ _OUTCOME_MANAGED_TRIGGERS = (
     "trg_witnessed_artifact_files_no_update",
     "trg_witnessed_artifact_files_no_delete",
     "trg_witnessed_artifact_files_no_conflicting_insert",
-    "trg_terminal_tasks_output_manifest_immutable",
-    "trg_terminal_tasks_identity_status_immutable",
-    "trg_terminal_tasks_no_delete",
-    "trg_terminal_tasks_no_conflicting_insert",
+    "trg_witnessed_artifact_files_no_conflicting_update",
+    *_OUTCOME_REVIEW_SEAL_TRIGGERS,
     "trg_witnessed_artifact_tasks_preserve_source",
     "trg_witnessed_artifact_tasks_preserve_handoff",
     "trg_witnessed_artifact_tasks_no_delete",
     "trg_witnessed_artifact_tasks_no_conflicting_insert",
+    "trg_witnessed_artifact_tasks_no_conflicting_update",
+)
+
+_OUTCOME_REQUIRED_TRIGGERS = (
+    *_OUTCOME_SHARED_PARENT_TRIGGERS,
+    *_OUTCOME_MANAGED_TRIGGERS,
 )
 
 _INDEX_DDL = (
@@ -2346,6 +3362,10 @@ def _assert_p23_historical_rows(conn: sqlite3.Connection) -> None:
             invalid("answer message order")
 
 
+_DEFAULT_BUSY_TIMEOUT_MS = 5_000
+_INIT_BUSY_TIMEOUT_MS = 30_000
+
+
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
     """打开一个 sqlite3 连接：Row 工厂 + WAL + 外键约束 + 手动事务模式。
 
@@ -2362,7 +3382,7 @@ def get_conn(db_path: str | Path) -> sqlite3.Connection:
     if key not in _VALIDATED_DB_PATHS:
         config.assert_local_db_path(db_path)
         _VALIDATED_DB_PATHS.add(key)
-    busy_timeout_ms = 5000
+    busy_timeout_ms = _DEFAULT_BUSY_TIMEOUT_MS
     conn = sqlite3.connect(
         str(db_path), isolation_level=None, timeout=busy_timeout_ms / 1000
     )
@@ -2409,7 +3429,7 @@ def _execute_script_in_transaction(
     ``sqlite3.Connection.executescript`` commits any active transaction before
     running.  ``init_db`` must hold one ``BEGIN IMMEDIATE`` across evidence
     preflight and schema convergence; otherwise a second initializer can
-    observe the first halfway through creating the two judgment tables and
+    observe the first halfway through creating the three judgment ledgers and
     misclassify that transient as deletion residue.  ``complete_statement``
     understands trigger bodies, so each canonical statement remains intact.
     """
@@ -2435,24 +3455,33 @@ def init_db(db_path: str | Path) -> None:
     conn = get_conn(db_path)
     try:
         # Serialize the entire evidence preflight + convergence window across
-        # API/worker processes.  Releasing the lock between them would let a
-        # peer see legitimate half-created schema as tamper residue.
+        # API/worker processes.  Deep O(N) witnesses can keep a peer beyond the
+        # ordinary request-write budget, so only this lock acquisition gets a
+        # larger bounded wait; restore the runtime budget immediately after the
+        # lock is held.  Releasing the lock between checks would let a peer see
+        # legitimate half-created schema as tamper residue.
+        conn.execute(f"PRAGMA busy_timeout={_INIT_BUSY_TIMEOUT_MS}")
         conn.execute("BEGIN IMMEDIATE")
-        # 在任何 CREATE/收敛动作之前先看现场：若已有任一非空判断账本，则两张
+        conn.execute(f"PRAGMA busy_timeout={_DEFAULT_BUSY_TIMEOUT_MS}")
+        # 在任何 CREATE/收敛动作之前先看现场：若已有任一非空判断账本，则三张
         # 表和全部 canonical 对象必须原本就在位。否则 `_DDL` 补一张被删的表、
         # 或后文重建 no-op trigger 后再报绿，会掩盖历史保护窗已经断裂的事实。
         judgment_table_names = (
             "task_review_advice",
             "task_human_decisions",
+            "task_review_event_witnesses",
         )
         existing_judgment_tables = {
             str(row[0])
             for row in conn.execute(
                 "SELECT name FROM sqlite_master "
-                "WHERE type = 'table' AND name IN (?, ?)",
+                "WHERE type = 'table' AND name IN (?, ?, ?)",
                 judgment_table_names,
             )
         }
+        review_event_witness_table_existed = (
+            "task_review_event_witnesses" in existing_judgment_tables
+        )
         judgment_managed_object_names = (
             *_JUDGMENT_MANAGED_TRIGGERS,
             *_JUDGMENT_MANAGED_INDEXES,
@@ -2538,7 +3567,122 @@ def init_db(db_path: str | Path) -> None:
             from .outcome_schema import assert_outcome_schema
 
             assert_outcome_schema(conn)
+        # Once this schema generation has begun protecting any event/review/
+        # terminal evidence, an empty outcome ledger is not permission to wash
+        # a missing or no-op review seal back to green.  A genuine pre-ADR-0036
+        # legacy database has no outcome table and may converge once; every
+        # subsequent startup must preserve the exact protection window.
+        task_events_has_rows = bool(
+            conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'task_events'"
+            ).fetchone()
+            and conn.execute(
+                "SELECT EXISTS(SELECT 1 FROM task_events LIMIT 1)"
+            ).fetchone()[0]
+            == 1
+        )
+        decisions_have_rows = bool(
+            "task_human_decisions" in existing_judgment_tables
+            and conn.execute(
+                "SELECT EXISTS(SELECT 1 FROM task_human_decisions LIMIT 1)"
+            ).fetchone()[0]
+            == 1
+        )
+        sealed_task_has_rows = bool(
+            conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'tasks'"
+            ).fetchone()
+            and conn.execute(
+                "SELECT EXISTS(SELECT 1 FROM tasks "
+                "WHERE status IN ('waiting_review','completed','failed','cancelled') LIMIT 1)"
+            ).fetchone()[0]
+            == 1
+        )
+        review_seal_has_evidence = bool(
+            outcome_table_exists
+            and (task_events_has_rows or decisions_have_rows or sealed_task_has_rows)
+        )
+        if review_seal_has_evidence and not outcome_was_nonempty:
+            from .outcome_schema import review_seal_triggers_are_canonical
+
+            if review_seal_triggers_are_canonical(conn) is not True:
+                raise sqlite3.IntegrityError(
+                    "review seal evidence lacks exact append-only witnesses"
+                )
+        # ADR-0036 v5 adds signed task/file snapshots to every ledger row.
+        # SQLite cannot add the nullable columns and recover the canonical
+        # CREATE TABLE digest in place.  Rebuild only an empty pre-v5 ledger;
+        # a nonempty ledger was already required to pass the exact current
+        # witness above and therefore fails closed instead of being rewritten.
+        if outcome_table_exists and not outcome_was_nonempty:
+            outcome_columns = {
+                str(row[1])
+                for row in conn.execute(
+                    "PRAGMA table_xinfo(artifact_outcome_events)"
+                )
+            }
+            snapshot_columns = {
+                "source_task_witness_json",
+                "source_file_witness_json",
+            }
+            if not snapshot_columns.issubset(outcome_columns):
+                if review_seal_has_evidence:
+                    raise sqlite3.IntegrityError(
+                        "pre-snapshot outcome ledger with review evidence "
+                        "requires manual migration"
+                    )
+                for trigger_name in _OUTCOME_MANAGED_TRIGGERS:
+                    conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+                for index_name in _OUTCOME_MANAGED_INDEXES:
+                    conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+                conn.execute("DROP TABLE artifact_outcome_events")
         _execute_script_in_transaction(conn, _DDL)
+        # First strict-generation install seals every pre-existing review event
+        # byte-for-byte before runtime review triggers are installed.  Existing
+        # events without an exact decision remain explicitly legacy; they are
+        # preserved for historical K1 compatibility but never promoted into a
+        # structured decision.  On subsequent startups the table already
+        # exists, so missing/tampered witness rows are not backfilled away.
+        if not review_event_witness_table_existed:
+            conn.execute(
+                """
+                INSERT INTO task_review_event_witnesses (
+                    event_id, event_internal_id, task_id, agent_id, event_type,
+                    level, message, payload_json, created_at, decision_id,
+                    witness_kind, schema_version
+                )
+                SELECT
+                    review.event_id,
+                    review.id,
+                    review.task_id,
+                    review.agent_id,
+                    review.event_type,
+                    review.level,
+                    review.message,
+                    review.payload_json,
+                    review.created_at,
+                    CASE WHEN decision.id IS NULL THEN NULL ELSE decision.id END,
+                    CASE WHEN decision.id IS NULL
+                         THEN 'legacy_pre_instrumentation'
+                         ELSE 'structured_v1'
+                    END,
+                    1
+                FROM task_events AS review
+                LEFT JOIN task_human_decisions AS decision
+                  ON decision.task_id = review.task_id
+                 AND json_valid(review.payload_json) = 1
+                 AND json_type(review.payload_json) = 'object'
+                 AND json_type(review.payload_json, '$.decision_id') = 'text'
+                 AND json_extract(review.payload_json, '$.decision_id') = decision.id
+                 AND review.event_type = CASE decision.action
+                     WHEN 'approve' THEN 'review_approved'
+                     ELSE 'review_rejected'
+                 END
+                WHERE review.event_type IN ('review_approved', 'review_rejected')
+                """
+            )
         # 迁移 #1（ADR-0013）：model_calls.conversation_id——导引会话的模型调用归因。
         # 并发启动安全（Codex R1-P1）：API 进程与 Job Runner 进程都在启动时调
         # init_db，对 pre-ADR-0013 存量库，无锁的 check-then-ALTER 会让双方同时
@@ -2681,9 +3825,10 @@ def init_db(db_path: str | Path) -> None:
                 for table_name in (
                     "task_review_advice",
                     "task_human_decisions",
+                    "task_review_event_witnesses",
                 )
             )
-            if judgment_has_rows:
+            if judgment_has_rows and review_event_witness_table_existed:
                 from .review_schema import assert_judgment_schema
 
                 assert_judgment_schema(conn)
@@ -2703,7 +3848,7 @@ def init_db(db_path: str | Path) -> None:
                 "SELECT EXISTS(SELECT 1 FROM artifact_outcome_events LIMIT 1)"
             ).fetchone()[0] == 1
             if not outcome_has_rows:
-                for trigger_name in _OUTCOME_MANAGED_TRIGGERS:
+                for trigger_name in _OUTCOME_REQUIRED_TRIGGERS:
                     conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
                 for index_name in _OUTCOME_MANAGED_INDEXES:
                     conn.execute(f"DROP INDEX IF EXISTS {index_name}")

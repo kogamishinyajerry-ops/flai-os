@@ -19,7 +19,7 @@ from typing import Any
 from jsonschema import ValidationError, validate
 
 from ..config import CONTRACTS_DIR
-from ..core.errors import TaskNotFoundError
+from ..core.errors import IllegalTransitionError, TaskNotFoundError
 from ..core.statemachine import assert_transition, is_terminal
 
 _EVENT_SCHEMA_PATH = CONTRACTS_DIR / "event.schema.json"
@@ -492,6 +492,10 @@ def set_task_status(
         task = get_task(conn, task_id)
         if task is None:
             raise TaskNotFoundError(f"任务不存在：{task_id}")
+        if task["status"] == "waiting_review" and new_status != "waiting_review":
+            raise IllegalTransitionError(
+                "waiting_review 只能通过 apply_human_review 绑定具名人工终裁后转出"
+            )
         assert_transition(task["status"], new_status)
 
         now = _now_iso()
@@ -597,28 +601,15 @@ def apply_human_review(
                 now,
             ),
         )
-        updates: dict[str, Any] = {
-            "status": new_status,
-            "updated_at": now,
-            "finished_at": now,  # completed/failed 均 terminal
-        }
-        if not approve:
-            updates["error_message"] = (
-                f"人工拒绝（reviewer={reviewer}；reason={reason_code}）"
-            ) + (
-                f"：{comment}" if comment else ""
-            )
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        conn.execute(
-            f"UPDATE tasks SET {set_clause} WHERE id = ?",
-            (*updates.values(), task_id),
-        )
         # 样本标签回填（approve→1 / reject→0）——复用 set_sample_review_outcome
         # primitive（其裸 UPDATE 不自开事务，参与本 BEGIN IMMEDIATE，故与迁移同事务原子）。
         sample_rows = set_sample_review_outcome(conn, task_id, accepted=approve)
-        # signer 事件，与迁移同事务（「无事件=没发生」在人签路径落地）。
+        # signer 事件先于 waiting_review 出口写入，但仍与状态迁移处于同一写事务，
+        # 外部永远不可见半态。这样 SQLite 的出口 trigger 能物理要求 exact decision
+        # + exact review event 已同时存在，通用状态 setter/raw UPDATE 都不能冒充人签。
         payload = {
             "reviewer": reviewer,
+            "reviewer_username": reviewer_username,
             "comment": comment,
             "decision_id": decision_id,
             "reason_code": reason_code,
@@ -635,20 +626,6 @@ def apply_human_review(
                 + (f"；{sample_rows} 条样本标记为工程师认可" if sample_rows else ""),
                 payload=payload,
             )
-            # ADR-0036 cohort 起点：只在**新** user-origin 人工批准事务里，按当时
-            # 冻结的权威 output 清单逐件落 capture_started。它只表示 instrumentation
-            # active，不是 outcome；绝不扫描旧 review event 反向回填。插入与人签同
-            # 事务，故 marker 必绑定 exact review_approved event_id，任一坏 provenance
-            # 会让本次批准整体 fail-closed 回滚。
-            if task.get("origin") == "user":
-                for output_file_id in dict.fromkeys(task.get("output_file_ids") or []):
-                    append_artifact_outcome_event(
-                        conn,
-                        event_type="capture_started",
-                        source_task_id=task_id,
-                        source_file_id=output_file_id,
-                        review_event_id=review_event["event_id"],
-                    )
         else:
             append_event(
                 conn,
@@ -660,6 +637,38 @@ def apply_human_review(
                 + (f"；{sample_rows} 条样本标记为未认可" if sample_rows else ""),
                 payload=payload,
             )
+        updates: dict[str, Any] = {
+            "status": new_status,
+            "updated_at": now,
+            "finished_at": now,  # completed/failed 均 terminal
+            # A reviewed terminal row must be reconstructible from its durable
+            # decision.  Approval clears any stale pre-review error; rejection
+            # replaces it with the exact structured-decision rendering below.
+            "error_message": None,
+        }
+        if not approve:
+            updates["error_message"] = (
+                f"人工拒绝（reviewer={reviewer}；reason={reason_code}）"
+            ) + (f"：{comment}" if comment else "")
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        conn.execute(
+            f"UPDATE tasks SET {set_clause} WHERE id = ?",
+            (*updates.values(), task_id),
+        )
+        if approve:
+            # ADR-0036 cohort 起点：只在**新** user-origin 人工批准事务里，按进入
+            # waiting_review 时已经封印的权威 output 清单逐件落 capture_started。
+            # marker 必绑定上方 exact review_approved event_id；任一坏 provenance
+            # 会让 decision/event/status/capture 整体 fail-closed 回滚。
+            if task.get("origin") == "user":
+                for output_file_id in dict.fromkeys(task.get("output_file_ids") or []):
+                    append_artifact_outcome_event(
+                        conn,
+                        event_type="capture_started",
+                        source_task_id=task_id,
+                        source_file_id=output_file_id,
+                        review_event_id=review_event["event_id"],
+                    )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
@@ -691,7 +700,23 @@ def has_review_approved_event(conn: sqlite3.Connection, task_id: str) -> bool:
     """该任务是否有持久 review_approved 事件=人工签发见证（apply_human_review 是唯一写入
     方，见其实现）。K1 签发维 provenance 用：`status=='completed'` 只证时序、不证人签。"""
     row = conn.execute(
-        "SELECT 1 FROM task_events WHERE task_id = ? AND event_type = 'review_approved' LIMIT 1",
+        """
+        SELECT 1
+        FROM task_events AS review
+        JOIN task_review_event_witnesses AS witness
+          ON witness.event_id = review.event_id
+         AND witness.event_internal_id = review.id
+         AND witness.task_id = review.task_id
+         AND witness.agent_id IS review.agent_id
+         AND witness.event_type = review.event_type
+         AND witness.level = review.level
+         AND witness.message = review.message
+         AND witness.payload_json = review.payload_json
+         AND witness.created_at = review.created_at
+        WHERE review.task_id = ?
+          AND review.event_type = 'review_approved'
+        LIMIT 1
+        """,
         (task_id,),
     ).fetchone()
     return row is not None
@@ -701,6 +726,96 @@ def has_review_approved_event(conn: sqlite3.Connection, task_id: str) -> bool:
 
 def _decode_artifact_outcome(row: sqlite3.Row) -> dict[str, Any]:
     return dict(row)
+
+
+def _artifact_outcome_parent_snapshots(
+    conn: sqlite3.Connection,
+    *,
+    event_type: str,
+    source_task_id: str,
+    source_file_id: str,
+    review_event_id: str,
+) -> tuple[str, str]:
+    """Return the exact signed parent snapshots carried by every ledger row.
+
+    Capture rows derive the snapshot from the sealed task/file records.  Flow
+    rows copy the unique capture snapshot instead of rediscovering a newer
+    parent, preserving the exact approval cohort across downloads/handoffs.
+    SQLite builds the JSON so repository and trigger byte representation are
+    identical even for Unicode, NULL, and embedded JSON text columns.
+    """
+    if event_type != "capture_started":
+        capture = conn.execute(
+            """
+            SELECT source_task_witness_json, source_file_witness_json
+            FROM artifact_outcome_events
+            WHERE event_type = 'capture_started'
+              AND source_task_id = ?
+              AND source_file_id = ?
+              AND review_event_id = ?
+            LIMIT 1
+            """,
+            (source_task_id, source_file_id, review_event_id),
+        ).fetchone()
+        if capture is None:
+            raise sqlite3.IntegrityError(
+                "outcome flow requires prior capture snapshot"
+            )
+        return str(capture[0]), str(capture[1])
+
+    row = conn.execute(
+        """
+        SELECT
+          json_object(
+              'agent_id', source_task.agent_id,
+              'agent_version', source_task.agent_version,
+              'conversation_id', source_task.conversation_id,
+              'created_at', source_task.created_at,
+              'created_by', source_task.created_by,
+              'created_by_username', source_task.created_by_username,
+              'data_classification', source_task.data_classification,
+              'depends_on', source_task.depends_on,
+              'error_message', source_task.error_message,
+              'finished_at', source_task.finished_at,
+              'id', source_task.id,
+              'input_binding', source_task.input_binding,
+              'input_file_ids', source_task.input_file_ids,
+              'inputs_json', source_task.inputs_json,
+              'metadata_json', source_task.metadata_json,
+              'name', source_task.name,
+              'origin', source_task.origin,
+              'output_file_ids', source_task.output_file_ids,
+              'retry_of', source_task.retry_of,
+              'rowid', source_task.rowid,
+              'started_at', source_task.started_at,
+              'status', source_task.status,
+              'updated_at', source_task.updated_at
+          ) AS task_witness,
+          json_object(
+              'classification', source_file.classification,
+              'created_at', source_file.created_at,
+              'filename', source_file.filename,
+              'id', source_file.id,
+              'kind', source_file.kind,
+              'path', source_file.path,
+              'rowid', source_file.rowid,
+              'sha256', source_file.sha256,
+              'size_bytes', source_file.size_bytes,
+              'task_id', source_file.task_id,
+              'uploaded_by', source_file.uploaded_by
+          ) AS file_witness
+        FROM tasks AS source_task
+        JOIN files AS source_file
+          ON source_file.id = ? AND source_file.task_id = source_task.id
+        WHERE source_task.id = ?
+        """,
+        (source_file_id, source_task_id),
+    ).fetchone()
+    if row is None:
+        raise sqlite3.IntegrityError(
+            "capture snapshot requires exact source task and file"
+        )
+    return str(row[0]), str(row[1])
 
 
 def append_artifact_outcome_event(
@@ -749,15 +864,25 @@ def append_artifact_outcome_event(
     ):
         raise ValueError("pipeline_handoff 需要 exact downstream task，且不得携带 actor/bytes")
 
+    source_task_witness_json, source_file_witness_json = (
+        _artifact_outcome_parent_snapshots(
+            conn,
+            event_type=event_type,
+            source_task_id=source_task_id,
+            source_file_id=source_file_id,
+            review_event_id=review_event_id,
+        )
+    )
     outcome_id = f"outcome_{uuid.uuid4().hex}"
     created_at = _now_iso()
     conn.execute(
         """
         INSERT INTO artifact_outcome_events
             (id, event_type, source_task_id, source_file_id, review_event_id,
+             source_task_witness_json, source_file_witness_json,
              actor_username, downstream_task_id, delivered_bytes,
              schema_version, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
         """,
         (
             outcome_id,
@@ -765,6 +890,8 @@ def append_artifact_outcome_event(
             source_task_id,
             source_file_id,
             review_event_id,
+            source_task_witness_json,
+            source_file_witness_json,
             actor_username,
             downstream_task_id,
             delivered_bytes,
@@ -1097,11 +1224,39 @@ def claim_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
 
 
 def set_task_outputs(conn: sqlite3.Connection, task_id: str, output_file_ids: list[str]) -> dict[str, Any]:
-    now = _now_iso()
-    conn.execute(
-        "UPDATE tasks SET output_file_ids = ?, updated_at = ? WHERE id = ?",
-        (json.dumps(output_file_ids, ensure_ascii=False), now, task_id),
-    )
+    """Replace the mutable draft manifest before the human review seal.
+
+    The state recheck and write share one IMMEDIATE transaction so a concurrent
+    running->waiting_review transition cannot slip between a Python precheck
+    and the UPDATE.  waiting_review and all terminal states are immutable at
+    both repository and trigger layers.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        task = get_task(conn, task_id)
+        if task is None:
+            raise TaskNotFoundError(f"任务不存在：{task_id}")
+        if task["status"] == "waiting_review" or is_terminal(task["status"]):
+            raise IllegalTransitionError(
+                f"任务处于 {task['status']}，审阅包/终态产物清单已封印"
+            )
+        now = _now_iso()
+        cursor = conn.execute(
+            "UPDATE tasks SET output_file_ids = ?, updated_at = ? "
+            "WHERE id = ? AND status = ?",
+            (
+                json.dumps(output_file_ids, ensure_ascii=False),
+                now,
+                task_id,
+                task["status"],
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise IllegalTransitionError("任务状态已并发变化，产物清单未写入")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
     return get_task(conn, task_id)  # type: ignore[return-value]
 
 

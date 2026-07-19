@@ -53,14 +53,47 @@ def _insert_completed_task(conn, task_id: str, finished_at: str, origin: str = "
     conn.commit()
 
 
-def _insert_review_event(conn, task_id: str, created_at: str) -> None:
-    # task_events DDL：event_id NOT NULL UNIQUE + level NOT NULL + message NOT NULL
-    # （无 seq 列）——event_id 用 task_id+created_at 拼保证跨行唯一。
+def _insert_reviewed_task(conn, task_id: str, created_at: str) -> None:
+    decision_id = f"decision-{task_id}"
     conn.execute(
-        "INSERT INTO task_events (event_id, task_id, event_type, level, message,"
-        " payload_json, created_at)"
-        " VALUES (?, ?, 'review_approved', 'info', '评审通过', '{}', ?)",
-        (f"evt-{task_id}-{created_at}", task_id, created_at),
+        "INSERT INTO tasks (id, agent_id, agent_version, name, status, inputs_json, "
+        "input_file_ids, output_file_ids, created_by, origin, created_at, updated_at) "
+        "VALUES (?, 'hello_agent', '0.1.0', ?, 'waiting_review', '{}', '[]', '[]', "
+        "'测试工程师', 'user', ?, ?)",
+        (task_id, task_id, created_at, created_at),
+    )
+    conn.execute(
+        "INSERT INTO task_human_decisions "
+        "(id, task_id, paired_advice_id, action, reason_code, comment, "
+        " reviewer_username, reviewer_display_name, schema_version, created_at) "
+        "VALUES (?, ?, NULL, 'approve', NULL, NULL, 'reviewer', '测试签发人', 1, ?)",
+        (decision_id, task_id, created_at),
+    )
+    conn.execute(
+        "INSERT INTO task_events (event_id, task_id, agent_id, event_type, level, "
+        "message, payload_json, created_at) VALUES (?, ?, 'hello_agent', "
+        "'review_approved', 'info', '评审通过', ?, ?)",
+        (
+            f"evt-{task_id}-{created_at}",
+            task_id,
+            json.dumps(
+                {
+                    "reviewer": "测试签发人",
+                    "reviewer_username": "reviewer",
+                    "comment": None,
+                    "decision_id": decision_id,
+                    "reason_code": None,
+                    "paired_advice_id": None,
+                },
+                ensure_ascii=False,
+            ),
+            created_at,
+        ),
+    )
+    conn.execute(
+        "UPDATE tasks SET status = 'completed', updated_at = ?, finished_at = ?, "
+        "error_message = NULL WHERE id = ?",
+        (created_at, created_at, task_id),
     )
     conn.commit()
 
@@ -100,12 +133,10 @@ def test_stats_overview_exact_counts(app_env):
     client, app = app_env
     conn = app.state.conn_factory()
     try:
-        _insert_completed_task(conn, "t-in", AFTER)
-        _insert_completed_task(conn, "t-out", BEFORE)          # 界前不计
+        _insert_reviewed_task(conn, "t-in", AFTER)
+        _insert_reviewed_task(conn, "t-out", BEFORE)          # 界前不计
         _insert_completed_task(conn, "t-eval", AFTER, origin="eval")  # eval 不计
         _insert_task_null_finished(conn, "t-null", AFTER)      # NULL finished_at 不计
-        _insert_review_event(conn, "t-in", AFTER)
-        _insert_review_event(conn, "t-out", BEFORE)
         _insert_other_event(conn, "t-in", AFTER)               # 非 review 事件不计
         _insert_promotion(conn, "hello_agent", AFTER)
         _insert_promotion(conn, "hello_agent", BEFORE)
@@ -120,6 +151,30 @@ def test_stats_overview_exact_counts(app_env):
     assert body["reviews_approved"] == 1
     assert body["promotions"] == 1
     assert isinstance(body["curated_cases_total"], int)
+
+
+def test_stats_review_count_is_unknown_when_judgment_witness_is_red(app_env):
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        _insert_reviewed_task(conn, "t-tampered-review", AFTER)
+        trigger_name = "trg_task_events_no_update"
+        trigger_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+            (trigger_name,),
+        ).fetchone()[0]
+        conn.execute(f'DROP TRIGGER "{trigger_name}"')
+        conn.execute(
+            "UPDATE task_events SET message = 'forged' "
+            "WHERE task_id = 't-tampered-review' AND event_type = 'review_approved'"
+        )
+        conn.execute(trigger_sql)
+    finally:
+        conn.close()
+
+    body = client.get("/api/stats/overview", params={"since": SINCE}).json()
+    assert body["tasks_completed"] == 1
+    assert body["reviews_approved"] == "未知（判断账本不可信）"
 
 
 def test_stats_since_boundary_inclusive(app_env):

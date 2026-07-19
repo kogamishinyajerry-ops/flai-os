@@ -24,6 +24,48 @@ def _fake_health(monkeypatch, payload: dict[str, object]) -> None:
     )
 
 
+def _seed_captured_artifact(conn: sqlite3.Connection) -> str:
+    task_id = "epoch-source"
+    file_id = "epoch-file"
+    repos.create_task(
+        conn,
+        task_id=task_id,
+        agent_id="hello_agent",
+        agent_version="0.1.0",
+        name="epoch witness",
+        created_by="测试工程师",
+        created_by_username="test_engineer",
+        inputs={},
+        input_file_ids=[],
+        metadata={},
+        origin="user",
+    )
+    repos.create_file(
+        conn,
+        file_id=file_id,
+        task_id=task_id,
+        kind="output",
+        filename="epoch.txt",
+        path="/tmp/epoch.txt",
+        size_bytes=5,
+        sha256="a" * 64,
+        classification="internal",
+    )
+    repos.set_task_outputs(conn, task_id, [file_id])
+    for status in ("queued", "validating", "running", "waiting_review"):
+        repos.set_task_status(conn, task_id, status)
+    repos.apply_human_review(
+        conn,
+        task_id,
+        action="approve",
+        reviewer="测试工程师",
+        reviewer_username="test_engineer",
+        reason_code=None,
+        comment="epoch baseline",
+    )
+    return file_id
+
+
 def test_main_selfcheck_and_report_share_canonical_outcome_contract() -> None:
     from backend.app import main as main_mod
     from scripts import usage_report
@@ -176,6 +218,83 @@ def test_source_task_guard_uses_bounded_index(app_env) -> None:
     detail = " ".join(str(row[3]) for row in plan)
     assert "idx_artifact_outcomes_source_task_created" in detail
     assert "SEARCH" in detail
+
+
+def test_health_and_readyz_deep_recheck_persisted_provenance(
+    app_env, monkeypatch
+) -> None:
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        repos.beat_worker_heartbeat(conn, generation=config.WORKER_GENERATION)
+    finally:
+        conn.close()
+
+    original = outcome_schema._provenance_integrity
+    calls = 0
+
+    def count_deep_rechecks(conn):
+        nonlocal calls
+        calls += 1
+        return original(conn)
+
+    monkeypatch.setattr(outcome_schema, "_provenance_integrity", count_deep_rechecks)
+    health = client.get("/api/health")
+    ready = client.get("/api/readyz")
+    assert health.status_code == 200
+    assert health.json()["outcome_schema_witnesses"]["provenance_integrity"] is True
+    assert ready.status_code == 200
+    assert (
+        ready.json()["outcome_telemetry"]["schema_witnesses"][
+            "provenance_integrity"
+        ]
+        is True
+    )
+    assert calls == 2
+
+
+def test_health_deep_recheck_stays_red_after_guard_drop_and_restore(
+    app_env,
+) -> None:
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        repos.beat_worker_heartbeat(conn, generation=config.WORKER_GENERATION)
+        file_id = _seed_captured_artifact(conn)
+        trigger_names = (
+            "trg_witnessed_artifact_files_no_update",
+            "trg_review_package_files_no_update",
+        )
+        trigger_sql = {
+            name: conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+                (name,),
+            ).fetchone()[0]
+            for name in trigger_names
+        }
+        conn.execute("BEGIN IMMEDIATE")
+        for name in trigger_names:
+            conn.execute(f"DROP TRIGGER {name}")
+        conn.execute("UPDATE files SET kind = 'input' WHERE id = ?", (file_id,))
+        for name in trigger_names:
+            conn.execute(trigger_sql[name])
+        conn.execute("COMMIT")
+        assert outcome_schema.outcome_schema_witnesses(conn)[
+            "provenance_integrity"
+        ] is False
+    finally:
+        conn.close()
+
+    health = client.get("/api/health")
+    assert health.status_code == 200
+    witnesses = health.json()["outcome_schema_witnesses"]
+    assert witnesses["required_triggers"] is True
+    assert witnesses["provenance_integrity"] is False
+    ready = client.get("/api/readyz")
+    assert ready.status_code == 503
+    assert ready.json()["outcome_telemetry"]["schema_witnesses"][
+        "provenance_integrity"
+    ] is False
 
 
 def test_readyz_rejects_fresh_old_worker_generation_even_with_exact_schema(app_env) -> None:

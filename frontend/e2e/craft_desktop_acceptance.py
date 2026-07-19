@@ -199,6 +199,72 @@ def _db(sql: str, params: tuple = ()) -> None:
     conn.close()
 
 
+def _seed_structured_approval(
+    task_id: str,
+    *,
+    decision_id: str,
+    event_id: str,
+    event_created_at: str,
+    finished_at: str,
+) -> None:
+    """夹具也走当前严格人签固定点，不在切换后伪造 legacy review event。
+
+    视觉验收需要冻结时钟，不能直接调用会取墙钟的 HTTP review 入口；这里镜像其单一
+    BEGIN IMMEDIATE：decision → exact six-key event（由生产 AFTER trigger 自动封存）→
+    waiting_review 出口。任一步不满足生产 trigger，整组回滚并让验收真实失败。
+    """
+    import sqlite3
+
+    reviewer = "验收工程师"
+    payload = json.dumps(
+        {
+            "reviewer": reviewer,
+            "reviewer_username": reviewer,
+            "comment": None,
+            "decision_id": decision_id,
+            "reason_code": None,
+            "paired_advice_id": None,
+        },
+        ensure_ascii=False,
+    )
+    conn = sqlite3.connect(WORK / "flai_os.db")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "INSERT INTO task_human_decisions "
+            "(id, task_id, paired_advice_id, action, reason_code, comment, "
+            "reviewer_username, reviewer_display_name, schema_version, created_at) "
+            "VALUES (?,?,NULL,'approve',NULL,NULL,?,?,1,?)",
+            (decision_id, task_id, reviewer, reviewer, finished_at),
+        )
+        conn.execute(
+            "INSERT INTO task_events "
+            "(event_id, task_id, agent_id, event_type, level, message, "
+            "payload_json, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                event_id,
+                task_id,
+                "hello_agent",
+                "review_approved",
+                "info",
+                f"人工批准放行（reviewer={reviewer}），任务转 completed",
+                payload,
+                event_created_at,
+            ),
+        )
+        conn.execute(
+            "UPDATE tasks SET status='completed', updated_at=?, finished_at=?, "
+            "error_message=NULL WHERE id=?",
+            (finished_at, finished_at, task_id),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
 def flip_completed_with_artifact_and_events(task_id: str) -> None:
     """夹具：completed+产物+事件流（tool_failed 后重试成功=合法业务态）+签发链
     +tool_runs（mock 位如实）+model_calls（token 用量）——批次二 F1/F3 探针面。
@@ -209,10 +275,14 @@ def flip_completed_with_artifact_and_events(task_id: str) -> None:
     # set_task_data_classification），夹具不落就是讲了个不自洽的故事，门会
     # 正确地咬（本批实测咬过一次：签发行/工具 chip payload 全被遮蔽）。
     _db(
-        "UPDATE tasks SET status='completed', output_file_ids=?, started_at=?, finished_at=?,"
-        " data_classification='internal' WHERE id=?",
-        (json.dumps(["file_probe_0001"]), "2026-07-15T02:00:00+00:00", "2026-07-15T02:02:05+00:00", task_id),
+        "UPDATE tasks SET output_file_ids=? WHERE id=?",
+        (json.dumps(["file_probe_0001"]), task_id),
     )
+    _db(
+        "UPDATE tasks SET started_at=?, data_classification='internal' WHERE id=?",
+        ("2026-07-15T02:00:00+00:00", task_id),
+    )
+    _db("UPDATE tasks SET status='waiting_review' WHERE id=?", (task_id,))
     rows = [
         ("evt_craft_1", "task_created", "info", "任务已创建", "{}"),
         ("evt_craft_2", "tool_started", "info", "工具开始", json.dumps({"tool_id": "mock_echo"})),
@@ -220,8 +290,6 @@ def flip_completed_with_artifact_and_events(task_id: str) -> None:
         ("evt_craft_4", "tool_started", "info", "工具重试", json.dumps({"tool_id": "mock_echo"})),
         ("evt_craft_5", "tool_finished", "info", "工具完成", json.dumps({"tool_id": "mock_echo"})),
         ("evt_craft_5b", "review_requested", "info", "请求人工审核", "{}"),
-        ("evt_craft_5c", "review_approved", "info", "人工已批准", json.dumps({"reviewer": "验收工程师"})),
-        ("evt_craft_6", "task_completed", "info", "任务完成", "{}"),
     ]
     for i, (eid, etype, level, msg, payload) in enumerate(rows):
         _db(
@@ -229,6 +297,28 @@ def flip_completed_with_artifact_and_events(task_id: str) -> None:
             " VALUES (?,?,?,?,?,?,?,?)",
             (eid, task_id, "hello_agent", etype, level, msg, payload, f"2026-07-15T02:00:{10 + i:02d}+00:00"),
         )
+    _seed_structured_approval(
+        task_id,
+        decision_id="decision_craft_a",
+        event_id="evt_craft_5c",
+        event_created_at="2026-07-15T02:00:16+00:00",
+        finished_at="2026-07-15T02:02:05+00:00",
+    )
+    _db(
+        "INSERT INTO task_events "
+        "(event_id, task_id, agent_id, event_type, level, message, payload_json, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (
+            "evt_craft_6",
+            task_id,
+            "hello_agent",
+            "task_completed",
+            "info",
+            "任务完成",
+            "{}",
+            "2026-07-15T02:02:05+00:00",
+        ),
+    )
     # tool_runs：mock_echo 首跑失败+重试成功，两条均 mock=1（hello_agent 的
     # mock 工具如实落库）——F3 工具行该报「2 次工具调用 · 含 2 次 mock」+amber。
     for status, fin in (("failed", "2026-07-15T02:00:12+00:00"), ("success", "2026-07-15T02:00:14+00:00")):
@@ -378,8 +468,12 @@ with sync_playwright() as p:
     task_b = resp_b.json()["id"]
     task_c = resp_c.json()["id"]
     flip_completed_with_artifact_and_events(task_a)
-    _db("UPDATE tasks SET status='waiting_review', started_at=? WHERE id=?",
+    # Seed timing while the row is still mutable, then enter the review seal
+    # with a status-only statement.  Production correctly rejects changing
+    # provenance in the same statement that first enters waiting_review.
+    _db("UPDATE tasks SET started_at=? WHERE id=?",
         ("2026-07-15T02:00:00+00:00", task_b))
+    _db("UPDATE tasks SET status='waiting_review' WHERE id=?", (task_b,))
     _db("UPDATE tasks SET status='cancelled' WHERE id=?", (task_c,))
     _db(
         "INSERT INTO task_events (event_id, task_id, agent_id, event_type, level, message, payload_json, created_at)"
@@ -614,9 +708,10 @@ with sync_playwright() as p:
     task_e = resp_e.json()["id"]
     # 同 flip 夹具口径：有 tool_runs 派生行必须配 internal 分级戳，否则分级门
     # fail-closed 遮蔽 events/产物元数据（门正确，夹具要自洽）。
-    _db("UPDATE tasks SET status='completed', output_file_ids=?, started_at=?, finished_at=?,"
+    _db("UPDATE tasks SET output_file_ids=? WHERE id=?", (json.dumps(file_ids), task_e))
+    _db("UPDATE tasks SET status='completed', started_at=?, finished_at=?,"
         " data_classification='internal' WHERE id=?",
-        (json.dumps(file_ids), "2026-07-15T03:00:00+00:00", "2026-07-15T03:00:42+00:00", task_e))
+        ("2026-07-15T03:00:00+00:00", "2026-07-15T03:00:42+00:00", task_e))
     _db("INSERT INTO tool_runs (task_id, tool_id, tool_version, mock, status, input_json, started_at, finished_at)"
         " VALUES (?,?,?,?,?,?,?,?)",
         (task_e, "real_writer", "1.0.0", 0, "success", "{}",
@@ -678,12 +773,16 @@ with sync_playwright() as p:
     resp_f = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "工艺批探针F"}})
     assert resp_f.status_code < 300, resp_f.text
     task_f = resp_f.json()["id"]
-    _db("UPDATE tasks SET status='completed', started_at=?, finished_at=?, data_classification='sensitive' WHERE id=?",
-        ("2026-07-15T05:00:00+00:00", "2026-07-15T05:01:00+00:00", task_f))
-    _db("INSERT INTO task_events (event_id, task_id, agent_id, event_type, level, message, payload_json, created_at)"
-        " VALUES (?,?,?,?,?,?,?,?)",
-        ("evt_craft_f1", task_f, "hello_agent", "review_approved", "info", "人工已批准",
-         json.dumps({"reviewer": "验收工程师"}), "2026-07-15T05:00:30+00:00"))
+    _db("UPDATE tasks SET started_at=?, data_classification='sensitive' WHERE id=?",
+        ("2026-07-15T05:00:00+00:00", task_f))
+    _db("UPDATE tasks SET status='waiting_review' WHERE id=?", (task_f,))
+    _seed_structured_approval(
+        task_f,
+        decision_id="decision_craft_f",
+        event_id="evt_craft_f1",
+        event_created_at="2026-07-15T05:00:30+00:00",
+        finished_at="2026-07-15T05:01:00+00:00",
+    )
     _db("INSERT INTO tool_runs (task_id, tool_id, tool_version, mock, status, input_json, started_at, finished_at)"
         " VALUES (?,?,?,?,?,?,?,?)",
         (task_f, "real_writer", "1.0.0", 0, "success", "{}",
@@ -993,10 +1092,18 @@ with sync_playwright() as p:
     page.wait_for_timeout(200)
 
     # ── ⑫ Q2 /me 混合零值活体咬合（Codex R0 P2）：⑪a 夹具期四格全 >0，零值
-    #    分支只有 tamper 咬过、没有活体证据。把待签任务全部落定 → waiting_review
-    #    归真 0 → 同屏「>0 显格 / ==0 隐格」双分支对表（本探针居套件末，夹具
-    #    形变不影响任何后续断言；①' 暗主题块只看已完成的 task_a）──────────
-    _db("UPDATE tasks SET status='cancelled' WHERE status='waiting_review'")
+    #    分支只有 tamper 咬过、没有活体证据。经唯一合法人签出口驳回 task_b，
+    #    waiting_review 归真 0 → 同屏「>0 显格 / ==0 隐格」双分支对表。测试夹具
+    #    也不得绕过 sealed review package 的数据库不变量直接改状态。──────────
+    settle_b = API.post(
+        f"/api/tasks/{task_b}/review",
+        json={
+            "action": "reject",
+            "reason_code": "method_error",
+            "comment": "桌面验收夹具：合法落定待签态",
+        },
+    )
+    assert settle_b.status_code < 300, settle_b.text
     me2 = API.get("/api/me/contributions", params={"since": since_iso}, timeout=10).json()
     page.goto(BASE + "/me", wait_until="networkidle")
     page.wait_for_selector(".me-stat", timeout=8000)
@@ -1494,17 +1601,22 @@ with sync_playwright() as p:
     #    元素，中心 elementFromPoint 命中 dock 子树=遮挡违规。已知局限（如实
     #    声明）：单点中心采样——边角被咬但中心露出的部分遮挡不计，堵死需多点
     #    采样（中心+四角内缩），列 retro────────────────────────────────────
-    # 夹具留痕可回滚（3-lens oracle 审 P2）：记住被翻的两条 id+原状态，六页
-    # 枚举完显式还原——后续新增 check 不被静默污染的任务状态坑到。
-    import sqlite3 as _sq
-    _c = _sq.connect(WORK / "flai_os.db")
-    _flip_a = _c.execute("SELECT id, status FROM tasks LIMIT 1").fetchone()
-    _c.execute("UPDATE tasks SET status='waiting_review' WHERE id=?", (_flip_a[0],))
-    _flip_b = _c.execute(
-        "SELECT id, status FROM tasks WHERE status != 'waiting_review' LIMIT 1").fetchone()
-    _c.execute("UPDATE tasks SET status='running' WHERE id=?", (_flip_b[0],))
-    _c.commit()
-    _c.close()
+    # 独立建两条 created 夹具再推进到 waiting/running，不改写既有已签/终态任务。
+    # waiting 枚举后走 review 合法出口；V0.1 明确不支持取消 running，运行夹具随
+    # 本套件临时数据库一并销毁，不伪造一个不存在的状态机出口。
+    _dock_wait_resp = API.post(
+        "/api/tasks",
+        json={"agent_id": "hello_agent", "inputs": {"name": "dock 待签探针"}},
+    )
+    _dock_run_resp = API.post(
+        "/api/tasks",
+        json={"agent_id": "hello_agent", "inputs": {"name": "dock 运行探针"}},
+    )
+    assert _dock_wait_resp.status_code < 300 and _dock_run_resp.status_code < 300
+    _dock_wait_id = _dock_wait_resp.json()["id"]
+    _dock_run_id = _dock_run_resp.json()["id"]
+    _db("UPDATE tasks SET status='waiting_review' WHERE id=?", (_dock_wait_id,))
+    _db("UPDATE tasks SET status='running' WHERE id=?", (_dock_run_id,))
     DOCK_JS = """
     () => {
       const dock = document.querySelector(".status-dock");
@@ -1532,11 +1644,15 @@ with sync_playwright() as p:
         v = page.evaluate(DOCK_JS)
         if v:
             dock_all[_path] = v
-    _c = _sq.connect(WORK / "flai_os.db")
-    _c.execute("UPDATE tasks SET status=? WHERE id=?", (_flip_a[1], _flip_a[0]))
-    _c.execute("UPDATE tasks SET status=? WHERE id=?", (_flip_b[1], _flip_b[0]))
-    _c.commit()
-    _c.close()
+    _dock_wait_done = API.post(
+        f"/api/tasks/{_dock_wait_id}/review",
+        json={
+            "action": "reject",
+            "reason_code": "method_error",
+            "comment": "dock 视觉探针合法收口",
+        },
+    )
+    assert _dock_wait_done.status_code < 300, _dock_wait_done.text
     check("⑯ dock 带全页遮挡审计（waiting+running pill 在场，六页可点元素零被拦）",
           (len(dock_all) == 0) is True, str(dock_all)[:220])
 

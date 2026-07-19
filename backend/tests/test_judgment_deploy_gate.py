@@ -20,8 +20,11 @@ from scripts import deploy_selfcheck
 _JUDGMENT_WITNESS_KEYS = {
     "advice_table_shape",
     "human_decision_table_shape",
+    "review_event_witness_table_shape",
     "required_indexes",
     "required_triggers",
+    "rowid_integrity",
+    "provenance_integrity",
 }
 
 
@@ -189,6 +192,65 @@ def test_same_name_noop_judgment_trigger_fails_all_deployment_witnesses(
     assert local.ok is False
     health_body = client.get("/api/health").json()
     assert health_body["judgment_schema_witnesses"]["required_triggers"] is False
+    ready = client.get("/api/readyz")
+    assert ready.status_code == 503
+    assert ready.json()["judgment_capture"]["schema_ready"] is False
+
+
+def test_replayed_judgment_guard_with_mutated_provenance_fails_readyz(
+    app_env,
+) -> None:
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        repos.beat_worker_heartbeat(conn, generation=deploy_selfcheck.WORKER_GENERATION)
+        task = repos.create_task(
+            conn,
+            task_id="judgment-provenance-readyz",
+            agent_id="reviewed_agent",
+            agent_version="1.0.0",
+            name="provenance readyz",
+            created_by="创建工程师",
+            created_by_username="creator",
+            inputs={},
+            input_file_ids=[],
+            metadata={},
+        )
+        call = repos.record_model_call(
+            conn,
+            task_id=task["id"],
+            agent_id="r0_review_advisor",
+            model_profile="review",
+            model_name="model-a",
+            status="success",
+        )
+        repos.record_review_advice(
+            conn,
+            task_id=task["id"],
+            model_call_id=call["id"],
+            advisor_id="r0_review_advisor",
+            advisor_version="0.1.0",
+            model_profile="review",
+            model_name="model-a",
+            advisory_outcome="clear",
+            doubts=[],
+        )
+        trigger_name = "trg_witnessed_model_calls_no_update"
+        trigger_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+            (trigger_name,),
+        ).fetchone()[0]
+        conn.execute(f"DROP TRIGGER {trigger_name}")
+        conn.execute("UPDATE model_calls SET status = 'failed' WHERE id = ?", (call["id"],))
+        conn.execute(trigger_sql)
+        local = deploy_selfcheck.check_judgment_schema(conn)
+    finally:
+        conn.close()
+
+    assert local.ok is False
+    health_body = client.get("/api/health").json()
+    assert health_body["judgment_schema_witnesses"]["required_triggers"] is True
+    assert health_body["judgment_schema_witnesses"]["provenance_integrity"] is False
     ready = client.get("/api/readyz")
     assert ready.status_code == 503
     assert ready.json()["judgment_capture"]["schema_ready"] is False

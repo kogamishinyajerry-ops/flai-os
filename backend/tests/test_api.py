@@ -477,6 +477,7 @@ def test_review_approve_e2e_full_chain(review_app_env) -> None:
     assert len(approved_events) == 1
     payload = approved_events[0]["payload"]
     assert payload["reviewer"] == TEST_DISPLAY_NAME
+    assert payload["reviewer_username"] == "test_engineer"
     assert payload["comment"] == "结果核对无误"
     assert payload["reason_code"] is None
     assert payload["paired_advice_id"] is None
@@ -535,6 +536,7 @@ def test_review_reject_e2e_full_chain(review_app_env) -> None:
     rejected_events = [e for e in events if e["event_type"] == "review_rejected"]
     assert len(rejected_events) == 1
     assert rejected_events[0]["payload"]["reviewer"] == TEST_DISPLAY_NAME
+    assert rejected_events[0]["payload"]["reviewer_username"] == "test_engineer"
     assert rejected_events[0]["payload"]["reason_code"] == "method_error"
     assert rejected_events[0]["payload"]["paired_advice_id"] is None
     assert rejected_events[0]["payload"]["decision_id"].startswith("decision_")
@@ -849,8 +851,17 @@ def me_two_user_env(tmp_path: Path):
                 for _ in range(completed):
                     tid = task_ids[idx]
                     idx += 1
-                    for st in ("queued", "validating", "running", "waiting_review", "completed"):
+                    for st in ("queued", "validating", "running", "waiting_review"):
                         repos.set_task_status(conn, tid, st)
+                    repos.apply_human_review(
+                        conn,
+                        tid,
+                        action="approve",
+                        reviewer=display_name,
+                        reviewer_username=username,
+                        reason_code=None,
+                        comment="contribution fixture sign-off",
+                    )
                 for _ in range(waiting):
                     tid = task_ids[idx]
                     idx += 1
