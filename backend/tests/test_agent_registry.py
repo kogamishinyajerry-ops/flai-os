@@ -20,6 +20,11 @@ def _copy_hello_agent(dest: Path) -> Path:
     return dest
 
 
+def _copy_guide_agent(dest: Path) -> Path:
+    shutil.copytree(AGENTS_DIR / "guide_agent", dest)
+    return dest
+
+
 def test_scan_registers_real_hello_agent() -> None:
     registry = AgentRegistry(AGENTS_DIR, _AGENT_SCHEMA)
     registry.scan()
@@ -58,6 +63,86 @@ def test_scan_marks_package_missing_readme_as_invalid(tmp_path: Path) -> None:
     assert registry.get("hello_agent") is None
     assert len(registry.errors) == 1
     assert "README.md" in registry.errors[0]["error"]
+
+
+def test_scan_rejects_missing_literal_workflow_schema_asset(tmp_path: Path) -> None:
+    """workflow.py 以 ``Path(__file__).with_name(...)`` 读取的包内 schema 是
+    运行必需资产；文件缺失时 Registry 必须 fail-closed，不能等到首轮会话才炸。
+    """
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    broken = _copy_guide_agent(agents_dir / "guide_agent")
+    (broken / "question_output_schema.json").unlink()
+
+    registry = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    registry.scan()
+
+    assert registry.get("guide_agent") is None
+    assert len(registry.errors) == 1
+    assert "question_output_schema.json" in registry.errors[0]["error"]
+
+
+def test_scan_rejects_malformed_literal_workflow_schema_asset(tmp_path: Path) -> None:
+    """运行时引用的 schema 即使在场，非合法 JSON 也不能注册成可用 Agent。"""
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    broken = _copy_guide_agent(agents_dir / "guide_agent")
+    (broken / "question_output_schema.json").write_text("{not-json", encoding="utf-8")
+
+    registry = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    registry.scan()
+
+    assert registry.get("guide_agent") is None
+    assert len(registry.errors) == 1
+    assert "question_output_schema.json" in registry.errors[0]["error"]
+    assert "JSON Schema" in registry.errors[0]["error"]
+
+
+def test_scan_rejects_literal_workflow_asset_outside_package(tmp_path: Path) -> None:
+    """静态资产发现不能把 ``../`` 变成 Registry 的任意文件读取通道。"""
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    broken = _copy_guide_agent(agents_dir / "guide_agent")
+    workflow_path = broken / "workflow.py"
+    workflow_path.write_text(
+        workflow_path.read_text(encoding="utf-8").replace(
+            'with_name("question_output_schema.json")',
+            'with_name("../question_output_schema.json")',
+        ),
+        encoding="utf-8",
+    )
+    (agents_dir / "question_output_schema.json").write_text(
+        '{"type":"object"}\n', encoding="utf-8"
+    )
+
+    registry = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    registry.scan()
+
+    assert registry.get("guide_agent") is None
+    assert len(registry.errors) == 1
+    assert "逃出包根" in registry.errors[0]["error"] or "非法文件名" in registry.errors[0]["error"]
+
+
+def test_scan_rejects_literal_workflow_schema_symlink_inside_package(tmp_path: Path) -> None:
+    """跨 Windows 包合同只接受常规文件；即使 symlink 目标仍在包内也拒绝。"""
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    broken = _copy_guide_agent(agents_dir / "guide_agent")
+    schema_path = broken / "question_output_schema.json"
+    target = broken / "question-output-schema-real.json"
+    schema_path.rename(target)
+    try:
+        schema_path.symlink_to(target.name)
+    except OSError as exc:
+        pytest.skip(f"当前文件系统不支持 symlink：{exc}")
+
+    registry = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    registry.scan()
+
+    assert registry.get("guide_agent") is None
+    assert len(registry.errors) == 1
+    assert "question_output_schema.json" in registry.errors[0]["error"]
+    assert "常规文件" in registry.errors[0]["error"] or "symlink" in registry.errors[0]["error"]
 
 
 def test_scan_marks_trial_status_with_tbd_maintainer_as_invalid(tmp_path: Path) -> None:

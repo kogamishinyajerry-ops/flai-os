@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 
 from _artifacts import resolve_shots_dir
+from _wait import wait_for_condition
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
@@ -72,6 +73,7 @@ _sock.bind(("127.0.0.1", 0))
 PORT = _sock.getsockname()[1]
 _sock.close()
 BASE = f"http://127.0.0.1:{PORT}"
+TASK_STATUS_SELECTOR = ".page-header > .el-tag"
 
 app = create_app(
     agents_dir=AGENTS_DIR,
@@ -101,7 +103,6 @@ from _auth import login_context, seed_user  # noqa: E402（须在后端就绪后
 seed_user(WORK / "flai_os.db", "验收工程师")
 
 runner = JobRunner(app.state.runtime, app.state.conn_factory, poll_interval=0.2)
-threading.Thread(target=runner.run_forever, daemon=True).start()
 
 SHOTS.mkdir(parents=True, exist_ok=True)
 results: list[tuple[str, bool, str]] = []
@@ -110,6 +111,11 @@ results: list[tuple[str, bool, str]] = []
 def check(name: str, ok: bool, detail: str = "") -> None:
     results.append((name, ok, detail))
     print(("PASS" if ok is True else "FAIL"), name, ("| " + detail if detail and ok is not True else ""))
+
+
+def task_status_text(page) -> str:
+    status = page.locator(TASK_STATUS_SELECTOR).first
+    return status.inner_text().strip() if status.count() else ""
 
 
 with sync_playwright() as p:
@@ -140,12 +146,29 @@ with sync_playwright() as p:
     task_id = page.url.rsplit("/", 1)[-1]
     check("③创建 Hello Agent 任务", task_id.startswith("task_"), page.url)
 
+    # 回归见证：worker 尚未启动时当前任务必为 queued，而全局任务统计栏天然含
+    # “已完成 · 0”。等待条件若扫整页，会把这个无关标签误认成当前任务终态并假绿。
+    collision_fixture_ready = wait_for_condition(
+        lambda: task_status_text(page) == "排队中"
+        and "已完成 · 0" in page.locator("body").inner_text(),
+        timeout_seconds=8,
+        poll_seconds=0.2,
+    )
+    current_body = page.locator("body").inner_text()
+    check(
+        "③b侧栏含已完成统计时，当前任务仍按详情状态保持排队中",
+        collision_fixture_ready is True
+        and "已完成" in current_body
+        and task_status_text(page) == "排队中",
+        current_body[:500],
+    )
+    threading.Thread(target=runner.run_forever, daemon=True).start()
+
     # ── ④任务事件（worker 驱动到 completed,页面 2s 轮询）──
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        if "已完成" in page.locator("body").inner_text():
-            break
-        time.sleep(1)
+    completed_in_time = wait_for_condition(
+        lambda: task_status_text(page) == "已完成",
+        timeout_seconds=30,
+    )
     # 批次四 Q5：原始事件 token 移入 WorkLog 展开态（折叠态=人话扫读面）——
     # 断言改走展开路径取 token（幂等守卫：已展开则不再点）。
     if page.locator(".worklog-timeline").count() == 0:
@@ -153,7 +176,13 @@ with sync_playwright() as p:
         page.wait_for_selector(".worklog-timeline", timeout=3000)
     body = page.locator("body").inner_text()
     events_ok = all(k in body for k in ("task_created", "tool_started", "tool_finished", "task_completed"))
-    check("④任务事件时间轴（展开态）可见且任务完成", "已完成" in body and events_ok, body[:500])
+    check(
+        "④任务事件时间轴（展开态）可见且任务完成",
+        completed_in_time is True
+        and task_status_text(page) == "已完成"
+        and events_ok,
+        body[:500],
+    )
     page.screenshot(path=str(SHOTS / "3_detail_events.png"), full_page=True)
 
     # ── ⑤a 有界预览：页面审阅只能打 /preview，不得为展示暗中拖 /download blob ──
@@ -200,13 +229,13 @@ with sync_playwright() as p:
     page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
     review_task_id = page.url.rsplit("/", 1)[-1]
 
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        if "等待人工审核" in page.locator("body").inner_text():
-            break
-        time.sleep(1)
+    review_ready_in_time = wait_for_condition(
+        lambda: task_status_text(page) == "等待人工审核",
+        timeout_seconds=30,
+    )
     review_card_visible = page.locator(".review-card").is_visible()
-    check("附加:任务进入 waiting_review 且放行卡片可见", review_card_visible,
+    check("附加:任务进入 waiting_review 且放行卡片可见",
+          review_ready_in_time is True and review_card_visible,
           page.locator("body").inner_text()[:400])
     page.screenshot(path=str(SHOTS / "6_waiting_review.png"), full_page=True)
 
@@ -223,7 +252,7 @@ with sync_playwright() as p:
         page.wait_for_selector(".worklog-timeline", timeout=3000)
     body = page.locator("body").inner_text()
     check("附加:人工批准→completed+review_approved 事件上时间轴（展开态）",
-          "已完成" in body and "review_approved" in body, body[:600])
+          task_status_text(page) == "已完成" and "review_approved" in body, body[:600])
     page.screenshot(path=str(SHOTS / "7_review_approved.png"), full_page=True)
 
     browser.close()

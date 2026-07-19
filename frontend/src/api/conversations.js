@@ -32,6 +32,17 @@ export const postMessage = (conversationId, content, fileIds = []) =>
     timeoutMs: 180_000,
   });
 
+// P2.3 结构化澄清的唯一写入口。它与任务评审完全正交：客户端只提交冻结问题
+// 的 revision、稳定 submission_id 与回答 payload；署名由服务端登录身份派生。
+// submission_id 在不确定失败后保持不变，让服务端可以如实返回幂等重放结果。
+export const answerQuestion = (conversationId, questionId, body) =>
+  request(`/api/conversations/${conversationId}/questions/${questionId}/answer`, {
+    method: "POST",
+    json: body,
+    // 回答会继续触发一次模型推理，沿用普通消息的内网慢操作上限。
+    timeoutMs: 180_000,
+  });
+
 // 结束会话（active→concluded）：「确认草案去创建任务」时归档会话（ADR-0013）。
 export const concludeConversation = (conversationId) =>
   request(`/api/conversations/${conversationId}/conclude`, { method: "POST" });

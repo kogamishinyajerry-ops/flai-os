@@ -34,7 +34,8 @@ Open Design 私有模块，不代理其终端，不复制凭据，也不把 FLAi
 ## 3. Phase 1 已建立的 fixture 信任链
 
 Phase 1 新增独立工具 `open_design_fixture_generate` 与 draft Agent
-`open_design_candidate_agent`：
+`open_design_candidate_agent`。P2.2 更新 App.vue 后，fixture 以 0.1.1 补丁版本重新锁定
+source bytes，并把不可变 snapshot identity 升为 `flai-task-review-assets-v2`：
 
 ```text
 FLAi 三份设计 SSOT
@@ -63,14 +64,18 @@ Runtime 因 `requires_human_review=true` 停在 `waiting_review`；不会产生 
 渲染或发布、不代表 Open Design 真实运行结果，也不构成视觉 QA。它只证明 FLAi 能验证、
 登记和审核这类 artifact。生产设计必须由真实 Open Design run 生成并另行浏览器比较。
 
-本次 fixture 的固定信任锚为：
+本次 v2 fixture snapshot 的固定信任锚为：
 
-- canonical request：`c6a56a02c8b742bd28d34060b4712097d83bc6d15b1822cd3a2e791d66d85d56`；
-- design reference package：`38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94`；
-- fixture bundle：`ad145be4e55a5ab46d660daeed6555cd01667b7a02fad92cc98e3203bdc53898`；
-- response payload：`a3734f515445b1ee8cee775da91bddd2659c4408ab67fad7d47610a68bfe5f9d`；
+- canonical request：`aab2740108a2d13aca53869f6c4c39b732a5ab3c2c3f3848f61bcb7915038f2c`；
+- design reference package：`4fa241ae49d3c992168b2589779e24344749300a129e1f9478337974a3d68ca3`；
+- fixture bundle：`70be2a7428ab385eb85e57845133b6b457402c6421c15d338a7f0a1b6b9eefd8`；
+- response payload：`175f9c11a6853f7684e53ba603742414b9484f68ac6e33672fbf2f170bf35139`；
 - HTML candidate：`e1242ccccb30758c184d798f50edc2b3fc0f38508c3f70f6a7c0238fa5e27db1`；
 - SVG candidate：`8424d13080e3b1d79cef1e9a60a0e7a1a019d8f3a7bea4103fe3c523534bbd48`。
+
+`flai-design-reference-package/v1` 保持不变，因为机械对比证明 allowlist、24 个 token 值、
+信任色约束与 package shape 均未变化；变化的是受认证的 App.vue source bytes。旧 package
+digest 的请求有专门 fail-closed 回归，不能被新 fixture 静默接受。
 
 这些值只锚定当前机器协议夹具；真实 Open Design run 必须产生独立 run/artifact provenance，
 不得复用上述 `mock=true` 身份。

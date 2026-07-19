@@ -8,7 +8,11 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+import time
+import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .. import config
@@ -195,10 +199,14 @@ CREATE TABLE IF NOT EXISTS samples (
 -- 与一次性 tasks 表正交：一次导引会话最终产出一份「预填任务草案」（recommendation），
 -- 交人确认后由人经 tasks 表提交——会话本身绝不签发任务。
 CREATE TABLE IF NOT EXISTS conversations (
-    id TEXT PRIMARY KEY,
+    id TEXT PRIMARY KEY NOT NULL,
     agent_id TEXT NOT NULL,
     status TEXT NOT NULL,
     created_by TEXT NOT NULL,
+    -- 迁移 #14（P2.3）：会话稳定 owner 的唯一身份键。created_by 仍是展示名
+    -- （可撞名）；本列存认证 principal 的 exact username。可空仅为 legacy：
+    -- 存量 NULL 不从 display_name 猜 owner，也不向普通用户开放认领。
+    created_by_username TEXT,
     recommendation_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -206,12 +214,73 @@ CREATE TABLE IF NOT EXISTS conversations (
 
 CREATE TABLE IF NOT EXISTS conversation_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- 迁移 #15（P2.3）：对外稳定消息 id。内部自增 id 仅负责严格插入顺序，
+    -- 不再泄漏为公开引用；legacy 行在 init_db 写锁内一次性回填。
+    message_id TEXT NOT NULL UNIQUE,
     conversation_id TEXT NOT NULL,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     recommendation_json TEXT,
     file_ids TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL
+);
+
+-- P2.3 普通会话澄清 Question。status 不落库：pending/answered/expired/
+-- superseded 均由 closed_reason + expires_at 在仓储投影时推导。问题规格列冻结；
+-- resolution tuple 要么全空、要么一次性完整闭合，避免半回答事实。
+CREATE TABLE IF NOT EXISTS conversation_questions (
+    id TEXT PRIMARY KEY NOT NULL,
+    conversation_id TEXT NOT NULL,
+    prompt_message_id TEXT NOT NULL,
+    asked_to_username TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision = 1),
+    kind TEXT NOT NULL CHECK (kind IN ('single_choice', 'free_text')),
+    prompt TEXT NOT NULL,
+    description TEXT,
+    options_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    closed_reason TEXT CHECK (
+        closed_reason IS NULL
+        OR closed_reason IN ('answered', 'expired', 'superseded')
+    ),
+    closed_at TEXT,
+    submission_id TEXT,
+    answer_json TEXT,
+    answered_by_username TEXT,
+    answer_message_id TEXT,
+    response_message_id TEXT,
+    CHECK (
+        (
+            closed_reason IS NULL
+            AND closed_at IS NULL
+            AND submission_id IS NULL
+            AND answer_json IS NULL
+            AND answered_by_username IS NULL
+            AND answer_message_id IS NULL
+            AND response_message_id IS NULL
+        )
+        OR (
+            closed_reason IN ('expired', 'superseded')
+            AND closed_at IS NOT NULL
+            AND submission_id IS NULL
+            AND answer_json IS NULL
+            AND answered_by_username IS NULL
+            AND answer_message_id IS NULL
+            AND response_message_id IS NULL
+        )
+        OR (
+            closed_reason = 'answered'
+            AND closed_at IS NOT NULL
+            AND submission_id IS NOT NULL
+            AND answer_json IS NOT NULL
+            AND answered_by_username IS NOT NULL
+            AND answered_by_username = asked_to_username
+            AND answer_message_id IS NOT NULL
+            AND response_message_id IS NOT NULL
+            AND response_message_id <> prompt_message_id
+        )
+    )
 );
 
 -- M10 治理闭环（ADR-0018）。eval_runs=评测跑批证据（case_results 回溯到真实
@@ -326,6 +395,446 @@ _INDEX_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_feedback_task_id ON feedback(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_id "
     "ON conversation_messages(conversation_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_messages_message_id "
+    "ON conversation_messages(message_id)",
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_messages_public_id_required
+    BEFORE INSERT ON conversation_messages
+    WHEN NEW.message_id IS NULL
+         OR length(NEW.message_id) <> 36
+         OR substr(NEW.message_id, 1, 4) <> 'msg_'
+         OR substr(NEW.message_id, 5) GLOB '*[^0-9a-f]*'
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation message public id is required');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_messages_no_update
+    BEFORE UPDATE ON conversation_messages
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation_messages is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_messages_no_delete
+    BEFORE DELETE ON conversation_messages
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation_messages is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_messages_no_conflicting_insert
+    BEFORE INSERT ON conversation_messages
+    WHEN EXISTS (
+        SELECT 1 FROM conversation_messages
+        WHERE message_id = NEW.message_id
+           OR (NEW.id <> -1 AND id = NEW.id)
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation_messages is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_messages_positive_internal_id
+    AFTER INSERT ON conversation_messages
+    WHEN NEW.id <= 0
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation message internal id must be positive');
+    END
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_conversation_questions_conversation_id "
+    "ON conversation_questions(conversation_id, created_at, id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_questions_prompt_message_id "
+    "ON conversation_questions(prompt_message_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_questions_one_unresolved "
+    "ON conversation_questions(conversation_id, asked_to_username) "
+    "WHERE closed_reason IS NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_questions_answer_message_id "
+    "ON conversation_questions(answer_message_id) WHERE answer_message_id IS NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_questions_response_message_id "
+    "ON conversation_questions(response_message_id) WHERE response_message_id IS NOT NULL",
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_public_id_required
+    BEFORE INSERT ON conversation_questions
+    WHEN NEW.id IS NULL
+         OR length(NEW.id) <> 34
+         OR substr(NEW.id, 1, 2) <> 'q_'
+         OR substr(NEW.id, 3) GLOB '*[^0-9a-f]*'
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation question public id is required');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_timestamp_canonical
+    BEFORE INSERT ON conversation_questions
+    WHEN length(NEW.created_at) <> 32
+         OR substr(NEW.created_at, 5, 1) <> '-'
+         OR substr(NEW.created_at, 8, 1) <> '-'
+         OR substr(NEW.created_at, 11, 1) <> 'T'
+         OR substr(NEW.created_at, 14, 1) <> ':'
+         OR substr(NEW.created_at, 17, 1) <> ':'
+         OR substr(NEW.created_at, 20, 1) <> '.'
+         OR substr(NEW.created_at, 27, 6) <> '+00:00'
+         OR (
+             substr(NEW.created_at, 1, 4)
+             || substr(NEW.created_at, 6, 2)
+             || substr(NEW.created_at, 9, 2)
+             || substr(NEW.created_at, 12, 2)
+             || substr(NEW.created_at, 15, 2)
+             || substr(NEW.created_at, 18, 2)
+             || substr(NEW.created_at, 21, 6)
+         ) GLOB '*[^0-9]*'
+         OR CAST(substr(NEW.created_at, 1, 4) AS INTEGER) NOT BETWEEN 1 AND 9999
+         OR CAST(substr(NEW.created_at, 6, 2) AS INTEGER) NOT BETWEEN 1 AND 12
+         OR CAST(substr(NEW.created_at, 9, 2) AS INTEGER) NOT BETWEEN 1 AND
+             CASE CAST(substr(NEW.created_at, 6, 2) AS INTEGER)
+                 WHEN 2 THEN CASE
+                     WHEN CAST(substr(NEW.created_at, 1, 4) AS INTEGER) % 400 = 0
+                          OR (
+                              CAST(substr(NEW.created_at, 1, 4) AS INTEGER) % 4 = 0
+                              AND CAST(substr(NEW.created_at, 1, 4) AS INTEGER) % 100 <> 0
+                          )
+                     THEN 29 ELSE 28 END
+                 WHEN 4 THEN 30
+                 WHEN 6 THEN 30
+                 WHEN 9 THEN 30
+                 WHEN 11 THEN 30
+                 ELSE 31
+             END
+         OR CAST(substr(NEW.created_at, 12, 2) AS INTEGER) NOT BETWEEN 0 AND 23
+         OR CAST(substr(NEW.created_at, 15, 2) AS INTEGER) NOT BETWEEN 0 AND 59
+         OR CAST(substr(NEW.created_at, 18, 2) AS INTEGER) NOT BETWEEN 0 AND 59
+         OR strftime('%Y-%m-%dT%H:%M:%S', NEW.created_at)
+             IS NOT substr(NEW.created_at, 1, 19)
+         OR length(NEW.expires_at) <> 32
+         OR substr(NEW.expires_at, 5, 1) <> '-'
+         OR substr(NEW.expires_at, 8, 1) <> '-'
+         OR substr(NEW.expires_at, 11, 1) <> 'T'
+         OR substr(NEW.expires_at, 14, 1) <> ':'
+         OR substr(NEW.expires_at, 17, 1) <> ':'
+         OR substr(NEW.expires_at, 20, 1) <> '.'
+         OR substr(NEW.expires_at, 27, 6) <> '+00:00'
+         OR (
+             substr(NEW.expires_at, 1, 4)
+             || substr(NEW.expires_at, 6, 2)
+             || substr(NEW.expires_at, 9, 2)
+             || substr(NEW.expires_at, 12, 2)
+             || substr(NEW.expires_at, 15, 2)
+             || substr(NEW.expires_at, 18, 2)
+             || substr(NEW.expires_at, 21, 6)
+         ) GLOB '*[^0-9]*'
+         OR CAST(substr(NEW.expires_at, 1, 4) AS INTEGER) NOT BETWEEN 1 AND 9999
+         OR CAST(substr(NEW.expires_at, 6, 2) AS INTEGER) NOT BETWEEN 1 AND 12
+         OR CAST(substr(NEW.expires_at, 9, 2) AS INTEGER) NOT BETWEEN 1 AND
+             CASE CAST(substr(NEW.expires_at, 6, 2) AS INTEGER)
+                 WHEN 2 THEN CASE
+                     WHEN CAST(substr(NEW.expires_at, 1, 4) AS INTEGER) % 400 = 0
+                          OR (
+                              CAST(substr(NEW.expires_at, 1, 4) AS INTEGER) % 4 = 0
+                              AND CAST(substr(NEW.expires_at, 1, 4) AS INTEGER) % 100 <> 0
+                          )
+                     THEN 29 ELSE 28 END
+                 WHEN 4 THEN 30
+                 WHEN 6 THEN 30
+                 WHEN 9 THEN 30
+                 WHEN 11 THEN 30
+                 ELSE 31
+             END
+         OR CAST(substr(NEW.expires_at, 12, 2) AS INTEGER) NOT BETWEEN 0 AND 23
+         OR CAST(substr(NEW.expires_at, 15, 2) AS INTEGER) NOT BETWEEN 0 AND 59
+         OR CAST(substr(NEW.expires_at, 18, 2) AS INTEGER) NOT BETWEEN 0 AND 59
+         OR strftime('%Y-%m-%dT%H:%M:%S', NEW.expires_at)
+             IS NOT substr(NEW.expires_at, 1, 19)
+    BEGIN
+        SELECT RAISE(ABORT, 'question timestamp must be canonical RFC3339 UTC');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_ttl_24h
+    BEFORE INSERT ON conversation_questions
+    WHEN strftime('%s', NEW.created_at) IS NULL
+         OR strftime('%s', NEW.expires_at) IS NULL
+         OR CAST(strftime('%s', NEW.expires_at) AS INTEGER)
+             - CAST(strftime('%s', NEW.created_at) AS INTEGER) <> 86400
+         OR substr(NEW.expires_at, 21, 6) <> substr(NEW.created_at, 21, 6)
+    BEGIN
+        SELECT RAISE(ABORT, 'question TTL must be exactly 24 hours');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_owner_exact
+    BEFORE INSERT ON conversation_questions
+    WHEN NOT EXISTS (
+        SELECT 1 FROM conversations
+        WHERE id = NEW.conversation_id
+          AND created_by_username = NEW.asked_to_username
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'question owner must match conversation owner');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_initially_unresolved
+    BEFORE INSERT ON conversation_questions
+    WHEN NEW.closed_reason IS NOT NULL
+         OR NEW.closed_at IS NOT NULL
+         OR NEW.submission_id IS NOT NULL
+         OR NEW.answer_json IS NOT NULL
+         OR NEW.answered_by_username IS NOT NULL
+         OR NEW.answer_message_id IS NOT NULL
+         OR NEW.response_message_id IS NOT NULL
+    BEGIN
+        SELECT RAISE(ABORT, 'question must start unresolved');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_prompt_message
+    BEFORE INSERT ON conversation_questions
+    WHEN NOT EXISTS (
+        SELECT 1 FROM conversation_messages
+        WHERE message_id = NEW.prompt_message_id
+          AND conversation_id = NEW.conversation_id
+          AND role = 'assistant'
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'question prompt message mismatch');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_spec_immutable
+    BEFORE UPDATE ON conversation_questions
+    WHEN NEW.id IS NOT OLD.id
+         OR NEW.conversation_id IS NOT OLD.conversation_id
+         OR NEW.prompt_message_id IS NOT OLD.prompt_message_id
+         OR NEW.asked_to_username IS NOT OLD.asked_to_username
+         OR NEW.revision IS NOT OLD.revision
+         OR NEW.kind IS NOT OLD.kind
+         OR NEW.prompt IS NOT OLD.prompt
+         OR NEW.description IS NOT OLD.description
+         OR NEW.options_json IS NOT OLD.options_json
+         OR NEW.created_at IS NOT OLD.created_at
+         OR NEW.expires_at IS NOT OLD.expires_at
+    BEGIN
+        SELECT RAISE(ABORT, 'question spec is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_rowid_immutable
+    BEFORE UPDATE ON conversation_questions
+    WHEN NEW.rowid IS NOT OLD.rowid
+    BEGIN
+        SELECT RAISE(ABORT, 'question row identity is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_positive_rowid
+    AFTER INSERT ON conversation_questions
+    WHEN NEW.rowid <= 0
+    BEGIN
+        SELECT RAISE(ABORT, 'question internal rowid must be positive');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_resolution_once
+    BEFORE UPDATE ON conversation_questions
+    WHEN OLD.closed_reason IS NOT NULL
+    BEGIN
+        SELECT RAISE(ABORT, 'question resolution is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_answer_messages
+    BEFORE UPDATE ON conversation_questions
+    WHEN NEW.closed_reason = 'answered'
+         AND NOT EXISTS (
+             SELECT 1
+             FROM conversation_messages AS prompt_message
+             JOIN conversation_messages AS answer_message
+               ON answer_message.message_id = NEW.answer_message_id
+             JOIN conversation_messages AS response_message
+               ON response_message.message_id = NEW.response_message_id
+             WHERE prompt_message.message_id = NEW.prompt_message_id
+               AND prompt_message.conversation_id = NEW.conversation_id
+               AND prompt_message.role = 'assistant'
+               AND answer_message.conversation_id = NEW.conversation_id
+               AND answer_message.role = 'user'
+               AND response_message.conversation_id = NEW.conversation_id
+               AND response_message.role = 'assistant'
+               AND prompt_message.id < answer_message.id
+               AND answer_message.id < response_message.id
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'question answer message mismatch');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_answer_before_expiry
+    BEFORE UPDATE ON conversation_questions
+    WHEN NEW.closed_reason = 'answered'
+         AND (
+             NEW.closed_at IS NULL
+             OR NEW.closed_at < NEW.created_at
+             OR NEW.closed_at >= NEW.expires_at
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'question answer is expired');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_resolution_timestamp
+    BEFORE UPDATE ON conversation_questions
+    WHEN NEW.closed_reason IS NOT NULL
+         AND (
+             NEW.closed_at IS NULL
+             OR length(NEW.closed_at) <> 32
+             OR substr(NEW.closed_at, 5, 1) <> '-'
+             OR substr(NEW.closed_at, 8, 1) <> '-'
+             OR substr(NEW.closed_at, 11, 1) <> 'T'
+             OR substr(NEW.closed_at, 14, 1) <> ':'
+             OR substr(NEW.closed_at, 17, 1) <> ':'
+             OR substr(NEW.closed_at, 20, 1) <> '.'
+             OR substr(NEW.closed_at, 27, 6) <> '+00:00'
+             OR (
+                 substr(NEW.closed_at, 1, 4)
+                 || substr(NEW.closed_at, 6, 2)
+                 || substr(NEW.closed_at, 9, 2)
+                 || substr(NEW.closed_at, 12, 2)
+                 || substr(NEW.closed_at, 15, 2)
+                 || substr(NEW.closed_at, 18, 2)
+                 || substr(NEW.closed_at, 21, 6)
+             ) GLOB '*[^0-9]*'
+             OR CAST(substr(NEW.closed_at, 1, 4) AS INTEGER) NOT BETWEEN 1 AND 9999
+             OR CAST(substr(NEW.closed_at, 6, 2) AS INTEGER) NOT BETWEEN 1 AND 12
+             OR CAST(substr(NEW.closed_at, 9, 2) AS INTEGER) NOT BETWEEN 1 AND
+                 CASE CAST(substr(NEW.closed_at, 6, 2) AS INTEGER)
+                     WHEN 2 THEN CASE
+                         WHEN CAST(substr(NEW.closed_at, 1, 4) AS INTEGER) % 400 = 0
+                              OR (
+                                  CAST(substr(NEW.closed_at, 1, 4) AS INTEGER) % 4 = 0
+                                  AND CAST(substr(NEW.closed_at, 1, 4) AS INTEGER) % 100 <> 0
+                              )
+                         THEN 29 ELSE 28 END
+                     WHEN 4 THEN 30
+                     WHEN 6 THEN 30
+                     WHEN 9 THEN 30
+                     WHEN 11 THEN 30
+                     ELSE 31
+                 END
+             OR CAST(substr(NEW.closed_at, 12, 2) AS INTEGER) NOT BETWEEN 0 AND 23
+             OR CAST(substr(NEW.closed_at, 15, 2) AS INTEGER) NOT BETWEEN 0 AND 59
+             OR CAST(substr(NEW.closed_at, 18, 2) AS INTEGER) NOT BETWEEN 0 AND 59
+             OR strftime('%Y-%m-%dT%H:%M:%S', NEW.closed_at)
+                 IS NOT substr(NEW.closed_at, 1, 19)
+             OR NEW.closed_at < NEW.created_at
+             OR (NEW.closed_reason = 'expired' AND NEW.closed_at <> NEW.expires_at)
+             OR (NEW.closed_reason = 'superseded' AND NEW.closed_at >= NEW.expires_at)
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'question resolution timestamp is invalid');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_no_delete
+    BEFORE DELETE ON conversation_questions
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation_questions is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_no_conflicting_insert
+    BEFORE INSERT ON conversation_questions
+    WHEN EXISTS (
+        SELECT 1 FROM conversation_questions WHERE id = NEW.id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation_questions is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_no_conflicting_insert_v2
+    BEFORE INSERT ON conversation_questions
+    WHEN EXISTS (
+        SELECT 1 FROM conversation_questions
+        WHERE id = NEW.id
+           OR prompt_message_id = NEW.prompt_message_id
+           OR (NEW.rowid <> -1 AND rowid = NEW.rowid)
+           OR (
+               NEW.closed_reason IS NULL
+               AND closed_reason IS NULL
+               AND conversation_id = NEW.conversation_id
+               AND asked_to_username = NEW.asked_to_username
+           )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation_questions is immutable');
+    END
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_conversations_created_by_username "
+    "ON conversations(created_by_username)",
+    # Fresh DDL has NOT NULL; the trigger is the equivalent forward-write gate
+    # for supported pre-P2.3 tables whose TEXT PRIMARY KEY metadata remains
+    # nullable after ALTER migrations.
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversations_id_required
+    BEFORE INSERT ON conversations
+    WHEN NEW.id IS NULL OR typeof(NEW.id) <> 'text' OR length(NEW.id) = 0
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation id is required');
+    END
+    """,
+    # P2.3：owner 一旦非 NULL 即不可变；NULL→非 NULL 留给未来显式 CAS-on-NULL
+    # 认领 API（本切片不提供），非 NULL→另一值/NULL 均由 SQLite 纵深拒绝。
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversations_owner_immutable
+    BEFORE UPDATE OF created_by_username ON conversations
+    WHEN OLD.created_by_username IS NOT NULL
+         AND NEW.created_by_username IS NOT OLD.created_by_username
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation owner is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversations_no_conflicting_insert
+    BEFORE INSERT ON conversations
+    WHEN EXISTS (SELECT 1 FROM conversations WHERE id = NEW.id)
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation owner is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversations_identity_immutable
+    BEFORE UPDATE ON conversations
+    WHEN NEW.id IS NOT OLD.id OR NEW.rowid IS NOT OLD.rowid
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation identity is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversations_no_delete
+    BEFORE DELETE ON conversations
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversations_no_conflicting_insert_v2
+    BEFORE INSERT ON conversations
+    WHEN EXISTS (
+        SELECT 1 FROM conversations
+        WHERE id = NEW.id OR (NEW.rowid <> -1 AND rowid = NEW.rowid)
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation identity is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversations_positive_rowid
+    AFTER INSERT ON conversations
+    WHEN NEW.rowid <= 0
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation internal rowid must be positive');
+    END
+    """,
     "CREATE INDEX IF NOT EXISTS idx_tasks_conversation_id ON tasks(conversation_id)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_status_created_at ON tasks(status, created_at)",
@@ -337,10 +846,746 @@ _INDEX_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)",
 )
 
+# P2.3 managed schema objects are authoritative, not merely name-presence
+# probes.  SQLite's IF NOT EXISTS preserves a same-name stale/no-op trigger or
+# wrong-column index indefinitely, so init_db refreshes these exact objects under
+# its migration write lock before replaying _INDEX_DDL.  An index recreation that
+# encounters contradictory persisted rows fails startup rather than weakening a
+# uniqueness/predicate contract.
+_P23_MANAGED_INDEXES = (
+    "idx_conversation_messages_conversation_id",
+    "idx_conversation_messages_message_id",
+    "idx_conversation_questions_conversation_id",
+    "idx_conversation_questions_prompt_message_id",
+    "idx_conversation_questions_one_unresolved",
+    "idx_conversation_questions_answer_message_id",
+    "idx_conversation_questions_response_message_id",
+    "idx_conversations_created_by_username",
+)
+
+_P23_MANAGED_TRIGGERS = (
+    "trg_conversation_messages_public_id_required",
+    "trg_conversation_messages_no_update",
+    "trg_conversation_messages_no_delete",
+    "trg_conversation_messages_no_conflicting_insert",
+    "trg_conversation_messages_positive_internal_id",
+    "trg_conversation_questions_public_id_required",
+    "trg_conversation_questions_timestamp_canonical",
+    "trg_conversation_questions_ttl_24h",
+    "trg_conversation_questions_owner_exact",
+    "trg_conversation_questions_initially_unresolved",
+    "trg_conversation_questions_prompt_message",
+    "trg_conversation_questions_spec_immutable",
+    "trg_conversation_questions_rowid_immutable",
+    "trg_conversation_questions_positive_rowid",
+    "trg_conversation_questions_resolution_once",
+    "trg_conversation_questions_answer_messages",
+    "trg_conversation_questions_answer_before_expiry",
+    "trg_conversation_questions_resolution_timestamp",
+    "trg_conversation_questions_no_delete",
+    "trg_conversation_questions_no_conflicting_insert",
+    "trg_conversation_questions_no_conflicting_insert_v2",
+    "trg_conversations_id_required",
+    "trg_conversations_owner_immutable",
+    "trg_conversations_no_conflicting_insert",
+    "trg_conversations_identity_immutable",
+    "trg_conversations_no_delete",
+    "trg_conversations_no_conflicting_insert_v2",
+    "trg_conversations_positive_rowid",
+)
+
 
 # P0-B2（Codex 命中即审 P1-1）：每进程已校验过的 DB 路径 memo，避免 get_conn 每次
 # 重复校验（尤其 Windows GetDriveType 系统调用）。
 _VALIDATED_DB_PATHS: set[str] = set()
+
+
+def _p23_sql_without_comments(sql: str) -> str | None:
+    """Strip SQLite comments while preserving quoted identifiers/literals."""
+    result: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(sql):
+        char = sql[index]
+        if quote is not None:
+            result.append(char)
+            if char == quote:
+                if index + 1 < len(sql) and sql[index + 1] == quote:
+                    result.append(sql[index + 1])
+                    index += 2
+                    continue
+                quote = None
+            index += 1
+            continue
+        if char in ("'", '"', "`"):
+            quote = char
+            result.append(char)
+            index += 1
+            continue
+        if char == "[":
+            quote = "]"
+            result.append(char)
+            index += 1
+            continue
+        if sql.startswith("--", index):
+            newline = sql.find("\n", index + 2)
+            if newline < 0:
+                return "".join(result)
+            result.append(" ")
+            index = newline + 1
+            continue
+        if sql.startswith("/*", index):
+            end = sql.find("*/", index + 2)
+            if end < 0:
+                return None
+            result.append(" ")
+            index = end + 2
+            continue
+        result.append(char)
+        index += 1
+    return None if quote is not None else "".join(result)
+
+
+def _p23_table_definitions(sql: str) -> tuple[str, ...] | None:
+    """Split CREATE TABLE's top-level definitions without parsing expressions."""
+    clean = _p23_sql_without_comments(sql)
+    if clean is None:
+        return None
+    definitions: list[str] = []
+    quote: str | None = None
+    depth = 0
+    content_start: int | None = None
+    definition_start: int | None = None
+    index = 0
+    while index < len(clean):
+        char = clean[index]
+        if quote is not None:
+            if char == quote:
+                if index + 1 < len(clean) and clean[index + 1] == quote:
+                    index += 2
+                    continue
+                quote = None
+            index += 1
+            continue
+        if char in ("'", '"', "`"):
+            quote = char
+            index += 1
+            continue
+        if char == "[":
+            quote = "]"
+            index += 1
+            continue
+        if content_start is None:
+            if char == "(":
+                content_start = index + 1
+                definition_start = content_start
+            index += 1
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            if depth == 0:
+                assert definition_start is not None
+                tail = " ".join(clean[definition_start:index].split())
+                if tail:
+                    definitions.append(tail)
+                # Canonical identity tables are ordinary rowid tables.  STRICT
+                # and WITHOUT ROWID change type/identity behavior and cannot be
+                # ignored merely because their tokens follow the closing paren.
+                suffix = clean[index + 1 :].strip()
+                if suffix.endswith(";"):
+                    suffix = suffix[:-1].strip()
+                if suffix:
+                    return None
+                return tuple(definitions)
+            depth -= 1
+        elif char == "," and depth == 0:
+            assert definition_start is not None
+            definition = " ".join(clean[definition_start:index].split())
+            if not definition:
+                return None
+            definitions.append(definition)
+            definition_start = index + 1
+        index += 1
+    return None
+
+
+def _p23_definition_head(definition: str) -> tuple[str, str] | None:
+    """Return a top-level definition's first SQLite identifier and remainder."""
+    stripped = definition.lstrip()
+    if not stripped:
+        return None
+    opener = stripped[0]
+    if opener in ('"', "`", "["):
+        closer = "]" if opener == "[" else opener
+        end = stripped.find(closer, 1)
+        if end < 0:
+            return None
+        name = stripped[1:end]
+        remainder = stripped[end + 1 :].strip()
+        return name, remainder
+    end = 0
+    while end < len(stripped) and (
+        stripped[end].isalnum() or stripped[end] in ("_", "$")
+    ):
+        end += 1
+    if end == 0:
+        return None
+    return stripped[:end], stripped[end:].strip()
+
+
+def _p23_quoted_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _p23_required_table_shape_is_canonical(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    allowed_definition_variants: tuple[
+        tuple[tuple[str, str], ...], ...
+    ],
+    required_xinfo: dict[str, tuple[tuple[object, ...], ...]],
+) -> bool:
+    """Validate the explicit fresh/legacy column contract for a runtime table.
+
+    Column order and clauses must match the fresh DDL or one repository-owned
+    legacy ALTER history exactly.  Unknown columns and constraints fail closed
+    because omitted-column inserts still evaluate their NOT NULL, default,
+    generated, CHECK, and FK behavior.
+    """
+    table_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    if table_row is None or not isinstance(table_row[0], str):
+        return False
+    definitions = _p23_table_definitions(table_row[0])
+    if definitions is None:
+        return False
+
+    actual_definitions: list[tuple[str, str]] = []
+    for definition in definitions:
+        head = _p23_definition_head(definition)
+        if head is None:
+            return False
+        actual_definitions.append(
+            (
+                head[0].casefold(),
+                " ".join(head[1].split()).casefold(),
+            )
+        )
+    normalized_variants = {
+        tuple(
+            (name.casefold(), " ".join(clause.split()).casefold())
+            for name, clause in variant
+        )
+        for variant in allowed_definition_variants
+    }
+    if tuple(actual_definitions) not in normalized_variants:
+        return False
+
+    quoted_table = _p23_quoted_identifier(table)
+    required_names = {name.casefold() for name in required_xinfo}
+    actual_xinfo = {
+        str(row[1]): tuple(row[2:])
+        for row in conn.execute(f"PRAGMA table_xinfo({quoted_table})")
+    }
+    if any(
+        actual_xinfo.get(name) not in allowed
+        for name, allowed in required_xinfo.items()
+    ):
+        return False
+    if any(
+        str(row[3]).casefold() in required_names
+        for row in conn.execute(f"PRAGMA foreign_key_list({quoted_table})")
+    ):
+        return False
+
+    for index_row in conn.execute(f"PRAGMA index_list({quoted_table})"):
+        if int(index_row[2]) != 1:
+            continue
+        index_name = str(index_row[1])
+        quoted_index = _p23_quoted_identifier(index_name)
+        index_xinfo = list(conn.execute(f"PRAGMA index_xinfo({quoted_index})"))
+        key_columns = [
+            str(row[2])
+            for row in index_xinfo
+            if int(row[5]) == 1 and row[2] is not None
+        ]
+        index_sql_row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+            (index_name,),
+        ).fetchone()
+        index_sql = (
+            index_sql_row[0]
+            if index_sql_row is not None and isinstance(index_sql_row[0], str)
+            else None
+        )
+        if table == "conversations" and (
+            index_name.startswith("sqlite_autoindex_conversations_")
+            and key_columns == ["id"]
+            and str(index_row[3]) == "pk"
+            and int(index_row[4]) == 0
+            and index_sql is None
+        ):
+            continue
+        if table == "conversation_messages" and (
+            index_name == "idx_conversation_messages_message_id"
+            and key_columns == ["message_id"]
+            and str(index_row[3]) == "c"
+            and int(index_row[4]) == 0
+        ):
+            continue
+        if table == "conversation_messages" and (
+            index_name.startswith("sqlite_autoindex_conversation_messages_")
+            and key_columns == ["message_id"]
+            and str(index_row[3]) == "u"
+            and int(index_row[4]) == 0
+            and index_sql is None
+        ):
+            continue
+        # Any other UNIQUE/expression/partial index changes the set of writable
+        # facts, even when it mentions only a future additive column.  Later
+        # phases must explicitly promote such an index into the managed set.
+        return False
+    return True
+
+
+def _p23_identity_table_shape_witnesses(
+    conn: sqlite3.Connection,
+) -> dict[str, bool]:
+    """Shared startup/readiness contract for the two ordered conversation tables."""
+    conversation_fresh = (
+        ("id", "TEXT PRIMARY KEY NOT NULL"),
+        ("agent_id", "TEXT NOT NULL"),
+        ("status", "TEXT NOT NULL"),
+        ("created_by", "TEXT NOT NULL"),
+        ("created_by_username", "TEXT"),
+        ("recommendation_json", "TEXT"),
+        ("created_at", "TEXT NOT NULL"),
+        ("updated_at", "TEXT NOT NULL"),
+    )
+    conversation_legacy = (
+        ("id", "TEXT PRIMARY KEY"),
+        ("agent_id", "TEXT NOT NULL"),
+        ("status", "TEXT NOT NULL"),
+        ("created_by", "TEXT NOT NULL"),
+        ("recommendation_json", "TEXT"),
+        ("created_at", "TEXT NOT NULL"),
+        ("updated_at", "TEXT NOT NULL"),
+        ("created_by_username", "TEXT"),
+    )
+    conversation_xinfo = {
+        "id": (("TEXT", 0, None, 1, 0), ("TEXT", 1, None, 1, 0)),
+        "agent_id": (("TEXT", 1, None, 0, 0),),
+        "status": (("TEXT", 1, None, 0, 0),),
+        "created_by": (("TEXT", 1, None, 0, 0),),
+        "created_by_username": (("TEXT", 0, None, 0, 0),),
+        "recommendation_json": (("TEXT", 0, None, 0, 0),),
+        "created_at": (("TEXT", 1, None, 0, 0),),
+        "updated_at": (("TEXT", 1, None, 0, 0),),
+    }
+    message_fresh = (
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("message_id", "TEXT NOT NULL UNIQUE"),
+        ("conversation_id", "TEXT NOT NULL"),
+        ("role", "TEXT NOT NULL"),
+        ("content", "TEXT NOT NULL"),
+        ("recommendation_json", "TEXT"),
+        ("file_ids", "TEXT NOT NULL DEFAULT '[]'"),
+        ("created_at", "TEXT NOT NULL"),
+    )
+    message_m7_legacy = (
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("conversation_id", "TEXT NOT NULL"),
+        ("role", "TEXT NOT NULL"),
+        ("content", "TEXT NOT NULL"),
+        ("recommendation_json", "TEXT"),
+        ("file_ids", "TEXT NOT NULL DEFAULT '[]'"),
+        ("created_at", "TEXT NOT NULL"),
+        ("message_id", "TEXT"),
+    )
+    message_m6_legacy = (
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("conversation_id", "TEXT NOT NULL"),
+        ("role", "TEXT NOT NULL"),
+        ("content", "TEXT NOT NULL"),
+        ("recommendation_json", "TEXT"),
+        ("created_at", "TEXT NOT NULL"),
+        ("file_ids", "TEXT NOT NULL DEFAULT '[]'"),
+        ("message_id", "TEXT"),
+    )
+    message_xinfo = {
+        "id": (("INTEGER", 0, None, 1, 0),),
+        "message_id": (("TEXT", 0, None, 0, 0), ("TEXT", 1, None, 0, 0)),
+        "conversation_id": (("TEXT", 1, None, 0, 0),),
+        "role": (("TEXT", 1, None, 0, 0),),
+        "content": (("TEXT", 1, None, 0, 0),),
+        "recommendation_json": (("TEXT", 0, None, 0, 0),),
+        "file_ids": (("TEXT", 1, "'[]'", 0, 0),),
+        "created_at": (("TEXT", 1, None, 0, 0),),
+    }
+    return {
+        "conversation_table_shape": _p23_required_table_shape_is_canonical(
+            conn,
+            table="conversations",
+            allowed_definition_variants=(
+                conversation_fresh,
+                conversation_legacy,
+            ),
+            required_xinfo=conversation_xinfo,
+        ),
+        "message_table_shape": _p23_required_table_shape_is_canonical(
+            conn,
+            table="conversation_messages",
+            allowed_definition_variants=(
+                message_fresh,
+                message_m7_legacy,
+                message_m6_legacy,
+            ),
+            required_xinfo=message_xinfo,
+        ),
+    }
+
+
+def _assert_p23_identity_table_shapes(conn: sqlite3.Connection) -> None:
+    for witness, valid in _p23_identity_table_shape_witnesses(conn).items():
+        if valid is not True:
+            raise sqlite3.IntegrityError(f"P2.3 schema witness failed: {witness}")
+
+
+def _p23_index_set_is_canonical(conn: sqlite3.Connection) -> bool:
+    """Reject every unapproved explicit index on the three P2.3 tables.
+
+    Even a non-unique expression index is write-observable: evaluating a stale
+    ``json_extract``/collation/predicate can abort an otherwise legal insert.
+    P2.4+ must therefore add new indexes to the managed contract explicitly.
+    """
+    tables = (
+        "conversations",
+        "conversation_messages",
+        "conversation_questions",
+    )
+    for table in tables:
+        quoted_table = _p23_quoted_identifier(table)
+        for index_row in conn.execute(f"PRAGMA index_list({quoted_table})"):
+            index_name = str(index_row[1])
+            if index_name in _P23_MANAGED_INDEXES:
+                continue
+            quoted_index = _p23_quoted_identifier(index_name)
+            key_columns = [
+                str(row[2])
+                for row in conn.execute(f"PRAGMA index_xinfo({quoted_index})")
+                if int(row[5]) == 1 and row[2] is not None
+            ]
+            if (
+                table == "conversations"
+                and index_name.startswith("sqlite_autoindex_conversations_")
+                and key_columns == ["id"]
+                and int(index_row[2]) == 1
+                and str(index_row[3]) == "pk"
+                and int(index_row[4]) == 0
+            ):
+                continue
+            if (
+                table == "conversation_messages"
+                and index_name.startswith(
+                    "sqlite_autoindex_conversation_messages_"
+                )
+                and key_columns == ["message_id"]
+                and int(index_row[2]) == 1
+                and str(index_row[3]) == "u"
+                and int(index_row[4]) == 0
+            ):
+                continue
+            if (
+                table == "conversation_questions"
+                and index_name.startswith(
+                    "sqlite_autoindex_conversation_questions_"
+                )
+                and key_columns == ["id"]
+                and int(index_row[2]) == 1
+                and str(index_row[3]) == "pk"
+                and int(index_row[4]) == 0
+            ):
+                continue
+            return False
+    return True
+
+
+def _p23_trigger_set_is_canonical(conn: sqlite3.Connection) -> bool:
+    """All persisted triggers on P2.3 tables require explicit management."""
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+        "AND tbl_name IN ('conversations', 'conversation_messages', "
+        "'conversation_questions')"
+    ).fetchall()
+    return {str(row[0]) for row in rows} == set(_P23_MANAGED_TRIGGERS)
+
+
+def _assert_p23_schema_object_sets(conn: sqlite3.Connection) -> None:
+    if _p23_index_set_is_canonical(conn) is not True:
+        raise sqlite3.IntegrityError("P2.3 schema witness failed: required_indexes")
+    if _p23_trigger_set_is_canonical(conn) is not True:
+        raise sqlite3.IntegrityError("P2.3 schema witness failed: required_triggers")
+
+
+def _p23_public_id(value: object, prefix: str) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == len(prefix) + 32
+        and value.startswith(prefix)
+        and all(char in "0123456789abcdef" for char in value[len(prefix) :])
+    )
+
+
+def _p23_timestamp(value: object) -> datetime | None:
+    """Parse only the canonical form accepted by Python/runtime projections."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        return None
+    if parsed.isoformat(timespec="microseconds") != value:
+        return None
+    return parsed
+
+
+def _p23_text(
+    value: object, *, maximum: int, nullable: bool = False
+) -> bool:
+    if value is None:
+        return nullable
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= maximum
+
+
+def _p23_options(options_json: object, kind: object) -> list[dict[str, object]] | None:
+    if not isinstance(options_json, str):
+        return None
+    try:
+        options = json.loads(options_json)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(options, list):
+        return None
+    if kind == "single_choice":
+        if not 2 <= len(options) <= 6:
+            return None
+    elif kind == "free_text":
+        if options:
+            return None
+    else:
+        return None
+
+    labels: set[str] = set()
+    for index, option in enumerate(options, start=1):
+        if not isinstance(option, dict) or set(option) != {
+            "id",
+            "label",
+            "description",
+        }:
+            return None
+        if option["id"] != f"option_{index}":
+            return None
+        if not _p23_text(option["label"], maximum=200):
+            return None
+        label_key = str(option["label"]).strip().casefold()
+        if label_key in labels:
+            return None
+        labels.add(label_key)
+        if not _p23_text(option["description"], maximum=500, nullable=True):
+            return None
+    canonical = json.dumps(
+        options, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return options if canonical == options_json else None
+
+
+def _p23_answer(
+    answer_json: object,
+    *,
+    kind: object,
+    options: list[dict[str, object]],
+) -> bool:
+    if not isinstance(answer_json, str):
+        return False
+    try:
+        answer = json.loads(answer_json)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(answer, dict):
+        return False
+    if json.dumps(
+        answer, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ) != answer_json:
+        return False
+    if answer.get("kind") == "option":
+        return (
+            set(answer) == {"kind", "option_id"}
+            and kind == "single_choice"
+            and answer.get("option_id") in {option["id"] for option in options}
+        )
+    if answer.get("kind") == "text":
+        return set(answer) == {"kind", "text"} and _p23_text(
+            answer.get("text"), maximum=4000
+        )
+    return False
+
+
+def _assert_p23_historical_rows(conn: sqlite3.Connection) -> None:
+    """Validate immutable P2.3 facts after schema convergence, without JSON1.
+
+    Managed triggers constrain future writes but are not retroactive.  A process
+    that previously ran with missing/no-op triggers may already contain poison;
+    startup must fail without rewriting those facts.  Naturally expired yet still
+    unresolved Questions remain valid because expiry status is a read projection.
+    """
+    invalid_conversation_identity = conn.execute(
+        "SELECT id FROM conversations WHERE rowid <= 0 OR id IS NULL "
+        "OR typeof(id) <> 'text' OR length(id) = 0 LIMIT 1"
+    ).fetchone()
+    if invalid_conversation_identity is not None:
+        raise sqlite3.IntegrityError("conversation identity is invalid")
+    duplicate_conversation_identity = conn.execute(
+        "SELECT id FROM conversations GROUP BY id HAVING COUNT(*) <> 1 LIMIT 1"
+    ).fetchone()
+    if duplicate_conversation_identity is not None:
+        raise sqlite3.IntegrityError("conversation id is not unique")
+    invalid_message_identity = conn.execute(
+        "SELECT id FROM conversation_messages WHERE id <= 0 LIMIT 1"
+    ).fetchone()
+    if invalid_message_identity is not None:
+        raise sqlite3.IntegrityError("conversation message internal id is invalid")
+    orphan_message = conn.execute(
+        "SELECT message.id FROM conversation_messages AS message "
+        "LEFT JOIN conversations AS conversation "
+        "ON conversation.id = message.conversation_id "
+        "WHERE conversation.id IS NULL LIMIT 1"
+    ).fetchone()
+    if orphan_message is not None:
+        raise sqlite3.IntegrityError("conversation message owner axis is invalid")
+
+    owners = {
+        row["id"]: row["created_by_username"]
+        for row in conn.execute("SELECT id, created_by_username FROM conversations")
+    }
+    messages = {
+        row["message_id"]: (row["id"], row["conversation_id"], row["role"])
+        for row in conn.execute(
+            "SELECT id, message_id, conversation_id, role FROM conversation_messages"
+        )
+    }
+    seen_answer_ids: set[str] = set()
+    seen_response_ids: set[str] = set()
+
+    for row in conn.execute("SELECT rowid AS _p23_rowid, * FROM conversation_questions"):
+        def invalid(detail: str) -> None:
+            raise sqlite3.IntegrityError(
+                f"conversation question historical row is invalid: {detail}"
+            )
+
+        if row["_p23_rowid"] <= 0:
+            invalid("internal rowid")
+        if not _p23_public_id(row["id"], "q_"):
+            invalid("question id")
+        if not _p23_public_id(row["conversation_id"], "conv_"):
+            invalid("conversation id")
+        if not _p23_public_id(row["prompt_message_id"], "msg_"):
+            invalid("prompt message id")
+        if row["revision"] != 1:
+            invalid("revision")
+        if not _p23_text(row["prompt"], maximum=500):
+            invalid("prompt")
+        if not _p23_text(row["description"], maximum=1000, nullable=True):
+            invalid("description")
+        if not _p23_text(row["asked_to_username"], maximum=100):
+            invalid("asked_to_username")
+        if owners.get(row["conversation_id"]) != row["asked_to_username"]:
+            invalid("owner link")
+
+        prompt_message = messages.get(row["prompt_message_id"])
+        if (
+            prompt_message is None
+            or prompt_message[1] != row["conversation_id"]
+            or prompt_message[2] != "assistant"
+        ):
+            invalid("prompt link")
+
+        created_at = _p23_timestamp(row["created_at"])
+        expires_at = _p23_timestamp(row["expires_at"])
+        if created_at is None or expires_at is None:
+            invalid("timestamp")
+        if expires_at - created_at != timedelta(hours=24):
+            invalid("TTL")
+        options = _p23_options(row["options_json"], row["kind"])
+        if options is None:
+            invalid("options")
+
+        answer_fields = (
+            row["submission_id"],
+            row["answer_json"],
+            row["answered_by_username"],
+            row["answer_message_id"],
+            row["response_message_id"],
+        )
+        closed_reason = row["closed_reason"]
+        if closed_reason is None:
+            if row["closed_at"] is not None or any(
+                value is not None for value in answer_fields
+            ):
+                invalid("partial unresolved tuple")
+            continue
+
+        closed_at = _p23_timestamp(row["closed_at"])
+        if closed_at is None or closed_at < created_at:
+            invalid("resolution timestamp")
+        if closed_reason == "expired":
+            if closed_at != expires_at or any(
+                value is not None for value in answer_fields
+            ):
+                invalid("expired tuple")
+            continue
+        if closed_reason == "superseded":
+            if closed_at >= expires_at or any(
+                value is not None for value in answer_fields
+            ):
+                invalid("superseded tuple")
+            continue
+        if closed_reason != "answered":
+            invalid("closed reason")
+        if closed_at >= expires_at:
+            invalid("answer boundary")
+        if (
+            not isinstance(row["submission_id"], str)
+            or not 8 <= len(row["submission_id"]) <= 128
+            or row["answered_by_username"] != row["asked_to_username"]
+            or not _p23_public_id(row["answer_message_id"], "msg_")
+            or not _p23_public_id(row["response_message_id"], "msg_")
+            or not _p23_answer(
+                row["answer_json"], kind=row["kind"], options=options
+            )
+        ):
+            invalid("answer tuple")
+        if row["answer_message_id"] in seen_answer_ids:
+            invalid("answer message reuse")
+        if row["response_message_id"] in seen_response_ids:
+            invalid("response message reuse")
+        seen_answer_ids.add(row["answer_message_id"])
+        seen_response_ids.add(row["response_message_id"])
+        answer_message = messages.get(row["answer_message_id"])
+        response_message = messages.get(row["response_message_id"])
+        if (
+            answer_message is None
+            or response_message is None
+            or answer_message[1:] != (row["conversation_id"], "user")
+            or response_message[1:] != (row["conversation_id"], "assistant")
+            or not prompt_message[0] < answer_message[0] < response_message[0]
+        ):
+            invalid("answer message order")
 
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
@@ -359,13 +1604,43 @@ def get_conn(db_path: str | Path) -> sqlite3.Connection:
     if key not in _VALIDATED_DB_PATHS:
         config.assert_local_db_path(db_path)
         _VALIDATED_DB_PATHS.add(key)
-    conn = sqlite3.connect(str(db_path), isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA recursive_triggers=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
+    busy_timeout_ms = 5000
+    conn = sqlite3.connect(
+        str(db_path), isolation_level=None, timeout=busy_timeout_ms / 1000
+    )
+    try:
+        conn.row_factory = sqlite3.Row
+        # journal_mode is exceptional: on a pre-WAL database SQLite may return
+        # ``database is locked`` immediately and bypass the connection's ordinary
+        # busy handler.  Install the visible budget first, then retry this one
+        # startup transition within the same bounded five-second window.
+        conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+        deadline = time.monotonic() + busy_timeout_ms / 1000
+        delay = 0.01
+        while True:
+            try:
+                row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+                if row is not None and str(row[0]).lower() == "wal":
+                    break
+                error: sqlite3.OperationalError = sqlite3.OperationalError(
+                    "WAL journal mode was not enabled"
+                )
+            except sqlite3.OperationalError as exc:
+                detail = str(exc).lower()
+                if "locked" not in detail and "busy" not in detail:
+                    raise
+                error = exc
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise error
+            time.sleep(min(delay, remaining))
+            delay = min(delay * 2, 0.1)
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA recursive_triggers=ON")
+        return conn
+    except Exception:
+        conn.close()
+        raise
 
 
 def init_db(db_path: str | Path) -> None:
@@ -394,6 +1669,42 @@ def init_db(db_path: str | Path) -> None:
             if "file_ids" not in msg_cols:
                 conn.execute(
                     "ALTER TABLE conversation_messages ADD COLUMN file_ids TEXT NOT NULL DEFAULT '[]'"
+                )
+            # 迁移 #15（P2.3）：conversation_messages.message_id——公开稳定引用轴。
+            # fresh DDL 为 NOT NULL；legacy SQLite 无法原位补 NOT NULL，故写锁内补
+            # nullable 列并逐行生成 msg_<32hex>，随后 unique index + insert trigger
+            # 共同保证新写必填且不可替换。重复/并发 init 只填 NULL，不改稳定 id。
+            msg_cols_v15 = {
+                row[1] for row in conn.execute("PRAGMA table_info(conversation_messages)")
+            }
+            if "message_id" not in msg_cols_v15:
+                conn.execute(
+                    "ALTER TABLE conversation_messages ADD COLUMN message_id TEXT"
+                )
+            legacy_message_rows = conn.execute(
+                "SELECT id FROM conversation_messages "
+                "WHERE message_id IS NULL OR message_id = '' ORDER BY id"
+            ).fetchall()
+            for row in legacy_message_rows:
+                conn.execute(
+                    "UPDATE conversation_messages SET message_id = ? WHERE id = ?",
+                    (f"msg_{uuid.uuid4().hex}", row[0]),
+                )
+            # Partial/tampered P2.3 databases may already have a nonempty public
+            # id that the legacy backfill must never bless or rewrite.  Validate
+            # every persisted value after NULL/empty backfill and fail startup on
+            # the first poison row; fixed lowercase IDs remain byte-for-byte stable.
+            invalid_message_id = conn.execute(
+                "SELECT id FROM conversation_messages "
+                "WHERE message_id IS NULL "
+                "OR length(message_id) <> 36 "
+                "OR substr(message_id, 1, 4) <> 'msg_' "
+                "OR substr(message_id, 5) GLOB '*[^0-9a-f]*' "
+                "LIMIT 1"
+            ).fetchone()
+            if invalid_message_id is not None:
+                raise sqlite3.IntegrityError(
+                    "conversation message public id is invalid"
                 )
             # 迁移 #3（ADR-0016/M8）：tasks.conversation_id——把导引协作会话产出的
             # N 个任务归到同一次会话下（协作工作台按会话分组）。可空：非会话产出的
@@ -462,10 +1773,38 @@ def init_db(db_path: str | Path) -> None:
             task_cols_v12 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
             if "retry_of" not in task_cols_v12:
                 conn.execute("ALTER TABLE tasks ADD COLUMN retry_of TEXT")
+            # 迁移 #14（P2.3）：conversations.created_by_username——会话稳定 owner。
+            # nullable/无 DEFAULT：存量行保留 NULL，绝不从可撞名 created_by 反推；
+            # 普通用户查询只按 exact username，故 legacy NULL 天然不可见、不可引用。
+            conversation_cols_v14 = {
+                row[1] for row in conn.execute("PRAGMA table_info(conversations)")
+            }
+            if "created_by_username" not in conversation_cols_v14:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN created_by_username TEXT"
+                )
+            # Converge every P2.3 managed object, not just missing names.  This
+            # repairs stale/no-op trigger bodies and wrong-column/predicate indexes
+            # on restart.  All names are static module constants; the write lock
+            # prevents another initializer from observing the refresh window.
+            for trigger_name in _P23_MANAGED_TRIGGERS:
+                conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+            for index_name in _P23_MANAGED_INDEXES:
+                conn.execute(f"DROP INDEX IF EXISTS {index_name}")
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:
                 conn.execute(statement)
+            _assert_p23_identity_table_shapes(conn)
+            _assert_p23_schema_object_sets(conn)
+            _assert_p23_historical_rows(conn)
+            # Shared startup/readiness/deploy witness: a same-column loose table
+            # or same-name stale object is not an acceptable partial migration.
+            # Import locally to keep db.py <-> p23_schema canonical derivation
+            # acyclic at module load time.
+            from .p23_schema import assert_p23_schema
+
+            assert_p23_schema(conn)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

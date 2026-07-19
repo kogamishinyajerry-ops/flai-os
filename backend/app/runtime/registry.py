@@ -10,14 +10,17 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import sqlite3
+import stat
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import yaml
-from jsonschema import ValidationError, validate
+from jsonschema import SchemaError, ValidationError, validate
+from jsonschema.validators import Draft7Validator, validator_for
 
 from ..core.errors import DuplicateAgentIdError, InvalidPackageError
 
@@ -37,6 +40,89 @@ _REQUIRED_FILES: tuple[str, ...] = (
 _REQUIRED_DIRS: tuple[str, ...] = ("eval_cases",)
 
 
+def referenced_package_files(entry: Path, agent: dict[str, Any]) -> list[str]:
+    """Return package files that the manifest or workflow loads at runtime.
+
+    In addition to manifest-declared entrypoint/input/output files, workflows may
+    use ``Path(__file__).with_name("...")`` for package-local, versioned assets.
+    Those literal references are discoverable without importing or executing
+    untrusted package code and therefore belong to the same integrity boundary.
+    """
+    names = {"agent.yaml", "prompt.md"}
+    for ref in (
+        (agent.get("workflow") or {}).get("entrypoint"),
+        (agent.get("input") or {}).get("schema"),
+        (agent.get("output") or {}).get("schema"),
+    ):
+        if isinstance(ref, str) and ref:
+            names.add(ref)
+
+    workflow_name = (agent.get("workflow") or {}).get("entrypoint")
+    if isinstance(workflow_name, str) and workflow_name:
+        raw_workflow_path = entry / workflow_name
+        if raw_workflow_path.exists() or raw_workflow_path.is_symlink():
+            try:
+                workflow_path = package_reference_path(entry, workflow_name)
+                if stat.S_ISREG(workflow_path.lstat().st_mode) is not True:
+                    raise ValueError("workflow 必须是常规文件，目录与 symlink 均拒绝")
+                tree = ast.parse(workflow_path.read_text(encoding="utf-8"), filename=str(workflow_path))
+            except (OSError, UnicodeError, SyntaxError) as exc:
+                raise InvalidPackageError(
+                    f"{entry} {workflow_name} 无法解析，不能核验运行时包资产：{exc}"
+                ) from exc
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                    continue
+                if node.func.attr != "with_name" or len(node.args) != 1:
+                    continue
+                receiver = node.func.value
+                if not (
+                    isinstance(receiver, ast.Call)
+                    and isinstance(receiver.func, ast.Name)
+                    and receiver.func.id == "Path"
+                    and len(receiver.args) == 1
+                    and isinstance(receiver.args[0], ast.Name)
+                    and receiver.args[0].id == "__file__"
+                ):
+                    continue
+                literal = node.args[0]
+                if isinstance(literal, ast.Constant) and isinstance(literal.value, str):
+                    posix_name = PurePosixPath(literal.value)
+                    windows_name = PureWindowsPath(literal.value)
+                    if (
+                        literal.value in ("", ".", "..")
+                        or len(posix_name.parts) != 1
+                        or len(windows_name.parts) != 1
+                        or posix_name.name != literal.value
+                        or windows_name.name != literal.value
+                    ):
+                        raise ValueError(
+                            f"workflow Path(__file__).with_name() 引用了非法文件名 "
+                            f"{literal.value!r}，可能逃出包根"
+                        )
+                    names.add(literal.value)
+    return sorted(names)
+
+
+def package_reference_path(entry: Path, reference: str) -> Path:
+    """Resolve one cross-platform-safe package-relative reference.
+
+    Both POSIX and Windows path grammars are checked because packages are built
+    on macOS but deployed on Windows. Symlinks are resolved before containment.
+    """
+    if not reference or "\x00" in reference:
+        raise ValueError(f"引用文件名非法：{reference!r}")
+    for pure in (PurePosixPath(reference), PureWindowsPath(reference)):
+        if pure.is_absolute() or pure.drive or ".." in pure.parts:
+            raise ValueError(f"引用文件逃出包根：{reference!r}")
+    root = entry.resolve()
+    candidate = entry / reference
+    resolved = candidate.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError(f"引用文件逃出包根：{reference!r}")
+    return candidate
+
+
 class AgentRegistry:
     """扫描 `agents_dir` 下的 Agent Package，维护内存注册表并可同步进 DB。"""
 
@@ -46,6 +132,7 @@ class AgentRegistry:
         self._schema: dict[str, Any] = json.loads(self.schema_path.read_text(encoding="utf-8"))
         self._agents: dict[str, dict[str, Any]] = {}
         self._dirs: dict[str, Path] = {}
+        self._package_files: dict[str, tuple[str, ...]] = {}
         self.errors: list[dict[str, str]] = []
 
     def adopt(self, other: "AgentRegistry") -> None:
@@ -62,6 +149,7 @@ class AgentRegistry:
         句柄 API 是 V0.2 槽位（ADR-0018 已声明限制）。
         """
         self._dirs = other._dirs
+        self._package_files = other._package_files
         self.errors = other.errors
         self._agents = other._agents
 
@@ -69,6 +157,7 @@ class AgentRegistry:
         """重新扫描 agents_dir，覆盖式重建内存注册表（幂等：可重复调用）。"""
         self._agents = {}
         self._dirs = {}
+        self._package_files = {}
         self.errors = []
         if not self.agents_dir.is_dir():
             return
@@ -76,7 +165,7 @@ class AgentRegistry:
             if not entry.is_dir():
                 continue
             try:
-                data = self._load_one(entry)
+                data, package_files = self._load_one(entry)
             except InvalidPackageError as exc:
                 self.errors.append({"path": str(entry), "error": str(exc)})
                 continue
@@ -87,8 +176,9 @@ class AgentRegistry:
                 )
             self._agents[agent_id] = data
             self._dirs[agent_id] = entry
+            self._package_files[agent_id] = package_files
 
-    def _load_one(self, entry: Path) -> dict[str, Any]:
+    def _load_one(self, entry: Path) -> tuple[dict[str, Any], tuple[str, ...]]:
         yaml_path = entry / "agent.yaml"
         if not yaml_path.is_file():
             raise InvalidPackageError(f"{entry} 缺少 agent.yaml")
@@ -107,6 +197,74 @@ class AgentRegistry:
         missing += [f"{d}/" for d in _REQUIRED_DIRS if not (entry / d).is_dir()]
         if missing:
             raise InvalidPackageError(f"{entry} 缺少 docs/02 强制件：{', '.join(missing)}")
+
+        try:
+            referenced_files = referenced_package_files(entry, data)
+            referenced_paths = {
+                name: package_reference_path(entry, name) for name in referenced_files
+            }
+        except (OSError, ValueError) as exc:
+            raise InvalidPackageError(f"{entry} manifest/workflow 包资产引用非法：{exc}") from exc
+        referenced_missing: list[str] = []
+        referenced_non_regular: list[str] = []
+        for name, path in referenced_paths.items():
+            try:
+                mode = path.lstat().st_mode
+            except FileNotFoundError:
+                referenced_missing.append(name)
+                continue
+            except OSError as exc:
+                raise InvalidPackageError(
+                    f"{entry} 无法核验运行时包资产 {name}：{exc}"
+                ) from exc
+            if stat.S_ISREG(mode) is not True:
+                referenced_non_regular.append(name)
+        if referenced_missing:
+            raise InvalidPackageError(
+                f"{entry} 缺少 manifest/workflow 引用的运行时包资产："
+                f"{', '.join(referenced_missing)}"
+            )
+        if referenced_non_regular:
+            raise InvalidPackageError(
+                f"{entry} manifest/workflow 引用的包资产必须是常规文件（目录与 symlink 均拒绝）："
+                f"{', '.join(referenced_non_regular)}"
+            )
+
+        declared_schemas = {
+            ref
+            for ref in (
+                (data.get("input") or {}).get("schema"),
+                (data.get("output") or {}).get("schema"),
+            )
+            if isinstance(ref, str) and ref
+        }
+        schema_assets = [
+            name
+            for name in referenced_files
+            if name in declared_schemas or name.lower().endswith("schema.json")
+        ]
+        for name in schema_assets:
+            schema_path = referenced_paths[name]
+            try:
+                if schema_path.stat().st_size > _OUT_SCHEMA_MAX_BYTES:
+                    raise InvalidPackageError(
+                        f"{entry} 引用的 JSON Schema {name} 超过 {_OUT_SCHEMA_MAX_BYTES} 字节上界"
+                    )
+                schema_doc = json.loads(schema_path.read_bytes().decode("utf-8"))
+                validator_for(schema_doc, default=Draft7Validator).check_schema(schema_doc)
+            except InvalidPackageError:
+                raise
+            except (
+                json.JSONDecodeError,
+                UnicodeError,
+                OSError,
+                SchemaError,
+                TypeError,
+                RecursionError,
+            ) as exc:
+                raise InvalidPackageError(
+                    f"{entry} 引用的运行时包资产 {name} 不是合法 JSON Schema：{exc}"
+                ) from exc
 
         # P2-7：trial/released 禁 TBD——agent.schema.json 对 owner.maintainer/
         # business_reviewer 的字段说明早已承诺"trial 及以上状态禁止 TBD"，本处
@@ -307,7 +465,7 @@ class AgentRegistry:
                     "依据行必须 required 含 resolved）——依据承诺必须有可核验的输出"
                     "结构承接（ADR-0030：无处兑现的承诺=假绿温床，fail-closed 拒载）"
                 )
-        return data
+        return data, tuple(referenced_files)
 
     def get(self, agent_id: str) -> dict[str, Any] | None:
         """按 id 取已注册 Agent 的 agent.yaml 解析结果；未注册返回 None（不抛异常）。"""
@@ -326,6 +484,7 @@ class AgentRegistry:
         entry = self._dirs.get(agent_id)
         del self._agents[agent_id]
         self._dirs.pop(agent_id, None)
+        self._package_files.pop(agent_id, None)
         self.errors.append({"path": str(entry) if entry else agent_id, "error": reason})
 
     def list(self) -> list[dict[str, Any]]:
@@ -339,6 +498,10 @@ class AgentRegistry:
         内与 `.get(agent_id)` 返回的 yaml 数据一一对应。
         """
         return self._dirs.get(agent_id)
+
+    def package_files(self, agent_id: str) -> tuple[str, ...] | None:
+        """Return the immutable referenced-file set accepted by the last scan."""
+        return self._package_files.get(agent_id)
 
     def sync_to_db(self, conn: sqlite3.Connection) -> None:
         """把内存注册表写入 agents 表（upsert）+ agent_versions 表（追加，UNIQUE 冲突忽略）。

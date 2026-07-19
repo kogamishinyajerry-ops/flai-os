@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from conftest import TEST_USERNAME
+
 
 def _mk(client, name, **extra):
     body = {"agent_id": "hello_agent", "name": name, "inputs": {"name": name}}
@@ -130,8 +132,20 @@ def test_R1_cross_conversation_dependency_rejected(app_env):
     c1, c2 = f"conv_{uuid.uuid4().hex}", f"conv_{uuid.uuid4().hex}"
     conn = app.state.conn_factory()
     try:
-        repos.create_conversation(conn, conversation_id=c1, agent_id="guide_agent", created_by="t")
-        repos.create_conversation(conn, conversation_id=c2, agent_id="guide_agent", created_by="t")
+        repos.create_conversation(
+            conn,
+            conversation_id=c1,
+            agent_id="guide_agent",
+            created_by="t",
+            created_by_username=TEST_USERNAME,
+        )
+        repos.create_conversation(
+            conn,
+            conversation_id=c2,
+            agent_id="guide_agent",
+            created_by="t",
+            created_by_username=TEST_USERNAME,
+        )
         repos.create_task(
             conn, task_id="t1_in_c1", agent_id="hello_agent", agent_version="0.1.0",
             name="t1", created_by="t", inputs={"name": "x"}, input_file_ids=[], metadata={},

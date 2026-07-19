@@ -1,4 +1,4 @@
-# 一键执行前端构建、后端全量测试、前端纯函数核与 19 套浏览器验收；任一步失败立即汇总退出。
+# 一键执行前端构建、后端全量测试、前端纯函数核与 20 套浏览器验收；任一步失败立即汇总退出。
 # macOS pwsh 只验证脚本对称性；Windows 内网目标机运行仍为 DECLARED-NOT-VERIFIED。
 $ErrorActionPreference = "Stop"
 
@@ -99,6 +99,7 @@ if ($env:UPDATE_GOLDENS -eq "1") {
 $E2EScripts = @(
     "frontend/e2e/m2_acceptance.py",
     "frontend/e2e/m6_guide_acceptance.py",
+    "frontend/e2e/p23_question_acceptance.py",
     "frontend/e2e/m8_collab_chain_acceptance.py",
     "frontend/e2e/m8_guide_orchestrator_acceptance.py",
     "frontend/e2e/m8_workbench_acceptance.py",

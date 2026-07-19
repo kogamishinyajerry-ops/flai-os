@@ -11,7 +11,7 @@
   },
   "design_reference_package": {
     "schema_version": "flai-design-reference-package/v1",
-    "package_sha256": "38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94"
+    "package_sha256": "4fa241ae49d3c992168b2589779e24344749300a129e1f9478337974a3d68ca3"
   },
   "open_design_protocol": {
     "operations": [

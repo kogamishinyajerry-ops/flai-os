@@ -8,6 +8,7 @@ ADR-0019（真鉴权）后测试世界的登录纪律（loop-auditor F6）：
 - 经 API 写入的记名字段（created_by/reviewer/…）一律等于 TEST_DISPLAY_NAME。
 """
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,31 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_USERNAME = "test_engineer"
 TEST_PASSWORD = "test-password-123"
 TEST_DISPLAY_NAME = "测试工程师"
+
+
+def seed_pre_p23_legacy_conversation(
+    conn: sqlite3.Connection,
+    *,
+    conversation_id: str,
+    agent_id: str,
+    created_by: str,
+) -> None:
+    """Insert the fact produced by migrating a pre-owner conversation row.
+
+    Current runtime code must never create a NULL owner.  Tests that exercise
+    legacy invisibility seed that historical state explicitly instead of using
+    the production repository creation boundary.
+    """
+    created_at = "2025-01-01T00:00:00+00:00"
+    conn.execute(
+        """
+        INSERT INTO conversations
+            (id, agent_id, status, created_by, created_by_username,
+             recommendation_json, created_at, updated_at)
+        VALUES (?, ?, 'active', ?, NULL, NULL, ?, ?)
+        """,
+        (conversation_id, agent_id, created_by, created_at, created_at),
+    )
 
 
 def seed_user(db_path, *, username: str = TEST_USERNAME,

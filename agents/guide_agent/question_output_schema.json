@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "导引 Agent 结构化澄清提议",
+  "description": "仅描述模型可提议的普通澄清内容。问题 id、接收 username、revision、TTL、回答状态及任何审批/签发语义均不在模型权限内。",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "prompt", "options"],
+      "properties": {
+        "kind": { "const": "single_choice" },
+        "prompt": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "description": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 1000 },
+            { "type": "null" }
+          ]
+        },
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label"],
+            "properties": {
+              "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "description": {
+                "oneOf": [
+                  { "type": "string", "minLength": 1, "maxLength": 500 },
+                  { "type": "null" }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "prompt"],
+      "properties": {
+        "kind": { "const": "free_text" },
+        "prompt": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "description": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 1000 },
+            { "type": "null" }
+          ]
+        },
+        "options": { "type": "array", "maxItems": 0 }
+      }
+    }
+  ]
+}

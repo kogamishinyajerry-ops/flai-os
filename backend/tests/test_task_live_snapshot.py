@@ -16,6 +16,8 @@ from jsonschema import Draft202012Validator, ValidationError
 import pytest
 from referencing import Registry, Resource
 
+from conftest import TEST_USERNAME
+
 from backend.app.storage import repos
 
 
@@ -236,6 +238,7 @@ def test_all_live_authority_reads_are_no_store(app_env) -> None:
             conversation_id="conv_live_authority",
             agent_id="hello_agent",
             created_by="测试用户",
+            created_by_username=TEST_USERNAME,
         )
     finally:
         conn.close()

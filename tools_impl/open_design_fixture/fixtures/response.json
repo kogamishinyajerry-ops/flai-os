@@ -1,8 +1,8 @@
 {
   "schema_version": "open-design-fixture-response/v1",
-  "fixture_id": "flai-task-review-assets-v1",
+  "fixture_id": "flai-task-review-assets-v2",
   "generator_mode": "fixture",
-  "design_reference_package_sha256": "38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94",
+  "design_reference_package_sha256": "4fa241ae49d3c992168b2589779e24344749300a129e1f9478337974a3d68ca3",
   "candidates": [
     {
       "id": "flai-task-review-html",

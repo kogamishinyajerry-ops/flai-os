@@ -31,6 +31,8 @@ from jsonschema import validate
 
 _PLAN_START = "<<PLAN>>"
 _PLAN_END = "<<END>>"
+_QUESTION_START = "<<QUESTION>>"
+_QUESTION_END = "<<END_QUESTION>>"
 _SELF_ID = "guide_agent"
 
 _MAX_PLAN_AGENTS = 5          # 单份计划召集 Agent 数上限（超出截断并记 capped）
@@ -46,9 +48,26 @@ _MAX_DROPPED = 20            # dropped_agents 记录条数上限（防海量幻�
 _MAX_STRIPPED = 32           # 单 Agent stripped_fields 条数上限
 _MAX_ID_CHARS = 64           # 审计列表里单个 id/字段名的展示长度上限
 
+# P2.3 普通澄清 Question：这是一个与 task review 完全分离的交互合同。模型只可
+# 提议问题正文/选项；id、精确 username、revision、TTL 与回答状态全部由平台生成。
+# 上限先于 json.loads，显式 malformed block 令整轮诚实失败、零落库。
+_MAX_QUESTION_BYTES = 12_000
+_MAX_QUESTION_PROMPT_CHARS = 500
+_MAX_QUESTION_DESCRIPTION_CHARS = 1_000
+_MAX_QUESTION_OPTION_LABEL_CHARS = 200
+_MAX_QUESTION_OPTION_DESCRIPTION_CHARS = 500
+_MIN_QUESTION_OPTIONS = 2
+_MAX_QUESTION_OPTIONS = 6
+
 
 def _load_system_prompt() -> str:
     return Path(__file__).with_name("prompt.md").read_text(encoding="utf-8").strip()
+
+
+def _load_question_proposal_schema() -> dict[str, Any]:
+    """模型可控字段的独立 schema；与服务端公开 Question/Answer 合同分离。"""
+    path = Path(__file__).with_name("question_output_schema.json")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def run(context: dict[str, Any]) -> dict[str, Any]:
@@ -70,12 +89,26 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(reply, str) or not reply.strip():
         raise ValueError("导引模型返回空内容，无法继续对话（诚实失败，不伪造对话）")
 
+    # 必须在任一 parser 剥离文本之前对**原始回复**做拓扑校验。否则
+    # PLAN 先吞掉嵌套 Question，或 Question 先剥掉后让 PLAN 看起来唯一完整，
+    # 会把一份显式破损/混合协议误投影为真的结构事实。
+    _validate_envelope_topology(reply)
     assistant_message, raw_plan = _split_plan(reply)
+    assistant_message, raw_question, question_present = _split_question(assistant_message)
+    if raw_plan is not None and question_present:
+        raise ValueError("导引回复不能同时包含结构化问题与计划裁决")
     plan = _validate_plan(raw_plan, registry, candidates) if raw_plan else None
+    question = _validate_question(raw_question) if question_present else None
+    if question_present and question is None:
+        raise ValueError("导引返回的结构化问题不符合 conversation-question/v1")
     # 传输键保持 `recommendation`（存储列 recommendation_json / API 字段皆不变，
     # 免迁移）——其形状自 M8 起是「导引计划」（orchestrate | refuse），前端按
     # decision 分支渲染。
-    return {"assistant_message": assistant_message, "recommendation": plan}
+    return {
+        "assistant_message": assistant_message,
+        "recommendation": plan,
+        "question": question,
+    }
 
 
 # ── 候选 Agent 清单（注入系统提示，供 LLM 选择/预填）─────────────────────
@@ -151,13 +184,189 @@ def _render_candidates(candidates: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+# ── 普通澄清 Question 解析（P2.3；与 task review 完全正交）──────────────
+
+def _validate_envelope_topology(reply: str) -> None:
+    """原始 assistant 回复的结构 sentinel 拓扑闸。
+
+    一轮最多只能携带一个完整 PLAN **或**一个完整 Question。计数、
+    先后顺序或家族互斥任一破损，都在 parser 看到局部文本前拒绝整轮。
+    sentinel 即使出现在 JSON 字符串或块外正文中也仍属协议标记；
+    不尝试从模型输出中猜测“本意是普通文字”。
+    """
+    plan_starts = reply.count(_PLAN_START)
+    plan_ends = reply.count(_PLAN_END)
+    question_starts = reply.count(_QUESTION_START)
+    question_ends = reply.count(_QUESTION_END)
+
+    plan_present = plan_starts > 0 or plan_ends > 0
+    question_present = question_starts > 0 or question_ends > 0
+    if plan_present and question_present:
+        raise ValueError(
+            "导引回复不能同时包含结构化问题与计划标记（拓扑非法）"
+        )
+
+    if plan_present:
+        if (
+            plan_starts != 1
+            or plan_ends != 1
+            or reply.find(_PLAN_END) < reply.find(_PLAN_START)
+        ):
+            raise ValueError("导引结构化计划标记不完整、重复或顺序非法")
+        return
+
+    if question_present and (
+        question_starts != 1
+        or question_ends != 1
+        or reply.find(_QUESTION_END) < reply.find(_QUESTION_START)
+    ):
+        raise ValueError("导引结构化问题标记不完整、重复或顺序非法")
+
+
+def _split_question(reply: str) -> tuple[str, str | None, bool]:
+    """拆出唯一完整 ``<<QUESTION>>`` block。
+
+    返回 ``(正文, raw_json, marker_present)``。普通文本没有 marker 时完全不猜；
+    孤立/不完整/重复 marker 是显式结构协议破损，必须抛错令本轮零落库。Question
+    块前后的正文都保留，纯 block 则给一个只描述 UI 事实的中性引导句。
+    """
+    starts = reply.count(_QUESTION_START)
+    ends = reply.count(_QUESTION_END)
+    if starts == 0 and ends == 0:
+        return reply.strip(), None, False
+    if starts != 1 or ends != 1:
+        raise ValueError("导引结构化问题标记不完整或重复")
+    start = reply.find(_QUESTION_START)
+    end = reply.find(_QUESTION_END)
+    if end < start:
+        raise ValueError("导引结构化问题结束标记早于起始标记")
+    raw = reply[start + len(_QUESTION_START):end].strip()
+    before = reply[:start].strip()
+    after = reply[end + len(_QUESTION_END):].strip()
+    parts = [part for part in (before, after) if part]
+    message = "\n".join(parts) if parts else "请回答下方问题，以便继续。"
+    return message, raw, True
+
+
+def _bounded_question_text(value: Any, *, maximum: int, required: bool) -> str | None:
+    if value is None and required is False:
+        return None
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > maximum:
+        return None
+    return text
+
+
+def _validate_question(raw: str | None) -> dict[str, Any] | None:
+    """把模型 Question 提议收敛成 v1 平台 spec；非法即 ``None``。
+
+    v1 仅支持 ``single_choice`` 与 ``free_text``。选择题的 option id 由平台按
+    顺序生成，模型无权指定 id/default/recommended/authority 等暗示性字段；界面
+    永远另给自定义文本回答，因此合同不接受模型控制 ``allow_custom``。
+    """
+    if raw is None:
+        return None
+    try:
+        if len(raw.encode("utf-8")) > _MAX_QUESTION_BYTES:
+            return None
+        proposed = json.loads(raw)
+    except (json.JSONDecodeError, RecursionError, UnicodeError, ValueError):
+        return None
+    if not isinstance(proposed, dict):
+        return None
+    try:
+        validate(proposed, _load_question_proposal_schema())
+    except Exception:
+        # schema/引用/深度等任何无法确定性评估的情形都不放行。
+        return None
+    if set(proposed) - {"kind", "prompt", "description", "options"}:
+        return None
+
+    kind = proposed.get("kind")
+    if kind not in ("single_choice", "free_text"):
+        return None
+    prompt = _bounded_question_text(
+        proposed.get("prompt"), maximum=_MAX_QUESTION_PROMPT_CHARS, required=True
+    )
+    if prompt is None:
+        return None
+    description = _bounded_question_text(
+        proposed.get("description"),
+        maximum=_MAX_QUESTION_DESCRIPTION_CHARS,
+        required=False,
+    )
+    # optional description 若显式给了错误类型/空串，也视为 malformed，而不是静默
+    # 改写模型协议；省略或 null 才是无描述。
+    if "description" in proposed and proposed.get("description") is not None and description is None:
+        return None
+
+    raw_options = proposed.get("options", [])
+    if kind == "free_text":
+        if raw_options != []:
+            return None
+        return {
+            "kind": kind,
+            "prompt": prompt,
+            "description": description,
+            "options": [],
+        }
+
+    if not isinstance(raw_options, list):
+        return None
+    if not (_MIN_QUESTION_OPTIONS <= len(raw_options) <= _MAX_QUESTION_OPTIONS):
+        return None
+    options: list[dict[str, Any]] = []
+    seen_labels: set[str] = set()
+    for index, entry in enumerate(raw_options, start=1):
+        if not isinstance(entry, dict) or set(entry) - {"label", "description"}:
+            return None
+        label = _bounded_question_text(
+            entry.get("label"), maximum=_MAX_QUESTION_OPTION_LABEL_CHARS, required=True
+        )
+        if label is None:
+            return None
+        folded = label.casefold()
+        if folded in seen_labels:
+            return None
+        seen_labels.add(folded)
+        option_description = _bounded_question_text(
+            entry.get("description"),
+            maximum=_MAX_QUESTION_OPTION_DESCRIPTION_CHARS,
+            required=False,
+        )
+        if (
+            "description" in entry
+            and entry.get("description") is not None
+            and option_description is None
+        ):
+            return None
+        options.append(
+            {
+                "id": f"option_{index}",
+                "label": label,
+                "description": option_description,
+            }
+        )
+    return {
+        "kind": kind,
+        "prompt": prompt,
+        "description": description,
+        "options": options,
+    }
+
+
 # ── 计划块解析 + 确定性校验（LLM 边界的咬合点）──────────────────────────
 
 def _split_plan(reply: str) -> tuple[str, str | None]:
     """把 assistant 文本与计划块拆开。无块 → (原文, None)；有块 → (块外文本, 块内 JSON 串)。
 
-    块前 + 块后的文本都原样保留展示（审计 P3：此前块后文本被静默丢弃）；块后若再
-    出现计划块，只认第一块、后续整体丢弃（不把 sentinel 原文外露给用户当正文）。"""
+    块前 + 块后的文本都原样保留展示（审计 P3：此前块后文本被静默丢弃）。
+    ``run`` 已在调用前用原始回复验证唯一完整 envelope；本函数不对重复块做
+    “只认第一个”的宽松恢复。"""
     start = reply.find(_PLAN_START)
     if start == -1:
         return reply.strip(), None
@@ -167,9 +376,6 @@ def _split_plan(reply: str) -> tuple[str, str | None]:
         return reply.strip(), None
     raw = reply[start + len(_PLAN_START):end].strip()
     tail = reply[end + len(_PLAN_END):]
-    next_block = tail.find(_PLAN_START)
-    if next_block != -1:
-        tail = tail[:next_block]
     parts = [p for p in (reply[:start].strip(), tail.strip()) if p]
     message = "\n".join(parts) if parts else "已根据你的需求给出方案，请在下方确认。"
     return message, raw

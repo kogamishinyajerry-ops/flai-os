@@ -17,7 +17,13 @@ from typing import Any
 import yaml
 from fastapi.testclient import TestClient
 
-from conftest import seed_and_login, seed_user, login
+from conftest import (
+    TEST_USERNAME,
+    login,
+    seed_and_login,
+    seed_pre_p23_legacy_conversation,
+    seed_user,
+)
 from backend.app.api import classification_gate as cgate
 from backend.app.main import create_app
 from backend.app.runtime.runtime import _task_data_classification, _tool_taint_classification
@@ -366,7 +372,13 @@ def test_conversation_model_calls_seal_by_task() -> None:
             seed_and_login(client, db_path)
             conn = get_conn(db_path)
             try:
-                repos.create_conversation(conn, conversation_id="c1", agent_id="a", created_by="u")
+                repos.create_conversation(
+                    conn,
+                    conversation_id="c1",
+                    agent_id="a",
+                    created_by="u",
+                    created_by_username=TEST_USERNAME,
+                )
                 _mktask(conn, "st", classification="sensitive", status="failed", err="e")
                 _mktask(conn, "it", classification="internal", status="completed")
                 repos.record_model_call(conn, task_id="st", conversation_id="c1",
@@ -512,7 +524,13 @@ def test_conversation_tasks_endpoint_seals(tmp_path: Path) -> None:
         seed_and_login(client, db_path)
         conn = get_conn(db_path)
         try:
-            repos.create_conversation(conn, conversation_id="cv", agent_id="a", created_by="u")
+            repos.create_conversation(
+                conn,
+                conversation_id="cv",
+                agent_id="a",
+                created_by="u",
+                created_by_username=TEST_USERNAME,
+            )
             _mktask(conn, "cs", classification="sensitive", status="failed", err="机密错误文本")
             conn.execute("UPDATE tasks SET conversation_id='cv' WHERE id='cs'")
         finally:
@@ -613,7 +631,12 @@ def test_conversation_wrapper_blocks_task_attribution(tmp_path: Path) -> None:
     db = tmp_path / "d.db"; init_db(db)
     conn = get_conn(db)
     try:
-        repos.create_conversation(conn, conversation_id="cv2", agent_id="hello_agent", created_by="u")
+        seed_pre_p23_legacy_conversation(
+            conn,
+            conversation_id="cv2",
+            agent_id="hello_agent",
+            created_by="u",
+        )
 
         class _RecordingGateway:
             def chat(self, profile, messages, *, task_id=None, conversation_id=None,

@@ -181,6 +181,20 @@ def test_canonical_request_hash_drift_fails_closed() -> None:
     assert "request sha256" in result["error_message"].lower()
 
 
+def test_previous_design_reference_snapshot_binding_fails_closed() -> None:
+    request = json.loads(json.dumps(FIXED_REQUEST, ensure_ascii=False))
+    request["design_reference_package"]["package_sha256"] = (
+        "38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94"
+    )
+
+    result = FixtureOpenDesignClient().generate(request)
+
+    assert result["status"] == "failed"
+    assert result["request_sha256"] != FIXED_REQUEST_SHA256
+    assert result["candidates"] == []
+    assert "request sha256" in result["error_message"].lower()
+
+
 def test_agent_and_tool_input_schemas_accept_only_the_fixed_request() -> None:
     agent_schema = json.loads(
         (REPO_ROOT / "agents/open_design_candidate_agent/input_schema.json").read_text(encoding="utf-8")

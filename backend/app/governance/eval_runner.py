@@ -26,11 +26,13 @@ import hashlib
 import json
 import logging
 import shutil
+import stat
 import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from ..runtime.registry import package_reference_path, referenced_package_files
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
 
@@ -44,16 +46,80 @@ _OUTPUT_FIELD_OPS = ("eq", "contains", "exists", "gte", "lte")
 # 配置**实际解析**（契约允许任意 schema/entrypoint 文件名——写死默认名会让
 # custom_schema.json 的改动逃出指纹）。tool/model/scope 级 provenance 是
 # manifest 的完整形态，V0.1 已声明限制（ADR-0018）。
-def _referenced_package_files(agent: dict[str, Any]) -> list[str]:
-    names = ["agent.yaml", "prompt.md"]
-    for ref in (
-        (agent.get("workflow") or {}).get("entrypoint"),
-        (agent.get("input") or {}).get("schema"),
-        (agent.get("output") or {}).get("schema"),
+def _referenced_package_files(agent: dict[str, Any], pkg_dir: Path) -> list[str]:
+    names = referenced_package_files(pkg_dir, agent)
+    for name in names:
+        package_reference_path(pkg_dir, name)
+    return names
+
+
+def _registered_package_files(
+    agent_registry: Any,
+    *,
+    agent_id: str,
+    agent: dict[str, Any],
+    pkg_dir: Path,
+) -> tuple[str, ...]:
+    """Return the complete referenced set accepted by Registry.scan().
+
+    Lightweight test registries and legacy snapshot shims may not implement the
+    method; only those fall back to deterministic discovery from their package.
+    A real Registry returning ``None`` is an integrity error, never a fallback.
+    """
+    getter = getattr(agent_registry, "package_files", None)
+    if callable(getter):
+        names = getter(agent_id)
+        if names is None:
+            raise ValueError(f"agent {agent_id!r} 缺少注册期包资产集合，拒绝冻结")
+    else:
+        names = _referenced_package_files(agent, pkg_dir)
+    if not isinstance(names, (list, tuple)) or not names:
+        raise ValueError(f"agent {agent_id!r} 注册期包资产集合非法，拒绝冻结")
+    if any(not isinstance(name, str) or not name for name in names):
+        raise ValueError(f"agent {agent_id!r} 注册期包资产集合含非法文件名，拒绝冻结")
+    return tuple(dict.fromkeys(names))
+
+
+def _read_required_package_file(pkg_dir: Path, name: str) -> bytes:
+    """Read one required regular file and reject path/read races fail-closed."""
+    try:
+        path = package_reference_path(pkg_dir, name)
+        before = path.lstat()
+        if stat.S_ISREG(before.st_mode) is not True:
+            raise ValueError("不是常规文件（目录或 symlink 均拒绝）")
+        data = path.read_bytes()
+        after = path.lstat()
+        package_reference_path(pkg_dir, name)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"必需包资产 {name!r} 无法完整读取：{exc}") from exc
+
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_size,
+        before.st_mtime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_size,
+        after.st_mtime_ns,
+    )
+    if (
+        stat.S_ISREG(after.st_mode) is not True
+        or before_identity != after_identity
+        or len(data) != after.st_size
     ):
-        if isinstance(ref, str) and ref:
-            names.append(ref)
-    return sorted(set(names))
+        raise ValueError(f"必需包资产 {name!r} 在读取期间发生变化，拒绝冻结")
+    return data
+
+
+def _capture_required_package_files(
+    pkg_dir: Path, names: tuple[str, ...] | list[str]
+) -> dict[str, bytes]:
+    return {name: _read_required_package_file(pkg_dir, name) for name in names}
 
 # T1（异步评测队列，GH #2）：原进程内 single-flight 锁（EvalBusy→409）已由
 # 「入队 + worker 配额门」替换——并发触发不再拒绝，超配额的 run 排队最终执行
@@ -131,6 +197,7 @@ def compute_digest(
     approved: list[dict[str, Any]],
     pkg_dir: Path | None = None,
     agent: dict[str, Any] | None = None,
+    package_files: tuple[str, ...] | list[str] | None = None,
 ) -> str | None:
     """评测证据指纹：approved case 原文 + 引用的输入文件实体 + 配置实际引用的包文件。
 
@@ -153,10 +220,11 @@ def compute_digest(
                 h.update(src.read_bytes() if src.is_file() else b"<missing>")
                 h.update(b"\n")
     if pkg_dir is not None and agent is not None:
-        for name in _referenced_package_files(agent):
-            f = pkg_dir / name
+        names = package_files or _referenced_package_files(agent, pkg_dir)
+        captured = _capture_required_package_files(pkg_dir, names)
+        for name in names:
             h.update(f"pkg:{name}\n".encode("utf-8"))
-            h.update(f.read_bytes() if f.is_file() else b"<missing>")
+            h.update(captured[name])
             h.update(b"\n")
     return h.hexdigest()
 
@@ -311,20 +379,17 @@ def freeze_eval_snapshot(conn: Any, *, agent_registry: Any, agent_id: str) -> st
         raise ValueError(f"agent 不存在：{agent_id}")
     pkg_dir = agent_registry.package_dir(agent_id)
     pkg_real = pkg_dir.resolve()
-    # 引用文件路径封闭 fail-closed 拒冻结（Codex R2 审 P2）：schema/entrypoint 仅受「是
-    # 字符串」约束。绝对路径 / ../ 逃逸的 ref 即便 _grab 跳过捕获，冻结的 agent 配置仍原样
-    # 保留该路径字符串——执行侧 AgentRuntime 校验与 compute_digest 会用它读**活磁盘**
-    # （materialized_dir / "/abs" == "/abs"），令快照声称冻结 A 却实评 live B。故在建 run
-    # 前直接拒冻结此类畸形 agent（引用应为包内相对路径，于 agent 注册期修正）。跳过捕获
-    # 不足以堵——必须让这种 agent 根本进不了快照。无 checked-in agent 用逃逸 ref。
-    for _ref in _referenced_package_files(agent):
-        _rp = (pkg_dir / _ref).resolve()
-        if _rp != pkg_real and pkg_real not in _rp.parents:
-            raise ValueError(
-                f"agent {agent_id!r} 的引用文件逃出包根：{_ref!r}——拒绝冻结，快照无法保证"
-                "该路径不可变（把 schema/entrypoint 改为包内相对路径后重试）"
-            )
-    files: dict[str, str] = {}
+    registered_files = _registered_package_files(
+        agent_registry,
+        agent_id=agent_id,
+        agent=agent,
+        pkg_dir=pkg_dir,
+    )
+    captured_required = _capture_required_package_files(pkg_dir, registered_files)
+    files: dict[str, str] = {
+        name: base64.b64encode(raw).decode("ascii")
+        for name, raw in captured_required.items()
+    }
 
     def _grab(rel: str) -> None:
         p = pkg_dir / rel
@@ -343,9 +408,6 @@ def freeze_eval_snapshot(conn: Any, *, agent_registry: Any, agent_id: str) -> st
         if p.is_file():
             files[rel] = base64.b64encode(p.read_bytes()).decode("ascii")
 
-    for name in _referenced_package_files(agent):
-        _grab(name)
-    _grab("workflow.py")
     # eval_cases/ 递归全量冻结（Codex R0 审 P1）：iterdir 非递归、只抓直接子文件，会漏
     # 掉 case 的 input_files 引用的嵌套 fixture（如 cfd_evaluate_agent 的
     # fixtures/<run>/postProcessing/.../forceCoeffs.dat）。材化后这些文件缺席，
@@ -366,11 +428,17 @@ def freeze_eval_snapshot(conn: Any, *, agent_registry: Any, agent_id: str) -> st
         frozen_dir = Path(_td)
         _materialize_snapshot({"files": files}, frozen_dir)
         approved, _drafts, _broken = load_eval_cases(frozen_dir)
-        digest = compute_digest(approved, frozen_dir, agent)
+        digest = compute_digest(
+            approved,
+            frozen_dir,
+            agent,
+            package_files=registered_files,
+        )
     content = {
         "agent_id": agent_id,
         "agent_version": str(agent.get("version")),
         "agent": agent,
+        "referenced_files": list(registered_files),
         "files": files,
         "eval_cases_digest": digest,
     }
@@ -461,11 +529,21 @@ class _SnapshotRegistry:
     其余 agent 委托活注册表。让执行（含 runtime 的 workflow/schema 定位）读冻结内容而非
     活磁盘——enqueue 后改活包对本 run 无影响。"""
 
-    def __init__(self, base: Any, agent_id: str, frozen_agent: dict[str, Any], materialized_dir: Path) -> None:
+    def __init__(
+        self,
+        base: Any,
+        agent_id: str,
+        frozen_agent: dict[str, Any],
+        materialized_dir: Path,
+        referenced_files: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
         self._base = base
         self._agent_id = agent_id
         self._frozen_agent = frozen_agent
         self._dir = materialized_dir
+        self._referenced_files = (
+            tuple(referenced_files) if referenced_files is not None else None
+        )
 
     def get(self, agent_id: str) -> Any:
         if agent_id != self._agent_id:
@@ -481,6 +559,14 @@ class _SnapshotRegistry:
 
     def package_dir(self, agent_id: str) -> Any:
         return self._dir if agent_id == self._agent_id else self._base.package_dir(agent_id)
+
+    def package_files(self, agent_id: str) -> Any:
+        if agent_id != self._agent_id:
+            getter = getattr(self._base, "package_files", None)
+            return getter(agent_id) if callable(getter) else None
+        if self._referenced_files is not None:
+            return self._referenced_files
+        return tuple(_referenced_package_files(self._frozen_agent, self._dir))
 
     def __getattr__(self, name: str) -> Any:  # 其余方法（list/scan/deregister…）委托活注册表
         return getattr(self._base, name)
@@ -579,7 +665,13 @@ def execute_eval_run(
     with tempfile.TemporaryDirectory(prefix="flai_eval_snap_") as _td:
         materialized = Path(_td)
         _materialize_snapshot(content, materialized)
-        shim_registry = _SnapshotRegistry(agent_registry, agent_id, content["agent"], materialized)
+        shim_registry = _SnapshotRegistry(
+            agent_registry,
+            agent_id,
+            content["agent"],
+            materialized,
+            content.get("referenced_files"),
+        )
         shim_runtime = _clone_runtime_with_registry(runtime, shim_registry)
         return _run_eval_body(
             run=run, run_id=run_id, agent_id=agent_id, triggered_by=triggered_by,
@@ -651,9 +743,20 @@ def _run_eval_body(
         # 此前落在保护范围外，会让 worker 已认领的行永久停 running 泄配额。纳入后与 case
         # 循环统一 fail-closed 收口 error。
         pkg_dir = agent_registry.package_dir(agent_id)
+        package_files = _registered_package_files(
+            agent_registry,
+            agent_id=agent_id,
+            agent=agent,
+            pkg_dir=pkg_dir,
+        )
         is_interactive = (agent.get("workflow") or {}).get("mode") == "interactive"
         approved, drafts, broken = load_eval_cases(pkg_dir)
-        digest = compute_digest(approved, pkg_dir, agent)
+        digest = compute_digest(
+            approved,
+            pkg_dir,
+            agent,
+            package_files=package_files,
+        )
         for item in broken:
             failed += 1
             case_results.append(
@@ -723,7 +826,12 @@ def _run_eval_body(
     # 复核路径此前在保护范围外，抛异常会让 run 永久停 running）。
     try:
         post_approved, _post_drafts, _post_broken = load_eval_cases(pkg_dir)
-        post_digest = compute_digest(post_approved, pkg_dir, agent)
+        post_digest = compute_digest(
+            post_approved,
+            pkg_dir,
+            agent,
+            package_files=package_files,
+        )
     except Exception as exc:  # noqa: BLE001 - 复核不可得=证据不可信，fail-closed 作废
         logger.exception("eval run %s 终点复核失败", run_id)
         post_digest = f"<recheck-failed:{exc}>"

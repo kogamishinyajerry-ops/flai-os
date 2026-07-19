@@ -91,7 +91,11 @@ def create_team(body: CreateTeamRequest, request: Request) -> dict[str, Any]:
     agent_registry = request.app.state.agent_registry
     conn = request.app.state.conn_factory()
     try:
-        conv = repos.get_conversation(conn, body.conversation_id)
+        # P2.3：团队蓝本的来源会话只能由其 exact username owner 引用。
+        # foreign / legacy NULL / 不存在统一 404，且必须发生在方案读取与写事务之前。
+        conv = repos.get_conversation_for_owner(
+            conn, body.conversation_id, request.state.user["username"]
+        )
         if conv is None:
             raise HTTPException(status_code=404, detail=f"会话不存在：{body.conversation_id}")
         rec = conv.get("recommendation") or {}
@@ -230,6 +234,18 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
     agent_registry = request.app.state.agent_registry
     conn = request.app.state.conn_factory()
     try:
+        # P2.3：可选 target conversation 是最高优先级的资源边界。必须在读取
+        # team/registry/版本/材料之前 exact-username 判权，foreign/legacy 统一 404，
+        # 不能借团队对账的 422 侧信道观察系统现势。run_batch_creation 事务内仍复查。
+        if body.conversation_id is not None:
+            owned_target = repos.get_conversation_for_owner(
+                conn, body.conversation_id, request.state.user["username"]
+            )
+            if owned_target is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"归属的导引会话不存在：{body.conversation_id}",
+                )
         team = repos.get_team(conn, team_id)
         if team is None:
             raise HTTPException(status_code=404, detail=f"团队不存在：{team_id}")

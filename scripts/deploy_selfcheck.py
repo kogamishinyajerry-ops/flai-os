@@ -9,6 +9,11 @@
     2. 核心表齐全（缺表=init_db 没跑）
     3. ≥1 活跃账户（ADR-0019 D9：users 空=全员锁在门外，部署第一条命令是 user_admin.py create）
     4. 数据分级轴存在（files/samples 有 classification 列，ADR-0021 代际见证）
+    4b. P2.3 SQLite schema 见证：conversations/conversation_messages 的
+        identity-critical 完整显式表合同（fresh + 仓内 legacy ALTER 形态）、
+        conversation_questions canonical table shape，以及三表所有登记索引/
+        触发器的完整 SQL。未知列、索引、触发器 fail-closed；只证结构，
+        不宣称存量 owner 或 Question 数据完整。
     5. worker 心跳+代际（Codex R1 审 P1）：Job Runner 是独立进程——API 换新而
        worker 未重启时，旧 worker 落库走 DDL DEFAULT 洗白派生分级。要求心跳
        60 秒内新鲜且代际=当前 WORKER_GENERATION。**部署顺序：先起 API+worker
@@ -22,7 +27,9 @@
        查与鉴权 401 都会假 PASS，必须要活进程自报的代际标记）
     8b. health 含 created_by_username_axis=true（迁移 #9 运行进程代际，Codex 治理审
         P2：库补列后旧 API 未重启窗口会造无归因 user 任务混入 legacy NULL 群）
-    8c. health 含 eval_snapshot_axis=true（T2/#5 运行进程代际，Codex R0 审 P1：enqueue
+    8c. health 含 structured_question_axis=true 与服务侧 schema witnesses：
+        独立拦住仅有更早 created_by_username_axis 的旧 API/旧库假绿。
+    8d. health 含 eval_snapshot_axis=true（T2/#5 运行进程代际，Codex R0 审 P1：enqueue
         须冻结不可变快照——旧 API 未重启会入队无 handle 的 run、worker 回退活磁盘执行，
         「评的就是晋升的那版」不可变保证静默失效。配合 WORKER_GENERATION bump 双向见证）
     9. health.db_identity = 探针侧库路径指纹（Codex R1 审 P2：两侧 FLAI_DB_PATH
@@ -52,14 +59,20 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-# 只从 config 导（纯 stdlib）——从 jobs.runner 导会连带拉 repos→jsonschema，
-# 破坏本探针「免应用依赖、系统 Python 可跑」的承诺（Codex R2 审 P2）。
+# 只导入纯 stdlib 应用模块——从 jobs.runner 导会连带拉
+# repos→jsonschema，破坏本探针「免应用依赖、系统 Python 可跑」的承诺。
 from backend.app import config  # noqa: E402
+from backend.app.storage.p23_schema import (  # noqa: E402
+    P23_SCHEMA_WITNESS_KEYS as _P23_SCHEMA_WITNESS_KEYS,
+)
+from backend.app.storage.p23_schema import (  # noqa: E402
+    p23_schema_witnesses as _p23_schema_witnesses,
+)
 
 WORKER_GENERATION = config.WORKER_GENERATION
 _WORKER_STALE_SECONDS = 60
 
-# 缺任何一张=init_db 没跑或库文件指错——直接列全量九表+鉴权两表，不挑子集。
+# 缺任何一张=init_db 没跑或库文件指错——列出全部必需表，不挑子集。
 REQUIRED_TABLES = frozenset({
     "agents", "agent_versions", "tasks", "task_events", "files", "feedback",
     "tool_runs", "model_calls", "samples", "conversations",
@@ -68,9 +81,19 @@ REQUIRED_TABLES = frozenset({
     # T2/#5（Codex R0 审 P1 schema 见证）：不可变评测快照表——库未迁出此表=旧代际，
     # enqueue 冻结快照将报错。与 health.eval_snapshot_axis（活进程见证）互补。
     "eval_snapshots",
+    # P2.3 结构化提问持久化；列/索引/触发器由独立 schema
+    # witness 继续校验，不只靠表名假绿。
+    "conversation_questions",
 })
 
 _HTTP_TIMEOUT = 10
+_P23_SCHEMA_WITNESS_LABELS = {
+    "conversation_table_shape": "conversations identity-critical shape",
+    "message_table_shape": "conversation_messages identity-critical shape",
+    "question_table_shape": "conversation_questions canonical table shape",
+    "required_indexes": "required indexes",
+    "required_triggers": "required triggers",
+}
 
 
 class Check:
@@ -130,6 +153,27 @@ def check_classification_axis(conn: sqlite3.Connection) -> Check:
             f"{missing} 缺 classification 列——库是旧代际，先跑 scripts/init_db 迁移",
         )
     return Check("数据分级轴（ADR-0021）", True, "files/samples 均有 classification 列")
+
+
+def check_p23_schema(conn: sqlite3.Connection) -> Check:
+    """P2.3 identity-table/index/trigger witness, never historical data."""
+    witnesses = _p23_schema_witnesses(conn)
+    missing_labels = [
+        _P23_SCHEMA_WITNESS_LABELS.get(key, key)
+        for key in _P23_SCHEMA_WITNESS_KEYS
+        if witnesses.get(key) is not True
+    ]
+    if missing_labels:
+        return Check(
+            "P2.3 结构化提问 schema",
+            False,
+            f"schema witness 缺失 {missing_labels}——旧库、迁移未完或结构被破坏",
+        )
+    return Check(
+        "P2.3 结构化提问 schema",
+        True,
+        "P2.3 schema witnesses complete (structure only; no historical data claim)",
+    )
 
 
 def check_worker_generation(conn: sqlite3.Connection) -> Check:
@@ -283,6 +327,47 @@ def check_live_created_by_username_generation(base_url: str) -> Check:
     )
 
 
+def check_live_structured_question_generation(base_url: str) -> Check:
+    """P2.3 live-code + served-DB witness; old username-axis APIs must fail.
+
+    The remote schema map is checked independently from the probe-side SQLite
+    inspection.  Both are structure witnesses only and make no claim about
+    historical row ownership or Question outcomes.
+    """
+    name = "运行进程 P2.3 结构化提问代际"
+    url = f"{base_url}/api/health"
+    try:
+        _, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check(name, False, f"{url} 不可达或非 JSON：{exc}")
+    if payload.get("structured_question_axis") is not True:
+        return Check(
+            name,
+            False,
+            "health 无 structured_question_axis=true——运行中 API 是 P2.3 之前"
+            "旧进程；created_by_username_axis 不能替代本代际，fail-closed",
+        )
+    witnesses = payload.get("p23_schema_witnesses")
+    if not isinstance(witnesses, dict):
+        return Check(name, False, "health 缺 p23_schema_witnesses 结构见证")
+    missing = [
+        key for key in _P23_SCHEMA_WITNESS_KEYS
+        if witnesses.get(key) is not True
+    ]
+    if missing:
+        return Check(
+            name,
+            False,
+            f"活服务实际连库的 P2.3 schema witness 缺失 {missing}",
+        )
+    return Check(
+        name,
+        True,
+        "活进程自报 structured_question_axis=true，且服务侧 schema witnesses 全在位",
+    )
+
+
 def check_live_eval_snapshot_generation(base_url: str) -> Check:
     """T2/#5 运行进程的不可变快照代际见证（Codex R0 审 P1）：eval_snapshots 表存在
     （检查 2）只证磁盘，活 API 必须自报 eval_snapshot_axis——否则「DB 已迁移+worker 已
@@ -367,6 +452,7 @@ def main() -> int:
         try:
             for fn in (
                 check_tables, check_active_user, check_classification_axis,
+                check_p23_schema,
                 check_worker_generation,
             ):
                 try:
@@ -377,13 +463,17 @@ def main() -> int:
         finally:
             conn.close()
     else:
-        for name in ("核心表齐全", "≥1 活跃账户", "数据分级轴（ADR-0021）", "worker 心跳代际"):
+        for name in (
+            "核心表齐全", "≥1 活跃账户", "数据分级轴（ADR-0021）",
+            "P2.3 结构化提问 schema", "worker 心跳代际",
+        ):
             checks.append(Check(name, False, "跳过：DB 文件缺失"))
 
     checks.append(check_health(base_url))
     checks.append(check_model_gateway_config(base_url))
     checks.append(check_live_classification_generation(base_url))
     checks.append(check_live_created_by_username_generation(base_url))
+    checks.append(check_live_structured_question_generation(base_url))
     checks.append(check_live_eval_snapshot_generation(base_url))
     checks.append(check_db_identity(base_url, db_path))
     checks.append(check_auth_generation(base_url))

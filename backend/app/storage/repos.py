@@ -10,9 +10,10 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from jsonschema import ValidationError, validate
@@ -23,6 +24,8 @@ from ..core.statemachine import assert_transition, is_terminal
 
 _EVENT_SCHEMA_PATH = CONTRACTS_DIR / "event.schema.json"
 _event_schema_cache: dict[str, Any] | None = None
+_QUESTION_ID_RE = re.compile(r"^q_[a-f0-9]{32}$")
+_MESSAGE_ID_RE = re.compile(r"^msg_[a-f0-9]{32}$")
 
 
 def _now_iso() -> str:
@@ -1221,16 +1224,35 @@ def create_conversation(
     conversation_id: str,
     agent_id: str,
     created_by: str,
+    created_by_username: str,
 ) -> dict[str, Any]:
-    """建会话：初始态 active，无推荐（recommendation 留 NULL 待对话产出）。"""
+    """建会话：初始态 active，无推荐（recommendation 留 NULL 待对话产出）。
+
+    ``created_by`` 是展示名；``created_by_username`` 是 P2.3 稳定 owner。运行时
+    新建必须携带非空认证 username；legacy NULL 只能作为迁移前已经存在的事实，
+    不得再经当前仓储入口制造。本仓储层不提供 owner 更新函数：非 NULL owner
+    另由 DB trigger 锁死不可变。
+    """
+    if not isinstance(created_by_username, str) or not created_by_username.strip():
+        raise ValueError("created_by_username must be a non-blank string")
     now = _now_iso()
     conn.execute(
         """
         INSERT INTO conversations
-            (id, agent_id, status, created_by, recommendation_json, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?)
+            (id, agent_id, status, created_by, created_by_username,
+             recommendation_json, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?)
         """,
-        (conversation_id, agent_id, "active", created_by, None, now, now),
+        (
+            conversation_id,
+            agent_id,
+            "active",
+            created_by,
+            created_by_username,
+            None,
+            now,
+            now,
+        ),
     )
     return get_conversation(conn, conversation_id)  # type: ignore[return-value]
 
@@ -1242,23 +1264,37 @@ def get_conversation(conn: sqlite3.Connection, conversation_id: str) -> dict[str
     return _decode_conversation(row) if row is not None else None
 
 
+def get_conversation_for_owner(
+    conn: sqlite3.Connection, conversation_id: str, created_by_username: str
+) -> dict[str, Any] | None:
+    """按 id + exact username 取会话；foreign 与 legacy NULL 都返回 None。
+
+    这是所有普通用户 conversation_id 引用的单一仓储判据。刻意不用
+    ``created_by``（display_name 可撞名），也不为 NULL 猜测/回填 owner。
+    """
+    row = conn.execute(
+        "SELECT * FROM conversations WHERE id = ? AND created_by_username = ?",
+        (conversation_id, created_by_username),
+    ).fetchone()
+    return _decode_conversation(row) if row is not None else None
+
+
 def list_conversations(
     conn: sqlite3.Connection,
     *,
-    created_by: str | None = None,
+    created_by_username: str,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    clauses: list[str] = []
-    params: list[Any] = []
-    if created_by is not None:
-        clauses.append("created_by = ?")
-        params.append(created_by)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params.extend([limit, offset])
+    """列当前 exact username 的会话；无“不过滤”普通用户路径。
+
+    ``created_by_username = ?`` 天然排除 legacy NULL。调用者不能用 display_name
+    或客户端 owner 参数扩张结果集。
+    """
     rows = conn.execute(
-        f"SELECT * FROM conversations {where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
-        params,
+        "SELECT * FROM conversations WHERE created_by_username = ? "
+        "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+        (created_by_username, limit, offset),
     ).fetchall()
     return [_decode_conversation(r) for r in rows]
 
@@ -1281,13 +1317,23 @@ def append_message(
     """
     now = _now_iso()
     rec_json = json.dumps(recommendation, ensure_ascii=False) if recommendation is not None else None
+    message_id = f"msg_{uuid.uuid4().hex}"
     cur = conn.execute(
         """
         INSERT INTO conversation_messages
-            (conversation_id, role, content, recommendation_json, file_ids, created_at)
-        VALUES (?,?,?,?,?,?)
+            (message_id, conversation_id, role, content,
+             recommendation_json, file_ids, created_at)
+        VALUES (?,?,?,?,?,?,?)
         """,
-        (conversation_id, role, content, rec_json, json.dumps(file_ids or [], ensure_ascii=False), now),
+        (
+            message_id,
+            conversation_id,
+            role,
+            content,
+            rec_json,
+            json.dumps(file_ids or [], ensure_ascii=False),
+            now,
+        ),
     )
     conn.execute(
         "UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conversation_id)
@@ -1306,6 +1352,18 @@ def list_messages(conn: sqlite3.Connection, conversation_id: str) -> list[dict[s
     return [_decode_message(r) for r in rows]
 
 
+def get_message_by_public_id(
+    conn: sqlite3.Connection, conversation_id: str, message_id: str
+) -> dict[str, Any] | None:
+    """按 conversation + public message id 精确取消息，路径错配统一不可见。"""
+    row = conn.execute(
+        "SELECT * FROM conversation_messages "
+        "WHERE conversation_id = ? AND message_id = ?",
+        (conversation_id, message_id),
+    ).fetchone()
+    return _decode_message(row) if row is not None else None
+
+
 def count_messages(conn: sqlite3.Connection, conversation_id: str) -> int:
     """会话消息计数——post_message 乐观并发检查用（ADR-0013）。"""
     row = conn.execute(
@@ -1313,6 +1371,525 @@ def count_messages(conn: sqlite3.Connection, conversation_id: str) -> int:
         (conversation_id,),
     ).fetchone()
     return int(row[0])
+
+
+# ── structured conversation questions（P2.3）────────────────────────
+
+def _question_timestamp(
+    value: str | datetime | None, *, field: str
+) -> tuple[str, datetime]:
+    """Validate an aware ISO timestamp and return canonical fixed-microsecond UTC."""
+    if value is None:
+        value = _now_iso()
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        parseable = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+        try:
+            parsed = datetime.fromisoformat(parseable)
+        except ValueError as exc:
+            raise ValueError(f"{field} must be an ISO 8601 timestamp") from exc
+    else:
+        raise ValueError(f"{field} must be an ISO 8601 timestamp")
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field} must include a timezone")
+    utc = parsed.astimezone(timezone.utc)
+    return utc.isoformat(timespec="microseconds"), utc
+
+
+def _question_text(
+    value: Any, *, field: str, maximum: int, nullable: bool = False
+) -> str | None:
+    if value is None and nullable:
+        return None
+    if not isinstance(value, str) or not value.strip() or len(value) > maximum:
+        raise ValueError(f"invalid question {field}")
+    return value
+
+
+def _normalize_question_spec(question_spec: dict[str, Any]) -> dict[str, Any]:
+    """Freeze the parser output without relying on SQLite JSON1 validation."""
+    if not isinstance(question_spec, dict):
+        raise ValueError("question_spec must be an object")
+    allowed = {"kind", "prompt", "description", "options"}
+    if set(question_spec) - allowed or not {"kind", "prompt"} <= set(question_spec):
+        raise ValueError("invalid question spec fields")
+
+    kind = question_spec["kind"]
+    if kind not in ("single_choice", "free_text"):
+        raise ValueError("invalid question kind")
+    prompt = _question_text(question_spec["prompt"], field="prompt", maximum=500)
+    description = _question_text(
+        question_spec.get("description"),
+        field="description",
+        maximum=1000,
+        nullable=True,
+    )
+    raw_options = question_spec.get("options", [])
+    if not isinstance(raw_options, list):
+        raise ValueError("question options must be an array")
+    if kind == "single_choice" and not 2 <= len(raw_options) <= 6:
+        raise ValueError("single-choice questions require 2-6 frozen options")
+    if kind == "free_text" and raw_options:
+        raise ValueError("free-text questions cannot carry options")
+
+    options: list[dict[str, Any]] = []
+    seen_labels: set[str] = set()
+    for index, raw_option in enumerate(raw_options, start=1):
+        if not isinstance(raw_option, dict):
+            raise ValueError("question option must be an object")
+        if set(raw_option) - {"id", "label", "description"}:
+            raise ValueError("invalid question option fields")
+        expected_id = f"option_{index}"
+        if raw_option.get("id") != expected_id:
+            raise ValueError("question option ids must be deterministic")
+        label = _question_text(raw_option.get("label"), field="option label", maximum=200)
+        label_key = label.strip().casefold()
+        if label_key in seen_labels:
+            raise ValueError("question option labels must be unique")
+        seen_labels.add(label_key)
+        option_description = _question_text(
+            raw_option.get("description"),
+            field="option description",
+            maximum=500,
+            nullable=True,
+        )
+        options.append(
+            {
+                "id": expected_id,
+                "label": label,
+                "description": option_description,
+            }
+        )
+    return {
+        "kind": kind,
+        "prompt": prompt,
+        "description": description,
+        "options": options,
+    }
+
+
+def validate_question_answer(
+    question: dict[str, Any], answer: dict[str, Any]
+) -> dict[str, Any]:
+    """Validate an answer against the exact frozen option set and return a copy."""
+    if not isinstance(answer, dict):
+        raise ValueError("question answer must be an object")
+    answer_kind = answer.get("kind")
+    if answer_kind == "option":
+        if set(answer) != {"kind", "option_id"}:
+            raise ValueError("invalid option answer fields")
+        option_id = answer.get("option_id")
+        frozen_ids = {
+            option.get("id")
+            for option in question.get("options", [])
+            if isinstance(option, dict)
+        }
+        if question.get("kind") != "single_choice" or option_id not in frozen_ids:
+            raise ValueError("answer option is not in the frozen question")
+        return {"kind": "option", "option_id": option_id}
+    if answer_kind == "text":
+        if set(answer) != {"kind", "text"}:
+            raise ValueError("invalid text answer fields")
+        text = answer.get("text")
+        if not isinstance(text, str) or not text.strip() or len(text) > 4000:
+            raise ValueError("invalid text answer")
+        if question.get("kind") not in ("single_choice", "free_text"):
+            raise ValueError("question does not accept text")
+        return {"kind": "text", "text": text}
+    raise ValueError("invalid question answer kind")
+
+
+def _begin_question_write(conn: sqlite3.Connection) -> str | None:
+    """Acquire a write lock, or isolate this primitive inside a caller transaction."""
+    if conn.in_transaction:
+        savepoint = f"question_{uuid.uuid4().hex}"
+        conn.execute(f"SAVEPOINT {savepoint}")
+        return savepoint
+    conn.execute("BEGIN IMMEDIATE")
+    return None
+
+
+def _commit_question_write(conn: sqlite3.Connection, savepoint: str | None) -> None:
+    if savepoint is None:
+        conn.execute("COMMIT")
+    else:
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+
+
+def _rollback_question_write(conn: sqlite3.Connection, savepoint: str | None) -> None:
+    if savepoint is None:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        return
+    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+
+
+def _project_question(
+    row: sqlite3.Row, *, now: str | datetime | None = None
+) -> dict[str, Any]:
+    now_iso, now_utc = _question_timestamp(now, field="now")
+    del now_iso  # only the exact instant is needed for the derived status
+    created_iso, _ = _question_timestamp(row["created_at"], field="created_at")
+    expires_iso, expires_utc = _question_timestamp(row["expires_at"], field="expires_at")
+    options = json.loads(row["options_json"])
+    closed_reason = row["closed_reason"]
+
+    answer_projection: dict[str, Any] | None = None
+    if closed_reason == "answered":
+        payload = json.loads(row["answer_json"])
+        closed_iso, _ = _question_timestamp(row["closed_at"], field="closed_at")
+        # There is intentionally no second answered_at column: closed_at is the
+        # immutable resolution instant and is projected as public answered_at.
+        answer_projection = {
+            "schema_version": "conversation-answer/v1",
+            "question_id": row["id"],
+            "question_revision": row["revision"],
+            "submission_id": row["submission_id"],
+            "payload": payload,
+            "answered_by_username": row["answered_by_username"],
+            "answered_at": closed_iso,
+            "answer_message_id": row["answer_message_id"],
+            "response_message_id": row["response_message_id"],
+        }
+        status = "answered"
+        closed_at = closed_iso
+    elif closed_reason in ("expired", "superseded"):
+        status = closed_reason
+        closed_at, _ = _question_timestamp(row["closed_at"], field="closed_at")
+    elif now_utc >= expires_utc:
+        # Natural expiry is projected without a mutable persisted status. Until
+        # the next write closes it, expires_at is also the truthful close instant.
+        status = "expired"
+        closed_at = expires_iso
+    else:
+        status = "pending"
+        closed_at = None
+
+    return {
+        "schema_version": "conversation-question/v1",
+        "id": row["id"],
+        "conversation_id": row["conversation_id"],
+        "prompt_message_id": row["prompt_message_id"],
+        "revision": row["revision"],
+        "kind": row["kind"],
+        "prompt": row["prompt"],
+        "description": row["description"],
+        "options": options,
+        "asked_to_username": row["asked_to_username"],
+        "status": status,
+        "created_at": created_iso,
+        "expires_at": expires_iso,
+        "answer": answer_projection,
+        "closed_at": closed_at,
+    }
+
+
+def get_question(
+    conn: sqlite3.Connection,
+    question_id: str,
+    *,
+    conversation_id: str | None = None,
+    asked_to_username: str | None = None,
+    now: str | datetime | None = None,
+) -> dict[str, Any] | None:
+    clauses = ["id = ?"]
+    params: list[Any] = [question_id]
+    if conversation_id is not None:
+        clauses.append("conversation_id = ?")
+        params.append(conversation_id)
+    if asked_to_username is not None:
+        clauses.append("asked_to_username = ?")
+        params.append(asked_to_username)
+    row = conn.execute(
+        f"SELECT * FROM conversation_questions WHERE {' AND '.join(clauses)}",
+        params,
+    ).fetchone()
+    return _project_question(row, now=now) if row is not None else None
+
+
+def list_questions(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    *,
+    now: str | datetime | None = None,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM conversation_questions WHERE conversation_id = ? "
+        "ORDER BY created_at ASC, id ASC",
+        (conversation_id,),
+    ).fetchall()
+    return [_project_question(row, now=now) for row in rows]
+
+
+def get_unresolved_question(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    asked_to_username: str,
+    *,
+    now: str | datetime | None = None,
+) -> dict[str, Any] | None:
+    """Return the persisted unresolved row; projection may already be expired."""
+    row = conn.execute(
+        "SELECT * FROM conversation_questions "
+        "WHERE conversation_id = ? AND asked_to_username = ? "
+        "AND closed_reason IS NULL ORDER BY created_at DESC, id DESC LIMIT 1",
+        (conversation_id, asked_to_username),
+    ).fetchone()
+    return _project_question(row, now=now) if row is not None else None
+
+
+def _close_unresolved_question_rows(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    asked_to_username: str,
+    *,
+    now_iso: str,
+    now_utc: datetime,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM conversation_questions "
+        "WHERE conversation_id = ? AND asked_to_username = ? "
+        "AND closed_reason IS NULL ORDER BY created_at ASC, id ASC",
+        (conversation_id, asked_to_username),
+    ).fetchall()
+    closed_ids: list[str] = []
+    for row in rows:
+        expires_iso, expires_utc = _question_timestamp(
+            row["expires_at"], field="expires_at"
+        )
+        reason = "expired" if now_utc >= expires_utc else "superseded"
+        closed_at = expires_iso if reason == "expired" else now_iso
+        cur = conn.execute(
+            "UPDATE conversation_questions SET closed_reason = ?, closed_at = ? "
+            "WHERE id = ? AND closed_reason IS NULL",
+            (reason, closed_at, row["id"]),
+        )
+        if cur.rowcount == 1:
+            closed_ids.append(row["id"])
+    projections: list[dict[str, Any]] = []
+    for question_id in closed_ids:
+        row = conn.execute(
+            "SELECT * FROM conversation_questions WHERE id = ?", (question_id,)
+        ).fetchone()
+        if row is not None:
+            projections.append(_project_question(row, now=now_iso))
+    return projections
+
+
+def close_unresolved_questions(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    asked_to_username: str,
+    *,
+    now: str | datetime,
+) -> list[dict[str, Any]]:
+    """Atomically close the prior unresolved Question at its truthful instant."""
+    now_iso, now_utc = _question_timestamp(now, field="now")
+    savepoint = _begin_question_write(conn)
+    try:
+        result = _close_unresolved_question_rows(
+            conn,
+            conversation_id,
+            asked_to_username,
+            now_iso=now_iso,
+            now_utc=now_utc,
+        )
+        _commit_question_write(conn, savepoint)
+        return result
+    except Exception:
+        _rollback_question_write(conn, savepoint)
+        raise
+
+
+def create_question(
+    conn: sqlite3.Connection,
+    *,
+    question_id: str,
+    conversation_id: str,
+    prompt_message_id: str,
+    asked_to_username: str,
+    question_spec: dict[str, Any],
+    created_at: str | datetime,
+    expires_at: str | datetime,
+) -> dict[str, Any]:
+    """Close any prior unresolved Question and atomically insert revision 1."""
+    if not _QUESTION_ID_RE.fullmatch(question_id):
+        raise ValueError("invalid public question id")
+    if not _MESSAGE_ID_RE.fullmatch(prompt_message_id):
+        raise ValueError("invalid public prompt message id")
+    if (
+        not isinstance(asked_to_username, str)
+        or not asked_to_username.strip()
+        or len(asked_to_username) > 100
+    ):
+        raise ValueError("invalid asked_to_username")
+    spec = _normalize_question_spec(question_spec)
+    created_iso, created_utc = _question_timestamp(created_at, field="created_at")
+    expires_iso, expires_utc = _question_timestamp(expires_at, field="expires_at")
+    if expires_utc - created_utc != timedelta(hours=24):
+        raise ValueError("question TTL must be exactly 24 hours")
+    options_json = json.dumps(
+        spec["options"], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+
+    savepoint = _begin_question_write(conn)
+    try:
+        _close_unresolved_question_rows(
+            conn,
+            conversation_id,
+            asked_to_username,
+            now_iso=created_iso,
+            now_utc=created_utc,
+        )
+        conn.execute(
+            """
+            INSERT INTO conversation_questions
+                (id, conversation_id, prompt_message_id, asked_to_username,
+                 revision, kind, prompt, description, options_json,
+                 created_at, expires_at, closed_reason, closed_at,
+                 submission_id, answer_json, answered_by_username,
+                 answer_message_id, response_message_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                question_id,
+                conversation_id,
+                prompt_message_id,
+                asked_to_username,
+                1,
+                spec["kind"],
+                spec["prompt"],
+                spec["description"],
+                options_json,
+                created_iso,
+                expires_iso,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM conversation_questions WHERE id = ?", (question_id,)
+        ).fetchone()
+        if row is None:  # pragma: no cover - INSERT success makes this impossible
+            raise RuntimeError("question insert was not observable")
+        result = _project_question(row, now=created_iso)
+        _commit_question_write(conn, savepoint)
+        return result
+    except Exception:
+        _rollback_question_write(conn, savepoint)
+        raise
+
+
+def resolve_question(
+    conn: sqlite3.Connection,
+    *,
+    question_id: str,
+    conversation_id: str,
+    asked_to_username: str,
+    submission_id: str,
+    answer: dict[str, Any],
+    answered_at: str | datetime,
+    answer_message_id: str,
+    response_message_id: str,
+) -> dict[str, Any] | None:
+    """CAS the first complete answer; exact same submission+payload replays."""
+    answered_iso, answered_utc = _question_timestamp(answered_at, field="answered_at")
+    savepoint = _begin_question_write(conn)
+    try:
+        row = conn.execute(
+            "SELECT * FROM conversation_questions "
+            "WHERE id = ? AND conversation_id = ? AND asked_to_username = ?",
+            (question_id, conversation_id, asked_to_username),
+        ).fetchone()
+        if row is None:
+            _commit_question_write(conn, savepoint)
+            return None
+
+        question = _project_question(row, now=answered_iso)
+        if row["closed_reason"] == "answered":
+            normalized_answer = validate_question_answer(question, answer)
+            existing_answer = json.loads(row["answer_json"])
+            result = (
+                question
+                if row["submission_id"] == submission_id
+                and existing_answer == normalized_answer
+                else None
+            )
+            _commit_question_write(conn, savepoint)
+            return result
+        if row["closed_reason"] is not None:
+            _commit_question_write(conn, savepoint)
+            return None
+
+        _, expires_utc = _question_timestamp(row["expires_at"], field="expires_at")
+        if answered_utc >= expires_utc:
+            conn.execute(
+                "UPDATE conversation_questions "
+                "SET closed_reason = 'expired', closed_at = expires_at "
+                "WHERE id = ? AND closed_reason IS NULL",
+                (question_id,),
+            )
+            _commit_question_write(conn, savepoint)
+            return None
+
+        normalized_answer = validate_question_answer(question, answer)
+        if (
+            not isinstance(submission_id, str)
+            or not 8 <= len(submission_id) <= 128
+        ):
+            raise ValueError("invalid submission_id")
+        if not _MESSAGE_ID_RE.fullmatch(answer_message_id):
+            raise ValueError("invalid answer_message_id")
+        if not _MESSAGE_ID_RE.fullmatch(response_message_id):
+            raise ValueError("invalid response_message_id")
+        answer_json = json.dumps(
+            normalized_answer,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        cur = conn.execute(
+            """
+            UPDATE conversation_questions
+            SET closed_reason = 'answered', closed_at = ?, submission_id = ?,
+                answer_json = ?, answered_by_username = ?,
+                answer_message_id = ?, response_message_id = ?
+            WHERE id = ? AND conversation_id = ? AND asked_to_username = ?
+              AND closed_reason IS NULL
+            """,
+            (
+                answered_iso,
+                submission_id,
+                answer_json,
+                asked_to_username,
+                answer_message_id,
+                response_message_id,
+                question_id,
+                conversation_id,
+                asked_to_username,
+            ),
+        )
+        if cur.rowcount != 1:
+            _commit_question_write(conn, savepoint)
+            return None
+        resolved_row = conn.execute(
+            "SELECT * FROM conversation_questions WHERE id = ?", (question_id,)
+        ).fetchone()
+        if resolved_row is None:  # pragma: no cover - immutable row cannot vanish
+            raise RuntimeError("resolved question was not observable")
+        result = _project_question(resolved_row, now=answered_iso)
+        _commit_question_write(conn, savepoint)
+        return result
+    except Exception:
+        _rollback_question_write(conn, savepoint)
+        raise
 
 
 def set_conversation_recommendation(

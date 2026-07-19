@@ -1,5 +1,19 @@
 # guide_agent changelog
 
+## 0.4.0（2026-07-19，结构化澄清 Question，ADR-0033）
+
+- **把信息不足从自由文本追问收成显式 Question 提议**：模型仅可在
+  `<<QUESTION>>...<<END_QUESTION>>` 中提出一个 `single_choice` 或
+  `free_text` 澄清问题；Question 与 `<<PLAN>>` 互斥，畸形块 fail-closed，普通
+  prose 不会被猜成结构化问题。
+- **模型权限保持最小**：模型只提议问题正文、说明和选项；问题 id、精确接收
+  username、revision、24 小时期限、状态、回答消息及幂等 submission id 均由平台
+  生成和持久化。Question/Answer 不进入 task review，也没有批准、驳回或签发含义。
+- 新增独立 `question_output_schema.json`，只约束模型可控提议字段，与平台公开
+  Question/Answer 合同分离。Registry 会核验 workflow 静态引用的包内 schema
+  存在且合法；评测 digest 与不可变快照冻结其**原始字节**，同版本下改动会令旧
+  评测证据失效。
+
 ## 0.3.0（2026-07-09，M8 编排官化，ADR-0012）
 
 - **从「单 Agent 推荐」升级为「编排官」**：导引成为真正的门面——听懂需求后做

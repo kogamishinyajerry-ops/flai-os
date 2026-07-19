@@ -89,10 +89,10 @@ invalid-input witness，再进入实现。
 
 | 阶段 | 目标 | 先决条件与机械退出门 |
 |---|---|---|
-| P2.1 断连诚实度（已实现，待全量门） | 借鉴 JerryAgent，把 `connection`、`lastSuccessAt`、旧快照提示与 task exact cursor 投影到现有阅读轴 | 旧 task/event 响应不改；additive live-snapshot 提供 gap 检测；冷断连零假数据、暖断连标旧、重连 sequence-zero 覆盖，并有 Node + contract + E2E witness |
-| P2.2 视觉信任债 | 收口 Element Plus 旁路语义色、Agent 类别色暗色对比和残留 reduced-motion 位移 | 不新增信任色；light/dark 对比可测；desktop/narrow/focus/reduced-motion 四态通过应用内浏览器复核 |
-| P2.3 结构化问题 | 为普通澄清建立 Question/Answer 合同 | Question 与 task review API、状态机、权限完全分离；过期/重复回答 fail-closed |
-| P2.4 服务端寻址 | 在 B2 中实现会话/任务/产物可定位搜索 | 先以唯一 `username` 建 owner 合同与迁移 ADR；再决定 FTS5、分页、权限过滤和 inputs/output filename 范围 |
+| P2.1 断连诚实度（已完成，`b79592e`） | 借鉴 JerryAgent，把 `connection`、`lastSuccessAt`、旧快照提示与 task exact cursor 投影到现有阅读轴 | 旧 task/event 响应不改；additive live-snapshot 提供 gap 检测；冷断连零假数据、暖断连标旧、重连 sequence-zero 覆盖，并有 Node + contract + E2E witness |
+| P2.2 视觉信任债（已完成，`6e2baeb`） | 收口 Element Plus 旁路语义色、Agent 类别色暗色对比和残留 reduced-motion 位移 | 不新增信任色；light/dark 对比可测；desktop/narrow/focus/reduced-motion 四态通过应用内浏览器复核 |
+| P2.3 结构化问题（已完成，阶段冻结） | 为普通澄清建立 Question/Answer 合同 | Question 与 task review API、状态机、权限完全分离；exact owner、严格 envelope、稳定消息锚、原子回答、过期/重复/并发回答、schema 漂移均 fail-closed |
+| P2.4 服务端寻址（下一阶段） | 在 B2 中实现会话/任务/产物可定位搜索 | exact `username` owner 已完成；下一步先冻结 title/archive/search projection 与权限、分页、深链合同，再决定 FTS5 或跨 Windows 的确定性索引 |
 | P2.5 具名审核收件箱 | 把“点名请签”做成真正的收件箱而非全量排序 | 所有 task 创建入口同一契约；候选审核、人签与发布批准仍是三个状态；同名 display name 反例必须拒绝 |
 | P2.6 会话生命周期 | 标题、重命名、归档和历史分组 | owner 轴完成迁移；API/UI/审计事件和并发更新契约均有无效输入测试 |
 | P2.7 Open Design 生产 adapter | 新增独立 `mock=false` daemon tool，真实生成统一候选 | loopback、有界轮询、路径/内容清洗、exact provenance；成功只到 `waiting_review`，不写源码、不自动晋升 |
@@ -102,7 +102,7 @@ invalid-input witness，再进入实现。
 推荐严格按 P2.1→P2.9 推进；只有 P2.1 与 P2.2 可在互不重叠文件上并行。每阶段单独提交、
 单独验收，上一阶段未绿不得借下一阶段扩大范围掩盖失败。
 
-## 7. 本轮收口
+## 7. Phase 1 / Fable 受控迁移收口
 
 已受控迁入并验收的只有以下窄片：
 
@@ -117,3 +117,19 @@ invalid-input witness，再进入实现。
 未迁入。JerryAgent composer persistence 原型也在终审故障注入后撤出。最新稳定 cut 快照的
 定向证据为：后端 137/137、前端 Node 49/49、M6 14/14、frontend build 通过、双轴终审无
 P0–P2；最终发布门仍以 `bash scripts/verify_all.sh` 的当次退出码为准。
+
+## 8. P2 可信主线进度（2026-07-19）
+
+- P2.1 已以独立提交冻结：断连/旧快照/gap/强制 resnapshot 共用真实服务端快照，不补演
+  离线期间的伪新鲜 transition。
+- P2.2 已以独立提交冻结：暗色、390px、focus、reduced-motion、类别身份色与 Element
+  Plus 信任色 bridge 不再形成旁路语义色板。
+- P2.3 已完成实现与阶段验收：稳定 exact username owner、Question/Answer 公开合同、
+  原子 resolution、严格 schema/history gate 和单一写轴 QuestionCard。独立冻结证据为
+  后端 386/386、前端 Node 102/102、production build 通过、真实浏览器 22/22。最终工作树
+  `UV_OFFLINE=1 bash scripts/verify_all.sh` 退出码为 0：production build 通过、pytest
+  1480/1480、Node 102/102、20/20 条浏览器 E2E 脚本全部通过。M2 精确 selector
+  曾连续 10 次 10/10；加入“侧栏已有完成统计、当前任务仍 queued”的真实负例及有限正数
+  timeout 审查后，又连续 3 次 11/11，最终全量门为 11/11。
+- P2.4 尚未开始实现；只允许在 P2.3 阶段冻结之后开启，不得借下一阶段 schema 或 UI
+  扩面掩盖前一阶段债务。

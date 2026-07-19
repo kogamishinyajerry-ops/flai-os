@@ -737,13 +737,12 @@ def test_history_window_caps_messages_and_chars() -> None:
 
 
 def test_split_plan_preserves_tail_text(app_env) -> None:
-    """审计 P3：计划块之后的 assistant 文本此前被静默丢弃——现原样保留；
-    第二个计划块整体丢弃（只认第一块，sentinel 不外露）。"""
+    """审计 P3：唯一合法计划块之后的 assistant 文本不得被静默丢弃。"""
     client, app = app_env
     plan = _orchestrate([_agent("fta_agent", prefilled={"top_event": "X"})])
     reply = (
         "块前说明。\n" + _plan_reply("", plan).strip()
-        + "\n块后重要提醒：请补全组件清单。\n<<PLAN>>\n{\"decision\":\"orchestrate\",\"agents\":[{\"agent_id\":\"hello_agent\"}]}\n<<END>>"
+        + "\n块后重要提醒：请补全组件清单。"
     )
     _inject(app, _CannedStub(reply))
     conv_id = _open_conversation(client)
@@ -752,4 +751,24 @@ def test_split_plan_preserves_tail_text(app_env) -> None:
     assert "块前说明" in body["content"]
     assert "块后重要提醒" in body["content"], "计划块之后的文本不得静默丢弃"
     assert "<<PLAN>>" not in body["content"] and "<<END>>" not in body["content"]
-    assert body["recommendation"]["agents"][0]["agent_id"] == "fta_agent", "只认第一块"
+    assert body["recommendation"]["agents"][0]["agent_id"] == "fta_agent"
+
+
+def test_duplicate_plan_envelope_fails_round_without_partial_messages(app_env) -> None:
+    """重复 PLAN 不得再“只认第一块”：拓扑异常令整轮 502 且零落库。"""
+    client, app = app_env
+    first = _orchestrate([_agent("fta_agent", prefilled={"top_event": "X"})])
+    second = _orchestrate([_agent("hello_agent")])
+    reply = _plan_reply("块前说明。", first) + "\n" + _plan_reply("块间文本。", second)
+    _inject(app, _CannedStub(reply))
+    conv_id = _open_conversation(client)
+
+    resp = client.post(
+        f"/api/conversations/{conv_id}/messages", json={"content": "做故障树"}
+    )
+
+    assert resp.status_code == 502
+    assert "结构化计划" in resp.json()["detail"]
+    snapshot = client.get(f"/api/conversations/{conv_id}").json()
+    assert snapshot["messages"] == []
+    assert snapshot["recommendation"] is None

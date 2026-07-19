@@ -40,6 +40,10 @@ from .runtime.conversation import ConversationService
 from .runtime.runtime import AgentRuntime
 from .storage import repos
 from .storage.db import get_conn, init_db
+from .storage.p23_schema import (
+    P23_SCHEMA_WITNESS_KEYS as _P23_SCHEMA_WITNESS_KEYS,
+)
+from .storage.p23_schema import p23_schema_witnesses as _p23_schema_witnesses
 
 _WORKER_STALE_S = 60  # 与 deploy_selfcheck 同口径：心跳超 60s 视为 worker 已死/挂起
 
@@ -155,6 +159,16 @@ def create_app(
 
     @app.get("/api/health")
     def health() -> dict[str, object]:
+        try:
+            conn = conn_factory()
+            try:
+                p23_schema_witnesses = _p23_schema_witnesses(conn)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            p23_schema_witnesses = {
+                key: False for key in _P23_SCHEMA_WITNESS_KEYS
+            }
         return {
             "status": "ok",
             "agents": len(app.state.agent_registry.list()),
@@ -171,6 +185,11 @@ def create_app(
             # 脚本已跑迁移、API 仍旧码）时旧 API 无此位 → 部署自检 FAIL，operator
             # 据此知 API 未重启，避免旧 API 静默造无归因 user 任务混入 legacy NULL 群。
             "created_by_username_axis": True,
+            # P2.3 专属活进程代际：不复用更早的 task username 轴。
+            # schema witnesses 每次从服务实际连接的库读取，只证明三张表的
+            # identity/约束/索引/触发器合同，不宣称存量 owner 或 Question 数据完整。
+            "structured_question_axis": True,
+            "p23_schema_witnesses": p23_schema_witnesses,
             # T2/#5 不可变快照代际标记（Codex R0 审 P1 同款范式）：见证「活着的 API
             # 进程」跑的是 enqueue 冻结快照的代码。分离部署偏斜（DB 已迁移出 eval_snapshots
             # 表、worker 已更新，API 仍是 T1 旧码不冻结）时旧 API 无此位 → 部署自检 FAIL，
@@ -196,11 +215,26 @@ def create_app(
         conn = conn_factory()
         try:
             wf = _worker_freshness(conn)
+            p23_schema_witnesses = _p23_schema_witnesses(conn)
         finally:
             conn.close()
+        p23_schema_ready = all(
+            p23_schema_witnesses.get(key) is True
+            for key in _P23_SCHEMA_WITNESS_KEYS
+        )
+        ready = wf["fresh"] is True and p23_schema_ready is True
         return JSONResponse(
-            {"status": "ready" if wf["fresh"] else "degraded", "worker": wf},
-            status_code=200 if wf["fresh"] else 503,
+            {
+                "status": "ready" if ready is True else "degraded",
+                "worker": wf,
+                "structured_question_axis": True,
+                "p23": {
+                    "runtime_generation": True,
+                    "schema_ready": p23_schema_ready,
+                    "schema_witnesses": p23_schema_witnesses,
+                },
+            },
+            status_code=200 if ready is True else 503,
         )
 
     app.include_router(auth_api.router)

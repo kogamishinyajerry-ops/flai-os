@@ -11,11 +11,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 VERIFY_SH = SCRIPTS_DIR / "verify_all.sh"
 VERIFY_PS1 = SCRIPTS_DIR / "verify_all.ps1"
+M2_ACCEPTANCE = REPO_ROOT / "frontend" / "e2e" / "m2_acceptance.py"
 WITH_PACKAGE_RE = re.compile(r'''--with\s+(?:"([^"]+)"|'([^']+)'|([^\s`\\]+))''')
 
 EXPECTED_E2E_SCRIPTS = (
     "frontend/e2e/m2_acceptance.py",
     "frontend/e2e/m6_guide_acceptance.py",
+    "frontend/e2e/p23_question_acceptance.py",
     "frontend/e2e/m8_collab_chain_acceptance.py",
     "frontend/e2e/m8_guide_orchestrator_acceptance.py",
     "frontend/e2e/m8_workbench_acceptance.py",
@@ -219,6 +221,16 @@ def test_development_verification_entries_have_equivalent_coverage() -> None:
         POWERSHELL_EXECUTION_WIRING,
         powershell=True,
     )
+
+
+def test_m2_acceptance_has_no_wall_clock_or_temporary_debug_probe() -> None:
+    source = _read(M2_ACCEPTANCE)
+
+    assert "time.time()" not in source
+    assert 'lambda: "已完成" in page.locator("body").inner_text()' not in source
+    assert "[DEBUG-m2race]" not in source
+    assert "[M2-DIAG]" not in source
+    assert "[M2-STACK]" not in source
 
 
 def test_contract_parser_ignores_commented_paths_and_step_labels() -> None:

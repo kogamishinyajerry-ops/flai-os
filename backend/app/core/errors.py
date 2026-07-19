@@ -94,6 +94,21 @@ class ConversationConflictError(FlaiError):
     """会话被并发修改（本轮基于的历史已过期），本轮不落库，可重试（ADR-0013）。"""
 
 
+class ConversationQuestionNotFoundError(ConversationNotFoundError):
+    """结构化澄清问题不存在、路径不匹配或不属于当前 exact username。
+
+    三种情形统一为不可见，避免向错用户泄漏问题生命周期。
+    """
+
+
+class ConversationQuestionConflictError(ConversationConflictError):
+    """问题已回答、已过期、已被替代，或回答轮基于的消息历史已过期。"""
+
+
+class ConversationAnswerInvalidError(FlaiError):
+    """回答形状虽通过传输模型，但不符合该问题冻结的类型或选项。"""
+
+
 class ClearanceDeniedError(FlaiError):
     """Agent 密级准入上限不足以接收本轮材料（ADR-0030）——策略拒绝非报警红。
     任务路径在 API 层直接 400；交互路径由运行时抛本错误、API 层映射 400。"""

@@ -1,6 +1,6 @@
 id: open_design_fixture_generate
 name: "Open Design 本地可信夹具生成器"
-version: 0.1.0
+version: 0.1.1
 type: python_adapter
 mock: true
 description: >
@@ -50,7 +50,7 @@ input_schema:
         schema_version:
           const: flai-design-reference-package/v1
         package_sha256:
-          const: 38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94
+          const: 4fa241ae49d3c992168b2589779e24344749300a129e1f9478337974a3d68ca3
       additionalProperties: false
     open_design_protocol:
       type: object
@@ -129,7 +129,7 @@ output_schema:
     production_daemon_used:
       const: false
     fixture_id:
-      const: flai-task-review-assets-v1
+      const: flai-task-review-assets-v2
     fixture_sha256:
       type: string
       pattern: "^$|^[a-f0-9]{64}$"
@@ -458,15 +458,15 @@ output_schema:
       then:
         properties:
           fixture_sha256:
-            const: ad145be4e55a5ab46d660daeed6555cd01667b7a02fad92cc98e3203bdc53898
+            const: 70be2a7428ab385eb85e57845133b6b457402c6421c15d338a7f0a1b6b9eefd8
           request_sha256:
-            const: c6a56a02c8b742bd28d34060b4712097d83bc6d15b1822cd3a2e791d66d85d56
+            const: aab2740108a2d13aca53869f6c4c39b732a5ab3c2c3f3848f61bcb7915038f2c
           design_reference_package_sha256:
-            const: 38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94
+            const: 4fa241ae49d3c992168b2589779e24344749300a129e1f9478337974a3d68ca3
           design_reference_package:
-            const: {"schema_version":"flai-design-reference-package/v1","sources":{"app_tokens":{"path":"frontend/src/App.vue","sha256":"a0a2c365d8775b3c4cbdf30d255d50c606b1b6123a9355391636af17a0488a9c"},"motion_system":{"path":"docs/design/MOTION-SYSTEM.md","sha256":"8942f2d781e90b80af07fe61ac8697d9a3a6f7f46ce254d04ceadfa1b858bb9a"},"ui_paradigm":{"path":"docs/design/UI-PARADIGM.md","sha256":"6985d3ce38d9667d4a351c44499f0cd4685257adca956fb6475e0ca6247677b9"}},"theme":"light","token_allowlist":["--clay","--clay-deep","--ink","--ink-soft","--ink-faint","--page-bg","--card-bg","--paper-surface","--hairline","--trust-real","--trust-signed","--trust-fail","--trust-pending","--focus-ring-clay","--radius-sm","--radius-lg","--space-1","--space-2","--space-3","--space-4","--space-6","--shadow-card","--serif","--sans"],"tokens":{"--card-bg":"#ffffff","--clay":"#c15f3c","--clay-deep":"#a54e2f","--focus-ring-clay":"var(--clay)","--hairline":"#ece5db","--ink":"#2b2622","--ink-faint":"#a39d90","--ink-soft":"#6b6259","--page-bg":"#faf7f2","--paper-surface":"#fdfcf9","--radius-lg":"12px","--radius-sm":"6px","--sans":"\"PingFang SC\", \"Microsoft YaHei\", system-ui, -apple-system, sans-serif","--serif":"\"Iowan Old Style\", \"Palatino Linotype\", Palatino, \"Songti SC\", \"STSong\", \"Times New Roman\", serif","--shadow-card":"0 1px 2px rgba(43, 38, 34, 0.035), 0 4px 14px rgba(72, 58, 44, 0.05)","--space-1":"4px","--space-2":"8px","--space-3":"12px","--space-4":"16px","--space-6":"24px","--trust-fail":"#be3a3a","--trust-pending":"#a8761a","--trust-real":"#2e8f50","--trust-signed":"#167d8b"},"trust_color_constraints":{"--clay":"work_or_selected_only","--trust-fail":"true_failure_or_rejection_only","--trust-pending":"unverified_degraded_or_waiting_review_only","--trust-real":"real_evidence_only","--trust-signed":"human_signed_only","cancelled":"neutral_no_trust_color","completed":"neutral_no_trust_color","human_is_only_signer":true}}
+            const: {"schema_version":"flai-design-reference-package/v1","sources":{"app_tokens":{"path":"frontend/src/App.vue","sha256":"b19bfd2fad7d66e6d02917f4e20d2e78c1ea30d48d836d5aed987ad0a5219ed7"},"motion_system":{"path":"docs/design/MOTION-SYSTEM.md","sha256":"8942f2d781e90b80af07fe61ac8697d9a3a6f7f46ce254d04ceadfa1b858bb9a"},"ui_paradigm":{"path":"docs/design/UI-PARADIGM.md","sha256":"6985d3ce38d9667d4a351c44499f0cd4685257adca956fb6475e0ca6247677b9"}},"theme":"light","token_allowlist":["--clay","--clay-deep","--ink","--ink-soft","--ink-faint","--page-bg","--card-bg","--paper-surface","--hairline","--trust-real","--trust-signed","--trust-fail","--trust-pending","--focus-ring-clay","--radius-sm","--radius-lg","--space-1","--space-2","--space-3","--space-4","--space-6","--shadow-card","--serif","--sans"],"tokens":{"--card-bg":"#ffffff","--clay":"#c15f3c","--clay-deep":"#a54e2f","--focus-ring-clay":"var(--clay)","--hairline":"#ece5db","--ink":"#2b2622","--ink-faint":"#a39d90","--ink-soft":"#6b6259","--page-bg":"#faf7f2","--paper-surface":"#fdfcf9","--radius-lg":"12px","--radius-sm":"6px","--sans":"\"PingFang SC\", \"Microsoft YaHei\", system-ui, -apple-system, sans-serif","--serif":"\"Iowan Old Style\", \"Palatino Linotype\", Palatino, \"Songti SC\", \"STSong\", \"Times New Roman\", serif","--shadow-card":"0 1px 2px rgba(43, 38, 34, 0.035), 0 4px 14px rgba(72, 58, 44, 0.05)","--space-1":"4px","--space-2":"8px","--space-3":"12px","--space-4":"16px","--space-6":"24px","--trust-fail":"#be3a3a","--trust-pending":"#a8761a","--trust-real":"#2e8f50","--trust-signed":"#167d8b"},"trust_color_constraints":{"--clay":"work_or_selected_only","--trust-fail":"true_failure_or_rejection_only","--trust-pending":"unverified_degraded_or_waiting_review_only","--trust-real":"real_evidence_only","--trust-signed":"human_signed_only","cancelled":"neutral_no_trust_color","completed":"neutral_no_trust_color","human_is_only_signer":true}}
           response_sha256:
-            const: a3734f515445b1ee8cee775da91bddd2659c4408ab67fad7d47610a68bfe5f9d
+            const: 175f9c11a6853f7684e53ba603742414b9484f68ac6e33672fbf2f170bf35139
           protocol_trace:
             minItems: 4
             maxItems: 4

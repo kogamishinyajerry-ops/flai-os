@@ -560,6 +560,100 @@ def test_migration_concurrent_init_db_sweep(tmp_path) -> None:
         assert "conversation_id" in _model_calls_columns(db_path)
 
 
+def test_get_conn_waits_for_short_pre_wal_write_lock(tmp_path) -> None:
+    """``journal_mode=WAL`` must not bypass the configured busy budget.
+
+    SQLite's journal-mode pragma returns ``database is locked`` immediately on a
+    pre-WAL database even though ordinary writes honor ``busy_timeout``.  Startup
+    therefore needs its own bounded retry at this exact open boundary.
+    """
+    import sqlite3
+    import threading
+    import time
+
+    from backend.app.storage import db as db_mod
+
+    db_path = tmp_path / "pre-wal-short-lock.db"
+    holder = sqlite3.connect(str(db_path), isolation_level=None)
+    holder.execute("CREATE TABLE legacy_marker (id INTEGER PRIMARY KEY)")
+    assert holder.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    holder.execute("BEGIN IMMEDIATE")
+
+    attempted = threading.Event()
+    errors: list[Exception] = []
+    observed_modes: list[str] = []
+
+    def opener() -> None:
+        attempted.set()
+        try:
+            conn = db_mod.get_conn(db_path)
+            try:
+                observed_modes.append(conn.execute("PRAGMA journal_mode").fetchone()[0])
+            finally:
+                conn.close()
+        except Exception as exc:  # noqa: BLE001 - concurrent witness captures all
+            errors.append(exc)
+
+    thread = threading.Thread(target=opener)
+    thread.start()
+    assert attempted.wait(timeout=2)
+    time.sleep(0.1)  # keep the short lock long enough to enter journal-mode setup
+    holder.execute("COMMIT")
+    holder.close()
+    thread.join(timeout=7)
+
+    assert not thread.is_alive(), "get_conn exceeded its bounded startup wait"
+    assert errors == []
+    assert observed_modes == ["wal"]
+
+
+@pytest.mark.parametrize("precreate", [False, True], ids=["fresh", "pre-wal"])
+def test_concurrent_fresh_and_pre_wal_init_db_all_survive(
+    tmp_path, precreate: bool
+) -> None:
+    import sqlite3
+    import threading
+
+    from backend.app.storage import db as db_mod
+
+    db_path = tmp_path / ("pre-wal-init.db" if precreate else "fresh-init.db")
+    if precreate:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("CREATE TABLE legacy_marker (id INTEGER PRIMARY KEY)")
+            conn.commit()
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        finally:
+            conn.close()
+
+    barrier = threading.Barrier(4)
+    errors: list[Exception] = []
+
+    def initialize() -> None:
+        barrier.wait()
+        try:
+            db_mod.init_db(db_path)
+        except Exception as exc:  # noqa: BLE001 - concurrent witness captures all
+            errors.append(exc)
+
+    threads = [threading.Thread(target=initialize) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
+    conn = db_mod.get_conn(db_path)
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_questions'"
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
 def test_delivery_summary_sensitive_task_suppresses_batch_fields(app_env) -> None:
     """ADR-0025 一致封闭回归（Codex R2-P1）：/events 对 sensitive 任务遮蔽
     summary_generated payload，delivery_summary 若照读事件 payload 即重开被封

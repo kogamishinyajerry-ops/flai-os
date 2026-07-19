@@ -43,19 +43,19 @@
       "const": false
     },
     "fixture_id": {
-      "const": "flai-task-review-assets-v1"
+      "const": "flai-task-review-assets-v2"
     },
     "fixture_sha256": {
-      "const": "ad145be4e55a5ab46d660daeed6555cd01667b7a02fad92cc98e3203bdc53898"
+      "const": "70be2a7428ab385eb85e57845133b6b457402c6421c15d338a7f0a1b6b9eefd8"
     },
     "request_sha256": {
-      "const": "c6a56a02c8b742bd28d34060b4712097d83bc6d15b1822cd3a2e791d66d85d56"
+      "const": "aab2740108a2d13aca53869f6c4c39b732a5ab3c2c3f3848f61bcb7915038f2c"
     },
     "response_sha256": {
-      "const": "a3734f515445b1ee8cee775da91bddd2659c4408ab67fad7d47610a68bfe5f9d"
+      "const": "175f9c11a6853f7684e53ba603742414b9484f68ac6e33672fbf2f170bf35139"
     },
     "design_reference_package_sha256": {
-      "const": "38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94"
+      "const": "4fa241ae49d3c992168b2589779e24344749300a129e1f9478337974a3d68ca3"
     },
     "candidate_count": {
       "const": 2
@@ -106,7 +106,7 @@
             "filename": "OPEN_DESIGN_REVIEW.md",
             "media_type": "text/markdown",
             "role": "review",
-            "sha256": "40fd8928e02ebd9ba88a33f7a09f499763935196c7e32dcb987de0473845d7ba"
+            "sha256": "e20458cd94f5e64872d738a4718a6d5ff4db762f56775831897842bb0d338acc"
           }
         },
         {
@@ -130,7 +130,7 @@
             "filename": "flai_design_reference_package.json",
             "media_type": "application/json",
             "role": "design_reference",
-            "sha256": "38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94"
+            "sha256": "4fa241ae49d3c992168b2589779e24344749300a129e1f9478337974a3d68ca3"
           }
         },
         {
@@ -138,7 +138,7 @@
             "filename": "open_design_candidates.json",
             "media_type": "application/json",
             "role": "candidate_index",
-            "sha256": "29f8f89d5ec647c6ca424142ba0f4c3020aec03a258811b6fab71354d4f35fd5"
+            "sha256": "49e6ca735ffb7930ad918aadee71bed8af21e80069de3cd3c55cd8c839011b72"
           }
         },
         {
@@ -146,7 +146,7 @@
             "filename": "open_design_provenance.json",
             "media_type": "application/json",
             "role": "provenance",
-            "sha256": "aee72e5df6cf1ab480791f36ab2d84e1addab448231503fa6c6dc346116a9688"
+            "sha256": "6c5de32642f0cea3a4ce1946839d138e06389c0ca5a805bf8a67fc7318f89837"
           }
         }
       ],

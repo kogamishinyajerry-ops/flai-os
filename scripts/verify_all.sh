@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键执行前端构建、后端全量测试、前端纯函数核与 19 套浏览器验收；任一步失败立即汇总退出。
+# 一键执行前端构建、后端全量测试、前端纯函数核与 20 套浏览器验收；任一步失败立即汇总退出。
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -69,6 +69,7 @@ run_step "①b 前端纯函数核 node --test" test_frontend_core
 E2E_SCRIPTS=(
   "frontend/e2e/m2_acceptance.py"
   "frontend/e2e/m6_guide_acceptance.py"
+  "frontend/e2e/p23_question_acceptance.py"
   "frontend/e2e/m8_collab_chain_acceptance.py"
   "frontend/e2e/m8_guide_orchestrator_acceptance.py"
   "frontend/e2e/m8_workbench_acceptance.py"

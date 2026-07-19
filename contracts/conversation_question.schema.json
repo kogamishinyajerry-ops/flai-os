@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/conversation_question.schema.json",
+  "title": "FLAi-OS conversation clarification question",
+  "description": "会话中的普通结构化澄清。Question 与 task review API、状态机、签发权和信任色 teal 完全分离。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "conversation_id",
+    "prompt_message_id",
+    "revision",
+    "kind",
+    "prompt",
+    "description",
+    "options",
+    "asked_to_username",
+    "status",
+    "created_at",
+    "expires_at",
+    "answer",
+    "closed_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "conversation-question/v1" },
+    "id": { "type": "string", "pattern": "^q_[a-f0-9]{32}$" },
+    "conversation_id": { "type": "string", "pattern": "^conv_[a-f0-9]{32}$" },
+    "prompt_message_id": { "type": "string", "pattern": "^msg_[a-f0-9]{32}$" },
+    "revision": { "const": 1 },
+    "kind": { "enum": ["single_choice", "free_text"] },
+    "prompt": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "description": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1, "maxLength": 1000 }
+      ]
+    },
+    "options": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/option" }
+    },
+    "asked_to_username": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "status": { "enum": ["pending", "answered", "expired", "superseded"] },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "expires_at": { "$ref": "#/$defs/timestamp" },
+    "answer": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "https://flai-os.local/contracts/conversation_answer.schema.json" }
+      ]
+    },
+    "closed_at": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/timestamp" }
+      ]
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "description"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^option_[1-9][0-9]*$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 1, "maxLength": 500 }
+          ]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "kind": { "const": "single_choice" } },
+        "required": ["kind"]
+      },
+      "then": { "properties": { "options": { "minItems": 2, "maxItems": 6 } } },
+      "else": { "properties": { "options": { "maxItems": 0 } } }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "pending" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "answer": { "type": "null" },
+          "closed_at": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "answered" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "answer": { "$ref": "https://flai-os.local/contracts/conversation_answer.schema.json" },
+          "closed_at": { "$ref": "#/$defs/timestamp" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "enum": ["expired", "superseded"] } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "answer": { "type": "null" },
+          "closed_at": { "$ref": "#/$defs/timestamp" }
+        }
+      }
+    }
+  ]
+}

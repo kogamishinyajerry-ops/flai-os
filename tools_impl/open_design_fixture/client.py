@@ -26,16 +26,16 @@ from .design_reference import (
     validate_design_reference_package,
 )
 
-FIXTURE_ID = "flai-task-review-assets-v1"
-FIXED_REQUEST_SHA256 = "c6a56a02c8b742bd28d34060b4712097d83bc6d15b1822cd3a2e791d66d85d56"
-PINNED_DESIGN_REFERENCE_PACKAGE_SHA256 = "38f682356f8a7e2b13ec95fec5c6b3e6354928129bc7b61d6634141a6c2efc94"
+FIXTURE_ID = "flai-task-review-assets-v2"
+FIXED_REQUEST_SHA256 = "aab2740108a2d13aca53869f6c4c39b732a5ab3c2c3f3848f61bcb7915038f2c"
+PINNED_DESIGN_REFERENCE_PACKAGE_SHA256 = "4fa241ae49d3c992168b2589779e24344749300a129e1f9478337974a3d68ca3"
 
 DEFAULT_EXPECTED_FILE_SHA256 = {
     "flai-task-review-candidate.html": "e1242ccccb30758c184d798f50edc2b3fc0f38508c3f70f6a7c0238fa5e27db1",
     "flai-task-review-candidate.svg": "8424d13080e3b1d79cef1e9a60a0e7a1a019d8f3a7bea4103fe3c523534bbd48",
-    "request.json": "c6a1521553c0780fe2f23e38817ad1b91b5d0ce0e7a2aa07b332b1b38c2af5b8",
-    "response.json": "8ae693b6faf0ff40d444e7d5f6f5b02dba623a4bc122267e1246cc753e743a89",
-    "response.schema.json": "343733135eb40b7d22783201fb9b929c533a1039de9a039fcbde9350287c218f",
+    "request.json": "7b832b113811acec5e6edd23d45d180b85658defaac643206914acb5bd8dd484",
+    "response.json": "d54b97caa5d250b6fdfe78df1e20b54ea96654a27ee4b68f72a93ab5daddb097",
+    "response.schema.json": "2f8ec4924f4fe8e77287782de8dd8fc2d6c22b789c203d491fc17e44048283ab",
 }
 PINNED_CANDIDATE_FILE_SHA256 = {
     "flai-task-review-candidate.html": DEFAULT_EXPECTED_FILE_SHA256[
@@ -63,7 +63,7 @@ PINNED_CANDIDATE_DESCRIPTORS = [
         "content_sha256": PINNED_CANDIDATE_FILE_SHA256["flai-task-review-candidate.svg"],
     },
 ]
-FIXTURE_BUNDLE_SHA256 = "ad145be4e55a5ab46d660daeed6555cd01667b7a02fad92cc98e3203bdc53898"
+FIXTURE_BUNDLE_SHA256 = "70be2a7428ab385eb85e57845133b6b457402c6421c15d338a7f0a1b6b9eefd8"
 
 _PROJECT_ID = "flai-task-review-fixture"
 _PROJECT_NAME = "FLAi-OS task review candidate"

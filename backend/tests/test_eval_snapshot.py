@@ -78,6 +78,20 @@ def _fresh_registry(tmp_path: Path):
     return reg, agents_dir / "hello_agent"
 
 
+def _fresh_guide_registry(tmp_path: Path):
+    import shutil
+
+    from backend.app.runtime.registry import AgentRegistry
+
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    shutil.copytree(REPO / "agents" / "guide_agent", agents_dir / "guide_agent")
+    reg = AgentRegistry(agents_dir, REPO / "contracts" / "agent.schema.json")
+    reg.scan()
+    assert reg.get("guide_agent") is not None, reg.errors
+    return reg, agents_dir / "guide_agent"
+
+
 def test_enqueue_freezes_snapshot_and_binds_run(conn_factory, tmp_path) -> None:
     """enqueue 冻结不可变快照 + run 绑 handle；快照含材化所需文件（workflow.py + cases）。"""
     import json as _json
@@ -119,6 +133,226 @@ def test_enqueue_snapshot_is_content_derived_and_deduped(conn_factory, tmp_path)
     assert r1["snapshot_handle"] == r2["snapshot_handle"], "同活包→同内容派生 handle"
     assert r1["id"] != r2["id"], "两个不同 run 引用同一快照"
     assert n == 1, "内容派生 + insert-once → 快照去重到一行"
+
+
+def test_digest_covers_exact_bytes_of_literal_workflow_schema_asset(tmp_path: Path) -> None:
+    """workflow 直接读取的包内 schema 也是被测对象本体；即使语义等价，原始
+    字节改变也必须改变 digest，使同版本旧评测证据失效。
+    """
+    from backend.app.governance import eval_runner
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "agent.yaml").write_text("id: interactive_agent\nversion: 0.4.0\n", encoding="utf-8")
+    (pkg / "prompt.md").write_text("prompt\n", encoding="utf-8")
+    (pkg / "workflow.py").write_text(
+        'from pathlib import Path\nSCHEMA = Path(__file__).with_name("question_output_schema.json")\n',
+        encoding="utf-8",
+    )
+    schema_path = pkg / "question_output_schema.json"
+    schema_path.write_bytes(b'{"type":"object"}\n')
+    agent = {
+        "id": "interactive_agent",
+        "version": "0.4.0",
+        "workflow": {"entrypoint": "workflow.py", "mode": "interactive"},
+    }
+    approved = [{"_file": "case.json", "_raw": b'{"case_id":"c"}\n'}]
+
+    before = eval_runner.compute_digest(approved, pkg, agent)
+    schema_path.write_bytes(b'{"type": "object"}\n')
+    after = eval_runner.compute_digest(approved, pkg, agent)
+
+    assert before is not None and after is not None
+    assert after != before
+
+
+def test_digest_rejects_missing_file_from_registered_reference_set(tmp_path: Path) -> None:
+    from backend.app.governance import eval_runner
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "workflow.py").write_text("def run(context): return context\n", encoding="utf-8")
+    schema_path = pkg / "question_output_schema.json"
+    schema_path.write_text('{"type":"object"}\n', encoding="utf-8")
+    agent = {"id": "a", "version": "0.4.0", "workflow": {"entrypoint": "workflow.py"}}
+    approved = [{"_file": "case.json", "_raw": b'{"case_id":"c"}\n'}]
+    registered = ("workflow.py", "question_output_schema.json")
+    schema_path.unlink()
+
+    with pytest.raises(ValueError, match="question_output_schema.json"):
+        eval_runner.compute_digest(
+            approved,
+            pkg,
+            agent,
+            package_files=registered,
+        )
+
+
+def test_freeze_captures_exact_literal_workflow_schema_bytes(conn_factory, tmp_path) -> None:
+    """冻结内容必须物化 workflow 的额外包内 schema，而不是只在 digest 里记一个
+    缺失哨兵；执行与复核都读取同一份冻结字节。
+    """
+    import base64 as _base64
+    import json as _json
+    import shutil as _shutil
+
+    from backend.app.governance import eval_runner
+    from backend.app.runtime.registry import AgentRegistry
+
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    pkg = agents_dir / "guide_agent"
+    _shutil.copytree(REPO / "agents" / "guide_agent", pkg)
+    expected = (pkg / "question_output_schema.json").read_bytes()
+    registry = AgentRegistry(agents_dir, REPO / "contracts" / "agent.schema.json")
+    registry.scan()
+    assert registry.get("guide_agent") is not None, registry.errors
+
+    conn = conn_factory()
+    try:
+        handle = eval_runner.freeze_eval_snapshot(
+            conn, agent_registry=registry, agent_id="guide_agent"
+        )
+        snap = repos.get_eval_snapshot(conn, handle)
+    finally:
+        conn.close()
+
+    assert snap is not None
+    content = _json.loads(snap["content_json"])
+    assert _base64.b64decode(content["files"]["question_output_schema.json"]) == expected
+
+
+def test_enqueue_rejects_registered_schema_deleted_after_scan(conn_factory, tmp_path) -> None:
+    """Registry 已验证的运行资产在 enqueue 前被删，必须零 snapshot、零 run 拒绝。"""
+    from backend.app.governance import eval_runner
+
+    registry, pkg = _fresh_guide_registry(tmp_path)
+    (pkg / "question_output_schema.json").unlink()
+    conn = conn_factory()
+    try:
+        with pytest.raises(ValueError, match="question_output_schema.json"):
+            eval_runner.enqueue_eval_run(
+                conn, agent_registry=registry, agent_id="guide_agent", triggered_by="tester"
+            )
+        assert conn.execute("SELECT COUNT(*) FROM eval_snapshots").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM eval_runs").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_freeze_rejects_registered_schema_replaced_by_directory(conn_factory, tmp_path) -> None:
+    from backend.app.governance import eval_runner
+
+    registry, pkg = _fresh_guide_registry(tmp_path)
+    schema_path = pkg / "question_output_schema.json"
+    schema_path.unlink()
+    schema_path.mkdir()
+    conn = conn_factory()
+    try:
+        with pytest.raises(ValueError, match="question_output_schema.json"):
+            eval_runner.freeze_eval_snapshot(conn, agent_registry=registry, agent_id="guide_agent")
+        assert conn.execute("SELECT COUNT(*) FROM eval_snapshots").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_freeze_rejects_registered_schema_replaced_by_escaping_symlink(
+    conn_factory, tmp_path
+) -> None:
+    from backend.app.governance import eval_runner
+
+    registry, pkg = _fresh_guide_registry(tmp_path)
+    schema_path = pkg / "question_output_schema.json"
+    outside = tmp_path / "outside-schema.json"
+    outside.write_text('{"type":"object"}\n', encoding="utf-8")
+    schema_path.unlink()
+    try:
+        schema_path.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"当前文件系统不支持 symlink：{exc}")
+    conn = conn_factory()
+    try:
+        with pytest.raises(ValueError, match="逃出包根|question_output_schema.json"):
+            eval_runner.freeze_eval_snapshot(conn, agent_registry=registry, agent_id="guide_agent")
+        assert conn.execute("SELECT COUNT(*) FROM eval_snapshots").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_freeze_rejects_registered_schema_read_error(
+    conn_factory, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.app.governance import eval_runner
+
+    registry, pkg = _fresh_guide_registry(tmp_path)
+    schema_path = pkg / "question_output_schema.json"
+    real_read_bytes = Path.read_bytes
+
+    def denied(path: Path) -> bytes:
+        if path == schema_path:
+            raise PermissionError("injected schema read denial")
+        return real_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", denied)
+    conn = conn_factory()
+    try:
+        with pytest.raises(ValueError, match="question_output_schema.json"):
+            eval_runner.freeze_eval_snapshot(conn, agent_registry=registry, agent_id="guide_agent")
+        assert conn.execute("SELECT COUNT(*) FROM eval_snapshots").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_freeze_rejects_registered_schema_changed_during_capture(
+    conn_factory, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """读取返回旧字节后路径被并发替换，也不能生成“抓到 A、活路径已是 B”的快照。"""
+    from backend.app.governance import eval_runner
+
+    registry, pkg = _fresh_guide_registry(tmp_path)
+    schema_path = pkg / "question_output_schema.json"
+    real_read_bytes = Path.read_bytes
+    raced = {"done": False}
+
+    def replace_after_read(path: Path) -> bytes:
+        data = real_read_bytes(path)
+        if path == schema_path and raced["done"] is False:
+            raced["done"] = True
+            path.unlink()
+            path.write_bytes(data + b"\n")
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", replace_after_read)
+    conn = conn_factory()
+    try:
+        with pytest.raises(ValueError, match="question_output_schema.json"):
+            eval_runner.freeze_eval_snapshot(conn, agent_registry=registry, agent_id="guide_agent")
+        assert raced["done"] is True
+        assert conn.execute("SELECT COUNT(*) FROM eval_snapshots").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_freeze_keeps_reference_set_from_registry_scan(conn_factory, tmp_path) -> None:
+    """scan 后 workflow 即使删掉静态引用，freeze 仍须要求 scan 时登记的完整资产集。"""
+    from backend.app.governance import eval_runner
+
+    registry, pkg = _fresh_guide_registry(tmp_path)
+    workflow_path = pkg / "workflow.py"
+    workflow_path.write_text(
+        workflow_path.read_text(encoding="utf-8").replace(
+            'with_name("question_output_schema.json")', 'with_name("prompt.md")'
+        ),
+        encoding="utf-8",
+    )
+    (pkg / "question_output_schema.json").unlink()
+    conn = conn_factory()
+    try:
+        with pytest.raises(ValueError, match="question_output_schema.json"):
+            eval_runner.freeze_eval_snapshot(conn, agent_registry=registry, agent_id="guide_agent")
+        assert conn.execute("SELECT COUNT(*) FROM eval_snapshots").fetchone()[0] == 0
+    finally:
+        conn.close()
 
 
 def test_materialized_snapshot_is_frozen_against_live_edits(conn_factory, tmp_path) -> None:
@@ -208,10 +442,10 @@ def test_freeze_digest_derived_from_frozen_bytes_not_live_reread(
     (pkg / "prompt.md").write_text("ORIGINAL PROMPT", encoding="utf-8")  # 确保被捕获的已知原文
     real_compute = eval_runner.compute_digest
 
-    def _mutate_live_then_compute(approved, pkg_dir=None, agent=None):
+    def _mutate_live_then_compute(approved, pkg_dir=None, agent=None, package_files=None):
         # 模拟 freeze 抓完字节后、算 digest 前，活包 prompt.md 被并发改动
         (pkg / "prompt.md").write_text("MUTATED LIVE DURING FREEZE", encoding="utf-8")
-        return real_compute(approved, pkg_dir, agent)
+        return real_compute(approved, pkg_dir, agent, package_files=package_files)
 
     monkeypatch.setattr(eval_runner, "compute_digest", _mutate_live_then_compute)
     conn = conn_factory()

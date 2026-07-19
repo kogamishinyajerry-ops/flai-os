@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/conversation_answer.schema.json",
+  "title": "FLAi-OS conversation clarification answer",
+  "description": "普通会话澄清的不可变回答事实。它不携带批准、驳回、签发或 task review 权限。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "question_id",
+    "question_revision",
+    "submission_id",
+    "payload",
+    "answered_by_username",
+    "answered_at",
+    "answer_message_id",
+    "response_message_id"
+  ],
+  "properties": {
+    "schema_version": { "const": "conversation-answer/v1" },
+    "question_id": { "type": "string", "pattern": "^q_[a-f0-9]{32}$" },
+    "question_revision": { "const": 1 },
+    "submission_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "payload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "option_id"],
+          "properties": {
+            "kind": { "const": "option" },
+            "option_id": { "type": "string", "pattern": "^option_[1-9][0-9]*$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "text"],
+          "properties": {
+            "kind": { "const": "text" },
+            "text": { "type": "string", "minLength": 1, "maxLength": 4000 }
+          }
+        }
+      ]
+    },
+    "answered_by_username": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "answered_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "answer_message_id": { "type": "string", "pattern": "^msg_[a-f0-9]{32}$" },
+    "response_message_id": { "type": "string", "pattern": "^msg_[a-f0-9]{32}$" }
+  }
+}

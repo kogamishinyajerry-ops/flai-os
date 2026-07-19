@@ -245,8 +245,38 @@ def _get_agent_or_none(registry: Any, agent_id: str) -> dict[str, Any] | None:
     return agent
 
 
+def _require_owned_conversation(
+    conn: Any, conversation_id: str, created_by_username: str
+) -> dict[str, Any]:
+    """普通用户显式引用 conversation_id 的单一 owner 门。
+
+    foreign、legacy NULL、真实不存在三者统一 404；只按 exact username，绝不用
+    display_name。调用点可在写事务内复查 active，保证与 conclude 串行化。
+    """
+    conv = repos.get_conversation_for_owner(
+        conn, conversation_id, created_by_username
+    )
+    if conv is None:
+        raise HTTPException(
+            status_code=404, detail=f"归属的导引会话不存在：{conversation_id}"
+        )
+    return conv
+
+
 @router.post("/tasks")
 def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
+    # P2.3：显式 conversation_id 必须先于 Agent/依赖/文件等资源观察过 owner 门，
+    # 确保 foreign/legacy 始终 404 且零副作用；写事务内仍会复查 owner+active。
+    if body.conversation_id is not None:
+        owner_conn = request.app.state.conn_factory()
+        try:
+            _require_owned_conversation(
+                owner_conn,
+                body.conversation_id,
+                request.state.user["username"],
+            )
+        finally:
+            owner_conn.close()
     agent_registry = request.app.state.agent_registry
     agent = _get_agent_or_none(agent_registry, body.agent_id)
     if agent is None:
@@ -377,11 +407,11 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             # BEGIN IMMEDIATE，故本事务只包「复查 + create_task」，提交后再迁 queued。
             conn.execute("BEGIN IMMEDIATE")
             try:
-                conv = repos.get_conversation(conn, body.conversation_id)
-                if conv is None:
-                    raise HTTPException(
-                        status_code=404, detail=f"归属的导引会话不存在：{body.conversation_id}"
-                    )
+                conv = _require_owned_conversation(
+                    conn,
+                    body.conversation_id,
+                    created_by_username,
+                )
                 if conv["status"] != "active":
                     raise HTTPException(
                         status_code=409,
@@ -489,6 +519,10 @@ def run_batch_creation(
     校验并从同对象盖章 agent_version——registry 若在对账后热切换到不兼容新版，
     本校验 422 拒发，闭合「新注册表版本被盖进任务→runtime 漂移复检恒过」的
     TOCTOU 旁路。None=不校验（batch 直建端点无对账语义，行为不变）。"""
+    # P2.3：在任何逐项资源校验前先封 conversation_id 引用，避免 foreign/legacy
+    # 通过不同 agent/file 错误观察系统状态。事务内还会复查 owner+active。
+    if conversation_id is not None:
+        _require_owned_conversation(conn, conversation_id, created_by_username)
     errors: list[dict[str, Any]] = []
     agents: list[dict[str, Any] | None] = []
     for idx, item in enumerate(items):
@@ -548,11 +582,9 @@ def run_batch_creation(
     conn.execute("BEGIN IMMEDIATE")
     try:
         if conversation_id is not None:
-            conv = repos.get_conversation(conn, conversation_id)
-            if conv is None:
-                raise HTTPException(
-                    status_code=404, detail=f"归属的导引会话不存在：{conversation_id}"
-                )
+            conv = _require_owned_conversation(
+                conn, conversation_id, created_by_username
+            )
             if conv["status"] != "active":
                 raise HTTPException(
                     status_code=409,
@@ -653,6 +685,10 @@ def list_tasks(
     response.headers["Cache-Control"] = "no-store"
     conn = request.app.state.conn_factory()
     try:
+        if conversation_id is not None:
+            _require_owned_conversation(
+                conn, conversation_id, request.state.user["username"]
+            )
         rows = repos.list_tasks(
             conn, agent_id=agent_id, status=status, conversation_id=conversation_id,
             origin=None if origin == "all" else origin,

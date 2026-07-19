@@ -1,6 +1,6 @@
 # JerryAgent → FLAi-OS 可信交互映射
 
-> 状态：P2.1 已落地断连投影与 task live-snapshot 连续游标；composer 持久化和结构化问题仍未进入运行时。
+> 状态：P2.1 已落地断连投影与 task live-snapshot 连续游标；P2.3 结构化问题已完成阶段收口；composer 持久化仍延期。
 > 来源基线：`/Users/Zhuanz/projects/meta/jerryagent`，只读审计 HEAD
 > `3c1adcb0cee0726993d21f1d6ffb729b241d39dc`；该工作树本身有用户未提交改动，
 > 因而只把可在源码与测试中复核的行为当参考，不搬运整文件。
@@ -27,7 +27,7 @@ JerryAgent 的高价值成果有四层：
 | 服务端投影是 SSOT | `liveFeed` 每轮替换 task snapshot，events 按 offset 追加 | 保留服务端事实；不在客户端合成 demo/运行态 |
 | 严格 sequence + gap recovery | 旧 event API 仍只有 UUID；新增 task live-snapshot 以每任务序数 + exact event anchor 提供 additive cursor | gap/重复/跨 task/错锚整批拒绝并强制 sequence-zero resnapshot；旧 API 不改形 |
 | 断连显式 stale | channel 投影 connection/lastSuccessAt/stale/resyncing；阅读面共用 amber 提示 | 冷失败零假数据；暖失败保旧快照并标旧；恢复先完整重取 |
-| 问题与批准分离 | Guide 澄清是普通 assistant 文本；Task `waiting_review` 才有 `/review` | 不从 `recommendation=null` 猜 QuestionPanel；批准只留在具名审核面 |
+| 问题与批准分离 | Guide 只从完整显式 envelope 创建普通 Question；Task `waiting_review` 才有 `/review` | Question/Answer 有独立合同、稳定消息锚与 exact username；批准仍只留在具名审核面 |
 | 会话草稿隔离 | Guide 仍是内存草稿 | 本轮只冻结合同；sessionStorage 实现经故障注入后延期，不宣称已采用 |
 | 一条阅读轴与渐进披露 | Guide 主轴、今日任务台、StatusDock、内联产物/签发已存在 | 继续收敛，不再新造平行 dashboard 或第二决定源 |
 
@@ -68,10 +68,30 @@ P2.1 保持轮询、不引入 SSE，采用如下合同：
 `ADR-0032-task-live-snapshot-cursor.md` 冻结。未来若引入 compaction 或 SSE 必须升级 stream
 generation/schema，不能静默复用 v1 ordinal。
 
-结构化澄清同理：先新增明确的 question kind、选项/自由文本回答合同与过期语义，再做
-QuestionPanel。它仍不得复用 task review API，也不得让 LLM 获得签发权。
+## 5. P2.3 已采用的结构化澄清切片
 
-## 5. 机械验收
+P2.3 没有从问号或 `recommendation=null` 猜控件，而是建立独立的
+`conversation-question/v1` 与 `conversation-answer/v1`：
+
+1. Guide 只有输出单个、完整且拓扑合法的 `QUESTION` envelope 才能提议普通澄清；
+   PLAN/Question 重复、嵌套、未闭合或共存全部 fail-closed。
+2. 服务端生成 Question id、稳定 prompt `message_id`、确定性 option id、exact
+   `asked_to_username`、revision 与 24h TTL；模型和客户端不能自报这些事实。
+3. 单选、自定义文本与自由文本都走专用 Answer API。Answer 不调用 task review，不改变
+   task、event、sample、gate 或签发状态。
+4. 相同 submission 与相同规范化 payload 可安全 replay；不同提交、过期、结束或并发落后
+   一律 409 并强制权威 resnapshot。模型失败时零消息落库，原 Question 保持 pending。
+5. 回答、canonical user message、assistant response、旧 Question CAS 闭合、下一 Question
+   和 recommendation 快照在同一 SQLite 事务提交；人工结束会话同步 supersede pending 问题。
+6. QuestionCard 保持一条阅读轴，使用现有暖纸/clay/token；无 green/teal、批准、驳回、
+   推荐默认项或第二决定源，并覆盖 390px、暗色、键盘 focus 与 reduced-motion。
+7. 普通仓储入口拒绝 ownerless 会话；Question option 标签在模型、仓储与历史审计三层都
+   按 `strip().casefold()` 唯一。一个 snapshot 最多一个 pending Question，pending 期间
+   composer/附件/Agent 入口不可写，过期后按权威时间恢复单一写轴。
+8. 启动、health、readyz 与部署自检共享精确五键 schema witness；未知列、约束、索引、
+   trigger 或历史毒数据全部 fail-closed，不能以局部 runtime 标志获得假绿。
+
+## 6. 机械验收
 
 composer 部分仍只冻结文档，不存在 persistence 交付声明。重启该切片时，invalid-first 测试必须至少覆盖：存储全程不可用下连续 accepted、
 目标键 conflict/unreadable、fresh→created 多段迁移、A→B→A、身份切换、跨实例 busy
@@ -84,3 +104,13 @@ P2.1 disconnected slice 已覆盖：
 - reconnect 以服务端 snapshot 整包覆盖本地投影；
 - question bubble 不出现批准/驳回控件；
 - task review 仍只有 `waiting_review` 可操作，并由现有后端原子迁移与审计守门。
+
+P2.3 的机械门包含：同名 display name 的跨用户 404、legacy NULL owner 不冒认、布尔
+revision 与非法 payload 422/零模型、Question/PLAN 畸形拓扑、精确到期边界、并发回答唯一
+提交、SQLite UPDATE/DELETE/REPLACE 防篡改、真实 HTTP 投影套公开 JSON Schema、浏览器
+刷新恢复/502 重试/409 resnapshot，以及 Question 全子树不借 REAL 绿或人签 teal。阶段
+冻结证据为后端 P2.3/兼容回归 386/386、前端 Node 102/102、production build 通过与真实
+浏览器 Question acceptance 22/22。最终工作树的 `UV_OFFLINE=1 bash scripts/verify_all.sh`
+退出码为 0：pytest 1480/1480、Node 102/102、20/20 条浏览器 E2E 脚本全部通过。M2
+精确 selector 曾连续 10 次 10/10；加入侧栏冲突真实负例与有限 timeout 审查后，又连续
+3 次 11/11，最终全量门 11/11，拒绝用全局统计文案冒充当前任务终态。

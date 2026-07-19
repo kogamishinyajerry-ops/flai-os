@@ -15,11 +15,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+
+from conftest import (
+    TEST_DISPLAY_NAME,
+    TEST_USERNAME,
+    seed_pre_p23_legacy_conversation,
+)
 
 from backend.app.runtime import attachments as att
 from backend.app.runtime import conversation as conv_mod
@@ -524,10 +531,16 @@ def test_file_ids_over_limit_rejected_before_dedup(client: TestClient, app_env) 
     绕过 pydantic，模拟非 HTTP 调用方。"""
     _, app = app_env
     svc = app.state.conversation_service
-    conv = svc.create(agent_id="guide_agent", created_by="t")
+    principal = {"username": TEST_USERNAME, "display_name": TEST_DISPLAY_NAME}
+    conv = svc.create(agent_id="guide_agent", principal=principal)
     over_with_dupes = ["a", "b", "c", "d", "e", "a", "b"]  # 去重前 7 > 5；去重后 5 ≤ 5
     with pytest.raises(ValueError, match="附件数上限"):
-        svc.post_message(conversation_id=conv["id"], content="x", file_ids=over_with_dupes)
+        svc.post_message(
+            conversation_id=conv["id"],
+            content="x",
+            file_ids=over_with_dupes,
+            principal=principal,
+        )
 
 
 def test_file_ids_deduped_preserving_order(client: TestClient, app_env) -> None:
@@ -563,18 +576,32 @@ def test_migration_2_adds_file_ids_to_legacy_messages_table(tmp_path) -> None:
     from backend.app.storage import db as db_mod
 
     db_path = tmp_path / "legacy_m7.db"
-    db_mod.init_db(db_path)
-    conn = db_mod.get_conn(db_path)
+    # Reproduce the real pre-M7 DDL.  CREATE TABLE AS SELECT is not a valid
+    # migration witness because it silently drops INTEGER PRIMARY KEY,
+    # AUTOINCREMENT, NOT NULL, defaults, and indexes.
+    conn = sqlite3.connect(db_path)
     try:
-        legacy_cols = ", ".join(
-            r[1] for r in conn.execute("PRAGMA table_info(conversation_messages)")
-            if r[1] != "file_ids"
+        conn.executescript(
+            """
+            CREATE TABLE conversations (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                recommendation_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE conversation_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                recommendation_json TEXT,
+                created_at TEXT NOT NULL
+            );
+            """
         )
-        conn.execute("BEGIN IMMEDIATE")
-        conn.execute(f"CREATE TABLE cm_legacy AS SELECT {legacy_cols} FROM conversation_messages")
-        conn.execute("DROP TABLE conversation_messages")
-        conn.execute("ALTER TABLE cm_legacy RENAME TO conversation_messages")
-        conn.execute("COMMIT")
     finally:
         conn.close()
     assert "file_ids" not in _messages_columns(db_path)
@@ -593,10 +620,17 @@ def test_legacy_rows_decode_with_empty_file_ids(tmp_path) -> None:
     db_mod.init_db(db_path)
     conn = db_mod.get_conn(db_path)
     try:
-        repos.create_conversation(conn, conversation_id="conv_x", agent_id="guide_agent", created_by="t")
+        seed_pre_p23_legacy_conversation(
+            conn,
+            conversation_id="conv_x",
+            agent_id="guide_agent",
+            created_by="t",
+        )
         conn.execute(
-            "INSERT INTO conversation_messages (conversation_id, role, content, created_at)"
-            " VALUES ('conv_x','user','旧行','2026-01-01T00:00:00')"
+            "INSERT INTO conversation_messages "
+            "(conversation_id, message_id, role, content, created_at)"
+            " VALUES "
+            "('conv_x','msg_11111111111111111111111111111111','user','旧行','2026-01-01T00:00:00')"
         )
         msgs = repos.list_messages(conn, "conv_x")
         assert msgs[0]["file_ids"] == []

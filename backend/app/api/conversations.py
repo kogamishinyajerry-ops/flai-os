@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -22,6 +22,9 @@ from ..core.errors import (
     ConversationClosedError,
     ConversationConflictError,
     ConversationNotFoundError,
+    ConversationAnswerInvalidError,
+    ConversationQuestionConflictError,
+    ConversationQuestionNotFoundError,
     FileNotFoundInStoreError,
     ModelConfigError,
     ModelUpstreamError,
@@ -40,6 +43,8 @@ class CreateConversationRequest(BaseModel):
 
 
 class PostMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     # max_length：审计 P2（DoS 面）——content 此前无上限，超大文本会被落库并
     # 全量转发模型。16000 字符对需求描述/追问回答绰绰有余；更大材料走附件通道。
     content: str = Field(min_length=1, max_length=16000)
@@ -65,13 +70,56 @@ class PostMessageRequest(BaseModel):
         return v
 
 
+class OptionQuestionAnswerPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["option"]
+    option_id: str = Field(pattern=r"^option_[1-9][0-9]*$")
+
+
+class TextQuestionAnswerPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["text"]
+    text: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("text")
+    @classmethod
+    def text_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("回答文本不得为空白")
+        return stripped
+
+
+class AnswerQuestionRequest(BaseModel):
+    """普通澄清 Answer；身份、时间和消息 id 全由服务端派生。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    question_revision: Literal[1]
+    submission_id: str = Field(
+        min_length=8,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$",
+    )
+    payload: OptionQuestionAnswerPayload | TextQuestionAnswerPayload
+
+    @field_validator("question_revision", mode="before")
+    @classmethod
+    def question_revision_must_be_exact_integer(cls, value: Any) -> Any:
+        # bool is an int subclass in Python/Pydantic; the wire contract is an
+        # exact revision number, so JSON true must never enter the answer path.
+        if type(value) is not int or value != 1:
+            raise ValueError("question_revision 必须是整数 1")
+        return value
+
+
 @router.post("/conversations")
 def create_conversation(body: CreateConversationRequest, request: Request) -> dict[str, Any]:
     service = request.app.state.conversation_service
     try:
-        return service.create(
-            agent_id=body.agent_id, created_by=request.state.user["display_name"]
-        )
+        return service.create(agent_id=body.agent_id, principal=request.state.user)
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except NotInteractiveAgentError as exc:
@@ -81,13 +129,19 @@ def create_conversation(body: CreateConversationRequest, request: Request) -> di
 @router.get("/conversations")
 def list_conversations(
     request: Request,
-    created_by: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[dict[str, Any]]:
     conn = request.app.state.conn_factory()
     try:
-        return repos.list_conversations(conn, created_by=created_by, limit=limit, offset=offset)
+        # P2.3：列表 owner 只取认证 principal 的 exact username。客户端即使仍
+        # 携旧 created_by/owner query，FastAPI 不把它绑定到任何参数，结果集不受其影响。
+        return repos.list_conversations(
+            conn,
+            created_by_username=request.state.user["username"],
+            limit=limit,
+            offset=offset,
+        )
     finally:
         conn.close()
 
@@ -99,7 +153,7 @@ def get_conversation(
     response.headers["Cache-Control"] = "no-store"
     service = request.app.state.conversation_service
     try:
-        return service.get(conversation_id)
+        return service.get(conversation_id, principal=request.state.user)
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -111,7 +165,10 @@ def post_message(
     service = request.app.state.conversation_service
     try:
         return service.post_message(
-            conversation_id=conversation_id, content=body.content, file_ids=body.file_ids
+            conversation_id=conversation_id,
+            content=body.content,
+            file_ids=body.file_ids,
+            principal=request.state.user,
         )
     except (ConversationNotFoundError, FileNotFoundInStoreError) as exc:
         # 会话不存在 / 引用了不存在的附件 id：404，且本轮零落库。
@@ -138,13 +195,58 @@ def post_message(
         ) from exc
 
 
+@router.post("/conversations/{conversation_id}/questions/{question_id}/answer")
+def answer_question(
+    conversation_id: str,
+    question_id: str,
+    body: AnswerQuestionRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """回答普通结构化澄清；与 task review/批准/签发状态机完全分离。"""
+    service = request.app.state.conversation_service
+    try:
+        return service.answer_question(
+            conversation_id=conversation_id,
+            question_id=question_id,
+            question_revision=body.question_revision,
+            submission_id=body.submission_id,
+            payload=body.payload.model_dump(),
+            principal=request.state.user,
+        )
+    except (
+        ConversationNotFoundError,
+        ConversationQuestionNotFoundError,
+    ) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConversationAnswerInvalidError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (
+        ConversationClosedError,
+        ConversationConflictError,
+        ConversationQuestionConflictError,
+    ) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ClearanceDeniedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ModelConfigError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"模型网关未配置，导引不可用：{exc}。此为部署配置问题（非临时故障），"
+            "请联系管理员设置 FLAI_LLM_* 环境变量后再试。",
+        ) from exc
+    except (ModelUpstreamError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502, detail=f"导引本轮回答失败（可重试）：{exc}"
+        ) from exc
+
+
 @router.post("/conversations/{conversation_id}/conclude")
 def conclude_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
     """结束会话（active → concluded）。「确认草案去创建任务」时前端调用本端点
     归档会话（ADR-0013：补上 V0.1 会话不落终态的债）。"""
     service = request.app.state.conversation_service
     try:
-        return service.conclude(conversation_id)
+        return service.conclude(conversation_id, principal=request.state.user)
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ConversationClosedError as exc:
@@ -156,7 +258,12 @@ def list_conversation_model_calls(conversation_id: str, request: Request) -> lis
     """会话的模型调用留痕（ADR-0013：导引路径的 Q5 可追溯，成败全量）。"""
     conn = request.app.state.conn_factory()
     try:
-        if repos.get_conversation(conn, conversation_id) is None:
+        if (
+            repos.get_conversation_for_owner(
+                conn, conversation_id, request.state.user["username"]
+            )
+            is None
+        ):
             raise HTTPException(status_code=404, detail=f"会话不存在：{conversation_id}")
         # ADR-0025 单 chokepoint（R1-A 补漏）：会话聚合 model_calls 跨成员任务，
         # sensitive 任务的 summary/error 承载工具产出——逐行按归属任务分级遮蔽。
@@ -177,7 +284,12 @@ def list_conversation_tasks(
     response.headers["Cache-Control"] = "no-store"
     conn = request.app.state.conn_factory()
     try:
-        if repos.get_conversation(conn, conversation_id) is None:
+        if (
+            repos.get_conversation_for_owner(
+                conn, conversation_id, request.state.user["username"]
+            )
+            is None
+        ):
             raise HTTPException(status_code=404, detail=f"会话不存在：{conversation_id}")
         # 会话成员是「完整分组视图」而非「最近流」——分页取尽，绝不静默截断
         # （异源 Codex M8-P3：硬编码 limit=500 会让 >500 成员的会话丢最旧任务，

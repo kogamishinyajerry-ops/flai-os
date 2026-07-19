@@ -1,7 +1,10 @@
 <template>
   <div class="guide-page" :class="{ 'is-empty': !started && messages.length === 0 }">
     <!-- 起手 hero（未开始且无消息）：衬线问候 + 具名，随 composer 在视口垂直居中。 -->
-    <div v-if="!started && messages.length === 0 && !restoring" class="guide-hero fx-rise">
+    <div
+      v-if="!started && messages.length === 0 && !restoring && conversationLoadState === 'fresh'"
+      class="guide-hero fx-rise"
+    >
       <!-- 减重批：hero 只剩问候+一句主标题（Claude 精髓=留白克制，信任靠交互
            建立不靠说教）。价值主张/政策句收进 composer 下一行；名字由
            WelcomeGate 身份门一次收齐，此处不再询问。 -->
@@ -41,7 +44,12 @@
       show-icon
       :closable="false"
       class="page-alert"
-    />
+    >
+      <div v-if="conversationLoadFailed" class="page-alert-actions">
+        <button type="button" class="page-alert-action cta-clay" @click="retryFailedConversation">重新加载</button>
+        <button type="button" class="page-alert-action is-secondary" @click="startFreshAfterLoadFailure">新对话</button>
+      </div>
+    </el-alert>
 
     <ConnectionTruthNotice
       :loaded="convFeedLoaded"
@@ -56,7 +64,7 @@
 
     <!-- 会话流 -->
     <div v-if="messages.length || sending" ref="streamEl" class="thread">
-      <div v-for="(m, idx) in messages" :key="idx" :class="['bubble-row', m.role]">
+      <div v-for="(m, idx) in messages" :key="m.message_id || idx" :class="['bubble-row', m.role]">
 
         <!-- 用户消息：靠右暖气泡 -->
         <div v-if="m.role === 'user'" class="user-bubble" :class="{ 'fx-ink-in': m.fresh }">
@@ -75,6 +83,17 @@
             <!-- 助手正文走 MarkdownLite（W5）：列表/标题/引用成块渲染——桌面级
                  富文本；纯插值零 v-html，XSS 面不变。用户气泡仍纯文本忠实显示。 -->
             <MarkdownLite v-if="m.content" :text="m.content" class="ai-lead" />
+
+            <QuestionCard
+              v-if="m.question"
+              :question="m.question"
+              :busy="questionBusy[m.question.id] === true"
+              :error="questionErrors[m.question.id] || ''"
+              :request-failed="questionRequestFailed[m.question.id] === true"
+              :stale="questionStale[m.question.id] === true"
+              @submit="submitQuestionAnswer"
+              @refresh="refreshQuestion(m.question.id)"
+            />
 
             <!-- 导引计划（M8 编排官）：refuse=显式拒绝 -->
             <div v-if="m.recommendation && m.recommendation.decision === 'refuse'" class="plan-card refuse" :class="{ 'fx-rise': m.fresh }">
@@ -413,9 +432,9 @@
             :show-file-list="false"
             multiple
             :on-change="handleFileSelect"
-            :disabled="sending"
+            :disabled="sending || !composerWriteReady"
           >
-            <button class="icon-btn" :disabled="sending" title="添加附件（≤5 个/条；文本类直读、xlsx 预览）" aria-label="添加附件">
+            <button class="icon-btn" :disabled="sending || !composerWriteReady" title="添加附件（≤5 个/条；文本类直读、xlsx 预览）" aria-label="添加附件">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.49"/></svg>
             </button>
           </el-upload>
@@ -423,7 +442,7 @@
                Agent 名填进草稿并聚焦——问导引怎么用它，绝不代发（人是唯一发起者）。 -->
           <el-popover placement="top-start" :width="320" trigger="click" popper-class="agent-pick-pop">
             <template #reference>
-              <button class="icon-btn" :disabled="sending" title="浏览可用 Agent" aria-label="浏览可用 Agent">
+              <button class="icon-btn" :disabled="sending || !composerWriteReady" title="浏览可用 Agent" aria-label="浏览可用 Agent">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>
               </button>
             </template>
@@ -463,12 +482,12 @@
             v-model="draft"
             type="textarea"
             :autosize="{ minRows: 1, maxRows: 6 }"
-            :disabled="sending"
+            :disabled="sending || !composerWriteReady"
             :placeholder="composerPlaceholder"
             class="composer-input"
             @keydown.enter.exact.prevent="send"
           />
-          <button class="send-btn cta-clay" :disabled="sending || !draft.trim()" aria-label="发送" @click="send">
+          <button class="send-btn cta-clay" :disabled="sending || !composerWriteReady || !draft.trim()" aria-label="发送" @click="send">
             <svg v-if="!sending" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
             <span v-else class="send-spin"></span>
           </button>
@@ -489,7 +508,7 @@
 import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { createConversation, postMessage, getConversation } from "../api/conversations";
+import { answerQuestion, createConversation, postMessage, getConversation } from "../api/conversations";
 import { createTeam } from "../api/teams";
 import { unwrapDetail } from "../api/client";
 import { createTask, createTasksBatch } from "../api/tasks";
@@ -514,9 +533,20 @@ import IntentGlyph from "../components/artwork/IntentGlyph.vue";
 import MarkdownLite from "../components/MarkdownLite.vue";
 import OnboardingCard from "../components/OnboardingCard.vue";
 import ConnectionTruthNotice from "../components/ConnectionTruthNotice.vue";
+import QuestionCard from "../components/QuestionCard.vue";
+import { hasPendingConversationQuestion, mergeQuestionSnapshot } from "../utils/questionCardCore.js";
+import {
+  conversationWriteEligibility,
+  createConversationRuntimeGate,
+  shouldReconcileConversationMutation,
+  validateConversationAnswerResponse,
+  validateConversationPostResponse,
+  validateConversationSnapshot,
+} from "../utils/conversationRuntimeCore.js";
 import { displayName } from "../stores/session";
 
 const router = useRouter();
+const route = useRoute();
 
 const GUIDE_AGENT_ID = "guide_agent";
 const MAX_FILES_PER_MESSAGE = 5; // 与后端 PostMessageRequest / 运行时同值
@@ -528,6 +558,156 @@ const draft = ref("");
 const sending = ref(false);
 const pageError = ref("");
 const streamEl = ref(null);
+// 问题卡的请求状态必须按 question_id 隔离：回答一次澄清不能借用全局 sending，
+// 也不能让一张卡的失败禁用或染红其它历史卡。
+const questionBusy = reactive({});
+const questionErrors = reactive({});
+const questionRequestFailed = reactive({});
+const questionStale = reactive({});
+const conversationRuntimeGate = createConversationRuntimeGate();
+const pendingConversationResnapshots = new Set();
+const conversationLoadState = ref("fresh");
+const conversationSnapshotInFlight = ref(false);
+const routeConversationId = computed(() => {
+  const value = route.query.c;
+  return typeof value === "string" ? value : "";
+});
+const conversationWriteDecision = computed(() => conversationWriteEligibility({
+  routeConversationId: routeConversationId.value,
+  loadedConversationId: conversationId.value,
+  loadState: conversationLoadState.value,
+  snapshotInFlight: conversationSnapshotInFlight.value,
+}));
+const conversationWriteReady = computed(() => conversationWriteDecision.value.allowed === true);
+const questionClockMs = ref(Date.now());
+let questionExpiryGateTimer = null;
+const hasPendingQuestion = computed(() =>
+  hasPendingConversationQuestion(messages.value, questionClockMs.value)
+);
+const composerWriteReady = computed(() =>
+  conversationWriteReady.value === true && hasPendingQuestion.value !== true
+);
+const conversationLoadFailed = computed(() =>
+  Boolean(routeConversationId.value) && conversationLoadState.value === "error"
+);
+let questionRequestSequence = 0;
+const questionRequestTokens = new Map();
+
+function scheduleQuestionExpiryGate() {
+  if (questionExpiryGateTimer) clearTimeout(questionExpiryGateTimer);
+  questionExpiryGateTimer = null;
+  const now = Date.now();
+  questionClockMs.value = now;
+  const expiries = messages.value
+    .filter((message) => message.question?.status === "pending")
+    .map((message) => Date.parse(message.question.expires_at))
+    .filter((expiresAt) => Number.isFinite(expiresAt) && expiresAt > now);
+  if (!expiries.length) return;
+  const delay = Math.max(0, Math.min(Math.min(...expiries) - now + 20, 2_147_000_000));
+  questionExpiryGateTimer = setTimeout(scheduleQuestionExpiryGate, delay);
+}
+
+watch(
+  () => messages.value.map((message) =>
+    `${message.question?.id || ""}:${message.question?.status || ""}:${message.question?.expires_at || ""}`
+  ).join("|"),
+  scheduleQuestionExpiryGate,
+  { immediate: true },
+);
+onUnmounted(() => {
+  if (questionExpiryGateTimer) clearTimeout(questionExpiryGateTimer);
+});
+
+function questionRequestKey(conversation, question) {
+  return `${conversation}:${question}`;
+}
+
+function beginQuestionRequest(conversation, question) {
+  const key = questionRequestKey(conversation, question);
+  const token = ++questionRequestSequence;
+  const runtimeToken = conversationRuntimeGate.begin(`question:${question}`);
+  questionRequestTokens.set(key, token);
+  return { key, token, runtimeToken, conversation };
+}
+
+function isCurrentQuestionRequest(requestToken) {
+  return questionRequestTokens.get(requestToken.key) === requestToken.token
+    && conversationRuntimeGate.isCurrent(requestToken.runtimeToken, requestToken.conversation);
+}
+
+function finishQuestionRequest(requestToken, questionId) {
+  if (!isCurrentQuestionRequest(requestToken)) return;
+  questionRequestTokens.delete(requestToken.key);
+  questionBusy[questionId] = false;
+}
+
+function clearQuestionInteractionState() {
+  // 切换会话会让所有在途回答的 UI 世代失效。请求可在服务端继续按 CAS/幂等
+  // 收束，但迟到响应不得写入后来重新打开的同一会话，也不得提前解开新请求 busy。
+  questionRequestTokens.clear();
+  for (const state of [questionBusy, questionErrors, questionRequestFailed, questionStale]) {
+    for (const key of Object.keys(state)) delete state[key];
+  }
+}
+
+function normalizeConversationMessage(message, { fresh = false } = {}) {
+  return {
+    role: message.role,
+    content: message.content,
+    message_id: message.message_id || null,
+    recommendation: message.recommendation || null,
+    question: message.question || null,
+    attachments: message.attachments && message.attachments.length ? message.attachments : undefined,
+    createdAt: message.created_at || null,
+    fresh,
+  };
+}
+
+function replaceQuestionProjection(question) {
+  if (!question || !question.id) return;
+  const prompt = messages.value.find(
+    (message) =>
+      message.question?.id === question.id
+      || (question.prompt_message_id && message.message_id === question.prompt_message_id)
+  );
+  if (prompt) prompt.question = mergeQuestionSnapshot(prompt.question, question);
+}
+
+function appendCanonicalMessage(message, { fresh = false } = {}) {
+  if (!message || !message.role) return;
+  const normalized = normalizeConversationMessage(message, { fresh });
+  const existingIndex = normalized.message_id
+    ? messages.value.findIndex((item) => item.message_id === normalized.message_id)
+    : -1;
+  if (existingIndex >= 0) {
+    const current = messages.value[existingIndex];
+    messages.value[existingIndex] = {
+      ...current,
+      ...normalized,
+      question: mergeQuestionSnapshot(current.question, normalized.question),
+      fresh: current.fresh === true && fresh === true,
+    };
+    return;
+  }
+  messages.value.push(normalized);
+}
+
+function mergeConversationSnapshot(conv) {
+  const currentById = new Map(
+    messages.value.filter((message) => message.message_id).map((message) => [message.message_id, message])
+  );
+  messages.value = (conv.messages || []).map((raw) => {
+    const next = normalizeConversationMessage(raw);
+    const current = next.message_id ? currentById.get(next.message_id) : null;
+    if (!current) return next;
+    return {
+      ...current,
+      ...next,
+      question: mergeQuestionSnapshot(current.question, next.question),
+      fresh: false,
+    };
+  });
+}
 // composer placeholder 语境分化：未起手空会话引导点意图卡；会话中改为「继续说下去」，
 // 不再重复「回答导引的追问」（此刻输入框已在真实对话流里，无需再解释这是什么）。
 const composerPlaceholder = computed(() =>
@@ -589,7 +769,7 @@ function removePendingFile(item) {
   pendingFiles.value = pendingFiles.value.filter((f) => f.uid !== item.uid);
 }
 
-async function uploadPendingFiles() {
+async function uploadPendingFiles(isCurrent = () => true) {
   // 顺序上传未完成项（含上一轮失败项）；任一失败即抛出，本轮消息不发送。
   // 已知行为（反方审 P3）：某轮失败但附件已上传成功（status:done）时，附件
   // 保留在待发区——这是重试语义（重试同一句不重复上传）。若用户改发别的
@@ -597,9 +777,11 @@ async function uploadPendingFiles() {
   // 不静默——是否带上由用户自己看着 chips 决定。
   // 上传阶段如实报进度（Codex R0 审 P2）：上传宽限放宽到 300s 后，把网络
   // 上传时间伪装成「导引思考中」是假声明——分阶段各说各话。
-  const todo = pendingFiles.value.filter((f) => f.status !== "done").length;
+  const batch = [...pendingFiles.value];
+  const todo = batch.filter((f) => f.status !== "done").length;
   let nth = 0;
-  for (const item of pendingFiles.value) {
+  for (const item of batch) {
+    if (isCurrent() !== true) return null;
     if (item.status === "done") continue;
     nth += 1;
     uploadPhase.value = `正在上传附件 ${nth}/${todo}（${item.name}）…`;
@@ -607,16 +789,19 @@ async function uploadPendingFiles() {
     item.error = "";
     try {
       const res = await apiUploadFile(item.raw);
+      if (isCurrent() !== true) return null;
       item.status = "done";
       item.fileId = res.id;
     } catch (err) {
+      if (isCurrent() !== true) return null;
       item.status = "error";
       item.error = err.detail || err.message;
       throw new Error(`附件「${item.name}」上传失败：${item.error}`);
     }
   }
+  if (isCurrent() !== true) return null;
   uploadPhase.value = "";
-  return pendingFiles.value.map((f) => f.fileId);
+  return batch.map((f) => f.fileId);
 }
 
 function inputCount(agent) {
@@ -766,77 +951,420 @@ async function scrollToBottom() {
   // 让高高的协作方案卡从「目标句」开始展开，而不是被塞进 62vh 的小盒里。
   await nextTick();
   const last = streamEl.value && streamEl.value.lastElementChild;
-  if (last) last.scrollIntoView({ behavior: "smooth", block: "start" });
+  const reduceMotion = typeof window.matchMedia === "function"
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches === true;
+  if (last) last.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+}
+
+async function reconcileConversationSnapshot(id, isCurrent = () => true) {
+  if (conversationRuntimeGate.currentSession() !== id || isCurrent() !== true) return false;
+  const snapshotToken = conversationRuntimeGate.begin("snapshot");
+  conversationSnapshotInFlight.value = true;
+  try {
+    const raw = await getConversation(id);
+    // 每个 GET 先过 session epoch + 同 scope generation，再验完整 Question/message
+    // 链。A→B→A 里的旧 A 与同会话旧 snapshot 都不能写回当前轴。
+    if (
+      !conversationRuntimeGate.isCurrent(snapshotToken, id)
+      || isCurrent() !== true
+    ) return false;
+    const conv = validateConversationSnapshot(raw, id);
+    if (
+      !conversationRuntimeGate.isCurrent(snapshotToken, id)
+      || isCurrent() !== true
+    ) return false;
+    conversationId.value = conv.id;
+    conversationStatus.value = conv.status || null;
+    conversationLoadState.value = "ready";
+    started.value = true;
+    mergeConversationSnapshot(conv);
+    await scrollToBottom();
+    if (
+      !conversationRuntimeGate.isCurrent(snapshotToken, id)
+      || isCurrent() !== true
+    ) return false;
+    ensureConversationTasksFeed();
+    ensureAgentSchemasForMessages();
+    return true;
+  } catch (err) {
+    if (
+      conversationRuntimeGate.isCurrent(snapshotToken, id)
+      && isCurrent() === true
+    ) {
+      conversationLoadState.value = "error";
+      pageError.value = `会话状态重核失败：${questionRequestError(err)}`;
+    }
+    throw err;
+  } finally {
+    if (conversationRuntimeGate.isCurrent(snapshotToken, id)) {
+      conversationSnapshotInFlight.value = false;
+      if (
+        pendingConversationResnapshots.has(id)
+        && sending.value !== true
+        && !Object.values(questionBusy).some((busy) => busy === true)
+      ) {
+        void reconcileLateConversationMutation(id);
+      }
+    }
+  }
+}
+
+async function reconcileLateConversationMutation(id) {
+  if (!id || conversationRuntimeGate.currentSession() !== id) return false;
+  if (
+    conversationSnapshotInFlight.value === true
+    || sending.value === true
+    || Object.values(questionBusy).some((busy) => busy === true)
+  ) {
+    pendingConversationResnapshots.add(id);
+    return false;
+  }
+  pendingConversationResnapshots.delete(id);
+  try {
+    return await reconcileConversationSnapshot(id);
+  } catch (syncErr) {
+    if (conversationRuntimeGate.currentSession() === id) {
+      pageError.value = `消息可能已在后台落地，但状态重核失败：${questionRequestError(syncErr)}`;
+    }
+    return false;
+  }
+}
+
+async function reconcileConversationMutationOutcome(id, outcome) {
+  if (shouldReconcileConversationMutation(outcome) !== true) return false;
+  return reconcileLateConversationMutation(id);
+}
+
+function questionRequestError(err) {
+  if (typeof err?.detail === "string" && err.detail) return err.detail;
+  if (typeof err?.message === "string" && err.message) return err.message;
+  return "回答未提交，请稍后重试";
+}
+
+async function refreshQuestion(questionId) {
+  if (!questionId || questionBusy[questionId] === true) return;
+  questionRequestFailed[questionId] = false;
+  if (sending.value === true || !conversationId.value) {
+    questionErrors[questionId] = "会话仍在变化，暂时无法重新核对";
+    questionStale[questionId] = true;
+    return;
+  }
+  const targetConversationId = conversationId.value;
+  const requestToken = beginQuestionRequest(targetConversationId, questionId);
+  questionBusy[questionId] = true;
+  try {
+    const reconciled = await reconcileConversationSnapshot(
+      targetConversationId,
+      () => isCurrentQuestionRequest(requestToken)
+    );
+    if (!isCurrentQuestionRequest(requestToken)) return;
+    if (reconciled === true) {
+      questionErrors[questionId] = "";
+      questionStale[questionId] = false;
+    }
+  } catch (err) {
+    if (!isCurrentQuestionRequest(requestToken)) return;
+    questionErrors[questionId] = `状态重核失败：${questionRequestError(err)}`;
+    questionStale[questionId] = true;
+  } finally {
+    finishQuestionRequest(requestToken, questionId);
+    if (pendingConversationResnapshots.has(targetConversationId)) {
+      await reconcileLateConversationMutation(targetConversationId);
+    }
+  }
+}
+
+async function submitQuestionAnswer(submission) {
+  const questionId = submission?.questionId;
+  if (!questionId || questionBusy[questionId] === true) return;
+  questionRequestFailed[questionId] = false;
+  if (sending.value === true) {
+    questionErrors[questionId] = "上一轮消息仍在处理中，请等它落地后再提交回答";
+    return;
+  }
+  if (conversationWriteReady.value !== true) {
+    questionErrors[questionId] = "会话状态尚未可信核对，回答未提交";
+    questionStale[questionId] = true;
+    return;
+  }
+  const targetConversationId = conversationId.value;
+  if (!targetConversationId) {
+    questionErrors[questionId] = "会话身份尚未核对，回答未提交";
+    questionStale[questionId] = true;
+    return;
+  }
+  const promptMessage = messages.value.find((message) => message.question?.id === questionId);
+  if (!promptMessage?.message_id) {
+    questionErrors[questionId] = "问题与会话消息的稳定引用无法核对，回答未提交";
+    questionStale[questionId] = true;
+    return;
+  }
+
+  const requestToken = beginQuestionRequest(targetConversationId, questionId);
+  questionBusy[questionId] = true;
+  questionErrors[questionId] = "";
+  questionStale[questionId] = false;
+  try {
+    const rawResult = await answerQuestion(targetConversationId, questionId, {
+      question_revision: submission.questionRevision,
+      submission_id: submission.submissionId,
+      payload: submission.payload,
+    });
+    const answerRequestIsCurrent =
+      conversationId.value !== targetConversationId
+      ? false
+      : isCurrentQuestionRequest(requestToken);
+    if (!answerRequestIsCurrent) {
+      await reconcileConversationMutationOutcome(targetConversationId, {
+        isCurrent: false,
+        outcome: "success",
+        status: 200,
+      });
+      return;
+    }
+    const result = validateConversationAnswerResponse(rawResult, {
+      conversationId: targetConversationId,
+      questionId,
+      questionRevision: submission.questionRevision,
+      promptMessageId: promptMessage.message_id,
+      submissionId: submission.submissionId,
+      payload: submission.payload,
+    });
+    if (
+      conversationId.value !== targetConversationId
+      || !isCurrentQuestionRequest(requestToken)
+    ) return;
+
+    replaceQuestionProjection(result.question);
+    // 服务端返回的是真实落库的 canonical user/assistant 消息。只有 2xx 后才入轴；
+    // 幂等重放不再表演成“刚发生”，且按 message_id 去重。
+    const isFresh = result.replayed !== true;
+    appendCanonicalMessage(result.answer_message, { fresh: isFresh });
+    appendCanonicalMessage(result.message, { fresh: isFresh });
+    conversationStatus.value = result.conversation?.status || conversationStatus.value;
+    questionErrors[questionId] = "";
+    questionRequestFailed[questionId] = false;
+    questionStale[questionId] = false;
+    await scrollToBottom();
+    if (!isCurrentQuestionRequest(requestToken)) return;
+    ensureConversationTasksFeed();
+    ensureAgentSchemasForMessages();
+  } catch (err) {
+    const answerRequestIsCurrent =
+      conversationId.value === targetConversationId
+      && isCurrentQuestionRequest(requestToken);
+    if (!answerRequestIsCurrent) {
+      await reconcileConversationMutationOutcome(targetConversationId, {
+        isCurrent: false,
+        outcome: "error",
+        status: err?.status,
+      });
+      return;
+    }
+    const needsReconcile = shouldReconcileConversationMutation({
+      isCurrent: true,
+      outcome: "error",
+      status: err?.status,
+    });
+    questionRequestFailed[questionId] = true;
+    // P2.3 兼容见证：err?.status === 409 || err?.status === 0 仍属于必须重核；
+    // 现在统一由 shouldReconcileConversationMutation 连同无 status 的 2xx 合同歧义处理。
+    questionErrors[questionId] = questionRequestError(err);
+    if (needsReconcile) {
+      questionStale[questionId] = true;
+      try {
+        const reconciled = await reconcileConversationSnapshot(
+          targetConversationId,
+          () => isCurrentQuestionRequest(requestToken)
+        );
+        if (!isCurrentQuestionRequest(requestToken)) return;
+        if (reconciled === true) questionStale[questionId] = false;
+      } catch (syncErr) {
+        if (!isCurrentQuestionRequest(requestToken)) return;
+        questionErrors[questionId] = `${questionErrors[questionId]}；状态重核失败：${questionRequestError(syncErr)}`;
+      }
+    }
+  } finally {
+    finishQuestionRequest(requestToken, questionId);
+    if (pendingConversationResnapshots.has(targetConversationId)) {
+      await reconcileLateConversationMutation(targetConversationId);
+    }
+  }
 }
 
 async function send() {
   if (restoring.value) return; // 会话恢复在途不收发言——防止意外新建会话
+  if (sending.value === true) return;
+  const writeDecision = conversationWriteDecision.value;
+  if (writeDecision.allowed !== true) {
+    pageError.value = writeDecision.reason === "load_error"
+      ? "当前会话尚未可信加载；请先重新加载，或退出并开始新对话"
+      : "会话状态仍在核对，本轮未发送";
+    return;
+  }
+  if (hasPendingQuestion.value === true) {
+    pageError.value = "请先在当前问题卡提交回答，再继续对话";
+    return;
+  }
+  if (Object.values(questionBusy).some((busy) => busy === true)) {
+    pageError.value = "问题回答仍在处理中，请等本轮落地后再继续发送消息";
+    return;
+  }
   const content = draft.value.trim();
   if (!content) return;
   pageError.value = "";
+  let targetConversationId = conversationId.value;
+  let sendToken = conversationRuntimeGate.begin("send");
+  let postAttempted = false;
+  const baselineMessageIds = new Set(
+    messages.value.filter((message) => message.message_id).map((message) => message.message_id),
+  );
+  const sendIsCurrent = () =>
+    conversationRuntimeGate.isCurrent(sendToken, targetConversationId);
 
   // 乐观追加用户气泡（附件 chips 一并显示；失败整体回滚）
   const optimisticAttachments = pendingFiles.value.map((f) => ({ id: f.uid, filename: f.name }));
-  messages.value.push({
+  const optimisticMessage = {
     role: "user",
     content,
     attachments: optimisticAttachments.length ? optimisticAttachments : undefined,
     // fresh：仅本次会话中「刚落地」的气泡播墨迹入场；历史加载不带此标记——
     // 诚实地板：不让三天前的旧对话表演"刚发生"（信任镜头 P2）。
     fresh: true,
-  });
+  };
+  messages.value.push(optimisticMessage);
   draft.value = "";
-  await scrollToBottom();
-
   sending.value = true;
   try {
+    await scrollToBottom();
+    if (!sendIsCurrent()) return;
     // 先传附件（已 done 的跳过，失败即中止——本轮消息不发送）
-    const fileIds = await uploadPendingFiles();
+    const fileIds = await uploadPendingFiles(sendIsCurrent);
+    if (!sendIsCurrent() || fileIds === null) return;
     // 上传收尾后重锚思考计时：thinkingSeconds 只讲模型等待的真话，不把
     // 上传耗时算进「导引思考中 Ns」（Codex R0 审 P2 的分阶段诚实口径）。
     sendStartedAt.value = Date.now();
-    if (!conversationId.value) {
+    if (!targetConversationId) {
       // Codex R0 P1：Agent 门户「开始对话」携 ?agent=<id> 直达该垂类交互包
       //（policy_qa/standards_qa）；无参默认导引。id 合法性由后端建会接口
       // 判定（不存在/非 interactive → 如实报错，不静默回退导引）。
       const conv = await createConversation({ agentId: targetAgentId.value });
+      if (!sendIsCurrent()) return;
+      targetConversationId = conv.id;
+      sendToken = conversationRuntimeGate.bindSession(sendToken, targetConversationId);
       conversationId.value = conv.id;
       conversationStatus.value = conv.status || "active";
+      conversationLoadState.value = "ready";
       started.value = true;
       // URL 反映当前会话（可刷新/分享/回退），并让左栏历史即时收录这条新会话。
-      router.replace({ path: "/", query: { c: conv.id } });
+      await router.replace({ path: "/", query: { c: conv.id } });
+      if (!sendIsCurrent()) return;
     }
-    const res = await postMessage(conversationId.value, content, fileIds);
+    postAttempted = true;
+    const rawResponse = await postMessage(targetConversationId, content, fileIds);
+    if (!sendIsCurrent()) {
+      // POST 可能已在服务端原子落库。若用户 A→B→A 回到同一会话，迟到成功
+      // 不能直接 append，也不能看似丢失；只允许当前 session 发起一次严格 GET
+      // 重核。GET 合同若损坏则保持红色错误，不写入半可信消息。
+      await reconcileConversationMutationOutcome(targetConversationId, {
+        isCurrent: false,
+        outcome: "success",
+        status: 200,
+      });
+      return;
+    }
+    const res = validateConversationPostResponse(rawResponse, {
+      conversationId: targetConversationId,
+      userContent: content,
+    });
+    if (!sendIsCurrent()) return;
     // 成功：附件已随消息落库，清空待发区；气泡 chips 换用真实文件 id
-    const sent = messages.value[messages.value.length - 1];
-    if (sent && sent.role === "user" && optimisticAttachments.length) {
-      sent.attachments = pendingFiles.value.map((f) => ({ id: f.fileId, filename: f.name }));
+    const sent = optimisticMessage;
+    if (messages.value.includes(sent)) {
+      if (optimisticAttachments.length) {
+        sent.attachments = pendingFiles.value.map((f) => ({ id: f.fileId, filename: f.name }));
+      }
+      // 2xx 必须带精确 canonical user_message；无 stable id/错角色会在上方
+      // fail-closed，绝不再以正文猜「最后一条 user」。
+      const canonicalUser = res.user_message || null;
+      const normalizedUser = normalizeConversationMessage(canonicalUser, { fresh: true });
+      Object.assign(sent, normalizedUser, {
+        attachments: sent.attachments || normalizedUser.attachments,
+        fresh: true,
+      });
     }
     pendingFiles.value = [];
-    messages.value.push({
-      role: "assistant",
-      content: res.message.content,
-      recommendation: res.message.recommendation || null,
-      fresh: true,
-      createdAt: res.message.created_at || null,
-    });
+    appendCanonicalMessage(res.message, { fresh: true });
     await scrollToBottom();
+    if (!sendIsCurrent()) return;
     ensureConversationTasksFeed(); // 本轮若刚给出 orchestrate 方案，开始为其召集状态保鲜
     ensureAgentSchemasForMessages(); // 内联召集就绪判据的契约预取（fail-closed）
   } catch (err) {
+    const sendRequestIsCurrent = sendIsCurrent();
+    if (!sendRequestIsCurrent) {
+      if (targetConversationId && postAttempted) {
+        await reconcileConversationMutationOutcome(targetConversationId, {
+          isCurrent: false,
+          outcome: "error",
+          status: err?.status,
+        });
+      }
+      return;
+    }
     // 本轮失败：后端契约是「失败零落库」（幂等重试，ADR-0013），本地同样回滚
     // 乐观气泡并把原文还原到输入框——不在界面上留一条服务端不存在的幽灵消息，
     // 重试也不会堆出重复 user 气泡（Codex R1-P2）。附件 chips 留在待发区
     // （已上传项带 fileId，重试不重复上传）。不伪造 assistant 回复。
-    const last = messages.value[messages.value.length - 1];
-    if (last && last.role === "user" && last.content === content) {
-      messages.value.pop();
-    }
+    const optimisticIndex = messages.value.indexOf(optimisticMessage);
+    if (optimisticIndex >= 0) messages.value.splice(optimisticIndex, 1);
     draft.value = content;
-    pageError.value = err.detail || err.message;
+    pageError.value = err.detail || err.message || "消息发送失败";
+    // 网络/超时与畸形 2xx 都可能发生在服务端已提交之后。保留还稿的同时强制
+    // resnapshot；只有完整 GET 合同通过才以服务端事实替换本地不确定态。
+    const needsReconcile = shouldReconcileConversationMutation({
+      isCurrent: true,
+      outcome: "error",
+      status: err?.status,
+    });
+    if (targetConversationId && postAttempted && needsReconcile) {
+      try {
+        const reconciled = await reconcileConversationSnapshot(
+          targetConversationId,
+          () => sendIsCurrent(),
+        );
+        if (reconciled === true && sendIsCurrent()) {
+          const committedUserIndex = messages.value.findIndex((message) =>
+            message.message_id
+            && !baselineMessageIds.has(message.message_id)
+            && message.role === "user"
+            && message.content === content
+          );
+          const committedReply = committedUserIndex >= 0
+            ? messages.value.slice(committedUserIndex + 1).find((message) =>
+              message.message_id
+              && !baselineMessageIds.has(message.message_id)
+              && message.role === "assistant"
+            )
+            : null;
+          if (committedReply) {
+            draft.value = "";
+            pendingFiles.value = [];
+          }
+        }
+      } catch (syncErr) {
+        if (sendIsCurrent()) {
+          pageError.value = `${pageError.value}；状态重核失败：${questionRequestError(syncErr)}`;
+        }
+      }
+    }
   } finally {
-    sending.value = false;
-    uploadPhase.value = ""; // 上传中途失败的清扫口（成功路径在 uploadPendingFiles 尾清）
+    if (sendIsCurrent()) {
+      sending.value = false;
+      uploadPhase.value = ""; // 上传中途失败的清扫口（成功路径在 uploadPendingFiles 尾清）
+      if (pendingConversationResnapshots.has(targetConversationId)) {
+        await reconcileLateConversationMutation(targetConversationId);
+      }
+    }
   }
 }
 
@@ -1649,13 +2177,21 @@ function ensureConversationTasksFeed() {
 }
 
 // ── 会话恢复（左栏历史点击 / 刷新 /?c=<id>）──
-const route = useRoute();
 
-function resetToFresh(clearError = true) {
+function resetToFresh(clearError = true, { sessionId = "" } = {}) {
+  // 导航本身推进 session epoch；即使路径 A→B→A，第一轮 A 的所有 await 续体
+  // 也永久失效，不能因为字符串 id 再次相同就复活。
+  conversationRuntimeGate.enterSession(sessionId);
   messages.value = [];
+  clearQuestionInteractionState();
   started.value = false;
   conversationId.value = "";
   conversationStatus.value = null;
+  conversationLoadState.value = sessionId ? "loading" : "fresh";
+  conversationSnapshotInFlight.value = false;
+  sending.value = false;
+  restoring.value = false;
+  uploadPhase.value = "";
   draft.value = "";
   pendingFiles.value = [];
   releaseConversationTasksFeed();
@@ -1685,28 +2221,30 @@ function qaRecommendation(rec) {
 const restoring = ref(false);
 
 async function loadConversation(id) {
-  resetToFresh();
+  resetToFresh(true, { sessionId: id });
+  const loadToken = conversationRuntimeGate.begin("load");
   restoring.value = true;
   try {
-    const conv = await getConversation(id);
-    conversationId.value = conv.id;
-    conversationStatus.value = conv.status || null; // 只读会话如实带出（Codex R0-P2）
-    started.value = true;
-    messages.value = (conv.messages || []).map((m) => ({
-      role: m.role,
-      content: m.content,
-      recommendation: m.recommendation || null,
-      attachments: m.attachments && m.attachments.length ? m.attachments : undefined,
-      createdAt: m.created_at || null,
-    }));
-    await scrollToBottom();
-    ensureConversationTasksFeed(); // 恢复的历史会话若已带 orchestrate 方案，立即接上订阅
-    ensureAgentSchemasForMessages(); // 历史方案卡同样预取输入契约（内联就绪判据）
+    await reconcileConversationSnapshot(
+      id,
+      () => conversationRuntimeGate.isCurrent(loadToken, id),
+    );
   } catch (err) {
-    pageError.value = err.detail || err.message || "会话加载失败";
+    if (conversationRuntimeGate.isCurrent(loadToken, id)) {
+      pageError.value = err.detail || err.message || "会话加载失败";
+    }
   } finally {
-    restoring.value = false;
+    if (conversationRuntimeGate.isCurrent(loadToken, id)) restoring.value = false;
   }
+}
+
+function retryFailedConversation() {
+  const id = routeConversationId.value;
+  if (id) loadConversation(id);
+}
+
+function startFreshAfterLoadFailure() {
+  router.push({ path: "/" });
 }
 
 onMounted(() => {
@@ -1714,6 +2252,7 @@ onMounted(() => {
   if (typeof c === "string" && c) loadConversation(c);
 });
 onUnmounted(() => {
+  conversationRuntimeGate.enterSession("");
   feedDisposed = true; // 先封门再释放：卸载后任何 await 续体不得再 acquire
   releaseConversationTasksFeed();
 });
@@ -1724,7 +2263,12 @@ watch(
   (c) => {
     if (typeof c === "string" && c) {
       if (c !== conversationId.value) loadConversation(c);
-    } else if (started.value || messages.value.length) {
+    } else if (
+      restoring.value
+      || conversationRuntimeGate.currentSession()
+      || started.value
+      || messages.value.length
+    ) {
       resetToFresh();
     }
   }
@@ -1843,6 +2387,24 @@ watch(
 
 .page-alert {
   margin-bottom: 14px;
+}
+.page-alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.page-alert-action {
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  font: inherit;
+}
+.page-alert-action.is-secondary {
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  cursor: pointer;
 }
 
 /* ── 会话流 ── */
