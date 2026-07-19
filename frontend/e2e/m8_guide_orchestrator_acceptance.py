@@ -161,9 +161,15 @@ with sync_playwright() as p:
     _start_and_send(page, "li_gong", "做双通道供电的控制逻辑和故障树")
     expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
     page.wait_for_selector(".agent-card", timeout=5000)
+    # Agent cards render before their async manifest/schema validation settles.
+    # Counting immediately observes the honest interim “参数未齐” state even
+    # though the same cards expose both create actions milliseconds later (the
+    # next click step used to prove this after already recording a false FAIL).
+    create_actions = page.get_by_role("button", name="去创建此任务")
+    expect(create_actions).to_have_count(2, timeout=8000)
     body = page.locator("body").inner_text()
     agent_cards = page.locator(".agent-card").count()
-    create_btns = page.get_by_role("button", name="去创建此任务").count()
+    create_btns = create_actions.count()
     multi_ok = (
         "协作方案" in body
         and "2 个 Agent 协作" in body
