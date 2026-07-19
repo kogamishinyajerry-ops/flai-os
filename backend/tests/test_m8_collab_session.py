@@ -53,14 +53,29 @@ def _open_conversation(client: TestClient) -> str:
 
 
 def _make_pre_m8_tasks_db(db_path) -> None:
-    """造 pre-M8 老库：重建 tasks 为不含 conversation_id 的旧形状（rebuild-rename，
-    任何 SQLite 版本可用；迁移探测只看列名，AS SELECT 丢约束无妨）。"""
+    """造 pre-M8 老库：重建 tasks 为不含 conversation_id 的旧形状。
+
+    保留原列的 PK/NOT NULL/default；``CREATE TABLE AS SELECT`` 会把 ``tasks.id``
+    的唯一性丢掉，令现代 outcome 外键天然失配，那不是任何真实旧版 tasks 表的形状。
+    """
     db_mod.init_db(db_path)
     conn = db_mod.get_conn(db_path)
     try:
-        legacy_cols = ", ".join(
-            r[1] for r in conn.execute("PRAGMA table_info(tasks)") if r[1] != "conversation_id"
-        )
+        legacy_info = [
+            r for r in conn.execute("PRAGMA table_info(tasks)")
+            if r[1] != "conversation_id"
+        ]
+        legacy_cols = ", ".join(f'"{r[1]}"' for r in legacy_info)
+        definitions: list[str] = []
+        for row in legacy_info:
+            definition = f'"{row[1]}" {row[2]}'
+            if row[5]:
+                definition += " PRIMARY KEY"
+            if row[3]:
+                definition += " NOT NULL"
+            if row[4] is not None:
+                definition += f" DEFAULT {row[4]}"
+            definitions.append(definition)
         # This fixture deliberately creates a temporary schema state with no
         # ``tasks`` table between DROP and RENAME.  Modern ledgers have guards
         # on other tables that reference ``tasks``; normal ALTER TABLE schema
@@ -69,7 +84,11 @@ def _make_pre_m8_tasks_db(db_path) -> None:
         # needs this compatibility mode.
         conn.execute("PRAGMA legacy_alter_table=ON")
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(f"CREATE TABLE tasks_legacy AS SELECT {legacy_cols} FROM tasks")
+        conn.execute(f"CREATE TABLE tasks_legacy ({', '.join(definitions)})")
+        conn.execute(
+            f"INSERT INTO tasks_legacy ({legacy_cols}) "
+            f"SELECT {legacy_cols} FROM tasks"
+        )
         conn.execute("DROP TABLE tasks")
         conn.execute("ALTER TABLE tasks_legacy RENAME TO tasks")
         conn.execute("COMMIT")

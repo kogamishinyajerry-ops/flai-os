@@ -749,6 +749,8 @@ _JUDGMENT_MANAGED_TRIGGERS = (
 _OUTCOME_OBJECT_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_artifact_outcomes_source_created "
     "ON artifact_outcome_events(source_file_id, created_at, id)",
+    "CREATE INDEX IF NOT EXISTS idx_artifact_outcomes_source_task_created "
+    "ON artifact_outcome_events(source_task_id, created_at, id)",
     "CREATE INDEX IF NOT EXISTS idx_artifact_outcomes_downstream_created "
     "ON artifact_outcome_events(downstream_task_id, created_at, id) "
     "WHERE downstream_task_id IS NOT NULL",
@@ -774,6 +776,27 @@ _OUTCOME_OBJECT_DDL = (
          AND review_event.event_type = 'review_approved'
         WHERE source_task.id = NEW.source_task_id
           AND source_task.origin = 'user'
+          AND source_task.status = 'completed'
+          AND EXISTS (
+              SELECT 1
+              FROM task_human_decisions AS decision
+              WHERE decision.task_id = source_task.id
+                AND decision.action = 'approve'
+                AND json_type(
+                    CASE
+                        WHEN json_valid(review_event.payload_json)
+                        THEN review_event.payload_json ELSE '{}'
+                    END,
+                    '$.decision_id'
+                ) = 'text'
+                AND decision.id = json_extract(
+                    CASE
+                        WHEN json_valid(review_event.payload_json)
+                        THEN review_event.payload_json ELSE '{}'
+                    END,
+                    '$.decision_id'
+                )
+          )
           AND EXISTS (
               SELECT 1
               FROM json_each(
@@ -790,7 +813,7 @@ _OUTCOME_OBJECT_DDL = (
     BEGIN
         SELECT RAISE(
             ABORT,
-            'outcome requires user source, authoritative output, and exact approval event'
+            'outcome requires user source, authoritative output, and exact approval decision'
         );
     END
     """,
@@ -885,7 +908,7 @@ _OUTCOME_OBJECT_DDL = (
         SELECT 1
         FROM artifact_outcome_events AS existing
         WHERE existing.id = NEW.id
-           OR (NEW.rowid <> -1 AND existing.rowid = NEW.rowid)
+           OR existing.rowid = NEW.rowid
            OR (
                NEW.event_type = 'capture_started'
                AND existing.event_type = 'capture_started'
@@ -905,6 +928,14 @@ _OUTCOME_OBJECT_DDL = (
     END
     """,
     """
+    CREATE TRIGGER IF NOT EXISTS trg_artifact_outcomes_positive_rowid
+    AFTER INSERT ON artifact_outcome_events
+    WHEN NEW.rowid <= 0
+    BEGIN
+        SELECT RAISE(ABORT, 'artifact outcome internal rowid must be positive');
+    END
+    """,
+    """
     CREATE TRIGGER IF NOT EXISTS trg_witnessed_artifact_files_no_update
     BEFORE UPDATE ON files
     WHEN EXISTS (
@@ -916,6 +947,82 @@ _OUTCOME_OBJECT_DDL = (
     END
     """,
     """
+    CREATE TRIGGER IF NOT EXISTS trg_witnessed_artifact_files_no_delete
+    BEFORE DELETE ON files
+    WHEN EXISTS (
+        SELECT 1 FROM artifact_outcome_events
+        WHERE source_file_id = OLD.id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'outcome-witnessed file is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_witnessed_artifact_files_no_conflicting_insert
+    BEFORE INSERT ON files
+    WHEN EXISTS (
+        SELECT 1
+        FROM files AS existing
+        WHERE (existing.id = NEW.id OR existing.rowid = NEW.rowid)
+          AND EXISTS (
+              SELECT 1 FROM artifact_outcome_events
+              WHERE source_file_id = existing.id
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'outcome-witnessed file is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_terminal_tasks_output_manifest_immutable
+    BEFORE UPDATE OF output_file_ids ON tasks
+    WHEN (OLD.status IN ('completed', 'failed', 'cancelled')
+          OR NEW.status IN ('completed', 'failed', 'cancelled'))
+         AND NEW.output_file_ids IS NOT OLD.output_file_ids
+    BEGIN
+        SELECT RAISE(ABORT, 'terminal task output manifest is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_terminal_tasks_identity_status_immutable
+    BEFORE UPDATE OF id, status ON tasks
+    WHEN (
+        OLD.status IN ('completed', 'failed', 'cancelled')
+        AND (
+            NEW.id IS NOT OLD.id
+            OR NEW.status IS NOT OLD.status
+        )
+    )
+    OR (
+        NEW.status IN ('completed', 'failed', 'cancelled')
+        AND NEW.id IS NOT OLD.id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'terminal task identity and status are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_terminal_tasks_no_delete
+    BEFORE DELETE ON tasks
+    WHEN OLD.status IN ('completed', 'failed', 'cancelled')
+    BEGIN
+        SELECT RAISE(ABORT, 'terminal task is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_terminal_tasks_no_conflicting_insert
+    BEFORE INSERT ON tasks
+    WHEN EXISTS (
+        SELECT 1
+        FROM tasks AS existing
+        WHERE existing.status IN ('completed', 'failed', 'cancelled')
+          AND (existing.id = NEW.id OR existing.rowid = NEW.rowid)
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'terminal task is immutable');
+    END
+    """,
+    """
     CREATE TRIGGER IF NOT EXISTS trg_witnessed_artifact_tasks_preserve_source
     BEFORE UPDATE ON tasks
     WHEN EXISTS (
@@ -923,19 +1030,10 @@ _OUTCOME_OBJECT_DDL = (
         FROM artifact_outcome_events AS outcome
         WHERE outcome.source_task_id = OLD.id
           AND (
-              NEW.origin <> 'user'
-              OR NOT EXISTS (
-                  SELECT 1
-                  FROM json_each(
-                      CASE
-                          WHEN json_valid(NEW.output_file_ids)
-                           AND json_type(NEW.output_file_ids) = 'array'
-                          THEN NEW.output_file_ids ELSE '[]'
-                      END
-                  ) AS output_ref
-                  WHERE output_ref.type = 'text'
-                    AND output_ref.value = outcome.source_file_id
-              )
+              NEW.id IS NOT OLD.id
+              OR NEW.origin IS NOT 'user'
+              OR NEW.status IS NOT 'completed'
+              OR NEW.output_file_ids IS NOT OLD.output_file_ids
           )
     )
     BEGIN
@@ -951,7 +1049,8 @@ _OUTCOME_OBJECT_DDL = (
         WHERE outcome.event_type = 'pipeline_handoff'
           AND outcome.downstream_task_id = OLD.id
           AND (
-              NEW.origin <> 'user'
+              NEW.id IS NOT OLD.id
+              OR NEW.origin IS NOT 'user'
               OR NOT EXISTS (
                   SELECT 1
                   FROM json_each(
@@ -982,10 +1081,42 @@ _OUTCOME_OBJECT_DDL = (
         SELECT RAISE(ABORT, 'outcome-witnessed downstream handoff is immutable');
     END
     """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_witnessed_artifact_tasks_no_delete
+    BEFORE DELETE ON tasks
+    WHEN EXISTS (
+        SELECT 1
+        FROM artifact_outcome_events AS outcome
+        WHERE outcome.source_task_id = OLD.id
+           OR outcome.downstream_task_id = OLD.id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'outcome-witnessed task is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_witnessed_artifact_tasks_no_conflicting_insert
+    BEFORE INSERT ON tasks
+    WHEN EXISTS (
+        SELECT 1
+        FROM tasks AS existing
+        WHERE (existing.id = NEW.id OR existing.rowid = NEW.rowid)
+          AND EXISTS (
+              SELECT 1
+              FROM artifact_outcome_events AS outcome
+              WHERE outcome.source_task_id = existing.id
+                 OR outcome.downstream_task_id = existing.id
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'outcome-witnessed task is immutable');
+    END
+    """,
 )
 
 _OUTCOME_MANAGED_INDEXES = (
     "idx_artifact_outcomes_source_created",
+    "idx_artifact_outcomes_source_task_created",
     "idx_artifact_outcomes_downstream_created",
     "idx_artifact_outcomes_one_capture",
     "idx_artifact_outcomes_one_handoff",
@@ -999,9 +1130,18 @@ _OUTCOME_MANAGED_TRIGGERS = (
     "trg_artifact_outcomes_no_update",
     "trg_artifact_outcomes_no_delete",
     "trg_artifact_outcomes_no_conflicting_insert",
+    "trg_artifact_outcomes_positive_rowid",
     "trg_witnessed_artifact_files_no_update",
+    "trg_witnessed_artifact_files_no_delete",
+    "trg_witnessed_artifact_files_no_conflicting_insert",
+    "trg_terminal_tasks_output_manifest_immutable",
+    "trg_terminal_tasks_identity_status_immutable",
+    "trg_terminal_tasks_no_delete",
+    "trg_terminal_tasks_no_conflicting_insert",
     "trg_witnessed_artifact_tasks_preserve_source",
     "trg_witnessed_artifact_tasks_preserve_handoff",
+    "trg_witnessed_artifact_tasks_no_delete",
+    "trg_witnessed_artifact_tasks_no_conflicting_insert",
 )
 
 _INDEX_DDL = (
@@ -2261,6 +2401,31 @@ def get_conn(db_path: str | Path) -> sqlite3.Connection:
         raise
 
 
+def _execute_script_in_transaction(
+    conn: sqlite3.Connection, script: str
+) -> None:
+    """Execute canonical DDL without ``executescript``'s implicit COMMIT.
+
+    ``sqlite3.Connection.executescript`` commits any active transaction before
+    running.  ``init_db`` must hold one ``BEGIN IMMEDIATE`` across evidence
+    preflight and schema convergence; otherwise a second initializer can
+    observe the first halfway through creating the two judgment tables and
+    misclassify that transient as deletion residue.  ``complete_statement``
+    understands trigger bodies, so each canonical statement remains intact.
+    """
+    pending: list[str] = []
+    for line in script.splitlines(keepends=True):
+        pending.append(line)
+        candidate = "".join(pending)
+        if sqlite3.complete_statement(candidate):
+            statement = candidate.strip()
+            if statement:
+                conn.execute(statement)
+            pending.clear()
+    if "".join(pending).strip():
+        raise sqlite3.OperationalError("canonical DDL contains an incomplete statement")
+
+
 def init_db(db_path: str | Path) -> None:
     """幂等建表：CREATE TABLE IF NOT EXISTS，可重复调用。
 
@@ -2269,6 +2434,10 @@ def init_db(db_path: str | Path) -> None:
     """
     conn = get_conn(db_path)
     try:
+        # Serialize the entire evidence preflight + convergence window across
+        # API/worker processes.  Releasing the lock between them would let a
+        # peer see legitimate half-created schema as tamper residue.
+        conn.execute("BEGIN IMMEDIATE")
         # 在任何 CREATE/收敛动作之前先看现场：若已有任一非空判断账本，则两张
         # 表和全部 canonical 对象必须原本就在位。否则 `_DDL` 补一张被删的表、
         # 或后文重建 no-op trigger 后再报绿，会掩盖历史保护窗已经断裂的事实。
@@ -2369,14 +2538,13 @@ def init_db(db_path: str | Path) -> None:
             from .outcome_schema import assert_outcome_schema
 
             assert_outcome_schema(conn)
-        conn.executescript(_DDL)
+        _execute_script_in_transaction(conn, _DDL)
         # 迁移 #1（ADR-0013）：model_calls.conversation_id——导引会话的模型调用归因。
         # 并发启动安全（Codex R1-P1）：API 进程与 Job Runner 进程都在启动时调
         # init_db，对 pre-ADR-0013 存量库，无锁的 check-then-ALTER 会让双方同时
         # 观察到「列缺失」，输家撞 duplicate column name 直接启动失败。改为先
         # BEGIN IMMEDIATE 拿写锁、锁内复查——锁内读到的列集即权威，赢家先完成
         # 迁移则此处如实跳过。
-        conn.execute("BEGIN IMMEDIATE")
         try:
             cols = {row[1] for row in conn.execute("PRAGMA table_info(model_calls)")}
             if "conversation_id" not in cols:

@@ -223,6 +223,7 @@ def create_app(
             # ADR-0036 活 API 代际 + exact served-DB schema 双见证。worker 侧
             # pipeline writer 另由 WORKER_GENERATION 心跳咬合，拒绝新 API/DB 配旧 worker。
             "outcome_telemetry_axis": True,
+            "outcome_telemetry_generation": config.OUTCOME_TELEMETRY_GENERATION,
             "p23_schema_witnesses": p23_schema_witnesses,
             "judgment_schema_witnesses": judgment_schema_witnesses,
             "outcome_schema_witnesses": outcome_schema_witnesses,
@@ -288,6 +289,7 @@ def create_app(
                 "search_addressing_axis": True,
                 "judgment_capture_axis": True,
                 "outcome_telemetry_axis": True,
+                "outcome_telemetry_generation": config.OUTCOME_TELEMETRY_GENERATION,
                 "p23": {
                     "runtime_generation": True,
                     "schema_ready": p23_schema_ready,
@@ -300,6 +302,7 @@ def create_app(
                 },
                 "outcome_telemetry": {
                     "runtime_generation": True,
+                    "generation": config.OUTCOME_TELEMETRY_GENERATION,
                     "schema_ready": outcome_schema_ready,
                     "schema_witnesses": outcome_schema_witnesses,
                     "worker_generation_ready": worker_generation_ready,

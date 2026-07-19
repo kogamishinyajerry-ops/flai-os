@@ -797,28 +797,28 @@ def get_artifact_capture_witness(
 def record_full_download_outcome(
     conn: sqlite3.Connection,
     *,
+    source_task_id: str,
     source_file_id: str,
+    review_event_id: str,
     actor_username: str,
     delivered_bytes: int,
-) -> dict[str, Any] | None:
-    """Record a completed 200 body for an already-instrumented signed output.
+) -> dict[str, Any]:
+    """Record a completed 200 body against a pre-stream cohort snapshot.
 
-    A missing capture marker means legacy/non-instrumented artifact: return None
-    truthfully instead of creating a retrospective cohort marker.  Repeated real
-    deliveries intentionally append repeated events.
+    The caller must snapshot the exact source task/file/review witness before
+    streaming begins.  This function deliberately does not discover a newer
+    capture marker after delivery; SQLite independently revalidates that exact
+    witness during INSERT.  Repeated real deliveries intentionally append
+    repeated events.
     """
     conn.execute("BEGIN IMMEDIATE")
     try:
-        capture = get_artifact_capture_witness(conn, source_file_id)
-        if capture is None:
-            conn.execute("COMMIT")
-            return None
         outcome = append_artifact_outcome_event(
             conn,
             event_type="full_download",
-            source_task_id=capture["source_task_id"],
+            source_task_id=source_task_id,
             source_file_id=source_file_id,
-            review_event_id=capture["review_event_id"],
+            review_event_id=review_event_id,
             actor_username=actor_username,
             delivered_bytes=delivered_bytes,
         )

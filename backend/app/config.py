@@ -42,6 +42,11 @@ LLM_TIMEOUT_S = max(1.0, float(os.environ.get("FLAI_LLM_TIMEOUT_S", "120")))
 # 内网可 export FLAI_EVAL_QUOTA 调整。下限夹 1（0/负会永久卡住队列）。
 DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 
+# ADR-0036 API 代际。布尔 axis 只能区分“接过/没接过”功能，无法阻止初版
+# outcome API 在 DB 已迁到收紧版后继续存活并以旧的 post-send cohort 发现逻辑漏过
+# 部署门。精确字符串同时覆盖 pre-stream snapshot、decision-bound capture 与父级冻结。
+OUTCOME_TELEMETRY_GENERATION = "adr36-decision-bound-prestream-snapshot-v2"
+
 # worker 代际字符串（ADR-0021/Codex R2 审 P2）：放在纯 stdlib 的 config，
 # 让部署自检探针（deploy_selfcheck.py，号称免应用依赖）导入它时不连带拉
 # jobs.runner→storage.repos→jsonschema。**改派生语义的里程碑同步 bump**——

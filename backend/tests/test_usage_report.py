@@ -11,6 +11,7 @@ import importlib.util
 import sqlite3
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from backend.app.storage.db import init_db
@@ -24,6 +25,7 @@ spec.loader.exec_module(usage_report)
 
 NOW = dt.datetime(2026, 7, 18, 12, 0, 0, tzinfo=dt.timezone.utc)
 RECENT = "2026-07-17T10:00:00+00:00"
+FUTURE = "2026-07-19T10:00:00+00:00"
 OLD = "2026-05-01T10:00:00+00:00"
 
 
@@ -72,7 +74,16 @@ def make_db(tmp_path: Path, *, include_outcomes: bool = True) -> Path:
         "(event_id, task_id, agent_id, event_type, level, message, payload_json, created_at) "
         "VALUES (?,?,?,?,?,?,?,?)",
         [
-            ("e1", "t1", "a1", "review_approved", "info", "approved", "{}", RECENT),
+            (
+                "e1",
+                "t1",
+                "a1",
+                "review_approved",
+                "info",
+                "approved",
+                '{"decision_id":"d1"}',
+                RECENT,
+            ),
             ("e3", "t3", "a2", "review_rejected", "warning", "rejected", "{}", RECENT),
             ("e4", "t4", "a1", "review_approved", "info", "approved", "{}", OLD),
             ("ee1", "t5", "a1", "review_approved", "info", "approved", "{}", RECENT),
@@ -151,6 +162,7 @@ def test_counts_window_and_eval_isolation(tmp_path):
             "outcome_table_shape": True,
             "required_indexes": True,
             "required_triggers": True,
+            "provenance_integrity": True,
         },
         "observation_started_at": RECENT,
         "requested_window_start": "2026-07-04T12:00:00+00:00",
@@ -201,6 +213,169 @@ def test_outcome_table_without_capture_is_unknown_not_fake_zero(tmp_path):
     assert report["artifact_outcomes"]["status"] == "unknown_no_instrumented_artifacts"
     assert "未知" in report["artifact_outcomes"]["full_download"]
     assert "未知" in report["artifact_outcomes"]["pipeline_handoff"]
+
+
+def test_future_first_capture_is_unknown_not_measured(tmp_path):
+    db = make_db(tmp_path, include_outcomes=False)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO artifact_outcome_events VALUES (?,?,?,?,?,?,?,?,?,?)",
+        ("o_future", "capture_started", "t1", "f1", "e1", None, None, None, 1, FUTURE),
+    )
+    conn.commit()
+    conn.close()
+
+    report = usage_report.build_report(db, days=14, now=NOW)
+
+    outcomes = report["artifact_outcomes"]
+    assert outcomes["status"] == "unknown_future_capture_timestamp"
+    assert "未知" in outcomes["capture_started"]
+    assert "未知" in outcomes["full_download"]
+    assert "未知" in outcomes["pipeline_handoff"]
+
+
+def test_future_outcome_is_excluded_from_point_in_time_counts(tmp_path):
+    db = make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO artifact_outcome_events VALUES (?,?,?,?,?,?,?,?,?,?)",
+        ("o_future", "full_download", "t1", "f1", "e1", "u2", None, 10, 1, FUTURE),
+    )
+    conn.commit()
+    conn.close()
+
+    report = usage_report.build_report(db, days=14, now=NOW)
+
+    assert report["artifact_outcomes"]["status"] == "measured"
+    assert report["artifact_outcomes"]["full_download"] == {
+        "delivered_events_lower_bound": 2,
+        "distinct_artifacts": 1,
+        "distinct_source_tasks": 1,
+        "distinct_actors": 1,
+    }
+
+
+def test_same_second_pre_generation_outcome_is_not_lost_by_display_truncation(
+    tmp_path,
+):
+    db = make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO artifact_outcome_events VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (
+            "o_same_second",
+            "full_download",
+            "t1",
+            "f1",
+            "e1",
+            "u2",
+            None,
+            10,
+            1,
+            "2026-07-18T12:00:00.500000+00:00",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    report = usage_report.build_report(
+        db,
+        days=14,
+        now=dt.datetime(
+            2026,
+            7,
+            18,
+            12,
+            0,
+            0,
+            900_000,
+            tzinfo=dt.timezone.utc,
+        ),
+    )
+
+    assert report["generated_at"] == "2026-07-18T12:00:00+00:00"
+    assert report["artifact_outcomes"]["full_download"][
+        "delivered_events_lower_bound"
+    ] == 3
+
+
+def test_report_reads_one_wal_snapshot_during_concurrent_outcome_write(
+    tmp_path, monkeypatch
+):
+    db = make_db(tmp_path)
+    real_connect = sqlite3.connect
+    setup = real_connect(db)
+    assert setup.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    setup.close()
+
+    reader_reached_outcomes = threading.Event()
+    writer_committed = threading.Event()
+    writer_errors: list[BaseException] = []
+
+    def writer() -> None:
+        try:
+            assert reader_reached_outcomes.wait(timeout=5)
+            write_conn = real_connect(db, timeout=5)
+            try:
+                write_conn.execute(
+                    "INSERT INTO artifact_outcome_events VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        "o_concurrent",
+                        "full_download",
+                        "t1",
+                        "f1",
+                        "e1",
+                        "u2",
+                        None,
+                        10,
+                        1,
+                        RECENT,
+                    ),
+                )
+                write_conn.commit()
+            finally:
+                write_conn.close()
+        except BaseException as exc:  # pragma: no cover - re-raised in reader thread
+            writer_errors.append(exc)
+        finally:
+            writer_committed.set()
+
+    writer_thread = threading.Thread(target=writer, daemon=True)
+    writer_thread.start()
+
+    def instrumented_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        database = str(args[0] if args else kwargs.get("database", ""))
+        if "mode=ro" in database:
+            paused = False
+
+            def trace(sql: str) -> None:
+                nonlocal paused
+                if not paused and "MIN(outcome.created_at)" in sql:
+                    paused = True
+                    reader_reached_outcomes.set()
+                    writer_committed.wait(timeout=5)
+
+            conn.set_trace_callback(trace)
+        return conn
+
+    monkeypatch.setattr(usage_report.sqlite3, "connect", instrumented_connect)
+    report = usage_report.build_report(db, days=14, now=NOW)
+    writer_thread.join(timeout=5)
+
+    assert not writer_thread.is_alive()
+    assert writer_errors == []
+    assert report["artifact_outcomes"]["full_download"][
+        "delivered_events_lower_bound"
+    ] == 2
+    verify = real_connect(db)
+    try:
+        assert verify.execute(
+            "SELECT COUNT(*) FROM artifact_outcome_events "
+            "WHERE event_type = 'full_download'"
+        ).fetchone()[0] == 3
+    finally:
+        verify.close()
 
 
 def test_naive_injected_clock_is_interpreted_as_utc_not_local_time(tmp_path):

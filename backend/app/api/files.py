@@ -407,37 +407,54 @@ def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
         access_label="下载",
     )
 
-    # Only output artifacts can belong to the signed outcome cohort.  The
-    # callback opens its own connection because FileResponse streams after this
-    # sync endpoint has returned.  record_full_download_outcome re-witnesses the
-    # capture marker and provenance under BEGIN IMMEDIATE; legacy/input files
+    # Only output artifacts that are already in the signed outcome cohort when
+    # this response is constructed can produce a delivery fact.  Snapshot the
+    # exact capture/review witness before streaming: discovering a marker only
+    # after the body was sent would retroactively admit a request that started
+    # while the artifact was unsigned.  The callback opens its own connection
+    # because FileResponse streams after this sync endpoint has returned, then
+    # SQLite revalidates the snapshotted witness on insert.  Legacy/input files
     # truthfully no-op.  Repeated complete downloads remain repeated deliveries.
-    on_full_body_sent: Callable[[int], None] | None = None
-    if (
-        record["kind"] == "output"
-        and request.method == "GET"
-        # Any Range request is explicitly outside full_download semantics,
-        # even when If-Range makes Starlette fall back to a simple 200 body.
-        and "range" not in request.headers
-    ):
-        conn_factory = request.app.state.conn_factory
-        actor_username = request.state.user["username"]
-
-        def _record(delivered_bytes: int) -> None:
-            conn = conn_factory()
+    try:
+        on_full_body_sent: Callable[[int], None] | None = None
+        if (
+            record["kind"] == "output"
+            and request.method == "GET"
+            # Any Range request is explicitly outside full_download semantics,
+            # even when If-Range makes Starlette fall back to a simple 200 body.
+            and "range" not in request.headers
+        ):
+            conn_factory = request.app.state.conn_factory
+            actor_username = request.state.user["username"]
+            witness_conn = conn_factory()
             try:
-                repos.record_full_download_outcome(
-                    conn,
-                    source_file_id=file_id,
-                    actor_username=actor_username,
-                    delivered_bytes=delivered_bytes,
+                capture_witness = repos.get_artifact_capture_witness(
+                    witness_conn, file_id
                 )
             finally:
-                conn.close()
+                witness_conn.close()
 
-        on_full_body_sent = _record
+            if capture_witness is not None:
+                source_task_id = capture_witness["source_task_id"]
+                source_file_id = capture_witness["source_file_id"]
+                review_event_id = capture_witness["review_event_id"]
 
-    try:
+                def _record(delivered_bytes: int) -> None:
+                    conn = conn_factory()
+                    try:
+                        repos.record_full_download_outcome(
+                            conn,
+                            source_task_id=source_task_id,
+                            source_file_id=source_file_id,
+                            review_event_id=review_event_id,
+                            actor_username=actor_username,
+                            delivered_bytes=delivered_bytes,
+                        )
+                    finally:
+                        conn.close()
+
+                on_full_body_sent = _record
+
         return _VerifiedFileResponse(
             handle,
             path=record["path"],

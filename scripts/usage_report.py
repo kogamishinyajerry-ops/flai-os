@@ -69,12 +69,21 @@ def build_report(db_path: Path, days: int, now: dt.datetime | None = None) -> di
         if now.tzinfo is None
         else now.astimezone(dt.timezone.utc)
     )
+    generated_at = now.isoformat(timespec="seconds")
+    # Persisted facts commonly carry microseconds.  Keep the human-facing
+    # timestamp compact, but compare against the exact injected/current clock;
+    # a seconds-truncated upper bound would wrongly drop facts from the same
+    # second that happened before ``now``.
+    generated_at_bound = now.isoformat(timespec="microseconds")
     since = (now - dt.timedelta(days=days)).isoformat(timespec="seconds")
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
+        # sqlite3 的只读 SELECT 默认可能各自打开/关闭事务；显式 BEGIN 让整份报告
+        # 固定在第一次读取建立的同一 WAL snapshot 上，避免同份报告跨时点拼接。
+        conn.execute("BEGIN")
         report: dict = {
-            "generated_at": now.isoformat(timespec="seconds"),
+            "generated_at": generated_at,
             "window_days": days,
             "db": str(db_path),
         }
@@ -317,6 +326,15 @@ def build_report(db_path: Path, days: int, now: dt.datetime | None = None) -> di
                         "pipeline_handoff": "未知（采集起点不可验证）",
                         "note": "拒绝跨不可验证采集起点编造结果计数",
                     }
+                elif first_capture_dt > now:
+                    report["artifact_outcomes"] = {
+                        "status": "unknown_future_capture_timestamp",
+                        "observation_started_at": "未知（capture_started 晚于报告生成时点）",
+                        "capture_started": "未知（采集起点来自未来，不进入当前快照计数）",
+                        "full_download": "未知（采集起点来自未来，不进入当前快照计数）",
+                        "pipeline_handoff": "未知（采集起点来自未来，不进入当前快照计数）",
+                        "note": "拒绝把报告生成时点之后的采集事实计入当前报告",
+                    }
                 else:
                     requested_since_dt = now - dt.timedelta(days=days)
                     effective_dt = max(requested_since_dt, first_capture_dt)
@@ -341,8 +359,10 @@ def build_report(db_path: Path, days: int, now: dt.datetime | None = None) -> di
                             "JOIN tasks AS source ON source.id = outcome.source_task_id "
                             "AND source.origin = 'user' "
                             + downstream_join
-                            + "WHERE outcome.event_type = ? AND outcome.created_at >= ?",
-                            (event_type, effective_since),
+                            + "WHERE outcome.event_type = ? "
+                            "AND outcome.created_at >= ? "
+                            "AND outcome.created_at <= ?",
+                            (event_type, effective_since, generated_at_bound),
                         ).fetchone()
                         result = {
                             "events": int(row["events"]),
@@ -363,8 +383,9 @@ def build_report(db_path: Path, days: int, now: dt.datetime | None = None) -> di
                         "AND source.origin = 'user' "
                         "WHERE outcome.event_type = 'full_download' "
                         "AND outcome.created_at >= ? "
+                        "AND outcome.created_at <= ? "
                         "AND outcome.actor_username IS NOT NULL",
-                        (effective_since,),
+                        (effective_since, generated_at_bound),
                     ) or 0)
                     handoff_counts = outcome_counts(
                         "pipeline_handoff", require_downstream=True

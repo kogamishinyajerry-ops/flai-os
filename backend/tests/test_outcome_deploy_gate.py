@@ -62,20 +62,41 @@ def test_live_outcome_generation_requires_exact_true_and_all_witnesses(monkeypat
     valid = {key: True for key in _WITNESS_KEYS}
     _fake_health(
         monkeypatch,
-        {"outcome_telemetry_axis": True, "outcome_schema_witnesses": valid},
+        {
+            "outcome_telemetry_axis": True,
+            "outcome_telemetry_generation": config.OUTCOME_TELEMETRY_GENERATION,
+            "outcome_schema_witnesses": valid,
+        },
     )
     assert deploy_selfcheck.check_live_outcome_generation("http://api").ok is True
 
     _fake_health(
         monkeypatch,
-        {"outcome_telemetry_axis": 1, "outcome_schema_witnesses": valid},
+        {
+            "outcome_telemetry_axis": 1,
+            "outcome_telemetry_generation": config.OUTCOME_TELEMETRY_GENERATION,
+            "outcome_schema_witnesses": valid,
+        },
+    )
+    assert deploy_selfcheck.check_live_outcome_generation("http://api").ok is False
+    _fake_health(
+        monkeypatch,
+        {
+            "outcome_telemetry_axis": True,
+            "outcome_telemetry_generation": "adr36-stale-api",
+            "outcome_schema_witnesses": valid,
+        },
     )
     assert deploy_selfcheck.check_live_outcome_generation("http://api").ok is False
     broken = dict(valid)
     broken["required_triggers"] = 1
     _fake_health(
         monkeypatch,
-        {"outcome_telemetry_axis": True, "outcome_schema_witnesses": broken},
+        {
+            "outcome_telemetry_axis": True,
+            "outcome_telemetry_generation": config.OUTCOME_TELEMETRY_GENERATION,
+            "outcome_schema_witnesses": broken,
+        },
     )
     assert deploy_selfcheck.check_live_outcome_generation("http://api").ok is False
 
@@ -91,6 +112,10 @@ def test_fresh_outcome_schema_passes_local_health_and_readyz(app_env) -> None:
 
     health = client.get("/api/health").json()
     assert health["outcome_telemetry_axis"] is True
+    assert (
+        health["outcome_telemetry_generation"]
+        == config.OUTCOME_TELEMETRY_GENERATION
+    )
     assert set(health["outcome_schema_witnesses"]) == _WITNESS_KEYS
     assert all(value is True for value in health["outcome_schema_witnesses"].values())
     ready = client.get("/api/readyz")
@@ -135,6 +160,22 @@ def test_extra_unique_index_that_would_collapse_downloads_fails_exact_gate(app_e
         conn.close()
     assert client.get("/api/health").json()["outcome_schema_witnesses"]["required_indexes"] is False
     assert client.get("/api/readyz").status_code == 503
+
+
+def test_source_task_guard_uses_bounded_index(app_env) -> None:
+    _client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        plan = conn.execute(
+            "EXPLAIN QUERY PLAN SELECT 1 FROM artifact_outcome_events "
+            "WHERE source_task_id = ? LIMIT 1",
+            ("missing",),
+        ).fetchall()
+    finally:
+        conn.close()
+    detail = " ".join(str(row[3]) for row in plan)
+    assert "idx_artifact_outcomes_source_task_created" in detail
+    assert "SEARCH" in detail
 
 
 def test_readyz_rejects_fresh_old_worker_generation_even_with_exact_schema(app_env) -> None:

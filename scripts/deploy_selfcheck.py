@@ -92,6 +92,7 @@ from backend.app.storage.outcome_schema import (  # noqa: E402
 )
 
 WORKER_GENERATION = config.WORKER_GENERATION
+OUTCOME_TELEMETRY_GENERATION = config.OUTCOME_TELEMETRY_GENERATION
 _WORKER_STALE_SECONDS = 60
 
 # 缺任何一张=init_db 没跑或库文件指错——列出全部必需表，不挑子集。
@@ -130,6 +131,7 @@ _OUTCOME_SCHEMA_WITNESS_LABELS = {
     "outcome_table_shape": "artifact_outcome_events canonical table shape",
     "required_indexes": "required outcome indexes",
     "required_triggers": "required outcome provenance/append-only triggers",
+    "provenance_integrity": "persisted outcome parent/flow provenance",
 }
 
 
@@ -544,6 +546,13 @@ def check_live_outcome_generation(base_url: str) -> Check:
             False,
             "health 无 outcome_telemetry_axis=true——运行中 API 未接入 ADR-0036，fail-closed",
         )
+    if payload.get("outcome_telemetry_generation") != OUTCOME_TELEMETRY_GENERATION:
+        return Check(
+            name,
+            False,
+            "health outcome API 代际不匹配——运行中 API 未重启到 decision-bound/"
+            "pre-stream snapshot 版本，fail-closed",
+        )
     witnesses = payload.get("outcome_schema_witnesses")
     if not isinstance(witnesses, dict):
         return Check(name, False, "health 缺 outcome_schema_witnesses 结构见证")
@@ -560,7 +569,7 @@ def check_live_outcome_generation(base_url: str) -> Check:
     return Check(
         name,
         True,
-        "活进程自报 outcome_telemetry_axis=true，且服务侧 exact schema witnesses 全在位",
+        "活进程 outcome API 代际 exact，且服务侧 exact schema witnesses 全在位",
     )
 
 

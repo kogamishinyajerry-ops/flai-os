@@ -200,19 +200,34 @@ def test_tool_runs_summary_bounded_counts(app_env) -> None:
 def test_output_files_endpoint_projects_metadata_no_leak(app_env) -> None:
     """批B P1 修复：/tasks/{id}/output_files 只投影
     [{id, filename, size_bytes, data_classification}]，绝不含 path/sha256/uploaded_by。
-    hello_agent 产出的 internal 文件 + 手工插入的 sensitive 文件都要能看见——分级本身
+    同一非终态任务预挂的 internal + sensitive 文件都要能看见——分级本身
     是元数据（前端据此决定要不要渲染下载链接），真下载仍走 /files/{id}/download 原
     分级门，本端点不代管下载授权。"""
     client, app = app_env
-    task = _create_and_run(client, app, "hello_agent", {"name": "产物投影"})
-    assert task["status"] == "completed"
+    created = client.post(
+        "/api/tasks",
+        json={"agent_id": "hello_agent", "inputs": {"name": "产物投影"}},
+    )
+    assert created.status_code == 200
+    task = created.json()
+    assert task["status"] == "queued"
     task_id = task["id"]
-    assert task["output_file_ids"], "hello_agent 必须产出至少一个文件"
-    internal_file_id = task["output_file_ids"][0]
+    internal_file_id = "file_internal_test"
 
-    # 手工插入一个 sensitive 分级产物并挂到同一任务，模拟受限产物场景。
+    # 投影测试只需在运行前构造清单；终态 manifest 在 ADR-0036 下必须冻结。
     conn = app.state.conn_factory()
     try:
+        repos.create_file(
+            conn,
+            file_id=internal_file_id,
+            task_id=task_id,
+            kind="output",
+            filename="普通产物.csv",
+            path="/nonexistent/普通产物.csv",
+            size_bytes=21,
+            sha256="1" * 64,
+            classification="internal",
+        )
         sensitive_file = repos.create_file(
             conn,
             file_id="file_sensitive_test",
@@ -224,7 +239,11 @@ def test_output_files_endpoint_projects_metadata_no_leak(app_env) -> None:
             sha256="0" * 64,
             classification="sensitive",
         )
-        repos.set_task_outputs(conn, task_id, [*task["output_file_ids"], sensitive_file["id"]])
+        repos.set_task_outputs(
+            conn,
+            task_id,
+            [internal_file_id, sensitive_file["id"]],
+        )
     finally:
         conn.close()
 

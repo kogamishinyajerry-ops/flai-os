@@ -10,11 +10,13 @@ from pathlib import Path
 
 import anyio
 import pytest
+from starlette.requests import Request
 
-from backend.app.api.files import _VerifiedFileResponse
+from backend.app.api.files import _VerifiedFileResponse, download_file
 from backend.app.jobs.runner import resolve_dependencies_once
 from backend.app.storage import repos
 from backend.app.storage.db import get_conn, init_db
+from backend.app.storage.outcome_schema import outcome_schema_witnesses
 
 TEST_USERNAME = "test_engineer"
 
@@ -195,6 +197,48 @@ def test_invalid_foreign_non_user_unsigned_and_bad_download_rows_are_rejected(
         conn.close()
 
 
+def test_capture_requires_exact_approve_decision_bound_by_event_payload(
+    outcome_db: Path,
+) -> None:
+    conn = get_conn(outcome_db)
+    try:
+        _create_task(conn, "source")
+        file_id = _attach_output(conn, "source")
+        for status in ("queued", "validating", "running", "waiting_review"):
+            repos.set_task_status(conn, "source", status)
+        conn.execute(
+            "INSERT INTO task_human_decisions "
+            "(id, task_id, paired_advice_id, action, reason_code, comment, "
+            " reviewer_username, reviewer_display_name, schema_version, created_at) "
+            "VALUES ('decision_exact', 'source', NULL, 'approve', NULL, NULL, "
+            " 'reviewer', '评审员', 1, '2026-07-19T00:00:00+00:00')"
+        )
+        repos.set_task_status(conn, "source", "completed")
+        review_event = repos.append_event(
+            conn,
+            task_id="source",
+            agent_id="hello_agent",
+            event_type="review_approved",
+            level="info",
+            message="legacy event without an exact decision witness",
+            payload={"decision_id": "decision_wrong"},
+        )
+
+        with pytest.raises(sqlite3.IntegrityError, match="exact approval"):
+            repos.append_artifact_outcome_event(
+                conn,
+                event_type="capture_started",
+                source_task_id="source",
+                source_file_id=file_id,
+                review_event_id=review_event["event_id"],
+            )
+        assert conn.execute(
+            "SELECT COUNT(*) FROM artifact_outcome_events"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 def test_outcome_ledger_blocks_update_delete_replace_and_explicit_rowid_replace(
     outcome_db: Path,
 ) -> None:
@@ -251,8 +295,150 @@ def test_outcome_ledger_blocks_update_delete_replace_and_explicit_rowid_replace(
                     row["created_at"],
                 ),
             )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO artifact_outcome_events "
+                "(rowid, id, event_type, source_task_id, source_file_id, review_event_id, "
+                " actor_username, downstream_task_id, delivered_bytes, schema_version, created_at) "
+                "VALUES (-1, ?, 'full_download', 'source', ?, ?, ?, NULL, ?, 1, ?)",
+                (
+                    f"outcome_{uuid.uuid4().hex}",
+                    file_id,
+                    review_event_id,
+                    TEST_USERNAME,
+                    len(b"signed-output"),
+                    row["created_at"],
+                ),
+            )
     finally:
         conn.close()
+
+
+def _raw_row(conn: sqlite3.Connection, table: str, row_id: str) -> tuple:
+    row = conn.execute(
+        f'SELECT rowid, * FROM "{table}" WHERE id = ?', (row_id,)
+    ).fetchone()
+    assert row is not None
+    return tuple(row)
+
+
+def _replace_row(
+    conn: sqlite3.Connection,
+    table: str,
+    row_id: str,
+    *,
+    changes: dict[str, object],
+) -> None:
+    columns = [str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')]
+    current = conn.execute(
+        f'SELECT {", ".join(columns)} FROM "{table}" WHERE id = ?', (row_id,)
+    ).fetchone()
+    assert current is not None
+    values = dict(zip(columns, tuple(current), strict=True))
+    values.update(changes)
+    conn.execute(
+        f'INSERT OR REPLACE INTO "{table}" ({", ".join(columns)}) '
+        f'VALUES ({", ".join("?" for _ in columns)})',
+        tuple(values[column] for column in columns),
+    )
+
+
+def test_witnessed_parent_rows_block_delete_and_replace_with_recursive_triggers_off(
+    outcome_db: Path,
+) -> None:
+    conn = get_conn(outcome_db)
+    try:
+        _create_task(conn, "source")
+        file_id = _attach_output(conn, "source")
+        _approve(conn, "source")
+        _create_task(conn, "downstream", depends_on=["source"])
+        repos.enqueue_dependent_task(conn, "downstream", [file_id])
+
+        originals = {
+            ("files", file_id): _raw_row(conn, "files", file_id),
+            ("tasks", "source"): _raw_row(conn, "tasks", "source"),
+            ("tasks", "downstream"): _raw_row(conn, "tasks", "downstream"),
+        }
+        conn.execute("PRAGMA recursive_triggers = OFF")
+        attacks = (
+            ("files", file_id, {"kind": "input", "size_bytes": 1}),
+            ("tasks", "source", {"origin": "eval", "output_file_ids": "[]"}),
+            ("tasks", "downstream", {"origin": "eval", "depends_on": "[]"}),
+        )
+        for table, row_id, changes in attacks:
+            with pytest.raises(sqlite3.IntegrityError):
+                _replace_row(conn, table, row_id, changes=changes)
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(f'DELETE FROM "{table}" WHERE id = ?', (row_id,))
+            assert _raw_row(conn, table, row_id) == originals[(table, row_id)]
+    finally:
+        conn.close()
+
+
+def test_terminal_task_freezes_identity_status_and_exact_output_manifest(
+    outcome_db: Path,
+) -> None:
+    conn = get_conn(outcome_db)
+    try:
+        _create_task(conn, "terminal")
+        for status in ("queued", "validating", "running", "analyzing"):
+            repos.set_task_status(conn, "terminal", status)
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "UPDATE tasks SET status = 'completed', output_file_ids = '[\"late\"]' "
+                "WHERE id = 'terminal'"
+            )
+        assert repos.get_task(conn, "terminal")["status"] == "analyzing"
+        repos.set_task_status(conn, "terminal", "completed")
+
+        # Non-provenance maintenance remains legal after terminalization.
+        conn.execute(
+            "UPDATE tasks SET metadata_json = '{\"note\":\"kept\"}', "
+            "data_classification = 'internal' WHERE id = 'terminal'"
+        )
+        original = _raw_row(conn, "tasks", "terminal")
+        conn.execute("PRAGMA recursive_triggers = OFF")
+        with pytest.raises(sqlite3.IntegrityError):
+            repos.set_task_outputs(conn, "terminal", ["late"])
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "UPDATE tasks SET status = 'failed' WHERE id = 'terminal'"
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            _replace_row(conn, "tasks", "terminal", changes={"output_file_ids": '["late"]'})
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("DELETE FROM tasks WHERE id = 'terminal'")
+        assert _raw_row(conn, "tasks", "terminal") == original
+    finally:
+        conn.close()
+
+
+def test_historical_parent_orphan_keeps_provenance_witness_red_after_guard_restore(
+    outcome_db: Path,
+) -> None:
+    conn = get_conn(outcome_db)
+    try:
+        _create_task(conn, "source")
+        file_id = _attach_output(conn, "source")
+        _approve(conn, "source")
+        trigger_name = "trg_witnessed_artifact_files_no_delete"
+        trigger_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+            (trigger_name,),
+        ).fetchone()[0]
+        conn.execute(f"DROP TRIGGER {trigger_name}")
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
+        conn.execute(trigger_sql)
+
+        witnesses = outcome_schema_witnesses(conn)
+        assert witnesses["required_triggers"] is True
+        assert witnesses["provenance_integrity"] is False
+    finally:
+        conn.close()
+
+    with pytest.raises(sqlite3.IntegrityError, match="provenance_integrity"):
+        init_db(outcome_db)
 
 
 def test_missing_outcome_table_with_managed_trigger_residue_fails_startup(
@@ -327,6 +513,99 @@ def test_full_download_records_only_after_complete_200_body(app_env) -> None:
         assert {row["source_file_id"] for row in rows} == {file_id}
         assert {row["actor_username"] for row in rows} == {TEST_USERNAME}
         assert {row["delivered_bytes"] for row in rows} == {len(content)}
+    finally:
+        conn.close()
+
+
+def test_download_started_before_approval_is_not_retroactively_added_to_cohort(
+    app_env,
+) -> None:
+    client, app = app_env
+    task_id = f"task_{uuid.uuid4().hex}"
+    content = b"approval must precede delivery"
+    path = app.state.task_runs_dir / task_id / "artifact.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    conn = app.state.conn_factory()
+    try:
+        _create_task(conn, task_id)
+        file_id = _attach_output(conn, task_id, path=path, content=content)
+    finally:
+        conn.close()
+
+    # Construct the actual endpoint response while the artifact is unsigned.
+    # Approval happens only after this request crossed the download boundary,
+    # but before its complete body is sent: it must not be admitted
+    # retrospectively into the signed-artifact cohort.
+    request = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": f"/api/files/{file_id}/download",
+            "raw_path": f"/api/files/{file_id}/download".encode(),
+            "query_string": b"",
+            "headers": [],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+            "app": app,
+        }
+    )
+    request.state.user = {
+        "username": TEST_USERNAME,
+        "display_name": "测试工程师",
+    }
+    response = download_file(file_id, request)
+
+    conn = app.state.conn_factory()
+    try:
+        review_event_id = _approve(conn, task_id)
+    finally:
+        conn.close()
+
+    delivered = bytearray()
+
+    async def send(message):
+        if message["type"] == "http.response.body":
+            delivered.extend(message.get("body", b""))
+
+    try:
+        anyio.run(response._handle_simple, send, False, False)
+    finally:
+        response._verified_handle.close()
+
+    assert bytes(delivered) == content
+    conn = app.state.conn_factory()
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM artifact_outcome_events "
+            "WHERE event_type = 'capture_started' AND source_file_id = ?",
+            (file_id,),
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM artifact_outcome_events "
+            "WHERE event_type = 'full_download' AND source_file_id = ?",
+            (file_id,),
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    # A new request that starts after approval remains a legitimate delivery.
+    post_approval = client.get(f"/api/files/{file_id}/download")
+    assert post_approval.status_code == 200
+    assert post_approval.content == content
+    conn = app.state.conn_factory()
+    try:
+        row = conn.execute(
+            "SELECT * FROM artifact_outcome_events "
+            "WHERE event_type = 'full_download' AND source_file_id = ?",
+            (file_id,),
+        ).fetchone()
+        assert row is not None
+        assert row["source_task_id"] == task_id
+        assert row["source_file_id"] == file_id
+        assert row["review_event_id"] == review_event_id
     finally:
         conn.close()
 

@@ -19,6 +19,7 @@ OUTCOME_SCHEMA_WITNESS_KEYS = (
     "outcome_table_shape",
     "required_indexes",
     "required_triggers",
+    "provenance_integrity",
 )
 
 
@@ -134,6 +135,141 @@ def _artifact_table_trigger_contracts(
     return tuple(contracts)
 
 
+def _provenance_integrity(conn: sqlite3.Connection) -> bool:
+    """Validate persisted parent/flow witnesses, not just schema object names.
+
+    The parent rows are deliberately normalized rather than copied into the
+    telemetry ledger.  Canonical triggers freeze them prospectively; this
+    bounded set of anti-joins keeps startup/health red if an earlier missing
+    guard or foreign-keys-off writer left an observable orphan or mismatch.
+    Repeated downloads are validated by their shared capture tuple, so only the
+    byte-equality query scales with delivery-event count.
+    """
+    if conn.execute(
+        "PRAGMA foreign_key_check(artifact_outcome_events)"
+    ).fetchone() is not None:
+        return False
+
+    safe_review_payload = (
+        "CASE WHEN json_valid(review.payload_json) "
+        "THEN review.payload_json ELSE '{}' END"
+    )
+    safe_outputs = (
+        "CASE WHEN json_valid(source.output_file_ids) THEN "
+        "CASE WHEN json_type(source.output_file_ids) = 'array' "
+        "THEN source.output_file_ids ELSE '[]' END ELSE '[]' END"
+    )
+    invalid_capture = conn.execute(
+        f"""
+        SELECT 1
+        FROM artifact_outcome_events AS capture
+        LEFT JOIN tasks AS source
+          ON source.id = capture.source_task_id
+        LEFT JOIN files AS artifact
+          ON artifact.id = capture.source_file_id
+        LEFT JOIN task_events AS review
+          ON review.event_id = capture.review_event_id
+        LEFT JOIN task_human_decisions AS decision
+          ON decision.task_id = capture.source_task_id
+         AND decision.action = 'approve'
+         AND decision.id = json_extract({safe_review_payload}, '$.decision_id')
+        WHERE capture.event_type = 'capture_started'
+          AND (
+              source.id IS NULL
+              OR source.origin IS NOT 'user'
+              OR source.status IS NOT 'completed'
+              OR artifact.id IS NULL
+              OR artifact.task_id IS NOT source.id
+              OR artifact.kind IS NOT 'output'
+              OR review.event_id IS NULL
+              OR review.task_id IS NOT source.id
+              OR review.event_type IS NOT 'review_approved'
+              OR json_type({safe_review_payload}, '$.decision_id') IS NOT 'text'
+              OR decision.id IS NULL
+              OR NOT EXISTS (
+                  SELECT 1 FROM json_each({safe_outputs}) AS output_ref
+                  WHERE output_ref.type = 'text'
+                    AND output_ref.value = capture.source_file_id
+              )
+          )
+        LIMIT 1
+        """
+    ).fetchone()
+    if invalid_capture is not None:
+        return False
+
+    flow_without_capture = conn.execute(
+        """
+        SELECT 1
+        FROM artifact_outcome_events AS flow
+        WHERE flow.event_type IN ('full_download', 'pipeline_handoff')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM artifact_outcome_events AS capture
+              WHERE capture.event_type = 'capture_started'
+                AND capture.source_task_id = flow.source_task_id
+                AND capture.source_file_id = flow.source_file_id
+                AND capture.review_event_id = flow.review_event_id
+          )
+        LIMIT 1
+        """
+    ).fetchone()
+    if flow_without_capture is not None:
+        return False
+
+    invalid_download = conn.execute(
+        """
+        SELECT 1
+        FROM artifact_outcome_events AS download
+        LEFT JOIN files AS artifact ON artifact.id = download.source_file_id
+        WHERE download.event_type = 'full_download'
+          AND (
+              artifact.id IS NULL
+              OR download.delivered_bytes IS NOT artifact.size_bytes
+          )
+        LIMIT 1
+        """
+    ).fetchone()
+    if invalid_download is not None:
+        return False
+
+    safe_depends = (
+        "CASE WHEN json_valid(downstream.depends_on) THEN "
+        "CASE WHEN json_type(downstream.depends_on) = 'array' "
+        "THEN downstream.depends_on ELSE '[]' END ELSE '[]' END"
+    )
+    safe_inputs = (
+        "CASE WHEN json_valid(downstream.input_file_ids) THEN "
+        "CASE WHEN json_type(downstream.input_file_ids) = 'array' "
+        "THEN downstream.input_file_ids ELSE '[]' END ELSE '[]' END"
+    )
+    invalid_handoff = conn.execute(
+        f"""
+        SELECT 1
+        FROM artifact_outcome_events AS handoff
+        LEFT JOIN tasks AS downstream
+          ON downstream.id = handoff.downstream_task_id
+        WHERE handoff.event_type = 'pipeline_handoff'
+          AND (
+              downstream.id IS NULL
+              OR downstream.origin IS NOT 'user'
+              OR NOT EXISTS (
+                  SELECT 1 FROM json_each({safe_depends}) AS upstream_ref
+                  WHERE upstream_ref.type = 'text'
+                    AND upstream_ref.value = handoff.source_task_id
+              )
+              OR NOT EXISTS (
+                  SELECT 1 FROM json_each({safe_inputs}) AS input_ref
+                  WHERE input_ref.type = 'text'
+                    AND input_ref.value = handoff.source_file_id
+              )
+          )
+        LIMIT 1
+        """
+    ).fetchone()
+    return invalid_handoff is None
+
+
 @lru_cache(maxsize=1)
 def _canonical_schema() -> _CanonicalSchema:
     from . import db as db_mod
@@ -193,6 +329,7 @@ def outcome_schema_witnesses(conn: sqlite3.Connection) -> dict[str, bool]:
                 and _artifact_table_trigger_contracts(conn)
                 == canonical.artifact_table_triggers
             ),
+            "provenance_integrity": _provenance_integrity(conn),
         }
     except (sqlite3.Error, RuntimeError, TypeError, ValueError):
         return failed
