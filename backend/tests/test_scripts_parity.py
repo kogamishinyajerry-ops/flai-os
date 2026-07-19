@@ -199,6 +199,20 @@ def test_shell_and_powershell_with_dependencies_match(stem: str) -> None:
     assert shell_packages == powershell_packages
 
 
+@pytest.mark.parametrize("stem", ["deploy_selfcheck", "verify_m4_signal_package"])
+def test_fail_closed_python_gate_wrappers_are_paired(stem: str) -> None:
+    shell = _active_source(_read(SCRIPTS_DIR / f"{stem}.sh"))
+    powershell = _active_source(
+        _read(SCRIPTS_DIR / f"{stem}.ps1"), powershell=True
+    )
+
+    assert f'exec python3 scripts/{stem}.py "$@"' in shell
+    assert f"python scripts/{stem}.py @args" in powershell
+    assert "$null -eq $LASTEXITCODE" in powershell
+    assert "exit $LASTEXITCODE" in powershell
+    assert re.search(r"catch\s*\{.*?exit 1\s*\}", powershell, re.DOTALL)
+
+
 def test_development_verification_entries_have_equivalent_coverage() -> None:
     shell = _read(VERIFY_SH)
     powershell = _read(VERIFY_PS1)

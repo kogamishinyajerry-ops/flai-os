@@ -1,0 +1,477 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/m4-signal-package.schema.json",
+  "title": "FLAi-OS M4 signal package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "package_id",
+    "actors",
+    "evidence",
+    "items",
+    "claims"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "m4-signal-package.v1"
+    },
+    "package_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "actors": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/actor"
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/evidence"
+      }
+    },
+    "items": {
+      "type": "object",
+      "required": [
+        "1-1",
+        "1-2",
+        "1-3",
+        "1-4",
+        "1-5",
+        "1-6",
+        "2-1",
+        "2-2",
+        "2-3",
+        "2-4",
+        "2-5",
+        "2-6",
+        "3-1",
+        "3-2",
+        "4-1",
+        "4-2",
+        "4-3",
+        "5-1",
+        "5-2",
+        "5-3",
+        "5-4",
+        "5-5",
+        "5-6"
+      ],
+      "propertyNames": {
+        "enum": [
+          "1-1",
+          "1-2",
+          "1-3",
+          "1-4",
+          "1-5",
+          "1-6",
+          "1-7",
+          "2-1",
+          "2-2",
+          "2-3",
+          "2-4",
+          "2-5",
+          "2-6",
+          "3-1",
+          "3-2",
+          "3-3",
+          "3-4",
+          "4-1",
+          "4-2",
+          "4-3",
+          "4-4",
+          "5-1",
+          "5-2",
+          "5-3",
+          "5-4",
+          "5-5",
+          "5-6"
+        ]
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/item"
+      }
+    },
+    "claims": {
+      "$ref": "#/$defs/claims"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "nonblank": {
+      "type": "string",
+      "pattern": "^.*\\S.*$"
+    },
+    "canonicalUtc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{6})?Z$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "role",
+        "authorities",
+        "identity_evidence_id"
+      ],
+      "properties": {
+        "kind": {
+          "enum": ["person", "service"]
+        },
+        "role": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "authorities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "observer",
+              "business_owner",
+              "it_owner",
+              "model_service_owner",
+              "policy_owner",
+              "data_export_control_owner",
+              "platform_team",
+              "service"
+            ]
+          }
+        },
+        "identity_evidence_id": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "sha256"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "identity_mapping",
+            "command_output",
+            "screenshot",
+            "report",
+            "relationship_matrix",
+            "policy_ruling",
+            "endpoint_probe",
+            "model_inventory",
+            "category_mapping",
+            "workflow_trace",
+            "other"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "applicabilityRuling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner_id", "reason", "ruling_evidence_id"],
+      "properties": {
+        "owner_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "reason": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "ruling_evidence_id": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "negativeDisposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "controls",
+        "policy_owner_id",
+        "ruling_evidence_id"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": ["blocks", "accepted_with_controls"]
+        },
+        "controls": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/control"
+          }
+        },
+        "policy_owner_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "ruling_evidence_id": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "evidence_id"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "evidence_id": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "observed_at",
+        "observer_id",
+        "evidence_ids"
+      ],
+      "properties": {
+        "result": {
+          "enum": ["observed_yes", "observed_no", "not_applicable"]
+        },
+        "observed_at": {
+          "$ref": "#/$defs/canonicalUtc"
+        },
+        "observer_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "evidence_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "applicability_ruling": {
+          "$ref": "#/$defs/applicabilityRuling"
+        },
+        "negative_disposition": {
+          "$ref": "#/$defs/negativeDisposition"
+        }
+      }
+    },
+    "reviewRelationship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["matrix_evidence_id", "business_owner_id"],
+      "properties": {
+        "matrix_evidence_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "business_owner_id": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "separationRuling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "ruling_evidence_id", "business_owner_id"],
+      "properties": {
+        "status": {
+          "enum": ["defined", "undefined"]
+        },
+        "ruling_evidence_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "business_owner_id": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "modelFamily": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inventory_evidence_id",
+        "endpoint_probe_evidence_id",
+        "second_family_available",
+        "families"
+      ],
+      "properties": {
+        "inventory_evidence_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "endpoint_probe_evidence_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "second_family_available": {
+          "type": "boolean"
+        },
+        "families": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonblank"
+          }
+        }
+      }
+    },
+    "sameFamilyCompensation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deterministic_verification_policy_evidence_id",
+        "human_sampling_floor_policy_evidence_id",
+        "policy_owner_id",
+        "ruling_evidence_id"
+      ],
+      "properties": {
+        "deterministic_verification_policy_evidence_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "human_sampling_floor_policy_evidence_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "policy_owner_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "ruling_evidence_id": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "humanSignFloor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category_mapping_evidence_id",
+        "ruling_evidence_id",
+        "owner_id",
+        "policy_owner_id",
+        "percent",
+        "configurable",
+        "unknown_category_action"
+      ],
+      "properties": {
+        "category_mapping_evidence_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "ruling_evidence_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "owner_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "policy_owner_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "percent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "configurable": {
+          "type": "boolean"
+        },
+        "unknown_category_action": {
+          "$ref": "#/$defs/nonblank"
+        }
+      }
+    },
+    "flowStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "action", "actor_id", "audit_evidence_id"],
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "action": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "actor_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "audit_evidence_id": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "threeStateFlow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate", "human_approval", "publication"],
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/flowStep"
+        },
+        "human_approval": {
+          "$ref": "#/$defs/flowStep"
+        },
+        "publication": {
+          "$ref": "#/$defs/flowStep"
+        }
+      }
+    },
+    "claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_relationship",
+        "separation_ruling",
+        "model_family",
+        "same_family_compensation",
+        "permanent_human_sign_floor",
+        "three_state_flow"
+      ],
+      "properties": {
+        "review_relationship": {
+          "$ref": "#/$defs/reviewRelationship"
+        },
+        "separation_ruling": {
+          "$ref": "#/$defs/separationRuling"
+        },
+        "model_family": {
+          "$ref": "#/$defs/modelFamily"
+        },
+        "same_family_compensation": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/sameFamilyCompensation"}
+          ]
+        },
+        "permanent_human_sign_floor": {
+          "$ref": "#/$defs/humanSignFloor"
+        },
+        "three_state_flow": {
+          "$ref": "#/$defs/threeStateFlow"
+        }
+      }
+    }
+  }
+}

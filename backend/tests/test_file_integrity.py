@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from backend.app.core.errors import FileIntegrityError
+from backend.app.storage import file_integrity
 from backend.app.storage.file_integrity import open_verified_file
 
 
@@ -90,3 +91,34 @@ def test_path_outside_authoritative_root_is_rejected(tmp_path: Path) -> None:
             expected_size=1,
             expected_sha256=hashlib.sha256(b"x").hexdigest(),
         )
+
+
+@pytest.mark.skipif(
+    getattr(os, "O_NONBLOCK", 0) == 0,
+    reason="host does not expose a non-blocking open flag",
+)
+def test_posix_open_is_nonblocking_before_regular_file_fstat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "uploads"
+    payload = b"registered payload"
+    path = _write_stored(root, payload)
+    original_open = os.open
+    observed_flags: list[int] = []
+
+    def tracking_open(target: str | bytes | os.PathLike[str], flags: int, *args, **kwargs):
+        observed_flags.append(flags)
+        return original_open(target, flags, *args, **kwargs)
+
+    monkeypatch.setattr(file_integrity.os, "open", tracking_open)
+
+    handle = open_verified_file(
+        path,
+        allowed_root=root,
+        expected_size=len(payload),
+        expected_sha256=hashlib.sha256(payload).hexdigest(),
+    )
+    handle.close()
+
+    assert observed_flags
+    assert observed_flags[-1] & os.O_NONBLOCK

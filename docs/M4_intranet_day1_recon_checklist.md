@@ -94,13 +94,59 @@
    已获同一 owner 书面裁定。仅观察到「尚无制度」仍是重要事实，但谓词保持 False。
 3. `5-3=observed_no`（没有第二模型家族）可以计为已取证负结果，但必须同时完成
    `5-4` 的确定性核验加权、人工抽检地板和具名 policy owner 裁定；否则谓词为 False。
-4. `5-5` 已由数据/出口管制责任人确认永久 100% 人签地板；未知类别继续按人工签发
-   fail-closed。缺 policy owner 或只有平台团队自述时谓词为 False。
+4. `5-5` 已由数据/出口管制责任人与具名 policy owner 确认永久 100% 人签地板；未知类别继续按
+   人工签发 fail-closed。两种 authority 可由同一人兼任，但都须经身份 evidence 绑定；缺任一角色
+   或只有平台团队自述时谓词为 False。
 5. `5-6` 已逐步确认候选、人工批准、发布三个独立动作/状态/审计证据；同一主体承担
    多个角色不等于三态合并。缺任一步证据时谓词为 False。
 
 任何空白、`unknown`、口头印象、未跑的探针或不可回查证据都会使谓词为 False。
 已取证的负结果保留原样，不制造假绿；它只有在上述安全补偿一并完成时才可解锁。
+
+#### 机械 gate 合同（ADR-0037）
+
+现场记录回收到受控 evidence mirror 后，使用唯一合同与评估器重新派生上述谓词：
+
+```bash
+bash scripts/verify_m4_signal_package.sh \
+  --package <m4-signal-package.json> \
+  --evidence-root <受控证据镜像目录> \
+  --report <证据镜像外的已有目录>/m4-signal-gate-report.json
+```
+
+Windows 对等入口为 `scripts/verify_m4_signal_package.ps1`。在真实 Windows 目标机运行前，
+PowerShell 入口只标 `DECLARED-NOT-VERIFIED`，不得借静态对等测试冒充实机通过。输入合同是
+`contracts/m4-signal-package.schema.json`；包内不得自报
+`M4_SIGNAL_PACKAGE_COMPLETE=true`，最终布尔只能由评估器派生。
+
+为消除三值语义歧义，以下规则焊死：
+
+1. `5-1/5-2/5-3/5-5/5-6` 必须有实质观测，不接受 `not_applicable`；`5-4` 仅在
+   `5-3=observed_yes` 且真实端点证明第二基础家族可用时允许 `not_applicable`，仍须业务/IT
+   owner 的理由与书面证据。
+2. 任一 `observed_no` 必须具名 disposition。`blocks` 如实保持 False；只有
+   `accepted_with_controls`、逐项绑定 exact evidence 的非空控制措施、具名 policy owner 与
+   书面裁定同时存在时，才可继续
+   参与合取。`5-3=observed_no` 还必须同时通过 `5-4` 的确定性核验政策、人工抽检地板和 owner
+   裁定，不能用自由文本绕过。
+3. package 只接受有界 UTF-8 JSON 普通文件。evidence 只接受 evidence root 下可回查的普通文件、
+   便携相对路径和 exact SHA-256；缺文件、空文件、摘要漂移、绝对/越界路径、symlink/junction、
+   同一物理文件或 byte-identical 内容登记成多个 ID 均为 False。受控记录 ID 若没有本地可验证
+   resolver，不能只凭一个字符串放行。
+4. actor/owner 权限是**现场受控映射的声明 + exact evidence 绑定**。机械 gate 能证明声明与证据
+   字节一致，不能凭自身证明现实身份或授权真实；具名 owner 的真实性仍由现场制度与人负责。
+5. 报告中的 `package_sha256` 是 exact 输入文件字节摘要，不冒充 canonical 语义摘要。`--report`
+   必须位于 package 与 evidence root 之外；只改大小写、Unicode 规范形或 Windows 尾随点/空格
+   仍按同一路径碰撞拒绝，不能覆盖输入。gate 不写路线图、不自动解冻、不证明 N10，也不替代
+   Gate 1 或 owner 终裁。
+6. evidence kind 必须匹配本表验证方法，不能拿任意“观测类”文件代替。尤其 `1-1..1-5` 要有
+   `endpoint_probe`，`1-6` 必须同时有 `endpoint_probe + model_inventory`；`2-*` 的命令实跑项要有
+   `command_output`，`4-2` 的真实性能盘观摩要有 `workflow_trace`。第二模型家族与 5-6 三态的名字
+   都拒绝 Unicode 控制/格式/私用等 `C*` 类字符，并在 NFKC、空白折叠、casefold 后判重；零宽或
+   其他字符串别名不算独立家族/状态/动作。
+
+仓库只提交合同、评估器与合成测试，不提交一份“全绿示例包”，避免合成 owner/evidence 被误用为
+真实 M4 信号。
 
 ---
 

@@ -25,7 +25,9 @@ Open Design 生产资产流水线。
 2. **M4 信号包完成谓词为 True**：严格按
    `docs/M4_intranet_day1_recon_checklist.md` 的「M4 信号包完成谓词」逐项判定。
    已取证的负结果可以进入信号包并触发安全补偿；空白、`unknown`、未跑探针、缺少
-   必需的 policy owner 或证据路径，一律 fail-closed，不解锁。
+   必需的 policy owner 或证据路径，一律 fail-closed，不解锁。现场证据回收后须通过
+   `scripts/verify_m4_signal_package.sh/.ps1` 对 exact package/evidence 摘要机械复算；该命令
+   只证明 M4 这一半排期门，不证明 N10 或 Gate 1。
 
 这是一道**开发排期门**，不是导入授权门。不可逆内网导入仍须独立通过
 `docs/PRODUCTION-READINESS-PROGRAM.md` 的 Gate 1 与具名 owner 终裁。
