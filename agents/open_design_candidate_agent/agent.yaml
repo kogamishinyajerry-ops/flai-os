@@ -1,6 +1,6 @@
 id: open_design_candidate_agent
 name: "Open Design 统一设计候选 Agent（可信夹具阶段）"
-version: 0.1.1
+version: 0.1.2
 status: draft
 maturity: L0
 category: structured_gen

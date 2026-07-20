@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Open Design daemon candidate-only workflow output",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "review_contract",
+    "generator_kind",
+    "candidate_manifest_sha256",
+    "candidate_id",
+    "asset_slot",
+    "classification",
+    "project_id",
+    "run_id",
+    "result_package_sha256",
+    "promotable_asset",
+    "generator_mode",
+    "execution_trust",
+    "production_readiness",
+    "candidate_only",
+    "release_effect",
+    "human_review_required",
+    "mock",
+    "passive_previews",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {"const": "open-design-daemon-candidate-output/v1"},
+    "review_contract": {"const": "open-design-candidate/v1"},
+    "generator_kind": {"const": "open_design_daemon"},
+    "candidate_manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "candidate_id": {"type": "string", "pattern": "^odc-[a-f0-9]{32}$"},
+    "asset_slot": {
+      "enum": [
+        "task_review_summary",
+        "agent_activity_indicator",
+        "workflow_monitor_sidebar"
+      ]
+    },
+    "classification": {"const": "sensitive"},
+    "project_id": {"type": "string", "pattern": "^flai-[a-f0-9]{32}$"},
+    "run_id": {"type": "string", "minLength": 1},
+    "result_package_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "promotable_asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slot_id",
+        "source_path",
+        "bundle_relpath",
+        "media_type",
+        "size_bytes",
+        "sha256"
+      ],
+      "properties": {
+        "slot_id": {"const": "default_desktop_light"},
+        "source_path": {"const": "previews/default_desktop_light.png"},
+        "bundle_relpath": {"const": "captured/previews/default_desktop_light.png"},
+        "media_type": {"const": "image/png"},
+        "size_bytes": {"type": "integer", "minimum": 1, "maximum": 4194304},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "generator_mode": {"const": "loopback_daemon_trial"},
+    "execution_trust": {"const": "untrusted_generated"},
+    "production_readiness": {"const": "trial_not_attested"},
+    "candidate_only": {"const": true},
+    "release_effect": {"const": "none"},
+    "human_review_required": {"const": true},
+    "mock": {"const": false},
+    "passive_previews": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 7,
+      "items": {"type": "object"}
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 36,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "filename",
+          "bundle_relpath",
+          "media_type",
+          "role",
+          "sha256",
+          "source_path"
+        ],
+        "properties": {
+          "filename": {"type": "string", "minLength": 1},
+          "bundle_relpath": {"type": "string", "minLength": 1},
+          "media_type": {
+            "enum": [
+              "text/html",
+              "image/svg+xml",
+              "text/css",
+              "application/json",
+              "text/markdown",
+              "image/png"
+            ]
+          },
+          "role": {
+            "enum": [
+              "candidate_source",
+              "passive_preview",
+              "candidate_manifest",
+              "provenance",
+              "design_reference",
+              "review"
+            ]
+          },
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "source_path": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}

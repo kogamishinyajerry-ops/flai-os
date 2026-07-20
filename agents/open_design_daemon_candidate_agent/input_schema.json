@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Open Design daemon fixed-slot candidate request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "asset_slot",
+    "comparison_slots",
+    "interaction_contract"
+  ],
+  "properties": {
+    "schema_version": {"const": "open-design-daemon-request/v1"},
+    "asset_slot": {
+      "enum": [
+        "task_review_summary",
+        "agent_activity_indicator",
+        "workflow_monitor_sidebar"
+      ]
+    },
+    "comparison_slots": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 7,
+      "uniqueItems": true,
+      "contains": {"const": "default_desktop_light"},
+      "minContains": 1,
+      "maxContains": 1,
+      "items": {
+        "enum": [
+          "default_desktop_light",
+          "default_mobile_light",
+          "focus_desktop_light",
+          "reduced_motion_desktop_light",
+          "error_desktop_light",
+          "default_desktop_dark",
+          "default_mobile_dark"
+        ]
+      }
+    },
+    "interaction_contract": {
+      "const": {
+        "candidate_only": true,
+        "human_review_required": true,
+        "release_effect": "none",
+        "rendering": "passive_png_only"
+      }
+    }
+  }
+}

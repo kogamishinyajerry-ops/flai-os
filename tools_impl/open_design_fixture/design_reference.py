@@ -22,12 +22,12 @@ SOURCE_PATHS = {
     "ui_paradigm": "docs/design/UI-PARADIGM.md",
 }
 
-# Pinned to the trusted source bytes for fixture snapshot 0.1.1.  Updating any
+# Pinned to the trusted source bytes for fixture snapshot 0.1.2.  Updating any
 # SSOT requires an explicit fixture snapshot update; runtime never learns new
 # hashes from the files it is supposed to authenticate.  ``SCHEMA_VERSION``
 # changes only when the projected package shape or semantics change.
 EXPECTED_SOURCE_SHA256 = {
-    "frontend/src/App.vue": "b19bfd2fad7d66e6d02917f4e20d2e78c1ea30d48d836d5aed987ad0a5219ed7",
+    "frontend/src/App.vue": "36e8f51fe0306a4e68ccae6fade1982c0f0f75343c377c19851be8c058c6e785",
     "docs/design/MOTION-SYSTEM.md": "8942f2d781e90b80af07fe61ac8697d9a3a6f7f46ce254d04ceadfa1b858bb9a",
     "docs/design/UI-PARADIGM.md": "6985d3ce38d9667d4a351c44499f0cd4685257adca956fb6475e0ca6247677b9",
 }

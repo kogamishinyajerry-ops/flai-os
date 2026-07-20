@@ -1,0 +1,232 @@
+id: open_design_daemon_generate
+name: "Open Design 回环候选生成器（窄试运行）"
+version: 0.1.0
+type: python_adapter
+mock: false
+output_classification: sensitive
+description: >
+  默认关闭、固定资产槽位的 Open Design loopback REST adapter。只接收 task 隔离标识和
+  服务端枚举，不接收自由正文、附件或 knowledge；对版本、channel、Agent、请求模型、已发布
+  design system digest、run/result、文件字节和被动 PNG 做 fail-closed 对账。输出恒为
+  untrusted_generated 候选，绝不执行 HTML、写 FLAi 源码、晋升或发布。
+entrypoint: tools_impl.open_design_daemon.adapter:run
+input_schema:
+  type: object
+  additionalProperties: false
+  required:
+    - schema_version
+    - asset_slot
+    - comparison_slots
+    - interaction_contract
+  properties:
+    schema_version:
+      const: open-design-daemon-request/v1
+    asset_slot:
+      enum:
+        - task_review_summary
+        - agent_activity_indicator
+        - workflow_monitor_sidebar
+    comparison_slots:
+      type: array
+      minItems: 1
+      maxItems: 7
+      uniqueItems: true
+      contains:
+        const: default_desktop_light
+      minContains: 1
+      maxContains: 1
+      items:
+        enum:
+          - default_desktop_light
+          - default_mobile_light
+          - focus_desktop_light
+          - reduced_motion_desktop_light
+          - error_desktop_light
+          - default_desktop_dark
+          - default_mobile_dark
+    interaction_contract:
+      const:
+        candidate_only: true
+        human_review_required: true
+        release_effect: none
+        rendering: passive_png_only
+output_schema:
+  type: object
+  additionalProperties: false
+  required:
+    - schema_version
+    - status
+    - generator_mode
+    - mock
+    - untrusted_generated
+    - execution_trust
+    - real_daemon_candidate_captured
+    - failure_stage
+    - unreconciled_upstream_side_effects_may_exist
+    - production_readiness
+    - candidate_only
+    - release_effect
+    - human_review_required
+    - classification
+    - candidate_id
+    - asset_slot
+    - project_id
+    - run_id
+    - daemon_binding
+    - design_reference_package
+    - design_reference_package_sha256
+    - result_package_sha256
+    - storage
+    - file_set_sha256
+    - files
+    - passive_previews
+    - safety_scan
+    - response_sha256
+    - error_message
+  properties:
+    schema_version:
+      const: open-design-daemon-result/v1
+    status:
+      enum: [success, failed]
+    generator_mode:
+      const: loopback_daemon_trial
+    mock:
+      const: false
+    untrusted_generated:
+      const: true
+    execution_trust:
+      const: untrusted_generated
+    real_daemon_candidate_captured:
+      type: boolean
+    failure_stage:
+      type: [string, "null"]
+      minLength: 1
+    unreconciled_upstream_side_effects_may_exist:
+      type: boolean
+    production_readiness:
+      const: trial_not_attested
+    candidate_only:
+      const: true
+    release_effect:
+      const: none
+    human_review_required:
+      const: true
+    classification:
+      const: sensitive
+    candidate_id:
+      type: [string, "null"]
+      pattern: "^odc-[a-f0-9]{32}$"
+    asset_slot:
+      enum: [task_review_summary, agent_activity_indicator, workflow_monitor_sidebar, null]
+    project_id:
+      type: [string, "null"]
+      pattern: "^flai-[a-f0-9]{32}$"
+    run_id:
+      type: [string, "null"]
+      minLength: 1
+    daemon_binding:
+      type: object
+    design_reference_package:
+      type: object
+    design_reference_package_sha256:
+      type: string
+      pattern: "^$|^[a-f0-9]{64}$"
+    result_package_sha256:
+      type: string
+      pattern: "^$|^[a-f0-9]{64}$"
+    storage:
+      const:
+        kind: od-owned
+        base_dir: null
+    file_set_sha256:
+      type: string
+      pattern: "^$|^[a-f0-9]{64}$"
+    files:
+      type: array
+      maxItems: 32
+      items:
+        type: object
+        additionalProperties: false
+        required: [path, media_type, size_bytes, sha256, content_base64]
+        properties:
+          path:
+            type: string
+            minLength: 1
+            maxLength: 240
+          media_type:
+            enum: [text/html, image/svg+xml, text/css, application/json, text/markdown, image/png]
+          size_bytes:
+            type: integer
+            minimum: 1
+            maximum: 4194304
+          sha256:
+            type: string
+            pattern: "^[a-f0-9]{64}$"
+          content_base64:
+            type: string
+    passive_previews:
+      type: array
+      maxItems: 7
+      items:
+        type: object
+    safety_scan:
+      type: object
+    response_sha256:
+      type: string
+      pattern: "^[a-f0-9]{64}$"
+    error_message:
+      type: [string, "null"]
+  allOf:
+    - if:
+        properties:
+          status:
+            const: success
+      then:
+        properties:
+          real_daemon_candidate_captured:
+            const: true
+          failure_stage:
+            type: "null"
+          unreconciled_upstream_side_effects_may_exist:
+            const: false
+          candidate_id:
+            type: string
+          asset_slot:
+            type: string
+          project_id:
+            type: string
+          run_id:
+            type: string
+          files:
+            minItems: 2
+          passive_previews:
+            minItems: 1
+          error_message:
+            type: "null"
+      else:
+        properties:
+          real_daemon_candidate_captured:
+            const: false
+          failure_stage:
+            type: string
+            minLength: 1
+          candidate_id:
+            type: "null"
+          files:
+            maxItems: 0
+          passive_previews:
+            maxItems: 0
+          error_message:
+            type: string
+            minLength: 1
+runtime:
+  timeout_seconds: 1900
+  max_parallel_jobs: 1
+  retry: 0
+safety:
+  require_workspace_isolation: false
+  allow_shell_command: false
+  save_raw_files: false
+owner:
+  maintainer: TBD
+  business_owner: TBD

@@ -1,0 +1,20 @@
+{
+  "name": "fixed agent activity candidate",
+  "input": {
+    "schema_version": "open-design-daemon-request/v1",
+    "asset_slot": "agent_activity_indicator",
+    "comparison_slots": ["default_desktop_light", "default_mobile_light"],
+    "interaction_contract": {
+      "candidate_only": true,
+      "human_review_required": true,
+      "release_effect": "none",
+      "rendering": "passive_png_only"
+    }
+  },
+  "expected": {
+    "task_terminal_state": "waiting_review",
+    "mock": false,
+    "execution_trust": "untrusted_generated",
+    "release_effect": "none"
+  }
+}

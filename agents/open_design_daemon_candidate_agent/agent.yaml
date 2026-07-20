@@ -1,0 +1,65 @@
+id: open_design_daemon_candidate_agent
+name: "Open Design 回环设计候选 Agent（窄试运行）"
+version: 0.1.0
+status: disabled
+maturity: L0
+category: structured_gen
+summary: "按三个固定 FLAi 资产槽位调用默认关闭的 Open Design loopback daemon，捕获未受信生成字节和被动 PNG；只形成待人工审核候选，不执行 HTML 或发布。"
+description: >
+  零 FLAi 模型调用（model.profile=none），只调用 mock=false 的
+  open_design_daemon_generate。输入没有自由 brief、附件或 knowledge；adapter 将服务端固定
+  intent、FLAi 设计引用包与 allowlisted comparison matrix 交给已精确绑定的 Open Design
+  Agent、请求模型与 design system。所有结果 execution_trust=untrusted_generated、
+  classification=sensitive、production_readiness=trial_not_attested、release_effect=none；当前
+  permissions 只是计划性元数据，角色 gate 未覆盖 create/batch/teams 前保持 disabled。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: none
+knowledge:
+  enabled: false
+  scopes: []
+tools:
+  - open_design_daemon_generate
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats:
+    - .html
+    - .svg
+    - .css
+    - .json
+    - .md
+    - .png
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: true
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: true
+  save_model_calls: false
+  save_feedback: true
+data_asset:
+  collect_samples: false
+limitations:
+  - "仅支持 task_review_summary、agent_activity_indicator、workflow_monitor_sidebar 三个服务端固定 intent；不是通用设计提示入口。"
+  - "mock=false 只表示实际调用 loopback daemon；仍是 trial_not_attested，不代表 Open Design sidecar、模型、视觉质量或 Windows 内网已获生产证明。"
+  - "生成内容恒为 untrusted_generated；HTML/SVG 只作附件且不得执行，可见比较只使用通过结构扫描的 PNG。"
+  - "只产生候选并停在 waiting_review；P2.8 候选选择与任务人签同事务形成一项具名事实，release 批准是第二项独立具名事实；两项都不自动写源码或 publish。"
+  - "默认关闭；URL、版本、channel、Agent、请求模型、published design-system digest 或文件/result 任一不精确即失败。"
+  - "当前 status=disabled；permissions.visibility/allowed_roles 尚未被 Runtime/API 强制执行，create/batch/teams 角色 gate 完成前不得启用。"
+  - "即使输入固定，Open Design ambient memory、custom instructions 与宿主文件读取尚不可验证；输出恒为 sensitive，专用 sidecar/dataDir 与最小 OS 权限未证明前不得降密。"
+  - "requested_model_id 只证明请求绑定；上游不回传实际执行模型，因此 model_execution_attested=false。"
+  - "工具失败会保留 failure_stage、已知 project/run identity 与未对账上游副作用标记；Runtime timeout 不能杀 Python thread，且当前无 run cancel/reconcile，故仍可能产生 orphan run。"
+  - "P2.8 当前按 internal-only 政策拒绝本 sensitive 候选；角色轴和逐文件降密政策交付前，live compare/promotion 路径显式阻断。"
