@@ -6,7 +6,11 @@
 // task-transition——微反馈/翻转唤醒/后续批全吃这一个总线。
 import { ref } from "vue";
 import { listTasks, getTaskLiveSnapshot, listModelCalls } from "../api/tasks.js";
-import { getConversation, listConversationTasks } from "../api/conversations.js";
+import {
+  getConversation,
+  getConversationAgentFacts,
+  listConversationTasks,
+} from "../api/conversations.js";
 import { fetchAllReviewInbox } from "../api/me.js";
 import { diffTransitions, nextInterval, makeEpochGuard, shouldRefreshOnJoin } from "./liveFeedCore.js";
 import {
@@ -18,6 +22,11 @@ import {
   planTaskSnapshotRequest,
   requestFullSnapshot,
 } from "./liveSnapshotCore.js";
+import {
+  advanceAgentFactRuntimeFloors,
+  confirmAgentFactResnapshot,
+  evaluateAgentFactContinuity,
+} from "../utils/agentFactProjection.js";
 
 const channels = new Map(); // key → channel
 const transitionSubs = new Set();
@@ -68,6 +77,10 @@ function applyConnection(state, event) {
 function buildTasksChannel(ch) {
   ch.state = { tasks: ref([]), loaded: ref(false), error: ref(""), ...syncState() };
   ch.intervalOf = () => 5000;
+  // Full unavailable snapshots are truthful connection facts, but they must
+  // not erase the last reported runtime revision. Keep a bounded per-channel
+  // high-water map so A/7 -> unavailable -> A/6 forces another full snapshot.
+  ch.agentFactRuntimeFloors = new Map();
   ch.suppressTransitionsOnce = false;
   ch.onFetchFailure = () => { ch.suppressTransitionsOnce = true; };
   ch.fetch = async (fresh) => {
@@ -209,6 +222,7 @@ function buildConversationChannel(ch, convId) {
   ch.state = {
     conversation: ref(null),
     memberTasks: ref([]),
+    agentFacts: ref(null),
     loaded: ref(false),
     error: ref(""),
     ...syncState(),
@@ -217,16 +231,48 @@ function buildConversationChannel(ch, convId) {
   ch.suppressTransitionsOnce = false;
   ch.onFetchFailure = () => { ch.suppressTransitionsOnce = true; };
   ch.fetch = async (fresh) => {
-    const [conversation, memberTasks] = await Promise.all([
-      getConversation(convId), listConversationTasks(convId),
+    const [conversation, memberTasks, firstAgentFacts] = await Promise.all([
+      getConversation(convId),
+      listConversationTasks(convId),
+      getConversationAgentFacts(convId),
     ]);
     if (!fresh()) return; // 落地前复查：响应回来时若已换代,整包作废
+    let agentFacts = firstAgentFacts;
+    let continuity = evaluateAgentFactContinuity(
+      ch.state.agentFacts.value,
+      agentFacts,
+      ch.agentFactRuntimeFloors,
+    );
+    if (continuity.action === "resnapshot") {
+      // Agent facts 是完整快照而非增量流。source epoch 漂移、revision 回退、
+      // 同 revision 内容变化或 schema 异常都说明旧事实不能再被当作当前事实。
+      // 先显式进入 resync，再从同一权威端点强制重拍一次；二次仍异常则整包
+      // 不落地，由通用失败路径保留旧快照并标 stale/disconnected。
+      applyConnection(ch.state, { type: "resync", error: continuity.reason });
+      ch.suppressTransitionsOnce = true;
+      const suspectAgentFacts = agentFacts;
+      const resnapshotReason = continuity.reason;
+      agentFacts = await getConversationAgentFacts(convId);
+      if (!fresh()) return;
+      continuity = confirmAgentFactResnapshot(
+        ch.state.agentFacts.value,
+        suspectAgentFacts,
+        agentFacts,
+        resnapshotReason,
+        ch.agentFactRuntimeFloors,
+      );
+      if (continuity.action === "resnapshot") {
+        throw new Error(`完整 Agent 事实快照校验失败：${continuity.reason}`);
+      }
+    }
     // 水合抑制（Task 12 修复 3）：语义同 buildTasksChannel——冷启动首拉不广播/不带外补拉。
     const hydrating = ch.state.loaded.value !== true;
     const reconciling = ch.suppressTransitionsOnce === true;
     const evs = (hydrating || reconciling) ? [] : diffTransitions(ch.state.memberTasks.value, memberTasks);
     ch.state.conversation.value = conversation;
     ch.state.memberTasks.value = memberTasks;
+    ch.agentFactRuntimeFloors = advanceAgentFactRuntimeFloors(ch.agentFactRuntimeFloors, agentFacts);
+    ch.state.agentFacts.value = agentFacts;
     ch.suppressTransitionsOnce = false;
     if (evs.length) { emitTransitions(evs); for (const ev of evs) pokeTask(ev.id); }
   };

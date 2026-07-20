@@ -32,6 +32,10 @@ from ..core.errors import (
     NotInteractiveAgentError,
 )
 from ..storage import repos
+from ..runtime.agent_fact_projection import (
+    AgentFactProjectionUnavailable,
+    project_agent_facts,
+)
 
 router = APIRouter(prefix="/api", tags=["conversations"])
 
@@ -197,6 +201,45 @@ def get_conversation(
         return service.get(conversation_id, principal=request.state.user)
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/conversations/{conversation_id}/agent-facts")
+def get_conversation_agent_facts(
+    conversation_id: str, request: Request, response: Response
+) -> dict[str, Any]:
+    """Return one complete, owner-scoped fact snapshot; never a delta."""
+    response.headers["Cache-Control"] = "no-store"
+    conn = request.app.state.conn_factory()
+    try:
+        if (
+            repos.get_conversation_for_owner(
+                conn, conversation_id, request.state.user["username"]
+            )
+            is None
+        ):
+            # Foreign, missing and pre-owner legacy conversations deliberately
+            # share one response so this endpoint is not an existence oracle.
+            raise HTTPException(
+                status_code=404,
+                detail=f"会话不存在：{conversation_id}",
+                headers={"Cache-Control": "no-store"},
+            )
+        try:
+            return project_agent_facts(
+                conn,
+                conversation_id=conversation_id,
+                jerryagent_facts_reader=getattr(
+                    request.app.state, "jerryagent_facts_reader", None
+                ),
+            )
+        except AgentFactProjectionUnavailable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Agent fact snapshot unavailable",
+                headers={"Cache-Control": "no-store"},
+            ) from exc
+    finally:
+        conn.close()
 
 
 @router.post("/conversations/{conversation_id}/messages")

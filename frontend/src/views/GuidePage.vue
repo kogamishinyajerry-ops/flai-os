@@ -163,15 +163,26 @@
 
               <div class="section-label roster-label">召集的 Agent · {{ m.recommendation.agents.length }}</div>
               <!-- L1 编队总览行（批七 §1.4）：纯 computed 聚合成员任务快照，零动画
-                   数字替换；a>0 行首 work-pulse-dot；待签发段 amber。收束态假绿
+                   数字替换；待签发段 amber。收束态假绿
                    禁令（O7 tamper 探针）：非全终态或有待签发绝不出「完成」类总结。 -->
               <div v-if="squadSegs(m.recommendation)" class="sa-squad-line">
-                <span v-if="squadHasWork(m.recommendation)" class="work-pulse-dot"></span>
                 <template v-for="(seg, si) in squadSegs(m.recommendation)" :key="si">
                   <span v-if="si > 0" class="squad-sep">·</span>
                   <span class="squad-seg" :class="`tone-${seg.tone}`">{{ seg.text }}</span>
                 </template>
               </div>
+              <!-- Agent 事实投影只在当前有效方案上出现一次。它与成员任务卡共用
+                   conversation 全量快照；主轴仅给低焦虑摘要，深钻取进入既有右栏。 -->
+              <AgentFactSummary
+                v-if="idx === latestPlanIdx && conversationId"
+                :snapshot="conversationAgentFacts"
+                :loaded="convFeedLoaded"
+                :connection="convFeedConnection"
+                :stale="convFeedStale"
+                :resyncing="convFeedResyncing"
+                :error="convFeedSyncError"
+                @open="openConversationAgentMonitor"
+              />
               <!-- codex 式子 agent 行（owner 定向：紧凑+实时感，不要大静卡）：
                    一行一名成员——状态灯 + 名字 + 分工 + 右槽实时状态词/耗时秒表；
                    次行=实时进度旁白（运行中 shimmer 扫光，事件驱动）或未召集时的
@@ -184,13 +195,12 @@
                   :class="{ 'fx-rise': m.fresh, 'is-live': !!agentTaskInfo(a) }"
                 >
                   <div class="sa-head">
-                    <!-- 六态灯（批七 T1/T4）：等待接力=空心灯（1px ink 描边，绝无
-                         is-pulsing，O2 探针）；接力翻转瞬间播 2 轮 sa-relay-echo 自停。
+                    <!-- 六态灯（批七 T1/T4）：所有成员状态灯静态；等待接力=空心灯
+                         （1px ink 描边）；接力翻转瞬间播 2 轮 sa-relay-echo 自停。
                          灯的翻转只认 status（memberPhase 派生），事件只做旁白。 -->
                     <span
                       class="status-lamp"
-                      :class="{ 'is-pulsing': agentTaskInfo(a) && isWorkState(agentTaskInfo(a).latest.status),
-                                'is-hollow': memberPhaseOf(a) === 'waiting_upstream',
+                      :class="{ 'is-hollow': memberPhaseOf(a) === 'waiting_upstream',
                                 'sa-relay-echo': agentTaskInfo(a) && relayEchoIds.has(agentTaskInfo(a).latest.id) }"
                       :style="{ background: memberLampBg(a) }"
                     ></span>
@@ -531,7 +541,7 @@ import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, ta
 import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
 import { useAgentNames } from "../stores/agentNames";
 import EvidenceList from "../components/EvidenceList.vue";
-import { openTaskPeek } from "../stores/statusCenter";
+import { openAgentMonitor, openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";
 import ThinkingInk from "../components/artwork/ThinkingInk.vue";
@@ -540,6 +550,7 @@ import MarkdownLite from "../components/MarkdownLite.vue";
 import OnboardingCard from "../components/OnboardingCard.vue";
 import ConnectionTruthNotice from "../components/ConnectionTruthNotice.vue";
 import QuestionCard from "../components/QuestionCard.vue";
+import AgentFactSummary from "../components/AgentFactSummary.vue";
 import { hasPendingConversationQuestion, mergeQuestionSnapshot } from "../utils/questionCardCore.js";
 import {
   conversationWriteEligibility,
@@ -1883,6 +1894,11 @@ function createOneTask(agent, plan) {
 // acquire，需按当前目标（有无 orchestrate 方案 × 当前 conversationId）
 // watch-diff acquire/release，同 StatusCenter.vue 的 ensurePeekLoaded 姿势。
 const conversationTasks = ref([]);
+const conversationAgentFacts = ref(null);
+
+function openConversationAgentMonitor() {
+  if (conversationId.value) openAgentMonitor(conversationId.value);
+}
 
 // ── 批七编队投影状态（§1.3/§1.4）────────────────────────────────────────────
 const agentNames = useAgentNames(); // 名册+meta（domain/clearance/charter）懒加载单例
@@ -2104,11 +2120,6 @@ function squadSegs(plan) {
   return squadSegments(squadCounts(tasks), tasks, nowTick.value);
 }
 
-function squadHasWork(plan) {
-  const tasks = squadTasksOf(plan);
-  return tasks.some((t) => TASK_WORK_STATES.has(t.status));
-}
-
 // 会话任务快照每次落地 → 对账 task channel 持有集；有任一工作态成员任务 →
 // 秒表开，全部终态 → 秒表停（不空转）。必须声明在 conversationTasks 之后：
 // watch source 创建时即求值，TDZ 抛错会被 Vue callWithErrorHandling 吞成
@@ -2171,6 +2182,7 @@ function releaseConversationTasksFeed() {
   }
   convTasksHandleFor = null;
   conversationTasks.value = [];
+  conversationAgentFacts.value = null;
   convFeedLoaded.value = false;
   convFeedConnection.value = "idle";
   convFeedLastSuccessAt.value = null;
@@ -2202,6 +2214,7 @@ function ensureConversationTasksFeed() {
   convTasksStop = watch(
     [
       convTasksHandle.state.memberTasks,
+      convTasksHandle.state.agentFacts,
       convTasksHandle.state.loaded,
       convTasksHandle.state.connection,
       convTasksHandle.state.lastSuccessAt,
@@ -2209,9 +2222,10 @@ function ensureConversationTasksFeed() {
       convTasksHandle.state.resyncing,
       convTasksHandle.state.syncError,
     ],
-    ([tasks, loaded, connection, lastSuccessAt, stale, resyncing, syncError]) => {
+    ([tasks, agentFacts, loaded, connection, lastSuccessAt, stale, resyncing, syncError]) => {
       if (convTasksHandleFor !== id) return;
       conversationTasks.value = tasks;
+      conversationAgentFacts.value = agentFacts;
       convFeedLoaded.value = loaded;
       convFeedConnection.value = connection;
       convFeedLastSuccessAt.value = lastSuccessAt;
@@ -2827,7 +2841,7 @@ watch(
   font-variant-numeric: tabular-nums; /* 秒表逐秒活跳不抖宽 */
 }
 
-/* 实时旁白行：事件驱动一行人话；运行中=灰阶 shimmer 扫光（活着的信号） */
+/* 实时旁白行：事件驱动一行人话；运行中保持静态，连续动效只留事实摘要 glyph。 */
 .sa-stageline {
   margin: 6px 0 0 17px;
   font-size: 12.5px;
@@ -2835,25 +2849,9 @@ watch(
   color: var(--ink-soft);
 }
 .sa-stageline.is-running {
-  background: linear-gradient(100deg, var(--ink-soft) 30%, var(--clay) 50%, var(--ink-soft) 70%);
-  background-size: 220% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: sa-shimmer 2.4s linear infinite;
+  color: var(--ink-soft);
 }
 .sa-stageline.is-review { color: var(--trust-pending); }
-@keyframes sa-shimmer {
-  from { background-position: 200% 0; }
-  to { background-position: -20% 0; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .sa-stageline.is-running {
-    animation: none;
-    background: none;
-    color: var(--ink-soft);
-  }
-}
 
 /* 未召集次行：理由 + 预填 chips 单行收纳 */
 .sa-subline {
@@ -2884,7 +2882,7 @@ watch(
 .squad-seg.tone-amber { color: var(--trust-pending); font-weight: 600; }
 .squad-seg.tone-rose { color: var(--trust-fail); font-weight: 600; }
 
-/* 等待接力=空心灯（T1）：1px ink 描边圆，绝无 is-pulsing（O2 探针断言互斥） */
+/* 等待接力=空心灯（T1）：1px ink 描边圆；成员状态灯均为静态。 */
 .status-lamp.is-hollow {
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--ink-soft);
@@ -3013,9 +3011,6 @@ watch(
   border-radius: 50%;
   flex: none;
 }
-.status-lamp.is-pulsing {
-  animation: flai-work-pulse var(--pulse-duration) ease-in-out infinite;
-}
 .status-word {
   font-size: 12px;
   font-weight: 600;
@@ -3074,7 +3069,6 @@ watch(
   font-size: 11.5px;
 }
 @media (prefers-reduced-motion: reduce) {
-  .status-lamp.is-pulsing { animation: none; }
 }
 .agent-role {
   font-size: 13.5px;

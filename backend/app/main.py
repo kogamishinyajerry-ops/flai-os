@@ -40,7 +40,10 @@ from .auth.service import LoginThrottle
 from .bootstrap import assemble
 from .logging_setup import configure_logging, reset_logging
 from .runtime.conversation import ConversationService
-from .runtime.jerryagent_adapter import build_agent_execution_router
+from .runtime.jerryagent_adapter import (
+    build_agent_execution_router,
+    build_jerryagent_facts_reader,
+)
 from .runtime.runtime import AgentRuntime
 from .design_promotion.service import DesignPromotionService
 from .design_promotion.targets import TargetRegistry
@@ -193,6 +196,7 @@ def create_app(
                 conn_factory=conn_factory,
             )
             execution_router = build_agent_execution_router()
+            jerryagent_facts_reader = build_jerryagent_facts_reader()
             runtime = AgentRuntime(
                 asm.agent_registry, asm.tool_registry, asm.model_gateway, conn_factory,
                 task_runs_dir, knowledge_service=asm.knowledge_service, uploads_dir=uploads_dir,
@@ -242,6 +246,7 @@ def create_app(
             app.state.model_gateway = asm.model_gateway
             app.state.runtime = runtime
             app.state.execution_router = execution_router
+            app.state.jerryagent_facts_reader = jerryagent_facts_reader
             app.state.conversation_service = conversation_service
             app.state.design_promotion_service = design_promotion_service
             app.state.conn_factory = conn_factory
@@ -257,6 +262,9 @@ def create_app(
             runtime = getattr(app.state, "runtime", None)
             if runtime is not None:
                 runtime.close()
+            facts_reader = getattr(app.state, "jerryagent_facts_reader", None)
+            if facts_reader is not None:
+                facts_reader.close()
             # 退出复位（ADR-0023 D5）：移除本 app 所挂 handler + 恢复 logger 原态，
             # 杜绝跨测试泄漏（测试 with TestClient 退出即清）；生产仅进程退出时触发。
             reset_logging()

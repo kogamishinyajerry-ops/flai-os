@@ -274,9 +274,31 @@ def test_adapter_binds_identity_polls_one_execution_and_writes_candidate(
     assert [name for name, _payload in events.rows] == [
         "agent_layer_started",
         "agent_layer_submitted",
+        "agent_layer_identity_bound",
         "agent_layer_observed",
         "agent_layer_observed",
     ]
+    identity_bound = next(
+        payload
+        for name, payload in events.rows
+        if name == "agent_layer_identity_bound"
+    )
+    assert identity_bound == {
+        "execution_id": "task-123",
+        "runtime_task_id": "runtime-task-a",
+        "request_sha256": submitted["requestSha256"],
+        "runtime_identity": {
+            key: _health()[key]
+            for key in (
+                "product",
+                "schema",
+                "runtimeEventSchemaVersion",
+                "instanceId",
+                "sessionId",
+                "runtimeKind",
+            )
+        },
+    }
 
 
 def test_lost_submission_receipt_reconciles_exact_execution_before_observing(
@@ -471,7 +493,7 @@ def test_submission_recovery_is_bounded_to_two_posts_and_two_exact_lookups(
         lookups += 1
         return _json({"error": "not found"}, status=404)
 
-    request, _events = _request(tmp_path)
+    request, events = _request(tmp_path)
     adapter = JerryAgentAdapter(
         load_jerryagent_settings(_settings_env()),
         transport=httpx.MockTransport(handler),
@@ -565,7 +587,7 @@ def test_semantically_invalid_submission_receipt_is_not_masked_by_reconciliation
         lookups += 1
         raise AssertionError("an invalid receipt must fail before reconciliation")
 
-    request, _events = _request(tmp_path)
+    request, events = _request(tmp_path)
     adapter = JerryAgentAdapter(
         load_jerryagent_settings(_settings_env()),
         transport=httpx.MockTransport(handler),
@@ -651,7 +673,7 @@ def test_exact_replay_after_restart_uses_frozen_execution_identity(
             )
         )
 
-    request, _events = _request(tmp_path)
+    request, events = _request(tmp_path)
     adapter = JerryAgentAdapter(
         load_jerryagent_settings(_settings_env()),
         transport=httpx.MockTransport(handler),
@@ -662,6 +684,13 @@ def test_exact_replay_after_restart_uses_frozen_execution_identity(
 
     assert outcome.receipt.runtime_identity["sessionId"] == "session-a"
     assert outcome.receipt.runtime_identity["sessionId"] != "replacement-session"
+    identity_bound = next(
+        payload
+        for name, payload in events.rows
+        if name == "agent_layer_identity_bound"
+    )
+    assert identity_bound["runtime_identity"]["sessionId"] == "session-a"
+    assert identity_bound["runtime_identity"]["sessionId"] != "replacement-session"
 
 
 def test_result_may_advance_global_revision_after_terminal_projection(

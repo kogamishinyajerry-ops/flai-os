@@ -101,3 +101,9 @@ export const concludeConversation = (conversationId, { lifecycleRevision }) =>
 // 据此聚合展示。仅读——任务仍由人在创建页亲手签发。
 export const listConversationTasks = (conversationId) =>
   request(`/api/conversations/${conversationId}/tasks`, { cache: "no-store" });
+
+// Agent 事实投影：这是会话成员任务的完整只读快照，不是增量事件流。
+// FLAi 任务依赖与人签来自本机治理账本；JerryAgent 只补充经过后端收窄、
+// 去自由文本的 runtime/subagent 事实。调用方不得直接访问 sidecar。
+export const getConversationAgentFacts = (conversationId) =>
+  request(`/api/conversations/${conversationId}/agent-facts`, { cache: "no-store" });

@@ -6,7 +6,7 @@
     v-model="statusCenter.open"
     :size="drawerSize"
     :with-header="false"
-    :close-on-press-escape="statusCenter.view === 'inbox'"
+    :close-on-press-escape="statusCenter.view !== 'peek'"
     destroy-on-close
     class="status-center-drawer"
     @open="onOpen"
@@ -16,8 +16,16 @@
       <!-- 头部：inbox=标题；peek=←返回 + 任务名（渐进披露的返回轴） -->
       <div class="sc-head">
         <template v-if="statusCenter.view === 'peek'">
-          <button class="sc-back" @click="backToInbox">←</button>
-          <span class="sc-title sc-title-task">{{ peekTask ? taskDisplayName(peekTask, agentNames.map) : statusCenter.taskId?.slice(0, 12) || "任务速览" }}</span>
+          <button
+            class="sc-back"
+            :aria-label="statusCenter.peekReturnView === 'monitor' ? '返回 Agent 运行监控' : '返回状态中心'"
+            @click="backFromTaskPeek"
+          >←</button>
+          <span class="sc-title sc-title-task">{{ peekTitle }}</span>
+        </template>
+        <template v-else-if="statusCenter.view === 'monitor'">
+          <span class="sc-title">Agent 运行监控</span>
+          <span class="sc-sub">FLAi 治理账本 · 受限运行事实投影</span>
         </template>
         <template v-else>
           <span class="sc-title">状态中心</span>
@@ -118,8 +126,23 @@
         </template>
       </div>
 
+      <!-- ═══ Agent 事实监控：沿用 conversation 全量快照，不建第二轮询链 ═══ -->
+      <div v-else-if="statusCenter.view === 'monitor'" class="sc-body sc-monitor-body">
+        <AgentMonitorView
+          :snapshot="monitorSnapshot"
+          :loaded="monitorLoaded"
+          :connection="monitorConnection"
+          :stale="monitorStale"
+          :resyncing="monitorResyncing"
+          :error="monitorSyncError"
+          :focus-task-id="statusCenter.focusTaskId"
+          @inspect="openTaskPeek"
+          @retry="retryMonitor"
+        />
+      </div>
+
       <!-- ═══ 任务速览视图 ═══ -->
-      <div v-else class="sc-body" :class="{ 'sc-sensitive': peekTask?.data_classification === 'sensitive' }" v-loading="peekLoading">
+      <div v-else-if="statusCenter.view === 'peek'" class="sc-body" :class="{ 'sc-sensitive': peekTask?.data_classification === 'sensitive' }" v-loading="peekLoading">
         <ConnectionTruthNotice
           :loaded="peekLoaded"
           :connection="peekConnection"
@@ -305,7 +328,7 @@
 </template>
 
 <script setup>
-// 状态中心（收件箱+速览双视图）。轮询纪律：收件箱并轨 liveFeed 'tasks'
+// 状态中心（收件箱／速览／Agent 监控三视图）。轮询纪律：收件箱并轨 liveFeed 'tasks'
 // channel（5s 自链），速览并轨 'task:<id>' channel（批A Task 5：与 TaskDetail
 // 共用同一条链——同 taskId 同屏时全站只此一条该任务详情轮询）。本组件不再
 // 自建任何 setTimeout 轮询/epoch 守卫，全部由 channel 统一承接。签发链路与
@@ -313,8 +336,8 @@
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { statusCenter, openTaskPeek, backToInbox, closeCenter } from "../stores/statusCenter";
-import { acquireChannel, pokeReviewInbox, pokeTask, pokeTasks, resnapshotTask } from "../stores/liveFeed";
+import { statusCenter, openTaskPeek, backFromTaskPeek, backToInbox, closeCenter } from "../stores/statusCenter";
+import { acquireChannel, pokeConversation, pokeReviewInbox, pokeTask, pokeTasks, resnapshotTask } from "../stores/liveFeed";
 import { reviewTask } from "../api/tasks";
 import { request } from "../api/client";
 import { downloadUrl, fetchFilePreview } from "../api/files";
@@ -348,6 +371,7 @@ import MarkdownLite from "./MarkdownLite.vue";
 import InboxZero from "./artwork/InboxZero.vue";
 import CompletionSeal from "./CompletionSeal.vue";
 import ConnectionTruthNotice from "./ConnectionTruthNotice.vue";
+import AgentMonitorView from "./AgentMonitorView.vue";
 
 const router = useRouter();
 
@@ -362,7 +386,10 @@ function openAllTasks() {
 }
 const viewportWidth = ref(window.innerWidth);
 const syncViewportWidth = () => { viewportWidth.value = window.innerWidth; };
-const drawerSize = computed(() => viewportWidth.value < 640 ? "100%" : "540px");
+const drawerSize = computed(() => {
+  if (viewportWidth.value < 640) return "100%";
+  return statusCenter.view === "monitor" ? "360px" : "540px";
+});
 onMounted(() => window.addEventListener("resize", syncViewportWidth));
 
 // ── 收件箱行级活面（批次三 G3/G4）：1s ticker 仅抽屉打开期间存活、关闭即清
@@ -469,6 +496,71 @@ function releaseInboxFeed() {
     releaseReviewInbox();
     reviewInboxHeld = false;
   }
+}
+
+// ── 会话 Agent 事实监控 ──
+// 与 GuidePage 复用同一个 conversation channel；liveFeed 按 key 合并订阅，
+// 因此打开右栏只增加一个观察者，不增加第二条 HTTP 轮询链。
+const monitorSnapshot = ref(null);
+const monitorLoaded = ref(false);
+const monitorConnection = ref("idle");
+const monitorLastSuccessAt = ref(null);
+const monitorStale = ref(true);
+const monitorResyncing = ref(false);
+const monitorSyncError = ref("");
+let monitorHandle = null;
+let monitorStops = [];
+let monitorLoadedFor = null;
+
+function acquireMonitorFeed(conversationId) {
+  if (monitorHandle) return;
+  monitorHandle = acquireChannel(`conversation:${conversationId}`);
+  monitorStops = [
+    watch(monitorHandle.state.agentFacts, (v) => { monitorSnapshot.value = v; }, { immediate: true }),
+    watch(monitorHandle.state.loaded, (v) => { monitorLoaded.value = v; }, { immediate: true }),
+    watch(monitorHandle.state.connection, (v) => { monitorConnection.value = v; }, { immediate: true }),
+    watch(monitorHandle.state.lastSuccessAt, (v) => { monitorLastSuccessAt.value = v; }, { immediate: true }),
+    watch(monitorHandle.state.stale, (v) => { monitorStale.value = v; }, { immediate: true }),
+    watch(monitorHandle.state.resyncing, (v) => { monitorResyncing.value = v; }, { immediate: true }),
+    watch(monitorHandle.state.syncError, (v) => { monitorSyncError.value = v; }, { immediate: true }),
+  ];
+}
+
+function releaseMonitorFeed() {
+  monitorStops.forEach((stop) => stop());
+  monitorStops = [];
+  if (monitorHandle) {
+    monitorHandle.release();
+    monitorHandle = null;
+  }
+  monitorSnapshot.value = null;
+  monitorLoaded.value = false;
+  monitorConnection.value = "idle";
+  monitorLastSuccessAt.value = null;
+  monitorStale.value = true;
+  monitorResyncing.value = false;
+  monitorSyncError.value = "";
+}
+
+function retryMonitor() {
+  const id = statusCenter.conversationId;
+  return id ? pokeConversation(id) : Promise.resolve();
+}
+
+function ensureMonitorLoaded() {
+  const id = statusCenter.open && statusCenter.view === "monitor"
+    ? statusCenter.conversationId
+    : null;
+  if (id === monitorLoadedFor) return;
+  if (monitorLoadedFor) releaseMonitorFeed();
+  monitorLoadedFor = id;
+  if (id) acquireMonitorFeed(id);
+}
+
+function ensureSurfaceFeed() {
+  if (!statusCenter.open) return;
+  if (statusCenter.view === "monitor") releaseInboxFeed();
+  else acquireInboxFeed();
 }
 
 function refreshReviewInbox() {
@@ -637,6 +729,13 @@ const commentOpen = ref(false); // 意见框默认收纳，签发决策面零填
 const reviewing = ref(false);
 const reviewSettledTaskId = ref(null);
 const peekReviewSettled = computed(() => reviewSettledTaskId.value === statusCenter.taskId);
+const peekTitle = computed(() => {
+  if (!peekTask.value) return "任务速览";
+  const explicitName = typeof peekTask.value.name === "string" ? peekTask.value.name.trim() : "";
+  if (explicitName && explicitName !== peekTask.value.id) return explicitName;
+  const agentName = agentNames.map[peekTask.value.agent_id];
+  return typeof agentName === "string" && agentName.trim() ? agentName : "Agent 任务";
+});
 const peekRejectDialogOpen = ref(false);
 const peekRejectReasonCode = ref("");
 const peekRejectComment = ref("");
@@ -875,18 +974,21 @@ function onEsc(e) {
   // inbox 态的 Esc 也吞掉，drawer 永远收不到——双镜头 P1）。
   if (statusCenter.view === "peek") {
     e.stopPropagation();
-    backToInbox();
+    backFromTaskPeek();
   }
 }
 
 function onOpen() {
-  acquireInboxFeed();
+  ensureSurfaceFeed();
   ensurePeekLoaded(); // 幂等：目标未变则不重新 acquire
-  nextTick(() => document.querySelector(".sc-shell")?.focus());
+  ensureMonitorLoaded();
+  focusStatusCenterView();
 }
 function onClosed() {
   releaseInboxFeed(); // channel 无其它订阅者时自停,有则由其继续养着
   releasePeekFeed();
+  releaseMonitorFeed();
+  monitorLoadedFor = null;
   peekLoadedFor = null; // 下次打开重新初载
   artifactsFingerprint = null;
   artifactsLoading.value = false;
@@ -925,14 +1027,36 @@ function ensurePeekLoaded() {
   loadAcceptedSamples(id); // 已批准任务重开也能看到固化入口（未认可样本被 ===true 过滤，静默无痕）
 }
 watch(() => [statusCenter.open, statusCenter.view, statusCenter.taskId], ensurePeekLoaded);
-
-// 焦点跟随视图：进出速览时被点击的条目/返回钮会随视图切换卸载，焦点跌落到
-// body——keydown 不再冒泡经过 .sc-shell，Esc 层层退出会整体失灵（实机探针
-// 咬出）。每次视图翻转都把焦点收回 shell，键盘路径才连续。
 watch(
-  () => [statusCenter.open, statusCenter.view],
+  () => [statusCenter.open, statusCenter.view, statusCenter.conversationId],
+  () => {
+    ensureSurfaceFeed();
+    ensureMonitorLoaded();
+  },
+);
+
+// 焦点跟随视图：monitor → peek → monitor 返回时，恢复被检视任务的精确按钮，
+// 同时让浏览器把它滚回最近可见位置。其余视图仍回收至 shell，保持 Esc 层层退出。
+function focusStatusCenterView() {
+  nextTick(() => {
+    if (statusCenter.view === "monitor" && statusCenter.focusTaskId) {
+      const target = document.querySelector(
+        ".sc-monitor-body [data-agent-fact-focus-target='true']",
+      );
+      if (target) {
+        target.scrollIntoView({ block: "nearest" });
+        target.focus();
+        return;
+      }
+    }
+    document.querySelector(".sc-shell")?.focus();
+  });
+}
+
+watch(
+  () => [statusCenter.open, statusCenter.view, statusCenter.focusTaskId],
   ([open]) => {
-    if (open) nextTick(() => document.querySelector(".sc-shell")?.focus());
+    if (open) focusStatusCenterView();
   }
 );
 
@@ -940,6 +1064,7 @@ onUnmounted(() => {
   window.removeEventListener("resize", syncViewportWidth);
   releaseInboxFeed(); // 安全网：正常路径已在 onClosed 释放,release() 本身幂等
   releasePeekFeed();
+  releaseMonitorFeed();
   artifactsFingerprint = null;
   resetSampleFixState();
   if (tickTimer !== null) {
@@ -1003,6 +1128,11 @@ onUnmounted(() => {
 .sc-close:hover {
   color: var(--clay);
   border-color: var(--clay-softer);
+}
+.sc-back:focus-visible,
+.sc-close:focus-visible {
+  outline: 2px solid var(--focus-ring-clay, var(--clay));
+  outline-offset: 2px;
 }
 .sc-close {
   margin-left: auto;
@@ -1387,6 +1517,12 @@ onUnmounted(() => {
   padding-top: 10px;
 }
 @media (max-width: 640px) {
+  .sc-back,
+  .sc-close {
+    width: 44px;
+    height: 44px;
+  }
+
   .peek-review-reason-group {
     grid-template-columns: minmax(0, 1fr);
   }

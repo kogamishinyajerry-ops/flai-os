@@ -204,7 +204,8 @@ test("narrow surfaces wrap and the status drawer tracks live viewport width", ()
   assert.match(workbench, /@media\s*\(max-width:\s*640px\)[\s\S]*?\.rg-line[^{]*\{[^}]*flex-wrap:\s*wrap;/);
   assert.match(workbench, /@keydown\.space\.prevent="goTask\(latestTaskFor\(a\)\)"/);
   assert.match(statusCenter, /const viewportWidth\s*=\s*ref\(window\.innerWidth\)/);
-  assert.match(statusCenter, /const drawerSize\s*=\s*computed\(\(\)\s*=>\s*viewportWidth\.value\s*<\s*640\s*\?\s*["']100%["']\s*:\s*["']540px["']\)/);
+  assert.match(statusCenter, /viewportWidth\.value\s*<\s*640[^]*return\s+["']100%["']/);
+  assert.match(statusCenter, /statusCenter\.view\s*===\s*["']monitor["']\s*\?\s*["']360px["']\s*:\s*["']540px["']/);
   assert.match(statusCenter, /window\.addEventListener\(["']resize["'],\s*syncViewportWidth\)/);
   assert.match(statusCenter, /window\.removeEventListener\(["']resize["'],\s*syncViewportWidth\)/);
 });

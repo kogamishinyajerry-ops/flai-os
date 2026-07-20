@@ -8,6 +8,7 @@ human-signature path.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -15,6 +16,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
@@ -466,7 +468,8 @@ class JerryAgentAdapter:
         if (
             identity.get("product") != "JerryAgent"
             or identity.get("schema") != JERRY_CONTRACT_VERSION
-            or identity.get("runtimeEventSchemaVersion") != 1
+            or type(identity.get("runtimeEventSchemaVersion")) is not int
+            or identity["runtimeEventSchemaVersion"] != 1
             or identity.get("runtimeKind") not in {"external", "native-owned"}
             or not isinstance(identity.get("instanceId"), str)
             or not identity["instanceId"]
@@ -795,6 +798,16 @@ class JerryAgentAdapter:
             raise JerryAgentAdapterError(
                 "JerryAgent observation did not establish a frozen runtime identity"
             )
+        self._event(
+            request,
+            "agent_layer_identity_bound",
+            {
+                "execution_id": task_id,
+                "runtime_task_id": runtime_task_id,
+                "request_sha256": digest,
+                "runtime_identity": dict(execution_identity),
+            },
+        )
         revision = projection["revision"]
         observed_status = projection["status"]
         previous_projection = projection
@@ -912,3 +925,450 @@ def build_agent_execution_router(
     if settings.enabled is True:
         adapters.append(JerryAgentAdapter(settings, transport=transport))
     return AgentExecutionRouter(tuple(adapters))
+
+
+# ── Read-only Agent fact projection ──────────────────────────────────────────
+
+_FACT_KEYS = frozenset(
+    {
+        "runtimeTaskId",
+        "status",
+        "revision",
+        "identity",
+        "wait",
+        "delegationHold",
+        "subagentCount",
+        "subagentsTruncated",
+        "subagents",
+    }
+)
+_FACT_WAIT_KEYS = frozenset(
+    {"kind", "since", "subjectOrdinal", "pendingCount", "continueWhen"}
+)
+_FACT_HOLD_KEYS = frozenset(
+    {"phase", "requestedAt", "resolvedAt", "satisfiedByOrdinal"}
+)
+_FACT_SUBAGENT_KEYS = frozenset(
+    {"ordinal", "status", "retryOfOrdinal", "createdAt", "updatedAt"}
+)
+_FACT_STATUSES = frozenset(
+    {"queued", "running", "awaiting_approval", "completed", "failed", "cancelled"}
+)
+_FACT_SUBAGENT_STATUSES = frozenset(
+    {"queued", "running", "completed", "failed", "cancelled", "interrupted"}
+)
+_FACT_RETRYABLE_SUBAGENT_STATUSES = frozenset(
+    {"failed", "cancelled", "interrupted"}
+)
+_FACT_WAIT_CONTINUE = {
+    "runtime_approval": "approval_resolved",
+    "delegation_hold": "subagent_created_or_hold_released",
+    "subagent_completion": "subagents_terminal",
+    "subagent_retry": "retry_lineage_completed_or_task_stopped",
+}
+_FACT_HOLD_PHASES = frozenset({"armed", "released", "satisfied"})
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_SAFE_INTEGER_MAX = 9_007_199_254_740_991
+
+
+class JerryAgentFactsUnavailable(RuntimeError):
+    """A closed, UI-safe reason for an unavailable Jerry fact snapshot."""
+
+    REASONS = frozenset({"disabled", "unreachable", "not_found", "malformed"})
+
+    def __init__(self, reason: str) -> None:
+        if reason not in self.REASONS:
+            raise ValueError("unknown JerryAgent fact unavailability reason")
+        super().__init__(reason)
+        self.reason = reason
+
+
+class DisabledJerryAgentFactsReader:
+    enabled = False
+
+    def read(
+        self,
+        execution_id: str,
+        *,
+        expected_binding: Mapping[str, Any] | None = None,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
+        del execution_id
+        del expected_binding
+        del timeout_s
+        raise JerryAgentFactsUnavailable("disabled")
+
+    def close(self) -> None:
+        return None
+
+
+def _fact_safe_integer(value: Any, *, minimum: int = 0) -> int:
+    if type(value) is not int or not minimum <= value <= _SAFE_INTEGER_MAX:
+        raise JerryAgentFactsUnavailable("malformed")
+    return value
+
+
+def _fact_timestamp(value: Any) -> datetime:
+    if not isinstance(value, str) or not value or len(value) > 64:
+        raise JerryAgentFactsUnavailable("malformed")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise JerryAgentFactsUnavailable("malformed") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise JerryAgentFactsUnavailable("malformed")
+    return parsed
+
+
+def _fact_timestamp_z(value: Any) -> str:
+    return (
+        _fact_timestamp(value)
+        .astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+class JerryAgentFactsReader:
+    """Read and strictly sanitize one full JerryAgent fact snapshot."""
+
+    enabled = True
+
+    def __init__(
+        self,
+        settings: JerryAgentSettings,
+        *,
+        transport: httpx.BaseTransport | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if settings.enabled is not True or settings.base_url is None or settings.token is None:
+            raise JerryAgentFactsUnavailable("disabled")
+        self._monotonic = monotonic
+        self._http = httpx.Client(
+            base_url=settings.base_url,
+            timeout=httpx.Timeout(_MAX_IO_TIMEOUT_S),
+            follow_redirects=False,
+            trust_env=False,
+            transport=transport,
+            headers={
+                "accept": "application/json",
+                "authorization": f"Bearer {settings.token}",
+                "user-agent": "flai-os-jerryagent-facts/0.1",
+            },
+        )
+
+    def close(self) -> None:
+        self._http.close()
+
+    def read(
+        self,
+        execution_id: str,
+        *,
+        expected_binding: Mapping[str, Any] | None = None,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
+        if not isinstance(execution_id, str) or _ID.fullmatch(execution_id) is None:
+            raise JerryAgentFactsUnavailable("malformed")
+        if timeout_s is None:
+            request_timeout_s = _MAX_IO_TIMEOUT_S
+        elif (
+            isinstance(timeout_s, bool)
+            or not isinstance(timeout_s, (int, float))
+            or not math.isfinite(float(timeout_s))
+            or timeout_s <= 0
+        ):
+            raise JerryAgentFactsUnavailable("unreachable")
+        else:
+            request_timeout_s = min(_MAX_IO_TIMEOUT_S, float(timeout_s))
+        path = (
+            "/api/agent-layer/v1/executions/"
+            f"{quote(execution_id, safe='')}/facts"
+        )
+        deadline = self._monotonic() + request_timeout_s
+        try:
+            with self._http.stream("GET", path, timeout=request_timeout_s) as response:
+                # JerryAgent reserves 503 for corrupt persisted facts.  It is
+                # a contract failure, not a transport outage, and its error
+                # body is deliberately not forwarded.
+                if response.status_code == 503:
+                    raise JerryAgentFactsUnavailable("malformed")
+                if response.status_code >= 500:
+                    raise JerryAgentFactsUnavailable("unreachable")
+                if response.status_code not in {200, 404}:
+                    raise JerryAgentFactsUnavailable("malformed")
+                try:
+                    value = _read_bounded_json(
+                        response,
+                        path,
+                        deadline=deadline,
+                        monotonic=self._monotonic,
+                    )
+                except httpx.HTTPError as exc:
+                    raise JerryAgentFactsUnavailable("unreachable") from exc
+                except JerryAgentAdapterError as exc:
+                    if self._monotonic() >= deadline:
+                        raise JerryAgentFactsUnavailable("unreachable") from exc
+                    raise JerryAgentFactsUnavailable("malformed") from exc
+                if response.status_code == 404:
+                    if value != {"error": "not found"}:
+                        raise JerryAgentFactsUnavailable("malformed")
+                    raise JerryAgentFactsUnavailable("not_found")
+        except JerryAgentFactsUnavailable:
+            raise
+        except httpx.HTTPError as exc:
+            raise JerryAgentFactsUnavailable("unreachable") from exc
+        return self._validate(
+            value,
+            execution_id=execution_id,
+            expected_binding=expected_binding,
+        )
+
+    @staticmethod
+    def _validate(
+        value: dict[str, Any],
+        *,
+        execution_id: str,
+        expected_binding: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        if set(value) != _FACT_KEYS:
+            raise JerryAgentFactsUnavailable("malformed")
+        runtime_task_id = value.get("runtimeTaskId")
+        if not isinstance(runtime_task_id, str) or _ID.fullmatch(runtime_task_id) is None:
+            raise JerryAgentFactsUnavailable("malformed")
+        if value.get("status") not in _FACT_STATUSES:
+            raise JerryAgentFactsUnavailable("malformed")
+        revision = _fact_safe_integer(value.get("revision"))
+
+        identity = value.get("identity")
+        if not isinstance(identity, dict) or set(identity) != _IDENTITY_KEYS:
+            raise JerryAgentFactsUnavailable("malformed")
+        if (
+            identity.get("product") != "JerryAgent"
+            or identity.get("schema") != JERRY_CONTRACT_VERSION
+            or type(identity.get("runtimeEventSchemaVersion")) is not int
+            or identity["runtimeEventSchemaVersion"] != 1
+            or identity.get("runtimeKind") not in {"external", "native-owned"}
+            or not isinstance(identity.get("instanceId"), str)
+            or _ID.fullmatch(identity["instanceId"]) is None
+            or not isinstance(identity.get("sessionId"), str)
+            or _ID.fullmatch(identity["sessionId"]) is None
+            or identity.get("executionId") != execution_id
+            or identity.get("externalTaskId") != execution_id
+            or not isinstance(identity.get("requestSha256"), str)
+            or _SHA256_RE.fullmatch(identity["requestSha256"]) is None
+        ):
+            raise JerryAgentFactsUnavailable("malformed")
+        if (
+            not isinstance(expected_binding, Mapping)
+            or set(expected_binding)
+            != {
+                "requestSha256",
+                "runtimeTaskId",
+                "instanceId",
+                "sessionId",
+                "runtimeKind",
+                "minimumRevision",
+            }
+            or runtime_task_id != expected_binding.get("runtimeTaskId")
+            or identity["requestSha256"] != expected_binding.get("requestSha256")
+            or (
+                expected_binding.get("instanceId") is not None
+                and identity["instanceId"] != expected_binding["instanceId"]
+            )
+            or (
+                expected_binding.get("sessionId") is not None
+                and identity["sessionId"] != expected_binding["sessionId"]
+            )
+            or (
+                expected_binding.get("runtimeKind") is not None
+                and identity["runtimeKind"] != expected_binding["runtimeKind"]
+            )
+            or (
+                expected_binding.get("minimumRevision") is not None
+                and (
+                    type(expected_binding["minimumRevision"]) is not int
+                    or expected_binding["minimumRevision"] < 0
+                    or expected_binding["minimumRevision"] > _SAFE_INTEGER_MAX
+                    or revision < expected_binding["minimumRevision"]
+                )
+            )
+        ):
+            raise JerryAgentFactsUnavailable("malformed")
+
+        subagent_count = _fact_safe_integer(value.get("subagentCount"))
+        truncated = value.get("subagentsTruncated")
+        subagents = value.get("subagents")
+        if (
+            type(truncated) is not bool
+            or not isinstance(subagents, list)
+            or len(subagents) > 64
+            or len(subagents) != min(subagent_count, 64)
+            or truncated is not (subagent_count > 64)
+        ):
+            raise JerryAgentFactsUnavailable("malformed")
+        sanitized_subagents: list[dict[str, Any]] = []
+        retry_sources: set[int] = set()
+        for expected_ordinal, item in enumerate(subagents, start=1):
+            if not isinstance(item, dict) or set(item) != _FACT_SUBAGENT_KEYS:
+                raise JerryAgentFactsUnavailable("malformed")
+            ordinal = _fact_safe_integer(item.get("ordinal"), minimum=1)
+            retry_ordinal = item.get("retryOfOrdinal")
+            if ordinal != expected_ordinal or (
+                retry_ordinal is not None
+                and (
+                    type(retry_ordinal) is not int
+                    or retry_ordinal < 1
+                    or retry_ordinal >= ordinal
+                )
+            ):
+                raise JerryAgentFactsUnavailable("malformed")
+            if item.get("status") not in _FACT_SUBAGENT_STATUSES:
+                raise JerryAgentFactsUnavailable("malformed")
+            if retry_ordinal is not None and (
+                retry_ordinal in retry_sources
+                or sanitized_subagents[retry_ordinal - 1]["status"]
+                not in _FACT_RETRYABLE_SUBAGENT_STATUSES
+            ):
+                raise JerryAgentFactsUnavailable("malformed")
+            if retry_ordinal is not None:
+                retry_sources.add(retry_ordinal)
+            created = _fact_timestamp(item.get("createdAt"))
+            updated = _fact_timestamp(item.get("updatedAt"))
+            if updated < created:
+                raise JerryAgentFactsUnavailable("malformed")
+            sanitized_subagents.append(
+                {
+                    "ordinal": ordinal,
+                    "status": item["status"],
+                    "retryOfOrdinal": retry_ordinal,
+                    "createdAt": _fact_timestamp_z(item["createdAt"]),
+                    "updatedAt": _fact_timestamp_z(item["updatedAt"]),
+                }
+            )
+
+        wait = value.get("wait")
+        sanitized_wait: dict[str, Any] | None = None
+        if wait is not None:
+            if not isinstance(wait, dict) or set(wait) != _FACT_WAIT_KEYS:
+                raise JerryAgentFactsUnavailable("malformed")
+            kind = wait.get("kind")
+            if (
+                kind not in _FACT_WAIT_CONTINUE
+                or wait.get("continueWhen") != _FACT_WAIT_CONTINUE[kind]
+            ):
+                raise JerryAgentFactsUnavailable("malformed")
+            since = _fact_timestamp_z(wait.get("since"))
+            subject_ordinal = wait.get("subjectOrdinal")
+            if subject_ordinal is not None and (
+                type(subject_ordinal) is not int
+                or not 1 <= subject_ordinal <= subagent_count
+            ):
+                raise JerryAgentFactsUnavailable("malformed")
+            pending_count = _fact_safe_integer(wait.get("pendingCount"), minimum=1)
+            sanitized_wait = {
+                "kind": kind,
+                "since": since,
+                "subjectOrdinal": subject_ordinal,
+                "pendingCount": pending_count,
+                "continueWhen": wait["continueWhen"],
+            }
+
+        hold = value.get("delegationHold")
+        sanitized_hold: dict[str, Any] | None = None
+        if hold is not None:
+            if not isinstance(hold, dict) or set(hold) != _FACT_HOLD_KEYS:
+                raise JerryAgentFactsUnavailable("malformed")
+            phase = hold.get("phase")
+            if phase not in _FACT_HOLD_PHASES:
+                raise JerryAgentFactsUnavailable("malformed")
+            requested = _fact_timestamp(hold.get("requestedAt"))
+            resolved_raw = hold.get("resolvedAt")
+            resolved = None if resolved_raw is None else _fact_timestamp(resolved_raw)
+            satisfied_by = hold.get("satisfiedByOrdinal")
+            if (
+                (phase == "armed" and (resolved is not None or satisfied_by is not None))
+                or (phase != "armed" and resolved is None)
+                or (resolved is not None and resolved < requested)
+                or (
+                    satisfied_by is not None
+                    and (
+                        type(satisfied_by) is not int
+                        or not 1 <= satisfied_by <= subagent_count
+                    )
+                )
+                or (phase == "satisfied" and satisfied_by is None)
+                or (phase != "satisfied" and satisfied_by is not None)
+            ):
+                raise JerryAgentFactsUnavailable("malformed")
+            sanitized_hold = {
+                "phase": phase,
+                "requestedAt": _fact_timestamp_z(hold["requestedAt"]),
+                "resolvedAt": (
+                    None
+                    if hold["resolvedAt"] is None
+                    else _fact_timestamp_z(hold["resolvedAt"])
+                ),
+                "satisfiedByOrdinal": satisfied_by,
+            }
+
+        status = value["status"]
+        wait_kind = sanitized_wait["kind"] if sanitized_wait is not None else None
+        active_children = [
+            item for item in sanitized_subagents if item["status"] in {"queued", "running"}
+        ]
+        if status in {"completed", "failed", "cancelled"} and (
+            sanitized_wait is not None or active_children
+        ):
+            raise JerryAgentFactsUnavailable("malformed")
+        if wait_kind == "runtime_approval":
+            if status != "awaiting_approval" or sanitized_wait["subjectOrdinal"] is not None:
+                raise JerryAgentFactsUnavailable("malformed")
+        elif status == "awaiting_approval":
+            raise JerryAgentFactsUnavailable("malformed")
+        if wait_kind == "delegation_hold" and (
+            sanitized_wait["subjectOrdinal"] is not None
+            or sanitized_wait["pendingCount"] != 1
+            or sanitized_hold is None
+            or sanitized_hold["phase"] != "armed"
+        ):
+            raise JerryAgentFactsUnavailable("malformed")
+        if sanitized_hold is not None and sanitized_hold["phase"] == "armed" and wait_kind not in {
+            "runtime_approval",
+            "delegation_hold",
+        }:
+            raise JerryAgentFactsUnavailable("malformed")
+        if wait_kind in {"subagent_completion", "subagent_retry"}:
+            subject = sanitized_wait["subjectOrdinal"]
+            if subject is None or sanitized_wait["pendingCount"] > subagent_count:
+                raise JerryAgentFactsUnavailable("malformed")
+            if subject <= len(sanitized_subagents):
+                subject_status = sanitized_subagents[subject - 1]["status"]
+                expected_statuses = (
+                    {"queued", "running"}
+                    if wait_kind == "subagent_completion"
+                    else _FACT_RETRYABLE_SUBAGENT_STATUSES
+                )
+                if subject_status not in expected_statuses:
+                    raise JerryAgentFactsUnavailable("malformed")
+
+        return {
+            "sourceEpoch": hashlib.sha256(canonical_json_bytes(identity)).hexdigest(),
+            "revision": revision,
+            "status": value["status"],
+            "wait": sanitized_wait,
+            "delegationHold": sanitized_hold,
+            "subagentCount": subagent_count,
+            "subagentsTruncated": truncated,
+            "subagents": sanitized_subagents,
+        }
+
+
+def build_jerryagent_facts_reader(
+    env: Mapping[str, str] | None = None,
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> JerryAgentFactsReader | DisabledJerryAgentFactsReader:
+    settings = load_jerryagent_settings(env)
+    if settings.enabled is not True:
+        return DisabledJerryAgentFactsReader()
+    return JerryAgentFactsReader(settings, transport=transport)
