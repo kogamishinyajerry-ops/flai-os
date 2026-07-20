@@ -1,0 +1,281 @@
+id: ax_web_extract
+name: "ax 静态 Web 获取与结构化抽取工具"
+version: 0.1.0
+type: python_adapter
+mock: false
+description: >
+  经受控子进程调用固定版本的 ax 单文件二进制，读取明确获准的 HTTPS 页面并保存
+  原始响应与来源清单。L0 仅允许 .invalid 测试夹具，不提供生产联网激活路径。
+entrypoint: tools_impl.ax_web_extract.adapter:run
+output_classification: sensitive
+input_schema:
+  type: object
+  required:
+    - operation
+    - url
+  properties:
+    operation:
+      type: string
+      enum:
+        - fetch
+        - discover
+        - extract
+    url:
+      type: string
+      minLength: 1
+      maxLength: 2048
+      pattern: "^https://[^/?#@]+(?:/[^?#]*)?$"
+      enum:
+        - "https://fixture.invalid/page"
+        - "https://fixture.invalid/slow"
+        - "https://fixture.invalid/large"
+    selector:
+      type: string
+      minLength: 1
+      maxLength: 500
+    row:
+      type: string
+      minLength: 1
+      maxLength: 1000
+    needle:
+      type: string
+      minLength: 1
+      maxLength: 500
+    limit:
+      type: integer
+      minimum: 1
+      maximum: 50
+    budget_tokens:
+      type: integer
+      minimum: 50
+      maximum: 4000
+    max_bytes:
+      type: integer
+      minimum: 1
+      maximum: 5000000
+    timeout_seconds:
+      type: integer
+      minimum: 1
+      maximum: 15
+  allOf:
+    - if:
+        required:
+          - operation
+        properties:
+          operation:
+            const: extract
+      then:
+        required:
+          - selector
+    - if:
+        required:
+          - operation
+        properties:
+          operation:
+            const: fetch
+      then:
+        not:
+          anyOf:
+            - required:
+                - selector
+            - required:
+                - row
+            - required:
+                - needle
+    - if:
+        required:
+          - operation
+        properties:
+          operation:
+            const: discover
+      then:
+        not:
+          anyOf:
+            - required:
+                - selector
+            - required:
+                - row
+    - if:
+        required:
+          - operation
+        properties:
+          operation:
+            const: extract
+      then:
+        not:
+          required:
+            - needle
+  additionalProperties: false
+output_schema:
+  type: object
+  required:
+    - status
+  properties:
+    status:
+      type: string
+      enum:
+        - success
+        - failed
+    error_code:
+      type: string
+    error_message:
+      type: string
+    operation:
+      type: string
+      enum:
+        - fetch
+        - discover
+        - extract
+    run_id:
+      type: string
+    ax_version:
+      type: string
+      const: "0.1.18"
+    ax_binary_sha256:
+      type: string
+      pattern: "^[a-f0-9]{64}$"
+    network_policy_id:
+      type: string
+      const: "l0-fixture-only"
+    requested_url:
+      type: string
+      enum:
+        - "https://fixture.invalid/page"
+        - "https://fixture.invalid/slow"
+        - "https://fixture.invalid/large"
+    final_url:
+      type: string
+      enum:
+        - "https://fixture.invalid/page"
+        - "https://fixture.invalid/slow"
+        - "https://fixture.invalid/large"
+    http_status:
+      type: integer
+      minimum: 100
+      maximum: 599
+    ok:
+      type: boolean
+    redirected:
+      type: boolean
+    fetched_at:
+      type: string
+    elapsed_ms:
+      type: integer
+      minimum: 0
+    byte_count:
+      type: integer
+      minimum: 0
+    sha256:
+      type: string
+      pattern: "^[a-f0-9]{64}$"
+    raw_output_path:
+      type: string
+    manifest_path:
+      type: string
+    truncated:
+      type: boolean
+    data: {}
+    extracted_output_path:
+      type: string
+    extraction_sha256:
+      type: string
+      pattern: "^[a-f0-9]{64}$"
+  allOf:
+    - if:
+        required:
+          - status
+        properties:
+          status:
+            const: failed
+      then:
+        required:
+          - error_code
+          - error_message
+        not:
+          required:
+            - data
+    - if:
+        properties:
+          status:
+            const: success
+      then:
+        required:
+          - operation
+          - run_id
+          - ax_version
+          - ax_binary_sha256
+          - network_policy_id
+          - requested_url
+          - final_url
+          - http_status
+          - ok
+          - redirected
+          - fetched_at
+          - elapsed_ms
+          - byte_count
+          - sha256
+          - raw_output_path
+          - manifest_path
+          - truncated
+        properties:
+          ok:
+            const: true
+          http_status:
+            minimum: 200
+            maximum: 299
+        not:
+          anyOf:
+            - required:
+                - error_code
+            - required:
+                - error_message
+    - if:
+        required:
+          - status
+          - operation
+        properties:
+          status:
+            const: success
+          operation:
+            enum:
+              - discover
+              - extract
+      then:
+        required:
+          - data
+          - extracted_output_path
+          - extraction_sha256
+    - if:
+        required:
+          - raw_output_path
+      then:
+        required:
+          - operation
+          - run_id
+          - ax_version
+          - ax_binary_sha256
+          - network_policy_id
+          - requested_url
+          - fetched_at
+          - byte_count
+          - sha256
+          - manifest_path
+          - truncated
+    - if:
+        required:
+          - extracted_output_path
+      then:
+        required:
+          - extraction_sha256
+  additionalProperties: false
+runtime:
+  timeout_seconds: 20
+  max_parallel_jobs: 2
+  retry: 0
+safety:
+  require_workspace_isolation: true
+  allow_shell_command: true
+  save_raw_files: true
+owner:
+  maintainer: TBD
+  business_owner: TBD

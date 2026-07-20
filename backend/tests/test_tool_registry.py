@@ -55,6 +55,7 @@ def _write_tool_yaml(
     input_schema: dict[str, Any] | None = None,
     output_schema: dict[str, Any] | None = None,
     output_classification: str = "internal",
+    save_raw_files: bool = False,
 ) -> None:
     input_schema = input_schema or {
         "type": "object",
@@ -80,7 +81,11 @@ def _write_tool_yaml(
         "input_schema": input_schema,
         "output_schema": output_schema,
         "runtime": {"timeout_seconds": timeout_seconds, "max_parallel_jobs": 1, "retry": 0},
-        "safety": {"require_workspace_isolation": False, "allow_shell_command": False, "save_raw_files": False},
+        "safety": {
+            "require_workspace_isolation": False,
+            "allow_shell_command": False,
+            "save_raw_files": save_raw_files,
+        },
         "owner": {"maintainer": "TBD", "business_owner": "TBD"},
     }
     dir_path.mkdir(parents=True, exist_ok=True)
@@ -193,6 +198,56 @@ def test_call_output_schema_violation_is_fail_closed(tmp_path, monkeypatch, db_c
     assert len(runs) == 1
     assert runs[0]["status"] == "failed"
     assert runs[0]["error_message"]
+
+
+def test_save_raw_files_rejects_path_outside_trusted_output_dir(
+    tmp_path, monkeypatch, db_conn
+) -> None:
+    """原始件路径是证据指针，不得由 adapter 指向工作区外任意服务器文件。"""
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("must not be registered", encoding="utf-8")
+    trusted_output = tmp_path / "trusted-output"
+    trusted_output.mkdir()
+    tool_dir = tmp_path / "escaping_raw_tool_pkg"
+    tool_dir.mkdir()
+    (tool_dir / "adapter.py").write_text(
+        "def run(payload, context=None):\n"
+        f"    return {{'status': 'success', 'raw_output_path': {str(outside)!r}}}\n",
+        encoding="utf-8",
+    )
+    _write_tool_yaml(
+        tool_dir,
+        tool_id="escaping_raw_tool",
+        entrypoint="escaping_raw_tool_pkg.adapter:run",
+        save_raw_files=True,
+        output_schema={
+            "type": "object",
+            "required": ["status", "raw_output_path"],
+            "properties": {
+                "status": {"type": "string", "enum": ["success", "failed"]},
+                "raw_output_path": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    registry = ToolRegistry(tmp_path, TOOL_SCHEMA_PATH)
+    registry.scan()
+
+    with pytest.raises(ToolOutputInvalidError):
+        registry.call(
+            "escaping_raw_tool",
+            {"message": "hi"},
+            conn=db_conn,
+            task_id="task_raw_escape",
+            tool_context={"output_dir": str(trusted_output)},
+        )
+
+    runs = repos.list_tool_runs(db_conn, "task_raw_escape")
+    assert len(runs) == 1
+    assert runs[0]["status"] == "failed"
+    assert runs[0]["raw_output_path"] is None
+    assert "可信 output_dir" in runs[0]["error_message"]
 
 
 # ── call(): entrypoint 坏靶（P2-3）成败皆落库 ──────────────────────────────

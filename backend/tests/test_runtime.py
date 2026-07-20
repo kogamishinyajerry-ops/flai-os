@@ -388,6 +388,11 @@ class _FailedStatusToolRegistry:
         return {"status": "failed", "echoed": {}, "error_message": "case 级可恢复失败（测试注入）"}
 
 
+class _SensitiveFailedStatusToolRegistry(_FailedStatusToolRegistry):
+    def get(self, tool_id):
+        return {"id": tool_id, "output_classification": "sensitive"}
+
+
 def test_tool_context_reports_tool_failed_on_failed_status(tmp_path: Path) -> None:
     from backend.app.runtime.runtime import _ToolRegistryContext
 
@@ -411,6 +416,82 @@ def test_tool_context_reports_tool_failed_on_failed_status(tmp_path: Path) -> No
         assert "case 级可恢复失败" in failed["payload"]["error"]
     finally:
         conn.close()
+
+
+def test_sensitive_tool_started_event_records_keys_not_input_values(tmp_path: Path) -> None:
+    from backend.app.runtime.runtime import _ToolRegistryContext
+
+    conn = _make_conn(tmp_path)
+    try:
+        _make_task(conn, "task_sensitive_tool_event")
+        ctx = _ToolRegistryContext(
+            _SensitiveFailedStatusToolRegistry(),
+            conn,
+            "task_sensitive_tool_event",
+            "hello_agent",
+            frozenset({"sensitive_tool"}),
+        )
+
+        secret = "must-not-enter-event-payload"
+        ctx.call("sensitive_tool", {"url": f"https://fixture.invalid/{secret}"})
+        started = repos.list_events(conn, "task_sensitive_tool_event")[0]
+
+        assert started["event_type"] == "tool_started"
+        assert started["payload"] == {
+            "tool_id": "sensitive_tool",
+            "input_keys": ["url"],
+        }
+        assert secret not in str(started["payload"])
+    finally:
+        conn.close()
+
+
+def test_workflow_tool_context_receives_trusted_output_dir(tmp_path: Path) -> None:
+    """文件型 Tool 只能从 Runtime 获得任务输出根，不能让 payload 自报写入路径。"""
+
+    class _CaptureRegistry:
+        def __init__(self) -> None:
+            self.tool_context = None
+
+        def call(self, tool_id, payload, *, conn=None, task_id=None, tool_context=None):
+            self.tool_context = tool_context
+            return {"status": "success"}
+
+    conn = _make_conn(tmp_path)
+    capture = _CaptureRegistry()
+    runtime = AgentRuntime(
+        agent_registry=None,
+        tool_registry=capture,
+        model_gateway=_FakeModelGateway(),
+        conn_factory=lambda: _make_conn(tmp_path),
+        task_runs_dir=tmp_path / "task-runs",
+        uploads_dir=tmp_path / "uploads",
+    )
+    output_dir = tmp_path / "task-runs" / "task_context_output"
+    output_dir.mkdir(parents=True)
+    pkg_dir = tmp_path / "agent-pkg"
+    pkg_dir.mkdir()
+    try:
+        _make_task(conn, "task_context_output")
+        task = repos.get_task(conn, "task_context_output")
+        context = runtime._build_context(
+            conn,
+            task,
+            {
+                "tools": ["probe_tool"],
+                "model": {"profile": "none"},
+                "knowledge": {"enabled": False},
+            },
+            pkg_dir,
+            output_dir,
+            [],
+        )
+        result = context["tool_registry"].call("probe_tool", {})
+    finally:
+        conn.close()
+
+    assert result["status"] == "success"
+    assert capture.tool_context == {"output_dir": str(output_dir)}
 
 
 def test_execute_missing_input_file_id_fails_closed(tmp_path: Path) -> None:

@@ -111,10 +111,42 @@ class ToolRegistry:
         tool_version = tool["version"]
         mock = bool(tool.get("mock", False))
         started_at = _now_iso()
+        sensitive_input = tool.get("output_classification") == "sensitive"
+        if sensitive_input is True:
+            if isinstance(payload, dict):
+                default_recorded_input = {
+                    "_redacted": True,
+                    "input_keys": sorted(str(key) for key in payload),
+                }
+            else:
+                default_recorded_input = {
+                    "_redacted": True,
+                    "input_type": type(payload).__name__,
+                }
+        else:
+            default_recorded_input = payload
 
-        def _record(*, status: str, output: dict[str, Any] | None, error_message: str | None, finished_at: str) -> None:
+        def _record(
+            *,
+            status: str,
+            output: dict[str, Any] | None,
+            error_message: str | None,
+            finished_at: str,
+            record_raw_paths: bool = False,
+        ) -> None:
             if conn is None:
                 return
+            # 解析/文件型工具可在已通过其 output_schema 的结果中声明原始件路径。
+            # Registry 只做有类型的映射，不从 payload 接受路径，也不猜工具工作区；
+            # 真正的路径约束由可信 tool_context + adapter 负责。此前两列始终 NULL，
+            # 与 docs/03「原始件入 tool_runs」契约脱节。
+            raw_input_path = None
+            raw_output_path = None
+            if record_raw_paths is True and isinstance(output, dict):
+                if isinstance(output.get("raw_input_path"), str):
+                    raw_input_path = output["raw_input_path"]
+                if isinstance(output.get("raw_output_path"), str):
+                    raw_output_path = output["raw_output_path"]
             repos.record_tool_run(
                 conn,
                 task_id=task_id,
@@ -122,8 +154,10 @@ class ToolRegistry:
                 tool_version=tool_version,
                 mock=mock,
                 status=status,
-                input_json=payload,
+                input_json=default_recorded_input,
                 output_json=output,
+                raw_input_path=raw_input_path,
+                raw_output_path=raw_output_path,
                 error_message=error_message,
                 started_at=started_at,
                 finished_at=finished_at,
@@ -133,8 +167,20 @@ class ToolRegistry:
         try:
             validate(payload, tool["input_schema"])
         except JsonSchemaValidationError as exc:
-            error_message = f"入参未通过 input_schema 校验：{exc.message}"
-            _record(status="failed", output=None, error_message=error_message, finished_at=_now_iso())
+            if sensitive_input is True:
+                field_path = ".".join(str(part) for part in exc.absolute_path) or "$"
+                error_message = (
+                    "入参未通过 input_schema 校验："
+                    f"field={field_path}, rule={exc.validator}；sensitive 输入值已遮蔽"
+                )
+            else:
+                error_message = f"入参未通过 input_schema 校验：{exc.message}"
+            _record(
+                status="failed",
+                output=None,
+                error_message=error_message,
+                finished_at=_now_iso(),
+            )
             raise ToolInputInvalidError(error_message) from exc
 
         # 2) 加载 entrypoint（形如 module.path:func）。P2-3：import/getattr 失败也是
@@ -213,5 +259,75 @@ class ToolRegistry:
             error_message = f"工具输出缺少合法 status（实得 {status!r}），按契约违规处理"
             _record(status="failed", output=output, error_message=error_message, finished_at=finished_at)
             raise ToolOutputInvalidError(error_message)
-        _record(status=status, output=output, error_message=output.get("error_message"), finished_at=finished_at)
+
+        save_raw_files = tool.get("safety", {}).get("save_raw_files") is True
+        if save_raw_files is True:
+            raw_keys = ("raw_input_path", "raw_output_path")
+            evidence_path_keys = (*raw_keys, "manifest_path", "extracted_output_path")
+            if status == "success" and not isinstance(output.get("raw_output_path"), str):
+                error_message = (
+                    "工具声明 save_raw_files=true，但成功输出缺 raw_output_path；"
+                    "拒绝制造无原始件的成功记录"
+                )
+                _record(
+                    status="failed",
+                    output=output,
+                    error_message=error_message,
+                    finished_at=finished_at,
+                )
+                raise ToolOutputInvalidError(error_message)
+
+            if status == "failed" and all(
+                output.get(key) is None for key in evidence_path_keys
+            ):
+                # 预执行拒绝（如激活开关/URL 策略失败）尚未产生原始件；失败记录本身
+                # 仍合法，不得因 output_dir 尚未创建而把契约内 failed 升成异常。
+                save_raw_files = False
+
+        if save_raw_files is True:
+            root_raw = (tool_context or {}).get("output_dir")
+            try:
+                if not isinstance(root_raw, str) or not root_raw:
+                    raise ValueError("可信 tool_context.output_dir 缺失")
+                root = Path(root_raw)
+                if not root.is_absolute() or root.is_symlink() or not root.is_dir():
+                    raise ValueError("可信 output_dir 必须是已存在的绝对普通目录")
+                root = root.resolve(strict=True)
+                for key in evidence_path_keys:
+                    value = output.get(key)
+                    if value is None:
+                        continue
+                    if not isinstance(value, str):
+                        raise ValueError(f"{key} 不是字符串")
+                    candidate = Path(value)
+                    if not candidate.is_absolute() or candidate.is_symlink():
+                        raise ValueError(f"{key} 必须是绝对普通文件且不能是符号链接")
+                    try:
+                        candidate = candidate.resolve(strict=True)
+                    except OSError as exc:
+                        raise ValueError(f"{key} 不存在或不可解析") from exc
+                    if not candidate.is_file():
+                        raise ValueError(f"{key} 不是普通文件")
+                    try:
+                        candidate.relative_to(root)
+                    except ValueError as exc:
+                        raise ValueError(f"{key} 不在可信 output_dir 内") from exc
+                    output[key] = str(candidate)
+            except (OSError, ValueError) as exc:
+                error_message = f"原始/证据件路径未通过可信 output_dir 校验：{exc}"
+                _record(
+                    status="failed",
+                    output=output,
+                    error_message=error_message,
+                    finished_at=finished_at,
+                )
+                raise ToolOutputInvalidError(error_message) from exc
+
+        _record(
+            status=status,
+            output=output,
+            error_message=output.get("error_message"),
+            finished_at=finished_at,
+            record_raw_paths=save_raw_files,
+        )
         return output
