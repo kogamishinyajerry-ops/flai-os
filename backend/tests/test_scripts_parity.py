@@ -199,7 +199,14 @@ def test_shell_and_powershell_with_dependencies_match(stem: str) -> None:
     assert shell_packages == powershell_packages
 
 
-@pytest.mark.parametrize("stem", ["deploy_selfcheck", "verify_m4_signal_package"])
+@pytest.mark.parametrize(
+    "stem",
+    [
+        "deploy_selfcheck",
+        "verify_m4_signal_package",
+        "verify_n10_observation_package",
+    ],
+)
 def test_fail_closed_python_gate_wrappers_are_paired(stem: str) -> None:
     shell = _active_source(_read(SCRIPTS_DIR / f"{stem}.sh"))
     powershell = _active_source(

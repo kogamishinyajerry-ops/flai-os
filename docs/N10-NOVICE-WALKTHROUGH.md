@@ -1,8 +1,9 @@
 # N10 真人新手走查协议与逐人记录模板
 
 > **性质**：这是一次真实用户观察协议，不是自动化 E2E、可用性宣称或演示脚本。
-> 当前仓库只提供协议和**空白**记录模板；任何参与者、用时、成功率和原话都必须在
-> 真人走查现场产生，禁止预填或推测。
+> 当前仓库只提供协议、**空白**记录模板和结构完整性检查器；任何参与者、
+> 用时、结果和原话都必须在真人走查现场产生，禁止预填或推测。检查器不认证
+> 真人身份，也不能把申报字段升格为事实。
 
 ## 1. 样本口径
 
@@ -108,7 +109,74 @@
 - 可复现条件：
 ```
 
-## 6. 两人完成后的收口方式
+## 6. 结构化记录包与完整性检查
+
+`contracts/n10-observation-package.schema.json` 是结构化记录包的形状合同。现场可直接
+记录为 JSON，也可以先使用第 5 节的人类可读工作表，再原样归一到 JSON。若做转录，
+必须在受控存储中保留现场原始稿，并以同一 `record_id` 对账；不得事后补造精确用时、
+原话或观察结果。
+
+记录包必须如实表达：
+
+- 精确 commit/build、浏览器、视口、主题、输入方式与 gateway 模式；
+- 参与者类型、新手/环境合格声明、观察者和现场观察声明；
+- 恰好按 `N1` 至 `N10` 排列的十步结果；已尝试步骤必须有用时，帮助完成必须
+  留下救援内容，真实中止后的步骤必须明示为未到达；
+- 若环境或参与者口径在任务开始前即无效，十步必须统一记为
+  `not_started_invalid_session`，用时为空且引语标明未采集原因；不得保留十步
+  `unassisted`/`completed` 结果来冒充一次有效场次；
+- `not_started_invalid_session` 与 `not_reached_after_abort` 的无观察叙述使用 schema
+  固定的 exact sentinel，不能在自由文本里暗写“已点击/已发布”；任何已尝试场次的
+  总观察用时必须为正且不超过会话区间；
+- 原始观察文本至少包含字母或数字；纯空白、不可见 filler、纯标点或纯图标不能充当
+  引语、动作、解释或访谈答案；
+- 结束访谈、问题分类和受控媒体**引用**。媒体文件本身不得内嵌到 package 或
+  提交进仓库。
+
+在仓库根目录运行：
+
+```bash
+bash scripts/verify_n10_observation_package.sh \
+  --package /controlled/n10/n10-observation-package.json
+```
+
+Windows 对等入口为：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify_n10_observation_package.ps1 `
+  --package C:\controlled\n10\n10-observation-package.json
+```
+
+包含空格的路径应按 shell 规则引用。包文件必须是不超过 2 MiB 的普通 UTF-8 JSON 文件；
+实体媒体、真实身份对照和其他受控证据保留在仓库外。仓库不提交真实记录包、
+身份对照或截图/录屏；测试中的临时合成 package 不构成真人样本。
+
+参数解析成功后，命令只向 stdout 输出 JSON 报告，不提供 `--report` 文件输出。
+缺少 `--package` 或参数非法时按 CLI 约定退出非零。报告的
+`N10_DECLARED_RECORD_PACKAGE_STRUCTURALLY_COMPLETE`、`declared_eligible_n` 和 `eligible_builds` 是申报
+记录的派生视图；`owner_identity_confirmation_required=true` 明示保留人工身份核对，
+`roadmap_effect="none"` 表示不改变路线图，`m4_status="not_evaluated"` 表示本检查完全没有
+评估 M4；
+`package_sha256` 绑定本次检查的 exact 输入，`findings` 列出结构或语义缺口。只有同时
+满足以下条件时才返回 exit 0：
+
+1. package 和每条申报记录通过合同与协议内部一致性检查；
+2. 按规范化 `participant_key` 去重后，申报符合真实同事、新手、有效环境、现场观察与
+   合格终止口径的场次至少 2 条；
+3. 没有任何 finding。
+
+`N10_DECLARED_RECORD_PACKAGE_STRUCTURALLY_COMPLETE=true` 和 exit 0 只表示**申报记录
+结构完整，且申报的去重合格场次数 `declared_eligible_n >= 2`**。它不能认证参与者是真人或不同同事，
+不证明十步成功、产品可用性、统计显著性或 M4 完成，也不写路线图、不自动解锁
+P2.5–P2.8。排期 owner 仍必须核对 exact 包摘要、受控原始记录与身份对照，明确确认
+至少两条记录来自**两位不同真实同事**。
+`eligible_builds` 若显示记录跨 build 或 gateway 模式，不得把合计 `n` 冒充为同版本可用性样本。
+
+`.ps1` 是合同对等的薄包装入口，但在 Windows 真实目标机上完成运行取证前，状态只能是
+`DECLARED-NOT-VERIFIED`；在 macOS 上做 PowerShell 语法、静态对等或 `pwsh` 运行均不能
+代替 Windows 实机证明。
+
+## 7. 两人完成后的收口方式
 
 只有完成至少两份合格的逐人原始记录后，才能另建聚合报告。聚合时：
 
@@ -116,4 +184,5 @@
 2. 将每个问题链接回参与者编号、步骤和原始证据，不暴露不必要身份。
 3. 区分「阻塞」「焦虑/无反馈」「误解信任状态」「偏好」与「环境故障」。
 4. 给每条建议写最小可证伪验收条件；不得先决定 UI 解法再选择性引用观察。
-5. `n >= 2` 只解锁基于信号的下一轮设计，不证明产品已达到统计显著或生产可用。
+5. `n >= 2` 本身只提供下一轮设计所需的真人信号，不单独解锁任何 phase，也不证明
+   产品已达到统计显著或生产可用；仍须满足 M4 并由排期 owner 明确裁决。

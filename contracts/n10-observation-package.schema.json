@@ -1,0 +1,559 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/n10-observation-package.schema.json",
+  "title": "FLAi-OS N10 structured observation package",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "protocol_version",
+    "records"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "n10-observation-package.v1"
+    },
+    "protocol_version": {
+      "const": "N10-2026-07-19"
+    },
+    "records": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/record"
+      }
+    }
+  },
+  "$defs": {
+    "canonicalTime": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{6})?Z$",
+      "not": {
+        "pattern": "[\\r\\n]"
+      }
+    },
+    "capturedText": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "text"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "captured"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000,
+              "pattern": "\\S"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "reason"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "not_captured"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000,
+              "pattern": "\\S"
+            }
+          }
+        }
+      ]
+    },
+    "build": {
+      "type": "object",
+      "required": [
+        "commit_sha",
+        "build_id",
+        "browser",
+        "viewport",
+        "theme",
+        "input_method",
+        "data_mode",
+        "gateway_mode"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "commit_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "not": {
+            "pattern": "[\\r\\n]"
+          }
+        },
+        "build_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "\\S"
+        },
+        "browser": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "\\S"
+        },
+        "viewport": {
+          "type": "object",
+          "required": [
+            "width",
+            "height"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "width": {
+              "type": "integer",
+              "minimum": 320,
+              "maximum": 8192
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 320,
+              "maximum": 8192
+            }
+          }
+        },
+        "theme": {
+          "enum": [
+            "light",
+            "dark"
+          ]
+        },
+        "input_method": {
+          "enum": [
+            "mouse_keyboard",
+            "keyboard",
+            "touch",
+            "other"
+          ]
+        },
+        "data_mode": {
+          "const": "synthetic"
+        },
+        "gateway_mode": {
+          "enum": [
+            "live_configured",
+            "controlled_stub"
+          ]
+        }
+      }
+    },
+    "termination": {
+      "type": "object",
+      "required": [
+        "kind",
+        "at_step",
+        "detail"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "completed",
+            "participant_stopped",
+            "product_blocker",
+            "environment_invalid",
+            "ineligible_participant"
+          ]
+        },
+        "at_step": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^N(?:10|[1-9])$",
+          "not": {
+            "type": "string",
+            "pattern": "[\\r\\n]"
+          }
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "attestation": {
+      "type": "object",
+      "required": [
+        "observed_live",
+        "path_coaching_withheld",
+        "recorded_contemporaneously",
+        "attested_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "observed_live": {
+          "type": "boolean"
+        },
+        "path_coaching_withheld": {
+          "type": "boolean"
+        },
+        "recorded_contemporaneously": {
+          "type": "boolean"
+        },
+        "attested_at": {
+          "$ref": "#/$defs/canonicalTime"
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": [
+        "step_id",
+        "result",
+        "duration_seconds",
+        "first_action",
+        "stall_point",
+        "participant_quote",
+        "observer_interpretation",
+        "observer_rescue",
+        "observable_result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "step_id": {
+          "type": "string",
+          "pattern": "^N(?:10|[1-9])$",
+          "not": {
+            "pattern": "[\\r\\n]"
+          }
+        },
+        "result": {
+          "enum": [
+            "unassisted",
+            "assisted",
+            "failed",
+            "aborted",
+            "version_unavailable",
+            "not_reached_after_abort",
+            "not_started_invalid_session"
+          ]
+        },
+        "duration_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 7200
+        },
+        "first_action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "pattern": "\\S"
+        },
+        "stall_point": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "pattern": "\\S"
+        },
+        "participant_quote": {
+          "$ref": "#/$defs/capturedText"
+        },
+        "observer_interpretation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "pattern": "\\S"
+        },
+        "observer_rescue": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 4000,
+          "pattern": "\\S"
+        },
+        "observable_result": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "pattern": "\\S"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "const": "not_reached_after_abort"
+              }
+            },
+            "required": [
+              "result"
+            ]
+          },
+          "then": {
+            "properties": {
+              "duration_seconds": {
+                "const": null
+              },
+              "first_action": {
+                "const": "未到达（此前已中止）"
+              },
+              "stall_point": {
+                "const": "未到达（此前已中止）"
+              },
+              "participant_quote": {
+                "const": {
+                  "status": "not_captured",
+                  "reason": "此前已中止，未向参与者提出此步骤"
+                }
+              },
+              "observer_interpretation": {
+                "const": "未到达，不作参与者行为归因"
+              },
+              "observer_rescue": {
+                "const": null
+              },
+              "observable_result": {
+                "const": "未到达（此前已中止）"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "const": "not_started_invalid_session"
+              }
+            },
+            "required": [
+              "result"
+            ]
+          },
+          "then": {
+            "properties": {
+              "duration_seconds": {
+                "const": null
+              },
+              "first_action": {
+                "const": "本场无效，任务步骤未开始"
+              },
+              "stall_point": {
+                "const": "本场无效，未观察步骤停滞"
+              },
+              "participant_quote": {
+                "const": {
+                  "status": "not_captured",
+                  "reason": "本场在任务开始前已判定无效"
+                }
+              },
+              "observer_interpretation": {
+                "const": "未开始，不作参与者行为归因"
+              },
+              "observer_rescue": {
+                "const": null
+              },
+              "observable_result": {
+                "const": "本场无效，任务步骤未开始"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "issue": {
+      "type": "object",
+      "required": [
+        "category",
+        "step_id",
+        "observation",
+        "reproduction"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "enum": [
+            "blocker",
+            "anxiety_no_feedback",
+            "trust_state_misunderstanding",
+            "cannot_locate_or_next_action",
+            "outcome_signal",
+            "environment_fault",
+            "preference"
+          ]
+        },
+        "step_id": {
+          "type": "string",
+          "pattern": "^N(?:10|[1-9])$",
+          "not": {
+            "pattern": "[\\r\\n]"
+          }
+        },
+        "observation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "pattern": "\\S"
+        },
+        "reproduction": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 4000,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "record": {
+      "type": "object",
+      "required": [
+        "record_id",
+        "participant_key",
+        "participant_kind",
+        "role_category",
+        "novice_eligible",
+        "environment_valid",
+        "observer_username",
+        "build",
+        "started_at",
+        "ended_at",
+        "termination",
+        "observer_attestation",
+        "steps",
+        "exit_interview",
+        "issues",
+        "controlled_media_refs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "record_id": {
+          "type": "string",
+          "pattern": "^N10-[0-9]{8}-P[A-Z0-9_-]{1,31}$",
+          "not": {
+            "pattern": "[\\r\\n]"
+          }
+        },
+        "participant_key": {
+          "type": "string",
+          "pattern": "^P[A-Z0-9_-]{1,31}$",
+          "not": {
+            "pattern": "[\\r\\n]"
+          }
+        },
+        "participant_kind": {
+          "enum": [
+            "real_colleague",
+            "developer_self_test",
+            "automation",
+            "agent",
+            "repeat_participant",
+            "unknown"
+          ]
+        },
+        "role_category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "\\S"
+        },
+        "novice_eligible": {
+          "type": "boolean"
+        },
+        "environment_valid": {
+          "type": "boolean"
+        },
+        "observer_username": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "not": {
+            "pattern": "[\\r\\n]"
+          }
+        },
+        "build": {
+          "$ref": "#/$defs/build"
+        },
+        "started_at": {
+          "$ref": "#/$defs/canonicalTime"
+        },
+        "ended_at": {
+          "$ref": "#/$defs/canonicalTime"
+        },
+        "termination": {
+          "$ref": "#/$defs/termination"
+        },
+        "observer_attestation": {
+          "$ref": "#/$defs/attestation"
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 10,
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        },
+        "exit_interview": {
+          "type": "object",
+          "required": [
+            "q1",
+            "q2",
+            "q3",
+            "q4",
+            "q5"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "q1": {
+              "$ref": "#/$defs/capturedText"
+            },
+            "q2": {
+              "$ref": "#/$defs/capturedText"
+            },
+            "q3": {
+              "$ref": "#/$defs/capturedText"
+            },
+            "q4": {
+              "$ref": "#/$defs/capturedText"
+            },
+            "q5": {
+              "$ref": "#/$defs/capturedText"
+            }
+          }
+        },
+        "issues": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/issue"
+          }
+        },
+        "controlled_media_refs": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "pattern": "\\S"
+          }
+        }
+      }
+    }
+  }
+}
