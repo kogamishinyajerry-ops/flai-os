@@ -92,7 +92,7 @@ P2.4 复用现有 QuickSwitcher、Guide 与 TaskDetail，只使用既有暖纸�
 
 ### 6. 与相邻阶段及 schema witness 的边界
 
-- P2.3 的会话、消息与 Question 表、8 个受管索引、28 个受管 trigger 以及五键 schema
+- P2.3 的会话、消息与 Question 表、8 个受管索引、29 个受管 trigger 以及五键 schema
   witness 原样冻结；P2.4 不新增迁移、列、索引或 trigger。
 - P2.4 只拥有搜索 projection、稳定寻址与只读深链。
 - P2.5 才实现具名人签收件箱；搜索不得推断 reviewer 或产生签收状态。

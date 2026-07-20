@@ -1294,7 +1294,9 @@ def test_answer_message_pair_is_unique_across_questions_even_when_order_matches(
             expires_at="2026-07-20T02:00:00+00:00",
         )
         conn.execute("PRAGMA recursive_triggers=OFF")
-        with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+        with pytest.raises(
+            sqlite3.IntegrityError, match="question answer messages are already bound"
+        ):
             repos.resolve_question(
                 conn,
                 question_id=question_2["id"],
@@ -1311,6 +1313,85 @@ def test_answer_message_pair_is_unique_across_questions_even_when_order_matches(
             question_2["id"],
             now="2026-07-19T03:00:00+00:00",
         )["status"] == "pending"
+    finally:
+        conn.close()
+
+
+def test_update_or_replace_cannot_rebind_answer_messages_by_deleting_old_question(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "question-answer-replace-guard.db"
+    db_mod.init_db(db_path)
+    conn = db_mod.get_conn(db_path)
+    try:
+        conversation_id, prompt_1 = _seed_question_context(conn)
+        question_1 = repos.create_question(
+            conn,
+            question_id="q_" + "3" * 32,
+            conversation_id=conversation_id,
+            prompt_message_id=prompt_1,
+            asked_to_username="alice",
+            question_spec={"kind": "free_text", "prompt": "第一问"},
+            created_at="2026-07-19T00:00:00+00:00",
+            expires_at="2026-07-20T00:00:00+00:00",
+        )
+        prompt_2 = repos.append_message(
+            conn, conversation_id=conversation_id, role="assistant", content="第二问"
+        )["message_id"]
+        answer_message_id = repos.append_message(
+            conn, conversation_id=conversation_id, role="user", content="第一答"
+        )["message_id"]
+        response_message_id = repos.append_message(
+            conn, conversation_id=conversation_id, role="assistant", content="收到第一答"
+        )["message_id"]
+        assert repos.resolve_question(
+            conn,
+            question_id=question_1["id"],
+            conversation_id=conversation_id,
+            asked_to_username="alice",
+            submission_id="submission-original-answer",
+            answer={"kind": "text", "text": "第一答"},
+            answered_at="2026-07-19T01:00:00+00:00",
+            answer_message_id=answer_message_id,
+            response_message_id=response_message_id,
+        ) is not None
+        question_2 = repos.create_question(
+            conn,
+            question_id="q_" + "4" * 32,
+            conversation_id=conversation_id,
+            prompt_message_id=prompt_2,
+            asked_to_username="alice",
+            question_spec={"kind": "free_text", "prompt": "第二问"},
+            created_at="2026-07-19T02:00:00+00:00",
+            expires_at="2026-07-20T02:00:00+00:00",
+        )
+        before = conn.execute(
+            "SELECT id, closed_reason, answer_message_id, response_message_id "
+            "FROM conversation_questions ORDER BY id"
+        ).fetchall()
+
+        conn.execute("PRAGMA recursive_triggers=OFF")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                UPDATE OR REPLACE conversation_questions
+                SET closed_reason = 'answered',
+                    closed_at = '2026-07-19T03:00:00.000000+00:00',
+                    submission_id = 'submission-rebinding-attempt',
+                    answer_json = '{"kind":"text","text":"复用"}',
+                    answered_by_username = 'alice',
+                    answer_message_id = ?,
+                    response_message_id = ?
+                WHERE id = ?
+                """,
+                (answer_message_id, response_message_id, question_2["id"]),
+            )
+
+        after = conn.execute(
+            "SELECT id, closed_reason, answer_message_id, response_message_id "
+            "FROM conversation_questions ORDER BY id"
+        ).fetchall()
+        assert [tuple(row) for row in after] == [tuple(row) for row in before]
     finally:
         conn.close()
 

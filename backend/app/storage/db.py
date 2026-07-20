@@ -2417,6 +2417,22 @@ _INDEX_DDL = (
     END
     """,
     """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_answer_refs_unique
+    BEFORE UPDATE ON conversation_questions
+    WHEN NEW.closed_reason = 'answered'
+         AND EXISTS (
+             SELECT 1 FROM conversation_questions
+             WHERE id IS NOT OLD.id
+               AND (
+                   answer_message_id = NEW.answer_message_id
+                   OR response_message_id = NEW.response_message_id
+               )
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'question answer messages are already bound');
+    END
+    """,
+    """
     CREATE TRIGGER IF NOT EXISTS trg_conversation_questions_answer_messages
     BEFORE UPDATE ON conversation_questions
     WHEN NEW.closed_reason = 'answered'
@@ -2653,6 +2669,7 @@ _P23_MANAGED_TRIGGERS = (
     "trg_conversation_questions_rowid_immutable",
     "trg_conversation_questions_positive_rowid",
     "trg_conversation_questions_resolution_once",
+    "trg_conversation_questions_answer_refs_unique",
     "trg_conversation_questions_answer_messages",
     "trg_conversation_questions_answer_before_expiry",
     "trg_conversation_questions_resolution_timestamp",

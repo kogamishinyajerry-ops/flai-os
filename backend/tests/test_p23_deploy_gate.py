@@ -60,6 +60,7 @@ _P23_REQUIRED_TRIGGER_NAMES = (
     "trg_conversation_questions_rowid_immutable",
     "trg_conversation_questions_positive_rowid",
     "trg_conversation_questions_resolution_once",
+    "trg_conversation_questions_answer_refs_unique",
     "trg_conversation_questions_answer_messages",
     "trg_conversation_questions_answer_before_expiry",
     "trg_conversation_questions_resolution_timestamp",
@@ -570,7 +571,7 @@ def test_offline_probe_and_shared_schema_contract_load_with_stdlib_only() -> Non
             "-c",
             "from scripts import deploy_selfcheck; "
             "from backend.app.storage import p23_schema; "
-            "assert len(p23_schema.p23_required_trigger_names()) == 28; "
+            "assert len(p23_schema.p23_required_trigger_names()) == 29; "
             "assert len(p23_schema.p23_required_index_names()) == 8; "
             "assert deploy_selfcheck._p23_schema_witnesses "
             "is p23_schema.p23_schema_witnesses",
