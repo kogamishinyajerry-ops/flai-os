@@ -41,11 +41,20 @@
 
         <template v-if="inboxLoaded">
 
-        <!-- 待你签发：amber=仅待人核；行动召唤最高优先（工程师一进来先看要我处理的） -->
+        <!-- 只有服务端 exact-username 个人收件箱才可称“点名请你签”。 -->
         <div class="sc-group">
           <!-- 零值不显示（批次四 Q2）：N=0 时组头不渲染「· 0」——0 不是信息。 -->
-          <div class="sc-group-label waiting">✍ 待你签发<template v-if="waitingTasks.length"> · <span class="num-token">{{ waitingTasks.length }}</span></template></div>
-          <div v-if="waitingTasks.length" class="sc-list">
+          <div class="sc-group-label waiting">✍ 点名请你签<template v-if="reviewInboxLoaded && waitingTasks.length"> · <span class="num-token">{{ waitingTasks.length }}</span></template></div>
+          <div v-if="!reviewInboxLoaded && !reviewInboxError" class="sc-zero">正在核对个人签收件箱……</div>
+          <div v-else-if="!reviewInboxLoaded" class="sc-zero" role="alert">
+            个人签收件箱暂不可用，未显示虚假零值。
+            <button type="button" class="sc-inline-retry" @click="refreshReviewInbox">重试</button>
+          </div>
+          <div v-else-if="reviewInboxStale || reviewInboxSyncError" class="sc-zero" role="status">
+            当前显示上次成功快照，连接恢复后将自动重核。
+            <button type="button" class="sc-inline-retry" @click="refreshReviewInbox">立即重试</button>
+          </div>
+          <div v-if="reviewInboxLoaded && waitingTasks.length" class="sc-list">
             <div v-for="t in waitingTasks" :key="t.id" class="sc-item" role="button" tabindex="0" @click="openTaskPeek(t.id)" @keydown.enter.prevent="openTaskPeek(t.id)" @keydown.space.prevent="openTaskPeek(t.id)">
               <span class="sc-lamp" :style="{ background: 'var(--trust-pending)' }"></span>
               <span class="sc-item-main">
@@ -58,9 +67,9 @@
               <span class="sc-item-cta">审阅 →</span>
             </div>
           </div>
-          <div v-else class="sc-zero">
+          <div v-else-if="reviewInboxLoaded" class="sc-zero">
             <InboxZero class="sc-zero-art" />
-            <span>没有等你签发的任务</span>
+            <span>{{ reviewInboxStale ? "上次成功快照中没有点名请你签的任务" : "当前没有点名请你签的任务" }}</span>
           </div>
         </div>
 
@@ -105,7 +114,7 @@
         <!-- 诚实口径压缩（批次四 Q3；3-lens 诚实镜头 P2 补回「计数与清单」双重
              范围声明——组头数字与列表内容都被窗口限定，压缩不丢范围界定）。
              全句叙述形态只留任务台一处（m8 锚在彼侧）。 -->
-        <div class="sc-foot-note">口径：计数与清单均来自最近 100 条任务窗口，窗口外不虚报。</div>
+        <div class="sc-foot-note">口径：个人签收件箱按精确用户名完整分页；运行与最近落定来自最近 100 条任务窗口。</div>
         </template>
       </div>
 
@@ -305,7 +314,7 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { statusCenter, openTaskPeek, backToInbox, closeCenter } from "../stores/statusCenter";
-import { acquireChannel, pokeTask, pokeTasks, resnapshotTask } from "../stores/liveFeed";
+import { acquireChannel, pokeReviewInbox, pokeTask, pokeTasks, resnapshotTask } from "../stores/liveFeed";
 import { reviewTask } from "../api/tasks";
 import { request } from "../api/client";
 import { downloadUrl, fetchFilePreview } from "../api/files";
@@ -314,7 +323,16 @@ import { downloadUrl, fetchFilePreview } from "../api/files";
 // 全量精度，扫读面紧凑）。
 import { statusLabel, statusTagType, taskLampColor, formatTime, formatClockCompact, formatDuration, taskElapsedMs, formatFileSize, formatTokens, artifactTypeLabel, taskDisplayName, TASK_WORK_STATES } from "../utils/format";
 import { memberPhase } from "../utils/squad";
-import { displayName } from "../stores/session";
+import { currentUser, displayName } from "../stores/session";
+import {
+  reviewInboxTasks,
+  reviewInboxLoaded,
+  reviewInboxError,
+  reviewInboxStale,
+  reviewInboxSyncError,
+  acquireReviewInbox,
+  releaseReviewInbox,
+} from "../stores/reviewInbox.js";
 import { useAgentNames } from "../stores/agentNames";
 import { markTaskSeen } from "../utils/lastSeen";
 import { buildRetryRoute } from "../utils/retryPrefill";
@@ -407,7 +425,7 @@ const inboxLastSuccessAt = ref(null);
 const inboxStale = ref(true);
 const inboxResyncing = ref(false);
 const inboxSyncError = ref("");
-const waitingTasks = computed(() => inboxTasks.value.filter((t) => t.status === "waiting_review"));
+const waitingTasks = computed(() => reviewInboxTasks.value);
 // 批七 §3-15：等待接力任务（created+depends_on 派生态）并入运行中组可见——
 // 行尾灰注标注，不脉动不计时（memberPhase 同口径，任务 status 是唯一真值）。
 const workingTasks = computed(() =>
@@ -421,8 +439,11 @@ const recentDoneTasks = computed(() =>
 
 let tasksHandle = null;
 let tasksStops = [];
+let reviewInboxHeld = false;
 function acquireInboxFeed() {
   if (tasksHandle) return; // 已持有,幂等（onOpen 可能与其它触发路径重入）
+  acquireReviewInbox();
+  reviewInboxHeld = true;
   tasksHandle = acquireChannel("tasks");
   tasksStops = [
     watch(tasksHandle.state.tasks, (v) => { inboxTasks.value = v; }, { immediate: true }),
@@ -444,6 +465,15 @@ function releaseInboxFeed() {
     tasksHandle.release();
     tasksHandle = null;
   }
+  if (reviewInboxHeld) {
+    releaseReviewInbox();
+    reviewInboxHeld = false;
+  }
+}
+
+function refreshReviewInbox() {
+  const username = currentUser.value?.username;
+  if (username) pokeReviewInbox(username);
 }
 
 // 收件箱计数即时回落（原 refreshInbox() 二次拉,现改为复用 doReview 里已经
@@ -455,6 +485,9 @@ function patchInboxTask(task) {
   const next = inboxTasks.value.slice();
   next[idx] = { ...next[idx], ...task };
   inboxTasks.value = next;
+  if (task.status !== "waiting_review") {
+    reviewInboxTasks.value = reviewInboxTasks.value.filter((row) => row.id !== task.id);
+  }
 }
 
 // ── 速览数据（并轨 liveFeed 'task:<id>' channel——与 TaskDetail 同 taskId

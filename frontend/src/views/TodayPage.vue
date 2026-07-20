@@ -29,12 +29,15 @@
     </div>
 
     <template v-if="feedLoaded">
-      <!-- 版块 1：待你签发（amber 置顶，行动召唤最高优先）。零值不显示（批次四
+      <!-- 版块 1：精确个人签收件箱（amber 置顶）。零值不显示（批次四
            Q2，cd-bg-tasks-panel 语法全站化）：N=0 时组头不渲染「· 0」——版块
            容器恒在（batch_b ① 钉五版块），只收计数后缀。 -->
       <section class="today-section">
-        <div class="today-section-head waiting">✍ 待你签发<template v-if="waitingTasks.length"> · <span class="num-token">{{ waitingTasks.length }}</span></template></div>
-        <div v-if="waitingTasks.length" class="today-list">
+        <div class="today-section-head waiting">✍ 点名请你签<template v-if="reviewInboxLoaded && waitingTasks.length"> · <span class="num-token">{{ waitingTasks.length }}</span></template></div>
+        <div v-if="!reviewInboxLoaded && !reviewInboxError" class="today-error">正在核对个人签收件箱……</div>
+        <div v-else-if="!reviewInboxLoaded" class="today-error" role="alert">个人签收件箱暂不可用，未显示虚假零值。<button type="button" @click="refreshReviewInbox">重试</button></div>
+        <div v-else-if="reviewInboxStale || reviewInboxSyncError" class="today-error" role="status">当前显示上次成功快照，连接恢复后将自动重核。<button type="button" @click="refreshReviewInbox">立即重试</button></div>
+        <div v-if="reviewInboxLoaded && waitingTasks.length" class="today-list">
           <div
             v-for="t in waitingTasks"
             :key="t.id"
@@ -61,7 +64,7 @@
             </span>
           </div>
         </div>
-        <EmptyState v-else variant="action" description="没有等你签发的任务" />
+        <EmptyState v-else-if="reviewInboxLoaded" variant="action" :description="reviewInboxStale ? '上次成功快照中没有点名请你签的任务' : '当前没有点名请你签的任务'" />
       </section>
 
       <!-- 版块 2：进行中 -->
@@ -192,10 +195,21 @@ import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import DeliveryCard from "../components/DeliveryCard.vue";
 import ConnectionTruthNotice from "../components/ConnectionTruthNotice.vue";
+import {
+  reviewInboxTasks,
+  reviewInboxLoaded,
+  reviewInboxError,
+  reviewInboxStale,
+  reviewInboxSyncError,
+  acquireReviewInbox,
+  releaseReviewInbox,
+  refreshReviewInbox,
+} from "../stores/reviewInbox.js";
 
 const router = useRouter();
 
 const tasksChannel = acquireChannel("tasks");
+acquireReviewInbox();
 const {
   tasks: feedTasks,
   loaded: feedLoaded,
@@ -209,7 +223,7 @@ const {
 
 const maturityLabel = (m) => MATURITY[m]?.label ?? m;
 
-const waitingTasks = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review"));
+const waitingTasks = computed(() => reviewInboxTasks.value);
 const workingTasks = computed(() =>
   feedTasks.value.filter((t) => ["created", "queued", "running", "validating"].includes(t.status))
 );
@@ -414,6 +428,7 @@ function openTask(id) {
 
 onUnmounted(() => {
   tasksChannel.release();
+  releaseReviewInbox();
   offTransition();
   if (pendingStatsRefetchTimer !== null) clearTimeout(pendingStatsRefetchTimer);
   if (midnightTimer !== null) clearTimeout(midnightTimer);

@@ -61,7 +61,7 @@
           <!-- 批七 §1.5：hero 进度句换 squad.js 分组计数句（O7 收束假绿禁令同源）。 -->
           <div v-if="heroSquadLine" class="prog-sub">{{ heroSquadLine }}</div>
           <div v-else class="prog-sub">尚无成员任务</div>
-          <span v-if="waitingReviewCount > 0" class="pill-amber">待你签发 <span class="num-token">{{ waitingReviewCount }}</span></span>
+          <span v-if="waitingReviewCount > 0" class="pill-amber">待人工签发 <span class="num-token">{{ waitingReviewCount }}</span></span>
         </div>
       </div>
 

@@ -6,7 +6,7 @@
       {{ feedResyncing ? "正在重同步" : "同步中断" }}
     </span>
     <span v-if="waitingCount > 0" class="dock-pill dock-pill-waiting" :class="{ 'dock-pulse-echo': pulseEcho }">
-      ✍ 待你签发 <span class="num-token">{{ waitingCount }}</span>
+      ✍ 点名请你签 <span class="num-token">{{ waitingCount }}</span>
     </span>
     <span v-if="workingCount > 0" class="dock-pill dock-pill-working">
       <span class="work-pulse-dot"></span>
@@ -47,6 +47,15 @@ import {
 } from "../stores/taskFeed";
 import { onTransition } from "../stores/liveFeed";
 import { setTitleBadge } from "../utils/titleBadge";
+import { currentUser } from "../stores/session.js";
+import {
+  reviewInboxTasks,
+  reviewInboxLoaded,
+  reviewInboxConnection,
+  reviewInboxStale,
+  acquireReviewInbox,
+  releaseReviewInbox,
+} from "../stores/reviewInbox.js";
 
 const router = useRouter();
 
@@ -54,16 +63,17 @@ const router = useRouter();
 const agentNames = useAgentNames();
 
 const workingCount = computed(() => feedTasks.value.filter((t) => TASK_WORK_STATES.has(t.status)).length);
-const waitingCount = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review").length);
+const waitingCount = computed(() => reviewInboxTasks.value.length);
 const syncIssue = computed(() =>
-  feedConnection.value === "disconnected" && (feedLoaded.value || feedStale.value)
+  (feedConnection.value === "disconnected" && (feedLoaded.value || feedStale.value))
+  || (reviewInboxConnection.value === "disconnected" && (reviewInboxLoaded.value || reviewInboxStale.value))
 );
 const dockLabel = computed(() => syncIssue.value
   ? `打开状态中心；${feedResyncing.value ? "正在重新核对完整快照" : "任务同步已中断"}`
   : "打开状态中心"
 );
 
-// N5 标签页召回：内网 http 无 Notification API，切走标签页后「待你签发」
+// N5 标签页召回：内网 http 无 Notification API，切走标签页后「点名请你签」
 // 只能靠 title 徽章召回。计数与坞内 pill 同源（真实轮询），坞卸载即清零
 // ——绝不让残留徽章冒充仍有待签。
 watch(waitingCount, (v) => setTitleBadge(v), { immediate: true });
@@ -104,6 +114,10 @@ function playPulseEcho() {
 
 function handleTransition(ev) {
   if (ev.to !== "waiting_review") return;
+  if (
+    !currentUser.value?.username
+    || ev.task?.review_requested_from_username !== currentUser.value.username
+  ) return;
   const now = Date.now();
   sweepEchoedAt(now);
   playPulseEcho(); // 角标脉冲不受 dedupe/hidden 限制——「积到角标」
@@ -119,7 +133,7 @@ function handleTransition(ev) {
     message: h(
       "span",
       { style: "cursor:pointer", onClick: () => router.push(`/tasks/${ev.id}`) },
-      `「${name}」待你签发`
+      `「${name}」点名请你签`
     ),
   });
 }
@@ -145,6 +159,7 @@ function readSimHubUrl() {
 
 onMounted(() => {
   acquireTaskFeed();
+  acquireReviewInbox();
   offTransition = onTransition(handleTransition);
   readSimHubUrl();
   // 浮窗（SimMonitorFloat）确认新源后派发 flai:simhub-changed（同标签页内变更，
@@ -154,6 +169,7 @@ onMounted(() => {
 });
 onUnmounted(() => {
   releaseTaskFeed();
+  releaseReviewInbox();
   if (offTransition) offTransition();
   if (pulseTimer) clearTimeout(pulseTimer);
   window.removeEventListener("flai:simhub-changed", readSimHubUrl);

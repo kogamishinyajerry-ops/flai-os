@@ -46,7 +46,7 @@ export function squadCounts(tasks) {
 
 // 收束态假绿禁令（§1.4，O7 tamper 探针在场）：只要有待签发或非终态成员，
 // 绝不出现「完成」类总结措辞；全终态且零待签才「协作已收束」。
-// segments 带 tone（neutral/clay/amber/rose）：待你签发段必须 amber 上屏
+// segments 带 tone（neutral/clay/amber/rose）：待人工签发段必须 amber 上屏
 // （信任色锁：amber=待人签唯一语义），失败段玫红（真失败才红）。
 export function squadSegments(counts, tasks, now) {
   if (counts.settled === true && counts.waitingReview === 0) {
@@ -64,7 +64,7 @@ export function squadSegments(counts, tasks, now) {
   if (counts.running > 0) segs.push({ text: `${counts.running} 运行中`, tone: "clay" });
   if (counts.queued > 0) segs.push({ text: `${counts.queued} 已入队`, tone: "neutral" });
   if (counts.waitingUpstream > 0) segs.push({ text: `${counts.waitingUpstream} 等待接力`, tone: "neutral" });
-  if (counts.waitingReview > 0) segs.push({ text: `${counts.waitingReview} 待你签发`, tone: "amber" });
+  if (counts.waitingReview > 0) segs.push({ text: `${counts.waitingReview} 待人工签发`, tone: "amber" });
   if (counts.completed > 0) segs.push({ text: `${counts.completed} 已完成`, tone: "neutral" });
   if (counts.failed > 0) segs.push({ text: `${counts.failed} 失败`, tone: "rose" });
   if (counts.cancelled > 0) segs.push({ text: `${counts.cancelled} 已取消`, tone: "neutral" });

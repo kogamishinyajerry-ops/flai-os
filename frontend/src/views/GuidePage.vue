@@ -1690,7 +1690,7 @@ function elapsedText(t) {
 function stagelineText(t) {
   if (t.status === "queued") return "排队中——等待执行器领取";
   if (TASK_WORK_STATES.has(t.status)) return stageNotes[t.id] || `${statusLabel(t.status)}…`;
-  if (t.status === "waiting_review") return "产物已就绪——等待你审阅放行";
+  if (t.status === "waiting_review") return "产物已就绪——等待人工审阅放行";
   if (t.status === "completed") {
     const dur = elapsedText(t);
     return dur ? `任务完成 · 用时 ${dur}` : "任务完成"; // 时态即状态：过去式盖章

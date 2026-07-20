@@ -410,9 +410,9 @@ with sync_playwright() as p:
                       "O5c 展开后未核徽逐条在场", "O5d 依据区计算色无绿（绿仅 REAL 实测）"):
             check(probe, False, "依据 chip 未出现（成员未达终审面）")
 
-    # O7（待签相）：待你签发 amber 段在场 + 仍无收束措辞
+    # O7（待签相）：全局成员行保持中性「待人工签发」+ amber 段在场
     squad_text2 = page.locator(".sa-squad-line").inner_text()
-    check("O7c 待签相含「待你签发」", "待你签发" in squad_text2, squad_text2)
+    check("O7c 待签相含「待人工签发」", "待人工签发" in squad_text2, squad_text2)
     check("O7d 待签相 amber 段在场", page.locator(".sa-squad-line .squad-seg.tone-amber").count() >= 1)
     check("O7e 待签相仍无收束措辞", "收束" not in squad_text2 and "全部完成" not in squad_text2, squad_text2)
     page.screenshot(path=str(SHOTS / "2_waiting_review_evidence.png"), full_page=True)

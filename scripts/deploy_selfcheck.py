@@ -78,6 +78,12 @@ from backend.app.storage.p23_schema import (  # noqa: E402
 from backend.app.storage.p23_schema import (  # noqa: E402
     p23_schema_witnesses as _p23_schema_witnesses,
 )
+from backend.app.storage.review_route_schema import (  # noqa: E402
+    REVIEW_ROUTE_SCHEMA_WITNESS_KEYS as _REVIEW_ROUTE_SCHEMA_WITNESS_KEYS,
+)
+from backend.app.storage.review_route_schema import (  # noqa: E402
+    review_route_schema_witnesses as _review_route_schema_witnesses,
+)
 from backend.app.storage.review_schema import (  # noqa: E402
     JUDGMENT_SCHEMA_WITNESS_KEYS as _JUDGMENT_SCHEMA_WITNESS_KEYS,
 )
@@ -120,6 +126,12 @@ _P23_SCHEMA_WITNESS_LABELS = {
     "question_table_shape": "conversation_questions canonical table shape",
     "required_indexes": "required indexes",
     "required_triggers": "required triggers",
+}
+_REVIEW_ROUTE_SCHEMA_WITNESS_LABELS = {
+    "route_column_shape": "review route column shape",
+    "required_index": "review inbox partial index",
+    "required_triggers": "review route immutable guards",
+    "persisted_routes_valid": "persisted exact route facts",
 }
 _JUDGMENT_SCHEMA_WITNESS_LABELS = {
     "advice_table_shape": "task_review_advice canonical table shape",
@@ -238,6 +250,27 @@ def check_judgment_schema(conn: sqlite3.Connection) -> Check:
         "判断资产只追加 schema",
         True,
         "judgment witnesses complete (structure + persisted provenance; no quality claim)",
+    )
+
+
+def check_review_route_schema(conn: sqlite3.Connection) -> Check:
+    """P2.5 exact route structure and current persisted-row sanity."""
+    witnesses = _review_route_schema_witnesses(conn)
+    missing_labels = [
+        _REVIEW_ROUTE_SCHEMA_WITNESS_LABELS.get(key, key)
+        for key in _REVIEW_ROUTE_SCHEMA_WITNESS_KEYS
+        if witnesses.get(key) is not True
+    ]
+    if missing_labels:
+        return Check(
+            "P2.5 点名签收路由 schema",
+            False,
+            f"schema witness 缺失 {missing_labels}——旧库、迁移未完或结构被破坏",
+        )
+    return Check(
+        "P2.5 点名签收路由 schema",
+        True,
+        "review route witnesses complete (routing only; no authorization claim)",
     )
 
 
@@ -475,6 +508,29 @@ def check_live_eval_snapshot_generation(base_url: str) -> Check:
     )
 
 
+def check_live_named_review_inbox_generation(base_url: str) -> Check:
+    """P2.5 live-code and served-DB exact route witnesses."""
+    name = "运行进程 P2.5 点名签收代际"
+    url = f"{base_url}/api/health"
+    try:
+        _, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check(name, False, f"{url} 不可达或非 JSON：{exc}")
+    if not isinstance(payload, dict) or payload.get("named_review_inbox_axis") is not True:
+        return Check(name, False, "health 无 named_review_inbox_axis=true，fail-closed")
+    witnesses = payload.get("review_route_schema_witnesses")
+    if not isinstance(witnesses, dict):
+        return Check(name, False, "health 缺 review_route_schema_witnesses")
+    missing = [
+        key for key in _REVIEW_ROUTE_SCHEMA_WITNESS_KEYS
+        if witnesses.get(key) is not True
+    ]
+    if missing:
+        return Check(name, False, f"活服务实际连库的 review route witness 缺失 {missing}")
+    return Check(name, True, "活进程代际与服务侧 exact route witnesses 全在位")
+
+
 def check_live_search_addressing_generation(base_url: str) -> Check:
     """P2.4 服务侧检索代际见证，只接受显式布尔真。"""
     name = "运行进程 P2.4 服务侧检索代际"
@@ -642,6 +698,7 @@ def main() -> int:
             for fn in (
                 check_tables, check_active_user, check_classification_axis,
                 check_p23_schema,
+                check_review_route_schema,
                 check_judgment_schema,
                 check_outcome_schema,
                 check_worker_generation,
@@ -657,7 +714,7 @@ def main() -> int:
         for name in (
             "核心表齐全", "≥1 活跃账户", "数据分级轴（ADR-0021）",
             "P2.3 结构化提问 schema", "判断资产只追加 schema",
-            "产物流转只追加 schema", "worker 心跳代际",
+            "P2.5 点名签收路由 schema", "产物流转只追加 schema", "worker 心跳代际",
         ):
             checks.append(Check(name, False, "跳过：DB 文件缺失"))
 
@@ -668,6 +725,7 @@ def main() -> int:
     checks.append(check_live_structured_question_generation(base_url))
     checks.append(check_live_eval_snapshot_generation(base_url))
     checks.append(check_live_search_addressing_generation(base_url))
+    checks.append(check_live_named_review_inbox_generation(base_url))
     checks.append(check_live_judgment_generation(base_url))
     checks.append(check_live_outcome_generation(base_url))
     checks.append(check_db_identity(base_url, db_path))

@@ -19,9 +19,13 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator
 
-from .tasks import BatchTaskItem, run_batch_creation
+from .tasks import (
+    BatchTaskItem,
+    _canonical_review_route_username,
+    run_batch_creation,
+)
 from ..storage import repos
 
 router = APIRouter(prefix="/api", tags=["teams"])
@@ -209,6 +213,12 @@ class SummonRequest(BaseModel):
 
     items: list[SummonItem] = Field(min_length=1, max_length=_MAX_MEMBERS)
     conversation_id: str | None = Field(default=None, max_length=64)
+    review_requested_from_username: str | None = Field(default=None, max_length=100)
+
+    @field_validator("review_requested_from_username")
+    @classmethod
+    def review_route_is_exact_username(cls, v: str | None) -> str | None:
+        return _canonical_review_route_username(v)
 
 
 def _version_drift_rejects(saved: str, current: str) -> bool:
@@ -349,6 +359,7 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
             conversation_id=body.conversation_id,
             created_by=request.state.user["display_name"],
             created_by_username=request.state.user["username"],
+            review_requested_from_username=body.review_requested_from_username,
             pinned_versions=pinned_versions,
         )
         result["team_id"] = team_id

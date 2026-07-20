@@ -7,6 +7,7 @@
 import { ref } from "vue";
 import { listTasks, getTaskLiveSnapshot, listModelCalls } from "../api/tasks.js";
 import { getConversation, listConversationTasks } from "../api/conversations.js";
+import { fetchAllReviewInbox } from "../api/me.js";
 import { diffTransitions, nextInterval, makeEpochGuard, shouldRefreshOnJoin } from "./liveFeedCore.js";
 import {
   acknowledgeFullSnapshot,
@@ -89,6 +90,16 @@ function buildTasksChannel(ch) {
       // 翻转唤醒：清单先看到状态变化时,带外补拉对应详情 channel（免等其下一 tick）
       for (const ev of evs) pokeTask(ev.id);
     }
+  };
+}
+
+function buildReviewInboxChannel(ch) {
+  ch.state = { tasks: ref([]), loaded: ref(false), error: ref(""), ...syncState() };
+  ch.intervalOf = () => 5000;
+  ch.fetch = async (fresh) => {
+    const next = await fetchAllReviewInbox();
+    if (!fresh()) return;
+    ch.state.tasks.value = next;
   };
 }
 
@@ -224,6 +235,7 @@ function buildConversationChannel(ch, convId) {
 function makeChannel(key) {
   const ch = { key, refCount: 0, timer: null, inflight: null, guard: makeEpochGuard() };
   if (key === "tasks") buildTasksChannel(ch);
+  else if (key.startsWith("review-inbox:")) buildReviewInboxChannel(ch);
   else if (key.startsWith("task:")) buildTaskChannel(ch, key.slice(5));
   else if (key.startsWith("conversation:")) buildConversationChannel(ch, key.slice(13));
   else throw new Error(`liveFeed: 未知 channel key ${key}`);
@@ -364,6 +376,13 @@ export function pokeTasks() {
   const ch = channels.get("tasks");
   if (!ch || ch.refCount <= 0) return Promise.resolve();
   return pokeChannel("tasks", ch);
+}
+
+export function pokeReviewInbox(username) {
+  const key = `review-inbox:${username}`;
+  const ch = channels.get(key);
+  if (!ch || ch.refCount <= 0) return Promise.resolve();
+  return pokeChannel(key, ch);
 }
 
 export function resnapshotTask(id) {

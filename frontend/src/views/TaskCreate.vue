@@ -60,6 +60,32 @@
         <el-input v-model="form.name" placeholder="可选，便于在历史中辨认" @input="onNameInput" />
       </el-form-item>
 
+      <el-form-item label="点名签收">
+        <div class="inputs-field">
+          <el-select
+            v-model="form.reviewRequestedFromUsername"
+            clearable
+            filterable
+            placeholder="可选；不点名则进入全局待人工签发"
+            style="width: 100%"
+            :loading="reviewUsersLoading"
+            :disabled="reviewUsersLoading || Boolean(reviewUsersError)"
+          >
+            <el-option
+              v-for="user in reviewUsers"
+              :key="user.username"
+              :label="`${user.display_name}（${user.username}）`"
+              :value="user.username"
+            />
+          </el-select>
+          <div class="field-hint">点名只影响个人收件箱路由，不改变谁有权签发。</div>
+          <div v-if="reviewUsersError" class="field-error" role="alert">
+            签收人名册不可用：{{ reviewUsersError }}；当前不会伪装成空名册。
+            <button type="button" class="mode-toggle" @click="loadReviewUsers">重试</button>
+          </div>
+        </div>
+      </el-form-item>
+
       <el-form-item label="输入参数">
         <div class="inputs-field">
           <!-- 信任色锁（W7）：绿=仅真实结果，预填草案是「未核对」内容，不是已验证
@@ -168,6 +194,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { listAgents, getAgent } from "../api/agents";
 import { createTask } from "../api/tasks";
+import { fetchReviewRoutingUsers } from "../api/me.js";
 import { concludeConversation } from "../api/conversations";
 import { uploadFile as apiUploadFile } from "../api/files";
 import { statusLabel, statusTagType } from "../utils/format";
@@ -198,6 +225,22 @@ const submitting = ref(false);
 const uploadingFiles = ref(false);
 const submitError = ref("");
 const uploadItems = ref([]);
+const reviewUsers = ref([]);
+const reviewUsersLoading = ref(false);
+const reviewUsersError = ref("");
+
+async function loadReviewUsers() {
+  reviewUsersLoading.value = true;
+  reviewUsersError.value = "";
+  try {
+    reviewUsers.value = await fetchReviewRoutingUsers();
+  } catch (err) {
+    reviewUsers.value = [];
+    reviewUsersError.value = err.detail || err.message || "加载失败";
+  } finally {
+    reviewUsersLoading.value = false;
+  }
+}
 // 预填来源（"" | guide | demo | retry）：guide=导引草案（m6 锚文案逐字不动）；
 // demo=首登引导的 Hello 演示（评审 N2）；retry=失败任务「复制为新任务」
 // （评审 N4a，带血缘 retry_of）。三种预填都是「机器带入待人核」内容，
@@ -254,6 +297,7 @@ const form = reactive({
   agentId: typeof route.query.agent_id === "string" ? route.query.agent_id : "",
   name: "",
   inputsText: "{}",
+  reviewRequestedFromUsername: null,
 });
 
 // M6 人确认接缝：从智能导引带入的预填草案（sessionStorage 传递，不走 URL）。
@@ -511,6 +555,7 @@ async function handleSubmit() {
       inputFileIds: uploadItems.value.filter((i) => i.status === "done").map((i) => i.fileId),
       conversationId: prefillConversationId.value,
       retryOf: prefillRetryOf.value,
+      reviewRequestedFromUsername: form.reviewRequestedFromUsername,
     });
     // 单 Agent 导引流程：任务已创建成功，此刻再归档本会话（fire-and-forget，归档失败
     // 不影响已建任务；多 Agent 由工作台「结束协作」显式归档）。必须后于 createTask——
@@ -552,6 +597,7 @@ watch(
 
 onMounted(() => {
   loadAgents();
+  loadReviewUsers();
   onResize();
   window.addEventListener("resize", onResize);
 });

@@ -28,7 +28,7 @@
       </li>
       <li class="ob-step">
         <span class="ob-num">3</span>
-        <span class="ob-step-tx"><b>结果等你签发</b>——任务完成后右上角状态坞会亮「待你签发」，审阅产物后由你放行才算数。</span>
+        <span class="ob-step-tx"><b>结果等人工签发</b>——创建时点名你后，右上角状态坞会亮「点名请你签」；未点名任务只显示为待人工签发。</span>
       </li>
     </ol>
     <div class="ob-foot">找任务 / 会话 / Agent，按 <kbd>⌘K</kbd>（Windows 用 <kbd>Ctrl</kbd><kbd>K</kbd>）随时搜。</div>

@@ -1,5 +1,5 @@
 // N5 标签页标题徽章：内网 http 非 secure context，Notification API 不可用——
-// 用户切去别的标签页后，「待你签发」的召回只剩 document.title 一条通道。
+// 用户切去别的标签页后，「点名请你签」的召回只剩 document.title 一条通道。
 // 本模块是全应用唯一的 title 写手（router afterEach 与状态坞徽章都经此合成），
 // 防止两处 document.title = ... 互相覆盖：路由切换丢徽章，或徽章更新丢页名。
 // 计数来源=状态坞的真实轮询计数（诚实地板），清零/卸载即还原纯页名。

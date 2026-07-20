@@ -44,9 +44,12 @@
           </button>
         </div>
 
-        <!-- 待你签发：amber 组置顶（行动召唤最高优先） -->
+        <div v-if="filterKey === 'all' && !reviewInboxLoaded && !reviewInboxError" class="cl-zero">正在核对个人签收件箱……</div>
+        <div v-else-if="filterKey === 'all' && !reviewInboxLoaded" class="cl-error" role="alert">个人签收件箱暂不可用，未显示虚假零值。<button type="button" @click="refreshReviewInbox">重试</button></div>
+        <div v-else-if="filterKey === 'all' && (reviewInboxStale || reviewInboxSyncError)" class="cl-error" role="status">当前显示上次成功快照，连接恢复后将自动重核。<button type="button" @click="refreshReviewInbox">立即重试</button></div>
+        <!-- exact username 个人收件箱；全局 waiting_review 仍留在普通任务列表。 -->
         <template v-if="waitingTasks.length">
-          <div class="cl-group-label waiting">✍ 待你签发 · {{ waitingTasks.length }}</div>
+          <div class="cl-group-label waiting">✍ 点名请你签 · {{ waitingTasks.length }}</div>
           <div
             v-for="t in waitingTasks"
             :key="t.id"
@@ -63,13 +66,12 @@
               <!-- 人话称呼（批次四 Q1）：taskDisplayName 三级诚实降级 SSOT；
                    meta 时钟=同名行消歧锚（3-lens 可用性镜头 P2）。 -->
               <span class="cl-name">{{ taskDisplayName(t, agentNames.map) }}</span>
-              <span class="cl-sub">{{ t.agent_id }} · 需要你签发 · {{ consoleClock(t.created_at) }}</span>
+              <span class="cl-sub">{{ t.agent_id }} · 点名请你签 · {{ consoleClock(t.created_at) }}</span>
             </span>
           </div>
         </template>
 
-        <!-- 全部视图保留「待你签发」置顶分组；专项筛选平铺为单一结果集。
-             分组计数包括 0，明确表达最近 100 条窗口内的真实结果。 -->
+        <!-- 专项筛选仍是全局任务窗口；不能把全局待审冒充个人签收件箱。 -->
         <div class="cl-group-label">
           {{ resultGroupLabel }} · {{ otherTasks.length }}
         </div>
@@ -97,7 +99,7 @@
         </div>
       </template>
 
-      <div class="cl-foot-note">清单来自最近任务窗口（100 条）真实轮询——窗口外不虚报。</div>
+      <div class="cl-foot-note">个人签收件箱按精确用户名完整分页；其余清单来自最近任务窗口（100 条）。</div>
     </aside>
 
     <section class="console-main">
@@ -141,6 +143,16 @@ import TaskDetail from "./TaskDetail.vue";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import ConnectionTruthNotice from "../components/ConnectionTruthNotice.vue";
+import {
+  reviewInboxTasks,
+  reviewInboxLoaded,
+  reviewInboxError,
+  reviewInboxStale,
+  reviewInboxSyncError,
+  acquireReviewInbox,
+  releaseReviewInbox,
+  refreshReviewInbox,
+} from "../stores/reviewInbox.js";
 
 const route = useRoute();
 const router = useRouter();
@@ -158,11 +170,12 @@ const selectedId = computed(() => (typeof route.params.taskId === "string" ? rou
 const filterKey = ref("all");
 const filterCounts = computed(() => countTasksByFilter(feedTasks.value));
 const waitingTasks = computed(() =>
-  filterKey.value === "all" ? filterTasks(feedTasks.value, "waiting_review") : [],
+  filterKey.value === "all" && reviewInboxLoaded.value ? reviewInboxTasks.value : [],
 );
 const otherTasks = computed(() => {
   if (filterKey.value !== "all") return filterTasks(feedTasks.value, filterKey.value);
-  return feedTasks.value.filter((task) => task.status !== "waiting_review");
+  const personalIds = new Set(waitingTasks.value.map((task) => task.id));
+  return feedTasks.value.filter((task) => !personalIds.has(task.id));
 });
 const activeFilter = computed(() =>
   TASK_FILTERS.find((filter) => filter.key === filterKey.value) || TASK_FILTERS[0],
@@ -193,8 +206,12 @@ function select(t) {
 onMounted(() => {
   ensureTaskBaseline(); // 首次进任务台锚定未读基线（幂等）
   acquireTaskFeed();
+  acquireReviewInbox();
 });
-onUnmounted(releaseTaskFeed);
+onUnmounted(() => {
+  releaseTaskFeed();
+  releaseReviewInbox();
+});
 </script>
 
 <style scoped>

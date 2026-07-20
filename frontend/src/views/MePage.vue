@@ -121,7 +121,7 @@ const agentNames = useAgentNames();
 const ME_STAT_DEFS = [
   { key: "since_created", label: "本周发起" },
   { key: "since_completed", label: "本周完成" },
-  { key: "waiting_review", label: "待我跟进" },
+  { key: "waiting_review", label: "我发起·待审" },
   { key: "total_created", label: "累计发起" },
 ];
 const visibleMeStats = computed(() => {

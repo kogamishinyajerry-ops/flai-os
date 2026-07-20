@@ -26,6 +26,12 @@
     },
     "created_by": { "type": "string", "minLength": 1, "description": "发起用户显示名（display_name，可变、可撞名，仅展示）。" },
     "created_by_username": { "type": ["string", "null"], "description": "发起人不可变唯一 username（迁移 #9）。批C 个人贡献归因/职责分离的身份主键，按此绝不撞名；存量行为 null（自报时代不冒充追溯）。" },
+    "review_requested_from_username": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "P2.5 创建时点的精确用户名签收路由。只决定个人签收件箱归属，不授予、限制或替代签发权限；实际签发人仍由认证会话写入 task_human_decisions。存量、未点名与 eval 任务为 null，绝不从 display_name 推断。"
+    },
     "created_at": { "type": "string", "format": "date-time", "description": "ISO 8601 时间戳。" },
     "updated_at": { "type": "string", "format": "date-time", "description": "状态最近一次变更时间；每次状态迁移必须同步刷新。" },
     "started_at": {

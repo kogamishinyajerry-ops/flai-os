@@ -72,6 +72,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- 职责分离的身份主键——按 username 归因绝不撞名。可空：存量行留 NULL（自报时代之后才有的
     -- 追溯，不可从 display_name 反推，同迁移 #6 uploaded_by 口径）。
     created_by_username TEXT,
+    -- P2.5：创建时点的精确用户名路由。它只决定个人签收件箱归属，不授予或
+    -- 排除签发权限；实际签发人仍只记 task_human_decisions.reviewer_username。
+    -- 可空：存量、未点名与 eval 任务均为 NULL，绝不由 display_name 反推。
+    review_requested_from_username TEXT,
     -- retry_of（迁移 #12/评审 N4b）：「复制为新任务」的血缘注记——本任务复制自哪个
     -- 既有任务。纯元数据：不改队列/审计/管道语义（inputs 由前端复制进请求体、附件仍走
     -- kind=input 白名单），resolver/review/worker 均不读此列。可空 NULL=非重跑任务。
@@ -2161,6 +2165,73 @@ _OUTCOME_REQUIRED_TRIGGERS = (
 )
 
 _INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_tasks_review_inbox "
+    "ON tasks(review_requested_from_username, status, origin, created_at DESC, id DESC) "
+    "WHERE review_requested_from_username IS NOT NULL",
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_tasks_review_route_validate_insert
+    BEFORE INSERT ON tasks
+    WHEN NEW.review_requested_from_username IS NOT NULL
+         AND (
+             NEW.origin IS NOT 'user'
+             OR typeof(NEW.review_requested_from_username) <> 'text'
+             OR length(NEW.review_requested_from_username) = 0
+             OR length(NEW.review_requested_from_username) > 100
+             OR NEW.review_requested_from_username
+                IS NOT trim(NEW.review_requested_from_username)
+             OR NOT EXISTS (
+                 SELECT 1 FROM users
+                 WHERE username COLLATE BINARY = NEW.review_requested_from_username
+                   AND is_active = 1
+             )
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'review route requires an active exact username');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_tasks_review_route_immutable
+    BEFORE UPDATE OF review_requested_from_username ON tasks
+    WHEN NEW.review_requested_from_username
+         IS NOT OLD.review_requested_from_username
+    BEGIN
+        SELECT RAISE(ABORT, 'review route is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_tasks_review_route_identity_immutable
+    BEFORE UPDATE ON tasks
+    WHEN (NEW.id IS NOT OLD.id OR NEW.rowid IS NOT OLD.rowid)
+         AND (
+             OLD.review_requested_from_username IS NOT NULL
+             OR NEW.review_requested_from_username IS NOT NULL
+             OR EXISTS (
+                 SELECT 1 FROM tasks AS conflicting_task
+                 WHERE conflicting_task.rowid IS NOT OLD.rowid
+                   AND (
+                       conflicting_task.id = NEW.id
+                       OR conflicting_task.rowid = NEW.rowid
+                   )
+                   AND conflicting_task.review_requested_from_username IS NOT NULL
+             )
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'review route is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_tasks_review_route_no_conflicting_insert
+    BEFORE INSERT ON tasks
+    WHEN EXISTS (
+        SELECT 1 FROM tasks
+        WHERE id = NEW.id
+          AND review_requested_from_username
+              IS NOT NEW.review_requested_from_username
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'review route is immutable');
+    END
+    """,
     "CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_tool_runs_task_id ON tool_runs(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_model_calls_task_id ON model_calls(task_id)",
@@ -2683,6 +2754,19 @@ _P23_MANAGED_TRIGGERS = (
     "trg_conversations_no_delete",
     "trg_conversations_no_conflicting_insert_v2",
     "trg_conversations_positive_rowid",
+)
+
+# P2.5 exact named-review routing is a separate tasks-table schema axis.  These
+# names are refreshed under the same init write lock, but are witnessed by
+# review_route_schema.py rather than being smuggled into the P2.3 conversation
+# table inventory.
+_REVIEW_ROUTE_MANAGED_INDEXES = ("idx_tasks_review_inbox",)
+
+_REVIEW_ROUTE_MANAGED_TRIGGERS = (
+    "trg_tasks_review_route_validate_insert",
+    "trg_tasks_review_route_immutable",
+    "trg_tasks_review_route_identity_immutable",
+    "trg_tasks_review_route_no_conflicting_insert",
 )
 
 
@@ -3538,6 +3622,29 @@ def init_db(db_path: str | Path) -> None:
             from .review_schema import assert_judgment_schema
 
             assert_judgment_schema(conn)
+        # P2.5 routing facts become evidence-bearing at the first non-NULL
+        # exact username.  A no-op/missing guard at that point leaves the past
+        # rebinding window unknowable, so inspect before any CREATE/repair.
+        tasks_table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'"
+        ).fetchone() is not None
+        review_route_column_exists = bool(
+            tasks_table_exists
+            and "review_requested_from_username"
+            in {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+        )
+        review_route_has_rows = bool(
+            review_route_column_exists
+            and conn.execute(
+                "SELECT EXISTS(SELECT 1 FROM tasks "
+                "WHERE review_requested_from_username IS NOT NULL LIMIT 1)"
+            ).fetchone()[0]
+            == 1
+        )
+        if review_route_has_rows:
+            from .review_route_schema import assert_review_route_schema
+
+            assert_review_route_schema(conn)
         # Outcome ledger is likewise evidence-bearing once the first cohort
         # marker exists.  A missing managed guard on a nonempty ledger means the
         # historical protection window is unknowable; never silently recreate
@@ -3820,6 +3927,13 @@ def init_db(db_path: str | Path) -> None:
             task_cols_v12 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
             if "retry_of" not in task_cols_v12:
                 conn.execute("ALTER TABLE tasks ADD COLUMN retry_of TEXT")
+            # 迁移 #16（P2.5）：点名签收是创建时精确 username 路由，不是签发授权。
+            # 存量/未点名/eval 行保留 NULL，绝不从 created_by/display_name 猜测回填。
+            task_cols_v16 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+            if "review_requested_from_username" not in task_cols_v16:
+                conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN review_requested_from_username TEXT"
+                )
             # 迁移 #14（P2.3）：conversations.created_by_username——会话稳定 owner。
             # nullable/无 DEFAULT：存量行保留 NULL，绝不从可撞名 created_by 反推；
             # 普通用户查询只按 exact username，故 legacy NULL 天然不可见、不可引用。
@@ -3857,6 +3971,10 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
             for index_name in _P23_MANAGED_INDEXES:
                 conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+            for trigger_name in _REVIEW_ROUTE_MANAGED_TRIGGERS:
+                conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+            for index_name in _REVIEW_ROUTE_MANAGED_INDEXES:
+                conn.execute(f"DROP INDEX IF EXISTS {index_name}")
             for trigger_name in _JUDGMENT_MANAGED_TRIGGERS:
                 conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
             for index_name in _JUDGMENT_MANAGED_INDEXES:
@@ -3890,6 +4008,9 @@ def init_db(db_path: str | Path) -> None:
             from .p23_schema import assert_p23_schema
 
             assert_p23_schema(conn)
+            from .review_route_schema import assert_review_route_schema
+
+            assert_review_route_schema(conn)
             # 判断账本与 P2.3 一样按完整 SQL 语义见证；同名 no-op trigger
             # 或宽松 lookalike table 都不能被启动路径误报为可信。
             from .review_schema import assert_judgment_schema

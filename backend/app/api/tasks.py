@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from . import classification_gate as cgate
+from ..auth import service as auth_service
 from ..core.errors import IllegalTransitionError
 from ..logging_setup import audit_event
 from ..storage import repos
@@ -22,6 +23,28 @@ router = APIRouter(prefix="/api", tags=["tasks"])
 # 审计 P2（DoS 面）：inputs 此前无大小上限——超大 JSON 会被原样落库并进入
 # runtime/事件链路放大。256KB 对 params 型输入绰绰有余；大数据走文件上传通道。
 _INPUTS_MAX_BYTES = 256 * 1024
+
+
+def _canonical_review_route_username(value: str | None) -> str | None:
+    """P2.5 点名只接受 exact username；不 trim、不把显示名猜成身份。"""
+    if value is None:
+        return None
+    if not value or value != value.strip():
+        raise ValueError("签收路由必须是无首尾空白的精确 username")
+    return value
+
+
+def _require_active_review_route(
+    conn: Any, review_requested_from_username: str | None
+) -> None:
+    if review_requested_from_username is None:
+        return
+    user = auth_service.get_user_by_username(
+        conn, review_requested_from_username
+    )
+    if user is None or user["is_active"] != 1:
+        # 不区分不存在/停用，避免把创建接口变成账户状态 oracle。
+        raise HTTPException(status_code=422, detail="指定签收人不可用")
 
 
 class InputBinding(BaseModel):
@@ -76,6 +99,13 @@ class CreateTaskRequest(BaseModel):
     # 重跑。纯元数据：不入队逻辑、不管道产物、不改审计语义；创建期只校验目标
     # 存在（防悬空血缘），供详情页渲染恢复链（failed 死端 → 最短恢复路径）。
     retry_of: str | None = Field(default=None, max_length=64)
+    # P2.5：只做个人收件箱路由，不改变任何用户的签发权限。
+    review_requested_from_username: str | None = Field(default=None, max_length=100)
+
+    @field_validator("review_requested_from_username")
+    @classmethod
+    def review_route_is_exact_username(cls, v: str | None) -> str | None:
+        return _canonical_review_route_username(v)
 
     @field_validator("inputs")
     @classmethod
@@ -212,7 +242,13 @@ class CreateTasksBatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     conversation_id: str | None = Field(default=None, max_length=100)
+    review_requested_from_username: str | None = Field(default=None, max_length=100)
     items: list[BatchTaskItem] = Field(min_length=1, max_length=32)
+
+    @field_validator("review_requested_from_username")
+    @classmethod
+    def review_route_is_exact_username(cls, v: str | None) -> str | None:
+        return _canonical_review_route_username(v)
 
 
 class ReviewTaskRequest(BaseModel):
@@ -314,6 +350,9 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
 
     conn = request.app.state.conn_factory()
     try:
+        _require_active_review_route(
+            conn, body.review_requested_from_username
+        )
         task_id = f"task_{uuid.uuid4().hex}"
         # ADR-0019 D5：发起人=登录会话身份（中间件已验证注入），非请求体自报。
         # created_by 存 display_name（展示用，可撞名）；created_by_username（迁移 #9）
@@ -418,6 +457,7 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             input_binding=body.input_binding.model_dump() if body.input_binding is not None else None,
             conversation_id=body.conversation_id,
             retry_of=body.retry_of,
+            review_requested_from_username=body.review_requested_from_username,
         )
         if body.conversation_id is not None:
             # 归属某导引会话：会话须真实存在（防悬空引用）**且仍 active**——归档后真只读
@@ -473,6 +513,7 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                 "status_from": "created",
                 "status_to": status_to,
                 "depends_on": body.depends_on or [],
+                "review_requested_from_username": body.review_requested_from_username,
             },
         )
         # 批七 Codex R0 P2-2：charter 开场白持久化为事件（batch 路径同款）——前端
@@ -516,6 +557,7 @@ def create_tasks_batch(body: CreateTasksBatchRequest, request: Request) -> dict[
             conversation_id=body.conversation_id,
             created_by=request.state.user["display_name"],
             created_by_username=request.state.user["username"],
+            review_requested_from_username=body.review_requested_from_username,
         )
     finally:
         conn.close()
@@ -529,6 +571,7 @@ def run_batch_creation(
     conversation_id: str | None,
     created_by: str,
     created_by_username: str,
+    review_requested_from_username: str | None = None,
     pinned_versions: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """批量创建内核（批七 batch 端点原实现整体提取，语义零改动）：逐项静态校验
@@ -544,6 +587,7 @@ def run_batch_creation(
     # 通过不同 agent/file 错误观察系统状态。事务内还会复查 owner+active。
     if conversation_id is not None:
         _require_owned_conversation(conn, conversation_id, created_by_username)
+    _require_active_review_route(conn, review_requested_from_username)
     errors: list[dict[str, Any]] = []
     agents: list[dict[str, Any] | None] = []
     for idx, item in enumerate(items):
@@ -631,6 +675,7 @@ def run_batch_creation(
                 input_binding=None,
                 conversation_id=conversation_id,
                 retry_of=None,
+                review_requested_from_username=review_requested_from_username,
             )
         # 入队与创建事件并入同一事务（Codex R0 P1-1：两阶段窗口下，收尾任一
         # 写失败会让「行已存在但报错返回」——导引重试路径造重复任务；worker
@@ -663,6 +708,7 @@ def run_batch_creation(
                     "status_to": status_to,
                     "depends_on": deps,
                     "batch_index": idx,
+                    "review_requested_from_username": review_requested_from_username,
                 },
             )
             # Codex R0 P2（charter 留痕）：expertise.charter 作为任务首条 agent_log

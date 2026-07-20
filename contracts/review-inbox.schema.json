@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/review-inbox.schema.json",
+  "title": "FLAi-OS 个人签收件箱",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "items",
+    "has_more",
+    "next_offset",
+    "snapshot_id",
+    "total"
+  ],
+  "properties": {
+    "schema_version": { "const": "review-inbox/v1" },
+    "items": {
+      "type": "array",
+      "items": { "$ref": "task.schema.json" }
+    },
+    "has_more": { "type": "boolean" },
+    "next_offset": { "type": ["integer", "null"], "minimum": 1 },
+    "snapshot_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "total": { "type": "integer", "minimum": 0 }
+  }
+}

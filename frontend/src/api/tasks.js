@@ -2,7 +2,7 @@ import { request } from "./client.js";
 import { buildReviewPayload } from "../utils/reviewCore.js";
 
 // created_by 服务端从登录会话派生（ADR-0019 D5），前端不再发送任何身份文本。
-export const createTask = ({ agentId, name, inputs, inputFileIds, conversationId, retryOf }) =>
+export const createTask = ({ agentId, name, inputs, inputFileIds, conversationId, retryOf, reviewRequestedFromUsername }) =>
   request("/api/tasks", {
     method: "POST",
     json: {
@@ -14,16 +14,18 @@ export const createTask = ({ agentId, name, inputs, inputFileIds, conversationId
       conversation_id: conversationId || null,
       // N4a/迁移#12：「复制为新任务」的血缘注记（纯元数据，指向不存在→后端 404）。
       retry_of: retryOf || null,
+      review_requested_from_username: reviewRequestedFromUsername || null,
     },
   });
 
 // 批七 §3-B6：编队一键开工走原子 batch——全有全无（任一项非法整批 422 零写入，
 // detail.batch_errors 逐项透出），after=同批更早下标 → 服务端映射真 depends_on。
-export const createTasksBatch = ({ conversationId, items }) =>
+export const createTasksBatch = ({ conversationId, items, reviewRequestedFromUsername }) =>
   request("/api/tasks/batch", {
     method: "POST",
     json: {
       conversation_id: conversationId || null,
+      review_requested_from_username: reviewRequestedFromUsername || null,
       items: (items || []).map((it) => ({
         agent_id: it.agentId,
         name: it.name || null,

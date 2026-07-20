@@ -142,6 +142,9 @@ with sync_playwright() as p:
     page.goto(BASE + "/tasks/new?agent_id=review_agent", wait_until="networkidle")
     page.wait_for_selector(".agent-preview", state="visible", timeout=5000)
     page.locator('input[placeholder="请填写姓名"]').first.fill("批B今日交付验收")
+    review_route = page.locator(".el-form-item").filter(has_text="点名签收")
+    review_route.locator(".el-select").click()
+    page.locator(".el-select-dropdown__item").filter(has_text="test_engineer").click()
     page.get_by_role("button", name="提交任务").click()
     page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
     task_id = page.url.rsplit("/", 1)[-1]
@@ -165,7 +168,7 @@ with sync_playwright() as p:
     page.goto(BASE + "/today", wait_until="networkidle")
     poke_wait(page, lambda: page.locator(".today-section").count() == 5, 10)
     section_count = page.locator(".today-section").count()
-    check("①/today 渲染五版块（待你签发/进行中/今日交付/Agent 动态/团队总量）",
+    check("①/today 渲染五版块（点名请你签/进行中/今日交付/Agent 动态/团队总量）",
           section_count == 5, f"count={section_count}")
 
     def _counts_match():
@@ -177,7 +180,7 @@ with sync_playwright() as p:
     matched = poke_wait(page, _counts_match, 10)
     waiting_text = page.locator(".today-section-head.waiting").inner_text()
     dock_text = page.locator(".dock-pill-waiting").inner_text() if page.locator(".dock-pill-waiting").count() else "(无角标)"
-    check("①待签发计数 === StatusDock 角标数（同页同源 tasks channel）",
+    check("①个人签收计数 === StatusDock 角标数（同页同源 exact inbox snapshot）",
           matched is True, f"today='{waiting_text}' dock='{dock_text}'")
     page.screenshot(path=str(SHOTS / "1_today_five_sections.png"), full_page=True)
 

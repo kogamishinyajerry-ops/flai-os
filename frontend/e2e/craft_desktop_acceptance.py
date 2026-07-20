@@ -407,7 +407,7 @@ with sync_playwright() as p:
     check(f"③纯数据空态恰 {expected_lines} 行（Agent 动态双空态已合并为一行）",
           lines.count() == expected_lines, f"count={lines.count()} stats_all_zero={stats_all_zero}")
     body = page.locator("body").inner_text()
-    texts = ["没有等你签发的任务", "当前没有进行中的任务", "今天还没有交付的任务", "今天还没有 Agent 动态"]
+    texts = ["当前没有点名请你签的任务", "当前没有进行中的任务", "今天还没有交付的任务", "今天还没有 Agent 动态"]
     check("③空态文案 4 段逐字不变（双空态合并文案）", all(t in body for t in texts),
           "缺:" + ",".join(t for t in texts if t not in body))
     # Q2 零计数豁口：冷态三个组头绝不出现「· 0」。

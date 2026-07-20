@@ -46,9 +46,9 @@
         <h2>任务详情</h2>
         <span v-if="isTaskWorking" class="work-pulse-dot"></span>
         <el-tag :type="statusTagType(task.status)">{{ statusLabel(task.status) }}</el-tag>
-        <!-- 待你签发常驻徽章：与 el-tag 共存不替换（e2e 可能断言 el-tag 文案），
-             复用 App.vue 全局 .pill-amber（工作台会话页同款用法）。 -->
-        <span v-if="isWaitingReview" class="pill-amber">待你签发</span>
+        <!-- 点名只是路由，不是授权：精确命中本人时才用个人化文案；其余待审
+             仍可按现有政策签发，但绝不冒充“点名给我”。 -->
+        <span v-if="isWaitingReview" class="pill-amber">{{ isRequestedFromMe ? "点名请你签" : "待人工签发" }}</span>
         <!-- 批量任务摘要（P2）：消解「全失败 case 仍显示绿色已完成」的误导——
              ok/failed 计数取自最后一条 summary_generated 折叠事件，纯前端派生。
              成功计数用中性 info 不给绿（3-lens trust P2 收口）：绿=仅真实 REAL
@@ -493,7 +493,8 @@ import {
   isReviewContextCurrent,
   validateReviewDecision,
 } from "../utils/reviewCore.js";
-import { displayName } from "../stores/session";
+import { currentUser, displayName } from "../stores/session";
+import { isReviewRequestedFrom } from "../utils/reviewInboxCore.js";
 import { markTaskSeen } from "../utils/lastSeen";
 import { burstSigned } from "../effects/burst";
 
@@ -864,6 +865,9 @@ const batchSummary = computed(() => {
 
 const canCancel = computed(() => ["created", "queued"].includes(task.value?.status));
 const isWaitingReview = computed(() => task.value?.status === "waiting_review");
+const isRequestedFromMe = computed(() =>
+  isReviewRequestedFrom(task.value, currentUser.value?.username)
+);
 watch(isWaitingReview, (waiting) => {
   // 另一签发者或其它可信入口已落定时，当前结构化驳回草稿立即失效；不让
   // 对旧 waiting_review 快照打开的对话框继续提交。

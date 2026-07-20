@@ -14,11 +14,12 @@ export const getTeam = (teamId) => request(`/api/teams/${teamId}`);
 
 // 召集：items 逐席位补参；顺序无关（服务端按 seq 升序重排，绝不信任提交序）。
 // 对账不过 → 422 detail.summon_errors 逐席位清单（整单拒发零写入）。
-export const summonTeam = ({ teamId, items, conversationId }) =>
+export const summonTeam = ({ teamId, items, conversationId, reviewRequestedFromUsername }) =>
   request(`/api/teams/${teamId}/summon`, {
     method: "POST",
     json: {
       conversation_id: conversationId || null,
+      review_requested_from_username: reviewRequestedFromUsername || null,
       items: (items || []).map((it) => ({
         seq: it.seq,
         inputs: it.inputs || {},
