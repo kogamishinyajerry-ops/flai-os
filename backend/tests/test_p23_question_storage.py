@@ -1155,7 +1155,11 @@ def test_repository_normalizes_question_times_and_requires_exact_24h_ttl(
                 created_at="2026-07-19T00:00:00+00:00",
                 expires_at="2026-07-19T23:59:59.999999+00:00",
             )
-        assert repos.get_question(conn, question["id"])["status"] == "pending"
+        assert repos.get_question(
+            conn,
+            question["id"],
+            now="2026-07-19T12:00:00+00:00",
+        )["status"] == "pending"
     finally:
         conn.close()
 
@@ -1302,7 +1306,11 @@ def test_answer_message_pair_is_unique_across_questions_even_when_order_matches(
                 answer_message_id=answer_message_id,
                 response_message_id=response_message_id,
             )
-        assert repos.get_question(conn, question_2["id"])["status"] == "pending"
+        assert repos.get_question(
+            conn,
+            question_2["id"],
+            now="2026-07-19T03:00:00+00:00",
+        )["status"] == "pending"
     finally:
         conn.close()
 
@@ -1354,7 +1362,11 @@ def test_answer_messages_must_follow_prompt_in_strict_internal_order(
                 answer_message_id=early_answer,
                 response_message_id=early_response,
             )
-        assert repos.get_question(conn, question["id"])["status"] == "pending"
+        assert repos.get_question(
+            conn,
+            question["id"],
+            now="2026-07-19T01:00:00+00:00",
+        )["status"] == "pending"
 
         # A legal prompt→answer→response sequence remains atomic inside an outer
         # write transaction and resolves normally.

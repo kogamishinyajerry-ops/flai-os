@@ -22,6 +22,7 @@ const pendingChoice = {
   ],
   answer: null,
 };
+const PENDING_NOW_MS = Date.parse("2026-07-19T23:59:59Z");
 
 test("secure submission id falls back to getRandomValues as an RFC 4122 UUID v4", () => {
   const seeded = Uint8Array.from([
@@ -88,24 +89,71 @@ test("the normal composer is blocked only while a Question is effectively pendin
 
 test("single choice accepts a declared option or explicit custom text, never a guessed default", () => {
   assert.deepEqual(
-    validateQuestionSubmission(pendingChoice, { mode: "option", optionId: "option_2", text: "" }),
+    validateQuestionSubmission(
+      pendingChoice,
+      { mode: "option", optionId: "option_2", text: "" },
+      { nowMs: PENDING_NOW_MS },
+    ),
     { ok: true, payload: { kind: "option", option_id: "option_2" }, error: "" },
   );
   assert.deepEqual(
-    validateQuestionSubmission(pendingChoice, { mode: "text", optionId: "", text: "  另一个系统  " }),
+    validateQuestionSubmission(
+      pendingChoice,
+      { mode: "text", optionId: "", text: "  另一个系统  " },
+      { nowMs: PENDING_NOW_MS },
+    ),
     { ok: true, payload: { kind: "text", text: "另一个系统" }, error: "" },
   );
-  assert.equal(validateQuestionSubmission(pendingChoice, { mode: "option", optionId: "", text: "" }).ok, false);
-  assert.equal(validateQuestionSubmission(pendingChoice, { mode: "option", optionId: "option_9", text: "" }).ok, false);
+  assert.equal(
+    validateQuestionSubmission(
+      pendingChoice,
+      { mode: "option", optionId: "", text: "" },
+      { nowMs: PENDING_NOW_MS },
+    ).ok,
+    false,
+  );
+  assert.equal(
+    validateQuestionSubmission(
+      pendingChoice,
+      { mode: "option", optionId: "option_9", text: "" },
+      { nowMs: PENDING_NOW_MS },
+    ).ok,
+    false,
+  );
 });
 
 test("free text rejects option payload, blanks, and oversize input", () => {
   const question = { ...pendingChoice, kind: "free_text", options: [] };
-  assert.equal(validateQuestionSubmission(question, { mode: "option", optionId: "option_1", text: "" }).ok, false);
-  assert.equal(validateQuestionSubmission(question, { mode: "text", optionId: "", text: "   " }).ok, false);
-  assert.equal(validateQuestionSubmission(question, { mode: "text", optionId: "", text: "x".repeat(4001) }).ok, false);
+  assert.equal(
+    validateQuestionSubmission(
+      question,
+      { mode: "option", optionId: "option_1", text: "" },
+      { nowMs: PENDING_NOW_MS },
+    ).ok,
+    false,
+  );
+  assert.equal(
+    validateQuestionSubmission(
+      question,
+      { mode: "text", optionId: "", text: "   " },
+      { nowMs: PENDING_NOW_MS },
+    ).ok,
+    false,
+  );
+  assert.equal(
+    validateQuestionSubmission(
+      question,
+      { mode: "text", optionId: "", text: "x".repeat(4001) },
+      { nowMs: PENDING_NOW_MS },
+    ).ok,
+    false,
+  );
   assert.deepEqual(
-    validateQuestionSubmission(question, { mode: "text", optionId: "", text: "验收通过率 100%" }),
+    validateQuestionSubmission(
+      question,
+      { mode: "text", optionId: "", text: "验收通过率 100%" },
+      { nowMs: PENDING_NOW_MS },
+    ),
     { ok: true, payload: { kind: "text", text: "验收通过率 100%" }, error: "" },
   );
 });
