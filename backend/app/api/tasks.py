@@ -835,6 +835,28 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
         task = repos.get_task(conn, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+        metadata = task.get("metadata")
+        if (
+            task.get("agent_id") == "open_design_daemon_candidate_agent"
+            or (
+                isinstance(metadata, dict)
+                and metadata.get("review_contract")
+                == "open-design-candidate/v1"
+            )
+        ):
+            # The DB trigger is the physical defense.  This explicit API stop
+            # gives the user the correct recovery path instead of surfacing a
+            # raw integrity failure or allowing a generic review to bypass the
+            # comparison/selection ledger.
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "use_design_selection_endpoint",
+                    "message": (
+                        "Open Design 候选必须通过并排比较与具名候选选择完成签收"
+                    ),
+                },
+            )
         if task["status"] != "waiting_review":
             raise HTTPException(
                 status_code=409,

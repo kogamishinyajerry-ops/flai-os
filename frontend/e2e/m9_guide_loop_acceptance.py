@@ -199,7 +199,11 @@ with sync_playwright() as p:
     page.locator(".status-artifact").click()
     page.wait_for_selector(".sc-shell", timeout=5000)
     check("⑥锚点直开速览面板", page.locator(".sc-back").count() == 1)
-    check("⑥速览产物区可见（失败也如实显示非静默）", "产物" in page.locator(".sc-body").inner_text())
+    # Drawer 壳先出现，task channel 随后才投影 output_file_ids；不能在壳刚开时
+    # 同步读取正文制造竞态。等待权威产物区 label，加载中/失败/成功三态都保留它。
+    artifact_label = page.locator(".peek-label").filter(has_text=re.compile(r"^产物"))
+    expect(artifact_label).to_be_visible(timeout=8000)
+    check("⑥速览产物区可见（失败也如实显示非静默）", artifact_label.count() == 1)
     page.screenshot(path=str(SHOTS / "4_peek_from_anchor.png"))
     page.keyboard.press("Escape")
     page.wait_for_timeout(300)

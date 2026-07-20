@@ -50,6 +50,13 @@ DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 # 与每轮 live deep provenance。
 OUTCOME_TELEMETRY_GENERATION = "adr36-signed-review-event-canonical-time-v8"
 
+# P2.8 API/schema generation.  The value deliberately carries the current
+# trust boundary: the Open Design producer remains disabled and emits
+# sensitive/unattested candidates, so live admission is blocked until the
+# deferred role/declassification axis exists.  This witnesses code parity; it
+# is not a production-readiness claim.
+DESIGN_PROMOTION_GENERATION = "p28-disabled-sensitive-trial-v1"
+
 # worker 代际字符串（ADR-0021/Codex R2 审 P2）：放在纯 stdlib 的 config，
 # 让部署自检探针（deploy_selfcheck.py，号称免应用依赖）导入它时不连带拉
 # jobs.runner→storage.repos→jsonschema。**改派生语义的里程碑同步 bump**——

@@ -347,7 +347,7 @@ def resolved_color(page, css_value: str) -> str:
     )
 
 
-from _auth import login_context, login_httpx, seed_user  # noqa: E402
+from _auth import E2E_USERNAME, login_context, login_httpx, seed_user  # noqa: E402
 
 seed_user(WORK / "flai_os.db", "验收工程师")
 
@@ -460,7 +460,14 @@ with sync_playwright() as p:
     #    毒丸隔离事件——runner._quarantine_poison_candidate 同款 task_cancelled+
     #    level=error，红线探针「取消绝不染红」的最刁钻输入）──────────────────
     resp_a = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "工艺批探针A"}})
-    resp_b = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "工艺批探针B"}})
+    resp_b = API.post(
+        "/api/tasks",
+        json={
+            "agent_id": "hello_agent",
+            "inputs": {"name": "工艺批探针B"},
+            "review_requested_from_username": E2E_USERNAME,
+        },
+    )
     resp_c = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "工艺批探针C"}})
     assert resp_a.status_code < 300 and resp_b.status_code < 300 and resp_c.status_code < 300, \
         f"建任务失败：{resp_a.text} {resp_b.text} {resp_c.text}"
@@ -935,7 +942,8 @@ with sync_playwright() as p:
           len(sc_names) > 0 and all(not n.strip().startswith("task_") for n in sc_names)
           and any("Hello Agent" in n for n in sc_names), str(sc_names[:5]))
     check("⑪Q3 状态中心口径短句（计数与清单双重范围声明保留，全句叙述只留任务台）",
-          page.locator(".sc-foot-note").inner_text().strip() == "口径：计数与清单均来自最近 100 条任务窗口，窗口外不虚报。",
+          page.locator(".sc-foot-note").inner_text().strip()
+          == "口径：个人签收件箱按精确用户名完整分页；运行与最近落定来自最近 100 条任务窗口。",
           page.locator(".sc-foot-note").inner_text())
     page.screenshot(path=str(SHOTS / "statuscenter_human_names_light.png"))
     page.locator(".sc-close").click()

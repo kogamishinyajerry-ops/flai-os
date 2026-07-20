@@ -1,0 +1,449 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai.local/contracts/design-promotion.schema.json",
+  "title": "FLAi Design Promotion v1",
+  "oneOf": [
+    { "$ref": "#/$defs/comparisonCreate" },
+    { "$ref": "#/$defs/selectionRequest" },
+    { "$ref": "#/$defs/releaseRequestCreate" },
+    { "$ref": "#/$defs/releaseDecisionRequest" },
+    { "$ref": "#/$defs/publishRequest" },
+    { "$ref": "#/$defs/rollbackRequest" },
+    { "$ref": "#/$defs/comparison" },
+    { "$ref": "#/$defs/selection" },
+    { "$ref": "#/$defs/releaseRequest" },
+    { "$ref": "#/$defs/releaseDecision" },
+    { "$ref": "#/$defs/publishResult" },
+    { "$ref": "#/$defs/rollbackResult" }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "requestId": { "type": "string", "pattern": "^req_[a-f0-9]{32}$" },
+    "candidateId": { "type": "string", "pattern": "^odc-[a-f0-9]{32}$" },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["username", "display_name"],
+      "properties": {
+        "username": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "display_name": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "taskDecisionAttribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision_id", "username", "display_name", "at"],
+      "properties": {
+        "decision_id": { "type": "string", "pattern": "^decision_[a-f0-9]{32}$" },
+        "username": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "display_name": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "releaseDecisionAttribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision_id", "username", "display_name", "at"],
+      "properties": {
+        "decision_id": { "type": "string", "pattern": "^release_decision_[a-f0-9]{32}$" },
+        "username": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "display_name": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "expectedTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "absent" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "sha256"],
+          "properties": {
+            "kind": { "const": "present" },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      ]
+    },
+    "reasonCode": {
+      "enum": ["visual_mismatch", "trust_semantics", "accessibility", "incomplete_matrix", "other"]
+    },
+    "nonblankComment": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "pattern": ".*\\S.*"
+    },
+    "comparisonCreate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "task_id"],
+      "properties": {
+        "request_id": { "$ref": "#/$defs/requestId" },
+        "task_id": { "type": "string", "minLength": 1, "maxLength": 160 }
+      }
+    },
+    "selectionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "action", "expected_comparison_sha256", "candidate_id", "reason_code"],
+      "properties": {
+        "request_id": { "$ref": "#/$defs/requestId" },
+        "action": { "enum": ["approve", "reject"] },
+        "expected_comparison_sha256": { "$ref": "#/$defs/sha256" },
+        "candidate_id": { "oneOf": [{ "$ref": "#/$defs/candidateId" }, { "type": "null" }] },
+        "reason_code": { "oneOf": [{ "$ref": "#/$defs/reasonCode" }, { "type": "null" }] },
+        "comment": { "type": ["string", "null"], "maxLength": 2000 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["action"],
+            "properties": { "action": { "const": "approve" } }
+          },
+          "then": {
+            "properties": {
+              "candidate_id": { "$ref": "#/$defs/candidateId" },
+              "reason_code": { "type": "null" }
+            }
+          },
+          "else": {
+            "properties": {
+              "candidate_id": { "type": "null" },
+              "reason_code": { "$ref": "#/$defs/reasonCode" }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["reason_code"],
+            "properties": { "reason_code": { "const": "other" } }
+          },
+          "then": {
+            "required": ["comment"],
+            "properties": { "comment": { "$ref": "#/$defs/nonblankComment" } }
+          }
+        }
+      ]
+    },
+    "releaseRequestCreate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "selection_id", "expected_comparison_sha256", "expected_candidate_sha256", "expected_target"],
+      "properties": {
+        "request_id": { "$ref": "#/$defs/requestId" },
+        "selection_id": { "type": "string", "pattern": "^selection_[a-f0-9]{32}$" },
+        "expected_comparison_sha256": { "$ref": "#/$defs/sha256" },
+        "expected_candidate_sha256": { "$ref": "#/$defs/sha256" },
+        "expected_target": { "$ref": "#/$defs/expectedTarget" }
+      }
+    },
+    "releaseDecisionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "action", "expected_summary_sha256", "reason_code"],
+      "properties": {
+        "request_id": { "$ref": "#/$defs/requestId" },
+        "action": { "enum": ["approve", "reject"] },
+        "expected_summary_sha256": { "$ref": "#/$defs/sha256" },
+        "reason_code": { "oneOf": [{ "$ref": "#/$defs/reasonCode" }, { "type": "null" }] },
+        "comment": { "type": ["string", "null"], "maxLength": 2000 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["action"],
+            "properties": { "action": { "const": "approve" } }
+          },
+          "then": {
+            "properties": { "reason_code": { "type": "null" } }
+          },
+          "else": {
+            "properties": { "reason_code": { "$ref": "#/$defs/reasonCode" } }
+          }
+        },
+        {
+          "if": {
+            "required": ["reason_code"],
+            "properties": { "reason_code": { "const": "other" } }
+          },
+          "then": {
+            "required": ["comment"],
+            "properties": { "comment": { "$ref": "#/$defs/nonblankComment" } }
+          }
+        }
+      ]
+    },
+    "publishRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "expected_release_package_sha256", "expected_target", "confirm"],
+      "properties": {
+        "request_id": { "$ref": "#/$defs/requestId" },
+        "expected_release_package_sha256": { "$ref": "#/$defs/sha256" },
+        "expected_target": { "$ref": "#/$defs/expectedTarget" },
+        "confirm": { "const": true }
+      }
+    },
+    "rollbackRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "expected_release_package_sha256", "expected_current_sha256", "confirm"],
+      "properties": {
+        "request_id": { "$ref": "#/$defs/requestId" },
+        "expected_release_package_sha256": { "$ref": "#/$defs/sha256" },
+        "expected_current_sha256": { "$ref": "#/$defs/sha256" },
+        "confirm": { "const": true }
+      }
+    },
+    "frameImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "width", "height", "url"],
+      "properties": {
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "width": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "url": { "type": "string", "pattern": "^/api/design-comparisons/" }
+      }
+    },
+    "candidateFrameImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "width", "height", "url", "scan"],
+      "properties": {
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "width": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "url": { "type": "string", "pattern": "^/api/design-comparisons/" },
+        "scan": { "const": "passed" }
+      }
+    },
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame_id", "slot_id", "viewport", "state", "theme", "locale", "current", "candidate"],
+      "properties": {
+        "frame_id": { "type": "string", "pattern": "^frame_[a-f0-9]{32}$" },
+        "slot_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "viewport": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["width", "height", "dpr"],
+          "properties": {
+            "width": { "type": "integer", "minimum": 1, "maximum": 4096 },
+            "height": { "type": "integer", "minimum": 1, "maximum": 4096 },
+            "dpr": { "type": "integer", "minimum": 1, "maximum": 4 }
+          }
+        },
+        "state": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "theme": { "enum": ["light", "dark"] },
+        "locale": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "current": { "$ref": "#/$defs/frameImage" },
+        "candidate": { "$ref": "#/$defs/candidateFrameImage" }
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "selection_id", "comparison_id", "comparison_sha256", "task_id", "action", "candidate_id", "candidate_sha256", "task_decision_id", "selected_by", "reason_code", "comment", "created_at", "task_status"],
+      "properties": {
+        "schema_version": { "const": "flai-design-selection/v1" },
+        "selection_id": { "type": "string", "pattern": "^selection_[a-f0-9]{32}$" },
+        "comparison_id": { "type": "string", "pattern": "^comparison_[a-f0-9]{32}$" },
+        "comparison_sha256": { "$ref": "#/$defs/sha256" },
+        "task_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "action": { "enum": ["approve", "reject"] },
+        "candidate_id": { "oneOf": [{ "$ref": "#/$defs/candidateId" }, { "type": "null" }] },
+        "candidate_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "task_decision_id": { "type": "string", "pattern": "^decision_[a-f0-9]{32}$" },
+        "selected_by": { "$ref": "#/$defs/identity" },
+        "reason_code": { "oneOf": [{ "$ref": "#/$defs/reasonCode" }, { "type": "null" }] },
+        "comment": { "type": ["string", "null"], "maxLength": 2000 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "task_status": { "enum": ["completed", "failed"] }
+      }
+    },
+    "releaseSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate", "target"],
+      "properties": {
+        "candidate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["task_id", "candidate_id", "asset_slot", "asset_sha256", "comparison_sha256", "candidate_approval"],
+          "properties": {
+            "task_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "candidate_id": { "$ref": "#/$defs/candidateId" },
+            "asset_slot": { "enum": ["task_review_summary", "agent_activity_indicator", "workflow_monitor_sidebar"] },
+            "asset_sha256": { "$ref": "#/$defs/sha256" },
+            "comparison_sha256": { "$ref": "#/$defs/sha256" },
+            "candidate_approval": { "$ref": "#/$defs/taskDecisionAttribution" }
+          }
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target_id", "relative_path", "preimage", "postimage_sha256"],
+          "properties": {
+            "target_id": { "enum": ["open_design_task_review_summary_v1", "open_design_agent_activity_indicator_v1", "open_design_workflow_monitor_sidebar_v1"] },
+            "relative_path": { "type": "string", "pattern": "^frontend/src/assets/open-design/[a-z-]+\\.png$" },
+            "preimage": { "$ref": "#/$defs/expectedTarget" },
+            "postimage_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      }
+    },
+    "releaseRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "release_request_id", "selection_id", "comparison_id", "state", "summary", "summary_sha256", "requested_by", "created_at"],
+      "properties": {
+        "schema_version": { "const": "flai-design-release-request/v1" },
+        "release_request_id": { "type": "string", "pattern": "^release_[a-f0-9]{32}$" },
+        "selection_id": { "type": "string", "pattern": "^selection_[a-f0-9]{32}$" },
+        "comparison_id": { "type": "string", "pattern": "^comparison_[a-f0-9]{32}$" },
+        "state": { "const": "awaiting_release_approval" },
+        "summary": { "$ref": "#/$defs/releaseSummary" },
+        "summary_sha256": { "$ref": "#/$defs/sha256" },
+        "requested_by": { "$ref": "#/$defs/identity" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "releasePackage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "release_package_sha256", "summary", "release_approval"],
+      "properties": {
+        "schema_version": { "const": "flai-design-release-package/v1" },
+        "release_package_sha256": { "$ref": "#/$defs/sha256" },
+        "summary": { "$ref": "#/$defs/releaseSummary" },
+        "release_approval": { "$ref": "#/$defs/releaseDecisionAttribution" }
+      }
+    },
+    "releaseDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "release_request_id", "state", "decision_id", "action", "summary_sha256", "decided_by", "reason_code", "comment", "created_at", "release_package"],
+      "properties": {
+        "schema_version": { "const": "flai-design-release-decision/v1" },
+        "release_request_id": { "type": "string", "pattern": "^release_[a-f0-9]{32}$" },
+        "state": { "enum": ["release_approved", "release_rejected"] },
+        "decision_id": { "type": "string", "pattern": "^release_decision_[a-f0-9]{32}$" },
+        "action": { "enum": ["approve", "reject"] },
+        "summary_sha256": { "$ref": "#/$defs/sha256" },
+        "decided_by": { "$ref": "#/$defs/identity" },
+        "reason_code": { "oneOf": [{ "$ref": "#/$defs/reasonCode" }, { "type": "null" }] },
+        "comment": { "type": ["string", "null"], "maxLength": 2000 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "release_package": { "oneOf": [{ "$ref": "#/$defs/releasePackage" }, { "type": "null" }] }
+      }
+    },
+    "publishResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "release_request_id", "state", "publish_event_id", "target_id", "before_sha256", "after_sha256", "backup_sha256", "release_package_sha256", "published_by", "published_at"],
+      "properties": {
+        "schema_version": { "const": "flai-design-publish-result/v1" },
+        "release_request_id": { "type": "string", "pattern": "^release_[a-f0-9]{32}$" },
+        "state": { "const": "published" },
+        "publish_event_id": { "type": "string", "pattern": "^promotion_event_[a-f0-9]{32}$" },
+        "target_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "before_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "after_sha256": { "$ref": "#/$defs/sha256" },
+        "backup_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "release_package_sha256": { "$ref": "#/$defs/sha256" },
+        "published_by": { "$ref": "#/$defs/identity" },
+        "published_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "rollbackResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "release_request_id", "state", "rollback_event_id", "target_id", "before_sha256", "after_sha256", "backup_sha256", "release_package_sha256", "rolled_back_by", "rolled_back_at"],
+      "properties": {
+        "schema_version": { "const": "flai-design-publish-result/v1" },
+        "release_request_id": { "type": "string", "pattern": "^release_[a-f0-9]{32}$" },
+        "state": { "const": "rolled_back" },
+        "rollback_event_id": { "type": "string", "pattern": "^promotion_event_[a-f0-9]{32}$" },
+        "target_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "before_sha256": { "$ref": "#/$defs/sha256" },
+        "after_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "backup_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "release_package_sha256": { "$ref": "#/$defs/sha256" },
+        "rolled_back_by": { "$ref": "#/$defs/identity" },
+        "rolled_back_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selection", "release_request", "release_decision", "latest_publish"],
+      "properties": {
+        "selection": { "oneOf": [{ "$ref": "#/$defs/selection" }, { "type": "null" }] },
+        "release_request": { "oneOf": [{ "$ref": "#/$defs/releaseRequest" }, { "type": "null" }] },
+        "release_decision": { "oneOf": [{ "$ref": "#/$defs/releaseDecision" }, { "type": "null" }] },
+        "latest_publish": { "oneOf": [{ "$ref": "#/$defs/publishResult" }, { "$ref": "#/$defs/rollbackResult" }, { "type": "null" }] }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "comparison_id", "comparison_sha256", "task_id", "candidate", "target", "phase", "workflow", "provenance", "frames", "created_by", "created_at"],
+      "properties": {
+        "schema_version": { "const": "flai-design-comparison/v1" },
+        "comparison_id": { "type": "string", "pattern": "^comparison_[a-f0-9]{32}$" },
+        "comparison_sha256": { "$ref": "#/$defs/sha256" },
+        "task_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "candidate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["candidate_id", "asset_slot", "asset_file_id", "asset_sha256", "media_type", "execution_trust"],
+          "properties": {
+            "candidate_id": { "$ref": "#/$defs/candidateId" },
+            "asset_slot": { "enum": ["task_review_summary", "agent_activity_indicator", "workflow_monitor_sidebar"] },
+            "asset_file_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "asset_sha256": { "$ref": "#/$defs/sha256" },
+            "media_type": { "const": "image/png" },
+            "execution_trust": { "const": "untrusted_generated" }
+          }
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target_id", "relative_path", "preimage"],
+          "properties": {
+            "target_id": { "enum": ["open_design_task_review_summary_v1", "open_design_agent_activity_indicator_v1", "open_design_workflow_monitor_sidebar_v1"] },
+            "relative_path": { "type": "string", "pattern": "^frontend/src/assets/open-design/[a-z-]+\\.png$" },
+            "preimage": { "$ref": "#/$defs/expectedTarget" }
+          }
+        },
+        "phase": { "enum": ["candidate_pending", "candidate_rejected", "candidate_approved", "release_pending", "release_rejected", "publish_ready", "published", "rolled_back", "manual_intervention"] },
+        "workflow": { "$ref": "#/$defs/workflow" },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mock", "project_id", "run_id", "result_package_sha256", "design_reference_package_sha256", "file_set_sha256", "production_readiness"],
+          "properties": {
+            "mock": { "const": false },
+            "project_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "run_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "result_package_sha256": { "$ref": "#/$defs/sha256" },
+            "design_reference_package_sha256": { "$ref": "#/$defs/sha256" },
+            "file_set_sha256": { "$ref": "#/$defs/sha256" },
+            "production_readiness": { "const": "trial_not_attested" }
+          }
+        },
+        "frames": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/frame" } },
+        "created_by": { "$ref": "#/$defs/identity" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

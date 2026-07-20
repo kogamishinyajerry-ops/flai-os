@@ -48,7 +48,7 @@
         <el-tag :type="statusTagType(task.status)">{{ statusLabel(task.status) }}</el-tag>
         <!-- 点名只是路由，不是授权：精确命中本人时才用个人化文案；其余待审
              仍可按现有政策签发，但绝不冒充“点名给我”。 -->
-        <span v-if="isWaitingReview" class="pill-amber">{{ isRequestedFromMe ? "点名请你签" : "待人工签发" }}</span>
+        <span v-if="isWaitingReview" class="pill-amber">{{ isOpenDesignCandidateTask ? "待候选审批（非发布批准）" : (isRequestedFromMe ? "点名请你签" : "待人工签发") }}</span>
         <!-- 批量任务摘要（P2）：消解「全失败 case 仍显示绿色已完成」的误导——
              ok/failed 计数取自最后一条 summary_generated 折叠事件，纯前端派生。
              成功计数用中性 info 不给绿（3-lens trust P2 收口）：绿=仅真实 REAL
@@ -210,11 +210,27 @@
         </ul>
       </div>
 
-      <div class="section" v-if="canCancel || isWaitingReview">
+      <DesignComparisonPanel
+        v-if="isOpenDesignCandidateTask"
+        class="section"
+        :task="task"
+      />
+
+      <el-alert
+        v-else-if="isWaitingReview && blocksGenericReview"
+        class="section"
+        type="warning"
+        title="候选审查合同不完整，通用任务签发已停用"
+        description="该任务命中了 Open Design 候选审查边界，但缺少完整、可验证的候选元数据。请修复服务端投影后重新加载；前端不会回退到 /tasks 通用签发。"
+        :closable="false"
+        show-icon
+      />
+
+      <div class="section" v-if="canCancel || (isWaitingReview && !blocksGenericReview)">
         <h3>动作</h3>
         <el-button v-if="canCancel" plain @click="handleCancel">取消任务</el-button>
 
-        <el-card v-if="isWaitingReview" shadow="never" class="review-card">
+        <el-card v-if="isWaitingReview && !blocksGenericReview" shadow="never" class="review-card">
           <el-form label-width="80px">
             <el-form-item label="审核人">
               <span class="review-signer">{{ signerName }}（登录身份，签发记名不可代填）</span>
@@ -485,6 +501,7 @@ import CompletionSeal from "../components/CompletionSeal.vue";
 import VerificationCard from "../components/VerificationCard.vue";
 import EvidenceList from "../components/EvidenceList.vue";
 import ConnectionTruthNotice from "../components/ConnectionTruthNotice.vue";
+import DesignComparisonPanel from "../components/DesignComparisonPanel.vue";
 import { ensureTaskEvidence, taskEvidenceWithheld } from "../stores/taskEvidence";
 import { useAgentNames } from "../stores/agentNames";
 import {
@@ -495,6 +512,10 @@ import {
 } from "../utils/reviewCore.js";
 import { currentUser, displayName } from "../stores/session";
 import { isReviewRequestedFrom } from "../utils/reviewInboxCore.js";
+import {
+  blocksGenericTaskReview,
+  isOpenDesignProductionCandidateTask,
+} from "../utils/designPromotionCore.js";
 import { markTaskSeen } from "../utils/lastSeen";
 import { burstSigned } from "../effects/burst";
 
@@ -865,13 +886,18 @@ const batchSummary = computed(() => {
 
 const canCancel = computed(() => ["created", "queued"].includes(task.value?.status));
 const isWaitingReview = computed(() => task.value?.status === "waiting_review");
+const isOpenDesignCandidateTask = computed(() =>
+  isOpenDesignProductionCandidateTask(task.value),
+);
+const blocksGenericReview = computed(() => blocksGenericTaskReview(task.value));
 const isRequestedFromMe = computed(() =>
   isReviewRequestedFrom(task.value, currentUser.value?.username)
 );
-watch(isWaitingReview, (waiting) => {
+watch([isWaitingReview, blocksGenericReview], ([waiting, genericReviewBlocked]) => {
   // 另一签发者或其它可信入口已落定时，当前结构化驳回草稿立即失效；不让
-  // 对旧 waiting_review 快照打开的对话框继续提交。
-  if (!waiting) rejectDialogOpen.value = false;
+  // 对旧 waiting_review 快照打开的对话框继续提交。任务在等待期间切入专用
+  // Open Design 候选合同也立即关闭通用签发入口。
+  if (!waiting || genericReviewBlocked) rejectDialogOpen.value = false;
 });
 const isTerminal = computed(() => ["completed", "failed", "cancelled"].includes(task.value?.status));
 // 页头到席点：与 WorkLog 内部同一口径（TASK_WORK_STATES），紧邻状态 tag 左侧。
@@ -1096,7 +1122,7 @@ async function handleReview(
   action,
   { reasonCode = null, comment = reviewForm.comment, skipConfirm = false } = {},
 ) {
-  if (reviewing.value || reviewSettled.value) return false;
+  if (reviewing.value || reviewSettled.value || blocksGenericReview.value) return false;
   const label = action === "approve" ? "批准放行" : "驳回";
   reviewing.value = true;
   try {
@@ -1107,12 +1133,15 @@ async function handleReview(
         return false;
       }
     }
-    if (!isReviewContextCurrent({
-      expectedTaskId: taskId,
-      currentTaskId: route.params.taskId,
-      waiting: isWaitingReview.value,
-      visible: task.value?.id === taskId,
-    })) {
+    if (
+      blocksGenericReview.value ||
+      !isReviewContextCurrent({
+        expectedTaskId: taskId,
+        currentTaskId: route.params.taskId,
+        waiting: isWaitingReview.value,
+        visible: task.value?.id === taskId,
+      })
+    ) {
       return false;
     }
     await reviewTask(taskId, {

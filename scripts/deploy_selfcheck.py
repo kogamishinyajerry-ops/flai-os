@@ -18,6 +18,8 @@
         物理隔离账本、必需索引、只追加 trigger 与 persisted provenance 均严格校验。
     4d. ADR-0036 产物流转 SQLite schema 见证：逐权威产物 cohort、重复交付与
         exact handoff 所需表/索引/trigger 全 SQL 校验；额外 UNIQUE 也拒绝。
+    4e. P2.8 设计候选晋升 SQLite schema 见证：六张只追加账本、索引、签发耦合
+        trigger、行 hash 与跨账本引用完整性复用 canonical witness 严格校验。
     5. worker 心跳+代际（Codex R1 审 P1）：Job Runner 是独立进程——API 换新而
        worker 未重启时，旧 worker 落库走 DDL DEFAULT 洗白派生分级。要求心跳
        60 秒内新鲜且代际=当前 WORKER_GENERATION。**部署顺序：先起 API+worker
@@ -42,6 +44,8 @@
         witnesses 全部严格 ``is True``（旧 API/旧库/同名空 trigger 均拒绝）
     8g. health 含 outcome_telemetry_axis=true 且服务侧 outcome schema witnesses
         全部严格 ``is True``；配合 worker generation 拒绝 API/worker 混版漏记。
+    8h. health 含 design_promotion_axis=true、精确 P2.8 generation，且服务侧
+        design-promotion canonical witnesses 全部严格 ``is True``。
     9. health.db_identity = 探针侧库路径指纹（Codex R1 审 P2：两侧 FLAI_DB_PATH
        不一致时，探针查有账户的库 A、服务连空库 B，其余全 PASS 却无人能登录）
     10. 未认证 GET /api/agents → 401（鉴权代际见证：200=裸奔旧代际，404=旧代码，
@@ -102,9 +106,19 @@ from backend.app.storage.outcome_schema import (  # noqa: E402
 from backend.app.storage.outcome_schema import (  # noqa: E402
     outcome_schema_witnesses as _outcome_schema_witnesses,
 )
+from backend.app.storage.design_promotion_schema import (  # noqa: E402
+    DESIGN_PROMOTION_SCHEMA_WITNESS_KEYS as _DESIGN_PROMOTION_SCHEMA_WITNESS_KEYS,
+)
+from backend.app.storage.design_promotion_schema import (  # noqa: E402
+    DESIGN_PROMOTION_TABLES as _DESIGN_PROMOTION_TABLES,
+)
+from backend.app.storage.design_promotion_schema import (  # noqa: E402
+    design_promotion_schema_witnesses as _design_promotion_schema_witnesses,
+)
 
 WORKER_GENERATION = config.WORKER_GENERATION
 OUTCOME_TELEMETRY_GENERATION = config.OUTCOME_TELEMETRY_GENERATION
+DESIGN_PROMOTION_GENERATION = config.DESIGN_PROMOTION_GENERATION
 _WORKER_STALE_SECONDS = 60
 
 # 缺任何一张=init_db 没跑或库文件指错——列出全部必需表，不挑子集。
@@ -125,6 +139,9 @@ REQUIRED_TABLES = frozenset({
     "task_review_advice", "task_human_decisions",
     # ADR-0036：逐权威产物 cohort + lower-bound flow ledger。
     "artifact_outcome_events",
+    # P2.8：候选比较、选择、发布申请/签发、实际发布与幂等回放
+    # 六张只追加账本。
+    *_DESIGN_PROMOTION_TABLES,
 })
 
 _HTTP_TIMEOUT = 10
@@ -164,6 +181,13 @@ _OUTCOME_SCHEMA_WITNESS_LABELS = {
     "required_indexes": "required outcome indexes",
     "required_triggers": "required outcome provenance/append-only triggers",
     "provenance_integrity": "persisted outcome parent/flow provenance",
+}
+_DESIGN_PROMOTION_SCHEMA_WITNESS_LABELS = {
+    "table_shapes": "six promotion ledger table shapes",
+    "required_indexes": "required promotion indexes",
+    "required_triggers": "required append-only and human-signoff triggers",
+    "row_integrity": "persisted promotion row/hash integrity",
+    "reference_integrity": "persisted promotion reference integrity",
 }
 
 
@@ -328,6 +352,29 @@ def check_outcome_schema(conn: sqlite3.Connection) -> Check:
         "产物流转只追加 schema",
         True,
         "outcome schema witnesses complete (flow evidence only; no adoption claim)",
+    )
+
+
+def check_design_promotion_schema(conn: sqlite3.Connection) -> Check:
+    """P2.8 exact ledger/index/trigger and persisted-integrity witness."""
+    witnesses = _design_promotion_schema_witnesses(conn)
+    missing_labels = [
+        _DESIGN_PROMOTION_SCHEMA_WITNESS_LABELS.get(key, key)
+        for key in _DESIGN_PROMOTION_SCHEMA_WITNESS_KEYS
+        if witnesses.get(key) is not True
+    ]
+    if missing_labels:
+        return Check(
+            "P2.8 设计候选晋升只追加 schema",
+            False,
+            f"schema witness 缺失 {missing_labels}——旧库、迁移未完、"
+            "结构或存量引用被破坏",
+        )
+    return Check(
+        "P2.8 设计候选晋升只追加 schema",
+        True,
+        "design-promotion witnesses complete "
+        "(structure + persisted integrity; no release-readiness claim)",
     )
 
 
@@ -712,6 +759,52 @@ def check_live_outcome_generation(base_url: str) -> Check:
     )
 
 
+def check_live_design_promotion_generation(base_url: str) -> Check:
+    """P2.8 live API generation plus served-DB canonical witnesses."""
+    name = "运行进程 P2.8 设计候选晋升代际"
+    url = f"{base_url}/api/health"
+    try:
+        _, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check(name, False, f"{url} 不可达或非 JSON：{exc}")
+    if not isinstance(payload, dict):
+        return Check(name, False, f"{url} JSON 根节点不是对象，fail-closed")
+    if payload.get("design_promotion_axis") is not True:
+        return Check(
+            name,
+            False,
+            "health 无 design_promotion_axis=true——运行中 API 未接入 P2.8 "
+            "受限晋升边界，fail-closed",
+        )
+    if payload.get("design_promotion_generation") != DESIGN_PROMOTION_GENERATION:
+        return Check(
+            name,
+            False,
+            "health design-promotion API 代际不匹配——运行中 API 未重启到 "
+            f"{DESIGN_PROMOTION_GENERATION!r}，fail-closed",
+        )
+    witnesses = payload.get("design_promotion_schema_witnesses")
+    if not isinstance(witnesses, dict):
+        return Check(name, False, "health 缺 design_promotion_schema_witnesses 结构见证")
+    missing = [
+        key
+        for key in _DESIGN_PROMOTION_SCHEMA_WITNESS_KEYS
+        if witnesses.get(key) is not True
+    ]
+    if missing:
+        return Check(
+            name,
+            False,
+            f"活服务实际连库的 design-promotion schema witness 缺失 {missing}",
+        )
+    return Check(
+        name,
+        True,
+        "活进程 P2.8 API 代际 exact，且服务侧 canonical schema witnesses 全在位",
+    )
+
+
 def check_auth_generation(base_url: str) -> Check:
     """鉴权代际见证：匿名打有数据的端点，401 才是新代际的证词。
 
@@ -780,6 +873,7 @@ def main() -> int:
                 check_review_route_schema,
                 check_judgment_schema,
                 check_outcome_schema,
+                check_design_promotion_schema,
                 check_worker_generation,
             ):
                 try:
@@ -792,9 +886,10 @@ def main() -> int:
     else:
         for name in (
             "核心表齐全", "≥1 活跃账户", "数据分级轴（ADR-0021）",
-            "P2.3 结构化提问 schema", "判断资产只追加 schema",
-            "P2.6 会话生命周期只追加 schema",
-            "P2.5 点名签收路由 schema", "产物流转只追加 schema", "worker 心跳代际",
+            "P2.3 结构化提问 schema", "P2.6 会话生命周期只追加 schema",
+            "P2.5 点名签收路由 schema", "判断资产只追加 schema",
+            "产物流转只追加 schema", "P2.8 设计候选晋升只追加 schema",
+            "worker 心跳代际",
         ):
             checks.append(Check(name, False, "跳过：DB 文件缺失"))
 
@@ -809,6 +904,7 @@ def main() -> int:
     checks.append(check_live_named_review_inbox_generation(base_url))
     checks.append(check_live_judgment_generation(base_url))
     checks.append(check_live_outcome_generation(base_url))
+    checks.append(check_live_design_promotion_generation(base_url))
     checks.append(check_db_identity(base_url, db_path))
     checks.append(check_auth_generation(base_url))
     checks.append(check_frontend_dist())

@@ -1,6 +1,6 @@
 # Fable UI 批八可信迁移契约
 
-> 状态：CONTROLLED MIGRATION COMPLETE
+> 状态：CONTROLLED MIGRATION + P2.1–P2.8 CONTRACT CLOSEOUT COMPLETE
 > 可信基线：`5c086338b998971aa92299d085873de900b39bb3`
 > 候选只作需求与反例来源；本文件不把候选工作树认定为已验收实现。
 
@@ -93,10 +93,10 @@ invalid-input witness，再进入实现。
 | P2.2 视觉信任债（已完成，`6e2baeb`） | 收口 Element Plus 旁路语义色、Agent 类别色暗色对比和残留 reduced-motion 位移 | 不新增信任色；light/dark 对比可测；desktop/narrow/focus/reduced-motion 四态通过应用内浏览器复核 |
 | P2.3 结构化问题（已完成，阶段冻结） | 为普通澄清建立 Question/Answer 合同 | Question 与 task review API、状态机、权限完全分离；exact owner、严格 envelope、稳定消息锚、原子回答、过期/重复/并发回答、schema 漂移均 fail-closed |
 | P2.4 服务端寻址（已完成，`dfcf9ab`） | 在 B2 中实现会话/消息/任务/产物的只读可定位搜索 | 按 [ADR-0034](../adr/ADR-0034-exact-addressing-search.md) 使用单 scope、有界 50k SQLite literal scan 与 snapshot keyset cursor；不依赖 FTS、不迁移 P2.3 schema，title/archive 写语义后移 P2.6 |
-| P2.5 具名审核收件箱 | 把“点名请签”做成真正的收件箱而非全量排序 | 所有 task 创建入口同一契约；候选审核、人签与发布批准仍是三个状态；同名 display name 反例必须拒绝 |
-| P2.6 会话生命周期 | 标题、重命名、归档和历史分组 | owner 轴完成迁移；API/UI/审计事件和并发更新契约均有无效输入测试 |
-| P2.7 Open Design 生产 adapter | 新增独立 `mock=false` daemon tool，真实生成统一候选 | loopback、有界轮询、路径/内容清洗、exact provenance；成功只到 `waiting_review`，不写源码、不自动晋升 |
-| P2.8 候选比较与 promotion | 同 viewport/state 比较现状与真实候选，显式晋升资产 | 不执行不可信 HTML；人工选择与发布批准分开；exact hash、明确目标、可回退、普通 E2E 零金图覆盖 |
+| P2.5 具名审核收件箱（已完成，`5801b7f`） | 把“点名请签”做成真正的收件箱而非全量排序 | 所有 task 创建入口同一 exact username 契约；同名 display name 不参与判权；候选选择、人签与发布批准不合并 |
+| P2.6 会话生命周期（已完成，`ad6e43c`） | 标题、重命名、归档和历史分组 | owner 轴、visible/archived 双清单、审计事件与 strict CAS 已接线；归档不可逆且列表逐项 fail-closed |
+| P2.7 Open Design 生产形态 adapter（受限完成） | 独立 `mock=false` daemon tool 生成固定槽位候选 | loopback、有界轮询、路径/内容清洗、exact provenance 已实现；Agent 仍 disabled/default-off/sensitive，只到 `waiting_review`，不写源码、不自动晋升 |
+| P2.8 候选比较与 promotion（受限完成） | 同 viewport/state 比较现状与候选，显式晋升资产 | TaskDetail、双具名闸、exact hash、intent/recovery 与 deploy witness 已实现；真实 P2.7 sensitive 候选固定 403，生产 target registry 默认空 |
 | P2.9 Windows/离线运维 | 让 Open Design sidecar 达到内网交付标准 | `.sh/.ps1` 成对、固定版本、离线包、health/status/stop、端口冲突和异常退出演练全部通过 |
 
 推荐严格按 P2.1→P2.9 推进；只有 P2.1 与 P2.2 可在互不重叠文件上并行。每阶段单独提交、
@@ -119,7 +119,7 @@ persistence 原型也在终审故障注入后撤出。最新稳定 cut 快照的
 定向证据为：后端 137/137、前端 Node 49/49、M6 14/14、frontend build 通过、双轴终审无
 P0–P2；最终发布门仍以 `bash scripts/verify_all.sh` 的当次退出码为准。
 
-## 8. P2 可信主线进度（2026-07-19）
+## 8. P2 可信主线进度（2026-07-20）
 
 - P2.1 已以独立提交冻结：断连/旧快照/gap/强制 resnapshot 共用真实服务端快照，不补演
   离线期间的伪新鲜 transition。
@@ -139,3 +139,32 @@ P0–P2；最终发布门仍以 `bash scripts/verify_all.sh` 的当次退出码�
   principal/query/filter/limit/snapshot 绑定游标与 `no-store`；只复用现有 token 和页面，
   不新增侧栏。阶段工作树通过后端与 Node 定向回归、production build、P2.4 浏览器
   acceptance，并随后进入全量 `verify_all`；该证据只证明本地实现，不证明 N10/M4。
+- P2.5 已以 `5801b7f` 冻结：请求人可用 exact username 点名审核人；收件箱只显示当前登录
+  username 的权威任务，名册/列表失败不伪装为空，同名 display name 不获得权限。
+- P2.6 已以 `ad6e43c` 冻结：会话标题、重命名、不可逆归档、visible/archived 双清单、审计
+  事件与 strict CAS 共用后端权威事实；409 不重试，部分成功会明确区分“任务已创建”和
+  “会话生命周期更新未完成”。
+- P2.7 已按受限边界完成：独立 `mock=false` loopback daemon adapter、固定槽位、双取文件、
+  静态内容/PNG 扫描、原子候选包和 runtime metadata seal 均已实现。由于角色强制、专用
+  sidecar、run cancel/reconcile、live daemon、Windows/offline 与供应链证明缺失，Agent 保持
+  disabled/default-off，输出恒为 `sensitive + untrusted_generated`。
+- P2.8 已按默认关闭边界完成：后端精确解析 P2.7 manifest，前端提供同矩阵 PNG 并排面；
+  候选选择与 release 批准是两项独立具名事实，发布/回退使用 append-only intent、exact hash、
+  同卷 quarantine 和故障 reconciliation。生产装配没有 synthetic admission，真实 P2.7
+  sensitive 候选必定 403；生产 target/frame registry 默认为空，未来先通过角色/降密门后仍未
+  provision 时，比较创建才会 409。
+
+## 9. 本次收口边界：跳过真实用户反馈，不跳过真实性
+
+用户明确要求本次先不执行真实用户反馈。因此 N10 仍记录为 `n=0 / 未通过`，没有把自动化、
+合成 PNG 或开发者自测包装成真实新手走查。与真实反馈无关的收口均已进入可信主线：
+
+- 人签判断资产化与结构化驳回原因：`80b00cb`、`0222ec1`；
+- 签发后下载/引用 outcome 采集与 provenance 固定：`7618e86`、`4380d62`；
+- review event fixed-point 与 M4/N10 可机械采集表：`e517321`、`b9bd05f`、`d3680cc`、
+  `00876e1`；
+- P2.5–P2.8 的可信交互、Open Design 候选与默认关闭 promotion 合同：见本节上方。
+
+这些实现是“仪器与安全停点已装好”，不是 M4 已发生、真实用户已采用、角色轴已完成或
+Open Design 已在 Windows 内网投产。下一阶段只能从 P2.9/角色与逐文件降密/目标 provisioning
+中选择；N10 若继续跳过，就必须始终保持未通过状态。

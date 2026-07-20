@@ -554,6 +554,34 @@ with sync_playwright() as p:
               json.dumps({"status": done.get("status"), "err": done.get("error_message")}, ensure_ascii=False)[:250])
 
     # ── P2.2：真实 reduced-motion hover/focus 证据 ────────────────────────
+    # P2.5 后 Today 的待签卡只来自登录人的精确签收件箱；团队接力任务没有角色轴，
+    # 不能偷偷把发起人当签收人。另建一个显式点名夹具，为 hover 探针提供诚实载体。
+    review_probe_id = "task_b8_named_review_probe"
+    conn = app.state.conn_factory()
+    try:
+        repos.create_task(
+            conn,
+            task_id=review_probe_id,
+            agent_id="hello_agent",
+            agent_version=HELLO["version"],
+            name="批八点名签收探针",
+            created_by="王工",
+            created_by_username=E2E_USERNAME,
+            review_requested_from_username=E2E_USERNAME,
+            inputs={},
+            metadata={},
+        )
+        conn.execute(
+            "UPDATE tasks SET started_at=? WHERE id=?",
+            ("2026-07-20T00:00:00+00:00", review_probe_id),
+        )
+        conn.execute(
+            "UPDATE tasks SET status='waiting_review' WHERE id=?",
+            (review_probe_id,),
+        )
+    finally:
+        conn.close()
+
     rctx = browser.new_context(viewport={"width": 390, "height": 844})
     login_context(rctx, BASE)
     rctx.add_init_script("localStorage.setItem('flai.simMonitorHub', 'http://127.0.0.1:9')")

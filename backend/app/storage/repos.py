@@ -27,6 +27,7 @@ _EVENT_SCHEMA_PATH = CONTRACTS_DIR / "event.schema.json"
 _event_schema_cache: dict[str, Any] | None = None
 _QUESTION_ID_RE = re.compile(r"^q_[a-f0-9]{32}$")
 _MESSAGE_ID_RE = re.compile(r"^msg_[a-f0-9]{32}$")
+_DECISION_ID_RE = re.compile(r"^decision_[a-f0-9]{32}$")
 _REVIEW_REASON_CODES = frozenset({
     "source_doubt",
     "method_error",
@@ -45,6 +46,10 @@ _ARTIFACT_OUTCOME_EVENT_TYPES = frozenset({
 
 class InvalidReviewError(ValueError):
     """人工终裁请求违反判断账本合同；API 层可安全映射为显式 422。"""
+
+
+class InvalidOpenDesignCandidateError(ValueError):
+    """Open Design candidate provenance cannot be sealed as review truth."""
 
 
 def _now_iso() -> str:
@@ -556,36 +561,31 @@ def set_task_status(
     return get_task(conn, task_id)  # type: ignore[return-value]
 
 
-def apply_human_review(
+def apply_human_review_in_transaction(
     conn: sqlite3.Connection,
     task_id: str,
     *,
+    decision_id: str,
     action: str,
-    reviewer: str,
+    reviewer_display_name: str,
     reviewer_username: str,
     reason_code: str | None,
     comment: str | None,
     paired_advice_id: str | None = None,
 ) -> tuple[dict[str, Any], int]:
-    """人工签发（approve/reject）的原子落库（Codex 增量2审 R4 P1）。
+    """参与调用方事务的人签 primitive；自身绝不 BEGIN/COMMIT/ROLLBACK。
 
-    waiting_review→completed/failed 状态迁移、样本标签回填、signer 事件
-    （review_approved / review_rejected）三者包进**同一 BEGIN IMMEDIATE** 原子提交。
-    此前 review_task 依次调 set_task_status（自带独立 COMMIT）+ set_sample_review_outcome
-    + append_event 三次**分离提交**：crash 窗口可留下 status=completed 却无 signer 事件、
-    样本仍 NULL 的任务——resolver 只看 status=='completed' 即放行下游，「无事件=没发生」
-    铁律在最承重的人签路径失守（R2-3 已给次要的 resolver enqueue/cancel 上原子事件，
-    此处补齐人签路径本身）。诚实边界：签名本体是人工触发、状态机门控且已持久提交的
-    状态迁移**本身**（人确实签了，非未签发放行）；本修补的是审计事件与样本标签同迁移的
-    **原子性**——防审计轨/样本标签在 crash 窗口丢失、与迁移脱节。event 契约校验失败 /
-    非法转换 → 连状态迁移一并 ROLLBACK。
-
-    返回 (最终任务行, 回填样本行数)。非 waiting_review 由 assert_transition 抛
-    IllegalTransitionError（调用方按并发竞态转 409；含另一 review 已并发转出的场景）。
+    调用方须先持有事务，并提供将与更大业务事实绑定的 exact decision_id。状态迁移、
+    人工决定、样本标签、signer event 与 outcome capture 均写入该事务；任何异常由调用方
+    统一回滚。普通 review API 通过下方 ``apply_human_review`` 包装器保持原合同。
     """
+    if not conn.in_transaction:
+        raise InvalidReviewError("事务型人工终裁 primitive 必须由调用方先开启事务")
+    if not isinstance(decision_id, str) or _DECISION_ID_RE.fullmatch(decision_id) is None:
+        raise InvalidReviewError("人工终裁 decision_id 格式非法")
     if action not in {"approve", "reject"}:
         raise InvalidReviewError(f"未知人工终裁动作：{action}")
-    if not isinstance(reviewer, str) or not reviewer.strip():
+    if not isinstance(reviewer_display_name, str) or not reviewer_display_name.strip():
         raise InvalidReviewError("人工终裁显示名必须非空")
     if not isinstance(reviewer_username, str) or not reviewer_username.strip():
         raise InvalidReviewError("人工终裁 username 必须非空")
@@ -600,8 +600,7 @@ def apply_human_review(
 
     approve = action == "approve"
     new_status = "completed" if approve else "failed"
-    decision_id = f"decision_{uuid.uuid4().hex}"
-    conn.execute("BEGIN IMMEDIATE")
+    reviewer = reviewer_display_name
     try:
         task = get_task(conn, task_id)
         if task is None:
@@ -706,11 +705,42 @@ def apply_human_review(
                         source_file_id=output_file_id,
                         review_event_id=review_event["event_id"],
                     )
-        conn.execute("COMMIT")
     except Exception:
-        conn.execute("ROLLBACK")
         raise
     return get_task(conn, task_id), sample_rows  # type: ignore[return-value]
+
+
+def apply_human_review(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    action: str,
+    reviewer: str,
+    reviewer_username: str,
+    reason_code: str | None,
+    comment: str | None,
+    paired_advice_id: str | None = None,
+) -> tuple[dict[str, Any], int]:
+    """普通人工签发入口：为 primitive 建立并拥有唯一事务边界。"""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        result = apply_human_review_in_transaction(
+            conn,
+            task_id,
+            decision_id=f"decision_{uuid.uuid4().hex}",
+            action=action,
+            reviewer_display_name=reviewer,
+            reviewer_username=reviewer_username,
+            reason_code=reason_code,
+            comment=comment,
+            paired_advice_id=paired_advice_id,
+        )
+        conn.execute("COMMIT")
+        return result
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
 
 
 def get_agent_version_manifest(
@@ -1290,6 +1320,228 @@ def set_task_outputs(conn: sqlite3.Connection, task_id: str, output_file_ids: li
         )
         if cursor.rowcount != 1:
             raise IllegalTransitionError("任务状态已并发变化，产物清单未写入")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id)  # type: ignore[return-value]
+
+
+def _open_design_sealed_metadata(
+    task: dict[str, Any],
+    *,
+    review_contract: str,
+    generator_kind: str,
+    candidate_manifest_sha256: str,
+) -> dict[str, Any]:
+    if review_contract != "open-design-candidate/v1":
+        raise InvalidOpenDesignCandidateError("review contract is not exact")
+    if generator_kind != "open_design_daemon":
+        raise InvalidOpenDesignCandidateError("generator kind is not exact")
+    if re.fullmatch(r"[a-f0-9]{64}", candidate_manifest_sha256) is None:
+        raise InvalidOpenDesignCandidateError("candidate manifest sha256 is invalid")
+
+    sealed_keys = {
+        "review_contract",
+        "generator_kind",
+        "candidate_manifest_sha256",
+    }
+    if task.get("agent_id") != "open_design_daemon_candidate_agent":
+        raise InvalidOpenDesignCandidateError(
+            "candidate metadata belongs only to the exact Open Design agent"
+        )
+    if task.get("status") != "running":
+        raise InvalidOpenDesignCandidateError(
+            "candidate metadata can be sealed only while the task is running"
+        )
+    if task.get("data_classification") != "sensitive":
+        raise InvalidOpenDesignCandidateError(
+            "unattested Open Design candidates must remain sensitive"
+        )
+    metadata = task.get("metadata")
+    if not isinstance(metadata, dict):
+        raise InvalidOpenDesignCandidateError("task metadata is not an object")
+    if sealed_keys.intersection(metadata):
+        raise InvalidOpenDesignCandidateError(
+            "Open Design candidate metadata is already sealed"
+        )
+    sealed = dict(metadata)
+    sealed.update(
+        {
+            "review_contract": review_contract,
+            "generator_kind": generator_kind,
+            "candidate_manifest_sha256": candidate_manifest_sha256,
+        }
+    )
+    return sealed
+
+
+def _canonical_metadata_json(metadata: dict[str, Any]) -> str:
+    return json.dumps(
+        metadata,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def seal_open_design_candidate_metadata(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    review_contract: str,
+    generator_kind: str,
+    candidate_manifest_sha256: str,
+) -> dict[str, Any]:
+    """CAS-seal only metadata; retained as a narrow repository test seam.
+
+    Production runtime uses :func:`seal_open_design_candidate_for_review` so
+    metadata, the output manifest, ``waiting_review`` and its audit event are
+    one externally indivisible transaction.
+    """
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        task = get_task(conn, task_id)
+        if task is None:
+            raise TaskNotFoundError(f"任务不存在：{task_id}")
+        sealed = _open_design_sealed_metadata(
+            task,
+            review_contract=review_contract,
+            generator_kind=generator_kind,
+            candidate_manifest_sha256=candidate_manifest_sha256,
+        )
+        cursor = conn.execute(
+            "UPDATE tasks SET metadata_json = ? "
+            "WHERE id = ? AND status = 'running' "
+            "AND agent_id = 'open_design_daemon_candidate_agent'",
+            (
+                _canonical_metadata_json(sealed),
+                task_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise InvalidOpenDesignCandidateError(
+                "Open Design candidate metadata CAS lost its running task"
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id)  # type: ignore[return-value]
+
+
+def seal_open_design_candidate_for_review(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    output_file_ids: list[str],
+    review_contract: str,
+    generator_kind: str,
+    candidate_manifest_sha256: str,
+) -> dict[str, Any]:
+    """Atomically bind a verified P2.7 package and enter ``waiting_review``.
+
+    File bytes and rows are prepared before this transaction.  The externally
+    visible task projection, however, changes all-or-nothing: metadata, exact
+    output ids, status and ``review_requested`` commit together.  A crash or
+    event-contract error can leave only unreferenced prepared output rows, not
+    a half-sealed review task.
+    """
+
+    if (
+        not isinstance(output_file_ids, list)
+        or not output_file_ids
+        or any(not isinstance(file_id, str) or not file_id for file_id in output_file_ids)
+        or len(set(output_file_ids)) != len(output_file_ids)
+    ):
+        raise InvalidOpenDesignCandidateError(
+            "Open Design output file ids must be a nonempty unique list"
+        )
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        task = get_task(conn, task_id)
+        if task is None:
+            raise TaskNotFoundError(f"任务不存在：{task_id}")
+        sealed = _open_design_sealed_metadata(
+            task,
+            review_contract=review_contract,
+            generator_kind=generator_kind,
+            candidate_manifest_sha256=candidate_manifest_sha256,
+        )
+        rows = conn.execute(
+            "SELECT id, task_id, kind, filename, sha256, classification "
+            "FROM files WHERE task_id = ? AND kind = 'output'",
+            (task_id,),
+        ).fetchall()
+        by_id = {str(row["id"]): row for row in rows}
+        if set(by_id) != set(output_file_ids):
+            raise InvalidOpenDesignCandidateError(
+                "Open Design output file set does not match prepared rows"
+            )
+        if any(
+            row["task_id"] != task_id
+            or row["kind"] != "output"
+            or row["classification"] != "sensitive"
+            for row in by_id.values()
+        ):
+            raise InvalidOpenDesignCandidateError(
+                "Open Design output files lost task or sensitive binding"
+            )
+        manifests = [
+            row
+            for row in by_id.values()
+            if row["filename"] == "open_design_daemon_candidates.json"
+            and row["sha256"] == candidate_manifest_sha256
+        ]
+        if len(manifests) != 1:
+            raise InvalidOpenDesignCandidateError(
+                "Open Design output rows do not bind the exact candidate manifest"
+            )
+
+        now = _now_iso()
+        metadata_cursor = conn.execute(
+            "UPDATE tasks SET metadata_json = ? "
+            "WHERE id = ? AND status = 'running' "
+            "AND agent_id = 'open_design_daemon_candidate_agent'",
+            (_canonical_metadata_json(sealed), task_id),
+        )
+        if metadata_cursor.rowcount != 1:
+            raise InvalidOpenDesignCandidateError(
+                "Open Design metadata CAS lost its running task"
+            )
+        outputs_cursor = conn.execute(
+            "UPDATE tasks SET output_file_ids = ?, updated_at = ? "
+            "WHERE id = ? AND status = 'running'",
+            (json.dumps(output_file_ids, ensure_ascii=False), now, task_id),
+        )
+        if outputs_cursor.rowcount != 1:
+            raise InvalidOpenDesignCandidateError(
+                "Open Design output manifest CAS lost its running task"
+            )
+        append_event(
+            conn,
+            task_id=task_id,
+            agent_id="open_design_daemon_candidate_agent",
+            event_type="review_requested",
+            level="info",
+            message="Open Design 敏感候选已封印，等待人工审核；尚未选择或批准发布",
+            payload={
+                "review_contract": review_contract,
+                "generator_kind": generator_kind,
+                "candidate_manifest_sha256": candidate_manifest_sha256,
+                "classification": "sensitive",
+            },
+        )
+        assert_transition("running", "waiting_review")
+        status_cursor = conn.execute(
+            "UPDATE tasks SET status = 'waiting_review' WHERE id = ? AND status = 'running'",
+            (task_id,),
+        )
+        if status_cursor.rowcount != 1:
+            raise InvalidOpenDesignCandidateError(
+                "Open Design review seal lost its running task"
+            )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")

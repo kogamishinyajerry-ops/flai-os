@@ -39,6 +39,13 @@ _JUDGMENT_SHARED_TRIGGER_NAMES = (
     "trg_structured_review_events_decision_witness",
     "trg_structured_review_events_capture_witness",
 )
+# This trigger is owned and byte-witnessed by design_promotion_schema.  The
+# judgment inventory still rejects every unknown extra trigger on its exclusive
+# tables; it ignores only this explicitly delegated cross-ledger guard so a
+# legitimate pre-P2.8 nonempty judgment ledger can be upgraded in place.
+_JUDGMENT_DELEGATED_TRIGGER_NAMES = (
+    "trg_p28_design_decision_requires_selection",
+)
 
 
 @dataclass(frozen=True)
@@ -141,13 +148,20 @@ def _all_trigger_contracts(
     shared_placeholders = ",".join(
         "?" for _ in _JUDGMENT_SHARED_TRIGGER_NAMES
     )
+    delegated_placeholders = ",".join(
+        "?" for _ in _JUDGMENT_DELEGATED_TRIGGER_NAMES
+    )
     rows = conn.execute(
         "SELECT name, tbl_name, sql FROM sqlite_master "
         "WHERE type = 'trigger' AND ("
         f"tbl_name IN ({table_placeholders}) "
         f"OR name IN ({shared_placeholders})"
-        ") ORDER BY name",
-        (*_JUDGMENT_EXCLUSIVE_TRIGGER_TABLES, *_JUDGMENT_SHARED_TRIGGER_NAMES),
+        f") AND name NOT IN ({delegated_placeholders}) ORDER BY name",
+        (
+            *_JUDGMENT_EXCLUSIVE_TRIGGER_TABLES,
+            *_JUDGMENT_SHARED_TRIGGER_NAMES,
+            *_JUDGMENT_DELEGATED_TRIGGER_NAMES,
+        ),
     ).fetchall()
     contracts: list[tuple[str, tuple[object, ...]]] = []
     for name, table, sql in rows:

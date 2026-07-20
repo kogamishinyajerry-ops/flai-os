@@ -144,7 +144,9 @@ with sync_playwright() as p:
     page.locator('input[placeholder="请填写姓名"]').first.fill("批B今日交付验收")
     review_route = page.locator(".el-form-item").filter(has_text="点名签收")
     review_route.locator(".el-select").click()
-    page.locator(".el-select-dropdown__item").filter(has_text="test_engineer").click()
+    # P2.5 点名签收只接受服务端名册中的精确 username；_auth.seed_user 的
+    # 默认验收账户是 e2e_engineer，不能再沿用早期自由文本夹具 test_engineer。
+    page.locator(".el-select-dropdown__item").filter(has_text="e2e_engineer").click()
     page.get_by_role("button", name="提交任务").click()
     page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
     task_id = page.url.rsplit("/", 1)[-1]

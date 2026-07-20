@@ -25,6 +25,7 @@ from . import config
 from .api import agents as agents_api
 from .api import auth as auth_api
 from .api import conversations as conversations_api
+from .api import design_promotions as design_promotions_api
 from .api import feedback as feedback_api
 from .api import files as files_api
 from .api import governance as governance_api
@@ -40,6 +41,8 @@ from .bootstrap import assemble
 from .logging_setup import configure_logging, reset_logging
 from .runtime.conversation import ConversationService
 from .runtime.runtime import AgentRuntime
+from .design_promotion.service import DesignPromotionService
+from .design_promotion.targets import TargetRegistry
 from .storage import repos
 from .storage.db import get_conn, init_db
 from .storage.conversation_lifecycle_schema import (
@@ -69,6 +72,12 @@ from .storage.review_schema import (
 )
 from .storage.review_schema import (
     judgment_schema_witnesses as _judgment_schema_witnesses,
+)
+from .storage.design_promotion_schema import (
+    DESIGN_PROMOTION_SCHEMA_WITNESS_KEYS as _DESIGN_PROMOTION_SCHEMA_WITNESS_KEYS,
+)
+from .storage.design_promotion_schema import (
+    design_promotion_schema_witnesses as _design_promotion_schema_witnesses,
 )
 
 _WORKER_STALE_S = 60  # 与 deploy_selfcheck 同口径：心跳超 60s 视为 worker 已死/挂起
@@ -104,6 +113,9 @@ def create_app(
     uploads_dir: Path | None = None,
     task_runs_dir: Path | None = None,
     frontend_dist_dir: Path | None = None,
+    design_target_root: Path | None = None,
+    design_promotion_runtime_dir: Path | None = None,
+    design_targets: TargetRegistry | None = None,
 ) -> FastAPI:
     agents_dir = Path(agents_dir) if agents_dir is not None else config.AGENTS_DIR
     tools_dir = Path(tools_dir) if tools_dir is not None else config.TOOLS_DIR
@@ -115,6 +127,20 @@ def create_app(
     frontend_dist_dir = (
         Path(frontend_dist_dir) if frontend_dist_dir is not None else config.FRONTEND_DIST_DIR
     )
+    design_target_root = (
+        Path(design_target_root)
+        if design_target_root is not None
+        else config.REPO_ROOT
+    )
+    design_promotion_runtime_dir = (
+        Path(design_promotion_runtime_dir)
+        if design_promotion_runtime_dir is not None
+        else config.DATA_DIR / "design_promotions"
+    )
+    # No production target/frame matrix is guessed.  Deployments must inject a
+    # closed registry after provisioning exact current PNG references; the
+    # default empty registry fails comparison creation explicitly.
+    design_targets = design_targets if design_targets is not None else TargetRegistry()
 
     def conn_factory() -> sqlite3.Connection:
         return get_conn(db_path)
@@ -122,7 +148,12 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         config.assert_local_db_path(db_path)  # P0-B2：DB 必须本地固定盘，否则 fail-closed 拒启
-        for d in (db_path.parent, uploads_dir, task_runs_dir):
+        for d in (
+            db_path.parent,
+            uploads_dir,
+            task_runs_dir,
+            design_promotion_runtime_dir,
+        ):
             d.mkdir(parents=True, exist_ok=True)
         # 进程日志 + 审计留痕（ADR-0023）：log_dir 派生 db_path.parent/logs——
         # 生产落 data/logs，测试落 tmp（per-test 隔离，零 conftest 改动，D3）。
@@ -148,6 +179,38 @@ def create_app(
                 asm.agent_registry, asm.model_gateway, conn_factory, uploads_dir=uploads_dir,
             )
 
+            def apply_design_human_review(
+                conn: sqlite3.Connection, **kwargs: object
+            ) -> dict[str, object]:
+                task, _sample_rows = repos.apply_human_review_in_transaction(
+                    conn,
+                    str(kwargs["task_id"]),
+                    decision_id=str(kwargs["decision_id"]),
+                    action=str(kwargs["action"]),
+                    reviewer_display_name=str(kwargs["reviewer_display_name"]),
+                    reviewer_username=str(kwargs["reviewer_username"]),
+                    reason_code=(
+                        str(kwargs["reason_code"])
+                        if kwargs.get("reason_code") is not None
+                        else None
+                    ),
+                    comment=(
+                        str(kwargs["comment"])
+                        if kwargs.get("comment") is not None
+                        else None
+                    ),
+                )
+                return task
+
+            design_promotion_service = DesignPromotionService(
+                conn_factory=conn_factory,
+                task_runs_dir=task_runs_dir,
+                target_root=design_target_root,
+                promotion_runtime_dir=design_promotion_runtime_dir,
+                targets=design_targets,
+                human_review_applier=apply_design_human_review,
+            )
+
             app.state.agent_registry = asm.agent_registry
             app.state.tool_registry = asm.tool_registry
             app.state.scope_registry = asm.scope_registry
@@ -155,11 +218,14 @@ def create_app(
             app.state.model_gateway = asm.model_gateway
             app.state.runtime = runtime
             app.state.conversation_service = conversation_service
+            app.state.design_promotion_service = design_promotion_service
             app.state.conn_factory = conn_factory
             app.state.db_path = db_path
             app.state.uploads_dir = uploads_dir
             app.state.task_runs_dir = task_runs_dir
             app.state.agents_dir = agents_dir
+            app.state.design_target_root = design_target_root
+            app.state.design_promotion_runtime_dir = design_promotion_runtime_dir
 
             yield
         finally:
@@ -198,6 +264,9 @@ def create_app(
                 review_route_schema_witnesses = _review_route_schema_witnesses(conn)
                 judgment_schema_witnesses = _judgment_schema_witnesses(conn)
                 outcome_schema_witnesses = _outcome_schema_witnesses(conn)
+                design_promotion_schema_witnesses = (
+                    _design_promotion_schema_witnesses(conn)
+                )
             finally:
                 conn.close()
         except sqlite3.Error:
@@ -216,6 +285,9 @@ def create_app(
             }
             outcome_schema_witnesses = {
                 key: False for key in _OUTCOME_SCHEMA_WITNESS_KEYS
+            }
+            design_promotion_schema_witnesses = {
+                key: False for key in _DESIGN_PROMOTION_SCHEMA_WITNESS_KEYS
             }
         return {
             "status": "ok",
@@ -254,6 +326,11 @@ def create_app(
             # pipeline writer 另由 WORKER_GENERATION 心跳咬合，拒绝新 API/DB 配旧 worker。
             "outcome_telemetry_axis": True,
             "outcome_telemetry_generation": config.OUTCOME_TELEMETRY_GENERATION,
+            # P2.8 only witnesses this disabled-sensitive trial generation and
+            # its exact ledgers.  It does not claim a live Open Design daemon,
+            # role enforcement, declassification, or provisioned target matrix.
+            "design_promotion_axis": True,
+            "design_promotion_generation": config.DESIGN_PROMOTION_GENERATION,
             "p23_schema_witnesses": p23_schema_witnesses,
             "conversation_lifecycle_schema_witnesses": (
                 conversation_lifecycle_schema_witnesses
@@ -261,6 +338,9 @@ def create_app(
             "review_route_schema_witnesses": review_route_schema_witnesses,
             "judgment_schema_witnesses": judgment_schema_witnesses,
             "outcome_schema_witnesses": outcome_schema_witnesses,
+            "design_promotion_schema_witnesses": (
+                design_promotion_schema_witnesses
+            ),
             # T2/#5 不可变快照代际标记（Codex R0 审 P1 同款范式）：见证「活着的 API
             # 进程」跑的是 enqueue 冻结快照的代码。分离部署偏斜（DB 已迁移出 eval_snapshots
             # 表、worker 已更新，API 仍是 T1 旧码不冻结）时旧 API 无此位 → 部署自检 FAIL，
@@ -293,6 +373,9 @@ def create_app(
             review_route_schema_witnesses = _review_route_schema_witnesses(conn)
             judgment_schema_witnesses = _judgment_schema_witnesses(conn)
             outcome_schema_witnesses = _outcome_schema_witnesses(conn)
+            design_promotion_schema_witnesses = (
+                _design_promotion_schema_witnesses(conn)
+            )
         finally:
             conn.close()
         p23_schema_ready = all(
@@ -315,6 +398,10 @@ def create_app(
             outcome_schema_witnesses.get(key) is True
             for key in _OUTCOME_SCHEMA_WITNESS_KEYS
         )
+        design_promotion_schema_ready = all(
+            design_promotion_schema_witnesses.get(key) is True
+            for key in _DESIGN_PROMOTION_SCHEMA_WITNESS_KEYS
+        )
         worker_generation_ready = (
             wf.get("generation") == config.WORKER_GENERATION
         )
@@ -328,6 +415,7 @@ def create_app(
             and review_route_schema_ready is True
             and judgment_schema_ready is True
             and outcome_schema_ready is True
+            and design_promotion_schema_ready is True
         )
         return JSONResponse(
             {
@@ -340,6 +428,8 @@ def create_app(
                 "judgment_capture_axis": True,
                 "outcome_telemetry_axis": True,
                 "outcome_telemetry_generation": config.OUTCOME_TELEMETRY_GENERATION,
+                "design_promotion_axis": True,
+                "design_promotion_generation": config.DESIGN_PROMOTION_GENERATION,
                 "p23": {
                     "runtime_generation": True,
                     "schema_ready": p23_schema_ready,
@@ -367,6 +457,12 @@ def create_app(
                     "schema_witnesses": outcome_schema_witnesses,
                     "worker_generation_ready": worker_generation_ready,
                 },
+                "design_promotion": {
+                    "runtime_generation": True,
+                    "generation": config.DESIGN_PROMOTION_GENERATION,
+                    "schema_ready": design_promotion_schema_ready,
+                    "schema_witnesses": design_promotion_schema_witnesses,
+                },
             },
             status_code=200 if ready is True else 503,
         )
@@ -377,6 +473,7 @@ def create_app(
     app.include_router(files_api.router)
     app.include_router(feedback_api.router)
     app.include_router(conversations_api.router)
+    app.include_router(design_promotions_api.router)
     app.include_router(governance_api.router)
     app.include_router(stats_api.router)
     app.include_router(me_api.router)

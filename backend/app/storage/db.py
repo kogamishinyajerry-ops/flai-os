@@ -4368,6 +4368,15 @@ def init_db(db_path: str | Path) -> None:
             from .review_schema import assert_judgment_schema
 
             assert_judgment_schema(conn)
+            # P2.8 promotion ledgers are installed inside the one serialized
+            # startup transaction.  Persisted P2.8 evidence is never repaired
+            # around: the installer first proves the exact closed schema and
+            # historical hashes, or fails startup.  Only six exact, empty
+            # ledgers may reseal indexes/triggers dropped by a parent-table
+            # rebuild, because no P2.8 row can be falsely blessed in that case.
+            from .design_promotion_schema import install_design_promotion_schema
+
+            install_design_promotion_schema(conn)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

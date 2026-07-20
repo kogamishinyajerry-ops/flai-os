@@ -874,6 +874,51 @@ def test_R4_apply_human_review_atomic_happy_path(dbf):
         conn.close()
 
 
+def test_R4_human_review_primitive_participates_in_caller_transaction(dbf):
+    """P2.8：设计候选选择与通用人签必须共享同一 caller-owned 事务。
+
+    primitive 接受调用方预先封印的 decision_id，不得自行 BEGIN/COMMIT；调用方回滚后，
+    decision/event/status 必须一起消失，避免 selection 与通用人签出现半事实。
+    """
+    conn = dbf()
+    try:
+        _mk(conn, "p28-review")
+        _drive(conn, "p28-review", "waiting_review")
+        decision_id = "decision_" + "a" * 32
+        conn.execute("BEGIN IMMEDIATE")
+        task, sample_rows = repos.apply_human_review_in_transaction(
+            conn,
+            "p28-review",
+            decision_id=decision_id,
+            action="approve",
+            reviewer_display_name="候选评审员",
+            reviewer_username="candidate_reviewer",
+            reason_code=None,
+            comment="matrix checked",
+        )
+        assert conn.in_transaction is True
+        assert task["status"] == "completed"
+        assert sample_rows == 0
+        decision = conn.execute(
+            "SELECT id FROM task_human_decisions WHERE task_id=?",
+            ("p28-review",),
+        ).fetchone()
+        assert decision is not None and decision["id"] == decision_id
+        conn.execute("ROLLBACK")
+
+        assert repos.get_task(conn, "p28-review")["status"] == "waiting_review"
+        assert conn.execute(
+            "SELECT count(*) FROM task_human_decisions WHERE task_id=?",
+            ("p28-review",),
+        ).fetchone()[0] == 0
+        assert not any(
+            event["event_type"] == "review_approved"
+            for event in repos.list_events(conn, "p28-review")
+        )
+    finally:
+        conn.close()
+
+
 def test_R4_review_event_failure_rolls_back_transition(dbf, monkeypatch):
     """R4-1 tamper：signer 事件写入失败 → waiting_review→completed 迁移**整体 ROLLBACK**，
     任务留 waiting_review、无 review_approved 事件。证「无事件=没发生」在人签路径原子——

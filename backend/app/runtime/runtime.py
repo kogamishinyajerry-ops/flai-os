@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import logging
 import re
 import sqlite3
@@ -51,6 +52,245 @@ _EVENT_ENUM = frozenset(
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_OPEN_DESIGN_AGENT_ID = "open_design_daemon_candidate_agent"
+_OPEN_DESIGN_OUTPUT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "review_contract",
+        "generator_kind",
+        "candidate_manifest_sha256",
+        "candidate_id",
+        "asset_slot",
+        "classification",
+        "project_id",
+        "run_id",
+        "result_package_sha256",
+        "promotable_asset",
+        "generator_mode",
+        "execution_trust",
+        "production_readiness",
+        "candidate_only",
+        "release_effect",
+        "human_review_required",
+        "mock",
+        "passive_previews",
+        "artifacts",
+    }
+)
+_OPEN_DESIGN_MANIFEST_FIELDS = frozenset(
+    {
+        "schema_version",
+        "review_contract",
+        "generator_kind",
+        "candidate_id",
+        "asset_slot",
+        "classification",
+        "project_id",
+        "run_id",
+        "execution_trust",
+        "production_readiness",
+        "candidate_only",
+        "release_effect",
+        "mock",
+        "design_reference_package_sha256",
+        "result_package_sha256",
+        "file_set_sha256",
+        "promotable_asset",
+        "captured_files",
+        "passive_previews",
+    }
+)
+_OPEN_DESIGN_ASSET_SLOTS = frozenset(
+    {
+        "task_review_summary",
+        "agent_activity_indicator",
+        "workflow_monitor_sidebar",
+    }
+)
+
+
+def _validate_open_design_candidate_result(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    agent: dict[str, Any],
+    package_dir: Path,
+    output_dir: Path,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Verify the P2.7 result and exact manifest bytes before the DB seal.
+
+    The workflow's Python return value is not itself durable evidence.  This
+    seam revalidates the locked output schema, hashes the atomically published
+    manifest file, and cross-binds its provenance.  The returned three-key fact
+    is committed later with output ids, ``waiting_review`` and its audit event
+    by one repository transaction.
+    """
+
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import SchemaError, ValidationError
+
+    def reject(message: str) -> repos.InvalidOpenDesignCandidateError:
+        return repos.InvalidOpenDesignCandidateError(message)
+
+    if not isinstance(result, dict) or set(result) != {"status", "outputs"}:
+        raise reject("Open Design workflow result envelope is not exact")
+    outputs = result.get("outputs")
+    if result.get("status") != "success" or not isinstance(outputs, list) or len(outputs) != 1:
+        raise reject("Open Design workflow must return exactly one successful candidate")
+    output = outputs[0]
+    if not isinstance(output, dict) or set(output) != _OPEN_DESIGN_OUTPUT_FIELDS:
+        raise reject("Open Design candidate output fields are not exact")
+
+    schema_name = (agent.get("output") or {}).get("schema")
+    if schema_name != "output_schema.json":
+        raise reject("Open Design output schema binding is not exact")
+    schema_path = package_dir / schema_name
+    try:
+        package_root = package_dir.resolve(strict=True)
+        if package_dir.is_symlink() or schema_path.is_symlink() or not schema_path.is_file():
+            raise reject("Open Design output schema path is unsafe")
+        schema_path.resolve(strict=True).relative_to(package_root)
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        if not isinstance(schema, dict) or schema.get("additionalProperties") is not False:
+            raise reject("Open Design output schema is not closed")
+        Draft202012Validator.check_schema(schema)
+        Draft202012Validator(schema).validate(output)
+    except repos.InvalidOpenDesignCandidateError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError, SchemaError, ValidationError, ValueError) as exc:
+        raise reject(f"Open Design output schema validation failed: {exc.__class__.__name__}") from exc
+
+    expected_scalars = {
+        "schema_version": "open-design-daemon-candidate-output/v1",
+        "review_contract": "open-design-candidate/v1",
+        "generator_kind": "open_design_daemon",
+        "classification": "sensitive",
+        "generator_mode": "loopback_daemon_trial",
+        "execution_trust": "untrusted_generated",
+        "production_readiness": "trial_not_attested",
+        "candidate_only": True,
+        "release_effect": "none",
+        "human_review_required": True,
+        "mock": False,
+    }
+    if any(output.get(key) != value for key, value in expected_scalars.items()):
+        raise reject("Open Design candidate lost its sensitive trial identity")
+    if output.get("asset_slot") not in _OPEN_DESIGN_ASSET_SLOTS:
+        raise reject("Open Design candidate asset slot is not allowlisted")
+    if re.fullmatch(r"odc-[a-f0-9]{32}", str(output.get("candidate_id", ""))) is None:
+        raise reject("Open Design candidate id is invalid")
+    if re.fullmatch(r"flai-[a-f0-9]{32}", str(output.get("project_id", ""))) is None:
+        raise reject("Open Design project id is invalid")
+    if not isinstance(output.get("run_id"), str) or not output["run_id"]:
+        raise reject("Open Design run id is invalid")
+    for key in ("candidate_manifest_sha256", "result_package_sha256"):
+        if re.fullmatch(r"[a-f0-9]{64}", str(output.get(key, ""))) is None:
+            raise reject(f"Open Design {key} is invalid")
+
+    artifacts = output.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise reject("Open Design artifact manifest is invalid")
+    manifest_artifacts = [
+        item
+        for item in artifacts
+        if isinstance(item, dict) and item.get("role") == "candidate_manifest"
+    ]
+    if len(manifest_artifacts) != 1:
+        raise reject("Open Design result must bind exactly one candidate manifest")
+    artifact = manifest_artifacts[0]
+    if artifact != {
+        "filename": "open_design_daemon_candidates.json",
+        "bundle_relpath": "open_design_daemon_candidates.json",
+        "media_type": "application/json",
+        "role": "candidate_manifest",
+        "sha256": output["candidate_manifest_sha256"],
+        "source_path": None,
+    }:
+        raise reject("Open Design candidate manifest artifact binding is invalid")
+
+    bundle_dir = output_dir / "open_design_daemon_candidate_bundle"
+    manifest_path = bundle_dir / "open_design_daemon_candidates.json"
+    try:
+        output_root = output_dir.resolve(strict=True)
+        if (
+            output_dir.is_symlink()
+            or bundle_dir.is_symlink()
+            or manifest_path.is_symlink()
+            or not bundle_dir.is_dir()
+            or not manifest_path.is_file()
+        ):
+            raise reject("Open Design candidate manifest path is unsafe")
+        manifest_path.resolve(strict=True).relative_to(output_root)
+        manifest_bytes = manifest_path.read_bytes()
+    except repos.InvalidOpenDesignCandidateError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise reject("Open Design candidate manifest could not be opened safely") from exc
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    if manifest_sha256 != output["candidate_manifest_sha256"]:
+        raise reject("Open Design candidate manifest byte sha256 mismatch")
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise reject("Open Design candidate manifest is not canonical JSON") from exc
+    if not isinstance(manifest, dict) or set(manifest) != _OPEN_DESIGN_MANIFEST_FIELDS:
+        raise reject("Open Design candidate manifest fields are not exact")
+
+    manifest_scalars = {
+        "schema_version": "open-design-daemon-candidate-manifest/v1",
+        "review_contract": "open-design-candidate/v1",
+        "generator_kind": "open_design_daemon",
+        "classification": "sensitive",
+        "execution_trust": "untrusted_generated",
+        "production_readiness": "trial_not_attested",
+        "candidate_only": True,
+        "release_effect": "none",
+        "mock": False,
+    }
+    if any(manifest.get(key) != value for key, value in manifest_scalars.items()):
+        raise reject("Open Design manifest lost its sensitive trial identity")
+    for key in (
+        "candidate_id",
+        "asset_slot",
+        "project_id",
+        "run_id",
+        "result_package_sha256",
+        "promotable_asset",
+        "passive_previews",
+    ):
+        if manifest.get(key) != output.get(key):
+            raise reject(f"Open Design manifest/output {key} binding mismatch")
+    for key in ("design_reference_package_sha256", "file_set_sha256"):
+        if re.fullmatch(r"[a-f0-9]{64}", str(manifest.get(key, ""))) is None:
+            raise reject(f"Open Design manifest {key} is invalid")
+
+    promotable = manifest.get("promotable_asset")
+    if not isinstance(promotable, dict) or set(promotable) != {
+        "slot_id",
+        "source_path",
+        "bundle_relpath",
+        "media_type",
+        "size_bytes",
+        "sha256",
+    }:
+        raise reject("Open Design promotable asset binding is not exact")
+    if (
+        promotable.get("slot_id") != "default_desktop_light"
+        or promotable.get("media_type") != "image/png"
+        or type(promotable.get("size_bytes")) is not int
+        or promotable["size_bytes"] <= 0
+        or re.fullmatch(r"[a-f0-9]{64}", str(promotable.get("sha256", ""))) is None
+    ):
+        raise reject("Open Design promotable asset is not the fixed passive PNG")
+
+    return {
+        "review_contract": output["review_contract"],
+        "generator_kind": output["generator_kind"],
+        "candidate_manifest_sha256": manifest_sha256,
+    }
 
 
 class _WorkflowEventLogger:
@@ -659,12 +899,89 @@ class AgentRuntime:
             self._record_failure_sample(conn, task, agent, error_message, data_classification)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
+        # P2.7 Open Design is a privileged, disabled-by-default trial whose
+        # workflow return cannot become review truth by assertion alone.  Hash
+        # the atomically published manifest and CAS the minimum routing facts
+        # while the task is still running.  Any mismatch ends as a real failed
+        # task; no malformed candidate may reach waiting_review.
+        open_design_seal: dict[str, str] | None = None
+        if agent_id == _OPEN_DESIGN_AGENT_ID:
+            try:
+                open_design_seal = _validate_open_design_candidate_result(
+                    conn,
+                    task_id=task_id,
+                    agent=agent,
+                    package_dir=pkg_dir,
+                    output_dir=output_dir,
+                    result=result,
+                )
+            except Exception as exc:  # noqa: BLE001 - fail-closed provenance seam
+                error_message = (
+                    "Open Design 候选封印失败："
+                    f"{exc.__class__.__name__}: {exc}"
+                )
+                repos.set_task_status(
+                    conn, task_id, "failed", error_message=error_message
+                )
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="task_failed",
+                    level="error",
+                    message=error_message,
+                )
+                self._record_failure_sample(
+                    conn, task, agent, error_message, data_classification
+                )
+                return {
+                    "status": "failed",
+                    "task": repos.get_task(conn, task_id),
+                }
+
         # 3) 成功：注册产物 + 样本沉淀（产物/样本继承任务级派生分级=文件∨知识∨工具
         # 三轴，ADR-0021 D3 + Codex R0-P1 + ADR-0024/0025）。复用执行期已算并落库的
         # data_classification（不重算，保产物/样本与落库任务级分级一致）。
         output_file_ids = self._register_outputs(
             conn, task_id, output_dir, classification=data_classification
         )
+        if open_design_seal is not None:
+            try:
+                sealed_task = repos.seal_open_design_candidate_for_review(
+                    conn,
+                    task_id,
+                    output_file_ids=output_file_ids,
+                    review_contract=open_design_seal["review_contract"],
+                    generator_kind=open_design_seal["generator_kind"],
+                    candidate_manifest_sha256=open_design_seal[
+                        "candidate_manifest_sha256"
+                    ],
+                )
+            except Exception as exc:  # noqa: BLE001 - atomic seal must fail closed
+                error_message = (
+                    "Open Design 审阅包原子封印失败："
+                    f"{exc.__class__.__name__}: {exc}"
+                )
+                repos.set_task_status(
+                    conn, task_id, "failed", error_message=error_message
+                )
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="task_failed",
+                    level="error",
+                    message=error_message,
+                )
+                self._record_failure_sample(
+                    conn, task, agent, error_message, data_classification
+                )
+                return {
+                    "status": "failed",
+                    "task": repos.get_task(conn, task_id),
+                }
+            return {"status": "waiting_review", "task": sealed_task}
+
         repos.set_task_outputs(conn, task_id, output_file_ids)
 
         # sim_run_ref 回填（P3.2 接缝，spec §4.3）：workflow 成功输出

@@ -18,6 +18,7 @@ from conftest import TEST_DISPLAY_NAME, login, seed_and_login, seed_user
 from backend.app import config
 from backend.app.jobs.runner import JobRunner
 from backend.app.main import create_app
+from backend.app.storage import repos
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -573,6 +574,52 @@ def test_review_approve_forbids_rejection_reason(review_app_env) -> None:
 
     assert response.status_code == 422
     assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
+
+
+def test_generic_review_redirects_open_design_candidate_to_selection_endpoint(
+    review_app_env,
+) -> None:
+    """P2.8 candidate selection is the only human-decision entry for this task kind."""
+    client, app = review_app_env
+    task_id = "task_open_design_generic_guard"
+    conn = app.state.conn_factory()
+    try:
+        repos.create_task(
+            conn,
+            task_id=task_id,
+            agent_id="open_design_daemon_candidate_agent",
+            agent_version="0.1.0",
+            name="Open Design candidate",
+            created_by="Reviewer",
+            created_by_username="test_engineer",
+            inputs={},
+            input_file_ids=[],
+            metadata={
+                "review_contract": "open-design-candidate/v1",
+                "generator_kind": "open_design_daemon",
+                "candidate_manifest_sha256": "a" * 64,
+            },
+        )
+        for status in ("queued", "validating", "running", "waiting_review"):
+            repos.set_task_status(conn, task_id, status)
+    finally:
+        conn.close()
+
+    response = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "approve"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "use_design_selection_endpoint",
+        "message": "Open Design 候选必须通过并排比较与具名候选选择完成签收",
+    }
+    conn = app.state.conn_factory()
+    try:
+        assert repos.get_task(conn, task_id)["status"] == "waiting_review"
+        assert repos.get_human_decision(conn, task_id) is None
+    finally:
+        conn.close()
 
 
 @pytest.mark.parametrize("comment", [None, "", "   "])

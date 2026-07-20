@@ -12,7 +12,7 @@
   ④'磁盘铁证：tmp 包 agent.yaml 的 maturity 行真实变 L1
   ④''晋升区随 L1 消失（transition_supported 只认 L0→L1）
   ⑤晋升记录 L0→L1 可见
-  ⑥用户任务→waiting_review→状态坞 peek 批准放行
+  ⑥用户任务显式点名当前 username→waiting_review→状态坞 peek 批准放行
   ⑦固化入口出现→固化→case_file 回显
   ⑦'磁盘铁证：case_*_from_sample.json 落盘且 curation=draft
   ⑧固化后再跑评测：draft 不计数仍 3/3，待策展一节可见
@@ -233,6 +233,11 @@ with sync_playwright() as p:
     expect(page.locator(".agent-preview")).to_be_visible(timeout=5000)
     # 创建人=登录身份（ADR-0019），无输入框
     page.locator('input[placeholder="请填写姓名"]').first.fill("治理链样本")
+    # P2.5 后个人收件箱只认 exact username；普通 waiting_review 不得再被
+    # 状态中心伪装成“点名请你签”。本治理链需要从状态坞签发，故夹具明确点名。
+    review_route = page.locator(".el-form-item").filter(has_text="点名签收")
+    review_route.locator(".el-select").click()
+    page.locator(".el-select-dropdown__item").filter(has_text="e2e_engineer").click()
     page.get_by_role("button", name="提交任务").click()
     page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
     task_id = page.url.rsplit("/", 1)[-1]
