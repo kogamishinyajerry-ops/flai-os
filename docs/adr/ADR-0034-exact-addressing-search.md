@@ -1,6 +1,6 @@
 # ADR-0034：精确寻址与只读服务端搜索
 
-- 状态：Accepted（实现与阶段验收进行中）
+- 状态：Accepted（实现与阶段验收完成）
 - 日期：2026-07-19
 - 范围：P2.4
 
@@ -101,7 +101,7 @@ P2.4 复用现有 QuickSwitcher、Guide 与 TaskDetail，只使用既有暖纸�
 
 ## 验收状态
 
-合同已冻结，代码、契约测试、前端定位与部署自检正在本阶段收口。阶段完成前必须至少证明：
+合同、代码、契约测试、前端定位与部署自检已在 `dfcf9ab` 完成本阶段收口，并证明：
 
 - 同 display name 的不同 username、foreign exact id 与 legacy NULL 均不能跨用户命中；
 - task 输入/错误/正文从匹配与响应两侧都不可见，artifact 只认 exact output membership；
@@ -110,8 +110,8 @@ P2.4 复用现有 QuickSwitcher、Guide 与 TaskDetail，只使用既有暖纸�
 - QuickSwitcher 不出现 debounce 假空态，消息/产物深链能精确落点，失效锚显式报错；
 - 搜索为只读、`no-store`，且 P2.3 schema witness 保持不变。
 
-本 ADR 不宣称当前已通过完整浏览器验收或 `verify_all`；这些证据必须以 P2.4 最终工作树的
-真实命令退出码另行记录。
+P2.4 浏览器 acceptance 与其后全量 `verify_all` 已在对应工作树真实退出为 0；该证据不
+替代 N10 真人观察、M4 信号包或目标机 Gate 1。
 
 ## 后果
 

@@ -92,7 +92,7 @@ invalid-input witness，再进入实现。
 | P2.1 断连诚实度（已完成，`b79592e`） | 借鉴 JerryAgent，把 `connection`、`lastSuccessAt`、旧快照提示与 task exact cursor 投影到现有阅读轴 | 旧 task/event 响应不改；additive live-snapshot 提供 gap 检测；冷断连零假数据、暖断连标旧、重连 sequence-zero 覆盖，并有 Node + contract + E2E witness |
 | P2.2 视觉信任债（已完成，`6e2baeb`） | 收口 Element Plus 旁路语义色、Agent 类别色暗色对比和残留 reduced-motion 位移 | 不新增信任色；light/dark 对比可测；desktop/narrow/focus/reduced-motion 四态通过应用内浏览器复核 |
 | P2.3 结构化问题（已完成，阶段冻结） | 为普通澄清建立 Question/Answer 合同 | Question 与 task review API、状态机、权限完全分离；exact owner、严格 envelope、稳定消息锚、原子回答、过期/重复/并发回答、schema 漂移均 fail-closed |
-| P2.4 服务端寻址（进行中） | 在 B2 中实现会话/消息/任务/产物的只读可定位搜索 | 按 [ADR-0034](../adr/ADR-0034-exact-addressing-search.md) 使用单 scope、有界 50k SQLite literal scan 与 snapshot keyset cursor；不依赖 FTS、不迁移 P2.3 schema，title/archive 写语义后移 P2.6 |
+| P2.4 服务端寻址（已完成，`dfcf9ab`） | 在 B2 中实现会话/消息/任务/产物的只读可定位搜索 | 按 [ADR-0034](../adr/ADR-0034-exact-addressing-search.md) 使用单 scope、有界 50k SQLite literal scan 与 snapshot keyset cursor；不依赖 FTS、不迁移 P2.3 schema，title/archive 写语义后移 P2.6 |
 | P2.5 具名审核收件箱 | 把“点名请签”做成真正的收件箱而非全量排序 | 所有 task 创建入口同一契约；候选审核、人签与发布批准仍是三个状态；同名 display name 反例必须拒绝 |
 | P2.6 会话生命周期 | 标题、重命名、归档和历史分组 | owner 轴完成迁移；API/UI/审计事件和并发更新契约均有无效输入测试 |
 | P2.7 Open Design 生产 adapter | 新增独立 `mock=false` daemon tool，真实生成统一候选 | loopback、有界轮询、路径/内容清洗、exact provenance；成功只到 `waiting_review`，不写源码、不自动晋升 |
@@ -132,9 +132,10 @@ P0–P2；最终发布门仍以 `bash scripts/verify_all.sh` 的当次退出码�
   1480/1480、Node 102/102、20/20 条浏览器 E2E 脚本全部通过。M2 精确 selector
   曾连续 10 次 10/10；加入“侧栏已有完成统计、当前任务仍 queued”的真实负例及有限正数
   timeout 审查后，又连续 3 次 11/11，最终全量门为 11/11。
-- P2.4 已冻结 ADR-0034 并开始实现：现有 QuickSwitcher 分别请求
+- P2.4 已实现并以 `dfcf9ab` 冻结：现有 QuickSwitcher 分别请求
   `conversation/message/task/artifact` 单 scope；会话/消息只认 exact username，任务只搜
   `origin='user'` 的认证全局元数据且永不搜索输入/错误/正文，产物只认父任务
   `output_file_ids` 精确成员。v1 采用无迁移、无 FTS 依赖的 50k 有界 literal scan、
   principal/query/filter/limit/snapshot 绑定游标与 `no-store`；只复用现有 token 和页面，
-  不新增侧栏。代码与阶段验收仍在进行中，尚不宣称 P2.4 浏览器或全量门通过。
+  不新增侧栏。阶段工作树通过后端与 Node 定向回归、production build、P2.4 浏览器
+  acceptance，并随后进入全量 `verify_all`；该证据只证明本地实现，不证明 N10/M4。

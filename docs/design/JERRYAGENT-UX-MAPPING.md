@@ -1,6 +1,6 @@
 # JerryAgent → FLAi-OS 可信交互映射
 
-> 状态：P2.1 已落地断连投影与 task live-snapshot 连续游标；P2.3 结构化问题已完成阶段收口；P2.4 只读寻址正在实现；composer 持久化仍延期。
+> 状态：P2.1 已落地断连投影与 task live-snapshot 连续游标；P2.3 结构化问题与 P2.4 只读寻址均已完成阶段收口；composer 持久化仍延期。
 > 来源基线：`/Users/Zhuanz/projects/meta/jerryagent`，只读审计 HEAD
 > `3c1adcb0cee0726993d21f1d6ffb729b241d39dc`；该工作树本身有用户未提交改动，
 > 因而只把可在源码与测试中复核的行为当参考，不搬运整文件。
@@ -28,7 +28,7 @@ JerryAgent 的高价值成果有四层：
 | 严格 sequence + gap recovery | 旧 event API 仍只有 UUID；新增 task live-snapshot 以每任务序数 + exact event anchor 提供 additive cursor | gap/重复/跨 task/错锚整批拒绝并强制 sequence-zero resnapshot；旧 API 不改形 |
 | 断连显式 stale | channel 投影 connection/lastSuccessAt/stale/resyncing；阅读面共用 amber 提示 | 冷失败零假数据；暖失败保旧快照并标旧；恢复先完整重取 |
 | 问题与批准分离 | Guide 只从完整显式 envelope 创建普通 Question；Task `waiting_review` 才有 `/review` | Question/Answer 有独立合同、稳定消息锚与 exact username；批准仍只留在具名审核面 |
-| 稳定事实可寻址 | P2.3 已提供 exact owner 与公开 `message_id`，原 QuickSwitcher 仍只搜客户端窗口 | P2.4 用单 scope 服务端只读搜索补齐会话/消息/任务/产物，并以稳定 id 深链；不新增 dashboard 或侧栏 |
+| 稳定事实可寻址 | P2.3 已提供 exact owner 与公开 `message_id` | P2.4 已用单 scope 服务端只读搜索补齐会话/消息/任务/产物，并以稳定 id 深链；不新增 dashboard 或侧栏 |
 | 会话草稿隔离 | Guide 仍是内存草稿 | 本轮只冻结合同；sessionStorage 实现经故障注入后延期，不宣称已采用 |
 | 一条阅读轴与渐进披露 | Guide 主轴、今日任务台、StatusDock、内联产物/签发已存在 | 继续收敛，不再新造平行 dashboard 或第二决定源 |
 
@@ -92,7 +92,7 @@ P2.3 没有从问号或 `recommendation=null` 猜控件，而是建立独立的
 8. 启动、health、readyz 与部署自检共享精确五键 schema witness；未知列、约束、索引、
    trigger 或历史毒数据全部 fail-closed，不能以局部 runtime 标志获得假绿。
 
-## 6. P2.4 正在采用的只读寻址切片
+## 6. P2.4 已采用的只读寻址切片
 
 JerryAgent 的可取之处仍是“稳定事实先于 UI 猜测”，不是复制其 Desktop 外壳。P2.4 按
 [ADR-0034](../adr/ADR-0034-exact-addressing-search.md) 建立以下边界：
@@ -110,7 +110,8 @@ JerryAgent 的可取之处仍是“稳定事实先于 UI 猜测”，不是复�
 5. 只复用现有 QuickSwitcher、Guide、TaskDetail 与暖纸/clay/amber/red token，不增加新
    侧栏、常驻 workflow 墙或信任色。具名签收留在 P2.5；标题/重命名/归档写语义留在 P2.6。
 
-该切片代码与验收仍在收口中；这里不宣称浏览器 acceptance 或全量门已经通过。
+该切片已在 `dfcf9ab` 完成代码、契约、前端深链与浏览器 acceptance，并进入后续全量
+`verify_all` 基线。此处只声明本地实现已验收，不把它外推为真人可用性或 M4 事实。
 
 ## 7. 机械验收
 
