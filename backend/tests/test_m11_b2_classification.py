@@ -586,10 +586,53 @@ def test_worker_heartbeat_upsert_and_generation(governance_env: GovernanceEnv) -
         second = repos.get_worker_heartbeat(conn)
         assert second["generation"] == WORKER_GENERATION, "beat 必须覆写代际字符串"
         assert second["started_at"] == first["started_at"], "started_at 首次值必须保留"
+        assert second["execution_bindings"] == [
+            {
+                "adapter": "native_python",
+                "contract_version": "native.workflow.v1",
+            }
+        ]
         n = conn.execute("SELECT COUNT(*) FROM worker_heartbeats").fetchone()[0]
         assert n == 1, "固定 worker_id 单行 upsert，不得增长"
     finally:
         conn.close()
+
+
+def test_job_runner_heartbeat_uses_the_actual_router_binding_set(
+    governance_env: GovernanceEnv,
+) -> None:
+    from backend.app.jobs.runner import JobRunner
+
+    class _Router:
+        bindings = frozenset(
+            {
+                ("native_python", "native.workflow.v1"),
+                ("jerryagent_sidecar", "flai.agent-layer.v1"),
+            }
+        )
+
+    class _Runtime:
+        execution_router = _Router()
+
+    runner = JobRunner(_Runtime(), governance_env.app.state.conn_factory)
+    runner.beat()
+
+    conn = governance_env.app.state.conn_factory()
+    try:
+        heartbeat = repos.get_worker_heartbeat(conn)
+    finally:
+        conn.close()
+    assert heartbeat is not None
+    assert heartbeat["execution_bindings"] == [
+        {
+            "adapter": "jerryagent_sidecar",
+            "contract_version": "flai.agent-layer.v1",
+        },
+        {
+            "adapter": "native_python",
+            "contract_version": "native.workflow.v1",
+        },
+    ]
 
 
 def test_list_files_by_ids_survives_huge_id_list(governance_env: GovernanceEnv) -> None:

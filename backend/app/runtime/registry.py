@@ -39,6 +39,15 @@ _REQUIRED_FILES: tuple[str, ...] = (
 )
 _REQUIRED_DIRS: tuple[str, ...] = ("eval_cases",)
 
+_DEFAULT_EXECUTION = {
+    "adapter": "native_python",
+    "contract_version": "native.workflow.v1",
+}
+_EXECUTION_CONTRACT_BY_ADAPTER = {
+    "native_python": "native.workflow.v1",
+    "jerryagent_sidecar": "flai.agent-layer.v1",
+}
+
 
 def referenced_package_files(entry: Path, agent: dict[str, Any]) -> list[str]:
     """Return package files that the manifest or workflow loads at runtime.
@@ -191,7 +200,27 @@ class AgentRegistry:
         try:
             validate(data, self._schema)
         except ValidationError as exc:
-            raise InvalidPackageError(f"{entry} agent.yaml 未通过 agent.schema.json 校验：{exc.message}") from exc
+            error_path = ".".join(str(part) for part in exc.absolute_path)
+            error_detail = f"{error_path}: {exc.message}" if error_path else exc.message
+            raise InvalidPackageError(
+                f"{entry} agent.yaml 未通过 agent.schema.json 校验：{error_detail}"
+            ) from exc
+
+        # Agent execution 是创建任务时冻结的选择。旧包整块缺省只能解释成
+        # native v1；显式声明则 adapter/contract 必须精确配对，绝不允许运行期
+        # 猜测或从 sidecar 静默回退本地 Python。
+        execution = data.get("execution")
+        if execution is None:
+            execution = dict(_DEFAULT_EXECUTION)
+            data["execution"] = execution
+        adapter = execution["adapter"]
+        contract_version = execution["contract_version"]
+        expected_contract = _EXECUTION_CONTRACT_BY_ADAPTER[adapter]
+        if contract_version != expected_contract:
+            raise InvalidPackageError(
+                f"{entry} execution.adapter={adapter!r} 只允许 "
+                f"execution.contract_version={expected_contract!r}，实际为 {contract_version!r}"
+            )
 
         missing = [f for f in _REQUIRED_FILES if not (entry / f).is_file()]
         missing += [f"{d}/" for d in _REQUIRED_DIRS if not (entry / d).is_dir()]
@@ -289,6 +318,43 @@ class AgentRegistry:
         # 故在 Registry 扫描侧 Python 补，fail-closed 拒载。
         workflow = data.get("workflow", {}) or {}
         model = data.get("model", {}) or {}
+        logging = data.get("logging", {}) or {}
+        if adapter == "jerryagent_sidecar":
+            if workflow.get("mode") != "job":
+                raise InvalidPackageError(
+                    f"{entry} jerryagent_sidecar 要求 workflow.mode=job"
+                )
+            if workflow.get("requires_human_review") is not True:
+                raise InvalidPackageError(
+                    f"{entry} jerryagent_sidecar 要求 workflow.requires_human_review=True"
+                )
+            if model.get("profile") in (None, "none"):
+                raise InvalidPackageError(
+                    f"{entry} jerryagent_sidecar 要求 model.profile 非 none"
+                )
+            if data.get("tools") != []:
+                raise InvalidPackageError(
+                    f"{entry} jerryagent_sidecar 首版要求 tools=[]"
+                )
+            if (data.get("knowledge") or {}).get("enabled") is True:
+                raise InvalidPackageError(
+                    f"{entry} jerryagent_sidecar 首版要求 knowledge.enabled 非 True"
+                )
+            if status not in ("draft", "trial", "disabled"):
+                raise InvalidPackageError(
+                    f"{entry} jerryagent_sidecar 首版 status 只允许 draft/trial/disabled，"
+                    f"实际为 {status!r}"
+                )
+            if logging.get("save_model_calls") is not False:
+                raise InvalidPackageError(
+                    f"{entry} jerryagent_sidecar 首版要求 logging.save_model_calls=False："
+                    "侧车调用尚未进入 FLAi 逐调用模型账本"
+                )
+            if logging.get("save_tool_logs") is not False:
+                raise InvalidPackageError(
+                    f"{entry} jerryagent_sidecar 首版要求 logging.save_tool_logs=False："
+                    "侧车调用尚未进入 FLAi 逐调用工具账本"
+                )
         if (
             workflow.get("mode") == "job"
             and model.get("profile") not in (None, "none")

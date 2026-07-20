@@ -75,7 +75,9 @@ def test_main_selfcheck_and_report_share_canonical_outcome_contract() -> None:
     assert usage_report._outcome_schema_witnesses is outcome_schema.outcome_schema_witnesses
     assert set(deploy_selfcheck._OUTCOME_SCHEMA_WITNESS_LABELS) == _WITNESS_KEYS
     assert "artifact_outcome_events" in deploy_selfcheck.REQUIRED_TABLES
-    assert config.WORKER_GENERATION.endswith("+adr36-outcome-flow")
+    assert config.WORKER_GENERATION.endswith(
+        "+adr36-outcome-flow+jerryagent-layer-v1"
+    )
 
 
 def test_outcome_probe_contract_loads_with_stdlib_only() -> None:

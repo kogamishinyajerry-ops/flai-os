@@ -115,6 +115,36 @@
         }
       }
     },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter", "contract_version"],
+      "description": "Agent execution 绑定。整块缺省严格解释为 native_python/native.workflow.v1；一旦声明，两字段必须同时在场并精确配对，Registry 还会强制 sidecar 安全不变量。",
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "enum": ["native_python", "jerryagent_sidecar"]
+        },
+        "contract_version": {
+          "type": "string",
+          "enum": ["native.workflow.v1", "flai.agent-layer.v1"]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "adapter": { "const": "native_python" },
+            "contract_version": { "const": "native.workflow.v1" }
+          }
+        },
+        {
+          "properties": {
+            "adapter": { "const": "jerryagent_sidecar" },
+            "contract_version": { "const": "flai.agent-layer.v1" }
+          }
+        }
+      ]
+    },
     "permissions": {
       "type": "object",
       "additionalProperties": false,

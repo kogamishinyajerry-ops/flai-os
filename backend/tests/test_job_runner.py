@@ -422,6 +422,9 @@ def test_worker_entrypoint_recovers_under_lock_before_polling(tmp_path, monkeypa
         def run_forever(self) -> None:
             order.append("poll")
 
+        def close(self) -> None:
+            order.append("close")
+
     def runner_factory():
         order.append("assemble")
         return _StubRunner()
@@ -435,4 +438,4 @@ def test_worker_entrypoint_recovers_under_lock_before_polling(tmp_path, monkeypa
 
     monkeypatch.setattr(runner_module, "recover_interrupted_tasks", fake_recover)
     assert run_worker_forever(runner_factory, lambda: None, lock_path) == 0
-    assert order == ["assemble", "recover", "poll"]
+    assert order == ["assemble", "recover", "poll", "close"]

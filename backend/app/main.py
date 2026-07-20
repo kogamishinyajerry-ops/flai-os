@@ -40,11 +40,18 @@ from .auth.service import LoginThrottle
 from .bootstrap import assemble
 from .logging_setup import configure_logging, reset_logging
 from .runtime.conversation import ConversationService
+from .runtime.jerryagent_adapter import build_agent_execution_router
 from .runtime.runtime import AgentRuntime
 from .design_promotion.service import DesignPromotionService
 from .design_promotion.targets import TargetRegistry
 from .storage import repos
 from .storage.db import get_conn, init_db
+from .storage.execution_binding_schema import (
+    EXECUTION_BINDING_SCHEMA_WITNESS_KEYS as _EXECUTION_BINDING_SCHEMA_WITNESS_KEYS,
+)
+from .storage.execution_binding_schema import (
+    execution_binding_schema_witnesses as _execution_binding_schema_witnesses,
+)
 from .storage.conversation_lifecycle_schema import (
     CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_KEYS as _CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_KEYS,
 )
@@ -88,19 +95,34 @@ def _worker_freshness(conn: sqlite3.Connection) -> dict[str, object]:
     naive/畸形时间戳一律 fail-closed 判不新鲜（宁误报死，不假报活）。"""
     hb = repos.get_worker_heartbeat(conn)
     if hb is None:
-        return {"present": False, "fresh": False, "age_s": None, "generation": None}
+        return {
+            "present": False,
+            "fresh": False,
+            "age_s": None,
+            "generation": None,
+            "execution_bindings": None,
+        }
     generation = hb.get("generation")
+    execution_bindings = hb.get("execution_bindings")
     try:
         beat_time = datetime.fromisoformat(str(hb.get("last_beat_at")))
     except (ValueError, TypeError):
         return {"present": True, "fresh": False, "age_s": None,
-                "generation": generation, "reason": "timestamp_malformed"}
+                "generation": generation, "execution_bindings": execution_bindings,
+                "reason": "timestamp_malformed"}
     if beat_time.tzinfo is None:
         return {"present": True, "fresh": False, "age_s": None,
-                "generation": generation, "reason": "naive_timestamp"}
+                "generation": generation, "execution_bindings": execution_bindings,
+                "reason": "naive_timestamp"}
     age = (datetime.now(timezone.utc) - beat_time).total_seconds()
     fresh = -5.0 <= age <= float(_WORKER_STALE_S)
-    return {"present": True, "fresh": fresh, "age_s": round(age, 1), "generation": generation}
+    return {
+        "present": True,
+        "fresh": fresh,
+        "age_s": round(age, 1),
+        "generation": generation,
+        "execution_bindings": execution_bindings,
+    }
 
 
 def create_app(
@@ -170,10 +192,12 @@ def create_app(
                 knowledge_dir=knowledge_dir,
                 conn_factory=conn_factory,
             )
+            execution_router = build_agent_execution_router()
             runtime = AgentRuntime(
                 asm.agent_registry, asm.tool_registry, asm.model_gateway, conn_factory,
                 task_runs_dir, knowledge_service=asm.knowledge_service, uploads_dir=uploads_dir,
                 scope_registry=asm.scope_registry,  # ADR-0021 知识轴派生分级用
+                execution_router=execution_router,
             )
             conversation_service = ConversationService(
                 asm.agent_registry, asm.model_gateway, conn_factory, uploads_dir=uploads_dir,
@@ -217,6 +241,7 @@ def create_app(
             app.state.knowledge_service = asm.knowledge_service
             app.state.model_gateway = asm.model_gateway
             app.state.runtime = runtime
+            app.state.execution_router = execution_router
             app.state.conversation_service = conversation_service
             app.state.design_promotion_service = design_promotion_service
             app.state.conn_factory = conn_factory
@@ -229,6 +254,9 @@ def create_app(
 
             yield
         finally:
+            runtime = getattr(app.state, "runtime", None)
+            if runtime is not None:
+                runtime.close()
             # 退出复位（ADR-0023 D5）：移除本 app 所挂 handler + 恢复 logger 原态，
             # 杜绝跨测试泄漏（测试 with TestClient 退出即清）；生产仅进程退出时触发。
             reset_logging()
@@ -258,6 +286,9 @@ def create_app(
             conn = conn_factory()
             try:
                 p23_schema_witnesses = _p23_schema_witnesses(conn)
+                execution_binding_schema_witnesses = (
+                    _execution_binding_schema_witnesses(conn)
+                )
                 conversation_lifecycle_schema_witnesses = (
                     _conversation_lifecycle_schema_witnesses(conn)
                 )
@@ -272,6 +303,9 @@ def create_app(
         except sqlite3.Error:
             p23_schema_witnesses = {
                 key: False for key in _P23_SCHEMA_WITNESS_KEYS
+            }
+            execution_binding_schema_witnesses = {
+                key: False for key in _EXECUTION_BINDING_SCHEMA_WITNESS_KEYS
             }
             conversation_lifecycle_schema_witnesses = {
                 key: False
@@ -296,6 +330,22 @@ def create_app(
             "llm_base_url_set": bool(os.environ.get("FLAI_LLM_BASE_URL")),
             "llm_api_key_set": bool(os.environ.get("FLAI_LLM_API_KEY")),
             "llm_model_reasoning_set": bool(os.environ.get("FLAI_LLM_MODEL_REASONING")),
+            # 配置见证，不冒充侧车在线：真实 identity/revision 仅在任务执行的
+            # preflight 与不可变 agent_log receipt 中确立。
+            "agent_layer_axis": True,
+            "agent_layer": {
+                "contract": "flai.agent-layer.v1",
+                "bindings": [
+                    {"adapter": adapter, "contract_version": contract}
+                    for adapter, contract in sorted(app.state.execution_router.bindings)
+                ],
+                "jerryagent_configured": (
+                    ("jerryagent_sidecar", "flai.agent-layer.v1")
+                    in app.state.execution_router.bindings
+                ),
+                "runtime_attested": False,
+                "schema_witnesses": execution_binding_schema_witnesses,
+            },
             # B2 运行进程代际标记（ADR-0021/Codex R0-P1）：部署自检门据此见证
             # 「活着的进程」跑的是分级轴代码——只查 DB 列会漏掉「库已迁移但服务
             # 重启失败仍是旧进程」的假 PASS。仍是布尔位，不含数据。
@@ -367,6 +417,9 @@ def create_app(
         try:
             wf = _worker_freshness(conn)
             p23_schema_witnesses = _p23_schema_witnesses(conn)
+            execution_binding_schema_witnesses = (
+                _execution_binding_schema_witnesses(conn)
+            )
             conversation_lifecycle_schema_witnesses = (
                 _conversation_lifecycle_schema_witnesses(conn)
             )
@@ -381,6 +434,10 @@ def create_app(
         p23_schema_ready = all(
             p23_schema_witnesses.get(key) is True
             for key in _P23_SCHEMA_WITNESS_KEYS
+        )
+        execution_binding_schema_ready = all(
+            execution_binding_schema_witnesses.get(key) is True
+            for key in _EXECUTION_BINDING_SCHEMA_WITNESS_KEYS
         )
         conversation_lifecycle_schema_ready = all(
             conversation_lifecycle_schema_witnesses.get(key) is True
@@ -405,11 +462,21 @@ def create_app(
         worker_generation_ready = (
             wf.get("generation") == config.WORKER_GENERATION
         )
+        api_execution_bindings = repos.canonical_worker_execution_bindings(
+            app.state.execution_router.bindings
+        )
+        worker_execution_bindings_ready = (
+            wf.get("execution_bindings") == api_execution_bindings
+        )
         wf["generation_ready"] = worker_generation_ready
         wf["expected_generation"] = config.WORKER_GENERATION
+        wf["execution_bindings_ready"] = worker_execution_bindings_ready
+        wf["expected_execution_bindings"] = api_execution_bindings
         ready = (
             wf["fresh"] is True
             and worker_generation_ready is True
+            and worker_execution_bindings_ready is True
+            and execution_binding_schema_ready is True
             and p23_schema_ready is True
             and conversation_lifecycle_schema_ready is True
             and review_route_schema_ready is True
@@ -421,6 +488,16 @@ def create_app(
             {
                 "status": "ready" if ready is True else "degraded",
                 "worker": wf,
+                "agent_layer_axis": True,
+                "agent_layer": {
+                    "runtime_generation": True,
+                    "contract": "flai.agent-layer.v1",
+                    "bindings": api_execution_bindings,
+                    "worker_bindings": wf.get("execution_bindings"),
+                    "worker_binding_ready": worker_execution_bindings_ready,
+                    "schema_ready": execution_binding_schema_ready,
+                    "schema_witnesses": execution_binding_schema_witnesses,
+                },
                 "structured_question_axis": True,
                 "conversation_lifecycle_axis": True,
                 "search_addressing_axis": True,

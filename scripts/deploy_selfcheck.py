@@ -9,6 +9,8 @@
     2. 核心表齐全（缺表=init_db 没跑）
     3. ≥1 活跃账户（ADR-0019 D9：users 空=全员锁在门外，部署第一条命令是 user_admin.py create）
     4. 数据分级轴存在（files/samples 有 classification 列，ADR-0021 代际见证）
+    4a. Agent execution binding 两列、精确配对、不可变 trigger 与存量行见证；
+        缺 guard 或 nullable/lookalike 列均拒绝，避免运行时改绑后仍假绿。
     4b. P2.3 SQLite schema 见证：conversations/conversation_messages 的
         identity-critical 完整显式表合同（fresh + 仓内 legacy ALTER 形态）、
         conversation_questions canonical table shape，以及三表所有登记索引/
@@ -46,6 +48,8 @@
         全部严格 ``is True``；配合 worker generation 拒绝 API/worker 混版漏记。
     8h. health 含 design_promotion_axis=true、精确 P2.8 generation，且服务侧
         design-promotion canonical witnesses 全部严格 ``is True``。
+    8i. health 含 agent_layer_axis=true、精确 v1 contract、native 基础 binding，
+        且服务实际连库的 execution binding witnesses 全部严格 ``is True``。
     9. health.db_identity = 探针侧库路径指纹（Codex R1 审 P2：两侧 FLAI_DB_PATH
        不一致时，探针查有账户的库 A、服务连空库 B，其余全 PASS 却无人能登录）
     10. 未认证 GET /api/agents → 401（鉴权代际见证：200=裸奔旧代际，404=旧代码，
@@ -76,6 +80,12 @@ sys.path.insert(0, str(REPO))
 # 只导入纯 stdlib 应用模块——从 jobs.runner 导会连带拉
 # repos→jsonschema，破坏本探针「免应用依赖、系统 Python 可跑」的承诺。
 from backend.app import config  # noqa: E402
+from backend.app.storage.execution_binding_schema import (  # noqa: E402
+    EXECUTION_BINDING_SCHEMA_WITNESS_KEYS as _EXECUTION_BINDING_SCHEMA_WITNESS_KEYS,
+)
+from backend.app.storage.execution_binding_schema import (  # noqa: E402
+    execution_binding_schema_witnesses as _execution_binding_schema_witnesses,
+)
 from backend.app.storage.conversation_lifecycle_schema import (  # noqa: E402
     CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_KEYS as _CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_KEYS,
 )
@@ -145,6 +155,17 @@ REQUIRED_TABLES = frozenset({
 })
 
 _HTTP_TIMEOUT = 10
+_SUPPORTED_AGENT_BINDINGS = frozenset(
+    {
+        ("native_python", "native.workflow.v1"),
+        ("jerryagent_sidecar", "flai.agent-layer.v1"),
+    }
+)
+_EXECUTION_BINDING_SCHEMA_WITNESS_LABELS = {
+    "binding_column_shape": "frozen execution binding columns",
+    "required_triggers": "exact-pair and immutable binding triggers",
+    "persisted_bindings_valid": "persisted exact adapter/contract bindings",
+}
 _P23_SCHEMA_WITNESS_LABELS = {
     "conversation_table_shape": "conversations identity-critical shape",
     "message_table_shape": "conversation_messages identity-critical shape",
@@ -200,6 +221,29 @@ class Check:
         self.detail = detail
 
 
+def _canonical_agent_bindings(value: object) -> list[dict[str, str]] | None:
+    if not isinstance(value, list) or not all(
+        isinstance(item, dict)
+        and set(item) == {"adapter", "contract_version"}
+        and isinstance(item.get("adapter"), str)
+        and isinstance(item.get("contract_version"), str)
+        for item in value
+    ):
+        return None
+    pairs = [(item["adapter"], item["contract_version"]) for item in value]
+    if (
+        len(set(pairs)) != len(pairs)
+        or any(pair not in _SUPPORTED_AGENT_BINDINGS for pair in pairs)
+        or ("native_python", "native.workflow.v1") not in pairs
+    ):
+        return None
+    canonical = [
+        {"adapter": adapter, "contract_version": contract_version}
+        for adapter, contract_version in sorted(pairs)
+    ]
+    return canonical if value == canonical else None
+
+
 def _http_get(url: str) -> tuple[int, bytes]:
     """返回 (status, body)。4xx/5xx 不抛——状态码本身就是探针的观测值。"""
     req = urllib.request.Request(url, method="GET")
@@ -248,6 +292,27 @@ def check_classification_axis(conn: sqlite3.Connection) -> Check:
             f"{missing} 缺 classification 列——库是旧代际，先跑 scripts/init_db 迁移",
         )
     return Check("数据分级轴（ADR-0021）", True, "files/samples 均有 classification 列")
+
+
+def check_execution_binding_schema(conn: sqlite3.Connection) -> Check:
+    """Frozen Agent-layer binding structure and persisted exact-pair witness."""
+    witnesses = _execution_binding_schema_witnesses(conn)
+    missing_labels = [
+        _EXECUTION_BINDING_SCHEMA_WITNESS_LABELS.get(key, key)
+        for key in _EXECUTION_BINDING_SCHEMA_WITNESS_KEYS
+        if witnesses.get(key) is not True
+    ]
+    if missing_labels:
+        return Check(
+            "Agent execution binding schema",
+            False,
+            f"schema witness 缺失 {missing_labels}——旧库、迁移未完或绑定 guard 被破坏",
+        )
+    return Check(
+        "Agent execution binding schema",
+        True,
+        "execution binding witnesses complete (shape + guards + persisted pairs)",
+    )
 
 
 def check_p23_schema(conn: sqlite3.Connection) -> Check:
@@ -384,7 +449,8 @@ def check_worker_generation(conn: sqlite3.Connection) -> Check:
     name = "worker 心跳代际"
     try:
         row = conn.execute(
-            "SELECT generation, last_beat_at FROM worker_heartbeats WHERE worker_id='default'"
+            "SELECT generation, last_beat_at, execution_bindings_json "
+            "FROM worker_heartbeats WHERE worker_id='default'"
         ).fetchone()
     except sqlite3.Error as exc:
         return Check(name, False, f"worker_heartbeats 表不可读（旧库未迁移？）：{exc}")
@@ -394,12 +460,21 @@ def check_worker_generation(conn: sqlite3.Connection) -> Check:
             "无 worker 心跳——worker 未启动，或为 B2 前旧代际（旧代码不写心跳）。"
             "部署顺序：先起 API+worker 再跑自检",
         )
-    generation, last_beat = row[0], row[1]
+    generation, last_beat, bindings_json = row[0], row[1], row[2]
     if generation != WORKER_GENERATION:
         return Check(
             name, False,
             f"worker 代际 {generation!r} ≠ 当前 {WORKER_GENERATION!r}——worker 未重启到新代码",
         )
+    try:
+        bindings = json.loads(bindings_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return Check(name, False, f"worker binding witness 非 JSON：{exc}")
+    canonical_bindings = _canonical_agent_bindings(bindings)
+    if canonical_bindings is None or json.dumps(
+        canonical_bindings, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ) != bindings_json:
+        return Check(name, False, "worker binding witness 非 canonical exact set")
     try:
         beat_time = datetime.fromisoformat(last_beat)
     except (ValueError, TypeError) as exc:
@@ -412,7 +487,11 @@ def check_worker_generation(conn: sqlite3.Connection) -> Check:
             name, False,
             f"心跳过期（{age.total_seconds():.0f}s 前）——worker 已死或挂起",
         )
-    return Check(name, True, f"代际 {generation}，{age.total_seconds():.0f}s 前心跳")
+    return Check(
+        name,
+        True,
+        f"代际 {generation}，{age.total_seconds():.0f}s 前心跳；binding witness canonical",
+    )
 
 
 def _db_path_fingerprint(db_path: Path) -> str:
@@ -805,6 +884,98 @@ def check_live_design_promotion_generation(base_url: str) -> Check:
     )
 
 
+def check_live_agent_layer_generation(base_url: str) -> Check:
+    """Agent-layer live generation plus served-DB frozen-binding witnesses."""
+    name = "运行进程 Agent-layer 代际"
+    url = f"{base_url}/api/health"
+    try:
+        _, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check(name, False, f"{url} 不可达或非 JSON：{exc}")
+    if not isinstance(payload, dict):
+        return Check(name, False, f"{url} JSON 根节点不是对象，fail-closed")
+    if payload.get("agent_layer_axis") is not True:
+        return Check(
+            name,
+            False,
+            "health 无 agent_layer_axis=true——运行中 API 尚未接入冻结执行层，fail-closed",
+        )
+    agent_layer = payload.get("agent_layer")
+    if not isinstance(agent_layer, dict):
+        return Check(name, False, "health 缺 agent_layer 精确结构")
+    if agent_layer.get("contract") != "flai.agent-layer.v1":
+        return Check(name, False, "health Agent-layer contract 非 flai.agent-layer.v1")
+    if agent_layer.get("runtime_attested") is not False:
+        return Check(
+            name,
+            False,
+            "health runtime_attested 必须为 false；配置见证不得冒充侧车在线证明",
+        )
+    if type(agent_layer.get("jerryagent_configured")) is not bool:
+        return Check(name, False, "health jerryagent_configured 不是 literal boolean")
+    bindings = _canonical_agent_bindings(agent_layer.get("bindings"))
+    if bindings is None:
+        return Check(name, False, "health Agent-layer bindings 结构或精确配对非法")
+    if {
+        "adapter": "native_python",
+        "contract_version": "native.workflow.v1",
+    } not in bindings:
+        return Check(name, False, "health Agent-layer 缺 mandatory native binding")
+    witnesses = agent_layer.get("schema_witnesses")
+    if not isinstance(witnesses, dict):
+        return Check(name, False, "health 缺 execution binding schema witnesses")
+    missing = [
+        key
+        for key in _EXECUTION_BINDING_SCHEMA_WITNESS_KEYS
+        if witnesses.get(key) is not True
+    ]
+    if missing:
+        return Check(
+            name,
+            False,
+            f"活服务实际连库的 execution binding witness 缺失 {missing}",
+        )
+    return Check(
+        name,
+        True,
+        "活进程 Agent-layer v1 代际 exact；配置与在线证明分离，绑定 witnesses 全在位",
+    )
+
+
+def check_live_agent_layer_readiness(base_url: str) -> Check:
+    """Require the live worker router witness to equal the API router exactly."""
+
+    name = "运行进程 Agent-layer worker/API binding 对账"
+    url = f"{base_url}/api/readyz"
+    try:
+        status, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check(name, False, f"{url} 不可达或非 JSON：{exc}")
+    if not isinstance(payload, dict):
+        return Check(name, False, "readyz JSON 根节点不是对象")
+    agent_layer = payload.get("agent_layer")
+    if not isinstance(agent_layer, dict):
+        return Check(name, False, "readyz 缺 agent_layer 结构")
+    api_bindings = _canonical_agent_bindings(agent_layer.get("bindings"))
+    worker_bindings = _canonical_agent_bindings(agent_layer.get("worker_bindings"))
+    if api_bindings is None or worker_bindings is None:
+        return Check(name, False, "readyz binding witness 非 canonical exact set")
+    if (
+        agent_layer.get("worker_binding_ready") is not True
+        or api_bindings != worker_bindings
+    ):
+        return Check(name, False, "worker/API binding exact 对账失败")
+    if status != 200 or payload.get("status") != "ready":
+        return Check(
+            name,
+            False,
+            f"readyz 未就绪（HTTP {status}）；其余 readiness gate 仍有失败",
+        )
+    return Check(name, True, "worker/API Agent-layer binding canonical 且 exact 一致")
+
+
 def check_auth_generation(base_url: str) -> Check:
     """鉴权代际见证：匿名打有数据的端点，401 才是新代际的证词。
 
@@ -868,6 +1039,7 @@ def main() -> int:
         try:
             for fn in (
                 check_tables, check_active_user, check_classification_axis,
+                check_execution_binding_schema,
                 check_p23_schema,
                 check_conversation_lifecycle_schema,
                 check_review_route_schema,
@@ -886,6 +1058,7 @@ def main() -> int:
     else:
         for name in (
             "核心表齐全", "≥1 活跃账户", "数据分级轴（ADR-0021）",
+            "Agent execution binding schema",
             "P2.3 结构化提问 schema", "P2.6 会话生命周期只追加 schema",
             "P2.5 点名签收路由 schema", "判断资产只追加 schema",
             "产物流转只追加 schema", "P2.8 设计候选晋升只追加 schema",
@@ -905,6 +1078,8 @@ def main() -> int:
     checks.append(check_live_judgment_generation(base_url))
     checks.append(check_live_outcome_generation(base_url))
     checks.append(check_live_design_promotion_generation(base_url))
+    checks.append(check_live_agent_layer_generation(base_url))
+    checks.append(check_live_agent_layer_readiness(base_url))
     checks.append(check_db_identity(base_url, db_path))
     checks.append(check_auth_generation(base_url))
     checks.append(check_frontend_dist())

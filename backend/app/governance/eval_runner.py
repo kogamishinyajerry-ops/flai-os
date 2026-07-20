@@ -38,7 +38,13 @@ from ..storage.file_integrity import open_verified_file
 
 logger = logging.getLogger(__name__)
 
-_CHECK_KINDS = ("status_is", "artifact_exists", "artifact_contains", "output_field")
+_CHECK_KINDS = (
+    "status_is",
+    "task_field",
+    "artifact_exists",
+    "artifact_contains",
+    "output_field",
+)
 _OUTPUT_FIELD_OPS = ("eq", "contains", "exists", "gte", "lte")
 
 # 证据指纹除 approved case 原文外还须绑定被测对象本体（异源审 P1-4/F3）：
@@ -283,6 +289,25 @@ def _eval_one_check(
         expected = _require(check, "value")
         actual = final_task.get("status")
         return actual == expected, f"status_is: 期望 {expected!r}，实际 {actual!r}"
+
+    if kind == "task_field":
+        dotted = _require(check, "path")
+        op = check.get("op")
+        if op not in ("exists", "eq"):
+            raise CheckConfigError("task_field 的 op 只允许 exists/eq")
+        if op == "eq" and "value" not in check:
+            raise CheckConfigError("task_field op=eq 缺必填字段 'value'")
+        found, actual = _dig(final_task, dotted)
+        if op == "exists":
+            return found, f"task_field: {dotted!r} exists={found}"
+        expected = check.get("value")
+        ok = (
+            found
+            and isinstance(actual, bool) == isinstance(expected, bool)
+            and type(actual) is type(expected)
+            and actual == expected
+        )
+        return ok, f"task_field: {dotted!r} eq {expected!r}，实际 {actual!r}"
 
     # 产物归属双保险：output_file_ids 本就属本任务，仍显式过滤 task_id+kind
     by_name = {
@@ -605,6 +630,7 @@ def _clone_runtime_with_registry(runtime: Any, registry: Any) -> Any:
         knowledge_service=runtime.knowledge_service,
         uploads_dir=runtime.uploads_dir,
         scope_registry=runtime.scope_registry,
+        execution_router=runtime.execution_router,
     )
 
 
@@ -946,6 +972,10 @@ def _run_one_case_inner(
             input_file_ids.append(file_id)
 
         task_id = f"task_{uuid.uuid4().hex}"
+        execution = agent.get("execution") or {
+            "adapter": "native_python",
+            "contract_version": "native.workflow.v1",
+        }
         repos.create_task(
             conn,
             task_id=task_id,
@@ -957,6 +987,8 @@ def _run_one_case_inner(
             input_file_ids=input_file_ids,
             metadata={"eval_case_file": case_file},
             origin="eval",
+            execution_adapter=execution["adapter"],
+            execution_contract_version=execution["contract_version"],
         )
         repos.set_task_status(conn, task_id, "queued")
         claimed = repos.claim_task(conn, task_id)

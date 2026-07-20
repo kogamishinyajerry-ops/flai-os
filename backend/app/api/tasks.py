@@ -24,6 +24,34 @@ router = APIRouter(prefix="/api", tags=["tasks"])
 # runtime/事件链路放大。256KB 对 params 型输入绰绰有余；大数据走文件上传通道。
 _INPUTS_MAX_BYTES = 256 * 1024
 
+_DEFAULT_EXECUTION_BINDING = ("native_python", "native.workflow.v1")
+_EXECUTION_CONTRACT_BY_ADAPTER = {
+    "native_python": "native.workflow.v1",
+    "jerryagent_sidecar": "flai.agent-layer.v1",
+}
+
+
+def _execution_binding(agent: dict[str, Any]) -> tuple[str, str]:
+    """Return the Registry-validated binding to freeze into one task.
+
+    Raw legacy manifests may omit the optional block and mean native v1.
+    A present malformed/mismatched block is never treated as absence: Registry
+    should already have rejected it, and this defensive seam fails closed.
+    """
+    execution = agent.get("execution")
+    if execution is None:
+        return _DEFAULT_EXECUTION_BINDING
+    if not isinstance(execution, dict):
+        raise RuntimeError("Registry 返回了非法 agent execution 绑定")
+    adapter = execution.get("adapter")
+    contract_version = execution.get("contract_version")
+    if (
+        not isinstance(adapter, str)
+        or _EXECUTION_CONTRACT_BY_ADAPTER.get(adapter) != contract_version
+    ):
+        raise RuntimeError("Registry 返回了未精确配对的 agent execution 绑定")
+    return adapter, contract_version
+
 
 def _canonical_review_route_username(value: str | None) -> str | None:
     """P2.5 点名只接受 exact username；不 trim、不把显示名猜成身份。"""
@@ -347,6 +375,7 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             status_code=409,
             detail=f"agent {body.agent_id} 是导引类（interactive）Agent，请走 /api/conversations 对话，不作为一次性任务运行",
         )
+    execution_adapter, execution_contract_version = _execution_binding(agent)
 
     conn = request.app.state.conn_factory()
     try:
@@ -458,6 +487,8 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             conversation_id=body.conversation_id,
             retry_of=body.retry_of,
             review_requested_from_username=body.review_requested_from_username,
+            execution_adapter=execution_adapter,
+            execution_contract_version=execution_contract_version,
         )
         if body.conversation_id is not None:
             # 归属某导引会话：会话须真实存在（防悬空引用）**且仍 active**——归档后真只读
@@ -514,6 +545,8 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                 "status_to": status_to,
                 "depends_on": body.depends_on or [],
                 "review_requested_from_username": body.review_requested_from_username,
+                "execution_adapter": execution_adapter,
+                "execution_contract_version": execution_contract_version,
             },
         )
         # 批七 Codex R0 P2-2：charter 开场白持久化为事件（batch 路径同款）——前端
@@ -642,6 +675,14 @@ def run_batch_creation(
                 "batch_errors": errors,
             },
         )
+    # Freeze once from the exact Registry objects validated above.  Reusing
+    # this list for both INSERT and task_created prevents a hot reload between
+    # the two loops from making the event disagree with the persisted task.
+    execution_bindings: list[tuple[str, str]] = []
+    for agent in agents:
+        if agent is None:  # guarded by the collected-error branch above
+            raise RuntimeError("Agent execution 绑定冻结时 Agent 缺失")
+        execution_bindings.append(_execution_binding(agent))
 
     task_ids = [f"task_{uuid.uuid4().hex}" for _ in items]
     conn.execute("BEGIN IMMEDIATE")
@@ -660,6 +701,7 @@ def run_batch_creation(
                 )
         for idx, item in enumerate(items):
             deps = [task_ids[d] for d in item.after]
+            execution_adapter, execution_contract_version = execution_bindings[idx]
             repos.create_task(
                 conn,
                 task_id=task_ids[idx],
@@ -676,6 +718,8 @@ def run_batch_creation(
                 conversation_id=conversation_id,
                 retry_of=None,
                 review_requested_from_username=review_requested_from_username,
+                execution_adapter=execution_adapter,
+                execution_contract_version=execution_contract_version,
             )
         # 入队与创建事件并入同一事务（Codex R0 P1-1：两阶段窗口下，收尾任一
         # 写失败会让「行已存在但报错返回」——导引重试路径造重复任务；worker
@@ -685,6 +729,7 @@ def run_batch_creation(
         _now = repos._now_iso()
         for idx, item in enumerate(items):
             deps = [task_ids[d] for d in item.after]
+            execution_adapter, execution_contract_version = execution_bindings[idx]
             if deps:
                 status_to = "created"
                 message = f"任务已创建（等待 {len(deps)} 个前置任务）：agent={item.agent_id}"
@@ -709,6 +754,8 @@ def run_batch_creation(
                     "depends_on": deps,
                     "batch_index": idx,
                     "review_requested_from_username": review_requested_from_username,
+                    "execution_adapter": execution_adapter,
+                    "execution_contract_version": execution_contract_version,
                 },
             )
             # Codex R0 P2（charter 留痕）：expertise.charter 作为任务首条 agent_log

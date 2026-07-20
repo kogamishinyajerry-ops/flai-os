@@ -21,6 +21,7 @@ changelog 条目 + promotions 审计记录。常驻 API 的内存投影在其下
 
 from __future__ import annotations
 
+import atexit
 import sys
 from pathlib import Path
 
@@ -55,6 +56,7 @@ def main() -> int:
     from backend.app import config
     from backend.app.bootstrap import assemble
     from backend.app.governance import eval_runner, promotion
+    from backend.app.runtime.jerryagent_adapter import build_agent_execution_router
     from backend.app.runtime.runtime import AgentRuntime
     from backend.app.storage.db import get_conn, init_db
 
@@ -68,11 +70,14 @@ def main() -> int:
         contracts_dir=config.CONTRACTS_DIR, knowledge_dir=config.KNOWLEDGE_DIR,
         conn_factory=conn_factory,
     )
+    execution_router = build_agent_execution_router()
+    atexit.register(execution_router.close)
     runtime = AgentRuntime(
         asm.agent_registry, asm.tool_registry, asm.model_gateway, conn_factory,
         config.TASK_RUNS_DIR, knowledge_service=asm.knowledge_service,
         uploads_dir=config.UPLOADS_DIR,
         scope_registry=asm.scope_registry,  # ADR-0021 知识轴（Codex R1 审 P1）
+        execution_router=execution_router,
     )
 
     print(f"[1/2] 跑评测：{agent_id} …")

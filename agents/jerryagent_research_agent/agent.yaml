@@ -1,0 +1,57 @@
+id: jerryagent_research_agent
+name: "JerryAgent 研究复利候选 Agent（核心层试运行）"
+version: 0.1.0
+status: disabled
+maturity: L0
+category: reasoning_assist
+summary: "通过默认关闭的 JerryAgent Agent-layer sidecar 组织并行研究与综合，只形成具运行时来源的待人工复核候选。"
+description: >
+  FLAi-OS 持有任务、密级、事件、产物登记和人工签发；JerryAgent 只承担受限的
+  Agent 执行层。该包用于验证跨轮研究、并行专家与失败经验能否沉淀为下一轮起点，
+  不把 JerryAgent completed 解释成 FLAi 完成或批准。当前缺少 Windows 内网 sidecar、
+  凭证轮换和逐调用模型/工具账本的真实证明，因此保持 disabled。
+owner:
+  department: 二所
+  maintainer: TBD
+  business_reviewer: TBD
+model:
+  profile: reasoning
+knowledge:
+  enabled: false
+  scopes: []
+tools: []
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats:
+    - .md
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: job
+  requires_human_review: true
+execution:
+  adapter: jerryagent_sidecar
+  contract_version: flai.agent-layer.v1
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: false
+  save_model_calls: false
+  save_feedback: true
+data_asset:
+  collect_samples: true
+  sample_fields:
+    - inputs.objective
+    - outputs.summary
+limitations:
+  - "只生成候选，不能批准、签发、发布、改变任务状态或绕过 FLAi 人工审核。"
+  - "侧车调用的模型、工具和子智能体尚未进入 FLAi model_calls/tool_runs 逐调用账本，所有产物强制 sensitive。"
+  - "首版不传输文件内容、不访问 FLAi knowledge/tool capability，也不支持运行中取消。"
+  - "默认 disabled；只有完成精确版本、token 轮换、进程隔离和 Windows 内网握手证明后才可申请 trial。"

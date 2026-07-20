@@ -84,9 +84,13 @@ def test_monitor_agent_real_contract_derives_sensitive() -> None:
 # ── 2. 单 chokepoint 判定（classification_gate，读落库列不重派生） ──────────
 
 def _mktask(conn, task_id: str, *, classification, status: str = "completed",
-            err: str | None = None, agent_id: str = "hello_agent"):
+            err: str | None = None, agent_id: str = "hello_agent",
+            execution_adapter: str = "native_python",
+            execution_contract_version: str = "native.workflow.v1"):
     repos.create_task(conn, task_id=task_id, agent_id=agent_id, agent_version="0.1.0",
-                      name="t", created_by="u", inputs={})
+                      name="t", created_by="u", inputs={},
+                      execution_adapter=execution_adapter,
+                      execution_contract_version=execution_contract_version)
     conn.execute(
         "UPDATE tasks SET status=?, data_classification=?, error_message=? WHERE id=?",
         (status, classification, err, task_id),
@@ -347,6 +351,40 @@ def test_backfill_matrix(tmp_path: Path) -> None:
         assert repos.get_task(conn, "d")["data_classification"] is None
         # 幂等：再跑一次 no-op
         assert repos.backfill_task_data_classification(conn, ["monitor_adapter_recon"]) == 0
+    finally:
+        conn.close()
+
+
+def test_backfill_uses_the_frozen_external_adapter_as_a_sensitive_axis(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "d.db"; init_db(db)
+    conn = get_conn(db)
+    try:
+        _mktask(
+            conn,
+            "external_cancelled",
+            classification=None,
+            status="cancelled",
+            execution_adapter="jerryagent_sidecar",
+            execution_contract_version="flai.agent-layer.v1",
+        )
+        _mktask(
+            conn,
+            "native_cancelled",
+            classification=None,
+            status="cancelled",
+        )
+
+        assert repos.backfill_task_data_classification(conn, []) == 2
+        assert (
+            repos.get_task(conn, "external_cancelled")["data_classification"]
+            == "sensitive"
+        )
+        assert (
+            repos.get_task(conn, "native_cancelled")["data_classification"]
+            == "internal"
+        )
     finally:
         conn.close()
 

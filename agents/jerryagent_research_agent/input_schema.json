@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JerryAgent 研究候选输入契约",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["objective"],
+  "properties": {
+    "objective": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 8000,
+      "description": "需要形成待人工复核候选的研究目标。"
+    },
+    "constraints": {
+      "type": "array",
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    }
+  }
+}
+

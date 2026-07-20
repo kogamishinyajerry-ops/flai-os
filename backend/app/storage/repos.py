@@ -97,6 +97,12 @@ def _decode_task(row: sqlite3.Row) -> dict[str, Any]:
     d["review_requested_from_username"] = d.get(
         "review_requested_from_username"
     )
+    # 创建时冻结的 execution 绑定。缺键仅可能来自尚未跑 init_db 的 legacy
+    # Row/test double；历史执行事实只能如实解释为 native，投影键始终存在。
+    d["execution_adapter"] = d.get("execution_adapter", "native_python")
+    d["execution_contract_version"] = d.get(
+        "execution_contract_version", "native.workflow.v1"
+    )
     return d
 
 
@@ -255,6 +261,8 @@ def create_task(
     input_binding: dict[str, Any] | None = None,
     retry_of: str | None = None,
     review_requested_from_username: str | None = None,
+    execution_adapter: str = "native_python",
+    execution_contract_version: str = "native.workflow.v1",
 ) -> dict[str, Any]:
     """建任务：初始态永远是 created（未入队）。
 
@@ -275,6 +283,15 @@ def create_task(
     """
     if origin not in ("user", "eval"):
         raise ValueError(f"origin 只认 'user'/'eval'：{origin!r}")
+    execution_pairs = {
+        ("native_python", "native.workflow.v1"),
+        ("jerryagent_sidecar", "flai.agent-layer.v1"),
+    }
+    if (execution_adapter, execution_contract_version) not in execution_pairs:
+        raise ValueError(
+            "execution adapter/contract 必须精确配对："
+            f"{execution_adapter!r}/{execution_contract_version!r}"
+        )
     now = _now_iso()
     conn.execute(
         """
@@ -283,8 +300,9 @@ def create_task(
              created_at, updated_at, started_at, finished_at,
              input_file_ids, output_file_ids, inputs_json, error_message, metadata_json,
              conversation_id, origin, created_by_username, depends_on, input_binding,
-             retry_of, review_requested_from_username)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             retry_of, review_requested_from_username, execution_adapter,
+             execution_contract_version)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             task_id, agent_id, agent_version, name, "created", created_by,
@@ -301,6 +319,8 @@ def create_task(
             json.dumps(input_binding, ensure_ascii=False) if input_binding else None,
             retry_of,
             review_requested_from_username,
+            execution_adapter,
+            execution_contract_version,
         ),
     )
     return get_task(conn, task_id)  # type: ignore[return-value]
@@ -1093,7 +1113,9 @@ def backfill_task_data_classification(
       2. tool_runs 引用当前判 sensitive 的工具；
       3. tool_runs 引用当前注册表**不认识**的工具（已卸载/scan 被拒/改名——历史分级
          不可考，fail-closed 判 sensitive，绝不把「当前无命中」当「已证明 internal」，
-         Codex R0 P1-3）。
+         Codex R0 P1-3）；
+      4. 冻结 execution_adapter 非 native_python（外置 Agent-layer 的逐调用来源不在
+         FLAi 账本，即使执行前取消且没有任何内容子行也必须静态 sensitive）。
 
     `known_tool_ids`=当前注册表全部工具 id（sensitive+internal）；缺省 None 表示调用方
     未提供已知集 → 跳过第 3 类（保持旧行为，仅测试/兼容用）。`sensitive_tool_ids` 由调用
@@ -1151,14 +1173,23 @@ def backfill_task_data_classification(
                                WHERE {' OR '.join(taint_clauses)})""",
                 (*_BACKFILL_TERMINAL_STATES, *taint_params),
             )
-        # 3) 剩余终态 NULL → internal（无 sensitive 证据）。
+        # 3) sensitive：外置 Agent-layer 是冻结在任务行上的静态污点轴。早于执行取消的
+        #    任务没有 files/samples/tool_runs，但外置模型/工具/子智能体不受 FLAi 逐调用
+        #    账本证明这一事实仍然成立，不能被最终兜底永久洗成 internal。
+        conn.execute(
+            f"UPDATE tasks SET data_classification = 'sensitive'"
+            f" WHERE data_classification IS NULL AND status IN ({term_ph})"
+            " AND execution_adapter != 'native_python'",
+            _BACKFILL_TERMINAL_STATES,
+        )
+        # 4) 剩余终态 NULL → internal（无 sensitive 证据）。
         conn.execute(
             f"UPDATE tasks SET data_classification = 'internal'"
             f" WHERE data_classification IS NULL AND status IN ({term_ph})",
             _BACKFILL_TERMINAL_STATES,
         )
-        # 4) 子行一致化（Codex R0 P1）：**下载门（files.py:277）与固化/复用门（curation）
-        #    检的是 files/samples 自身的 classification 子行，不是父任务列**。步骤 1-2 把父
+        # 5) 子行一致化（Codex R0 P1）：**下载门（files.py:277）与固化/复用门（curation）
+        #    检的是 files/samples 自身的 classification 子行，不是父任务列**。步骤 1-3 把父
         #    任务升 sensitive 后，历史 internal 子行（0.1.0 期 monitor 草案：工具轴当时不存在
         #    →产物误落 internal）仍会过下载 403（不触发）与 eval-cases 原样固化=半闭合假绿。
         #    故把**终态 sensitive 任务**的非 sensitive 子行一并升 sensitive——与执行期
@@ -3099,23 +3130,114 @@ def list_promotions_all(conn: sqlite3.Connection, limit: int = 20) -> list[dict[
 
 # ── worker heartbeats（迁移 #7，ADR-0021/Codex R1 审 P1）────────────────
 
-def beat_worker_heartbeat(conn: sqlite3.Connection, *, generation: str, detail: str | None = None) -> None:
+_WORKER_EXECUTION_BINDINGS = frozenset(
+    {
+        ("native_python", "native.workflow.v1"),
+        ("jerryagent_sidecar", "flai.agent-layer.v1"),
+    }
+)
+_NATIVE_WORKER_EXECUTION_BINDINGS = frozenset(
+    {("native_python", "native.workflow.v1")}
+)
+
+
+def canonical_worker_execution_bindings(
+    bindings: object | None = None,
+) -> list[dict[str, str]]:
+    """Return the exact sorted worker/API router binding witness.
+
+    ``None`` is deliberately native-only for repository callers predating the
+    Agent layer.  Production ``JobRunner`` always passes its live router set.
+    """
+
+    selected = _NATIVE_WORKER_EXECUTION_BINDINGS if bindings is None else bindings
+    try:
+        pairs = list(selected)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise ValueError("worker execution bindings must be an iterable") from exc
+    if (
+        not pairs
+        or len(set(pairs)) != len(pairs)
+        or any(
+            not isinstance(pair, tuple)
+            or len(pair) != 2
+            or not all(isinstance(item, str) for item in pair)
+            or pair not in _WORKER_EXECUTION_BINDINGS
+            for pair in pairs
+        )
+        or ("native_python", "native.workflow.v1") not in pairs
+    ):
+        raise ValueError("worker execution bindings are not an exact supported set")
+    return [
+        {"adapter": adapter, "contract_version": contract_version}
+        for adapter, contract_version in sorted(pairs)
+    ]
+
+
+def _decode_worker_execution_bindings(raw: object) -> list[dict[str, str]] | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(value, list) or not all(
+        isinstance(item, dict)
+        and set(item) == {"adapter", "contract_version"}
+        and isinstance(item.get("adapter"), str)
+        and isinstance(item.get("contract_version"), str)
+        for item in value
+    ):
+        return None
+    try:
+        canonical = canonical_worker_execution_bindings(
+            [
+                (item["adapter"], item["contract_version"])
+                for item in value
+            ]
+        )
+    except ValueError:
+        return None
+    canonical_json = json.dumps(
+        canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return canonical if value == canonical and raw == canonical_json else None
+
+
+def beat_worker_heartbeat(
+    conn: sqlite3.Connection,
+    *,
+    generation: str,
+    detail: str | None = None,
+    execution_bindings: object | None = None,
+) -> None:
     """worker 心跳 upsert：单实例锁保证同库唯一 worker，固定主键单行不增长。
 
     generation 每次心跳覆写——worker 升级重启后旧代际字符串不会残留误导
     部署自检门；started_at 保留首次值供诊断。
     """
     now = _now_iso()
+    canonical_bindings = canonical_worker_execution_bindings(execution_bindings)
+    bindings_json = json.dumps(
+        canonical_bindings,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     conn.execute(
         """
-        INSERT INTO worker_heartbeats (worker_id, generation, detail, started_at, last_beat_at)
-        VALUES ('default', ?, ?, ?, ?)
+        INSERT INTO worker_heartbeats (
+            worker_id, generation, detail, execution_bindings_json,
+            started_at, last_beat_at
+        )
+        VALUES ('default', ?, ?, ?, ?, ?)
         ON CONFLICT(worker_id) DO UPDATE SET
             generation = excluded.generation,
             detail = excluded.detail,
+            execution_bindings_json = excluded.execution_bindings_json,
             last_beat_at = excluded.last_beat_at
         """,
-        (generation, detail, now, now),
+        (generation, detail, bindings_json, now, now),
     )
 
 
@@ -3123,7 +3245,13 @@ def get_worker_heartbeat(conn: sqlite3.Connection) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT * FROM worker_heartbeats WHERE worker_id = 'default'"
     ).fetchone()
-    return dict(row) if row is not None else None
+    if row is None:
+        return None
+    value = dict(row)
+    value["execution_bindings"] = _decode_worker_execution_bindings(
+        value.get("execution_bindings_json")
+    )
+    return value
 
 
 # ── 专家团队模板（批八/ADR-0031，迁移 #13）─────────────────────────────────

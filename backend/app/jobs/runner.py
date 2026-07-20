@@ -356,6 +356,13 @@ class JobRunner:
         self._last_beat_monotonic: float | None = None
         self._last_resolve_monotonic: float | None = None
 
+    def close(self) -> None:
+        """Release the runtime transport after the poller has stopped."""
+
+        close = getattr(self._runtime, "close", None)
+        if callable(close):
+            close()
+
     def beat(self) -> None:
         """写 worker 心跳+代际（迁移 #7）。失败只记日志不上抛——心跳是部署
         自检的观测通道，绝不许它反过来炸掉真正干活的 worker。
@@ -367,10 +374,15 @@ class JobRunner:
         conn = None
         try:
             conn = self._conn_factory()
+            router = getattr(self._runtime, "execution_router", None)
+            execution_bindings = (
+                getattr(router, "bindings", None) if router is not None else None
+            )
             repos.beat_worker_heartbeat(
                 conn,
                 generation=WORKER_GENERATION,
                 detail=f"pid={os.getpid()}",
+                execution_bindings=execution_bindings,
             )
             self._last_beat_monotonic = time.monotonic()
         except Exception:
@@ -527,6 +539,7 @@ def _assemble_default_worker_runtime() -> tuple[Any, Any, Callable[[], sqlite3.C
     from .. import config
     from ..bootstrap import assemble
     from ..runtime.runtime import AgentRuntime
+    from ..runtime.jerryagent_adapter import build_agent_execution_router
     from ..storage.db import get_conn, init_db
 
     config.assert_local_db_path(config.DB_PATH)  # P0-B2：DB 必须本地固定盘，否则 fail-closed 拒启
@@ -549,6 +562,7 @@ def _assemble_default_worker_runtime() -> tuple[Any, Any, Callable[[], sqlite3.C
         # ADR-0021 知识轴（Codex R1 审 P1）：漏传=registry 缺失分支把 enabled
         # Agent 全判 sensitive——public_internal 知识 Agent 的产物会 403。
         scope_registry=asm.scope_registry,
+        execution_router=build_agent_execution_router(),
     )
     return asm, runtime, conn_factory
 
@@ -574,6 +588,7 @@ def run_worker_forever(
     worker 进程（单实例锁），故评测配额是全局的。两 factory 均在锁后调用（避免
     第二个进程重跑昂贵 bootstrap）；生产装配共享同一份 assembly（见 _run_default_worker）。
     """
+    runner: JobRunner | None = None
     try:
         with worker_singleton_lock(lock_path):
             # factory 内含真实 registry/model runtime 装配，必须放在锁后，避免
@@ -628,6 +643,9 @@ def run_worker_forever(
     except WorkerAlreadyRunningError as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1
+    finally:
+        if runner is not None:
+            runner.close()
     return 0
 
 

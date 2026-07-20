@@ -204,6 +204,7 @@ def test_main_runs_both_local_and_live_promotion_gates(
         "check_tables",
         "check_active_user",
         "check_classification_axis",
+        "check_execution_binding_schema",
         "check_p23_schema",
         "check_conversation_lifecycle_schema",
         "check_review_route_schema",
@@ -238,6 +239,8 @@ def test_main_runs_both_local_and_live_promotion_gates(
         "check_live_named_review_inbox_generation",
         "check_live_judgment_generation",
         "check_live_outcome_generation",
+        "check_live_agent_layer_generation",
+        "check_live_agent_layer_readiness",
         "check_auth_generation",
     ):
         monkeypatch.setattr(

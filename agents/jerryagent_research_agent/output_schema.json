@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JerryAgent 研究候选输出事实",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "summary",
+    "runtime_task_id",
+    "request_sha256",
+    "candidate_only",
+    "human_review_required"
+  ],
+  "properties": {
+    "summary": {"type": "string", "minLength": 1, "maxLength": 500},
+    "runtime_task_id": {"type": "string", "minLength": 1},
+    "request_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "candidate_only": {"const": true},
+    "human_review_required": {"const": true}
+  }
+}
+

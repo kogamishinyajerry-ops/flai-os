@@ -256,6 +256,16 @@ bash scripts/dev_start_worker.sh
 | `FLAI_LLM_MODEL_REASONING` | 空 | reasoning profile 模型名 | 必填 |
 | `FLAI_LLM_MODEL_FAST` | 空 | fast profile 模型名（当前生产 Agent 仅用 reasoning/none，接入 fast profile 时才必填） | 按需 |
 | `FLAI_LLM_TIMEOUT_S` | `120` | 模型上游 HTTP 超时秒数；目标机须按真实 reasoning 请求 p99 配置，不能把默认值当结论 | 可选但必须核对 |
+| `FLAI_JERRYAGENT_ENABLED` | `0` | 字面 `1` 才装配 `jerryagent_sidecar@flai.agent-layer.v1`；关闭时绝不静默模拟 sidecar | 试运行必填 |
+| `FLAI_JERRYAGENT_URL` | 空 | JerryAgent 精确 loopback HTTP origin（仅 `http://127.0.0.1:<port>`） | 试运行必填 |
+| `FLAI_JERRYAGENT_TOKEN` | 空 | 与 JerryAgent `JERRYAGENT_FLAI_TOKEN` 相同的 32–256 位 bearer secret | 试运行必填 |
+| `FLAI_JERRYAGENT_TIMEOUT_S` | `900` | 单次外置研究执行观察时限；超时按 outcome indeterminate 真实失败，无 native 回退 | 可选但必须核对 |
+| `FLAI_JERRYAGENT_POLL_INTERVAL_S` | `0.25` | v1 execution projection 轮询间隔 | 可选 |
+
+JerryAgent 对端须设置相同字节的 `JERRYAGENT_FLAI_TOKEN`，并把
+`JERRYAGENT_DESKTOP_PORT` 固定为 `FLAI_JERRYAGENT_URL` 中的端口。token 模式是专用
+Agent-layer data-plane：不开放 Desktop、snapshot、commands 或 SSE，也不会在端口冲突时
+回退到随机端口。
 
 跑测试（串行基准命令；开发全量门使用 `pytest-xdist -n auto`）：
 
@@ -266,7 +276,7 @@ uv run --no-project --with pytest --with jsonschema --with pyyaml \
 ```
 
 开发/CI 一键全量验证（前端构建 + 全量 pytest：tests/ + tools_impl/ + backend/tests
-三个 testpaths、`node --test` 前端纯函数核 + 19 套浏览器 E2E，任一步失败即止并打印
+三个 testpaths、`node --test` 前端纯函数核 + 21 套浏览器 E2E，任一步失败即止并打印
 汇总）：
 
 ```bash

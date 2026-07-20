@@ -65,9 +65,23 @@ wheelhouse 离线装好——见 `docs/M11-OFFLINE-PACKAGE-PLAN.md`）。下文�
 | `FLAI_LLM_BASE_URL` / `FLAI_LLM_API_KEY` / `FLAI_LLM_MODEL_REASONING` | 模型网关（对话/导引/fta 主入口） | **未配→首条消息 503**（deploy_selfcheck 第 7 项会拦） |
 | `FLAI_LLM_MODEL_FAST` | 快模型档 | 可选 |
 | `FLAI_MONITOR_CORE_DIR` | 监控生成工具的承重核目录 | **未配=fail-closed**（monitor 工具不可达，有意） |
+| `FLAI_JERRYAGENT_ENABLED` | JerryAgent Agent-layer 开关 | 未配/`0`=只装配 native；只有字面 `1` 启用 |
+| `FLAI_JERRYAGENT_URL` / `FLAI_JERRYAGENT_TOKEN` | 精确 loopback origin 与 bearer secret | 启用时缺失或畸形→API/worker 启动失败；不得回退 native |
+| `FLAI_JERRYAGENT_TIMEOUT_S` / `FLAI_JERRYAGENT_POLL_INTERVAL_S` | 外置执行观察上限与轮询间隔 | `900` / `0.25`，目标机按实测核对 |
 
-> **key 纪律**：`FLAI_LLM_API_KEY` 等 secret 由守护器的环境注入（systemd `EnvironmentFile=`
+> **key 纪律**：`FLAI_LLM_API_KEY`、`FLAI_JERRYAGENT_TOKEN` 等 secret 由守护器的环境注入（systemd `EnvironmentFile=`
 > 权限 600 / Windows 服务账户环境），**绝不写进本仓、日志、单元文件明文**。
+
+JerryAgent 进程必须注入与 FLAi 相同字节的 `JERRYAGENT_FLAI_TOKEN`，并与 FLAi worker
+运行在同一主机；`JERRYAGENT_DESKTOP_PORT` 必须与 `FLAI_JERRYAGENT_URL` 的端口一致且为
+固定正端口。token 模式禁用 ephemeral fallback，并将 JerryAgent 变为仅开放
+`/api/agent-layer/v1/*` 的专用 data-plane，不能同时承担 Desktop/TUI HTTP 服务。health 里的
+`instanceId/sessionId` 必须非空；`/api/health` 的
+`jerryagent_configured=true` 只证明 FLAi 装配了 adapter，不证明 sidecar 在线。首次试运行必须
+保存一次真实双仓 execution receipt；当前 `jerryagent_research_agent` 仍为 disabled。
+API 与 worker 必须使用同一组 `FLAI_JERRYAGENT_*` 配置。worker 心跳写入实际 Router binding
+集合，`/api/readyz` 与 `deploy_selfcheck.py` 会将该集合同 API Router exact 对账；任一进程漏配、
+旧 worker 未重启或 heartbeat witness 非 canonical 都返回 503/FAIL，不以 native 回退掩盖分叉。
 
 ## 五、参考模板（未实测，上线前在目标机验证）
 

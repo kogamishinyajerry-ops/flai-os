@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import logging
 import re
@@ -22,6 +21,7 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, BinaryIO, Callable
 
 from ..core.errors import (
@@ -33,6 +33,14 @@ from ..core.errors import (
 )
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
+from .agent_execution import (
+    AgentExecutionRequest,
+    AgentExecutionRouter,
+    NATIVE_ADAPTER_ID,
+    NATIVE_CONTRACT_VERSION,
+    NativeWorkflowAdapter,
+    load_workflow_module as _load_workflow_module,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -613,7 +621,7 @@ def _task_data_classification(
     scope_registry: Any,
     tool_registry: Any,
 ) -> str:
-    """任务级派生分级 = 文件污点轴 ∨ 知识轴 ∨ 工具污点轴（任一 sensitive 即 sensitive）。
+    """任务级派生分级 = 文件 ∨ 知识 ∨ 工具 ∨ Agent-layer 轴。
 
     ADR-0025：此纯函数只**计算**分级；落库与不可变性由 AgentRuntime.execute 在执行期
     调一次 + repos.set_task_data_classification 承担。read 期一律读落库列，绝不调本函数
@@ -625,16 +633,27 @@ def _task_data_classification(
         return "sensitive"
     if _tool_taint_classification(agent, tool_registry) != "internal":
         return "sensitive"
+    # 外置 Agent-layer 的模型、工具和子智能体调用不经过 FLAi 自身的 model_calls /
+    # tool_runs 账本，首版无法逐调用证明来源。静态升级 sensitive，绝不把侧车生成的
+    # 候选洗成 internal。未知 adapter 同样 fail-closed；真正执行还会被 router 拒绝。
+    if task.get("execution_adapter", NATIVE_ADAPTER_ID) != NATIVE_ADAPTER_ID:
+        return "sensitive"
     return "internal"
 
 
-def _load_workflow_module(agent_id: str, workflow_path: Path) -> Any:
-    spec = importlib.util.spec_from_file_location(f"flai_agent_{agent_id}_workflow", workflow_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"无法加载 workflow.py：{workflow_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def _early_failure_data_classification(task: dict[str, Any]) -> str:
+    """Classify failures that happen before the full agent-derived taint pass.
+
+    External Agent-layer execution is statically sensitive because its model,
+    tool and subagent activity is outside FLAi's per-call ledgers.  That fact is
+    already frozen on the task and remains knowable even when the registered
+    agent has drifted or become disabled.  Native failures retain the historic
+    ``internal`` diagnostic visibility used by these system-only messages.
+    """
+
+    if task.get("execution_adapter", NATIVE_ADAPTER_ID) != NATIVE_ADAPTER_ID:
+        return "sensitive"
+    return "internal"
 
 
 class _KnowledgeContext:
@@ -720,6 +739,7 @@ class AgentRuntime:
         knowledge_service: Any | None = None,
         uploads_dir: str | Path | None = None,
         scope_registry: Any | None = None,
+        execution_router: AgentExecutionRouter | None = None,
     ) -> None:
         self.agent_registry = agent_registry
         self.tool_registry = tool_registry
@@ -737,6 +757,23 @@ class AgentRuntime:
         # ADR-0021 知识轴派生用；None 时知识轴对 enabled Agent 一律 fail-closed
         # 判 sensitive（_knowledge_classification 的 registry 缺失分支）。
         self.scope_registry = scope_registry
+        # Directly constructed test/runtime instances preserve the historical
+        # native-only behavior. Production assembly injects the default-off
+        # environment-bound router explicitly.
+        self.execution_router = execution_router or AgentExecutionRouter(
+            (
+                NativeWorkflowAdapter(
+                    workflow_loader=lambda agent_id, workflow_path: (
+                        _load_workflow_module(agent_id, workflow_path)
+                    )
+                ),
+            )
+        )
+
+    def close(self) -> None:
+        """Release Agent-layer transports owned by this runtime."""
+
+        self.execution_router.close()
 
     def execute(self, task_id: str) -> dict[str, Any]:
         """驱动任务 task_id（调用前须已处于 validating 态）走完生命周期，返回最终 task dict。"""
@@ -754,6 +791,14 @@ class AgentRuntime:
         agent_id = task["agent_id"]
         agent = self.agent_registry.get(agent_id)
         if agent is None:
+            # There is no current manifest from which to derive the native
+            # knowledge/tool axes.  Preserve the native NULL fail-closed
+            # behavior, but the frozen external adapter alone is sufficient to
+            # prove this task sensitive.
+            if task.get("execution_adapter", NATIVE_ADAPTER_ID) != NATIVE_ADAPTER_ID:
+                repos.set_task_data_classification(
+                    conn, task_id, _early_failure_data_classification(task)
+                )
             repos.set_task_status(conn, task_id, "failed", error_message=f"Agent 未注册：{agent_id}")
             repos.append_event(
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
@@ -775,9 +820,12 @@ class AgentRuntime:
             )
             # final-confirm P2：本分支在 set_task_data_classification 前触发，任务分级留 NULL→
             # classification_gate 当 sensitive 遮蔽 drift 诊断（含"请重建"指引），用户无法诊断。
-            # drift 是固定系统消息、非敏感用户内容，CAS 落 internal 使诊断经分级门可见（同 R3-2
-            # 级联取消；set_task_data_classification 是 CAS-on-NULL，未执行任务恒 NULL 故等价落 internal）。
-            repos.set_task_data_classification(conn, task_id, "internal")
+            # drift 是固定系统消息、非敏感用户内容；native 任务仍 CAS internal 使诊断经
+            # 分级门可见（同 R3-2 级联取消）。外置任务则不能为诊断可见性洗掉其静态
+            # sensitive 轴，故按冻结 adapter 决定。set_task_data_classification 是 CAS-on-NULL。
+            repos.set_task_data_classification(
+                conn, task_id, _early_failure_data_classification(task)
+            )
             repos.set_task_status(conn, task_id, "failed", error_message=msg)
             repos.append_event(
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
@@ -791,7 +839,9 @@ class AgentRuntime:
         # （镜像 conversation.post_message 的既有语义）。
         if agent.get("status") == "disabled":
             msg = f"Agent 已下线，拒绝执行：{agent_id}——任务创建后成员被禁用，请改派或重建"
-            repos.set_task_data_classification(conn, task_id, "internal")
+            repos.set_task_data_classification(
+                conn, task_id, _early_failure_data_classification(task)
+            )
             repos.set_task_status(conn, task_id, "failed", error_message=msg)
             repos.append_event(
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
@@ -800,6 +850,11 @@ class AgentRuntime:
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
         pkg_dir = self.agent_registry.package_dir(agent_id)
+        native_execution = (
+            task.get("execution_adapter", NATIVE_ADAPTER_ID) == NATIVE_ADAPTER_ID
+            and task.get("execution_contract_version", NATIVE_CONTRACT_VERSION)
+            == NATIVE_CONTRACT_VERSION
+        )
 
         # ADR-0025：执行期算一次任务级分级（文件∨知识∨工具三轴）并**落库为不可变列**。
         # 落在产出任何内容（产物/样本/tool_runs/事件正文/error_message）之前，故每条
@@ -855,7 +910,15 @@ class AgentRuntime:
             self._record_failure_sample(conn, task, agent, msg, data_classification)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
-        # 2) 进入 running，构建 context 并调用 workflow.run()
+        if native_execution is not True:
+            # External adapters receive only task/manifest metadata on the
+            # request envelope.  They cannot consume native file paths or
+            # in-process model/tool/knowledge capabilities, so release the
+            # integrity-verification handles before any long sidecar wait.
+            self._close_verified_files(verified_files)
+            verified_files = []
+
+        # 2) 进入 running，构建受限 capability context 并调用冻结的 Agent-layer adapter。
         output_dir = self.task_runs_dir / task_id / "output"
         try:
             repos.set_task_status(conn, task_id, "running")
@@ -867,22 +930,67 @@ class AgentRuntime:
             raise
 
         try:
-            context = self._build_context(
-                conn,
-                task,
-                agent,
-                pkg_dir,
-                output_dir,
-                [row for row, _handle in verified_files],
+            if native_execution is True:
+                context = self._build_context(
+                    conn,
+                    task,
+                    agent,
+                    pkg_dir,
+                    output_dir,
+                    [row for row, _handle in verified_files],
+                )
+            else:
+                context = MappingProxyType(
+                    {
+                        "event_logger": _WorkflowEventLogger(
+                            conn, task["id"], agent_id
+                        )
+                    }
+                )
+            outcome = self.execution_router.execute(
+                AgentExecutionRequest(
+                    task=task,
+                    agent=agent,
+                    package_dir=pkg_dir,
+                    output_dir=output_dir,
+                    context=context,
+                )
             )
-            workflow_module = _load_workflow_module(agent_id, pkg_dir / "workflow.py")
-            result = workflow_module.run(context)
+            result = dict(outcome.result)
+            receipt = outcome.receipt
+            # Preserve the exact native event contract. External execution is
+            # the new provenance boundary and therefore requires an explicit
+            # receipt in FLAi's immutable event stream.
+            if receipt.adapter != NATIVE_ADAPTER_ID:
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="agent_log",
+                    level="info",
+                    message=(
+                        f"Agent-layer 执行收据：{receipt.adapter}@"
+                        f"{receipt.contract_version}"
+                    ),
+                    payload={
+                        "workflow_event_type": "agent_layer_receipt",
+                        "execution_adapter": receipt.adapter,
+                        "execution_contract_version": receipt.contract_version,
+                        "execution_id": receipt.execution_id,
+                        "request_sha256": receipt.request_sha256,
+                        "runtime_identity": dict(receipt.runtime_identity),
+                        "final_revision": receipt.final_revision,
+                        "model_calls_attested_by_flai": (
+                            receipt.model_calls_attested_by_flai
+                        ),
+                    },
+                )
         except Exception as exc:
             error_message = f"{exc.__class__.__name__}: {exc}"
             repos.set_task_status(conn, task_id, "failed", error_message=error_message)
             repos.append_event(
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
-                level="error", message=f"workflow 执行异常：{error_message}",
+                level="error", message=f"Agent-layer 执行异常：{error_message}",
             )
             self._record_failure_sample(conn, task, agent, error_message, data_classification)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}

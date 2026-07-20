@@ -89,7 +89,7 @@ DESIGN_PROMOTION_GENERATION = "p28-disabled-sensitive-trial-v1"
 # 因而必须 bump，readyz/deploy_selfcheck 以心跳代际拒绝混版。
 WORKER_GENERATION = (
     "collab-resolver+t2-eval-snapshot+b3-llm-timeout+b8-disabled-gate"
-    "+adr36-outcome-flow"
+    "+adr36-outcome-flow+jerryagent-layer-v1"
 )
 
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。

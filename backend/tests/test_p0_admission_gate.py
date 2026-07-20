@@ -201,6 +201,44 @@ def test_readyz_200_when_fresh(app_env) -> None:
     assert r.status_code == 200
     assert r.json()["worker"]["fresh"] is True
     assert r.json()["worker"]["generation_ready"] is True
+    assert r.json()["worker"]["execution_bindings_ready"] is True
+    assert r.json()["worker"]["execution_bindings"] == [
+        {
+            "adapter": "native_python",
+            "contract_version": "native.workflow.v1",
+        }
+    ]
+
+
+def test_readyz_503_when_worker_and_api_execution_bindings_diverge(app_env) -> None:
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        repos.beat_worker_heartbeat(
+            conn,
+            generation=config.WORKER_GENERATION,
+            execution_bindings={
+                ("native_python", "native.workflow.v1"),
+                ("jerryagent_sidecar", "flai.agent-layer.v1"),
+            },
+        )
+    finally:
+        conn.close()
+
+    response = client.get("/api/readyz")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["worker"]["fresh"] is True
+    assert body["worker"]["generation_ready"] is True
+    assert body["worker"]["execution_bindings_ready"] is False
+    assert body["agent_layer"]["worker_binding_ready"] is False
+    assert body["agent_layer"]["bindings"] == [
+        {
+            "adapter": "native_python",
+            "contract_version": "native.workflow.v1",
+        }
+    ]
 
 
 def test_readyz_503_when_stale(app_env) -> None:

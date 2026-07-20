@@ -79,7 +79,18 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- retry_of（迁移 #12/评审 N4b）：「复制为新任务」的血缘注记——本任务复制自哪个
     -- 既有任务。纯元数据：不改队列/审计/管道语义（inputs 由前端复制进请求体、附件仍走
     -- kind=input 白名单），resolver/review/worker 均不读此列。可空 NULL=非重跑任务。
-    retry_of TEXT
+    retry_of TEXT,
+    -- Agent execution 绑定在任务创建时冻结；legacy 行按既有真实执行方式回填
+    -- native。两列由 trigger 禁止任何 UPDATE，运行期不得改绑或静默 fallback。
+    execution_adapter TEXT NOT NULL DEFAULT 'native_python',
+    execution_contract_version TEXT NOT NULL DEFAULT 'native.workflow.v1',
+    CONSTRAINT ck_tasks_execution_binding_exact CHECK (
+        (execution_adapter = 'native_python'
+         AND execution_contract_version = 'native.workflow.v1')
+        OR
+        (execution_adapter = 'jerryagent_sidecar'
+         AND execution_contract_version = 'flai.agent-layer.v1')
+    )
 );
 
 CREATE TABLE IF NOT EXISTS task_events (
@@ -555,6 +566,7 @@ CREATE TABLE IF NOT EXISTS worker_heartbeats (
     worker_id TEXT PRIMARY KEY,
     generation TEXT NOT NULL,
     detail TEXT,
+    execution_bindings_json TEXT NOT NULL DEFAULT '[{"adapter":"native_python","contract_version":"native.workflow.v1"}]',
     started_at TEXT NOT NULL,
     last_beat_at TEXT NOT NULL
 );
@@ -583,6 +595,34 @@ CREATE TABLE IF NOT EXISTS team_members (
     PRIMARY KEY (team_id, seq)
 );
 """
+
+_EXECUTION_BINDING_TRIGGER_DDL = (
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_tasks_execution_binding_exact_insert
+    BEFORE INSERT ON tasks
+    WHEN NOT (
+        (NEW.execution_adapter = 'native_python'
+         AND NEW.execution_contract_version = 'native.workflow.v1')
+        OR
+        (NEW.execution_adapter = 'jerryagent_sidecar'
+         AND NEW.execution_contract_version = 'flai.agent-layer.v1')
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'task execution binding must be an exact pair');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_tasks_execution_binding_immutable
+    BEFORE UPDATE OF execution_adapter, execution_contract_version ON tasks
+    BEGIN
+        SELECT RAISE(ABORT, 'task execution binding is immutable');
+    END
+    """,
+)
+_EXECUTION_BINDING_MANAGED_TRIGGERS = (
+    "trg_tasks_execution_binding_exact_insert",
+    "trg_tasks_execution_binding_immutable",
+)
 
 _JUDGMENT_OBJECT_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_task_review_advice_task_created "
@@ -3906,6 +3946,33 @@ def init_db(db_path: str | Path) -> None:
         tasks_table_exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'"
         ).fetchone() is not None
+        execution_binding_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(tasks)")
+        } if tasks_table_exists else set()
+        existing_execution_binding_columns = execution_binding_columns & {
+            "execution_adapter",
+            "execution_contract_version",
+        }
+        if existing_execution_binding_columns and existing_execution_binding_columns != {
+            "execution_adapter",
+            "execution_contract_version",
+        }:
+            raise sqlite3.IntegrityError(
+                "execution binding column residue is incomplete"
+            )
+        execution_binding_has_rows = bool(
+            len(existing_execution_binding_columns) == 2
+            and conn.execute("SELECT EXISTS(SELECT 1 FROM tasks LIMIT 1)").fetchone()[0]
+            == 1
+        )
+        if execution_binding_has_rows:
+            # Once a task carries a frozen binding, a missing or altered guard
+            # makes past rebinding unknowable.  Witness before any convergence;
+            # never repair around evidence and report a false green startup.
+            from .execution_binding_schema import assert_execution_binding_schema
+
+            assert_execution_binding_schema(conn)
         review_route_column_exists = bool(
             tasks_table_exists
             and "review_requested_from_username"
@@ -4143,6 +4210,21 @@ def init_db(db_path: str | Path) -> None:
         # BEGIN IMMEDIATE 拿写锁、锁内复查——锁内读到的列集即权威，赢家先完成
         # 迁移则此处如实跳过。
         try:
+            # Agent-layer worker/API parity witness.  Legacy workers cannot write
+            # this column, so the truthful historical/default witness is native;
+            # a Jerry-enabled API will then fail readiness until its worker is
+            # restarted and writes the actual two-binding router set.
+            worker_heartbeat_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(worker_heartbeats)")
+            }
+            if "execution_bindings_json" not in worker_heartbeat_cols:
+                conn.execute(
+                    "ALTER TABLE worker_heartbeats ADD COLUMN "
+                    "execution_bindings_json TEXT NOT NULL DEFAULT "
+                    "'[{\"adapter\":\"native_python\","
+                    "\"contract_version\":\"native.workflow.v1\"}]'"
+                )
             cols = {row[1] for row in conn.execute("PRAGMA table_info(model_calls)")}
             if "conversation_id" not in cols:
                 conn.execute("ALTER TABLE model_calls ADD COLUMN conversation_id TEXT")
@@ -4263,6 +4345,53 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute(
                     "ALTER TABLE tasks ADD COLUMN review_requested_from_username TEXT"
                 )
+            # 迁移 #18：任务创建时冻结 Agent execution adapter/contract。存量任务
+            # 历史上只能由本进程 workflow.py 执行，因此两个 DEFAULT 是如实回填，
+            # 不是推测 sidecar provenance。补齐两列后立刻安装 UPDATE 禁写 trigger；
+            # 直至事务提交，其他进程看不到半迁移状态。
+            task_cols_v18 = {
+                row[1] for row in conn.execute("PRAGMA table_info(tasks)")
+            }
+            if "execution_adapter" not in task_cols_v18:
+                conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN execution_adapter "
+                    "TEXT NOT NULL DEFAULT 'native_python'"
+                )
+            if "execution_contract_version" not in task_cols_v18:
+                conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN execution_contract_version "
+                    "TEXT NOT NULL DEFAULT 'native.workflow.v1'"
+                )
+            invalid_execution_binding = conn.execute(
+                """
+                SELECT id FROM tasks
+                WHERE typeof(execution_adapter) <> 'text'
+                   OR typeof(execution_contract_version) <> 'text'
+                   OR NOT (
+                    (execution_adapter = 'native_python'
+                     AND execution_contract_version = 'native.workflow.v1')
+                    OR
+                    (execution_adapter = 'jerryagent_sidecar'
+                     AND execution_contract_version = 'flai.agent-layer.v1')
+                )
+                LIMIT 1
+                """
+            ).fetchone()
+            if invalid_execution_binding is not None:
+                raise sqlite3.IntegrityError(
+                    "tasks contains an invalid execution adapter/contract binding; "
+                    f"refusing migration at task {invalid_execution_binding[0]!r}"
+                )
+            # Empty/new axes may safely converge inside this serialized
+            # transaction.  Evidence-bearing axes were already proven exact
+            # above, so this drop/recreate does not bless an unknown gap.
+            for trigger_name in _EXECUTION_BINDING_MANAGED_TRIGGERS:
+                conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+            for trigger_ddl in _EXECUTION_BINDING_TRIGGER_DDL:
+                conn.execute(trigger_ddl)
+            from .execution_binding_schema import assert_execution_binding_schema
+
+            assert_execution_binding_schema(conn)
             # 迁移 #14（P2.3）：conversations.created_by_username——会话稳定 owner。
             # nullable/无 DEFAULT：存量行保留 NULL，绝不从可撞名 created_by 反推；
             # 普通用户查询只按 exact username，故 legacy NULL 天然不可见、不可引用。

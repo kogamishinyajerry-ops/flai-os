@@ -132,6 +132,27 @@ def test_agent_schema_bites_on_invalid(mutate, reason) -> None:
         pytest.fail(f"契约没咬住反例：{reason}")
 
 
+@pytest.mark.parametrize(
+    ("adapter", "contract_version"),
+    [
+        ("native_python", "flai.agent-layer.v1"),
+        ("jerryagent_sidecar", "native.workflow.v1"),
+    ],
+)
+def test_agent_schema_rejects_mismatched_execution_pair(
+    adapter: str,
+    contract_version: str,
+) -> None:
+    bad = _valid_agent()
+    bad["execution"] = {
+        "adapter": adapter,
+        "contract_version": contract_version,
+    }
+
+    with pytest.raises(ValidationError):
+        validate(bad, _load_schema("agent.schema.json"))
+
+
 def _valid_tool() -> dict:
     return _load_yaml(REPO / "tools_impl/mock_tools/tool.yaml")
 
@@ -169,6 +190,8 @@ def test_task_schema_accepts_inputs_property() -> None:
     schema = _load_schema("task.schema.json")
     sample = {
         "id": "task_001", "agent_id": "hello_agent", "agent_version": "0.1.0",
+        "execution_adapter": "native_python",
+        "execution_contract_version": "native.workflow.v1",
         "status": "queued", "created_by": "tester", "created_at": "2026-07-08T00:00:00Z",
         "inputs": {"name": "张三"},
     }
