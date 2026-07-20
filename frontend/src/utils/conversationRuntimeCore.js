@@ -94,7 +94,8 @@ const OPTION_ID = /^option_[1-9][0-9]*$/;
 const TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:Z|([+-])(\d{2}):(\d{2}))$/;
 const QUESTION_TTL_MICROS = 86_400_000_000n;
 const QUESTION_STATUSES = new Set(["pending", "answered", "expired", "superseded"]);
-const CONVERSATION_STATUSES = new Set(["active", "paused", "concluded", "abandoned"]);
+const CONVERSATION_STATUSES = new Set(["active", "concluded"]);
+const CONVERSATION_TITLE_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
 export class ConversationRuntimeContractError extends Error {
   constructor(detail) {
@@ -124,6 +125,14 @@ function exactKeys(value, expected, path) {
 
 function validText(value, maximum) {
   return typeof value === "string" && value.trim().length > 0 && value.length <= maximum;
+}
+
+function validConversationTitle(value) {
+  return typeof value === "string"
+    && value.length >= 1
+    && value.length <= 60
+    && value === value.trim()
+    && CONVERSATION_TITLE_CONTROL.test(value) !== true;
 }
 
 function parseTimestampMicros(value) {
@@ -336,7 +345,44 @@ function validateConversationSummary(conversation, expectedId, { requireMessages
   contract(validText(conversation.agent_id, 200), "conversation.agent_id 非法");
   contract(CONVERSATION_STATUSES.has(conversation.status), "conversation.status 非法");
   contract(validText(conversation.created_by, 200), "conversation.created_by 非法");
+  contract(
+    conversation.title === null || validConversationTitle(conversation.title),
+    "conversation.title 非法",
+  );
+  contract(
+    Number.isInteger(conversation.lifecycle_revision) && conversation.lifecycle_revision >= 0,
+    "conversation.lifecycle_revision 非法",
+  );
+  contract(
+    conversation.archived_at === null || validTimestamp(conversation.archived_at),
+    "conversation.archived_at 非法",
+  );
   if (requireMessages) contract(Array.isArray(conversation.messages), "conversation.messages 必须是数组");
+}
+
+/** Validate one conversation projection that intentionally omits the message history. */
+export function validateConversationSummaryProjection(conversation, expectedId = conversation?.id) {
+  validateConversationSummary(conversation, expectedId, { requireMessages: false });
+  return conversation;
+}
+
+/** Validate a complete list authority before any row can drive labels or CAS mutations. */
+export function validateConversationListProjection(conversations) {
+  contract(Array.isArray(conversations), "conversation list 必须是数组");
+  const ids = new Set();
+  conversations.forEach((conversation, index) => {
+    try {
+      validateConversationSummaryProjection(conversation);
+      contract(!ids.has(conversation.id), `conversation list[${index}].id 重复`);
+      ids.add(conversation.id);
+    } catch (error) {
+      if (error instanceof ConversationRuntimeContractError) {
+        throw new ConversationRuntimeContractError(`conversation list[${index}] 非法：${error.message}`);
+      }
+      throw error;
+    }
+  });
+  return conversations;
 }
 
 /** Validate a GET /conversations/:id snapshot before it can replace UI truth. */

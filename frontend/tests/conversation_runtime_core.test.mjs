@@ -62,6 +62,9 @@ function validSnapshot() {
     agent_id: "guide_agent",
     status: "active",
     created_by: "Alice",
+    title: null,
+    lifecycle_revision: 0,
+    archived_at: null,
     recommendation: null,
     messages: [
       {
@@ -107,6 +110,9 @@ function validAnswerResponse() {
       agent_id: "guide_agent",
       status: "active",
       created_by: "Alice",
+      title: null,
+      lifecycle_revision: 0,
+      archived_at: null,
       recommendation: null,
     },
     replayed: false,

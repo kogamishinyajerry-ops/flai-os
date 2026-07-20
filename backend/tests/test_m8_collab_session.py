@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import TEST_DISPLAY_NAME
+from conftest import TEST_DISPLAY_NAME, TEST_USERNAME
 
 from backend.app.storage import db as db_mod
 from backend.app.storage import repos
@@ -259,7 +259,10 @@ def test_create_task_on_concluded_conversation_rejected(client: TestClient) -> N
     """异源 Codex R2-#3：会话 concluded 后 API 真只读——不再接受新成员任务
     （「结束协作」= 真结束）。关闭陈旧创建页 / 直连 API 在归档后挂任务的旁路。"""
     conv_id = _open_conversation(client)
-    assert client.post(f"/api/conversations/{conv_id}/conclude").status_code == 200
+    assert client.post(
+        f"/api/conversations/{conv_id}/conclude",
+        json={"lifecycle_revision": 0},
+    ).status_code == 200
     resp = client.post(
         "/api/tasks",
         json={
@@ -381,9 +384,16 @@ def test_create_task_concluded_race_is_atomic(app_env, tmp_path) -> None:
     # rival：短 timeout 直连抢锁归档。修好时 victim 持写锁 → 这里被拒快速失败；
     # 未修时 victim 无锁 → 这里成功归档。两种结果都放行，裁决交给不变量。
     rival = sqlite3.connect(str(db_path), isolation_level=None, timeout=1.0)
+    rival.row_factory = sqlite3.Row
     try:
         rival.execute("BEGIN IMMEDIATE")
-        rival.execute("UPDATE conversations SET status='concluded' WHERE id=?", (conv_id,))
+        repos.append_conversation_lifecycle_event(
+            rival,
+            conversation_id=conv_id,
+            event_type="concluded",
+            actor_username=TEST_USERNAME,
+            lifecycle_revision=0,
+        )
         rival.execute("COMMIT")
     except sqlite3.OperationalError:
         pass  # 修好：被 victim 写锁挡住——防御生效

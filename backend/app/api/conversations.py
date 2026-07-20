@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -115,6 +116,44 @@ class AnswerQuestionRequest(BaseModel):
         return value
 
 
+class ConversationLifecycleRequest(BaseModel):
+    """Every lifecycle mutation carries the exact current projection revision."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    lifecycle_revision: int = Field(ge=0)
+
+    @field_validator("lifecycle_revision", mode="before")
+    @classmethod
+    def lifecycle_revision_must_be_exact_integer(cls, value: Any) -> Any:
+        # JSON booleans are Python ints; strict=True alone is not an adequate
+        # wire-level witness for a revision number.
+        if type(value) is not int:
+            raise ValueError("lifecycle_revision 必须是整数")
+        return value
+
+
+class RenameConversationRequest(ConversationLifecycleRequest):
+    title: str
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def title_must_be_single_line_and_bounded(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            raise ValueError("title 必须是字符串")
+        title = value.strip()
+        if title != value:
+            raise ValueError("title 必须已去除首尾空白")
+        if not 1 <= len(title) <= 60:
+            raise ValueError("title 去除首尾空白后须为 1 到 60 个字符")
+        if any(
+            unicodedata.category(char) in {"Cc", "Zl", "Zp"}
+            for char in title
+        ):
+            raise ValueError("title 不得包含控制字符或换行")
+        return title
+
+
 @router.post("/conversations")
 def create_conversation(body: CreateConversationRequest, request: Request) -> dict[str, Any]:
     service = request.app.state.conversation_service
@@ -129,6 +168,7 @@ def create_conversation(body: CreateConversationRequest, request: Request) -> di
 @router.get("/conversations")
 def list_conversations(
     request: Request,
+    visibility: Literal["visible", "archived"] = Query(default="visible"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[dict[str, Any]]:
@@ -139,6 +179,7 @@ def list_conversations(
         return repos.list_conversations(
             conn,
             created_by_username=request.state.user["username"],
+            visibility=visibility,
             limit=limit,
             offset=offset,
         )
@@ -241,15 +282,61 @@ def answer_question(
 
 
 @router.post("/conversations/{conversation_id}/conclude")
-def conclude_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
-    """结束会话（active → concluded）。「确认草案去创建任务」时前端调用本端点
-    归档会话（ADR-0013：补上 V0.1 会话不落终态的债）。"""
+def conclude_conversation(
+    conversation_id: str,
+    body: ConversationLifecycleRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """结束会话（active → concluded），使对话只读；与归档可见性正交。"""
     service = request.app.state.conversation_service
     try:
-        return service.conclude(conversation_id, principal=request.state.user)
+        return service.conclude(
+            conversation_id,
+            lifecycle_revision=body.lifecycle_revision,
+            principal=request.state.user,
+        )
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ConversationClosedError as exc:
+    except (ConversationClosedError, ConversationConflictError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.patch("/conversations/{conversation_id}/title")
+def rename_conversation(
+    conversation_id: str,
+    body: RenameConversationRequest,
+    request: Request,
+) -> dict[str, Any]:
+    service = request.app.state.conversation_service
+    try:
+        return service.rename(
+            conversation_id,
+            title=body.title,
+            lifecycle_revision=body.lifecycle_revision,
+            principal=request.state.user,
+        )
+    except ConversationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConversationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/conversations/{conversation_id}/archive")
+def archive_conversation(
+    conversation_id: str,
+    body: ConversationLifecycleRequest,
+    request: Request,
+) -> dict[str, Any]:
+    service = request.app.state.conversation_service
+    try:
+        return service.archive(
+            conversation_id,
+            lifecycle_revision=body.lifecycle_revision,
+            principal=request.state.user,
+        )
+    except ConversationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConversationConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 

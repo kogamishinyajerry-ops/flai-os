@@ -271,9 +271,11 @@ function onResize() {
 // M8：由导引协作会话带入的会话 id——提交任务时回填，使任务归到协作工作台的
 // 同一次会话下。门户直建（无 from=guide）时保持 null。
 const prefillConversationId = ref(null);
-// 单 Agent 导引流程：任务创建成功后再归档本会话（异源 Codex R2-#3：会话 concluded 后
-// API 真只读拒新任务，故归档必须后于创建，不能像旧流程那样先归档再跳创建页）。
+// 单 Agent 导引流程：任务创建成功后再结束本会话（异源 Codex R2-#3：会话 concluded 后
+// API 真只读拒新任务，故结束必须后于创建，不能像旧流程那样先结束再跳创建页）。
 const prefillConcludeAfter = ref(false);
+// 与草案同一时刻读取的生命周期 CAS 版本；不从任务创建结果或本地计数猜测更新。
+const prefillLifecycleRevision = ref(null);
 // 提交飞入（批A T10）：提交成功、跳转前在提交按钮附近播一次 fx-rise（列表飞入感）。
 const submitAnchor = ref(null);
 function prefersReducedMotion() {
@@ -328,6 +330,7 @@ function resetPrefillState() {
   prefillHadFileCount.value = 0;
   prefillConversationId.value = null;
   prefillConcludeAfter.value = false;
+  prefillLifecycleRevision.value = null;
   // 自动预填的任务名先撤（nameWasPrefilled 标识区分人工输入 vs 自动带入）——
   // 人工手输的名字绝不动（用户编辑后 @input 已把 flag 置 false）。
   if (nameWasPrefilled) {
@@ -364,8 +367,12 @@ function consumePrefillDraft() {
         }
         if (typeof draft.conversation_id === "string") {
           prefillConversationId.value = draft.conversation_id;
-          // 单 Agent 草案带 conclude_after：提交成功后归档本会话（后于创建，见下）。
+          // 单 Agent 草案带 conclude_after：提交成功后结束本会话（后于创建，见下）。
           prefillConcludeAfter.value = draft.conclude_after === true;
+          prefillLifecycleRevision.value = Number.isInteger(draft.lifecycle_revision)
+            && draft.lifecycle_revision >= 0
+            ? draft.lifecycle_revision
+            : null;
         }
         for (const f of Array.isArray(draft.files) ? draft.files : []) {
           if (f && f.id && f.name) {
@@ -557,17 +564,35 @@ async function handleSubmit() {
       retryOf: prefillRetryOf.value,
       reviewRequestedFromUsername: form.reviewRequestedFromUsername,
     });
-    // 单 Agent 导引流程：任务已创建成功，此刻再归档本会话（fire-and-forget，归档失败
-    // 不影响已建任务；多 Agent 由工作台「结束协作」显式归档）。必须后于 createTask——
+    // 单 Agent 导引流程：任务已创建成功，此刻再结束本会话。结束失败不回滚已建任务；
+    // 多 Agent 由工作台「结束协作」显式结束。必须后于 createTask——
     // 会话须在创建时仍 active（异源 Codex R2-#3：结束协作=真只读）。
+    let conclusionWarning = "";
     if (prefillConcludeAfter.value && prefillConversationId.value) {
-      concludeConversation(prefillConversationId.value).catch(() => {});
+      if (!Number.isInteger(prefillLifecycleRevision.value) || prefillLifecycleRevision.value < 0) {
+        conclusionWarning = "任务已创建，但会话版本未核对，未结束";
+      } else {
+        try {
+          await concludeConversation(prefillConversationId.value, {
+            lifecycleRevision: prefillLifecycleRevision.value,
+          });
+        } catch (concludeError) {
+          conclusionWarning = concludeError?.status === 409
+            ? "任务已创建，但会话因状态变化未结束"
+            : `任务已创建，但未能确认会话是否已结束：${concludeError?.detail || concludeError?.message || "请稍后重试"}`;
+        }
+      }
     }
-    ElMessage({ message: "任务已创建", type: "info" });
+    if (conclusionWarning) {
+      submitError.value = conclusionWarning;
+      ElMessage.warning(conclusionWarning);
+    } else {
+      ElMessage({ message: "任务已创建", type: "info" });
+    }
     await playSubmitRise();
     // 范式 2a 对话轴闭环：从导引来（back=chat）且会话仍活跃 → 回流对话，任务卡
-    // 在流里原地亮起（Claude 式零跳页）。单 Agent conclude_after 已归档会话，
-    // 回一个刚被归档的会话反而突兀——仍走详情页；工作台来的召集同样走详情页
+    // 在流里原地亮起（Claude 式零跳页）。单 Agent conclude_after 已结束会话，
+    // 回一个刚结束的会话反而突兀——仍走详情页；工作台来的召集同样走详情页
     // （m8_collab_chain e2e 断言④=提交后落详情，该路径不带 back=chat）。
     if (route.query.back === "chat" && prefillConversationId.value && !prefillConcludeAfter.value) {
       router.push({ path: "/", query: { c: prefillConversationId.value } });

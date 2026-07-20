@@ -634,7 +634,10 @@ def test_concluded_conversation_rejects_answer_before_model_or_write(app_env) ->
     before_messages = [
         (item["message_id"], item["role"], item["content"]) for item in before
     ]
-    concluded = client.post(f"/api/conversations/{conversation_id}/conclude")
+    concluded = client.post(
+        f"/api/conversations/{conversation_id}/conclude",
+        json={"lifecycle_revision": 0},
+    )
     assert concluded.status_code == 200, concluded.text
 
     response = _answer(

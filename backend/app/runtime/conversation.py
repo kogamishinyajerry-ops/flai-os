@@ -6,7 +6,7 @@
 不需后台轮询）。
 
 职责边界（只做通用会话编排，不含任何导引业务逻辑）：
-- 维护会话生命周期与消息持久化（active → concluded/abandoned，终态不可再收消息）；
+- 维护会话生命周期与消息持久化（active → concluded，终态不可再收消息）；
 - 逐轮把会话历史（截窗后）转发到 Agent 包的 `run(context)`；
 - 落回 assistant 回复与其可能携带的推荐（预填任务草案）快照。
 
@@ -61,6 +61,11 @@ _MAX_QUESTION_TEXT = 4_000
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _lifecycle_now_iso() -> str:
+    """Canonical timestamp shared by a lifecycle event and its side effects."""
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _expiry_from(created_at: str) -> str:
@@ -336,12 +341,59 @@ class ConversationService:
         finally:
             conn.close()
 
+    def rename(
+        self,
+        conversation_id: str,
+        *,
+        title: str,
+        lifecycle_revision: int,
+        principal: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Rename any owned lifecycle projection through the append-only ledger."""
+        conn = self.conn_factory()
+        try:
+            principal_username = _principal_username(principal)
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conv = repos.get_conversation_for_owner(
+                    conn, conversation_id, principal_username
+                )
+                if conv is None:
+                    raise ConversationNotFoundError(
+                        f"会话不存在：{conversation_id}"
+                    )
+                if conv["lifecycle_revision"] != lifecycle_revision:
+                    raise ConversationConflictError(
+                        "会话生命周期版本已变化，请刷新后重试"
+                    )
+                if conv["title"] == title:
+                    raise ConversationConflictError("会话标题没有变化")
+                result = repos.append_conversation_lifecycle_event(
+                    conn,
+                    conversation_id=conversation_id,
+                    event_type="renamed",
+                    actor_username=principal_username,
+                    lifecycle_revision=lifecycle_revision,
+                    title=title,
+                )
+                conn.execute("COMMIT")
+                return result
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        finally:
+            conn.close()
+
     def conclude(
-        self, conversation_id: str, *, principal: Mapping[str, Any]
+        self,
+        conversation_id: str,
+        *,
+        lifecycle_revision: int,
+        principal: Mapping[str, Any],
     ) -> dict[str, Any]:
         """人工结束会话：active → concluded（唯一合法转出，BEGIN IMMEDIATE 防并发双转）。
 
-        「确认草案去创建任务」时前端调用本动作归档会话；已终态的会话如实 409，
+        「确认草案去创建任务」时前端调用本动作结束会话；已终态的会话如实 409，
         不做幂等吞掉——重复 conclude 说明调用方状态观有误，应当被看见。
         """
         conn = self.conn_factory()
@@ -354,17 +406,70 @@ class ConversationService:
                 )
                 if conv is None:
                     raise ConversationNotFoundError(f"会话不存在：{conversation_id}")
+                if conv["lifecycle_revision"] != lifecycle_revision:
+                    raise ConversationConflictError(
+                        "会话生命周期版本已变化，请刷新后重试"
+                    )
                 if conv["status"] != "active":
                     raise ConversationClosedError(
                         f"会话已 {conv['status']}，无法再次结束：{conversation_id}"
                     )
+                event_at = _lifecycle_now_iso()
                 repos.close_unresolved_questions(
                     conn,
                     conversation_id,
                     principal_username,
-                    now=_now_iso(),
+                    now=event_at,
                 )
-                result = repos.set_conversation_status(conn, conversation_id, "concluded")
+                result = repos.append_conversation_lifecycle_event(
+                    conn,
+                    conversation_id=conversation_id,
+                    event_type="concluded",
+                    actor_username=principal_username,
+                    lifecycle_revision=lifecycle_revision,
+                    created_at=event_at,
+                )
+                conn.execute("COMMIT")
+                return result
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        finally:
+            conn.close()
+
+    def archive(
+        self,
+        conversation_id: str,
+        *,
+        lifecycle_revision: int,
+        principal: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Irreversibly hide a conversation without changing status or Question."""
+        conn = self.conn_factory()
+        try:
+            principal_username = _principal_username(principal)
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conv = repos.get_conversation_for_owner(
+                    conn, conversation_id, principal_username
+                )
+                if conv is None:
+                    raise ConversationNotFoundError(
+                        f"会话不存在：{conversation_id}"
+                    )
+                if conv["lifecycle_revision"] != lifecycle_revision:
+                    raise ConversationConflictError(
+                        "会话生命周期版本已变化，请刷新后重试"
+                    )
+                if conv["archived_at"] is not None:
+                    raise ConversationConflictError("会话已经归档，不能重复归档")
+                result = repos.append_conversation_lifecycle_event(
+                    conn,
+                    conversation_id=conversation_id,
+                    event_type="archived",
+                    actor_username=principal_username,
+                    lifecycle_revision=lifecycle_revision,
+                )
                 conn.execute("COMMIT")
                 return result
             except Exception:

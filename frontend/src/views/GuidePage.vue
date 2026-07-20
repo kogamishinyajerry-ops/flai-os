@@ -305,10 +305,10 @@
                     <p v-if="a.stripped_fields && a.stripped_fields.length" class="agent-stripped">
                       已剔除不合法字段：{{ a.stripped_fields.join("、") }}（未匹配该 Agent 的输入契约）
                     </p>
-                    <!-- 提示按成员就绪分轴（CRS R0-P3）：参数齐但方案级不可开工（归档/附件）
+                    <!-- 提示按成员就绪分轴（CRS R0-P3）：参数齐但方案级不可开工（结束/附件）
                          不能误导用户去修本已齐的参数 -->
                     <div v-if="!summonedLocally(a) && !agentBatchable(a, m.recommendation)" class="sa-subline">
-                      <span v-if="agentReady(a) === true" class="agent-unready-hint">参数已齐——本方案暂不可一键开工（会话已归档或有附件），可去创建页亲手提交。</span>
+                      <span v-if="agentReady(a) === true" class="agent-unready-hint">参数已齐——本方案暂不可一键开工（会话已结束或有附件），可去创建页亲手提交。</span>
                       <span v-else class="agent-unready-hint">参数未齐——直接回复导引补全，或去创建页填好后亲手提交。</span>
                     </div>
                   </template>
@@ -1012,6 +1012,7 @@ async function reconcileConversationSnapshot(id, isCurrent = () => true) {
     ) return false;
     conversationId.value = conv.id;
     conversationStatus.value = conv.status || null;
+    conversationLifecycleRevision.value = conv.lifecycle_revision;
     conversationLoadState.value = "ready";
     started.value = true;
     mergeConversationSnapshot(conv);
@@ -1182,6 +1183,7 @@ async function submitQuestionAnswer(submission) {
     appendCanonicalMessage(result.answer_message, { fresh: isFresh });
     appendCanonicalMessage(result.message, { fresh: isFresh });
     conversationStatus.value = result.conversation?.status || conversationStatus.value;
+    conversationLifecycleRevision.value = result.conversation.lifecycle_revision;
     questionErrors[questionId] = "";
     questionRequestFailed[questionId] = false;
     questionStale[questionId] = false;
@@ -1294,6 +1296,7 @@ async function send() {
       sendToken = conversationRuntimeGate.bindSession(sendToken, targetConversationId);
       conversationId.value = conv.id;
       conversationStatus.value = conv.status || "active";
+      conversationLifecycleRevision.value = conv.lifecycle_revision;
       conversationLoadState.value = "ready";
       started.value = true;
       // URL 反映当前会话（可刷新/分享/回退），并让左栏历史即时收录这条新会话。
@@ -1318,6 +1321,7 @@ async function send() {
       userContent: content,
     });
     if (!sendIsCurrent()) return;
+    conversationLifecycleRevision.value = res.conversation.lifecycle_revision;
     // 成功：附件已随消息落库，清空待发区；气泡 chips 换用真实文件 id
     const sent = optimisticMessage;
     if (messages.value.includes(sent)) {
@@ -1426,7 +1430,7 @@ function collectCarriedFiles() {
 }
 
 function openWorkbench() {
-  // 进入本次会话的协作工作台（分工架构 + 逐个召集 + 进度）。不归档会话——
+  // 进入本次会话的协作工作台（分工架构 + 逐个召集 + 进度）。不结束会话——
   // 工作台里还要继续从蓝图召集 Agent；会话作协作锚点保持存续。
   if (conversationId.value) {
     router.push(`/workbench/${conversationId.value}`);
@@ -1436,7 +1440,7 @@ function openWorkbench() {
 // ── 原地召集（对话轴内联确认，范式 2a 单入口）─────────────────────────
 // 宪法边界：导引绝不代召集——「原地召集」「确认召集」两次点击都由人亲手完成，
 // 走与创建页完全相同的 POST /api/tasks（服务端 jsonschema 校验 fail-closed）。
-// 只在①多 Agent 方案（单 Agent 保留创建页 conclude_after 归档语义）②预填非空
+// 只在①多 Agent 方案（单 Agent 保留创建页 conclude_after 结束语义）②预填非空
 // ③会话无携带附件（附件必须经创建页人工过目）时提供；参数不全由 422 如实
 // 透出，引导走「去创建此任务」补全，绝不客户端猜校验。
 const opening = ref(null); // 「照此方案开工」进行中的会话 id（按会话作用域，CRS R1-P2：
@@ -1449,6 +1453,8 @@ const locallySummoned = reactive({});
 // 会话可写态（Codex R0-P2）：getConversation/createConversation 如实带出，concluded
 // 只读会话不提供内联召集（否则创建必 409）。未知（null）= fail-closed 不提供。
 const conversationStatus = ref(null);
+// rename/archive/conclude 共用的 CAS 版本；只从经过运行时合同核对的会话投影更新。
+const conversationLifecycleRevision = ref(null);
 // Agent 输入契约缓存（Codex R0-P1）：POST /api/tasks 不做即时 schema 校验（校验在
 // worker 运行期），故「预填就绪」必须由前端按 input_schema.required 逐键判定后才
 // 提供内联路径——schema 拉不到 / 未知一律 fail-closed 回创建页路径。
@@ -1759,7 +1765,7 @@ async function openPlan(plan) {
     return;
   }
   if (planOpenable(plan) !== true) {
-    ElMessage.error("条件已变化（会话归档 / 新增附件），请刷新方案或走「去创建此任务」。");
+    ElMessage.error("条件已变化（会话已结束 / 新增附件），请刷新方案或走「去创建此任务」。");
     return;
   }
   // 会话 id 提前钉死（CRS R0-P1 语义保留）：原子端点下不存在「中途切会话」的
@@ -1842,10 +1848,10 @@ function createOneTask(agent, plan) {
   // 人确认接缝：把某个被召集 Agent 的预填草案交给创建任务页，由人补全后亲手
   // 提交（导引绝不代签）。走 sessionStorage 而非 URL，避免工程数据进查询串。
   // M7：会话附件随草案带走，创建页以「已上传」状态入列，人可移除。
-  // 单 Agent 计划：确认后应归档会话（保留 M6「一次会话=一个任务」语义）。但归档必须
+  // 单 Agent 计划：确认后应结束会话（保留 M6「一次会话=一个任务」语义）。但结束必须
   // **后于任务创建成功**——异源 Codex R2-#3：会话 concluded 后 API 真只读拒新任务，若
-  // 沿用旧的「先 fire-and-forget 归档、再跳创建页」，创建时会话已 concluded → 创建被 409
-  // 打回。故这里不再先归档，只在草案里带 conclude_after 标记，由创建页在提交成功后归档。
+  // 沿用旧的「先 fire-and-forget 结束、再跳创建页」，创建时会话已 concluded → 创建被 409
+  // 打回。故这里只在草案里带 conclude_after 与当前 revision，由创建页在提交成功后结束。
   const isSingleAgent =
     plan && Array.isArray(plan.agents) && plan.agents.length === 1 && !!conversationId.value;
   sessionStorage.setItem(
@@ -1856,7 +1862,8 @@ function createOneTask(agent, plan) {
       files: collectCarriedFiles(),
       // M8：带上会话 id——创建的任务归到本次导引协作会话下（协作工作台按会话聚合）。
       conversation_id: conversationId.value || null,
-      // 单 Agent：创建页提交成功后再归档本会话（多 Agent 由工作台「结束协作」显式归档）。
+      lifecycle_revision: conversationLifecycleRevision.value,
+      // 单 Agent：创建页提交成功后再结束本会话（多 Agent 由工作台「结束协作」显式结束）。
       conclude_after: isSingleAgent,
     })
   );
@@ -2227,6 +2234,7 @@ function resetToFresh(clearError = true, { sessionId = "" } = {}) {
   started.value = false;
   conversationId.value = "";
   conversationStatus.value = null;
+  conversationLifecycleRevision.value = null;
   conversationLoadState.value = sessionId ? "loading" : "fresh";
   conversationSnapshotInFlight.value = false;
   sending.value = false;

@@ -39,12 +39,14 @@ _P23_REQUIRED_INDEX_NAMES = (
 )
 _P23_REQUIRED_TRIGGER_NAMES = (
     "trg_conversations_id_required",
+    "trg_conversations_lifecycle_initial_state",
     "trg_conversations_owner_immutable",
     "trg_conversations_no_conflicting_insert",
     "trg_conversations_identity_immutable",
     "trg_conversations_no_delete",
     "trg_conversations_no_conflicting_insert_v2",
     "trg_conversations_positive_rowid",
+    "trg_conversations_lifecycle_event_required",
     "trg_conversation_messages_public_id_required",
     "trg_conversation_messages_no_update",
     "trg_conversation_messages_no_delete",
@@ -402,12 +404,12 @@ def test_message_public_id_witness_rejects_defaulted_or_generated_lookalike(
         ),
         ("id TEXT PRIMARY KEY NOT NULL,", "id TEXT,"),
         (
-            "updated_at TEXT NOT NULL\n)",
-            "updated_at TEXT NOT NULL\n) STRICT",
+            "archived_at TEXT\n)",
+            "archived_at TEXT\n) STRICT",
         ),
         (
-            "updated_at TEXT NOT NULL\n)",
-            "updated_at TEXT NOT NULL,\n    CHECK (1 = 1)\n)",
+            "archived_at TEXT\n)",
+            "archived_at TEXT,\n    CHECK (1 = 1)\n)",
         ),
     ),
 )
@@ -571,7 +573,7 @@ def test_offline_probe_and_shared_schema_contract_load_with_stdlib_only() -> Non
             "-c",
             "from scripts import deploy_selfcheck; "
             "from backend.app.storage import p23_schema; "
-            "assert len(p23_schema.p23_required_trigger_names()) == 29; "
+            "assert len(p23_schema.p23_required_trigger_names()) == 31; "
             "assert len(p23_schema.p23_required_index_names()) == 8; "
             "assert deploy_selfcheck._p23_schema_witnesses "
             "is p23_schema.p23_schema_witnesses",

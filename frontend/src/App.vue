@@ -35,20 +35,104 @@
 
       <div class="sb-history">
         <div class="sb-section-label">最近对话</div>
+        <div v-if="visibleConvosError" class="convo-list-error" role="alert">
+          <span>最近对话加载失败：{{ visibleConvosError }}</span>
+          <button type="button" @click="loadConvos">重试</button>
+        </div>
         <div class="sb-convos">
-          <a
-            v-for="c in convos"
+          <div v-if="visibleConvosLoading && !visibleConvosLoaded" class="convo-loading" role="status">
+            正在加载最近对话…
+          </div>
+          <div
+            v-for="c in visibleConvos"
             :key="c.id"
             class="convo-item"
             :class="{ 'is-active': activeConvoId === c.id }"
-            :title="convoTitle(c)"
-            @click="openConvo(c)"
           >
-            <span class="convo-dot" :class="c.recommendation && c.recommendation.decision === 'refuse' ? 'refuse' : (c.recommendation ? 'plan' : 'talk')"></span>
-            <span class="convo-title">{{ convoTitle(c) }}</span>
-            <span v-if="c.updated_at || c.created_at" class="convo-time">{{ formatTime(c.updated_at || c.created_at) }}</span>
-          </a>
-          <div v-if="!convos.length" class="convo-empty">还没有对话——从上方「新对话」开始</div>
+            <button type="button" class="convo-open" :title="convoTitle(c)" @click="openConvo(c)">
+              <span class="convo-dot" :class="c.recommendation && c.recommendation.decision === 'refuse' ? 'refuse' : (c.recommendation ? 'plan' : 'talk')"></span>
+              <span class="convo-copy">
+                <span class="convo-title">{{ convoTitle(c) }}</span>
+                <span class="convo-meta">
+                  <span>{{ convoLifecycleLabel(c) }}</span>
+                  <span v-if="c.updated_at || c.created_at">{{ formatTime(c.updated_at || c.created_at) }}</span>
+                </span>
+              </span>
+            </button>
+            <el-dropdown trigger="click" @command="handleConvoCommand($event, c)" @click.stop>
+              <button
+                type="button"
+                class="convo-menu"
+                :disabled="Boolean(convoMutationId)"
+                :aria-label="`管理会话：${convoTitle(c)}`"
+                @click.stop
+              >•••</button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="rename">重命名</el-dropdown-item>
+                  <el-dropdown-item command="archive" divided>归档…</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+          <div
+            v-if="visibleConvosLoaded && !visibleConvosError && !visibleConvos.length"
+            class="convo-empty"
+          >还没有对话——从上方「新对话」开始</div>
+        </div>
+
+        <button
+          type="button"
+          class="sb-archive-toggle"
+          :aria-expanded="archivedExpanded"
+          @click="archivedExpanded = !archivedExpanded"
+        >
+          <span>{{ archivedExpanded ? "▾" : "▸" }} 已归档</span>
+          <span v-if="archivedConvosLoaded" class="archive-count">{{ archivedConvos.length }}</span>
+        </button>
+        <div v-if="archivedConvosError" class="convo-list-error" role="alert">
+          <span>已归档会话加载失败：{{ archivedConvosError }}</span>
+          <button type="button" @click="loadConvos">重试</button>
+        </div>
+        <div v-if="archivedExpanded" class="sb-convos is-archived">
+          <div v-if="archivedConvosLoading && !archivedConvosLoaded" class="convo-loading" role="status">
+            正在加载已归档会话…
+          </div>
+          <div
+            v-for="c in archivedConvos"
+            :key="c.id"
+            class="convo-item"
+            :class="{ 'is-active': activeConvoId === c.id }"
+          >
+            <button type="button" class="convo-open" :title="convoTitle(c)" @click="openConvo(c)">
+              <span class="convo-dot archived"></span>
+              <span class="convo-copy">
+                <span class="convo-title">{{ convoTitle(c) }}</span>
+                <span class="convo-meta">
+                  <span>{{ convoLifecycleLabel(c) }}</span>
+                  <span>已归档</span>
+                </span>
+              </span>
+            </button>
+            <el-dropdown trigger="click" @command="handleConvoCommand($event, c)" @click.stop>
+              <button
+                type="button"
+                class="convo-menu"
+                :disabled="Boolean(convoMutationId)"
+                :aria-label="`管理已归档会话：${convoTitle(c)}`"
+                @click.stop
+              >•••</button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="rename">重命名</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+          <div
+            v-if="archivedConvosLoaded && !archivedConvosError && !archivedConvos.length"
+            class="convo-empty"
+          >还没有已归档会话</div>
         </div>
       </div>
 
@@ -132,7 +216,11 @@
 <script setup>
 import { ref, computed, watch, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { listConversations } from "./api/conversations";
+import {
+  archiveConversation,
+  listConversations,
+  renameConversation,
+} from "./api/conversations";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { formatTime } from "./utils/format";
 import { currentUser, fetchMe, logout } from "./stores/session";
@@ -241,20 +329,142 @@ const sidebarOpen = ref(false);
 function toggleSidebar() { sidebarOpen.value = !sidebarOpen.value; }
 function closeSidebar() { sidebarOpen.value = false; }
 
-const convos = ref([]);
-async function loadConvos() {
+const visibleConvos = ref([]);
+const archivedConvos = ref([]);
+const visibleConvosLoading = ref(false);
+const archivedConvosLoading = ref(false);
+const visibleConvosLoaded = ref(false);
+const archivedConvosLoaded = ref(false);
+const visibleConvosError = ref("");
+const archivedConvosError = ref("");
+const archivedExpanded = ref(false);
+const convoMutationId = ref("");
+let convoLoadSeq = 0;
+
+function convoRequestError(err) {
+  return err?.detail || err?.message || "请求失败";
+}
+
+async function loadConvoBucket(visibility, seq) {
+  const items = visibility === "visible" ? visibleConvos : archivedConvos;
+  const loading = visibility === "visible" ? visibleConvosLoading : archivedConvosLoading;
+  const loaded = visibility === "visible" ? visibleConvosLoaded : archivedConvosLoaded;
+  const error = visibility === "visible" ? visibleConvosError : archivedConvosError;
+  loading.value = true;
+  error.value = "";
   try {
-    const list = await listConversations({ limit: 30 });
-    convos.value = list;
-  } catch {
-    convos.value = []; // 左栏历史失败不阻断主区
+    const list = await listConversations({ visibility, limit: 30 });
+    if (seq !== convoLoadSeq) return false;
+    if (!Array.isArray(list)) throw new Error("会话列表响应格式不可信");
+    items.value = list;
+    loaded.value = true;
+    return true;
+  } catch (err) {
+    if (seq !== convoLoadSeq) return false;
+    // 暖失败保留最后一份真实清单，同时亮出错误；冷失败也绝不画成空列表。
+    error.value = convoRequestError(err);
+    loaded.value = true;
+    return false;
+  } finally {
+    if (seq === convoLoadSeq) loading.value = false;
   }
 }
+
+async function loadConvos() {
+  const seq = ++convoLoadSeq;
+  const refreshed = await Promise.all([
+    loadConvoBucket("visible", seq),
+    loadConvoBucket("archived", seq),
+  ]);
+  return refreshed.every((ok) => ok === true);
+}
+
 function convoTitle(c) {
+  if (c.title) return c.title;
   const r = c.recommendation;
   if (r && r.decision === "orchestrate" && r.goal) return r.goal;
   if (r && r.decision === "refuse" && r.reason) return "（未接住）" + r.reason;
   return `与 ${c.created_by || "你"} 的对话`;
+}
+function convoLifecycleLabel(c) {
+  return c.status === "concluded" ? "已结束" : "进行中";
+}
+
+async function mutateConversation(c, mutation, successMessage) {
+  if (convoMutationId.value) return;
+  convoMutationId.value = c.id;
+  try {
+    await mutation();
+    ElMessage({ message: successMessage, type: "info" });
+    await loadConvos();
+  } catch (err) {
+    // CAS 冲突绝不自动重放人的动作。先刷新两条权威清单，再请人重新判断。
+    const refreshed = await loadConvos();
+    if (err?.status === 409) {
+      if (refreshed) {
+        ElMessage.warning("会话已发生变化，已刷新权威列表；请重新操作。");
+      } else {
+        ElMessage.error("会话已发生变化；权威列表刷新失败。原操作未重试，请先重试加载。");
+      }
+    } else {
+      ElMessage.error(`会话操作失败：${convoRequestError(err)}`);
+    }
+  } finally {
+    convoMutationId.value = "";
+  }
+}
+
+async function renameConvo(c) {
+  let result;
+  try {
+    result = await ElMessageBox.prompt("输入仅由你确认的会话标题（1–60 字）", "重命名会话", {
+      confirmButtonText: "保存标题",
+      cancelButtonText: "取消",
+      inputValue: c.title || "",
+      inputPlaceholder: "请输入会话标题",
+      inputValidator: (raw) => {
+        const title = typeof raw === "string" ? raw.trim() : "";
+        if (!title) return "标题不能为空";
+        if (title.length > 60) return "标题不能超过 60 字";
+        if (/[\u0000-\u001f\u007f-\u009f]/.test(title)) return "标题不能包含换行或控制字符";
+        return true;
+      },
+    });
+  } catch {
+    return;
+  }
+  const title = result.value.trim();
+  await mutateConversation(
+    c,
+    () => renameConversation(c.id, {
+      lifecycleRevision: c.lifecycle_revision,
+      title,
+    }),
+    "会话标题已更新",
+  );
+}
+
+async function archiveConvo(c) {
+  try {
+    await ElMessageBox.confirm(
+      "归档后会话将移入「已归档」。此操作不可撤销；归档不会结束会话。确定归档？",
+      "归档会话",
+      { confirmButtonText: "确认归档", cancelButtonText: "取消", type: "warning" },
+    );
+  } catch {
+    return;
+  }
+  await mutateConversation(
+    c,
+    () => archiveConversation(c.id, { lifecycleRevision: c.lifecycle_revision }),
+    "会话已归档",
+  );
+}
+
+function handleConvoCommand(command, c) {
+  if (convoMutationId.value) return;
+  if (command === "rename") void renameConvo(c);
+  else if (command === "archive") void archiveConvo(c);
 }
 function openConvo(c) {
   router.push({ path: "/", query: { c: c.id } });
@@ -856,7 +1066,8 @@ body {
   color: var(--ink-faint);
   padding: 4px 12px 6px;
 }
-.sb-convos { overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.sb-convos { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.sb-convos.is-archived { flex: 0 1 auto; max-height: 180px; }
 .sb-convos::-webkit-scrollbar { width: 6px; }
 .sb-convos::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 6px; }
 .convo-item {
@@ -865,18 +1076,40 @@ body {
   gap: 8px;
   padding: 7px var(--space-3);
   border-radius: var(--radius-md);
-  cursor: pointer;
   transition: background var(--motion-fast) var(--ease-out-soft);
 }
 .convo-item:hover { background: var(--hover-tint); }
 .convo-item.is-active { background: var(--select-tint-clay); }
+.convo-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
 .convo-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-faint); }
 /* clay 预算（批次五 C3）：方案类会话点由「实心 clay」降为空心描边环——侧栏
    历史会话无上限，逐条染 clay 会随条数稀释强调；形状（空心 vs 实心）承担
    类型语义，inset 环零布局位移。 */
 .convo-dot.plan { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink-soft); }
 .convo-dot.refuse { background: var(--trust-pending); }
+.convo-dot.archived { background: transparent; box-shadow: inset 0 0 0 1px var(--ink-faint); }
+.convo-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .convo-title {
+  display: block;
   font-size: var(--fs-sm);
   color: var(--ink-soft);
   white-space: nowrap;
@@ -884,18 +1117,76 @@ body {
   text-overflow: ellipsis;
 }
 .convo-item.is-active .convo-title { color: var(--ink); font-weight: 600; }
-/* hover 出时间戳（Claude Desktop 语言）：静止零噪音，悬停渐显 */
-.convo-time {
-  flex: none;
-  margin-left: auto;
+.convo-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--fs-2xs);
   font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
-  opacity: 0;
-  transition: opacity var(--motion-fast) var(--ease-out-soft);
 }
-.convo-item:hover .convo-time { opacity: 1; }
+.convo-menu {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 11px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out-soft), background var(--motion-fast) var(--ease-out-soft);
+}
+.convo-item:hover .convo-menu,
+.convo-menu:focus-visible { opacity: 1; }
+.convo-menu:hover { background: var(--paper-rail); color: var(--ink); }
+.convo-menu:disabled { cursor: wait; opacity: 0.55; }
+@media (hover: none) {
+  .convo-menu { opacity: 1; }
+}
 .convo-empty { font-size: var(--fs-sm); color: var(--ink-faint); padding: var(--space-2) var(--space-3); line-height: 1.5; }
+.convo-loading { font-size: var(--fs-sm); color: var(--ink-faint); padding: var(--space-2) var(--space-3); }
+.convo-list-error {
+  margin: 0 8px 4px;
+  padding: 7px 8px;
+  border-left: 2px solid var(--trust-fail);
+  background: color-mix(in srgb, var(--trust-fail) 7%, transparent);
+  color: var(--trust-fail);
+  font-size: var(--fs-2xs);
+  line-height: 1.45;
+}
+.convo-list-error button {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.sb-archive-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 12px;
+  border: 0;
+  border-top: 1px solid var(--hairline-soft);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+}
+.sb-archive-toggle:hover { color: var(--ink-soft); background: var(--hover-tint); }
+.archive-count { font-variant-numeric: tabular-nums; font-weight: 500; }
 
 /* ── 「我的贡献」深链（批C task7）：贴合 .sb-identity 视觉 ── */
 .sb-mine {
@@ -966,7 +1257,9 @@ body {
   color: var(--ink-faint);
 }
 @media (prefers-reduced-motion: reduce) {
-  .convo-time,
+  .convo-menu,
+  .convo-item,
+  .sb-archive-toggle,
   .sb-foot-btn {
     transition: none;
   }

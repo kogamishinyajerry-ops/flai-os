@@ -611,11 +611,11 @@ def test_post_to_closed_conversation_409(app_env) -> None:
     _inject(app, _CannedStub("你好"))
     conv_id = _open_conversation(client)
 
-    conn = app.state.conn_factory()
-    try:
-        repos.set_conversation_status(conn, conv_id, "concluded")
-    finally:
-        conn.close()
+    concluded = client.post(
+        f"/api/conversations/{conv_id}/conclude",
+        json={"lifecycle_revision": 0},
+    )
+    assert concluded.status_code == 200, concluded.text
 
     resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "还能说话吗"})
     assert resp.status_code == 409
@@ -631,17 +631,26 @@ def test_conclude_lifecycle(app_env) -> None:
     _inject(app, _CannedStub("你好"))
     conv_id = _open_conversation(client)
 
-    resp = client.post(f"/api/conversations/{conv_id}/conclude")
+    resp = client.post(
+        f"/api/conversations/{conv_id}/conclude",
+        json={"lifecycle_revision": 0},
+    )
     assert resp.status_code == 200
     assert resp.json()["status"] == "concluded"
 
-    again = client.post(f"/api/conversations/{conv_id}/conclude")
+    again = client.post(
+        f"/api/conversations/{conv_id}/conclude",
+        json={"lifecycle_revision": 1},
+    )
     assert again.status_code == 409, "重复 conclude 必须如实 409，不幂等吞掉"
 
     msg = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "还在吗"})
     assert msg.status_code == 409
 
-    assert client.post("/api/conversations/conv_missing/conclude").status_code == 404
+    assert client.post(
+        "/api/conversations/conv_missing/conclude",
+        json={"lifecycle_revision": 0},
+    ).status_code == 404
 
 
 class _InterloperStub(_CannedStub):

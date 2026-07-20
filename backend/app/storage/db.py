@@ -378,7 +378,13 @@ CREATE TABLE IF NOT EXISTS conversations (
     created_by_username TEXT,
     recommendation_json TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    -- P2.6：生命周期与可见性正交。title 仅由 rename 事件产生；revision
+    -- 是所有 rename/conclude/archive 的单一 CAS 轴；archived_at 只表达
+    -- 侧栏可见性，不改变 status，也不关闭普通 Question。
+    title TEXT,
+    lifecycle_revision INTEGER NOT NULL DEFAULT 0,
+    archived_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS conversation_messages (
@@ -449,6 +455,29 @@ CREATE TABLE IF NOT EXISTS conversation_questions (
             AND response_message_id IS NOT NULL
             AND response_message_id <> prompt_message_id
         )
+    )
+);
+
+-- P2.6 会话生命周期审计账本。事件是唯一写缝：合法 INSERT 由受管 trigger
+-- 同语句更新 conversations 投影；UPDATE/DELETE/REPLACE 均被纵深拒绝。
+-- 存量会话不回填事件，故 legacy active/concluded 行保持 revision=0。
+CREATE TABLE IF NOT EXISTS conversation_lifecycle_events (
+    id TEXT PRIMARY KEY NOT NULL,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id),
+    event_type TEXT NOT NULL CHECK (
+        event_type IN ('renamed', 'concluded', 'archived')
+    ),
+    lifecycle_revision INTEGER NOT NULL CHECK (lifecycle_revision > 0),
+    actor_username TEXT NOT NULL,
+    prior_status TEXT NOT NULL CHECK (prior_status IN ('active', 'concluded')),
+    prior_title TEXT,
+    prior_archived_at TEXT,
+    title TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(conversation_id, lifecycle_revision),
+    CHECK (
+        (event_type = 'renamed' AND title IS NOT NULL)
+        OR (event_type IN ('concluded', 'archived') AND title IS NULL)
     )
 );
 
@@ -2643,6 +2672,18 @@ _INDEX_DDL = (
         SELECT RAISE(ABORT, 'conversation id is required');
     END
     """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversations_lifecycle_initial_state
+    BEFORE INSERT ON conversations
+    WHEN NEW.status IS NOT 'active'
+         OR NEW.title IS NOT NULL
+         OR typeof(NEW.lifecycle_revision) <> 'integer'
+         OR NEW.lifecycle_revision <> 0
+         OR NEW.archived_at IS NOT NULL
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation must start at lifecycle revision zero');
+    END
+    """,
     # P2.3：owner 一旦非 NULL 即不可变；NULL→非 NULL 留给未来显式 CAS-on-NULL
     # 认领 API（本切片不提供），非 NULL→另一值/NULL 均由 SQLite 纵深拒绝。
     """
@@ -2694,6 +2735,213 @@ _INDEX_DDL = (
     WHEN NEW.rowid <= 0
     BEGIN
         SELECT RAISE(ABORT, 'conversation internal rowid must be positive');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversations_lifecycle_event_required
+    BEFORE UPDATE OF title, status, lifecycle_revision, archived_at ON conversations
+    WHEN (
+        NEW.title IS NOT OLD.title
+        OR NEW.status IS NOT OLD.status
+        OR NEW.lifecycle_revision IS NOT OLD.lifecycle_revision
+        OR NEW.archived_at IS NOT OLD.archived_at
+    )
+    AND NOT EXISTS (
+        SELECT 1
+        FROM conversation_lifecycle_events AS event
+        WHERE event.conversation_id = OLD.id
+          AND event.lifecycle_revision = OLD.lifecycle_revision + 1
+          AND NEW.lifecycle_revision = event.lifecycle_revision
+          AND NEW.updated_at IS event.created_at
+          AND (
+              (
+                  event.event_type = 'renamed'
+                  AND NEW.title IS event.title
+                  AND NEW.status IS OLD.status
+                  AND NEW.archived_at IS OLD.archived_at
+              )
+              OR (
+                  event.event_type = 'concluded'
+                  AND OLD.status = 'active'
+                  AND NEW.status = 'concluded'
+                  AND NEW.title IS OLD.title
+                  AND NEW.archived_at IS OLD.archived_at
+              )
+              OR (
+                  event.event_type = 'archived'
+                  AND OLD.archived_at IS NULL
+                  AND NEW.archived_at IS event.created_at
+                  AND NEW.title IS OLD.title
+                  AND NEW.status IS OLD.status
+              )
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation lifecycle update requires exact event');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_lifecycle_events_validate_insert
+    BEFORE INSERT ON conversation_lifecycle_events
+    WHEN NEW.id IS NULL
+         OR typeof(NEW.id) <> 'text'
+         OR length(NEW.id) <> 36
+         OR substr(NEW.id, 1, 4) <> 'cle_'
+         OR substr(NEW.id, 5) GLOB '*[^0-9a-f]*'
+         OR typeof(NEW.conversation_id) <> 'text'
+         OR typeof(NEW.event_type) <> 'text'
+         OR typeof(NEW.lifecycle_revision) <> 'integer'
+         OR typeof(NEW.actor_username) <> 'text'
+         OR length(NEW.actor_username) = 0
+         OR length(NEW.actor_username) > 100
+         OR NEW.actor_username IS NOT trim(NEW.actor_username)
+         OR typeof(NEW.prior_status) <> 'text'
+         OR typeof(NEW.prior_title) NOT IN ('null', 'text')
+         OR typeof(NEW.prior_archived_at) NOT IN ('null', 'text')
+         OR typeof(NEW.created_at) <> 'text'
+         OR length(NEW.created_at) <> 32
+         OR substr(NEW.created_at, 5, 1) <> '-'
+         OR substr(NEW.created_at, 8, 1) <> '-'
+         OR substr(NEW.created_at, 11, 1) <> 'T'
+         OR substr(NEW.created_at, 14, 1) <> ':'
+         OR substr(NEW.created_at, 17, 1) <> ':'
+         OR substr(NEW.created_at, 20, 1) <> '.'
+         OR substr(NEW.created_at, 27, 6) <> '+00:00'
+         OR (
+             substr(NEW.created_at, 1, 4)
+             || substr(NEW.created_at, 6, 2)
+             || substr(NEW.created_at, 9, 2)
+             || substr(NEW.created_at, 12, 2)
+             || substr(NEW.created_at, 15, 2)
+             || substr(NEW.created_at, 18, 2)
+             || substr(NEW.created_at, 21, 6)
+         ) GLOB '*[^0-9]*'
+         OR CAST(substr(NEW.created_at, 1, 4) AS INTEGER) NOT BETWEEN 1 AND 9999
+         OR CAST(substr(NEW.created_at, 6, 2) AS INTEGER) NOT BETWEEN 1 AND 12
+         OR CAST(substr(NEW.created_at, 9, 2) AS INTEGER) NOT BETWEEN 1 AND
+             CASE CAST(substr(NEW.created_at, 6, 2) AS INTEGER)
+                 WHEN 2 THEN CASE
+                     WHEN CAST(substr(NEW.created_at, 1, 4) AS INTEGER) % 400 = 0
+                          OR (
+                              CAST(substr(NEW.created_at, 1, 4) AS INTEGER) % 4 = 0
+                              AND CAST(substr(NEW.created_at, 1, 4) AS INTEGER) % 100 <> 0
+                          )
+                     THEN 29 ELSE 28 END
+                 WHEN 4 THEN 30
+                 WHEN 6 THEN 30
+                 WHEN 9 THEN 30
+                 WHEN 11 THEN 30
+                 ELSE 31
+             END
+         OR CAST(substr(NEW.created_at, 12, 2) AS INTEGER) NOT BETWEEN 0 AND 23
+         OR CAST(substr(NEW.created_at, 15, 2) AS INTEGER) NOT BETWEEN 0 AND 59
+         OR CAST(substr(NEW.created_at, 18, 2) AS INTEGER) NOT BETWEEN 0 AND 59
+         OR strftime('%Y-%m-%dT%H:%M:%S', NEW.created_at)
+             IS NOT substr(NEW.created_at, 1, 19)
+         OR (
+             NEW.event_type = 'renamed'
+             AND (
+                 typeof(NEW.title) <> 'text'
+                 OR length(NEW.title) NOT BETWEEN 1 AND 60
+                 OR NEW.title IS NOT trim(NEW.title, char(
+                     9,10,11,12,13,28,29,30,31,32,133,160,5760,
+                     8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,
+                     8202,8232,8233,8239,8287,12288
+                 ))
+                 OR instr(NEW.title, char(0)) > 0
+                 OR NEW.title GLOB ('*[' || char(
+                     1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,
+                     17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,
+                     127,128,129,130,131,132,133,134,135,136,137,138,
+                     139,140,141,142,143,144,145,146,147,148,149,150,
+                     151,152,153,154,155,156,157,158,159
+                 ) || ']*')
+                 OR instr(NEW.title, char(8232)) > 0
+                 OR instr(NEW.title, char(8233)) > 0
+             )
+         )
+         OR NOT EXISTS (
+             SELECT 1
+             FROM conversations AS conversation
+             WHERE conversation.id = NEW.conversation_id
+               AND conversation.created_by_username IS NEW.actor_username
+               AND NEW.prior_status IS conversation.status
+               AND NEW.prior_title IS conversation.title
+               AND NEW.prior_archived_at IS conversation.archived_at
+               AND typeof(conversation.lifecycle_revision) = 'integer'
+               AND NEW.lifecycle_revision = conversation.lifecycle_revision + 1
+               AND (
+                   (
+                       NEW.event_type = 'renamed'
+                       AND NEW.title IS NOT conversation.title
+                   )
+                   OR (
+                       NEW.event_type = 'concluded'
+                       AND NEW.title IS NULL
+                       AND conversation.status = 'active'
+                   )
+                   OR (
+                       NEW.event_type = 'archived'
+                       AND NEW.title IS NULL
+                       AND conversation.archived_at IS NULL
+                   )
+               )
+         )
+    BEGIN
+        SELECT RAISE(ABORT, 'invalid conversation lifecycle event');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_lifecycle_events_apply_projection
+    AFTER INSERT ON conversation_lifecycle_events
+    BEGIN
+        UPDATE conversations
+        SET title = CASE WHEN NEW.event_type = 'renamed' THEN NEW.title ELSE title END,
+            status = CASE WHEN NEW.event_type = 'concluded' THEN 'concluded' ELSE status END,
+            archived_at = CASE
+                WHEN NEW.event_type = 'archived' THEN NEW.created_at ELSE archived_at
+            END,
+            lifecycle_revision = NEW.lifecycle_revision,
+            updated_at = NEW.created_at
+        WHERE id = NEW.conversation_id;
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_lifecycle_events_no_update
+    BEFORE UPDATE ON conversation_lifecycle_events
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation lifecycle events are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_lifecycle_events_no_delete
+    BEFORE DELETE ON conversation_lifecycle_events
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation lifecycle events are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_lifecycle_events_no_conflicting_insert
+    BEFORE INSERT ON conversation_lifecycle_events
+    WHEN EXISTS (
+        SELECT 1 FROM conversation_lifecycle_events
+        WHERE id = NEW.id
+           OR (
+               conversation_id = NEW.conversation_id
+               AND lifecycle_revision = NEW.lifecycle_revision
+           )
+           OR (NEW.rowid <> -1 AND rowid = NEW.rowid)
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation lifecycle events are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS trg_conversation_lifecycle_events_positive_rowid
+    AFTER INSERT ON conversation_lifecycle_events
+    WHEN NEW.rowid <= 0
+    BEGIN
+        SELECT RAISE(ABORT, 'conversation lifecycle event rowid must be positive');
     END
     """,
     "CREATE INDEX IF NOT EXISTS idx_tasks_conversation_id ON tasks(conversation_id)",
@@ -2748,12 +2996,33 @@ _P23_MANAGED_TRIGGERS = (
     "trg_conversation_questions_no_conflicting_insert",
     "trg_conversation_questions_no_conflicting_insert_v2",
     "trg_conversations_id_required",
+    "trg_conversations_lifecycle_initial_state",
     "trg_conversations_owner_immutable",
     "trg_conversations_no_conflicting_insert",
     "trg_conversations_identity_immutable",
     "trg_conversations_no_delete",
     "trg_conversations_no_conflicting_insert_v2",
     "trg_conversations_positive_rowid",
+    "trg_conversations_lifecycle_event_required",
+)
+
+# P2.6 lifecycle owns the append-only event-table guards.  Its two projection
+# guards live on conversations and are also registered in the exhaustive P2.3
+# trigger inventory above, so adding this axis cannot weaken the older exact
+# three-table witness.
+_CONVERSATION_LIFECYCLE_EVENT_MANAGED_TRIGGERS = (
+    "trg_conversation_lifecycle_events_validate_insert",
+    "trg_conversation_lifecycle_events_apply_projection",
+    "trg_conversation_lifecycle_events_no_update",
+    "trg_conversation_lifecycle_events_no_delete",
+    "trg_conversation_lifecycle_events_no_conflicting_insert",
+    "trg_conversation_lifecycle_events_positive_rowid",
+)
+
+_CONVERSATION_LIFECYCLE_MANAGED_TRIGGERS = (
+    "trg_conversations_lifecycle_initial_state",
+    "trg_conversations_lifecycle_event_required",
+    *_CONVERSATION_LIFECYCLE_EVENT_MANAGED_TRIGGERS,
 )
 
 # P2.5 exact named-review routing is a separate tasks-table schema axis.  These
@@ -3040,6 +3309,9 @@ def _p23_identity_table_shape_witnesses(
         ("recommendation_json", "TEXT"),
         ("created_at", "TEXT NOT NULL"),
         ("updated_at", "TEXT NOT NULL"),
+        ("title", "TEXT"),
+        ("lifecycle_revision", "INTEGER NOT NULL DEFAULT 0"),
+        ("archived_at", "TEXT"),
     )
     conversation_legacy = (
         ("id", "TEXT PRIMARY KEY"),
@@ -3050,6 +3322,9 @@ def _p23_identity_table_shape_witnesses(
         ("created_at", "TEXT NOT NULL"),
         ("updated_at", "TEXT NOT NULL"),
         ("created_by_username", "TEXT"),
+        ("title", "TEXT"),
+        ("lifecycle_revision", "INTEGER NOT NULL DEFAULT 0"),
+        ("archived_at", "TEXT"),
     )
     conversation_xinfo = {
         "id": (("TEXT", 0, None, 1, 0), ("TEXT", 1, None, 1, 0)),
@@ -3060,6 +3335,9 @@ def _p23_identity_table_shape_witnesses(
         "recommendation_json": (("TEXT", 0, None, 0, 0),),
         "created_at": (("TEXT", 1, None, 0, 0),),
         "updated_at": (("TEXT", 1, None, 0, 0),),
+        "title": (("TEXT", 0, None, 0, 0),),
+        "lifecycle_revision": (("INTEGER", 1, "0", 0, 0),),
+        "archived_at": (("TEXT", 0, None, 0, 0),),
     }
     message_fresh = (
         ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
@@ -3645,6 +3923,57 @@ def init_db(db_path: str | Path) -> None:
             from .review_route_schema import assert_review_route_schema
 
             assert_review_route_schema(conn)
+        # P2.6 lifecycle facts become evidence-bearing at the first title,
+        # archive timestamp, positive revision, or event.  Legacy concluded
+        # rows at revision zero predate this ledger and are deliberately not
+        # backfilled.  Once evidence exists, exact guards/table/projection must
+        # already be canonical before any CREATE/drop/replay can occur.
+        conversations_table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'conversations'"
+        ).fetchone() is not None
+        conversation_columns_before_p26 = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(conversations)")
+        } if conversations_table_exists else set()
+        lifecycle_projection_columns = {
+            "title", "lifecycle_revision", "archived_at"
+        }
+        lifecycle_projection_has_evidence = bool(
+            lifecycle_projection_columns.issubset(
+                conversation_columns_before_p26
+            )
+            and conn.execute(
+                "SELECT EXISTS(SELECT 1 FROM conversations "
+                "WHERE title IS NOT NULL OR archived_at IS NOT NULL "
+                "OR lifecycle_revision <> 0 LIMIT 1)"
+            ).fetchone()[0]
+            == 1
+        )
+        lifecycle_event_table_existed = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'conversation_lifecycle_events'"
+        ).fetchone() is not None
+        lifecycle_ledger_has_rows = bool(
+            lifecycle_event_table_existed
+            and conn.execute(
+                "SELECT EXISTS(SELECT 1 FROM conversation_lifecycle_events LIMIT 1)"
+            ).fetchone()[0]
+            == 1
+        )
+        lifecycle_has_evidence = (
+            lifecycle_projection_has_evidence or lifecycle_ledger_has_rows
+        )
+        if lifecycle_has_evidence:
+            if lifecycle_event_table_existed is not True:
+                raise sqlite3.IntegrityError(
+                    "conversation lifecycle projection lacks its event ledger"
+                )
+            from .conversation_lifecycle_schema import (
+                assert_conversation_lifecycle_schema,
+            )
+
+            assert_conversation_lifecycle_schema(conn)
         # Outcome ledger is likewise evidence-bearing once the first cohort
         # marker exists.  A missing managed guard on a nonempty ledger means the
         # historical protection window is unknowable; never silently recreate
@@ -3944,6 +4273,21 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute(
                     "ALTER TABLE conversations ADD COLUMN created_by_username TEXT"
                 )
+            # 迁移 #17（P2.6）：title/status/visibility 三轴中的新增投影列。
+            # title 与 archived_at 可空；lifecycle_revision 对全部 legacy 行取 0。
+            # 绝不从 recommendation/status/时间戳伪造标题、归档时间或历史事件。
+            conversation_cols_v17 = {
+                row[1] for row in conn.execute("PRAGMA table_info(conversations)")
+            }
+            if "title" not in conversation_cols_v17:
+                conn.execute("ALTER TABLE conversations ADD COLUMN title TEXT")
+            if "lifecycle_revision" not in conversation_cols_v17:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN "
+                    "lifecycle_revision INTEGER NOT NULL DEFAULT 0"
+                )
+            if "archived_at" not in conversation_cols_v17:
+                conn.execute("ALTER TABLE conversations ADD COLUMN archived_at TEXT")
             # 非空判断账本已经承载不可回溯证据。若启动前其受管 trigger/index
             # 缺失或被替成 no-op，历史期间是否发生过 UPDATE/DELETE/REPLACE 已不可知；
             # 此时自动“修好再报绿”会制造假绿。只允许空账本自动收敛；非空账本先
@@ -3971,6 +4315,9 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
             for index_name in _P23_MANAGED_INDEXES:
                 conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+            if lifecycle_has_evidence is not True:
+                for trigger_name in _CONVERSATION_LIFECYCLE_EVENT_MANAGED_TRIGGERS:
+                    conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
             for trigger_name in _REVIEW_ROUTE_MANAGED_TRIGGERS:
                 conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
             for index_name in _REVIEW_ROUTE_MANAGED_INDEXES:
@@ -4011,6 +4358,11 @@ def init_db(db_path: str | Path) -> None:
             from .review_route_schema import assert_review_route_schema
 
             assert_review_route_schema(conn)
+            from .conversation_lifecycle_schema import (
+                assert_conversation_lifecycle_schema,
+            )
+
+            assert_conversation_lifecycle_schema(conn)
             # 判断账本与 P2.3 一样按完整 SQL 语义见证；同名 no-op trigger
             # 或宽松 lookalike table 都不能被启动路径误报为可信。
             from .review_schema import assert_judgment_schema

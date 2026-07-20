@@ -42,6 +42,12 @@ from .runtime.conversation import ConversationService
 from .runtime.runtime import AgentRuntime
 from .storage import repos
 from .storage.db import get_conn, init_db
+from .storage.conversation_lifecycle_schema import (
+    CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_KEYS as _CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_KEYS,
+)
+from .storage.conversation_lifecycle_schema import (
+    conversation_lifecycle_schema_witnesses as _conversation_lifecycle_schema_witnesses,
+)
 from .storage.p23_schema import (
     P23_SCHEMA_WITNESS_KEYS as _P23_SCHEMA_WITNESS_KEYS,
 )
@@ -186,6 +192,9 @@ def create_app(
             conn = conn_factory()
             try:
                 p23_schema_witnesses = _p23_schema_witnesses(conn)
+                conversation_lifecycle_schema_witnesses = (
+                    _conversation_lifecycle_schema_witnesses(conn)
+                )
                 review_route_schema_witnesses = _review_route_schema_witnesses(conn)
                 judgment_schema_witnesses = _judgment_schema_witnesses(conn)
                 outcome_schema_witnesses = _outcome_schema_witnesses(conn)
@@ -194,6 +203,10 @@ def create_app(
         except sqlite3.Error:
             p23_schema_witnesses = {
                 key: False for key in _P23_SCHEMA_WITNESS_KEYS
+            }
+            conversation_lifecycle_schema_witnesses = {
+                key: False
+                for key in _CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_KEYS
             }
             review_route_schema_witnesses = {
                 key: False for key in _REVIEW_ROUTE_SCHEMA_WITNESS_KEYS
@@ -224,6 +237,10 @@ def create_app(
             # schema witnesses 每次从服务实际连接的库读取，只证明三张表的
             # identity/约束/索引/触发器合同，不宣称存量 owner 或 Question 数据完整。
             "structured_question_axis": True,
+            # P2.6 活进程代际：会话 status 与 visibility 正交，所有 lifecycle
+            # mutation 经 CAS + append-only ledger。具体投影、表、trigger 与存量链
+            # 由 served-DB exact witnesses 证明，布尔代际本身不作完整性声明。
+            "conversation_lifecycle_axis": True,
             # P2.4 活进程代际：精确 owner、稳定消息/产物地址、服务端有界搜索已接线。
             # 这不是 DB schema 完整性见证，只用于阻断新 QuickSwitcher 连上旧 API。
             "search_addressing_axis": True,
@@ -238,6 +255,9 @@ def create_app(
             "outcome_telemetry_axis": True,
             "outcome_telemetry_generation": config.OUTCOME_TELEMETRY_GENERATION,
             "p23_schema_witnesses": p23_schema_witnesses,
+            "conversation_lifecycle_schema_witnesses": (
+                conversation_lifecycle_schema_witnesses
+            ),
             "review_route_schema_witnesses": review_route_schema_witnesses,
             "judgment_schema_witnesses": judgment_schema_witnesses,
             "outcome_schema_witnesses": outcome_schema_witnesses,
@@ -267,6 +287,9 @@ def create_app(
         try:
             wf = _worker_freshness(conn)
             p23_schema_witnesses = _p23_schema_witnesses(conn)
+            conversation_lifecycle_schema_witnesses = (
+                _conversation_lifecycle_schema_witnesses(conn)
+            )
             review_route_schema_witnesses = _review_route_schema_witnesses(conn)
             judgment_schema_witnesses = _judgment_schema_witnesses(conn)
             outcome_schema_witnesses = _outcome_schema_witnesses(conn)
@@ -275,6 +298,10 @@ def create_app(
         p23_schema_ready = all(
             p23_schema_witnesses.get(key) is True
             for key in _P23_SCHEMA_WITNESS_KEYS
+        )
+        conversation_lifecycle_schema_ready = all(
+            conversation_lifecycle_schema_witnesses.get(key) is True
+            for key in _CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_KEYS
         )
         review_route_schema_ready = all(
             review_route_schema_witnesses.get(key) is True
@@ -297,6 +324,7 @@ def create_app(
             wf["fresh"] is True
             and worker_generation_ready is True
             and p23_schema_ready is True
+            and conversation_lifecycle_schema_ready is True
             and review_route_schema_ready is True
             and judgment_schema_ready is True
             and outcome_schema_ready is True
@@ -306,6 +334,7 @@ def create_app(
                 "status": "ready" if ready is True else "degraded",
                 "worker": wf,
                 "structured_question_axis": True,
+                "conversation_lifecycle_axis": True,
                 "search_addressing_axis": True,
                 "named_review_inbox_axis": True,
                 "judgment_capture_axis": True,
@@ -315,6 +344,11 @@ def create_app(
                     "runtime_generation": True,
                     "schema_ready": p23_schema_ready,
                     "schema_witnesses": p23_schema_witnesses,
+                },
+                "conversation_lifecycle": {
+                    "runtime_generation": True,
+                    "schema_ready": conversation_lifecycle_schema_ready,
+                    "schema_witnesses": conversation_lifecycle_schema_witnesses,
                 },
                 "named_review_inbox": {
                     "runtime_generation": True,

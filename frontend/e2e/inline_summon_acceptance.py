@@ -12,7 +12,7 @@ escape / 已召集=督战 chip）。验收面：
      inputs 与预填一致；未就绪成员绝不被带上（fail-closed 不越权）；
   ④ 零跳页：URL 仍 /?c=<conv>，督战 chip 原地亮起；开工按钮随「就绪待开工=0」消失；
   ⑤ e2e 锚点不破：未就绪成员的「去创建此任务」仍在（m9 back=chat 契约路径原样保留）；
-  ⑥ 会话归档（concluded）后重开：开工按钮整体消失（只读会话不可召集）。
+  ⑥ 会话结束（concluded）后重开：开工按钮整体消失（只读会话不可召集）。
   ⑦ conversation task ledger 首载失败时 fail-closed：不把未知当“尚未召集”，
      批量与单项创建入口均隐藏；真实账恢复后才开放。
 
@@ -251,9 +251,13 @@ with sync_playwright() as p:
         fta_card.get_by_role("button", name="去创建此任务").count() == 1,
     )
 
-    # ⑥ 归档会话重开 → 只读，开工按钮整体消失（创建必 409，入口就不该有）
-    resp = API.post(f"/api/conversations/{conv_id}/conclude")
-    check("⑥归档 API 生效", resp.status_code == 200, f"status={resp.status_code}")
+    # ⑥ 结束会话重开 → 只读，开工按钮整体消失（创建必 409，入口就不该有）
+    lifecycle_revision = API.get(f"/api/conversations/{conv_id}").json()["lifecycle_revision"]
+    resp = API.post(
+        f"/api/conversations/{conv_id}/conclude",
+        json={"lifecycle_revision": lifecycle_revision},
+    )
+    check("⑥结束 API 生效", resp.status_code == 200, f"status={resp.status_code}")
     page.goto(BASE + f"/?c={conv_id}", wait_until="networkidle")
     page.wait_for_selector(".plan-card", timeout=8000)
     page.wait_for_timeout(800)  # schema 预取窗口——就绪也不该显示（status 门优先）

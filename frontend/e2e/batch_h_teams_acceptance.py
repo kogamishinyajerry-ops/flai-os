@@ -711,14 +711,18 @@ with sync_playwright() as p:
     check("O6d 无编造「依据 N 条」计数", "依据 1 条" not in body_text and "依据 0 条" not in body_text)
     page.screenshot(path=str(SHOTS / "4_withheld.png"))
 
-    # ── O7 归档后入口消失 ───────────────────────────────────────────────────
+    # ── O7 结束后入口消失 ───────────────────────────────────────────────────
     if conv_id:
-        API.post(f"/api/conversations/{conv_id}/conclude")
+        lifecycle_revision = API.get(f"/api/conversations/{conv_id}").json()["lifecycle_revision"]
+        API.post(
+            f"/api/conversations/{conv_id}/conclude",
+            json={"lifecycle_revision": lifecycle_revision},
+        )
         page.goto(BASE + f"/?c={conv_id}")
         expect(page.locator(".plan-card").last).to_be_visible(timeout=8000)
-        check("O7b 会话归档后入口不在场", page.locator(".save-team-btn").count() == 0)
+        check("O7b 会话结束后入口不在场", page.locator(".save-team-btn").count() == 0)
     else:
-        check("O7b 会话归档后入口不在场", False, "conv_id 缺失")
+        check("O7b 会话结束后入口不在场", False, "conv_id 缺失")
 
     browser.close()
 

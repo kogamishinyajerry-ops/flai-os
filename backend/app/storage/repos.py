@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -48,6 +49,11 @@ class InvalidReviewError(ValueError):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _lifecycle_now_iso() -> str:
+    """Return the canonical microsecond UTC timestamp required by the ledger."""
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _load_event_schema() -> dict[str, Any]:
@@ -1844,20 +1850,134 @@ def list_conversations(
     conn: sqlite3.Connection,
     *,
     created_by_username: str,
+    visibility: str = "visible",
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """列当前 exact username 的会话；无“不过滤”普通用户路径。
+    """列当前 exact username 的可见或已归档会话。
 
     ``created_by_username = ?`` 天然排除 legacy NULL。调用者不能用 display_name
-    或客户端 owner 参数扩张结果集。
+    或客户端 owner 参数扩张结果集。归档是不可逆的可见性轴，与 status 正交；
+    默认只返回未归档会话，调用方须显式选择 ``archived`` 才能看归档列表。
     """
+    if visibility not in {"visible", "archived"}:
+        raise ValueError("visibility must be visible or archived")
+    visibility_predicate = (
+        "archived_at IS NULL" if visibility == "visible" else "archived_at IS NOT NULL"
+    )
     rows = conn.execute(
-        "SELECT * FROM conversations WHERE created_by_username = ? "
+        "SELECT * FROM conversations WHERE created_by_username = ? AND "
+        f"{visibility_predicate} "
         "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
         (created_by_username, limit, offset),
     ).fetchall()
     return [_decode_conversation(r) for r in rows]
+
+
+def _normalize_conversation_title(title: str) -> str:
+    if not isinstance(title, str):
+        raise ValueError("conversation title must be a string")
+    normalized = title.strip()
+    if normalized != title:
+        raise ValueError("conversation title must already be trimmed")
+    if not 1 <= len(normalized) <= 60:
+        raise ValueError("conversation title must contain 1 to 60 characters")
+    if any(
+        unicodedata.category(char) in {"Cc", "Zl", "Zp"}
+        for char in normalized
+    ):
+        raise ValueError("conversation title cannot contain control or line characters")
+    return normalized
+
+
+def append_conversation_lifecycle_event(
+    conn: sqlite3.Connection,
+    *,
+    conversation_id: str,
+    event_type: str,
+    actor_username: str,
+    lifecycle_revision: int,
+    title: str | None = None,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    """Append the one authoritative lifecycle event and return its projection.
+
+    ``lifecycle_revision`` is the caller's expected current revision.  The event
+    stores ``expected + 1`` and the database trigger applies the projection.  This
+    function deliberately neither starts nor commits a transaction: the service
+    owns the ``BEGIN IMMEDIATE`` boundary so concluding can close an unresolved
+    Question and append the event atomically through this single write seam.
+    """
+    if type(lifecycle_revision) is not int or lifecycle_revision < 0:
+        raise ValueError("lifecycle_revision must be a non-negative exact integer")
+    if event_type not in {"renamed", "concluded", "archived"}:
+        raise ValueError("unknown conversation lifecycle event")
+    if (
+        not isinstance(actor_username, str)
+        or not actor_username
+        or actor_username != actor_username.strip()
+        or len(actor_username) > 100
+    ):
+        raise ValueError("actor_username must be an exact non-blank username")
+
+    conversation = get_conversation_for_owner(
+        conn, conversation_id, actor_username
+    )
+    if conversation is None:
+        raise ValueError("conversation does not exist for lifecycle actor")
+    if conversation["lifecycle_revision"] != lifecycle_revision:
+        raise ValueError("stale conversation lifecycle revision")
+
+    event_title: str | None = None
+    if event_type == "renamed":
+        event_title = _normalize_conversation_title(title)  # type: ignore[arg-type]
+        if event_title == conversation["title"]:
+            raise ValueError("conversation already has this title")
+    elif title is not None:
+        raise ValueError("only renamed events may carry title")
+
+    if event_type == "concluded" and conversation["status"] != "active":
+        raise ValueError("conversation is already concluded")
+    if event_type == "archived" and conversation["archived_at"] is not None:
+        raise ValueError("conversation is already archived")
+
+    event_at = created_at if created_at is not None else _lifecycle_now_iso()
+    conn.execute(
+        """
+        INSERT INTO conversation_lifecycle_events
+            (id, conversation_id, event_type, lifecycle_revision,
+             actor_username, prior_status, prior_title, prior_archived_at,
+             title, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            f"cle_{uuid.uuid4().hex}",
+            conversation_id,
+            event_type,
+            lifecycle_revision + 1,
+            actor_username,
+            conversation["status"],
+            conversation["title"],
+            conversation["archived_at"],
+            event_title,
+            event_at,
+        ),
+    )
+    projected = get_conversation_for_owner(conn, conversation_id, actor_username)
+    if projected is None:  # pragma: no cover - insert trigger cannot remove the row
+        raise RuntimeError("conversation lifecycle projection disappeared")
+    return projected
+
+
+def list_conversation_lifecycle_events(
+    conn: sqlite3.Connection, conversation_id: str
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM conversation_lifecycle_events "
+        "WHERE conversation_id = ? ORDER BY lifecycle_revision ASC",
+        (conversation_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def append_message(
@@ -2460,35 +2580,27 @@ def set_conversation_recommendation(
     *,
     status: str | None = None,
 ) -> dict[str, Any]:
-    """回填会话的最新推荐（预填任务草案），可选同时推进 status（如 concluded）。
+    """回填会话的最新推荐（预填任务草案），不得推进生命周期。
 
     recommendation 是「导引当前给出的预填草案」快照——会话可多轮刷新推荐，
     以最后一次为准；人确认提交任务的动作在 tasks 端点，与此处解耦。
     """
+    if status is not None:
+        raise ValueError("conversation status must change through a lifecycle event")
     now = _now_iso()
     rec_json = json.dumps(recommendation, ensure_ascii=False) if recommendation is not None else None
-    if status is not None:
-        conn.execute(
-            "UPDATE conversations SET recommendation_json = ?, status = ?, updated_at = ? WHERE id = ?",
-            (rec_json, status, now, conversation_id),
-        )
-    else:
-        conn.execute(
-            "UPDATE conversations SET recommendation_json = ?, updated_at = ? WHERE id = ?",
-            (rec_json, now, conversation_id),
-        )
+    conn.execute(
+        "UPDATE conversations SET recommendation_json = ?, updated_at = ? WHERE id = ?",
+        (rec_json, now, conversation_id),
+    )
     return get_conversation(conn, conversation_id)  # type: ignore[return-value]
 
 
 def set_conversation_status(
     conn: sqlite3.Connection, conversation_id: str, status: str
 ) -> dict[str, Any]:
-    now = _now_iso()
-    conn.execute(
-        "UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?",
-        (status, now, conversation_id),
-    )
-    return get_conversation(conn, conversation_id)  # type: ignore[return-value]
+    """Removed write seam retained only to fail closed for stale internal callers."""
+    raise ValueError("conversation status must change through a lifecycle event")
 
 
 # ── eval_runs / promotions（M10 治理闭环，ADR-0018） ────────────────────

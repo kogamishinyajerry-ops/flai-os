@@ -44,8 +44,9 @@
           <div class="sess-title-row">
             <h2>协作会话</h2>
             <el-tag :type="conversation.status === 'active' ? 'primary' : 'info'" effect="plain" size="small">
-              {{ conversation.status === "active" ? "进行中" : "已归档" }}
+              {{ conversation.status === "active" ? "进行中" : "已结束" }}
             </el-tag>
+            <el-tag v-if="conversation.archived_at" type="info" effect="plain" size="small">已归档</el-tag>
           </div>
           <div v-if="goal" class="sess-goal-kicker">协作目标</div>
           <p v-if="goal" class="sess-goal">{{ goal }}</p>
@@ -187,13 +188,13 @@
               </div>
               <p v-if="a.role" class="member-role"><strong>分工：</strong>{{ a.role }}</p>
               <!-- 未召集：会话进行中才可从蓝图召集（人签发；导引不代召集）；
-                   会话已归档则只读，不再召集（结束协作 = 真的结束）。 -->
+                   会话已结束则只读，不再召集。归档只影响可见性，与此正交。 -->
               <div v-if="conversation.status === 'active'" class="member-action">
                 <el-button size="small" type="primary" plain @click="summon(a)">去创建此任务</el-button>
                 <span class="member-hint">用导引预填的草案创建任务，由你补全并亲手提交。</span>
               </div>
               <div v-else class="member-action">
-                <span class="member-hint">会话已归档，未召集——如需继续，请从智能导引开启新协作。</span>
+                <span class="member-hint">会话已结束，未召集——如需继续，请从智能导引开启新协作。</span>
               </div>
             </div>
           </div>
@@ -512,11 +513,16 @@ function goTask(t) {
 }
 
 async function concludeSession() {
-  // 结束协作：会话 active→concluded（归档）。已创建的成员任务不受影响、仍可查看；
-  // 归档后不再从蓝图召集新 Agent（结束 = 真的结束）。二次确认防误点。
+  // 结束协作：会话 active→concluded。已创建的成员任务不受影响、仍可查看；
+  // 归档是另一条可见性轴，不由此动作代办。二次确认防误点。
+  const lifecycleRevision = conversation.value?.lifecycle_revision;
+  if (!Number.isInteger(lifecycleRevision) || lifecycleRevision < 0) {
+    ElMessage.error("会话版本尚未可信核对，未提交结束操作");
+    return;
+  }
   try {
     await ElMessageBox.confirm(
-      "结束后本次协作归档：已创建的任务不受影响、仍可查看，但不再从蓝图召集新的 Agent。确定结束？",
+      "结束后本次协作将只读：已创建的任务不受影响、仍可查看，但不再从蓝图召集新的 Agent。确定结束？",
       "结束协作",
       { confirmButtonText: "确定结束", cancelButtonText: "再想想", type: "warning" }
     );
@@ -524,10 +530,19 @@ async function concludeSession() {
     return; // 用户取消
   }
   try {
-    await concludeConversation(sessionId);
-    ElMessage({ message: "协作已归档", type: "info" });
-    pokeConversation(sessionId); // 带外补拉：不等下一 tick，归档结果立即回显
+    await concludeConversation(sessionId, { lifecycleRevision: lifecycleRevision });
+    ElMessage({ message: "协作已结束", type: "info" });
+    pokeConversation(sessionId); // 带外补拉：不等下一 tick，结束结果立即回显
   } catch (err) {
+    if (err?.status === 409) {
+      await pokeConversation(sessionId);
+      if (convConnection.value === "connected") {
+        ElMessage.warning("会话状态已变化，已刷新权威状态；结束操作未自动重试。");
+      } else {
+        ElMessage.error("会话状态已变化；权威状态刷新失败。结束操作未自动重试，请先重试加载。");
+      }
+      return;
+    }
     ElMessage.error(err.detail || err.message || "结束协作失败");
   }
 }

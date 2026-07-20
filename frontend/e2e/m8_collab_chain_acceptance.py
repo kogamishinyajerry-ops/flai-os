@@ -217,20 +217,20 @@ with sync_playwright() as p:
     page.wait_for_selector(".chip-review", timeout=15000)
     page.screenshot(path=str(SHOTS / "3_session_after.png"), full_page=True)
 
-    # ⑥ 结束协作 → 归档 + 召集入口消失（结束 = 真的结束；成员任务不受影响）
+    # ⑥ 结束协作 → concluded + 召集入口消失（归档是正交可见性轴；成员任务不受影响）
     assert page.get_by_role("button", name="结束协作").count() == 1, "active 会话应有结束协作入口"
     page.get_by_role("button", name="结束协作").click()
     page.get_by_role("button", name="确定结束").click()  # ElMessageBox 二次确认
-    expect(page.locator(".sess-hero")).to_contain_text("已归档", timeout=6000)
+    expect(page.locator(".sess-hero")).to_contain_text("已结束", timeout=6000)
     body = page.locator("body").inner_text()
     conclude_ok = (
-        "已归档" in body
-        and page.get_by_role("button", name="结束协作").count() == 0   # 归档后不再可结束
-        and page.get_by_role("button", name="去创建此任务").count() == 0  # 归档后不再召集
-        and "会话已归档" in body
+        "已结束" in body
+        and page.get_by_role("button", name="结束协作").count() == 0   # 结束后不再可结束
+        and page.get_by_role("button", name="去创建此任务").count() == 0  # 结束后不再召集
+        and "会话已结束" in body
         and "已召集 · 1 个任务" in body                                  # 已建任务仍在
     )
-    check("⑥结束协作→归档只读（召集入口消失，成员任务不受影响）", conclude_ok,
+    check("⑥结束协作→已结束只读（召集入口消失，成员任务不受影响）", conclude_ok,
           f"conclude_btn={page.get_by_role('button', name='结束协作').count()} summon={page.get_by_role('button', name='去创建此任务').count()} body={body[-400:]}")
     page.screenshot(path=str(SHOTS / "4_session_concluded.png"), full_page=True)
 

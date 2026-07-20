@@ -146,6 +146,12 @@ def _strip_conversation_owner_column(db_path: Path) -> None:
         # remove the cross-table hardening trigger for the fixture window and let
         # init_db recreate it after the legacy table is renamed back.
         conn.execute("DROP TRIGGER IF EXISTS trg_conversation_questions_owner_exact")
+        # P2.6 event triggers also reference conversations.  This fixture has an
+        # empty lifecycle ledger and deliberately reconstructs a pre-P2.6 table;
+        # remove those forward guards for the fixture window so SQLite can rename
+        # the legacy table, then let init_db recreate the canonical set.
+        for trigger_name in db_mod._CONVERSATION_LIFECYCLE_EVENT_MANAGED_TRIGGERS:
+            conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
         conn.execute(
             """
             CREATE TABLE conversations_legacy (
@@ -881,7 +887,10 @@ def test_foreign_conversation_surfaces_are_uniform_404(two_user_env) -> None:
     assert bob.get(f"/api/conversations/{conversation_id}").status_code == 404
     assert bob.get(f"/api/conversations/{conversation_id}/model_calls").status_code == 404
     assert bob.get(f"/api/conversations/{conversation_id}/tasks").status_code == 404
-    assert bob.post(f"/api/conversations/{conversation_id}/conclude").status_code == 404
+    assert bob.post(
+        f"/api/conversations/{conversation_id}/conclude",
+        json={"lifecycle_revision": 0},
+    ).status_code == 404
 
 
 def test_foreign_post_is_404_before_llm_and_has_zero_side_effects(two_user_env) -> None:

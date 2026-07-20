@@ -72,6 +72,12 @@ sys.path.insert(0, str(REPO))
 # 只导入纯 stdlib 应用模块——从 jobs.runner 导会连带拉
 # repos→jsonschema，破坏本探针「免应用依赖、系统 Python 可跑」的承诺。
 from backend.app import config  # noqa: E402
+from backend.app.storage.conversation_lifecycle_schema import (  # noqa: E402
+    CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_KEYS as _CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_KEYS,
+)
+from backend.app.storage.conversation_lifecycle_schema import (  # noqa: E402
+    conversation_lifecycle_schema_witnesses as _conversation_lifecycle_schema_witnesses,
+)
 from backend.app.storage.p23_schema import (  # noqa: E402
     P23_SCHEMA_WITNESS_KEYS as _P23_SCHEMA_WITNESS_KEYS,
 )
@@ -113,6 +119,8 @@ REQUIRED_TABLES = frozenset({
     # P2.3 结构化提问持久化；列/索引/触发器由独立 schema
     # witness 继续校验，不只靠表名假绿。
     "conversation_questions",
+    # P2.6 status/visibility 正交生命周期只追加账本。
+    "conversation_lifecycle_events",
     # M4 前判断资产：人签与机器建议物理隔离的只追加账本。
     "task_review_advice", "task_human_decisions",
     # ADR-0036：逐权威产物 cohort + lower-bound flow ledger。
@@ -126,6 +134,13 @@ _P23_SCHEMA_WITNESS_LABELS = {
     "question_table_shape": "conversation_questions canonical table shape",
     "required_indexes": "required indexes",
     "required_triggers": "required triggers",
+}
+_CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_LABELS = {
+    "projection_columns": "conversation lifecycle projection columns",
+    "event_table_shape": "conversation lifecycle event table shape",
+    "required_indexes": "conversation lifecycle exact indexes",
+    "required_triggers": "conversation lifecycle projection/append-only triggers",
+    "persisted_event_chains": "persisted lifecycle event chains and projections",
 }
 _REVIEW_ROUTE_SCHEMA_WITNESS_LABELS = {
     "route_column_shape": "review route column shape",
@@ -229,6 +244,27 @@ def check_p23_schema(conn: sqlite3.Connection) -> Check:
         "P2.3 结构化提问 schema",
         True,
         "P2.3 schema witnesses complete (structure only; no historical data claim)",
+    )
+
+
+def check_conversation_lifecycle_schema(conn: sqlite3.Connection) -> Check:
+    """P2.6 exact structure and persisted lifecycle-chain witness."""
+    witnesses = _conversation_lifecycle_schema_witnesses(conn)
+    missing_labels = [
+        _CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_LABELS.get(key, key)
+        for key in _CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_KEYS
+        if witnesses.get(key) is not True
+    ]
+    if missing_labels:
+        return Check(
+            "P2.6 会话生命周期只追加 schema",
+            False,
+            f"schema witness 缺失 {missing_labels}——旧库、迁移未完、结构或存量链被破坏",
+        )
+    return Check(
+        "P2.6 会话生命周期只追加 schema",
+        True,
+        "lifecycle witnesses complete (structure + persisted chains; no usage claim)",
     )
 
 
@@ -487,6 +523,48 @@ def check_live_structured_question_generation(base_url: str) -> Check:
     )
 
 
+def check_live_conversation_lifecycle_generation(base_url: str) -> Check:
+    """P2.6 live-code plus served-DB lifecycle witness; exact booleans only."""
+    name = "运行进程 P2.6 会话生命周期代际"
+    url = f"{base_url}/api/health"
+    try:
+        _, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check(name, False, f"{url} 不可达或非 JSON：{exc}")
+    if not isinstance(payload, dict):
+        return Check(name, False, f"{url} JSON 根节点不是对象，fail-closed")
+    if payload.get("conversation_lifecycle_axis") is not True:
+        return Check(
+            name,
+            False,
+            "health 无 conversation_lifecycle_axis=true——运行中 API 是 P2.6 之前旧进程，fail-closed",
+        )
+    witnesses = payload.get("conversation_lifecycle_schema_witnesses")
+    if not isinstance(witnesses, dict):
+        return Check(
+            name,
+            False,
+            "health 缺 conversation_lifecycle_schema_witnesses 结构见证",
+        )
+    missing = [
+        key
+        for key in _CONVERSATION_LIFECYCLE_SCHEMA_WITNESS_KEYS
+        if witnesses.get(key) is not True
+    ]
+    if missing:
+        return Check(
+            name,
+            False,
+            f"活服务实际连库的 conversation lifecycle witness 缺失 {missing}",
+        )
+    return Check(
+        name,
+        True,
+        "活进程自报 conversation_lifecycle_axis=true，且服务侧 exact witnesses 全在位",
+    )
+
+
 def check_live_eval_snapshot_generation(base_url: str) -> Check:
     """T2/#5 运行进程的不可变快照代际见证（Codex R0 审 P1）：eval_snapshots 表存在
     （检查 2）只证磁盘，活 API 必须自报 eval_snapshot_axis——否则「DB 已迁移+worker 已
@@ -698,6 +776,7 @@ def main() -> int:
             for fn in (
                 check_tables, check_active_user, check_classification_axis,
                 check_p23_schema,
+                check_conversation_lifecycle_schema,
                 check_review_route_schema,
                 check_judgment_schema,
                 check_outcome_schema,
@@ -714,6 +793,7 @@ def main() -> int:
         for name in (
             "核心表齐全", "≥1 活跃账户", "数据分级轴（ADR-0021）",
             "P2.3 结构化提问 schema", "判断资产只追加 schema",
+            "P2.6 会话生命周期只追加 schema",
             "P2.5 点名签收路由 schema", "产物流转只追加 schema", "worker 心跳代际",
         ):
             checks.append(Check(name, False, "跳过：DB 文件缺失"))
@@ -723,6 +803,7 @@ def main() -> int:
     checks.append(check_live_classification_generation(base_url))
     checks.append(check_live_created_by_username_generation(base_url))
     checks.append(check_live_structured_question_generation(base_url))
+    checks.append(check_live_conversation_lifecycle_generation(base_url))
     checks.append(check_live_eval_snapshot_generation(base_url))
     checks.append(check_live_search_addressing_generation(base_url))
     checks.append(check_live_named_review_inbox_generation(base_url))

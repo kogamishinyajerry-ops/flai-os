@@ -184,6 +184,7 @@ const searchFailedCount = computed(() =>
 
 // 会话标题：与 App.vue 左栏 convoTitle 同一口径（未接住会话前缀「未接住」）。
 function convoTitle(c) {
+  if (c.title) return c.title;
   const r = c.recommendation;
   if (r && r.decision === "orchestrate" && r.goal) return r.goal;
   if (r && r.decision === "refuse" && r.reason) return "（未接住）" + r.reason;
@@ -449,7 +450,7 @@ async function fetchAll() {
     });
   try {
     const [convs, tks, ags] = await Promise.all([
-      grab("conversation", listConversations()),
+      grab("conversation", listConversations({ visibility: "visible" })),
       grab("task", listTasks({ limit: 50 })),
       grab("agent", listAgents()),
     ]);
