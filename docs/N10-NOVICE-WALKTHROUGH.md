@@ -67,46 +67,78 @@
 ```markdown
 # N10 原始记录：P__
 
-- 日期/时区：
-- commit/build：
-- 参与者假名编号：
-- 岗位类型（不写敏感身份）：
-- 新手口径符合：是 / 否（若否，本次不计入 n，仍可留观察）
-- 观察者：
-- 浏览器/屏幕/主题/输入方式：
-- 录屏或截图证据（如有，受控路径）：
-- 开始/结束时间：
-- 中止：否 / 是（步骤与原话）：
+- record_id（原始稿与结构包共用的稳定编号）：
+- participant_key（受控去重键，不写真实姓名/工号）：
+- participant_kind（real_colleague / developer_self_test / automation / agent /
+  repeat_participant / unknown）：
+- role_category（岗位类型，不写敏感身份）：
+- novice_eligible（true / false；若 false，本次不计入 n，仍保留观察）：
+- environment_valid（true / false；前置环境失败必须为 false）：
+- observer_username（可审计的稳定 username，不用显示名代替）：
+- commit_sha（40 位完整 Git SHA）：
+- build_id：
+- browser：
+- viewport.width：
+- viewport.height：
+- theme（light / dark）：
+- input_method（mouse_keyboard / keyboard / touch / other）：
+- data_mode（固定 synthetic）：
+- gateway_mode（live_configured / controlled_stub）：
+- started_at（UTC canonical time）：
+- ended_at（UTC canonical time）：
+- termination.kind（completed / participant_stopped / product_blocker /
+  environment_invalid / ineligible_participant）：
+- termination.at_step（N1..N10；不适用时留空）：
+- termination.detail（逐字事实，不写事后推断）：
+- observer_attestation.observed_live（true / false）：
+- observer_attestation.path_coaching_withheld（true / false）：
+- observer_attestation.recorded_contemporaneously（true / false）：
+- observer_attestation.attested_at（UTC canonical time）：
+- controlled_media_refs（如有，只写受控引用；媒体本体不进仓库）：
 
-| 步骤 | 结果（无帮助/有帮助/失败/中止/版本不具备） | 用时 | 首次动作与停滞点 | 参与者原话 | 观察者救援 | 可观察结果/证据 |
-|---|---|---:|---|---|---|---|
-| N1 | | | | | | |
-| N2 | | | | | | |
-| N3 | | | | | | |
-| N4 | | | | | | |
-| N5 | | | | | | |
-| N6 | | | | | | |
-| N7 | | | | | | |
-| N8 | | | | | | |
-| N9 | | | | | | |
-| N10 | | | | | | |
+文本型单元格使用 `captured: 现场原文`；确实没有采集时使用
+`not_captured: 未采集原因`，不得用空白让转录者事后猜测。`result` 枚举映射：
+
+- 无帮助完成 = `unassisted`
+- 有帮助完成 = `assisted`
+- 失败 = `failed`
+- 中止发生步 = `aborted`
+- 版本不具备 = `version_unavailable`
+- 中止后未到达 = `not_reached_after_abort`
+- 会话开始前已判无效 = `not_started_invalid_session`
+
+| step_id | result | duration_seconds | first_action | stall_point | participant_quote | observer_interpretation | observer_rescue | observable_result |
+|---|---|---:|---|---|---|---|---|---|
+| N1 | | | | | | | | |
+| N2 | | | | | | | | |
+| N3 | | | | | | | | |
+| N4 | | | | | | | | |
+| N5 | | | | | | | | |
+| N6 | | | | | | | | |
+| N7 | | | | | | | | |
+| N8 | | | | | | | | |
+| N9 | | | | | | | | |
+| N10 | | | | | | | | |
 
 ## 结束访谈（尽量逐字）
 
-1. 哪一刻你最不确定系统是否还在工作？
-2. 哪一刻你不知道下一步该由谁行动？
-3. 哪个状态、颜色或图标与你的理解不一致？
-4. 如果明天再次使用，你会从哪里开始？
-5. 最终产物会被下载、引用、采用、搁置还是退回？为什么？
+每项同样使用 `captured:` 或 `not_captured:`：
+
+1. exit_interview.q1：哪一刻你最不确定系统是否还在工作？
+2. exit_interview.q2：哪一刻你不知道下一步该由谁行动？
+3. exit_interview.q3：哪个状态、颜色或图标与你的理解不一致？
+4. exit_interview.q4：如果明天再次使用，你会从哪里开始？
+5. exit_interview.q5：最终产物会被下载、引用、采用、搁置还是退回？为什么？
 
 ## 观察者初步问题单（不在现场替参与者归因）
 
-- 阻塞：
-- 焦虑/无反馈：
-- 误解信任状态：
-- 找不到对象或下一步：
-- outcome 信号：
-- 可复现条件：
+没有问题时明确写 `issues: []`。有问题时每条逐行记录，类别只能取
+`blocker / anxiety_no_feedback / trust_state_misunderstanding /
+cannot_locate_or_next_action / outcome_signal / environment_fault / preference`：
+
+| issues[].category | issues[].step_id | issues[].observation | issues[].reproduction |
+|---|---|---|---|
+| | | | |
 ```
 
 ## 6. 结构化记录包与完整性检查
