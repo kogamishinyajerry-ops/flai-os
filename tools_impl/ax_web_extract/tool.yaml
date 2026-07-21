@@ -8,6 +8,8 @@ description: >
   原始响应与来源清单。L0 仅允许 .invalid 测试夹具，不提供生产联网激活路径。
 entrypoint: tools_impl.ax_web_extract.adapter:run
 output_classification: sensitive
+egress:
+  network: fixture_only
 input_schema:
   type: object
   required:

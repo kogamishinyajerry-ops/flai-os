@@ -247,9 +247,9 @@ with sync_playwright() as p:
             break
         time.sleep(1)
     page.locator(".status-dock").click()
-    # 批次四 Q1 后 sc-item 主名缺名时回退 Agent 显示名（不再是裸任务 id）；
-    # 本定位串命中的是 .sc-item-sub 里恒显的裸 agent_id，行为不受主名影响。
-    sc_item = page.locator(".sc-item", has_text="governed_agent")
+    # 状态中心只显示人话任务名/Agent 名，不再把运行时 agent_id 当定位锚；
+    # 本夹具的 exact inbox 只有这一条点名签收任务，按语义组定位。
+    sc_item = page.locator(".sc-group:has(.sc-group-label.waiting) .sc-item")
     expect(sc_item.first).to_be_visible(timeout=5000)
     sc_item.first.click()
     expect(page.locator(".peek-approve")).to_be_visible(timeout=8000)

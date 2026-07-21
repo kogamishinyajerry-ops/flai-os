@@ -1,14 +1,14 @@
 id: jerryagent_research_agent
-name: "JerryAgent 研究复利候选 Agent（核心层试运行）"
+name: "研究复利候选 Agent（核心层试运行）"
 version: 0.1.0
 status: disabled
 maturity: L0
 category: reasoning_assist
-summary: "通过默认关闭的 JerryAgent Agent-layer sidecar 组织并行研究与综合，只形成具运行时来源的待人工复核候选。"
+summary: "通过默认关闭的受限执行层组织并行研究与综合，只形成具运行时来源的待人工复核候选。"
 description: >
-  FLAi-OS 持有任务、密级、事件、产物登记和人工签发；JerryAgent 只承担受限的
+  FLAi-OS 持有任务、密级、事件、产物登记和人工签发；受限运行底座只承担
   Agent 执行层。该包用于验证跨轮研究、并行专家与失败经验能否沉淀为下一轮起点，
-  不把 JerryAgent completed 解释成 FLAi 完成或批准。当前缺少 Windows 内网 sidecar、
+  不把运行层 completed 解释成 FLAi 完成或批准。当前缺少 Windows 内网 sidecar、
   凭证轮换和逐调用模型/工具账本的真实证明，因此保持 disabled。
 owner:
   department: 二所

@@ -16,6 +16,7 @@
     "output_schema",
     "runtime",
     "safety",
+    "egress",
     "owner",
     "output_classification"
   ],
@@ -142,6 +143,25 @@
         "save_raw_files": {
           "type": "boolean",
           "description": "true = 原始输入/输出文件必须落盘并入 tool_runs 追溯。"
+        }
+      }
+    },
+    "egress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "network"
+      ],
+      "properties": {
+        "network": {
+          "type": "string",
+          "enum": [
+            "none",
+            "fixture_only",
+            "loopback_only",
+            "production"
+          ],
+          "description": "工具的网络出口能力必须显式声明，禁止缺省推断。none=无获准网络出口；fixture_only=仅确定性测试夹具；loopback_only=仅本机回环服务；production=外部生产网络。当前 Registry 对 production 无条件 fail-closed，直到运行时角色轴与可执行 egress policy 均落地并经独立变更替换硬锁。"
         }
       }
     },

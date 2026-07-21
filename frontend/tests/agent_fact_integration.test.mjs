@@ -39,11 +39,30 @@ test("the existing right drawer owns the on-demand monitor workspace", () => {
   assert.match(center, /返回 Agent 运行监控/);
   assert.match(center, /const peekTitle = computed/);
   assert.doesNotMatch(center, /sc-title-task[^\n]*taskId\?\.slice/);
+  assert.doesNotMatch(center, /\{\{\s*t\.agent_id\s*\}\}/);
+  assert.doesNotMatch(center, /\{\{\s*peekTask\.agent_id\s*\}\}/);
   assert.match(monitor, /data-agent-fact-focus-target/);
   assert.doesNotMatch(monitor, /data-agent-fact-task-id/);
   assert.doesNotMatch(monitor, /\{\{\s*(?:task|dependency)\.taskId\s*\}\}/);
   assert.match(center, /scrollIntoView\(\{ block: "nearest" \}\)/);
   assert.doesNotMatch(center, /<el-dialog[^>]*agent-monitor/i);
+  assert.match(center, /employeeTaskLabel\(t\)/);
+  assert.doesNotMatch(center, /taskDisplayName\(t, agentNames\.map\)/);
+});
+
+test("ordinary task surfaces hide runtime brands and internal handles", () => {
+  const center = read("../src/components/StatusCenter.vue");
+  const detail = read("../src/views/TaskDetail.vue");
+
+  assert.match(center, /const employeeTaskLabel = \(task\) =>/);
+  assert.match(detail, /const taskAgentLabel = computed/);
+  assert.match(detail, /const taskTitle = computed/);
+  assert.doesNotMatch(detail, /\{\{\s*task\.agent_id\s*\}\}/);
+  assert.doesNotMatch(detail, /\{\{\s*task\.retry_of\s*\}\}/);
+  assert.doesNotMatch(detail, /out\.push\(\{\s*id,\s*name:\s*id\.slice\(/);
+  assert.match(detail, /重跑自 上次失败任务/);
+  assert.doesNotMatch(detail, /<el-descriptions-item label="Agent ID">/);
+  assert.doesNotMatch(detail, /<el-descriptions-item label="ID">\{\{\s*task\.id/);
 });
 
 test("the guide keeps one compact fact card and opens the same monitor", () => {
@@ -77,7 +96,30 @@ test("monitor motion and trust colors stay inside the existing semantic slots", 
   assert.match(summary, /const emptyUnverified = computed/);
   assert.match(summary, /projection\.value\.unavailableRuntimeCount > 0/);
   assert.match(summary, /if \(coldError\.value\) return "unknown"/);
-  assert.match(monitor, /agent-monitor-notice\.is-invalid\s*\{\s*color:\s*var\(--trust-pending\)/);
+  assert.match(monitor, /agent-monitor-notice\.is-invalid[^}]*color:\s*var\(--ink-soft\)[^}]*border-inline-start-color:\s*var\(--trust-pending\)/s);
   assert.doesNotMatch(monitor, /agent-monitor-notice\.is-invalid\s*\{\s*color:\s*var\(--trust-fail\)/);
   assert.doesNotMatch(monitor, /runtime\.reason\s*===\s*"malformed"\)\)\s*return\s*"failure"/);
+});
+
+test("monitor has a named dialog and progressively discloses dense task facts", () => {
+  const center = read("../src/components/StatusCenter.vue");
+  const monitor = read("../src/components/AgentMonitorView.vue");
+  const summary = read("../src/components/AgentFactSummary.vue");
+
+  assert.match(center, /aria-labelledby="status-center-drawer-title"/);
+  assert.match(center, /id="status-center-drawer-title"/);
+  assert.match(center, /class="sc-head"\s*:class="\{ 'is-monitor': statusCenter\.view === 'monitor' \}"/);
+  assert.match(center, /\.sc-head\.is-monitor[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto/s);
+  assert.match(monitor, /class="agent-monitor-facts"/);
+  assert.match(monitor, /:open="shouldExpandTask\(task\)"/);
+  assert.match(monitor, /taskDisclosureLabel\(task\)/);
+  assert.match(monitor, /focusTaskId === task\.taskId[^]*task\.phase === "failed"[^]*task\.signoff\.state === "awaiting_human"/);
+  assert.match(monitor, /agent-monitor-completed-row[^]*`tone-\$\{taskTone\(task\)\}`/);
+  assert.match(monitor, /\.agent-monitor-completed-row\.tone-signed[^}]*border-inline-start-color:\s*var\(--trust-signed\)/s);
+
+  // Semantic slots stay on icons, rails and borders; ordinary small copy uses
+  // the readable ink tier instead of sub-AA decorative color tokens.
+  assert.match(summary, /\.agent-fact-meta,[^}]*color:\s*var\(--ink-soft\)/s);
+  assert.match(monitor, /\.agent-monitor-runtime\.tone-waiting[^}]*color:\s*var\(--ink-soft\)/s);
+  assert.match(monitor, /\.agent-monitor-signoff\.tone-signed[^}]*border-inline-start-color:\s*var\(--trust-signed\)/s);
 });

@@ -17,6 +17,8 @@ description: >
   谁都不碰，同名 run 已存在即拒。
 entrypoint: tools_impl.cfd_solve_launch.adapter:run
 output_classification: internal
+egress:
+  network: none
 input_schema:
   type: object
   required:

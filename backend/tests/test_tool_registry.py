@@ -76,6 +76,7 @@ def _write_tool_yaml(
         "type": "python_adapter",
         "mock": mock,
         "output_classification": output_classification,  # ADR-0024：schema required
+        "egress": {"network": "none"},
         "description": "测试用工具包，仅供 ToolRegistry 单测使用",
         "entrypoint": entrypoint,
         "input_schema": input_schema,
@@ -137,6 +138,26 @@ def test_scan_rejects_tool_missing_output_classification(tmp_path) -> None:
     registry.scan()
     assert registry.get("ok_tool") is not None
     assert registry.get("no_class_tool") is None, "漏声明 output_classification 的工具必须被拒"
+
+
+def test_scan_rejects_tool_missing_egress_declaration(tmp_path) -> None:
+    """Network capability is explicit and fail-closed for every package."""
+
+    _write_tool_yaml(tmp_path / "ok_tool", tool_id="ok_tool", entrypoint="ok_tool.adapter:run")
+    bad_dir = tmp_path / "no_egress_tool"
+    bad_dir.mkdir()
+    data = yaml.safe_load((tmp_path / "ok_tool" / "tool.yaml").read_text("utf-8"))
+    data["id"] = "no_egress_tool"
+    data.pop("egress")
+    (bad_dir / "tool.yaml").write_text(
+        yaml.safe_dump(data, allow_unicode=True), encoding="utf-8"
+    )
+
+    registry = ToolRegistry(tmp_path, TOOL_SCHEMA_PATH)
+    registry.scan()
+
+    assert registry.get("ok_tool") is not None
+    assert registry.get("no_egress_tool") is None
 
 
 def test_scan_duplicate_tool_id_raises(tmp_path) -> None:

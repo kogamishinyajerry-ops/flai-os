@@ -33,11 +33,18 @@ Tool Registry 只认这个目录形态；`tool.yaml` 缺失或 schema 校验不�
 | `description` | string | ≥10 字，说清工具做什么 |
 | `entrypoint` | string | 形如 `tools_impl.performance_disk.adapter:run` |
 | `mock` | bool（可选，默认 false） | 见第3节 |
+| `output_classification` | enum | 工具污点下限，必须显式为 `internal` 或 `sensitive` |
+| `egress.network` | enum | 必填；`none` / `fixture_only` / `loopback_only` / `production`。当前 `production` 在 Registry 注册期与调用期一律拒绝，不能凭 manifest 或环境变量直接解锁 |
 | `input_schema` | object | 内嵌 JSON Schema，`type` 必须是 `object`；Registry 调用前强制校验，不合格拒调 |
 | `output_schema` | object | 内嵌 JSON Schema；必含 `status`（`success`/`failed`）；解析类工具必含 `raw_output_path` |
 | `runtime.timeout_seconds/max_parallel_jobs/retry` | object | 调用超时/并发上限/重试次数 |
 | `safety.*` | object | 见第4节三开关 |
 | `owner.maintainer/business_owner` | object | 责任人，可先填 `TBD`（schema 不强制非空校验，但注册进 `released` Agent 前应补全） |
+
+`egress.network` 是默认拒绝的能力声明，不是可执行 egress policy 本身。生产外网能力的
+开放顺序固定为：先完成运行时角色轴，再完成连接时可执行的 DNS/IP/重定向策略，最后才
+允许以独立、默认关闭的 L1 adapter 提案进入评审。将 adapter 改名、换 entrypoint、设置
+环境变量，或只增加一个 `production` 声明都不会让 Tool Registry 放行。
 
 ## 3. `mock` 字段的诚实语义
 

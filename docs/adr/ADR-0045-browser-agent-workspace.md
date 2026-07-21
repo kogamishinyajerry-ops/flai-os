@@ -49,6 +49,10 @@ CLI/TUI 继续服务开发者与高级诊断，不成为 CFD、结构、控制�
 
 - 会话主轴只显示一张紧凑事实卡和一个低频运行 glyph；
 - 右侧监控栏默认关闭，按需展开 dependency、wait、handoff、subagent 与 signoff；
+- 监控栏 dialog 由可见标题提供 accessible name；任务事实默认折叠，只有精确聚焦、
+  真实失败/驳回或等待人工签收的项目自动展开，避免 100 项窗口退化成事实墙；
+- semantic hue 只承担 glyph、边轨和状态形状，`fs-xs` 正文使用可读 ink 层级；
+  信任色不能以牺牲普通文本 AA 对比度为代价；
 - 主轴与监控栏复用同一 conversation snapshot 和轮询权威，不增加第二 poller；
 - 关闭监控栏不触发 cancel；返回会话后用完整快照恢复事实；
 - epoch 变化、revision 回退或同 revision 内容漂移强制 resnapshot，失败时保留旧快照并明确 stale。
@@ -101,8 +105,11 @@ KPI route、治理自评分、自由文本 rationale/chain-of-thought、角色�
 
 - 关闭/打开监控栏不触发任务取消或新轮询；
 - 路由离开后服务端任务事实可由完整快照恢复；
-- 普通路径不暴露 runtime 品牌、终端或内部标识；
+- 普通路径（主轴、监控、速览、收件箱与完整任务页）不暴露 runtime 品牌、终端或
+  内部标识；内部 handle 只参与受控路由与服务端关联，不成为可见任务名称；
 - unavailable gap 之后的同 epoch revision 回退仍触发强制 resnapshot；
 - native `not_applicable` 不显示成 runtime 故障；
 - 截断快照披露“最近 N / 共 M”，不作全会话终态断言；
 - 人签与 Agent 完成在文字、图形和信任色上均不混同。
+- dialog 可访问名称、键盘 focus 回返、默认折叠策略与小字对比度在桌面/390px/
+  reduced-motion 浏览器验收中成立。

@@ -160,6 +160,8 @@ def _valid_tool() -> dict:
 @pytest.mark.parametrize("mutate, reason", [
     (lambda t: t.pop("safety"), "缺 safety 三开关"),
     (lambda t: t.pop("runtime"), "缺 runtime"),
+    (lambda t: t.pop("egress"), "缺 egress 显式声明"),
+    (lambda t: t.__setitem__("egress", {"network": "live"}), "非法网络 egress 模式"),
     (lambda t: t.__setitem__("type", "shell_script"), "非法工具类型"),
     (lambda t: t.__setitem__("entrypoint", "随便写的"), "非法 entrypoint 形态"),
     (lambda t: t["runtime"].__setitem__("timeout_seconds", 0), "超时=0"),

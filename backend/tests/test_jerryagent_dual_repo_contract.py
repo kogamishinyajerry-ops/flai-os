@@ -7,20 +7,30 @@ Run with:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import socket
 import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
-from backend.app.runtime.jerryagent_adapter import JerryAgentAdapter, load_jerryagent_settings
+from backend.app.runtime.agent_execution import canonical_json_bytes
+from backend.app.runtime.jerryagent_adapter import (
+    JerryAgentAdapter,
+    build_jerryagent_facts_reader,
+    load_jerryagent_settings,
+)
 from backend.tests.test_jerryagent_adapter import TOKEN, _request
 
 
 _FIXTURE = r"""
 import path from "node:path";
+import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 
 const repo = path.resolve(process.argv[2]);
@@ -32,6 +42,13 @@ const storeModule = await import(pathToFileURL(path.join(repo, "runtime/event-st
 const { DesktopBridgeServer, AGENT_LAYER_COMMAND_BINDING } = bridgeModule;
 const { RuntimeEventStore } = storeModule;
 let eventId = 0;
+const terminalRelease = new Promise((resolve) => {
+  const input = readline.createInterface({ input: process.stdin });
+  input.once("line", () => {
+    input.close();
+    resolve();
+  });
+});
 const store = new RuntimeEventStore({
   filePath: eventFile,
   sessionId: "dual-repo-session",
@@ -73,7 +90,38 @@ const server = new DesktopBridgeServer({
       actor: { kind: "agent", label: "JerryAgent" },
       payload: { status: "running", detail: "fixture running" },
     });
-    setTimeout(() => {
+    store.append({
+      type: "subagent.created",
+      taskId,
+      actor: { kind: "system", label: "JerryAgent runtime" },
+      payload: {
+        subagentId: "dual-secret-subagent-id",
+        name: "dual-secret-subagent-name",
+        role: "dual-secret-subagent-role",
+        objective: "dual-secret-subagent-objective",
+      },
+    });
+    store.append({
+      type: "subagent.status.changed",
+      taskId,
+      actor: { kind: "subagent", id: "dual-secret-subagent-id" },
+      payload: {
+        subagentId: "dual-secret-subagent-id",
+        status: "running",
+        detail: "dual-secret-subagent-detail",
+      },
+    });
+    void terminalRelease.then(() => {
+      store.append({
+        type: "subagent.status.changed",
+        taskId,
+        actor: { kind: "subagent", id: "dual-secret-subagent-id" },
+        payload: {
+          subagentId: "dual-secret-subagent-id",
+          status: "completed",
+          detail: "dual-secret-subagent-completed-detail",
+        },
+      });
       store.append({
         type: "message.recorded",
         taskId,
@@ -90,7 +138,7 @@ const server = new DesktopBridgeServer({
         actor: { kind: "agent", label: "JerryAgent" },
         payload: { status: "completed", detail: "fixture completed" },
       });
-    }, 25);
+    });
     return { accepted: true, taskId, dispatchStatus: "pending" };
   },
 });
@@ -128,21 +176,21 @@ def test_flai_adapter_completes_against_real_jerryagent_bridge(
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        stdin=subprocess.PIPE,
         text=True,
     )
     try:
         assert process.stdout is not None
         base_url = process.stdout.readline().strip()
         assert base_url.startswith("http://127.0.0.1:")
-        settings = load_jerryagent_settings(
-            {
-                "FLAI_JERRYAGENT_ENABLED": "1",
-                "FLAI_JERRYAGENT_URL": base_url,
-                "FLAI_JERRYAGENT_TOKEN": TOKEN,
-                "FLAI_JERRYAGENT_TIMEOUT_S": "10",
-                "FLAI_JERRYAGENT_POLL_INTERVAL_S": "0.01",
-            }
-        )
+        settings_env = {
+            "FLAI_JERRYAGENT_ENABLED": "1",
+            "FLAI_JERRYAGENT_URL": base_url,
+            "FLAI_JERRYAGENT_TOKEN": TOKEN,
+            "FLAI_JERRYAGENT_TIMEOUT_S": "10",
+            "FLAI_JERRYAGENT_POLL_INTERVAL_S": "0.01",
+        }
+        settings = load_jerryagent_settings(settings_env)
         request, _events = _request(tmp_path)
         if astral_prompt:
             # Cross-language witness: Python counts Unicode code points while
@@ -154,12 +202,130 @@ def test_flai_adapter_completes_against_real_jerryagent_bridge(
                 "constraints": ["😀" * 500] * 12 + ["a" * 500] * 8,
             }
         adapter = JerryAgentAdapter(settings)
+        facts_reader = build_jerryagent_facts_reader(settings_env)
         try:
-            outcome = adapter.execute(request)
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                execution = executor.submit(adapter.execute, request)
+                identity_bound = None
+                observed = None
+                event_deadline = time.monotonic() + 5
+                while time.monotonic() < event_deadline:
+                    for event_name, payload in list(_events.rows):
+                        if event_name == "agent_layer_identity_bound":
+                            identity_bound = payload
+                        elif event_name == "agent_layer_observed":
+                            observed = payload
+                    if identity_bound is not None and observed is not None:
+                        break
+                    if execution.done():
+                        execution.result()
+                        pytest.fail(
+                            "JerryAgent execution completed before its live fact "
+                            "witness could be observed"
+                        )
+                    time.sleep(0.005)
+
+                assert identity_bound is not None
+                assert observed is not None
+                expected_binding = {
+                    "requestSha256": identity_bound["request_sha256"],
+                    "runtimeTaskId": identity_bound["runtime_task_id"],
+                    "instanceId": identity_bound["runtime_identity"]["instanceId"],
+                    "sessionId": identity_bound["runtime_identity"]["sessionId"],
+                    "runtimeKind": identity_bound["runtime_identity"]["runtimeKind"],
+                    "minimumRevision": observed["revision"],
+                }
+                expected_identity = {
+                    **identity_bound["runtime_identity"],
+                    "executionId": request.task["id"],
+                    "externalTaskId": request.task["id"],
+                    "requestSha256": identity_bound["request_sha256"],
+                }
+                expected_source_epoch = hashlib.sha256(
+                    canonical_json_bytes(expected_identity)
+                ).hexdigest()
+
+                live_facts = facts_reader.read(
+                    request.task["id"],
+                    expected_binding=expected_binding,
+                    timeout_s=5,
+                )
+                assert live_facts["sourceEpoch"] == expected_source_epoch
+                assert live_facts["revision"] >= observed["revision"]
+                assert live_facts["status"] == "running"
+                assert live_facts["wait"] is not None
+                assert live_facts["wait"] == {
+                    "kind": "subagent_completion",
+                    "since": live_facts["wait"]["since"],
+                    "subjectOrdinal": 1,
+                    "pendingCount": 1,
+                    "continueWhen": "subagents_terminal",
+                }
+                assert live_facts["delegationHold"] is None
+                assert live_facts["subagentCount"] == 1
+                assert live_facts["subagentsTruncated"] is False
+                assert len(live_facts["subagents"]) == 1
+                assert live_facts["subagents"][0] == {
+                    "ordinal": 1,
+                    "status": "running",
+                    "retryOfOrdinal": None,
+                    "createdAt": live_facts["subagents"][0]["createdAt"],
+                    "updatedAt": live_facts["subagents"][0]["updatedAt"],
+                }
+                rendered_live_facts = json.dumps(live_facts, ensure_ascii=False)
+                for secret in (
+                    "dual-secret-subagent-id",
+                    "dual-secret-subagent-name",
+                    "dual-secret-subagent-role",
+                    "dual-secret-subagent-objective",
+                    "dual-secret-subagent-detail",
+                ):
+                    assert secret not in rendered_live_facts
+                assert "identity" not in live_facts
+                assert "runtimeTaskId" not in live_facts
+                assert "requestSha256" not in live_facts
+
+                # An explicit stdin latch, rather than a timing window, keeps
+                # the runtime in its observable running/wait state until the
+                # cross-repo /facts assertions have completed.
+                assert process.stdin is not None
+                process.stdin.write("release-terminal\n")
+                process.stdin.flush()
+                outcome = execution.result(timeout=10)
+
+            terminal_binding = {
+                **expected_binding,
+                "minimumRevision": outcome.receipt.final_revision,
+            }
+            terminal_facts = facts_reader.read(
+                outcome.receipt.execution_id,
+                expected_binding=terminal_binding,
+                timeout_s=5,
+            )
         finally:
+            facts_reader.close()
             adapter.close()
+        assert outcome.receipt.request_sha256 == identity_bound["request_sha256"]
+        assert dict(outcome.receipt.runtime_identity) == identity_bound["runtime_identity"]
         assert outcome.receipt.runtime_identity["product"] == "JerryAgent"
         assert outcome.receipt.final_revision is not None
+        assert terminal_facts["sourceEpoch"] == expected_source_epoch
+        assert terminal_facts["revision"] >= outcome.receipt.final_revision
+        assert terminal_facts["status"] == "completed"
+        assert terminal_facts["wait"] is None
+        assert terminal_facts["subagentCount"] == 1
+        assert terminal_facts["subagents"] == [
+            {
+                "ordinal": 1,
+                "status": "completed",
+                "retryOfOrdinal": None,
+                "createdAt": terminal_facts["subagents"][0]["createdAt"],
+                "updatedAt": terminal_facts["subagents"][0]["updatedAt"],
+            }
+        ]
+        assert "dual-secret-subagent-completed-detail" not in json.dumps(
+            terminal_facts, ensure_ascii=False
+        )
         assert outcome.result["outputs"][0]["candidate_only"] is True
         assert (tmp_path / "output" / "jerryagent_result.md").is_file()
     finally:

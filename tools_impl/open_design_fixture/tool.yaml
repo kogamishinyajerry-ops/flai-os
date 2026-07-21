@@ -11,6 +11,8 @@ description: >
   必须使用新的 tool id，绝不把本 mock 包原地翻牌。
 entrypoint: tools_impl.open_design_fixture.adapter:run
 output_classification: internal
+egress:
+  network: none
 input_schema:
   type: object
   required:

@@ -14,6 +14,8 @@ description: >
   运行语义不变。未配置/sidecar 不符/产物缺失即 fail-closed（绝不猜路径、不补零、不编造）。
 entrypoint: tools_impl.cfd_result_read.adapter:run
 output_classification: internal
+egress:
+  network: none
 input_schema:
   type: object
   required:

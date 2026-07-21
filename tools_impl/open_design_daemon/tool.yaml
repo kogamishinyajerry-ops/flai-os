@@ -4,6 +4,8 @@ version: 0.1.0
 type: python_adapter
 mock: false
 output_classification: sensitive
+egress:
+  network: loopback_only
 description: >
   默认关闭、固定资产槽位的 Open Design loopback REST adapter。只接收 task 隔离标识和
   服务端枚举，不接收自由正文、附件或 knowledge；对版本、channel、Agent、请求模型、已发布

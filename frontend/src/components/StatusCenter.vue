@@ -7,6 +7,7 @@
     :size="drawerSize"
     :with-header="false"
     :close-on-press-escape="statusCenter.view !== 'peek'"
+    aria-labelledby="status-center-drawer-title"
     destroy-on-close
     class="status-center-drawer"
     @open="onOpen"
@@ -14,21 +15,21 @@
   >
     <div class="sc-shell" @keydown.esc="onEsc" tabindex="-1">
       <!-- 头部：inbox=标题；peek=←返回 + 任务名（渐进披露的返回轴） -->
-      <div class="sc-head">
+      <div class="sc-head" :class="{ 'is-monitor': statusCenter.view === 'monitor' }">
         <template v-if="statusCenter.view === 'peek'">
           <button
             class="sc-back"
             :aria-label="statusCenter.peekReturnView === 'monitor' ? '返回 Agent 运行监控' : '返回状态中心'"
             @click="backFromTaskPeek"
           >←</button>
-          <span class="sc-title sc-title-task">{{ peekTitle }}</span>
+          <span id="status-center-drawer-title" class="sc-title sc-title-task">{{ peekTitle }}</span>
         </template>
         <template v-else-if="statusCenter.view === 'monitor'">
-          <span class="sc-title">Agent 运行监控</span>
+          <span id="status-center-drawer-title" class="sc-title">Agent 运行监控</span>
           <span class="sc-sub">FLAi 治理账本 · 受限运行事实投影</span>
         </template>
         <template v-else>
-          <span class="sc-title">状态中心</span>
+          <span id="status-center-drawer-title" class="sc-title">状态中心</span>
           <span class="sc-sub">状态来找你——这里汇总要你处理与正在发生的</span>
         </template>
         <button class="sc-close" aria-label="关闭" @click="closeCenter">✕</button>
@@ -66,11 +67,11 @@
             <div v-for="t in waitingTasks" :key="t.id" class="sc-item" role="button" tabindex="0" @click="openTaskPeek(t.id)" @keydown.enter.prevent="openTaskPeek(t.id)" @keydown.space.prevent="openTaskPeek(t.id)">
               <span class="sc-lamp" :style="{ background: 'var(--trust-pending)' }"></span>
               <span class="sc-item-main">
-                <!-- 人话称呼（批次四 Q1）：缺名任务回退 Agent 显示名而非裸 id——
-                     taskDisplayName 三级诚实降级 SSOT，名册缺位仍显 id 切片。 -->
-                <span class="sc-item-name">{{ taskDisplayName(t, agentNames.map) }}</span>
+                <!-- 员工路径不显示内部 task handle；显式人名优先，其次 Agent
+                     注册表显示名，名册缺位诚实降级为泛称。 -->
+                <span class="sc-item-name">{{ employeeTaskLabel(t) }}</span>
                 <!-- 行级紧凑时钟（批次三 G4）：全量 locale 串收敛为同日 HH:MM/跨日 MM-DD HH:MM。 -->
-                <span class="sc-item-sub">{{ t.agent_id }} · {{ rowClock(t.created_at) }}</span>
+                <span class="sc-item-sub">{{ rowClock(t.created_at) }}</span>
               </span>
               <span class="sc-item-cta">审阅 →</span>
             </div>
@@ -94,10 +95,10 @@
                 :style="memberPhase(t) === 'waiting_upstream' ? {} : { background: 'var(--clay)' }"
               ></span>
               <span class="sc-item-main">
-                <span class="sc-item-name">{{ taskDisplayName(t, agentNames.map) }}</span>
+                <span class="sc-item-name">{{ employeeTaskLabel(t) }}</span>
                 <!-- 活跳时长（批次三 G3，cd-bg-tasks-panel Running 卡「时长实时」）：
                      started_at 缺失（queued/validating 早期）=段不出现，不硬凑。 -->
-                <span class="sc-item-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }}<template v-if="memberPhase(t) === 'waiting_upstream'"> <span class="sc-relay-note">(等待接力)</span></template><template v-if="runElapsed(t)"> · 已 {{ runElapsed(t) }}</template></span>
+                <span class="sc-item-sub">{{ statusLabel(t.status) }}<template v-if="memberPhase(t) === 'waiting_upstream'"> <span class="sc-relay-note">(等待接力)</span></template><template v-if="runElapsed(t)"> · 已 {{ runElapsed(t) }}</template></span>
               </span>
               <span class="sc-item-cta">速览 →</span>
             </div>
@@ -111,8 +112,8 @@
             <div v-for="t in recentDoneTasks" :key="t.id" class="sc-item" role="button" tabindex="0" @click="openTaskPeek(t.id)" @keydown.enter.prevent="openTaskPeek(t.id)" @keydown.space.prevent="openTaskPeek(t.id)">
               <span class="sc-lamp" :style="{ background: taskLampColor(t.status) }"></span>
               <span class="sc-item-main">
-                <span class="sc-item-name">{{ taskDisplayName(t, agentNames.map) }}</span>
-                <span class="sc-item-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }} · {{ rowClock(t.finished_at || t.created_at) }}</span>
+                <span class="sc-item-name">{{ employeeTaskLabel(t) }}</span>
+                <span class="sc-item-sub">{{ statusLabel(t.status) }} · {{ rowClock(t.finished_at || t.created_at) }}</span>
               </span>
             </div>
           </div>
@@ -160,7 +161,7 @@
             <div v-if="isPeekWorking" class="work-flow-strip-peek" aria-hidden="true"></div>
             <span v-if="isPeekWorking" class="work-pulse-dot"></span>
             <el-tag :type="statusTagType(peekTask.status)">{{ statusLabel(peekTask.status) }}</el-tag>
-            <span class="peek-agent">{{ peekTask.agent_id }} · {{ peekTask.agent_version || "—" }}</span>
+            <span class="peek-agent">{{ peekAgentLabel }} · {{ peekTask.agent_version || "—" }}</span>
             <button class="peek-fullpage" @click="goFullPage">打开完整页 ↗</button>
           </div>
 
@@ -344,7 +345,7 @@ import { downloadUrl, fetchFilePreview } from "../api/files";
 // formatTime 保留给授权链行（N8）——签发决策面的检视级全量时间戳；行级扫读
 // 面（待签/落定行）走 formatClockCompact 紧凑时钟（批次三 G4 边界：检视面
 // 全量精度，扫读面紧凑）。
-import { statusLabel, statusTagType, taskLampColor, formatTime, formatClockCompact, formatDuration, taskElapsedMs, formatFileSize, formatTokens, artifactTypeLabel, taskDisplayName, TASK_WORK_STATES } from "../utils/format";
+import { statusLabel, statusTagType, taskLampColor, formatTime, formatClockCompact, formatDuration, taskElapsedMs, formatFileSize, formatTokens, artifactTypeLabel, TASK_WORK_STATES } from "../utils/format";
 import { memberPhase } from "../utils/squad";
 import { currentUser, displayName } from "../stores/session";
 import {
@@ -377,6 +378,21 @@ const router = useRouter();
 
 // Agent 人话名册（批次四 Q1）：行级主文本缺名时回退注册表显示名。
 const agentNames = useAgentNames();
+
+// 状态中心是普通员工路径：owner-scoped task handle 只用于 click 路由，不进入
+// 可见主名。任务显式名称若等于后端 id，也按未命名处理，避免 fixture/导入任务
+// 把内部 handle 伪装成人话名称带上屏。
+const employeeTaskLabel = (task) => {
+  if (!task) return "Agent 任务";
+  const explicitName = typeof task.name === "string" ? task.name.trim() : "";
+  if (explicitName && explicitName !== task.id) return explicitName;
+  const registryName = task.agent_id && Object.hasOwn(agentNames.map, task.agent_id)
+    ? agentNames.map[task.agent_id]
+    : null;
+  return typeof registryName === "string" && registryName.trim()
+    ? registryName
+    : "Agent 任务";
+};
 
 // 「查看全部任务 →」：状态中心是任务总览的家（来找你）；要看更全的三栏视图 /
 // 历史全量时深链到 /tasks（范式 Phase 3：任务台降级为深链，不占主导航）。
@@ -729,12 +745,16 @@ const commentOpen = ref(false); // 意见框默认收纳，签发决策面零填
 const reviewing = ref(false);
 const reviewSettledTaskId = ref(null);
 const peekReviewSettled = computed(() => reviewSettledTaskId.value === statusCenter.taskId);
+const peekAgentLabel = computed(() => {
+  if (!peekTask.value) return "Agent";
+  const agentName = agentNames.map[peekTask.value.agent_id];
+  return typeof agentName === "string" && agentName.trim() ? agentName : "Agent";
+});
 const peekTitle = computed(() => {
   if (!peekTask.value) return "任务速览";
   const explicitName = typeof peekTask.value.name === "string" ? peekTask.value.name.trim() : "";
   if (explicitName && explicitName !== peekTask.value.id) return explicitName;
-  const agentName = agentNames.map[peekTask.value.agent_id];
-  return typeof agentName === "string" && agentName.trim() ? agentName : "Agent 任务";
+  return peekAgentLabel.value === "Agent" ? "Agent 任务" : peekAgentLabel.value;
 });
 const peekRejectDialogOpen = ref(false);
 const peekRejectReasonCode = ref("");
@@ -1088,6 +1108,27 @@ onUnmounted(() => {
   gap: 10px;
   padding: 16px 20px 12px;
   border-bottom: 1px solid var(--hairline);
+}
+.sc-head.is-monitor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+.sc-head.is-monitor .sc-title {
+  min-width: 0;
+  white-space: nowrap;
+}
+.sc-head.is-monitor .sc-sub {
+  grid-column: 1;
+  grid-row: 2;
+  color: var(--ink-soft);
+}
+.sc-head.is-monitor .sc-close {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  margin-left: 0;
 }
 .sc-title {
   font-family: var(--serif);

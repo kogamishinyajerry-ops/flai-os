@@ -12,6 +12,8 @@ description: >
 entrypoint: tools_impl.excel_case_parser.adapter:run
 # 工具污点声明（ADR-0024）：本工具不碰外部不可考数据，产物 internal。
 output_classification: internal
+egress:
+  network: none
 input_schema:
   type: object
   required:

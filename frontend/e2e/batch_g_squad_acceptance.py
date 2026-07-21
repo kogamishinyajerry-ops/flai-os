@@ -14,7 +14,8 @@
   O8 guide after 幻觉引用 → 整体剥离降级（stripped_fields 记名）+ dropped 审计可见；
   O9 装载期 fail-closed：L3+job 无人签 / evidence required 无 findings → 拒载；
   O10 completed 状态词计算色=中性非绿；
-  O11 prefers-reduced-motion：脉动灯静态降级（animation none）。
+  O11 prefers-reduced-motion：单一事实摘要的低频工作 glyph 静态降级；
+      成员行不再用多个脉动灯制造焦虑。
 
 tamper witness（S4 tamper 轮实证）：
   - 断开 tasks.py batch 的 after→depends_on 映射 → O1 必红；
@@ -75,7 +76,7 @@ WORK = Path(tempfile.mkdtemp(prefix="flai_batch_g_"))
 # fault 语料命中词（agents/fault_history_agent/data/fault_cases.json 的 tags）
 FAULT_PROBLEM = "XR-100 连续运行两小时后间歇断电并出现母线复位，热浸时复现，冷却后恢复，怀疑接插件接触阻抗波动。"
 REFUSE_PROBLEM = "海岚-9 在热浸后出现间歇断电，冷却后恢复。"
-RANK_SLEEP_S = 8.0  # 排序窗人为放宽：给 O11 reduced-motion 与运行态断言一个稳定观察窗
+RANK_SLEEP_S = 8.0  # 排序窗人为放宽：给 O11 reduced-motion 与摘要运行态一个稳定观察窗
 # （3-lens P3：wait_status 轮询+双上下文开销会吃掉窗口前段，8s > 两个 6s expect 预算）
 
 
@@ -349,23 +350,26 @@ with sync_playwright() as p:
     running_fault = wait_status(t_fault["id"], {"running", "validating", "parsing", "analyzing"}, timeout_s=30)
     check("O1d resolver 真把下游送进工作态", running_fault.get("status") in {"running", "validating", "parsing", "analyzing"}, str(running_fault.get("status")))
 
-    # O11：排序窗内（RANK_SLEEP_S）两上下文对照——正常页脉动、reduce 页 animation none
+    # O11：排序窗内两上下文对照——会话只保留一个低频工作 glyph；
+    # 成员小灯不再脉动，reduce 页则把这个唯一 glyph 也静态化。
+    main_work_glyph = page.locator(".agent-fact-summary.is-working .agent-fact-glyph")
     try:
-        expect(page.locator(".status-lamp.is-pulsing").first).to_be_visible(timeout=6000)
-        main_anim = page.locator(".status-lamp.is-pulsing").first.evaluate(
+        expect(main_work_glyph).to_be_visible(timeout=6000)
+        main_anim = main_work_glyph.evaluate(
             "el => getComputedStyle(el).animationName"
         )
-        check("O11a 正常上下文运行灯真有动画", main_anim not in ("none", ""), str(main_anim))
+        check("O11a 正常上下文唯一工作 glyph 真有低频动画", main_anim not in ("none", ""), str(main_anim))
     except Exception as exc:  # 观察窗错过=诚实红，不静默
-        check("O11a 正常上下文运行灯真有动画", False, f"观察窗错过：{exc}")
+        check("O11a 正常上下文唯一工作 glyph 真有低频动画", False, f"观察窗错过：{exc}")
+    reduced_work_glyph = rpage.locator(".agent-fact-summary.is-working .agent-fact-glyph")
     try:
-        expect(rpage.locator(".status-lamp.is-pulsing").first).to_be_visible(timeout=6000)
-        r_anim = rpage.locator(".status-lamp.is-pulsing").first.evaluate(
+        expect(reduced_work_glyph).to_be_visible(timeout=6000)
+        r_anim = reduced_work_glyph.evaluate(
             "el => getComputedStyle(el).animationName"
         )
-        check("O11b reduced-motion 运行灯 animation=none", r_anim in ("none", ""), str(r_anim))
+        check("O11b reduced-motion 唯一工作 glyph animation=none", r_anim in ("none", ""), str(r_anim))
     except Exception as exc:
-        check("O11b reduced-motion 运行灯 animation=none", False, f"观察窗错过：{exc}")
+        check("O11b reduced-motion 唯一工作 glyph animation=none", False, f"观察窗错过：{exc}")
 
     # O1（事件层）：dependency_resolved 事件真实在场（resolver 留痕）
     events = API.get(f"/api/tasks/{t_fault['id']}/events?limit=200").json()

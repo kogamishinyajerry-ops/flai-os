@@ -1,4 +1,4 @@
-# 一键执行前端构建、后端全量测试、前端纯函数核与 21 套浏览器验收；任一步失败立即汇总退出。
+# 一键执行前端构建、后端全量测试、前端纯函数核与 22 套浏览器验收；任一步失败立即汇总退出。
 # macOS pwsh 只验证脚本对称性；Windows 内网目标机运行仍为 DECLARED-NOT-VERIFIED。
 $ErrorActionPreference = "Stop"
 
@@ -117,7 +117,8 @@ $E2EScripts = @(
     "frontend/e2e/inline_summon_acceptance.py",
     "frontend/e2e/craft_desktop_acceptance.py",
     "frontend/e2e/batch_g_squad_acceptance.py",
-    "frontend/e2e/batch_h_teams_acceptance.py"
+    "frontend/e2e/batch_h_teams_acceptance.py",
+    "frontend/e2e/agent_fact_projection_acceptance.py"
 )
 
 foreach ($E2EScript in $E2EScripts) {

@@ -78,9 +78,9 @@
            仪式只属于亲历者，见下方 onTransition 订阅注释。 -->
       <CompletionSeal :task="task" :animate="sealAnimate" />
 
-      <!-- 首屏只留一行轻量上下文；完整元数据（ID/版本/时间）折叠为次要，让产物与决策优先。 -->
+      <!-- 首屏只留一行轻量上下文；内部 handle 不进入普通员工路径。 -->
       <div class="task-context">
-        <span>Agent <b>{{ task.agent_id }}</b></span>
+        <span>Agent <b>{{ taskAgentLabel }}</b></span>
         <span class="ctx-dot">·</span>
         <span>创建人 {{ task.created_by }}</span>
         <span class="ctx-dot">·</span>
@@ -89,11 +89,12 @@
         <template v-if="task.retry_of">
           <span class="ctx-dot">·</span>
           <router-link class="ctx-retry-link" :to="`/tasks/${task.retry_of}`">
-            重跑自 <span class="num-token">{{ task.retry_of }}</span>
+            重跑自 上次失败任务
           </router-link>
         </template>
         <!-- 批七 §1.6 接力血缘行：depends_on 忠实投影（上游名经任务/名册解析，
-             解析失败回退 id 切片诚实不编）；与 retry_of 同区同语法。 -->
+             解析失败退为有序泛称，不把内部 handle 搬进员工路径）；与 retry_of
+             同区同语法。 -->
         <template v-if="relayLineage.length">
           <span class="ctx-dot">·</span>
           <span class="ctx-relay">接力自：<router-link
@@ -320,12 +321,11 @@
       <aside class="td-rail">
         <div class="task-meta-card">
           <el-collapse class="task-meta-collapse">
-            <el-collapse-item title="任务信息（ID · 版本 · 时间）">
+            <el-collapse-item title="任务信息（版本 · 时间）">
               <el-descriptions :column="1" border class="task-descriptions">
-                <el-descriptions-item label="ID">{{ task.id }}</el-descriptions-item>
-                <el-descriptions-item label="Agent ID">{{ task.agent_id }}</el-descriptions-item>
+                <el-descriptions-item label="Agent">{{ taskAgentLabel }}</el-descriptions-item>
                 <el-descriptions-item label="Agent 版本">{{ task.agent_version }}</el-descriptions-item>
-                <el-descriptions-item label="任务名称">{{ task.name || "—" }}</el-descriptions-item>
+                <el-descriptions-item label="任务名称">{{ taskTitle }}</el-descriptions-item>
                 <el-descriptions-item label="创建人">{{ task.created_by }}</el-descriptions-item>
                 <el-descriptions-item label="创建时间">{{ formatTime(task.created_at) }}</el-descriptions-item>
                 <el-descriptions-item label="开始时间">{{ formatTime(task.started_at) }}</el-descriptions-item>
@@ -359,7 +359,7 @@
           </div>
           <div class="source-block">
             <div class="source-label">执行方</div>
-            <div>{{ task.agent_id || "—" }} · {{ task.agent_version || "—" }}</div>
+            <div>{{ taskAgentLabel }} · {{ task.agent_version || "—" }}</div>
           </div>
           <!-- B1：模型调用消耗诚实披露——零调用（hello 等无 LLM Agent）显示中性
                灰字；token 合计只对能折算出总数的行求和，凑不出来一律「未知」，
@@ -626,6 +626,21 @@ let offTransition = null;
 
 // ── 批七 §1.6：依据段 + 接力血缘 ─────────────────────────────────────────
 const agentNamesStore = useAgentNames();
+const taskAgentLabel = computed(() => {
+  const agentId = task.value?.agent_id;
+  const registryName = agentId && Object.hasOwn(agentNamesStore.map, agentId)
+    ? agentNamesStore.map[agentId]
+    : null;
+  return typeof registryName === "string" && registryName.trim()
+    ? registryName
+    : "Agent";
+});
+const taskTitle = computed(() => {
+  const current = task.value;
+  const explicitName = typeof current?.name === "string" ? current.name.trim() : "";
+  if (explicitName && explicitName !== current?.id) return explicitName;
+  return taskAgentLabel.value === "Agent" ? "Agent 任务" : taskAgentLabel.value;
+});
 
 // findings/refusals 从已拉取的 JSON 产物解析（§2.2 输出契约惯例）；无匹配
 // 产物/解析失败/密级遮蔽拒读 → null，段落零渲染（诚实缺位不编空态）。
@@ -678,7 +693,7 @@ const evidenceRequiredMissing = computed(() => {
 });
 
 // 接力血缘（depends_on 已在 GET 投影）：上游任务名逐个轻量解析（≤32，常态
-// 1-2 个）；拉取失败回退 id 切片（绝不编名字）。
+// 1-2 个）；name===id 与拉取失败均退为有序泛称，内部 handle 只留作链接目标。
 const relayLineage = ref([]);
 watch(
   () => task.value?.depends_on,
@@ -691,11 +706,23 @@ watch(
     if (relayLineage.value.length === list.length) return; // 已解析（depends_on 不可变）
     const out = [];
     for (const id of list) {
+      const fallbackName = `上游任务 ${out.length + 1}`;
       try {
         const ut = await getTask(id);
-        out.push({ id, name: agentNamesStore.map[ut.agent_id] || ut.name || id.slice(0, 8) });
+        const explicitName = typeof ut.name === "string" ? ut.name.trim() : "";
+        const registryName = ut.agent_id && Object.hasOwn(agentNamesStore.map, ut.agent_id)
+          ? agentNamesStore.map[ut.agent_id]
+          : null;
+        out.push({
+          id,
+          name: explicitName && explicitName !== ut.id
+            ? explicitName
+            : (typeof registryName === "string" && registryName.trim()
+                ? registryName
+                : fallbackName),
+        });
       } catch {
-        out.push({ id, name: id.slice(0, 8) });
+        out.push({ id, name: fallbackName });
       }
     }
     relayLineage.value = out;

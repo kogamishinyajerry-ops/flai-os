@@ -36,6 +36,7 @@ EXPECTED_E2E_SCRIPTS = (
     "frontend/e2e/craft_desktop_acceptance.py",
     "frontend/e2e/batch_g_squad_acceptance.py",
     "frontend/e2e/batch_h_teams_acceptance.py",
+    "frontend/e2e/agent_fact_projection_acceptance.py",
 )
 
 SHELL_ARRAY_RE = re.compile(r"E2E_SCRIPTS=\((.*?)\n\)", re.DOTALL)

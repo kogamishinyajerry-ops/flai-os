@@ -115,5 +115,16 @@ binary/固定 fixture 验收。
 4. 之后依次完成 Windows 固定 binary 离线包与目标机测试、受控 live pilot、browser
    fallback 与独立知识准入。
 
+当前 `ToolRegistry` 还设置了代码级熔断：只接受精确的 L0 fixture-only manifest；任何
+`ax_*` 或 ax entrypoint 的 L1/live 候选会在 scan 阶段排除，并在 call 阶段二次拒绝。
+该熔断不读取环境变量，且由 Windows 也执行的 `test_ax_production_registration_gate.py`
+锁定。未来只有在第 1、2 项已有独立证据后，才可通过单独评审修改这段熔断；删除熔断
+本身仍不等于生产激活。
+
+`tool.yaml` 的 `egress.network` 只是能力声明，不是可执行 egress policy；它让缺省与
+`production` 候选在准入层 fail-closed，但不能证明连接时已经执行 DNS/IP、redirect、
+端口、代理或防火墙策略。把该字段改成 `production`、把 adapter 改名，或谎报为 `none`
+都不是解锁凭据，也不能替代第 1、2 项的独立运行证据。
+
 角色轴、egress policy 或 L1 adapter 的“代码存在”都不等于生产联网已启用；只有上述顺序
 逐门验收且由具名人批准，才可另行申请 live 激活。

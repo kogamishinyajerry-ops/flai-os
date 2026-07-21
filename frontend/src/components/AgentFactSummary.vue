@@ -187,13 +187,16 @@ const animateWork = computed(() => tone.value === "working"
 
 .agent-fact-meta,
 .agent-fact-open {
-  color: var(--ink-faint);
+  color: var(--ink-soft);
   font-size: var(--fs-xs);
   line-height: 1.25;
 }
 
 .agent-fact-open {
-  color: var(--clay);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: var(--clay);
+  text-underline-offset: 2px;
   white-space: nowrap;
 }
 

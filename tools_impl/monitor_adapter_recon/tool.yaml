@@ -18,6 +18,8 @@ entrypoint: tools_impl.monitor_adapter_recon.adapter:run
 # run 目录、把侦察证据拷进 draft 产物，出处不可考——任务产物一律派生 sensitive，
 # 经 ADR-0021 下载 403 门 + ADR-0023 敏感访问审计。无此声明则会误判 internal 外泄。
 output_classification: sensitive
+egress:
+  network: none
 input_schema:
   type: object
   required:

@@ -80,7 +80,9 @@
             <span class="agent-monitor-duration">历时 {{ durationText(task) }}</span>
           </button>
 
-          <div class="agent-monitor-detail">
+          <details class="agent-monitor-facts" :open="shouldExpandTask(task)">
+            <summary>{{ taskDisclosureLabel(task) }}</summary>
+            <div class="agent-monitor-detail">
             <div v-if="task.dependencies.length" class="agent-monitor-fact-block">
               <span class="agent-monitor-label">依赖</span>
               <span v-for="dependency in task.dependencies" :key="dependency.taskId" class="agent-monitor-fact-line">
@@ -141,7 +143,8 @@
                 另有 {{ unreturnedSubagentCount(task) }} 个子智能体未包含在当前有界窗口。
               </span>
             </div>
-          </div>
+            </div>
+          </details>
         </article>
 
         <details
@@ -156,7 +159,7 @@
             type="button"
             class="agent-monitor-completed-row"
             :data-agent-fact-focus-target="focusTaskId === task.taskId ? 'true' : null"
-            :class="{ 'is-focused': focusTaskId === task.taskId }"
+            :class="[{ 'is-focused': focusTaskId === task.taskId }, `tone-${taskTone(task)}`]"
             @click="emit('inspect', task.taskId)"
           >
             <span>
@@ -384,6 +387,22 @@ function taskTone(task) {
   return "neutral";
 }
 
+function shouldExpandTask(task) {
+  return props.focusTaskId === task.taskId
+    || task.phase === "failed"
+    || task.signoff.state === "rejected"
+    || task.signoff.state === "awaiting_human";
+}
+
+function taskDisclosureLabel(task) {
+  const facts = [];
+  if (task.dependencies.length) facts.push(`依赖 ${task.dependencies.length}`);
+  if (task.wait) facts.push("正在等待");
+  if (task.handoffs.length) facts.push(`接力 ${task.handoffs.length}`);
+  if (task.runtime.subagentCount > 0) facts.push(`子智能体 ${task.runtime.subagentCount}`);
+  return facts.length ? `事实明细 · ${facts.join(" · ")}` : "事实明细";
+}
+
 function waitView(task) {
   const view = waitPresentation(task.wait, task.signoff);
   if (task.wait?.kind !== "dependency") return view;
@@ -470,11 +489,11 @@ function clockText(iso) {
 }
 
 .agent-monitor-head-copy strong { font-size: var(--fs-sm); }
-.agent-monitor-head-copy span { color: var(--ink-faint); font-size: var(--fs-xs); }
+.agent-monitor-head-copy span { color: var(--ink-soft); font-size: var(--fs-xs); }
 
 .agent-monitor-persistence {
   margin: 0;
-  color: var(--ink-faint);
+  color: var(--ink-soft);
   font-size: var(--fs-xs);
   line-height: 1.45;
 }
@@ -488,11 +507,20 @@ function clockText(iso) {
   white-space: nowrap;
 }
 
-.tone-working { color: var(--clay); }
-.tone-waiting { color: var(--trust-pending); }
-.tone-signed { color: var(--trust-signed); }
-.tone-failure { color: var(--trust-fail); }
+.tone-working,
+.tone-waiting,
+.tone-signed,
+.tone-failure { color: var(--ink-soft); }
 .tone-neutral { color: var(--ink-soft); }
+
+.agent-monitor-state {
+  padding-inline-start: 6px;
+  border-inline-start: 2px solid var(--ink-soft);
+}
+.agent-monitor-state.tone-working { border-inline-start-color: var(--clay); }
+.agent-monitor-state.tone-waiting { border-inline-start-color: var(--trust-pending); }
+.agent-monitor-state.tone-signed { border-inline-start-color: var(--trust-signed); }
+.agent-monitor-state.tone-failure { border-inline-start-color: var(--trust-fail); }
 
 .agent-monitor-notice,
 .agent-monitor-sync {
@@ -507,9 +535,15 @@ function clockText(iso) {
   line-height: 1.5;
 }
 
-.agent-monitor-notice.is-invalid { color: var(--trust-pending); }
+.agent-monitor-notice.is-invalid {
+  color: var(--ink-soft);
+  border-inline-start-color: var(--trust-pending);
+}
 .agent-monitor-notice.is-pending,
-.agent-monitor-sync { color: var(--trust-pending); }
+.agent-monitor-sync {
+  color: var(--ink-soft);
+  border-inline-start-color: var(--trust-pending);
+}
 
 .agent-monitor-notice button,
 .agent-monitor-sync button {
@@ -519,7 +553,10 @@ function clockText(iso) {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--card-bg, var(--paper-surface));
-  color: var(--clay);
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--clay);
+  text-underline-offset: 2px;
   cursor: pointer;
 }
 
@@ -546,7 +583,7 @@ function clockText(iso) {
 }
 
 .agent-monitor-group h3 span {
-  color: var(--ink-faint);
+  color: var(--ink-soft);
   font-family: var(--mono);
 }
 
@@ -600,11 +637,31 @@ function clockText(iso) {
 
 .agent-monitor-task-main span,
 .agent-monitor-duration {
-  color: var(--ink-faint);
+  color: var(--ink-soft);
   font-size: var(--fs-xs);
 }
 
 .agent-monitor-duration { white-space: nowrap; }
+
+.agent-monitor-facts {
+  border-top: 1px solid var(--hairline-soft);
+}
+
+.agent-monitor-facts > summary {
+  min-block-size: 44px;
+  display: flex;
+  align-items: center;
+  padding-inline: var(--space-3);
+  color: var(--ink-soft);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.agent-monitor-facts > summary:focus-visible {
+  outline: 2px solid var(--focus-ring-clay, var(--clay));
+  outline-offset: -2px;
+}
 
 .agent-monitor-detail {
   display: grid;
@@ -624,7 +681,7 @@ function clockText(iso) {
 }
 
 .agent-monitor-label {
-  color: var(--ink-faint);
+  color: var(--ink-soft);
   font-size: var(--fs-xs);
   font-weight: 600;
 }
@@ -637,19 +694,30 @@ function clockText(iso) {
   gap: var(--space-2);
   padding: var(--space-2);
   border-radius: var(--radius-sm);
+  border-inline-start: 2px solid var(--ink-soft);
   background: var(--paper-rail);
   font-size: var(--fs-xs);
 }
 
+.agent-monitor-signoff.tone-working { border-inline-start-color: var(--clay); }
+.agent-monitor-signoff.tone-waiting { border-inline-start-color: var(--trust-pending); }
+.agent-monitor-signoff.tone-signed { border-inline-start-color: var(--trust-signed); }
+.agent-monitor-signoff.tone-failure { border-inline-start-color: var(--trust-fail); }
+
 .agent-monitor-runtime,
 .agent-monitor-scope {
-  color: var(--ink-faint);
+  color: var(--ink-soft);
   font-size: var(--fs-xs);
   line-height: 1.45;
 }
 
-.agent-monitor-runtime.tone-waiting { color: var(--trust-pending); }
-.agent-monitor-runtime.tone-failure { color: var(--trust-fail); }
+.agent-monitor-runtime.tone-waiting,
+.agent-monitor-runtime.tone-failure {
+  padding-inline-start: 6px;
+  color: var(--ink-soft);
+  border-inline-start: 2px solid var(--trust-pending);
+}
+.agent-monitor-runtime.tone-failure { border-inline-start-color: var(--trust-fail); }
 
 .agent-monitor-subagent {
   min-block-size: 28px;
@@ -669,7 +737,7 @@ function clockText(iso) {
   min-block-size: 44px;
   display: flex;
   align-items: center;
-  color: var(--ink-faint);
+  color: var(--ink-soft);
   cursor: pointer;
 }
 
@@ -701,10 +769,15 @@ function clockText(iso) {
   padding: var(--space-2);
   border: 0;
   border-top: 1px solid var(--hairline-soft);
+  border-inline-start: 2px solid transparent;
   background: transparent;
-  color: var(--ink-faint);
+  color: var(--ink-soft);
   text-align: start;
   cursor: pointer;
+}
+
+.agent-monitor-completed-row.tone-signed {
+  border-inline-start-color: var(--trust-signed);
 }
 
 .agent-monitor-completed-row > span:first-child {
@@ -720,7 +793,7 @@ function clockText(iso) {
   white-space: nowrap;
 }
 
-.agent-monitor-completed-row small { color: var(--ink-faint); }
+.agent-monitor-completed-row small { color: var(--ink-soft); }
 
 @media (max-width: 380px) {
   .agent-monitor-head { grid-template-columns: 28px minmax(0, 1fr); }

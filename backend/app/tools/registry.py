@@ -28,6 +28,101 @@ from ..core.errors import (
 from ..storage import repos
 
 
+_AX_L0_TOOL_ID = "ax_web_extract"
+_AX_L0_ENTRYPOINT = "tools_impl.ax_web_extract.adapter:run"
+_AX_L0_VERSION = "0.1.0"
+_AX_L0_NETWORK_POLICY_ID = "l0-fixture-only"
+_NETWORK_EGRESS_MODES = {"none", "fixture_only", "loopback_only", "production"}
+
+
+def _network_egress_registration_error(tool: dict[str, Any]) -> str | None:
+    """Keep external production networking unregistrable before its gates.
+
+    The manifest declaration is an admission contract, not the future
+    executable egress policy.  The latter still has to enforce DNS/IP/redirect
+    checks at connection time.  Unknown or missing declarations are rejected
+    again here for defense in depth when a test or caller mutates ``_tools``
+    without going through schema validation.
+    """
+
+    tool_id = str(tool.get("id") or "")
+    network_mode = (tool.get("egress") or {}).get("network")
+    if network_mode not in _NETWORK_EGRESS_MODES:
+        return "工具缺少合法 egress.network 显式声明，默认拒绝注册与调用"
+    if network_mode == "production":
+        return (
+            "production 网络 adapter 注册已机械锁定：必须先完成运行时角色轴，"
+            "再完成可执行 egress policy；独立 L1 仍必须默认 disabled"
+        )
+    if network_mode == "fixture_only" and tool_id != _AX_L0_TOOL_ID:
+        return (
+            "egress.network=fixture_only 当前仅保留给精确 ax L0 身份；"
+            "任何生产候选必须先完成运行时角色轴与可执行 egress policy，"
+            "独立 L1 仍必须默认 disabled"
+        )
+    return None
+
+
+def _ax_registration_error(tool: dict[str, Any]) -> str | None:
+    """Return the hard-fuse reason for an ax production candidate.
+
+    ax L0 is an exact, fixture-only package.  Any L1/live sibling stays
+    unregistrable until the runtime role axis and executable egress policy are
+    implemented and this code fuse is replaced through an independently
+    reviewed change.  Environment variables cannot alter this decision.
+    """
+
+    tool_id = str(tool.get("id") or "")
+    entrypoint = str(tool.get("entrypoint") or "")
+    module_path = entrypoint.partition(":")[0]
+    input_properties = (tool.get("input_schema") or {}).get("properties", {})
+    input_required = set((tool.get("input_schema") or {}).get("required") or [])
+    operation_enum = set(
+        (input_properties.get("operation") or {}).get("enum") or []
+    )
+    output_properties = (tool.get("output_schema") or {}).get("properties", {})
+    id_is_ax_family = tool_id == "ax" or tool_id.startswith("ax_")
+    entrypoint_is_ax_family = (
+        module_path == "tools_impl.ax"
+        or module_path.startswith("tools_impl.ax_")
+        or module_path.startswith("tools_impl.ax.")
+    )
+    network_extract_shape = (
+        "url" in input_properties
+        or "url" in input_required
+        or bool(operation_enum.intersection({"fetch", "discover", "extract"}))
+        or "network_policy_id" in output_properties
+    )
+
+    if tool_id == _AX_L0_TOOL_ID:
+        policy_const = (
+            (tool.get("output_schema") or {})
+            .get("properties", {})
+            .get("network_policy_id", {})
+            .get("const")
+        )
+        exact_l0 = (
+            entrypoint == _AX_L0_ENTRYPOINT
+            and tool.get("version") == _AX_L0_VERSION
+            and tool.get("output_classification") == "sensitive"
+            and (tool.get("egress") or {}).get("network") == "fixture_only"
+            and policy_const == _AX_L0_NETWORK_POLICY_ID
+        )
+        if exact_l0:
+            return None
+        return (
+            "ax_web_extract 仅允许精确的 L0 fixture-only manifest；"
+            "运行时角色轴与可执行 egress policy 尚未完成，任何 L1/live 变体必须默认 disabled"
+        )
+
+    if id_is_ax_family or entrypoint_is_ax_family or network_extract_shape:
+        return (
+            "ax/联网抽取 L1/live 生产 adapter 注册已机械锁定：必须先完成运行时角色轴，"
+            "再完成可执行 egress policy；独立 L1 仍必须默认 disabled"
+        )
+    return None
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -74,6 +169,16 @@ class ToolRegistry:
                 self.errors.append({"dir": str(entry), "error": str(exc)})
                 continue
 
+            egress_error = _network_egress_registration_error(data)
+            if egress_error is not None:
+                self.errors.append({"dir": str(entry), "error": egress_error})
+                continue
+
+            ax_error = _ax_registration_error(data)
+            if ax_error is not None:
+                self.errors.append({"dir": str(entry), "error": ax_error})
+                continue
+
             tool_id = data["id"]
             if tool_id in self._tools:
                 raise DuplicateAgentIdError(
@@ -107,6 +212,12 @@ class ToolRegistry:
         tool = self._tools.get(tool_id)
         if tool is None:
             raise ToolNotRegisteredError(f"工具未注册：{tool_id}（先注册再调用，见 docs/03）")
+        egress_error = _network_egress_registration_error(tool)
+        if egress_error is not None:
+            raise ToolNotRegisteredError(egress_error)
+        ax_error = _ax_registration_error(tool)
+        if ax_error is not None:
+            raise ToolNotRegisteredError(ax_error)
 
         tool_version = tool["version"]
         mock = bool(tool.get("mock", False))
