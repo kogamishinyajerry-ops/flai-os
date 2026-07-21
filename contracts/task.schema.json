@@ -88,6 +88,78 @@
     "input_binding": {
       "type": ["object", "null"],
       "description": "artifact→input 绑定（迁移 #9/协作运行时 §3.1）：声明上游产物如何映射为本任务输入。字段 from_tasks（string 数组，创建期 typed+有界≤32+去重）：非空=resolver 只从这些上游拷 output_file_ids 入 input_file_ids，其余上游仍参与依赖等待但产物不注入；空数组或 null=默认拷全部上游 output_file_ids。from_tasks 引用的上游必在 depends_on 内（越权引用创建期 422 拒）。"
+    },
+    "source_binding": {
+      "type": ["object", "null"],
+      "description": "任务创建时冻结的当前轮参数与附件来源证据。null=存量、门户直建或 legacy 单 Agent 任务；不允许事后覆盖。",
+      "additionalProperties": false,
+      "required": ["version", "graph_digest", "node_id", "request_id", "params", "attachments"],
+      "properties": {
+        "version": {
+          "const": "task_source.v1",
+          "description": "来源绑定契约版本；未知版本必须 fail-closed。"
+        },
+        "graph_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "规范化 guide_dag.v1 图的 SHA-256（裸小写十六进制）。"
+        },
+        "node_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "图内稳定且唯一的节点 id。"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "description": "创建本图的 safe_auto 当前轮幂等键。"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "json_pointer", "value_digest"],
+          "properties": {
+            "kind": { "const": "current_turn_json" },
+            "json_pointer": {
+              "type": "string",
+              "pattern": "^/",
+              "description": "参数在当前用户轮 JSON 中的确定性位置。"
+            },
+            "value_digest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$",
+              "description": "该节点参数值规范化 JSON 的 SHA-256。"
+            }
+          }
+        },
+        "attachments": {
+          "type": "array",
+          "maxItems": 5,
+          "uniqueItems": true,
+          "description": "仅当前轮、当前 owner 明确绑定到本节点的附件证据；空数组表示本节点无附件。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "slot", "file_id", "conversation_id", "uploaded_by_username",
+              "sha256", "classification", "kind", "task_id"
+            ],
+            "properties": {
+              "slot": { "const": "input_file_ids" },
+              "file_id": { "type": "string", "minLength": 1 },
+              "conversation_id": { "type": "string", "minLength": 1 },
+              "uploaded_by_username": { "type": "string", "minLength": 1 },
+              "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "classification": { "const": "internal" },
+              "kind": { "const": "input" },
+              "task_id": { "type": "null" }
+            }
+          }
+        }
+      }
     }
   }
 }

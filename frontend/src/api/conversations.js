@@ -2,10 +2,13 @@ import { request } from "./client";
 
 // 导引会话（M6，ADR-0012）。会话由 ConversationService 驱动，与一次性 tasks 正交。
 // created_by 服务端从登录会话派生（ADR-0019 D5），前端不再发送。
-export const createConversation = ({ agentId }) =>
+export const createConversation = ({ agentId, requestId = null }) =>
   request("/api/conversations", {
     method: "POST",
-    json: { agent_id: agentId },
+    json: {
+      agent_id: agentId,
+      ...(requestId ? { request_id: requestId } : {}),
+    },
   });
 
 export const getConversation = (conversationId) =>

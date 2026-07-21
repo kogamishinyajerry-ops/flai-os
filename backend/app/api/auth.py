@@ -80,7 +80,11 @@ def login(body: LoginRequest, request: Request, response: Response) -> dict[str,
         service.COOKIE_NAME, token, max_age=_COOKIE_MAX_AGE,
         httponly=True, samesite="lax", path="/",
     )
-    return {"username": user["username"], "display_name": user["display_name"]}
+    return {
+        "username": user["username"],
+        "display_name": user["display_name"],
+        "role": user["role"],
+    }
 
 
 @router.post("/logout")
@@ -99,4 +103,8 @@ def logout(request: Request, response: Response) -> dict[str, str]:
 @router.get("/me")
 def me(request: Request) -> dict[str, Any]:
     user = request.state.user  # default-deny 中间件已验证并注入；无会话到不了这里
-    return {"username": user["username"], "display_name": user["display_name"]}
+    return {
+        "username": user["username"],
+        "display_name": user["display_name"],
+        "role": user["role"],
+    }

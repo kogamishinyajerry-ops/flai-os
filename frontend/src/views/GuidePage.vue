@@ -41,7 +41,7 @@
     />
 
     <el-alert
-      v-if="conversationReadOnly"
+      v-if="conversationReadOnly && !pageError"
       type="info"
       :title="conversationReadOnlyNotice"
       show-icon
@@ -123,19 +123,43 @@
             >
               <div class="plan-topline">
                 <span class="plan-kicker">协作方案</span>
-                <span class="plan-count">{{ m.recommendation.agents.length }} 个 Agent 协作</span>
+                <span class="plan-count">{{ planAgents(m.recommendation).length }} 个 Agent 协作</span>
               </div>
               <div
                 v-if="m.recommendation.execution"
                 class="execution-strip"
-                :class="{ blocked: m.recommendation.execution.status !== 'dispatched' }"
+                :class="{
+                  blocked:
+                    m.recommendation.execution.status !== 'dispatched' ||
+                    !!planTaskMappingIssue(m.recommendation),
+                }"
               >
                 <span class="execution-dot"></span>
-                <span class="execution-title">{{ executionStatusText(m.recommendation.execution) }}</span>
+                <span class="execution-title">
+                  {{
+                    planTaskMappingIssue(m.recommendation)
+                      ? "版本化计划任务映射不可验证，已停止关联"
+                      : executionStatusText(m.recommendation.execution)
+                  }}
+                </span>
                 <span
-                  v-if="m.recommendation.execution.issues && m.recommendation.execution.issues.length"
+                  v-if="
+                    planTaskMappingIssue(m.recommendation) ||
+                    (m.recommendation.execution.issues && m.recommendation.execution.issues.length)
+                  "
                   class="execution-detail"
-                >{{ m.recommendation.execution.issues[0].message }}</span>
+                >{{
+                  planTaskMappingIssue(m.recommendation) ||
+                  m.recommendation.execution.issues[0].message
+                }}</span>
+              </div>
+              <div
+                v-else-if="m.recommendation.contract === 'guide_dag.v1'"
+                class="execution-strip blocked"
+              >
+                <span class="execution-dot"></span>
+                <span class="execution-title">版本化 DAG 缺少权威执行回执</span>
+                <span class="execution-detail">已禁止逐节点创建；请用 safe_auto 重新提交。</span>
               </div>
               <h2 v-if="m.recommendation.goal" class="plan-goal-title">{{ m.recommendation.goal }}</h2>
               <p v-if="m.recommendation.analysis" class="plan-reason">{{ m.recommendation.analysis }}</p>
@@ -144,63 +168,68 @@
                 <p class="plan-workflow">{{ m.recommendation.workflow }}</p>
               </div>
 
-              <div class="section-label roster-label">召集的 Agent · {{ m.recommendation.agents.length }}</div>
+              <div class="section-label roster-label">召集的 Agent · {{ planAgents(m.recommendation).length }}</div>
               <div class="agent-list">
                 <div
-                  v-for="(a, ai) in m.recommendation.agents"
-                  :key="ai"
+                  v-for="(a, ai) in planAgents(m.recommendation)"
+                  :key="a.node_id || `${a.agent_id || 'agent'}:${ai}`"
                   class="agent-card"
                   :class="{ 'fx-rise': m.fresh }"
                 >
                   <div class="agent-main">
                     <div class="agent-top">
                       <span class="agent-name">{{ a.agent_name }}</span>
-                      <span class="agent-maturity">{{ a.maturity }} / {{ a.status }}</span>
+                      <span v-if="a.maturity || a.status" class="agent-maturity">
+                        {{ [a.maturity, a.status].filter(Boolean).join(" / ") }}
+                      </span>
                     </div>
 
                     <!-- B1 对话轴督战：该会话已为此 Agent 召集过任务才显示（诚实地板，
                          未召集零占位）；点击直开任务速览，不逼人跳页看进度。 -->
                     <div
-                      v-if="agentTaskInfo(a)"
+                      v-if="agentTaskInfo(a, m.recommendation)"
                       class="agent-status"
                       role="button"
                       tabindex="0"
-                      @click.stop="openTaskPeek(agentTaskInfo(a).latest.id)"
-                      @keydown.enter.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
-                      @keydown.space.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
+                      @click.stop="openTaskPeek(agentTaskInfo(a, m.recommendation).latest.id)"
+                      @keydown.enter.stop.prevent="openTaskPeek(agentTaskInfo(a, m.recommendation).latest.id)"
+                      @keydown.space.stop.prevent="openTaskPeek(agentTaskInfo(a, m.recommendation).latest.id)"
                     >
                       <span
                         class="status-lamp"
-                        :class="{ 'is-pulsing': isWorkState(agentTaskInfo(a).latest.status) }"
-                        :style="{ background: taskLampColor(agentTaskInfo(a).latest.status) }"
+                        :class="{ 'is-pulsing': isWorkState(agentTaskInfo(a, m.recommendation).latest.status) }"
+                        :style="{ background: taskLampColor(agentTaskInfo(a, m.recommendation).latest.status) }"
                       ></span>
-                      <span class="status-word" :style="{ color: taskLampColor(agentTaskInfo(a).latest.status) }">
-                        {{ statusLabel(agentTaskInfo(a).latest.status) }}
+                      <span class="status-word" :style="{ color: taskLampColor(agentTaskInfo(a, m.recommendation).latest.status) }">
+                        {{ statusLabel(agentTaskInfo(a, m.recommendation).latest.status) }}
                       </span>
-                      <span v-if="agentTaskInfo(a).extra > 0" class="status-extra">+{{ agentTaskInfo(a).extra }}</span>
+                      <span v-if="agentTaskInfo(a, m.recommendation).extra > 0" class="status-extra">+{{ agentTaskInfo(a, m.recommendation).extra }}</span>
                       <!-- 行动召唤按态分级：待签发=amber 强 CTA（签发来找人）；其余=速览 -->
-                      <span v-if="agentTaskInfo(a).latest.status === 'waiting_review'" class="status-peek is-review">审阅签发 →</span>
+                      <span v-if="agentTaskInfo(a, m.recommendation).latest.status === 'waiting_review'" class="status-peek is-review">审阅签发 →</span>
                       <span v-else class="status-peek">速览 →</span>
                     </div>
 
                     <!-- 产物锚点行（Claude Artifact 卡片锚点哲学）：任务完成且真有产物
                          才长出——点击同样直开速览（产物预览+签发同面板），零跳页。 -->
                     <div
-                      v-if="agentTaskInfo(a) && agentTaskInfo(a).latest.status === 'completed' && (agentTaskInfo(a).latest.output_file_ids || []).length"
+                      v-if="agentTaskInfo(a, m.recommendation) && agentTaskInfo(a, m.recommendation).latest.status === 'completed' && (agentTaskInfo(a, m.recommendation).latest.output_file_ids || []).length"
                       class="status-artifact"
                       role="button"
                       tabindex="0"
-                      @click.stop="openTaskPeek(agentTaskInfo(a).latest.id)"
-                      @keydown.enter.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
-                      @keydown.space.stop.prevent="openTaskPeek(agentTaskInfo(a).latest.id)"
+                      @click.stop="openTaskPeek(agentTaskInfo(a, m.recommendation).latest.id)"
+                      @keydown.enter.stop.prevent="openTaskPeek(agentTaskInfo(a, m.recommendation).latest.id)"
+                      @keydown.space.stop.prevent="openTaskPeek(agentTaskInfo(a, m.recommendation).latest.id)"
                     >
                       <svg class="artifact-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
-                      <span class="artifact-count">{{ (agentTaskInfo(a).latest.output_file_ids || []).length }} 件产物</span>
+                      <span class="artifact-count">{{ (agentTaskInfo(a, m.recommendation).latest.output_file_ids || []).length }} 件产物</span>
                       <span class="artifact-open">查看 ↗</span>
                     </div>
 
                     <p v-if="a.rationale" class="agent-rationale">{{ a.rationale }}</p>
                     <p v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</p>
+                    <p v-if="a.depends_on && a.depends_on.length" class="agent-role">
+                      <span class="role-tag">前置</span>{{ a.depends_on.join("、") }}
+                    </p>
                     <div v-if="inputCount(a)" class="agent-draft">
                       <div class="draft-label">预填草案 · {{ inputCount(a) }} 个字段</div>
                       <div class="draft-fields">
@@ -215,7 +244,13 @@
                     </p>
                     <!-- 历史 plan_only 会话保留兼容入口；新 safe_auto 计划由后端执行，
                          页面不再自动点按钮，也不要求用户搬运参数。 -->
-                    <div v-if="!m.recommendation.execution" class="agent-actions">
+                    <div
+                      v-if="
+                        !m.recommendation.execution &&
+                        guidePlanAllowsManualCreate(m.recommendation)
+                      "
+                      class="agent-actions"
+                    >
                       <button class="agent-cta" @click="createOneTask(a, m.recommendation)">去创建此任务</button>
                     </div>
                   </div>
@@ -235,15 +270,30 @@
               <div class="plan-foot">
                 <button class="workbench-btn" @click="openWorkbench">进入协作工作台 →</button>
                 <button type="button" class="plan-escape" @click="focusComposer">想调整方案？直接告诉导引 ↓</button>
-                <span v-if="m.recommendation.execution?.status === 'dispatched'" class="plan-note">
+                <span v-if="planTaskMappingIssue(m.recommendation)" class="plan-note">
+                  版本化计划任务映射不可验证，页面已停止关联任务；请重新获取权威执行回执。
+                </span>
+                <span
+                  v-else-if="
+                    m.recommendation.contract === 'guide_dag.v1' &&
+                    m.recommendation.execution?.status === 'dispatched'
+                  "
+                  class="plan-note"
+                >
+                  任务图已原子创建，根节点已入队，下游等待依赖推进，叶节点仍需真人签发。
+                </span>
+                <span v-else-if="m.recommendation.execution?.status === 'dispatched'" class="plan-note">
                   安全任务已由平台自动创建并入队；若任务进入 waiting_review，最终工程签发仍由你完成。
                 </span>
                 <span v-else-if="m.recommendation.execution" class="plan-note">
                   当前方案未自动执行，也没有创建任务；请按上方原因直接在会话中补充或调整。
                 </span>
-                <span v-else class="plan-note">
+                <span v-else-if="guidePlanAllowsManualCreate(m.recommendation)" class="plan-note">
                   在工作台里看分工架构、逐个召集 Agent、追进度——签发权始终在你，
                   每个任务都由你补全并<strong>亲手提交</strong>。
+                </span>
+                <span v-else class="plan-note">
+                  版本化方案缺少权威执行回执，已禁止回退为逐节点手动创建。
                 </span>
               </div>
             </div>
@@ -271,7 +321,7 @@
           :title="f.status === 'error' ? f.error : ''"
         >
           📎 {{ f.name }}{{ f.status === "error" ? "（上传失败）" : "" }}
-          <span class="chip-x" @click="removePendingFile(f)">×</span>
+          <span v-if="!f.locked && !sending" class="chip-x" @click="removePendingFile(f)">×</span>
         </span>
       </div>
       <div class="composer-shell">
@@ -359,7 +409,21 @@ import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation } from "../api/conversations";
 import { listAgents } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
+import { authenticatedPrincipal, fetchMe } from "../stores/session";
+import {
+  createGuideSafeAutoOutbox,
+  dispatchGuideSafeAutoIntent,
+  filesFromGuideSafeAutoRecord,
+  recoverGuideSafeAutoOutbox,
+} from "../utils/guideSafeAutoOutbox";
 import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, formatTime } from "../utils/format";
+import {
+  guidePlanAgents,
+  guidePlanAllowsManualCreate,
+  guidePlanTaskMappingIssue,
+  indexGuidePlanTasks,
+  tasksForGuidePlanAgent,
+} from "../utils/guidePlan";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";
@@ -380,6 +444,9 @@ const draft = ref("");
 const sending = ref(false);
 const pageError = ref("");
 const streamEl = ref(null);
+const outboxRecoveryBlocked = ref(false);
+const outboxRecoveryActive = ref(false);
+const guideSafeAutoOutbox = createGuideSafeAutoOutbox();
 // 已恢复会话只有后端明确 active 时才允许继续发言；缺失/未知状态同样
 // fail-closed 为只读。全新会话 started=false，不受该守卫影响。
 const routeConversationId = computed(() =>
@@ -389,10 +456,14 @@ const conversationTargetMismatch = computed(() =>
   !!routeConversationId.value && conversationId.value !== routeConversationId.value
 );
 const conversationReadOnly = computed(() =>
-  conversationTargetMismatch.value || (started.value && conversationStatus.value !== "active")
+  outboxRecoveryBlocked.value ||
+  conversationTargetMismatch.value ||
+  (started.value && conversationStatus.value !== "active")
 );
 const conversationReadOnlyNotice = computed(() =>
-  conversationTargetMismatch.value
+  outboxRecoveryBlocked.value
+    ? "有一轮自动执行仍待服务端权威确认，已锁定输入；刷新后会用原 request_id 自动恢复"
+    : conversationTargetMismatch.value
     ? "会话尚未可靠加载，已禁止发送；请重新打开该会话"
     : started.value && !conversationStatus.value
     ? "会话加载失败，已禁止发送；请重新打开该会话"
@@ -514,7 +585,15 @@ function clearFailedSendIfCommitted(targetConversationId, history) {
 }
 
 function hasActiveGuideSend() {
-  return sending.value || !!freshInFlightSend || inFlightSends.size > 0;
+  return (
+    sending.value ||
+    outboxRecoveryActive.value ||
+    outboxRecoveryBlocked.value ||
+    !!retryTurn ||
+    !!freshInFlightSend ||
+    inFlightSends.size > 0 ||
+    hasPendingGuideOutbox()
+  );
 }
 
 function canNavigateDuringGuideSend(to = null) {
@@ -544,6 +623,85 @@ function turnRequestId(content, fileIds) {
   const requestId = newTurnRequestId();
   retryTurn = { fingerprint, requestId };
   return requestId;
+}
+
+function hasPendingGuideOutbox() {
+  try {
+    return guideSafeAutoOutbox.read() !== null;
+  } catch {
+    // 畸形/未知版本/存储不可读均不能当作“没有待办”继续 POST。
+    return true;
+  }
+}
+
+function failedSendMatchesCurrentOutbox(operation) {
+  if (!operation.requestId) return true;
+  const principal = authenticatedPrincipal();
+  if (!principal) return false;
+
+  // A failed turn is directly retryable only on the exact page target that owns the durable
+  // intent. A forced route switch must not let another conversation consume the one-tab outbox.
+  const routeTarget = routeConversationId.value || null;
+  if ((operation.targetConversationId || null) !== routeTarget) return false;
+
+  try {
+    return guideSafeAutoOutbox.matchesIntent(principal, {
+      requestId: operation.requestId,
+      agentId: GUIDE_AGENT_ID,
+      conversationId: operation.targetConversationId || null,
+      content: operation.content,
+      fileIds: operation.files.map((file) => file.fileId),
+      files: operation.files.map((file) => ({ id: file.fileId, name: file.name })),
+    });
+  } catch {
+    // unreadable/malformed/version-mismatched/principal-drifted records stay fail-closed.
+    return false;
+  }
+}
+
+function preflightDurableRetry(principal, operation) {
+  let record;
+  try {
+    record = guideSafeAutoOutbox.loadForPrincipal(principal);
+  } catch (error) {
+    operation.outboxPreflightFailed = true;
+    throw error;
+  }
+
+  if (!record) {
+    if (retryTurn?.requestId) {
+      operation.requestId = retryTurn.requestId;
+      operation.outboxPreflightFailed = true;
+      throw new Error("OUTBOX_RECORD_MISSING: 待确认 safe_auto 意图已丢失，禁止生成新 request_id");
+    }
+    return null;
+  }
+
+  operation.requestId = record.request_id;
+  const routeTarget = routeConversationId.value || null;
+  const operationTarget = operation.targetConversationId || null;
+  const fileIds = operation.files.map((file) => file.fileId);
+  const filesReady = fileIds.every((fileId) => typeof fileId === "string" && fileId.length > 0);
+  operation.fingerprint = JSON.stringify([operation.content, fileIds]);
+  if (
+    routeTarget !== operationTarget ||
+    !filesReady ||
+    !guideSafeAutoOutbox.matchesIntent(principal, {
+      requestId: record.request_id,
+      agentId: GUIDE_AGENT_ID,
+      conversationId: operationTarget,
+      content: operation.content,
+      fileIds,
+      files: operation.files.map((file) => ({ id: file.fileId, name: file.name })),
+    })
+  ) {
+    operation.outboxPreflightFailed = true;
+    throw new Error(
+      "OUTBOX_INTENT_MISMATCH: 待确认意图与当前主体、会话、正文或附件不一致，禁止上传或换新 ID",
+    );
+  }
+  retryTurn = { fingerprint: operation.fingerprint, requestId: record.request_id };
+  return record;
 }
 
 // 时段感问候（Claude「Up late?」人格温度）：起手 hero 只挂载一次渲染，但改用
@@ -592,6 +750,9 @@ function handleFileSelect(uploadFile) {
 }
 
 function removePendingFile(item) {
+  if (item.locked || sending.value || outboxRecoveryActive.value || outboxRecoveryBlocked.value) {
+    return;
+  }
   pendingFiles.value = pendingFiles.value.filter((f) => f.uid !== item.uid);
 }
 
@@ -635,6 +796,10 @@ function executionStatusText(execution) {
   if (execution?.status === "blocked_policy") return "超出自动执行范围，暂未执行";
   if (execution?.status === "blocked_conflict") return "计划存在冲突，暂未执行";
   return "暂未自动执行";
+}
+
+function planAgents(plan) {
+  return guidePlanAgents(plan);
 }
 
 function focusComposer() {
@@ -699,8 +864,9 @@ async function send() {
     targetConversationId,
     content,
     files: sendFiles,
-    requestId: null,
+    requestId: retryTurn?.requestId || null,
     fingerprint: null,
+    outboxPreflightFailed: false,
   };
   if (targetConversationId) {
     failedSends.delete(targetConversationId);
@@ -727,40 +893,76 @@ async function send() {
   sending.value = true;
   try {
     await scrollToBottom();
+    // safe_auto 前紧贴请求重读服务端身份，避免另一标签页换 cookie 后本页仍拿旧
+    // currentUser 生成 outbox principal。身份 GET 失败/漂移时附件与会话 POST 均为零。
+    if ((await fetchMe()) !== true) {
+      throw new Error("无法确认当前认证身份，已禁止自动执行");
+    }
+    const principal = authenticatedPrincipal();
+    if (!principal) throw new Error("认证身份缺少 username/role，已禁止自动执行");
+    // 未知结果重试必须先验证 durable outbox；记录缺失/坏版本/主体、路由、正文或
+    // 附件漂移时，在上传和任一会话 POST 之前 fail-closed，绝不旋转 request_id。
+    const durableRetry = preflightDurableRetry(principal, sendOperation);
     // 先传附件（已 done 的跳过，失败即中止——本轮消息不发送）
     const fileIds = await uploadPendingFiles(sendFiles);
-    if (!targetConversationId) {
-      const conv = await createConversation({ agentId: GUIDE_AGENT_ID });
-      targetConversationId = conv.id;
-      bindInFlightSend(sendOperation, targetConversationId);
-      // 全新会话在 create await 期间若已切走，仍把用户明确发出的本轮 POST 到
-      // 刚创建的会话，但绝不夺回当前 URL/UI；仍停留原页面时才接管为当前会话。
-      if (isCurrentSendUi(sendUiToken, sendLoadEpoch, initialConversationId)) {
-        conversationId.value = targetConversationId;
-        conversationStatus.value = conv.status || "active";
-        started.value = true;
-        // URL 反映当前会话（可刷新/分享/回退），并让左栏历史即时收录这条新会话。
-        internalConversationNavigation = targetConversationId;
-        const clearInternalNavigation = () => {
-          if (internalConversationNavigation === targetConversationId) {
-            internalConversationNavigation = null;
-          }
-        };
-        void router
-          .replace({ path: "/", query: { c: targetConversationId } })
-          .then(clearInternalNavigation, clearInternalNavigation);
-      }
-    }
-    // 失效续体也要完成已授权的原会话发送，但不得覆盖当前会话的重试 key。
-    const requestId = isCurrentSendUi(sendUiToken, sendLoadEpoch, targetConversationId)
+    // request_id 必须在 fresh conversation POST 之前稳定下来；create 与 message 共用
+    // 同一 key。sessionStorage 写入并回读成功之后协调器才允许任一 POST。
+    const requestId = durableRetry
+      ? durableRetry.request_id
+      : isCurrentSendUi(sendUiToken, sendLoadEpoch, targetConversationId)
       ? turnRequestId(content, fileIds)
       : newTurnRequestId();
     sendOperation.requestId = requestId;
     sendOperation.fingerprint = JSON.stringify([content, fileIds]);
-    const res = await postMessage(targetConversationId, content, fileIds, {
-      executionMode: "safe_auto",
-      requestId,
+    const dispatched = await dispatchGuideSafeAutoIntent({
+      outbox: guideSafeAutoOutbox,
+      principal,
+      intent: {
+        requestId,
+        agentId: GUIDE_AGENT_ID,
+        conversationId: targetConversationId || null,
+        content,
+        fileIds,
+        // 只持久化服务端 file id 与显示名；raw File 永不进入 sessionStorage。
+        files: sendFiles.map((file) => ({ id: file.fileId, name: file.name })),
+      },
+      createConversation: ({ agentId, requestId: createRequestId }) =>
+        createConversation({ agentId, requestId: createRequestId }),
+      postMessage: ({ conversationId: id, content: body, fileIds: ids, requestId: idempotencyKey }) =>
+        postMessage(id, body, ids, {
+          executionMode: "safe_auto",
+          requestId: idempotencyKey,
+        }),
+      getConversation,
+      onConversationBound: async (boundConversationId) => {
+        if (targetConversationId) return;
+        targetConversationId = boundConversationId;
+        bindInFlightSend(sendOperation, targetConversationId);
+        // 全新会话在 create await 期间若已切走，仍完成已持久化意图，但绝不夺回
+        // 当前 URL/UI；仍停留原页面时才接管为当前会话。
+        if (isCurrentSendUi(sendUiToken, sendLoadEpoch, initialConversationId)) {
+          conversationId.value = targetConversationId;
+          conversationStatus.value = "active";
+          started.value = true;
+          internalConversationNavigation = targetConversationId;
+          const clearInternalNavigation = () => {
+            if (internalConversationNavigation === targetConversationId) {
+              internalConversationNavigation = null;
+            }
+          };
+          try {
+            await router.replace({ path: "/", query: { c: targetConversationId } });
+          } finally {
+            clearInternalNavigation();
+          }
+          if (routeConversationId.value !== targetConversationId) {
+            throw new Error("新会话 URL 绑定失败，已保留 outbox 且未发送消息");
+          }
+        }
+      },
     });
+    const res = dispatched.response;
+    outboxRecoveryBlocked.value = false;
     releaseInFlightSend(sendOperation);
     sendSettled = true;
     failedSends.delete(targetConversationId);
@@ -805,6 +1007,10 @@ async function send() {
     // （已上传项带 fileId，重试不重复上传）。不伪造 assistant 回复。
     releaseInFlightSend(sendOperation);
     sendSettled = true;
+    // Persisted + exact + same-route failures are safe to retry in place with the same
+    // request_id. Only unreadable/missing/mismatched durable state locks the composer.
+    outboxRecoveryBlocked.value =
+      sendOperation.outboxPreflightFailed || !failedSendMatchesCurrentOutbox(sendOperation);
     rememberFailedSend(sendOperation, err);
     if (!isCurrentSendUi(sendUiToken, sendLoadEpoch, targetConversationId)) {
       // 若用户已回到目标会话，恢复原草稿/附件与稳定 request_id；若该会话仍在
@@ -863,8 +1069,7 @@ function createOneTask(agent, plan) {
   // **后于任务创建成功**——异源 Codex R2-#3：会话 concluded 后 API 真只读拒新任务，若
   // 沿用旧的「先 fire-and-forget 归档、再跳创建页」，创建时会话已 concluded → 创建被 409
   // 打回。故这里不再先归档，只在草案里带 conclude_after 标记，由创建页在提交成功后归档。
-  const isSingleAgent =
-    plan && Array.isArray(plan.agents) && plan.agents.length === 1 && !!conversationId.value;
+  const isSingleAgent = planAgents(plan).length === 1 && !!conversationId.value;
   sessionStorage.setItem(
     "flai_prefill",
     JSON.stringify({
@@ -908,10 +1113,20 @@ function isWorkState(status) {
   return TASK_WORK_STATES.has(status);
 }
 
-// agent_id 匹配：后端按 created_at DESC, id DESC 返回，同一 agent 多任务时
-// 第一条即最新一次召集；其余只计数，不逐条铺开（roster 卡片寸土寸金）。
-function agentTaskInfo(agent) {
-  const list = conversationTasks.value.filter((t) => t.agent_id === agent.agent_id);
+// DAG 只能依赖 execution.node_tasks 的 node_id → task_id 权威映射；legacy 才允许
+// agent_id 分组。任一映射不完整时整张图不关联任务，避免把同 Agent 的其它任务
+// 冒充成本轮节点。后端按 created_at DESC, id DESC 返回，legacy 多任务沿用该顺序。
+function planTaskIndex(plan) {
+  return indexGuidePlanTasks(plan, conversationTasks.value);
+}
+
+function planTaskMappingIssue(plan) {
+  return guidePlanTaskMappingIssue(plan, conversationTasks.value);
+}
+
+function agentTaskInfo(agent, plan) {
+  const index = indexGuidePlanTasks(plan, conversationTasks.value);
+  const list = tasksForGuidePlanAgent(index, agent);
   if (!list.length) return null;
   return { latest: list[0], extra: list.length - 1 };
 }
@@ -1027,7 +1242,132 @@ async function loadConversation(id) {
   }
 }
 
-onMounted(() => {
+async function keepOutboxBlockedAndLoadRoute(errorText) {
+  restoring.value = false;
+  outboxRecoveryActive.value = false;
+  const targetId = routeConversationId.value;
+  if (targetId) await loadConversation(targetId);
+  pageError.value = pageError.value ? `${errorText}；${pageError.value}` : errorText;
+  return true;
+}
+
+async function resumePersistedGuideTurn() {
+  const hasRecord = hasPendingGuideOutbox();
+  if (!hasRecord) return false;
+
+  // App 身份门只会在 /me 完成后挂载页面；这里仍做防御纵深，username/role 任一
+  // 缺失都不读取意图、更不发网络请求。
+  outboxRecoveryBlocked.value = true;
+  outboxRecoveryActive.value = true;
+  restoring.value = true;
+  if ((await fetchMe()) !== true) {
+    pageError.value = "无法向服务端确认当前身份，待恢复自动执行已被锁定";
+    restoring.value = false;
+    outboxRecoveryActive.value = false;
+    return true;
+  }
+  const principal = authenticatedPrincipal();
+  if (!principal) {
+    pageError.value = "认证身份缺少 username/role，待恢复自动执行已被锁定";
+    restoring.value = false;
+    outboxRecoveryActive.value = false;
+    return true;
+  }
+
+  let visibleRecord = null;
+  try {
+    visibleRecord = guideSafeAutoOutbox.loadForPrincipal(principal);
+    if (visibleRecord) {
+      const routeId = routeConversationId.value;
+      if (
+        routeId &&
+        (visibleRecord.conversation_id === null || visibleRecord.conversation_id !== routeId)
+      ) {
+        return keepOutboxBlockedAndLoadRoute(
+          "当前 URL 会话与待恢复 safe_auto 意图不一致，已锁定且未发起任何恢复 POST",
+        );
+      }
+      draft.value = visibleRecord.payload.content;
+      pendingFiles.value = filesFromGuideSafeAutoRecord(visibleRecord).map((file) => reactive(file));
+      retryTurn = {
+        fingerprint: JSON.stringify([visibleRecord.payload.content, visibleRecord.payload.file_ids]),
+        requestId: visibleRecord.request_id,
+      };
+    }
+  } catch (err) {
+    // sessionStorage 不可读、坏版本、主体漂移都禁止恢复 POST，但不应连安全的
+    // 权威 GET 也一并吞掉：深链会话仍可只读展示，composer 继续由 outbox 锁封闭。
+    return keepOutboxBlockedAndLoadRoute(err.message || "待恢复自动执行记录非法");
+  }
+
+  const result = await recoverGuideSafeAutoOutbox({
+    outbox: guideSafeAutoOutbox,
+    principal,
+    createConversation: ({ agentId, requestId }) => createConversation({ agentId, requestId }),
+    postMessage: ({ conversationId: id, content, fileIds, executionMode, requestId }) =>
+      postMessage(id, content, fileIds, { executionMode, requestId }),
+    getConversation,
+    onConversationBound: async (boundConversationId, record) => {
+      visibleRecord = record;
+      const routeId = routeConversationId.value;
+      if (routeId && routeId !== boundConversationId) {
+        throw new Error("当前 URL 会话与待恢复 safe_auto 会话不一致，已禁止后台重放");
+      }
+      if (!routeId) {
+        internalConversationNavigation = boundConversationId;
+        const clearInternalNavigation = () => {
+          if (internalConversationNavigation === boundConversationId) {
+            internalConversationNavigation = null;
+          }
+        };
+        try {
+          await router.replace({ path: "/", query: { c: boundConversationId } });
+        } finally {
+          clearInternalNavigation();
+        }
+        if (routeConversationId.value !== boundConversationId) {
+          throw new Error("待恢复会话 URL 绑定失败，已禁止消息重放");
+        }
+      }
+    },
+  });
+
+  outboxRecoveryActive.value = false;
+  restoring.value = false;
+  if (result.status === "confirmed") {
+    outboxRecoveryBlocked.value = false;
+    pendingFiles.value = [];
+    retryTurn = null;
+    pageError.value = "";
+    const targetId = result.record?.conversation_id || visibleRecord?.conversation_id;
+    const currentRouteId = routeConversationId.value;
+    if (targetId && currentRouteId === targetId) {
+      await loadConversation(targetId);
+    } else if (currentRouteId) {
+      await loadConversation(currentRouteId);
+    } else {
+      resetToFresh();
+    }
+    return true;
+  }
+
+  // 权威 GET 失败、409、主体/版本异常都保留 outbox 并锁 composer。若会话已
+  // CAS 绑定，URL/页面也锚定该会话；绝不退回“新对话”诱导用户换 request_id。
+  const retained = result.record || visibleRecord;
+  if (retained?.conversation_id) {
+    conversationId.value = retained.conversation_id;
+    conversationStatus.value = "";
+    started.value = true;
+  }
+  pageError.value =
+    result.error?.detail ||
+    result.error?.message ||
+    "待恢复自动执行尚未获得服务端权威确认，记录已保留";
+  return true;
+}
+
+onMounted(async () => {
+  if (await resumePersistedGuideTurn()) return;
   const c = route.query.c;
   if (typeof c === "string" && c) loadConversation(c);
   else restoreFreshSendState();
@@ -1042,6 +1382,7 @@ onUnmounted(() => {
 watch(
   () => route.query.c,
   (c) => {
+    if (outboxRecoveryActive.value) return;
     if (typeof c === "string" && c) {
       if (c !== conversationId.value) loadConversation(c);
     } else {

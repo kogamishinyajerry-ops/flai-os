@@ -26,11 +26,98 @@
             }
           }
         },
-        "replayed": { "type": "boolean" }
+        "replayed": { "type": "boolean" },
+        "graph_version": { "const": "guide_dag.v1" },
+        "graph_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "node_tasks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["node_id", "agent_id", "task_id", "initial_status"],
+            "properties": {
+              "node_id": { "type": "string" },
+              "agent_id": { "type": "string" },
+              "task_id": { "type": "string" },
+              "initial_status": { "enum": ["queued", "created"] }
+            }
+          }
+        }
       }
     }
   },
   "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "contract", "analysis", "goal", "workflow", "nodes", "dropped_agents", "capped"],
+      "properties": {
+        "decision": { "const": "orchestrate" },
+        "contract": { "const": "guide_dag.v1" },
+        "analysis": { "type": "string" },
+        "goal": { "type": "string" },
+        "workflow": { "type": "string" },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["node_id", "agent_id", "agent_version", "agent_name", "category", "status", "maturity", "role", "rationale", "prefilled_inputs", "stripped_fields", "depends_on", "artifact_binding", "attachment_binding"],
+            "properties": {
+              "node_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+              "agent_id": { "type": "string" },
+              "agent_version": { "type": "string" },
+              "agent_name": { "type": "string" },
+              "category": { "type": "string" },
+              "status": { "type": "string" },
+              "maturity": { "type": "string" },
+              "role": { "type": "string" },
+              "rationale": { "type": "string" },
+              "prefilled_inputs": { "type": "object" },
+              "stripped_fields": { "type": "array", "maxItems": 0 },
+              "depends_on": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+              "artifact_binding": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["mode", "from_nodes"],
+                "properties": {
+                  "mode": { "enum": ["none", "all", "selected"] },
+                  "from_nodes": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+                }
+              },
+              "attachment_binding": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["mode"],
+                "properties": {
+                  "mode": { "enum": ["none", "current_turn"] }
+                }
+              }
+            }
+          }
+        },
+        "dropped_agents": { "type": "array", "maxItems": 0 },
+        "capped": { "const": false },
+        "execution": {
+          "allOf": [
+            { "$ref": "#/definitions/execution" },
+            {
+              "if": {
+                "required": ["status"],
+                "properties": { "status": { "const": "dispatched" } }
+              },
+              "then": {
+                "required": ["graph_version", "graph_digest", "node_tasks"]
+              }
+            }
+          ]
+        }
+      }
+    },
     {
       "type": "object",
       "additionalProperties": false,

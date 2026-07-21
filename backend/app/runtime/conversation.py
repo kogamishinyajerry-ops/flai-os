@@ -38,13 +38,16 @@ from typing import Any, Callable, Iterator
 from ..auth.authorization import agent_is_callable, current_actor_matches, role_can_access_agent
 from ..core.errors import (
     ConversationAccessDeniedError,
+    ConversationAttachmentBindingError,
     ConversationClosedError,
     ConversationConflictError,
     ConversationNotFoundError,
+    FileIntegrityError,
     FileNotFoundInStoreError,
     NotInteractiveAgentError,
 )
 from ..storage import repos
+from ..storage.file_integrity import open_verified_file
 from .attachments import render_attachment_blocks
 from .guide_dispatch import GuidePlanDispatch
 from .runtime import _load_workflow_module
@@ -61,6 +64,76 @@ _HISTORY_MAX_CHARS = 60_000
 # （与截窗同哲学：诚实降级）。单消息附件数上限（防御纵深，API 层同限）。
 _ATTACHMENT_BUDGET_CHARS = 24_000
 _MAX_FILES_PER_MESSAGE = 5
+
+
+def _safe_auto_file_bindings(
+    conn: sqlite3.Connection,
+    *,
+    file_ids: list[str],
+    actor_username: str,
+    uploads_root: Path,
+) -> tuple[dict[str, str], ...]:
+    """验证并冻结当前轮附件的最小来源证据；任何不可信存量都默认拒绝。"""
+    rows = repos.list_files_by_ids(conn, file_ids)
+    by_id = {row["id"]: row for row in rows}
+    missing = [file_id for file_id in file_ids if file_id not in by_id]
+    if missing:
+        raise FileNotFoundInStoreError(
+            f"附件不存在（请先经 /api/files/upload 上传）：{missing}"
+        )
+
+    bindings: list[dict[str, str]] = []
+    for file_id in file_ids:
+        row = by_id[file_id]
+        uploader = row.get("uploaded_by_username")
+        if not isinstance(uploader, str) or not uploader:
+            raise ConversationAttachmentBindingError(
+                f"附件 {file_id} 缺少可信上传账户来源，不能用于 safe_auto"
+            )
+        if uploader != actor_username:
+            raise ConversationAccessDeniedError(
+                f"附件 {file_id} 不属于当前认证用户，拒绝跨用户自动执行"
+            )
+        if row.get("kind") != "input":
+            raise ConversationAttachmentBindingError(
+                f"附件 {file_id} 不是未消费的输入文件，不能用于 safe_auto"
+            )
+        if row.get("task_id") is not None:
+            raise ConversationAttachmentBindingError(
+                f"附件 {file_id} 已归属任务，不能再次作为当前轮自动执行来源"
+            )
+        if row.get("classification") != "internal":
+            raise ConversationAttachmentBindingError(
+                f"附件 {file_id} 的分级不是 internal，拒绝进入 safe_auto"
+            )
+        sha256 = row.get("sha256")
+        if not isinstance(sha256, str) or not sha256:
+            raise ConversationAttachmentBindingError(
+                f"附件 {file_id} 缺少 sha256 完整性证据，不能用于 safe_auto"
+            )
+        try:
+            # open_verified_file 以同一只读句柄核对 root/普通文件/size/sha256；
+            # 此处只做来源 admission，验证成功即关闭，不把句柄跨模型调用持有。
+            with open_verified_file(
+                row.get("path") or "",
+                allowed_root=uploads_root,
+                expected_size=row.get("size_bytes"),
+                expected_sha256=sha256,
+            ):
+                pass
+        except (OSError, FileIntegrityError, TypeError, ValueError) as exc:
+            raise ConversationAttachmentBindingError(
+                f"附件 {file_id} 的磁盘对象缺失或完整性校验失败，不能用于 safe_auto"
+            ) from exc
+        bindings.append(
+            {
+                "file_id": file_id,
+                "sha256": sha256,
+                "classification": "internal",
+                "uploaded_by_username": uploader,
+            }
+        )
+    return tuple(bindings)
 
 
 def _dispatch_request_digest(
@@ -222,19 +295,13 @@ class ConversationService:
         created_by: str,
         created_by_username: str | None = None,
         actor_role: str | None = None,
+        creation_request_id: str | None = None,
     ) -> dict[str, Any]:
-        """建会话：Agent 必须存在且为 interactive 型，否则如实拒绝。"""
-        agent = self.agent_registry.get(agent_id)
-        if agent is None:
-            raise ConversationNotFoundError(f"agent 不存在：{agent_id}")
-        if not agent_is_callable(agent, mode="interactive"):
-            raise NotInteractiveAgentError(
-                f"agent {agent_id} 已下线或非 interactive 型，不能发起会话"
-            )
-        if actor_role is not None and not role_can_access_agent(agent, actor_role):
-            raise ConversationAccessDeniedError(
-                f"当前角色 {actor_role} 无权调用 interactive agent {agent_id}"
-            )
+        """建会话；可选创建键按认证用户名持久幂等并绑定目标 Agent。"""
+        if creation_request_id is not None and (
+            not created_by_username or not actor_role
+        ):
+            raise ValueError("创建会话 request_id 必须绑定认证用户名与当前角色")
         conn = self.conn_factory()
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -248,9 +315,22 @@ class ConversationService:
                     raise ConversationAccessDeniedError(
                         "认证账户已停用或角色发生变化，请重新登录后重试"
                     )
+            if creation_request_id is not None:
+                existing = repos.get_conversation_by_creation_request(
+                    conn,
+                    created_by_username=created_by_username or "",
+                    creation_request_id=creation_request_id,
+                )
+                if existing is not None:
+                    if existing["agent_id"] != agent_id:
+                        raise ConversationConflictError(
+                            "同一 request_id 已用于不同 Agent，拒绝复用会话创建授权"
+                        )
+                    conn.execute("COMMIT")
+                    return existing
             current_agent = self.agent_registry.get(agent_id)
             if current_agent is None:
-                raise ConversationNotFoundError(f"agent 在会话创建期间已不可用：{agent_id}")
+                raise ConversationNotFoundError(f"agent 不存在或已不可用：{agent_id}")
             if not agent_is_callable(current_agent, mode="interactive"):
                 raise NotInteractiveAgentError(
                     f"agent {agent_id} 在会话创建期间已下线或不再是 interactive 型"
@@ -262,13 +342,32 @@ class ConversationService:
                     f"agent {agent_id} 的权限在会话创建期间发生变化"
                 )
             conversation_id = f"conv_{uuid.uuid4().hex}"
-            conversation = repos.create_conversation(
-                conn,
-                conversation_id=conversation_id,
-                agent_id=agent_id,
-                created_by=created_by,
-                created_by_username=created_by_username,
-            )
+            try:
+                conversation = repos.create_conversation(
+                    conn,
+                    conversation_id=conversation_id,
+                    agent_id=agent_id,
+                    created_by=created_by,
+                    created_by_username=created_by_username,
+                    creation_request_id=creation_request_id,
+                )
+            except sqlite3.IntegrityError:
+                # BEGIN IMMEDIATE 已封住同库正常竞态；仍对未来多 writer/唯一索引
+                # 冲突做纵深恢复。只有同主体、同 key、同 Agent 才能重放。
+                if creation_request_id is None or created_by_username is None:
+                    raise
+                existing = repos.get_conversation_by_creation_request(
+                    conn,
+                    created_by_username=created_by_username,
+                    creation_request_id=creation_request_id,
+                )
+                if existing is None:
+                    raise
+                if existing["agent_id"] != agent_id:
+                    raise ConversationConflictError(
+                        "同一 request_id 已用于不同 Agent，拒绝复用会话创建授权"
+                    )
+                conversation = existing
             conn.execute("COMMIT")
             return conversation
         except Exception:
@@ -402,7 +501,11 @@ class ConversationService:
         raw_file_ids = file_ids or []
         if len(raw_file_ids) > _MAX_FILES_PER_MESSAGE:
             raise ValueError(f"单条消息附件数上限 {_MAX_FILES_PER_MESSAGE}，实收 {len(raw_file_ids)}")
-        file_ids = list(dict.fromkeys(raw_file_ids))  # 去重保序
+        if execution_mode == "safe_auto" and len(set(raw_file_ids)) != len(raw_file_ids):
+            raise ConversationAttachmentBindingError(
+                "safe_auto 的 file_ids 必须唯一，拒绝静默去重来源证据"
+            )
+        file_ids = list(dict.fromkeys(raw_file_ids))  # plan_only 保持既有去重保序语义
         if execution_mode == "safe_auto" and (
             not request_id or not actor_display_name or not actor_username or not actor_role
         ):
@@ -449,7 +552,16 @@ class ConversationService:
                 raise ConversationClosedError(
                     f"会话已 {conv['status']}，不再接受新消息：{conversation_id}"
                 )
-            if file_ids:
+            current_file_bindings: tuple[dict[str, str], ...] = ()
+            if execution_mode == "safe_auto" and file_ids:
+                # 必须先于 workflow/model：来源不可信时模型零调用、消息/任务零落库。
+                current_file_bindings = _safe_auto_file_bindings(
+                    conn,
+                    file_ids=file_ids,
+                    actor_username=actor_username or "",
+                    uploads_root=self.uploads_dir,
+                )
+            elif file_ids:
                 found = {f["id"] for f in repos.list_files_by_ids(conn, file_ids)}
                 missing = [fid for fid in file_ids if fid not in found]
                 if missing:
@@ -481,6 +593,15 @@ class ConversationService:
             # 事务性单轮（Codex P2 / ADR-0013）：内存拼「历史 + 本轮 user」喂 workflow，
             # 成功后才进事务落库。baseline 计数供提交前乐观并发检查。
             persisted = repos.list_messages(conn, conversation_id)
+            if execution_mode == "safe_auto" and any(
+                message.get("file_ids") for message in persisted
+            ):
+                # 历史轮附件没有本轮授权，既不能成为 DAG 来源，也不能在本轮再次
+                # 渲染进模型上下文。必须在 workflow/model 前拒绝，避免旧附件内容
+                # 影响新一轮自动执行判断或发生不必要的模型侧暴露。
+                raise ConversationAttachmentBindingError(
+                    "会话历史包含附件；safe_auto 只接受当前轮显式绑定的附件来源"
+                )
             baseline_count = len(persisted)
             history = [
                 {"role": m["role"], "content": m["content"], "file_ids": m.get("file_ids") or []}
@@ -584,6 +705,18 @@ class ConversationService:
                         "会话在本轮生成期间被并发消息修改，本轮不落库——请基于最新历史重试"
                     )
                 if execution_mode == "safe_auto":
+                    # 模型调用期间文件可能被归属/换分级；提交点重查并与模型前快照
+                    # 对账，任何漂移都整轮回滚，绝不以旧证据派发。
+                    committed_file_bindings = _safe_auto_file_bindings(
+                        conn,
+                        file_ids=file_ids,
+                        actor_username=actor_username or "",
+                        uploads_root=self.uploads_dir,
+                    )
+                    if committed_file_bindings != current_file_bindings:
+                        raise ConversationAttachmentBindingError(
+                            "当前轮附件来源证据在生成期间发生变化，本轮不落库"
+                        )
                     execution = self.guide_plan_dispatch.dispatch_in_transaction(
                         conn,
                         conversation_id=conversation_id,
@@ -593,8 +726,11 @@ class ConversationService:
                         actor_username=actor_username or "",
                         actor_role=actor_role or "",
                         current_user_content=content,
-                        has_attachments=bool(file_ids)
-                        or any(m.get("file_ids") for m in persisted),
+                        has_attachments=bool(file_ids),
+                        current_file_bindings=list(current_file_bindings),
+                        has_historical_attachments=any(
+                            message.get("file_ids") for message in persisted
+                        ),
                     )
                     if recommendation is not None:
                         # workflow 返回对象只作为输入；复制后再附加平台执行事实，绝不

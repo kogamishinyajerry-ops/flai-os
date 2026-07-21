@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 from backend.app.auth import service as auth_service
 from backend.app.auth.passwords import hash_password, verify_password
 from backend.app.storage.db import get_conn, init_db
-from conftest import TEST_DISPLAY_NAME, TEST_PASSWORD, TEST_USERNAME, login, seed_user
+from conftest import TEST_DISPLAY_NAME, TEST_PASSWORD, TEST_ROLE, TEST_USERNAME, login, seed_user
 
 TESTS_DIR = Path(__file__).resolve().parent
 
@@ -118,7 +118,11 @@ def test_login_me_roundtrip(app_env):
     client, _app = app_env  # conftest 已真实登录
     me = client.get("/api/auth/me")
     assert me.status_code == 200
-    assert me.json() == {"username": TEST_USERNAME, "display_name": TEST_DISPLAY_NAME}
+    assert me.json() == {
+        "username": TEST_USERNAME,
+        "display_name": TEST_DISPLAY_NAME,
+        "role": TEST_ROLE,
+    }
 
 
 def test_wrong_password_401_then_throttle_429_even_with_correct_password(app_env):

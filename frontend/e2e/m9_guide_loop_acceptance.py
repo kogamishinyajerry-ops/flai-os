@@ -131,32 +131,27 @@ seed_user(WORK / "flai_os.db", "王工")
 API = login_httpx(BASE)  # 直连 API 的已登录客户端（ADR-0019）
 
 
-def force_legacy_plan_only(route) -> None:
-    """M9 专测历史手工回流/异常恢复；产品 safe_auto 主链由 M6/M8 单独验收。"""
-    request = route.request
-    payload = json.loads(request.post_data or "{}")
-    payload["execution_mode"] = "plan_only"
-    payload.pop("request_id", None)
-    headers = {k: v for k, v in request.headers.items() if k.lower() != "content-length"}
-    route.continue_(
-        post_data=json.dumps(payload, ensure_ascii=False),
-        headers={**headers, "content-type": "application/json"},
-    )
-
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
-    page.route("**/api/conversations/*/messages", force_legacy_plan_only)
     login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie
 
-    # ① 导引对话 → orchestrate 方案卡
-    page.goto(BASE + "/", wait_until="networkidle")
-    page.locator(".composer textarea").fill("做双通道供电的控制逻辑和故障树")
-    page.get_by_role("button", name="发送").click()
+    # ① 用真实认证 API 建立 legacy plan_only 历史，再由真浏览器验收手工回流。
+    # 不改写生产 safe_auto 请求，否则 durable outbox 会因权威历史没有 request_id
+    # 而按设计锁定 composer，这不是 legacy 回流场景应测试的入口。
+    created = API.post("/api/conversations", json={"agent_id": "guide_agent"})
+    assert created.status_code == 200, f"legacy 会话创建失败：{created.status_code} {created.text}"
+    conv_id = created.json()["id"]
+    posted = API.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={
+            "content": "做双通道供电的控制逻辑和故障树",
+            "execution_mode": "plan_only",
+        },
+    )
+    assert posted.status_code == 200, f"legacy plan_only 消息失败：{posted.status_code} {posted.text}"
+    page.goto(BASE + f"/?c={conv_id}", wait_until="networkidle")
     expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
-    convs = API.get("/api/conversations?limit=5").json()
-    conv_list = convs if isinstance(convs, list) else convs.get("items", [])
-    conv_id = conv_list[0]["id"] if conv_list else None
     check("①对话流出方案卡+拿到会话id", bool(conv_id))
     page.screenshot(path=str(SHOTS / "1_plan_card.png"), full_page=True)
 

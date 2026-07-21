@@ -58,6 +58,7 @@ def _decode_task(row: sqlite3.Row) -> dict[str, Any]:
     # 缺省 None（默认拷全部上游 output）。存量库无此列时 dict(row) 无该键，兜默认。
     d["depends_on"] = json.loads(d["depends_on"]) if d.get("depends_on") else []
     d["input_binding"] = json.loads(d["input_binding"]) if d.get("input_binding") else None
+    _decode_json(d, "source_binding_json", "source_binding", default=None)
     return d
 
 
@@ -77,6 +78,7 @@ def create_task(
     created_by_username: str | None = None,
     depends_on: list[str] | None = None,
     input_binding: dict[str, Any] | None = None,
+    source_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """建任务：初始态永远是 created（未入队）。
 
@@ -94,6 +96,9 @@ def create_task(
     created_by_username（迁移 #9）：发起人不可变唯一 username。created_by 存
     display_name（可变、可撞名，仅展示），本列存身份主键（批C 个人贡献按此归
     因绝不撞名）。省略=None，绝不用 created_by 冒充（自报时代不冒充追溯）。
+
+    source_binding（迁移 #14）：版本化 DAG 当前轮的参数/附件来源证据，随任务
+    INSERT 一次写入；None=无来源绑定。仓储层不提供覆盖 setter。
     """
     if origin not in ("user", "eval"):
         raise ValueError(f"origin 只认 'user'/'eval'：{origin!r}")
@@ -104,8 +109,9 @@ def create_task(
             (id, agent_id, agent_version, name, status, created_by,
              created_at, updated_at, started_at, finished_at,
              input_file_ids, output_file_ids, inputs_json, error_message, metadata_json,
-             conversation_id, origin, created_by_username, depends_on, input_binding)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             conversation_id, origin, created_by_username, depends_on, input_binding,
+             source_binding_json)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             task_id, agent_id, agent_version, name, "created", created_by,
@@ -120,6 +126,7 @@ def create_task(
             created_by_username,
             json.dumps(depends_on, ensure_ascii=False) if depends_on else None,
             json.dumps(input_binding, ensure_ascii=False) if input_binding else None,
+            json.dumps(source_binding, ensure_ascii=False) if source_binding is not None else None,
         ),
     )
     return get_task(conn, task_id)  # type: ignore[return-value]
@@ -869,19 +876,21 @@ def create_file(
     sha256: str,
     classification: str,
     uploaded_by: str | None = None,
+    uploaded_by_username: str | None = None,
 ) -> dict[str, Any]:
     """classification 必填无默认值（ADR-0021 D1/设计审 F4）：调用点漏传=TypeError
-    当场炸，绝不静默吃 DDL DEFAULT 把派生 sensitive 洗白成 internal。"""
+    当场炸，绝不静默吃 DDL DEFAULT 把派生 sensitive 洗白成 internal。
+    uploaded_by_username 只收认证会话的不可变 username；存量/运行时产物留 None。"""
     now = _now_iso()
     conn.execute(
         """
         INSERT INTO files
             (id, task_id, kind, filename, path, size_bytes, sha256, created_at,
-             classification, uploaded_by)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
+             classification, uploaded_by, uploaded_by_username)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
         """,
         (file_id, task_id, kind, filename, path, size_bytes, sha256, now,
-         classification, uploaded_by),
+         classification, uploaded_by, uploaded_by_username),
     )
     return get_file(conn, file_id)  # type: ignore[return-value]
 
@@ -1169,15 +1178,16 @@ def create_conversation(
     agent_id: str,
     created_by: str,
     created_by_username: str | None = None,
+    creation_request_id: str | None = None,
 ) -> dict[str, Any]:
-    """建会话：初始态 active，无推荐（recommendation 留 NULL 待对话产出）。"""
+    """建会话：初始态 active；可选 owner-scoped 创建幂等键随 INSERT 冻结。"""
     now = _now_iso()
     conn.execute(
         """
         INSERT INTO conversations
             (id, agent_id, status, created_by, created_by_username,
-             recommendation_json, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?)
+             creation_request_id, recommendation_json, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?)
         """,
         (
             conversation_id,
@@ -1185,6 +1195,7 @@ def create_conversation(
             "active",
             created_by,
             created_by_username,
+            creation_request_id,
             None,
             now,
             now,
@@ -1196,6 +1207,23 @@ def create_conversation(
 def get_conversation(conn: sqlite3.Connection, conversation_id: str) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+    ).fetchone()
+    return _decode_conversation(row) if row is not None else None
+
+
+def get_conversation_by_creation_request(
+    conn: sqlite3.Connection,
+    *,
+    created_by_username: str,
+    creation_request_id: str,
+) -> dict[str, Any] | None:
+    """按不可变 owner username + 创建幂等键取会话，供 service 判定重放/冲突。"""
+    row = conn.execute(
+        """
+        SELECT * FROM conversations
+        WHERE created_by_username = ? AND creation_request_id = ?
+        """,
+        (created_by_username, creation_request_id),
     ).fetchone()
     return _decode_conversation(row) if row is not None else None
 

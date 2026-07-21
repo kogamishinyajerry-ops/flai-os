@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from . import classification_gate as cgate
 from ..core.errors import (
     ConversationAccessDeniedError,
+    ConversationAttachmentBindingError,
     ConversationClosedError,
     ConversationConflictError,
     ConversationNotFoundError,
@@ -37,6 +38,10 @@ class CreateConversationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str
+    # 浏览器在收到创建响应前刷新时，可用同一键重放；键只在当前认证用户名下唯一。
+    request_id: str | None = Field(
+        default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_.:-]+$"
+    )
 
 
 class PostMessageRequest(BaseModel):
@@ -76,6 +81,8 @@ class PostMessageRequest(BaseModel):
     def safe_auto_requires_request_id(self) -> "PostMessageRequest":
         if self.execution_mode == "safe_auto" and self.request_id is None:
             raise ValueError("safe_auto 必须提供 request_id 以保证重试不重复创建任务")
+        if self.execution_mode == "safe_auto" and len(set(self.file_ids)) != len(self.file_ids):
+            raise ValueError("safe_auto 的 file_ids 必须唯一，拒绝静默去重来源证据")
         return self
 
 
@@ -88,10 +95,13 @@ def create_conversation(body: CreateConversationRequest, request: Request) -> di
             created_by=request.state.user["display_name"],
             created_by_username=request.state.user["username"],
             actor_role=request.state.user["role"],
+            creation_request_id=body.request_id,
         )
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except NotInteractiveAgentError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConversationConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ConversationAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -145,6 +155,9 @@ def post_message(
     except ConversationAccessDeniedError as exc:
         # 自动执行会产生真实任务；会话所有者不匹配时必须在模型调用前 fail-closed。
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ConversationAttachmentBindingError as exc:
+        # 文件存在但其种类/归属/分级/上传身份不满足自动执行来源契约。
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ModelConfigError as exc:
         # 模型网关未配置（缺 FLAI_LLM_*）=永久性错误：重试无效，需运维配置后恢复。
         # 与临时上游故障分流，绝不谎报「可重试」误导用户反复点发送（PM 战略审 top）。

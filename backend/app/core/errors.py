@@ -98,6 +98,10 @@ class ConversationAccessDeniedError(FlaiError):
     """当前认证主体无权在该会话中触发带副作用的自动执行。"""
 
 
+class ConversationAttachmentBindingError(FlaiError):
+    """当前轮附件不满足 safe-auto 的不可变来源绑定约束。"""
+
+
 class NotInteractiveAgentError(FlaiError):
     """对非 interactive 型 Agent 发起会话，或对 interactive 型 Agent 建一次性任务
     （ADR-0012：两条运行时语义正交，不允许混用）。"""
