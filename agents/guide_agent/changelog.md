@@ -1,5 +1,21 @@
 # guide_agent changelog
 
+## 0.5.0（2026-07-21，版本化多 Agent DAG 与当前轮来源绑定）
+
+- 新增显式 `guide_dag.v1`：1..5 个拓扑有序节点，锁定 `node_id/agent_id/agent_version`、
+  `depends_on`、参数、artifact 与 attachment binding；workflow 只规范化模型明确给出的图，
+  绝不从 legacy `agents[]` 或自然语言 `workflow` 猜边。
+- 所有版本化 DAG（包括单节点）都要求当前轮顶层 `inputs_by_agent` 键集合精确等于图中 Agent 且逐值类型严格
+  深相等；每个任务随 INSERT 冻结 `task_source.v1` 参数摘要与图 digest。
+- 当前轮 internal 附件可全集绑定到唯一 `attachment_binding.mode=current_turn` 节点，
+  冻结 uploader username、SHA-256、分级与会话锚；历史附件、多个目标或来源不明均零任务。
+- 复用现有 `depends_on/input_binding` 与 resolver：根节点直接 queued，下游保持 created。
+  非叶只能是零模型、无需审核的确定性 Agent；唯一叶必须进入人工审核，LLM 不进最终签发链。
+- V1 明确禁止有依赖节点 `artifact_binding.mode=none`：既有 resolver 将空 `from_tasks`
+  解释为默认全拷，当前版本不伪装支持 wait-only/no-artifact 边。
+- execution 增加权威 `graph_version/graph_digest/node_tasks`；当 DAG 声称 dispatched 时，
+  output schema 强制三者齐全。legacy 单 Agent 继续兼容，legacy 多 Agent 继续阻断。
+
 ## 0.4.0（2026-07-21，受限会话自动执行，ADR-0031）
 
 - 计划成员新增确定性 `agent_version` 快照，平台派发前与 Registry 当前版本复核。

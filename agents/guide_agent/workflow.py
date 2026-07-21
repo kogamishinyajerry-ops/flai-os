@@ -6,8 +6,8 @@ ConversationService 每轮调用 `run(context)`（统一入口，interactive 型
 2. 经 Model Gateway（profile=reasoning）发起对话，得到本轮 assistant 回复；
 3. 若回复含计划块（`<<PLAN>>...<<END>>`），对其做**确定性校验**后才作为结构化
    计划返回。计划有两种裁决（decision）：
-   - `orchestrate`：平台有合适 Agent。含最终分析、待用户确认的目标、以及一组
-     **每个都经确定性对账**的 Agent（含各自分工 role + 预填草案）与协作方式。
+   - `orchestrate`：平台有合适 Agent。legacy 单节点保留 `agents[]`；多节点只有模型
+     明确输出 `guide_dag.v1 + nodes` 时才按拓扑/版本/来源契约确定性规范化。
    - `refuse`：没有合适 Agent（甚至不值得为此建专用 Agent）。含拒绝理由、仍未
      解决的问题、以及如何重述/拆解才可接——**显式拒绝，不硬凑**。
 
@@ -17,7 +17,8 @@ LLM 边界（宪法铁律六 + §11.2）：LLM 只负责对话与**提议**，�
 input_schema.json（逐字段校验，非法字段剥离并如实记名），任一 Agent 不过即剥离；
 orchestrate 若无任何合法 Agent 存活 → 整份计划作废（fail-closed，不外露幻觉召集）。
 导引 workflow **绝不创建或签发任务**。认证用户请求 safe_auto 时，平台后端另以
-确定性 admission 物化满足白名单的计划；最终 review 仍只能由人完成。
+确定性 admission 物化满足白名单的单任务或 DAG；DAG 非叶只允许零模型确定性 Agent，
+唯一叶强制人工 review，最终签发仍只能由人完成。
 上游失败/空内容一律诚实抛错，绝不伪造对话或计划。
 """
 
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -114,6 +116,10 @@ def _candidates(
                 # 缺主体投影也 fail-closed 为不可；production 由 ConversationService
                 # 注入，最终派发仍在事务内权威复查 manifest + 当前角色。
                 "safe_auto": agent_id in (safe_auto_agent_ids or set()),
+                "model_profile": (agent.get("model") or {}).get("profile"),
+                "requires_human_review": (agent.get("workflow") or {}).get(
+                    "requires_human_review"
+                ),
                 "input_fields": _input_fields(registry, agent_id),
             }
         )
@@ -160,7 +166,8 @@ def _render_candidates(candidates: list[dict[str, Any]]) -> str:
         lines.append(
             f"- id=`{c['id']}` 名称={c['name']} 类型={c['category']} "
             f"成熟度={c['maturity']}/{c['status']} "
-            f"当前身份自动执行={'可' if c['safe_auto'] else '暂不可'}"
+            f"当前身份自动执行={'可' if c['safe_auto'] else '暂不可'} "
+            f"模型={c['model_profile']} 人工审核={'是' if c['requires_human_review'] is True else '否'}"
         )
         lines.append(f"  简介：{c['summary']}")
         if c["input_fields"]:
@@ -243,6 +250,12 @@ def _validate_refuse(proposed: dict[str, Any]) -> dict[str, Any]:
 def _validate_orchestrate(
     proposed: dict[str, Any], registry: Any, candidates: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
+    contract = proposed.get("contract")
+    if contract is not None:
+        if contract != "guide_dag.v1":
+            return None
+        return _validate_dag(proposed, registry, candidates)
+
     candidate_map = {c["id"]: c for c in candidates}
     raw_agents = proposed.get("agents")
     raw_agents = raw_agents if isinstance(raw_agents, list) else []
@@ -301,6 +314,139 @@ def _validate_orchestrate(
         # 审计列表收成有界：条数 ≤ _MAX_DROPPED、单条 ≤ _MAX_ID_CHARS（异源 Codex R1-#2）。
         "dropped_agents": [d[:_MAX_ID_CHARS] for d in dropped[:_MAX_DROPPED]],
         "capped": capped,
+    }
+
+
+def _validate_dag(
+    proposed: dict[str, Any], registry: Any, candidates: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """只规范化模型明确给出的 guide_dag.v1；绝不从 legacy agents/workflow 猜边。"""
+    raw_nodes = proposed.get("nodes")
+    if not isinstance(raw_nodes, list) or not 1 <= len(raw_nodes) <= _MAX_PLAN_AGENTS:
+        return None
+    candidate_map = {candidate["id"]: candidate for candidate in candidates}
+    nodes: list[dict[str, Any]] = []
+    seen_nodes: set[str] = set()
+    seen_agents: set[str] = set()
+    referenced: set[str] = set()
+    for entry in raw_nodes:
+        if not isinstance(entry, dict):
+            return None
+        node_id = entry.get("node_id")
+        agent_id = entry.get("agent_id")
+        if (
+            not isinstance(node_id, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", node_id) is None
+            or node_id in seen_nodes
+            or not isinstance(agent_id, str)
+            or agent_id in seen_agents
+            or agent_id not in candidate_map
+        ):
+            return None
+        target = candidate_map[agent_id]
+        if (
+            target.get("safe_auto") is not True
+            or entry.get("agent_version") != target.get("version")
+        ):
+            return None
+        dependencies = entry.get("depends_on")
+        if (
+            not isinstance(dependencies, list)
+            or any(not isinstance(dependency, str) for dependency in dependencies)
+            or len(dependencies) != len(set(dependencies))
+            or any(dependency not in seen_nodes for dependency in dependencies)
+        ):
+            return None
+        artifact_binding = entry.get("artifact_binding")
+        if (
+            not isinstance(artifact_binding, dict)
+            or set(artifact_binding) != {"mode", "from_nodes"}
+        ):
+            return None
+        mode = artifact_binding.get("mode")
+        from_nodes = artifact_binding.get("from_nodes")
+        if (
+            not isinstance(from_nodes, list)
+            or any(not isinstance(source, str) for source in from_nodes)
+            or len(from_nodes) != len(set(from_nodes))
+            or not set(from_nodes).issubset(set(dependencies))
+            or (
+                mode == "none"
+                and (bool(dependencies) or from_nodes != [])
+            )
+            or (
+                mode == "all"
+                and (not dependencies or from_nodes != dependencies)
+            )
+            or (
+                mode == "selected"
+                and (not dependencies or not from_nodes)
+            )
+            or mode not in {"none", "all", "selected"}
+        ):
+            return None
+        attachment_binding = entry.get("attachment_binding")
+        if (
+            not isinstance(attachment_binding, dict)
+            or set(attachment_binding) != {"mode"}
+            or attachment_binding.get("mode") not in {"none", "current_turn"}
+        ):
+            return None
+        raw_inputs = entry.get("prefilled_inputs")
+        if not isinstance(raw_inputs, dict):
+            return None
+        prefilled, stripped = _clean_prefilled_inputs(registry, agent_id, raw_inputs)
+        if stripped:
+            return None
+        nodes.append(
+            {
+                "node_id": node_id,
+                "agent_id": agent_id,
+                "agent_version": target["version"],
+                "agent_name": target["name"],
+                "category": target["category"],
+                "status": target["status"],
+                "maturity": target["maturity"],
+                "role": _text(entry.get("role")),
+                "rationale": _text(entry.get("rationale")),
+                "prefilled_inputs": prefilled,
+                "stripped_fields": [],
+                "depends_on": dependencies,
+                "artifact_binding": {
+                    "mode": mode,
+                    "from_nodes": from_nodes,
+                },
+                "attachment_binding": {"mode": attachment_binding["mode"]},
+            }
+        )
+        referenced.update(dependencies)
+        seen_nodes.add(node_id)
+        seen_agents.add(agent_id)
+
+    leaves = [node for node in nodes if node["node_id"] not in referenced]
+    if len(leaves) != 1:
+        return None
+    leaf_id = leaves[0]["node_id"]
+    for node in nodes:
+        target = candidate_map[node["agent_id"]]
+        if node["node_id"] == leaf_id:
+            if target.get("requires_human_review") is not True:
+                return None
+        elif (
+            target.get("model_profile") != "none"
+            or target.get("requires_human_review") is not False
+        ):
+            return None
+
+    return {
+        "decision": "orchestrate",
+        "contract": "guide_dag.v1",
+        "analysis": _text(proposed.get("analysis")),
+        "goal": _text(proposed.get("goal")),
+        "workflow": _text(proposed.get("workflow")),
+        "nodes": nodes,
+        "dropped_agents": [],
+        "capped": False,
     }
 
 

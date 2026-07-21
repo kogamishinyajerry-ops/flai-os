@@ -109,33 +109,31 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 
-def force_legacy_plan_only(route) -> None:
-    """本脚本保留历史 plan_only 人工回退链验收；产品默认 safe_auto 另由 M6/M8 验收。"""
-    request = route.request
-    payload = json.loads(request.post_data or "{}")
-    payload["execution_mode"] = "plan_only"
-    payload.pop("request_id", None)
-    headers = {k: v for k, v in request.headers.items() if k.lower() != "content-length"}
-    route.continue_(
-        post_data=json.dumps(payload, ensure_ascii=False),
-        headers={**headers, "content-type": "application/json"},
-    )
-
-
-from _auth import login_context, seed_user  # noqa: E402
+from _auth import login_context, login_httpx, seed_user  # noqa: E402
 
 seed_user(WORK / "flai_os.db", "王工")
+API = login_httpx(BASE)
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
-    page.route("**/api/conversations/*/messages", force_legacy_plan_only)
     login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie
 
-    # ① 导引 → orchestrate 方案
-    page.goto(BASE + "/", wait_until="networkidle")
-    page.locator(".composer textarea").fill("做双通道供电的控制逻辑和故障树")
-    page.get_by_role("button", name="发送").click()
+    # ① 用真实认证 API 建立 legacy plan_only 历史，再由真浏览器验收人工回退链。
+    # 不再在网络层把生产 safe_auto 请求改写成 plan_only：那会让 durable outbox
+    # 正确地判定“服务端权威历史缺少同一 request_id”并 fail-closed。
+    created = API.post("/api/conversations", json={"agent_id": "guide_agent"})
+    assert created.status_code == 200, f"legacy 会话创建失败：{created.status_code} {created.text}"
+    conversation_id = created.json()["id"]
+    posted = API.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={
+            "content": "做双通道供电的控制逻辑和故障树",
+            "execution_mode": "plan_only",
+        },
+    )
+    assert posted.status_code == 200, f"legacy plan_only 消息失败：{posted.status_code} {posted.text}"
+    page.goto(BASE + f"/?c={conversation_id}", wait_until="networkidle")
     expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
     check("①导引给出 orchestrate 协作方案", "协作方案" in page.locator("body").inner_text())
 

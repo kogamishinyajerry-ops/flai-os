@@ -80,7 +80,7 @@
         </div>
 
         <div class="roster fx-stagger">
-          <div v-for="(a, ai) in rosterAgents" :key="ai" class="member">
+          <div v-for="(a, ai) in rosterAgents" :key="a.node_id || `${a.agent_id || 'agent'}:${ai}`" class="member">
             <div class="member-bar" :style="{ background: categoryColor(a.category) }"></div>
             <div class="member-inner">
               <div class="member-head">
@@ -88,10 +88,14 @@
                 <span class="member-pill" :style="{ color: categoryColor(a.category), background: categoryColor(a.category) + '18' }">
                   {{ categoryLabel(a.category) }}
                 </span>
-                <span v-if="tasksFor(a).length" class="member-state summoned">已召集 · {{ tasksFor(a).length }} 个任务</span>
+                <span v-if="planTaskMappingIssue" class="member-state pending">映射不可验证</span>
+                <span v-else-if="tasksFor(a).length" class="member-state summoned">已召集 · {{ tasksFor(a).length }} 个任务</span>
                 <span v-else class="member-state pending">尚未召集</span>
               </div>
               <p v-if="a.role" class="member-role"><strong>分工：</strong>{{ a.role }}</p>
+              <p v-if="a.depends_on && a.depends_on.length" class="member-role">
+                <strong>前置：</strong>{{ a.depends_on.join("、") }}
+              </p>
 
               <!-- 已召集：成员任务（到席灯 + 状态 + 详情链接；waiting_review 醒目提示放行）；
                    chip-lastword（B2）：该任务的「最近动态」=最后一条事件的 message 原文
@@ -118,6 +122,14 @@
               <!-- safe_auto 计划不再把用户送去创建页。任务流可能比回执慢一个 tick，
                    因此先展示后端执行事实；blocker 引导回会话补信息。 -->
               <div
+                v-else-if="conversation.status === 'active' && planTaskMappingIssue"
+                class="member-action"
+              >
+                <span class="member-hint blocked">
+                  版本化计划任务映射不完整，已停止关联，绝不按 Agent 名猜测：{{ planTaskMappingIssue }}
+                </span>
+              </div>
+              <div
                 v-else-if="conversation.status === 'active' && plan.execution"
                 class="member-action"
               >
@@ -129,9 +141,17 @@
                 </span>
               </div>
               <!-- 历史 plan_only 会话保留兼容入口；新会话默认不再要求逐项点击。 -->
-              <div v-else-if="conversation.status === 'active'" class="member-action">
+              <div
+                v-else-if="conversation.status === 'active' && guidePlanAllowsManualCreate(plan)"
+                class="member-action"
+              >
                 <el-button size="small" type="primary" plain @click="summon(a)">去创建此任务</el-button>
                 <span class="member-hint">用导引预填的草案创建任务，由你补全并亲手提交。</span>
+              </div>
+              <div v-else-if="conversation.status === 'active'" class="member-action">
+                <span class="member-hint blocked">
+                  版本化 DAG 没有权威执行回执，已禁止逐节点手动创建；请回智能导引用 safe_auto 重新提交。
+                </span>
               </div>
               <div v-else class="member-action">
                 <span class="member-hint">会话已归档，未召集——如需继续，请从智能导引开启新协作。</span>
@@ -159,11 +179,23 @@
         </div>
       </div>
 
-      <p v-if="plan?.execution?.status === 'dispatched'" class="sess-foot">
+      <p v-if="planTaskMappingIssue" class="sess-foot">
+        版本化计划任务映射不可验证，页面已停止关联任务；请回到会话重新获取权威执行回执。
+      </p>
+      <p
+        v-else-if="plan?.contract === 'guide_dag.v1' && plan?.execution?.status === 'dispatched'"
+        class="sess-foot"
+      >
+        任务图已原子创建，根节点已入队，下游等待依赖推进，叶节点仍需真人签发。
+      </p>
+      <p v-else-if="plan?.execution?.status === 'dispatched'" class="sess-foot">
         安全任务已由平台自动创建并入队；waiting_review 的最终工程签发仍由你完成。
       </p>
       <p v-else-if="plan?.execution" class="sess-foot">
         当前方案被安全门阻断，没有创建任务；请回到会话按具体原因补充或调整。
+      </p>
+      <p v-else-if="plan?.contract === 'guide_dag.v1'" class="sess-foot">
+        版本化 DAG 未产生权威执行回执，不会降级为破坏依赖关系的逐项手动创建。
       </p>
       <p v-else class="sess-foot">
         签发权在你——协作里每个任务都由你在创建页补全并亲手提交，导引只做分流与预填，不代签、不代召集。
@@ -185,6 +217,13 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { concludeConversation } from "../api/conversations";
 import { categoryColor, categoryLabel, statusLabel, taskLampColor, TASK_WORK_STATES } from "../utils/format";
+import {
+  guidePlanAgents,
+  guidePlanAllowsManualCreate,
+  guidePlanTaskMappingIssue,
+  indexGuidePlanTasks,
+  tasksForGuidePlanAgent,
+} from "../utils/guidePlan";
 import { markSeen } from "../utils/lastSeen";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
@@ -200,15 +239,20 @@ const loading = computed(() => !convLoaded.value);
 
 const plan = computed(() => conversation.value?.recommendation || null);
 const goal = computed(() => (plan.value?.decision === "orchestrate" ? plan.value.goal : ""));
-const rosterAgents = computed(() => (plan.value?.decision === "orchestrate" ? plan.value.agents || [] : []));
-const rosterAgentIds = computed(() => new Set(rosterAgents.value.map((a) => a.agent_id)));
+const rosterAgents = computed(() => guidePlanAgents(plan.value));
+const planTaskIndex = computed(() => indexGuidePlanTasks(plan.value, memberTasks.value));
+const planTaskMappingIssue = computed(() =>
+  guidePlanTaskMappingIssue(plan.value, memberTasks.value)
+);
 
 function tasksFor(agent) {
-  return memberTasks.value.filter((t) => t.agent_id === agent.agent_id);
+  return tasksForGuidePlanAgent(planTaskIndex.value, agent);
 }
 const summonedCount = computed(() => rosterAgents.value.filter((a) => tasksFor(a).length > 0).length);
 const completedCount = computed(() => memberTasks.value.filter((t) => t.status === "completed").length);
-const otherTasks = computed(() => memberTasks.value.filter((t) => !rosterAgentIds.value.has(t.agent_id)));
+const otherTasks = computed(() =>
+  memberTasks.value.filter((t) => !planTaskIndex.value.claimedTaskIds.has(t.id))
+);
 // 待签发常驻 pill：waiting_review 任务数（文案刻意避开"尚未召集"/"待人工放行"既有词，不占用锚点断言位）。
 const waitingReviewCount = computed(() => memberTasks.value.filter((t) => t.status === "waiting_review").length);
 

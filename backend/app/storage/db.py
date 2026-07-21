@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- （None=默认拷全部上游 output_file_ids 入本任务 input_file_ids）。
     depends_on TEXT,
     input_binding TEXT,
+    -- source_binding_json（迁移 #14/版本化 DAG）：任务创建时冻结的当前轮参数与
+    -- 附件来源证据。可空：存量任务、门户直建任务不冒充有来源绑定。仅 INSERT
+    -- 时写入，不提供覆盖更新接口（不可变列遵守 CAS-on-NULL 边界）。
+    source_binding_json TEXT,
     -- created_by_username（迁移 #9/批C，与协作运行时 forge 同期并行两支各称 #9）：发起人的
     -- 不可变唯一 username，区别于 created_by（display_name，可变且非唯一）。批C 个人贡献归因/
     -- 职责分离的身份主键——按 username 归因绝不撞名。可空：存量行留 NULL（自报时代之后才有的
@@ -93,7 +97,10 @@ CREATE TABLE IF NOT EXISTS files (
     sha256 TEXT NOT NULL,
     created_at TEXT NOT NULL,
     classification TEXT NOT NULL DEFAULT 'internal',
-    uploaded_by TEXT
+    uploaded_by TEXT,
+    -- 不可变认证 username；uploaded_by 继续保留 display_name 仅供人读。
+    -- 存量行留 NULL，绝不从可变/可撞名 display_name 反推。
+    uploaded_by_username TEXT
 );
 
 CREATE TABLE IF NOT EXISTS feedback (
@@ -166,6 +173,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     status TEXT NOT NULL,
     created_by TEXT NOT NULL,
     created_by_username TEXT,
+    -- 客户端创建幂等键。只与 owner username 组合唯一；NULL 保持旧行为。
+    creation_request_id TEXT,
     recommendation_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -283,6 +292,9 @@ _INDEX_DDL = (
     "ON conversation_messages(conversation_id)",
     "CREATE INDEX IF NOT EXISTS idx_conversation_dispatches_created_at "
     "ON conversation_dispatches(created_at)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_conversations_owner_creation_request "
+    "ON conversations(created_by_username, creation_request_id) "
+    "WHERE creation_request_id IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_tasks_conversation_id ON tasks(conversation_id)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_status_created_at ON tasks(status, created_at)",
@@ -362,6 +374,8 @@ def init_db(db_path: str | Path) -> None:
                 )
             if "uploaded_by" not in file_cols:
                 conn.execute("ALTER TABLE files ADD COLUMN uploaded_by TEXT")
+            if "uploaded_by_username" not in file_cols:
+                conn.execute("ALTER TABLE files ADD COLUMN uploaded_by_username TEXT")
             sample_cols = {row[1] for row in conn.execute("PRAGMA table_info(samples)")}
             if "classification" not in sample_cols:
                 conn.execute(
@@ -391,6 +405,10 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute("ALTER TABLE tasks ADD COLUMN depends_on TEXT")
             if "input_binding" not in task_cols_v9:
                 conn.execute("ALTER TABLE tasks ADD COLUMN input_binding TEXT")
+            # 迁移 #14（版本化 DAG 来源绑定）：任务创建时一次写入的来源证据。
+            # 存量行 NULL，不从 inputs/input_file_ids 猜测或回填。
+            if "source_binding_json" not in task_cols_v9:
+                conn.execute("ALTER TABLE tasks ADD COLUMN source_binding_json TEXT")
             # 迁移 #11（T2/#5）：eval_runs.snapshot_handle——run 绑定其冻结快照句柄。存量 run
             # 无快照=NULL（执行侧回退活磁盘，向后兼容）。同写锁内探测补列。原 feat 分支标 #10，
             # 合并（→ main）时 #10 已被协作运行时 forge 的 depends_on/input_binding 占用，顺延 #11。
@@ -405,6 +423,8 @@ def init_db(db_path: str | Path) -> None:
             }
             if "created_by_username" not in conversation_cols:
                 conn.execute("ALTER TABLE conversations ADD COLUMN created_by_username TEXT")
+            if "creation_request_id" not in conversation_cols:
+                conn.execute("ALTER TABLE conversations ADD COLUMN creation_request_id TEXT")
             # 迁移 #13（ADR-0031 授权审查）：用户角色轴。旧系统所有认证账户均可
             # 调用全部任务端点，迁移为 admin 是对既有权限的显式化而非扩权；新账户
             # 由 create_user 显式写角色（默认 business_user）。异常 NULL 在执行门拒绝。

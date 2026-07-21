@@ -247,6 +247,7 @@ async def upload_file(
             classification=classification,
             # 分级是自报值（ADR-0021 D2 信任根声明）——标注人记名，标错可追责。
             uploaded_by=request.state.user["display_name"],
+            uploaded_by_username=request.state.user["username"],
         )
     except Exception:
         # 审计 P3（孤儿 blob）：落盘成功但入库失败（如锁等待超时）——磁盘有文件、
