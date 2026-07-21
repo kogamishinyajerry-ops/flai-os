@@ -84,6 +84,23 @@
       "uniqueItems": true,
       "description": "工具白名单（default-deny）。每项必须是 Tool Registry 已注册的 tool id，Registry 加载时对账。"
     },
+    "automation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_execution", "effect"],
+      "description": "会话级受限自动执行声明。字段缺失即默认拒绝；仅平台 admission 读取，LLM 不得覆盖。",
+      "properties": {
+        "session_execution": {
+          "type": "boolean",
+          "description": "true 才允许认证会话在完整计划下自动创建/入队任务；不代表允许自动签发。"
+        },
+        "effect": {
+          "type": "string",
+          "enum": ["none", "reversible", "external"],
+          "description": "执行副作用上界；safe_auto 首版只接收 none。"
+        }
+      }
+    },
     "input": {
       "type": "object",
       "additionalProperties": false,

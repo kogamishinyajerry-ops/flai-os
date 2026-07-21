@@ -113,7 +113,7 @@ def check_active_user(conn: sqlite3.Connection) -> Check:
         return Check(
             "≥1 活跃账户", False,
             "users 表无活跃账户——所有人被锁在登录门外（有意 fail-closed，"
-            "ADR-0019 D9）。执行：python3 scripts/user_admin.py create <用户名> <显示名>",
+            "ADR-0019 D9）。执行：python3 scripts/user_admin.py create <用户名> <显示名> --role admin",
         )
     return Check("≥1 活跃账户", True, f"活跃账户 {n} 个")
 

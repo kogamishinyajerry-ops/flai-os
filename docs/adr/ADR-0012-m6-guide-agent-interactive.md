@@ -1,5 +1,9 @@
 # ADR-0012: M6 导引 Agent 与 interactive 会话运行时
 
+> 2026-07-21 修订：决策 4 中“导引计划绝不触发任务创建”的机械提交边界，已由
+> ADR-0031 的认证 `safe_auto` 受限派发取代。LLM workflow 仍只提议，最终工程签发
+> 仍只能由人完成；其余决策不变。
+
 - 状态：已接受（2026-07-09）
 - 背景：M0–M5 的 Runtime 是一次性 job 模型（create→validate→run once→
   completed/waiting_review），只承载「单次输入→单次产物」。Owner 新方向要求

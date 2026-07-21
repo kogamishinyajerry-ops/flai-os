@@ -5,9 +5,8 @@
 
 覆盖导引全链：
   ① 导引页可达（统一入口）→ ② 发一句需求 → ③ 导引返回推荐卡片（Agent 名 +
-  类型色标 + 成熟度 + 预填草案 JSON + 被剔除非法字段的告警）→ ④ 点「确认草案，
-  去创建任务」→ ⑤ 落到创建任务页且**预填已带入 + 具名提交仍由人完成**（红线：
-  导引不代签）。
+  类型色标 + 成熟度 + 被剔除非法字段的告警）并被安全门零任务阻断 → ④ 新会话
+  提供完整显式 JSON 后，平台零点击自动创建并入队任务；最终工程签发仍由人完成。
 
 运行（仓根）：
   cd frontend && npm run build && cd ..
@@ -67,6 +66,17 @@ class _StubGateway:
         if self.fail_next:
             self.fail_next = False
             raise ModelUpstreamError("stub 注入的上游失败（验收失败轮 UI 回滚）")
+        latest = messages[-1]["content"] if messages else ""
+        explicit = '"system_description"' in latest and '"components"' in latest
+        inputs = (
+            {
+                "top_event": "供电完全丧失",
+                "system_description": "双通道供电系统",
+                "components": ["发电机A", "发电机B"],
+            }
+            if explicit
+            else {"top_event": "供电完全丧失", "bogus": "该字段不属于该 Agent"}
+        )
         plan = {
             "decision": "orchestrate",
             "analysis": "你要对双通道供电系统做故障树分析。",
@@ -77,7 +87,7 @@ class _StubGateway:
                     "agent_id": "fta_agent",
                     "role": "搭建并分析故障树",
                     "rationale": "你的需求是对供电系统做故障树分析，fta_agent 正是做这个的。",
-                    "prefilled_inputs": {"top_event": "供电完全丧失", "bogus": "该字段不属于该 Agent"},
+                    "prefilled_inputs": inputs,
                 }
             ],
         }
@@ -144,7 +154,11 @@ with sync_playwright() as p:
     body = page.locator("body").inner_text()
     # 2b 契约重立：「智能导引」原命中侧栏导航项，双 Surface 后导航收敛为
     # 「对话/任务台」——改锚 hero 主标题（导引页身份的稳定语义锚）。
-    check("①导引页可达且为统一入口", "说说你要做的工程活儿" in body and "导引不会替你创建" in body, body[:200])
+    check(
+        "①导引页可达且为统一入口",
+        "说说你要做的工程活儿" in body and "满足安全门的方案会自动执行" in body,
+        body[:200],
+    )
     page.screenshot(path=str(SHOTS / "1_guide_empty.png"), full_page=True)
 
     # ② 失败轮 UI 契约（Codex R1-P2 / M7 扩附件）：后端失败零落库，前端同样
@@ -197,29 +211,55 @@ with sync_playwright() as p:
         ATTACH_NAME in page.locator(".bubble-row.user").first.inner_text(),
         page.locator(".bubble-row.user").first.inner_text()[:120],
     )
-    check("③'导引不代签'红线文案在卡片可见", "签发权" in body and "亲手提交" in body, "")
+    check(
+        "③阻断事实与最终人签边界同屏可见",
+        "暂未执行" in body and "没有创建任务" in body and "最终工程签发" in body,
+        "",
+    )
     page.screenshot(path=str(SHOTS / "2_recommendation.png"), full_page=True)
 
-    # ④ 点「去创建此任务」→ 落创建任务页
-    page.get_by_role("button", name="去创建此任务").click()
-    page.wait_for_url(lambda url: "/tasks/new" in url, timeout=5000)
-    expect(page.locator(".prefill-note")).to_be_visible(timeout=5000)
-    body = page.locator("body").inner_text()
-
-    # ⑤ 预填带入 + 目标 Agent 选中；非法字段未随入（结构化表单：top_event 字段带值）
-    top_event_val = page.locator('input[placeholder="请填写顶事件"]').first.input_value()
-    prefill_ok = (
-        "已从智能导引带入预填草案" in body
-        and "供电完全丧失" in top_event_val
-        and "bogus" not in body  # 剥离字段不属于该 Agent schema，结构化表单里根本不存在
+    # ④ 含附件+非法字段的计划必须零任务，且不再出现手动创建兜底按钮。
+    conn = app.state.conn_factory()
+    try:
+        blocked_tasks = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+    finally:
+        conn.close()
+    check(
+        "④安全门阻断时零任务、零创建页按钮",
+        blocked_tasks == 0 and page.get_by_role("button", name="去创建此任务").count() == 0,
+        f"tasks={blocked_tasks}",
     )
-    check("④→⑤确认后预填草案带入创建任务页（仅合法字段）", prefill_ok,
-          f"top_event={top_event_val!r} bogus_in_body={'bogus' in body}")
-    carried_ok = ATTACH_NAME in body and "已上传" in body
-    check("⑤会话附件随草案带入创建页（已上传状态，人可移除，M7）", carried_ok,
-          f"attach_in_body={ATTACH_NAME in body}")
-    check("⑤签发仍由人完成（页面有『提交任务』按钮，导引未自动建任务）",
-          "提交任务" in body, "")
+
+    # ⑤ 新会话给出完整、字段关系明确的 JSON：不点创建/提交，后端直接原子入队。
+    page.goto(BASE + "/", wait_until="networkidle")
+    safe_inputs = {
+        "top_event": "供电完全丧失",
+        "system_description": "双通道供电系统",
+        "components": ["发电机A", "发电机B"],
+    }
+    page.locator(".composer textarea").fill(json.dumps(safe_inputs, ensure_ascii=False))
+    page.get_by_role("button", name="发送").click()
+    expect(page.locator(".execution-strip:not(.blocked)")).to_be_visible(timeout=8000)
+    body = page.locator("body").inner_text()
+    conn = app.state.conn_factory()
+    try:
+        task_rows = conn.execute(
+            "SELECT status, agent_id, created_by_username FROM tasks ORDER BY created_at"
+        ).fetchall()
+    finally:
+        conn.close()
+    auto_ok = (
+        len(task_rows) == 1
+        and dict(task_rows[0]) == {
+            "status": "queued",
+            "agent_id": "fta_agent",
+            "created_by_username": "e2e_engineer",
+        }
+        and "已自动发起，无需手动创建" in body
+        and page.get_by_role("button", name="去创建此任务").count() == 0
+    )
+    check("⑤完整显式 JSON 零点击自动创建并入队", auto_ok, f"tasks={[dict(r) for r in task_rows]}")
+    check("⑤自动入队不冒充工程签发", "最终工程签发仍由你完成" in body, "")
     page.screenshot(path=str(SHOTS / "3_prefilled_create.png"), full_page=True)
 
     # ── ⑧ 登录门（ADR-0019 真鉴权重立）：未登录首访被全屏拦下，真实登录后进入 ──

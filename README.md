@@ -94,7 +94,7 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 
 **判据①诚实边界（归纳跳跃对冲，非静默）**：判据①证明的窄事实是「已验证 **2 类数值范式**（空间离散 BVP / 时间积分 IVP）无需改内核即可接入」= 插件架构成立；**未覆盖交互式/流式/多模态 I/O 等其他潜在模块类**，「结构完成」是基于此 2 类的归纳，不外推为「所有模块类都零 diff」。
 
-**封板宣称边界**：双判据证明**结构层（内核可扩展性）+ 生长层（合成需求可长出合规 Agent）**，**不外推内网环境层**——M4 真实性能盘 Tool Adapter、角色轴、真实模型/鉴权/限流形态均待内网后锻验（公网≠内网）。封板=冻结当前已验证的结构+生长能力，非宣称内网即可生产运行。
+**封板宣称边界**：双判据证明**结构层（内核可扩展性）+ 生长层（合成需求可长出合规 Agent）**，**不外推内网环境层**——M4 真实性能盘 Tool Adapter、真实模型/鉴权/限流形态仍待内网后锻验（公网≠内网）。ADR-0031 已在封板后补入 Agent 调用/任务签发的 V0.1 角色 adapter，但完整 capability/RBAC 仍未完成。封板=冻结当前已验证的结构+生长能力，非宣称内网即可生产运行。
 
 ## V0.1 已知限制（诚实清单，非缺陷否认）
 
@@ -148,8 +148,10 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
     P1 残余风险）：若 LLM 输出一个 agent_id 真实、字段 schema-valid 的推荐块——
     无论被附件说服还是引用/复述攻击块——校验层会把它当合法推荐产出卡片。缓解：
     ①附件正文的定界符已中和，降低「逐字复述」触发；②幻觉 agent_id / 非法字段
-    仍拒；③**人在创建页复核 + 亲手提交是最终防线**（全程零自动签发）。工程师应
-    把推荐卡片当建议核对，尤其 top_event/system_description 等自由文本字段。
+    仍拒；③ADR-0031 的 safe_auto 仅接受**当前轮显式 JSON 深相等、单 Agent、无附件、
+    无工具/副作用、版本锁定且角色允许**的计划，其余零任务；④正式工程 review 仍只能
+    由认证真人签发。工程师应把推荐卡片当建议核对，尤其 top_event/system_description
+    等自由文本字段。
 12. **会话附件 file_id 无归属校验，内容会流向模型后端**（M7 敌意审 P2）：引用任意
     已存在的 file_id（可以是别的任务/会话遗留的）都会让该文件全文被渲染进模型
     上下文。与「V0.1 全局无鉴权」同源，但**若模型后端是外部厂商 API，这是一条
@@ -158,9 +160,10 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
     file 归属校验是 V0.2 项。
 13. **会话历史发模型前截窗**：最近 40 条/60K 字符（全量历史仍完整落库可查），
     超窗信息对模型不可见；「超窗摘要」是 V0.2 项。
-14. **全局无鉴权**：所有 API（含文件下载、人工放行）不做身份认证，内网可信环境
-    权衡 + 任务书 §15「不要一开始做复杂权限系统」；具名字段（created_by/reviewer）
-    是留痕不是认证。权限体系是 V0.2+ 项。
+14. **已有真鉴权与窄角色门，但不是完整 RBAC**：ADR-0019 后 `/api/*` 默认要求有效
+    会话；ADR-0031 后 direct task、interactive conversation、eval admission、safe_auto
+    与 task review 同时核对 Agent `visibility`/`allowed_roles`。Agent 发布/晋升、样本策展、
+    sensitive 访问和审计读取仍需另立并审批 capability 矩阵。
 15. **卡死任务回收仅覆盖「进程重启」时点**（R4 批收窄）：worker 启动时持单实例
     文件锁（跨平台，拒绝并行第二个 worker），并把上次进程遗留的执行态任务
     （validating/running/parsing/analyzing）置 failed、留 `worker_interrupted`
@@ -174,18 +177,19 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
     最小落点，「失败→评测用例」的自动管道是 V0.2 项。
 17. **knowledge 检索的边界**（ADR-0015 诚实清单）：①只挂 job 模式
     （`context["knowledge"]`），interactive 会话无挂载点（与工具同态，Wave 2
-    另立 ADR）；②密级静态门只约束**注册期** scope↔agent 声明一致性——V0.1 全局
-    无鉴权（见 #14），调用期不核对主体身份，真实 restricted 语料上内网前鉴权层
+    另立 ADR）；②密级静态门仍约束**注册期** scope↔agent 声明一致性；调用 Agent
+    时已有窄角色门（见 #14），但 sensitive 数据读取/下载能力矩阵尚未闭合，真实
+    restricted 语料上内网前完整访问控制层
     是硬前置；③source 仅 file_dir、kind 仅 document，obsidian/mcp/向量检索
     待内网侦察，调用即显式"未接入"错误；④索引缓存 per-进程（API 与 worker 各建
     各的，以文件指纹 manifest 失效，语料改动后两边下次检索各自重建，无跨进程
     一致性保证——检索是无状态读，最坏后果是短暂读到旧语料版本）；⑤PDF/纯图片
     语料不支持，scope 源目录含不支持格式会整 scope 拒检索（fail-closed）。
-18. **协作是「逐个召集」不是「一键起 N 个任务」**（M8/ADR-0016）：导引编排官给出的
-    orchestrate 计划里，各 Agent 的预填草案是**部分**输入（导引只填对话/附件里已明确
-    的字段，不替用户编工程数据），故工作台按蓝图**逐个**召集——每个任务仍要人在创建页
-    补全 required 字段并亲手提交。这是「人是唯一签发者 + 不编造工程数据」的必然，不是
-    缺陷；真正的一键批量起任务与「人是唯一签发者」冲突，不做。
+18. **安全协作计划可自动执行，最终工程签发仍只属于人**（ADR-0031 supersedes
+    ADR-0016 的手动创建默认）：导引默认请求 `safe_auto`；只有单 Agent、输入完整且逐字段
+    来自当前轮显式内容、版本精确匹配、无附件/工具/外部副作用并通过角色门的计划，才会
+    原子创建任务并入队。缺输入/来源、多 Agent、附件、工具或策略不满足时零任务并显式阻断；
+    历史 `plan_only` 会话仍保留逐个召集入口。自动化的是机械创建与参数搬运，不是工程签发。
 19. **协作会话 GC 未完备**（M8/ADR-0016）：单 Agent 计划确认沿用 M6 归档（conclude）；
     多 Agent 会话保持 active 作协作锚点，工作台已有**显式「结束协作」按钮**归档会话
     （归档后只读、不再从蓝图召集，已建任务不受影响）；但**无主会话与孤儿附件的
@@ -278,8 +282,8 @@ cd frontend && npm run build      # 产出 frontend/dist/（不入库）
 
 # 部署第一步（ADR-0019 真鉴权，有意 fail-closed）：账户为空时所有人都在
 # 登录门外——先由管理员在服务器上建首个账户（密码交互输入，不走 argv）：
-python3 scripts/user_admin.py create <用户名> <显示名>
-python3 scripts/user_admin.py list   # 核对；停用/改密见脚本头注
+python3 scripts/user_admin.py create <用户名> <显示名> --role admin
+python3 scripts/user_admin.py list   # 核对；角色/停用/改密见脚本头注
 ```
 
 ## 参考

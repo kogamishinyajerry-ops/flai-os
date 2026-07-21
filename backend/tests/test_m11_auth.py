@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.auth import service as auth_service
 from backend.app.auth.passwords import hash_password, verify_password
-from backend.app.storage.db import get_conn
+from backend.app.storage.db import get_conn, init_db
 from conftest import TEST_DISPLAY_NAME, TEST_PASSWORD, TEST_USERNAME, login, seed_user
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -587,6 +588,52 @@ def test_duplicate_username_rejected(app_env):
             )
     finally:
         conn.close()
+
+
+def test_legacy_users_gain_explicit_admin_role_without_losing_account(tmp_path):
+    db_path = tmp_path / "legacy_users.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO users (username, display_name, password_hash, created_at) "
+            "VALUES ('legacy', '存量用户', 'hash', '2026-07-20T00:00:00+00:00')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    init_db(db_path)
+
+    migrated = get_conn(db_path)
+    try:
+        row = migrated.execute(
+            "SELECT username, role FROM users WHERE username = 'legacy'"
+        ).fetchone()
+        assert dict(row) == {"username": "legacy", "role": "admin"}
+    finally:
+        migrated.close()
+
+
+def test_role_change_revokes_existing_sessions(app_env):
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        auth_service.set_user_role(conn, TEST_USERNAME, "business_user")
+    finally:
+        conn.close()
+    assert client.get("/api/auth/me").status_code == 401
 
 
 # ── AC8/F6：测试世界无旁路的结构检查 ─────────────────────────────────────

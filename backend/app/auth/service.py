@@ -24,6 +24,7 @@ COOKIE_NAME = "flai_session"
 # 「建得成但永远 422 登不上」的账户（登录端拒超长）。同一口径两处焊死。
 USERNAME_MAX = 100
 PASSWORD_MAX = 200
+USER_ROLES = frozenset({"admin", "agent_developer", "business_user"})
 
 
 def _now() -> datetime:
@@ -39,6 +40,7 @@ def _row_to_user(row: sqlite3.Row) -> dict[str, Any]:
         "id": row["id"],
         "username": row["username"],
         "display_name": row["display_name"],
+        "role": row["role"],
         "is_active": row["is_active"],
         "created_at": row["created_at"],
     }
@@ -47,7 +49,14 @@ def _row_to_user(row: sqlite3.Row) -> dict[str, Any]:
 # ── 用户 CRUD（scripts/user_admin.py 的唯一后端）──────────────────────────
 
 
-def create_user(conn: sqlite3.Connection, *, username: str, display_name: str, password: str) -> dict[str, Any]:
+def create_user(
+    conn: sqlite3.Connection,
+    *,
+    username: str,
+    display_name: str,
+    password: str,
+    role: str = "business_user",
+) -> dict[str, Any]:
     username = username.strip()
     display_name = display_name.strip()
     if not username or not display_name:
@@ -57,11 +66,13 @@ def create_user(conn: sqlite3.Connection, *, username: str, display_name: str, p
         raise ValueError(f"username 超长（>{USERNAME_MAX}），登录端会拒绝该账户")
     if len(password) > PASSWORD_MAX:
         raise ValueError(f"密码超长（>{PASSWORD_MAX}），登录端会拒绝该账户")
+    if role not in USER_ROLES:
+        raise ValueError(f"非法用户角色：{role!r}")
     try:
         cur = conn.execute(
-            "INSERT INTO users (username, display_name, password_hash, is_active, created_at)"
-            " VALUES (?, ?, ?, 1, ?)",
-            (username, display_name, hash_password(password), _now().isoformat()),
+            "INSERT INTO users (username, display_name, role, password_hash, is_active, created_at)"
+            " VALUES (?, ?, ?, ?, 1, ?)",
+            (username, display_name, role, hash_password(password), _now().isoformat()),
         )
     except sqlite3.IntegrityError as exc:
         raise ValueError(f"用户名已存在：{username}") from exc
@@ -80,17 +91,53 @@ def list_users(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def set_user_active(conn: sqlite3.Connection, username: str, active: bool) -> None:
-    cur = conn.execute(
-        "UPDATE users SET is_active = ? WHERE username = ?", (1 if active is True else 0, username)
-    )
-    if cur.rowcount == 0:
-        raise ValueError(f"用户不存在：{username}")
-    if active is False:
-        # 停用即吊销全部活会话——停用必须立刻生效，不等 7 天自然过期
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        cur = conn.execute(
+            "UPDATE users SET is_active = ? WHERE username = ?",
+            (1 if active is True else 0, username),
+        )
+        if cur.rowcount == 0:
+            raise ValueError(f"用户不存在：{username}")
+        if active is False:
+            # 停用与吊销同一写事务——旧会话绝无“已停用但尚未删除”的授权窗口。
+            conn.execute(
+                "DELETE FROM auth_sessions WHERE user_id = (SELECT id FROM users WHERE username = ?)",
+                (username,),
+            )
+        if owns_transaction:
+            conn.execute("COMMIT")
+    except Exception:
+        if owns_transaction and conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def set_user_role(conn: sqlite3.Connection, username: str, role: str) -> None:
+    """修改授权角色并吊销旧会话；新角色必须重新登录后才进入 request.state。"""
+    if role not in USER_ROLES:
+        raise ValueError(f"非法用户角色：{role!r}")
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        cur = conn.execute("UPDATE users SET role = ? WHERE username = ?", (role, username))
+        if cur.rowcount == 0:
+            raise ValueError(f"用户不存在：{username}")
+        # 角色更新与旧会话吊销同事务提交；任何读者只会看到旧角色+旧会话，或
+        # 新角色+无旧会话，不存在提升后旧会话短暂取得新权限的窗口。
         conn.execute(
             "DELETE FROM auth_sessions WHERE user_id = (SELECT id FROM users WHERE username = ?)",
             (username,),
         )
+        if owns_transaction:
+            conn.execute("COMMIT")
+    except Exception:
+        if owns_transaction and conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
 
 
 def reset_password(conn: sqlite3.Connection, username: str, new_password: str) -> None:

@@ -22,15 +22,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_USERNAME = "test_engineer"
 TEST_PASSWORD = "test-password-123"
 TEST_DISPLAY_NAME = "测试工程师"
+TEST_ROLE = "admin"
 
 
 def seed_user(db_path, *, username: str = TEST_USERNAME,
-              display_name: str = TEST_DISPLAY_NAME, password: str = TEST_PASSWORD):
+              display_name: str = TEST_DISPLAY_NAME, password: str = TEST_PASSWORD,
+              role: str = TEST_ROLE):
     """建测试账户（库须已 init——在 TestClient 进入 lifespan 之后调用）。"""
     conn = get_conn(db_path)
     try:
         return auth_service.create_user(
-            conn, username=username, display_name=display_name, password=password
+            conn, username=username, display_name=display_name, password=password, role=role
         )
     finally:
         conn.close()

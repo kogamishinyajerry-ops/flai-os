@@ -53,7 +53,11 @@ def trigger_eval_run(agent_id: str, body: TriggerEvalRequest, request: Request) 
             agent_registry=request.app.state.agent_registry,
             agent_id=agent_id,
             triggered_by=request.state.user["display_name"],  # ADR-0019 D5
+            actor_username=request.state.user["username"],
+            actor_role=request.state.user["role"],
         )
+    except eval_runner.EvalAuthorizationDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     finally:
         conn.close()
 

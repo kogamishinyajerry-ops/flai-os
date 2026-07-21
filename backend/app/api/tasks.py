@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import uuid
 from typing import Any, Literal
@@ -13,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import classification_gate as cgate
+from ..auth.authorization import agent_is_callable, current_actor_matches, role_can_access_agent
 from ..core.errors import IllegalTransitionError
 from ..logging_setup import audit_event
 from ..storage import repos
@@ -158,13 +160,50 @@ def _get_agent_or_none(registry: Any, agent_id: str) -> dict[str, Any] | None:
     return agent
 
 
+def _require_current_agent_access(
+    conn: Any, request: Request, agent_registry: Any, agent_id: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """写事务内重读账户与当前 manifest；任一授权/可用性变化都默认拒绝。"""
+    snapshot = request.state.user
+    actor = current_actor_matches(
+        conn,
+        username=snapshot["username"],
+        expected_role=snapshot["role"],
+    )
+    if actor is None:
+        raise HTTPException(
+            status_code=403,
+            detail="认证账户已停用或角色发生变化，请重新登录后重试",
+        )
+    agent = _get_agent_or_none(agent_registry, agent_id)
+    if agent is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"agent 在提交期间已不可用，拒绝运行或签发：{agent_id}",
+        )
+    if not agent_is_callable(agent, mode="job"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"agent 在提交期间已下线或不再是 job 型，拒绝运行或签发：{agent_id}",
+        )
+    if not role_can_access_agent(agent, actor["role"]):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"当前角色 {actor['role']} 无权运行或签发 agent {agent.get('id')}"
+                "（permissions.visibility/allowed_roles 默认拒绝）"
+            ),
+        )
+    return actor, copy.deepcopy(agent)
+
+
 @router.post("/tasks")
 def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
     agent_registry = request.app.state.agent_registry
     agent = _get_agent_or_none(agent_registry, body.agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"agent 不存在：{body.agent_id}")
-    if agent.get("status") == "disabled":
+    if not agent_is_callable(agent):
         raise HTTPException(status_code=409, detail=f"agent 已下线，禁止调用：{body.agent_id}")
     if (agent.get("workflow", {}) or {}).get("mode") == "interactive":
         # ADR-0012 决策 6：interactive 型 Agent（导引）不作为一次性任务运行，
@@ -176,13 +215,19 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
 
     conn = request.app.state.conn_factory()
     try:
+        # 角色复核、会话/依赖复查、创建、初始迁移与事件同一写事务：并发降权、
+        # conclude 或事件失败均不能留下已入队的越权/半成品任务。
+        conn.execute("BEGIN IMMEDIATE")
+        actor, agent = _require_current_agent_access(
+            conn, request, agent_registry, body.agent_id
+        )
         task_id = f"task_{uuid.uuid4().hex}"
         # ADR-0019 D5：发起人=登录会话身份（中间件已验证注入），非请求体自报。
         # created_by 存 display_name（展示用，可撞名）；created_by_username（迁移 #9）
-        # 存不可变唯一 username——批C 个人贡献归因按 username 绝不撞名，职责分离
-        # （禁自审）也以此为准（现仅落库，策略待 owner 定角色轴）。
-        created_by = request.state.user["display_name"]
-        created_by_username = request.state.user["username"]
+        # 存不可变唯一 username——批C 个人贡献归因按 username 绝不撞名；自审会被
+        # 精确标记进审计，是否硬性职责分离仍由 owner 后续策略决定。
+        created_by = actor["display_name"]
+        created_by_username = actor["username"]
         # 协作运行时 §3.4/§3.5：depends_on 只能引用**已存在**任务（→图按构造即 DAG，
         # 无法建回边指向未来任务，无需运行时环检测）；缺失即 404 fail-closed。
         # input_binding 引用的上游必在 depends_on 内（越权引用拒，T6）。
@@ -262,30 +307,31 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             # （异源 Codex R2-#3：「结束协作」= 真结束，不再接受新成员任务）。**复查状态与
             # INSERT 必须原子**（Codex R1 复审 #3：check-then-insert 非原子时，并发 conclude
             # 可抢在二者之间提交、仍把任务挂进已归档会话）→ BEGIN IMMEDIATE 写锁内复查真实
-            # 状态再 INSERT，与 conclude 的 BEGIN IMMEDIATE 串行化。set_task_status 自带
-            # BEGIN IMMEDIATE，故本事务只包「复查 + create_task」，提交后再迁 queued。
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                conv = repos.get_conversation(conn, body.conversation_id)
-                if conv is None:
-                    raise HTTPException(
-                        status_code=404, detail=f"归属的导引会话不存在：{body.conversation_id}"
-                    )
-                if conv["status"] != "active":
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            f"归属的导引会话已 {conv['status']}，不再接受新任务"
-                            f"（结束协作=真只读）：{body.conversation_id}"
-                        ),
-                    )
-                repos.create_task(conn, **create_kwargs)
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
-        else:
-            repos.create_task(conn, **create_kwargs)
+            # 状态再 INSERT，与 conclude 的 BEGIN IMMEDIATE 串行化。本外层事务同时包
+            # create_task、初始状态迁移与事件，任一步失败都不留半成品。
+            conv = repos.get_conversation(conn, body.conversation_id)
+            if conv is None:
+                raise HTTPException(
+                    status_code=404, detail=f"归属的导引会话不存在：{body.conversation_id}"
+                )
+            if conv["status"] != "active":
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"归属的导引会话已 {conv['status']}，不再接受新任务"
+                        f"（结束协作=真只读）：{body.conversation_id}"
+                    ),
+                )
+        latest_agent = _get_agent_or_none(agent_registry, body.agent_id)
+        if latest_agent != agent:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"agent {body.agent_id} 的 manifest 在任务校验期间发生变化；"
+                    "请基于当前版本重新提交"
+                ),
+            )
+        repos.create_task(conn, **create_kwargs)
         # 协作运行时 §3.5 条件短路（F4 命门修复）：depends_on 非空的任务**不自动入队**，
         # 滞留 created 由 resolver 在全部上游 completed 后管道产物入 input 并入队——否则
         # 带依赖任务会在此被 P2-4 无条件推进到 queued，resolver 永远看不到 created 态、
@@ -296,7 +342,7 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             status_to = "created"
             message = f"任务已创建（等待 {len(body.depends_on)} 个前置任务）：agent={body.agent_id}"
         else:
-            task = repos.set_task_status(conn, task_id, "queued")
+            task = repos.set_task_status_in_transaction(conn, task_id, "queued")
             status_to = "queued"
             message = f"任务已创建：agent={body.agent_id}"
         repos.append_event(
@@ -313,7 +359,12 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                 "depends_on": body.depends_on or [],
             },
         )
+        conn.execute("COMMIT")
         return task
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
     finally:
         conn.close()
 
@@ -410,17 +461,28 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
     """
     conn = request.app.state.conn_factory()
     try:
-        task = repos.get_task(conn, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
-        if task["status"] != "waiting_review":
-            raise HTTPException(
-                status_code=409,
-                detail=f"任务处于 {task['status']}，不在 waiting_review，无法人工放行/拒绝",
-            )
-
-        reviewer = request.state.user["display_name"]  # ADR-0019 D5：签发者=认证身份
+        conn.execute("BEGIN IMMEDIATE")
         try:
+            task = repos.get_task(conn, task_id)
+            if task is None:
+                raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+            if task["status"] != "waiting_review":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"任务处于 {task['status']}，不在 waiting_review，无法人工放行/拒绝",
+                )
+            actor, _agent = _require_current_agent_access(
+                conn,
+                request,
+                request.app.state.agent_registry,
+                task["agent_id"],
+            )
+            if _get_agent_or_none(request.app.state.agent_registry, task["agent_id"]) != _agent:
+                raise HTTPException(
+                    status_code=409,
+                    detail="任务所属 Agent manifest 在签发校验期间发生变化；请重新审核",
+                )
+            reviewer = actor["display_name"]  # ADR-0019 D5：签发者=当前认证身份
             # Codex 增量2审 R4 P1：状态迁移 + 样本标签回填 + signer 事件三者**同一事务
             # 原子落库**（此前三次分离提交，crash 窗口可留下 status=completed 却无
             # review_approved 事件的任务，resolver 见 status 即放行下游）。approve→completed
@@ -428,14 +490,21 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             task, _sample_rows = repos.apply_human_review(
                 conn, task_id, action=body.action, reviewer=reviewer, comment=body.comment
             )
+            conn.execute("COMMIT")
         except IllegalTransitionError as exc:
             # R1 复审 P2：两个 review 请求并发命中同一 waiting_review 任务时，
             # 后到者可通过预检但在状态机层被拒——这是正常并发竞态，
             # 与预检失败同口径返回 409，绝不让 500 逃逸。
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
             raise HTTPException(
                 status_code=409,
                 detail=f"任务已被并发的人工审核动作转出 waiting_review，本次不生效：{exc}",
             ) from exc
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
 
         # 治理签发审计（M12-2c）：人工放行/拒绝是「人是唯一签发者」红线的落点，
         # 是平台最安全承重的动作——此前只落 task_event（应用数据），无篡改抗性的
@@ -448,7 +517,7 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
         # 不拦截**（硬性职责分离 403 是 owner 待定的角色轴策略，task #17）。
         created_by = task.get("created_by")
         created_by_username = task.get("created_by_username")
-        reviewer_username = request.state.user["username"]
+        reviewer_username = actor["username"]
         if created_by_username is not None:
             self_review = bool(reviewer_username == created_by_username)
             self_review_basis = "username"  # 精确身份，不撞名

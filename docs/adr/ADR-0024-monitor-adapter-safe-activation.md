@@ -1,5 +1,10 @@
 # ADR-0024：monitor_adapter 安全激活——工具污点轴 + 诚实激活姿态
 
+> 后续状态（2026-07-21）：本文关于“users 无 role、admin_only 无运行时强制点”的
+> 历史判断已由 ADR-0031 取代；Agent 直接调用、交互会话、评测与任务签发现已接
+> 认证角色门。Monitor 的工具污点、敏感访问与真实 EAR 前置仍按本文以及后续另立、
+> 经审批的能力矩阵执行，未被自动解除。
+
 - 状态：Accepted（用户显式优先级：「把可视化监控生成模块正式接入平台」）；**D5（read
   期内容门 `_task_content_is_sensitive`）已被 ADR-0025 替换**——D1–D4（工具污点轴 +
   诚实姿态）保留有效，D5 的 read 期重派生方案因 Codex R1-A（遮蔽面 whack-a-mole）/

@@ -165,6 +165,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     agent_id TEXT NOT NULL,
     status TEXT NOT NULL,
     created_by TEXT NOT NULL,
+    created_by_username TEXT,
     recommendation_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -178,6 +179,17 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     recommendation_json TEXT,
     file_ids TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL
+);
+
+-- ADR-0031：认证会话 safe_auto 的幂等回执。相同 conversation_id/request_id
+-- 至多物化一次任务；同 key 不同 request_digest 必须响亮冲突，不能静默复用。
+CREATE TABLE IF NOT EXISTS conversation_dispatches (
+    conversation_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (conversation_id, request_id)
 );
 
 -- M10 治理闭环（ADR-0018）。eval_runs=评测跑批证据（case_results 回溯到真实
@@ -232,6 +244,7 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
+    role TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
@@ -268,6 +281,8 @@ _INDEX_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_feedback_task_id ON feedback(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_id "
     "ON conversation_messages(conversation_id)",
+    "CREATE INDEX IF NOT EXISTS idx_conversation_dispatches_created_at "
+    "ON conversation_dispatches(created_at)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_conversation_id ON tasks(conversation_id)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_status_created_at ON tasks(status, created_at)",
@@ -382,6 +397,21 @@ def init_db(db_path: str | Path) -> None:
             eval_cols = {row[1] for row in conn.execute("PRAGMA table_info(eval_runs)")}
             if "snapshot_handle" not in eval_cols:
                 conn.execute("ALTER TABLE eval_runs ADD COLUMN snapshot_handle TEXT")
+            # 迁移 #12（ADR-0031）：conversations.created_by_username——safe_auto 的
+            # 不可变所有者身份。存量会话留 NULL，绝不从可变/可撞名 display_name
+            # 反推；因此存量会话只能继续 plan_only，不能取得自动执行授权。
+            conversation_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(conversations)")
+            }
+            if "created_by_username" not in conversation_cols:
+                conn.execute("ALTER TABLE conversations ADD COLUMN created_by_username TEXT")
+            # 迁移 #13（ADR-0031 授权审查）：用户角色轴。旧系统所有认证账户均可
+            # 调用全部任务端点，迁移为 admin 是对既有权限的显式化而非扩权；新账户
+            # 由 create_user 显式写角色（默认 business_user）。异常 NULL 在执行门拒绝。
+            user_cols = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+            if "role" not in user_cols:
+                conn.execute("ALTER TABLE users ADD COLUMN role TEXT")
+                conn.execute("UPDATE users SET role = 'admin' WHERE role IS NULL")
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:

@@ -594,6 +594,33 @@ def test_post_message_rejected_if_agent_disabled_midway(app_env) -> None:
         app.state.agent_registry.get("guide_agent")["status"] = "draft"
 
 
+def test_post_message_rejected_if_agent_disabled_during_model_call(app_env) -> None:
+    """模型调用期间下线也必须在提交点复核，整轮不落消息或自动任务。"""
+    client, app = app_env
+    conv_id = _open_conversation(client)
+
+    class _DisableDuringChat(_CannedStub):
+        def chat(self, profile, messages, **kwargs):
+            app.state.agent_registry.get("guide_agent")["status"] = "disabled"
+            return super().chat(profile, messages, **kwargs)
+
+    app.state.conversation_service.model_gateway = _DisableDuringChat("不应落库")
+    try:
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "继续", "execution_mode": "plan_only"},
+        )
+        assert resp.status_code == 409, resp.text
+        conn = app.state.conn_factory()
+        try:
+            assert repos.list_messages(conn, conv_id) == []
+            assert repos.list_tasks(conn, conversation_id=conv_id) == []
+        finally:
+            conn.close()
+    finally:
+        app.state.agent_registry.get("guide_agent")["status"] = "draft"
+
+
 # ── agents API 暴露 mode（前端路由信号，Codex P2）─────────────────────────
 
 

@@ -1,8 +1,8 @@
 """导引会话接口（M6，ADR-0012）：interactive 型 Agent 的多轮对话入口。
 
 与一次性 tasks 端点正交——会话由 ConversationService 驱动（app.state.conversation_service）。
-红线：本层只负责开启会话、逐轮转发消息、返回 assistant 回复与推荐草案；**绝不**在
-本层创建/签发下游任务。推荐草案（recommendation）交前端带到创建任务页，由人确认提交。
+本层负责开启会话、逐轮转发消息，并把认证用户显式请求的 ``safe_auto`` 交给后端
+受限派发模块。派发只创建/入队可机械证明安全的任务；人工 review 与正式签发不可代理。
 
 错误映射（fail-closed，绝不把上游失败降级为绿）：
 - 会话/agent 不存在 → 404；会话已结束 → 409；对非 interactive Agent 发起会话 → 409；
@@ -11,13 +11,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from . import classification_gate as cgate
 from ..core.errors import (
+    ConversationAccessDeniedError,
     ConversationClosedError,
     ConversationConflictError,
     ConversationNotFoundError,
@@ -39,6 +40,8 @@ class CreateConversationRequest(BaseModel):
 
 
 class PostMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     # max_length：审计 P2（DoS 面）——content 此前无上限，超大文本会被落库并
     # 全量转发模型。16000 字符对需求描述/追问回答绰绰有余；更大材料走附件通道。
     content: str = Field(min_length=1, max_length=16000)
@@ -46,6 +49,12 @@ class PostMessageRequest(BaseModel):
     # 上限 5 个/条与运行时防御纵深同值；内容渲染进模型上下文由内核统一做
     # （防注入规则行 + 预算硬顶），本层只收 id。
     file_ids: list[str] = Field(default_factory=list, max_length=5)
+    # 默认保留 API 兼容的 plan_only；产品 GuidePage 对每次发送显式带 safe_auto。
+    # 授权来自认证用户这一轮请求，绝不由 LLM 的 plan 文本推断。
+    execution_mode: Literal["plan_only", "safe_auto"] = "plan_only"
+    request_id: str | None = Field(
+        default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_.:-]+$"
+    )
 
     @field_validator("content")
     @classmethod
@@ -63,18 +72,29 @@ class PostMessageRequest(BaseModel):
                 raise ValueError(f"非法附件 id：{fid!r}")
         return v
 
+    @model_validator(mode="after")
+    def safe_auto_requires_request_id(self) -> "PostMessageRequest":
+        if self.execution_mode == "safe_auto" and self.request_id is None:
+            raise ValueError("safe_auto 必须提供 request_id 以保证重试不重复创建任务")
+        return self
+
 
 @router.post("/conversations")
 def create_conversation(body: CreateConversationRequest, request: Request) -> dict[str, Any]:
     service = request.app.state.conversation_service
     try:
         return service.create(
-            agent_id=body.agent_id, created_by=request.state.user["display_name"]
+            agent_id=body.agent_id,
+            created_by=request.state.user["display_name"],
+            created_by_username=request.state.user["username"],
+            actor_role=request.state.user["role"],
         )
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except NotInteractiveAgentError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConversationAccessDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.get("/conversations")
@@ -107,7 +127,14 @@ def post_message(
     service = request.app.state.conversation_service
     try:
         return service.post_message(
-            conversation_id=conversation_id, content=body.content, file_ids=body.file_ids
+            conversation_id=conversation_id,
+            content=body.content,
+            file_ids=body.file_ids,
+            execution_mode=body.execution_mode,
+            request_id=body.request_id,
+            actor_display_name=request.state.user["display_name"],
+            actor_username=request.state.user["username"],
+            actor_role=request.state.user["role"],
         )
     except (ConversationNotFoundError, FileNotFoundInStoreError) as exc:
         # 会话不存在 / 引用了不存在的附件 id：404，且本轮零落库。
@@ -115,6 +142,9 @@ def post_message(
     except (ConversationClosedError, ConversationConflictError) as exc:
         # 已结束 / 被并发轮抢先：如实 409。冲突轮零落库，可基于最新历史重试。
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConversationAccessDeniedError as exc:
+        # 自动执行会产生真实任务；会话所有者不匹配时必须在模型调用前 fail-closed。
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ModelConfigError as exc:
         # 模型网关未配置（缺 FLAI_LLM_*）=永久性错误：重试无效，需运维配置后恢复。
         # 与临时上游故障分流，绝不谎报「可重试」误导用户反复点发送（PM 战略审 top）。
@@ -136,11 +166,15 @@ def conclude_conversation(conversation_id: str, request: Request) -> dict[str, A
     归档会话（ADR-0013：补上 V0.1 会话不落终态的债）。"""
     service = request.app.state.conversation_service
     try:
-        return service.conclude(conversation_id)
+        return service.conclude(
+            conversation_id, actor_username=request.state.user["username"]
+        )
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ConversationClosedError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConversationAccessDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.get("/conversations/{conversation_id}/model_calls")
@@ -160,9 +194,9 @@ def list_conversation_model_calls(conversation_id: str, request: Request) -> lis
 
 @router.get("/conversations/{conversation_id}/tasks")
 def list_conversation_tasks(conversation_id: str, request: Request) -> list[dict[str, Any]]:
-    """协作会话的成员任务（M8/ADR-0016）：导引把一次会话的计划分流成 N 个人签发
-    任务，各任务记 conversation_id 归到此会话下；协作工作台据此聚合展示进度与产物。
-    仅读——每个任务仍由人在创建页亲手签发（人是唯一签发者，本端点不创建任何任务）。
+    """协作会话的成员任务（M8/ADR-0016/ADR-0031）：任务按 conversation_id
+    聚合展示。任务可由人手工创建，也可由受限 safe_auto 原子物化；本端点始终仅读，
+    最终工程签发仍只能由认证真人完成。
     """
     conn = request.app.state.conn_factory()
     try:
@@ -170,8 +204,8 @@ def list_conversation_tasks(conversation_id: str, request: Request) -> list[dict
             raise HTTPException(status_code=404, detail=f"会话不存在：{conversation_id}")
         # 会话成员是「完整分组视图」而非「最近流」——分页取尽，绝不静默截断
         # （异源 Codex M8-P3：硬编码 limit=500 会让 >500 成员的会话丢最旧任务，
-        # 「完整成员视图」名不副实）。成员任务受人工逐个签发约束，实际远少于一页，
-        # 循环通常一次即止；边界正确性靠取尽保证。
+        # 「完整成员视图」名不副实）。单会话成员受 Guide 上限与自动派发安全门约束，
+        # 实际远少于一页；循环通常一次即止，边界正确性靠取尽保证。
         _PAGE = 500
         tasks: list[dict[str, Any]] = []
         offset = 0

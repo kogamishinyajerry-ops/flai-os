@@ -16,7 +16,8 @@ LLM 边界（宪法铁律六 + §11.2）：LLM 只负责对话与**提议**，�
 （agent_id 必须真实存在、非 disabled、非 interactive、非导引自身）与目标
 input_schema.json（逐字段校验，非法字段剥离并如实记名），任一 Agent 不过即剥离；
 orchestrate 若无任何合法 Agent 存活 → 整份计划作废（fail-closed，不外露幻觉召集）。
-导引**绝不创建/召集/签发任务**：计划只是草案，人在下游 tasks 端点逐个签发。
+导引 workflow **绝不创建或签发任务**。认证用户请求 safe_auto 时，平台后端另以
+确定性 admission 物化满足白名单的计划；最终 review 仍只能由人完成。
 上游失败/空内容一律诚实抛错，绝不伪造对话或计划。
 """
 
@@ -58,7 +59,13 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     agent_config = context["agent_config"]
     profile = agent_config["model"]["profile"]  # =reasoning（以 agent.yaml 为准）
 
-    candidates = _candidates(registry)
+    eligible = context.get("safe_auto_agent_ids")
+    safe_auto_agent_ids = (
+        {item for item in eligible if isinstance(item, str)}
+        if isinstance(eligible, (list, set, tuple, frozenset))
+        else set()
+    )
+    candidates = _candidates(registry, safe_auto_agent_ids=safe_auto_agent_ids)
     system_content = _load_system_prompt() + "\n\n" + _render_candidates(candidates)
     chat_messages = [{"role": "system", "content": system_content}, *messages]
 
@@ -80,7 +87,9 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
 
 # ── 候选 Agent 清单（注入系统提示，供 LLM 选择/预填）─────────────────────
 
-def _candidates(registry: Any) -> list[dict[str, Any]]:
+def _candidates(
+    registry: Any, *, safe_auto_agent_ids: set[str] | None = None
+) -> list[dict[str, Any]]:
     """可召集面 = 非 disabled、非 interactive、非导引自身的 specialist Agent
     （与 create_task 门一致：可运行即可召集，ADR-0012 决策 4/7）。"""
     out: list[dict[str, Any]] = []
@@ -99,7 +108,12 @@ def _candidates(registry: Any) -> list[dict[str, Any]]:
                 "category": agent.get("category", ""),
                 "status": agent.get("status", ""),
                 "maturity": agent.get("maturity", ""),
+                "version": agent.get("version", ""),
                 "summary": agent.get("summary", ""),
+                # 仅供模型优先选择；最终权威仍是 GuidePlanDispatch 在事务内复查。
+                # 缺主体投影也 fail-closed 为不可；production 由 ConversationService
+                # 注入，最终派发仍在事务内权威复查 manifest + 当前角色。
+                "safe_auto": agent_id in (safe_auto_agent_ids or set()),
                 "input_fields": _input_fields(registry, agent_id),
             }
         )
@@ -115,7 +129,14 @@ def _input_fields(registry: Any, agent_id: str) -> dict[str, str]:
     props = schema.get("properties", {})
     if not isinstance(props, dict):
         return {}
-    return {name: (spec or {}).get("description", "") for name, spec in props.items()}
+    required = {name for name in schema.get("required", []) if isinstance(name, str)}
+    return {
+        name: (
+            ("必填；" if name in required else "可选；")
+            + str((spec or {}).get("description", ""))
+        ).rstrip("；")
+        for name, spec in props.items()
+    }
 
 
 def _load_input_schema(registry: Any, agent_id: str) -> dict[str, Any] | None:
@@ -138,7 +159,8 @@ def _render_candidates(candidates: list[dict[str, Any]]) -> str:
     for c in candidates:
         lines.append(
             f"- id=`{c['id']}` 名称={c['name']} 类型={c['category']} "
-            f"成熟度={c['maturity']}/{c['status']}"
+            f"成熟度={c['maturity']}/{c['status']} "
+            f"当前身份自动执行={'可' if c['safe_auto'] else '暂不可'}"
         )
         lines.append(f"  简介：{c['summary']}")
         if c["input_fields"]:
@@ -252,6 +274,9 @@ def _validate_orchestrate(
         agents.append(
             {
                 "agent_id": agent_id,
+                # 真实候选由 _candidates 固定带 version；纯函数/历史测试夹具若缺失
+                # 则留空字符串，展示仍可用，而 safe_auto 的版本锁会 fail-closed。
+                "agent_version": target.get("version", ""),
                 "agent_name": target["name"],
                 "category": target["category"],
                 "status": target["status"],
