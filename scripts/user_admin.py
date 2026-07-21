@@ -1,8 +1,9 @@
 """账户管理（ADR-0019 D1：无自助注册，账户只在服务器上建）。
 
 用法（仓根，直连真实 data/flai_os.db；e2e/测试传 --db 指向 tmp 库）：
-    python3 scripts/user_admin.py create <username> <display_name>   # 密码 getpass 交互输入
+    python3 scripts/user_admin.py create <username> <display_name> --role admin
     python3 scripts/user_admin.py list
+    python3 scripts/user_admin.py set-role <username> <admin|agent_developer|business_user>
     python3 scripts/user_admin.py deactivate <username>
     python3 scripts/user_admin.py activate <username>
     python3 scripts/user_admin.py reset-password <username>
@@ -11,6 +12,8 @@
 - 密码绝不走 argv（进程列表/shell 历史不落密码）；非交互场景（部署脚本）
   用环境变量 FLAI_USER_PASSWORD 一次性传入，用后即清。
 - 停用/改密即时吊销该用户全部会话（service 层保证）。
+- 新账户默认 business_user；首个运维账户如需 safe_auto admin_only Agent，创建时
+  显式传 `--role admin`。改角色同样即时吊销旧会话。
 """
 
 from __future__ import annotations
@@ -53,10 +56,16 @@ def main() -> int:
     p_create = sub.add_parser("create")
     p_create.add_argument("username")
     p_create.add_argument("display_name")
+    p_create.add_argument(
+        "--role", choices=sorted(service.USER_ROLES), default="business_user"
+    )
     sub.add_parser("list")
     for name in ("deactivate", "activate", "reset-password"):
         p = sub.add_parser(name)
         p.add_argument("username")
+    p_role = sub.add_parser("set-role")
+    p_role.add_argument("username")
+    p_role.add_argument("role", choices=sorted(service.USER_ROLES))
     args = parser.parse_args()
 
     # 密码在开写事务**之前**读（Codex 审 P2）：getpass 交互可能持续数十秒，
@@ -75,16 +84,21 @@ def main() -> int:
             if args.cmd == "create":
                 user = service.create_user(
                     conn, username=args.username, display_name=args.display_name,
-                    password=new_password,
+                    password=new_password, role=args.role,
                 )
-                print(f"已创建：{user['username']}（{user['display_name']}）")
+                print(
+                    f"已创建：{user['username']}（{user['display_name']}，role={user['role']}）"
+                )
             elif args.cmd == "list":
                 users = service.list_users(conn)
                 if not users:
                     print("（无账户——部署第一步：create 建首个账户，否则所有人在登录门外）")
                 for u in users:
                     state = "active" if u["is_active"] == 1 else "DEACTIVATED"
-                    print(f"{u['username']:<20} {u['display_name']:<12} {state}  建于 {u['created_at']}")
+                    print(
+                        f"{u['username']:<20} {u['display_name']:<12} {u['role']:<16} "
+                        f"{state}  建于 {u['created_at']}"
+                    )
             elif args.cmd == "deactivate":
                 service.set_user_active(conn, args.username, False)
                 print(f"已停用并吊销全部会话：{args.username}")
@@ -94,6 +108,9 @@ def main() -> int:
             elif args.cmd == "reset-password":
                 service.reset_password(conn, args.username, new_password)
                 print(f"已改密并吊销旧会话：{args.username}")
+            elif args.cmd == "set-role":
+                service.set_user_role(conn, args.username, args.role)
+                print(f"已更新角色并吊销旧会话：{args.username} → {args.role}")
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

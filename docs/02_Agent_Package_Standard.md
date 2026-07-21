@@ -36,6 +36,7 @@ Agent Registry 只认这个目录形态；缺失 `agent.yaml` 或 schema 校验�
 | `model.fallback_profile` | string(可选) | 主 profile 不可用时的降级画像 |
 | `knowledge.enabled/scopes` | object | default-deny 白名单，`enabled=true` 时 `scopes` 至少 1 项，禁止 `*` 通配 |
 | `tools` | string[] | 工具白名单，每项必须是 Tool Registry 已注册 id，default-deny |
+| `automation.session_execution/effect` | object(可选) | 会话级受限自动执行声明；缺失即拒绝。首版仅 `session_execution=true`、`effect=none` 且零工具的 job Agent 可被平台自动创建/入队；**绝不代表自动签发** |
 | `input.type/allowed_extensions/schema` | object | `file_upload`/`params`/`none` |
 | `output.formats/schema` | object | 输出格式与 schema 文件名 |
 | `workflow.entrypoint` | const | V0.1 固定 `workflow.py` |

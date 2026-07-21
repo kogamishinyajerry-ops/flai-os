@@ -1,6 +1,6 @@
 id: control_logic_agent
 name: "控制逻辑结构生成 Agent"
-version: 0.1.0
+version: 0.2.0
 status: draft
 maturity: L0
 category: structured_gen
@@ -20,6 +20,9 @@ knowledge:
   enabled: false
   scopes: []
 tools: []
+automation:
+  session_execution: true
+  effect: none
 input:
   type: params
   schema: input_schema.json

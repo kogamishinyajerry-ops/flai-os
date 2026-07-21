@@ -1,6 +1,6 @@
 id: fta_agent
 name: "故障树分析辅助 Agent（FTA 草案生成）"
-version: 0.1.0
+version: 0.2.0
 status: draft
 maturity: L0
 category: reasoning_assist
@@ -22,6 +22,9 @@ knowledge:
   enabled: false
   scopes: []
 tools: []
+automation:
+  session_execution: true
+  effect: none
 input:
   type: params
   schema: input_schema.json

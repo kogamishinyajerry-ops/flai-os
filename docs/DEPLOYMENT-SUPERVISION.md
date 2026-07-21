@@ -46,7 +46,7 @@ wheelhouse 离线装好——见 `docs/M11-OFFLINE-PACKAGE-PLAN.md`）。下文�
 
 ```
 1. scripts/init_db          # 建表/迁移，幂等（API 与 worker 启动时也各自 init_db，但显式先跑更清晰）
-2. scripts/user_admin.py create <用户名> <显示名>   # 无账户=全员锁门外（ADR-0019 fail-closed）
+2. scripts/user_admin.py create <用户名> <显示名> --role admin   # 无账户=全员锁门外（ADR-0019 fail-closed）
 3. 起 API + 起 worker        # 两者都自 init_db；worker 先加锁再装配
 4. scripts/deploy_selfcheck.py   # 12 项全 PASS 才算部署完成（含 worker 心跳新鲜+代际见证）
 ```

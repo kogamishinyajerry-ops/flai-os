@@ -47,7 +47,7 @@ knowledge:
 | enabled=true 时至少 1 项 | schema 已用 `if/then` 强制，Registry 加载时二次校验 |
 | scope 与工具白名单同构 | 参照 `tools` 字段的白名单模式：不在清单 = 不可用，不因为"看起来相关"放行；运行时由 `_KnowledgeContext` 强制（与 `_ToolRegistryContext` 同构），新注册 scope 绝不自动扩大存量 Agent 可见面 |
 | 新增 scope 需登记 | **登记表已落地**（ADR-0015）：`data/knowledge/<scope_id>/scope.yaml`，由 ScopeRegistry 扫描校验。"先声明后登记"的过渡期规则作废——启动对账（reconcile）发现 `enabled is True` 的 Agent 引用未注册 scope → **整个 Agent 拒绝注册** |
-| 密级静态门 | restricted scope 仅 `visibility: admin_only` 的 Agent 可挂；department 需 admin_only/department_trial。**边界精确声明**：`permissions.visibility` 在 V0.1 运行时未被任何 API 端点强制——本门只约束注册期 scope↔agent 声明一致性，不约束调用期主体身份；真实 restricted 语料上内网前，用户鉴权层是硬前置（ADR-0015） |
+| 密级静态门 | restricted scope 仅 `visibility: admin_only` 的 Agent 可挂；department 需 admin_only/department_trial。注册期继续校验 scope↔agent 声明一致性；ADR-0031 起 direct task、interactive conversation、eval admission、safe_auto 与 task review 另以认证账户角色同时核对 `visibility`/`allowed_roles`。这仍不是敏感数据访问的完整 capability/RBAC，真实 restricted 语料入场还须另立并审批访问/审计矩阵。 |
 
 `contracts/knowledge_scope.schema.json`：Knowledge Scope 条目的权威契约（scope_id/name/kind/source/confidentiality/owner，敏感路径走 `path_or_uri_env` 环境变量）。Agent 侧的 `agent.yaml.knowledge.scopes[]` 只引用 scope_id；scope 本体定义以该 schema 为准，两者由启动对账强制（scope_id 不存在 → Agent 拒绝注册，`backend/app/knowledge/scopes.py: reconcile_agent_scopes`）。
 

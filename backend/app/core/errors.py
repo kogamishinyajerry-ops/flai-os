@@ -94,6 +94,10 @@ class ConversationConflictError(FlaiError):
     """会话被并发修改（本轮基于的历史已过期），本轮不落库，可重试（ADR-0013）。"""
 
 
+class ConversationAccessDeniedError(FlaiError):
+    """当前认证主体无权在该会话中触发带副作用的自动执行。"""
+
+
 class NotInteractiveAgentError(FlaiError):
     """对非 interactive 型 Agent 发起会话，或对 interactive 型 Agent 建一次性任务
     （ADR-0012：两条运行时语义正交，不允许混用）。"""

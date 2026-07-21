@@ -306,29 +306,49 @@ def set_task_status(
     """
     conn.execute("BEGIN IMMEDIATE")
     try:
-        task = get_task(conn, task_id)
-        if task is None:
-            raise TaskNotFoundError(f"任务不存在：{task_id}")
-        assert_transition(task["status"], new_status)
-
-        now = _now_iso()
-        updates: dict[str, Any] = {"status": new_status, "updated_at": now}
-        if new_status == "running" and task.get("started_at") is None:
-            updates["started_at"] = now
-        if is_terminal(new_status):
-            updates["finished_at"] = now
-        if error_message is not None:
-            updates["error_message"] = error_message
-
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        conn.execute(
-            f"UPDATE tasks SET {set_clause} WHERE id = ?",
-            (*updates.values(), task_id),
+        task = set_task_status_in_transaction(
+            conn, task_id, new_status, error_message=error_message
         )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
         raise
+    return task
+
+
+def set_task_status_in_transaction(
+    conn: sqlite3.Connection,
+    task_id: str,
+    new_status: str,
+    *,
+    error_message: str | None = None,
+) -> dict[str, Any]:
+    """在调用方已持有的事务内迁移任务状态；本函数绝不自行提交或回滚。
+
+    仅供需要把任务、初始状态和事件原子写入的深模块复用。普通调用方继续走
+    :func:`set_task_status`，由其负责取得 ``BEGIN IMMEDIATE`` 写锁。
+    """
+    if not conn.in_transaction:
+        raise RuntimeError("set_task_status_in_transaction 必须在显式事务内调用")
+    task = get_task(conn, task_id)
+    if task is None:
+        raise TaskNotFoundError(f"任务不存在：{task_id}")
+    assert_transition(task["status"], new_status)
+
+    now = _now_iso()
+    updates: dict[str, Any] = {"status": new_status, "updated_at": now}
+    if new_status == "running" and task.get("started_at") is None:
+        updates["started_at"] = now
+    if is_terminal(new_status):
+        updates["finished_at"] = now
+    if error_message is not None:
+        updates["error_message"] = error_message
+
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    conn.execute(
+        f"UPDATE tasks SET {set_clause} WHERE id = ?",
+        (*updates.values(), task_id),
+    )
     return get_task(conn, task_id)  # type: ignore[return-value]
 
 
@@ -358,7 +378,11 @@ def apply_human_review(
     """
     approve = action == "approve"
     new_status = "completed" if approve else "failed"
-    conn.execute("BEGIN IMMEDIATE")
+    # 允许 API 把“当前角色复核”与签发原子包在同一外层事务；普通调用方仍由本函数
+    # 自持事务，保持既有契约。
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
     try:
         task = get_task(conn, task_id)
         if task is None:
@@ -408,9 +432,11 @@ def apply_human_review(
                 + (f"；{sample_rows} 条样本标记为未认可" if sample_rows else ""),
                 payload=payload,
             )
-        conn.execute("COMMIT")
+        if owns_transaction:
+            conn.execute("COMMIT")
     except Exception:
-        conn.execute("ROLLBACK")
+        if owns_transaction and conn.in_transaction:
+            conn.execute("ROLLBACK")
         raise
     return get_task(conn, task_id), sample_rows  # type: ignore[return-value]
 
@@ -1142,16 +1168,27 @@ def create_conversation(
     conversation_id: str,
     agent_id: str,
     created_by: str,
+    created_by_username: str | None = None,
 ) -> dict[str, Any]:
     """建会话：初始态 active，无推荐（recommendation 留 NULL 待对话产出）。"""
     now = _now_iso()
     conn.execute(
         """
         INSERT INTO conversations
-            (id, agent_id, status, created_by, recommendation_json, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?)
+            (id, agent_id, status, created_by, created_by_username,
+             recommendation_json, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?)
         """,
-        (conversation_id, agent_id, "active", created_by, None, now, now),
+        (
+            conversation_id,
+            agent_id,
+            "active",
+            created_by,
+            created_by_username,
+            None,
+            now,
+            now,
+        ),
     )
     return get_conversation(conn, conversation_id)  # type: ignore[return-value]
 
@@ -1236,6 +1273,52 @@ def count_messages(conn: sqlite3.Connection, conversation_id: str) -> int:
     return int(row[0])
 
 
+def get_conversation_dispatch(
+    conn: sqlite3.Connection, conversation_id: str, request_id: str
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT conversation_id, request_id, request_digest, result_json, created_at
+        FROM conversation_dispatches
+        WHERE conversation_id = ? AND request_id = ?
+        """,
+        (conversation_id, request_id),
+    ).fetchone()
+    if row is None:
+        return None
+    result = dict(row)
+    _decode_json(result, "result_json", "result", default={})
+    return result
+
+
+def create_conversation_dispatch(
+    conn: sqlite3.Connection,
+    *,
+    conversation_id: str,
+    request_id: str,
+    request_digest: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """在会话单轮外层事务内写入幂等回执；不自行提交或回滚。"""
+    if not conn.in_transaction:
+        raise RuntimeError("conversation dispatch 回执必须在显式事务内写入")
+    conn.execute(
+        """
+        INSERT INTO conversation_dispatches
+            (conversation_id, request_id, request_digest, result_json, created_at)
+        VALUES (?,?,?,?,?)
+        """,
+        (
+            conversation_id,
+            request_id,
+            request_digest,
+            json.dumps(result, ensure_ascii=False),
+            _now_iso(),
+        ),
+    )
+    return get_conversation_dispatch(conn, conversation_id, request_id)  # type: ignore[return-value]
+
+
 def set_conversation_recommendation(
     conn: sqlite3.Connection,
     conversation_id: str,
@@ -1304,7 +1387,11 @@ def create_eval_run(
     （违反 POST 202+queued 契约与 e2e 断言）。写锁内 INSERT 再回查，worker 的 claim
     （同样 BEGIN IMMEDIATE）被写锁挡到 COMMIT 之后，快照必是入队瞬时态。"""
     now = _now_iso()
-    conn.execute("BEGIN IMMEDIATE")
+    # 评测 API 可把提交点的角色复核包进同一外层写事务；普通调用方仍由本函数
+    # 自持事务，二者都保证 INSERT 与返回快照不被 worker 抢先认领。
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
     try:
         conn.execute(
             """
@@ -1315,10 +1402,12 @@ def create_eval_run(
             (run_id, agent_id, agent_version, triggered_by, status, now, snapshot_handle),
         )
         snapshot = get_eval_run(conn, run_id)
-        conn.execute("COMMIT")
+        if owns_transaction:
+            conn.execute("COMMIT")
         return snapshot  # type: ignore[return-value]
     except Exception:
-        conn.execute("ROLLBACK")
+        if owns_transaction and conn.in_transaction:
+            conn.execute("ROLLBACK")
         raise
 
 

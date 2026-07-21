@@ -28,12 +28,12 @@ E2E_PASSWORD = "e2e-pass-flai"
 
 
 def seed_user(db_path, display_name: str, *, username: str = E2E_USERNAME,
-              password: str = E2E_PASSWORD) -> None:
+              password: str = E2E_PASSWORD, role: str = "admin") -> None:
     """建 e2e 账户（库须已 init——在后端 /api/health 就绪之后调用）。"""
     conn = get_conn(db_path)
     try:
         auth_service.create_user(
-            conn, username=username, display_name=display_name, password=password
+            conn, username=username, display_name=display_name, password=password, role=role
         )
     finally:
         conn.close()

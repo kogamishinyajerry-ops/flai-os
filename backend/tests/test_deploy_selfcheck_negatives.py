@@ -123,8 +123,8 @@ def test_active_user_only_inactive_fails(tmp_path: Path) -> None:
     conn = get_conn(db)
     try:
         conn.execute(
-            "INSERT INTO users (username, display_name, password_hash, is_active, created_at)"
-            " VALUES ('ghost', 'Ghost', 'x', 0, ?)",
+            "INSERT INTO users (username, display_name, password_hash, role, is_active, created_at)"
+            " VALUES ('ghost', 'Ghost', 'x', 'admin', 0, ?)",
             (datetime.now(timezone.utc).isoformat(),),
         )
         conn.commit()
@@ -139,8 +139,8 @@ def test_active_user_present_passes(tmp_path: Path) -> None:
     conn = get_conn(db)
     try:
         conn.execute(
-            "INSERT INTO users (username, display_name, password_hash, is_active, created_at)"
-            " VALUES ('jerry', 'Jerry', 'x', 1, ?)",
+            "INSERT INTO users (username, display_name, password_hash, role, is_active, created_at)"
+            " VALUES ('jerry', 'Jerry', 'x', 'admin', 1, ?)",
             (datetime.now(timezone.utc).isoformat(),),
         )
         conn.commit()

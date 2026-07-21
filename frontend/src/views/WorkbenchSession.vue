@@ -115,8 +115,20 @@
                 </div>
               </div>
 
-              <!-- 未召集：会话进行中才可从蓝图召集（人签发；导引不代召集）；
-                   会话已归档则只读，不再召集（结束协作 = 真的结束）。 -->
+              <!-- safe_auto 计划不再把用户送去创建页。任务流可能比回执慢一个 tick，
+                   因此先展示后端执行事实；blocker 引导回会话补信息。 -->
+              <div
+                v-else-if="conversation.status === 'active' && plan.execution"
+                class="member-action"
+              >
+                <span v-if="plan.execution.status === 'dispatched'" class="member-hint auto">
+                  已自动发起，等待任务状态同步。
+                </span>
+                <span v-else class="member-hint blocked">
+                  暂未自动执行：{{ plan.execution.issues?.[0]?.message || "安全门未通过" }}。请回智能导引直接补充。
+                </span>
+              </div>
+              <!-- 历史 plan_only 会话保留兼容入口；新会话默认不再要求逐项点击。 -->
               <div v-else-if="conversation.status === 'active'" class="member-action">
                 <el-button size="small" type="primary" plain @click="summon(a)">去创建此任务</el-button>
                 <span class="member-hint">用导引预填的草案创建任务，由你补全并亲手提交。</span>
@@ -147,7 +159,13 @@
         </div>
       </div>
 
-      <p class="sess-foot">
+      <p v-if="plan?.execution?.status === 'dispatched'" class="sess-foot">
+        安全任务已由平台自动创建并入队；waiting_review 的最终工程签发仍由你完成。
+      </p>
+      <p v-else-if="plan?.execution" class="sess-foot">
+        当前方案被安全门阻断，没有创建任务；请回到会话按具体原因补充或调整。
+      </p>
+      <p v-else class="sess-foot">
         签发权在你——协作里每个任务都由你在创建页补全并亲手提交，导引只做分流与预填，不代签、不代召集。
       </p>
     </template>
@@ -525,6 +543,8 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--ink-faint);
 }
+.member-hint.auto { color: var(--clay); font-weight: 650; }
+.member-hint.blocked { color: var(--trust-pending); }
 .task-chips {
   display: flex;
   flex-wrap: wrap;

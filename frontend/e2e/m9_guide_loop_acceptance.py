@@ -130,9 +130,23 @@ from _auth import login_context, login_httpx, seed_user  # noqa: E402
 seed_user(WORK / "flai_os.db", "王工")
 API = login_httpx(BASE)  # 直连 API 的已登录客户端（ADR-0019）
 
+
+def force_legacy_plan_only(route) -> None:
+    """M9 专测历史手工回流/异常恢复；产品 safe_auto 主链由 M6/M8 单独验收。"""
+    request = route.request
+    payload = json.loads(request.post_data or "{}")
+    payload["execution_mode"] = "plan_only"
+    payload.pop("request_id", None)
+    headers = {k: v for k, v in request.headers.items() if k.lower() != "content-length"}
+    route.continue_(
+        post_data=json.dumps(payload, ensure_ascii=False),
+        headers={**headers, "content-type": "application/json"},
+    )
+
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
+    page.route("**/api/conversations/*/messages", force_legacy_plan_only)
     login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie
 
     # ① 导引对话 → orchestrate 方案卡
@@ -176,7 +190,15 @@ with sync_playwright() as p:
     page.locator(".status-artifact").click()
     page.wait_for_selector(".sc-shell", timeout=5000)
     check("⑥锚点直开速览面板", page.locator(".sc-back").count() == 1)
-    check("⑥速览产物区可见（失败也如实显示非静默）", "产物" in page.locator(".sc-body").inner_text())
+    # drawer 外壳先开、任务详情随后异步拉取；必须等真实产物区出现，不能在
+    # v-loading 的空壳瞬间取 inner_text 造竞态假红。
+    expect(page.locator(".peek-label").filter(has_text="产物")).to_be_visible(timeout=8000)
+    peek_body = page.locator(".sc-body").inner_text()
+    check(
+        "⑥速览产物区可见（失败也如实显示非静默）",
+        "产物" in peek_body,
+        f"visible={page.locator('.sc-shell').is_visible()} body={peek_body[:300]!r}",
+    )
     page.screenshot(path=str(SHOTS / "4_peek_from_anchor.png"))
     page.keyboard.press("Escape")
     page.wait_for_timeout(300)

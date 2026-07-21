@@ -74,6 +74,16 @@ Invoke-Step -Name "② 全量 pytest -n auto（三个 testpaths）" -Action {
         python -m pytest -q -n auto
 }
 
+# 与 verify_all.sh 对齐：Node 不带目录参数，按默认发现规则扫描 frontend/tests/。
+Invoke-Step -Name "①b 前端纯函数核 node --test" -Action {
+    Push-Location "frontend"
+    try {
+        node --test
+    } finally {
+        Pop-Location
+    }
+}
+
 $E2EScripts = @(
     "frontend/e2e/m2_acceptance.py",
     "frontend/e2e/m6_guide_acceptance.py",

@@ -40,6 +40,15 @@
       class="page-alert"
     />
 
+    <el-alert
+      v-if="conversationReadOnly"
+      type="info"
+      :title="conversationReadOnlyNotice"
+      show-icon
+      :closable="false"
+      class="page-alert conversation-readonly"
+    />
+
     <!-- 会话流 -->
     <div v-if="messages.length || sending" ref="streamEl" class="thread">
       <div v-for="(m, idx) in messages" :key="idx" :class="['bubble-row', m.role]">
@@ -59,6 +68,16 @@
           <div class="ai-body" :class="{ 'fx-ink-in': m.fresh }">
             <div class="ai-name">智能导引<span v-if="m.createdAt" class="bubble-time">{{ formatTime(m.createdAt) }}</span></div>
             <p v-if="m.content" class="ai-lead">{{ m.content }}</p>
+            <div
+              v-if="m.recommendation?.decision === 'awaiting_plan'"
+              class="execution-strip blocked"
+            >
+              <span class="execution-dot"></span>
+              <span class="execution-title">导引仍在澄清，尚未创建任务</span>
+              <span v-if="m.recommendation.execution?.issues?.length" class="execution-detail">
+                {{ m.recommendation.execution.issues[0].message }}
+              </span>
+            </div>
 
             <!-- 导引计划（M8 编排官）：refuse=显式拒绝 -->
             <div v-if="m.recommendation && m.recommendation.decision === 'refuse'" class="plan-card refuse" :class="{ 'fx-rise': m.fresh }">
@@ -105,6 +124,18 @@
               <div class="plan-topline">
                 <span class="plan-kicker">协作方案</span>
                 <span class="plan-count">{{ m.recommendation.agents.length }} 个 Agent 协作</span>
+              </div>
+              <div
+                v-if="m.recommendation.execution"
+                class="execution-strip"
+                :class="{ blocked: m.recommendation.execution.status !== 'dispatched' }"
+              >
+                <span class="execution-dot"></span>
+                <span class="execution-title">{{ executionStatusText(m.recommendation.execution) }}</span>
+                <span
+                  v-if="m.recommendation.execution.issues && m.recommendation.execution.issues.length"
+                  class="execution-detail"
+                >{{ m.recommendation.execution.issues[0].message }}</span>
               </div>
               <h2 v-if="m.recommendation.goal" class="plan-goal-title">{{ m.recommendation.goal }}</h2>
               <p v-if="m.recommendation.analysis" class="plan-reason">{{ m.recommendation.analysis }}</p>
@@ -182,7 +213,9 @@
                     <p v-if="a.stripped_fields && a.stripped_fields.length" class="agent-stripped">
                       已剔除不合法字段：{{ a.stripped_fields.join("、") }}（未匹配该 Agent 的输入契约）
                     </p>
-                    <div class="agent-actions">
+                    <!-- 历史 plan_only 会话保留兼容入口；新 safe_auto 计划由后端执行，
+                         页面不再自动点按钮，也不要求用户搬运参数。 -->
+                    <div v-if="!m.recommendation.execution" class="agent-actions">
                       <button class="agent-cta" @click="createOneTask(a, m.recommendation)">去创建此任务</button>
                     </div>
                   </div>
@@ -202,7 +235,13 @@
               <div class="plan-foot">
                 <button class="workbench-btn" @click="openWorkbench">进入协作工作台 →</button>
                 <button type="button" class="plan-escape" @click="focusComposer">想调整方案？直接告诉导引 ↓</button>
-                <span class="plan-note">
+                <span v-if="m.recommendation.execution?.status === 'dispatched'" class="plan-note">
+                  安全任务已由平台自动创建并入队；若任务进入 waiting_review，最终工程签发仍由你完成。
+                </span>
+                <span v-else-if="m.recommendation.execution" class="plan-note">
+                  当前方案未自动执行，也没有创建任务；请按上方原因直接在会话中补充或调整。
+                </span>
+                <span v-else class="plan-note">
                   在工作台里看分工架构、逐个召集 Agent、追进度——签发权始终在你，
                   每个任务都由你补全并<strong>亲手提交</strong>。
                 </span>
@@ -243,9 +282,9 @@
             :show-file-list="false"
             multiple
             :on-change="handleFileSelect"
-            :disabled="sending"
+            :disabled="sending || conversationReadOnly"
           >
-            <button class="icon-btn" :disabled="sending" title="添加附件（≤5 个/条；文本类直读、xlsx 预览）" aria-label="添加附件">
+            <button class="icon-btn" :disabled="sending || conversationReadOnly" title="添加附件（≤5 个/条；文本类直读、xlsx 预览）" aria-label="添加附件">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.49"/></svg>
             </button>
           </el-upload>
@@ -253,7 +292,7 @@
                Agent 名填进草稿并聚焦——问导引怎么用它，绝不代发（人是唯一发起者）。 -->
           <el-popover placement="top-start" :width="320" trigger="click" popper-class="agent-pick-pop">
             <template #reference>
-              <button class="icon-btn" :disabled="sending" title="浏览可用 Agent" aria-label="浏览可用 Agent">
+              <button class="icon-btn" :disabled="sending || conversationReadOnly" title="浏览可用 Agent" aria-label="浏览可用 Agent">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>
               </button>
             </template>
@@ -292,21 +331,20 @@
             v-model="draft"
             type="textarea"
             :autosize="{ minRows: 1, maxRows: 6 }"
-            :disabled="sending"
+            :disabled="sending || conversationReadOnly"
             :placeholder="composerPlaceholder"
             class="composer-input"
             @keydown.enter.exact.prevent="send"
           />
-          <button class="send-btn" :disabled="sending || !draft.trim()" aria-label="发送" @click="send">
+          <button class="send-btn" :disabled="conversationReadOnly || sending || !draft.trim()" aria-label="发送" @click="send">
             <svg v-if="!sending" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
             <span v-else class="send-spin"></span>
           </button>
         </div>
       </div>
-      <!-- 减重批：政策句+诚实地板合一行（「导引不会替你创建」是 m6 e2e 锚，
-           字面保留）；快捷键仍 hover/聚焦才显。 -->
+      <!-- safe_auto 默认执行安全计划；“自动执行”与“工程签发”严格分层。 -->
       <div class="composer-hint">
-        <span>导引不会替你创建或签发任务——产出是草案，判定权在你。</span>
+        <span>满足安全门的方案会自动执行；缺信息或风险例外会在这里说明，最终工程签发仍由你完成。</span>
         <span class="keys"><kbd>Enter</kbd> 发送<span class="sep">·</span><kbd>⇧ Enter</kbd> 换行<span class="sep">·</span>📎 可带附件</span>
       </div>
       </div>
@@ -316,7 +354,7 @@
 
 <script setup>
 import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { createConversation, postMessage, getConversation } from "../api/conversations";
 import { listAgents } from "../api/agents";
@@ -329,21 +367,43 @@ import ThinkingInk from "../components/artwork/ThinkingInk.vue";
 import IntentGlyph from "../components/artwork/IntentGlyph.vue";
 
 const router = useRouter();
+const route = useRoute();
 
 const GUIDE_AGENT_ID = "guide_agent";
 const MAX_FILES_PER_MESSAGE = 5; // 与后端 PostMessageRequest / 运行时同值
 
 const started = ref(false);
 const conversationId = ref("");
+const conversationStatus = ref("");
 const messages = ref([]);
 const draft = ref("");
 const sending = ref(false);
 const pageError = ref("");
 const streamEl = ref(null);
+// 已恢复会话只有后端明确 active 时才允许继续发言；缺失/未知状态同样
+// fail-closed 为只读。全新会话 started=false，不受该守卫影响。
+const routeConversationId = computed(() =>
+  typeof route.query.c === "string" && route.query.c ? route.query.c : ""
+);
+const conversationTargetMismatch = computed(() =>
+  !!routeConversationId.value && conversationId.value !== routeConversationId.value
+);
+const conversationReadOnly = computed(() =>
+  conversationTargetMismatch.value || (started.value && conversationStatus.value !== "active")
+);
+const conversationReadOnlyNotice = computed(() =>
+  conversationTargetMismatch.value
+    ? "会话尚未可靠加载，已禁止发送；请重新打开该会话"
+    : started.value && !conversationStatus.value
+    ? "会话加载失败，已禁止发送；请重新打开该会话"
+    : "会话已归档，只读展示——可查看历史消息与任务，不能继续发送"
+);
 // composer placeholder 语境分化：未起手空会话引导点意图卡；会话中改为「继续说下去」，
 // 不再重复「回答导引的追问」（此刻输入框已在真实对话流里，无需再解释这是什么）。
 const composerPlaceholder = computed(() =>
-  !started.value && messages.value.length === 0
+  conversationReadOnly.value
+    ? "会话已归档，仅可查看"
+    : !started.value && messages.value.length === 0
     ? "描述你的工程需求，或点一张下方的意图卡…"
     : "回复导引，继续说下去…"
 );
@@ -351,6 +411,140 @@ const composerPlaceholder = computed(() =>
 // P2-A 反孤儿纪律；已上传项记 fileId，失败重试不重复上传。
 const pendingFiles = ref([]);
 let fileSeq = 0;
+// 网络丢响应时以同一 request_id 重试；只有 content/fileIds 真变化才换 key。
+// 后端回执是最终去重权威，本地只负责让用户无感复用同一轮授权。
+let retryTurn = null;
+
+let sendUiEpoch = 0;
+const inFlightSends = new Map();
+const failedSends = new Map();
+let freshInFlightSend = null;
+let failedFreshSend = null;
+let internalConversationNavigation = null;
+
+function invalidateSendUi() {
+  sendUiEpoch++;
+  sending.value = false;
+}
+
+function isCurrentSendUi(token, loadEpoch, targetConversationId) {
+  return (
+    token === sendUiEpoch &&
+    loadEpoch === conversationLoadEpoch &&
+    conversationId.value === targetConversationId
+  );
+}
+
+function bindInFlightSend(operation, targetConversationId) {
+  const previousTarget = operation.targetConversationId;
+  if (previousTarget && inFlightSends.get(previousTarget) === operation) {
+    inFlightSends.delete(previousTarget);
+  }
+  operation.targetConversationId = targetConversationId;
+  if (targetConversationId) inFlightSends.set(targetConversationId, operation);
+}
+
+function releaseInFlightSend(operation) {
+  const targetConversationId = operation.targetConversationId;
+  if (targetConversationId && inFlightSends.get(targetConversationId) === operation) {
+    inFlightSends.delete(targetConversationId);
+  }
+  if (freshInFlightSend === operation) freshInFlightSend = null;
+}
+
+function isViewingConversation(targetConversationId) {
+  return typeof route.query.c === "string" && route.query.c === targetConversationId;
+}
+
+function rememberFailedSend(operation, err) {
+  const targetConversationId = operation.targetConversationId;
+  const failure = {
+    content: operation.content,
+    files: operation.files,
+    requestId: operation.requestId,
+    fingerprint: operation.fingerprint,
+    error: err.detail || err.message || "发送失败",
+  };
+  if (targetConversationId) failedSends.set(targetConversationId, failure);
+  else if (operation.originatedFresh) failedFreshSend = failure;
+}
+
+function restoreConversationSendState(targetConversationId) {
+  if (conversationId.value !== targetConversationId) return;
+  const inFlight = inFlightSends.get(targetConversationId);
+  if (inFlight) {
+    sending.value = true;
+    return;
+  }
+  sending.value = false;
+  const failed = failedSends.get(targetConversationId);
+  if (!failed) return;
+  draft.value = failed.content;
+  pendingFiles.value = [...failed.files];
+  retryTurn = failed.requestId
+    ? { fingerprint: failed.fingerprint, requestId: failed.requestId }
+    : null;
+  pageError.value = failed.error;
+}
+
+function restoreFreshSendState() {
+  if (routeConversationId.value || conversationId.value) return;
+  if (freshInFlightSend) {
+    sending.value = true;
+    return;
+  }
+  sending.value = false;
+  const failed = failedFreshSend;
+  if (!failed) return;
+  draft.value = failed.content;
+  pendingFiles.value = [...failed.files];
+  retryTurn = failed.requestId
+    ? { fingerprint: failed.fingerprint, requestId: failed.requestId }
+    : null;
+  pageError.value = failed.error;
+}
+
+function clearFailedSendIfCommitted(targetConversationId, history) {
+  const failed = failedSends.get(targetConversationId);
+  if (!failed?.requestId) return;
+  const alreadyCommitted = history.some(
+    (message) => message?.recommendation?.execution?.request_id === failed.requestId
+  );
+  if (alreadyCommitted) failedSends.delete(targetConversationId);
+}
+
+function hasActiveGuideSend() {
+  return sending.value || !!freshInFlightSend || inFlightSends.size > 0;
+}
+
+function canNavigateDuringGuideSend(to = null) {
+  if (
+    to &&
+    internalConversationNavigation &&
+    typeof to.query?.c === "string" &&
+    to.query.c === internalConversationNavigation
+  ) {
+    return true;
+  }
+  return !hasActiveGuideSend();
+}
+
+onBeforeRouteLeave(() => canNavigateDuringGuideSend());
+onBeforeRouteUpdate((to) => canNavigateDuringGuideSend(to));
+
+function newTurnRequestId() {
+  return globalThis.crypto?.randomUUID
+    ? globalThis.crypto.randomUUID()
+    : `turn_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+function turnRequestId(content, fileIds) {
+  const fingerprint = JSON.stringify([content, fileIds]);
+  if (retryTurn && retryTurn.fingerprint === fingerprint) return retryTurn.requestId;
+  const requestId = newTurnRequestId();
+  retryTurn = { fingerprint, requestId };
+  return requestId;
+}
 
 // 时段感问候（Claude「Up late?」人格温度）：起手 hero 只挂载一次渲染，但改用
 // computed 让「随主题」变体能在主题切换时即时反映（不需要跟随时间跳动刷新，
@@ -401,13 +595,13 @@ function removePendingFile(item) {
   pendingFiles.value = pendingFiles.value.filter((f) => f.uid !== item.uid);
 }
 
-async function uploadPendingFiles() {
+async function uploadPendingFiles(files = pendingFiles.value) {
   // 顺序上传未完成项（含上一轮失败项）；任一失败即抛出，本轮消息不发送。
   // 已知行为（反方审 P3）：某轮失败但附件已上传成功（status:done）时，附件
   // 保留在待发区——这是重试语义（重试同一句不重复上传）。若用户改发别的
   // 内容，这些附件会一并带上，但 chips 始终可见、可逐个移除，故不隐藏、
   // 不静默——是否带上由用户自己看着 chips 决定。
-  for (const item of pendingFiles.value) {
+  for (const item of files) {
     if (item.status === "done") continue;
     item.status = "uploading";
     item.error = "";
@@ -421,7 +615,7 @@ async function uploadPendingFiles() {
       throw new Error(`附件「${item.name}」上传失败：${item.error}`);
     }
   }
-  return pendingFiles.value.map((f) => f.fileId);
+  return files.map((f) => f.fileId);
 }
 
 function inputCount(agent) {
@@ -432,6 +626,15 @@ function inputCount(agent) {
 // top_event/供电完全丧失 不依赖点击）；对象/数组回退单行 JSON。
 function formatDraftVal(v) {
   return v !== null && typeof v === "object" ? JSON.stringify(v) : String(v);
+}
+
+function executionStatusText(execution) {
+  if (execution?.status === "dispatched") return "已自动发起，无需手动创建";
+  if (execution?.status === "blocked_input") return "还缺输入，暂未执行";
+  if (execution?.status === "blocked_source") return "来源边界未满足，暂未执行";
+  if (execution?.status === "blocked_policy") return "超出自动执行范围，暂未执行";
+  if (execution?.status === "blocked_conflict") return "计划存在冲突，暂未执行";
+  return "暂未自动执行";
 }
 
 function focusComposer() {
@@ -477,42 +680,113 @@ async function scrollToBottom() {
 }
 
 async function send() {
-  if (restoring.value) return; // 会话恢复在途不收发言——防止意外新建会话
+  // 会话恢复在途不收发言；concluded/未知状态硬守卫零 POST。
+  // 即使 disabled 控件被 DOM 篡改或程序触发，也不得穿透到 API。
+  if (sending.value || restoring.value || conversationReadOnly.value) return;
   const content = draft.value.trim();
   if (!content) return;
+
+  // 一轮发送必须锁定它开始时的页面代际、目标会话与附件集合。GuidePage 会在
+  // ?c 切换时复用组件实例；任何 await 之后都不能再从响应式全局状态“现取”目标，
+  // 否则旧会话的附件/消息/计划可能串进新会话。
+  const sendLoadEpoch = conversationLoadEpoch;
+  const initialConversationId = conversationId.value;
+  const sendFiles = [...pendingFiles.value];
+  const sendUiToken = ++sendUiEpoch;
+  let targetConversationId = initialConversationId;
+  const sendOperation = {
+    originatedFresh: !targetConversationId,
+    targetConversationId,
+    content,
+    files: sendFiles,
+    requestId: null,
+    fingerprint: null,
+  };
+  if (targetConversationId) {
+    failedSends.delete(targetConversationId);
+    bindInFlightSend(sendOperation, targetConversationId);
+  } else {
+    failedFreshSend = null;
+    freshInFlightSend = sendOperation;
+  }
+  let sendSettled = false;
   pageError.value = "";
 
   // 乐观追加用户气泡（附件 chips 一并显示；失败整体回滚）
-  const optimisticAttachments = pendingFiles.value.map((f) => ({ id: f.uid, filename: f.name }));
-  messages.value.push({
+  const optimisticAttachments = sendFiles.map((f) => ({ id: f.uid, filename: f.name }));
+  const optimisticMessage = {
     role: "user",
     content,
     attachments: optimisticAttachments.length ? optimisticAttachments : undefined,
     // fresh：仅本次会话中「刚落地」的气泡播墨迹入场；历史加载不带此标记——
     // 诚实地板：不让三天前的旧对话表演"刚发生"（信任镜头 P2）。
     fresh: true,
-  });
+  };
+  messages.value.push(optimisticMessage);
   draft.value = "";
-  await scrollToBottom();
-
   sending.value = true;
   try {
+    await scrollToBottom();
     // 先传附件（已 done 的跳过，失败即中止——本轮消息不发送）
-    const fileIds = await uploadPendingFiles();
-    if (!conversationId.value) {
+    const fileIds = await uploadPendingFiles(sendFiles);
+    if (!targetConversationId) {
       const conv = await createConversation({ agentId: GUIDE_AGENT_ID });
-      conversationId.value = conv.id;
-      started.value = true;
-      // URL 反映当前会话（可刷新/分享/回退），并让左栏历史即时收录这条新会话。
-      router.replace({ path: "/", query: { c: conv.id } });
+      targetConversationId = conv.id;
+      bindInFlightSend(sendOperation, targetConversationId);
+      // 全新会话在 create await 期间若已切走，仍把用户明确发出的本轮 POST 到
+      // 刚创建的会话，但绝不夺回当前 URL/UI；仍停留原页面时才接管为当前会话。
+      if (isCurrentSendUi(sendUiToken, sendLoadEpoch, initialConversationId)) {
+        conversationId.value = targetConversationId;
+        conversationStatus.value = conv.status || "active";
+        started.value = true;
+        // URL 反映当前会话（可刷新/分享/回退），并让左栏历史即时收录这条新会话。
+        internalConversationNavigation = targetConversationId;
+        const clearInternalNavigation = () => {
+          if (internalConversationNavigation === targetConversationId) {
+            internalConversationNavigation = null;
+          }
+        };
+        void router
+          .replace({ path: "/", query: { c: targetConversationId } })
+          .then(clearInternalNavigation, clearInternalNavigation);
+      }
     }
-    const res = await postMessage(conversationId.value, content, fileIds);
+    // 失效续体也要完成已授权的原会话发送，但不得覆盖当前会话的重试 key。
+    const requestId = isCurrentSendUi(sendUiToken, sendLoadEpoch, targetConversationId)
+      ? turnRequestId(content, fileIds)
+      : newTurnRequestId();
+    sendOperation.requestId = requestId;
+    sendOperation.fingerprint = JSON.stringify([content, fileIds]);
+    const res = await postMessage(targetConversationId, content, fileIds, {
+      executionMode: "safe_auto",
+      requestId,
+    });
+    releaseInFlightSend(sendOperation);
+    sendSettled = true;
+    failedSends.delete(targetConversationId);
+    const replayed =
+      res.execution?.replayed === true ||
+      res.message?.recommendation?.execution?.replayed === true;
+    if (replayed) {
+      // 幂等回放说明权威消息已经在服务端历史中；本地乐观气泡若再 append 会重影。
+      // 当前仍看目标会话时整包重读，离开目标时等下一次正常恢复即可。
+      if (isViewingConversation(targetConversationId)) await loadConversation(targetConversationId);
+      return;
+    }
+    if (!isCurrentSendUi(sendUiToken, sendLoadEpoch, targetConversationId)) {
+      // A→B→A：若旧 POST 结算时 URL 又回到 A，必须在 POST 之后重新读取服务端
+      // 权威历史。这样即使先前的 A GET 早于 POST，也不会展示“尚未发送”诱导重复执行。
+      if (isViewingConversation(targetConversationId)) await loadConversation(targetConversationId);
+      return;
+    }
+
     // 成功：附件已随消息落库，清空待发区；气泡 chips 换用真实文件 id
-    const sent = messages.value[messages.value.length - 1];
-    if (sent && sent.role === "user" && optimisticAttachments.length) {
-      sent.attachments = pendingFiles.value.map((f) => ({ id: f.fileId, filename: f.name }));
+    if (optimisticAttachments.length) {
+      optimisticMessage.attachments = sendFiles.map((f) => ({ id: f.fileId, filename: f.name }));
     }
-    pendingFiles.value = [];
+    const sentFiles = new Set(sendFiles);
+    pendingFiles.value = pendingFiles.value.filter((f) => !sentFiles.has(f));
+    if (retryTurn?.requestId === requestId) retryTurn = null;
     messages.value.push({
       role: "assistant",
       content: res.message.content,
@@ -521,20 +795,38 @@ async function send() {
       createdAt: res.message.created_at || null,
     });
     await scrollToBottom();
-    ensureConversationTasksFeed(); // 本轮若刚给出 orchestrate 方案，开始为其召集状态保鲜
+    if (isCurrentSendUi(sendUiToken, sendLoadEpoch, targetConversationId)) {
+      ensureConversationTasksFeed(); // 本轮若刚给出 orchestrate 方案，开始为其召集状态保鲜
+    }
   } catch (err) {
     // 本轮失败：后端契约是「失败零落库」（幂等重试，ADR-0013），本地同样回滚
     // 乐观气泡并把原文还原到输入框——不在界面上留一条服务端不存在的幽灵消息，
     // 重试也不会堆出重复 user 气泡（Codex R1-P2）。附件 chips 留在待发区
     // （已上传项带 fileId，重试不重复上传）。不伪造 assistant 回复。
-    const last = messages.value[messages.value.length - 1];
-    if (last && last.role === "user" && last.content === content) {
-      messages.value.pop();
+    releaseInFlightSend(sendOperation);
+    sendSettled = true;
+    rememberFailedSend(sendOperation, err);
+    if (!isCurrentSendUi(sendUiToken, sendLoadEpoch, targetConversationId)) {
+      // 若用户已回到目标会话，恢复原草稿/附件与稳定 request_id；若该会话仍在
+      // GET 恢复途中，loadConversation 落地后会从 failedSends 做同一恢复。
+      if (isViewingConversation(targetConversationId)) {
+        restoreConversationSendState(targetConversationId);
+      }
+      return;
     }
+    const optimisticIndex = messages.value.indexOf(optimisticMessage);
+    if (optimisticIndex >= 0) messages.value.splice(optimisticIndex, 1);
     draft.value = content;
     pageError.value = err.detail || err.message;
   } finally {
-    sending.value = false;
+    if (!sendSettled) releaseInFlightSend(sendOperation);
+    if (isCurrentSendUi(sendUiToken, sendLoadEpoch, targetConversationId)) {
+      sending.value = false;
+    } else if (isViewingConversation(targetConversationId) && !inFlightSends.has(targetConversationId)) {
+      sending.value = false;
+    } else if (!routeConversationId.value && !freshInFlightSend) {
+      sending.value = false;
+    }
   }
 }
 
@@ -663,14 +955,15 @@ function ensureConversationTasksFeed() {
 }
 
 // ── 会话恢复（左栏历史点击 / 刷新 /?c=<id>）──
-const route = useRoute();
-
 function resetToFresh(clearError = true) {
+  invalidateSendUi();
   messages.value = [];
   started.value = false;
   conversationId.value = "";
+  conversationStatus.value = "";
   draft.value = "";
   pendingFiles.value = [];
+  retryTurn = null;
   releaseConversationTasksFeed();
   if (clearError) pageError.value = "";
 }
@@ -679,13 +972,34 @@ function resetToFresh(clearError = true) {
 // 不渲染可交互的空态 hero（「假起手」）、send 早退——否则此刻发消息会因
 // conversationId 尚空而意外新建会话（双镜头 P2 实审咬出的竞态）。
 const restoring = ref(false);
+let conversationLoadEpoch = 0;
+
+function isCurrentConversationLoad(epoch, targetId) {
+  return (
+    epoch === conversationLoadEpoch &&
+    typeof route.query.c === "string" &&
+    route.query.c === targetId
+  );
+}
 
 async function loadConversation(id) {
+  // GuidePage 实例会跨 ?c 复用；每次恢复都领取新 epoch，只允许
+  // 「最后一次请求 + URL 当前目标」写入状态。过期响应连 restoring
+  // 也不得清除，否则会提前打开新目标会话的 composer。
+  const targetId = id;
+  const epoch = ++conversationLoadEpoch;
+  const fallbackMessages = conversationId.value === targetId ? [...messages.value] : [];
   resetToFresh();
   restoring.value = true;
   try {
-    const conv = await getConversation(id);
+    const conv = await getConversation(targetId);
+    if (!isCurrentConversationLoad(epoch, targetId)) return;
+    if (!conv || conv.id !== targetId) {
+      pageError.value = "会话响应与当前目标不一致";
+      return;
+    }
     conversationId.value = conv.id;
+    conversationStatus.value = conv.status || "";
     started.value = true;
     messages.value = (conv.messages || []).map((m) => ({
       role: m.role,
@@ -694,20 +1008,32 @@ async function loadConversation(id) {
       attachments: m.attachments && m.attachments.length ? m.attachments : undefined,
       createdAt: m.created_at || null,
     }));
+    clearFailedSendIfCommitted(targetId, messages.value);
+    restoreConversationSendState(targetId);
     await scrollToBottom();
+    if (!isCurrentConversationLoad(epoch, targetId)) return;
     ensureConversationTasksFeed(); // 恢复的历史会话若已带 orchestrate 方案，立即接上订阅
   } catch (err) {
+    if (!isCurrentConversationLoad(epoch, targetId)) return;
+    // URL 已明确指向 targetId 时，失败态也保留其身份并标记 status unknown。
+    // 这样 composer 继续 fail-closed，而不会把目标会话误当成可新建的 fresh 页面。
+    conversationId.value = targetId;
+    conversationStatus.value = "";
+    started.value = true;
+    messages.value = fallbackMessages;
     pageError.value = err.detail || err.message || "会话加载失败";
   } finally {
-    restoring.value = false;
+    if (isCurrentConversationLoad(epoch, targetId)) restoring.value = false;
   }
 }
 
 onMounted(() => {
   const c = route.query.c;
   if (typeof c === "string" && c) loadConversation(c);
+  else restoreFreshSendState();
 });
 onUnmounted(() => {
+  conversationLoadEpoch++; // 作废所有 await 中的恢复续体
   feedDisposed = true; // 先封门再释放：卸载后任何 await 续体不得再 acquire
   releaseConversationTasksFeed();
 });
@@ -718,8 +1044,12 @@ watch(
   (c) => {
     if (typeof c === "string" && c) {
       if (c !== conversationId.value) loadConversation(c);
-    } else if (started.value || messages.value.length) {
-      resetToFresh();
+    } else {
+      // 「新对话」或移除 ?c 同样是新目标：即使旧请求尚在途也要立即作废。
+      conversationLoadEpoch++;
+      restoring.value = false;
+      if (started.value || messages.value.length || sending.value) resetToFresh();
+      restoreFreshSendState();
     }
   }
 );
@@ -980,6 +1310,34 @@ watch(
   border-radius: 999px;
   padding: 2px 10px;
 }
+.execution-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px 0 16px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-clay-soft);
+  border-radius: 10px;
+  background: var(--clay-soft);
+  color: var(--clay-deep);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.execution-strip.blocked {
+  border-color: rgba(var(--trust-pending-rgb), 0.35);
+  background: rgba(var(--trust-pending-rgb), 0.08);
+  color: var(--trust-pending);
+}
+.execution-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--clay);
+  flex: none;
+}
+.execution-strip.blocked .execution-dot { background: var(--trust-pending); }
+.execution-title { font-weight: 750; }
+.execution-detail { color: var(--ink-soft); }
 .plan-goal-title {
   font-family: var(--serif);
   font-size: 24px;

@@ -3,8 +3,8 @@
 M6 e2e 已覆盖单 Agent orchestrate 卡片；本脚本补 M8 编排官的两个新分支：
   ① refuse：平台接不住 → 显式拒绝卡片（理由 + 残留问题 + 重述建议），无「去创建
      此任务」按钮（拒绝不产生任何可召集 Agent）；
-  ② 多 Agent orchestrate：召集 2 个真实 Agent → 各带分工 role + 各自「去创建此
-     任务」按钮，dropped_agents 剔除告警可见。
+  ② 多 Agent orchestrate：召集 2 个真实 Agent → 各带分工 role；因当前尚无机器
+     可读 DAG，safe_auto 整体阻断、零任务、零手动创建按钮，dropped 告警可见。
 
 自包含：自起后端（tmp）+ stub gateway（本机无内网 key）+ 真 chromium。
 
@@ -166,23 +166,28 @@ with sync_playwright() as p:
         "协作方案" in body
         and "2 个 Agent 协作" in body
         and agent_cards == 2          # 幻觉 ghost_agent 被剔除，只剩 2 张真实卡片
-        and create_btns == 2          # 每个真实 Agent 一个创建按钮
+        and create_btns == 0          # safe_auto 不退化成人工搬运/逐项点击
         and "生成控制逻辑状态机" in body  # role
         and "搭建并分析故障树" in body
         and "ghost_agent" in body      # dropped 剔除告警如实记名
+        and "多 Agent 计划尚无机器可读依赖图" in body
+        and "没有创建任务" in body
     )
-    check("②多 Agent orchestrate：2 张 Agent 卡+各自分工+各自创建按钮+幻觉剔除告警",
+    check("②多 Agent orchestrate：2 张 Agent 卡+分工可见+安全门整体阻断+幻觉剔除告警",
           multi_ok, f"cards={agent_cards} btns={create_btns} body={body[-400:]}")
     page.screenshot(path=str(SHOTS / "2_multi_agent.png"), full_page=True)
 
-    # ── ③ 点某个 Agent 的「去创建此任务」→ 落创建页，仅带该 Agent 的预填 ──
-    page.get_by_role("button", name="去创建此任务").nth(1).click()  # fta_agent（第二张）
-    page.wait_for_url(lambda url: "/tasks/new" in url, timeout=5000)
-    expect(page.locator(".prefill-note")).to_be_visible(timeout=5000)
-    top_event_val = page.locator('input[placeholder="请填写顶事件"]').first.input_value()
-    create_ok = "供电完全丧失" in top_event_val and "提交任务" in page.locator("body").inner_text()
-    check("③点 Agent 的创建按钮→落创建页带该 Agent 预填（签发仍由人）", create_ok,
-          f"top_event={top_event_val!r}")
+    # ── ③ 阻断事实落库但任务严格为零；用户留在会话继续调整。 ──
+    conn = app.state.conn_factory()
+    try:
+        task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+    finally:
+        conn.close()
+    check(
+        "③多 Agent 未有结构化 DAG 前零任务、留在会话",
+        task_count == 0 and "/tasks/new" not in page.url,
+        f"tasks={task_count} url={page.url}",
+    )
     page.screenshot(path=str(SHOTS / "3_create_from_agent.png"), full_page=True)
 
     browser.close()

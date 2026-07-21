@@ -31,6 +31,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from ..auth.authorization import agent_is_callable, current_actor_matches, role_can_access_agent
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
 
@@ -66,6 +67,10 @@ class CheckConfigError(Exception):
     按 ADR-0018（审计 D3）：配置错误的 case 记 failed 而非 skipped——
     坏掉的断言绝不能空洞通过。
     """
+
+
+class EvalAuthorizationDenied(Exception):
+    """评测入队提交点的认证角色已失效或不满足 Agent permissions。"""
 
 
 def load_eval_cases(pkg_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -390,6 +395,8 @@ def enqueue_eval_run(
     agent_registry: Any,
     agent_id: str,
     triggered_by: str,
+    actor_username: str | None = None,
+    actor_role: str | None = None,
 ) -> dict[str, Any]:
     """入队一次评测跑批（T1，GH #2）：建 status='queued' 的 eval_run 立即返回，
     真正执行交给 worker（配额门内认领 queued→running）。调用方保证 agent 已注册
@@ -400,13 +407,92 @@ def enqueue_eval_run(
     agent = agent_registry.get(agent_id)
     if agent is None:
         raise ValueError(f"agent 不存在：{agent_id}")
-    snapshot_handle = freeze_eval_snapshot(conn, agent_registry=agent_registry, agent_id=agent_id)
+    authorized_request = actor_username is not None or actor_role is not None
+    if authorized_request:
+        if not actor_username or not actor_role or not role_can_access_agent(agent, actor_role):
+            raise EvalAuthorizationDenied(
+                f"当前角色无权触发 agent {agent_id} 的评测执行"
+            )
     run_id = f"eval_{uuid.uuid4().hex}"
-    return repos.create_eval_run(
-        conn, run_id=run_id, agent_id=agent_id,
-        agent_version=str(agent.get("version")), triggered_by=triggered_by,
-        status="queued", snapshot_handle=snapshot_handle,
-    )
+    if not authorized_request:
+        snapshot_handle = freeze_eval_snapshot(
+            conn, agent_registry=agent_registry, agent_id=agent_id
+        )
+        return repos.create_eval_run(
+            conn, run_id=run_id, agent_id=agent_id,
+            agent_version=str(agent.get("version")), triggered_by=triggered_by,
+            status="queued", snapshot_handle=snapshot_handle,
+        )
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        actor = current_actor_matches(
+            conn,
+            username=actor_username or "",
+            expected_role=actor_role or "",
+        )
+        current_agent = agent_registry.get(agent_id)
+        if (
+            actor is None
+            or current_agent is None
+            or not agent_is_callable(current_agent)
+            or not role_can_access_agent(current_agent, actor_role or "")
+        ):
+            raise EvalAuthorizationDenied(
+                "账户在评测快照生成期间已停用、角色变化或 Agent 权限变化；未入队"
+            )
+        # 快照写入与 run 入队共享本事务：提交点失权或后续任一步失败时二者一起
+        # 回滚，拒绝请求绝不留下孤立快照。随后按实际冻结的 Agent 再验一次权限，
+        # 防止注册表在两次读取间切换版本而让 run 版本/权限与执行快照错位。
+        snapshot_handle = freeze_eval_snapshot(
+            conn, agent_registry=agent_registry, agent_id=agent_id
+        )
+        snapshot = repos.get_eval_snapshot(conn, snapshot_handle)
+        try:
+            frozen_agent = json.loads(snapshot["content_json"])["agent"] if snapshot else None
+        except (KeyError, TypeError, json.JSONDecodeError):
+            frozen_agent = None
+        if (
+            not isinstance(frozen_agent, dict)
+            or frozen_agent.get("id") != agent_id
+            or not agent_is_callable(frozen_agent)
+            or not role_can_access_agent(frozen_agent, actor_role or "")
+        ):
+            raise EvalAuthorizationDenied(
+                "冻结的 Agent 版本已不可用或不再允许当前角色；未入队"
+            )
+        latest_agent = agent_registry.get(agent_id)
+        if (
+            latest_agent is None
+            or not agent_is_callable(latest_agent)
+            or not role_can_access_agent(latest_agent, actor_role or "")
+            or json.dumps(
+                latest_agent,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            != json.dumps(
+                frozen_agent,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        ):
+            raise EvalAuthorizationDenied(
+                "Agent manifest 在评测冻结期间发生变化；请基于当前版本重新触发"
+            )
+        run = repos.create_eval_run(
+            conn, run_id=run_id, agent_id=agent_id,
+            agent_version=str(snapshot["agent_version"]), triggered_by=triggered_by,
+            status="queued", snapshot_handle=snapshot_handle,
+        )
+        conn.execute("COMMIT")
+        return run
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
 
 
 def run_agent_evals(
