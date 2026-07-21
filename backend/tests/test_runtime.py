@@ -30,11 +30,28 @@ import yaml
 from backend.app.config import AGENTS_DIR, CONTRACTS_DIR, TOOLS_DIR
 from backend.app.runtime.registry import AgentRegistry
 from backend.app.runtime.runtime import AgentRuntime
-from backend.app.runtime.manifest import canonical_manifest_digest
+from backend.app.runtime.manifest import (
+    MANIFEST_PIN_VERSION,
+    canonical_execution_files_digest,
+    capture_execution_files,
+)
 from backend.app.storage import repos
 from backend.app.storage.db import get_conn, init_db
 
 _AGENT_SCHEMA = CONTRACTS_DIR / "agent.schema.json"
+
+
+def _bind_execution_generation(package_dir: Path) -> None:
+    """让复制的 legacy hello 包显式加入 safe-auto 执行代际，仅供 pin 测试。"""
+    yaml_path = package_dir / "agent.yaml"
+    manifest = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    manifest["execution_digest"] = canonical_execution_files_digest(
+        capture_execution_files(manifest, package_dir)
+    )
+    yaml_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
 
 
 def _now_iso() -> str:
@@ -635,7 +652,7 @@ def test_execute_requires_human_review(tmp_path: Path) -> None:
         {"mode": "safe_auto"},
         {
             "mode": "safe_auto",
-            "manifest_pin_version": "agent_manifest_pin.v1",
+            "manifest_pin_version": MANIFEST_PIN_VERSION,
             "agent_manifest_digest": "sha256:" + "0" * 64,
         },
     ],
@@ -643,7 +660,12 @@ def test_execute_requires_human_review(tmp_path: Path) -> None:
 def test_safe_auto_manifest_pin_fails_closed_before_workflow(
     tmp_path: Path, automation: dict[str, Any]
 ) -> None:
-    runtime, db_path = _make_runtime(AGENTS_DIR, tmp_path)
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    package_dir = agents_dir / "hello_agent"
+    shutil.copytree(AGENTS_DIR / "hello_agent", package_dir)
+    _bind_execution_generation(package_dir)
+    runtime, db_path = _make_runtime(agents_dir, tmp_path)
     conn = get_conn(db_path)
     try:
         task = repos.create_task(
@@ -683,9 +705,10 @@ def test_safe_auto_same_version_manifest_drift_fails_before_workflow(
     agents_dir.mkdir()
     package_dir = agents_dir / "hello_agent"
     shutil.copytree(AGENTS_DIR / "hello_agent", package_dir)
+    _bind_execution_generation(package_dir)
     runtime, db_path = _make_runtime(agents_dir, tmp_path)
-    frozen_manifest = runtime.agent_registry.get("hello_agent")
-    assert frozen_manifest is not None
+    frozen_snapshot = runtime.agent_registry.execution_snapshot("hello_agent")
+    assert frozen_snapshot is not None
 
     conn = get_conn(db_path)
     try:
@@ -701,8 +724,8 @@ def test_safe_auto_same_version_manifest_drift_fails_before_workflow(
             metadata={
                 "automation": {
                     "mode": "safe_auto",
-                    "manifest_pin_version": "agent_manifest_pin.v1",
-                    "agent_manifest_digest": canonical_manifest_digest(frozen_manifest),
+                    "manifest_pin_version": MANIFEST_PIN_VERSION,
+                    "agent_manifest_digest": frozen_snapshot.digest,
                 }
             },
         )
@@ -735,6 +758,208 @@ def test_safe_auto_same_version_manifest_drift_fails_before_workflow(
         ]
     finally:
         conn.close()
+
+
+@pytest.mark.parametrize("drift_target", ["input_schema", "workflow"])
+def test_safe_auto_same_version_execution_package_drift_fails_before_workflow(
+    tmp_path: Path,
+    drift_target: str,
+) -> None:
+    """safe-auto pin 必须覆盖实际执行字节，而非只覆盖 agent.yaml。
+
+    同版本部署若只改 schema/workflow，旧任务必须在 validation/workflow 触达前失败；
+    workflow 分支用外部 marker 证明漂移代码没有获得执行机会。
+    """
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    package_dir = agents_dir / "hello_agent"
+    shutil.copytree(AGENTS_DIR / "hello_agent", package_dir)
+    _bind_execution_generation(package_dir)
+    runtime, db_path = _make_runtime(agents_dir, tmp_path)
+    frozen_snapshot = runtime.agent_registry.execution_snapshot("hello_agent")
+    assert frozen_snapshot is not None
+
+    conn = get_conn(db_path)
+    try:
+        task = repos.create_task(
+            conn,
+            task_id=f"task_{drift_target}_drift",
+            agent_id="hello_agent",
+            agent_version="0.1.0",
+            name=f"same-version {drift_target} drift",
+            created_by="tester",
+            inputs={"name": "世界"},
+            input_file_ids=[],
+            metadata={
+                "automation": {
+                    "mode": "safe_auto",
+                    "manifest_pin_version": MANIFEST_PIN_VERSION,
+                    "agent_manifest_digest": frozen_snapshot.digest,
+                }
+            },
+        )
+        repos.set_task_status(conn, task["id"], "queued")
+        repos.set_task_status(conn, task["id"], "validating")
+    finally:
+        conn.close()
+
+    marker = tmp_path / "drifted_workflow_ran"
+    if drift_target == "input_schema":
+        schema_path = package_dir / "input_schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        schema["description"] = "同版本部署后漂移，但仍接受原输入"
+        schema_path.write_text(
+            json.dumps(schema, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+        )
+    else:
+        (package_dir / "workflow.py").write_text(
+            "from pathlib import Path\n"
+            "def run(context):\n"
+            f"    Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n"
+            "    return {'status': 'success', 'outputs': []}\n",
+            encoding="utf-8",
+        )
+
+    # 这是完整的新包代际（manifest 声明随执行文件更新）；旧任务仍必须因 pin
+    # 指向前一代而失败，而不是被 Registry 的撕裂包门提前挡住造成假绿。
+    _bind_execution_generation(package_dir)
+
+    # 模拟同版本包重扫并原子发布；agent.yaml 未变，旧实现只看其 digest 会放行。
+    shadow = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    shadow.scan()
+    assert shadow.errors == []
+    runtime.agent_registry.adopt(shadow)
+
+    result = runtime.execute(task["id"])
+
+    assert result["status"] == "failed"
+    assert "manifest" in result["task"]["error_message"]
+    assert not marker.exists(), "漂移后的 workflow 绝不能获得执行机会"
+    conn = get_conn(db_path)
+    try:
+        assert [event["event_type"] for event in repos.list_events(conn, task["id"])] == [
+            "task_failed"
+        ]
+        assert not (tmp_path / "task_runs" / task["id"]).exists()
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("drift_target", ["input_schema", "workflow"])
+def test_safe_auto_uses_pinned_snapshot_when_live_package_drifts_without_adopt(
+    tmp_path: Path,
+    drift_target: str,
+) -> None:
+    """digest 校验通过后也不得回读活目录（真实 TOCTOU 反例）。"""
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    package_dir = agents_dir / "hello_agent"
+    shutil.copytree(AGENTS_DIR / "hello_agent", package_dir)
+    _bind_execution_generation(package_dir)
+    runtime, db_path = _make_runtime(agents_dir, tmp_path)
+    frozen_snapshot = runtime.agent_registry.execution_snapshot("hello_agent")
+    assert frozen_snapshot is not None
+
+    conn = get_conn(db_path)
+    try:
+        task = repos.create_task(
+            conn,
+            task_id=f"task_live_{drift_target}_drift",
+            agent_id="hello_agent",
+            agent_version="0.1.0",
+            name=f"live {drift_target} drift after pin",
+            created_by="tester",
+            inputs={"name": "世界"},
+            input_file_ids=[],
+            metadata={
+                "automation": {
+                    "mode": "safe_auto",
+                    "manifest_pin_version": MANIFEST_PIN_VERSION,
+                    "agent_manifest_digest": frozen_snapshot.digest,
+                }
+            },
+        )
+        repos.set_task_status(conn, task["id"], "queued")
+        repos.set_task_status(conn, task["id"], "validating")
+    finally:
+        conn.close()
+
+    marker = tmp_path / "live_drifted_workflow_ran"
+    if drift_target == "input_schema":
+        schema_path = package_dir / "input_schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        schema.setdefault("properties", {}).setdefault("name", {})["const"] = "拒绝旧输入"
+        schema_path.write_text(
+            json.dumps(schema, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+        )
+    else:
+        (package_dir / "workflow.py").write_text(
+            "from pathlib import Path\n"
+            "def run(context):\n"
+            f"    Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n"
+            "    return {'status': 'success', 'outputs': []}\n",
+            encoding="utf-8",
+        )
+
+    # 不 scan/adopt：Registry 仍发布派发时不可变快照。Runtime 必须跑该快照，
+    # 而不是 digest 比对快照后又从已漂移活目录读 schema/workflow。
+    result = runtime.execute(task["id"])
+
+    assert result["status"] == "completed"
+    assert not marker.exists(), "活目录漂移 workflow 绝不能被加载"
+    conn = get_conn(db_path)
+    try:
+        events = [event["event_type"] for event in repos.list_events(conn, task["id"])]
+        assert events == [
+            "validation_started",
+            "agent_log",
+            "tool_started",
+            "tool_finished",
+            "agent_log",
+            "task_completed",
+        ]
+        assert result["task"]["output_file_ids"], "必须得到旧 hello workflow 的真实产物"
+    finally:
+        conn.close()
+
+
+def test_safe_auto_unchanged_execution_snapshot_runs_successfully(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    package_dir = agents_dir / "hello_agent"
+    shutil.copytree(AGENTS_DIR / "hello_agent", package_dir)
+    _bind_execution_generation(package_dir)
+    runtime, db_path = _make_runtime(agents_dir, tmp_path)
+    snapshot = runtime.agent_registry.execution_snapshot("hello_agent")
+    assert snapshot is not None
+    conn = get_conn(db_path)
+    try:
+        task = repos.create_task(
+            conn,
+            task_id="task_unchanged_execution_snapshot",
+            agent_id="hello_agent",
+            agent_version="0.1.0",
+            name="unchanged execution snapshot",
+            created_by="tester",
+            inputs={"name": "世界"},
+            input_file_ids=[],
+            metadata={
+                "automation": {
+                    "mode": "safe_auto",
+                    "manifest_pin_version": MANIFEST_PIN_VERSION,
+                    "agent_manifest_digest": snapshot.digest,
+                }
+            },
+        )
+        repos.set_task_status(conn, task["id"], "queued")
+        repos.set_task_status(conn, task["id"], "validating")
+    finally:
+        conn.close()
+
+    result = runtime.execute(task["id"])
+
+    assert result["status"] == "completed"
+    assert result["task"]["output_file_ids"]
 
 
 def test_review_requested_event_failure_keeps_waiting_review(

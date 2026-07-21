@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import copy
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import pytest
 
@@ -54,6 +57,121 @@ def test_business_user_cannot_manually_execute_admin_only_agent(app_env) -> None
         assert repos.list_tasks(conn) == []
     finally:
         conn.close()
+
+
+@pytest.mark.parametrize("task_status", ["created", "queued"])
+def test_business_user_cannot_cancel_admin_only_agent_task(
+    app_env, task_status: str
+) -> None:
+    client, app = app_env
+    depends_on: list[str] = []
+    if task_status == "created":
+        blocker = client.post(
+            "/api/tasks",
+            json={"agent_id": "hello_agent", "inputs": {"name": "阻塞任务"}},
+        )
+        assert blocker.status_code == 200, blocker.text
+        depends_on = [blocker.json()["id"]]
+
+    created = client.post(
+        "/api/tasks",
+        json={
+            "agent_id": "control_logic_agent",
+            "inputs": {
+                "system_name": "取消授权探针",
+                "states": ["OFF"],
+                "transitions": [],
+            },
+            "depends_on": depends_on,
+        },
+    )
+    assert created.status_code == 200, created.text
+    task_id = created.json()["id"]
+    assert created.json()["status"] == task_status
+    _create_and_login_business_user(client, app)
+
+    response = client.post(f"/api/tasks/{task_id}/cancel")
+
+    assert response.status_code == 403, response.text
+    conn = app.state.conn_factory()
+    try:
+        task = repos.get_task(conn, task_id)
+        assert task is not None and task["status"] == task_status
+        event_types = {event["event_type"] for event in repos.list_events(conn, task_id)}
+        assert "task_cancelled" not in event_types
+    finally:
+        conn.close()
+
+
+def test_cancel_holds_registry_snapshot_until_transaction_commit(
+    app_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, app = app_env
+    created = client.post(
+        "/api/tasks",
+        json={"agent_id": "hello_agent", "inputs": {"name": "取消锁探针"}},
+    )
+    assert created.status_code == 200, created.text
+    task_id = created.json()["id"]
+
+    live = app.state.agent_registry
+    shadow = type(live)(live.agents_dir, live.schema_path)
+    shadow.scan()
+    revoked = copy.deepcopy(shadow.get("hello_agent"))
+    assert revoked is not None
+    revoked["status"] = "disabled"
+    shadow._agents["hello_agent"] = revoked
+
+    cancel_event_inserted = threading.Event()
+    commit_entered = threading.Event()
+    release_commit = threading.Event()
+    commit_wait_timed_out = threading.Event()
+    adopt_started = threading.Event()
+    adopt_finished = threading.Event()
+    real_append_event = repos.append_event
+    real_conn_factory = app.state.conn_factory
+
+    def signal_cancel_event(*args: Any, **kwargs: Any):
+        event = real_append_event(*args, **kwargs)
+        if kwargs.get("event_type") == "task_cancelled":
+            cancel_event_inserted.set()
+        return event
+
+    def traced_conn_factory():
+        conn = real_conn_factory()
+
+        def trace(statement: str) -> None:
+            if statement.strip().upper() == "COMMIT" and cancel_event_inserted.is_set():
+                commit_entered.set()
+                if not release_commit.wait(5):
+                    commit_wait_timed_out.set()
+
+        conn.set_trace_callback(trace)
+        return conn
+
+    def publish_revocation() -> None:
+        adopt_started.set()
+        live.adopt(shadow)
+        adopt_finished.set()
+
+    monkeypatch.setattr(repos, "append_event", signal_cancel_event)
+    monkeypatch.setattr(app.state, "conn_factory", traced_conn_factory)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        cancel_future = pool.submit(client.post, f"/api/tasks/{task_id}/cancel")
+        assert cancel_event_inserted.wait(5)
+        assert commit_entered.wait(5)
+        assert not cancel_future.done()
+        adopt_future = pool.submit(publish_revocation)
+        assert adopt_started.wait(1)
+        assert not adopt_finished.wait(0.1), "adopt 不得越过取消事务的 COMMIT 线性化点"
+        release_commit.set()
+        response = cancel_future.result(timeout=5)
+        adopt_future.result(timeout=5)
+
+    assert not commit_wait_timed_out.is_set()
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "cancelled"
+    assert adopt_finished.is_set()
 
 
 def test_business_user_cannot_discover_or_open_draft_guide(app_env) -> None:

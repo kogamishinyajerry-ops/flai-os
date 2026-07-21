@@ -14,6 +14,7 @@ from jsonschema.exceptions import ValidationError
 
 from agents.guide_agent import workflow as guide_workflow
 from backend.app.jobs.runner import resolve_dependencies_once
+from backend.app.runtime.manifest import MANIFEST_PIN_VERSION
 from backend.app.storage import repos
 
 
@@ -702,19 +703,12 @@ def test_safe_auto_http_turn_dispatches_explicit_dag_and_persists_receipt(app_en
         assert receipt is not None
         assert receipt["result"]["execution"]["task_ids"] == execution["task_ids"]
         for task in tasks:
-            manifest = app.state.agent_registry.get(task["agent_id"])
-            expected_digest = "sha256:" + hashlib.sha256(
-                json.dumps(
-                    manifest,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    allow_nan=False,
-                ).encode("utf-8")
-            ).hexdigest()
+            snapshot = app.state.agent_registry.execution_snapshot(task["agent_id"])
+            assert snapshot is not None
+            expected_digest = snapshot.digest
             automation = task["metadata"]["automation"]
             assert automation["mode"] == "safe_auto"
-            assert automation["manifest_pin_version"] == "agent_manifest_pin.v1"
+            assert automation["manifest_pin_version"] == MANIFEST_PIN_VERSION
             assert automation["agent_manifest_digest"] == expected_digest
     finally:
         conn.close()

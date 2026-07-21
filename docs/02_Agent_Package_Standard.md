@@ -26,6 +26,7 @@ Agent Registry 只认这个目录形态；缺失 `agent.yaml` 或 schema 校验�
 | `id` | string | 全局唯一，蛇形小写，Registry 主键，重复即拒 |
 | `name` | string | 门户展示名 |
 | `version` | semver | 任何 prompt/workflow/schema 改动必须升版本并写 `changelog.md` |
+| `execution_digest` | sha256(可选/条件强制) | 绑定 prompt/workflow/实际 input/output schema 的路径与字节；`automation.session_execution=true` 时强制。Registry 以 `agent_execution_files.v1` 规范计算并逐字比对，部署先后写入造成的任一中间态均拒绝注册 |
 | `status` | enum | 运行生命周期：`draft`(仅开发者可见) / `trial`(试用角色可见) / `released`(正式) / `disabled`(下线) |
 | `maturity` | enum | 治理轴：`L0`/`L1`/`L2`/`L3`，见第3节；与 `status` 正交 |
 | `category` | enum | `tool_automation` / `knowledge_qa` / `structured_gen` / `reasoning_assist` |
@@ -95,7 +96,7 @@ def run(context):
 ## 5. 新增 Agent 的完整步骤（零平台核改动）
 
 1. 在 `agents/` 下新建 `<agent_id>/` 目录，按第1节形态建齐文件。
-2. 填写 `agent.yaml`，跑 `contracts/agent.schema.json` 自校验（Registry 启动时也会校验）。
+2. 填写 `agent.yaml`，跑 `contracts/agent.schema.json` 自校验（Registry 启动时也会校验）；若声明 `automation.session_execution=true`，须在 prompt/workflow/schema 定稿后写入与 Registry 同算法的 `execution_digest`，且这些文件任一变更都要同步更新摘要与 `version`。
 3. 写 `input_schema.json` / `output_schema.json`。
 4. 实现 `workflow.py` 的 `run(context)`，只调用已注册的 `model_gateway` profile 与 `tool_registry` 工具 id。
 5. `tools` 字段列出的每个工具 id 必须已在 `tools_impl/` 注册（见 `03_Tool_Package_Standard.md`），否则 Runtime 拒绝执行。

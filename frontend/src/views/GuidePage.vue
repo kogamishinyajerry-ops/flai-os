@@ -453,11 +453,20 @@ const outboxRecoveryActive = ref(false);
 const guideSafeAutoOutbox = createGuideSafeAutoOutbox();
 // 已恢复会话只有后端明确 active 时才允许继续发言；缺失/未知状态同样
 // fail-closed 为只读。全新会话 started=false，不受该守卫影响。
-const routeConversationId = computed(() =>
-  typeof route.query.c === "string" && route.query.c ? route.query.c : ""
+function classifyGuideConversationRoute(value) {
+  if (value === undefined) return { kind: "absent", id: "" };
+  if (typeof value === "string" && value) return { kind: "valid", id: value };
+  return { kind: "malformed", id: "" };
+}
+
+const routeConversationTarget = computed(() => classifyGuideConversationRoute(route.query.c));
+const routeConversationId = computed(() => routeConversationTarget.value.id);
+const routeConversationMalformed = computed(
+  () => routeConversationTarget.value.kind === "malformed"
 );
 const conversationTargetMismatch = computed(() =>
-  !!routeConversationId.value && conversationId.value !== routeConversationId.value
+  routeConversationMalformed.value ||
+  (!!routeConversationId.value && conversationId.value !== routeConversationId.value)
 );
 const conversationReadOnly = computed(() =>
   outboxRecoveryBlocked.value ||
@@ -1346,6 +1355,13 @@ async function resumePersistedGuideTurn() {
   outboxRecoveryBlocked.value = true;
   outboxRecoveryActive.value = true;
   restoring.value = true;
+  if (routeConversationMalformed.value) {
+    pageError.value =
+      "当前 URL 会话参数非法，待恢复 safe_auto 意图已锁定且未发起网络请求";
+    restoring.value = false;
+    outboxRecoveryActive.value = false;
+    return true;
+  }
   if ((await fetchMe()) !== true) {
     pageError.value = "无法向服务端确认当前身份，待恢复自动执行已被锁定";
     restoring.value = false;
@@ -1464,9 +1480,10 @@ async function resumePersistedGuideTurn() {
 
 onMounted(async () => {
   if (await resumePersistedGuideTurn()) return;
-  const c = route.query.c;
-  if (typeof c === "string" && c) loadConversation(c);
-  else restoreFreshSendState();
+  const target = routeConversationTarget.value;
+  if (target.kind === "valid") loadConversation(target.id);
+  else if (target.kind === "absent") restoreFreshSendState();
+  else pageError.value = "当前 URL 会话参数非法，已禁止发送";
 });
 onUnmounted(() => {
   conversationLoadEpoch++; // 作废所有 await 中的恢复续体
@@ -1477,16 +1494,25 @@ onUnmounted(() => {
 // 左栏切换会话 / 点「新对话」→ 据 ?c 变化恢复或重置（跳过刚创建的本会话，避免回灌）。
 watch(
   () => route.query.c,
-  (c) => {
+  () => {
     if (outboxRecoveryActive.value) return;
-    if (typeof c === "string" && c) {
-      if (c !== conversationId.value) loadConversation(c);
-    } else {
+    const target = routeConversationTarget.value;
+    if (target.kind === "valid") {
+      if (target.id !== conversationId.value) loadConversation(target.id);
+    } else if (target.kind === "absent") {
       // 「新对话」或移除 ?c 同样是新目标：即使旧请求尚在途也要立即作废。
       conversationLoadEpoch++;
       restoring.value = false;
       if (started.value || messages.value.length || sending.value) resetToFresh();
+      else pageError.value = "";
       restoreFreshSendState();
+    } else {
+      // 多值、空值与非字符串 c 均不是“新对话”。把它们当 fresh 会绕过
+      // durable outbox 的路由漂移门并重放 POST，因此必须保留锁且只展示错误。
+      conversationLoadEpoch++;
+      restoring.value = false;
+      invalidateSendUi();
+      pageError.value = "当前 URL 会话参数非法，已禁止发送";
     }
   }
 );

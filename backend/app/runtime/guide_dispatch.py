@@ -22,7 +22,7 @@ from jsonschema.exceptions import SchemaError
 
 from ..auth.authorization import agent_is_callable, role_can_access_agent
 from ..storage import repos
-from .manifest import MANIFEST_PIN_VERSION, canonical_manifest_digest
+from .manifest import MANIFEST_PIN_VERSION
 
 
 def _canonical_digest(value: Any) -> str:
@@ -97,12 +97,23 @@ def _executable_graph_payload(recommendation: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_input_schema(registry: Any, agent_id: str) -> dict[str, Any] | None:
-    package_dir = registry.package_dir(agent_id)
-    if package_dir is None:
-        return None
-    schema_path = Path(package_dir) / "input_schema.json"
     try:
-        loaded = json.loads(schema_path.read_text(encoding="utf-8"))
+        snapshot_getter = getattr(registry, "execution_snapshot", None)
+        snapshot = snapshot_getter(agent_id) if callable(snapshot_getter) else None
+        if snapshot is not None:
+            manifest = snapshot.manifest
+            schema_name = (manifest.get("input") or {}).get("schema")
+            if not isinstance(schema_name, str) or not schema_name:
+                return None
+            loaded = json.loads(snapshot.read_file(schema_name))
+        else:
+            # 仅保留测试 shim/旧 Registry 的兼容读取；正式 AgentRegistry 必须走
+            # 不可变 execution_snapshot，缺快照不能进入任务物化。
+            package_dir = registry.package_dir(agent_id)
+            if package_dir is None:
+                return None
+            schema_path = Path(package_dir) / "input_schema.json"
+            loaded = json.loads(schema_path.read_text(encoding="utf-8"))
         if not isinstance(loaded, dict):
             return None
         Draft202012Validator.check_schema(loaded)
@@ -433,7 +444,12 @@ class GuidePlanDispatch:
 
     def _validate_dag_agents(
         self, nodes: list[dict[str, Any]], actor_role: str
-    ) -> tuple[str | None, dict[str, Any] | None, dict[str, dict[str, Any]]]:
+    ) -> tuple[
+        str | None,
+        dict[str, Any] | None,
+        dict[str, dict[str, Any]],
+        dict[str, str],
+    ]:
         referenced = {
             dependency
             for node in nodes
@@ -441,6 +457,7 @@ class GuidePlanDispatch:
         }
         leaf_id = next(node["node_id"] for node in nodes if node["node_id"] not in referenced)
         frozen: dict[str, dict[str, Any]] = {}
+        frozen_digests: dict[str, str] = {}
         for node in nodes:
             node_id = node["node_id"]
             agent_id = node["agent_id"]
@@ -454,9 +471,11 @@ class GuidePlanDispatch:
                         agent_id=agent_id,
                     ),
                     {},
+                    {},
                 )
-            current = self._registry.get(agent_id)
-            agent = copy.deepcopy(current) if isinstance(current, dict) else None
+            snapshot_getter = getattr(self._registry, "execution_snapshot", None)
+            snapshot = snapshot_getter(agent_id) if callable(snapshot_getter) else None
+            agent = snapshot.manifest if snapshot is not None else None
             if agent is None or not agent_is_callable(agent, mode="job"):
                 return (
                     "blocked_conflict",
@@ -466,6 +485,7 @@ class GuidePlanDispatch:
                         node_id=node_id,
                         agent_id=agent_id,
                     ),
+                    {},
                     {},
                 )
             planned_version = node.get("agent_version")
@@ -482,6 +502,7 @@ class GuidePlanDispatch:
                         agent_id=agent_id,
                     ),
                     {},
+                    {},
                 )
             if not self._is_safe_auto_agent(agent, actor_role):
                 return (
@@ -493,6 +514,7 @@ class GuidePlanDispatch:
                         agent_id=agent_id,
                         actor_role=actor_role,
                     ),
+                    {},
                     {},
                 )
             workflow = agent.get("workflow") or {}
@@ -509,6 +531,7 @@ class GuidePlanDispatch:
                         agent_id=agent_id,
                     ),
                     {},
+                    {},
                 )
             if node_id == leaf_id and workflow.get("requires_human_review") is not True:
                 return (
@@ -520,9 +543,11 @@ class GuidePlanDispatch:
                         agent_id=agent_id,
                     ),
                     {},
+                    {},
                 )
             frozen[node_id] = agent
-        return None, None, frozen
+            frozen_digests[node_id] = snapshot.digest
+        return None, None, frozen, frozen_digests
 
     def _validate_dag_inputs(
         self, nodes: list[dict[str, Any]]
@@ -588,14 +613,18 @@ class GuidePlanDispatch:
         self,
         nodes: list[dict[str, Any]],
         frozen_agents: dict[str, dict[str, Any]],
+        frozen_digests: dict[str, str],
         actor_role: str,
     ) -> dict[str, Any] | None:
         for node in nodes:
             node_id = node["node_id"]
             agent_id = node["agent_id"]
-            latest = self._registry.get(agent_id)
+            snapshot_getter = getattr(self._registry, "execution_snapshot", None)
+            snapshot = snapshot_getter(agent_id) if callable(snapshot_getter) else None
+            latest = snapshot.manifest if snapshot is not None else None
             if (
                 not isinstance(latest, dict)
+                or snapshot.digest != frozen_digests[node_id]
                 or latest != frozen_agents[node_id]
                 or not self._is_safe_auto_agent(latest, actor_role)
                 or latest.get("version") != node.get("agent_version")
@@ -620,6 +649,7 @@ class GuidePlanDispatch:
         actor_role: str,
         plan_digest: str,
         frozen_agents: dict[str, dict[str, Any]],
+        frozen_manifest_digests: dict[str, str],
         current_file_bindings: list[dict[str, Any]],
         attachment_node_id: str | None,
     ) -> dict[str, Any]:
@@ -669,7 +699,7 @@ class GuidePlanDispatch:
             automation_meta = {
                 "mode": "safe_auto",
                 "manifest_pin_version": MANIFEST_PIN_VERSION,
-                "agent_manifest_digest": canonical_manifest_digest(agent),
+                "agent_manifest_digest": frozen_manifest_digests[node_id],
                 "request_id": request_id,
                 "plan_digest": plan_digest,
                 "graph_version": "guide_dag.v1",
@@ -813,9 +843,12 @@ class GuidePlanDispatch:
                     plan_digest=plan_digest,
                     issues=[attachment_issue],
                 )
-            graph_status, graph_issue, _frozen_agents = self._validate_dag_agents(
-                recommendation["nodes"], actor_role
-            )
+            (
+                graph_status,
+                graph_issue,
+                _frozen_agents,
+                _frozen_manifest_digests,
+            ) = self._validate_dag_agents(recommendation["nodes"], actor_role)
             if graph_issue is not None:
                 return _execution(
                     request_id=request_id,
@@ -846,7 +879,10 @@ class GuidePlanDispatch:
                     ],
                 )
             manifest_issue = self._dag_manifests_still_match(
-                recommendation["nodes"], _frozen_agents, actor_role
+                recommendation["nodes"],
+                _frozen_agents,
+                _frozen_manifest_digests,
+                actor_role,
             )
             if manifest_issue is not None:
                 return _execution(
@@ -865,6 +901,7 @@ class GuidePlanDispatch:
                 actor_role=actor_role,
                 plan_digest=plan_digest,
                 frozen_agents=_frozen_agents,
+                frozen_manifest_digests=_frozen_manifest_digests,
                 current_file_bindings=_dag_file_bindings,
                 attachment_node_id=_dag_attachment_node_id,
             )
@@ -919,8 +956,17 @@ class GuidePlanDispatch:
                 ],
             )
 
-        registered_agent = self._registry.get(agent_id)
-        agent = copy.deepcopy(registered_agent) if isinstance(registered_agent, dict) else None
+        snapshot_getter = getattr(self._registry, "execution_snapshot", None)
+        registered_snapshot = (
+            snapshot_getter(agent_id) if callable(snapshot_getter) else None
+        )
+        if registered_snapshot is not None:
+            agent = registered_snapshot.manifest
+            manifest_digest = registered_snapshot.digest
+        else:
+            registered_agent = self._registry.get(agent_id)
+            agent = copy.deepcopy(registered_agent) if isinstance(registered_agent, dict) else None
+            manifest_digest = None
         if (
             agent is None
             or not agent_is_callable(agent, mode="job")
@@ -1042,9 +1088,18 @@ class GuidePlanDispatch:
                 ],
             )
 
-        latest_agent = self._registry.get(agent_id)
+        latest_snapshot = (
+            snapshot_getter(agent_id) if callable(snapshot_getter) else None
+        )
+        latest_agent = (
+            latest_snapshot.manifest
+            if latest_snapshot is not None
+            else self._registry.get(agent_id)
+        )
         if (
             latest_agent is None
+            or latest_snapshot is None
+            or latest_snapshot.digest != manifest_digest
             or latest_agent != agent
             or not self._is_safe_auto_agent(latest_agent, actor_role)
             or latest_agent.get("version") != planned_version
@@ -1066,7 +1121,7 @@ class GuidePlanDispatch:
         automation_meta = {
             "mode": "safe_auto",
             "manifest_pin_version": MANIFEST_PIN_VERSION,
-            "agent_manifest_digest": canonical_manifest_digest(agent),
+            "agent_manifest_digest": manifest_digest,
             "request_id": request_id,
             "plan_digest": plan_digest,
             "initiated_by_username": actor_username,

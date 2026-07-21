@@ -47,6 +47,63 @@ def test_scan_marks_package_missing_workflow_as_invalid(tmp_path: Path) -> None:
     assert str(broken) == registry.errors[0]["path"]
 
 
+@pytest.mark.parametrize("first_write", ["workflow", "manifest"])
+def test_scan_rejects_stable_torn_execution_generation(
+    tmp_path: Path, first_write: str
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    package_dir = agents_dir / "control_logic_agent"
+    shutil.copytree(AGENTS_DIR / "control_logic_agent", package_dir)
+    yaml_path = package_dir / "agent.yaml"
+    workflow_path = package_dir / "workflow.py"
+    original_yaml = yaml_path.read_text(encoding="utf-8")
+    if first_write == "workflow":
+        workflow_path.write_text(
+            "def run(context):\n"
+            "    return {'status': 'success', 'outputs': [{'generation': 'new'}]}\n",
+            encoding="utf-8",
+        )
+    else:
+        yaml_path.write_text(
+            original_yaml.replace(
+                "execution_digest: sha256:3b2361937c187131eb3424261a6aa1accf23bb2f4cf80f2b3aeaaef8a25c83e1",
+                f"execution_digest: sha256:{'0' * 64}",
+            ),
+            encoding="utf-8",
+        )
+    registry = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    registry.scan()
+
+    assert registry.get("control_logic_agent") is None
+    assert registry.execution_snapshot("control_logic_agent") is None
+    assert len(registry.errors) == 1
+    assert "execution_digest" in registry.errors[0]["error"]
+
+
+def test_scan_rejects_safe_auto_agent_without_execution_generation(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    package_dir = agents_dir / "control_logic_agent"
+    shutil.copytree(AGENTS_DIR / "control_logic_agent", package_dir)
+    yaml_path = package_dir / "agent.yaml"
+    yaml_path.write_text(
+        "\n".join(
+            line for line in yaml_path.read_text(encoding="utf-8").splitlines()
+            if not line.startswith("execution_digest:")
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    registry = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    registry.scan()
+
+    assert registry.get("control_logic_agent") is None
+    assert registry.execution_snapshot("control_logic_agent") is None
+    assert len(registry.errors) == 1
+    assert "execution_digest" in registry.errors[0]["error"]
+
+
 def test_scan_marks_package_missing_readme_as_invalid(tmp_path: Path) -> None:
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()

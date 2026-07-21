@@ -17,6 +17,8 @@ import importlib.util
 import logging
 import re
 import sqlite3
+import tempfile
+import types
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -31,7 +33,7 @@ from ..core.errors import (
 )
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
-from .manifest import MANIFEST_PIN_VERSION, canonical_manifest_digest
+from .manifest import MANIFEST_PIN_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -364,7 +366,18 @@ def _task_data_classification(
     return "internal"
 
 
-def _load_workflow_module(agent_id: str, workflow_path: Path) -> Any:
+def _load_workflow_module(
+    agent_id: str,
+    workflow_path: Path,
+    *,
+    source_bytes: bytes | None = None,
+) -> Any:
+    if source_bytes is not None:
+        module = types.ModuleType(f"flai_agent_{agent_id}_workflow")
+        module.__file__ = str(workflow_path)
+        module.__package__ = None
+        exec(compile(source_bytes, str(workflow_path), "exec"), module.__dict__)
+        return module
     spec = importlib.util.spec_from_file_location(f"flai_agent_{agent_id}_workflow", workflow_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"无法加载 workflow.py：{workflow_path}")
@@ -480,7 +493,19 @@ class AgentRuntime:
             return {"status": "failed", "error_message": f"任务不存在：{task_id}"}
 
         agent_id = task["agent_id"]
-        agent = self.agent_registry.get(agent_id)
+        metadata = task.get("metadata")
+        automation = metadata.get("automation") if isinstance(metadata, dict) else None
+        is_safe_auto = (
+            isinstance(automation, dict) and automation.get("mode") == "safe_auto"
+        )
+        execution_snapshot = None
+        if is_safe_auto:
+            snapshot_getter = getattr(self.agent_registry, "execution_snapshot", None)
+            if callable(snapshot_getter):
+                execution_snapshot = snapshot_getter(agent_id)
+            agent = execution_snapshot.manifest if execution_snapshot is not None else None
+        else:
+            agent = self.agent_registry.get(agent_id)
         if agent is None:
             repos.set_task_status(conn, task_id, "failed", error_message=f"Agent 未注册：{agent_id}")
             repos.append_event(
@@ -513,14 +538,11 @@ class AgentRuntime:
             )
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
-        metadata = task.get("metadata")
-        automation = metadata.get("automation") if isinstance(metadata, dict) else None
-        if isinstance(automation, dict) and automation.get("mode") == "safe_auto":
+        if is_safe_auto:
             expected_digest = automation.get("agent_manifest_digest")
-            try:
-                current_digest = canonical_manifest_digest(agent)
-            except (TypeError, ValueError):
-                current_digest = None
+            current_digest = (
+                execution_snapshot.digest if execution_snapshot is not None else None
+            )
             if (
                 automation.get("manifest_pin_version") != MANIFEST_PIN_VERSION
                 or not isinstance(expected_digest, str)
@@ -542,7 +564,11 @@ class AgentRuntime:
                 )
                 return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
-        pkg_dir = self.agent_registry.package_dir(agent_id)
+        pkg_dir = (
+            execution_snapshot.package_dir
+            if execution_snapshot is not None
+            else self.agent_registry.package_dir(agent_id)
+        )
 
         # ADR-0025：执行期算一次任务级分级（文件∨知识∨工具三轴）并**落库为不可变列**。
         # 落在产出任何内容（产物/样本/tool_runs/事件正文/error_message）之前，故每条
@@ -562,7 +588,17 @@ class AgentRuntime:
         )
         verified_files: list[tuple[dict[str, Any], BinaryIO]] = []
         try:
-            self._validate_inputs(pkg_dir, agent, task["inputs"])
+            schema_bytes = None
+            if execution_snapshot is not None:
+                pkg_dir = self._materialize_execution_snapshot(
+                    execution_snapshot, task_id
+                )
+                schema_name = (agent.get("input") or {}).get("schema")
+                if isinstance(schema_name, str) and schema_name:
+                    schema_bytes = execution_snapshot.read_file(schema_name)
+            self._validate_inputs(
+                pkg_dir, agent, task["inputs"], schema_bytes=schema_bytes
+            )
             verified_files = self._open_input_files(conn, task)
         except Exception as exc:
             repos.append_event(
@@ -618,7 +654,17 @@ class AgentRuntime:
                 output_dir,
                 [row for row, _handle in verified_files],
             )
-            workflow_module = _load_workflow_module(agent_id, pkg_dir / "workflow.py")
+            workflow_name = (agent.get("workflow") or {}).get("entrypoint") or "workflow.py"
+            workflow_source = (
+                execution_snapshot.read_file(workflow_name)
+                if execution_snapshot is not None
+                else None
+            )
+            workflow_module = _load_workflow_module(
+                agent_id,
+                pkg_dir / workflow_name,
+                source_bytes=workflow_source,
+            )
             result = workflow_module.run(context)
         except Exception as exc:
             error_message = f"{exc.__class__.__name__}: {exc}"
@@ -770,7 +816,36 @@ class AgentRuntime:
                 classification=data_classification,
             )
 
-    def _validate_inputs(self, pkg_dir: Path, agent: dict[str, Any], inputs: dict[str, Any]) -> None:
+    def _materialize_execution_snapshot(self, snapshot: Any, task_id: str) -> Path:
+        """把 Registry 不可变字节投影到本任务私有目录，供相对 prompt 读取。
+
+        schema 与 workflow 本身仍直接使用 snapshot bytes 解析/编译；物化副本只给
+        ``Path(__file__).with_name(...)`` 这类包内相对读取提供同一快照根。
+        """
+        task_root = self.task_runs_dir / task_id
+        task_root.mkdir(parents=True, exist_ok=True)
+        snapshot_dir = Path(
+            tempfile.mkdtemp(prefix=".agent_snapshot_", dir=str(task_root))
+        )
+        snapshot_root = snapshot_dir.resolve()
+        for rel_name, content in snapshot.package_files:
+            target = snapshot_dir / rel_name
+            try:
+                target.resolve().relative_to(snapshot_root)
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"执行快照路径逃出任务私有根：{rel_name!r}") from exc
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        return snapshot_dir
+
+    def _validate_inputs(
+        self,
+        pkg_dir: Path,
+        agent: dict[str, Any],
+        inputs: dict[str, Any],
+        *,
+        schema_bytes: bytes | None = None,
+    ) -> None:
         import json
 
         from jsonschema import validate as jsonschema_validate
@@ -778,8 +853,11 @@ class AgentRuntime:
         schema_name = agent.get("input", {}).get("schema")
         if not schema_name:
             return
-        schema_path = pkg_dir / schema_name
-        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        if schema_bytes is None:
+            schema_path = pkg_dir / schema_name
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        else:
+            schema = json.loads(schema_bytes)
         jsonschema_validate(inputs, schema)
 
     def _open_input_files(

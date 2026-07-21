@@ -22,6 +22,7 @@ import yaml
 from jsonschema import ValidationError, validate
 
 from ..core.errors import DuplicateAgentIdError, InvalidPackageError
+from .manifest import AgentExecutionSnapshot, build_execution_snapshot
 
 # docs/02 §1 目录形态：除 agent.yaml 外的强制文件/目录（固定名，标准包形态图示）。
 _REQUIRED_FILES: tuple[str, ...] = (
@@ -44,6 +45,7 @@ class AgentRegistry:
         self._schema: dict[str, Any] = json.loads(self.schema_path.read_text(encoding="utf-8"))
         self._agents: dict[str, dict[str, Any]] = {}
         self._dirs: dict[str, Path] = {}
+        self._execution_snapshots: dict[str, AgentExecutionSnapshot] = {}
         self.errors: list[dict[str, str]] = []
         self._view_lock = threading.RLock()
 
@@ -68,6 +70,7 @@ class AgentRegistry:
             self._dirs = other._dirs
             self.errors = other.errors
             self._agents = other._agents
+            self._execution_snapshots = other._execution_snapshots
 
     def scan(self) -> None:
         """重新扫描 agents_dir，覆盖式重建内存注册表（幂等：可重复调用）。"""
@@ -77,6 +80,7 @@ class AgentRegistry:
     def _scan_locked(self) -> None:
         self._agents = {}
         self._dirs = {}
+        self._execution_snapshots = {}
         self.errors = []
         if not self.agents_dir.is_dir():
             return
@@ -84,7 +88,11 @@ class AgentRegistry:
             if not entry.is_dir():
                 continue
             try:
-                data = self._load_one(entry)
+                data, execution_snapshot = self._load_consistent_execution_snapshot(entry)
+            except (OSError, ValueError) as exc:
+                exc = InvalidPackageError(f"{entry} 执行快照捕获失败：{exc}")
+                self.errors.append({"path": str(entry), "error": str(exc)})
+                continue
             except InvalidPackageError as exc:
                 self.errors.append({"path": str(entry), "error": str(exc)})
                 continue
@@ -95,6 +103,33 @@ class AgentRegistry:
                 )
             self._agents[agent_id] = data
             self._dirs[agent_id] = entry
+            if execution_snapshot is not None:
+                self._execution_snapshots[agent_id] = execution_snapshot
+
+    def _load_consistent_execution_snapshot(
+        self, entry: Path
+    ) -> tuple[dict[str, Any], AgentExecutionSnapshot | None]:
+        """双采集同一包代际；扫描期间任一执行字节变化即拒绝本轮注册。
+
+        Registry 锁只能保护内存发布，不能冻结外部部署对活目录的多文件写入。
+        因此先后完整采集两次 agent.yaml + 实际 schema/workflow/prompt；只有规范化
+        manifest 与每个捕获字节完全一致才发布。变化中的包宁可本轮不可用，也不把
+        旧安全声明与新 workflow 拼成一个摘要自洽的撕裂快照。
+        """
+        first_manifest = self._load_one(entry)
+        if first_manifest.get("execution_digest") is None:
+            # 非 safe-auto 的 legacy 包保持兼容；它们不会获得 execution_snapshot，
+            # 因而 Guide/Runtime 的版本化自动执行入口会默认拒绝。
+            return first_manifest, None
+        first_snapshot = build_execution_snapshot(first_manifest, entry)
+        second_manifest = self._load_one(entry)
+        second_snapshot = build_execution_snapshot(second_manifest, entry)
+        if (
+            first_snapshot.manifest_json != second_snapshot.manifest_json
+            or first_snapshot.package_files != second_snapshot.package_files
+        ):
+            raise InvalidPackageError(f"{entry} 执行包在扫描期间发生变化，拒绝发布撕裂快照")
+        return second_manifest, second_snapshot
 
     def _load_one(self, entry: Path) -> dict[str, Any]:
         yaml_path = entry / "agent.yaml"
@@ -139,6 +174,15 @@ class AgentRegistry:
         # 故在 Registry 扫描侧 Python 补，fail-closed 拒载。
         workflow = data.get("workflow", {}) or {}
         model = data.get("model", {}) or {}
+        automation = data.get("automation", {}) or {}
+        if (
+            automation.get("session_execution") is True
+            and not isinstance(data.get("execution_digest"), str)
+        ):
+            raise InvalidPackageError(
+                f"{entry} automation.session_execution=true 但缺少 execution_digest；"
+                "safe-auto Agent 必须把 prompt/workflow/schema 绑定到同一包代际"
+            )
         if (
             workflow.get("mode") == "job"
             and model.get("profile") not in (None, "none")
@@ -170,6 +214,7 @@ class AgentRegistry:
             entry = self._dirs.get(agent_id)
             del self._agents[agent_id]
             self._dirs.pop(agent_id, None)
+            self._execution_snapshots.pop(agent_id, None)
             self.errors.append({"path": str(entry) if entry else agent_id, "error": reason})
 
     def list(self) -> list[dict[str, Any]]:
@@ -185,6 +230,11 @@ class AgentRegistry:
         """
         with self._view_lock:
             return self._dirs.get(agent_id)
+
+    def execution_snapshot(self, agent_id: str) -> AgentExecutionSnapshot | None:
+        """单次读取 manifest、包目录与执行字节的一致不可变视图。"""
+        with self._view_lock:
+            return self._execution_snapshots.get(agent_id)
 
     def sync_to_db(self, conn: sqlite3.Connection) -> None:
         """把内存注册表写入 agents 表（upsert）+ agent_versions 表（追加，UNIQUE 冲突忽略）。

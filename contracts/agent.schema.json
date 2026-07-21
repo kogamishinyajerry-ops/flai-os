@@ -5,6 +5,20 @@
   "description": "每个 Agent Package 的 agent.yaml 必须通过本 schema 校验后才能注册。字段语义见 docs/02_Agent_Package_Standard.md。顶层禁止未声明字段（additionalProperties=false）：扩展字段必须先改本契约并记 ADR，防止各 Agent 私自长出方言。",
   "type": "object",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "required": ["automation"],
+        "properties": {
+          "automation": {
+            "required": ["session_execution"],
+            "properties": { "session_execution": { "const": true } }
+          }
+        }
+      },
+      "then": { "required": ["execution_digest"] }
+    }
+  ],
   "required": [
     "id", "name", "version", "status", "maturity", "category", "summary",
     "owner", "model", "knowledge", "tools", "input", "output", "workflow",
@@ -21,6 +35,11 @@
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "description": "semver。任何 prompt/workflow/schema 改动都必须升版本并记 changelog.md。"
+    },
+    "execution_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "safe-auto 执行代际摘要；绑定 prompt/workflow/实际 input/output schema 路径与字节。automation.session_execution=true 时强制，任一文件先后更新造成不一致即拒绝注册。"
     },
     "status": {
       "type": "string",

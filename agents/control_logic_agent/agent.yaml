@@ -1,6 +1,7 @@
 id: control_logic_agent
 name: "控制逻辑结构生成 Agent"
 version: 0.2.0
+execution_digest: sha256:3b2361937c187131eb3424261a6aa1accf23bb2f4cf80f2b3aeaaef8a25c83e1
 status: draft
 maturity: L0
 category: structured_gen

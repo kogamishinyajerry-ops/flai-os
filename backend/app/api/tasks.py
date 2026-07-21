@@ -412,41 +412,65 @@ def get_task(task_id: str, request: Request) -> dict[str, Any]:
 
 @router.post("/tasks/{task_id}/cancel")
 def cancel_task(task_id: str, request: Request) -> dict[str, Any]:
+    agent_registry = request.app.state.agent_registry
     conn = request.app.state.conn_factory()
     try:
-        task = repos.get_task(conn, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
-        current = task["status"]
+        # 取消与创建/签发同属任务状态写入：在同一写事务内重读当前账户与 Agent
+        # manifest，禁止仅凭 task_id 绕过 Agent 可见性/角色授权后改写任务。Registry
+        # stable_view 必须覆盖授权复核直到 COMMIT/ROLLBACK，避免复核后并发 adopt
+        # 撤权/下线却仍按旧快照提交取消。
+        conn.execute("BEGIN IMMEDIATE")
+        with agent_registry.stable_view():
+            try:
+                task = repos.get_task(conn, task_id)
+                if task is None:
+                    raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+                _actor, agent = _require_current_agent_access(
+                    conn,
+                    request,
+                    agent_registry,
+                    task["agent_id"],
+                )
+                if _get_agent_or_none(agent_registry, task["agent_id"]) != agent:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="任务所属 Agent manifest 在取消校验期间发生变化；请重新确认",
+                    )
+                current = task["status"]
 
-        if current in ("created", "queued"):
-            task = repos.set_task_status(conn, task_id, "cancelled")
-            repos.append_event(
-                conn,
-                task_id=task_id,
-                agent_id=task.get("agent_id"),
-                event_type="task_cancelled",
-                level="info",
-                message="任务被用户取消",
-                payload={"previous_status": current},
-            )
-            # ADR-0025 一致封闭：sensitive 任务的**任一**出场面（含变更响应回显的
-            # 任务行 error_message）都过 chokepoint，绝不「GET 封、mutation 漏」。
-            return cgate.redact_task_row_if_sensitive(conn, task)
+                if current in ("created", "queued"):
+                    task = repos.set_task_status_in_transaction(conn, task_id, "cancelled")
+                    repos.append_event(
+                        conn,
+                        task_id=task_id,
+                        agent_id=task.get("agent_id"),
+                        event_type="task_cancelled",
+                        level="info",
+                        message="任务被用户取消",
+                        payload={"previous_status": current},
+                    )
+                    conn.execute("COMMIT")
+                    # ADR-0025 一致封闭：sensitive 任务的**任一**出场面（含变更响应回显的
+                    # 任务行 error_message）都过 chokepoint，绝不「GET 封、mutation 漏」。
+                    return cgate.redact_task_row_if_sensitive(conn, task)
 
-        if current == "running":
-            raise HTTPException(
-                status_code=409,
-                detail="V0.1 不支持取消运行中任务（ADR-0008 取消语义裁决）",
-            )
+                if current == "running":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="V0.1 不支持取消运行中任务（ADR-0008 取消语义裁决）",
+                    )
 
-        # waiting_review：docs/05 强制规则——只能人工放行（review_approved/
-        # review_rejected）转出，禁止任何自动化路径（含 cancel）转出；
-        # 其余终态（completed/failed/cancelled）本身禁止再迁移。
-        raise HTTPException(
-            status_code=409,
-            detail=f"任务处于 {current}，不可取消",
-        )
+                # waiting_review：docs/05 强制规则——只能人工放行（review_approved/
+                # review_rejected）转出，禁止任何自动化路径（含 cancel）转出；
+                # 其余终态（completed/failed/cancelled）本身禁止再迁移。
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"任务处于 {current}，不可取消",
+                )
+            except Exception:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
     finally:
         conn.close()
 

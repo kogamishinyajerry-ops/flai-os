@@ -92,6 +92,11 @@ function assistantResponse(requestId, result = "完成") {
 function createGuideSendHarness(guideSource, deps = {}) {
   // Execute the production send coordinator itself. The real outbox and real durable
   // dispatcher are injected; missing dependencies hard-fail instead of selecting a fallback.
+  const routeState = sourceSlice(
+    guideSource,
+    "function classifyGuideConversationRoute",
+    "const conversationReadOnlyNotice",
+  );
   const sendHelpers = sourceSlice(
     guideSource,
     "function invalidateSendUi()",
@@ -128,20 +133,8 @@ function createGuideSendHarness(guideSource, deps = {}) {
     const conversationStatus = { value: "" };
     const started = { value: false };
     const route = { query: {} };
-    const routeConversationId = {
-      get value() {
-        return typeof route.query.c === "string" && route.query.c ? route.query.c : "";
-      },
-    };
-    const conversationReadOnly = {
-      get value() {
-        return (
-          outboxRecoveryBlocked.value ||
-          (!!routeConversationId.value && conversationId.value !== routeConversationId.value) ||
-          (started.value && conversationStatus.value !== "active")
-        );
-      },
-    };
+    const computed = (read) => ({ get value() { return read(); } });
+    ${routeState}
     const router = {
       replace(target) {
         deps.replaces.push(target);
@@ -269,6 +262,7 @@ function createGuideSendHarness(guideSource, deps = {}) {
       state,
       switchConversation,
       switchFresh,
+      setRouteConversation(value) { route.query = { c: value }; },
       canLeave() { return leaveGuard(); },
       canUpdate(to) { return updateGuard(to); },
       setDraft(value) { draft.value = value; },
@@ -602,6 +596,64 @@ test("route or payload drift against a pending outbox fails before attachment up
   assert.equal(state.outbox.conversation_id, "A");
   assert.equal(state.outboxRecoveryBlocked, true);
   assert.match(state.pageError, /OUTBOX_INTENT_MISMATCH/);
+});
+
+
+test("malformed conversation routes keep a persisted outbox behind the production send guard", async () => {
+  const guide = await readFile(new URL("../src/views/GuidePage.vue", import.meta.url), "utf8");
+
+  for (const routeValue of [["A", "B"], "", null]) {
+    const storage = new FakeStorage();
+    const outbox = createGuideSafeAutoOutbox({ storage });
+    outbox.prepare(
+      { username: "alice", role: "agent_developer" },
+      {
+        requestId: "turn-malformed-route-0001",
+        agentId: "guide_agent",
+        conversationId: "A",
+        content: "执行 A",
+        fileIds: [],
+        files: [],
+        attachmentIntent: [],
+      },
+    );
+    let uploads = 0;
+    let creates = 0;
+    let posts = 0;
+    let canonicalGets = 0;
+    const harness = createGuideSendHarness(guide, {
+      storage,
+      createConversation: async () => {
+        creates += 1;
+        return { id: "must-not-create" };
+      },
+      postMessage: async () => {
+        posts += 1;
+        return assistantResponse("turn-malformed-route-0001");
+      },
+      getConversation: async () => {
+        canonicalGets += 1;
+        return canonicalConversation("A", "turn-malformed-route-0001");
+      },
+      uploadFile: async () => {
+        uploads += 1;
+        return { id: "must-not-upload" };
+      },
+    });
+
+    harness.switchFresh();
+    harness.setRouteConversation(routeValue);
+    harness.setDraft("执行 A");
+    harness.setFiles([{ name: "evidence.txt", raw: { name: "evidence.txt" } }]);
+    await harness.send();
+
+    assert.equal(uploads, 0, `route=${JSON.stringify(routeValue)}`);
+    assert.equal(creates, 0, `route=${JSON.stringify(routeValue)}`);
+    assert.equal(posts, 0, `route=${JSON.stringify(routeValue)}`);
+    assert.equal(canonicalGets, 0, `route=${JSON.stringify(routeValue)}`);
+    assert.equal(harness.state().conversationReadOnly, true);
+    assert.equal(harness.state().outbox.request_id, "turn-malformed-route-0001");
+  }
 });
 
 

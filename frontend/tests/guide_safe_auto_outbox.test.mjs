@@ -601,6 +601,111 @@ test("a reload route mismatch loads the URL authority before projecting outbox c
 });
 
 
+test("malformed conversation routes lock persisted recovery with zero network", async () => {
+  const source = await readFile(new URL("../src/views/GuidePage.vue", import.meta.url), "utf8");
+  const routeStart = source.indexOf("function classifyGuideConversationRoute");
+  const routeEnd = source.indexOf("const conversationTargetMismatch", routeStart);
+  const resumeStart = source.indexOf("async function resumePersistedGuideTurn()");
+  const resumeEnd = source.indexOf("\nonMounted(", resumeStart);
+
+  assert.notEqual(routeStart, -1);
+  assert.notEqual(routeEnd, -1);
+  assert.notEqual(resumeStart, -1);
+  assert.notEqual(resumeEnd, -1);
+
+  const productionRouteState = source.slice(routeStart, routeEnd);
+  const productionResume = source.slice(resumeStart, resumeEnd);
+  const runRecovery = new Function("routeValue", `
+    const route = { query: { c: routeValue } };
+    const computed = (read) => ({ get value() { return read(); } });
+    ${productionRouteState}
+
+    const outboxRecoveryBlocked = { value: false };
+    const outboxRecoveryActive = { value: false };
+    const restoring = { value: false };
+    const pageError = { value: "" };
+    const draft = { value: "" };
+    const pendingFiles = { value: [] };
+    let retryTurn = null;
+    let authGets = 0;
+    let creates = 0;
+    let messages = 0;
+    let canonicalGets = 0;
+    let uploads = 0;
+    let recoveries = 0;
+    const hasPendingGuideOutbox = () => true;
+    const fetchMe = async () => { authGets += 1; return true; };
+    const authenticatedPrincipal = () => ({ username: "alice", role: "agent_developer" });
+    const guideSafeAutoOutbox = {
+      loadForPrincipal: () => ({
+        request_id: "turn-multi-route-001",
+        conversation_id: null,
+        payload: { content: "执行", file_ids: [] },
+        attachment_intent: [],
+      }),
+    };
+    const filesFromGuideSafeAutoRecord = () => [];
+    const reactive = (value) => value;
+    const createConversation = async () => { creates += 1; return { id: "created" }; };
+    const postMessage = async () => { messages += 1; return {}; };
+    const getConversation = async () => { canonicalGets += 1; return {}; };
+    const uploadFile = async () => { uploads += 1; return {}; };
+    const recoverGuideSafeAutoOutbox = async (options) => {
+      recoveries += 1;
+      const created = await options.createConversation({
+        agentId: "guide_agent",
+        requestId: "turn-multi-route-001",
+        expectedPrincipal: { username: "alice", role: "agent_developer" },
+      });
+      await options.postMessage({
+        conversationId: created.id,
+        content: "执行",
+        fileIds: [],
+        executionMode: "safe_auto",
+        requestId: "turn-multi-route-001",
+        expectedPrincipal: { username: "alice", role: "agent_developer" },
+      });
+      return { status: "blocked", record: { conversation_id: null }, error: new Error("blocked") };
+    };
+    const keepOutboxBlockedAndLoadRoute = async () => true;
+    const router = { replace: async () => {} };
+    let internalConversationNavigation = null;
+    const resetToFresh = () => {};
+    const loadConversation = async () => { canonicalGets += 1; };
+    ${productionResume}
+    return resumePersistedGuideTurn().then((handled) => ({
+      handled,
+      authGets,
+      creates,
+      messages,
+      canonicalGets,
+      uploads,
+      recoveries,
+      blocked: outboxRecoveryBlocked.value,
+      active: outboxRecoveryActive.value,
+      restoring: restoring.value,
+      error: pageError.value,
+    }));
+  `);
+
+  for (const routeValue of [["A", "B"], "", null]) {
+    assert.deepEqual(await runRecovery(routeValue), {
+      handled: true,
+      authGets: 0,
+      creates: 0,
+      messages: 0,
+      canonicalGets: 0,
+      uploads: 0,
+      recoveries: 0,
+      blocked: true,
+      active: false,
+      restoring: false,
+      error: "当前 URL 会话参数非法，待恢复 safe_auto 意图已锁定且未发起网络请求",
+    });
+  }
+});
+
+
 test("GuidePage cannot remove immutable restored attachment chips", async () => {
   const source = await readFile(new URL("../src/views/GuidePage.vue", import.meta.url), "utf8");
   const start = source.indexOf("function removePendingFile(item)");

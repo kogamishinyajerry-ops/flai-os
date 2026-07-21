@@ -15,6 +15,7 @@ from jsonschema import validate
 
 from backend.app.auth import service as auth_service
 from backend.app.runtime.guide_dispatch import GuidePlanDispatch, _has_explicit_input_mapping
+from backend.app.runtime.manifest import MANIFEST_PIN_VERSION
 from backend.app.storage import repos
 
 
@@ -229,17 +230,10 @@ def test_safe_auto_complete_allowlisted_plan_creates_queued_task_atomically(app_
         assert task["metadata"]["automation"]["mode"] == "safe_auto"
         assert task["metadata"]["automation"]["created_via"] == "authenticated_conversation_turn"
         assert task["metadata"]["automation"]["authorized_role"] == "admin"
-        assert task["metadata"]["automation"]["manifest_pin_version"] == "agent_manifest_pin.v1"
-        expected_manifest = app.state.agent_registry.get("control_logic_agent")
-        expected_digest = "sha256:" + hashlib.sha256(
-            json.dumps(
-                expected_manifest,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            ).encode("utf-8")
-        ).hexdigest()
+        assert task["metadata"]["automation"]["manifest_pin_version"] == MANIFEST_PIN_VERSION
+        expected_snapshot = app.state.agent_registry.execution_snapshot("control_logic_agent")
+        assert expected_snapshot is not None
+        expected_digest = expected_snapshot.digest
         assert task["metadata"]["automation"]["agent_manifest_digest"] == expected_digest
         events = repos.list_events(conn, task["id"])
         assert [event["event_type"] for event in events] == ["task_created"]

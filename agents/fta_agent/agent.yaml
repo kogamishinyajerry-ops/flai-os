@@ -1,6 +1,7 @@
 id: fta_agent
 name: "故障树分析辅助 Agent（FTA 草案生成）"
 version: 0.2.0
+execution_digest: sha256:444b1523a20664d1426d301f3d9eb2fb00a92b08c2a07449b36eccf9235aa514
 status: draft
 maturity: L0
 category: reasoning_assist
