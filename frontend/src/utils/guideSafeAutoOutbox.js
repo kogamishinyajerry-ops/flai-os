@@ -5,10 +5,14 @@
 // principal in the record lets the client fail closed before replay if the shared cookie has
 // switched users or roles in another tab.
 
+// The physical key intentionally stays at its original v1 name. Reusing it lets the v2 reader
+// see an in-flight v1 record and fail closed as unsupported; moving to a new key would silently
+// ignore that older pending intent and could permit a second safe-auto turn.
 export const GUIDE_SAFE_AUTO_OUTBOX_KEY = "flai.guide.safe_auto.outbox.v1";
-export const GUIDE_SAFE_AUTO_OUTBOX_VERSION = 1;
+export const GUIDE_SAFE_AUTO_OUTBOX_VERSION = 2;
 
 const PHASES = new Set([
+  "preparing_uploads",
   "prepared",
   "creating_conversation",
   "posting_message",
@@ -78,6 +82,26 @@ function validIsoTimestamp(value, { nullable = false } = {}) {
 }
 
 
+function validNullableNonNegativeInteger(value) {
+  return value === null || (Number.isSafeInteger(value) && value >= 0);
+}
+
+
+function validAttachmentIntent(entry) {
+  return (
+    hasExactKeys(entry, ["token", "name", "size_bytes", "mime_type", "last_modified"]) &&
+    validId(entry.token) &&
+    typeof entry.name === "string" &&
+    entry.name.length > 0 &&
+    entry.name.length <= 512 &&
+    validNullableNonNegativeInteger(entry.size_bytes) &&
+    typeof entry.mime_type === "string" &&
+    entry.mime_type.length <= 255 &&
+    validNullableNonNegativeInteger(entry.last_modified)
+  );
+}
+
+
 function validateRecord(record) {
   if (!isPlainObject(record) || record.version !== GUIDE_SAFE_AUTO_OUTBOX_VERSION) {
     fail("OUTBOX_VERSION_UNSUPPORTED", "未知或缺失的 outbox 版本");
@@ -91,6 +115,7 @@ function validateRecord(record) {
       "conversation_id",
       "payload",
       "files",
+      "attachment_intent",
       "phase",
       "created_at",
       "last_attempt_at",
@@ -137,6 +162,29 @@ function validateRecord(record) {
     fail("OUTBOX_RECORD_MALFORMED", "附件恢复记录必须与 file_ids 一一对应且不得含 raw File");
   }
   if (
+    !Array.isArray(record.attachment_intent) ||
+    record.attachment_intent.length > 5 ||
+    record.attachment_intent.some((entry) => !validAttachmentIntent(entry)) ||
+    new Set(record.attachment_intent.map((entry) => entry.token)).size !==
+      record.attachment_intent.length
+  ) {
+    fail("OUTBOX_RECORD_MALFORMED", "附件意图描述非法或包含重复 token");
+  }
+  if (record.phase === "preparing_uploads") {
+    if (
+      record.attachment_intent.length === 0 ||
+      record.payload.file_ids.length !== 0 ||
+      record.files.length !== 0
+    ) {
+      fail("OUTBOX_RECORD_MALFORMED", "上传准备阶段不得伪造服务端 file_id");
+    }
+  } else if (
+    record.attachment_intent.length !== record.files.length ||
+    record.attachment_intent.some((entry, index) => entry.name !== record.files[index].name)
+  ) {
+    fail("OUTBOX_RECORD_MALFORMED", "附件意图必须与已绑定文件一一对应");
+  }
+  if (
     !PHASES.has(record.phase) ||
     !validIsoTimestamp(record.created_at) ||
     !validIsoTimestamp(record.last_attempt_at, { nullable: true })
@@ -155,7 +203,49 @@ function immutableIntentMatches(record, intent, principal) {
     record.conversation_id === intent.conversationId &&
     record.payload.content === intent.content &&
     JSON.stringify(record.payload.file_ids) === JSON.stringify(intent.fileIds) &&
-    JSON.stringify(record.files) === JSON.stringify(intent.files)
+    JSON.stringify(record.files) === JSON.stringify(intent.files) &&
+    JSON.stringify(record.attachment_intent) === JSON.stringify(intent.attachmentIntent)
+  );
+}
+
+
+function normalizeAttachmentIntent(entries, fallbackFiles = []) {
+  const source = entries === undefined
+    ? fallbackFiles.map((file) => ({
+        token: file?.id,
+        name: file?.name,
+        sizeBytes: null,
+        mimeType: "",
+        lastModified: null,
+      }))
+    : entries;
+  if (!Array.isArray(source)) fail("OUTBOX_INTENT_INVALID", "附件意图缺失");
+  const normalized = source.map((entry) => ({
+    token: entry?.token,
+    name: entry?.name,
+    size_bytes: entry?.sizeBytes ?? null,
+    mime_type: entry?.mimeType ?? "",
+    last_modified: entry?.lastModified ?? null,
+  }));
+  if (
+    normalized.length > 5 ||
+    normalized.some((entry) => !validAttachmentIntent(entry)) ||
+    new Set(normalized.map((entry) => entry.token)).size !== normalized.length
+  ) {
+    fail("OUTBOX_INTENT_INVALID", "附件意图描述非法或包含重复 token");
+  }
+  return normalized;
+}
+
+
+function uploadIntentMatches(record, intent, principal) {
+  return (
+    samePrincipal(record.principal, principal) &&
+    record.request_id === intent.requestId &&
+    record.agent_id === intent.agentId &&
+    record.conversation_id === intent.conversationId &&
+    record.payload.content === intent.content &&
+    JSON.stringify(record.attachment_intent) === JSON.stringify(intent.attachmentIntent)
   );
 }
 
@@ -172,6 +262,10 @@ function normalizeIntent(intent) {
       ? intent.files.map((file) => ({ id: file?.id, name: file?.name }))
       : intent.files,
   };
+  normalized.attachmentIntent = normalizeAttachmentIntent(
+    intent.attachmentIntent,
+    normalized.files,
+  );
   const probe = {
     version: GUIDE_SAFE_AUTO_OUTBOX_VERSION,
     principal: { username: "probe", role: "admin" },
@@ -180,7 +274,39 @@ function normalizeIntent(intent) {
     conversation_id: normalized.conversationId,
     payload: { content: normalized.content, file_ids: normalized.fileIds },
     files: normalized.files,
+    attachment_intent: normalized.attachmentIntent,
     phase: "prepared",
+    created_at: new Date(0).toISOString(),
+    last_attempt_at: null,
+  };
+  try {
+    validateRecord(probe);
+  } catch (error) {
+    fail("OUTBOX_INTENT_INVALID", error.message, error);
+  }
+  return normalized;
+}
+
+
+function normalizeUploadIntent(intent) {
+  if (!isPlainObject(intent)) fail("OUTBOX_INTENT_INVALID", "上传前发送意图缺失");
+  const normalized = {
+    requestId: intent.requestId,
+    agentId: intent.agentId,
+    conversationId: intent.conversationId ?? null,
+    content: typeof intent.content === "string" ? intent.content.trim() : intent.content,
+    attachmentIntent: normalizeAttachmentIntent(intent.attachmentIntent),
+  };
+  const probe = {
+    version: GUIDE_SAFE_AUTO_OUTBOX_VERSION,
+    principal: { username: "probe", role: "admin" },
+    request_id: normalized.requestId,
+    agent_id: normalized.agentId,
+    conversation_id: normalized.conversationId,
+    payload: { content: normalized.content, file_ids: [] },
+    files: [],
+    attachment_intent: normalized.attachmentIntent,
+    phase: normalized.attachmentIntent.length > 0 ? "preparing_uploads" : "prepared",
     created_at: new Date(0).toISOString(),
     last_attempt_at: null,
   };
@@ -259,41 +385,6 @@ export function createGuideSafeAutoOutbox({
     return record;
   }
 
-  function assertWritable(sizeHint = 1024) {
-    const probeKey = `${key}.writable-probe`;
-    const probeSize = Number.isInteger(sizeHint)
-      ? Math.max(128, Math.min(sizeHint, 50_000))
-      : 1024;
-    let previous;
-    try {
-      previous = resolvedStorage.getItem(probeKey);
-    } catch (error) {
-      fail("OUTBOX_STORAGE_READ_FAILED", "读取 sessionStorage 探针失败", error);
-    }
-    const probe = "0".repeat(probeSize);
-    try {
-      resolvedStorage.setItem(probeKey, probe);
-    } catch (error) {
-      fail("OUTBOX_STORAGE_WRITE_FAILED", "sessionStorage 写探针失败", error);
-    }
-    let roundTrip;
-    try {
-      roundTrip = resolvedStorage.getItem(probeKey);
-    } catch (error) {
-      fail("OUTBOX_STORAGE_READBACK_FAILED", "sessionStorage 探针回读失败", error);
-    }
-    try {
-      if (previous === null) resolvedStorage.removeItem(probeKey);
-      else resolvedStorage.setItem(probeKey, previous);
-    } catch (error) {
-      fail("OUTBOX_STORAGE_CLEAR_FAILED", "sessionStorage 探针清理失败", error);
-    }
-    if (roundTrip !== probe) {
-      fail("OUTBOX_STORAGE_READBACK_FAILED", "sessionStorage 探针写后回读不一致");
-    }
-    return true;
-  }
-
   function requireOwnedRecord(principal, requestId = null) {
     const normalizedPrincipal = normalizePrincipal(principal);
     const record = read();
@@ -327,11 +418,71 @@ export function createGuideSafeAutoOutbox({
         file_ids: normalizedIntent.fileIds,
       },
       files: normalizedIntent.files,
+      attachment_intent: normalizedIntent.attachmentIntent,
       phase: "prepared",
       created_at: createdAt,
       last_attempt_at: null,
     };
     return write(record);
+  }
+
+  function prepareUploads(principal, rawIntent) {
+    const normalizedPrincipal = normalizePrincipal(principal);
+    const normalizedIntent = normalizeUploadIntent(rawIntent);
+    const existing = read();
+    if (existing) {
+      if (uploadIntentMatches(existing, normalizedIntent, normalizedPrincipal)) return existing;
+      fail("OUTBOX_BUSY", "当前标签页已有另一条待确认 safe_auto 意图");
+    }
+    const record = {
+      version: GUIDE_SAFE_AUTO_OUTBOX_VERSION,
+      principal: normalizedPrincipal,
+      request_id: normalizedIntent.requestId,
+      agent_id: normalizedIntent.agentId,
+      conversation_id: normalizedIntent.conversationId,
+      payload: { content: normalizedIntent.content, file_ids: [] },
+      files: [],
+      attachment_intent: normalizedIntent.attachmentIntent,
+      phase: normalizedIntent.attachmentIntent.length > 0 ? "preparing_uploads" : "prepared",
+      created_at: now(),
+      last_attempt_at: null,
+    };
+    return write(record);
+  }
+
+  function completeUploads(principal, requestId, { fileIds, files }) {
+    const record = requireOwnedRecord(principal, requestId);
+    const candidate = normalizeIntent({
+      requestId: record.request_id,
+      agentId: record.agent_id,
+      conversationId: record.conversation_id,
+      content: record.payload.content,
+      fileIds,
+      files,
+      attachmentIntent: record.attachment_intent.map((entry) => ({
+        token: entry.token,
+        name: entry.name,
+        sizeBytes: entry.size_bytes,
+        mimeType: entry.mime_type,
+        lastModified: entry.last_modified,
+      })),
+    });
+    if (record.phase !== "preparing_uploads") {
+      if (immutableIntentMatches(record, candidate, normalizePrincipal(principal))) return record;
+      fail("OUTBOX_UPLOAD_BINDING_CONFLICT", "附件 file_id 只能完整绑定一次");
+    }
+    if (
+      candidate.files.length !== record.attachment_intent.length ||
+      candidate.files.some((file, index) => file.name !== record.attachment_intent[index].name)
+    ) {
+      fail("OUTBOX_UPLOAD_BINDING_CONFLICT", "上传结果与持久化附件意图不一致");
+    }
+    return write({
+      ...record,
+      payload: { ...record.payload, file_ids: candidate.fileIds },
+      files: candidate.files,
+      phase: "prepared",
+    });
   }
 
   function loadForPrincipal(principal) {
@@ -349,6 +500,13 @@ export function createGuideSafeAutoOutbox({
     const normalizedIntent = normalizeIntent(rawIntent);
     const record = loadForPrincipal(normalizedPrincipal);
     return record !== null && immutableIntentMatches(record, normalizedIntent, normalizedPrincipal);
+  }
+
+  function matchesUploadIntent(principal, rawIntent) {
+    const normalizedPrincipal = normalizePrincipal(principal);
+    const normalizedIntent = normalizeUploadIntent(rawIntent);
+    const record = loadForPrincipal(normalizedPrincipal);
+    return record !== null && uploadIntentMatches(record, normalizedIntent, normalizedPrincipal);
   }
 
   function bindConversation(principal, requestId, conversationId) {
@@ -381,10 +539,12 @@ export function createGuideSafeAutoOutbox({
 
   return {
     read,
-    assertWritable,
     prepare,
+    prepareUploads,
+    completeUploads,
     loadForPrincipal,
     matchesIntent,
+    matchesUploadIntent,
     bindConversation,
     markAttempt,
     clearConfirmed,
@@ -414,6 +574,17 @@ function requireConversationAuthority(conversation, conversationId) {
 
 export function filesFromGuideSafeAutoRecord(record) {
   validateRecord(record);
+  if (record.phase === "preparing_uploads") {
+    return record.attachment_intent.map((file, index) => ({
+      uid: `outbox_pending_${index}_${file.token}`,
+      name: file.name,
+      raw: null,
+      status: "error",
+      fileId: null,
+      error: "页面已刷新，原始附件不可恢复，已禁止自动重传",
+      locked: true,
+    }));
+  }
   return record.files.map((file, index) => ({
     uid: `outbox_${index}_${file.id}`,
     name: file.name,
@@ -427,6 +598,9 @@ export function filesFromGuideSafeAutoRecord(record) {
 
 
 async function createAndBindIfNeeded({ outbox, principal, record, createConversation, onConversationBound }) {
+  if (record.phase === "preparing_uploads") {
+    fail("OUTBOX_UPLOADS_INCOMPLETE", "附件上传尚未完成，刷新后禁止自动重传或创建会话");
+  }
   let current = record;
   if (current.conversation_id === null) {
     outbox.markAttempt(principal, current.request_id, "creating_conversation");
@@ -501,6 +675,9 @@ export async function recoverGuideSafeAutoOutbox({
   try {
     record = outbox.loadForPrincipal(principal);
     if (!record) return { status: "empty", record: null };
+    if (record.phase === "preparing_uploads") {
+      fail("OUTBOX_UPLOADS_INCOMPLETE", "附件上传尚未完成，刷新后禁止自动重传或创建会话");
+    }
     record = await createAndBindIfNeeded({
       outbox,
       principal,
@@ -532,7 +709,7 @@ export async function recoverGuideSafeAutoOutbox({
     // Retention is deliberate. In particular, a 409 never rotates request_id; a later reload
     // rechecks authority with the same stable key. Best-effort phase marking must not hide the
     // original storage/network failure.
-    if (record) {
+    if (record && record.phase !== "preparing_uploads") {
       try {
         outbox.markAttempt(principal, record.request_id, "blocked");
       } catch {

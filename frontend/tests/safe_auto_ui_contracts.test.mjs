@@ -7,6 +7,7 @@ import {
   createGuideSafeAutoOutbox,
   dispatchGuideSafeAutoIntent,
 } from "../src/utils/guideSafeAutoOutbox.js";
+import { request as apiRequest } from "../src/api/client.js";
 
 
 class FakeStorage {
@@ -302,7 +303,8 @@ test("guide sends only through the durable safe_auto coordinator", async () => {
   assert.match(api, /execution_mode:\s*executionMode/);
   assert.match(api, /request_id:\s*requestId/);
   assert.match(guide, /dispatchGuideSafeAutoIntent\(\{/);
-  assert.match(guide, /turnRequestId\(content, fileIds\)/);
+  assert.match(guide, /turnRequestId\(content, attachmentIntent\)/);
+  assert.match(guide, /guideSafeAutoOutbox\.prepareUploads\(principal,/);
   assert.match(guide, /retryTurn\.fingerprint === fingerprint/);
   assert.doesNotMatch(guide, /Executable legacy harness seam|typeof dispatchGuideSafeAutoIntent/);
 });
@@ -394,6 +396,100 @@ test("fresh create and message share one request id and bind before posting", as
   assert.equal(harness.state().routeConversationId, "C");
   assert.equal(harness.state().conversationId, "C");
   assert.equal(harness.state().outbox, null);
+});
+
+
+test("attachment upload starts only after durable intent and carries that principal", async () => {
+  const guide = await readFile(new URL("../src/views/GuidePage.vue", import.meta.url), "utf8");
+  const storage = new FakeStorage();
+  const expectedPrincipal = { username: "alice", role: "agent_developer" };
+  let requestId = null;
+  const uploadCalls = [];
+  const harness = createGuideSendHarness(guide, {
+    storage,
+    principal: expectedPrincipal,
+    uploadFile: async (raw, taskId, uploadPrincipal) => {
+      const record = JSON.parse(storage.getItem(GUIDE_SAFE_AUTO_OUTBOX_KEY));
+      assert.equal(record.version, 2);
+      assert.equal(record.phase, "preparing_uploads");
+      assert.deepEqual(record.payload.file_ids, []);
+      assert.deepEqual(record.files, []);
+      assert.deepEqual(uploadPrincipal, record.principal);
+      uploadCalls.push({ raw, taskId, uploadPrincipal });
+      return { id: "file-evidence" };
+    },
+    postMessage: async (_conversationId, _content, fileIds, options) => {
+      requestId = options.requestId;
+      assert.deepEqual(fileIds, ["file-evidence"]);
+      return assistantResponse(requestId);
+    },
+    getConversation: async (id) => canonicalConversation(id, requestId),
+  });
+
+  harness.switchConversation("A");
+  harness.setFiles([{
+    name: "evidence.txt",
+    raw: { name: "evidence.txt", size: 8, type: "text/plain", lastModified: 123 },
+  }]);
+  harness.setDraft("执行");
+  await harness.send();
+
+  assert.equal(uploadCalls.length, 1);
+  assert.equal(uploadCalls[0].taskId, null);
+  assert.deepEqual(uploadCalls[0].uploadPrincipal, expectedPrincipal);
+  assert.equal(harness.state().outbox, null);
+});
+
+
+test("files API serializes expected principal as one ASCII-safe pre-body header", async () => {
+  const source = await readFile(new URL("../src/api/files.js", import.meta.url), "utf8");
+  const executable = source
+    .replace(/import \{ request \} from "\.\/client";\s*/, "")
+    .replaceAll("export ", "");
+  const calls = [];
+  class TestFormData {
+    constructor() { this.entries = []; }
+    append(key, value) { this.entries.push([key, value]); }
+  }
+  const api = new Function(
+    "request",
+    "FormData",
+    `${executable}\nreturn { uploadFile };`,
+  )(
+    async (...args) => { calls.push(args); return { id: "file-1" }; },
+    TestFormData,
+  );
+  const expectedPrincipal = { username: "alice", role: "agent_developer" };
+
+  await api.uploadFile({ name: "evidence.txt" }, null, expectedPrincipal);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "/api/files/upload");
+  assert.deepEqual(Object.fromEntries(calls[0][1].formData.entries), {
+    file: { name: "evidence.txt" },
+  });
+  assert.equal(
+    decodeURIComponent(calls[0][1].headers["X-FLAI-Expected-Principal"]),
+    JSON.stringify(expectedPrincipal),
+  );
+});
+
+
+test("shared API client forwards caller headers unchanged", async () => {
+  const originalFetch = globalThis.fetch;
+  let seenInit = null;
+  globalThis.fetch = async (_path, init) => {
+    seenInit = init;
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  try {
+    await apiRequest("/api/header-probe", {
+      headers: { "X-FLAI-Expected-Principal": "%7B%7D" },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(seenInit.headers["X-FLAI-Expected-Principal"], "%7B%7D");
 });
 
 
@@ -627,4 +723,47 @@ test("unwritable session storage fails closed before attachment/create/message P
   assert.equal(state.conversationReadOnly, true);
   assert.match(state.pageError, /OUTBOX_STORAGE_WRITE_FAILED/);
   assert.match(guide, /v-if="conversationReadOnly && !pageError"/);
+});
+
+
+test("a writable probe cannot authorize upload when the durable outbox key write fails", async () => {
+  const guide = await readFile(new URL("../src/views/GuidePage.vue", import.meta.url), "utf8");
+  const storage = new FakeStorage();
+  storage.setItem = function setItem(key, value) {
+    if (key.endsWith(".writable-probe")) {
+      this.values.set(key, String(value));
+      return;
+    }
+    throw new Error("formal outbox key quota race");
+  };
+  let creates = 0;
+  let posts = 0;
+  let uploads = 0;
+  const harness = createGuideSendHarness(guide, {
+    storage,
+    createConversation: async () => {
+      creates += 1;
+      return { id: "never" };
+    },
+    postMessage: async () => {
+      posts += 1;
+      return assistantResponse("never");
+    },
+    uploadFile: async () => {
+      uploads += 1;
+      return { id: "must-not-upload" };
+    },
+  });
+
+  harness.switchFresh();
+  harness.setFiles([{ name: "evidence.txt", raw: { name: "evidence.txt" } }]);
+  harness.setDraft("执行");
+  await harness.send();
+  const state = harness.state();
+
+  assert.equal(uploads, 0);
+  assert.equal(creates, 0);
+  assert.equal(posts, 0);
+  assert.equal(state.outboxRecoveryBlocked, true);
+  assert.match(state.pageError, /OUTBOX_STORAGE_WRITE_FAILED/);
 });

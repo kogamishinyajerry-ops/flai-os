@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 
 import {
   GUIDE_SAFE_AUTO_OUTBOX_KEY,
+  GUIDE_SAFE_AUTO_OUTBOX_VERSION,
   createGuideSafeAutoOutbox,
   dispatchGuideSafeAutoIntent,
   filesFromGuideSafeAutoRecord,
@@ -116,6 +117,53 @@ test("unavailable sessionStorage constructs safely, then blocks dispatch before 
 });
 
 
+test("a reloaded pre-upload attachment intent stays locked with zero network", async () => {
+  const storage = new FakeStorage();
+  const first = createGuideSafeAutoOutbox({ storage });
+  first.prepareUploads(principal, {
+    requestId: "turn-prepare-upload-001",
+    agentId: "guide_agent",
+    conversationId: null,
+    content: "核查附件",
+    attachmentIntent: [{
+      token: "attachment_0_abcd1234",
+      name: "evidence.txt",
+      sizeBytes: 8,
+      mimeType: "text/plain",
+      lastModified: 123,
+    }],
+  });
+
+  const persisted = JSON.parse(storage.getItem(GUIDE_SAFE_AUTO_OUTBOX_KEY));
+  assert.equal(persisted.version, GUIDE_SAFE_AUTO_OUTBOX_VERSION);
+  assert.equal(persisted.phase, "preparing_uploads");
+  assert.deepEqual(persisted.payload.file_ids, []);
+  assert.deepEqual(persisted.files, []);
+  let networkCalls = 0;
+  const result = await recoverGuideSafeAutoOutbox({
+    outbox: createGuideSafeAutoOutbox({ storage }),
+    principal,
+    createConversation: async () => { networkCalls += 1; },
+    postMessage: async () => { networkCalls += 1; },
+    getConversation: async () => { networkCalls += 1; },
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.match(result.error.message, /OUTBOX_UPLOADS_INCOMPLETE/);
+  assert.equal(networkCalls, 0);
+  assert.equal(JSON.parse(storage.getItem(GUIDE_SAFE_AUTO_OUTBOX_KEY)).phase, "preparing_uploads");
+  assert.deepEqual(
+    filesFromGuideSafeAutoRecord(result.record).map(({ name, fileId, raw, locked }) => ({
+      name,
+      fileId,
+      raw,
+      locked,
+    })),
+    [{ name: "evidence.txt", fileId: null, raw: null, locked: true }],
+  );
+});
+
+
 test("request id and principal validation mirrors the backend fail-closed contract", () => {
   for (const requestId of [undefined, "short", "contains space", "x".repeat(65)]) {
     assert.throws(
@@ -144,14 +192,37 @@ test("request id and principal validation mirrors the backend fail-closed contra
 test("same-page retry is allowed only when the durable record exactly matches the failed intent", () => {
   const storage = new FakeStorage();
   const outbox = createGuideSafeAutoOutbox({ storage });
-  outbox.prepare(principal, intent());
+  const original = intent({
+    attachmentIntent: [{
+      token: "attachment_0_abcd1234",
+      name: "input.txt",
+      sizeBytes: 8,
+      mimeType: "text/plain",
+      lastModified: 123,
+    }],
+  });
+  outbox.prepare(principal, original);
 
-  assert.equal(outbox.matchesIntent(principal, intent()), true);
-  assert.equal(outbox.matchesIntent(principal, intent({ content: "另一条消息" })), false);
-  assert.equal(outbox.matchesIntent(principal, intent({ requestId: "turn-00000002" })), false);
-  assert.equal(outbox.matchesIntent(principal, intent({ fileIds: [], files: [] })), false);
+  assert.equal(outbox.matchesIntent(principal, original), true);
+  assert.equal(outbox.matchesIntent(principal, { ...original, content: "另一条消息" }), false);
+  assert.equal(outbox.matchesIntent(principal, { ...original, requestId: "turn-00000002" }), false);
+  assert.equal(
+    outbox.matchesIntent(principal, {
+      ...original,
+      fileIds: ["file-2"],
+      files: [{ id: "file-2", name: "input.txt" }],
+    }),
+    false,
+  );
+  assert.equal(
+    outbox.matchesIntent(principal, {
+      ...original,
+      attachmentIntent: [{ ...original.attachmentIntent[0], sizeBytes: 9 }],
+    }),
+    false,
+  );
   assert.throws(
-    () => outbox.matchesIntent({ username: "bob", role: "business_user" }, intent()),
+    () => outbox.matchesIntent({ username: "bob", role: "business_user" }, original),
     /OUTBOX_PRINCIPAL_MISMATCH/,
   );
 });
@@ -204,7 +275,11 @@ test("a new module instance replays the exact persisted request id and file ids"
 test("unknown versions, malformed records, and principal drift are fail-closed with zero POST", async () => {
   const badRecords = [
     { version: 99 },
-    { version: 1, principal: { username: "alice", role: "agent_developer" } },
+    { version: 1 },
+    {
+      version: GUIDE_SAFE_AUTO_OUTBOX_VERSION,
+      principal: { username: "alice", role: "agent_developer" },
+    },
   ];
 
   for (const bad of badRecords) {

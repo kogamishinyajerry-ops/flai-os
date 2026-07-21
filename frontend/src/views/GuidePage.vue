@@ -486,7 +486,7 @@ const composerPlaceholder = computed(() =>
 // P2-A 反孤儿纪律；已上传项记 fileId，失败重试不重复上传。
 const pendingFiles = ref([]);
 let fileSeq = 0;
-// 网络丢响应时以同一 request_id 重试；只有 content/fileIds 真变化才换 key。
+// 网络丢响应时以同一 request_id 重试；只有正文/附件意图真变化才换 key。
 // 后端回执是最终去重权威，本地只负责让用户无感复用同一轮授权。
 let retryTurn = null;
 
@@ -621,8 +621,32 @@ function newTurnRequestId() {
     : `turn_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
-function turnRequestId(content, fileIds) {
-  const fingerprint = JSON.stringify([content, fileIds]);
+function attachmentIntentForFiles(files) {
+  return files.map((file, index) => {
+    const raw = file.raw;
+    const sizeBytes = Number.isSafeInteger(raw?.size) && raw.size >= 0 ? raw.size : null;
+    const lastModified = Number.isSafeInteger(raw?.lastModified) && raw.lastModified >= 0
+      ? raw.lastModified
+      : null;
+    const mimeType = typeof raw?.type === "string" ? raw.type : "";
+    const seed = JSON.stringify([String(file.uid), file.name, sizeBytes, mimeType, lastModified]);
+    let hash = 2166136261;
+    for (let i = 0; i < seed.length; i += 1) {
+      hash ^= seed.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return {
+      token: `attachment_${index}_${(hash >>> 0).toString(16).padStart(8, "0")}`,
+      name: file.name,
+      sizeBytes,
+      mimeType,
+      lastModified,
+    };
+  });
+}
+
+function turnRequestId(content, attachmentIntent) {
+  const fingerprint = JSON.stringify([content, attachmentIntent]);
   if (retryTurn && retryTurn.fingerprint === fingerprint) return retryTurn.requestId;
   const requestId = newTurnRequestId();
   retryTurn = { fingerprint, requestId };
@@ -649,6 +673,16 @@ function failedSendMatchesCurrentOutbox(operation) {
   if ((operation.targetConversationId || null) !== routeTarget) return false;
 
   try {
+    const record = guideSafeAutoOutbox.loadForPrincipal(principal);
+    if (record?.phase === "preparing_uploads") {
+      return guideSafeAutoOutbox.matchesUploadIntent(principal, {
+        requestId: operation.requestId,
+        agentId: GUIDE_AGENT_ID,
+        conversationId: operation.targetConversationId || null,
+        content: operation.content,
+        attachmentIntent: operation.attachmentIntent,
+      });
+    }
     return guideSafeAutoOutbox.matchesIntent(principal, {
       requestId: operation.requestId,
       agentId: GUIDE_AGENT_ID,
@@ -656,6 +690,7 @@ function failedSendMatchesCurrentOutbox(operation) {
       content: operation.content,
       fileIds: operation.files.map((file) => file.fileId),
       files: operation.files.map((file) => ({ id: file.fileId, name: file.name })),
+      attachmentIntent: operation.attachmentIntent,
     });
   } catch {
     // unreadable/malformed/version-mismatched/principal-drifted records stay fail-closed.
@@ -686,7 +721,26 @@ function preflightDurableRetry(principal, operation) {
   const operationTarget = operation.targetConversationId || null;
   const fileIds = operation.files.map((file) => file.fileId);
   const filesReady = fileIds.every((fileId) => typeof fileId === "string" && fileId.length > 0);
-  operation.fingerprint = JSON.stringify([operation.content, fileIds]);
+  operation.fingerprint = JSON.stringify([operation.content, operation.attachmentIntent]);
+  if (record.phase === "preparing_uploads") {
+    if (
+      routeTarget !== operationTarget ||
+      !guideSafeAutoOutbox.matchesUploadIntent(principal, {
+        requestId: record.request_id,
+        agentId: GUIDE_AGENT_ID,
+        conversationId: operationTarget,
+        content: operation.content,
+        attachmentIntent: operation.attachmentIntent,
+      })
+    ) {
+      operation.outboxPreflightFailed = true;
+      throw new Error(
+        "OUTBOX_INTENT_MISMATCH: 待上传附件意图与当前主体、会话或正文不一致，禁止上传或换新 ID",
+      );
+    }
+    retryTurn = { fingerprint: operation.fingerprint, requestId: record.request_id };
+    return record;
+  }
   if (
     routeTarget !== operationTarget ||
     !filesReady ||
@@ -697,6 +751,7 @@ function preflightDurableRetry(principal, operation) {
       content: operation.content,
       fileIds,
       files: operation.files.map((file) => ({ id: file.fileId, name: file.name })),
+      attachmentIntent: operation.attachmentIntent,
     })
   ) {
     operation.outboxPreflightFailed = true;
@@ -760,7 +815,7 @@ function removePendingFile(item) {
   pendingFiles.value = pendingFiles.value.filter((f) => f.uid !== item.uid);
 }
 
-async function uploadPendingFiles(files = pendingFiles.value) {
+async function uploadPendingFiles(files = pendingFiles.value, expectedPrincipal = null) {
   // 顺序上传未完成项（含上一轮失败项）；任一失败即抛出，本轮消息不发送。
   // 已知行为（反方审 P3）：某轮失败但附件已上传成功（status:done）时，附件
   // 保留在待发区——这是重试语义（重试同一句不重复上传）。若用户改发别的
@@ -771,7 +826,8 @@ async function uploadPendingFiles(files = pendingFiles.value) {
     item.status = "uploading";
     item.error = "";
     try {
-      const res = await apiUploadFile(item.raw);
+      if (!item.raw) throw new Error("原始附件已丢失，禁止自动重传");
+      const res = await apiUploadFile(item.raw, null, expectedPrincipal);
       item.status = "done";
       item.fileId = res.id;
     } catch (err) {
@@ -861,6 +917,7 @@ async function send() {
   const sendLoadEpoch = conversationLoadEpoch;
   const initialConversationId = conversationId.value;
   const sendFiles = [...pendingFiles.value];
+  const attachmentIntent = attachmentIntentForFiles(sendFiles);
   const sendUiToken = ++sendUiEpoch;
   let targetConversationId = initialConversationId;
   const sendOperation = {
@@ -868,6 +925,7 @@ async function send() {
     targetConversationId,
     content,
     files: sendFiles,
+    attachmentIntent,
     requestId: retryTurn?.requestId || null,
     fingerprint: null,
     outboxPreflightFailed: false,
@@ -907,30 +965,35 @@ async function send() {
     // 未知结果重试必须先验证 durable outbox；记录缺失/坏版本/主体、路由、正文或
     // 附件漂移时，在上传和任一会话 POST 之前 fail-closed，绝不旋转 request_id。
     const durableRetry = preflightDurableRetry(principal, sendOperation);
+    const requestId = durableRetry
+      ? durableRetry.request_id
+      : isCurrentSendUi(sendUiToken, sendLoadEpoch, targetConversationId)
+      ? turnRequestId(content, attachmentIntent)
+      : newTurnRequestId();
+    sendOperation.requestId = requestId;
+    sendOperation.fingerprint = JSON.stringify([content, attachmentIntent]);
     if (!durableRetry) {
-      // 文件 id 只能由上传 API 产生，完整 outbox 会在上传后立刻写入；但任何上传
-      // POST 前先以接近最终记录大小做 sessionStorage 写后回读探针。存储不可用时
-      // 零上传、零会话 POST，避免留下无法恢复的孤儿附件。
+      // 真正的版本化发送意图必须先写入正式 outbox key 并回读，再允许附件 POST。
+      // 此时只持久化不可变附件描述；服务端 file_id 在上传完成后一次绑定。
       try {
-        guideSafeAutoOutbox.assertWritable(
-          content.length + sendFiles.reduce((total, file) => total + file.name.length, 0) + 2048,
-        );
+        guideSafeAutoOutbox.prepareUploads(principal, {
+          requestId,
+          agentId: GUIDE_AGENT_ID,
+          conversationId: targetConversationId || null,
+          content,
+          attachmentIntent,
+        });
       } catch (error) {
         sendOperation.outboxPreflightFailed = true;
         throw error;
       }
     }
-    // 先传附件（已 done 的跳过，失败即中止——本轮消息不发送）
-    const fileIds = await uploadPendingFiles(sendFiles);
-    // request_id 必须在 fresh conversation POST 之前稳定下来；create 与 message 共用
-    // 同一 key。sessionStorage 写入并回读成功之后协调器才允许任一 POST。
-    const requestId = durableRetry
-      ? durableRetry.request_id
-      : isCurrentSendUi(sendUiToken, sendLoadEpoch, targetConversationId)
-      ? turnRequestId(content, fileIds)
-      : newTurnRequestId();
-    sendOperation.requestId = requestId;
-    sendOperation.fingerprint = JSON.stringify([content, fileIds]);
+    // 已 done 的附件跳过；其余上传都带持久化主体快照，任一失败即中止消息。
+    const fileIds = await uploadPendingFiles(sendFiles, principal);
+    guideSafeAutoOutbox.completeUploads(principal, requestId, {
+      fileIds,
+      files: sendFiles.map((file) => ({ id: file.fileId, name: file.name })),
+    });
     const dispatched = await dispatchGuideSafeAutoIntent({
       outbox: guideSafeAutoOutbox,
       principal,
@@ -942,6 +1005,7 @@ async function send() {
         fileIds,
         // 只持久化服务端 file id 与显示名；raw File 永不进入 sessionStorage。
         files: sendFiles.map((file) => ({ id: file.fileId, name: file.name })),
+        attachmentIntent,
       },
       createConversation: ({ agentId, requestId: createRequestId, expectedPrincipal }) =>
         createConversation({ agentId, requestId: createRequestId, expectedPrincipal }),
@@ -1312,7 +1376,16 @@ async function resumePersistedGuideTurn() {
       draft.value = visibleRecord.payload.content;
       pendingFiles.value = filesFromGuideSafeAutoRecord(visibleRecord).map((file) => reactive(file));
       retryTurn = {
-        fingerprint: JSON.stringify([visibleRecord.payload.content, visibleRecord.payload.file_ids]),
+        fingerprint: JSON.stringify([
+          visibleRecord.payload.content,
+          visibleRecord.attachment_intent.map((entry) => ({
+            token: entry.token,
+            name: entry.name,
+            sizeBytes: entry.size_bytes,
+            mimeType: entry.mime_type,
+            lastModified: entry.last_modified,
+          })),
+        ]),
         requestId: visibleRecord.request_id,
       };
     }

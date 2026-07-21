@@ -85,8 +85,8 @@ def _post_safe_auto(
     )
 
 
-def _explicit_inputs(inputs: dict[str, Any], prefix: str = "请按以下输入执行") -> str:
-    return f"{prefix}：\n{json.dumps(inputs, ensure_ascii=False)}"
+def _explicit_inputs(inputs: dict[str, Any]) -> str:
+    return json.dumps(inputs, ensure_ascii=False)
 
 
 def test_safe_auto_missing_required_input_blocks_with_zero_tasks(app_env) -> None:
@@ -226,6 +226,7 @@ def test_safe_auto_complete_allowlisted_plan_creates_queued_task_atomically(app_
             "visibility": "admin_only",
             "allowed_roles": ["admin", "agent_developer"],
         }
+        assert task["metadata"]["automation"]["mode"] == "safe_auto"
         assert task["metadata"]["automation"]["created_via"] == "authenticated_conversation_turn"
         assert task["metadata"]["automation"]["authorized_role"] == "admin"
         assert task["metadata"]["automation"]["manifest_pin_version"] == "agent_manifest_pin.v1"
@@ -247,7 +248,7 @@ def test_safe_auto_complete_allowlisted_plan_creates_queued_task_atomically(app_
         conn.close()
 
 
-def test_safe_auto_commit_holds_stable_registry_view_until_receipt(
+def test_safe_auto_commit_holds_stable_registry_view_until_commit(
     app_env, monkeypatch
 ) -> None:
     client, app = app_env
@@ -276,24 +277,48 @@ def test_safe_auto_commit_holds_stable_registry_view_until_receipt(
     live = app.state.agent_registry
     shadow = type(live)(live.agents_dir, live.schema_path)
     shadow.scan()
+    shadow_manifest = copy.deepcopy(shadow.get("control_logic_agent"))
+    assert shadow_manifest is not None
+    shadow_manifest["summary"] = "registry-adopt-after-commit-sentinel"
+    shadow._agents["control_logic_agent"] = shadow_manifest
 
-    receipt_entered = threading.Event()
-    release_receipt = threading.Event()
+    receipt_inserted = threading.Event()
+    commit_entered = threading.Event()
+    release_commit = threading.Event()
+    commit_wait_timed_out = threading.Event()
     adopt_started = threading.Event()
     adopt_finished = threading.Event()
     real_create_receipt = repos.create_conversation_dispatch
+    real_service_conn_factory = app.state.conversation_service.conn_factory
 
-    def pause_before_receipt(*args: Any, **kwargs: Any):
-        receipt_entered.set()
-        assert release_receipt.wait(2)
-        return real_create_receipt(*args, **kwargs)
+    def signal_after_receipt(*args: Any, **kwargs: Any):
+        receipt = real_create_receipt(*args, **kwargs)
+        receipt_inserted.set()
+        return receipt
+
+    def traced_conn_factory():
+        conn = real_service_conn_factory()
+
+        def trace(statement: str) -> None:
+            if statement.strip().upper() == "COMMIT" and receipt_inserted.is_set():
+                commit_entered.set()
+                if not release_commit.wait(5):
+                    commit_wait_timed_out.set()
+
+        conn.set_trace_callback(trace)
+        return conn
 
     def publish_shadow() -> None:
         adopt_started.set()
         live.adopt(shadow)
         adopt_finished.set()
 
-    monkeypatch.setattr(repos, "create_conversation_dispatch", pause_before_receipt)
+    monkeypatch.setattr(repos, "create_conversation_dispatch", signal_after_receipt)
+    monkeypatch.setattr(
+        app.state.conversation_service,
+        "conn_factory",
+        traced_conn_factory,
+    )
     with ThreadPoolExecutor(max_workers=2) as pool:
         dispatch_future = pool.submit(
             _post_safe_auto,
@@ -302,17 +327,30 @@ def test_safe_auto_commit_holds_stable_registry_view_until_receipt(
             _explicit_inputs(inputs),
             "turn_registry_commit_lock_001",
         )
-        assert receipt_entered.wait(2)
+        assert receipt_inserted.wait(5)
+        assert commit_entered.wait(5)
+        assert not dispatch_future.done()
+        probe_conn = app.state.conn_factory()
+        try:
+            assert repos.get_conversation_dispatch(
+                probe_conn, conversation_id, "turn_registry_commit_lock_001"
+            ) is None
+        finally:
+            probe_conn.close()
         adopt_future = pool.submit(publish_shadow)
         assert adopt_started.wait(1)
         assert not adopt_finished.wait(0.1)
-        release_receipt.set()
-        response = dispatch_future.result(timeout=3)
-        adopt_future.result(timeout=3)
+        release_commit.set()
+        response = dispatch_future.result(timeout=5)
+        adopt_future.result(timeout=5)
 
     assert response.status_code == 200, response.text
     assert response.json()["execution"]["status"] == "dispatched"
+    assert not commit_wait_timed_out.is_set()
     assert adopt_finished.is_set()
+    assert live.get("control_logic_agent")["summary"] == (
+        "registry-adopt-after-commit-sentinel"
+    )
     conn = app.state.conn_factory()
     try:
         assert len(repos.list_tasks(conn, conversation_id=conversation_id)) == 1
@@ -771,6 +809,7 @@ def test_explicit_input_mapping_uses_json_type_strict_equality() -> None:
     assert _has_explicit_input_mapping({"count": 1}, '{"count": 1.0}') is False
     assert _has_explicit_input_mapping({"count": 2}, '{"count": 1, "count": 2}') is False
     assert _has_explicit_input_mapping({"flag": True}, '{"flag": true}') is True
+    assert _has_explicit_input_mapping({"x": float("inf")}, '{"x": 1e400}') is False
 
 
 def test_explicit_input_mapping_rejects_nested_example_or_rejection() -> None:
@@ -778,11 +817,23 @@ def test_explicit_input_mapping_rejects_nested_example_or_rejection() -> None:
 
     assert _has_explicit_input_mapping(
         inputs,
+        '不要执行；下面只是用于讨论的反例：\n{"flag": true}',
+    ) is False
+    assert _has_explicit_input_mapping(
+        inputs,
         json.dumps({"proposal_to_reject": inputs}),
     ) is False
     assert _has_explicit_input_mapping(
         inputs,
         f"请按以下输入执行：\n{json.dumps(inputs)}",
+    ) is False
+    assert _has_explicit_input_mapping(
+        inputs,
+        json.dumps(inputs) + "\n以上仅供讨论",
+    ) is False
+    assert _has_explicit_input_mapping(
+        inputs,
+        json.dumps(inputs),
     ) is True
     assert _has_explicit_input_mapping(
         inputs,
@@ -790,8 +841,56 @@ def test_explicit_input_mapping_rejects_nested_example_or_rejection() -> None:
     ) is True
     assert _has_explicit_input_mapping(
         inputs,
+        json.dumps({"inputs": inputs, "note": "仅供讨论"}),
+    ) is False
+    assert _has_explicit_input_mapping(
+        inputs,
         '{"proposal_to_reject": ] {"inputs": {"flag": true}}}',
     ) is False
+
+
+def test_safe_auto_discussion_example_is_not_execution_authority(app_env) -> None:
+    client, app = app_env
+    inputs = {
+        "system_name": "讨论反例",
+        "states": ["OFF"],
+        "transitions": [],
+    }
+    app.state.conversation_service.model_gateway = _CannedStub(
+        {
+            "decision": "orchestrate",
+            "analysis": "把讨论材料误当执行输入",
+            "goal": "生成控制逻辑",
+            "workflow": "单 Agent",
+            "agents": [
+                {
+                    "agent_id": "control_logic_agent",
+                    "role": "生成",
+                    "rationale": "确定性",
+                    "prefilled_inputs": inputs,
+                }
+            ],
+        }
+    )
+    conversation_id = _open(client)
+
+    response = _post_safe_auto(
+        client,
+        conversation_id,
+        "不要执行；下面只是用于讨论的反例：\n"
+        + json.dumps(inputs, ensure_ascii=False),
+        "turn_discussion_example_001",
+    )
+
+    assert response.status_code == 200, response.text
+    execution = response.json()["execution"]
+    assert execution["status"] == "blocked_source"
+    assert execution["issues"][0]["code"] == "UNVERIFIED_INPUT_SOURCE"
+    conn = app.state.conn_factory()
+    try:
+        assert repos.list_tasks(conn) == []
+    finally:
+        conn.close()
 
 
 @pytest.mark.parametrize(

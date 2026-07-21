@@ -713,6 +713,7 @@ def test_safe_auto_http_turn_dispatches_explicit_dag_and_persists_receipt(app_en
                 ).encode("utf-8")
             ).hexdigest()
             automation = task["metadata"]["automation"]
+            assert automation["mode"] == "safe_auto"
             assert automation["manifest_pin_version"] == "agent_manifest_pin.v1"
             assert automation["agent_manifest_digest"] == expected_digest
     finally:

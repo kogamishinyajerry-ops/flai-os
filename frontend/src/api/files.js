@@ -1,10 +1,17 @@
 import { request } from "./client";
 
-export const uploadFile = (file, taskId) => {
+export const uploadFile = (file, taskId, expectedPrincipal = null) => {
   const formData = new FormData();
   formData.append("file", file);
   if (taskId) formData.append("task_id", taskId);
-  return request("/api/files/upload", { method: "POST", formData });
+  const headers = expectedPrincipal
+    ? {
+        // Percent-encoding keeps Unicode usernames ASCII-safe in an HTTP header. The auth
+        // middleware validates this before FastAPI is allowed to parse/spool multipart bytes.
+        "X-FLAI-Expected-Principal": encodeURIComponent(JSON.stringify(expectedPrincipal)),
+      }
+    : undefined;
+  return request("/api/files/upload", { method: "POST", formData, headers });
 };
 
 // 下载走浏览器原生导航（FileResponse 附件头由后端给），不经 fetch。

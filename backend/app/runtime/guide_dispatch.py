@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import re
 import sqlite3
 import uuid
@@ -130,86 +131,33 @@ def _reject_nonfinite_json(value: str) -> Any:
     raise ValueError(f"JSON 不允许非有限数：{value}")
 
 
-def _balanced_container_end(content: str, start: int) -> int | None:
-    """返回一个 JSON 容器的边界；畸形外层仍整体跳过，绝不再扫描其嵌套对象。"""
-    opening = content[start]
-    expected = "}" if opening == "{" else "]"
-    stack = [expected]
-    in_string = False
-    escaped = False
-    for index in range(start + 1, len(content)):
-        char = content[index]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-            continue
-        if char == '"':
-            in_string = True
-        elif char == "{":
-            stack.append("}")
-        elif char == "[":
-            stack.append("]")
-        elif char in ("}", "]"):
-            if not stack or char != stack[-1]:
-                # 错配说明外层语义已不可可靠恢复；若从错配点后继续扫描，会把仍在
-                # 畸形外壳里的嵌套 inputs 误当顶层授权。None 令调用方拒绝余下全文。
-                return None
-            stack.pop()
-            if not stack:
-                return index + 1
-    return None
-
-
-def _top_level_json_values(content: str) -> list[Any]:
-    """解析文本中的非嵌套 JSON 容器；外层语义对象不会泄漏其内部对象。"""
-    decoder = json.JSONDecoder(
-        object_pairs_hook=_unique_object,
-        parse_constant=_reject_nonfinite_json,
-    )
-    values: list[Any] = []
-    index = 0
-    while index < len(content):
-        starts = [
-            position
-            for position in (content.find("{", index), content.find("[", index))
-            if position >= 0
-        ]
-        if not starts:
-            break
-        start = min(starts)
-        try:
-            candidate, consumed = decoder.raw_decode(content[start:])
-        except (json.JSONDecodeError, RecursionError, ValueError):
-            end = _balanced_container_end(content, start)
-            if end is None:
-                break
-            index = end
-            continue
-        values.append(candidate)
-        index = start + consumed
-    return values
+def _parse_finite_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"JSON 浮点数溢出为非有限值：{value}")
+    return parsed
 
 
 def _has_explicit_input_mapping(inputs: dict[str, Any], content: str) -> bool:
-    """用户必须显式给出与计划输入完全相同的 JSON 对象。
-
-    只做“所有叶值出现在全文”会丢失字段/结构关系：模型可交换 system_name 与
-    states 仍通过。这里由标准库 JSON 解析器恢复用户亲自声明的键值结构，再做深
-    相等；LLM 只能搬运，不能替用户决定字段归属。允许 ``{"inputs": {...}}``
-    作为带外层说明的等价 envelope。
-    """
-    for candidate in _top_level_json_values(content):
-        if _canonical_digest(candidate) == _canonical_digest(inputs):
-            return True
-        if isinstance(candidate, dict) and _canonical_digest(
-            candidate.get("inputs")
-        ) == _canonical_digest(inputs):
-            return True
-    return False
+    """整条用户消息必须是计划输入本身或精确的 ``inputs`` envelope。"""
+    try:
+        candidate = json.loads(
+            content,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_nonfinite_json,
+            parse_float=_parse_finite_float,
+        )
+    except (json.JSONDecodeError, RecursionError, TypeError, ValueError):
+        return False
+    if not isinstance(candidate, dict):
+        return False
+    if _canonical_digest(candidate) == _canonical_digest(inputs):
+        return True
+    return (
+        set(candidate) == {"inputs"}
+        and isinstance(candidate.get("inputs"), dict)
+        and _canonical_digest(candidate["inputs"]) == _canonical_digest(inputs)
+    )
 
 
 def _has_explicit_dag_input_mapping(
@@ -223,6 +171,7 @@ def _has_explicit_dag_input_mapping(
             content,
             object_pairs_hook=_unique_object,
             parse_constant=_reject_nonfinite_json,
+            parse_float=_parse_finite_float,
         )
     except (json.JSONDecodeError, RecursionError, TypeError, ValueError):
         return False

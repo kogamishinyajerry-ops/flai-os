@@ -32,8 +32,8 @@ async function parseDetail(resp) {
   }
 }
 
-export async function request(path, { method = "GET", json, formData } = {}) {
-  const init = { method, headers: {} };
+export async function request(path, { method = "GET", json, formData, headers } = {}) {
+  const init = { method, headers: { ...(headers || {}) } };
   if (json !== undefined) {
     init.headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(json);

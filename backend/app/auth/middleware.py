@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from http.cookies import SimpleCookie
 from typing import Any, Callable
+from urllib.parse import unquote_to_bytes
 
 import anyio.to_thread
 
@@ -31,6 +32,77 @@ _ALLOWLIST = {("POST", "/api/auth/login"), ("GET", "/api/health")}
 # 者可拉取全量路由清单+请求模型，与「default-deny 防路由枚举」自相矛盾。
 # 这几路要求有效会话（登录开发者仍可用 /docs）。
 _PROTECTED_NON_API = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
+
+_EXPECTED_PRINCIPAL_HEADER = b"x-flai-expected-principal"
+# 100 Unicode code points can expand to roughly 1200 bytes under percent-encoded UTF-8.
+# Keep a small hard ceiling while accepting every username allowed by the auth contract.
+_EXPECTED_PRINCIPAL_MAX_BYTES = 4096
+_USER_ROLES = {"admin", "agent_developer", "business_user"}
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"JSON 对象含重复键：{key}")
+        value[key] = item
+    return value
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"非法 JSON 常量：{value}")
+
+
+def _expected_principal(scope: Any) -> dict[str, str] | None:
+    """Decode the small ASCII header before any endpoint body parsing occurs."""
+    values = [
+        value
+        for name, value in scope.get("headers", [])
+        if name == _EXPECTED_PRINCIPAL_HEADER
+    ]
+    if not values:
+        return None
+    if len(values) != 1 or len(values[0]) > _EXPECTED_PRINCIPAL_MAX_BYTES:
+        raise ValueError("expected principal header count/size invalid")
+    try:
+        encoded = values[0].decode("ascii")
+        raw = unquote_to_bytes(encoded).decode("utf-8")
+        payload = json.loads(
+            raw,
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        UnicodeDecodeError,
+        ValueError,
+    ) as exc:
+        raise ValueError("expected principal header invalid") from exc
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"username", "role"}
+        or not isinstance(payload["username"], str)
+        or not 1 <= len(payload["username"]) <= 100
+        or not isinstance(payload["role"], str)
+        or payload["role"] not in _USER_ROLES
+    ):
+        raise ValueError("expected principal payload invalid")
+    return {"username": payload["username"], "role": payload["role"]}
+
+
+async def _send_json_error(send: Any, status: int, detail: str) -> None:
+    body = json.dumps({"detail": detail}, ensure_ascii=False).encode("utf-8")
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": [
+            (b"content-type", b"application/json; charset=utf-8"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ],
+    })
+    await send({"type": "http.response.body", "body": body})
 
 
 class AuthGateMiddleware:
@@ -63,16 +135,26 @@ class AuthGateMiddleware:
             # 静态/health 流量（不像 FastAPI 同步 handler 会被自动 offload）。
             user = await anyio.to_thread.run_sync(self._lookup_user, token)
         if user is None:
-            body = json.dumps({"detail": "未登录或会话已过期"}, ensure_ascii=False).encode("utf-8")
-            await send({
-                "type": "http.response.start",
-                "status": 401,
-                "headers": [
-                    (b"content-type", b"application/json; charset=utf-8"),
-                    (b"content-length", str(len(body)).encode("ascii")),
-                ],
-            })
-            await send({"type": "http.response.body", "body": body})
+            await _send_json_error(send, 401, "未登录或会话已过期")
+            return
+
+        # Guide safe-auto uploads carry the durable outbox principal in a small header.
+        # This ASGI gate runs before FastAPI parses multipart data, so a cookie drift is
+        # rejected before Starlette can spool the uploaded file to a temporary disk file.
+        try:
+            expected = _expected_principal(scope)
+        except ValueError:
+            await _send_json_error(send, 422, "expected principal header 格式非法")
+            return
+        if expected is not None and (
+            expected["username"] != user.get("username")
+            or expected["role"] != user.get("role")
+        ):
+            await _send_json_error(
+                send,
+                409,
+                "认证主体与持久化自动执行意图不一致，已拒绝请求",
+            )
             return
 
         # starlette Request.state 背靠 scope["state"]——处理器经 request.state.user 取用
