@@ -78,6 +78,11 @@ class ToolRegistry:
 
 - 每次工具调用对应 `tool_runs` 一行记录：`tool_id/tool_version/status/input_json/output_json/raw_input_path/raw_output_path/error_message/started_at/finished_at`。
 - `raw_input_path`/`raw_output_path` 指向 `data/task_runs/<task_id>/` 下的具体文件，禁止只存内存对象、不落盘。
+- 文件型 Tool 的任务输出根只能由 Runtime 经 `tool_context.output_dir` 注入，禁止由
+  payload 自报。Registry 仅在 `save_raw_files is True` 且路径是该可信根内的绝对
+  普通文件（非 symlink、实体存在）时写入 raw path；声明的 `manifest_path` 与
+  `extracted_output_path` 也走同一存在性/包含性校验。成功调用缺 raw_output_path 或
+  任一原始/证据路径越界均按输出契约失败处理。
 - 失败调用同样要记录（`status=failed` + `error_message`），不能因为失败就不写 `tool_runs`。
 
 ## 7. Python Adapter → MCP 演进路线

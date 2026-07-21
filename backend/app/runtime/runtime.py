@@ -392,12 +392,19 @@ class _ToolRegistryContext:
         # ToolRegistry.scan() 已校验 mock 为 boolean；缺省按 schema default=false，
         # 并用 `is True` 收窄，绝不对安全标记做 truthiness 判定。
         tool_mock = tool_manifest.get("mock", False) is True
+        if tool_manifest.get("output_classification") == "sensitive":
+            started_payload = {
+                "tool_id": tool_id,
+                "input_keys": sorted(str(key) for key in payload),
+                "mock": tool_mock,
+            }
+        else:
+            started_payload = {"tool_id": tool_id, "input": payload, "mock": tool_mock}
 
         repos.append_event(
             self._conn, task_id=self._task_id, agent_id=self._agent_id,
             event_type="tool_started", level="info",
-            message=f"开始调用工具 {tool_id}",
-            payload={"tool_id": tool_id, "input": payload, "mock": tool_mock},
+            message=f"开始调用工具 {tool_id}", payload=started_payload,
         )
         try:
             result = self._tool_registry.call(
@@ -1391,11 +1398,14 @@ class AgentRuntime:
         # $FLAI_CFD_CASE_DIR 活态——「评的就是晋升的那版」对这类 agent 也成立。snapshot 路径
         # 下 pkg_dir=材化目录 → fixture 根=<materialized>/eval_cases/fixtures。普通任务
         # （origin≠eval）不注入，工具回退活 env，真实 CFD 运行语义不变；无 fixtures 目录也不注入。
-        eval_tool_context: dict[str, Any] | None = None
+        # 所有文件型 Tool 都从 Runtime 获得可信任务输出根；payload 不得自报写入路径。
+        # 这是 docs/03 workspace/raw-file 契约的运行时接缝，也是 ax_web_extract 保存
+        # 原始快照而不越出 task_runs 的前提。eval fixture 在同一任务级 context 上增量注入。
+        tool_context: dict[str, Any] = {"output_dir": str(output_dir)}
         if task.get("origin") == "eval":
             _fixtures = pkg_dir / "eval_cases" / "fixtures"
             if _fixtures.is_dir():
-                eval_tool_context = {"eval_fixtures_dir": str(_fixtures)}
+                tool_context["eval_fixtures_dir"] = str(_fixtures)
         context: dict[str, Any] = {
             "task": task,
             "inputs": task["inputs"],
@@ -1403,7 +1413,7 @@ class AgentRuntime:
             "model_gateway": _gateway,
             "tool_registry": _ToolRegistryContext(
                 self.tool_registry, conn, task["id"], agent_id, allowed_tools,
-                tool_context=eval_tool_context,
+                tool_context=tool_context,
             ),
             "event_logger": _WorkflowEventLogger(conn, task["id"], agent_id),
             "output_dir": str(output_dir),

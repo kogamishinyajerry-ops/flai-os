@@ -2,7 +2,8 @@
 
 - 状态：Accepted
 - 日期：2026-07-20
-- 关联：ADR-0029（提议约束，非实施授权）、ADR-0032、ADR-0033、ADR-0039、ADR-0043
+- 关联：治理/评估 gap-closure R1 owner 提议（未纳入本分支，非实施授权）、
+  ADR-0032、ADR-0033、ADR-0039、ADR-0043
 
 ## 背景
 
@@ -11,7 +12,7 @@
 `completed` 或 `awaiting_approval` 冒充为 FLAi 人签。原始 runtime payload、错误正文、prompt、
 tool 参数或内部 id 也不应成为浏览器合同。
 
-ADR-0029 的 R1 owner 决策稿仍是未批准提议。本 ADR 只吸收其中“复用既有证据面、不得记录
+该治理/评估 gap-closure R1 owner 决策稿仍是未批准提议。本 ADR 只吸收其中“复用既有证据面、不得记录
 内部推理、机器事实不得代替人签、不得新造平行 trace/编排平台”的约束；不批准或实施其
 G1–G5、S1–S6 项。这里的 Agent Fact 是有界运行事实投影，不是 `decision_evidence`、治理评分或
 评测合同。

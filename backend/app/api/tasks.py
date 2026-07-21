@@ -1009,8 +1009,9 @@ def list_events(
         if task is None:
             raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
         events = repos.list_events(conn, task_id, limit=limit, offset=offset)
-        # ADR-0025：tool_started 事件 payload 带工具 input、tool_failed message 带外部
-        # grounding_failures（event.schema:74 本就要求敏感 payload 脱敏）——sensitive→
+        # ADR-0025：普通 tool_started 事件 payload 可带工具 input（sensitive 工具只留
+        # keys）；tool_failed message 可带外部 grounding_failures（event.schema:74
+        # 要求敏感 payload 脱敏）——sensitive→
         # 遮蔽 message+payload，只留 type/level/时间戳等元数据。
         if cgate.is_sensitive_task(conn, task):
             return cgate.redact_rows(events, cgate.EVENT_CONTENT_KEYS)

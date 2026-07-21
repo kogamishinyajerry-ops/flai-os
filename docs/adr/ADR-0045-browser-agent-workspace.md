@@ -2,7 +2,8 @@
 
 - 状态：Accepted
 - 日期：2026-07-20
-- 关联：ADR-0029（提议约束，非实施授权）、ADR-0039、ADR-0043、ADR-0044
+- 关联：治理/评估 gap-closure R1 owner 提议（未纳入本分支，非实施授权）、
+  ADR-0039、ADR-0043、ADR-0044
 
 ## 背景
 
@@ -81,11 +82,11 @@ DOM attribute；用户看到的是 Agent 名称与匿名 ordinal。
 
 每一步都必须复用既有审计、人签、分级与来源见证，不以“更像工作台”为由绕过治理。
 
-### 6. ADR-0029 owner 决策边界保持未越权
+### 6. 治理/评估 gap-closure owner 决策边界保持未越权
 
 本批只把浏览器工作台接到现有认证 owner scope、任务、事件、模型/工具留痕与人签 SSOT；不新增
 KPI route、治理自评分、自由文本 rationale/chain-of-thought、角色枚举或第二套 workflow trace。
-ADR-0029 中的运行时授权轴仍是 sensitive 真实数据进场前的独立 owner 决策项；当前界面不得把
+该提议中的运行时授权轴仍是 sensitive 真实数据进场前的独立 owner 决策项；当前界面不得把
 “已认证 username”表述成“已具备角色授权”，也不得用右栏监控完成度暗示治理控制已 verified。
 
 ## 被拒绝的方案
