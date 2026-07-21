@@ -98,6 +98,23 @@ test("missing, duplicate, or inconsistent DAG mappings fail closed for the whole
 });
 
 
+test("a versioned DAG rejects duplicate agent ids even when node ids are distinct", () => {
+  const plan = dagPlan([
+    { node_id: "prepare", agent_id: "deterministic", task_id: "task-p" },
+    { node_id: "review", agent_id: "deterministic", task_id: "task-r" },
+  ]);
+  plan.nodes[1].agent_id = "deterministic";
+  const index = indexGuidePlanTasks(plan, [
+    { id: "task-p", agent_id: "deterministic" },
+    { id: "task-r", agent_id: "deterministic" },
+  ]);
+
+  assert.equal(index.valid, false);
+  assert.match(index.reason, /Agent.*重复/);
+  assert.deepEqual([...index.claimedTaskIds], []);
+});
+
+
 test("a mapped task row with the wrong agent fails closed instead of being attached by id", () => {
   const plan = dagPlan([
     { node_id: "prepare", agent_id: "deterministic", task_id: "task-p" },
@@ -142,6 +159,45 @@ test("legacy plans alone retain agent_id task grouping and manual-create fallbac
   assert.equal(guidePlanAllowsManualCreate(legacy), true);
   assert.equal(guidePlanAllowsManualCreate(dagPlan([])), false);
   assert.equal(guidePlanAllowsManualCreate({ ...dagPlan([]), execution: null }), false);
+});
+
+
+test("a dispatched legacy plan binds only its receipt task id", () => {
+  const legacy = {
+    decision: "orchestrate",
+    agents: [{ agent_id: "legacy" }],
+    execution: { status: "dispatched", task_ids: ["task-old"] },
+  };
+  const tasks = [
+    { id: "task-new", agent_id: "legacy" },
+    { id: "task-old", agent_id: "legacy" },
+  ];
+  const index = indexGuidePlanTasks(legacy, tasks);
+
+  assert.equal(index.valid, true);
+  assert.deepEqual(tasksForGuidePlanAgent(index, legacy.agents[0]).map((task) => task.id), ["task-old"]);
+  assert.deepEqual([...index.claimedTaskIds], ["task-old"]);
+});
+
+
+test("a malformed dispatched legacy receipt fails closed", () => {
+  const cases = [
+    { status: "dispatched", task_ids: [] },
+    { status: "dispatched", task_ids: ["task-old", "task-new"] },
+    { status: "dispatched", task_ids: ["task-old", "task-old"] },
+    { status: "pending", task_ids: ["task-old"] },
+  ];
+  for (const execution of cases) {
+    const legacy = {
+      decision: "orchestrate",
+      agents: [{ agent_id: "legacy" }],
+      execution,
+    };
+    const index = indexGuidePlanTasks(legacy, [{ id: "task-old", agent_id: "legacy" }]);
+    assert.equal(index.valid, false);
+    assert.deepEqual(tasksForGuidePlanAgent(index, legacy.agents[0]), []);
+    assert.deepEqual([...index.claimedTaskIds], []);
+  }
 });
 
 
@@ -204,6 +260,14 @@ test("Guide and Workbench wire roster tasks through the authoritative projection
   assert.match(guide, /guidePlanTaskMappingIssue\(plan, conversationTasks\.value\)/);
   assert.match(guide, /tasksForGuidePlanAgent\(index, agent\)/);
   assert.match(guide, /guidePlanAllowsManualCreate\(m\.recommendation\)/);
+  assert.match(
+    guide,
+    /conversationStatus === ['"]active['"]\s*&&\s*!m\.recommendation\.execution/,
+  );
+  assert.match(
+    guide,
+    /function createOneTask\(agent, plan\)[\s\S]*conversationStatus\.value !== ['"]active['"]/,
+  );
   assert.doesNotMatch(guide, /conversationTasks\.value\.filter\(\(t\) => t\.agent_id === agent\.agent_id\)/);
 
   assert.match(workbench, /indexGuidePlanTasks\(plan\.value, memberTasks\.value\)/);

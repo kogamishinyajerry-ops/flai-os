@@ -224,6 +224,24 @@ def test_dag_requires_exact_current_turn_inputs_by_agent_mapping(app_env) -> Non
     assert execution["issues"][0]["code"] == "UNVERIFIED_INPUT_SOURCE"
 
 
+def test_dag_rejects_exact_inputs_when_the_json_is_only_a_prose_counterexample(
+    app_env,
+) -> None:
+    _client, app = app_env
+
+    execution = _dispatch(
+        app,
+        _valid_dag(),
+        current_user_content=(
+            "不要执行；下面只是用于讨论的反例：\n" + _explicit_dag_inputs()
+        ),
+    )
+
+    assert execution["status"] == "blocked_source"
+    assert execution["task_ids"] == []
+    assert execution["issues"][0]["code"] == "UNVERIFIED_INPUT_SOURCE"
+
+
 def test_dag_rejects_historical_attachment_as_current_authority(app_env) -> None:
     _client, app = app_env
 
@@ -571,6 +589,7 @@ def test_guide_workflow_normalizes_only_explicit_versioned_dag(app_env) -> None:
             "agent_registry": app.state.agent_registry,
             "agent_config": app.state.agent_registry.get("guide_agent"),
             "safe_auto_agent_ids": {"control_logic_agent", "fta_agent"},
+            "accessible_agent_ids": {"control_logic_agent", "fta_agent"},
         }
     )
     recommendation = result["recommendation"]
@@ -620,6 +639,7 @@ def test_guide_workflow_rejects_unknown_graph_contract_instead_of_falling_back(
             "agent_registry": app.state.agent_registry,
             "agent_config": app.state.agent_registry.get("guide_agent"),
             "safe_auto_agent_ids": {"control_logic_agent", "fta_agent"},
+            "accessible_agent_ids": {"control_logic_agent", "fta_agent"},
         }
     )
 
@@ -652,6 +672,7 @@ def test_safe_auto_http_turn_dispatches_explicit_dag_and_persists_receipt(app_en
             "content": _explicit_dag_inputs(),
             "execution_mode": "safe_auto",
             "request_id": "turn_dag_http_positive_001",
+            "expected_principal": {"username": "test_engineer", "role": "admin"},
         },
     )
 
@@ -680,6 +701,20 @@ def test_safe_auto_http_turn_dispatches_explicit_dag_and_persists_receipt(app_en
         assert len(tasks) == 2
         assert receipt is not None
         assert receipt["result"]["execution"]["task_ids"] == execution["task_ids"]
+        for task in tasks:
+            manifest = app.state.agent_registry.get(task["agent_id"])
+            expected_digest = "sha256:" + hashlib.sha256(
+                json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            automation = task["metadata"]["automation"]
+            assert automation["manifest_pin_version"] == "agent_manifest_pin.v1"
+            assert automation["agent_manifest_digest"] == expected_digest
     finally:
         conn.close()
 
@@ -703,6 +738,7 @@ def test_dag_schema_requires_graph_projection_when_execution_is_dispatched(app_e
             "agent_registry": app.state.agent_registry,
             "agent_config": app.state.agent_registry.get("guide_agent"),
             "safe_auto_agent_ids": {"control_logic_agent", "fta_agent"},
+            "accessible_agent_ids": {"control_logic_agent", "fta_agent"},
         }
     )["recommendation"]
     recommendation["execution"] = {

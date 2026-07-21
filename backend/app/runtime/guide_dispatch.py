@@ -21,6 +21,7 @@ from jsonschema.exceptions import SchemaError
 
 from ..auth.authorization import agent_is_callable, role_can_access_agent
 from ..storage import repos
+from .manifest import MANIFEST_PIN_VERSION, canonical_manifest_digest
 
 
 def _canonical_digest(value: Any) -> str:
@@ -217,18 +218,25 @@ def _has_explicit_dag_input_mapping(
     expected = {node["agent_id"]: node.get("prefilled_inputs") for node in nodes}
     if any(not isinstance(value, dict) for value in expected.values()):
         return False
-    for candidate in _top_level_json_values(content):
-        if not isinstance(candidate, dict) or set(candidate) != {"inputs_by_agent"}:
-            continue
-        mapping = candidate.get("inputs_by_agent")
-        if not isinstance(mapping, dict) or set(mapping) != set(expected):
-            continue
-        if all(
+    try:
+        candidate = json.loads(
+            content,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_nonfinite_json,
+        )
+    except (json.JSONDecodeError, RecursionError, TypeError, ValueError):
+        return False
+    if not isinstance(candidate, dict) or set(candidate) != {"inputs_by_agent"}:
+        return False
+    mapping = candidate.get("inputs_by_agent")
+    return (
+        isinstance(mapping, dict)
+        and set(mapping) == set(expected)
+        and all(
             _canonical_digest(mapping[agent_id]) == _canonical_digest(expected_inputs)
             for agent_id, expected_inputs in expected.items()
-        ):
-            return True
-    return False
+        )
+    )
 
 
 def _dag_structure_issue(recommendation: dict[str, Any]) -> dict[str, Any] | None:
@@ -462,6 +470,16 @@ class GuidePlanDispatch:
             for agent in self._registry.list()
             if isinstance(agent.get("id"), str)
             and self._is_safe_auto_agent(agent, actor_role)
+        }
+
+    def accessible_agent_ids(self, actor_role: str) -> set[str]:
+        """模型候选面只包含当前主体可发现且可调用的 job Agent。"""
+        return {
+            agent["id"]
+            for agent in self._registry.list()
+            if isinstance(agent.get("id"), str)
+            and agent_is_callable(agent, mode="job")
+            and role_can_access_agent(agent, actor_role)
         }
 
     def _validate_dag_agents(
@@ -701,6 +719,8 @@ class GuidePlanDispatch:
             }
             automation_meta = {
                 "mode": "safe_auto",
+                "manifest_pin_version": MANIFEST_PIN_VERSION,
+                "agent_manifest_digest": canonical_manifest_digest(agent),
                 "request_id": request_id,
                 "plan_digest": plan_digest,
                 "graph_version": "guide_dag.v1",
@@ -1096,6 +1116,8 @@ class GuidePlanDispatch:
         task_id = f"task_{uuid.uuid4().hex}"
         automation_meta = {
             "mode": "safe_auto",
+            "manifest_pin_version": MANIFEST_PIN_VERSION,
+            "agent_manifest_digest": canonical_manifest_digest(agent),
             "request_id": request_id,
             "plan_digest": plan_digest,
             "initiated_by_username": actor_username,

@@ -195,6 +195,7 @@ test("a new module instance replays the exact persisted request id and file ids"
   assert.equal(replayed.length, 1);
   assert.equal(replayed[0].requestId, "turn-00000001");
   assert.deepEqual(replayed[0].fileIds, ["file-1"]);
+  assert.deepEqual(replayed[0].expectedPrincipal, principal);
   assert.equal("files" in replayed[0], false, "only server file ids cross the replay API seam");
   assert.equal(storage.getItem(GUIDE_SAFE_AUTO_OUTBOX_KEY), null);
 });
@@ -240,29 +241,31 @@ test("fresh recovery uses the same request id for create and message, then CAS-b
   const outbox = createGuideSafeAutoOutbox({ storage });
   outbox.prepare(principal, intent({ conversationId: null, fileIds: [], files: [] }));
 
-  const createIds = [];
-  const postIds = [];
+  const createCalls = [];
+  const postCalls = [];
   let reads = 0;
   const result = await recoverGuideSafeAutoOutbox({
     outbox,
     principal,
-    createConversation: async ({ requestId }) => {
-      createIds.push(requestId);
+    createConversation: async (call) => {
+      createCalls.push(call);
       return { id: "conv-fresh", status: "active" };
     },
     getConversation: async () => {
       reads += 1;
       return authority("conv-fresh", reads === 2 ? "turn-00000001" : null);
     },
-    postMessage: async ({ requestId }) => {
-      postIds.push(requestId);
+    postMessage: async (call) => {
+      postCalls.push(call);
       return { ok: true };
     },
   });
 
   assert.equal(result.status, "confirmed");
-  assert.deepEqual(createIds, ["turn-00000001"]);
-  assert.deepEqual(postIds, ["turn-00000001"]);
+  assert.equal(createCalls[0].requestId, "turn-00000001");
+  assert.deepEqual(createCalls[0].expectedPrincipal, principal);
+  assert.equal(postCalls[0].requestId, "turn-00000001");
+  assert.deepEqual(postCalls[0].expectedPrincipal, principal);
 
   const casStorage = new FakeStorage();
   const cas = createGuideSafeAutoOutbox({ storage: casStorage });
@@ -283,11 +286,13 @@ test("initial fresh dispatch persists before create and clears only after canoni
     outbox: createGuideSafeAutoOutbox({ storage }),
     principal,
     intent: intent({ conversationId: null, fileIds: [], files: [] }),
-    createConversation: async ({ requestId }) => {
+    createConversation: async ({ requestId, expectedPrincipal }) => {
+      assert.deepEqual(expectedPrincipal, principal);
       seen.push(["create", requestId, JSON.parse(storage.getItem(GUIDE_SAFE_AUTO_OUTBOX_KEY)).phase]);
       return { id: "conv-new", status: "active" };
     },
-    postMessage: async ({ requestId }) => {
+    postMessage: async ({ requestId, expectedPrincipal }) => {
+      assert.deepEqual(expectedPrincipal, principal);
       seen.push(["message", requestId, JSON.parse(storage.getItem(GUIDE_SAFE_AUTO_OUTBOX_KEY)).conversation_id]);
       return { message: { recommendation: { execution: { request_id: requestId } } } };
     },

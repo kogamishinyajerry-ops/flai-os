@@ -259,6 +259,41 @@ export function createGuideSafeAutoOutbox({
     return record;
   }
 
+  function assertWritable(sizeHint = 1024) {
+    const probeKey = `${key}.writable-probe`;
+    const probeSize = Number.isInteger(sizeHint)
+      ? Math.max(128, Math.min(sizeHint, 50_000))
+      : 1024;
+    let previous;
+    try {
+      previous = resolvedStorage.getItem(probeKey);
+    } catch (error) {
+      fail("OUTBOX_STORAGE_READ_FAILED", "读取 sessionStorage 探针失败", error);
+    }
+    const probe = "0".repeat(probeSize);
+    try {
+      resolvedStorage.setItem(probeKey, probe);
+    } catch (error) {
+      fail("OUTBOX_STORAGE_WRITE_FAILED", "sessionStorage 写探针失败", error);
+    }
+    let roundTrip;
+    try {
+      roundTrip = resolvedStorage.getItem(probeKey);
+    } catch (error) {
+      fail("OUTBOX_STORAGE_READBACK_FAILED", "sessionStorage 探针回读失败", error);
+    }
+    try {
+      if (previous === null) resolvedStorage.removeItem(probeKey);
+      else resolvedStorage.setItem(probeKey, previous);
+    } catch (error) {
+      fail("OUTBOX_STORAGE_CLEAR_FAILED", "sessionStorage 探针清理失败", error);
+    }
+    if (roundTrip !== probe) {
+      fail("OUTBOX_STORAGE_READBACK_FAILED", "sessionStorage 探针写后回读不一致");
+    }
+    return true;
+  }
+
   function requireOwnedRecord(principal, requestId = null) {
     const normalizedPrincipal = normalizePrincipal(principal);
     const record = read();
@@ -346,6 +381,7 @@ export function createGuideSafeAutoOutbox({
 
   return {
     read,
+    assertWritable,
     prepare,
     loadForPrincipal,
     matchesIntent,
@@ -397,6 +433,7 @@ async function createAndBindIfNeeded({ outbox, principal, record, createConversa
     const conversation = await createConversation({
       agentId: current.agent_id,
       requestId: current.request_id,
+      expectedPrincipal: { ...current.principal },
     });
     if (!isPlainObject(conversation) || !validId(conversation.id)) {
       fail("OUTBOX_CREATE_RESPONSE_INVALID", "新会话响应缺少 id");
@@ -416,6 +453,7 @@ async function postPersistedIntent({ outbox, principal, record, postMessage, get
     fileIds: [...record.payload.file_ids],
     requestId: record.request_id,
     executionMode: "safe_auto",
+    expectedPrincipal: { ...record.principal },
   });
   outbox.markAttempt(principal, record.request_id, "awaiting_confirmation");
   const conversation = requireConversationAuthority(

@@ -33,6 +33,15 @@ from ..storage import repos
 router = APIRouter(prefix="/api", tags=["conversations"])
 
 
+class ExpectedPrincipal(BaseModel):
+    """浏览器意图绑定；仅作一致性前置条件，不参与授权。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=100)
+    role: Literal["admin", "agent_developer", "business_user"]
+
+
 class CreateConversationRequest(BaseModel):
     # ADR-0019 D5：created_by 已删——会话发起人=登录会话身份，服务端派生
     model_config = ConfigDict(extra="forbid")
@@ -42,6 +51,15 @@ class CreateConversationRequest(BaseModel):
     request_id: str | None = Field(
         default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_.:-]+$"
     )
+    expected_principal: ExpectedPrincipal | None = None
+
+    @model_validator(mode="after")
+    def idempotent_create_requires_expected_principal(
+        self,
+    ) -> "CreateConversationRequest":
+        if self.request_id is not None and self.expected_principal is None:
+            raise ValueError("带 request_id 的会话创建必须绑定 expected_principal")
+        return self
 
 
 class PostMessageRequest(BaseModel):
@@ -60,6 +78,7 @@ class PostMessageRequest(BaseModel):
     request_id: str | None = Field(
         default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_.:-]+$"
     )
+    expected_principal: ExpectedPrincipal | None = None
 
     @field_validator("content")
     @classmethod
@@ -81,13 +100,33 @@ class PostMessageRequest(BaseModel):
     def safe_auto_requires_request_id(self) -> "PostMessageRequest":
         if self.execution_mode == "safe_auto" and self.request_id is None:
             raise ValueError("safe_auto 必须提供 request_id 以保证重试不重复创建任务")
+        if self.execution_mode == "safe_auto" and self.expected_principal is None:
+            raise ValueError("safe_auto 必须绑定 expected_principal")
         if self.execution_mode == "safe_auto" and len(set(self.file_ids)) != len(self.file_ids):
             raise ValueError("safe_auto 的 file_ids 必须唯一，拒绝静默去重来源证据")
         return self
 
 
+def _assert_expected_principal(
+    expected: ExpectedPrincipal | None, request: Request
+) -> None:
+    if expected is None:
+        return
+    actual = request.state.user
+    if (
+        expected.username != actual.get("username")
+        or expected.role != actual.get("role")
+    ):
+        # 不回显当前 cookie 对应的身份，避免把一致性门变成主体探测接口。
+        raise HTTPException(
+            status_code=409,
+            detail="认证主体与持久化自动执行意图不一致，已拒绝请求",
+        )
+
+
 @router.post("/conversations")
 def create_conversation(body: CreateConversationRequest, request: Request) -> dict[str, Any]:
+    _assert_expected_principal(body.expected_principal, request)
     service = request.app.state.conversation_service
     try:
         return service.create(
@@ -134,6 +173,7 @@ def get_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
 def post_message(
     conversation_id: str, body: PostMessageRequest, request: Request
 ) -> dict[str, Any]:
+    _assert_expected_principal(body.expected_principal, request)
     service = request.app.state.conversation_service
     try:
         return service.post_message(

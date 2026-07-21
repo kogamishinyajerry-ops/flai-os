@@ -43,6 +43,9 @@ class _CapturingDispatch:
     def eligible_agent_ids(self, actor_role: str) -> set[str]:
         return set()
 
+    def accessible_agent_ids(self, actor_role: str) -> set[str]:
+        return set()
+
     def dispatch_in_transaction(self, conn, **kwargs: Any) -> dict[str, Any]:
         assert conn.in_transaction
         self.calls.append(kwargs)
@@ -71,10 +74,24 @@ class _TamperDuringChatStub(_ClarifyingStub):
         return result
 
 
-def _create(client, *, request_id: str, agent_id: str = "guide_agent"):
+def _create(
+    client,
+    *,
+    request_id: str,
+    agent_id: str = "guide_agent",
+    expected_username: str = TEST_USERNAME,
+    expected_role: str = TEST_ROLE,
+):
     return client.post(
         "/api/conversations",
-        json={"agent_id": agent_id, "request_id": request_id},
+        json={
+            "agent_id": agent_id,
+            "request_id": request_id,
+            "expected_principal": {
+                "username": expected_username,
+                "role": expected_role,
+            },
+        },
     )
 
 
@@ -86,6 +103,7 @@ def _safe_auto(client, conversation_id: str, *, request_id: str, file_ids=None):
             "file_ids": file_ids or [],
             "execution_mode": "safe_auto",
             "request_id": request_id,
+            "expected_principal": {"username": TEST_USERNAME, "role": TEST_ROLE},
         },
     )
 
@@ -135,6 +153,74 @@ def test_auth_login_and_me_expose_server_derived_role(app_env) -> None:
         "display_name": TEST_DISPLAY_NAME,
         "role": TEST_ROLE,
     }
+
+
+def test_idempotent_conversation_create_requires_expected_principal(app_env) -> None:
+    client, app = app_env
+
+    response = client.post(
+        "/api/conversations",
+        json={"agent_id": "guide_agent", "request_id": "create_missing_principal_001"},
+    )
+
+    assert response.status_code == 422, response.text
+    conn = app.state.conn_factory()
+    try:
+        assert repos.list_conversations(conn) == []
+    finally:
+        conn.close()
+
+
+def test_conversation_create_rejects_cookie_and_expected_principal_drift(app_env) -> None:
+    client, app = app_env
+    seed_user(
+        app.state.db_path,
+        username="other_engineer",
+        display_name="另一位工程师",
+        password="other-password-123",
+        role="admin",
+    )
+    login(client, username="other_engineer", password="other-password-123")
+
+    response = client.post(
+        "/api/conversations",
+        json={
+            "agent_id": "guide_agent",
+            "request_id": "create_principal_drift_001",
+            "expected_principal": {"username": TEST_USERNAME, "role": TEST_ROLE},
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    conn = app.state.conn_factory()
+    try:
+        assert repos.list_conversations(conn) == []
+    finally:
+        conn.close()
+
+
+def test_safe_auto_requires_expected_principal_before_model_or_persistence(app_env) -> None:
+    client, app = app_env
+    stub = _ClarifyingStub()
+    app.state.conversation_service.model_gateway = stub
+    conversation = client.post("/api/conversations", json={"agent_id": "guide_agent"})
+    assert conversation.status_code == 200, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    response = client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        json={
+            "content": "请处理本轮输入",
+            "execution_mode": "safe_auto",
+            "request_id": "turn_missing_principal_001",
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert stub.calls == 0
+    _assert_no_turn_side_effects(
+        app, conversation_id, request_id="turn_missing_principal_001"
+    )
 
 
 def test_create_conversation_same_owner_and_request_replays_one_row(app_env) -> None:
@@ -202,7 +288,11 @@ def test_create_conversation_request_key_is_namespaced_by_authenticated_owner(
         role="admin",
     )
     login(client, username="second_engineer", password="second-password-123")
-    second = _create(client, request_id="create_owner_bound_001")
+    second = _create(
+        client,
+        request_id="create_owner_bound_001",
+        expected_username="second_engineer",
+    )
 
     assert second.status_code == 200, second.text
     assert second.json()["id"] != first.json()["id"]

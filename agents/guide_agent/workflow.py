@@ -67,7 +67,17 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
         if isinstance(eligible, (list, set, tuple, frozenset))
         else set()
     )
-    candidates = _candidates(registry, safe_auto_agent_ids=safe_auto_agent_ids)
+    visible = context.get("accessible_agent_ids")
+    accessible_agent_ids = (
+        {item for item in visible if isinstance(item, str)}
+        if isinstance(visible, (list, set, tuple, frozenset))
+        else set()
+    )
+    candidates = _candidates(
+        registry,
+        safe_auto_agent_ids=safe_auto_agent_ids,
+        accessible_agent_ids=accessible_agent_ids,
+    )
     system_content = _load_system_prompt() + "\n\n" + _render_candidates(candidates)
     chat_messages = [{"role": "system", "content": system_content}, *messages]
 
@@ -90,13 +100,18 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
 # ── 候选 Agent 清单（注入系统提示，供 LLM 选择/预填）─────────────────────
 
 def _candidates(
-    registry: Any, *, safe_auto_agent_ids: set[str] | None = None
+    registry: Any,
+    *,
+    safe_auto_agent_ids: set[str] | None = None,
+    accessible_agent_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """可召集面 = 非 disabled、非 interactive、非导引自身的 specialist Agent
     （与 create_task 门一致：可运行即可召集，ADR-0012 决策 4/7）。"""
     out: list[dict[str, Any]] = []
     for agent in registry.list():
         agent_id = agent.get("id")
+        if accessible_agent_ids is not None and agent_id not in accessible_agent_ids:
+            continue
         if agent_id == _SELF_ID:
             continue
         if agent.get("status") == "disabled":

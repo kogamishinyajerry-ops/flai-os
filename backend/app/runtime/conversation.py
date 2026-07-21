@@ -30,7 +30,7 @@ import json
 import sqlite3
 import threading
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -623,6 +623,9 @@ class ConversationService:
                 "safe_auto_agent_ids": sorted(
                     self.guide_plan_dispatch.eligible_agent_ids(actor_role or "")
                 ),
+                "accessible_agent_ids": sorted(
+                    self.guide_plan_dispatch.accessible_agent_ids(actor_role or "")
+                ),
             }
             result = workflow.run(context)  # 抛异常即冒泡（不吞）；此前尚未落任何消息
 
@@ -638,6 +641,12 @@ class ConversationService:
             # 复查「仍 active 且历史未被并发轮改动」——检查失败整轮回滚，绝不把
             # 基于过期历史的回复交错写进历史（审计 P2：会话路径此前完全无序列化）。
             conn.execute("BEGIN IMMEDIATE")
+            registry_view = (
+                self.agent_registry.stable_view()
+                if execution_mode == "safe_auto"
+                else nullcontext()
+            )
+            registry_view.__enter__()
             try:
                 if actor_username is not None and actor_role is not None:
                     current_actor = current_actor_matches(
@@ -774,6 +783,8 @@ class ConversationService:
                 if conn.in_transaction:
                     conn.execute("ROLLBACK")
                 raise
+            finally:
+                registry_view.__exit__(None, None, None)
 
             return {
                 "message": msg,

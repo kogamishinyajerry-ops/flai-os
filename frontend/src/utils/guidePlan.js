@@ -48,6 +48,11 @@ function invalidDag(reason) {
 }
 
 
+function invalidLegacy(reason) {
+  return emptyIndex("legacy", reason);
+}
+
+
 function indexLegacyTasks(plan, tasks) {
   const index = emptyIndex("legacy");
   const rosterAgentIds = new Set(
@@ -55,6 +60,37 @@ function indexLegacyTasks(plan, tasks) {
       .map((agent) => agent?.agent_id)
       .filter((agentId) => typeof agentId === "string" && agentId.length > 0),
   );
+
+  const execution = plan?.execution;
+  if (execution !== undefined && execution !== null) {
+    if (
+      execution.status !== "dispatched" ||
+      !Array.isArray(execution.task_ids) ||
+      execution.task_ids.length !== 1 ||
+      typeof execution.task_ids[0] !== "string" ||
+      execution.task_ids[0].length === 0
+    ) {
+      return invalidLegacy("legacy Guide 执行回执必须精确包含一个 task_id");
+    }
+    const receiptTaskId = execution.task_ids[0];
+    const taskById = new Map();
+    for (const task of tasks) {
+      if (!task || typeof task.id !== "string" || task.id.length === 0) continue;
+      if (taskById.has(task.id)) {
+        return invalidLegacy("会话任务列表含重复 task_id，无法验证 legacy 回执");
+      }
+      taskById.set(task.id, task);
+    }
+    const task = taskById.get(receiptTaskId);
+    const index = emptyIndex("legacy");
+    index.claimedTaskIds.add(receiptTaskId);
+    if (!task) return index;
+    if (!rosterAgentIds.has(task.agent_id)) {
+      return invalidLegacy("权威 task_id 对应的任务 Agent 不在 legacy 计划中");
+    }
+    index.byAgentId.set(task.agent_id, [task]);
+    return index;
+  }
 
   for (const task of tasks) {
     if (!task || !rosterAgentIds.has(task.agent_id)) continue;
@@ -86,6 +122,7 @@ function indexDagTasks(plan, tasks) {
   }
 
   const nodesById = new Map();
+  const agentIds = new Set();
   for (const node of nodes) {
     if (
       !node ||
@@ -93,11 +130,13 @@ function indexDagTasks(plan, tasks) {
       node.node_id.length === 0 ||
       typeof node.agent_id !== "string" ||
       node.agent_id.length === 0 ||
-      nodesById.has(node.node_id)
+      nodesById.has(node.node_id) ||
+      agentIds.has(node.agent_id)
     ) {
-      return invalidDag("版本化 DAG 节点标识不完整或重复");
+      return invalidDag("版本化 DAG 节点标识或 Agent 不完整或重复");
     }
     nodesById.set(node.node_id, node);
+    agentIds.add(node.agent_id);
   }
 
   if (execution.node_tasks.length !== nodesById.size) {

@@ -56,6 +56,26 @@ def test_business_user_cannot_manually_execute_admin_only_agent(app_env) -> None
         conn.close()
 
 
+def test_business_user_cannot_discover_or_open_draft_guide(app_env) -> None:
+    client, app = app_env
+    _create_and_login_business_user(client, app)
+
+    listed = client.get("/api/agents")
+    assert listed.status_code == 200, listed.text
+    assert "guide_agent" not in {agent["id"] for agent in listed.json()}
+
+    detail = client.get("/api/agents/guide_agent")
+    assert detail.status_code == 403, detail.text
+
+    created = client.post("/api/conversations", json={"agent_id": "guide_agent"})
+    assert created.status_code == 403, created.text
+    conn = app.state.conn_factory()
+    try:
+        assert repos.list_conversations(conn, created_by="business_operator") == []
+    finally:
+        conn.close()
+
+
 def test_direct_task_reloads_manifest_at_admission(app_env, monkeypatch) -> None:
     """事务取锁后采用的新 manifest 若收紧权限，旧对象不得继续授权。"""
     client, app = app_env
@@ -234,7 +254,33 @@ def test_eval_reloads_live_manifest_after_snapshot_freeze(app_env, monkeypatch) 
     ],
 )
 def test_role_can_access_agent_is_fail_closed(permissions, role: str, expected: bool) -> None:
-    assert role_can_access_agent({"permissions": permissions}, role) is expected
+    assert role_can_access_agent(
+        {"status": "released", "permissions": permissions}, role
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("status", "role", "expected"),
+    [
+        ("draft", "admin", True),
+        ("draft", "agent_developer", True),
+        ("draft", "business_user", False),
+        ("trial", "business_user", True),
+        ("released", "business_user", True),
+        ("disabled", "admin", False),
+        ("bogus", "admin", False),
+        (None, "admin", False),
+    ],
+)
+def test_role_can_access_agent_enforces_lifecycle(status, role: str, expected: bool) -> None:
+    agent = {
+        "status": status,
+        "permissions": {
+            "visibility": "all",
+            "allowed_roles": ["admin", "agent_developer", "business_user"],
+        },
+    }
+    assert role_can_access_agent(agent, role) is expected
 
 
 @pytest.mark.parametrize(

@@ -13,6 +13,11 @@ _VISIBILITY_ROLES = {
 }
 _KNOWN_ROLES = frozenset({"admin", "agent_developer", "business_user"})
 _CALLABLE_AGENT_STATUSES = frozenset({"draft", "trial", "released"})
+_LIFECYCLE_ROLES = {
+    "draft": frozenset({"admin", "agent_developer"}),
+    "trial": _KNOWN_ROLES,
+    "released": _KNOWN_ROLES,
+}
 
 
 def role_can_access_agent(agent: dict[str, Any], role: str) -> bool:
@@ -25,13 +30,16 @@ def role_can_access_agent(agent: dict[str, Any], role: str) -> bool:
         return False
     allowed_roles = permissions.get("allowed_roles")
     visible_roles = _VISIBILITY_ROLES.get(permissions.get("visibility"))
+    lifecycle_roles = _LIFECYCLE_ROLES.get(agent.get("status"))
     return (
         isinstance(allowed_roles, list)
         and bool(allowed_roles)
         and all(isinstance(item, str) and item in _KNOWN_ROLES for item in allowed_roles)
         and len(allowed_roles) == len(set(allowed_roles))
         and visible_roles is not None
+        and lifecycle_roles is not None
         and role in _KNOWN_ROLES
+        and role in lifecycle_roles
         and role in visible_roles
         and role in allowed_roles
     )

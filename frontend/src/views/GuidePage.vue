@@ -246,6 +246,7 @@
                          页面不再自动点按钮，也不要求用户搬运参数。 -->
                     <div
                       v-if="
+                        conversationStatus === 'active' &&
                         !m.recommendation.execution &&
                         guidePlanAllowsManualCreate(m.recommendation)
                       "
@@ -288,7 +289,10 @@
                 <span v-else-if="m.recommendation.execution" class="plan-note">
                   当前方案未自动执行，也没有创建任务；请按上方原因直接在会话中补充或调整。
                 </span>
-                <span v-else-if="guidePlanAllowsManualCreate(m.recommendation)" class="plan-note">
+                <span
+                  v-else-if="conversationStatus === 'active' && guidePlanAllowsManualCreate(m.recommendation)"
+                  class="plan-note"
+                >
                   在工作台里看分工架构、逐个召集 Agent、追进度——签发权始终在你，
                   每个任务都由你补全并<strong>亲手提交</strong>。
                 </span>
@@ -903,6 +907,19 @@ async function send() {
     // 未知结果重试必须先验证 durable outbox；记录缺失/坏版本/主体、路由、正文或
     // 附件漂移时，在上传和任一会话 POST 之前 fail-closed，绝不旋转 request_id。
     const durableRetry = preflightDurableRetry(principal, sendOperation);
+    if (!durableRetry) {
+      // 文件 id 只能由上传 API 产生，完整 outbox 会在上传后立刻写入；但任何上传
+      // POST 前先以接近最终记录大小做 sessionStorage 写后回读探针。存储不可用时
+      // 零上传、零会话 POST，避免留下无法恢复的孤儿附件。
+      try {
+        guideSafeAutoOutbox.assertWritable(
+          content.length + sendFiles.reduce((total, file) => total + file.name.length, 0) + 2048,
+        );
+      } catch (error) {
+        sendOperation.outboxPreflightFailed = true;
+        throw error;
+      }
+    }
     // 先传附件（已 done 的跳过，失败即中止——本轮消息不发送）
     const fileIds = await uploadPendingFiles(sendFiles);
     // request_id 必须在 fresh conversation POST 之前稳定下来；create 与 message 共用
@@ -926,12 +943,13 @@ async function send() {
         // 只持久化服务端 file id 与显示名；raw File 永不进入 sessionStorage。
         files: sendFiles.map((file) => ({ id: file.fileId, name: file.name })),
       },
-      createConversation: ({ agentId, requestId: createRequestId }) =>
-        createConversation({ agentId, requestId: createRequestId }),
-      postMessage: ({ conversationId: id, content: body, fileIds: ids, requestId: idempotencyKey }) =>
+      createConversation: ({ agentId, requestId: createRequestId, expectedPrincipal }) =>
+        createConversation({ agentId, requestId: createRequestId, expectedPrincipal }),
+      postMessage: ({ conversationId: id, content: body, fileIds: ids, requestId: idempotencyKey, expectedPrincipal }) =>
         postMessage(id, body, ids, {
           executionMode: "safe_auto",
           requestId: idempotencyKey,
+          expectedPrincipal,
         }),
       getConversation,
       onConversationBound: async (boundConversationId) => {
@@ -1062,6 +1080,10 @@ function openWorkbench() {
 }
 
 function createOneTask(agent, plan) {
+  if (conversationStatus.value !== "active") {
+    pageError.value = "会话已归档或状态未知，只读历史禁止继续创建任务";
+    return;
+  }
   // 人确认接缝：把某个被召集 Agent 的预填草案交给创建任务页，由人补全后亲手
   // 提交（导引绝不代签）。走 sessionStorage 而非 URL，避免工程数据进查询串。
   // M7：会话附件随草案带走，创建页以「已上传」状态入列，人可移除。
@@ -1303,9 +1325,10 @@ async function resumePersistedGuideTurn() {
   const result = await recoverGuideSafeAutoOutbox({
     outbox: guideSafeAutoOutbox,
     principal,
-    createConversation: ({ agentId, requestId }) => createConversation({ agentId, requestId }),
-    postMessage: ({ conversationId: id, content, fileIds, executionMode, requestId }) =>
-      postMessage(id, content, fileIds, { executionMode, requestId }),
+    createConversation: ({ agentId, requestId, expectedPrincipal }) =>
+      createConversation({ agentId, requestId, expectedPrincipal }),
+    postMessage: ({ conversationId: id, content, fileIds, executionMode, requestId, expectedPrincipal }) =>
+      postMessage(id, content, fileIds, { executionMode, requestId, expectedPrincipal }),
     getConversation,
     onConversationBound: async (boundConversationId, record) => {
       visibleRecord = record;

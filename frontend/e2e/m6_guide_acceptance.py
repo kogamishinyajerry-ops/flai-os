@@ -325,26 +325,44 @@ with sync_playwright() as p:
     page.screenshot(path=str(SHOTS / "3_prefilled_create.png"), full_page=True)
 
     # ── ⑥ 版本化多 Agent DAG + 附件来源绑定 + 跨硬刷新幂等 ──
-    # 真实浏览器网络 seam：消息 POST 必须先完整穿透到后端并提交；只把紧随其后的
-    # 首次 canonical conversation GET 人为改成 503，模拟“服务端已提交、浏览器没拿到
-    # 权威回执”。硬刷新后前端必须先 GET 权威历史；命中同 request_id 后清 outbox，
-    # 绝不能再 POST 消息、再调用模型或再长出一套任务图。
+    # 真实浏览器网络 seam：create 与 message POST 都先 route.fetch() 穿透后端并完成
+    # 提交，再由 Chromium connectionreset 丢掉响应。第一次硬刷新以原 create key 找回
+    # 同一会话并继续 message；第二次硬刷新先 GET 权威历史，命中原 dispatch key 后清
+    # outbox。全过程不得重复创建会话、重复调用模型或长出第二套任务图。
     dag_page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")
     login_context(dag_page.context, BASE)
     dag_net: dict[str, Any] = {
         "conversation_id": None,
+        "create_posts": 0,
+        "create_response_losses": 0,
         "message_posts": 0,
+        "message_response_losses": 0,
         "message_committed": False,
         "canonical_gets": 0,
-        "canonical_failures": 0,
-        "reload_started": False,
-        "conversation_ops_after_reload": [],
+        "pre_final_confirmation_blocks": 0,
+        "final_reload_started": False,
+        "conversation_ops_after_final_reload": [],
     }
 
-    def route_dag_commit_then_lose_first_canonical_get(route, request) -> None:
+    def route_dag_commit_then_reset_connection(route, request) -> None:
         path = urlparse(request.url).path
         prefix = "/api/conversations/"
         suffix = "/messages"
+        is_create_post = request.method == "POST" and path == "/api/conversations"
+        if is_create_post:
+            dag_net["create_posts"] += 1
+            if dag_net["final_reload_started"] is True:
+                dag_net["conversation_ops_after_final_reload"].append("CREATE_POST")
+            upstream = route.fetch()
+            if upstream.status == 200:
+                dag_net["conversation_id"] = upstream.json().get("id")
+            if dag_net["create_response_losses"] == 0:
+                dag_net["create_response_losses"] += 1
+                route.abort("connectionreset")
+                return
+            route.fulfill(response=upstream)
+            return
+
         is_message_post = (
             request.method == "POST"
             and path.startswith(prefix)
@@ -353,13 +371,17 @@ with sync_playwright() as p:
         )
         if is_message_post:
             dag_net["message_posts"] += 1
-            if dag_net["reload_started"] is True:
-                dag_net["conversation_ops_after_reload"].append("POST")
+            if dag_net["final_reload_started"] is True:
+                dag_net["conversation_ops_after_final_reload"].append("MESSAGE_POST")
             upstream = route.fetch()
             conversation_id = path[len(prefix) : -len(suffix)]
             if upstream.status == 200:
                 dag_net["conversation_id"] = conversation_id
                 dag_net["message_committed"] = True
+            if dag_net["message_response_losses"] == 0:
+                dag_net["message_response_losses"] += 1
+                route.abort("connectionreset")
+                return
             route.fulfill(response=upstream)
             return
 
@@ -371,25 +393,25 @@ with sync_playwright() as p:
         )
         if is_canonical_get:
             dag_net["canonical_gets"] += 1
-            if dag_net["reload_started"] is True:
-                dag_net["conversation_ops_after_reload"].append("GET")
-            if (
-                dag_net["message_committed"] is True
-                and dag_net["canonical_failures"] == 0
-            ):
-                dag_net["canonical_failures"] += 1
+            if dag_net["final_reload_started"] is True:
+                dag_net["conversation_ops_after_final_reload"].append("GET")
+            elif dag_net["message_committed"] is True:
+                # route.replace/watch 可能在 message connection-reset 后同一刷新内并发 GET；
+                # 先保持“不确定”到下一次真实硬刷新，避免该内部 GET 抢先清 outbox。
+                dag_net["pre_final_confirmation_blocks"] += 1
                 route.fulfill(
                     status=503,
                     content_type="application/json",
                     body=json.dumps(
-                        {"detail": "stub 丢失消息提交后的首次 canonical GET"},
+                        {"detail": "保留真实 response-loss 到下一次硬刷新确认"},
                         ensure_ascii=False,
                     ),
                 )
                 return
         route.continue_()
 
-    dag_page.route("**/api/conversations/**", route_dag_commit_then_lose_first_canonical_get)
+    dag_page.route("**/api/conversations", route_dag_commit_then_reset_connection)
+    dag_page.route("**/api/conversations/**", route_dag_commit_then_reset_connection)
     dag_page.goto(BASE + "/", wait_until="networkidle")
     dag_attach_name = "DAG工况来源.txt"
     dag_attach_path = WORK / dag_attach_name
@@ -410,6 +432,9 @@ with sync_playwright() as p:
     conn = app.state.conn_factory()
     try:
         total_tasks_before_dag = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        total_conversations_before_dag = conn.execute(
+            "SELECT COUNT(*) FROM conversations"
+        ).fetchone()[0]
     finally:
         conn.close()
     chat_calls_before_dag = stub.chat_calls
@@ -417,41 +442,86 @@ with sync_playwright() as p:
     dag_page.get_by_role("button", name="发送").click()
     expect(dag_page.locator(".page-alert")).to_be_visible(timeout=8000)
     dag_page.wait_for_function(
-        "() => sessionStorage.getItem('flai.guide.safe_auto.outbox.v1') !== null",
+        "() => JSON.parse(sessionStorage.getItem('flai.guide.safe_auto.outbox.v1')).phase === 'creating_conversation'",
         timeout=5000,
     )
-    retained_outbox = dag_page.evaluate(
+    create_loss_outbox = dag_page.evaluate(
         "JSON.parse(sessionStorage.getItem('flai.guide.safe_auto.outbox.v1'))"
     )
-    dag_conversation_id = dag_net["conversation_id"]
     conn = app.state.conn_factory()
     try:
-        total_tasks_after_commit = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        total_tasks_after_create_loss = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        total_conversations_after_create_loss = conn.execute(
+            "SELECT COUNT(*) FROM conversations"
+        ).fetchone()[0]
     finally:
         conn.close()
-    committed_but_unconfirmed = (
-        isinstance(dag_conversation_id, str)
-        and dag_net["message_posts"] == 1
-        and dag_net["canonical_failures"] == 1
-        and retained_outbox["conversation_id"] == dag_conversation_id
-        and retained_outbox["phase"] == "awaiting_confirmation"
-        and len(retained_outbox["payload"]["file_ids"]) == 1
-        and total_tasks_after_commit == total_tasks_before_dag + 2
-        and stub.chat_calls == chat_calls_before_dag + 1
+    create_committed_response_lost = (
+        isinstance(dag_net["conversation_id"], str)
+        and dag_net["create_posts"] == 1
+        and dag_net["create_response_losses"] == 1
+        and dag_net["message_posts"] == 0
+        and create_loss_outbox["conversation_id"] is None
+        and create_loss_outbox["phase"] == "creating_conversation"
+        and len(create_loss_outbox["payload"]["file_ids"]) == 1
+        and total_conversations_after_create_loss == total_conversations_before_dag + 1
+        and total_tasks_after_create_loss == total_tasks_before_dag
+        and stub.chat_calls == chat_calls_before_dag
     )
     check(
-        "⑥POST 已提交但首次权威 GET 丢失：两任务已原子落库且 outbox 保留",
-        committed_but_unconfirmed,
+        "⑥create POST 已提交后连接重置：原 key/outbox 保留且零模型、零任务",
+        create_committed_response_lost,
         (
-            f"net={dag_net} outbox={retained_outbox} "
-            f"tasks={total_tasks_before_dag}->{total_tasks_after_commit} "
+            f"net={dag_net} outbox={create_loss_outbox} "
+            f"conversations={total_conversations_before_dag}->{total_conversations_after_create_loss} "
+            f"tasks={total_tasks_before_dag}->{total_tasks_after_create_loss} "
             f"chat={chat_calls_before_dag}->{stub.chat_calls}"
         ),
     )
 
-    # 硬刷新（不是 SPA 路由切换）：只允许先读权威会话；恢复命中 request_id 后清空
-    # sessionStorage。网络记录若出现 POST，或模型/任务增长，均立即假红。
-    dag_net["reload_started"] = True
+    # 第一次硬刷新重放同一 create key，必须绑定到同一会话；随后 message POST 真提交
+    # 两节点图但丢响应。恢复 catch 会把记录标为 blocked，供下一次刷新权威确认。
+    dag_page.reload(wait_until="domcontentloaded")
+    dag_page.wait_for_timeout(1500)
+    message_loss_raw = dag_page.evaluate(
+        "sessionStorage.getItem('flai.guide.safe_auto.outbox.v1')"
+    )
+    message_loss_outbox = json.loads(message_loss_raw) if message_loss_raw else None
+    dag_conversation_id = dag_net["conversation_id"]
+    conn = app.state.conn_factory()
+    try:
+        total_tasks_after_message_loss = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        total_conversations_after_message_loss = conn.execute(
+            "SELECT COUNT(*) FROM conversations"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    message_committed_response_lost = (
+        isinstance(dag_conversation_id, str)
+        and dag_net["create_posts"] == 2
+        and dag_net["message_posts"] == 1
+        and dag_net["message_response_losses"] == 1
+        and isinstance(message_loss_outbox, dict)
+        and message_loss_outbox["conversation_id"] == dag_conversation_id
+        and message_loss_outbox["phase"] == "blocked"
+        and total_conversations_after_message_loss == total_conversations_after_create_loss
+        and total_tasks_after_message_loss == total_tasks_before_dag + 2
+        and stub.chat_calls == chat_calls_before_dag + 1
+    )
+    check(
+        "⑥同 create key 找回会话；message POST 提交后连接重置且图仅落一份",
+        message_committed_response_lost,
+        (
+            f"net={dag_net} outbox={message_loss_outbox} "
+            f"conversations={total_conversations_after_create_loss}->{total_conversations_after_message_loss} "
+            f"tasks={total_tasks_before_dag}->{total_tasks_after_message_loss} "
+            f"chat={chat_calls_before_dag}->{stub.chat_calls}"
+        ),
+    )
+
+    # 第二次硬刷新：已绑定 outbox 只能先 GET；命中原 dispatch key 后清空，不允许
+    # create/message POST、第二次模型调用或第二套任务图。
+    dag_net["final_reload_started"] = True
     dag_page.reload(wait_until="domcontentloaded")
     dag_page.wait_for_function(
         "() => sessionStorage.getItem('flai.guide.safe_auto.outbox.v1') === null",
@@ -464,13 +534,15 @@ with sync_playwright() as p:
         total_tasks_after_reload = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
     finally:
         conn.close()
-    reload_ops = dag_net["conversation_ops_after_reload"]
+    reload_ops = dag_net["conversation_ops_after_final_reload"]
     no_replay_after_reload = (
         reload_ops
         and reload_ops[0] == "GET"
-        and "POST" not in reload_ops
+        and "CREATE_POST" not in reload_ops
+        and "MESSAGE_POST" not in reload_ops
+        and dag_net["create_posts"] == 2
         and dag_net["message_posts"] == 1
-        and total_tasks_after_reload == total_tasks_after_commit
+        and total_tasks_after_reload == total_tasks_after_message_loss
         and stub.chat_calls == chat_calls_before_dag + 1
     )
     check(
@@ -478,7 +550,7 @@ with sync_playwright() as p:
         no_replay_after_reload,
         (
             f"ops={reload_ops} posts={dag_net['message_posts']} "
-            f"tasks={total_tasks_after_commit}->{total_tasks_after_reload} "
+            f"tasks={total_tasks_after_message_loss}->{total_tasks_after_reload} "
             f"chat={stub.chat_calls}"
         ),
     )
@@ -498,7 +570,7 @@ with sync_playwright() as p:
             message
             for message in reversed(canonical.get("messages", []))
             if message.get("recommendation", {}).get("execution", {}).get("request_id")
-            == retained_outbox["request_id"]
+            == create_loss_outbox["request_id"]
         ),
         None,
     )
@@ -537,7 +609,7 @@ with sync_playwright() as p:
         f"execution={execution} tasks={dag_tasks}",
     )
 
-    dag_file_id = retained_outbox["payload"]["file_ids"][0]
+    dag_file_id = create_loss_outbox["payload"]["file_ids"][0]
     root_source = root_task.get("source_binding") or {}
     leaf_source = leaf_task.get("source_binding") or {}
     leaf_attachments = leaf_source.get("attachments") or []

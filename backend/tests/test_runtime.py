@@ -30,6 +30,7 @@ import yaml
 from backend.app.config import AGENTS_DIR, CONTRACTS_DIR, TOOLS_DIR
 from backend.app.runtime.registry import AgentRegistry
 from backend.app.runtime.runtime import AgentRuntime
+from backend.app.runtime.manifest import canonical_manifest_digest
 from backend.app.storage import repos
 from backend.app.storage.db import get_conn, init_db
 
@@ -624,6 +625,114 @@ def test_execute_requires_human_review(tmp_path: Path) -> None:
         assert "task_completed" not in event_types
         # 即使等人工放行，样本/产物依然在收尾前完成沉淀（spec：先注册产物+样本，再判 review/completed）。
         assert len(repos.list_samples(conn, task_id)) == 1
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    "automation",
+    [
+        {"mode": "safe_auto"},
+        {
+            "mode": "safe_auto",
+            "manifest_pin_version": "agent_manifest_pin.v1",
+            "agent_manifest_digest": "sha256:" + "0" * 64,
+        },
+    ],
+)
+def test_safe_auto_manifest_pin_fails_closed_before_workflow(
+    tmp_path: Path, automation: dict[str, Any]
+) -> None:
+    runtime, db_path = _make_runtime(AGENTS_DIR, tmp_path)
+    conn = get_conn(db_path)
+    try:
+        task = repos.create_task(
+            conn,
+            task_id="task_manifest_pin",
+            agent_id="hello_agent",
+            agent_version="0.1.0",
+            name="safe-auto manifest pin",
+            created_by="tester",
+            inputs={"name": "世界"},
+            input_file_ids=[],
+            metadata={"automation": automation},
+        )
+        repos.set_task_status(conn, task["id"], "queued")
+        repos.set_task_status(conn, task["id"], "validating")
+    finally:
+        conn.close()
+
+    result = runtime.execute("task_manifest_pin")
+
+    assert result["status"] == "failed"
+    assert "manifest" in result["task"]["error_message"]
+    conn = get_conn(db_path)
+    try:
+        assert [event["event_type"] for event in repos.list_events(conn, task["id"])] == [
+            "task_failed"
+        ]
+        assert not (tmp_path / "task_runs" / task["id"]).exists()
+    finally:
+        conn.close()
+
+
+def test_safe_auto_same_version_manifest_drift_fails_before_workflow(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    package_dir = agents_dir / "hello_agent"
+    shutil.copytree(AGENTS_DIR / "hello_agent", package_dir)
+    runtime, db_path = _make_runtime(agents_dir, tmp_path)
+    frozen_manifest = runtime.agent_registry.get("hello_agent")
+    assert frozen_manifest is not None
+
+    conn = get_conn(db_path)
+    try:
+        task = repos.create_task(
+            conn,
+            task_id="task_same_version_manifest_drift",
+            agent_id="hello_agent",
+            agent_version="0.1.0",
+            name="same-version manifest drift",
+            created_by="tester",
+            inputs={"name": "世界"},
+            input_file_ids=[],
+            metadata={
+                "automation": {
+                    "mode": "safe_auto",
+                    "manifest_pin_version": "agent_manifest_pin.v1",
+                    "agent_manifest_digest": canonical_manifest_digest(frozen_manifest),
+                }
+            },
+        )
+        repos.set_task_status(conn, task["id"], "queued")
+        repos.set_task_status(conn, task["id"], "validating")
+    finally:
+        conn.close()
+
+    manifest_path = package_dir / "agent.yaml"
+    changed = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert changed["version"] == "0.1.0"
+    changed["workflow"]["requires_human_review"] = True
+    manifest_path.write_text(
+        yaml.safe_dump(changed, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+    shadow = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    shadow.scan()
+    assert shadow.errors == []
+    assert shadow.get("hello_agent")["version"] == "0.1.0"
+    runtime.agent_registry.adopt(shadow)
+
+    result = runtime.execute(task["id"])
+
+    assert result["status"] == "failed"
+    assert "manifest" in result["task"]["error_message"]
+    conn = get_conn(db_path)
+    try:
+        assert [event["event_type"] for event in repos.list_events(conn, task["id"])] == [
+            "task_failed"
+        ]
     finally:
         conn.close()
 

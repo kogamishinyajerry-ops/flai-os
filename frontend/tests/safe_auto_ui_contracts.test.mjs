@@ -588,7 +588,7 @@ test("forced route drift cannot retarget a fresh durable send or take over the n
 });
 
 
-test("unwritable session storage fails closed before create/message and keeps one visible alert", async () => {
+test("unwritable session storage fails closed before attachment/create/message POST", async () => {
   const guide = await readFile(new URL("../src/views/GuidePage.vue", import.meta.url), "utf8");
   const storage = new FakeStorage();
   storage.setItem = () => {
@@ -596,6 +596,7 @@ test("unwritable session storage fails closed before create/message and keeps on
   };
   let creates = 0;
   let posts = 0;
+  let uploads = 0;
   const harness = createGuideSendHarness(guide, {
     storage,
     createConversation: async () => {
@@ -606,13 +607,19 @@ test("unwritable session storage fails closed before create/message and keeps on
       posts += 1;
       return assistantResponse("never");
     },
+    uploadFile: async () => {
+      uploads += 1;
+      return { id: "must-not-upload" };
+    },
   });
 
   harness.switchFresh();
+  harness.setFiles([{ name: "evidence.txt", raw: { name: "evidence.txt" } }]);
   harness.setDraft("执行");
   await harness.send();
   const state = harness.state();
 
+  assert.equal(uploads, 0);
   assert.equal(creates, 0);
   assert.equal(posts, 0);
   assert.equal(state.draft, "执行");

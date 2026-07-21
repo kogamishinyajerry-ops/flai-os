@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -61,13 +62,25 @@ def _open(client) -> str:
     return response.json()["id"]
 
 
-def _post_safe_auto(client, conversation_id: str, content: str, request_id: str):
+def _post_safe_auto(
+    client,
+    conversation_id: str,
+    content: str,
+    request_id: str,
+    *,
+    expected_username: str = "test_engineer",
+    expected_role: str = "admin",
+):
     return client.post(
         f"/api/conversations/{conversation_id}/messages",
         json={
             "content": content,
             "execution_mode": "safe_auto",
             "request_id": request_id,
+            "expected_principal": {
+                "username": expected_username,
+                "role": expected_role,
+            },
         },
     )
 
@@ -215,9 +228,98 @@ def test_safe_auto_complete_allowlisted_plan_creates_queued_task_atomically(app_
         }
         assert task["metadata"]["automation"]["created_via"] == "authenticated_conversation_turn"
         assert task["metadata"]["automation"]["authorized_role"] == "admin"
+        assert task["metadata"]["automation"]["manifest_pin_version"] == "agent_manifest_pin.v1"
+        expected_manifest = app.state.agent_registry.get("control_logic_agent")
+        expected_digest = "sha256:" + hashlib.sha256(
+            json.dumps(
+                expected_manifest,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        assert task["metadata"]["automation"]["agent_manifest_digest"] == expected_digest
         events = repos.list_events(conn, task["id"])
         assert [event["event_type"] for event in events] == ["task_created"]
         assert events[0]["payload"]["status_to"] == "queued"
+    finally:
+        conn.close()
+
+
+def test_safe_auto_commit_holds_stable_registry_view_until_receipt(
+    app_env, monkeypatch
+) -> None:
+    client, app = app_env
+    inputs = {
+        "system_name": "Registry 提交锁",
+        "states": ["OFF"],
+        "transitions": [],
+    }
+    app.state.conversation_service.model_gateway = _CannedStub(
+        {
+            "decision": "orchestrate",
+            "analysis": "确定性计划",
+            "goal": "验证 Registry 快照锁",
+            "workflow": "单 Agent",
+            "agents": [
+                {
+                    "agent_id": "control_logic_agent",
+                    "role": "生成",
+                    "rationale": "无副作用",
+                    "prefilled_inputs": inputs,
+                }
+            ],
+        }
+    )
+    conversation_id = _open(client)
+    live = app.state.agent_registry
+    shadow = type(live)(live.agents_dir, live.schema_path)
+    shadow.scan()
+
+    receipt_entered = threading.Event()
+    release_receipt = threading.Event()
+    adopt_started = threading.Event()
+    adopt_finished = threading.Event()
+    real_create_receipt = repos.create_conversation_dispatch
+
+    def pause_before_receipt(*args: Any, **kwargs: Any):
+        receipt_entered.set()
+        assert release_receipt.wait(2)
+        return real_create_receipt(*args, **kwargs)
+
+    def publish_shadow() -> None:
+        adopt_started.set()
+        live.adopt(shadow)
+        adopt_finished.set()
+
+    monkeypatch.setattr(repos, "create_conversation_dispatch", pause_before_receipt)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        dispatch_future = pool.submit(
+            _post_safe_auto,
+            client,
+            conversation_id,
+            _explicit_inputs(inputs),
+            "turn_registry_commit_lock_001",
+        )
+        assert receipt_entered.wait(2)
+        adopt_future = pool.submit(publish_shadow)
+        assert adopt_started.wait(1)
+        assert not adopt_finished.wait(0.1)
+        release_receipt.set()
+        response = dispatch_future.result(timeout=3)
+        adopt_future.result(timeout=3)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["execution"]["status"] == "dispatched"
+    assert adopt_finished.is_set()
+    conn = app.state.conn_factory()
+    try:
+        assert len(repos.list_tasks(conn, conversation_id=conversation_id)) == 1
+        assert repos.get_conversation_dispatch(
+            conn, conversation_id, "turn_registry_commit_lock_001"
+        ) is not None
+        assert repos.count_messages(conn, conversation_id) == 2
     finally:
         conn.close()
 
@@ -522,6 +624,7 @@ def test_safe_auto_attachment_plan_is_displayable_but_dispatch_blocked(app_env) 
             "file_ids": [uploaded.json()["id"]],
             "execution_mode": "safe_auto",
             "request_id": "turn_attachment_001",
+            "expected_principal": {"username": "test_engineer", "role": "admin"},
         },
     )
 
@@ -915,6 +1018,8 @@ def test_safe_auto_is_bound_to_immutable_conversation_owner_before_model(app_env
         conversation_id,
         _explicit_inputs(inputs),
         "turn_wrong_owner_001",
+        expected_username="other_engineer",
+        expected_role="business_user",
     )
 
     assert response.status_code == 403, response.text
@@ -931,7 +1036,7 @@ def test_safe_auto_is_bound_to_immutable_conversation_owner_before_model(app_env
         conn.close()
 
 
-def test_safe_auto_respects_existing_agent_role_permissions(app_env) -> None:
+def test_guide_prompt_hides_agents_inaccessible_to_current_role(app_env) -> None:
     client, app = app_env
     inputs = {
         "system_name": "业务用户控制",
@@ -959,16 +1064,16 @@ def test_safe_auto_respects_existing_agent_role_permissions(app_env) -> None:
     try:
         auth_service.create_user(
             conn,
-            username="business_owner",
-            display_name="业务用户",
-            password="business-password-123",
-            role="business_user",
+            username="developer_owner",
+            display_name="Agent 开发者",
+            password="developer-password-123",
+            role="agent_developer",
         )
     finally:
         conn.close()
     login = client.post(
         "/api/auth/login",
-        json={"username": "business_owner", "password": "business-password-123"},
+        json={"username": "developer_owner", "password": "developer-password-123"},
     )
     assert login.status_code == 200, login.text
     conversation_id = _open(client)
@@ -978,18 +1083,12 @@ def test_safe_auto_respects_existing_agent_role_permissions(app_env) -> None:
         conversation_id,
         _explicit_inputs(inputs),
         "turn_role_denied_001",
+        expected_username="developer_owner",
+        expected_role="agent_developer",
     )
 
     assert response.status_code == 200, response.text
-    execution = response.json()["execution"]
-    assert execution["status"] == "blocked_policy"
-    assert execution["issues"][0]["actor_role"] == "business_user"
-    control_line = next(
-        line
-        for line in stub.last_messages[0]["content"].splitlines()
-        if "id=`control_logic_agent`" in line
-    )
-    assert "当前身份自动执行=暂不可" in control_line
+    assert "id=`control_logic_agent`" not in stub.last_messages[0]["content"]
     conn = app.state.conn_factory()
     try:
         assert repos.list_tasks(conn, conversation_id=conversation_id) == []

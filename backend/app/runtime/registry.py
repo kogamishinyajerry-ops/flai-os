@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import yaml
 from jsonschema import ValidationError, validate
@@ -43,6 +45,13 @@ class AgentRegistry:
         self._agents: dict[str, dict[str, Any]] = {}
         self._dirs: dict[str, Path] = {}
         self.errors: list[dict[str, str]] = []
+        self._view_lock = threading.RLock()
+
+    @contextmanager
+    def stable_view(self) -> Iterator["AgentRegistry"]:
+        """在跨多次读取/提交的临界区内禁止发布新 Registry 快照。"""
+        with self._view_lock:
+            yield self
 
     def adopt(self, other: "AgentRegistry") -> None:
         """原子采纳另一实例的扫描结果（M10/ADR-0018 异源审 F1）。
@@ -51,18 +60,21 @@ class AgentRegistry:
         活注册表——直接对活实例 scan 会先清空再逐项重建，期间其他请求线程
         可短暂读到部分注册表、甚至读到本应被 knowledge 对账注销的 Agent。
 
-        发布序（R2 残余加固）：_dirs/errors 先行、_agents 收尾——_agents 是
-        全部读者的入口（get/list），一个在 _agents 可见的 id 必已有对应 dir。
-        单次 get() 或 package_dir() 各自原子；跨两次调用横跨发布点的读者可能
-        新旧混读（dict 与 dir 同键、路径恒同，无既知危害路径）——完整快照
-        句柄 API 是 V0.2 槽位（ADR-0018 已声明限制）。
+        发布受 stable_view 共用的 RLock 保护：单次 get/list/package_dir 有一致的
+        读边界；需要跨多次读取直至事务 COMMIT/ROLLBACK 的调用方必须持有
+        stable_view，使 adopt 只能在线性化提交点之前或之后发生。
         """
-        self._dirs = other._dirs
-        self.errors = other.errors
-        self._agents = other._agents
+        with self._view_lock:
+            self._dirs = other._dirs
+            self.errors = other.errors
+            self._agents = other._agents
 
     def scan(self) -> None:
         """重新扫描 agents_dir，覆盖式重建内存注册表（幂等：可重复调用）。"""
+        with self._view_lock:
+            self._scan_locked()
+
+    def _scan_locked(self) -> None:
         self._agents = {}
         self._dirs = {}
         self.errors = []
@@ -141,7 +153,8 @@ class AgentRegistry:
 
     def get(self, agent_id: str) -> dict[str, Any] | None:
         """按 id 取已注册 Agent 的 agent.yaml 解析结果；未注册返回 None（不抛异常）。"""
-        return self._agents.get(agent_id)
+        with self._view_lock:
+            return self._agents.get(agent_id)
 
     def deregister(self, agent_id: str, reason: str) -> None:
         """把已注册 Agent 移出注册表并记录原因（ADR-0015 knowledge scope 启动对账用）。
@@ -151,15 +164,17 @@ class AgentRegistry:
         使 DB agents 表不再 upsert 该 id（历史行保留，属审计痕迹非可调用入口）。
         未注册 id 调用为 no-op（幂等，重扫场景安全）。
         """
-        if agent_id not in self._agents:
-            return
-        entry = self._dirs.get(agent_id)
-        del self._agents[agent_id]
-        self._dirs.pop(agent_id, None)
-        self.errors.append({"path": str(entry) if entry else agent_id, "error": reason})
+        with self._view_lock:
+            if agent_id not in self._agents:
+                return
+            entry = self._dirs.get(agent_id)
+            del self._agents[agent_id]
+            self._dirs.pop(agent_id, None)
+            self.errors.append({"path": str(entry) if entry else agent_id, "error": reason})
 
     def list(self) -> list[dict[str, Any]]:
-        return list(self._agents.values())
+        with self._view_lock:
+            return list(self._agents.values())
 
     def package_dir(self, agent_id: str) -> Path | None:
         """取 Agent 包所在目录（Runtime 定位 workflow.py / *_schema.json 用）。
@@ -168,7 +183,8 @@ class AgentRegistry:
         的必要补充，随 `.get()/.list()` 一起在 `scan()` 后可用，同一扫描周期
         内与 `.get(agent_id)` 返回的 yaml 数据一一对应。
         """
-        return self._dirs.get(agent_id)
+        with self._view_lock:
+            return self._dirs.get(agent_id)
 
     def sync_to_db(self, conn: sqlite3.Connection) -> None:
         """把内存注册表写入 agents 表（upsert）+ agent_versions 表（追加，UNIQUE 冲突忽略）。
@@ -177,7 +193,9 @@ class AgentRegistry:
         agent_versions 按 (agent_id, version) 唯一约束，已存在的版本不重复插入。
         """
         now = datetime.now(timezone.utc).isoformat()
-        for agent_id, data in self._agents.items():
+        with self._view_lock:
+            snapshot = list(self._agents.items())
+        for agent_id, data in snapshot:
             yaml_json = json.dumps(data, ensure_ascii=False)
             conn.execute(
                 """

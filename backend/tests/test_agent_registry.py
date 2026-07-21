@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import threading
 from pathlib import Path
 
 import pytest
@@ -182,3 +183,27 @@ def test_sync_to_db_then_rescan_is_idempotent(tmp_path: Path) -> None:
         assert len(versions2) == 1
     finally:
         conn.close()
+
+
+def test_stable_view_blocks_adopt_until_reader_releases() -> None:
+    live = AgentRegistry(AGENTS_DIR, _AGENT_SCHEMA)
+    shadow = AgentRegistry(AGENTS_DIR, _AGENT_SCHEMA)
+    live.scan()
+    shadow.scan()
+    started = threading.Event()
+    adopted = threading.Event()
+
+    def publish() -> None:
+        started.set()
+        live.adopt(shadow)
+        adopted.set()
+
+    with live.stable_view():
+        thread = threading.Thread(target=publish)
+        thread.start()
+        assert started.wait(1)
+        assert not adopted.wait(0.1)
+
+    assert adopted.wait(1)
+    thread.join(timeout=1)
+    assert not thread.is_alive()

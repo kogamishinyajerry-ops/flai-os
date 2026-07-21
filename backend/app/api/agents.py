@@ -13,6 +13,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from backend.app.auth.authorization import role_can_access_agent
+
 router = APIRouter(prefix="/api", tags=["agents"])
 
 
@@ -39,10 +41,16 @@ def _project(agent: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _request_role(request: Request) -> str:
+    user = getattr(request.state, "user", None)
+    return user.get("role", "") if isinstance(user, dict) else ""
+
+
 @router.get("/agents")
 def list_agents(request: Request) -> list[dict[str, Any]]:
     registry = request.app.state.agent_registry
-    return [_project(a) for a in registry.list()]
+    role = _request_role(request)
+    return [_project(a) for a in registry.list() if role_can_access_agent(a, role)]
 
 
 def _read_input_schema(registry: Any, agent_id: str) -> dict[str, Any] | None:
@@ -68,6 +76,8 @@ def get_agent(agent_id: str, request: Request) -> dict[str, Any]:
     agent = _get_agent_or_none(registry, agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"agent 不存在：{agent_id}")
+    if not role_can_access_agent(agent, _request_role(request)):
+        raise HTTPException(status_code=403, detail="当前身份无权访问该 Agent")
     projected = _project(agent)
     projected["input_schema"] = _read_input_schema(registry, agent_id)
     return projected

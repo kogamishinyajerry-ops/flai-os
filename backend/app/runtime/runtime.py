@@ -31,6 +31,7 @@ from ..core.errors import (
 )
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
+from .manifest import MANIFEST_PIN_VERSION, canonical_manifest_digest
 
 logger = logging.getLogger(__name__)
 
@@ -511,6 +512,35 @@ class AgentRuntime:
                 level="error", message=msg,
             )
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
+
+        metadata = task.get("metadata")
+        automation = metadata.get("automation") if isinstance(metadata, dict) else None
+        if isinstance(automation, dict) and automation.get("mode") == "safe_auto":
+            expected_digest = automation.get("agent_manifest_digest")
+            try:
+                current_digest = canonical_manifest_digest(agent)
+            except (TypeError, ValueError):
+                current_digest = None
+            if (
+                automation.get("manifest_pin_version") != MANIFEST_PIN_VERSION
+                or not isinstance(expected_digest, str)
+                or expected_digest != current_digest
+            ):
+                msg = (
+                    "safe-auto Agent manifest pin 缺失或漂移：拒绝在未绑定的 manifest 上执行；"
+                    "请基于当前 Agent manifest 重新派发任务"
+                )
+                repos.set_task_data_classification(conn, task_id, "internal")
+                repos.set_task_status(conn, task_id, "failed", error_message=msg)
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="task_failed",
+                    level="error",
+                    message=msg,
+                )
+                return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
         pkg_dir = self.agent_registry.package_dir(agent_id)
 
