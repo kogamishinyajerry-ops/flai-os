@@ -1,0 +1,111 @@
+{
+  "schema_version": "DispatchObservationV1",
+  "work_item_ref": "flai-workspace-shell-kimi-001@3",
+  "work_item_digest": "sha256:150978a00d1aa6b6539b638db66053c4d1c1cd6f0fefce9075f3299ec5a6c768",
+  "dispatch_preparation_digest": "sha256:44115af4e0d228291635938190b095d86d6a8b07b11b18658840eefa3c3182be",
+  "observed_session_ref": "session_8029f845-0add-4038-87fe-9543983100a5",
+  "session_created_at_utc": "2026-07-24T15:28:26.064Z",
+  "coordinator_termination_recorded_at_utc": "2026-07-24T15:46:31Z",
+  "executor_identity": {
+    "requested_model": "kimi-code/k3",
+    "local_client_version": "0.29.0",
+    "actual_runtime_receipt": "REQUESTED_NOT_BACKEND_VERIFIED"
+  },
+  "outer_log": {
+    "path": "/private/tmp/flai-kimi-workspace-shell-v3-dispatch.jsonl",
+    "sha256": "7a4a61ddbaaf58cdb7c799112dba900553199517e9320a07f37e4484deb689cc",
+    "line_count": 162,
+    "byte_count": 215866,
+    "final_assistant_handoff_present": false
+  },
+  "tool_call_census": {
+    "total": 34,
+    "bash": 10,
+    "read": 16,
+    "edit": 7,
+    "todo_list": 1,
+    "authorized_source_reads": 16,
+    "non_whitelist_source_reads": 0,
+    "authorized_source_edits": 7,
+    "non_whitelist_source_edits": 0,
+    "package_install_commands": 0,
+    "external_implementation_network_commands": 0,
+    "git_mutation_commands": 0
+  },
+  "scope_deviations": [
+    {
+      "severity": "STOP_CONDITION",
+      "log_line": 125,
+      "tool_call_id": "tool_vKrrhkgiWXKvktBosmMSz0KM",
+      "operation": "Bash output redirection",
+      "path": "/tmp/red-unit.log",
+      "classification": "NON_WHITELIST_EXTERNAL_TEMP_WRITE",
+      "why_nonconformant": "The frozen contract permits source writes only to six owned files and screenshots only to the dedicated evidence directory; this test-log write was neither required nor authorized."
+    },
+    {
+      "severity": "POST_VIOLATION_OBSERVATION",
+      "log_line": 161,
+      "tool_call_id": "tool_MPjS7BPMl6l7UGaSeXJTyt3F",
+      "operation": "Bash read",
+      "path": "/tmp/red-unit.log",
+      "classification": "READ_OF_NON_WHITELIST_TEMP_ARTIFACT",
+      "why_nonconformant": "The command consumed the unauthorized temporary artifact after the stop condition had already been triggered."
+    }
+  ],
+  "unauthorized_temp_artifact": {
+    "path": "/tmp/red-unit.log",
+    "sha256": "f5b1f82be26cf4f195d662a9a0ef88d3e2f70a5adf6ac2d29b537053e2d99b4d",
+    "line_count": 1672,
+    "byte_count": 75221,
+    "preservation_status": "PRESERVED_FOR_AUDIT_NOT_ACCEPTED_AS_CANDIDATE_EVIDENCE"
+  },
+  "partial_red_test_observation": {
+    "suite": "frontend node --test",
+    "tests": 205,
+    "pass": 140,
+    "fail": 65,
+    "e2e_red_suite_completed": false,
+    "interpretation": "Expected red behavior was observed for a partial test-first change, but the run stopped before all six P1 red tests, implementation, green verification, or handoff."
+  },
+  "negative_confirmations": {
+    "executor_head_after_termination": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "executor_worktree_clean": false,
+    "executor_diff_from_base": [
+      "frontend/src/prototypes/workspace-shell/workspace-view.test.js"
+    ],
+    "executor_commits_created": 0,
+    "screenshot_evidence_count": 0,
+    "internal_data_or_secret_access": false,
+    "openhands_or_openwebui_access": false,
+    "production_interface_change": false,
+    "package_install": false,
+    "external_implementation_network": false
+  },
+  "termination": {
+    "initiator": "Codex coordinator",
+    "reason": "Fail-closed enforcement of the frozen non-whitelist write stop condition",
+    "wrapper_exit_code": 143,
+    "process_cleanup": "Exact shell, gtimeout, tee and kimi-code PIDs received SIGTERM and were verified absent",
+    "dirty_worktree_policy": "Preserve the isolated failed worktree for audit; never continue it or promote its diff"
+  },
+  "result": {
+    "dispatch_status": "STOPPED_FAIL_CLOSED_SCOPE_VIOLATION",
+    "implementation_status": "TEST_FIRST_RED_PARTIAL_ONLY",
+    "candidate_status": "NO_ACCEPTABLE_SOURCE_CANDIDATE",
+    "handoff_status": "NO_DEVELOPMENT_HANDOFF",
+    "codex_independent_review_status": "NOT_APPLICABLE",
+    "result_class": "FAILED_EXECUTION_ATTEMPT_NOT_INTERNAL_RELEASE"
+  },
+  "recommended_retry": {
+    "requires_new_owner_authorization": true,
+    "minimum_new_version": "flai-workspace-shell-kimi-001@4",
+    "p1_scope_change": "NONE",
+    "source_write_scope_change": "NONE",
+    "source_read_scope_change": "NONE",
+    "minimum_prompt_delta": "Forbid redirecting test, build, or audit output to any file. Require stdout/stderr-only result capture. Do not add a general temporary-file exception.",
+    "execution_target": "NEW_CLEAN_WORKTREE_AND_NEW_SESSION_ONLY",
+    "session_reuse": "DENY session_8029f845-0add-4038-87fe-9543983100a5"
+  },
+  "observation_digest_profile": "sha256-rfc8785-jcs-excluding_observation_digest",
+  "observation_digest": "sha256:9100cf8d0b1ce805d0ddd5a6029d05e850243d6146a3d20788d707411d1f0ffa"
+}
