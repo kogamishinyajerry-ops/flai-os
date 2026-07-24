@@ -85,6 +85,6 @@ service-worker；vite dev 的 HMR socket（固定 loopback + `vite-hmr` 子协�
 | `(cd frontend && npm run build)` | 成功；`dist/index.html` 存在 |
 | `test ! -e frontend/dist/workspace-shell.html` | PASS（未产出） |
 | `WORKSPACE_SHELL_SHOTS=… uv run … workspace_shell_prototype_acceptance.py` | 59/59 PASS；截图 17/17 |
-| `UV_OFFLINE=1 bash scripts/verify_all.sh` | 见 handoff（运行结果以实际输出为准） |
+| `UV_OFFLINE=1 bash scripts/verify_all.sh` | PASS：构建、全量 pytest、node --test 与 19 个既有浏览器套件全部完成，零失败（门禁再生的 docs/reviews 截图已恢复，未纳入 diff） |
 
 截图证据目录见 handoff；本文件不代替 `DevelopmentHandoffV1`。
