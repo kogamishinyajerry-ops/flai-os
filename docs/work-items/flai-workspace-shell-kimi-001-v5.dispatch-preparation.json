@@ -1,0 +1,136 @@
+{
+  "schema_version": "DispatchPreparationV1",
+  "work_item_ref": "flai-workspace-shell-kimi-001@5",
+  "work_item_digest": "sha256:9c016bf400e6afdac9d26f57ad9047bace8addfdb815cbec902d832c981507f4",
+  "authorization_proposal_digest": "sha256:a0f440f0717b3a610cc2b908c5f25b15bd6f7dbf2e5524d540e0f9a911875bf2",
+  "executor_environment_digest": "sha256:32454ebff75225a4799a7070d06cf5d08b08e343ca0dab52cd59ab0d48870592",
+  "freeze_commit_sha": "c3e23a91b3e42815e48d7b9492fb591b119b6637",
+  "prepared_at_utc": "2026-07-24T17:16:20Z",
+  "human_owner": "JerryKogami",
+  "owner_instruction_text": "批准 @5 最小重派",
+  "independent_freeze_reviews": [
+    {
+      "axis": "digest_scope_environment",
+      "result": "GO",
+      "p0": 0,
+      "p1": 0,
+      "p2": [
+        "Headless AUTO has no OS-level filesystem or network sandbox; bounded to EXTERNAL_DEVELOPMENT and SYNTHETIC_ONLY with live and post-run fail-closed audit."
+      ]
+    },
+    {
+      "axis": "mechanical_sequence_semantics",
+      "result": "GO",
+      "p0": 0,
+      "p1": 0,
+      "p2": [
+        "Same disclosed lack of OS-level filesystem or network sandbox."
+      ]
+    }
+  ],
+  "source": {
+    "worktree": "/private/tmp/flai-kimi-workspace-shell-v5.QjU0x6",
+    "branch": "codex/kimi-workspace-shell-v5",
+    "base_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "git_status": "CLEAN",
+    "frontend_node_modules": "EXISTS_COORDINATOR_PROVISIONED_OFFLINE",
+    "vite_cache_before_dispatch": "ABSENT_AND_EXPLICITLY_ALLOWED_ONLY_FOR_REQUIRED_E2E"
+  },
+  "executor": {
+    "client_path": "/Users/Zhuanz/.kimi-code/bin/kimi",
+    "client_version": "0.29.0",
+    "client_sha256": "5cccf53604f20c5499ea10c3094298f49a1ad59fa90cddd9fd7e0ba44815fdd3",
+    "provider_probe": "managed:kimi-code type=kimi models=3 source=oauth",
+    "requested_model": "kimi-code/k3",
+    "actual_runtime_identity": "REQUIRES_POST_DISPATCH_OBSERVATION"
+  },
+  "prompt": {
+    "template_ref": "docs/work-items/flai-workspace-shell-kimi-001-v5.prompt.md",
+    "template_sha256": "c70e9dab8b318d477db8e4994c68bec23d06641fa555407213243e1de754c43d",
+    "replacement_token": "${WORK_ITEM_DIGEST}",
+    "replacement_count": 1,
+    "rendered_sha256": "be8066e2dcdf0016d10e8116566d52c3a31774a1c03420e6ac70ce7ebaf1a404",
+    "rendered_byte_count": 19692,
+    "rendering": "IN_MEMORY_IMMEDIATELY_BEFORE_EXEC"
+  },
+  "process": {
+    "command_shape": "kimi --model kimi-code/k3 --prompt <rendered-in-memory> --output-format stream-json --skills-dir /private/tmp/flai-kimi-empty-skills-v5.ipfzHH",
+    "permission_mode": "HEADLESS_PROMPT_IMPLICIT_AUTO",
+    "outer_timeout_command": "/opt/homebrew/bin/gtimeout --signal=TERM --kill-after=30s 90m",
+    "max_active_runs": 1,
+    "max_new_sessions": 1,
+    "new_session_only": true,
+    "denied_session_refs": [
+      "session_2f449268-89fd-4104-bd95-fd7bd908557e",
+      "session_f55a6882-e7cb-4c8a-b465-04d0bba4d950",
+      "session_8029f845-0add-4038-87fe-9543983100a5",
+      "session_05f51f4a-867f-4b3f-848f-8b5c92554b3a"
+    ],
+    "outer_stream_log": "/private/tmp/flai-kimi-workspace-shell-v5-dispatch.jsonl",
+    "outer_stream_log_state_before_dispatch": "ABSENT",
+    "executor_background_commands": "DENY",
+    "test_build_audit_pipelines": "DENY",
+    "tool_internal_result_path_inspection": "DENY"
+  },
+  "environment": {
+    "KIMI_CODE_NO_AUTO_UPDATE": "1",
+    "KIMI_DISABLE_TELEMETRY": "1",
+    "UV_OFFLINE": "1",
+    "WORKSPACE_SHELL_SHOTS": "/private/tmp/flai-kimi-workspace-shell-v5-evidence.mGixLe",
+    "skills_directory": "/private/tmp/flai-kimi-empty-skills-v5.ipfzHH",
+    "screenshot_directory_state": "EXISTS_EMPTY",
+    "skills_directory_state": "EXISTS_EMPTY"
+  },
+  "synchronous_red_gate": {
+    "initial_state": "LOCKED",
+    "pre_red_source_diff_allowlist": [
+      "frontend/src/prototypes/workspace-shell/workspace-view.test.js",
+      "frontend/e2e/workspace_shell_prototype_acceptance.py"
+    ],
+    "unit_red": "TOP_LEVEL_FOREGROUND_DIRECT_FINAL_NONZERO",
+    "e2e_red": "TOP_LEVEL_FOREGROUND_DIRECT_FINAL_NONZERO",
+    "required_mapping": "ALL_SIX_P1",
+    "unlock_checkpoint": "RED_GATE_COMPLETE",
+    "product_files_locked_until_checkpoint": true
+  },
+  "direct_write_guard": {
+    "owned_source_files": 6,
+    "executor_authored_non_source_paths": [
+      "frontend/dist/** solely by required npm run build",
+      "/private/tmp/flai-kimi-workspace-shell-v5-evidence.mGixLe/** solely by required E2E",
+      "frontend/node_modules/.vite/** solely by required fixed-loopback Vite E2E",
+      "bounded local Git metadata solely for required six-file commits"
+    ],
+    "test_build_audit_output": "CURRENT_TOOL_RESPONSE_DIRECT_STDOUT_STDERR_ONLY",
+    "executor_output_redirection_or_tee": "DENY",
+    "executor_temporary_logs_results_helpers_scratch": "DENY",
+    "approved_tool_internal_ephemeral_state": "NOT_AN_EXECUTOR_RESULT_CHANNEL_AND_MUST_NOT_BE_NAMED_ENUMERATED_INSPECTED_POLLED_COPIED_CITED_OR_REUSED"
+  },
+  "tmp_negative_control": {
+    "pattern": "/tmp/workspace-shell-shots-*",
+    "pre_dispatch_paths": [],
+    "post_run_requirement": "EXACT_SET_EQUALITY_NO_NEW_PATH",
+    "owned_e2e_lazy_fallback_repair_required_before_any_e2e": true
+  },
+  "audit_policy": {
+    "live_tool_call_audit": true,
+    "post_run_complete_tool_call_audit": true,
+    "git_file_scope_audit": true,
+    "network_command_audit": true,
+    "direct_write_audit": true,
+    "red_gate_event_order_audit": true,
+    "stop_on_first_frozen_scope_or_protocol_violation": true,
+    "os_level_filesystem_network_sandbox": false
+  },
+  "authority": {
+    "environment": "EXTERNAL_DEVELOPMENT",
+    "fixtures": "SYNTHETIC_ONLY",
+    "internal_data_access": "NONE",
+    "internal_runtime_dependency": "NONE",
+    "candidate_class": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE",
+    "human_acceptance_status": "PENDING_JERRYKOGAMI",
+    "merge_push_release_authority": "NONE"
+  },
+  "preparation_digest_profile": "sha256-rfc8785-jcs-excluding_preparation_digest",
+  "preparation_digest": "sha256:afb2b85bcea5742d3e0481d6c3756d6c06f2b6cc63758c52baaf65afabe2a1a6"
+}
