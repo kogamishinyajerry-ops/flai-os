@@ -1,0 +1,145 @@
+{
+  "schema_version": "DispatchObservationV1",
+  "work_item_ref": "flai-workspace-shell-kimi-001@4",
+  "work_item_digest": "sha256:48fa8072fc49f587700cc13ca4e43789a3bfbd1890eb823ea60151d148577b31",
+  "dispatch_preparation_digest": "sha256:c524f75dcc49ea2b84fdc21f6309cdee1213663a0f9fe998583e687e6bb57094",
+  "observed_session_ref": "session_05f51f4a-867f-4b3f-848f-8b5c92554b3a",
+  "session_created_at_utc": "2026-07-24T16:30:55.940934Z",
+  "coordinator_termination_recorded_at_utc": "2026-07-24T16:54:35Z",
+  "executor_identity": {
+    "requested_model": "kimi-code/k3",
+    "local_client_version": "0.29.0",
+    "actual_runtime_receipt": "REQUESTED_NOT_BACKEND_VERIFIED"
+  },
+  "outer_log": {
+    "path": "/private/tmp/flai-kimi-workspace-shell-v4-dispatch.jsonl",
+    "sha256": "7483aef66eef45f71b04fc416d5fa066700e83320d2ae5d83946f58853993ec7",
+    "line_count": 245,
+    "byte_count": 287380,
+    "final_assistant_handoff_present": false
+  },
+  "tool_call_census": {
+    "total": 50,
+    "bash": 9,
+    "read": 19,
+    "grep": 1,
+    "edit": 19,
+    "todo_list": 2,
+    "authorized_source_inspections": 20,
+    "non_whitelist_source_inspections": 0,
+    "authorized_source_edits": 19,
+    "non_whitelist_source_edits": 0,
+    "package_install_commands": 0,
+    "external_implementation_network_commands": 0,
+    "git_mutation_commands": 0
+  },
+  "scope_deviations": [
+    {
+      "severity": "STOP_CONDITION",
+      "red_e2e_start_log_line": 172,
+      "product_edit_log_line": 174,
+      "red_e2e_tool_call_id": "tool_DrPyNWOLhtXz20U3is0fuvD4",
+      "product_edit_tool_call_id": "tool_7yEN78swusOkXKpdM1FSlgoT",
+      "operation": "Product implementation edit before completed red E2E result",
+      "path": "frontend/src/prototypes/workspace-shell/workspace-view.js",
+      "classification": "TEST_FIRST_ORDER_VIOLATION",
+      "why_nonconformant": "The executor launched the red E2E as a background task and edited product implementation before that task completed. The eventual failing E2E output was concurrent with the edit and therefore cannot prove a completed red run against unchanged @1 behavior."
+    },
+    {
+      "severity": "STOP_CONDITION",
+      "log_lines": [
+        236,
+        244
+      ],
+      "tool_call_ids": [
+        "tool_8tiWstBrEzD8QLuvcfEGLFOw",
+        "tool_LjYEkC9XUJDdPju0uP0hKg76"
+      ],
+      "operation": "Active reads of tool-internal background-task output",
+      "path": "/Users/Zhuanz/.kimi-code/sessions/wd_flai-kimi-workspace-shell-v4.2zyv0h_ad10a0692eb4/session_05f51f4a-867f-4b3f-848f-8b5c92554b3a/agents/main/tasks/bash-ayw7crbk/output.log",
+      "classification": "FORBIDDEN_TOOL_INTERNAL_EPHEMERAL_INSPECTION",
+      "why_nonconformant": "The frozen contract allowed unavoidable tool-internal state only when the executor did not select, inspect, copy, cite or reuse it. Both grep commands selected and inspected that file as a result channel."
+    },
+    {
+      "severity": "PROTOCOL_NONCONFORMANCE",
+      "log_lines": [
+        120,
+        152,
+        154,
+        156,
+        170
+      ],
+      "operation": "Piped Node red-test output without pipefail",
+      "classification": "UNRELIABLE_PIPE_EXIT_STATUS",
+      "why_nonconformant": "The frozen contract permitted a stdout pipe for large output only with pipefail. These commands merged stderr and piped output without setting pipefail, so their shell exit status did not reliably witness the test failure."
+    }
+  ],
+  "partial_red_test_observation": {
+    "unit_suite": {
+      "command_family": "frontend node --test",
+      "tests": 206,
+      "pass": 140,
+      "fail": 66,
+      "interpretation": "Expected unit red behavior was observed before the first product implementation edit, but several display commands used a pipe without pipefail."
+    },
+    "visual_e2e_suite": {
+      "command_family": "offline Playwright workspace shell E2E",
+      "assertions": 110,
+      "pass": 42,
+      "fail": 68,
+      "screenshot_count": 17,
+      "screenshot_directory": "/private/tmp/flai-kimi-workspace-shell-v4-evidence.LzDXSx",
+      "interpretation": "The suite ultimately failed as expected, but it ran in the background concurrently with the first product implementation edit and is not accepted as valid red-before evidence."
+    }
+  },
+  "negative_confirmations": {
+    "executor_head_after_termination": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "executor_worktree_clean": false,
+    "executor_diff_from_base": [
+      "frontend/e2e/workspace_shell_prototype_acceptance.py",
+      "frontend/src/prototypes/workspace-shell/workspace-view.js",
+      "frontend/src/prototypes/workspace-shell/workspace-view.test.js"
+    ],
+    "executor_diff_stat": "3 files changed, 396 insertions(+), 49 deletions(-)",
+    "executor_commits_created": 0,
+    "screenshot_evidence_count": 17,
+    "screenshot_evidence_status": "PRESERVED_RED_RUN_OUTPUT_NOT_ACCEPTED_AS_CANDIDATE_EVIDENCE",
+    "tmp_workspace_shell_shots_pre_dispatch": [],
+    "tmp_workspace_shell_shots_post_termination": [],
+    "eager_mkdtemp_repair_before_first_e2e": true,
+    "internal_data_or_secret_access": false,
+    "openhands_or_openwebui_access": false,
+    "production_interface_change": false,
+    "package_install": false,
+    "npm_build_run": false,
+    "verify_all_run": false,
+    "external_implementation_network": false
+  },
+  "termination": {
+    "initiator": "Codex coordinator",
+    "reason": "Fail-closed enforcement of test-first ordering and forbidden tool-internal ephemeral inspection stop conditions",
+    "wrapper_exit_code": 143,
+    "process_cleanup": "Exact shell, gtimeout, tee and kimi-code PIDs received SIGTERM and were verified absent",
+    "dirty_worktree_policy": "Preserve the isolated failed worktree for audit; never continue it or promote its diff"
+  },
+  "result": {
+    "dispatch_status": "STOPPED_FAIL_CLOSED_PROTOCOL_VIOLATION",
+    "implementation_status": "PARTIAL_TEST_AND_PRODUCT_EDIT_ONLY",
+    "candidate_status": "NO_ACCEPTABLE_SOURCE_CANDIDATE",
+    "handoff_status": "NO_DEVELOPMENT_HANDOFF",
+    "codex_independent_review_status": "NOT_APPLICABLE",
+    "result_class": "FAILED_EXECUTION_ATTEMPT_NOT_INTERNAL_RELEASE"
+  },
+  "recommended_retry": {
+    "requires_new_owner_authorization": true,
+    "minimum_new_version": "flai-workspace-shell-kimi-001@5",
+    "p1_scope_change": "NONE",
+    "source_write_scope_change": "NONE",
+    "source_read_scope_change": "NONE",
+    "minimum_prompt_delta": "All red tests must run synchronously and return non-zero before any product implementation edit. Background test execution and reading any tool-internal task output path are forbidden. Every stdout test pipe must begin in a shell with pipefail, but direct unpiped test execution is preferred.",
+    "execution_target": "NEW_CLEAN_WORKTREE_AND_NEW_SESSION_ONLY",
+    "session_reuse": "DENY session_05f51f4a-867f-4b3f-848f-8b5c92554b3a"
+  },
+  "observation_digest_profile": "sha256-rfc8785-jcs-excluding_observation_digest",
+  "observation_digest": "sha256:0c4dd36fac50779f37f8e09a3e4bb7e20dbeb19afca1943a6e61712c6c76c785"
+}
