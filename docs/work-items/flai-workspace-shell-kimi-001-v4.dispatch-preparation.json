@@ -1,0 +1,98 @@
+{
+  "schema_version": "DispatchPreparationV1",
+  "work_item_ref": "flai-workspace-shell-kimi-001@4",
+  "work_item_digest": "sha256:48fa8072fc49f587700cc13ca4e43789a3bfbd1890eb823ea60151d148577b31",
+  "authorization_proposal_digest": "sha256:9bc6062c777d0f8c22ff35decc0e21b52c671c0f3627cc65fcd2be66509fee0d",
+  "executor_environment_digest": "sha256:e98bbbd944746abb8b70315df84d83a525535bc15ec6650407cea019afdf976f",
+  "freeze_commit_sha": "68fe861f539a9bc10d0684d96d5bcb0ceabd7132",
+  "prepared_at_utc": "2026-07-24T16:29:23Z",
+  "human_owner": "JerryKogami",
+  "owner_instruction_text": "批准 @4 最小执行协议返工",
+  "source": {
+    "worktree": "/private/tmp/flai-kimi-workspace-shell-v4.2ZYv0h",
+    "branch": "codex/kimi-workspace-shell-v4",
+    "base_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "git_status": "CLEAN",
+    "frontend_node_modules": "EXISTS_COORDINATOR_PROVISIONED_OFFLINE",
+    "vite_cache_before_dispatch": "ABSENT_AND_EXPLICITLY_ALLOWED_ONLY_FOR_REQUIRED_E2E"
+  },
+  "executor": {
+    "client_path": "/Users/Zhuanz/.kimi-code/bin/kimi",
+    "client_version": "0.29.0",
+    "client_sha256": "5cccf53604f20c5499ea10c3094298f49a1ad59fa90cddd9fd7e0ba44815fdd3",
+    "provider_probe": "managed:kimi-code type=kimi models=3 source=oauth",
+    "requested_model": "kimi-code/k3",
+    "actual_runtime_identity": "REQUIRES_POST_DISPATCH_OBSERVATION"
+  },
+  "prompt": {
+    "template_ref": "docs/work-items/flai-workspace-shell-kimi-001-v4.prompt.md",
+    "template_sha256": "e5a7e177bd1d29b8c2f09b0c74fe9ed4930379069286563b6155cda6cc6ffcc7",
+    "replacement_token": "${WORK_ITEM_DIGEST}",
+    "replacement_count": 1,
+    "rendered_sha256": "8b40743163012fec43a454229f78796ff9236c758473d5b936206b732f8372fe",
+    "rendered_byte_count": 15668,
+    "rendering": "IN_MEMORY_IMMEDIATELY_BEFORE_EXEC"
+  },
+  "process": {
+    "command_shape": "kimi --model kimi-code/k3 --prompt <rendered-in-memory> --output-format stream-json --skills-dir /private/tmp/flai-kimi-empty-skills-v4.uiFQyN",
+    "permission_mode": "HEADLESS_PROMPT_IMPLICIT_AUTO",
+    "outer_timeout_command": "/opt/homebrew/bin/gtimeout --signal=TERM --kill-after=30s 90m",
+    "max_active_runs": 1,
+    "max_new_sessions": 1,
+    "new_session_only": true,
+    "denied_session_refs": [
+      "session_f55a6882-e7cb-4c8a-b465-04d0bba4d950",
+      "session_8029f845-0add-4038-87fe-9543983100a5"
+    ],
+    "outer_stream_log": "/private/tmp/flai-kimi-workspace-shell-v4-dispatch.jsonl",
+    "outer_stream_log_state_before_dispatch": "ABSENT"
+  },
+  "environment": {
+    "KIMI_CODE_NO_AUTO_UPDATE": "1",
+    "KIMI_DISABLE_TELEMETRY": "1",
+    "UV_OFFLINE": "1",
+    "WORKSPACE_SHELL_SHOTS": "/private/tmp/flai-kimi-workspace-shell-v4-evidence.LzDXSx",
+    "skills_directory": "/private/tmp/flai-kimi-empty-skills-v4.uiFQyN",
+    "screenshot_directory_state": "EXISTS_EMPTY",
+    "skills_directory_state": "EXISTS_EMPTY"
+  },
+  "direct_write_guard": {
+    "owned_source_files": 6,
+    "executor_authored_non_source_paths": [
+      "frontend/dist/** solely by required npm run build",
+      "/private/tmp/flai-kimi-workspace-shell-v4-evidence.LzDXSx/** solely by required E2E",
+      "frontend/node_modules/.vite/** solely by required fixed-loopback Vite E2E",
+      "bounded local Git metadata solely for required six-file commits"
+    ],
+    "test_build_audit_output": "TOOL_STDOUT_STDERR_ONLY",
+    "executor_output_redirection_or_tee": "DENY",
+    "executor_temporary_logs_results_helpers_scratch": "DENY",
+    "approved_tool_internal_ephemeral_state": "NOT_AN_EXECUTOR_RESULT_CHANNEL_AND_MUST_NOT_BE_SELECTED_INSPECTED_COPIED_CITED_OR_REUSED"
+  },
+  "tmp_negative_control": {
+    "pattern": "/tmp/workspace-shell-shots-*",
+    "pre_dispatch_paths": [],
+    "post_run_requirement": "EXACT_SET_EQUALITY_NO_NEW_PATH",
+    "owned_e2e_lazy_fallback_repair_required_before_any_e2e": true
+  },
+  "audit_policy": {
+    "live_tool_call_audit": true,
+    "post_run_complete_tool_call_audit": true,
+    "git_file_scope_audit": true,
+    "network_command_audit": true,
+    "direct_write_audit": true,
+    "stop_on_first_frozen_scope_violation": true,
+    "os_level_filesystem_network_sandbox": false
+  },
+  "authority": {
+    "environment": "EXTERNAL_DEVELOPMENT",
+    "fixtures": "SYNTHETIC_ONLY",
+    "internal_data_access": "NONE",
+    "internal_runtime_dependency": "NONE",
+    "candidate_class": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE",
+    "human_acceptance_status": "PENDING_JERRYKOGAMI",
+    "merge_push_release_authority": "NONE"
+  },
+  "preparation_digest_profile": "sha256-rfc8785-jcs-excluding_preparation_digest",
+  "preparation_digest": "sha256:c524f75dcc49ea2b84fdc21f6309cdee1213663a0f9fe998583e687e6bb57094"
+}
