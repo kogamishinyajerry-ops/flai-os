@@ -304,8 +304,9 @@ F0 只冻结以下设计合同、威胁模型、invalid-first fixture/drill 规�
     周期 runtime/control receipt 合同、GitHub 原生 review/merge 与人类集成决定；
 16. 组织身份、密级和正式签发的具名评审；
 17. `F0ReviewManifestV1`：frozen Git commit/tree、`CONTEXT.md`、ADR-0047～0062、V0.2
-    README/00～17/handoff 的逐文件 hash 与 review schema；七域 review 必须绑定同一 manifest
-    digest，任何 normative 变更使旧 review stale。
+    README/00～17/handoff 的逐文件 hash、生成主体/工具与 review/generation-receipt/seal
+    schema；manifest-generation receipt 必须经外部信任验证，七域 review core+seal 必须绑定
+    同一 manifest/generation receipt，任何 normative 变更使旧 review stale。
 
 真实 witness 分段后置：F1 验只读权限、backlog/replay/rebuild；F2 验低风险 intent；
 F3 验正式治理 challenge/receipt；D6/D7/D8 + F4 验执行、kill/revoke、Audit/WORM、

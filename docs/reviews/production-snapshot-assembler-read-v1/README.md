@@ -6,6 +6,9 @@
 >
 > 冻结 SHA-256：`8f791b5c9a5c5e3c9d18ef0168d23fe0ec5c9cc24f024f4e374c82de15357f24`
 >
+> 共同冻结依赖：Stage C Observer/Adapter source、fixtures 与 conformance tests，逐文件摘要见
+> `review-manifest.json.target.normative_dependencies`
+>
 > 当前评审状态：`PENDING_ASSIGNMENT`
 >
 > 当前评审计划：`DRAFT-PENDING-ASSIGNMENT`
@@ -14,7 +17,7 @@
 
 ## 1. 目的与边界
 
-本目录把冻结合同第 13 节要求的七个责任域组织为七组互相独立、可机械检查的 `ReviewDecisionCore + DecisionSeal/AuditReceipt`。它只服务于设计合同评审，不实现 Production Snapshot Assembler，不修改生产 Schema、API、状态机或运行配置。
+本目录把冻结合同第 13 节要求的七个责任域组织为七组互相独立、可机械检查的 `ReviewDecisionCore + DecisionSeal/AuditReceipt`。评审对象同时绑定合同和合同明确列为共同规范的 Stage C Observer/Adapter source、fixtures 与 conformance tests；任一依赖漂移都会使结构门失效。它只服务于设计合同评审，不实现 Production Snapshot Assembler，不修改生产 Schema、API、状态机或运行配置。
 
 安全、兼容性和失败码技术预审可以作为评审输入，但它们是 AI 辅助审查，不具组织签发权。聊天中的“接受”、Git 用户名、机器账号、测试通过、文件提交或模型结论都不能代替真实责任人的组织身份和签署证据。
 

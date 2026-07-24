@@ -1114,6 +1114,7 @@ Kimi-K3 完成”或“由 Codex 验证”。
 `DevelopmentHandoffV1` 必须包含：
 
 ```text
+handoff_schema_version = DevelopmentHandoffV1
 work_item_ref + work_item_digest
 assistant_run_ref + actual_runtime_receipt
 base_sha
@@ -1130,6 +1131,30 @@ unresolved_issues[]
 recommended_next_step
 handoff_digest
 ```
+
+`DevelopmentHandoffV1` 是不可变 handoff core。`final_sha_if_committed` 可以为 `null`，数组顺序
+按执行器提交的证据顺序保留；不得在摘要前排序、去重或丢弃失败/unknown。canonical projection
+从完整对象中**仅删除** `handoff_digest`；所有字符串必须为 NFC，禁止浮点数与非有限数，再
+执行 RFC 8785 JCS。摘要规则固定为：
+
+```text
+handoff_digest =
+  lowercase_hex(
+    SHA-256(
+      ASCII("flai.development-handoff.v1") || 0x00
+      || RFC8785_JCS_UTF8(
+           DevelopmentHandoffV1 excluding exactly handoff_digest
+         )
+    )
+  )
+```
+
+verifier 必须从 raw object 删除精确字段后重算，不信任执行器或客户端自报 digest。
+`handoff_schema_version`、work item/run/runtime receipt、base/final SHA、commit/diff、变更
+scope、验证命令与结果、证据、风险、未决项和下一步全部进入摘要。handoff 任一字段变化都
+生成新 core/digest；旧 core 保留，不得原地改写。该无钥摘要只证明内容绑定，不证明执行器
+身份、runtime 真实性、人类接受、GitHub approval 或 merge；这些仍分别依赖 dispatch/runtime
+receipt、reality witness、具名人类决定和 GitHub 权威回读。
 
 提交 handoff 不授予集成权。具名人类 owner 在飞书工作收件箱接收摘要与证据，可以请求返工或
 接受 handoff；代码 diff review、PR approval 和 merge 仍进入 GitHub 原生 Surface，由
@@ -5327,6 +5352,9 @@ Safety、GitHub 或执行能力已经可用。F0 只有在以下七个责任域�
 F0ReviewManifestV1 {
   review_manifest_schema_version
   review_manifest_ref
+  manifest_generator_subject_ref
+  manifest_generator_subject_kind
+  manifest_generator_tool_sha256
   repository_identity {
     vcs
     provider
@@ -5345,6 +5373,8 @@ F0ReviewManifestV1 {
     normative_role
   }
   review_record_schema_version
+  review_seal_schema_version
+  manifest_generation_receipt_schema_version
   supersedes_review_manifest_ref
   supersedes_review_manifest_digest
   created_at
@@ -5360,6 +5390,8 @@ F0NamedReviewV1 {
   decision
   review_manifest_ref
   review_manifest_digest
+  manifest_generation_receipt_ref
+  manifest_generation_receipt_digest
   role_assignment {
     assignment_ref
     assignment_digest
@@ -5379,14 +5411,55 @@ F0NamedReviewV1 {
   reviewed_at
   review_record_digest
 }
+
+F0ManifestGenerationReceiptV1 {
+  generation_receipt_schema_version
+  generation_receipt_ref
+  review_manifest_ref
+  review_manifest_digest
+  generator_subject_ref
+  generator_subject_kind
+  generator_tool_sha256
+  generation_channel_ref
+  generation_event_ref
+  generated_at
+  attestation_evidence_ref
+  external_verification_receipt_ref
+  generation_receipt_digest
+}
+
+F0NamedReviewSealV1 {
+  review_seal_schema_version
+  review_seal_ref
+  review_manifest_ref
+  review_manifest_digest
+  manifest_generation_receipt_ref
+  manifest_generation_receipt_digest
+  review_record_digest
+  responsibility_scope
+  reviewer_actor_id
+  reviewer_subject_kind
+  credential_or_audit_actor_id
+  actor_credential_binding_ref
+  evidence_kind
+  key_usage_or_audit_event_type
+  signature_or_audit_evidence_ref
+  trusted_timestamp
+  trust_policy_ref
+  trust_verification_receipt_ref
+  review_seal_digest
+}
 ```
 
-两份仅用于评审包、**不属于生产 Schema** 的机械合同位于：
+四份仅用于评审包、**不属于生产 Schema** 的机械合同位于：
 
 - `schemas/f0-review-manifest-v1.schema.json`；
-- `schemas/f0-named-review-v1.schema.json`。
+- `schemas/f0-named-review-v1.schema.json`；
+- `schemas/f0-manifest-generation-receipt-v1.schema.json`；
+- `schemas/f0-named-review-seal-v1.schema.json`。
 
-其版本字段分别固定为 `F0ReviewManifestV1` 与 `F0NamedReviewV1`，未知字段一律拒绝。
+其版本字段分别固定为 `F0ReviewManifestV1`、`F0NamedReviewV1`、
+`F0ManifestGenerationReceiptV1` 与 `F0NamedReviewSealV1`，未知字段一律拒绝。
 `repository_identity` 固定绑定本次 F0 的 GitHub 仓库：
 
 ```text
@@ -5404,7 +5477,7 @@ OID；`frozen_git_tree_sha` 必须逐字等于
 `git rev-parse <frozen_git_commit_sha>^{tree}` 的根 tree OID。
 
 `normative_files[]` 至少完整覆盖 `CONTEXT.md`、ADR-0047～0062、本设计包 README、00～17、
-`CODEX_HANDOFF_PROMPT.md` 与上述两份 review-package Schema。`normative_role` 只能是：
+`CODEX_HANDOFF_PROMPT.md` 与上述四份 review-package Schema。`normative_role` 只能是：
 
 ```text
 DOMAIN_CONTEXT
@@ -5456,6 +5529,32 @@ verifier 必须从 raw object 自行删除精确字段并重算，不信任 deta
 都生成新 manifest；旧 review 自动 stale，不允许“沿用同意”。review records 不进入 manifest
 digest，避免自引用；七域 `review_manifest_ref` 与 `review_manifest_digest` 必须分别逐字相等。
 
+manifest 还必须内容绑定 `manifest_generator_subject_ref`、`manifest_generator_subject_kind` 与
+生成器可执行文件的 raw-byte `manifest_generator_tool_sha256`。这些字段让 reviewer 能识别并
+排除 manifest 生成者，但**不能自证身份**。生成后必须由生成器所属的受控认证通道形成独立
+`F0ManifestGenerationReceiptV1`；该 receipt 绑定精确 manifest、生成器主体、工具 digest、
+channel/event 与 trusted evidence。receipt 的 canonical projection 仅删除
+`generation_receipt_ref` 与 `generation_receipt_digest`：
+
+```text
+generation_receipt_digest =
+  lowercase_hex(
+    SHA-256(
+      ASCII("flai.feishu-hub.f0-manifest-generation-receipt.v1") || 0x00
+      || RFC8785_JCS_UTF8(canonical projection)
+    )
+  )
+
+generation_receipt_ref =
+  "flai://f0-manifest-generation-receipt/sha256/"
+  || generation_receipt_digest
+```
+
+组织批准的外部 verifier 必须回读并验证生成 channel/event、workload/actor binding、工具
+digest、撤销状态和 attestation evidence；本地生成器不能给自己出可信 receipt。receipt 缺失、
+未验、主体/工具不一致或 reviewer 与生成主体相同，F0 保持阻断。receipt 不进入 manifest
+digest，避免回环；每份 `F0NamedReviewV1` 必须绑定同一 receipt ref/digest。
+
 `F0NamedReviewV1.responsibility_scope` 只能是下表七域之一：
 
 ```text
@@ -5483,6 +5582,21 @@ reviewer，`FLAI_RUNTIME_EVIDENCE_AND_AUDIT` 与 `GITHUB_ENGINEERING_DELIVERY` �
 reviewer。跨 record 的唯一性和上述职责分离由 review-package verifier 检查，不能只依赖单份
 JSON Schema。
 
+`assigned_runtime_witness_gates[]` 不得为空，并按责任域精确冻结：
+
+| 责任域 | 必须分配的 witness gate |
+|---|---|
+| `ORGANIZATIONAL_PRODUCT_AND_GOVERNANCE` | `F1_EXIT, F2_EXIT, F3_EXIT, F5_EXIT, PHASE_ENTRY` |
+| `IDENTITY_AND_AUTHENTICATION_CHANNEL` | `F1_EXIT, F2_EXIT, F3_EXIT, D6_F4_EXIT, D7_F4_EXIT, D8_F4_EXIT` |
+| `ACL_CLASSIFICATION_AND_PRIVACY` | `F1_EXIT, F2_EXIT, F3_EXIT, D6_F4_EXIT, D7_F4_EXIT, D8_F4_EXIT` |
+| `FLAI_RUNTIME_EVIDENCE_AND_AUDIT` | `F1_EXIT, F2_EXIT, F3_EXIT, D6_F4_EXIT, D7_F4_EXIT, D8_F4_EXIT` |
+| `GITHUB_ENGINEERING_DELIVERY` | `F1_EXIT, F2_EXIT, F3_EXIT, D6_F4_EXIT, D7_F4_EXIT, D8_F4_EXIT` |
+| `KNOWLEDGE_AND_RECORDS` | `F1_EXIT, F2_EXIT, F3_EXIT, D6_F4_EXIT, D7_F4_EXIT, D8_F4_EXIT, F5_EXIT` |
+| `SECRET_AND_OPERATIONAL_CONTINUITY` | `F1_EXIT, F2_EXIT, F3_EXIT, D6_F4_EXIT, D7_F4_EXIT, D8_F4_EXIT, F5_EXIT` |
+
+数组顺序按上表保留；不得用空数组、`NOT_APPLICABLE` 或其他域的分配替代。若后续能力门调整，
+必须先生成新 manifest/schema 和七域新 review。
+
 NamedReview 的 canonical projection 仅删除 `review_record_digest`；其余字段（包括 role
 assignment、SoD 声明、manifest binding、结论、条件/阻断项、witness 分配、风险和
 `reviewed_at`）全部进入摘要。字符串、时间、浮点与 JCS 规则同 manifest：
@@ -5500,6 +5614,29 @@ review_record_digest =
 `reviewed_at` 是 reviewer 完成该结论的 UTC `YYYY-MM-DDTHH:MM:SSZ` 时间，不得从文件 mtime、
 commit time 或模板生成时间推断。具名人类必须在组织批准的认证通道中形成 record；AI 输出、
 聊天确认、Git commit 和模板都不是 review。
+
+每份 `F0NamedReviewV1` decision core 必须配一份独立 `F0NamedReviewSealV1`。seal 绑定精确
+manifest、manifest-generation receipt、review core digest、责任域与 reviewer，并引用组织
+批准的签名或不可变审计证据、ActorBinding、key usage/audit event、trust policy、trusted
+timestamp 与 verification receipt。seal canonical projection 仅删除 `review_seal_ref` 与
+`review_seal_digest`：
+
+```text
+review_seal_digest =
+  lowercase_hex(
+    SHA-256(
+      ASCII("flai.feishu-hub.f0-named-review-seal.v1") || 0x00
+      || RFC8785_JCS_UTF8(canonical projection)
+    )
+  )
+
+review_seal_ref =
+  "flai://f0-named-review-seal/sha256/" || review_seal_digest
+```
+
+本地 verifier 只能重算 core/seal 摘要与绑定；只有组织批准的外部 verifier 能认证签名/审计
+证据、身份、任命、撤销、trusted timestamp 和追加式历史。自报 `HUMAN`、三个职责分离布尔、
+display name、无钥摘要或伪造 URI 均不能关闭 F0。
 
 模板可以帮助收集输入，但模板必须使用不同的
 `review_record_schema_version = F0NamedReviewTemplateV1`（本轮不定义模板 Schema），不得
@@ -5535,7 +5672,7 @@ F1；F0 通过也不自动授权 F1。AI 评审、聊天确认、Git commit 或�
 
 | 阶段 | 范围 | 退出证据 | 当前授权 |
 |---|---|---|---|
-| F0 合同冻结 | ADR、术语、Interface、Source Ownership、ActorBinding、classification、receipt、SecretRef、invalid-first fixture/drill 规格 | frozen Git commit/tree + `F0ReviewManifestV1`；七域 review digest 一致且通过；后续 runtime-witness 分配冻结 | 本文完成设计输入；未形成 frozen manifest、未正式签发 |
+| F0 合同冻结 | ADR、术语、Interface、Source Ownership、ActorBinding、classification、receipt、SecretRef、invalid-first fixture/drill 规格 | frozen Git commit/tree + `F0ReviewManifestV1`；manifest-generation receipt 通过外部验证；七域 review core+seal 一致且通过；后续 runtime-witness 分配冻结 | 本文完成设计输入；未形成 frozen manifest、未正式签发 |
 | F1 只读联邦视图 | FLAi/GitHub → 飞书工作收件箱、项目和共建地图 | freshness、event gap、ACL、脱敏、对账测试 | 未授权实现 |
 | F2 低风险协作意图 | 需求、关注、补证据、接收确认 | typed intent、幂等、拒绝与回告 | 未授权实现 |
 | F3 正式治理仪式 | 验收、路线图、知识、Qualification、DeploymentBinding | prepare/commit、step-up、role separation、owner receipt | 未授权实现 |
@@ -5632,7 +5769,9 @@ F0 不修改生产 Schema。任何后续 Schema、公开 Interface、第三方�
 49. signer 接受裸 digest/key handle，SigningRequest/target-owner attestation/issuance Head
     任一 binding 为 False/Unknown 仍签名；
 50. 七域 review 未绑定同一 `F0ReviewManifestV1`，manifest 未绑定 frozen commit/tree 与完整
-    normative path/hash 集，或 normative 文件变化后仍沿用旧 review。
+    normative path/hash 集，缺外部验证的 manifest-generation receipt、任一 review core 缺
+    对应 seal/ActorBinding/trust verification，witness gate 分配为空/漂移，或 normative 文件
+    变化后仍沿用旧 review。
 51. `EmergencyActorAdmissionV1` 缺 kind/subject/nonce/replay-domain canonical binding，
     同一 admission digest 被跨 prepare/commit/publication、跨 subject 或跨 Reservation
     复用，或 consumption key 未 CAS-on-NULL 仍产生 effect；

@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:flai:schema:review-package:f0-manifest-generation-receipt-v1",
+  "title": "F0ManifestGenerationReceiptV1",
+  "description": "External-evidence-bearing receipt for one F0 manifest generation event. This is review-package-only, not a production schema or F1 authorization.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "generation_receipt_schema_version",
+    "generation_receipt_ref",
+    "review_manifest_ref",
+    "review_manifest_digest",
+    "generator_subject_ref",
+    "generator_subject_kind",
+    "generator_tool_sha256",
+    "generation_channel_ref",
+    "generation_event_ref",
+    "generated_at",
+    "attestation_evidence_ref",
+    "external_verification_receipt_ref",
+    "generation_receipt_digest"
+  ],
+  "properties": {
+    "generation_receipt_schema_version": {
+      "const": "F0ManifestGenerationReceiptV1"
+    },
+    "generation_receipt_ref": {
+      "type": "string",
+      "pattern": "^flai://f0-manifest-generation-receipt/sha256/[0-9a-f]{64}$"
+    },
+    "review_manifest_ref": {
+      "type": "string",
+      "pattern": "^flai://f0-review-manifest/sha256/[0-9a-f]{64}$"
+    },
+    "review_manifest_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "generator_subject_ref": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "generator_subject_kind": {
+      "enum": [
+        "HUMAN",
+        "WORKLOAD"
+      ]
+    },
+    "generator_tool_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "generation_channel_ref": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "generation_event_ref": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "generated_at": {
+      "$ref": "#/$defs/utcSecondTimestamp"
+    },
+    "attestation_evidence_ref": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "external_verification_receipt_ref": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "generation_receipt_digest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "utcSecondTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[0-1])T([0-1][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$"
+    },
+    "nonPlaceholderString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "not": {
+        "enum": [
+          "TODO",
+          "TBD",
+          "UNKNOWN",
+          "PENDING",
+          "REVIEW-REQUIRED",
+          "PLACEHOLDER",
+          "<evidence>",
+          "待定",
+          "未知"
+        ]
+      }
+    }
+  },
+  "$comment": "Digest: lowercase_hex(SHA-256(ASCII('flai.feishu-hub.f0-manifest-generation-receipt.v1') || 0x00 || RFC8785_JCS_UTF8(NFC-validated receipt excluding exactly generation_receipt_ref and generation_receipt_digest))). generation_receipt_ref derives from that digest. The external verifier MUST authenticate the subject/channel/event/evidence and prove that the event generated the exact manifest digest with the exact tool digest."
+}

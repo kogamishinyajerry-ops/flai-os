@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:flai:schema:review-package:f0-named-review-seal-v1",
+  "title": "F0NamedReviewSealV1",
+  "description": "External signature or immutable-audit evidence envelope for one F0NamedReviewV1 core. This is review-package-only and cannot authorize F1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "review_seal_schema_version",
+    "review_seal_ref",
+    "review_manifest_ref",
+    "review_manifest_digest",
+    "manifest_generation_receipt_ref",
+    "manifest_generation_receipt_digest",
+    "review_record_digest",
+    "responsibility_scope",
+    "reviewer_actor_id",
+    "reviewer_subject_kind",
+    "credential_or_audit_actor_id",
+    "actor_credential_binding_ref",
+    "evidence_kind",
+    "key_usage_or_audit_event_type",
+    "signature_or_audit_evidence_ref",
+    "trusted_timestamp",
+    "trust_policy_ref",
+    "trust_verification_receipt_ref",
+    "review_seal_digest"
+  ],
+  "properties": {
+    "review_seal_schema_version": {
+      "const": "F0NamedReviewSealV1"
+    },
+    "review_seal_ref": {
+      "type": "string",
+      "pattern": "^flai://f0-named-review-seal/sha256/[0-9a-f]{64}$"
+    },
+    "review_manifest_ref": {
+      "type": "string",
+      "pattern": "^flai://f0-review-manifest/sha256/[0-9a-f]{64}$"
+    },
+    "review_manifest_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "manifest_generation_receipt_ref": {
+      "type": "string",
+      "pattern": "^flai://f0-manifest-generation-receipt/sha256/[0-9a-f]{64}$"
+    },
+    "manifest_generation_receipt_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "review_record_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "responsibility_scope": {
+      "$ref": "#/$defs/responsibilityScope"
+    },
+    "reviewer_actor_id": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "reviewer_subject_kind": {
+      "const": "HUMAN"
+    },
+    "credential_or_audit_actor_id": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "actor_credential_binding_ref": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "evidence_kind": {
+      "enum": [
+        "DIGITAL_SIGNATURE",
+        "IMMUTABLE_AUDIT_RECEIPT"
+      ]
+    },
+    "key_usage_or_audit_event_type": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "signature_or_audit_evidence_ref": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "trusted_timestamp": {
+      "$ref": "#/$defs/utcSecondTimestamp"
+    },
+    "trust_policy_ref": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "trust_verification_receipt_ref": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "review_seal_digest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "utcSecondTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[0-1])T([0-1][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$"
+    },
+    "nonPlaceholderString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "not": {
+        "enum": [
+          "TODO",
+          "TBD",
+          "UNKNOWN",
+          "PENDING",
+          "REVIEW-REQUIRED",
+          "PLACEHOLDER",
+          "<reviewer>",
+          "<evidence>",
+          "待定",
+          "未知"
+        ]
+      }
+    },
+    "responsibilityScope": {
+      "enum": [
+        "ORGANIZATIONAL_PRODUCT_AND_GOVERNANCE",
+        "IDENTITY_AND_AUTHENTICATION_CHANNEL",
+        "ACL_CLASSIFICATION_AND_PRIVACY",
+        "FLAI_RUNTIME_EVIDENCE_AND_AUDIT",
+        "GITHUB_ENGINEERING_DELIVERY",
+        "KNOWLEDGE_AND_RECORDS",
+        "SECRET_AND_OPERATIONAL_CONTINUITY"
+      ]
+    }
+  },
+  "$comment": "Digest: lowercase_hex(SHA-256(ASCII('flai.feishu-hub.f0-named-review-seal.v1') || 0x00 || RFC8785_JCS_UTF8(NFC-validated seal excluding exactly review_seal_ref and review_seal_digest))). review_seal_ref derives from that digest. The external verifier MUST prove that the signature/audit evidence was produced by the named HUMAN actor under the referenced credential binding and trust policy and binds the exact review_record_digest, manifest and generation receipt."
+}

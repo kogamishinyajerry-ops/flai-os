@@ -167,8 +167,9 @@ git log -1 --oneline
 
 ADR-0062 将该原型定位为未来飞书工作空间中的专业执行 Surface，但不授权把 Stage C 连接到真实飞书。飞书 Hub 只能先做 F0 合同和具名评审；F1～F5 的只读投影、typed intent、治理签发、执行观察和迁移分别另获授权。
 F0 七域评审必须绑定 `F0ReviewManifestV1`：包含 frozen Git commit/tree 和全部 normative
-文件逐项 hash；单个文档 hash、聊天确认或未提交工作树不能作为冻结对象，任一 normative
-变更都使旧 review stale。
+文件逐项 hash、生成主体/工具及 review/generation-receipt/seal schema；另需外部验证的
+manifest-generation receipt 与七域 named review core+seal。单个文档 hash、聊天确认或未提交
+工作树不能作为冻结对象，任一 normative 变更都使旧 review stale。
 
 没有 owner 对原型体验、MVP 范围和诚实标签的明确接受，不进入阶段 D。
 

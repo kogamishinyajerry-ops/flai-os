@@ -14,6 +14,8 @@
     "decision",
     "review_manifest_ref",
     "review_manifest_digest",
+    "manifest_generation_receipt_ref",
+    "manifest_generation_receipt_digest",
     "role_assignment",
     "segregation_of_duties",
     "design_evidence_refs",
@@ -53,6 +55,13 @@
       "pattern": "^flai://f0-review-manifest/sha256/[0-9a-f]{64}$"
     },
     "review_manifest_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "manifest_generation_receipt_ref": {
+      "type": "string",
+      "pattern": "^flai://f0-manifest-generation-receipt/sha256/[0-9a-f]{64}$"
+    },
+    "manifest_generation_receipt_digest": {
       "$ref": "#/$defs/sha256"
     },
     "role_assignment": {
@@ -105,6 +114,7 @@
     },
     "assigned_runtime_witness_gates": {
       "type": "array",
+      "minItems": 1,
       "uniqueItems": true,
       "items": {
         "enum": [
@@ -270,5 +280,5 @@
       ]
     }
   },
-  "$comment": "Digest: lowercase_hex(SHA-256(ASCII('flai.feishu-hub.f0-named-review.v1') || 0x00 || RFC8785_JCS_UTF8(NFC-validated record excluding exactly review_record_digest))). The review-package verifier MUST recompute the digest, verify manifest ref/digest derivation, resolve the role assignment, verify named HUMAN actor attestations, enforce seven-domain coverage and cross-record separation of duties, reject stale manifests and reject templates. CONDITIONAL, REJECTED and UNKNOWN never close F0; a later immutable APPROVED record is required. F0 approval does not authorize F1 or any production change."
+  "$comment": "Digest: lowercase_hex(SHA-256(ASCII('flai.feishu-hub.f0-named-review.v1') || 0x00 || RFC8785_JCS_UTF8(NFC-validated record excluding exactly review_record_digest))). The review-package verifier MUST recompute the digest, verify manifest and generation-receipt bindings, resolve the role assignment, pair the core with one valid F0NamedReviewSealV1, verify named HUMAN actor attestations through an external trust verifier, enforce exact per-domain witness-gate allocation and cross-record separation of duties, reject stale manifests and reject templates. CONDITIONAL, REJECTED and UNKNOWN never close F0; a later immutable APPROVED record is required. F0 approval does not authorize F1 or any production change."
 }

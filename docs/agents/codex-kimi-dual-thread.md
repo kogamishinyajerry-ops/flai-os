@@ -21,7 +21,9 @@ PR 批准者、合并者或发布签发者。首轮试运行采用两个 sibling
   `owned_file_scope` 与 `owned_interface_scope` 不重叠；
 - 飞书是工作发现、编排和回告入口，GitHub 是代码、commit、PR、CI、approval 与 merge
   的事实来源；
-- 具名人类 `human_owner` 是唯一可以接受 handoff、决定集成、批准 PR、合并和签发的人。
+- 具名人类 `human_owner` 是唯一可以接受 handoff、请求集成或返工的人；PR review/approval、
+  merge 和发布签发只能由 GitHub/组织策略授权的具名真人角色执行，这些角色可以与
+  `human_owner` 不同。
 
 当前能力边界：
 
@@ -58,7 +60,8 @@ PR 批准者、合并者或发布签发者。首轮试运行采用两个 sibling
 - 决定允许的工具、外联和预算；
 - 查看真实 diff、验证结果、风险与未决问题；
 - 按权威状态机决定 `NEEDS_REWORK` 或 `ACCEPTED`；
-- 在 GitHub 原生 Surface 完成需要的 review、approval、merge；
+- 把 handoff 送入 GitHub 原生 Surface，并等待 `required_reviewer`、CODEOWNERS、branch
+  protection、CI 与 merge owner 各自完成其被授权的动作；
 - 根据 GitHub 回读事实确认是否可以进入 `INTEGRATED`。
 
 ### 3.2 Codex 机器执行器
@@ -327,7 +330,7 @@ EFFECT_UNKNOWN → RECONCILING
 - [ ] 具名人类 owner 选择 `NEEDS_REWORK` 或 `ACCEPTED`；
 - [ ] `ACCEPTED` 后才进入 `INTEGRATION_PENDING`；
 - [ ] 人类在 GitHub 查看真实 diff、CI、CODEOWNERS 和 branch protection；
-- [ ] 只有人类在 GitHub 执行 approval/merge；
+- [ ] 只有 GitHub/组织策略授权的具名真人在 GitHub 执行其各自的 review、approval/merge；
 - [ ] Coordinator 回读 GitHub 后才更新 `INTEGRATED` 或其他权威终态；
 - [ ] 飞书只回告结果和证据，不允许人工改单元格伪造集成。
 
@@ -356,6 +359,7 @@ EFFECT_UNKNOWN → RECONCILING
 ```text
 DevelopmentHandoffV1
 
+handoff_schema_version: DevelopmentHandoffV1
 work_item_ref:
 work_item_digest:
 assistant_run_ref:
@@ -392,7 +396,8 @@ handoff_digest:
 - `verification_results[]` 区分真实通过、失败、未运行和 unknown；
 - `artifact_and_evidence_refs[]` 可解析且遵守 classification；
 - `risks[]` 与 `unresolved_issues[]` 不得为空字符串掩盖未知；
-- `handoff_digest` 按权威 canonical 规则生成，不由本文另定义。
+- `handoff_digest` 按权威合同的
+  `SHA-256("flai.development-handoff.v1" || NUL || RFC8785-JCS(core))` 规则复算；
 
 ## 12. Pilot 通过标准
 
@@ -404,7 +409,8 @@ handoff_digest:
 4. 两份 `DevelopmentHandoffV1` 完整、可复算且未越 scope；
 5. required checks 被独立复跑，失败和 unknown 未被点绿；
 6. 飞书只投影，GitHub 保持代码事实；
-7. 具名人类完成 accept、GitHub review/merge 和最终集成决定；
+7. `human_owner` 完成 accept，GitHub/组织策略授权的具名真人分别完成所需 review/merge，
+   Coordinator 再依据 GitHub 回读确认集成结果；
 8. 全链没有 Secret value、未批准 egress 或模型代签。
 
 在第 3 项闭合前，Kimi 可以参与人工受控的候选产出和流程演练，但 Kimi Adapter 仍保持

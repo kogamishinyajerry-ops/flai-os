@@ -382,8 +382,11 @@ SafetyEffectObservationV1 ──append_only_reconciles──> successor SafetyOw
 | `ProjectionManifest` | 目标 Surface/record、来源 revision/digest、classification lattice/policy、space ceiling、audience digest、redaction、adapter version、适用 receipt 与投影 digest | Hub Projection Module |
 | `ProjectContextBinding` | collaboration project 到 FLAi authorized project scope 的单向版本化映射；不携带 membership 写权 | FLAi Project Directory |
 | `DeliveryWorkItem` | 人类 owner、项目/密级、frozen SHA、文件/Interface scope、executor/budget、dispatch/handoff/integration 状态 | FLAi Delivery Governance |
-| `F0ReviewManifestV1` | frozen Git commit/tree、规范文件 path/hash/role 集、review schema、supersedes 与 canonical digest；不含 review records | FLAi Architecture / Governance |
-| `F0NamedReviewV1` | reviewer actor/scope/decision、精确 manifest ref+digest、design evidence、后续 witness gate、残余风险与 review digest | 对应七个责任域 |
+| `DevelopmentHandoffV1` | work item/run/runtime receipt、base/final SHA、commit/diff、变更 scope、验证结果、证据、风险/未决项与 domain-separated canonical digest | FLAi Delivery Governance |
+| `F0ReviewManifestV1` | frozen Git commit/tree、生成主体/工具摘要、规范文件 path/hash/role 集、review/receipt/seal schema、supersedes 与 canonical digest；不含 review records | FLAi Architecture / Governance |
+| `F0ManifestGenerationReceiptV1` | 精确 manifest、生成主体/工具、受控 channel/event、attestation evidence、外部验证 receipt 与 generation digest | 组织批准的 manifest-generation verifier |
+| `F0NamedReviewV1` | reviewer actor/scope/decision、精确 manifest 与 generation receipt、任命、design evidence、后续 witness gate、残余风险与 review core digest | 对应七个责任域 |
+| `F0NamedReviewSealV1` | review core、manifest/generation receipt、reviewer ActorBinding、签名或不可变审计证据、trust policy/verifier receipt 与 seal digest | 对应七个责任域的组织信任 verifier |
 | `SourceOwnershipRegistryV1` | `(intent_type, schema_version, resource_kind)` 到 owner Module/Port、receipt type/schema 与 verifier ref/version/digest 的具名签发映射；epoch/effective range、canonical digest | FLAi Architecture / Governance Policy owner |
 | `SourceOwnershipRegistryHeadV1` | owner、generation、current registry ref+digest、publication receipt 与独立 head digest | FLAi Architecture / Governance Policy owner |
 | `SourceOwnershipResolutionV1` | observed Head/Registry/Entry ref+digest 与确定性 resolution digest；零/多匹配都不是 resolution | SourceOwnershipRegistryPort |

@@ -30,6 +30,51 @@ FROZEN_RELATIVE_PATH = (
     "../../product/FLAi-OS_V0.2_Design_Package/"
     "16_Production_Snapshot_Assembler_Read_Contract.md"
 )
+FROZEN_NORMATIVE_DEPENDENCIES = (
+    {
+        "relative_path": (
+            "../../../frontend/src/prototypes/stage-c/observer-contract.js"
+        ),
+        "sha256": "db6dc1392d5a3d0b3a7a7286be0e5f862633d7d2dfb529785c5e626095e2efce",
+        "byte_length": 9_148,
+        "role": "OBSERVER_CONTRACT_SOURCE",
+    },
+    {
+        "relative_path": (
+            "../../../frontend/src/prototypes/stage-c/observer-contract.test.js"
+        ),
+        "sha256": "a1aec017dabfcd92fcc2f54156fab02841e3391b621ddbe210e5c73b9c03fb4c",
+        "byte_length": 10_665,
+        "role": "OBSERVER_CONFORMANCE_TEST",
+    },
+    {
+        "relative_path": (
+            "../../../frontend/src/prototypes/stage-c/"
+            "runtime-observer-adapter.fixtures.js"
+        ),
+        "sha256": "1b9ab1dcfe55602f21043297e0ccfab090daac2135ab65832aee6b7936336bb8",
+        "byte_length": 12_895,
+        "role": "ADAPTER_TEST_VECTOR",
+    },
+    {
+        "relative_path": (
+            "../../../frontend/src/prototypes/stage-c/"
+            "runtime-observer-adapter.js"
+        ),
+        "sha256": "ab0cfc9b4899d114c8199918c85253e943ad5f71a2ac5d01db11ffa117007613",
+        "byte_length": 31_292,
+        "role": "ADAPTER_SOURCE",
+    },
+    {
+        "relative_path": (
+            "../../../frontend/src/prototypes/stage-c/"
+            "runtime-observer-adapter.test.js"
+        ),
+        "sha256": "89b2fab514e9acf451951bd16a7666e0446a0047c1bc7cf119265e07f5789963",
+        "byte_length": 19_802,
+        "role": "ADAPTER_CONFORMANCE_TEST",
+    },
+)
 REVIEW_ROUND_ID = "psa-read-v1-r1"
 CORE_VERSION = "flai.review-decision-core.v1"
 SEAL_VERSION = "flai.review-decision-seal.v1"
@@ -475,6 +520,7 @@ def _validate_target(
             "byte_length",
             "freeze_status",
             "implementation_status",
+            "normative_dependencies",
         },
         "manifest.target",
         errors,
@@ -495,6 +541,46 @@ def _validate_target(
             "manifest.target.implementation_status must be "
             "ACCEPTED-NOT-IMPLEMENTED"
         )
+    dependencies = target.get("normative_dependencies")
+    if dependencies != list(FROZEN_NORMATIVE_DEPENDENCIES):
+        errors.append(
+            "manifest.target.normative_dependencies does not match the "
+            "frozen Adapter/Observer set"
+        )
+    else:
+        for dependency in FROZEN_NORMATIVE_DEPENDENCIES:
+            dependency_candidate = package_dir / dependency["relative_path"]
+            if dependency_candidate.is_symlink():
+                errors.append(
+                    "frozen normative dependency must not be a symlink: "
+                    f"{dependency['relative_path']}"
+                )
+                continue
+            dependency_path = dependency_candidate.resolve()
+            if not dependency_path.is_file():
+                errors.append(
+                    "frozen normative dependency is missing: "
+                    f"{dependency['relative_path']}"
+                )
+                continue
+            try:
+                dependency_bytes = dependency_path.read_bytes()
+            except OSError as exc:
+                errors.append(
+                    "frozen normative dependency is unreadable: "
+                    f"{dependency['relative_path']}: {exc}"
+                )
+                continue
+            if len(dependency_bytes) != dependency["byte_length"]:
+                errors.append(
+                    "frozen normative dependency byte length mismatch: "
+                    f"{dependency['relative_path']}"
+                )
+            if hashlib.sha256(dependency_bytes).hexdigest() != dependency["sha256"]:
+                errors.append(
+                    "frozen normative dependency SHA-256 mismatch: "
+                    f"{dependency['relative_path']}"
+                )
     relative_path = target.get("relative_path")
     if relative_path != FROZEN_RELATIVE_PATH:
         errors.append("manifest.target.relative_path does not match the frozen path")

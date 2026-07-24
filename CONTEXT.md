@@ -311,7 +311,9 @@ _Avoid_: outbox 即发送、claim 即调用、HTTP 2xx 即生效、崩溃后自�
 
 **F0 评审清单（F0ReviewManifestV1）**:
 七个责任域共同评审的唯一冻结对象，绑定 Git frozen commit/tree、全部 normative 文件
-path/hash/role 与 review schema；任一规范文件变化都会生成新 manifest 并使旧评审失效。
+path/hash/role、manifest 生成主体/工具与 review/generation-receipt/seal schema；必须另有经
+外部信任验证的 manifest-generation receipt，以及七域各自的 named review core+seal。任一
+规范文件变化都会生成新 manifest 并使旧评审失效。
 _Avoid_: 单文档 hash、聊天同意、未提交工作树、沿用旧评审
 
 **项目上下文绑定（ProjectContextBinding）**:
@@ -325,6 +327,13 @@ _Avoid_: 群成员即授权、Hub 项目总账、手工改 scope
 冻结 SHA、branch/worktree、文件/Interface scope、版本化 executor、预算、dispatch/handoff
 和 GitHub 集成状态；模型显示名不构成执行或合并证据。
 _Avoid_: AI 自主 merge、共享脏工作树、模型标签即执行凭证
+
+**开发交接核心（DevelopmentHandoffV1）**:
+执行器提交的不可变交接对象，内容绑定 work item/run/runtime receipt、base/final SHA、
+commit/diff、变更 scope、验证证据、风险和未决项；其 digest 使用 domain-separated
+RFC8785-JCS 规则且只排除自身摘要。无钥内容摘要不证明执行器身份、人类接受、GitHub approval
+或 merge。
+_Avoid_: 自然语言总结即交接、模型自报身份、未复算 digest、handoff 即批准合并
 
 **SecretRef**:
 指向 `secrets-stackdocker` 中受控运行时 App/Connector Secret 版本的非秘密引用；业务对象、

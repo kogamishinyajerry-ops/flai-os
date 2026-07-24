@@ -8,11 +8,16 @@
   "required": [
     "review_manifest_schema_version",
     "review_manifest_ref",
+    "manifest_generator_subject_ref",
+    "manifest_generator_subject_kind",
+    "manifest_generator_tool_sha256",
     "repository_identity",
     "frozen_git_commit_sha",
     "frozen_git_tree_sha",
     "normative_files",
     "review_record_schema_version",
+    "review_seal_schema_version",
+    "manifest_generation_receipt_schema_version",
     "supersedes_review_manifest_ref",
     "supersedes_review_manifest_digest",
     "created_at",
@@ -25,6 +30,18 @@
     "review_manifest_ref": {
       "type": "string",
       "pattern": "^flai://f0-review-manifest/sha256/[0-9a-f]{64}$"
+    },
+    "manifest_generator_subject_ref": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "manifest_generator_subject_kind": {
+      "enum": [
+        "HUMAN",
+        "WORKLOAD"
+      ]
+    },
+    "manifest_generator_tool_sha256": {
+      "$ref": "#/$defs/sha256"
     },
     "repository_identity": {
       "type": "object",
@@ -75,6 +92,12 @@
     },
     "review_record_schema_version": {
       "const": "F0NamedReviewV1"
+    },
+    "review_seal_schema_version": {
+      "const": "F0NamedReviewSealV1"
+    },
+    "manifest_generation_receipt_schema_version": {
+      "const": "F0ManifestGenerationReceiptV1"
     },
     "supersedes_review_manifest_ref": {
       "type": [
@@ -135,6 +158,24 @@
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
     },
+    "nonPlaceholderString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "not": {
+        "enum": [
+          "TODO",
+          "TBD",
+          "UNKNOWN",
+          "PENDING",
+          "REVIEW-REQUIRED",
+          "PLACEHOLDER",
+          "<generator>",
+          "待定",
+          "未知"
+        ]
+      }
+    },
     "utcSecondTimestamp": {
       "type": "string",
       "format": "date-time",
@@ -189,5 +230,5 @@
       }
     }
   },
-  "$comment": "Digest: lowercase_hex(SHA-256(ASCII('flai.feishu-hub.f0-review-manifest.v1') || 0x00 || RFC8785_JCS_UTF8(NFC-validated object excluding exactly review_manifest_ref and review_manifest_digest))). review_manifest_ref MUST equal 'flai://f0-review-manifest/sha256/' plus that digest. The verifier MUST also check the fixed repository identity, root tree, raw Git blobs, required normative path coverage, strict path ordering, no duplicate paths, supersedes ref/digest consistency, no floats and NFC strings."
+  "$comment": "Digest: lowercase_hex(SHA-256(ASCII('flai.feishu-hub.f0-review-manifest.v1') || 0x00 || RFC8785_JCS_UTF8(NFC-validated object excluding exactly review_manifest_ref and review_manifest_digest))). review_manifest_ref MUST equal 'flai://f0-review-manifest/sha256/' plus that digest. The generator subject and exact generator tool SHA-256 are content-bound but do not authenticate themselves; F0 closure additionally requires a valid F0ManifestGenerationReceiptV1 and external trust verification. The verifier MUST also check the fixed repository identity, root tree, raw Git blobs, required normative path coverage, strict path ordering, no duplicate paths, supersedes ref/digest consistency, no floats and NFC strings."
 }

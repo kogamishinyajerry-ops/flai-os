@@ -44,6 +44,15 @@ class ReviewGateTest(unittest.TestCase):
             target_contract_dir
             / "16_Production_Snapshot_Assembler_Read_Contract.md",
         )
+        source_repo_root = Path(__file__).resolve().parents[3]
+        for dependency in review_gate.FROZEN_NORMATIVE_DEPENDENCIES:
+            relative_from_repo = Path(
+                dependency["relative_path"].removeprefix("../../../")
+            )
+            source_dependency = source_repo_root / relative_from_repo
+            target_dependency = temp_root / relative_from_repo
+            target_dependency.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_dependency, target_dependency)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -198,6 +207,25 @@ class ReviewGateTest(unittest.TestCase):
                 error.startswith("frozen contract SHA-256 mismatch")
                 for error in result.structure_errors
             )
+        )
+
+    def test_adapter_dependency_change_invalidates_structure(self) -> None:
+        dependency = review_gate.FROZEN_NORMATIVE_DEPENDENCIES[3]
+        dependency_path = (
+            self.package_dir / dependency["relative_path"]
+        ).resolve()
+        dependency_path.write_text(
+            dependency_path.read_text(encoding="utf-8") + "\nchanged\n",
+            encoding="utf-8",
+        )
+
+        result = review_gate.evaluate(self.package_dir)
+
+        self.assertEqual("INVALID", result.contract_review)
+        self.assertIn(
+            "frozen normative dependency SHA-256 mismatch: "
+            + dependency["relative_path"],
+            result.structure_errors,
         )
 
     def test_plan_change_after_signing_invalidates_all_core_bindings(self) -> None:
