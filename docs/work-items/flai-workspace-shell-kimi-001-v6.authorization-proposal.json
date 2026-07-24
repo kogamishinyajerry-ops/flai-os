@@ -1,0 +1,420 @@
+{
+  "schema_version": "WorkItemPreparationAuthorizationProposalV1",
+  "proposal_ref": "flai-workspace-shell-kimi-001@6A-proposal-1",
+  "proposal_status": "OWNER_APPROVAL_REQUIRED_PREPARATION_ONLY_NOT_FROZEN_NOT_DISPATCHED",
+  "human_owner": "JerryKogami",
+  "requested_owner_authorization_text": "批准 @6A Codex Cage 构建与冻结，仅限本地 mock，不创建真实 K3 会话",
+  "prepared_at_utc": "2026-07-25T05:30:00Z",
+  "human_readable_ref": "docs/work-items/flai-workspace-shell-kimi-001-v6-authorization-proposal.md",
+  "human_readable_sha256": "f66b18e7bd9129b3e233421d42e27360e84a6a5b8c4c0c3a3e5962ce9f3fc5b7",
+  "project": "github:kogamishinyajerry-ops/flai-os",
+  "environment": "EXTERNAL_DEVELOPMENT",
+  "fixtures": "SYNTHETIC_ONLY",
+  "internal_data_access": "NONE",
+  "internal_runtime_dependency": "NONE",
+  "authorized_result_class": "CAGE_PREPARATION_AND_V6B_FREEZE_ONLY",
+  "real_k3_or_external_llm_authorized": false,
+  "real_provider_network_authorized": false,
+  "real_secret_or_credential_value_access_authorized": false,
+  "product_implementation_authorized": false,
+  "source_candidate_commit_authorized": false,
+  "rework_lineage": {
+    "source_work_item": "flai-workspace-shell-kimi-001@5",
+    "source_work_item_digest": "sha256:9c016bf400e6afdac9d26f57ad9047bace8addfdb815cbec902d832c981507f4",
+    "dispatch_observation_digest": "sha256:c5c01bcc6cbb914d768f8c801ad943a359f729e4a859ae621e6ea10fa9df391b",
+    "source_result": "STOPPED_FAIL_CLOSED_PROTOCOL_VIOLATION",
+    "source_failure_reason": "MANDATORY_READ_GATE_AND_FIRST_WRITE_ORDER_VIOLATION",
+    "source_session_ref": "session_f43b9534-d670-4a2a-9a99-e711fceebfb9",
+    "source_session_reuse": "DENY",
+    "source_dirty_worktree_reuse": "DENY",
+    "source_evidence_reuse": "DENY"
+  },
+  "preparation_privacy_incident": {
+    "incident_class": "READ_ONLY_OVERBROAD_LOCAL_KIMI_HOME_SEARCH",
+    "summary": "During ACP feasibility research, Codex accidentally ran one broad read-only rg under the real local Kimi home. UI-redacted private-state fragments appeared in tool output.",
+    "secret_value_extracted_transcribed_reused": false,
+    "file_or_session_state_modified": false,
+    "historical_session_selected_resumed_or_reused": false,
+    "corrective_controls": [
+      "No recursive search, directory enumeration or session inspection under the real Kimi home.",
+      "Use only pinned public source and synthetic HOME/KIMI_CODE_HOME during 6A.",
+      "Do not access secrets-stackdocker, real credentials, real providers or private Kimi state during 6A.",
+      "Freeze any future secret-injection reference in 6B before separate owner approval."
+    ]
+  },
+  "unchanged_future_product_scope": {
+    "six_p1_findings": [
+      "WSK3-P1-URL-CONTRACT",
+      "WSK3-P1-DOM-CONTRACT",
+      "WSK3-P1-TRUST-COLORS",
+      "WSK3-P1-INVALID-HISTORY",
+      "WSK3-P1-NETWORK-LEDGER",
+      "WSK3-P1-RAIL-STATE"
+    ],
+    "exclusive_source_write_scope": [
+      "frontend/src/prototypes/workspace-shell/WorkspaceShellPrototype.vue",
+      "frontend/src/prototypes/workspace-shell/workspace-view.js",
+      "frontend/src/prototypes/workspace-shell/workspace-view.test.js",
+      "frontend/src/prototypes/workspace-shell/workspace-shell.css",
+      "frontend/e2e/workspace_shell_prototype_acceptance.py",
+      "frontend/src/prototypes/workspace-shell/NOTES.md"
+    ],
+    "exhaustive_read_only_scope": [
+      "docs/agents/kimi-k3-workspace-shell-pilot.md",
+      "docs/design/WORKSPACE-SHELL-V1-BLUEPRINT.md",
+      "frontend/src/prototypes/stage-c/stage-c.css",
+      "frontend/src/prototypes/stage-c/StageCWorkbenchPrototype.vue",
+      "frontend/src/prototypes/stage-c/observer-contract.js",
+      "frontend/src/prototypes/workspace-shell/fixtures.js",
+      "frontend/workspace-shell.html",
+      "frontend/src/prototypes/workspace-shell/main.js",
+      "frontend/package.json",
+      "frontend/package-lock.json",
+      "frontend/vite.config.js",
+      "scripts/verify_all.sh"
+    ],
+    "mandatory_read_paths": [
+      "docs/agents/kimi-k3-workspace-shell-pilot.md",
+      "docs/design/WORKSPACE-SHELL-V1-BLUEPRINT.md",
+      "frontend/src/prototypes/stage-c/stage-c.css",
+      "frontend/src/prototypes/stage-c/StageCWorkbenchPrototype.vue",
+      "frontend/src/prototypes/stage-c/observer-contract.js",
+      "frontend/src/prototypes/workspace-shell/fixtures.js",
+      "frontend/workspace-shell.html",
+      "frontend/src/prototypes/workspace-shell/main.js",
+      "frontend/src/prototypes/workspace-shell/WorkspaceShellPrototype.vue",
+      "frontend/src/prototypes/workspace-shell/workspace-view.js",
+      "frontend/src/prototypes/workspace-shell/workspace-view.test.js",
+      "frontend/src/prototypes/workspace-shell/workspace-shell.css",
+      "frontend/e2e/workspace_shell_prototype_acceptance.py",
+      "frontend/src/prototypes/workspace-shell/NOTES.md"
+    ],
+    "supervisor_only_read_paths_not_kimi_model_context": [
+      "frontend/package.json",
+      "frontend/package-lock.json",
+      "frontend/vite.config.js",
+      "scripts/verify_all.sh"
+    ],
+    "production_interface_change": "NONE",
+    "schema_change": "NONE",
+    "new_product_or_package_dependency": "NONE"
+  },
+  "authorized_repo_write_scope_6a": {
+    "precondition_file": "frontend/e2e/workspace_shell_prototype_acceptance.py",
+    "allowed_semantic_change": "Evaluate tempfile.mkdtemp only when WORKSPACE_SHELL_SHOTS is absent, preserving exactly one fallback call.",
+    "assertion_screenshot_network_or_other_test_semantics_change": "DENY",
+    "exact_documentation_output_paths": [
+      "docs/work-items/flai-workspace-shell-kimi-001-v6a.cage-preflight.json",
+      "docs/work-items/flai-workspace-shell-kimi-001-v6a.cage-manifest.json",
+      "docs/work-items/flai-workspace-shell-kimi-001-v6a.tool-policy-matrix.json",
+      "docs/work-items/flai-workspace-shell-kimi-001-v6a.dispatch-observation.json",
+      "docs/work-items/flai-workspace-shell-kimi-001-v6b.freeze.json",
+      "docs/work-items/flai-workspace-shell-kimi-001-v6b.prompt.md",
+      "docs/work-items/flai-workspace-shell-kimi-001-v6b.executor-environment.json",
+      "docs/work-items/flai-workspace-shell-kimi-001-v6b.authorization-proposal.md",
+      "docs/work-items/flai-workspace-shell-kimi-001-v6b.authorization-proposal.json"
+    ],
+    "product_implementation_files": "DENY_EXCEPT_THE_SINGLE_PRECONDITION_SEMANTIC",
+    "local_source_candidate_commit": "DENY"
+  },
+  "precondition_acceptance": {
+    "base_before_precondition": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "new_base_sha": "TO_BE_FROZEN_DURING_6A",
+    "required_checks": [
+      "Diff contains only the precondition file and lazy WORKSPACE_SHELL_SHOTS fallback semantic.",
+      "Fixed WORKSPACE_SHELL_SHOTS plus raising tempfile.mkdtemp substitute yields zero calls and the fixed path.",
+      "Absent WORKSPACE_SHELL_SHOTS plus sentinel substitute yields exactly one call and the sentinel path.",
+      "Full-file AST and diff invariant finds no second temporary-directory fallback.",
+      "No assertion, screenshot manifest, network boundary or other test semantic changes.",
+      "The change is committed separately and the new worktree is clean."
+    ]
+  },
+  "coordinator_control_scope": {
+    "root_pattern": "/private/tmp/flai-kimi-workspace-shell-v6a-control.*/",
+    "root_creation": "ONE_MKTEMP_D_CREATED_AFTER_OWNER_APPROVAL_THEN_EXACT_PATH_FROZEN",
+    "ownership": "CODEX_COORDINATOR_ONLY",
+    "product_or_production_dependency": "NONE",
+    "allowed_components": [
+      "ACP stdio driver",
+      "loopback mock Kimi-compatible provider",
+      "phase-aware reverse-RPC filesystem broker",
+      "synthetic HOME and isolated KIMI_CODE_HOME",
+      "v1 permission deny configuration",
+      "Kimi Seatbelt profile",
+      "canonical-URL CONNECT proxy mock harness",
+      "TestRunnerCage profile and supervisor",
+      "process/network/file witnesses",
+      "positive and negative tests",
+      "content-addressed transcripts, receipts and manifests"
+    ],
+    "package_install": "DENY",
+    "implementation_language": "PYTHON_STDLIB_SYSTEM_BINARIES_AND_EXISTING_REPO_DEPENDENCIES_ONLY"
+  },
+  "synthetic_mock_acp_authority": {
+    "kimi_executable_path": "/Users/Zhuanz/.kimi-code/bin/kimi",
+    "kimi_executable_sha256_at_proposal": "5cccf53604f20c5499ea10c3094298f49a1ad59fa90cddd9fd7e0ba44815fdd3",
+    "expected_version": "0.29.0",
+    "expected_codesign_team_id": "2J9472RW75",
+    "max_kimi_acp_processes": 1,
+    "max_new_sessions": 1,
+    "session_class": "DISPOSABLE_SYNTHETIC_MOCK_POLICY_CALIBRATION_NOT_K3_DEVELOPMENT",
+    "max_policy_probe_prompts": 64,
+    "provider": "ONE_FROZEN_LOOPBACK_MOCK_ONLY",
+    "environment_model_override": {
+      "KIMI_MODEL_NAME": "ONE_FROZEN_MOCK_MODEL_ID",
+      "KIMI_MODEL_API_KEY": "DUMMY_FIXTURE_ONLY",
+      "KIMI_MODEL_BASE_URL": "ONE_FROZEN_LOOPBACK_MOCK_BASE_URL",
+      "expected_acp_model_current_value": "__kimi_env_model__",
+      "isolated_config_other_provider_or_model": "DENY",
+      "mismatch_or_fallback": "FAIL_CLOSED"
+    },
+    "external_network": "DENY",
+    "real_k3_or_llm": "DENY",
+    "token_cost": 0,
+    "real_home_kimi_home_agents_credentials_sessions": "DENY_EXCEPT_EXACT_PINNED_/Users/Zhuanz/.kimi-code/bin/kimi_READ_EXECUTE_AND_CODESIGN_METADATA_WITHOUT_PARENT_ENUMERATION; ALL_AGENTS_CREDENTIALS_SESSIONS_AND_SIBLINGS_REMAIN_DENIED",
+    "reuse_for_6b": "DENY",
+    "retry_or_second_mock_session": "DENY"
+  },
+  "v1_tool_policy_calibration": {
+    "tools_global_allowlist_security_claim": "DENY_UNSUPPORTED_BY_ACP_V1",
+    "inventory_source": "Actual tool schema sent by the pinned binary to the loopback mock provider",
+    "deny_seed_source": "PINNED_V1_PROFILE_AND_STATIC_INVENTORY_BEFORE_PROCESS_START",
+    "first_actual_schema_gate": "MUST_EXACTLY_EQUAL_THE_FROZEN_STATIC_INVENTORY_BEFORE_THE_MOCK_RETURNS_ANY_TOOL_CALL; UNKNOWN_EXTRA_OR_MISSING_STOPS",
+    "allowed_effective_operations": [
+      "Read through exact-manifest ACP fs broker",
+      "Write through exact-manifest ACP fs broker",
+      "Edit through exact-manifest ACP fs broker"
+    ],
+    "all_other_tools": "EXPLICIT_FIRST_MATCH_DENY_PLUS_OS_AND_BROKER_CONTAINMENT",
+    "unknown_custom_mcp": "DEFAULT_DENY",
+    "approve_always": "DENY",
+    "coverage_matrix_fields": [
+      "tool_name",
+      "present_in_actual_v1_schema",
+      "resolve_observed",
+      "permission_decision",
+      "filesystem_effect",
+      "process_effect",
+      "network_effect",
+      "provider_request_effect",
+      "expected_deny_witness",
+      "result"
+    ],
+    "active_probe_requirement": "Loopback mock responses request each tool and sentinel witnesses prove no effect before or after permission.",
+    "allowed_tool_positive_probe": "READ_WRITE_EDIT_TOUCH_ONLY_DISPOSABLE_CONTROL_ROOT_SENTINELS; REAL_REPO_CHANGED_AND_UNTRACKED_MANIFEST_REMAINS_EMPTY",
+    "any_uncontained_side_effect": "NO_GO_FOR_6B"
+  },
+  "bootstrap_and_filesystem_cage": {
+    "home": "ONE_SYNTHETIC_EMPTY_HOME",
+    "kimi_code_home": "ONE_SYNTHETIC_ISOLATED_HOME",
+    "agents_skills_mcp_plugins_custom_agents": "EMPTY_AND_NEGATIVELY_PROBED",
+    "real_home_and_real_kimi_home": "SEATBELT_READ_DENY_PROBES_USE_ONLY_PRECREATED_NONSECRET_CANARY_OR_METADATA; EXCEPT_EXACT_PINNED_/Users/Zhuanz/.kimi-code/bin/kimi_EXECUTABLE_AND_CODESIGN_METADATA_WITHOUT_PARENT_ENUMERATION",
+    "cwd_default": "METADATA_ONLY_NO_SOURCE_DATA",
+    "authorized_system_policy_read_paths_6a": [
+      "AGENTS.md"
+    ],
+    "repo_agents_policy": "IF_REQUIRED_BY_V1_BOOTSTRAP_BIND AGENTS.md AS FROZEN_SYSTEM_POLICY_INPUT_WITH_EXACT_HASH_AND_RETURNED_BYTES; OTHERWISE RECEIPT RECORDS NOT_READ; NOT_PART_OF_14_PATH_BUSINESS_CONTEXT",
+    "brand_agents_policy": "BOUND_TO_PINNED_BINARY_AND_PUBLIC_SOURCE_DIGEST",
+    "business_source_content": "EXACT_14_PATHS_VIA_FS_READ_TEXT_FILE_BROKER_ONLY",
+    "broker_required_controls": [
+      "canonical parent dirfd",
+      "openat O_NOFOLLOW",
+      "fstat regular-file validation",
+      "hardlink anomaly rejection",
+      "same-directory atomic write",
+      "before and after SHA-256",
+      "session and phase binding",
+      "size limit",
+      "unknown method rejection"
+    ],
+    "negative_cases": [
+      "outside",
+      "traversal",
+      "NUL",
+      "symlink",
+      "hardlink",
+      "TOCTOU",
+      "wrong session",
+      "wrong phase",
+      "oversize",
+      "unknown method"
+    ]
+  },
+  "kimi_process_cage": {
+    "technology": "MACOS_SANDBOX_EXEC_SEATBELT_EXTERNAL_SYNTHETIC_ONLY",
+    "repo_source_direct_read_write": "DENY_EXCEPT_EXACT_FROZEN_SYSTEM_POLICY_INPUT_IF_REQUIRED",
+    "fork_child_process_bash_extra_exec": "DENY",
+    "runtime_write_roots": [
+      "synthetic HOME",
+      "isolated KIMI_CODE_HOME",
+      "frozen TMP"
+    ],
+    "network": "ONE_FROZEN_LOOPBACK_MOCK_ENDPOINT_ONLY; ALL_OTHER_LOOPBACK_PORTS_UNIX_SOCKETS_AND_EXTERNAL_ENDPOINTS_DENIED",
+    "inherited_fds": "ACP_STDIN_STDOUT_STDERR_ONLY",
+    "environment": "MINIMIZED_FROZEN_NO_REAL_SECRET",
+    "resource_budgets": {
+      "wall_clock": "ONE_FROZEN_CUMULATIVE_LIMIT",
+      "request_bytes": "ONE_FROZEN_CUMULATIVE_LIMIT",
+      "response_bytes": "ONE_FROZEN_CUMULATIVE_LIMIT",
+      "prompt_count": 64,
+      "transcript_bytes": "ONE_FROZEN_CUMULATIVE_LIMIT"
+    },
+    "negative_controls": [
+      "out-of-scope file read",
+      "out-of-scope file write",
+      "/bin/sh exec",
+      "fork and child process",
+      "external socket",
+      "adjacent loopback port",
+      "Unix domain socket"
+    ],
+    "witnesses": [
+      "Seatbelt deny log",
+      "PID and PGID",
+      "high-frequency process tree samples",
+      "socket samples",
+      "before and after file manifests"
+    ],
+    "known_limit": "sandbox-exec is deprecated and is not the internal production sandbox."
+  },
+  "connect_proxy_mock_design": {
+    "real_provider_use_6a": "DENY",
+    "future_6b_url_policy": "KEEP_THE_CANONICAL_PROVIDER_URL_FOR_THE_SELECTED_CREDENTIAL_CLASS; DO_NOT_REWRITE_APPLICATION_BASE_URL_TO_LOOPBACK",
+    "future_6b_proxy_policy": "HTTPS_PROXY_TO_ONE_LOOPBACK_CONNECT_BROKER_ONLY",
+    "required_proxy_controls": [
+      "CONNECT only",
+      "exact host and port allowlist",
+      "pinned DNS resolution",
+      "private and loopback upstream rejection",
+      "redirect and DNS rebinding rejection",
+      "non-CONNECT rejection",
+      "append-only metadata ledger"
+    ],
+    "secret_bearing_tcb_language": "A future launcher or proxy may handle secret-bearing state but must not log, persist, output or branch on secret value.",
+    "6a_redaction_tests": "DUMMY HEADER AND BODY MUST NEVER APPEAR IN LOGS_ERRORS_OBSERVATIONS_OR_RECEIPTS",
+    "forbidden_credential_strategy": "REAL_PERSONAL_KIMI_CREDENTIAL_SYMLINK",
+    "future_6b_allowed_strategy_classes": [
+      "secrets-stackdocker injects KIMI_MODEL_* temporary API key into a secret-bearing launcher; isolated config has no other provider, ACP model currentValue must equal __kimi_env_model__, the value is absent from Codex/config/logs, and Bash/subprocess/plugin/MCP/extension surfaces are cage-blocked",
+      "secrets-stackdocker provides an independent minimal refresh-capable credential volume"
+    ],
+    "future_6b_requirement": "SELECT_AND_FREEZE_ONE_EXACT_STRATEGY_OR_DO_NOT_REQUEST_EXECUTION"
+  },
+  "test_runner_cage": {
+    "test_code_trust": "UNTRUSTED",
+    "repo_and_six_source_files": "READ_ONLY_DURING_RED_AND_GREEN",
+    "coordinator_only_roots_not_child_writable": [
+      "supervisor control",
+      "receipts",
+      "complete stdout and stderr"
+    ],
+    "child_write_roots_non_authoritative": [
+      "one frozen evidence root",
+      "one disposable child scratch root"
+    ],
+    "vite_cache_policy": "TRUSTED_BASELINE_WARMUP_MAY_WRITE_FRONTEND_NODE_MODULES_DOT_VITE_THEN_HASH_AND_SEAL_READ_ONLY; NO_WRITABLE_CACHE_REUSE_ACROSS_BASELINE_RED_GREEN",
+    "network": "DENY_EXCEPT_FIXED_LOOPBACK_VITE_BROWSER",
+    "environment": "MINIMAL_NO_SECRET",
+    "command_contract": "EXACT_ARGV_ARRAY_CWD_TIMEOUT_NO_PIPELINE_COMPLETE_STDOUT_STDERR_AND_NORMAL_EXIT_STATUS",
+    "source_integrity": "BIND_SIX_FILE_HASHES_AND_CHANGED_UNTRACKED_MANIFEST_BEFORE_AND_AFTER_EACH_RUN",
+    "malicious_fixture_negative_cases": [
+      "source modification",
+      "test self-modification",
+      "coordinator control-ledger modification",
+      "sealed Vite cache poisoning",
+      "external network",
+      "process escape"
+    ],
+    "malicious_fixture_target_policy": "DISPOSABLE_SENTINELS_ONLY_NEVER_SHARED_GIT_CONTROL_DIR",
+    "baseline_requirement": "FOCUSED_EXISTING_UNIT_AND_E2E_GREEN_IN_THE_SAME_RUNNER_CAGE"
+  },
+  "build_runner_cage": {
+    "repo_and_source": "READ_ONLY",
+    "only_product_write_root": "frontend/dist/**",
+    "network": "DENY",
+    "secret": "NONE",
+    "shared_writable_test_cache": "DENY",
+    "coordinator_control_stdout_stderr": "CHILD_READ_WRITE_DENY",
+    "required_bindings": [
+      "source hashes before and after",
+      "dist before and after manifest",
+      "out-of-scope write denial",
+      "exact argv cwd environment timeout and normal exit"
+    ]
+  },
+  "state_machine_preflight": {
+    "receipt_schema": "StateMachinePreflightReceiptV1",
+    "fault_injections": [
+      "crash after CAS and before frame send",
+      "response loss",
+      "duplicate send",
+      "out-of-order phase",
+      "test write after Phase T terminal",
+      "any source write after Phase I terminal",
+      "green attempt while Kimi PID remains alive",
+      "lock persistence failure",
+      "receipt persistence failure"
+    ],
+    "required_result_every_case": "NO_RESEND_NO_REUNLOCK_NO_NEXT_PHASE"
+  },
+  "required_6a_evidence": [
+    "Pinned binary version path SHA codesign and ACP v1 engine witness.",
+    "Actual v1 tool inventory and per-tool deny-policy coverage matrix.",
+    "ACP Kaos broker-versus-local method routing matrix.",
+    "Synthetic HOME AGENTS skills MCP plugin and custom-agent injection negatives.",
+    "Broker path TOCTOU hardlink phase and session negatives.",
+    "Seatbelt file process exec and network negatives.",
+    "CONNECT proxy mock-upstream host pinning and log-redaction negatives.",
+    "Dummy credential and real HOME or real credential unreachability evidence.",
+    "TestRunnerCage source control cache network and process malicious-fixture negatives.",
+    "BuildRunnerCage scope and network negatives.",
+    "StateMachinePreflightReceiptV1 with every required fault injection.",
+    "Focused baseline unit and E2E green in the same TestRunnerCage.",
+    "Per-file digests for driver profile config prompt policy tests receipts and manifests.",
+    "Placeholder-free 6B freeze and three-axis independent GO reviews."
+  ],
+  "required_6b_test_first_state_machine": [
+    "BASELINE_GREEN",
+    "PHASE_A_PROMPT_CAS_CONSUMED",
+    "READ_ACCEPTED",
+    "PHASE_T_PROMPT_CAS_CONSUMED",
+    "PHASE_T_TERMINAL",
+    "TEST_WRITES_REVOKED",
+    "TEST_LOCK_RECEIPT",
+    "TEST_AUTHORING_ACCEPTED",
+    "UNIT_RED_FINAL",
+    "E2E_RED_FINAL",
+    "RED_ACCEPTED",
+    "PHASE_I_PROMPT_CAS_CONSUMED",
+    "PHASE_I_TERMINAL",
+    "ALL_SOURCE_LOCKED",
+    "KIMI_EXITED",
+    "GREEN",
+    "BUILD",
+    "INDEPENDENT_REVIEW"
+  ],
+  "required_6b_test_first_invariants": [
+    "Every prompt is durably CAS-consumed before frame send; missing response remains consumed.",
+    "Phase T writes only the two test files and write authority is revoked before TestLockReceiptV1 and red execution.",
+    "Test diff cannot delete or weaken existing assertions, force unconditional failure or embed product implementation.",
+    "Codex alone signs TestAuthoringAcceptedV1, binding the test diff, existing-assertion preservation rules and six pre-frozen assertion IDs.",
+    "Before TestLockReceiptV1, repeat the lazy-mkdtemp probes, full-file AST and diff invariant, and temporary-directory manifest; bind them and the E2E hash into TestLockReceiptV1 and RedGateAcceptedV1.",
+    "RedGateAcceptedV1 binds baseline, test hashes, four unchanged implementation hashes, runner profile, exact argv/cwd/env/timeout, complete stdout/stderr, normal nonzero exits and the union of both outputs covering six assertion IDs.",
+    "Phase I writes only the remaining four files while both tests stay locked.",
+    "After Phase I terminal, lock all six files, seal hashes, terminate Kimi and confirm PID absence before green/build.",
+    "Before final green, repeat the lazy-mkdtemp probes, full-file invariant and temporary-directory manifest.",
+    "No fourth prompt, retry, patch reuse, old worktree or old session after invalid red, prompt uncertainty or green/build failure."
+  ],
+  "six_a_stop_conditions": [
+    "Any external network or real provider attempt.",
+    "Any real credential or secret value access.",
+    "Any real HOME, real Kimi home or private session access other than the exact pinned executable read/execute and codesign-metadata exception.",
+    "Second Kimi ACP process or second mock session.",
+    "Any uncontained side effect from a denied tool.",
+    "Any cage or TestRunnerCage negative control failure.",
+    "Any product implementation edit.",
+    "Any placeholder or non-GO axis in the proposed 6B freeze."
+  ],
+  "authorization_effect": "Owner approval authorizes one fresh worktree, one lazy-mkdtemp precondition commit, one coordinator control cage using existing dependencies, at most one pinned Kimi ACP process with one local synthetic mock session and at most 64 loopback policy-probe prompts, TestRunnerCage baseline and malicious-fixture checks, and writes only to authorized_repo_write_scope_6a.exact_documentation_output_paths. It does not authorize real K3/LLM/provider traffic, any real secret value or credential use, product implementation, a six-file source candidate commit, push, merge, production integration, Schema change, human signoff, internal release, or any real execution session before a second owner approval of the exact 6B digest.",
+  "proposal_digest_profile": "sha256-rfc8785-jcs-excluding_proposal_digest",
+  "proposal_digest": "sha256:cfe7953ffc86330195feb23f12fb617bbccf113abe64ccd92eb48e7bcb2f39d8"
+}

@@ -1,0 +1,135 @@
+{
+  "schema_version": "DispatchObservationV1",
+  "work_item_ref": "flai-workspace-shell-kimi-001@5",
+  "work_item_digest": "sha256:9c016bf400e6afdac9d26f57ad9047bace8addfdb815cbec902d832c981507f4",
+  "dispatch_preparation_digest": "sha256:afb2b85bcea5742d3e0481d6c3756d6c06f2b6cc63758c52baaf65afabe2a1a6",
+  "observed_session_ref": "session_f43b9534-d670-4a2a-9a99-e711fceebfb9",
+  "session_ref_evidence": "COORDINATOR_OBSERVED_NOT_BACKEND_ATTESTED",
+  "outer_log_created_at_utc": "2026-07-24T17:19:09Z",
+  "outer_log_last_modified_at_utc": "2026-07-24T17:38:15Z",
+  "observation_recorded_at_utc": "2026-07-24T17:56:12Z",
+  "termination_exact_time_status": "NOT_CAPTURED",
+  "executor_identity": {
+    "requested_model": "kimi-code/k3",
+    "local_client_version": "0.29.0",
+    "actual_runtime_receipt": "REQUESTED_NOT_BACKEND_VERIFIED"
+  },
+  "outer_log": {
+    "path": "/private/tmp/flai-kimi-workspace-shell-v5-dispatch.jsonl",
+    "sha256": "412933f3b18c1ac8462577d67bf8a89037a8eec93a6e03df97b06ecbc61959ce",
+    "line_count": 31,
+    "byte_count": 167217,
+    "final_assistant_handoff_present": false
+  },
+  "tool_call_census": {
+    "total": 21,
+    "bash": 8,
+    "read": 12,
+    "write": 1,
+    "authorized_source_inspections": 12,
+    "non_whitelist_source_inspections": 0,
+    "authorized_source_edits": 1,
+    "non_whitelist_source_edits": 0,
+    "package_install_commands": 0,
+    "external_implementation_network_commands": 0,
+    "git_mutation_commands": 0,
+    "test_commands": 0,
+    "build_commands": 0
+  },
+  "mandatory_read_gate": {
+    "required_count": 14,
+    "observed_count": 12,
+    "status": "FAILED",
+    "missing_paths": [
+      "frontend/src/prototypes/stage-c/stage-c.css",
+      "frontend/src/prototypes/stage-c/StageCWorkbenchPrototype.vue"
+    ],
+    "false_completion_claim_observed": true
+  },
+  "scope_deviations": [
+    {
+      "severity": "STOP_CONDITION",
+      "operation": "Source write before completing every mandatory read",
+      "path": "frontend/src/prototypes/workspace-shell/workspace-view.test.js",
+      "classification": "MANDATORY_READ_GATE_VIOLATION",
+      "why_nonconformant": "The executor performed only 12 of 14 mandatory reads, omitted both required Stage C presentation inputs, then claimed all 14 reads were complete and wrote a source file."
+    },
+    {
+      "severity": "STOP_CONDITION",
+      "operation": "First source write was not the sole authorized pre-red harness repair",
+      "path": "frontend/src/prototypes/workspace-shell/workspace-view.test.js",
+      "classification": "PRE_RED_HARNESS_ORDER_VIOLATION",
+      "why_nonconformant": "The first write replaced the focused unit-test file. The frozen contract required the first and only pre-red behavior repair to be the lazy tempfile.mkdtemp change inside the E2E harness."
+    }
+  ],
+  "red_gate_observation": {
+    "lazy_mkdtemp_harness_repair_observed": false,
+    "unit_red_command_observed": false,
+    "e2e_red_command_observed": false,
+    "six_p1_failure_mapping_observed": false,
+    "red_gate_complete_checkpoint_observed": false,
+    "status": "NOT_REACHED"
+  },
+  "negative_confirmations": {
+    "executor_head_after_termination": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "executor_branch": "codex/kimi-workspace-shell-v5",
+    "executor_worktree_clean": false,
+    "executor_diff_from_base": [
+      "frontend/src/prototypes/workspace-shell/workspace-view.test.js"
+    ],
+    "executor_diff_stat": "1 file changed, 46 insertions(+), 6 deletions(-)",
+    "executor_patch_sha256": "e579ac0bba2adf6909447cb62c08ae63755f1f7770a14d88ac1b5a4b9fcae550",
+    "dirty_file_sha256": "337328c140fc255e6c8de59d87b5e5f1e5f33f7b84309c87be9a88d21aea3511",
+    "executor_commits_created": 0,
+    "screenshot_evidence_count": 0,
+    "screenshot_evidence_directory_empty": true,
+    "tmp_workspace_shell_shots_created": [],
+    "internal_data_or_secret_access": false,
+    "openhands_or_openwebui_access": false,
+    "production_interface_change": false,
+    "product_implementation_file_change": false,
+    "package_install": false,
+    "npm_build_run": false,
+    "verify_all_run": false,
+    "external_implementation_network": false
+  },
+  "termination": {
+    "initiator": "Codex coordinator",
+    "reason": "Fail-closed enforcement of mandatory-read and first-write ordering stop conditions",
+    "wrapper_exit_code": 143,
+    "process_cleanup": "Exact shell, gtimeout, tee and kimi-code PIDs received SIGTERM and were verified absent",
+    "dirty_worktree_policy": "Preserve the isolated failed worktree and its one-file diff for audit; never continue it or promote its diff"
+  },
+  "result": {
+    "dispatch_status": "STOPPED_FAIL_CLOSED_PROTOCOL_VIOLATION",
+    "implementation_status": "PARTIAL_UNIT_TEST_EDIT_ONLY",
+    "candidate_status": "NO_ACCEPTABLE_SOURCE_CANDIDATE",
+    "handoff_status": "NO_DEVELOPMENT_HANDOFF",
+    "codex_independent_review_status": "NOT_APPLICABLE",
+    "result_class": "FAILED_EXECUTION_ATTEMPT_NOT_INTERNAL_RELEASE"
+  },
+  "authorization_consumption": {
+    "approved_new_sessions": 1,
+    "observed_new_sessions": 1,
+    "remaining_new_sessions": 0,
+    "same_work_item_retry_authorized": false,
+    "reason": "The owner authorization record and frozen payload each limit @5 to one new Kimi session."
+  },
+  "recommended_retry": {
+    "requires_new_owner_authorization": true,
+    "minimum_new_version": "flai-workspace-shell-kimi-001@6",
+    "p1_scope_change": "NONE",
+    "source_write_scope_change": "NONE",
+    "source_read_scope_change": "NONE",
+    "production_interface_scope_change": "NONE",
+    "minimum_execution_delta": [
+      "Create a separately reviewed Codex-owned precondition commit containing only the lazy-mkdtemp E2E harness repair, and bind @6 to that new clean base.",
+      "Require a machine-readable fourteen-path read receipt before the first executor write.",
+      "Preserve direct foreground unit red and E2E red, six-finding mapping and RED_GATE_COMPLETE before any product implementation edit."
+    ],
+    "execution_target": "NEW_CLEAN_WORKTREE_AND_NEW_SESSION_ONLY",
+    "session_reuse": "DENY session_f43b9534-d670-4a2a-9a99-e711fceebfb9"
+  },
+  "observation_digest_profile": "sha256-rfc8785-jcs-excluding_observation_digest",
+  "observation_digest": "sha256:c5c01bcc6cbb914d768f8c801ad943a359f729e4a859ae621e6ea10fa9df391b"
+}
