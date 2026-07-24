@@ -2,7 +2,7 @@
 
 > 文档状态：`ACCEPTED-NOT-IMPLEMENTED`
 >
-> 本文是 V0.2 设计包的运营读模型，不覆盖 [FLAi-OS 系统宪法](../../00_FLAi-OS_Constitution.md)、现行标准或已接受 ADR。术语以 [CONTEXT.md](../../../CONTEXT.md) 为准；需求与发布决策分别受 [ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md) 和 [ADR-0058](../../adr/ADR-0058-flai-bench-evaluation-foundation.md) 约束；外网研发协作入口受 [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 约束，内外网边界与内网自托管入口受 [ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md) 约束。
+> 本文是 V0.2 设计包的运营读模型，不覆盖 [FLAi-OS 系统宪法](../../00_FLAi-OS_Constitution.md)、现行标准或已接受 ADR。术语以 [CONTEXT.md](../../../CONTEXT.md) 为准；需求与发布决策分别受 [ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md) 和 [ADR-0058](../../adr/ADR-0058-flai-bench-evaluation-foundation.md) 约束；外网研发协作入口受 [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 约束，内外网边界与内网自托管入口受 [ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md) 约束，当前 Codex/Kimi 双线程责任章程受 [ADR-0064](../../adr/ADR-0064-workspace-foreground-verifiable-delivery-and-dual-track-development.md) 约束。
 
 ## 1. 目标与边界
 
@@ -85,9 +85,16 @@ AI 只可提取、聚类、比较、生成候选验收和起草说明；AI 不�
 `DeliveryWorkItem` 生命周期、GitHub 证明外网代码事实；内网维护由 `FLAiWorkspace` 与 Internal
 Forge/Registry 组织和证明，二者不在线同步。每项工作必须有一个具名人类 owner、冻结
 SHA、独立 branch/worktree、文件/Interface scope、执行身份、密级/egress/工具范围、并发与
-时间/Token 预算、Issue/PR、验证证据、交接 digest、所需评审和集成状态。Codex 偏主实现/
-Runtime/安全，Kimi-K3 偏 UI/UX/文案/动效，只是推荐分工，不是硬编码授权；实际 dispatch
-依赖版本化 executor qualification。两者不得并行拥有重叠文件或公共 Interface 写范围；
+时间/Token 预算、Issue/PR、验证证据、交接 digest、所需评审和集成状态。当前责任章程将
+Codex 定义为 **Platform & Integration Lead**，负责控制内核、领域/API 合同、后端、安全、
+Runtime/Sandbox/Tool、Knowledge、Bench、测试、部署和集成；将 Kimi-K3 定义为
+**Workspace Experience Lead**，负责 Workspace IA/交互、三栏工作范式、视觉与动效、
+Artifact 工作台、前端体验、响应式/无障碍和视觉回归。
+
+这些责任名称用于划分当前研发写范围，不是模型名驱动的硬编码授权；实际 dispatch 仍依赖
+版本化 executor qualification、项目 scope、密级、egress 和预算。Codex 先冻结事实合同和
+合成 fixture，Kimi 依合同实现体验；Kimi 可提交 scope-change request，但不得直接修改生产
+Schema、安全策略、状态机或审计语义。两者不得并行拥有重叠文件或公共 Interface 写范围；
 dispatch/pause/resume/cancel/reconcile/handoff/rework/accept 均使用 typed intent、幂等键与
 effect-unknown 对账。AI 互审可以形成建议，但不能成为 CODEOWNER、批准人、merge owner 或
 发布 signer。Kimi-K3 只在外网使用合成/脱敏资产协作，不能成为内网运行依赖。完整合同见 [17_Feishu_Organizational_Hub.md §8.2](17_Feishu_Organizational_Hub.md#82-codexkimi-k3-与多人开发) 与 [18_AirGap_Exchange_and_Internal_Release.md](18_AirGap_Exchange_and_Internal_Release.md)。

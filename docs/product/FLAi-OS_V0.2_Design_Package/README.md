@@ -17,7 +17,7 @@
 3. 可点击或可运行原型；
 4. 经具名人员批准后的分片开发。
 
-它是 [CONTEXT.md](../../../CONTEXT.md)、[ADR-0047 至 ADR-0063](#6-约束本包的决策-adr) 和现行标准的**派生读模型**，不是第二套单一事实源（SSOT），也不能仅凭修改本目录改变架构决策、当前运行事实、安全策略、发布状态或生产准入结论。
+它是 [CONTEXT.md](../../../CONTEXT.md)、[ADR-0047 至 ADR-0064](#6-约束本包的决策-adr) 和现行标准的**派生读模型**，不是第二套单一事实源（SSOT），也不能仅凭修改本目录改变架构决策、当前运行事实、安全策略、发布状态或生产准入结论。
 
 本包描述的目标形态大量属于 `ACCEPTED-NOT-IMPLEMENTED`。文档完整不等于软件已实现，界面原型可运行不等于真实 Runtime、模型、工具、知识、安全或部署已验证。
 
@@ -25,7 +25,7 @@
 
 ### 1.1 决策接受与正式签发不是一回事
 
-ADR-0049 至 ADR-0063 中的“已接受”，只记录委托人在本次设计会话中对产品方向的明确确认；ADR-0047/0048 负责谱系与术语身份澄清。它们都不是经组织身份系统认证的电子签名，也不自动等同于立项、预算、密级、试点、发布或上线批准。当前工作副本尚未形成 clean、可复算的 release baseline，正式治理流程还必须为每项需签发决策补齐具名 `actor_id`、职责/作用域、时间、精确 ADR/制品 digest、决定和不可抵赖证据。缺少这些字段时，实施者只能把它当作已确认的设计输入，不能当作正式准入凭据。
+ADR-0049 至 ADR-0064 中的“已接受”，只记录委托人在本次设计会话中对产品方向的明确确认；ADR-0047/0048 负责谱系与术语身份澄清。它们都不是经组织身份系统认证的电子签名，也不自动等同于立项、预算、密级、试点、发布或上线批准。当前工作副本尚未形成 clean、可复算的 release baseline，正式治理流程还必须为每项需签发决策补齐具名 `actor_id`、职责/作用域、时间、精确 ADR/制品 digest、决定和不可抵赖证据。缺少这些字段时，实施者只能把它当作已确认的设计输入，不能当作正式准入凭据。
 
 决策来源与实现状态是两条正交轴。后续 Decision Record 至少记录 `decision_status=confirmed_in_design_session|formally_signed|decision_required|superseded`、`accepted_by_actor_id`、`accepted_at`、`decision_scope`、`decision_digest`、`source_evidence_ref`；只有 `formally_signed` 且字段齐全才具组织治理效力。本文五种标签只表达实现/证据状态，其中 `ACCEPTED-NOT-IMPLEMENTED` 的“accepted”在当前包仅代表 `confirmed_in_design_session`，不能代替正式签发。
 
@@ -89,6 +89,28 @@ owner 于 2026-07-24 明确补充：当前接入飞书是为了让外网研发�
 该方向仍只调整产品、架构与未来 Adapter 合同，不授权 Runtime、Schema、数据库、第三方采购、
 真实系统接入、数据迁移、试点或生产部署。
 
+### 1.6 Workspace 前景体验、北极星与双线程收敛记录
+
+owner 于 2026-07-24 在逐项设计讨论中接受
+[ADR-0064](../../adr/ADR-0064-workspace-foreground-verifiable-delivery-and-dual-track-development.md)
+的完整方向：
+
+- `VerifiableWorkDelivery` 是隐性价值对象，FLAiWorkspace 是用户优先感知的产品前景；
+- 默认采用左侧上下文、中央连续会话、右侧实时 Artifact 的三栏工作范式；
+- FLAiWorkspace 拥有体验主权，自托管通讯/Wiki/项目产品只提供 Adapter 能力；
+- 唯一产品北极星指标是 `WeeklyVerifiedValueUserRate`；
+- 新旧系统遵循“新增先收口、存量只读吸收、写回逐项准入”；
+- Truth Knowledge Plane 逻辑统一、物理联邦、逐条可追溯、每次上下文重新授权；
+- FLAi Bench 是强制发布证据门，最终资格仍由具名真人签发；
+- 首发是共同地基加三条黄金薄切片，性能盘后处理为首个 Fast Follow；
+- OpenClaw 是受约束、可替换的 AgentRuntimePort Adapter；
+- Codex 使用 `Platform & Integration Lead` 责任 profile，Kimi-K3 使用
+  `Workspace Experience Lead` 责任 profile。
+
+这仍是 `confirmed_in_design_session / ACCEPTED-NOT-IMPLEMENTED`，不是组织正式签发，也不
+授权生产 Schema、真实数据、内网接入、试点、发布或部署。双线程开发仍必须在冻结 SHA 上以
+独立 branch/worktree、不重叠 scope、合成 fixture 和具名人类 owner 运行。
+
 ## 2. 权威来源与顺序
 
 不同类型的争议由不同 SSOT 裁决，不把所有事实压成一个模糊的总排序：
@@ -134,7 +156,7 @@ owner 于 2026-07-24 明确补充：当前接入飞书是为了让外网研发�
 截至 owner 在设计会话中选择 Stage C 收敛方向时：
 
 - FLAi-OS V0.1 有已封板的轻内核和若干真实基础模块，但封板明确不外推内网环境与生产韧性；
-- ADR-0049 至 ADR-0063 是已接受的 V0.2 方向，绝大多数仍未实现；
+- ADR-0049 至 ADR-0064 是已接受的 V0.2 方向，绝大多数仍未实现；
 - 飞书只被选为外网研发协作中枢；内网 FLAiWorkspace、自托管协作/Wiki Adapter、内部
   IdP/Forge/Registry/Secret 和 AirGapExchange 均尚未实现或验证；
 - Phase 0A 产品、UX 与合同语义已冻结；Stage C 仅形成 A 首页 → C 执行态的隔离合成原型，目标 UI、Phase 0A 运行、试点和 Stage D 开发尚未因本包获准开始；任何现有 Agent 也未自动取得真实敏感数据权限；
@@ -175,6 +197,7 @@ Workspace、Knowledge、Secret 或 Runtime 的真实集成；本轮须重新生�
 | [17_Feishu_Organizational_Hub.md](17_Feishu_Organizational_Hub.md) | 飞书外网研发协作、Codex/Kimi 工作包与 GitHub 交付合同 |
 | [18_AirGap_Exchange_and_Internal_Release.md](18_AirGap_Exchange_and_Internal_Release.md) | 内容寻址离线发布包、quarantine、内部准入、ReleaseSet 和脱敏反馈 |
 | [19_Internal_Self_Hosted_Workspace.md](19_Internal_Self_Hosted_Workspace.md) | 内网自托管 Workspace、替换 Ports、协作/知识候选与隔离 POC 门 |
+| [Codex + Kimi 双线程试运行手册](../../agents/codex-kimi-dual-thread.md) | 双 work item、独立 scope/worktree、witness、handoff 与人类集成纪律 |
 | [Production Snapshot Assembler 七域具名评审控制包](../../reviews/production-snapshot-assembler-read-v1/README.md) | 绑定冻结 SHA 的七域评审计划、Decision Core/Seal 模板与 fail-closed 机械检查 |
 | [CODEX_HANDOFF_PROMPT.md](CODEX_HANDOFF_PROMPT.md) | Codex 分阶段接手提示词与机械停止条件 |
 
@@ -199,6 +222,7 @@ Workspace、Knowledge、Secret 或 Runtime 的真实集成；本轮须重新生�
 - [ADR-0061：需求决策权与路线图签发](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)
 - [ADR-0062：飞书外网研发协作中枢（范围已收窄）](../../adr/ADR-0062-feishu-single-organizational-hub.md)
 - [ADR-0063：外网研发、离线准入与内网自托管工作空间](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)
+- [ADR-0064：Workspace 前景体验、可验证交付与双线程研发章程](../../adr/ADR-0064-workspace-foreground-verifiable-delivery-and-dual-track-development.md)
 
 ## 7. 现行基线与诚实边界
 
@@ -224,7 +248,7 @@ Workspace、Knowledge、Secret 或 Runtime 的真实集成；本轮须重新生�
 第一次接手按以下顺序阅读：
 
 1. 本 README，先理解证据等级与 NO-GO 边界；
-2. [CONTEXT.md](../../../CONTEXT.md) 与 ADR-0047 至 ADR-0063；
+2. [CONTEXT.md](../../../CONTEXT.md) 与 ADR-0047 至 ADR-0064；
 3. `00_Product_Vision`、`07_Design_Principles`、`01_PRD`；
 4. `18_AirGap_Exchange_and_Internal_Release`、`19_Internal_Self_Hosted_Workspace`、
    `03_Information_Architecture` 与 `08_Core_Workbench_UX`；

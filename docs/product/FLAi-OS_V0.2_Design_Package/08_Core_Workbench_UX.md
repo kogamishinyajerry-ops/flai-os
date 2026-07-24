@@ -2,7 +2,7 @@
 
 > 文档性质：V0.2 目标体验与原型验收合同，不授权当前仓库实现。
 >
-> 决策依据：[ADR-0050](../../adr/ADR-0050-uninterrupted-session-and-final-delivery-authorization.md)、[ADR-0052](../../adr/ADR-0052-workbench-first-and-role-specific-governance-surfaces.md)、[ADR-0053](../../adr/ADR-0053-phase-0a-three-golden-workflows.md)、[ADR-0054](../../adr/ADR-0054-office-assistant-first-tracer-bullet.md)、[ADR-0055](../../adr/ADR-0055-cfd-assistant-first-tracer-bullet.md)、[ADR-0056](../../adr/ADR-0056-meeting-assistant-first-tracer-bullet.md)、[ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md)。
+> 决策依据：[ADR-0050](../../adr/ADR-0050-uninterrupted-session-and-final-delivery-authorization.md)、[ADR-0052](../../adr/ADR-0052-workbench-first-and-role-specific-governance-surfaces.md)、[ADR-0053](../../adr/ADR-0053-phase-0a-three-golden-workflows.md)、[ADR-0054](../../adr/ADR-0054-office-assistant-first-tracer-bullet.md)、[ADR-0055](../../adr/ADR-0055-cfd-assistant-first-tracer-bullet.md)、[ADR-0056](../../adr/ADR-0056-meeting-assistant-first-tracer-bullet.md)、[ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md)、[ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)、[ADR-0064](../../adr/ADR-0064-workspace-foreground-verifiable-delivery-and-dual-track-development.md)。
 >
 > 当前设计依据：[UI-PARADIGM](../../design/UI-PARADIGM.md) 与本设计周期的 WorkBuddy 实机录屏分析。录屏分析稿尚未进入本隔离基线，只作外部设计证据；正式验收 Stage C 或申请 Stage D 前必须按精确 digest 导入或登记。
 

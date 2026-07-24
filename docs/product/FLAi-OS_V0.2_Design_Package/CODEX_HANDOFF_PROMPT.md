@@ -15,7 +15,7 @@
 1. `AGENTS.md`；
 2. `CONTEXT.md`；
 3. `docs/product/FLAi-OS_V0.2_Design_Package/README.md` 与本包全部文档；
-4. `docs/adr/ADR-0047-*.md` 至 `ADR-0063-*.md`；
+4. `docs/adr/ADR-0047-*.md` 至 `ADR-0064-*.md`；
 5. `docs/product/FLAi-OS_V0.2_Design_Package/15_Phase_0A_MVP_Spec.md`，并先核对其 Stage B 是否已由 owner 冻结；
 6. `docs/00_FLAi-OS_Constitution.md` 至 `docs/09_Workflow_Live_Monitor_Standard.md`；
 7. `docs/PRODUCTION-READINESS-PROGRAM.md`、`docs/DEPLOYMENT-SUPERVISION.md` 与 `docs/agents/issue-tracker.md`；
@@ -23,7 +23,7 @@
 
 权威原则：accepted ADR 裁决目标决策，`CONTEXT.md` 裁决术语，代码/Schema/测试/真实运行证据说明当前实现，现行标准说明当前合同，本设计包只是派生读模型。发现冲突时先记录，不得挑选方便的版本制造一致。
 
-ADR-0047/0048 负责决策谱系与知识发布身份澄清，ADR-0049～0063 当前只证明委托人在设计会话中确认产品方向；它们都不是组织身份系统中的正式签发。接手者必须分别记录 decision provenance 与 implementation evidence；在获得绑定 `actor_id + scope + timestamp + exact digest + evidence_ref` 的 `formally_signed` 记录前，不得把这些 ADR 当作试点、采购、发布或上线授权，也不得自行伪造 accepted_by 字段。当前 Stage B 已因 owner 于 2026-07-23 的明确原话“冻结 Stage B，进入 Stage C”标为 `FROZEN-FOR-STAGE-C`；Stage C 又因原话“以 C 为主，吸收 A 的首页”标为 `DIRECTION-SELECTED-FOR-CONVERGENCE`。两条记录的 `accepted_by_actor_id` 都是 `UNRESOLVED`；前者只打开隔离原型门，后者只选择 A 首页 → C 执行态的收敛方向，均不具有组织正式签发或 Stage D 授权效力。
+ADR-0047/0048 负责决策谱系与知识发布身份澄清，ADR-0049～0064 当前只证明委托人在设计会话中确认产品方向；它们都不是组织身份系统中的正式签发。接手者必须分别记录 decision provenance 与 implementation evidence；在获得绑定 `actor_id + scope + timestamp + exact digest + evidence_ref` 的 `formally_signed` 记录前，不得把这些 ADR 当作试点、采购、发布或上线授权，也不得自行伪造 accepted_by 字段。当前 Stage B 已因 owner 于 2026-07-23 的明确原话“冻结 Stage B，进入 Stage C”标为 `FROZEN-FOR-STAGE-C`；Stage C 又因原话“以 C 为主，吸收 A 的首页”标为 `DIRECTION-SELECTED-FOR-CONVERGENCE`。两条记录的 `accepted_by_actor_id` 都是 `UNRESOLVED`；前者只打开隔离原型门，后者只选择 A 首页 → C 执行态的收敛方向，均不具有组织正式签发或 Stage D 授权效力。
 
 ADR-0063 已把部署拓扑纠偏为：飞书只属于外网研发协作域；内网使用完全自托管
 `FLAiWorkspace`；两个域只通过 `AirGapExchange` 的签名离线发布包和独立脱敏反馈包交换成果。
@@ -155,7 +155,7 @@ git log -1 --oneline
 先交付证据化架构评审，至少包括：
 
 - 当前模块、Interface、Implementation、Seam、Adapter、权威事实源和调用路径；
-- ADR-0047 至 ADR-0063 对当前系统的逐条差距矩阵，并确认编号谱系、知识发布身份、双信任域、
+- ADR-0047 至 ADR-0064 对当前系统的逐条差距矩阵，并确认编号谱系、知识发布身份、双信任域、
   外网/内网事实所有权、AirGapExchange 和分域 Secret owner 无冲突；
 - 身份/BOLA、权限、Sandbox、网络出口、并发、取消/强杀、审计、知识、评测、Bundle 的威胁与失败路径；
 - 可复用模块与必须新增的最小 seam，说明为何保持高 Locality、避免第二控制面；
@@ -271,6 +271,8 @@ manifest-generation receipt 与七域 named review core+seal。单个文档 hash
 - ADR-0062：仅保留飞书外网研发协作中枢、Codex/Kimi 工作包和 GitHub 交付范围；
 - ADR-0063：外网研发域、AirGapExchange、内网 FLAiWorkspace、独立身份/Secret/Forge/Registry
   与离线发布准入。
+- ADR-0064：Workspace 前景体验、隐性可验证交付、唯一北极星、首发边界、OpenClaw Runtime
+  边界与 Codex/Kimi 双线程责任 profile。
 
 先读取 README、`15_Phase_0A_MVP_Spec.md` 的阶段状态和可验证的 owner 决策记录，再选择合法的下一门：若没有可靠阶段证据，默认从阶段 A 只读评审开始；若 Stage A 已接受而 Stage B 仍为 `DRAFT-FOR-FREEZE`，只复核/收敛 Stage B 并停在冻结门；只有 Stage B 已标 `FROZEN-FOR-STAGE-C` 且有 owner 明确授权，才执行 Stage C；只有 Stage C 已接受且 owner 点名某个冻结切片，才进入该 Stage D 切片。Git 状态、文档存在、聊天摘要或 Codex 自述都不能代替阶段授权。
 

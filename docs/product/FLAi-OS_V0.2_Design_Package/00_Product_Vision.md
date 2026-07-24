@@ -16,13 +16,29 @@
 
 标签不能由演示截图、LLM 自评、手工进度或“看起来可用”替代。能力状态变化必须回到代码、契约、评测、签发或运行证据。
 
-## 2. 北极星
+## 2. 平台使命、产品北极星与唯一指标
 
 FLAi-OS 是面向航空工程组织的**工程智能体协作与治理平台**。它让工程师用自然语言提交完整工作目标，让 Agent 在受控会话内连续规划、执行、验证和恢复；同时把模型、知识、工具、权限、沙箱、并发、证据和最终交付纳入同一控制内核。
 
-它的北极星不是“拥有最多 Agent”，而是：
+它的平台使命与价值方向不是“拥有最多 Agent”，而是：
 
 > 在不降低工程责任和组织安全的前提下，把高频知识工作与工程辅助工作变成可复用、可验证、可追溯的能力发布。
+
+面向普通用户的产品北极星进一步冻结为：
+
+> 让一名普通工程师只用一句目标，就能在受控权限内连续完成一项真实工作，并在同一处获得
+> 可检查的过程、可追溯的依据、可交付的产物，以及由真人作出的最终决定。
+
+`VerifiableWorkDelivery` 是隐性的价值对象，不是首页术语、一级导航或前置表单。用户首先感知
+的是流畅、熟悉的 `FLAiWorkspace`；治理默认在后台生效，只在来源不足、权限例外、风险中断或
+最终交付决定确需本人介入时渐进披露。专业性不能成为接受明显弱于成熟 Agent 工作台体验的
+理由，体验质量与运行真实性共同构成采用门槛。
+
+唯一产品北极星指标是 `WeeklyVerifiedValueUserRate`：冻结统计周内至少获得一项 `REAL`、
+有真实产物和证据摘要、并由具名有权真人作出有效正向最终决定的去重目标用户数，除以周初由适用
+`status=active` DeploymentBinding 冻结、具备真实工作流权限的目标用户数。`completed`、MOCK/TEST、
+合成 fixture、页面访问、消息、Agent 数量和 Token 消耗均不计入；其他效率、成本、质量和
+节时指标只用于诊断与护栏。
 
 人始终是唯一签发者。AI 可以形成建议、草稿、差异、依据链和待交付动作，但不能把自己的输出晋升为组织事实、工程结论或正式交付。
 
@@ -74,7 +90,7 @@ Surface。一次任务的主要体验是：
 
 `IMPLEMENTED-PARTIAL` 当前仓库已有 FastAPI、SQLite Job Runner、Agent Registry、Task Center、
 Agent Runtime、Model Gateway、Tool Registry、File Service、Event Log、评测快照与人工晋级
-等基础 Module。它们构成继续演进的本地骨架，但不等于 ADR-0049～0063 的目标状态已经完成。
+等基础 Module。它们构成继续演进的本地骨架，但不等于 ADR-0049～0064 的目标状态已经完成。
 
 `ACCEPTED-NOT-IMPLEMENTED` FLAi-OS 将保持唯一控制内核。ExecutionBroker 组合三类不可互换的窄 Port：OpenClaw/OpenHands 只可实现 `AgentRuntimePort`，macOS 隔离实现 `SandboxProviderPort`，Python/Office/CAE/HPC 实现 `ToolExecutionPort`。动态动作逐次取得 Kernel 的短时 ExecutionTicket；任何 Adapter 都不得持有第二套身份、任务、审计、授权或终态真相。移除任一 Adapter，不应改变 FLAi-OS 的权威任务语义。
 
@@ -227,7 +243,8 @@ Phase 0A 通过只证明限定机制成立，不证明生产就绪；Phase 0B �
 - 需求共创与决策权：ADR-0060～0061
 - 外网飞书研发协作中枢：ADR-0062
 - 外网开发、AirGap Exchange 与内网自托管 Workspace：ADR-0063
+- Workspace 前景体验、北极星与双线程研发章程：ADR-0064
 
 ---
 
-*V0.2 产品读模型 · 2026-07-23 · 未来能力均以状态标签和对应 ADR 为准*
+*V0.2 产品读模型 · 2026-07-24 · 未来能力均以状态标签和对应 ADR 为准*

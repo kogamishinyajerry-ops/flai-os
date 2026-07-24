@@ -2,7 +2,10 @@
 
 > 决策依据：
 > [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 与
-> [ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)
+> [ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)，当前双线程
+> 责任 profile 另受
+> [ADR-0064](../../adr/ADR-0064-workspace-foreground-verifiable-delivery-and-dual-track-development.md)
+> 约束。
 >
 > 状态：`EXTERNAL-DEVELOPMENT-ONLY / ACCEPTED-NOT-IMPLEMENTED`
 >
@@ -1180,8 +1183,12 @@ CODEOWNERS、branch protection 和 CI 裁决。GitHub 回读后，Coordinator �
 - 每个交付项只有一个具名人类 owner；
 - 每个 Assistant run 使用独立 branch/worktree；并发 scheduler 对文件与 Interface scope
   做冲突检测，不允许两个活动 run 同时拥有重叠写范围；
-- “Codex 主实现、Kimi-K3 偏 UI/UX”只是可编辑的推荐分工，不是模型名驱动的授权规则；实际
-  eligibility 由版本化 executor qualification、项目 scope、密级、egress 和预算共同决定；
+- 当前责任章程由 ADR-0064 冻结为 Codex `Platform & Integration Lead`、Kimi-K3
+  `Workspace Experience Lead`；它划分当前研发写范围，但不是模型名驱动的授权规则，实际
+  eligibility 仍由版本化 executor qualification、项目 scope、密级、egress 和预算共同决定；
+- Codex 先冻结领域/API、observer、runtime 与安全合同和合成 fixture；Kimi 依合同实现
+  Workspace 体验。Kimi 可以提交 scope-change request，但不得直接修改生产 Schema、安全
+  策略、状态机或审计语义；
 - AI 可以互审，但不能成为 CODEOWNER、批准者、merge owner 或发布 signer；
 - dispatch、pause、resume、cancel、reconcile、handoff、rework 与 accept 都是 typed
   intent，绑定幂等键、epoch 和 work item digest；任何 dispatch/control 远端响应不明均进入

@@ -199,11 +199,71 @@ _Avoid_: 外网控制面、内网运维入口、跨域同步桥
 或发布链。旧名 `FeishuOrganizationalHub` 仅作为 ADR-0062 历史标识，不再表示全局产品中枢。
 _Avoid_: 内网 FLAi 入口、飞书总数据库、Bitable 总账、第二控制内核
 
+**双线程研发责任章程（DualTrackDevelopmentCharter）**:
+`EXTERNAL_DEVELOPMENT` 当前采用的开发责任边界：Codex 作为 Platform & Integration Lead，
+负责控制内核、领域/API 合同、后端、安全、Runtime/Sandbox/Tool、Knowledge、Bench、测试、
+部署与集成；Kimi-K3 作为 Workspace Experience Lead，负责 Workspace IA/交互、视觉与动效、
+Artifact 工作台、前端体验、响应式/无障碍和视觉回归。角色名称不授予系统权限；每项工作仍
+必须绑定具名人类 owner、冻结 SHA、独立 branch/worktree、不重叠写范围、合成 fixture、
+验证证据和 DevelopmentHandoffV1，AI 不能批准、合并或签发。
+_Avoid_: 同分支自由协作、重叠文件所有权、模型名即授权、AI 自批、Kimi 修改生产安全合同
+
+**可验证工作交付（VerifiableWorkDelivery）**:
+用户从自然语言目标出发，在受控自治中获得可追溯依据、真实执行过程、可检查产物、验证证据
+以及具名真人最终决定的端到端工作闭环；它是 FLAi-OS 的隐性核心价值对象和效果度量单位，
+不是要求普通用户理解的产品术语、一级导航或前置表单。FLAiWorkspace 应把复杂治理编译进
+默认流程，仅在来源不足、权限例外、风险中断或最终交付决定确需本人介入时渐进披露。
+_Avoid_: 首页功能名、治理表单驱动、步骤审批流、Agent 自报完成、用活跃度替代有效交付
+
+**周可验证价值用户率（WeeklyVerifiedValueUserRate）**:
+FLAi-OS 的唯一产品北极星指标；分子是在一个冻结统计周内至少获得一项 `REAL` 可验证工作
+交付的去重目标用户数，分母是该周开始前由适用 `status=active` DeploymentBinding 冻结、具备真实
+工作流权限的去重目标用户数；展示率时必须同时显示分子、分母与 cohort/binding digest。
+definition、cohort selection policy、cohort 或 binding digest 任一变化都会形成不可直接环比的
+统计断点，必须显示 cohort delta 与原因，不能宣称增长。
+计入的交付必须绑定真实产物与证据摘要，并具有具名有权真人的有效正向最终决定；若包含外部
+效果，还必须有成功且后置验证成立的 ActionReceipt。仅有
+`completed` 状态、MOCK/TEST 运行、合成 fixture、页面访问、消息或 Token 消耗均不计入。
+交付总量、首个可见产物时间、验收率、返工率、证据完整率、单位成本、抽样节省时间与需求
+采纳率只是诊断指标；越权、安全和假绿事件是必须单独保持为零的护栏。
+_Avoid_: MAU、周活、Token 消耗、Agent 数量、任务 completed 数、可调整分母
+
+**前景工作空间体验（WorkspaceForegroundExperience）**:
+普通用户实际感知的产品表面；以熟悉、流畅的 Workspace 统一入口承接目标表达、连续协作、
+执行观察和产物检查，使专业控制默认在后台生效而不制造额外认知负担。其交互质量与运行真实性
+共同构成采用门槛；不能以“底层更专业”为由接受明显弱于成熟 Agent 工作台的启动成本、
+过程可见性或操作流畅度。
+_Avoid_: 治理后台当前台、传统表单工作流、聊天换皮、用专业性掩盖体验缺陷
+
+**会话—产物工作范式（SessionArtifactWorkspacePattern）**:
+用户从 FLAiWorkspace 工作收件箱提交目标或进入既有自治会话后的默认三栏执行态：左侧组织
+项目、空间、历史工作与获准知识上下文；中央以简洁、动态、连续的执行流呈现 Agent 当前动作；
+右侧持续渲染此刻最值得检查的真实对象，例如文档、表格、仿真状态、差异、图表或最终产物。
+工程智能体工作台是首发 Agent 执行主产品，但不是第二组织首页。会议、知识、CFD 等专业场景
+可以替换右侧工作台，但不得分裂统一入口。治理信息默认渐进披露，仅在异常、风险中断和最终
+交付决定需要本人介入时进入主流程。
+_Avoid_: 纯聊天页、统计驾驶舱首页、表单后台、固定依据栏、不可观察的“正在思考”
+
 **内网智能协作空间（FLAiWorkspace）**:
 `AIR_GAPPED_INTERNAL` 中面向业务用户的唯一日常产品入口，包含工作收件箱、项目、讨论、会议、
 真相知识、工程智能体工作台、共建地图、治理与后置指挥视图；自托管通讯/Wiki/项目产品只是
 其 Adapter，不拥有 FLAi 运行或治理事实。
 _Avoid_: 内网版飞书、聊天软件换皮、第二控制内核
+
+**工作空间体验主权（WorkspaceExperienceAuthority）**:
+FLAiWorkspace 对普通用户看到的导航、会话中心、动态执行流、产物工作台、工作收件箱和统一
+视觉语言承担完整产品责任；自托管通讯、Wiki、项目管理等系统只能通过 Adapter 提供可替换
+能力，或在不暴露产品接缝的前提下受控嵌入。用户不需要理解第三方系统边界，第三方系统也不得
+拥有 Agent 任务、授权、证据、交付或审计真相。
+_Avoid_: 开源系统拼盘、链接门户、iframe 集合、多套导航、多套任务真相
+
+**渐进信息吸收原则（ProgressiveInformationAbsorption）**:
+FLAiWorkspace 与既有 OA、邮件、通讯和文件系统之间遵循“新增先收口、存量只读吸收、写回
+逐项准入”：获准黄金工作流产生的新工作事实优先从 Workspace 进入；存量信息仅通过保留原始
+ACL、密级、版本、来源和时间的只读 Adapter 渐进接入；外部写回必须针对每个系统分别证明
+认证、授权、幂等、效果回执与审计后才能开放。读取到内容不等于获准将其交给模型，HTTP 成功
+也不等于写回效果已经生效。
+_Avoid_: 一次替换全部 OA、无权限继承的数据湖、账号模拟集成、脆弱爬虫主架构、通用写回开关
 
 **内网工作空间编排模块（InternalWorkspaceHub）**:
 通过 `open/prepare/commit` 隐藏内网身份、通讯、项目、知识创作和 FLAi owner 差异的深
@@ -431,8 +491,20 @@ _Avoid_: 自主求解、自动优化、无证据的总体评价
 会议行动助手的首个黄金薄切片，把用户主动提交的会后材料整理为带来源的会议工作包草稿，并集中呈现需要人在末端消解的记录与责任字段例外。
 _Avoid_: 实时会议伴随、自动签发纪要、全生命周期催办
 
+**首发能力边界（InitialCapabilityBoundary）**:
+FLAi-OS 首发只承诺一个共同平台地基与三条黄金薄切片：技术报告润色与规范化、CFD 算例
+体检、会后纪要与行动项整理；共同地基包括 Workspace、Truth Knowledge Plane、执行观察、
+Artifact 渲染、Sandbox、权限审计与 FLAi Bench。性能盘后处理是首个 Fast Follow，但不
+阻塞首发；Office 全家桶、自动外发消息、完整自主 CFD、实时会议伴随、OA 替换和 Agent
+市场均不属于首发承诺。
+_Avoid_: 三个全能 Agent、功能目录式 MVP、Fast Follow 阻塞首发、用未来能力宣传当前版本
+
 **权威知识底座**:
-为所有 Agent 提供统一权威目录、版本、有效性、适用范围、访问策略与精确出处的逻辑事实源；内容可以来自多个受控系统，但存储位置和检索技术本身不赋予权威性。
+为所有 Agent 提供统一权威目录、版本、有效性、适用范围、访问策略与精确出处的逻辑事实源；
+它采用逻辑统一、物理可联邦的 Truth Knowledge Plane：原始内容可以保留在受控源系统或
+不可变来源库，登记层统一管理 owner、ACL、密级、版本、摘要、有效期与发布状态，知识层保留
+逐条来源锚点，全文、向量和关系索引均是可重建投影。每次 Agent 上下文装配都必须按当前主体、
+任务、密级和用途重新授权；存储位置、同步成功和检索相似度本身都不赋予权威性。
 _Avoid_: Obsidian 库、向量数据库、文件共享盘、万能 RAG
 
 **权威知识项**:
@@ -450,7 +522,11 @@ _Avoid_: 文件路径、同步成功日志、连接器身份、FLAi-OS signer
 _Avoid_: 文末参考资料清单、相似度分数、模型自述理由
 
 **FLAi Bench**:
-复用生产执行链，对冻结能力发布包进行确定性回归、工程质量、安全治理和运行效率四轨评测的统一基准评测底座；它提供证据矩阵而不是可掩盖失败的单一总分。
+复用生产执行链，对冻结能力发布包进行确定性回归、工程质量、安全治理和运行效率四轨
+评测的统一基准评测底座，也是能力进入适用试点或生产范围前的强制发布证据门；它提供不能用
+综合分数掩盖单轨失败的证据矩阵，并严格区分 REAL、MOCK 与 TEST。Bench 通过只表示满足
+冻结标准，不能自动发布；具名真人只能在所有强制 Gate 通过后对精确发布包签发资格决定，
+也不能用批准覆盖红线失败。
 _Avoid_: 模型排行榜、演示用题库、第二套 Eval 平台
 
 **能力发布包**:
@@ -484,7 +560,11 @@ _Avoid_: 只改任务为 cancelled、仅拒绝下一步、无见证撤权成功
 _Avoid_: HTTP request id、每次重试随机 UUID、授权即成功
 
 **AgentRuntimePort**:
-承载 Agent Loop 提案与观察的窄接口；Built-in、OpenClaw、OpenHands 可作为实现，但只能提交 Step/Replan Proposal，不能直接调用下游或写权威状态。
+承载 Agent Loop 提案与观察的窄接口；Built-in Runtime 是简单、确定、可做合同测试和故障
+回退的参考实现，OpenClaw 是重点吸收成熟 Agent Loop 能力的受约束 Adapter，OpenHands 等
+实现也必须通过相同合同；首发可以只使用 Built-in，OpenClaw 接入不是 Phase 0A 前置。
+任何 Runtime 都只能提交 Step/Replan Proposal，不能直接持有企业长期凭据、调用下游、
+读取未经任务时装配的知识、写权威状态或决定业务完成。
 _Avoid_: SandboxProviderPort、ToolExecutionPort、第二控制面
 
 **SandboxProviderPort**:

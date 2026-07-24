@@ -2,7 +2,7 @@
 
 > 文档性质：V0.2 产品与交互设计读模型，不是新的裁决源。
 >
-> 决策依据：[ADR-0050](../../adr/ADR-0050-uninterrupted-session-and-final-delivery-authorization.md)、[ADR-0052](../../adr/ADR-0052-workbench-first-and-role-specific-governance-surfaces.md)、[ADR-0053](../../adr/ADR-0053-phase-0a-three-golden-workflows.md)、[ADR-0059](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)、[ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)、[ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md)、[ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)。
+> 决策依据：[ADR-0050](../../adr/ADR-0050-uninterrupted-session-and-final-delivery-authorization.md)、[ADR-0052](../../adr/ADR-0052-workbench-first-and-role-specific-governance-surfaces.md)、[ADR-0053](../../adr/ADR-0053-phase-0a-three-golden-workflows.md)、[ADR-0059](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)、[ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)、[ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md)、[ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)、[ADR-0064](../../adr/ADR-0064-workspace-foreground-verifiable-delivery-and-dual-track-development.md)。
 >
 > 当前设计依据：[UI-PARADIGM](../../design/UI-PARADIGM.md)、[MOTION-SYSTEM](../../design/MOTION-SYSTEM.md)。
 
@@ -18,7 +18,7 @@
 
 所有原型、设计评审和实现计划都必须逐条说明状态。视觉完成度不能把 `ACCEPTED-NOT-IMPLEMENTED` 变成“已支持”。
 
-## 2. 产品北极星
+## 2. 前景体验准则
 
 `ACCEPTED-NOT-IMPLEMENTED`
 

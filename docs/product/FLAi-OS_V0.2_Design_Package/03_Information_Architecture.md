@@ -2,7 +2,7 @@
 
 > 文档性质：V0.2 设计包读模型，不是新的事实源，也不授权实现。
 >
-> 主要决策依据：[ADR-0052](../../adr/ADR-0052-workbench-first-and-role-specific-governance-surfaces.md)、[ADR-0059](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)、[ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)、[ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)。
+> 主要决策依据：[ADR-0052](../../adr/ADR-0052-workbench-first-and-role-specific-governance-surfaces.md)、[ADR-0059](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)、[ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)、[ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)、[ADR-0064](../../adr/ADR-0064-workspace-foreground-verifiable-delivery-and-dual-track-development.md)。
 >
 > 当前实现依据：[UI-PARADIGM](../../design/UI-PARADIGM.md)、[UI-SIMPLIFICATION-CONVERSATION-HOME](../../design/UI-SIMPLIFICATION-CONVERSATION-HOME.md)。
 
@@ -20,7 +20,7 @@
 
 本章描述的是用户如何找到工作、理解状态并进入证据，不另建任务、身份、指标或审计事实源。若本章与 ADR 冲突，以 ADR 为准；若目标态与当前实现不同，必须同时保留二者的状态标签。
 
-## 2. IA 北极星：一个内网 FLAi Workspace、一份工作收件箱、角色化空间
+## 2. IA 目标心智模型：一个内网 FLAi Workspace、一份工作收件箱、角色化空间
 
 `ACCEPTED-NOT-IMPLEMENTED`
 
@@ -32,6 +32,11 @@
 内网产品只建立一个顶层应用“FLAi 工作空间”。工程执行、项目讨论、知识、共建、治理与领导
 阅读是其中的角色化空间；它们投影联邦 owner 的事实，不是多套应用，也不是一张聊天/Wiki/
 项目总表。Mattermost、Wiki.js 或其他自托管产品只隐藏在 Adapter 后面。
+
+`FLAiWorkspace` 拥有体验主权：统一导航、会话中心、动态执行流、Artifact 工作台、工作收件箱
+和视觉语言由 Workspace 负责，第三方自托管 Surface 只提供可替换能力。用户不需要理解这些
+产品的边界，也不在多套导航、任务状态和视觉语言之间切换。底层 `VerifiableWorkDelivery`
+保持为隐性价值对象；普通用户不需要先学习交付包、策略、任务图或治理术语才能开始工作。
 
 | 空间／Surface | 默认受众 | 核心问题 | 入口形态 | 写入权限 |
 |---|---|---|---|---|
@@ -151,6 +156,10 @@ V0.2 仍缺少统一的自治会话、Delivery Bundle、执行授权 receipt 和
 | 中央时间线 | 计划摘要、排队、执行、验证、恢复、阻断与交付状态 | 脱敏工具记录、证据引用、并行分支 | 内部思维链、虚构百分比、循环动画冒充进度 |
 | 右侧检查器 | 当前产物、差异、关键证据、待确认例外 | 文件预览、精确来源、hash、验证详情 | secret 明文、无权限原始 JSON、草稿冒充正式资产 |
 | 末端交付 | Delivery Bundle 摘要、残余风险、待交付动作 | 精确版本、策略、差异、receipt | 中途逐命令审批、永久 Full Access、授权后直接显示成功 |
+
+右侧检查器是实时对象舞台，不是固定依据栏。它优先显示当前正在处理或生成的对象，其次是用户
+最可能检查的预览、差异、异常和待确认问题，再其次才是当前证据与历史依据；每次切换都应解释
+“为什么此刻显示它”。缺少可验证对象时显示缺口，不以漂亮占位或循环动效冒充进展。
 
 右侧检查器关闭时不丢会话上下文；打开产物不替换中央时间线。移动焦点、返回和深链必须可预测，`Esc` 层层退出，`⌘K` 可检索会话、任务、产物和有权访问的治理对象。
 

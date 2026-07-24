@@ -6,7 +6,7 @@
 >
 > 适用范围：FLAi-OS Phase 0A/0B 产品发现、路线图签发、交付追踪与全员进展展示
 >
-> 决策依据：[ADR-0059](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)、[ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)、[ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md)
+> 决策依据：[ADR-0059](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)、[ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)、[ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md)、[ADR-0064](../../adr/ADR-0064-workspace-foreground-verifiable-delivery-and-dual-track-development.md)
 
 ## 1. 目的与非目标
 
@@ -172,7 +172,53 @@ generated_at: 2026-08-01T00:05:00+08:00
 - `minimum_group_size`、保留期、允许投影和导出策略必须版本化；具名下钻只对事件处置/数据质量等明确目的、具备相应 scope 的治理角色开放并留审计；
 - 团队聚合导出仍要重新鉴权、再次执行小样本抑制并带口径/窗口；不得导出可拼接回个人的明细或长期保存超出 retention policy 的数据。
 
-### 5.2 五类指标
+### 5.2 唯一产品北极星指标
+
+`WeeklyVerifiedValueUserRate` 是 FLAi-OS 唯一产品北极星指标；它不能复用或重命名当前较宽的
+`adoption.active_users`。其 Metric Definition 至少冻结：
+
+```yaml
+metric_id: product.weekly_verified_value_user_rate
+definition_version: "1.0.0"
+category: product_north_star
+window: frozen_calendar_week
+timezone: Asia/Shanghai
+cohort_selection_policy_ref: metric-policy://verified-value-cohort/1.0.0
+numerator_unit: distinct_authenticated_user
+denominator_unit: frozen_eligible_target_user
+unit: ratio
+allowed_projection: team_only
+```
+
+分子是在统计周内至少获得一项合格 `VerifiableWorkDelivery` 的去重认证目标用户。该交付必须：
+
+- runtime/reality witness 明确为 `REAL`，不是 MOCK、TEST、UNKNOWN 或合成 fixture；
+- 绑定实际 Artifact digest 与 evidence/fact digest；
+- 具有具名有权真人的有效正向最终决定，且 outcome 位于该 MetricDefinition 冻结的
+  `qualifying_outcomes` allowlist，并按工作流解析到适用的可验证 receipt；
+- 若交付包含外部效果，所有必需 ActionReceipt 均成功、后置验证成立且没有 effect_unknown；
+- 属于统计周开始前已冻结的适用真实工作流和用户范围；
+- 未因撤销、效果 unknown、证据失效或签发漂移而失去计数资格。
+
+分母是在统计周开始前由适用 `status=active` 的 `DeploymentBinding` 暴露、已具备至少一条真实工作流
+权限的目标用户集合。周中新增、移除或改权不回写本周分母，只形成下周 cohort 或显式口径
+修订；分母为零、无法复核或集合摘要缺失时返回 `not_applicable`/`unknown`，不得除零、临时
+缩小分母或填入漂亮比例。比率必须同时展示分子、分母和 cohort/DeploymentBinding digest，
+不能只展示脱离样本规模的百分比。
+
+`definition_version`、`cohort_selection_policy_ref`、cohort digest 或 DeploymentBinding
+digest 任一变化时，比较状态必须为 `not_comparable`，同时展示 cohort 增减数量和
+reason-coded 变化原因；不得继续计算或宣称周环比增长。只有这些标识均相同的连续窗口才允许
+展示趋势。
+
+同一用户一周内有多项交付也只计一次。`completed`、页面访问、消息、Token、Agent 数量、
+普通 active user、LLM 自评、rejected/returned/cancelled/failed、effect_unknown 和无有效
+正向真人最终决定的产物均不计入。只有 synthetic fixture 的 Phase 0A 受控验收阶段返回
+`not_applicable`，不能显示为零、REAL 或增长。首个可见产物时间、验收率、返工率、证据
+完整率、单位成本、抽样节省时间、需求采纳率和路线图进展只解释该北极星，不能成为第二
+北极星；越权、安全和假绿事件作为独立零容忍护栏报告。
+
+### 5.3 五类指标
 
 | 类别 | 可展示内容 | 主要事实源 | 不得做的推断 |
 |---|---|---|---|
@@ -182,7 +228,7 @@ generated_at: 2026-08-01T00:05:00+08:00
 | 资源消耗 | Token、模型/工具调用、时延、并发、稳定性、适用时的估算成本 | `model_calls`、`tool_runs`、任务时间戳、资源遥测 | Token 冒充贡献度；缺 Token 当 0 |
 | 组织价值 | 有基线的方法下区间化节时、覆盖率、返工减少等 | 版本化基线、人工抽样、可比较任务证据 | LLM 自评或 Agent 运行时长推导节时 |
 
-### 5.3 活跃使用人数
+### 5.4 活跃使用人数
 
 `active_user` 的 V0.2 默认口径是：在指定窗口和作用域内，至少产生一次合格真实工作行为的**不同认证用户**。
 
@@ -196,7 +242,7 @@ generated_at: 2026-08-01T00:05:00+08:00
 
 注册账号、登录次数、页面浏览和最近 100 条前端窗口都不是正式活跃口径。身份或 origin 缺失时报告覆盖缺口，不将其归入匿名用户后猜测人数。
 
-### 5.4 Token 与成本
+### 5.5 Token 与成本
 
 - Token 统计逐条读取真实 `model_calls`，按 resolved model、调用状态和时间窗口归集；profile 名不能替代实际模型身份。
 - 对缺失 usage 的调用报告“已知 Token 合计 + usage 覆盖率 + 缺失调用数”，不能把缺失值加为 0 后声称完整总量。
@@ -205,7 +251,7 @@ generated_at: 2026-08-01T00:05:00+08:00
 - 估算成本只有在 `PriceTableVersion` 同时匹配实际模型、计价单位、币种、适用时间和部署方式时才能计算。
 - 存在未匹配调用时，必须显示已覆盖成本与覆盖率；不能用当前价格倒填历史，也不能把未知成本显示为 0。
 
-### 5.5 节省时间
+### 5.6 节省时间
 
 节时指标需要一份具名、版本化的 `TimeSavingBaseline`：
 
@@ -435,6 +481,8 @@ Issue 关闭只表示工程追踪项结束。需求关闭还要求：
 | `CB-K03` | 没有适用 PriceTableVersion | 成本 `unknown`，Token 仍可按覆盖情况显示；成本不为 0 |
 | `CB-K04` | 没有批准的节时基线 | 显示“尚未建立基线”，不得由 LLM/运行时长估算 |
 | `CB-K05` | 事实完整且窗口内确实无合格事件 | `value_state=measured,value=0`，与 unknown/null 清晰区分 |
+| `CB-K06` | completed、MOCK/TEST、合成 fixture、非正向最终决定或 effect_unknown 的交付进入北极星候选 | 全部从 `WeeklyVerifiedValueUserRate` 分子排除，并保留排除原因 |
+| `CB-K07` | 周中或周界通过缩小 cohort、改变选择策略或改绑 DeploymentBinding 制造北极星增长 | 本周冻结分母不变；变化进入下周 cohort/新定义并标记 `not_comparable`、delta 与 reason，不宣称环比增长 |
 | `CB-P01` | 团队指标样本可能反推个人 | `suppressed` 且深链继续鉴权；标题、计数、通知均不泄密 |
 | `CB-P02` | 敏感需求关联公开路线图节点 | 依据策略输出脱敏/受限/整节点抑制，底层分类和来源不被降级 |
 | `CB-UX01` | 普通用户首次进入平台 | 单 Composer 与三个结果型入口是首要动作；共建地图只是次级入口，不抢占首页 |

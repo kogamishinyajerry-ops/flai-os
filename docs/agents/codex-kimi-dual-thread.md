@@ -6,7 +6,9 @@
 >
 > 权威合同：[`17_Feishu_Organizational_Hub.md`](../product/FLAi-OS_V0.2_Design_Package/17_Feishu_Organizational_Hub.md) 中的
 > `DeliveryWorkItemV1`、`AssistantDispatchReceiptV1`、`AssistantRunObservation` 与
-> `DevelopmentHandoffV1`
+> `DevelopmentHandoffV1`；当前责任 profile 由
+> [`ADR-0064`](../adr/ADR-0064-workspace-foreground-verifiable-delivery-and-dual-track-development.md)
+> 冻结。
 >
 > 约束：本手册不新增生产 Schema、状态、状态转换、权限或签发角色；与权威合同冲突时，以权威合同为准。
 
@@ -15,8 +17,10 @@
 Kimi 可以作为项目中的正式**机器执行器成员**参与开发，但不能被当作真人、CODEOWNER、
 PR 批准者、合并者或发布签发者。首轮试运行采用两个 sibling `DeliveryWorkItemV1`：
 
-- Codex 线程承担一个有界实现工作包；
-- Kimi 线程只承担独立评审、UI/UX 候选或测试夹具中的一个有界工作包；
+- Codex 以 `Platform & Integration Lead` 责任 profile 承担平台合同、后端、安全、Runtime、
+  Bench、验证与集成中的有界工作包；
+- Kimi 以 `Workspace Experience Lead` 责任 profile 承担 Workspace IA/交互、视觉动效、
+  Artifact 工作台、前端体验或视觉回归中的有界工作包；
 - 两个工作包冻结到同一 `frozen_sha`，使用不同 branch/worktree，并且
   `owned_file_scope` 与 `owned_interface_scope` 不重叠；
 - 飞书是工作发现、编排和回告入口，GitHub 是代码、commit、PR、CI、approval 与 merge
@@ -29,14 +33,15 @@ PR 批准者、合并者或发布签发者。首轮试运行采用两个 sibling
 
 | 能力 | 当前状态 | 允许的动作 |
 |---|---|---|
-| 本手册描述的人工双线程流程 | `ACCEPTED-NOT-IMPLEMENTED` | 可用于创建试运行工作包和人工核对 |
+| 本手册描述的人工双线程流程 | `ACCEPTED-NOT-IMPLEMENTED` | 仅在具名人类另行冻结目标、SHA、scope、预算与 dispatch 授权后用于试运行 |
 | Kimi Adapter 的真实 dispatch/control/handoff 与 runtime witness | `DECLARED-NOT-VERIFIED` | 不得仅凭模型名、配置或自然语言自报标成真实 Kimi run |
 | 飞书自动调度、自动控制和自动状态推进 | `DECLARED-NOT-VERIFIED` | 首轮只做人工编排或只读投影，不得声称已自动化 |
 | GitHub commit、PR、CI、approval、merge 事实 | 以 GitHub 实际回读为准 | 不接受飞书单元格或模型总结代替 |
 
-因此，首轮可以立即开展**人工受控试运行**，但在 Kimi Adapter 形成可验证
-`AssistantDispatchReceiptV1` 与 backend/reality witness 之前，不能把 Kimi 的自报运行投影为
-权威 `RUNNING`，也不能形成合格的 `DevelopmentHandoffV1`。
+因此，本手册只把首轮**人工受控试运行**定义到可执行程度，不自行打开执行门。具名人类必须
+另行冻结精确 work item、base SHA、scope、预算、classification、egress 和 dispatch 授权。
+在 Kimi Adapter 形成可验证 `AssistantDispatchReceiptV1` 与 backend/reality witness 之前，
+不能把 Kimi 的自报运行投影为权威 `RUNNING`，也不能形成合格的 `DevelopmentHandoffV1`。
 
 ## 2. 三层责任边界
 
@@ -66,18 +71,26 @@ PR 批准者、合并者或发布签发者。首轮试运行采用两个 sibling
 
 ### 3.2 Codex 机器执行器
 
-Codex 只在自己的 `branch_worktree` 和 `owned_file_scope` 内工作。首轮建议承担一个小而完整、
-可机械验证、不会修改生产 Schema/认证/安全状态机的实现工作包。它可以提交 commit 和
-`DevelopmentHandoffV1`，但不能接受自己的 handoff、批准自己的 PR 或合并。
+Codex 当前使用 `Platform & Integration Lead` 责任 profile，只在自己的 `branch_worktree`
+和 `owned_file_scope` 内工作。其主要责任是先冻结领域/API、observer、runtime 与安全合同和
+合成 fixture，再承担控制内核、后端、安全、Runtime/Sandbox/Tool、Knowledge、Bench、测试、
+部署或集成中的小而完整、可机械验证工作包。它可以提交 commit 和 `DevelopmentHandoffV1`，
+但不能接受自己的 handoff、批准自己的 PR、覆盖 Kimi 已评审的体验方案或自行合并。
 
 ### 3.3 Kimi 机器执行器
 
-Kimi 是与 Codex 并列的机器执行器身份，不是 Codex 的匿名“建议来源”。首轮仅允许以下一种
+Kimi 当前使用 `Workspace Experience Lead` 责任 profile，是与 Codex 并列的机器执行器身份，
+不是 Codex 的匿名“建议来源”。其主要责任是 Workspace IA/交互、三栏工作范式、视觉与动效、
+Artifact 右侧工作台、前端体验、响应式/无障碍和视觉回归。每个 work item 仍只允许以下一种
 边界清晰的任务：
 
 1. 对 Codex 工作包做独立评审，但不形成 GitHub approval；
 2. 在不触及生产权限、认证、安全或数据状态机的独立文件范围内产出 UI/UX 候选；
-3. 在独立文件范围内补充 invalid-first 或回归测试夹具，不修改被测生产接口。
+3. 在独立前端文件范围内补充体验、交互或视觉 invalid-first/回归夹具，不修改被测生产接口。
+
+Kimi 可以提交 `scope-change request`，但在新 work item/version 获得人类重新冻结前不得修改
+Codex 拥有的领域/API 合同、observer/runtime contract、生产 Schema、安全策略、状态机或审计
+语义；后端、安全或非体验测试夹具也必须走该 scope-change 路径。
 
 首轮 Kimi 不承担：
 
@@ -301,8 +314,10 @@ EFFECT_UNKNOWN → RECONCILING
 
 ### 9.3 首轮分工
 
-- [ ] Codex：一个有界实现切片，必须能用 `required_checks[]` 验证；
-- [ ] Kimi：只选择独立评审、UI/UX 候选、测试夹具三者之一；
+- [ ] Codex / Platform & Integration：冻结共享合同与合成 fixture，并承担一个能用
+      `required_checks[]` 验证的有界平台或集成切片；
+- [ ] Kimi / Workspace Experience：只选择一个不触及生产合同的 UI/UX、前端、视觉回归或
+      独立评审切片；
 - [ ] Kimi 不修改 Codex 拥有的文件或 Interface；
 - [ ] 两个 prompt/work package 都写明“不得扩 scope、不得访问 Secret、不得签发或合并”。
 
