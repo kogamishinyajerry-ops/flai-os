@@ -1,6 +1,6 @@
 # `flai-workspace-shell-kimi-001@6A` Codex Cage 构建与冻结提案
 
-状态：`OWNER_APPROVAL_REQUIRED / PREPARATION_ONLY / NOT_FROZEN / NOT_DISPATCHED`
+状态：`OWNER_APPROVAL_REQUIRED / PREPARATION_ONLY / PROPOSAL_REVISION_2_FROZEN / NOT_DISPATCHED`
 
 ## 为什么不直接重派 Kimi
 
@@ -17,6 +17,13 @@ build 或可接受 handoff。失败 session、脏工作树与空证据目录禁�
 
 - Kimi Code 0.29.0 的 `kimi acp` 使用 v1 harness；`[tools]` 全局 allowlist 是 v2-only，
   不能证明模型只看到 `Read / Write / Edit`；
+- v1 不是“所有配置规则按文件顺序全局首命中”，而是固定 policy chain；其中
+  `Read / Grep / Glob / ReadMediaFile / WebSearch / FetchURL / Agent / Skill / select_tools`
+  等工具存在默认批准路径；
+- `resolveExecution` 发生在 permission 之前；显式 deny 只能证明 `execute` 未发生，不能把
+  permission 本身当作 pre-resolve sandbox；
+- v1 的 `ask` 路径在 approval bridge 缺失时存在内部批准分支，所以 cage 必须机械证明
+  `session/request_permission` bridge 已挂载并 fail closed；
 - ACP 只 broker 文本读写，stat/iterdir/glob/readBytes/exec 与 session bootstrap 仍可能走
   LocalKaos；
 - Kimi native auth 与本地工具处于同一进程，不能靠同一个 Seatbelt principal 同时证明
@@ -58,6 +65,17 @@ scripts/verify_all.sh
 明确只供 Codex supervisor/cage 设计读取，不作为未来 Kimi 模型上下文。
 
 ## `@6A` 允许的仓库改动
+
+两个 Git 锚点职责不同，禁止混用：
+
+- `coordinator_authorization_commit`：本 proposal revision 2 的最终提交，只用于
+  `OwnerApprovalReceiptV1`、提案 blob 与授权审计绑定；
+- `execution_source_base_sha`：
+  `47d191cb4799ec57f4739b4d1c709f490481fe77`，唯一用于创建实际 @6A 隔离执行工作树。
+
+执行工作树不得从 coordinator authorization commit 创建，也不得把 coordinator 分支历史
+cherry-pick/merge 到执行分支。coordinator proposal 通过 receipt/digest 被控制面引用；九个
+授权输出和 lazy-`mkdtemp` 前置提交只产生在 execution-source 分支。
 
 ### 1. 唯一行为前置提交
 
@@ -115,10 +133,16 @@ Cage 源码、配置、mock fixture、日志和测试只放在一个由 `mktemp 
 
 - 一个 Kimi ACP 进程；
 - 一个全新、一次性、synthetic mock session；
-- 最多 64 个有序 policy-probe prompts；
+- 最多 64 个有序 prompts，且该总数包含 protocol calibration、policy probes、ask/reject 与
+  cancel fixture；
+- 普通 prompt 最多一个冻结的两请求 provider transaction；cancel fixture 只有首个 provider
+  request，取消后不得再调用 provider；累计 provider requests 不超过 128；
 - provider、Web、MCP 与所有 Kimi 流量只能连接冻结 loopback mock server；
-- 使用 `KIMI_MODEL_*` 合成 provider：`KIMI_MODEL_NAME` 指向 mock model、
-  `KIMI_MODEL_API_KEY` 是 dummy fixture、`KIMI_MODEL_BASE_URL` 指向 loopback；
+- 使用精确 `KIMI_MODEL_*` 合成 provider：
+  `KIMI_MODEL_NAME=mock-kimi`、`KIMI_MODEL_PROVIDER_TYPE=kimi`、
+  `KIMI_MODEL_API_KEY=mock-only`、
+  `KIMI_MODEL_BASE_URL=http://127.0.0.1:<preflight-frozen-port>/v1`、
+  `KIMI_MODEL_CAPABILITIES=tool_use`；
 - 隔离 config 不含其他 provider/model；`session/new.configOptions[id="model"].currentValue`
   必须精确为 v1 合成 alias `__kimi_env_model__`，否则 fail closed；
 - 真实 HOME、真实 KIMI_CODE_HOME、真实 `.agents`、真实 credential、真实 session 状态全部
@@ -132,28 +156,119 @@ Mock upstream 只做两件事：
 2. 以固定响应主动请求每个工具，用 sentinel 文件、进程、socket 与 provider-request count 验证
    deny policy 在 resolve/permission/execute 全链路没有副作用。
 
+Mock provider wire 必须固定为：
+
+- 只接受 loopback `POST /v1/chat/completions`，要求 dummy Bearer header、`stream: true` 与
+  `stream_options.include_usage: true`；其他 method/path/host 全部 fail closed；
+- 首个 protocol-calibration transaction 的第一次 SSE 只返回一个冻结 `Read` tool call；
+  后续 policy transaction 的第一次 SSE 只返回该 probe 的单一冻结 tool call；每次都以
+  `finish_reason: "tool_calls"` 与 `data: [DONE]` 结束；
+- 第二个 request 必须含完全配对的 assistant tool call 与唯一 tool result；第二次 SSE
+  返回非空 `MOCK_PHASE_COMPLETE`、`finish_reason: "stop"` 与 `data: [DONE]`；
+- 每个普通冻结 probe transaction 恰好两个 provider requests；cancel fixture 恰好一个，
+  随后只能走 ACP cancel/permission/prompt completion。普通 transaction 在 supervisor 开启
+  下一个 probe 前出现第三个请求、cancel 后出现第二个 request，或出现多工具、异名工具、
+  未知 tool-call id、参数漂移、缺失 tool result、非 SSE，均为 `NO_GO_FOR_6B`；
+- 该 wire 只证明 pinned binary 的 mock protocol 与 agent loop 可驱动，不证明 K3 身份、
+  真实模型质量、真实 credential 或真实网络策略。
+
 如果 mock protocol 无法驱动固定二进制或任何被禁工具产生副作用，`@6A` 结果是
 `NO_GO_FOR_6B`，不得用第二个 mock session 重试。
 
-### C. v1 deny-policy coverage
+### C. ACP v1 wire 与 transcript receipt
+
+- 固定 `@agentclientprotocol/sdk 0.23.0` 的 UTF-8 NDJSON framing：每个 JSON-RPC 对象恰好
+  一行，`protocolVersion` 必须是整数 `1`；
+- 顺序固定为 `initialize response → session/new response → session/prompt response`；
+  `session/new` 前必须完成 initialize，prompt 前必须取得 opaque `sessionId`；
+- client request id 使用方向化字符串，agent reverse request id 作为独立命名空间记录；
+  duplicate/unknown id、同一对象同时出现 result/error、wrong session/toolCallId 均 fail closed；
+- `__kimi_env_model__` 只证明环境覆盖选中，不构成 backend/model attestation；
+- `session/request_permission` 必须校验冻结 options tuple；允许的 mock response 只有
+  `approve_once`、显式 `reject` 或 `cancelled`，永不选择 `approve_always`；
+- tool terminal update 不等于 turn 完成；只有匹配 `session/prompt` response 的
+  `stopReason` 才封闭该 turn；
+- cancel fixture 必须先观察到 exact Read ask-sentinel 的恰好一个 pending reverse permission
+  request，再发送无 id 的 `session/cancel`，取消该 permission，并最终收到原 prompt 的
+  `stopReason: "cancelled"`；首个 tool-call request 之后不得再次调用 provider；
+- EOF 只能在 pending request 为零后发送；protocol stdout 与 stderr 分离保存。
+
+`@6A` 必须生成 `AcpMockTranscriptReceiptV1`，至少绑定 binary/source/driver/mock digest、
+argv/cwd/env allowlist digest、原始 NDJSON/stderr/transcript digest、逐消息方向与序号、
+session/model-option evidence、prompt completion、tool lifecycle、permission outcome、
+cancel/EOF/exit、所有 parser/order violation，以及
+`SHA256("flai.acp-mock-transcript.v1" || NUL || JCS(core))` fact digest。
+
+### D. v1 permission-policy coverage
 
 因为 v1 tool allowlist 不生效，安全合同改为：
 
-- 启动前从 pinned v1 profile/static inventory 生成 deny seed；首个实际 mock request tool schema
-  必须与该全集精确相等，出现 unknown/extra/missing 时，在 mock 返回任何 tool call 前停止；
+- 启动前从 pinned v1 profile/static inventory 生成并物化完整
+  `static_expected_schema_tools` 与逐工具 deny seed；首个实际 mock request tool schema 必须与
+  该全集精确相等，出现 unknown/extra/missing 时，在 mock 返回任何 tool call 前停止；
 - `Read / Write / Edit` 只在 phase-aware ACP broker 的 exact manifest 内可用；
-- 其余每个实际工具必须有显式 first-match `decision = "deny"`；
-- unknown/custom/MCP 工具默认 deny；
-- `session/request_permission` 只能 `reject/cancelled`，`approve_always` 永不允许；
+- 必须机械证明
+  `actual_schema_tools - {Read, Write, Edit} == explicit_deny_tools`；所有实际注册的非 R/W/E
+  内建工具都必须有显式 deny，不得用“尝试从注册面移除”代替；
+- v1 的 policy chain 以 deny tier 优先；只有同一 decision 内才按规则数组首个命中。每条
+  deny 必须使用 canonical `[[permission.rules]]`，只含运行时支持的 exact
+  `decision / scope / pattern / reason`，禁止依赖配置行全局首命中；
+- `coordinator_rule_id` 不是 Kimi config 字段；它由规则序号和上述四字段的 JCS digest 派生，
+  并绑定解析后的 runtime rule snapshot；
+- 空 hooks、空 MCP、空 plugin、空 custom tool/agent、空 skills 根必须让这些扩展 surface
+  不注册；若它们出现在 actual schema，schema equality gate 立即停止；
+- 禁止最终 `pattern = "*"` deny，因为它会在 deny tier 同时锁死合法工具；
+- unknown/custom/MCP 不得被宣称“天然默认 deny”；必须同时由“未注册/未暴露”、显式
+  synthetic deny probe、Seatbelt、broker 与 proxy 证明不可达；
+- `resolveExecution` 预期可以发生，但必须纯内存且可计数；每个 deny case 必须证明
+  `resolveCount == 1`、`executeCount == 0`、`requestPermissionCount == 0`，并观察到
+  `tool.call` 与 `isError=true` 的 deny `tool.result`；
+- 两个独立的 exact-manifest `Read` sentinel 必须分别配置精确 ask rule：
+  `Read(<control-root>/ask-reject-sentinel)` 与
+  `Read(<control-root>/ask-cancel-sentinel)`；它们不改变“所有实际非 R/W/E 工具显式 deny”
+  的集合；
+- ask/reject probe 必须先观察到恰好一个真实 `session/request_permission`，校验 options 后
+  返回 reject，并证明 `requestPermissionCount == 1`、`executeCount == 0`；approval bridge
+  缺失、unknown option、transport failure 均由 supervisor 判为拒绝并停止；
+- cancel probe 必须在另一个 Read ask-sentinel 的恰好一个 reverse permission request 已
+  pending 后才发送 `session/cancel`，并证明 pending 归零、原 prompt cancelled、无后续
+  provider request；
+- pinned-source 纯内存结构探针必须证明：默认 auto-approve surface 确实存在但不执行；
+  deny 压过 auto/yolo；同工具 allow+deny 仍 deny；allow+ask 进入 ask；这些探针只能证明
+  source-policy semantics，不能替代 pinned binary、Seatbelt 或 broker witness；
 - 配置 deny 不是唯一边界，必须由 Seatbelt、broker、proxy 与 active negative probe 共同证明。
+
+固定源清单如下。`pinned_default_profile_tool_patterns`：
+
+```text
+Read Write Edit Grep Glob Bash TaskList TaskOutput TaskStop
+CronCreate CronList CronDelete ReadMediaFile TodoList Skill WebSearch
+Agent AgentSwarm FetchURL AskUserQuestion EnterPlanMode ExitPlanMode
+CreateGoal GetGoal SetGoalBudget UpdateGoal mcp__*
+```
+
+`pinned_default_approve_tools`：
+
+```text
+Read Grep Glob ReadMediaFile SetTodoList TodoList TaskList TaskOutput
+CronList WebSearch FetchURL Agent AskUserQuestion Skill GetGoal
+SetGoalBudget UpdateGoal select_tools
+```
+
+preflight 必须把 wildcard/dynamic loader 解析成实际 schema 的精确工具名后再启动 Kimi；清单、
+解析代码与结果全部进 digest。default-approve 结构探针必须与上述全集精确相等，不能抽样。
 
 `@6A` 产出逐工具 coverage matrix：
 
 ```text
 tool name
 → 是否出现在真实 v1 schema
+→ 是否在注册面可见
+→ policy chain / coordinator_rule_id / runtime rule snapshot digest
 → resolve 是否发生
+→ resolve / execute / requestPermission count
 → permission decision
+→ tool.call / tool.result witness
 → filesystem/process/network/provider side effect
 → expected deny witness
 → result
@@ -162,10 +277,10 @@ tool name
 Read/Write/Edit 正向 probe 只能作用于 control root 内的 disposable sentinel，mock session 对真实
 repo 的 changed/untracked manifest 必须始终为空。
 
-### D. Bootstrap 与文件边界
+### E. Bootstrap 与文件边界
 
 - 使用 synthetic `HOME`、isolated `KIMI_CODE_HOME`、空 `.agents`、空 skills、空 MCP、空 plugin、
-  空 custom agent；
+  空 custom agent、空 hooks；
 - 真实 HOME 和真实 Kimi home 的 read probe 只允许命中预先创建的非敏感 canary/metadata，
   不得尝试打开任何私有文件；必须被 Seatbelt 拒绝。唯一例外是执行并读取
   `/Users/Zhuanz/.kimi-code/bin/kimi` 本身及其 codesign metadata，禁止同目录枚举；
@@ -180,7 +295,7 @@ repo 的 changed/untracked manifest 必须始终为空。
 - traversal、NUL、symlink、hardlink、TOCTOU、wrong session/phase、oversize、unknown method
   全部主动负测。
 
-### E. Kimi Process Cage
+### F. Kimi Process Cage
 
 使用当前 macOS 的 `sandbox-exec`/Seatbelt，只作为外部合成开发门：
 
@@ -196,7 +311,7 @@ repo 的 changed/untracked manifest 必须始终为空。
 同一 profile 必须用 sentinel 主动证明范围外 read/write、`/bin/sh`、fork/exec、外部 socket
 均为 EPERM。`ps`/`nettop` 只作 witness，不替代 enforcement。
 
-### F. Canonical URL CONNECT Proxy
+### G. Canonical URL CONNECT Proxy
 
 `@6A` 只用 mock upstream 验证未来网络方案，不接真实 provider：
 
@@ -220,7 +335,7 @@ repo 的 changed/untracked manifest 必须始终为空。
 真实个人 Kimi credential symlink 明确禁止。若无法形成不暴露值的精确 secret injection
 reference，`@6B` 不得提出执行授权。
 
-### G. TestRunnerCage
+### H. TestRunnerCage
 
 由 Kimi 编写的 JS/Python 测试视为不可信。`@6A` 必须构建第二个独立 runner cage：
 
@@ -237,7 +352,7 @@ reference，`@6B` 不得提出执行授权。
   control dir；
 - 每次 test 前后绑定六文件 hash 与 changed/untracked manifest。
 
-### H. BuildRunnerCage 与状态机故障注入
+### I. BuildRunnerCage 与状态机故障注入
 
 `BUILD` 使用独立 runner profile：
 
@@ -261,22 +376,39 @@ reference，`@6B` 不得提出执行授权。
 ## `@6A` 必须产出的机械证据
 
 1. binary/version/SHA/codesign 与 v1 engine witness；
-2. 实际 v1 tool inventory 与逐工具 deny-policy coverage matrix；
-3. ACP Kaos bridge/local routing matrix；
-4. synthetic HOME、AGENTS、skills、MCP、plugin、agent 注入负例；
-5. broker path/TOCTOU/hardlink/wrong-phase/session 全负例；
-6. Seatbelt file/process/exec/network 负例；
-7. CONNECT proxy mock-upstream、host pinning 与日志脱敏负例；
-8. dummy credential 与真实 HOME/credential 不可达证明；
-9. TestRunnerCage control/cache/source/network/process 恶意测试负例；
-10. BuildRunnerCage 范围与网络负例；
-11. `StateMachinePreflightReceiptV1` 全部故障注入；
-12. baseline focused unit/E2E 在同一 runner cage 中 green；
-13. cage driver/profile/config/prompt/policy/test 的逐文件 digest；
-14. 完整 `@6B` freeze，不含占位符并通过独立安全、范围、test-first 三轴复核。
+2. mock provider 普通 transaction 的两请求、cancel transaction 的单请求 SSE wire、
+   tool-call/result pairing 与零额外 request 证明；
+3. `AcpMockTranscriptReceiptV1` 的 NDJSON/ID/order/permission/cancel/EOF/fact-digest 全字段；
+4. 实际 v1 tool inventory、policy-chain witness 与逐工具 deny-policy coverage matrix；
+5. 默认批准 surface、approval bridge fail-open、resolve-before-permission 的纯内存负例；
+6. ACP Kaos bridge/local routing matrix；
+7. synthetic HOME、AGENTS、skills、MCP、plugin、agent、hook 注入负例；
+8. broker path/TOCTOU/hardlink/wrong-phase/session 全负例；
+9. Seatbelt file/process/exec/network 负例；
+10. CONNECT proxy mock-upstream、host pinning 与日志脱敏负例；
+11. dummy credential 与真实 HOME/credential 不可达证明；
+12. TestRunnerCage control/cache/source/network/process 恶意测试负例；
+13. BuildRunnerCage 范围与网络负例；
+14. `StateMachinePreflightReceiptV1` 全部故障注入；
+15. baseline focused unit/E2E 在同一 runner cage 中 green；
+16. cage driver/profile/config/prompt/policy/test 的逐文件 digest；
+17. 完整 `@6B` freeze，不含占位符并通过独立安全、范围、test-first 三轴复核。
 
 任何一项失败，最终状态只能是 `NO_GO_FOR_6B`。不得把部分 cage、mock session 或失败测试包装
 成执行就绪。
+
+额外 fail-closed stop 条件：
+
+- malformed/unknown/duplicate/out-of-order ACP frame，wrong session/toolCallId，pending request
+  非零时 EOF，或缺失匹配的 `session/prompt` completion；
+- approval bridge 缺失、出现 `approve_always`、unexpected implicit approval，或 deny case
+  进入 `execute`；
+- ask/reject 或 cancel fixture 未先观测并校验恰好一个 Read-sentinel pending reverse
+  permission request，或 cancel 提前发送；
+- 任一普通 transaction 出现第三个 provider request、cancel 后出现第二个 request、
+  非 loopback/未知 path 请求，或 tool call/result 不能精确配对；
+- hook/MCP/plugin/custom/skill surface 意外注册，或任何被禁工具产生文件、进程、网络、
+  provider side effect。
 
 ## `@6B` 必须冻结的 test-first 顺序
 
@@ -322,16 +454,31 @@ Owner 批准前，Codex 不会：
 
 ## 本次授权的精确效果
 
-JerryKogami 回复：
+泛化的“批准 @6A”或旧 revision 口令不构成授权。Codex 先把本 revision 提交，再向
+JerryKogami 提供已代入实际值的一行 `OwnerApprovalReceiptV1` 文本，格式必须是：
 
-> 批准 @6A Codex Cage 构建与冻结，仅限本地 mock，不创建真实 K3 会话
+> 批准 @6A proposal_ref=flai-workspace-shell-kimi-001@6A-proposal-2 proposal_digest=\<sha256:JCS\> markdown_sha256=\<sha256:hex\> coordinator_commit=\<40hex\>；仅限本地 mock，不创建真实 K3 会话
 
-才授权 Codex：
+只有 JerryKogami 原样回复该行，才授权 Codex。启动前必须把该回复解析成
+`OwnerApprovalReceiptV1`，CAS-on-NULL 持久化到 coordinator control root，并机械证明：
+
+- `proposal_ref` 精确匹配；
+- proposal JSON 去掉 `proposal_digest` 后的 RFC 8785 JCS digest 精确匹配；
+- Markdown SHA-256 精确匹配；
+- coordinator `HEAD` 与 40 位 authorization commit 精确匹配，且该 commit 中两个 proposal
+  blob 与 receipt hashes 一致；
+- 新执行工作树只从
+  `execution_source_base_sha=47d191cb4799ec57f4739b4d1c709f490481fe77` 创建，绝不从
+  coordinator authorization commit 创建；
+- receipt 不重复、不覆盖，任一 mismatch/缺字段/旧 revision 都在创建工作树或进程前停止。
+
+满足上述绑定后，才允许 Codex：
 
 1. 创建全新隔离工作树并形成唯一 lazy-`mkdtemp` 本地前置提交；
 2. 创建一个 coordinator control 目录，使用 stdlib/系统能力构建与负测 cage；
-3. 创建最多一个固定 Kimi ACP 进程和一个 synthetic mock session，最多 64 个 policy-probe
-   prompts，只连 loopback mock provider，使用 dummy key；
+3. 创建最多一个固定 Kimi ACP 进程和一个 synthetic mock session，最多 64 个 ACP prompts
+   （含所有 calibration/policy/ask/cancel fixtures）、最多 128 个 provider requests，只连
+   loopback mock provider，使用 dummy key；
 4. 运行 TestRunnerCage baseline 与恶意 fixture 负例；
 5. 只在上述 9 个精确 `docs/work-items/` 路径写入 `@6A` observation 与完整
    `@6B` freeze/authorization payload；
