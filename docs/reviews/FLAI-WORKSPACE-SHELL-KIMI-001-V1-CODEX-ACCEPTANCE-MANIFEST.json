@@ -1,0 +1,144 @@
+{
+  "schema": "CodexAcceptanceEvidenceV1",
+  "work_item_ref": "flai-workspace-shell-kimi-001@1",
+  "work_item_digest": "sha256:160337f0556ca231a472bff553f2925ce9c35f8b94fdaf79f029ea3858199266",
+  "human_owner": "JerryKogami",
+  "review_authority": "CODEX_READ_ONLY_REVIEW",
+  "human_acceptance_status": "PENDING",
+  "review_verdict": "REWORK_REQUIRED_NOT_ACCEPTABLE",
+  "result_class": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE",
+  "candidate": {
+    "base_sha": "71ecc9eadd457dfe03d2737d112f727b4a2183fa",
+    "final_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "branch": "codex/kimi-workspace-shell-v1",
+    "worktree": "/private/tmp/flai-kimi-workspace-shell.ClhXZm",
+    "patch_sha256": "f7596af1c70396ba222141dd0be57e562419b4b0b0298f069c3b23632094ae38",
+    "changed_file_count": 9,
+    "worktree_clean": true,
+    "pushed": false,
+    "merged": false,
+    "production_changed_interfaces": []
+  },
+  "runtime_evidence": {
+    "kimi_session_ref": "session_1ee76ca9-2967-40b4-98f0-18d19a171910",
+    "requested_model": "kimi-code/k3",
+    "actual_runtime_identity": "DECLARED_NOT_VERIFIED",
+    "assistant_dispatch_receipt": null,
+    "handoff_kind": "DevelopmentHandoffV1_DRAFT_IN_LOCAL_SESSION_WIRE"
+  },
+  "positive_checks": {
+    "file_scope": "PASS",
+    "production_boundary": "PASS",
+    "source_static_network_scan": "PASS",
+    "unit_tests": {
+      "status": "PASS",
+      "passed": 204,
+      "failed": 0,
+      "matrix_cases": 96
+    },
+    "build": {
+      "status": "PASS",
+      "dist_index_html": true,
+      "dist_workspace_shell_html": false
+    },
+    "visual_e2e_execution": {
+      "status": "PASS_WITH_COVERAGE_GAPS",
+      "passed": 59,
+      "failed": 0,
+      "screenshot_count": 17
+    },
+    "full_repository_gate_at_same_sha": {
+      "status": "PASS",
+      "python_tests": 1063,
+      "node_tests": 204,
+      "legacy_browser_suites": 19
+    }
+  },
+  "blocking_findings": [
+    {
+      "id": "WSK3-P1-URL-CONTRACT",
+      "severity": "P1",
+      "status": "OPEN",
+      "summary": "Frozen query is reality=REAL|MOCK|TEST|UNKNOWN, but implementation and E2E use form=; missing reality silently renders REAL instead of fail-closed UNKNOWN."
+    },
+    {
+      "id": "WSK3-P1-DOM-CONTRACT",
+      "severity": "P1",
+      "status": "OPEN",
+      "summary": "Only action-glyph and reality-badge exist from the ten frozen data-testid values."
+    },
+    {
+      "id": "WSK3-P1-TRUST-COLORS",
+      "severity": "P1",
+      "status": "OPEN",
+      "summary": "The candidate replaces the locked clay work slot with indigo and introduces a synthetic trust slot."
+    },
+    {
+      "id": "WSK3-P1-INVALID-HISTORY",
+      "severity": "P1",
+      "status": "OPEN",
+      "summary": "observation-invalid fails closed in Focus but still renders the raw invalid event in execution history."
+    },
+    {
+      "id": "WSK3-P1-NETWORK-LEDGER",
+      "severity": "P1",
+      "status": "OPEN",
+      "summary": "The DOM network ledger resets on every navigation; an earlier denied fetch becomes zero by the final assertion, so the E2E can report a false green."
+    },
+    {
+      "id": "WSK3-P1-RAIL-STATE",
+      "severity": "P1",
+      "status": "OPEN",
+      "summary": "Rail status is hard-coded and can show completed while the same current task is running."
+    }
+  ],
+  "non_blocking_findings": [
+    {
+      "id": "WSK3-P2-NOTES-COUNT",
+      "severity": "P2",
+      "status": "OPEN",
+      "summary": "NOTES says the scope union contains eight files; the committed diff contains nine."
+    },
+    {
+      "id": "WSK3-P2-DISPATCH-NETWORK",
+      "severity": "P2",
+      "status": "OPEN",
+      "summary": "The executor ran npm ci without offline mode; external network effect is UNKNOWN. Later offline verification does not prove the earlier install had zero egress."
+    },
+    {
+      "id": "WSK3-P2-READ-SCOPE",
+      "severity": "P2",
+      "status": "OPEN",
+      "summary": "The full Kimi tool log includes successful reads of Stage C main.js, stage-c.html and NOTES.md outside the coordinator read-only allowlist."
+    },
+    {
+      "id": "WSK3-P2-HANDOFF-DURABILITY",
+      "severity": "P2",
+      "status": "OPEN",
+      "summary": "A complete draft handoff exists in the local Kimi wire log but is not persisted as a coordinator-owned durable handoff artifact."
+    }
+  ],
+  "negative_probe_evidence": {
+    "reality_mock_rendered_form": "REAL",
+    "reality_fake_rendered_form": "REAL",
+    "actual_supported_query": "form",
+    "active_border_color": "rgb(61, 79, 158)",
+    "invalid_observation_history_count": 1,
+    "network_counter_before_navigation": {
+      "fetch": 1
+    },
+    "network_counter_after_navigation": {
+      "fetch": 0
+    }
+  },
+  "screenshots": {
+    "directory": "/private/tmp/flai-workspace-shell-codex-rerun.id8whk",
+    "count": 17,
+    "bundle_sha256": "1571bb0143e2dc619137530de0ab09c375d12b24912fbdf8ec762e9d0daa17e2",
+    "key_evidence": [
+      "/private/tmp/flai-workspace-shell-codex-rerun.id8whk/core-cfd-running.png",
+      "/private/tmp/flai-workspace-shell-codex-rerun.id8whk/docx-observation-invalid.png"
+    ]
+  },
+  "recommended_next_step": "Freeze a new flai-workspace-shell-kimi-001@2 rework payload that closes all P1 findings, then rerun the same independent review before JerryKogami accepts."
+}
