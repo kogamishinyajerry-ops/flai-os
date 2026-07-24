@@ -1,0 +1,58 @@
+{
+  "schema_version": "ExecutorEnvironmentV1",
+  "work_item_ref": "flai-workspace-shell-kimi-001@3",
+  "work_item_digest": "sha256:150978a00d1aa6b6539b638db66053c4d1c1cd6f0fefce9075f3299ec5a6c768",
+  "authorization_proposal_digest": "sha256:f75049d9554d1d6db23403001ee4685be3996c6f146db441e194c91e1ae8fcda",
+  "captured_at_utc": "2026-07-24T15:13:43Z",
+  "environment_class": "EXTERNAL_DEVELOPMENT",
+  "fixture_class": "SYNTHETIC_ONLY",
+  "internal_data_access": "NONE",
+  "internal_runtime_dependency": "NONE",
+  "source_candidate_class": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE",
+  "executor": {
+    "kind": "kimi-cli",
+    "path": "/Users/Zhuanz/.kimi-code/bin/kimi",
+    "version": "0.29.0",
+    "binary_sha256": "5cccf53604f20c5499ea10c3094298f49a1ad59fa90cddd9fd7e0ba44815fdd3",
+    "provider_probe": "managed:kimi-code type=kimi models=3 source=oauth",
+    "provider_probe_default_model": "kimi-code/k3"
+  },
+  "source": {
+    "worktree": "/private/tmp/flai-kimi-workspace-shell-v3.MHDHC6",
+    "branch": "codex/kimi-workspace-shell-v3",
+    "base_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "git_status_before_dispatch": "CLEAN"
+  },
+  "frontend_dependencies": {
+    "provisioning_command": "cd frontend && npm ci --offline --no-audit --no-fund",
+    "provisioning_owner": "Codex coordinator",
+    "provisioning_result": "PASS; 57 packages added; ignored node_modules only",
+    "network_policy": "OFFLINE_ONLY",
+    "package_json_sha256": "bcaf55fc7f36e85e203bd5c3ca6c73acb55bb1472edb7e558d8fcab6416fddf7",
+    "package_lock_sha256": "c2dd2e59b4b8ba3afd8429fc28d7cbecd3230ba55364b5cf5d95c122c830ccbe"
+  },
+  "browser_test_runtime": {
+    "probe_command": "uv run --offline --no-project --with playwright python - <local launch probe>",
+    "probe_result": "PASS",
+    "chromium_version": "149.0.7827.55",
+    "network_policy": "OFFLINE_ONLY"
+  },
+  "screenshot_evidence": {
+    "directory": "/private/tmp/flai-kimi-workspace-shell-v3-evidence.C5A3NE",
+    "location_class": "REPO_EXTERNAL_COORDINATOR_OWNED",
+    "state_at_freeze": "EXISTS_EMPTY",
+    "executor_preflight": "EXACT_PATH_AND_EMPTY_REQUIRED"
+  },
+  "skills": {
+    "directory": "/private/tmp/flai-kimi-empty-skills-v3.haGvfE",
+    "state_at_freeze": "EXISTS_EMPTY",
+    "auto_discovered_skills": "DISABLED_BY_EXPLICIT_SKILLS_DIR"
+  },
+  "secret_handling": {
+    "secret_values_recorded": false,
+    "secrets_stack_accessed": false,
+    "internal_credentials_accessed": false
+  },
+  "provision_digest_profile": "sha256-rfc8785-jcs-excluding_provision_digest",
+  "provision_digest": "sha256:0e061f2972a2f1131ae93cde2edcf844bbee06cd39832d1c086dd201dafd6410"
+}

@@ -1,0 +1,253 @@
+{
+  "work_item_id": "flai-workspace-shell-kimi-001",
+  "work_item_version": 3,
+  "work_item_digest": "sha256:150978a00d1aa6b6539b638db66053c4d1c1cd6f0fefce9075f3299ec5a6c768",
+  "digest_profile": "sha256-rfc8785-jcs-excluding_work_item_digest",
+  "digest_authority": "OWNER_APPROVED_LOCAL_CONTENT_FREEZE_NOT_PROTOCOL_DOMAIN_SEPARATED",
+  "human_owner": "JerryKogami",
+  "owner_instruction_text": "批准 @3 最小重派",
+  "owner_instruction_sha256": "fb09039be704ad62c918c23ed82aa2ecb605c1fe67be3df252e665cfc2b811f1",
+  "frozen_at_utc": "2026-07-24T15:13:43Z",
+  "authorization_proposal_ref": "flai-workspace-shell-kimi-001@3-proposal-1",
+  "authorization_proposal_digest": "sha256:f75049d9554d1d6db23403001ee4685be3996c6f146db441e194c91e1ae8fcda",
+  "authorized_project_scope_ref": "github:kogamishinyajerry-ops/flai-os",
+  "classification": "EXTERNAL_DEVELOPMENT_SYNTHETIC_ONLY",
+  "lineage": {
+    "implementation_base_ref": "flai-workspace-shell-kimi-001@1",
+    "implementation_base_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "v2_work_item_digest": "sha256:72b78143441303b170b124de0e24f836a8b289ee3ddc86fa9707c888ae425b19",
+    "v2_dispatch_observation_digest": "sha256:a250e37b4868d6a00ff5829d112203cf9f4eda3ef9319692cc0125b8087716d2",
+    "v2_result": "STOPPED_FAIL_CLOSED_SCOPE_VIOLATION_NO_SOURCE_CHANGE_NO_HANDOFF",
+    "v2_session_ref": "session_f55a6882-e7cb-4c8a-b465-04d0bba4d950",
+    "v2_session_reuse": "DENY"
+  },
+  "source_commitment_ref": "git:47d191cb4799ec57f4739b4d1c709f490481fe77",
+  "outcome_contract_ref": "git:71ecc9eadd457dfe03d2737d112f727b4a2183fa:docs/design/WORKSPACE-SHELL-V1-BLUEPRINT.md",
+  "prompt_template_ref": "docs/work-items/flai-workspace-shell-kimi-001-v3.prompt.md",
+  "prompt_template_sha256": "efec77ba40c1c621c27932ebb574d46f269f4dafa5d18913b59be96c969b2db5",
+  "prompt_rendering": {
+    "template_encoding": "UTF-8",
+    "replacement_token": "${WORK_ITEM_DIGEST}",
+    "replacement_value_source": "top-level work_item_digest",
+    "replacement_count": 1,
+    "newline_policy": "PRESERVE_TEMPLATE_BYTES",
+    "other_substitutions": "DENY",
+    "rendered_prompt_sha256_location": "LOCAL_DISPATCH_PREPARATION_RECORD"
+  },
+  "owned_file_scope": [
+    "frontend/src/prototypes/workspace-shell/WorkspaceShellPrototype.vue",
+    "frontend/src/prototypes/workspace-shell/workspace-view.js",
+    "frontend/src/prototypes/workspace-shell/workspace-view.test.js",
+    "frontend/src/prototypes/workspace-shell/workspace-shell.css",
+    "frontend/e2e/workspace_shell_prototype_acceptance.py",
+    "frontend/src/prototypes/workspace-shell/NOTES.md"
+  ],
+  "read_only_scope": [
+    "docs/agents/kimi-k3-workspace-shell-pilot.md",
+    "docs/design/WORKSPACE-SHELL-V1-BLUEPRINT.md",
+    "frontend/src/prototypes/stage-c/stage-c.css",
+    "frontend/src/prototypes/stage-c/StageCWorkbenchPrototype.vue",
+    "frontend/src/prototypes/stage-c/observer-contract.js",
+    "frontend/src/prototypes/workspace-shell/fixtures.js",
+    "frontend/workspace-shell.html",
+    "frontend/src/prototypes/workspace-shell/main.js",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "frontend/vite.config.js",
+    "scripts/verify_all.sh"
+  ],
+  "read_scope_policy": {
+    "agent_context_allowlist_is_exhaustive": true,
+    "transitive_read_exception": "DENY",
+    "approved_verification_process_transitive_runtime_reads": "ALLOW_WITHOUT_SOURCE_INSPECTION",
+    "repo_wide_search": "DENY"
+  },
+  "coordinator_owned_control_artifacts": [
+    "docs/work-items/flai-workspace-shell-kimi-001-v3-authorization-proposal.md",
+    "docs/work-items/flai-workspace-shell-kimi-001-v3.authorization-proposal.json",
+    "docs/work-items/flai-workspace-shell-kimi-001-v3.prompt.md",
+    "docs/work-items/flai-workspace-shell-kimi-001-v3.freeze.json",
+    "docs/work-items/flai-workspace-shell-kimi-001-v3.executor-environment.json",
+    "docs/work-items/flai-workspace-shell-kimi-001-v3.dispatch-preparation.json",
+    "docs/work-items/flai-workspace-shell-kimi-001-v3.dispatch-observation.json"
+  ],
+  "rework_findings": [
+    {
+      "finding_id": "WSK3-P1-URL-CONTRACT",
+      "severity": "P1",
+      "required_outcome": "Use only reality=REAL|MOCK|TEST|UNKNOWN; missing, empty, mixed-case, invalid and form-only input fail closed to UNKNOWN.",
+      "negative_control": "The @1 implementation fails reality=MOCK, reality=FAKE, reality=, reality=mock, missing reality and form=MOCK assertions."
+    },
+    {
+      "finding_id": "WSK3-P1-DOM-CONTRACT",
+      "severity": "P1",
+      "required_outcome": "Expose all ten exact frozen data-testid values without removing required internal interaction selectors.",
+      "negative_control": "The @1 implementation exposes only action-glyph and reality-badge from the frozen ten-value contract."
+    },
+    {
+      "finding_id": "WSK3-P1-TRUST-COLORS",
+      "severity": "P1",
+      "required_outcome": "Restore clay work, REAL green, human-sign teal, true-failure red and unverified amber token semantics; synthetic unsigned UI never renders green or teal.",
+      "negative_control": "The @1 running computed color rgb(61,79,158) and data-slot=synthetic fail."
+    },
+    {
+      "finding_id": "WSK3-P1-INVALID-HISTORY",
+      "severity": "P1",
+      "required_outcome": "Every projected unknown case across the 96 fixtures plus stale has no raw history or sensitive event text.",
+      "negative_control": "The @1 observation-invalid page renders one rejected raw history row containing the work-object title."
+    },
+    {
+      "finding_id": "WSK3-P1-NETWORK-LEDGER",
+      "severity": "P1",
+      "required_outcome": "Persist separate application-attempt counters across navigation and prove the detector with an isolated one-fetch negative control.",
+      "negative_control": "The @1 ledger resets fetch from one to zero after navigation."
+    },
+    {
+      "finding_id": "WSK3-P1-RAIL-STATE",
+      "severity": "P1",
+      "required_outcome": "Selected Rail state and trust derive from the effective execution projection across three workflows by eight states.",
+      "negative_control": "The @1 cfd running page says completed in the selected Rail item."
+    }
+  ],
+  "owned_interface_scope": [
+    "Prototype query contract is reality=REAL|MOCK|TEST|UNKNOWN; no form alias; missing or invalid fails closed to UNKNOWN.",
+    "Prototype exact data-testid contract is workspace-shell, workspace-rail, continuous-work-surface, focus-surface, workspace-composer, action-glyph, reality-badge, execution-state, instruction-queue and delivery-state.",
+    "Prototype trust presentation preserves clay #b4562f, REAL green #1e7d46, human-sign teal #0e7c7b, true-failure red #b3352c and unverified amber #986810; synthetic never renders green or teal.",
+    "Unknown observer projection produces no raw event history.",
+    "Browser acceptance uses a cross-navigation application-attempt ledger plus an isolated active denied-fetch negative control.",
+    "Selected Rail item state/trust derives from the current effective observer projection.",
+    "No production observer contract, runtime adapter, API, Schema, authentication, ACL, classification, signing, delivery, router, store, Vite production input, package, ADR or script interface changes."
+  ],
+  "frozen_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+  "branch_worktree": "codex/kimi-workspace-shell-v3@/private/tmp/flai-kimi-workspace-shell-v3.MHDHC6",
+  "issue_ref": null,
+  "pr_ref": null,
+  "required_checks": [
+    "git merge-base --is-ancestor 47d191cb4799ec57f4739b4d1c709f490481fe77 HEAD",
+    "git diff --check",
+    "git status --porcelain=v1 --untracked-files=all",
+    "git diff --name-only 47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "Executor: cd frontend && node --test",
+    "Executor: cd frontend && npm run build",
+    "Executor: test -f frontend/dist/index.html && test ! -e frontend/dist/workspace-shell.html",
+    "Executor: UV_OFFLINE=1 Playwright workspace-shell E2E with WORKSPACE_SHELL_SHOTS=/private/tmp/flai-kimi-workspace-shell-v3-evidence.C5A3NE",
+    "Coordinator: complete tool-call, file-scope and network-command audit",
+    "Coordinator: independent URL, ten-testid, 96-plus-stale history, network negative-control, Rail 3x8 and computed trust-color probes",
+    "Coordinator: fresh visual E2E review at 1440, 1280, reduced-motion, keyboard, IME, queue and exception states",
+    "Coordinator: UV_OFFLINE=1 bash scripts/verify_all.sh in a disposable verification worktree",
+    "Coordinator: DevelopmentHandoffV1 and JerryKogami acceptance package"
+  ],
+  "required_reviewer": "Codex Platform and Integration independent re-review; JerryKogami is sole acceptance authority",
+  "concurrency_budget": {
+    "max_active_runs": 1,
+    "max_new_sessions": 1
+  },
+  "time_budget": {
+    "max_wall_clock_minutes": 90,
+    "enforcement": "COORDINATOR_PROCESS_TIMEOUT",
+    "continuation": "REQUIRES_NEW_OWNER_AUTHORIZATION"
+  },
+  "token_or_cost_budget": {
+    "max_incremental_cost_cny": 0,
+    "access_scope": "EXISTING_KIMI_MANAGED_ACCESS_ONLY",
+    "token_cap": "NOT_EXPOSED_BY_KIMI_CLI_0_29_0",
+    "auto_tool_step_cap": "NOT_EXPOSED_BY_KIMI_CLI_0_29_0",
+    "stop_on_provider_limit": true,
+    "accounting_assurance": "NO_TOKEN_OR_COST_RECEIPT_AVAILABLE_FROM_CURRENT_CLI"
+  },
+  "allowed_tools": [
+    "kimi-code-cli@0.29.0",
+    "local-git",
+    "repository-approved-file-editor",
+    "node",
+    "npm-existing-node_modules-only",
+    "uv-offline",
+    "playwright-local-chromium",
+    "local-shell"
+  ],
+  "allowed_egress": {
+    "executor_model_transport": {
+      "mode": "ALLOWLISTED_PROVIDER_ONLY",
+      "provider": "managed:kimi-code",
+      "requested_model": "kimi-code/k3",
+      "purpose": "MODEL_INFERENCE_ONLY"
+    },
+    "source_context_egress": {
+      "mode": "OWNED_AND_EXHAUSTIVE_READ_ONLY_SCOPE_ONLY",
+      "classification": "EXTERNAL_DEVELOPMENT_SYNTHETIC_ONLY"
+    },
+    "implementation_runtime_network": "DENY",
+    "browser_test_network": "FIXED_LOOPBACK_BOOTSTRAP_ONLY",
+    "enforcement_status": "PROMPT_SCOPE_PLUS_UPDATE_AND_TELEMETRY_DISABLE_ENV_PLUS_LIVE_AND_POST_RUN_TOOL_CALL_AUDIT_NO_OS_NETWORK_SANDBOX",
+    "explicitly_denied": [
+      "PACKAGE_INSTALL",
+      "PUBLIC_REGISTRY",
+      "OPEN_WEBUI",
+      "OPENHANDS",
+      "SECRETS",
+      "SECRETS_STACKDOCKER",
+      "INTERNAL_DATA",
+      "NON_WHITELIST_SOURCE_CONTEXT",
+      "EXTERNAL_FETCH_XHR_WEBSOCKET_EVENTSOURCE_BEACON_SERVICE_WORKER"
+    ]
+  },
+  "executor_qualification": {
+    "requested_executor": "kimi-code/k3",
+    "client": "kimi-code-cli",
+    "client_path": "/Users/Zhuanz/.kimi-code/bin/kimi",
+    "client_sha256": "5cccf53604f20c5499ea10c3094298f49a1ad59fa90cddd9fd7e0ba44815fdd3",
+    "client_version": "0.29.0",
+    "actual_runtime_identity": "REQUIRES_DISPATCH_OBSERVATION",
+    "qualification_scope": "WORKSPACE_PRESENTATION_REWORK_ONLY"
+  },
+  "executor_environment": {
+    "node_modules_provision": "COORDINATOR_NPM_CI_OFFLINE",
+    "package_json_sha256": "bcaf55fc7f36e85e203bd5c3ca6c73acb55bb1472edb7e558d8fcab6416fddf7",
+    "package_lock_sha256": "c2dd2e59b4b8ba3afd8429fc28d7cbecd3230ba55364b5cf5d95c122c830ccbe",
+    "chromium_version": "149.0.7827.55",
+    "screenshot_evidence_dir": "/private/tmp/flai-kimi-workspace-shell-v3-evidence.C5A3NE",
+    "screenshot_evidence_dir_state": "EXISTS_EMPTY_OUTSIDE_REPOSITORY_AT_FREEZE",
+    "skills_dir": "/private/tmp/flai-kimi-empty-skills-v3.haGvfE",
+    "skills_dir_state": "EMPTY_AT_FREEZE"
+  },
+  "dispatch_configuration": {
+    "session_mode": "NEW_SESSION_ONLY",
+    "resume_session": "DENY",
+    "denied_session_ref": "session_f55a6882-e7cb-4c8a-b465-04d0bba4d950",
+    "additional_directories": "NONE",
+    "permission_mode": "HEADLESS_PROMPT_IMPLICIT_AUTO",
+    "output_format": "stream-json",
+    "disable_auto_update": true,
+    "disable_telemetry": true
+  },
+  "acceptance_criteria": [
+    "All six frozen P1 negative controls fail against @1 behavior and pass after the minimal rework.",
+    "The 96-case matrix remains present and passes; every projected unknown case plus stale has empty history.",
+    "Selected Rail agrees with effective execution projection across all three workflows and eight frozen states.",
+    "Existing visual, accessibility, queue, motion, fail-closed and build-boundary checks remain green.",
+    "Final diff contains only the six authorized files and introduces no dependency or production interface.",
+    "No application or external network request is introduced; the detector retains an attempted call across navigation.",
+    "DevelopmentHandoffV1 is complete and independently reviewed.",
+    "Result remains unpushed, unmerged, unaccepted, unsigned and SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE until JerryKogami accepts."
+  ],
+  "stop_conditions": [
+    "Preflight base, branch, worktree, dependency, clean-state, screenshot-directory or skills-directory mismatch",
+    "Any desired source-context read outside owned_file_scope plus exhaustive read_only_scope",
+    "Any required write outside owned_file_scope",
+    "Any package installation, dependency, production interface, real data, secret or non-loopback implementation network requirement",
+    "Any OpenWebUI, OpenHands, secrets-stackdocker, internal data, external repository or external URL access",
+    "Any need to weaken fail-closed, locked trust colors, synthetic labeling, human-signoff boundaries or an active negative control",
+    "Concurrent modification of an owned target file",
+    "An attributable required-check failure that cannot be fixed in scope",
+    "The 90-minute coordinator wall-clock limit is reached",
+    "The provider reports a token, rate, account or billing limit",
+    "Any new paid resource or incremental infrastructure spend is required"
+  ],
+  "current_blocker": null,
+  "lifecycle_state": "READY",
+  "integration_status": "NOT_INTEGRATED",
+  "authorization_evidence": "OWNER_CHAT_INSTRUCTION_CONTENT_BOUND_NOT_AUTHENTICATED_RECEIPT",
+  "dispatch_receipt_status": "PENDING",
+  "authority_projection_limit": "EFFECT_UNKNOWN_UNTIL_VERIFIABLE_ASSISTANT_DISPATCH_RECEIPT_AND_BACKEND_WITNESS",
+  "result_class": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE"
+}
