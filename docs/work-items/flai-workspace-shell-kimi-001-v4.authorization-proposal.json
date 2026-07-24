@@ -1,0 +1,116 @@
+{
+  "schema_version": "WorkItemAuthorizationProposalV1",
+  "proposal_ref": "flai-workspace-shell-kimi-001@4-proposal-1",
+  "proposal_status": "OWNER_APPROVAL_REQUIRED_NOT_FROZEN_NOT_DISPATCHED",
+  "human_owner": "JerryKogami",
+  "requested_owner_authorization_text": "批准 @4 最小执行协议返工",
+  "prepared_at_utc": "2026-07-24T15:49:28Z",
+  "human_readable_ref": "docs/work-items/flai-workspace-shell-kimi-001-v4-authorization-proposal.md",
+  "human_readable_sha256": "4f50e750d8afe23b3513c7aaadb2d933e8ba5050fd2b82097a44c680dda59b24",
+  "project": "github:kogamishinyajerry-ops/flai-os",
+  "environment": "EXTERNAL_DEVELOPMENT",
+  "fixtures": "SYNTHETIC_ONLY",
+  "internal_data_access": "NONE",
+  "internal_runtime_dependency": "NONE",
+  "result_class_if_successful": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE",
+  "rework_lineage": {
+    "source_work_item": "flai-workspace-shell-kimi-001@3",
+    "source_work_item_digest": "sha256:150978a00d1aa6b6539b638db66053c4d1c1cd6f0fefce9075f3299ec5a6c768",
+    "dispatch_observation_digest": "sha256:9100cf8d0b1ce805d0ddd5a6029d05e850243d6146a3d20788d707411d1f0ffa",
+    "source_result": "STOPPED_FAIL_CLOSED_NON_WHITELIST_TEMP_WRITE_NO_CANDIDATE_NO_HANDOFF",
+    "source_session_ref": "session_8029f845-0add-4038-87fe-9543983100a5",
+    "source_session_reuse": "DENY",
+    "source_dirty_worktree_reuse": "DENY"
+  },
+  "exact_delta_from_v3": {
+    "p1_findings_changed": false,
+    "source_write_scope_changed": false,
+    "source_read_scope_changed": false,
+    "production_interface_scope_changed": false,
+    "dependency_scope_changed": false,
+    "execution_protocol_changes": [
+      "Executor test, build and audit output must remain on tool stdout or stderr.",
+      "Executor commands may not use output redirection, tee, or temporary result files.",
+      "No general temporary-directory or scratch-file exception is added.",
+      "The already-required npm build may create only ignored frontend/dist verification output.",
+      "The already-required visual E2E may create only files under the fixed screenshot directory."
+    ]
+  },
+  "six_p1_findings": [
+    "WSK3-P1-URL-CONTRACT",
+    "WSK3-P1-DOM-CONTRACT",
+    "WSK3-P1-TRUST-COLORS",
+    "WSK3-P1-INVALID-HISTORY",
+    "WSK3-P1-NETWORK-LEDGER",
+    "WSK3-P1-RAIL-STATE"
+  ],
+  "exclusive_source_write_scope": [
+    "frontend/src/prototypes/workspace-shell/WorkspaceShellPrototype.vue",
+    "frontend/src/prototypes/workspace-shell/workspace-view.js",
+    "frontend/src/prototypes/workspace-shell/workspace-view.test.js",
+    "frontend/src/prototypes/workspace-shell/workspace-shell.css",
+    "frontend/e2e/workspace_shell_prototype_acceptance.py",
+    "frontend/src/prototypes/workspace-shell/NOTES.md"
+  ],
+  "exhaustive_read_only_scope": [
+    "docs/agents/kimi-k3-workspace-shell-pilot.md",
+    "docs/design/WORKSPACE-SHELL-V1-BLUEPRINT.md",
+    "frontend/src/prototypes/stage-c/stage-c.css",
+    "frontend/src/prototypes/stage-c/StageCWorkbenchPrototype.vue",
+    "frontend/src/prototypes/stage-c/observer-contract.js",
+    "frontend/src/prototypes/workspace-shell/fixtures.js",
+    "frontend/workspace-shell.html",
+    "frontend/src/prototypes/workspace-shell/main.js",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "frontend/vite.config.js",
+    "scripts/verify_all.sh"
+  ],
+  "verification_runtime_write_scope": {
+    "build_output": "frontend/dist/** only, generated solely by the required npm run build",
+    "visual_evidence": "/private/tmp/flai-kimi-workspace-shell-v4-evidence.LzDXSx/** only, generated solely by the required visual E2E",
+    "temporary_logs_and_results": "DENY",
+    "generic_tmp_or_scratch": "DENY"
+  },
+  "prepared_execution_target": {
+    "base_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "branch": "codex/kimi-workspace-shell-v4",
+    "worktree": "/private/tmp/flai-kimi-workspace-shell-v4.2ZYv0h",
+    "worktree_status": "CLEAN_AT_PROPOSAL",
+    "frontend_node_modules": "COORDINATOR_PROVISIONED_OFFLINE",
+    "package_json_sha256": "bcaf55fc7f36e85e203bd5c3ca6c73acb55bb1472edb7e558d8fcab6416fddf7",
+    "package_lock_sha256": "c2dd2e59b4b8ba3afd8429fc28d7cbecd3230ba55364b5cf5d95c122c830ccbe",
+    "screenshot_directory": "/private/tmp/flai-kimi-workspace-shell-v4-evidence.LzDXSx",
+    "skills_directory": "/private/tmp/flai-kimi-empty-skills-v4.uiFQyN"
+  },
+  "dispatch_policy_if_authorized": {
+    "executor": "kimi-code/k3",
+    "new_session_only": true,
+    "max_new_sessions": 1,
+    "max_active_runs": 1,
+    "max_wall_clock_minutes": 90,
+    "incremental_cost_cny": 0,
+    "package_install": "DENY",
+    "implementation_runtime_network": "DENY",
+    "browser_network": "FIXED_LOOPBACK_BOOTSTRAP_ONLY",
+    "secrets_internal_data_openhands_openwebui": "DENY",
+    "tool_calls": "LIVE_AUDIT_AND_POST_RUN_COMPLETE_AUDIT",
+    "authority": "NON_AUTHORITATIVE_UNTIL_CODEX_REVIEW_AND_JERRYKOGAMI_ACCEPTANCE"
+  },
+  "codex_independent_review_if_candidate_exists": [
+    "Exact changed-file scope and production-boundary review",
+    "Complete Kimi tool-call and network audit",
+    "Independent URL and exact ten-data-testid reverse probes",
+    "Independent 96-case plus stale unknown-history review",
+    "Independent cross-navigation network-ledger active negative control",
+    "Independent three-workflow by eight-state Rail projection consistency probe",
+    "Computed trust-color and unreachable green or teal review",
+    "Fresh visual E2E at 1440, 1280, reduced-motion, keyboard, IME, queue and exception states",
+    "Node tests and production build boundary",
+    "Full scripts/verify_all.sh in a disposable verification worktree",
+    "DevelopmentHandoffV1 completeness and JerryKogami acceptance package"
+  ],
+  "authorization_effect": "Owner approval authorizes generation and freeze of the full @4 payload and one fresh Kimi dispatch; it does not authorize merge, push, production integration, human signoff, internal release, or Schema change.",
+  "proposal_digest_profile": "sha256-rfc8785-jcs-excluding_proposal_digest",
+  "proposal_digest": "sha256:9bc6062c777d0f8c22ff35decc0e21b52c671c0f3627cc65fcd2be66509fee0d"
+}
