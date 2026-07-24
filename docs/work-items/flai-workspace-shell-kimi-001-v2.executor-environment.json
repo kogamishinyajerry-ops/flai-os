@@ -1,0 +1,50 @@
+{
+  "schema_version": "ExecutorEnvironmentV1",
+  "work_item_ref": "flai-workspace-shell-kimi-001@2",
+  "work_item_digest": "sha256:72b78143441303b170b124de0e24f836a8b289ee3ddc86fa9707c888ae425b19",
+  "captured_at_utc": "2026-07-24T14:28:23Z",
+  "environment_class": "EXTERNAL_DEVELOPMENT",
+  "fixture_class": "SYNTHETIC_ONLY",
+  "internal_data_access": "NONE",
+  "internal_runtime_dependency": "NONE",
+  "source_candidate_class": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE",
+  "executor": {
+    "kind": "kimi-cli",
+    "path": "/Users/Zhuanz/.kimi-code/bin/kimi",
+    "version": "0.29.0",
+    "binary_sha256": "5cccf53604f20c5499ea10c3094298f49a1ad59fa90cddd9fd7e0ba44815fdd3"
+  },
+  "source": {
+    "worktree": "/private/tmp/flai-kimi-workspace-shell-v2.eZNz49",
+    "branch": "codex/kimi-workspace-shell-v2",
+    "base_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "git_status_before_dispatch": "CLEAN"
+  },
+  "frontend_dependencies": {
+    "provisioning_command": "cd frontend && npm ci --offline --no-audit --no-fund",
+    "provisioning_owner": "Codex coordinator",
+    "provisioning_result": "PASS; 57 packages added; ignored node_modules only",
+    "network_policy": "OFFLINE_ONLY",
+    "package_json_sha256": "bcaf55fc7f36e85e203bd5c3ca6c73acb55bb1472edb7e558d8fcab6416fddf7",
+    "package_lock_sha256": "c2dd2e59b4b8ba3afd8429fc28d7cbecd3230ba55364b5cf5d95c122c830ccbe"
+  },
+  "browser_test_runtime": {
+    "probe_command": "uv run --offline --no-project --with playwright python - <local launch probe>",
+    "probe_result": "PASS",
+    "chromium_version": "149.0.7827.55",
+    "network_policy": "OFFLINE_ONLY"
+  },
+  "screenshot_evidence": {
+    "directory": "/private/tmp/flai-workspace-shell-v2-evidence.ti4aa2",
+    "location_class": "REPO_EXTERNAL_COORDINATOR_OWNED",
+    "state_at_freeze": "EXISTS_EMPTY",
+    "executor_preflight": "EXACT_PATH_AND_EMPTY_REQUIRED"
+  },
+  "secret_handling": {
+    "secret_values_recorded": false,
+    "secrets_stack_accessed": false,
+    "internal_credentials_accessed": false
+  },
+  "provision_digest_profile": "sha256-rfc8785-jcs-excluding_provision_digest",
+  "provision_digest": "sha256:945825b73096c9e4f47ffb33166bdb8b3dbafa4b951e3f414a98985749343458"
+}
