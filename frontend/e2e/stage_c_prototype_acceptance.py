@@ -484,7 +484,9 @@ try:
             "工作中切换合成形态保持工作台和 running 状态",
             page.locator("[data-testid='workbench']").is_visible()
             and page.input_value("[data-testid='state-picker']") == "running"
-            and page.locator("[data-testid='reality-badge']").get_attribute("data-reality-form") == "MOCK",
+            and page.locator("[data-testid='reality-badge']").get_attribute("data-reality-form") == "MOCK"
+            and page.get_attribute("[data-testid='hero'] .hero-glyph", "data-motion") == "true"
+            and page.get_attribute("[data-testid='object-card']", "data-rail-kind") == "object",
         )
 
         # ⑨b IME composition 期间快捷键不提交，结束后可提交（首页 Composer）

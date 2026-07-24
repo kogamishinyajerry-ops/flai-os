@@ -1,7 +1,7 @@
 {
   "work_item_id": "flai-stage-c-kimi-uiux-001",
   "work_item_version": 4,
-  "work_item_digest": "sha256:3f1094a2d16d7157fe225d6d24e337ed8bc500d5eecd2c33eb66b9c8d6bc4f52",
+  "work_item_digest": "sha256:9c1981ddc9652f8c41c5633053096eab2549097fde83f262a0d12f469a4ee2aa",
   "digest_profile": "sha256-rfc8785-jcs-excluding-work_item_digest",
   "human_owner": "JerryKogami",
   "authorized_project_scope_ref": "github:kogamishinyajerry-ops/flai-os",
@@ -16,6 +16,14 @@
     "frontend/src/prototypes/stage-c/fixtures.test.js",
     "frontend/src/prototypes/stage-c/NOTES.md",
     "frontend/e2e/stage_c_prototype_acceptance.py"
+  ],
+  "coordinator_owned_control_artifacts": [
+    {
+      "path": "frontend/src/prototypes/stage-c/work-item-v4.json",
+      "executor_access": "READ_ONLY",
+      "authority": "JerryKogami owner chat instruction; no authenticated issuance receipt",
+      "purpose": "Local scope content commitment; excluded from executor-owned write scope"
+    }
   ],
   "owned_interface_scope": [
     "Stage C synthetic prototype query reality=REAL|MOCK|TEST|UNKNOWN; absent defaults to REAL, invalid values fail closed to UNKNOWN",

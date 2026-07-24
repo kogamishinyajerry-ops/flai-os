@@ -7,12 +7,13 @@
 ## -2. v4 Codex 受控返工（rework_of: @3, base cfb4a97）
 
 `work-item-v4.json` 记录本轮精确文件、接口与检查范围；其内容承诺为
-`sha256:3f1094a2d16d7157fe225d6d24e337ed8bc500d5eecd2c33eb66b9c8d6bc4f52`。
+`sha256:9c1981ddc9652f8c41c5633053096eab2549097fde83f262a0d12f469a4ee2aa`。
 该摘要按文件声明的 profile 对“仅删除 `work_item_digest` 的完整对象”执行 JCS 与
 SHA-256，已机械重算一致。由于没有 `AssistantDispatchReceiptV1`，且当前合同尚未冻结
 `DeliveryWorkItemV1` 摘要的 domain separator，它只是
 `LOCAL_CONTENT_COMMITMENT_NOT_PROTOCOL_FREEZE`，不能投影为权威 RUNNING 或
-HANDOFF_SUBMITTED。
+HANDOFF_SUBMITTED。该 manifest 被单独列为 coordinator-owned 控制工件，对执行器只读，
+不混入 executor-owned 写范围。
 
 本轮范围：
 
@@ -48,7 +49,7 @@ TDD 红灯证据：
 | `bash scripts/verify_all.sh` | 首次完整运行 PASS：1063 Python、102 Node、19 个既有浏览器套件，无失败 |
 
 最终 Stage C 证据目录：
-`/private/tmp/stage-c-v4-final-focused.GRNmwA/`。已人工查看 running 三栏页与
+`/private/tmp/stage-c-v4-post-review.RxRdUi/`。已人工查看 running 三栏页与
 UNKNOWN/stale 缺口页；未发现新增横向溢出、信任色串槽或文字不可读问题。完整门禁生成的
 既有 `docs/reviews` 截图已在隔离 worktree 中恢复，未纳入本轮 diff。
 
