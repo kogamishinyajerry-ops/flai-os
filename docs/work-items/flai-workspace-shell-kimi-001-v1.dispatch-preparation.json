@@ -1,0 +1,58 @@
+{
+  "record_schema": "LocalAssistantDispatchPreparationV1",
+  "preparation_digest": "sha256:67172d160f97a88dd356b0f3b256e78f9efe77d516f2d1844c30dfdf941b306a",
+  "digest_profile": "sha256-rfc8785-jcs-excluding_preparation_digest",
+  "authority": "NON_AUTHORITATIVE_LOCAL_DISPATCH_PREPARATION",
+  "work_item_ref": "flai-workspace-shell-kimi-001@1",
+  "work_item_digest": "sha256:160337f0556ca231a472bff553f2925ce9c35f8b94fdaf79f029ea3858199266",
+  "freeze_commit_sha": "ced1c6a84a8c3751d3a342554ad3a4e51ea8c3e3",
+  "freeze_ref": "git:ced1c6a84a8c3751d3a342554ad3a4e51ea8c3e3:docs/work-items/flai-workspace-shell-kimi-001-v1.freeze.json",
+  "prompt_template_ref": "git:ced1c6a84a8c3751d3a342554ad3a4e51ea8c3e3:docs/work-items/flai-workspace-shell-kimi-001-v1.prompt.md",
+  "prompt_template_sha256": "c29c5ab2d6b331b0b25349095e1d464af4c59216c3cd7e654e470d52932d6b11",
+  "rendered_prompt_sha256": "16b0e409005aef36ef0a91c19ca30879bdb4a7a84d3ba62c7ad04f5f33ac1d05",
+  "rendering_rule": {
+    "encoding": "UTF-8",
+    "replacement_token": "${WORK_ITEM_DIGEST}",
+    "replacement_value": "sha256:160337f0556ca231a472bff553f2925ce9c35f8b94fdaf79f029ea3858199266",
+    "replacement_count": 1,
+    "newline_policy": "PRESERVE_TEMPLATE_BYTES",
+    "other_substitutions": "DENY"
+  },
+  "dispatch_generation": 1,
+  "prepared_at": "2026-07-24T11:38:31Z",
+  "requested_client": {
+    "path": "/Users/Zhuanz/.kimi-code/bin/kimi",
+    "version": "0.29.0",
+    "provider": "managed:kimi-code",
+    "model": "kimi-code/k3",
+    "permission_mode": "auto",
+    "output_format": "stream-json",
+    "session_mode": "NEW_SESSION_ONLY"
+  },
+  "target": {
+    "base_sha": "71ecc9eadd457dfe03d2737d112f727b4a2183fa",
+    "branch": "codex/kimi-workspace-shell-v1",
+    "worktree": "/private/tmp/flai-kimi-workspace-shell.ClhXZm",
+    "skills_dir": "/private/tmp/flai-kimi-empty-skills.UCYoSv",
+    "skills_dir_state": "EMPTY_AT_PREPARATION"
+  },
+  "process_control": {
+    "max_wall_clock_seconds": 5400,
+    "enforcement": "COORDINATOR_PROCESS_GROUP_TIMEOUT_TERM_THEN_KILL",
+    "max_active_runs": 1,
+    "max_new_sessions": 1
+  },
+  "scope_and_budget_bindings": {
+    "owned_scope_digest": "sha256:bf548ae6f31e5ee178641e0226414624ed33107370d255a9dd2d71655761637e",
+    "budget_digest": "sha256:a0490d2cb235ba1d4482653e4cd4f83a9e2b8d82722d74cc55f6c3bed003f368",
+    "idempotency_key_digest": "sha256:a84e751c720135d94c81f4c024b4966ae88f2677fe00660ff8c7703a58f71224",
+    "effect_key_digest": "sha256:6f596d82276ede3422e12586f1beb6595e15968bc9f6564b29068fd71302be10"
+  },
+  "egress_enforcement": "PROMPT_SCOPE_AND_POST_RUN_TOOL_CALL_AUDIT_ONLY_NO_OS_NETWORK_SANDBOX",
+  "requested_lifecycle_state": "DISPATCHING",
+  "actual_dispatch_receipt": "PENDING",
+  "actual_runtime_identity": "DECLARED_NOT_VERIFIED_UNTIL_OBSERVED",
+  "authority_projection_limit": "EFFECT_UNKNOWN_UNTIL_VERIFIABLE_ASSISTANT_DISPATCH_RECEIPT_AND_BACKEND_WITNESS",
+  "result_class": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE",
+  "observation_record_ref": "docs/work-items/flai-workspace-shell-kimi-001-v1.dispatch-observation.json"
+}
