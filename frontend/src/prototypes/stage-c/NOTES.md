@@ -1,8 +1,42 @@
-# Stage C 工作台原型 — 设计与审计笔记（work_item: flai-stage-c-kimi-uiux-001@2）
+# Stage C 工作台原型 — 设计与审计笔记（work_item: flai-stage-c-kimi-uiux-001@3）
 
 环境：EXTERNAL_DEVELOPMENT · fixtures：SYNTHETIC_ONLY · 内网数据/运行时依赖：NONE。
 本原型不证明任何真实执行、内网导入或部署；原型内不存在任何签发路径（本地点击
 不构成、也不模拟签发）。
+
+## -1. v3 返工范围（rework_of: @2, base 6951c7a）
+
+owner 会话指令 @3（小返工）：增加可达的 synthetic reality 展示入口及四形态 DOM
+测试，修复三个 P2，重新提供完整 DevelopmentHandoffV1。逐条对应：
+
+| 指令项 | 处置 |
+|---|---|
+| 可达的 synthetic reality 展示入口 | ① `vite.config.js` 增加多页 input，`npm run build` 现产出 `dist/stage-c.html`，dev / `vite preview` / dist 静态托管均可达 `/stage-c.html`（preview 实测 HTTP 200，见验证记录）。**scope 说明**：v2 冻结令 Vite 配置只读、入口留 Codex 集成门；本项为 owner @3 明确指令授权的 scope 扩边，handoff 中请求 owner 重新冻结确认。主应用内导航链接仍属 Codex 集成面，未改。② 顶栏新增「合成形态」picker（REAL/MOCK/TEST/UNKNOWN）+ `?reality=` URL 参数，四形态逐一直达；REAL/MOCK/TEST 经 `@reality` 显式覆盖，UNKNOWN 不是可观察形态（observer 合同只接受 REAL/MOCK/TEST），选择后强制落到 fail-closed 观察缺口并禁用状态选择器 + 诚实提示，非法 URL 形态参数 fail-closed 回 REAL。 |
+| 四形态 DOM 测试 | e2e 新增 ⑪ 四形态 DOM 矩阵：3 场景 × REAL/MOCK/TEST 逐组合断言徽标文案 / `data-reality-form` / `data-source-kind` / `data-slot` / 无 real 槽负例；终态形态保持 3 条；UNKNOWN 强制缺口 3 条 + 选择器禁用提示 1 条；picker 即时切换 1 条；非法参数回退 1 条。徽标 `data-reality` 属性更名为 `data-reality-form` 并补 `data-source-kind="synthetic-fixture"`，机器消费者不会把形态字段误读为真实见证语义。 |
+| 三个 P2 | P2-1：stale 快照保留最后观察 reality 字段，缺口状态仍展示「REAL 形态测试」徽标 → mode=unknown 一律压到 UNKNOWN 未核徽标（fail-closed 优先于形态字段），e2e ⑫ 3 场景 × 3 缺口态 @REAL 覆盖共 9 条负例。P2-2：permission-denied 隐式默认 MOCK、其余观察态默认 REAL，同源夹具默认形态不一致且无记录理由 → 统一默认 REAL，fixtures.test 新增「无隐式 MOCK 特例」+ e2e ⑬ 3 条。P2-3：failed/stopped 例外卡显示「原因码：observed」病句（原因码只属于观察 fail-closed）→ 拆为观察缺口卡（含原因码，仅 unknown 族）与执行例外卡（无原因码行，failed/stopped），e2e ⑭ 3 条。**诚实声明**：Codex v2 评审的三个 P2 原文未找到持久化记录（GitHub/docs/reviews/评审包均无），以上三条为按 @2 代码 grounded 自审确定的 P2；若与 owner 所指清单不符，按单立即返工。 |
+
+## -1.1 验证记录（真实命令与结果，v3）
+
+前置：`pwd`=`/private/tmp/flai-os-kimi-workspace-experience`，branch=
+`codex/kimi-workspace-experience-v1`，HEAD=base_sha `6951c7a4`，`git status` 干净。
+
+| 命令 | 结果 |
+|---|---|
+| `git diff --check` | 通过（无空白错误） |
+| scope 检查 `git diff --name-only` | 白名单 8 文件中的 6 个 + owner @3 授权扩边的 `frontend/vite.config.js`（共 7 文件） |
+| `cd frontend && node --test` | 102 pass / 0 fail（v2 为 101，+1：fixtures 默认形态无隐式 MOCK 特例） |
+| `cd frontend && npm run build` | 成功；**新产出 `dist/stage-c.html`**（chunk>500kB 警告为主应用既有产物） |
+| `npx vite preview` + `curl -o /dev/null -w %{http_code} /stage-c.html` | HTTP 200（dist 静态托管可达实测） |
+| `uv run --no-project --with playwright python frontend/e2e/stage_c_prototype_acceptance.py` | 106/106 PASS（v2 为 73，+33：四形态 DOM 矩阵与三个 P2 断言） |
+| e2e 截图 | `/private/tmp/stage-c-evidence-v3/*.png`（8 张，1440px） |
+
+e2e 实际矩阵：v2 的 73 条（3 场景 × 9 要求状态 × 2 组断言 = 54 + 首页负例 /
+validating / 3 缺口原因码 / 签发负例 3 / 三栏 2 / 双宽度 2 / reduced-motion /
+键盘 / IME 4 / focus-visible）全部保留并通过；新增 33 条 = ⑪ 四形态 DOM 18
+（3场景×3形态 running 9 + 终态形态保持 3 + UNKNOWN 强制缺口 3 + 禁用提示 1 +
+picker 切换 1 + 非法参数回退 1）+ ⑫ fail-closed 压 UNKNOWN 9（3场景×3缺口态）
++ ⑬ permission-denied 默认形态 3 + ⑭ 例外卡 3，合计 33；总计 106，全部 PASS。
+未挂载 `scripts/verify_all.sh`（不在写范围）。
 
 ## 0. v2 返工范围（rework_of: @1, base 547cb42）
 
@@ -48,7 +82,10 @@ e2e 实际矩阵：3 场景 × 9 要求状态 = 27 组合 × 2 组断言（glyph
 三栏 2 条、双宽度溢出 2 条、reduced-motion、键盘提交、IME 4 条、focus-visible，
 合计 73 条，全部 PASS。未挂载 `scripts/verify_all.sh`（不在写范围）。
 
-## 3. Codex 集成门（不属于本次写范围）
+## 3. Codex 集成门（v3 已部分闭合，主应用内导航仍属 Codex）
 
-当前 `npm run build` 不在 `frontend/dist` 产出 `stage-c.html`（v2 已复核确认）。
-本次未修改 Vite 或 `package.json`；正式入口由 Codex 在 v2 通过后另开集成工作项决定。
+v2 时 `npm run build` 不在 `frontend/dist` 产出 `stage-c.html`。v3 经 owner @3
+明确指令授权扩边，`vite.config.js` 已加多页 input，`dist/stage-c.html` 现随
+build 产出，dev / preview / dist 静态托管均可达 `/stage-c.html`。主应用
+（index.html 体系）内的导航入口链接仍属 Codex 集成面，本次未改；`package.json`
+未改。

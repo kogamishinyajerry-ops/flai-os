@@ -1,9 +1,9 @@
-"""Stage C 工作台原型 UI 行为验收 v2（SYNTHETIC ONLY）。
+"""Stage C 工作台原型 UI 行为验收 v3（SYNTHETIC ONLY）。
 
 自包含：启动 frontend vite dev server（需先 npm ci）+ 真 chromium，
 仅访问 /stage-c.html 原型页，不连后端、不打真 LLM、不碰 data/。
 
-断言矩阵（对应 work_item flai-stage-c-kimi-uiux-001@2 验证要求）：
+断言矩阵（对应 work_item flai-stage-c-kimi-uiux-001@3 验证要求）：
   ① docx / meeting / cfd × 九个要求状态（running / waiting_review /
      completed / failed / cancelled / evidence-missing / permission-denied /
      unknown / stale）全遍历：逐组合断言终态 glyph、data-motion、
@@ -19,6 +19,15 @@
   ⑧ prefers-reduced-motion：glyph computed animation-name 为 none；
   ⑨ 键盘：Ctrl+Enter 提交；IME composition 期间快捷键不提交，结束后可提交；
   ⑩ focus-visible：Tab 聚焦后焦点环可见（outline 2px solid）。
+  ⑪ 四形态 DOM 矩阵（@3 新增）：REAL/MOCK/TEST 经 reality picker 与
+     `?reality=` URL 参数可达，3 场景 × 3 形态逐组合断言徽标文案、
+     data-reality-form、data-source-kind、data-slot；UNKNOWN 形态只由
+     fail-closed 给出（picker 选 UNKNOWN 强制 unknown 缺口 + 状态选择器禁用）；
+  ⑫ P2-1：stale / evidence-missing / unknown 即使带 @REAL 覆盖，徽标一律
+     UNKNOWN 未核（fail-closed 优先于形态字段）；
+  ⑬ P2-2：permission-denied 默认 REAL 形态徽标（无隐式 MOCK 特例）；
+  ⑭ P2-3：failed / cancelled 显示“执行例外”卡且无“原因码”病句，
+     观察缺口卡（含原因码）只属 unknown 族。
 
 运行（仓根）：
   cd frontend && npm ci && cd ..
@@ -77,8 +86,11 @@ def wait_port(port: int, timeout: float = 60.0) -> None:
     sys.exit(f"诚实失败：vite dev server 端口 {port} 等待超时")
 
 
-def goto(page, scene: str, state: str):
-    page.goto(f"{BASE}/stage-c.html?scene={scene}&state={state}")
+def goto(page, scene: str, state: str, reality: str | None = None):
+    url = f"{BASE}/stage-c.html?scene={scene}&state={state}"
+    if reality is not None:
+        url += f"&reality={reality}"
+    page.goto(url)
     page.wait_for_selector("[data-testid='workbench']")
 
 
@@ -163,6 +175,102 @@ try:
             "cfd:validating glyph=guard 且动画开",
             page.get_attribute("[data-testid='hero'] .hero-glyph", "data-glyph") == "guard"
             and page.get_attribute("[data-testid='hero'] .hero-glyph", "data-motion") == "true",
+        )
+
+        # ⑪ 四形态 DOM 矩阵：REAL/MOCK/TEST 经 URL 与 picker 可达，徽标逐形态断言
+        for scene in SCENES:
+            for form in ("REAL", "MOCK", "TEST"):
+                goto(page, scene, "running", reality=form)
+                badge = page.locator("[data-testid='reality-badge']")
+                badge_text = badge.text_content() or ""
+                check(
+                    f"{scene}:running@{form} 形态徽标 DOM",
+                    f"合成样例 · {form} 形态测试 · 非真实见证" in badge_text
+                    and badge.get_attribute("data-reality-form") == form
+                    and badge.get_attribute("data-source-kind") == "synthetic-fixture"
+                    and badge.get_attribute("data-slot") == "test"
+                    and page.locator("[data-slot='real']").count() == 0
+                    and "有执行见证" not in (page.text_content("body") or ""),
+                    badge_text.strip(),
+                )
+        # ⑪b 四形态在终态同样成立（形态不随状态漂移）
+        for form in ("REAL", "MOCK", "TEST"):
+            goto(page, "docx", "completed", reality=form)
+            badge = page.locator("[data-testid='reality-badge']")
+            check(
+                f"docx:completed@{form} 形态徽标保持",
+                badge.get_attribute("data-reality-form") == form
+                and f"合成样例 · {form} 形态测试" in (badge.text_content() or ""),
+            )
+        # ⑪c UNKNOWN 形态：picker 选 UNKNOWN 强制 fail-closed 缺口，状态选择器禁用
+        for scene in SCENES:
+            goto(page, scene, "running", reality="UNKNOWN")
+            badge = page.locator("[data-testid='reality-badge']")
+            check(
+                f"{scene}: UNKNOWN 形态强制 fail-closed 缺口徽标",
+                badge.get_attribute("data-reality-form") == "UNKNOWN"
+                and badge.get_attribute("data-slot") == "unverified"
+                and "UNKNOWN 形态 · 未核，非真实见证" in (badge.text_content() or "")
+                and page.get_attribute("[data-testid='object-card']", "data-rail-kind") == "gap",
+            )
+        goto(page, "docx", "running", reality="UNKNOWN")
+        check(
+            "UNKNOWN 形态下状态选择器禁用且有诚实提示",
+            page.locator("[data-testid='state-picker']").is_disabled()
+            and page.locator("[data-testid='unknown-form-hint']").is_visible(),
+        )
+        # ⑪d picker 交互：切 MOCK 徽标即时更新；非法 URL 形态参数 fail-closed 回 REAL
+        goto(page, "docx", "running")
+        page.select_option("[data-testid='reality-picker']", "MOCK")
+        check(
+            "reality picker 切换 MOCK 后徽标即时更新",
+            page.locator("[data-testid='reality-badge']").get_attribute("data-reality-form") == "MOCK",
+        )
+        goto(page, "docx", "running", reality="FAKE")
+        check(
+            "非法 reality URL 参数 fail-closed 回 REAL 形态",
+            page.locator("[data-testid='reality-badge']").get_attribute("data-reality-form") == "REAL",
+        )
+
+        # ⑫ P2-1：fail-closed 状态一律 UNKNOWN 未核徽标（stale 不得保留 REAL 形态）
+        for scene in SCENES:
+            for state in ("stale", "evidence-missing", "unknown"):
+                goto(page, scene, state, reality="REAL")
+                badge = page.locator("[data-testid='reality-badge']")
+                check(
+                    f"{scene}:{state}@REAL fail-closed 压到 UNKNOWN 徽标",
+                    badge.get_attribute("data-reality-form") == "UNKNOWN"
+                    and badge.get_attribute("data-slot") == "unverified"
+                    and "未核，非真实见证" in (badge.text_content() or ""),
+                )
+
+        # ⑬ P2-2：permission-denied 默认 REAL 形态（无隐式 MOCK 特例）
+        for scene in SCENES:
+            goto(page, scene, "permission-denied")
+            badge = page.locator("[data-testid='reality-badge']")
+            check(
+                f"{scene}:permission-denied 默认 REAL 形态徽标",
+                badge.get_attribute("data-reality-form") == "REAL"
+                and "合成样例 · REAL 形态测试 · 非真实见证" in (badge.text_content() or ""),
+            )
+
+        # ⑭ P2-3：failed/cancelled 例外卡无“原因码”病句；缺口卡只属 unknown 族
+        for state in ("failed", "cancelled"):
+            goto(page, "docx", state)
+            card = page.locator("[data-testid='exception-card']")
+            check(
+                f"docx:{state} 执行例外卡可见且无原因码行",
+                card.is_visible()
+                and card.get_attribute("data-card-kind") == "exception"
+                and "原因码" not in (card.text_content() or "")
+                and page.locator("[data-testid='gap-card']").count() == 0,
+            )
+        goto(page, "docx", "unknown")
+        check(
+            "docx:unknown 缺口卡含原因码且无例外卡",
+            page.locator("[data-testid='gap-card']").is_visible()
+            and "原因码" in (page.locator("[data-testid='gap-card']").text_content() or "")
+            and page.locator("[data-testid='exception-card']").count() == 0,
         )
 
         # ③ completed 终态 glyph 静止且不给绿（矩阵已逐场景断言，这里截图留证）

@@ -5,6 +5,7 @@ import test from "node:test";
 import { OBSERVER_CONTRACT_VERSION } from "./observer-contract.js";
 import {
   FIXTURE_REALITIES,
+  FIXTURE_REALITY_FORMS,
   FIXTURE_SCENARIOS,
   FIXTURE_STATES,
   REQUIRED_STATES,
@@ -80,6 +81,18 @@ test("fixtures: permission-denied 是权限边界而非普通失败", () => {
   assert.equal(snap.motion, false);
 });
 
+test("fixtures: 所有观察态默认 REAL 形态（无隐式 MOCK 特例）", () => {
+  // @3 P2 修复：permission-denied 不再隐式默认 MOCK；同源夹具默认形态一致。
+  for (const scene of ["docx", "meeting", "cfd"]) {
+    for (const state of ["running", "waiting_review", "completed", "failed", "cancelled", "permission-denied"]) {
+      const snap = getFixtureSnapshot(`${scene}:${state}`);
+      assert.equal(snap.reality, "REAL", `${scene}:${state} 默认形态必须是 REAL`);
+    }
+  }
+  // 显式覆盖仍然生效
+  assert.equal(getFixtureSnapshot("meeting:permission-denied@MOCK").reality, "MOCK");
+});
+
 test("fixtures: 快照字段满足合同形状且不含虚构百分比", () => {
   for (const key of listFixtureKeys()) {
     const snap = getFixtureSnapshot(key);
@@ -108,6 +121,7 @@ test("fixtures: 已观察状态带 reality-witness 证据且 reality 单一", ()
 
 test("fixtures: REAL / MOCK / TEST / UNKNOWN 四种形态明确区分", () => {
   assert.deepEqual([...FIXTURE_REALITIES], ["REAL", "MOCK", "TEST"]);
+  assert.deepEqual([...FIXTURE_REALITY_FORMS], ["REAL", "MOCK", "TEST", "UNKNOWN"]);
   for (const reality of FIXTURE_REALITIES) {
     const snap = getFixtureSnapshot(`docx:running@${reality}`);
     assert.equal(snap.reality, reality, `running@${reality} reality 不匹配`);
@@ -117,8 +131,10 @@ test("fixtures: REAL / MOCK / TEST / UNKNOWN 四种形态明确区分", () => {
       `running@${reality} 缺少对应 reality-witness`,
     );
   }
-  // UNKNOWN 形态：evidence-missing / unknown 的 fail-closed 快照 reality=UNKNOWN；
-  // stale 保留最后观察的 reality 字段但 mode=unknown（停动画、不携带见证语义）。
+  // UNKNOWN 形态：不是可观察形态（observer 合同只接受 REAL/MOCK/TEST），
+  // 只能由 fail-closed 快照给出（reality=UNKNOWN，mode=unknown）；
+  // stale 保留最后观察的 reality 字段但 mode=unknown（停动画、不携带见证语义），
+  // UI 层对 mode=unknown 一律压到 UNKNOWN 未核徽标（见 e2e 四形态 DOM 矩阵）。
   for (const state of ["evidence-missing", "unknown"]) {
     const snap = getFixtureSnapshot(`docx:${state}`);
     assert.equal(snap.reality, "UNKNOWN", `${state} 必须 fail-closed 到 UNKNOWN`);
@@ -129,6 +145,8 @@ test("fixtures: REAL / MOCK / TEST / UNKNOWN 四种形态明确区分", () => {
   assert.equal(stale.reasonCode, "observation_stale");
   assert.equal(stale.motion, false);
   assert.throws(() => getFixtureSnapshot("docx:running@FAKE"), /unknown fixture reality/);
+  // UNKNOWN 不能作为显式覆盖形态（不可编造可观察 UNKNOWN 事件）
+  assert.throws(() => getFixtureSnapshot("docx:running@UNKNOWN"), /unknown fixture reality/);
 });
 
 test("fixtures: 合成 source 不产生真实见证语义（绿槽前置负例）", () => {

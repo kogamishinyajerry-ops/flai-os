@@ -5,6 +5,7 @@
 // 合成夹具永远不进绿槽；本地点击永远不进 teal 槽；取消用中性墨色，不进红槽。
 import { computed, ref } from "vue";
 import {
+  FIXTURE_REALITY_FORMS,
   FIXTURE_SCENARIOS,
   FIXTURE_STATES,
   getFixture,
@@ -13,13 +14,23 @@ import {
 const params = new URLSearchParams(window.location.search);
 const scene = ref(FIXTURE_SCENARIOS[params.get("scene")] ? params.get("scene") : "docx");
 const state = ref(FIXTURE_STATES.includes(params.get("state")) ? params.get("state") : "");
+// 四形态展示入口：REAL/MOCK/TEST 经 `@reality` 显式覆盖；UNKNOWN 不是可观察
+// 形态，选择后强制落到 fail-closed 观察缺口（state=unknown），不编造可观察事件。
+const reality = ref(
+  FIXTURE_REALITY_FORMS.includes(params.get("reality")) ? params.get("reality") : "REAL",
+);
 const submitted = ref(false);
 const showSignRequirements = ref(false);
 const composerText = ref("");
 
 const inWorkbench = computed(() => Boolean(state.value) || submitted.value);
 const effectiveState = computed(() => (submitted.value ? "running" : state.value || "running"));
-const fixture = computed(() => getFixture(`${scene.value}:${effectiveState.value}`));
+const fixtureKey = computed(() => (
+  reality.value === "UNKNOWN"
+    ? `${scene.value}:unknown`
+    : `${scene.value}:${effectiveState.value}@${reality.value}`
+));
+const fixture = computed(() => getFixture(fixtureKey.value));
 const scenario = computed(() => fixture.value.scenario);
 const snap = computed(() => fixture.value.snapshot);
 
@@ -66,20 +77,30 @@ const trustSlot = computed(() => {
 
 // 绿槽 REAL 只属于 control-kernel 来源的真实见证；合成夹具一律中性标注
 // “形态测试 · 非真实见证”。首页未提交时不显示任何执行类徽标。
+// P2 修复（@3）：fail-closed（mode=unknown）一律压到 UNKNOWN 未核徽标——
+// stale 快照虽保留最后观察的 reality 字段，但缺口状态不得继续展示 REAL/MOCK/TEST
+// 形态徽标；fail-closed 语义优先于形态字段。
 const KERNEL_REALITY_BADGE = {
-  REAL: { slot: "real", text: "REAL · 有执行见证" },
-  MOCK: { slot: "unverified", text: "MOCK · 仅声明" },
-  TEST: { slot: "test", text: "TEST · 测试适配器" },
-  UNKNOWN: { slot: "unverified", text: "UNKNOWN · 未核" },
+  REAL: { slot: "real", form: "REAL", text: "REAL · 有执行见证" },
+  MOCK: { slot: "unverified", form: "MOCK", text: "MOCK · 仅声明" },
+  TEST: { slot: "test", form: "TEST", text: "TEST · 测试适配器" },
+  UNKNOWN: { slot: "unverified", form: "UNKNOWN", text: "UNKNOWN · 未核" },
+};
+const UNKNOWN_SYNTHETIC_BADGE = {
+  slot: "unverified",
+  form: "UNKNOWN",
+  text: "合成样例 · UNKNOWN 形态 · 未核，非真实见证",
 };
 const realityBadge = computed(() => {
   if (!inWorkbench.value) return null;
+  if (snap.value.mode === "unknown") return UNKNOWN_SYNTHETIC_BADGE;
   const reality = snap.value.reality;
   if (snap.value.source !== "control-kernel") {
-    if (reality === "UNKNOWN") {
-      return { slot: "unverified", text: "合成样例 · UNKNOWN 形态 · 未核，非真实见证" };
-    }
-    return { slot: "test", text: `合成样例 · ${reality} 形态测试 · 非真实见证` };
+    return {
+      slot: "test",
+      form: reality,
+      text: `合成样例 · ${reality} 形态测试 · 非真实见证`,
+    };
   }
   return KERNEL_REALITY_BADGE[reality] || KERNEL_REALITY_BADGE.UNKNOWN;
 });
@@ -164,7 +185,11 @@ const railObject = computed(() => {
 });
 
 const showDelivery = computed(() => ["attention", "preview"].includes(snap.value.mode));
-const showGap = computed(() => ["unknown", "failed", "stopped"].includes(snap.value.mode));
+// P2 修复（@3）：缺口原因码只属于观察 fail-closed；failed/stopped 是终态事实，
+// 此前同卡显示“原因码：observed”是病句。拆为观察缺口卡（含原因码）与
+// 执行例外卡（无原因码行），仍聚合展示、不弹窗打断。
+const showGap = computed(() => snap.value.mode === "unknown");
+const showException = computed(() => ["failed", "stopped"].includes(snap.value.mode));
 const animating = computed(() => snap.value.motion === true);
 
 const steps = computed(() => {
@@ -210,12 +235,19 @@ function onFixtureChange() {
         <span
           v-if="realityBadge"
           class="badge"
-          :data-reality="snap.reality"
+          :data-reality-form="realityBadge.form"
+          data-source-kind="synthetic-fixture"
           :data-slot="realityBadge.slot"
           data-testid="reality-badge"
         >
           {{ realityBadge.text }}
         </span>
+        <label class="fixture-picker">
+          <span>合成形态</span>
+          <select v-model="reality" data-testid="reality-picker" @change="onFixtureChange">
+            <option v-for="r in FIXTURE_REALITY_FORMS" :key="r" :value="r">{{ r }}</option>
+          </select>
+        </label>
         <label class="fixture-picker">
           <span>合成场景</span>
           <select v-model="scene" data-testid="scene-picker" @change="onFixtureChange">
@@ -226,11 +258,19 @@ function onFixtureChange() {
         </label>
         <label class="fixture-picker">
           <span>合成状态</span>
-          <select v-model="state" data-testid="state-picker" @change="onFixtureChange">
+          <select
+            v-model="state"
+            data-testid="state-picker"
+            :disabled="reality === 'UNKNOWN'"
+            @change="onFixtureChange"
+          >
             <option value="">（首页）</option>
             <option v-for="s in FIXTURE_STATES" :key="s" :value="s">{{ s }}</option>
           </select>
         </label>
+        <span v-if="reality === 'UNKNOWN'" class="hint" data-testid="unknown-form-hint">
+          UNKNOWN 形态只由 fail-closed 观察缺口给出
+        </span>
       </div>
     </header>
 
@@ -355,10 +395,27 @@ function onFixtureChange() {
           </div>
         </section>
 
-        <!-- 例外与缺口聚合：不弹窗、不打断；取消用中性色，只有真失败用红 -->
-        <section v-if="showGap" class="gap-card" :data-trust="trustSlot" data-testid="gap-card">
+        <!-- 例外与缺口聚合：不弹窗、不打断；取消用中性色，只有真失败用红。
+             观察缺口卡带原因码；终态例外卡是事实陈述，无“原因码：observed”病句。 -->
+        <section
+          v-if="showGap"
+          class="gap-card"
+          data-card-kind="gap"
+          :data-trust="trustSlot"
+          data-testid="gap-card"
+        >
           <h3 class="gap-title">当前缺口</h3>
           <p class="gap-reason">原因码：{{ snap.reasonCode }}</p>
+          <p class="gap-detail">{{ snap.detail }}</p>
+        </section>
+        <section
+          v-if="showException"
+          class="gap-card"
+          data-card-kind="exception"
+          :data-trust="trustSlot"
+          data-testid="exception-card"
+        >
+          <h3 class="gap-title">执行例外</h3>
           <p class="gap-detail">{{ snap.detail }}</p>
         </section>
 

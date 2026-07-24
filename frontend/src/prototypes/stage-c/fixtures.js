@@ -85,8 +85,12 @@ export const REQUIRED_STATES = Object.freeze([
 ]);
 
 // REAL / MOCK / TEST 形态可通过 `${scene}:${state}@${reality}` 显式取 fixture；
-// UNKNOWN 形态由 evidence-missing / unknown / stale 的 fail-closed 分支给出。
+// UNKNOWN 不是可观察形态（observer 合同只接受 REAL/MOCK/TEST），只由
+// evidence-missing / unknown / stale 的 fail-closed 分支给出。
 export const FIXTURE_REALITIES = Object.freeze(["REAL", "MOCK", "TEST"]);
+// UI 展示入口提供的四形态选项：前三者显式覆盖，UNKNOWN 强制落到 fail-closed
+// 观察缺口（state=unknown），不为 UNKNOWN 编造可观察事件。
+export const FIXTURE_REALITY_FORMS = Object.freeze(["REAL", "MOCK", "TEST", "UNKNOWN"]);
 
 const STATE_COPY = Object.freeze({
   waiting_review: {
@@ -200,7 +204,10 @@ function buildEvents(scene, state, realityOverride) {
     });
     return { events: [old], nowMs: BASE_TIME };
   }
-  const reality = realityOverride || (state === "permission-denied" ? "MOCK" : "REAL");
+  // P2 修复（@3）：同源夹具所有观察态默认 REAL 形态；此前 permission-denied
+  // 单独默认 MOCK 且无记录理由，形态默认不一致。四形态差异由 UI 入口与
+  // DOM 矩阵经 `@reality` 显式覆盖遍历，不再依赖隐式默认。
+  const reality = realityOverride || "REAL";
   return { events: [makeEvent(scene, state, { reality })], nowMs: BASE_TIME + 30_000 };
 }
 
