@@ -1,0 +1,94 @@
+{
+  "schema_version": "DispatchObservationV1",
+  "work_item_ref": "flai-workspace-shell-kimi-001@2",
+  "work_item_digest": "sha256:72b78143441303b170b124de0e24f836a8b289ee3ddc86fa9707c888ae425b19",
+  "dispatch_preparation_digest": "sha256:4daf54fcb2ab5f44faaae314bff5068531136eed957675ae6332fe15206aecc2",
+  "observed_session_ref": "session_f55a6882-e7cb-4c8a-b465-04d0bba4d950",
+  "session_created_at_utc": "2026-07-24T14:44:06.926Z",
+  "coordinator_termination_observed_at_utc": "2026-07-24T14:55:19Z",
+  "executor_identity": {
+    "requested_model": "kimi-code/k3",
+    "local_client_log_witness": "provider=kimi model=k3 modelAlias=kimi-code/k3 thinkingEffort=high",
+    "local_client_log_witness_at_utc": "2026-07-24T14:44:07.277Z",
+    "actual_runtime_receipt": "DECLARED_AND_LOCAL_CLIENT_LOG_WITNESSED_NOT_BACKEND_VERIFIED"
+  },
+  "outer_log": {
+    "path": "/private/tmp/flai-kimi-workspace-shell-v2-dispatch.jsonl",
+    "sha256": "a6ba336ac2017a88e75b61aaecb7d2867dd6f0bb44d927558e847faca404eb2a",
+    "line_count": 34,
+    "byte_count": 193948,
+    "final_assistant_handoff_present": false
+  },
+  "tool_call_census": {
+    "total": 16,
+    "bash": 2,
+    "read": 14,
+    "write_or_edit": 0,
+    "authorized_reads": 12,
+    "non_whitelist_reads": 2,
+    "package_install_commands": 0,
+    "external_network_commands": 0,
+    "git_mutation_commands": 0,
+    "test_build_e2e_commands": 0
+  },
+  "scope_deviations": [
+    {
+      "severity": "STOP_CONDITION",
+      "log_line": 30,
+      "tool_call_id": "tool_8uIVDJ3PVr34mcuLIs2uPjot",
+      "operation": "Read",
+      "path": "frontend/workspace-shell.html",
+      "classification": "NON_WHITELIST_SYNTHETIC_PROTOTYPE_ENTRY_READ",
+      "content_sensitivity": "PUBLIC_AND_SYNTHETIC_SOURCE",
+      "why_nonconformant": "Not present in read_only_scope or the prompt pre-read list; no listed file imports it."
+    },
+    {
+      "severity": "STOP_CONDITION",
+      "log_line": 33,
+      "tool_call_id": "tool_qk4zM59crCDlLF3eQV1fEVvv",
+      "operation": "Read",
+      "path": "frontend/src/prototypes/workspace-shell/main.js",
+      "classification": "NON_WHITELIST_SYNTHETIC_PROTOTYPE_BOOTSTRAP_READ",
+      "content_sensitivity": "PUBLIC_AND_SYNTHETIC_SOURCE",
+      "why_nonconformant": "Not present in read_only_scope or the prompt pre-read list; it is imported only by the also-unlisted HTML entry."
+    }
+  ],
+  "negative_confirmations": {
+    "source_files_changed": false,
+    "executor_head_after_termination": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "executor_worktree_clean": true,
+    "executor_diff_from_base": [],
+    "screenshot_evidence_count": 0,
+    "internal_data_or_secret_access": false,
+    "openhands_or_openwebui_access": false,
+    "production_interface_change": false
+  },
+  "termination": {
+    "initiator": "Codex coordinator",
+    "reason": "Fail-closed enforcement of the frozen non-whitelist read stop condition",
+    "wrapper_exit_code": 130,
+    "orphan_cleanup": "Exact gtimeout and kimi-code child PIDs received SIGTERM and exited",
+    "rollback_required": false
+  },
+  "result": {
+    "dispatch_status": "STOPPED_FAIL_CLOSED_SCOPE_VIOLATION",
+    "implementation_status": "NOT_STARTED",
+    "candidate_status": "NO_SOURCE_CHANGE",
+    "handoff_status": "NO_DEVELOPMENT_HANDOFF",
+    "codex_substantive_acceptance_status": "NOT_APPLICABLE",
+    "result_class": "NO_SOURCE_CANDIDATE"
+  },
+  "recommended_retry": {
+    "requires_new_owner_authorization": true,
+    "minimum_new_version": "flai-workspace-shell-kimi-001@3",
+    "write_scope_change": "NONE",
+    "p1_scope_change": "NONE",
+    "read_scope_change": [
+      "Add frontend/workspace-shell.html as immutable read-only bootstrap input.",
+      "Add frontend/src/prototypes/workspace-shell/main.js as immutable read-only bootstrap input."
+    ],
+    "session_policy": "NEW_SESSION_ONLY; do not resume session_f55a6882-e7cb-4c8a-b465-04d0bba4d950"
+  },
+  "observation_digest_profile": "sha256-rfc8785-jcs-excluding_observation_digest",
+  "observation_digest": "sha256:a250e37b4868d6a00ff5829d112203cf9f4eda3ef9319692cc0125b8087716d2"
+}
