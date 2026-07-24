@@ -1,0 +1,220 @@
+{
+  "manifest_version": "flai.airgap-workspace.named-review-manifest.v1",
+  "review_package_id": "flai.airgap-workspace-f0.named-review.round-1",
+  "review_round_id": "airgap-workspace-f0-r1",
+  "review_plan_status": "DRAFT-PENDING-ASSIGNMENT",
+  "target": {
+    "frozen_commit_sha": "fb7e5a277b934792934275511ba1a063399210e7",
+    "frozen_tree_sha": "cfbf0ef08e680a551ee50fe87db2ddcf9473d300",
+    "base_commit_sha": "9023776c4ffbff6c7d3e0484fe956d1956e948d7",
+    "freeze_status": "FROZEN-FOR-NAMED-REVIEW",
+    "implementation_status": "ACCEPTED-NOT-IMPLEMENTED",
+    "production_status": "NO-GO",
+    "normative_paths": [
+      "CONTEXT.md",
+      "docs/adr/ADR-0062-feishu-single-organizational-hub.md",
+      "docs/adr/ADR-0063-external-development-airgap-internal-workspace.md",
+      "docs/agents/kimi-k3-uiux-pilot-prompt.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/00_Product_Vision.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/01_PRD.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/02_System_Architecture.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/03_Information_Architecture.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/04_Data_Model.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/05_AI_Operating_Model.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/06_Roadmap.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/07_Design_Principles.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/08_Core_Workbench_UX.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/09_Agent_Workflow_Lifecycle.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/10_AI_Transformation_Playbook.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/11_Authoritative_Knowledge_Foundation.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/12_FLAi_Bench.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/13_CoBuilding_Map_and_Demand_Loop.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/14_Security_Sandbox_Governance.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/15_Phase_0A_MVP_Spec.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/16_Production_Snapshot_Assembler_Read_Contract.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/17_Feishu_Organizational_Hub.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/18_AirGap_Exchange_and_Internal_Release.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/19_Internal_Self_Hosted_Workspace.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/CODEX_HANDOFF_PROMPT.md",
+      "docs/product/FLAi-OS_V0.2_Design_Package/README.md"
+    ]
+  },
+  "question_catalog": {
+    "COMMON-01": "确认评审对象是精确 frozen commit/tree；本决定只评审设计 F0，不声明 production-ready，不授权采购、实现、生产 Schema/API/状态机变更、真实连接、数据导入、试点或部署。",
+    "ARCH-01": "三个信任域、事实 owner、InternalWorkspaceHub、AirGapExchange 与专业 Surface 的边界是否消除第二控制面和隐含跨域依赖？",
+    "ARCH-02": "ADR-0062 是否只保留外网研发效力，且所有内网产品入口和治理语义均由 ADR-0063 接管？",
+    "AGX-01": "是否不存在 Feishu/GitHub 到内网的 RPC、webhook、共享身份、共享 Secret、自动遥测或双向同步路径？",
+    "AGX-02": "OfflineReleaseBundle、quarantine、内部复验、候选 ReleaseSet 与 deployable Head 是否严格分离且 fail-closed？",
+    "AGX-03": "入站发布与出站脱敏反馈是否使用不同角色、策略、receipt 和禁止字段？",
+    "ID-01": "外网身份/凭据/SecretRef 是否无法映射、重放或继承到内网，内网是否只有独立 IdP 与 Secret owner？",
+    "ID-02": "ACL、classification、存在性、purpose 和用户/来源/Agent 三重权限交集是否在释放正文前 fail-closed？",
+    "COLLAB-01": "自托管聊天/Wiki/项目 Surface 是否只是可替换 Adapter，且不能拥有 FLAi 项目、运行、知识、资格或审计事实？",
+    "COLLAB-02": "消息/附件/记录留存、导出、备份恢复、离线许可、中文体验和 Workspace outage 是否有可验证门，且故障不阻断安全止损？",
+    "KNOW-01": "内网 Wiki/DMS 与旧系统只提供来源 revision，Knowledge Authority 是否继续拥有版本、有效性、适用范围、ACL/classification、锚点和真人发布？",
+    "KNOW-02": "外网知识与旧系统材料是否必须分别经过离线准入或逐来源只读 Adapter，且不能因可检索而冒充权威？",
+    "RUN-01": "内网模型、Runtime、Tool、MCP、依赖与插件是否全部从内部 Registry 解析，并保持 Sandbox、REAL/MOCK/TEST witness 与审计门？",
+    "RUN-02": "Workspace/IdP/模型/Adapter 故障时，kill、revoke、isolate、credential invalidation 和 Audit/WORM 封存是否仍可用？",
+    "SUPPLY-01": "SBOM、许可证、签名/吊销、恶意代码/漏洞/Secret 扫描、可复现构建、目标兼容与完整文件集是否闭合？",
+    "SUPPLY-02": "InternalReleaseCandidateReceipt、QualificationDecision、DeploymentBinding、运行 witness、备份恢复和回滚是否分别有独立证据，且不存在复制成功即发布的假绿？"
+  },
+  "gate_policy": {
+    "required_domain_count": 7,
+    "required_decision": "approve",
+    "all_domains_required": true,
+    "digest_change_invalidates_all_reviews": true,
+    "ai_review_is_advisory_only": true,
+    "principal_type_must_be_human": true,
+    "same_actor_multiple_domains_requires_sod_exception": true,
+    "external_identity_role_and_decision_verification_required": true,
+    "review_does_not_authorize_implementation": true
+  },
+  "implementation_authorization": {
+    "authorized": false,
+    "authorization_ref": null,
+    "note": "This review package cannot grant A1, production implementation, procurement, data import, pilot, release, or deployment authority."
+  },
+  "external_trust_verifier": {
+    "status": "UNCONFIGURED",
+    "verifier_binding_ref": null,
+    "trusted_actor_registry_ref": null,
+    "trusted_role_assignment_registry_ref": null,
+    "trusted_decision_evidence_policy_ref": null,
+    "trusted_finding_registry_ref": null,
+    "append_only_decision_ledger_ref": null
+  },
+  "reviews": [
+    {
+      "domain_id": "product-architecture-domain-ownership",
+      "owner_role": "产品架构与领域所有权责任人",
+      "responsibility_scope": "Three trust zones, source ownership, deep Modules, dependency direction, ADR supersession, and absence of a second control plane.",
+      "required_question_ids": ["COMMON-01", "ARCH-01", "ARCH-02"],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision": "pending",
+      "decision_rationale": null,
+      "question_answers": {"COMMON-01": "pending", "ARCH-01": "pending", "ARCH-02": "pending"},
+      "finding_refs": [],
+      "evidence_refs": [],
+      "reviewed_at": null
+    },
+    {
+      "domain_id": "airgap-cybersecurity-transfer-control",
+      "owner_role": "AirGap 网络安全与传输控制责任人",
+      "responsibility_scope": "No online cross-domain path, closed-world bundles, quarantine, cryptographic admission, transfer custody, and separated export control.",
+      "required_question_ids": ["COMMON-01", "AGX-01", "AGX-02", "AGX-03"],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision": "pending",
+      "decision_rationale": null,
+      "question_answers": {"COMMON-01": "pending", "AGX-01": "pending", "AGX-02": "pending", "AGX-03": "pending"},
+      "finding_refs": [],
+      "evidence_refs": [],
+      "reviewed_at": null
+    },
+    {
+      "domain_id": "internal-identity-acl-classification-privacy",
+      "owner_role": "内网身份、ACL、密级与隐私责任人",
+      "responsibility_scope": "Zone-local identity and Secret roots, object authorization, classification, existence protection, privacy, and revocation.",
+      "required_question_ids": ["COMMON-01", "ID-01", "ID-02"],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision": "pending",
+      "decision_rationale": null,
+      "question_answers": {"COMMON-01": "pending", "ID-01": "pending", "ID-02": "pending"},
+      "finding_refs": [],
+      "evidence_refs": [],
+      "reviewed_at": null
+    },
+    {
+      "domain_id": "self-hosted-collaboration-records-continuity",
+      "owner_role": "自托管协作、记录与连续性责任人",
+      "responsibility_scope": "Collaboration/Wiki Adapter boundaries, records, retention/export, offline licensing, backup/restore, usability, and outage behavior.",
+      "required_question_ids": ["COMMON-01", "COLLAB-01", "COLLAB-02"],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision": "pending",
+      "decision_rationale": null,
+      "question_answers": {"COMMON-01": "pending", "COLLAB-01": "pending", "COLLAB-02": "pending"},
+      "finding_refs": [],
+      "evidence_refs": [],
+      "reviewed_at": null
+    },
+    {
+      "domain_id": "authoritative-knowledge-legacy-ingest",
+      "owner_role": "权威知识与旧系统采集责任人",
+      "responsibility_scope": "Knowledge Authority, source ACL/version provenance, legacy read-only ingest, offline knowledge import, validity, anchoring, and publication.",
+      "required_question_ids": ["COMMON-01", "KNOW-01", "KNOW-02"],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision": "pending",
+      "decision_rationale": null,
+      "question_answers": {"COMMON-01": "pending", "KNOW-01": "pending", "KNOW-02": "pending"},
+      "finding_refs": [],
+      "evidence_refs": [],
+      "reviewed_at": null
+    },
+    {
+      "domain_id": "agent-runtime-sandbox-evidence-audit",
+      "owner_role": "Agent Runtime、Sandbox、证据与审计责任人",
+      "responsibility_scope": "Internal model/runtime/tool resolution, Sandbox enforcement, reality witness, fail-closed evidence, Audit/WORM, and safety survival.",
+      "required_question_ids": ["COMMON-01", "RUN-01", "RUN-02"],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision": "pending",
+      "decision_rationale": null,
+      "question_answers": {"COMMON-01": "pending", "RUN-01": "pending", "RUN-02": "pending"},
+      "finding_refs": [],
+      "evidence_refs": [],
+      "reviewed_at": null
+    },
+    {
+      "domain_id": "software-supply-chain-internal-release-operations",
+      "owner_role": "软件供应链、内部发行与运维责任人",
+      "responsibility_scope": "SBOM/license/signing/scanning, reproducible build, internal Registry, candidate versus deployable ReleaseSet, operations, backup/restore, rollback, and deployment evidence.",
+      "required_question_ids": ["COMMON-01", "SUPPLY-01", "SUPPLY-02"],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision": "pending",
+      "decision_rationale": null,
+      "question_answers": {"COMMON-01": "pending", "SUPPLY-01": "pending", "SUPPLY-02": "pending"},
+      "finding_refs": [],
+      "evidence_refs": [],
+      "reviewed_at": null
+    }
+  ]
+}
