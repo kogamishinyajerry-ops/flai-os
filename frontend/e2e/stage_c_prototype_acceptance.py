@@ -1,20 +1,24 @@
-"""Stage C 工作台原型 UI 行为验收（SYNTHETIC ONLY）。
+"""Stage C 工作台原型 UI 行为验收 v2（SYNTHETIC ONLY）。
 
 自包含：启动 frontend vite dev server（需先 npm ci）+ 真 chromium，
 仅访问 /stage-c.html 原型页，不连后端、不打真 LLM、不碰 data/。
 
-断言矩阵（对应工作项验证要求）：
-  ① docx / meeting / cfd 三种夹具的 running：工作台可见、glyph 由
-     data-motion="true" 驱动、步骤文案禁止虚构百分比；
-  ② running / waiting_review / completed / failed / cancelled /
-     evidence-missing / permission-denied / unknown / stale 全状态：
-     终态、等待、unknown、stale 一律 data-motion="false"；
-  ③ completed 不给可信绿：hero data-trust 必须是 terminal 而非 real；
-  ④ evidence-missing / unknown / stale fail-closed：缺口卡如实显示原因码；
-  ⑤ 1440px 与 1280px：无横向溢出；
-  ⑥ prefers-reduced-motion：glyph computed animation-name 为 none；
-  ⑦ 键盘：首页 textarea 聚焦输入后 Ctrl/⌘+Enter 提交进入工作台；
-  ⑧ 真人签发入口：waiting_review 点击签发后出现 teal 人签徽标（原型演示）。
+断言矩阵（对应 work_item flai-stage-c-kimi-uiux-001@2 验证要求）：
+  ① docx / meeting / cfd × 九个要求状态（running / waiting_review /
+     completed / failed / cancelled / evidence-missing / permission-denied /
+     unknown / stale）全遍历：逐组合断言终态 glyph、data-motion、
+     信任槽、右栏对象种类；
+  ② 合成负例：任何状态下不存在 data-slot=real，页面不出现“有执行见证”，
+     徽标必须标注“合成样例 … 非真实见证”；首页未提交时无执行类徽标；
+  ③ completed 不给可信绿：hero data-trust=terminal（非 real/sign）；
+  ④ cancelled 中性：trust=terminal（不进红 fail）；failed/permission-denied=fail；
+  ⑤ 假签发负例：点击“查看签发要求”后无 teal 徽标、无“真人已签发/签发成功”，
+     hero 信任槽不变，amber“未签发”徽标保持；
+  ⑥ 三栏 Workspace：左上下文轨 / 中央叙事 / 右对象舞台，1440px 下三列；
+  ⑦ 1440px 与 1280px：无横向溢出；
+  ⑧ prefers-reduced-motion：glyph computed animation-name 为 none；
+  ⑨ 键盘：Ctrl+Enter 提交；IME composition 期间快捷键不提交，结束后可提交；
+  ⑩ focus-visible：Tab 聚焦后焦点环可见（outline 2px solid）。
 
 运行（仓根）：
   cd frontend && npm ci && cd ..
@@ -47,6 +51,21 @@ except ImportError:
 if not (FRONTEND / "node_modules").is_dir():
     sys.exit("诚实失败：frontend/node_modules 缺失。先执行 cd frontend && npm ci")
 
+SCENES = ["docx", "meeting", "cfd"]
+RUNNING_GLYPH = {"docx": "rewrite", "meeting": "map", "cfd": "inspect"}
+# 九个要求状态的逐态期望：glyph / motion / trust / 右栏对象种类
+STATE_EXPECT = {
+    "running": {"glyph": None, "motion": "true", "trust": "work", "rail": "object"},
+    "waiting_review": {"glyph": "wait", "motion": "false", "trust": "work", "rail": "checklist"},
+    "completed": {"glyph": "render", "motion": "false", "trust": "terminal", "rail": "frozen"},
+    "failed": {"glyph": "failed", "motion": "false", "trust": "fail", "rail": "failed"},
+    "cancelled": {"glyph": "cancelled", "motion": "false", "trust": "terminal", "rail": "stopped"},
+    "evidence-missing": {"glyph": "unknown", "motion": "false", "trust": "unverified", "rail": "gap"},
+    "permission-denied": {"glyph": "failed", "motion": "false", "trust": "fail", "rail": "failed"},
+    "unknown": {"glyph": "unknown", "motion": "false", "trust": "unverified", "rail": "gap"},
+    "stale": {"glyph": "unknown", "motion": "false", "trust": "unverified", "rail": "gap"},
+}
+
 
 def wait_port(port: int, timeout: float = 60.0) -> None:
     deadline = time.time() + timeout
@@ -64,11 +83,15 @@ def goto(page, scene: str, state: str):
 
 
 failures: list[str] = []
+passed = 0
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
+    global passed
     print(f"{'PASS' if ok else 'FAIL'}  {name}" + (f"  ({detail})" if detail else ""))
-    if not ok:
+    if ok:
+        passed += 1
+    else:
         failures.append(f"{name}: {detail}")
 
 
@@ -91,48 +114,66 @@ try:
 
         page = browser.new_page(viewport={"width": 1440, "height": 900})
 
-        # ① 三场景 running + glyph 映射 + 无虚构百分比
-        expected_glyph = {"docx": "rewrite", "meeting": "map", "cfd": "inspect"}
-        for scene, glyph in expected_glyph.items():
-            goto(page, scene, "running")
-            check(
-                f"{scene}:running glyph={glyph} 且动画开",
-                page.get_attribute("[data-testid='hero'] .hero-glyph", "data-glyph") == glyph
-                and page.get_attribute("[data-testid='hero'] .hero-glyph", "data-motion") == "true",
-            )
-            step = page.text_content("[data-testid='step-label']") or ""
-            check(f"{scene}:running 步骤文案无百分比", "%" not in step, step)
-            page.screenshot(path=str(SHOTS / f"{scene}-running.png"), full_page=True)
+        # ②a 首页负例：未提交任务不得出现任何执行类徽标
+        page.goto(f"{BASE}/stage-c.html")
+        page.wait_for_selector("[data-testid='home']")
+        body = page.text_content("body") or ""
+        check(
+            "首页无执行徽标且无“有执行见证”",
+            page.locator("[data-testid='reality-badge']").count() == 0
+            and "有执行见证" not in body,
+        )
+        page.screenshot(path=str(SHOTS / "home.png"), full_page=True)
 
+        # ①+②b 三场景 × 九态全矩阵：glyph / motion / trust / 右栏对象 / 合成负例
+        for scene in SCENES:
+            for state, expect in STATE_EXPECT.items():
+                goto(page, scene, state)
+                glyph = page.get_attribute("[data-testid='hero'] .hero-glyph", "data-glyph")
+                motion = page.get_attribute("[data-testid='hero'] .hero-glyph", "data-motion")
+                trust = page.get_attribute("[data-testid='hero']", "data-trust")
+                rail = page.get_attribute("[data-testid='object-card']", "data-rail-kind")
+                want_glyph = expect["glyph"] or RUNNING_GLYPH[scene]
+                check(
+                    f"{scene}:{state} glyph/motion/trust/rail",
+                    glyph == want_glyph
+                    and motion == expect["motion"]
+                    and trust == expect["trust"]
+                    and rail == expect["rail"],
+                    f"glyph={glyph} motion={motion} trust={trust} rail={rail}",
+                )
+                badge = page.locator("[data-testid='reality-badge']")
+                badge_text = badge.text_content() or ""
+                check(
+                    f"{scene}:{state} 合成负例（无 real 槽/无见证措辞/标注合成）",
+                    page.locator("[data-slot='real']").count() == 0
+                    and "有执行见证" not in (page.text_content("body") or "")
+                    and "合成样例" in badge_text
+                    and "非真实见证" in badge_text,
+                    badge_text.strip(),
+                )
+                step = page.text_content("[data-testid='step-label']") or ""
+                if "%" in step:
+                    check(f"{scene}:{state} 步骤文案无百分比", False, step)
+        page.screenshot(path=str(SHOTS / "matrix-tail.png"), full_page=True)
+
+        # ①b 额外交互状态 validating：guard glyph 且动画开
         goto(page, "cfd", "validating")
         check(
-            "cfd:validating glyph=guard",
-            page.get_attribute("[data-testid='hero'] .hero-glyph", "data-glyph") == "guard",
+            "cfd:validating glyph=guard 且动画开",
+            page.get_attribute("[data-testid='hero'] .hero-glyph", "data-glyph") == "guard"
+            and page.get_attribute("[data-testid='hero'] .hero-glyph", "data-motion") == "true",
         )
 
-        # ② 终态与异常状态一律停止动画
-        still = {
-            "waiting_review": "wait",
-            "completed": "render",
-            "failed": "failed",
-            "cancelled": "cancelled",
-            "evidence-missing": "unknown",
-            "permission-denied": "failed",
-            "unknown": "unknown",
-            "stale": "unknown",
-        }
-        for state, glyph in still.items():
-            goto(page, "docx", state)
-            motion = page.get_attribute("[data-testid='hero'] .hero-glyph", "data-motion")
-            check(f"docx:{state} 动画停止", motion == "false", f"glyph={glyph} motion={motion}")
-
-        # ③ completed 不给可信绿
+        # ③ completed 终态 glyph 静止且不给绿（矩阵已逐场景断言，这里截图留证）
         goto(page, "docx", "completed")
-        trust = page.get_attribute("[data-testid='hero']", "data-trust")
-        check("completed hero 信任槽=terminal（非 real 绿）", trust == "terminal", trust or "")
         page.screenshot(path=str(SHOTS / "docx-completed.png"), full_page=True)
 
-        # ④ fail-closed 缺口卡
+        # ④ cancelled 中性截图留证（矩阵已断言 trust=terminal）
+        goto(page, "docx", "cancelled")
+        page.screenshot(path=str(SHOTS / "docx-cancelled.png"), full_page=True)
+
+        # fail-closed 缺口卡原因码
         for state, reason in [
             ("evidence-missing", "observation_invalid"),
             ("unknown", "observation_missing"),
@@ -140,18 +181,57 @@ try:
         ]:
             goto(page, "meeting", state)
             gap = page.locator("[data-testid='gap-card']")
-            check(f"meeting:{state} 缺口卡可见", gap.is_visible())
-            check(f"meeting:{state} 原因码 {reason}", reason in (gap.text_content() or ""))
-            page.screenshot(path=str(SHOTS / f"meeting-{state}.png"), full_page=True)
+            check(
+                f"meeting:{state} 缺口卡可见且原因码 {reason}",
+                gap.is_visible() and reason in (gap.text_content() or ""),
+            )
+        page.screenshot(path=str(SHOTS / "meeting-gap.png"), full_page=True)
 
-        goto(page, "meeting", "permission-denied")
+        # ⑤ 假签发负例：teal 路径不可达
+        goto(page, "docx", "waiting_review")
         check(
-            "permission-denied 信任槽=fail 且缺口可见",
-            page.get_attribute("[data-testid='hero']", "data-trust") == "fail"
-            and page.locator("[data-testid='gap-card']").is_visible(),
+            "waiting_review 交付区与 amber 未签发徽标可见",
+            page.locator("[data-testid='delivery']").is_visible()
+            and page.locator("[data-testid='unsigned-badge']").is_visible()
+            and page.get_attribute("[data-testid='unsigned-badge']", "data-slot") == "unverified",
         )
+        page.click("[data-testid='sign-requirements-button']")
+        req = page.locator("[data-testid='sign-requirements']")
+        req_text = req.text_content() or ""
+        body = page.text_content("body") or ""
+        check(
+            "签发要求可见（认证主体/时间/版本/receipt）",
+            req.is_visible()
+            and "认证主体" in req_text
+            and "receipt" in req_text,
+        )
+        check(
+            "点击后无 teal 签发（无 sign 槽/无已签发措辞/信任槽不变）",
+            page.locator("[data-slot='sign']").count() == 0
+            and "真人已签发" not in body
+            and "签发成功" not in body
+            and page.get_attribute("[data-testid='hero']", "data-trust") == "work",
+        )
+        page.screenshot(path=str(SHOTS / "docx-sign-requirements.png"), full_page=True)
 
-        # ⑤ 1440 / 1280 无横向溢出
+        # ⑥ 三栏 Workspace 结构
+        goto(page, "docx", "running")
+        left = page.locator("[data-testid='left-rail']")
+        left_text = left.text_content() or ""
+        columns = page.evaluate(
+            "getComputedStyle(document.querySelector('[data-testid=\"workbench\"]')).gridTemplateColumns"
+        )
+        check(
+            "三栏：左上下文轨可见且含 项目/最近工作/知识上下文",
+            left.is_visible()
+            and "当前项目" in left_text
+            and "最近工作" in left_text
+            and "获准知识上下文" in left_text,
+        )
+        check("三栏：1440px 下 workbench 为三列", len(columns.split()) == 3, columns)
+        page.screenshot(path=str(SHOTS / "docx-running-three-pane.png"), full_page=True)
+
+        # ⑦ 1440 / 1280 无横向溢出
         for width in (1440, 1280):
             page.set_viewport_size({"width": width, "height": 900})
             goto(page, "cfd", "running")
@@ -160,7 +240,7 @@ try:
             )
             check(f"{width}px 无横向溢出", not overflow)
 
-        # ⑥ reduced motion 停动画
+        # ⑧ reduced motion 停动画
         page.emulate_media(reduced_motion="reduce")
         goto(page, "docx", "running")
         anim = page.eval_on_selector(
@@ -170,7 +250,7 @@ try:
         check("reduced-motion 下 glyph 动画为 none", anim == "none", anim)
         page.emulate_media(reduced_motion="no-preference")
 
-        # ⑦ 键盘提交：首页 → 工作台
+        # ⑨a 键盘提交：首页 Ctrl+Enter → 工作台
         page.set_viewport_size({"width": 1440, "height": 900})
         page.goto(f"{BASE}/stage-c.html")
         page.wait_for_selector("[data-testid='home']")
@@ -181,18 +261,75 @@ try:
             "键盘 Ctrl+Enter 提交进入工作台且动画开",
             page.get_attribute("[data-testid='hero'] .hero-glyph", "data-motion") == "true",
         )
-        page.screenshot(path=str(SHOTS / "home-submit.png"), full_page=True)
 
-        # ⑧ 真人签发入口（原型演示）
-        goto(page, "docx", "waiting_review")
-        check("waiting_review 交付区可见", page.locator("[data-testid='delivery']").is_visible())
-        page.click("[data-testid='sign-button']")
-        check(
-            "签发后出现 teal 人签徽标",
-            page.locator("[data-testid='signed-badge']").is_visible()
-            and page.get_attribute("[data-testid='hero']", "data-trust") == "sign",
+        # ⑨b IME composition 期间快捷键不提交，结束后可提交（首页 Composer）
+        page.goto(f"{BASE}/stage-c.html")
+        page.wait_for_selector("[data-testid='home']")
+        page.fill("[data-testid='composer'] textarea", "输入中途")
+        page.eval_on_selector(
+            "[data-testid='composer'] textarea",
+            """el => {
+              el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+              el.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true, isComposing: true,
+              }));
+            }""",
         )
-        page.screenshot(path=str(SHOTS / "docx-signed.png"), full_page=True)
+        check(
+            "IME composition 中 Ctrl+Enter 不提交（仍在首页）",
+            page.locator("[data-testid='workbench']").count() == 0
+            and page.locator("[data-testid='home']").is_visible(),
+        )
+        page.eval_on_selector(
+            "[data-testid='composer'] textarea",
+            "el => el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))",
+        )
+        page.press("[data-testid='composer'] textarea", "Control+Enter")
+        page.wait_for_selector("[data-testid='workbench']")
+        check("IME composition 结束后 Ctrl+Enter 可提交", True)
+
+        # ⑨c 工作台 Composer 同样防 IME 误提交
+        goto(page, "docx", "running")
+        page.fill("[data-testid='composer'] textarea", "追加一条修正")
+        page.eval_on_selector(
+            "[data-testid='composer'] textarea",
+            """el => {
+              el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+              el.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'Enter', metaKey: true, bubbles: true, cancelable: true, isComposing: true,
+              }));
+            }""",
+        )
+        check(
+            "工作台 IME composition 中 ⌘+Enter 不清空不提交",
+            page.input_value("[data-testid='composer'] textarea") == "追加一条修正",
+        )
+        page.eval_on_selector(
+            "[data-testid='composer'] textarea",
+            "el => el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))",
+        )
+        page.press("[data-testid='composer'] textarea", "Control+Enter")
+        check(
+            "工作台 composition 结束后可提交",
+            page.input_value("[data-testid='composer'] textarea") == "",
+        )
+
+        # ⑩ focus-visible 焦点环
+        page.goto(f"{BASE}/stage-c.html")
+        page.wait_for_selector("[data-testid='home']")
+        page.keyboard.press("Tab")
+        outline = page.evaluate(
+            """() => {
+              const el = document.activeElement;
+              const cs = getComputedStyle(el);
+              return { tag: el.tagName, style: cs.outlineStyle, width: cs.outlineWidth };
+            }"""
+        )
+        check(
+            "focus-visible 焦点环可见（2px solid）",
+            outline["style"] == "solid" and outline["width"] == "2px",
+            f"{outline['tag']} outline={outline['width']} {outline['style']}",
+        )
 
         browser.close()
 finally:
@@ -206,6 +343,7 @@ finally:
         server.kill()
 
 print(f"\n截图证据目录: {SHOTS}")
+print(f"断言总数: {passed + len(failures)}（PASS {passed} / FAIL {len(failures)}）")
 if failures:
     print(f"\n{len(failures)} 条断言失败：")
     for item in failures:

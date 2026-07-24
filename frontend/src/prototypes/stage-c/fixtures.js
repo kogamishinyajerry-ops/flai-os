@@ -71,6 +71,23 @@ export const FIXTURE_STATES = Object.freeze([
   "stale",
 ]);
 
+// 工作项要求的九个验证状态（validating 为额外交互状态，不在九态矩阵内）。
+export const REQUIRED_STATES = Object.freeze([
+  "running",
+  "waiting_review",
+  "completed",
+  "failed",
+  "cancelled",
+  "evidence-missing",
+  "permission-denied",
+  "unknown",
+  "stale",
+]);
+
+// REAL / MOCK / TEST 形态可通过 `${scene}:${state}@${reality}` 显式取 fixture；
+// UNKNOWN 形态由 evidence-missing / unknown / stale 的 fail-closed 分支给出。
+export const FIXTURE_REALITIES = Object.freeze(["REAL", "MOCK", "TEST"]);
+
 const STATE_COPY = Object.freeze({
   waiting_review: {
     kind: "attention",
@@ -169,34 +186,38 @@ function contextFor(scene, nowMs) {
   };
 }
 
-function buildEvents(scene, state) {
+function buildEvents(scene, state, realityOverride) {
   if (state === "unknown") return { events: [], nowMs: BASE_TIME + 60_000 };
   if (state === "evidence-missing") {
-    const bad = makeEvent(scene, "running");
+    const bad = makeEvent(scene, "running", { reality: realityOverride || "REAL" });
     bad.evidenceRefs = [];
     return { events: [bad], nowMs: BASE_TIME + 30_000 };
   }
   if (state === "stale") {
     const old = makeEvent(scene, "running", {
+      reality: realityOverride || "REAL",
       observedAt: new Date(BASE_TIME - 120_000).toISOString(),
     });
     return { events: [old], nowMs: BASE_TIME };
   }
-  const reality = state === "permission-denied" ? "MOCK" : "REAL";
+  const reality = realityOverride || (state === "permission-denied" ? "MOCK" : "REAL");
   return { events: [makeEvent(scene, state, { reality })], nowMs: BASE_TIME + 30_000 };
 }
 
 export function getFixtureSnapshot(key) {
-  const [scene, state] = key.split(":");
+  const [scene, state, reality] = key.split(/[:@]/);
   if (!FIXTURE_SCENARIOS[scene] || !FIXTURE_STATES.includes(state)) {
     throw new Error(`unknown fixture: ${key}`);
   }
-  const { events, nowMs } = buildEvents(scene, state);
+  if (reality !== undefined && !FIXTURE_REALITIES.includes(reality)) {
+    throw new Error(`unknown fixture reality: ${key}`);
+  }
+  const { events, nowMs } = buildEvents(scene, state, reality);
   return projectObserverEvents(events, contextFor(scene, nowMs));
 }
 
 export function getFixture(key) {
-  const [scene, state] = key.split(":");
+  const [scene, state] = key.split(/[:@]/);
   return {
     key,
     scene,

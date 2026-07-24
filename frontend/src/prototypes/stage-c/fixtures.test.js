@@ -4,25 +4,18 @@ import test from "node:test";
 
 import { OBSERVER_CONTRACT_VERSION } from "./observer-contract.js";
 import {
+  FIXTURE_REALITIES,
   FIXTURE_SCENARIOS,
   FIXTURE_STATES,
+  REQUIRED_STATES,
   getFixtureSnapshot,
   listFixtureKeys,
 } from "./fixtures.js";
 
 test("fixtures: 覆盖三种场景与全部要求状态", () => {
   assert.deepEqual(Object.keys(FIXTURE_SCENARIOS).sort(), ["cfd", "docx", "meeting"]);
-  for (const state of [
-    "running",
-    "waiting_review",
-    "completed",
-    "failed",
-    "cancelled",
-    "evidence-missing",
-    "permission-denied",
-    "unknown",
-    "stale",
-  ]) {
+  assert.equal(REQUIRED_STATES.length, 9);
+  for (const state of REQUIRED_STATES) {
     assert.ok(FIXTURE_STATES.includes(state), `missing state ${state}`);
   }
   const keys = listFixtureKeys();
@@ -110,5 +103,50 @@ test("fixtures: 已观察状态带 reality-witness 证据且 reality 单一", ()
       snap.evidenceRefs.some((ref) => ref.startsWith(`reality-witness:${snap.reality}:`)),
       `${scene}:running 缺少 reality-witness 证据`,
     );
+  }
+});
+
+test("fixtures: REAL / MOCK / TEST / UNKNOWN 四种形态明确区分", () => {
+  assert.deepEqual([...FIXTURE_REALITIES], ["REAL", "MOCK", "TEST"]);
+  for (const reality of FIXTURE_REALITIES) {
+    const snap = getFixtureSnapshot(`docx:running@${reality}`);
+    assert.equal(snap.reality, reality, `running@${reality} reality 不匹配`);
+    assert.equal(snap.source, "synthetic-fixture");
+    assert.ok(
+      snap.evidenceRefs.some((ref) => ref.startsWith(`reality-witness:${reality}:`)),
+      `running@${reality} 缺少对应 reality-witness`,
+    );
+  }
+  // UNKNOWN 形态：evidence-missing / unknown 的 fail-closed 快照 reality=UNKNOWN；
+  // stale 保留最后观察的 reality 字段但 mode=unknown（停动画、不携带见证语义）。
+  for (const state of ["evidence-missing", "unknown"]) {
+    const snap = getFixtureSnapshot(`docx:${state}`);
+    assert.equal(snap.reality, "UNKNOWN", `${state} 必须 fail-closed 到 UNKNOWN`);
+    assert.equal(snap.mode, "unknown");
+  }
+  const stale = getFixtureSnapshot("docx:stale");
+  assert.equal(stale.mode, "unknown");
+  assert.equal(stale.reasonCode, "observation_stale");
+  assert.equal(stale.motion, false);
+  assert.throws(() => getFixtureSnapshot("docx:running@FAKE"), /unknown fixture reality/);
+});
+
+test("fixtures: 合成 source 不产生真实见证语义（绿槽前置负例）", () => {
+  // UI 规则：source !== "control-kernel" 时不得渲染 data-slot=real / “有执行见证”。
+  // 夹具层保证：任何已观察快照的 source 都是 synthetic-fixture，reality 字段
+  // 只描述形态，不构成真实见证。
+  for (const key of listFixtureKeys()) {
+    const snap = getFixtureSnapshot(key);
+    if (snap.mode === "unknown") continue; // fail-closed 快照不携带 source
+    assert.equal(snap.source, "synthetic-fixture", `${key} source 必须是合成标注`);
+  }
+});
+
+test("fixtures: 快照文案不得出现签发完成或进度伪造措辞", () => {
+  for (const key of listFixtureKeys()) {
+    const snap = getFixtureSnapshot(key);
+    const text = `${snap.title} ${snap.detail} ${snap.stepLabel}`;
+    assert.ok(!/已签发|签发成功|有执行见证/.test(text), `${key} 出现越权信任措辞`);
+    assert.ok(!text.includes("%"), `${key} 禁止百分比`);
   }
 });
