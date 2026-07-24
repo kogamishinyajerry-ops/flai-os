@@ -1,8 +1,58 @@
-# Stage C 工作台原型 — 设计与审计笔记（work_item: flai-stage-c-kimi-uiux-001@3）
+# Stage C 工作台原型 — 设计与审计笔记（work_item: flai-stage-c-kimi-uiux-001@4）
 
 环境：EXTERNAL_DEVELOPMENT · fixtures：SYNTHETIC_ONLY · 内网数据/运行时依赖：NONE。
 本原型不证明任何真实执行、内网导入或部署；原型内不存在任何签发路径（本地点击
 不构成、也不模拟签发）。
+
+## -2. v4 Codex 受控返工（rework_of: @3, base cfb4a97）
+
+`work-item-v4.json` 记录本轮精确文件、接口与检查范围；其内容承诺为
+`sha256:3f1094a2d16d7157fe225d6d24e337ed8bc500d5eecd2c33eb66b9c8d6bc4f52`。
+该摘要按文件声明的 profile 对“仅删除 `work_item_digest` 的完整对象”执行 JCS 与
+SHA-256，已机械重算一致。由于没有 `AssistantDispatchReceiptV1`，且当前合同尚未冻结
+`DeliveryWorkItemV1` 摘要的 domain separator，它只是
+`LOCAL_CONTENT_COMMITMENT_NOT_PROTOCOL_FREEZE`，不能投影为权威 RUNNING 或
+HANDOFF_SUBMITTED。
+
+本轮范围：
+
+- 撤回 `vite.config.js` 的未冻结多页生产构建扩边；默认 `npm run build` 必须只产出
+  `dist/index.html`，不产出 `dist/stage-c.html`。原型源码仍可由 Vite dev 直接访问，
+  正式入口与导航继续留给独立 Codex 集成工作项。
+- `reality` 缺省仍为合成 REAL 形态；显式非法值 fail-closed 到 UNKNOWN 缺口，不得
+  静默回退 REAL。
+- 移除 `submitted` 与 `state` 双真相；首页提交、终态重新提交、左栏切换工作及形态切换后，
+  状态选择器与实际渲染 fixture 必须保持一致。
+- `permission-denied` 的合成默认 REAL 形态在 @4 中被显式冻结；它仍是
+  `source-kind=synthetic-fixture`，不会进入可信 REAL 绿槽。
+- 所有可见 11px/12px 直接文本在 running / waiting_review / unknown 三态下按 computed
+  颜色与实际背景扫描，对比度必须不低于 4.5:1。
+- E2E 自证截图清单精确为 7 张；不再依赖手工计数。
+
+TDD 红灯证据：
+
+- 未修复时默认 build 真实生成 `dist/stage-c.html`，构建边界检查退出 1。
+- 首轮 @4 E2E 为 105/116 PASS，11 条失败精确覆盖非法 Reality、6 处低对比度与
+  4 个状态一致性场景。
+- 扩展为全部小字号文本扫描后，waiting_review 与 unknown 又分别捕获 amber
+  `4.45:1`，结果为 111/113 PASS；随后才调整 amber token。
+
+### -2.1 v4 验证结果
+
+| 命令 | 结果 |
+|---|---|
+| `git diff --check` | PASS |
+| `cd frontend && node --test` | 102 pass / 0 fail |
+| `cd frontend && npm run build && test ! -e dist/stage-c.html` | PASS；仅生成 `dist/index.html`，Stage C 未进入默认生产构建 |
+| `STAGE_C_SHOTS=<fresh-temp> uv run --no-project --with playwright python frontend/e2e/stage_c_prototype_acceptance.py` | 113/113 PASS；截图清单自证 7/7 |
+| `bash scripts/verify_all.sh` | 首次完整运行 PASS：1063 Python、102 Node、19 个既有浏览器套件，无失败 |
+
+最终 Stage C 证据目录：
+`/private/tmp/stage-c-v4-final-focused.GRNmwA/`。已人工查看 running 三栏页与
+UNKNOWN/stale 缺口页；未发现新增横向溢出、信任色串槽或文字不可读问题。完整门禁生成的
+既有 `docs/reviews` 截图已在隔离 worktree 中恢复，未纳入本轮 diff。
+
+以下 v3/v2 小节保留为历史返工记录；其中截图数量已按脚本与独立执行结果从 8 更正为 7。
 
 ## -1. v3 返工范围（rework_of: @2, base 6951c7a）
 
@@ -28,7 +78,7 @@ owner 会话指令 @3（小返工）：增加可达的 synthetic reality 展示�
 | `cd frontend && npm run build` | 成功；**新产出 `dist/stage-c.html`**（chunk>500kB 警告为主应用既有产物） |
 | `npx vite preview` + `curl -o /dev/null -w %{http_code} /stage-c.html` | HTTP 200（dist 静态托管可达实测） |
 | `uv run --no-project --with playwright python frontend/e2e/stage_c_prototype_acceptance.py` | 106/106 PASS（v2 为 73，+33：四形态 DOM 矩阵与三个 P2 断言） |
-| e2e 截图 | `/private/tmp/stage-c-evidence-v3/*.png`（8 张，1440px） |
+| e2e 截图 | `/private/tmp/stage-c-evidence-v3/*.png`（7 张，1440px；@4 独立审计更正） |
 
 e2e 实际矩阵：v2 的 73 条（3 场景 × 9 要求状态 × 2 组断言 = 54 + 首页负例 /
 validating / 3 缺口原因码 / 签发负例 3 / 三栏 2 / 双宽度 2 / reduced-motion /
@@ -75,17 +125,15 @@ v1 技术复核意见 NEEDS_REWORK_NON_AUTHORITATIVE 的阻断项与体验项逐
 | `cd frontend && node --test` | 101 pass / 0 fail（含 fixtures.test.js 11 条） |
 | `cd frontend && npm run build` | 成功；**不产出 `dist/stage-c.html`**（chunk>500kB 警告为主应用既有产物）→ Codex 集成门 |
 | `uv run --no-project --with playwright python frontend/e2e/stage_c_prototype_acceptance.py` | 73/73 PASS |
-| e2e 截图 | `/private/tmp/stage-c-evidence-v2/*.png`（8 张，1440px） |
+| e2e 截图 | `/private/tmp/stage-c-evidence-v2/*.png`（7 张，1440px；@4 独立审计更正） |
 
 e2e 实际矩阵：3 场景 × 9 要求状态 = 27 组合 × 2 组断言（glyph/motion/trust/rail +
 合成负例）= 54；外加首页徽标负例、validating glyph、3 条缺口原因码、签发负例 3 条、
 三栏 2 条、双宽度溢出 2 条、reduced-motion、键盘提交、IME 4 条、focus-visible，
 合计 73 条，全部 PASS。未挂载 `scripts/verify_all.sh`（不在写范围）。
 
-## 3. Codex 集成门（v3 已部分闭合，主应用内导航仍属 Codex）
+## 3. Codex 集成门（v4 已撤回未冻结扩边）
 
-v2 时 `npm run build` 不在 `frontend/dist` 产出 `stage-c.html`。v3 经 owner @3
-明确指令授权扩边，`vite.config.js` 已加多页 input，`dist/stage-c.html` 现随
-build 产出，dev / preview / dist 静态托管均可达 `/stage-c.html`。主应用
-（index.html 体系）内的导航入口链接仍属 Codex 集成面，本次未改；`package.json`
-未改。
+v3 曾在未形成权威冻结 payload 的情况下给 `vite.config.js` 增加多页 input。v4 已撤回
+该扩边，默认 build 再次不产出 `dist/stage-c.html`。主应用（index.html 体系）内的入口、
+导航和部署暴露方式仍属独立 Codex 集成面；`package.json` 未改。

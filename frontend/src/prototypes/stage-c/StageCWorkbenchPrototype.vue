@@ -14,17 +14,29 @@ import {
 const params = new URLSearchParams(window.location.search);
 const scene = ref(FIXTURE_SCENARIOS[params.get("scene")] ? params.get("scene") : "docx");
 const state = ref(FIXTURE_STATES.includes(params.get("state")) ? params.get("state") : "");
-// 四形态展示入口：REAL/MOCK/TEST 经 `@reality` 显式覆盖；UNKNOWN 不是可观察
-// 形态，选择后强制落到 fail-closed 观察缺口（state=unknown），不编造可观察事件。
+// 缺省形态仅用于方便打开合成原型；显式非法输入必须 fail-closed 到 UNKNOWN，
+// 不能静默伪装为 REAL。UNKNOWN 不构造观察事件，只投影观察缺口。
+const requestedReality = params.get("reality");
 const reality = ref(
-  FIXTURE_REALITY_FORMS.includes(params.get("reality")) ? params.get("reality") : "REAL",
+  requestedReality === null
+    ? "REAL"
+    : (FIXTURE_REALITY_FORMS.includes(requestedReality) ? requestedReality : "UNKNOWN"),
 );
-const submitted = ref(false);
 const showSignRequirements = ref(false);
 const composerText = ref("");
 
-const inWorkbench = computed(() => Boolean(state.value) || submitted.value);
-const effectiveState = computed(() => (submitted.value ? "running" : state.value || "running"));
+const inWorkbench = computed(() => Boolean(state.value) || reality.value === "UNKNOWN");
+const effectiveState = computed(() => (
+  reality.value === "UNKNOWN" ? "unknown" : state.value || "running"
+));
+// UNKNOWN 形态的渲染事实固定为 unknown，选择器也必须显示同一有效状态；
+// 恢复到可观察形态后仍保留此前显式状态。
+const visibleState = computed({
+  get: () => (reality.value === "UNKNOWN" ? "unknown" : state.value),
+  set: (value) => {
+    state.value = value;
+  },
+});
 const fixtureKey = computed(() => (
   reality.value === "UNKNOWN"
     ? `${scene.value}:unknown`
@@ -202,7 +214,7 @@ function submitGoal() {
   if (!composerText.value.trim()) return;
   composerText.value = "";
   showSignRequirements.value = false;
-  submitted.value = true;
+  state.value = "running";
 }
 // 中文输入法 composition 期间（isComposing）快捷键不得提交；
 // composition 结束后 Ctrl/Meta+Enter 正常提交。
@@ -216,11 +228,10 @@ function onComposerKeydown(event) {
 function pickScene(key) {
   scene.value = key;
   showSignRequirements.value = false;
-  submitted.value = true;
+  state.value = "running";
 }
 function onFixtureChange() {
   showSignRequirements.value = false;
-  submitted.value = false;
 }
 </script>
 
@@ -259,7 +270,7 @@ function onFixtureChange() {
         <label class="fixture-picker">
           <span>合成状态</span>
           <select
-            v-model="state"
+            v-model="visibleState"
             data-testid="state-picker"
             :disabled="reality === 'UNKNOWN'"
             @change="onFixtureChange"

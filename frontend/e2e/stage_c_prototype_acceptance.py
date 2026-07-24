@@ -1,9 +1,9 @@
-"""Stage C 工作台原型 UI 行为验收 v3（SYNTHETIC ONLY）。
+"""Stage C 工作台原型 UI 行为验收 v4（SYNTHETIC ONLY）。
 
 自包含：启动 frontend vite dev server（需先 npm ci）+ 真 chromium，
 仅访问 /stage-c.html 原型页，不连后端、不打真 LLM、不碰 data/。
 
-断言矩阵（对应 work_item flai-stage-c-kimi-uiux-001@3 验证要求）：
+断言矩阵（对应 work_item flai-stage-c-kimi-uiux-001@4 验证要求）：
   ① docx / meeting / cfd × 九个要求状态（running / waiting_review /
      completed / failed / cancelled / evidence-missing / permission-denied /
      unknown / stale）全遍历：逐组合断言终态 glyph、data-motion、
@@ -25,9 +25,13 @@
      fail-closed 给出（picker 选 UNKNOWN 强制 unknown 缺口 + 状态选择器禁用）；
   ⑫ P2-1：stale / evidence-missing / unknown 即使带 @REAL 覆盖，徽标一律
      UNKNOWN 未核（fail-closed 优先于形态字段）；
-  ⑬ P2-2：permission-denied 默认 REAL 形态徽标（无隐式 MOCK 特例）；
+  ⑬ permission-denied 默认 REAL 形态徽标（@4 显式冻结，无隐式 MOCK 特例）；
   ⑭ P2-3：failed / cancelled 显示“执行例外”卡且无“原因码”病句，
      观察缺口卡（含原因码）只属 unknown 族。
+  ⑮ fail-closed：非法 reality 参数必须进入 UNKNOWN 缺口，绝不回退 REAL；
+  ⑯ 状态一致性：提交、切换场景与形态后，状态选择器和渲染快照保持一致；
+  ⑰ WCAG：11px / 12px 的 muted 界面文字对比度不低于 4.5:1；
+  ⑱ 截图清单由测试自证，文件数与名称不得依赖手工陈述。
 
 运行（仓根）：
   cd frontend && npm ci && cd ..
@@ -105,6 +109,65 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         passed += 1
     else:
         failures.append(f"{name}: {detail}")
+
+
+def small_text_contrast_violations(page) -> list[str]:
+    """扫描可见直接文本，返回 12px 及以下且低于 WCAG AA 的元素。"""
+    return page.evaluate(
+        """() => {
+          const rgba = value => {
+            const match = value.match(/[\\d.]+/g);
+            if (!match) return [0, 0, 0, 0];
+            const values = match.map(Number);
+            return [values[0], values[1], values[2], values.length > 3 ? values[3] : 1];
+          };
+          const luminance = rgb => {
+            const linear = rgb.slice(0, 3).map(channel => {
+              const value = channel / 255;
+              return value <= 0.04045
+                ? value / 12.92
+                : Math.pow((value + 0.055) / 1.055, 2.4);
+            });
+            return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+          };
+          return [...document.querySelectorAll('body *')].flatMap((el, index) => {
+            const style = getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            const directText = [...el.childNodes].some(
+              node => node.nodeType === Node.TEXT_NODE && node.textContent.trim(),
+            );
+            if (
+              !directText
+              || rect.width === 0
+              || rect.height === 0
+              || style.display === 'none'
+              || style.visibility === 'hidden'
+              || Number.parseFloat(style.fontSize) > 12
+            ) {
+              return [];
+            }
+            const foreground = rgba(style.color);
+            let node = el;
+            let background = [255, 255, 255, 1];
+            while (node) {
+              const candidate = rgba(getComputedStyle(node).backgroundColor);
+              if (candidate[3] > 0) {
+                background = candidate;
+                break;
+              }
+              node = node.parentElement;
+            }
+            const a = luminance(foreground);
+            const b = luminance(background);
+            const ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+            if (ratio >= 4.5) return [];
+            const label = el.getAttribute('data-testid')
+              || (typeof el.className === 'string' && el.className)
+              || `${el.tagName.toLowerCase()}[${index}]`;
+            return [`${label}=${ratio.toFixed(2)}:1`];
+          });
+        }""",
+    )
 
 
 server = subprocess.Popen(
@@ -219,7 +282,7 @@ try:
             page.locator("[data-testid='state-picker']").is_disabled()
             and page.locator("[data-testid='unknown-form-hint']").is_visible(),
         )
-        # ⑪d picker 交互：切 MOCK 徽标即时更新；非法 URL 形态参数 fail-closed 回 REAL
+        # ⑪d picker 交互：切 MOCK 徽标即时更新；非法 URL 形态参数 fail-closed 到 UNKNOWN
         goto(page, "docx", "running")
         page.select_option("[data-testid='reality-picker']", "MOCK")
         check(
@@ -228,8 +291,15 @@ try:
         )
         goto(page, "docx", "running", reality="FAKE")
         check(
-            "非法 reality URL 参数 fail-closed 回 REAL 形态",
-            page.locator("[data-testid='reality-badge']").get_attribute("data-reality-form") == "REAL",
+            "非法 reality URL 参数 fail-closed 到 UNKNOWN 缺口",
+            page.locator("[data-testid='reality-badge']").get_attribute("data-reality-form") == "UNKNOWN"
+            and page.locator("[data-testid='reality-badge']").get_attribute("data-slot") == "unverified"
+            and page.get_attribute("[data-testid='object-card']", "data-rail-kind") == "gap"
+            and page.input_value("[data-testid='state-picker']") == "unknown"
+            and page.input_value("[data-testid='reality-picker']") == "UNKNOWN"
+            and page.locator("[data-testid='state-picker']").is_disabled()
+            and page.locator("[data-slot='real']").count() == 0
+            and "有执行见证" not in (page.text_content("body") or ""),
         )
 
         # ⑫ P2-1：fail-closed 状态一律 UNKNOWN 未核徽标（stale 不得保留 REAL 形态）
@@ -337,6 +407,17 @@ try:
             and "获准知识上下文" in left_text,
         )
         check("三栏：1440px 下 workbench 为三列", len(columns.split()) == 3, columns)
+
+        # ⑰ 扫描 running / waiting_review / unknown 三态全部可见 11px / 12px 直接文本
+        for state in ("running", "waiting_review", "unknown"):
+            goto(page, "docx", state)
+            violations = small_text_contrast_violations(page)
+            check(
+                f"{state} 全部可见小字号文本对比度不低于 4.5:1",
+                not violations,
+                ", ".join(violations),
+            )
+        goto(page, "docx", "running")
         page.screenshot(path=str(SHOTS / "docx-running-three-pane.png"), full_page=True)
 
         # ⑦ 1440 / 1280 无横向溢出
@@ -367,7 +448,43 @@ try:
         page.wait_for_selector("[data-testid='workbench']")
         check(
             "键盘 Ctrl+Enter 提交进入工作台且动画开",
-            page.get_attribute("[data-testid='hero'] .hero-glyph", "data-motion") == "true",
+            page.get_attribute("[data-testid='hero'] .hero-glyph", "data-motion") == "true"
+            and page.input_value("[data-testid='state-picker']") == "running",
+        )
+
+        # ⑯a 从终态提交新目标：渲染快照与选择器都必须切到 running
+        goto(page, "docx", "completed")
+        page.fill("[data-testid='composer'] textarea", "根据新意见重新整理")
+        page.press("[data-testid='composer'] textarea", "Control+Enter")
+        check(
+            "终态提交新目标后选择器与渲染快照一致为 running",
+            page.input_value("[data-testid='state-picker']") == "running"
+            and page.get_attribute("[data-testid='hero'] .hero-glyph", "data-motion") == "true"
+            and page.get_attribute("[data-testid='hero'] .hero-glyph", "data-glyph") == "rewrite",
+        )
+
+        # ⑯b 左栏切换工作：同样从 running 开始，不得保留 failed 选择器值
+        goto(page, "docx", "failed")
+        page.get_by_role("button", name="会议纪要", exact=True).click()
+        check(
+            "从失败态切换左栏工作后选择器与渲染快照一致为 running",
+            page.input_value("[data-testid='state-picker']") == "running"
+            and page.get_attribute("[data-testid='hero'] .hero-glyph", "data-motion") == "true"
+            and page.get_attribute("[data-testid='hero'] .hero-glyph", "data-glyph") == "map",
+        )
+
+        # ⑯c 从首页提交后立即切换形态：不得被旧 submitted 状态踢回首页
+        page.goto(f"{BASE}/stage-c.html")
+        page.wait_for_selector("[data-testid='home']")
+        page.fill("[data-testid='composer'] textarea", "提交后立即检查另一合成形态")
+        page.press("[data-testid='composer'] textarea", "Control+Enter")
+        page.wait_for_selector("[data-testid='workbench']")
+        page.select_option("[data-testid='reality-picker']", "MOCK")
+        check(
+            "工作中切换合成形态保持工作台和 running 状态",
+            page.locator("[data-testid='workbench']").is_visible()
+            and page.input_value("[data-testid='state-picker']") == "running"
+            and page.locator("[data-testid='reality-badge']").get_attribute("data-reality-form") == "MOCK",
         )
 
         # ⑨b IME composition 期间快捷键不提交，结束后可提交（首页 Composer）
@@ -449,6 +566,22 @@ finally:
         server.wait(timeout=10)
     except subprocess.TimeoutExpired:
         server.kill()
+
+EXPECTED_SCREENSHOTS = {
+    "home.png",
+    "matrix-tail.png",
+    "docx-completed.png",
+    "docx-cancelled.png",
+    "meeting-gap.png",
+    "docx-sign-requirements.png",
+    "docx-running-three-pane.png",
+}
+actual_screenshots = {path.name for path in SHOTS.glob("*.png")}
+check(
+    "截图证据清单精确为 7 张",
+    actual_screenshots == EXPECTED_SCREENSHOTS,
+    f"expected={sorted(EXPECTED_SCREENSHOTS)} actual={sorted(actual_screenshots)}",
+)
 
 print(f"\n截图证据目录: {SHOTS}")
 print(f"断言总数: {passed + len(failures)}（PASS {passed} / FAIL {len(failures)}）")

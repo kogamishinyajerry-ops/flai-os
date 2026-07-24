@@ -4,7 +4,8 @@
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --ink: #1c1d21;
   --ink-2: #4b4e55;
-  --ink-3: #8a8d95;
+  /* 11/12px muted 文本在 #fff / #faf9f7 上均保持 WCAG AA >= 4.5:1。 */
+  --ink-3: #686b73;
   --line: #e4e2dd;
   --surface: #faf9f7;
   --surface-raised: #ffffff;
@@ -13,7 +14,7 @@
   --trust-real: #1e7d46; /* 绿：仅 control-kernel 来源 REAL 执行见证（合成原型不可达） */
   --trust-sign: #0e7c7b; /* teal：仅真实认证签发链（本原型无此路径，禁止引用） */
   --trust-fail: #b3352c; /* 红：仅真实失败/权限拒绝；取消用中性墨色 */
-  --trust-unverified: #9a6b12; /* amber：未核/UNKNOWN/MOCK */
+  --trust-unverified: #986810; /* amber：未核/UNKNOWN/MOCK；小字对比度 >= 4.5:1 */
   --radius: 10px;
 }
 * { box-sizing: border-box; }
