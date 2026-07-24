@@ -1,0 +1,209 @@
+{
+  "manifest_version": "flai.named-contract-review-manifest.v1",
+  "review_package_id": "flai.production-snapshot-assembler.read.v1.named-review.round-1",
+  "review_round_id": "psa-read-v1-r1",
+  "review_plan_status": "DRAFT-PENDING-ASSIGNMENT",
+  "target": {
+    "contract_id": "flai.production-snapshot-assembler.read.v1",
+    "relative_path": "../../product/FLAi-OS_V0.2_Design_Package/16_Production_Snapshot_Assembler_Read_Contract.md",
+    "sha256": "8f791b5c9a5c5e3c9d18ef0168d23fe0ec5c9cc24f024f4e374c82de15357f24",
+    "byte_length": 74878,
+    "freeze_status": "FROZEN-FOR-REVIEW",
+    "implementation_status": "ACCEPTED-NOT-IMPLEMENTED"
+  },
+  "question_catalog": {
+    "COMMON-01": "确认评审对象是合同 flai.production-snapshot-assembler.read.v1 的冻结 SHA-256；本决定只评审只读设计合同，不声明 production-ready，不授权实现，也不授权生产 Schema、API 或状态机变更。",
+    "module_ownership": "Assembler 是否只属于 Control Kernel，且没有吸收 Identity、Authorization、ExecutionBroker、Knowledge 或 Observer 的裁决权？",
+    "public_seam": "唯一公开调用面、内部 WitnessResolver seam 和依赖方向是否明确并保持深 Module？",
+    "no_second_state_machine": "合同是否保证只读、无业务写入，且不创建第二任务状态机或第二控制面？",
+    "authenticated_opaque_context": "认证上下文是否只能由受信通道铸造，且调用方无法伪造 actor、role、ACL 或 reality？",
+    "acl_classification_existence": "对象存在性、ACL、clearance、classification 与字段投影是否在释放前 fail-closed？",
+    "release_fence": "actor/session、credential epoch、ResourceEnvelope、AuthorizationDecision 与 verification-policy 的二次 fence 是否覆盖撤权和竞态？",
+    "single_read_transaction": "业务事实是否在一个 SQLite read transaction 中冻结，且外部验签和 release fence 不会混入新旧事实？",
+    "tail_window": "event tail window、总数、current event 与重复/冲突检查是否确定且不静默截断？",
+    "query_only": "连接、仓储与失败路径是否保证 read-only/query-only，无隐式迁移或写副作用？",
+    "performance_bounds": "读取规模、超时、锁占用和大对象策略是否有可实施的硬边界，未知时是否拒绝而非退化放行？",
+    "strict_receipt_schema": "receipt、admission core/seal、签名输入与 digest 绑定是否严格、无歧义且支持 invalid-first 验证？",
+    "issuer_authority": "issuer kind、key usage、工作负载身份与 Broker/Sandbox 独立作证是否由 Trust Policy 精确授权？",
+    "algorithm_policy": "算法、canonicalization、签名编码、时间与重放规则是否避免降级、混淆和摘要回环？",
+    "key_rotation_revocation": "历史签发策略与当前验证策略、轮换、吊销、retrospective compromise 和 release-time policy fence 是否闭合？",
+    "composite_backend_identity": "backend 是否表示 ExecutionBroker 组合身份，而不会把 AgentRuntime、SandboxProvider 或 Tool Adapter 任一方冒充整体？",
+    "broker_sandbox_independence": "Broker receipt 与 Sandbox witness 是否在 workload、leaf key material、key usage 和绑定对象上独立？",
+    "phase_witness_binding": "REAL/MOCK/TEST 及各阶段是否只能由对应受信证据产生，不能从 status 或日志自报推导？",
+    "four_key_provenance": "Observer 投影是否只携带 scope_id、chunk_id、source、fingerprint，并保持可追溯且不泄漏正文或未授权元数据？",
+    "authority_unresolved_boundary": "只有检索 provenance、缺少 KnowledgeVersion 权威、有效或适用证明时，是否保持 unresolved 而不伪装成权威依据？",
+    "adapter_v3_compatibility": "FactSet 与 readSnapshot 是否和冻结的 Stage C Runtime Observer Adapter v3 一致且没有隐式 UI 数据源？",
+    "diagnostic_only": "DIAGNOSTIC_ONLY 是否只支持受限诊断体验，不显示为 REAL、completed 绿色、交付成功或人签？",
+    "failure_experience": "稳定失败码、隐藏存在性、证据缺失、部分可见与重试语义是否支持诚实、低焦虑且不泄密的界面？"
+  },
+  "gate_policy": {
+    "required_domain_count": 7,
+    "required_decision": "approve",
+    "all_domains_required": true,
+    "digest_change_invalidates_all_reviews": true,
+    "ai_review_is_advisory_only": true,
+    "contract_review_does_not_authorize_implementation": true,
+    "principal_type_must_be_human": true,
+    "same_actor_multiple_domains_requires_sod_exception": true,
+    "decision_evidence_must_bind_decision_core_digest": true,
+    "trust_roots_are_external_to_this_package": true
+  },
+  "implementation_authorization": {
+    "authorized": false,
+    "authorization_ref": null,
+    "note": "This review package cannot grant implementation authority."
+  },
+  "external_trust_verifier": {
+    "status": "UNCONFIGURED",
+    "verifier_binding_ref": null,
+    "trusted_actor_registry_ref": null,
+    "trusted_role_assignment_registry_ref": null,
+    "trusted_signature_or_audit_policy_ref": null,
+    "trusted_finding_registry_ref": null,
+    "append_only_decision_ledger_ref": null,
+    "note": "The local checker cannot authenticate these references. A future pinned organization-approved verifier must resolve identity, role, signature/audit, revocation, findings, SoD exceptions, and append-only decision history before the named review gate can pass."
+  },
+  "reviews": [
+    {
+      "domain_id": "control-kernel-architecture",
+      "owner_role": "Control Kernel / 架构 owner",
+      "responsibility_scope": "ProductionSnapshotAssembler Module ownership, public seam, dependency direction, read-only boundary, and prohibition of a second state machine or control plane.",
+      "required_question_ids": [
+        "COMMON-01",
+        "module_ownership",
+        "public_seam",
+        "no_second_state_machine"
+      ],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision_core_path": "records/01-control-kernel-architecture.review.json",
+      "decision_seal_path": "seals/01-control-kernel-architecture.seal.json"
+    },
+    {
+      "domain_id": "identity-authorization",
+      "owner_role": "Identity / Authorization owner",
+      "responsibility_scope": "Trusted authenticated context, object authorization, ACL/classification/existence handling, and release-time authorization fences.",
+      "required_question_ids": [
+        "COMMON-01",
+        "authenticated_opaque_context",
+        "acl_classification_existence",
+        "release_fence"
+      ],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision_core_path": "records/02-identity-authorization.review.json",
+      "decision_seal_path": "seals/02-identity-authorization.seal.json"
+    },
+    {
+      "domain_id": "data-sqlite",
+      "owner_role": "数据 / SQLite owner",
+      "responsibility_scope": "SQLite point-in-time read boundary, event tail window, query-only behavior, locking, limits, and performance bounds.",
+      "required_question_ids": [
+        "COMMON-01",
+        "single_read_transaction",
+        "tail_window",
+        "query_only",
+        "performance_bounds"
+      ],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision_core_path": "records/03-data-sqlite.review.json",
+      "decision_seal_path": "seals/03-data-sqlite.seal.json"
+    },
+    {
+      "domain_id": "security-cryptography",
+      "owner_role": "安全 / 密码 owner",
+      "responsibility_scope": "Strict receipt schemas, issuer authorization, signature and digest rules, algorithm policy, key lifecycle, revocation, and verification-policy fences.",
+      "required_question_ids": [
+        "COMMON-01",
+        "strict_receipt_schema",
+        "issuer_authority",
+        "algorithm_policy",
+        "key_rotation_revocation"
+      ],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision_core_path": "records/04-security-cryptography.review.json",
+      "decision_seal_path": "seals/04-security-cryptography.seal.json"
+    },
+    {
+      "domain_id": "executionbroker-sandbox",
+      "owner_role": "ExecutionBroker / Sandbox owner",
+      "responsibility_scope": "Composite backend identity, Broker and Sandbox witness independence, execution binding, and phase-specific REAL/MOCK/TEST evidence.",
+      "required_question_ids": [
+        "COMMON-01",
+        "composite_backend_identity",
+        "broker_sandbox_independence",
+        "phase_witness_binding"
+      ],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision_core_path": "records/05-executionbroker-sandbox.review.json",
+      "decision_seal_path": "seals/05-executionbroker-sandbox.seal.json"
+    },
+    {
+      "domain_id": "knowledge",
+      "owner_role": "Knowledge owner",
+      "responsibility_scope": "Knowledge four-key provenance projection, authorization-preserving evidence handling, and the unresolved authority/applicability boundary.",
+      "required_question_ids": [
+        "COMMON-01",
+        "four_key_provenance",
+        "authority_unresolved_boundary"
+      ],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision_core_path": "records/06-knowledge.review.json",
+      "decision_seal_path": "seals/06-knowledge.seal.json"
+    },
+    {
+      "domain_id": "workbench-observer",
+      "owner_role": "工作台 / Observer owner",
+      "responsibility_scope": "Stage C Runtime Observer Adapter v3 compatibility, diagnostic-only projection, failure semantics, and honest user experience.",
+      "required_question_ids": [
+        "COMMON-01",
+        "adapter_v3_compatibility",
+        "diagnostic_only",
+        "failure_experience"
+      ],
+      "reviewer_assignment": {
+        "reviewer_display_name": null,
+        "reviewer_actor_id": null,
+        "reviewer_principal_type": "human",
+        "reviewer_role_assignment_ref": null,
+        "segregation_of_duties_exception_ref": null
+      },
+      "decision_core_path": "records/07-workbench-observer.review.json",
+      "decision_seal_path": "seals/07-workbench-observer.seal.json"
+    }
+  ]
+}

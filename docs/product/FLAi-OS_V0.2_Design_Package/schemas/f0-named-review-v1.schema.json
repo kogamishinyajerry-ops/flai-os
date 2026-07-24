@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:flai:schema:review-package:f0-named-review-v1",
+  "title": "F0NamedReviewV1",
+  "description": "Immutable named-human review record for the F0 review package. This is not a template, production schema, F1 authorization or runtime approval.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "review_record_schema_version",
+    "reviewer_actor_id",
+    "reviewer_display_name",
+    "reviewer_subject_kind",
+    "responsibility_scope",
+    "decision",
+    "review_manifest_ref",
+    "review_manifest_digest",
+    "role_assignment",
+    "segregation_of_duties",
+    "design_evidence_refs",
+    "assigned_runtime_witness_gates",
+    "conditions",
+    "blocking_findings",
+    "residual_risks",
+    "reviewed_at",
+    "review_record_digest"
+  ],
+  "properties": {
+    "review_record_schema_version": {
+      "const": "F0NamedReviewV1"
+    },
+    "reviewer_actor_id": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "reviewer_display_name": {
+      "$ref": "#/$defs/nonPlaceholderString"
+    },
+    "reviewer_subject_kind": {
+      "const": "HUMAN"
+    },
+    "responsibility_scope": {
+      "$ref": "#/$defs/responsibilityScope"
+    },
+    "decision": {
+      "enum": [
+        "APPROVED",
+        "CONDITIONAL",
+        "REJECTED",
+        "UNKNOWN"
+      ]
+    },
+    "review_manifest_ref": {
+      "type": "string",
+      "pattern": "^flai://f0-review-manifest/sha256/[0-9a-f]{64}$"
+    },
+    "review_manifest_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "role_assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignment_ref",
+        "assignment_digest",
+        "assigned_by_actor_id",
+        "assigned_at"
+      ],
+      "properties": {
+        "assignment_ref": {
+          "$ref": "#/$defs/nonPlaceholderString"
+        },
+        "assignment_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assigned_by_actor_id": {
+          "$ref": "#/$defs/nonPlaceholderString"
+        },
+        "assigned_at": {
+          "$ref": "#/$defs/utcSecondTimestamp"
+        }
+      },
+      "description": "The resolved assignment MUST bind this exact manifest ref/digest, reviewer_actor_id, responsibility_scope, assigned_by_actor_id and assigned_at."
+    },
+    "segregation_of_duties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewer_is_assignment_issuer",
+        "reviewer_is_manifest_generator",
+        "reviewer_is_automated_agent"
+      ],
+      "properties": {
+        "reviewer_is_assignment_issuer": {
+          "const": false
+        },
+        "reviewer_is_manifest_generator": {
+          "const": false
+        },
+        "reviewer_is_automated_agent": {
+          "const": false
+        }
+      }
+    },
+    "design_evidence_refs": {
+      "$ref": "#/$defs/nonEmptyUniqueStrings"
+    },
+    "assigned_runtime_witness_gates": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "F1_EXIT",
+          "F2_EXIT",
+          "F3_EXIT",
+          "D6_F4_EXIT",
+          "D7_F4_EXIT",
+          "D8_F4_EXIT",
+          "F5_EXIT",
+          "PHASE_ENTRY"
+        ]
+      }
+    },
+    "conditions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/nonBlankString"
+      }
+    },
+    "blocking_findings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/nonBlankString"
+      }
+    },
+    "residual_risks": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/nonBlankString"
+      }
+    },
+    "reviewed_at": {
+      "$ref": "#/$defs/utcSecondTimestamp"
+    },
+    "review_record_digest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "APPROVED"
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "then": {
+        "properties": {
+          "conditions": {
+            "maxItems": 0
+          },
+          "blocking_findings": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "CONDITIONAL"
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "then": {
+        "properties": {
+          "conditions": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "enum": [
+              "REJECTED",
+              "UNKNOWN"
+            ]
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "then": {
+        "properties": {
+          "blocking_findings": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "utcSecondTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[0-1])T([0-1][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$"
+    },
+    "nonBlankString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": ".*\\S.*"
+    },
+    "nonPlaceholderString": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/nonBlankString"
+        },
+        {
+          "not": {
+            "enum": [
+              "TODO",
+              "TBD",
+              "UNKNOWN",
+              "PENDING",
+              "REVIEW-REQUIRED",
+              "PLACEHOLDER",
+              "<reviewer>",
+              "<actor-id>",
+              "待定",
+              "未知"
+            ]
+          }
+        }
+      ]
+    },
+    "nonEmptyUniqueStrings": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/nonBlankString"
+      }
+    },
+    "responsibilityScope": {
+      "enum": [
+        "ORGANIZATIONAL_PRODUCT_AND_GOVERNANCE",
+        "IDENTITY_AND_AUTHENTICATION_CHANNEL",
+        "ACL_CLASSIFICATION_AND_PRIVACY",
+        "FLAI_RUNTIME_EVIDENCE_AND_AUDIT",
+        "GITHUB_ENGINEERING_DELIVERY",
+        "KNOWLEDGE_AND_RECORDS",
+        "SECRET_AND_OPERATIONAL_CONTINUITY"
+      ]
+    }
+  },
+  "$comment": "Digest: lowercase_hex(SHA-256(ASCII('flai.feishu-hub.f0-named-review.v1') || 0x00 || RFC8785_JCS_UTF8(NFC-validated record excluding exactly review_record_digest))). The review-package verifier MUST recompute the digest, verify manifest ref/digest derivation, resolve the role assignment, verify named HUMAN actor attestations, enforce seven-domain coverage and cross-record separation of duties, reject stale manifests and reject templates. CONDITIONAL, REJECTED and UNKNOWN never close F0; a later immutable APPROVED record is required. F0 approval does not authorize F1 or any production change."
+}

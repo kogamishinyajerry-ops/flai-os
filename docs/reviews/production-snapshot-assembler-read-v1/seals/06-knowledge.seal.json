@@ -1,0 +1,15 @@
+{
+  "seal_version": "flai.review-decision-seal.v1",
+  "review_round_id": "psa-read-v1-r1",
+  "review_domain_id": "knowledge",
+  "decision_core_digest": null,
+  "reviewer_actor_id": null,
+  "credential_or_audit_actor_id": null,
+  "actor_credential_binding_ref": null,
+  "evidence_kind": "pending",
+  "key_usage_or_audit_event_type": null,
+  "signature_or_audit_evidence_ref": null,
+  "trusted_timestamp": null,
+  "trust_policy_ref": null,
+  "trust_verification_receipt_ref": null
+}

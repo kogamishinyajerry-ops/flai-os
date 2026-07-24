@@ -1,0 +1,47 @@
+{
+  "record_version": "flai.review-decision-core.v1",
+  "review_round_id": "psa-read-v1-r1",
+  "decision_id": null,
+  "decision_revision": 1,
+  "previous_decision_core_digest": null,
+  "review_plan_digest": null,
+  "review_domain_id": "control-kernel-architecture",
+  "owner_role": "Control Kernel / 架构 owner",
+  "reviewer_display_name": null,
+  "reviewer_actor_id": null,
+  "reviewer_principal_type": "human",
+  "reviewer_role_assignment_ref": null,
+  "responsibility_scope": "ProductionSnapshotAssembler Module ownership, public seam, dependency direction, read-only boundary, and prohibition of a second state machine or control plane.",
+  "decision": "pending",
+  "reviewed_contract_id": "flai.production-snapshot-assembler.read.v1",
+  "reviewed_contract_digest": "sha256:8f791b5c9a5c5e3c9d18ef0168d23fe0ec5c9cc24f024f4e374c82de15357f24",
+  "reviewed_at": null,
+  "review_answers": [
+    {
+      "question_id": "COMMON-01",
+      "answer": "pending",
+      "rationale": null,
+      "finding_refs": []
+    },
+    {
+      "question_id": "module_ownership",
+      "answer": "pending",
+      "rationale": null,
+      "finding_refs": []
+    },
+    {
+      "question_id": "public_seam",
+      "answer": "pending",
+      "rationale": null,
+      "finding_refs": []
+    },
+    {
+      "question_id": "no_second_state_machine",
+      "answer": "pending",
+      "rationale": null,
+      "finding_refs": []
+    }
+  ],
+  "open_blocking_findings_count": null,
+  "findings_refs": []
+}
