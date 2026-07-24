@@ -4,7 +4,7 @@
 >
 > 决策依据：[ADR-0058](../../adr/ADR-0058-flai-bench-evaluation-foundation.md)
 >
-> 相关决策：[ADR-0018](../../adr/ADR-0018-m10-governance-loop.md) · [ADR-0053](../../adr/ADR-0053-phase-0a-three-golden-workflows.md) · [ADR-0057](../../adr/ADR-0057-authoritative-knowledge-foundation.md) · [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md)
+> 相关决策：[ADR-0018](../../adr/ADR-0018-m10-governance-loop.md) · [ADR-0053](../../adr/ADR-0053-phase-0a-three-golden-workflows.md) · [ADR-0057](../../adr/ADR-0057-authoritative-knowledge-foundation.md) · [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) · [ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)
 >
 > 当前标准：[07 Eval 标准](../../07_Eval_Standard.md)
 
@@ -33,7 +33,7 @@ FLAi Bench 是 FLAi-OS 的统一基准评测能力。它把现有 Eval Runner、
 - 把确定性、工程质量、安全治理和运行效率分别记账；
 - 对安全、诚实性、依据链和关键回归执行不可抵消门；
 - 为人工发布或晋级提供证据，不替代人类签发；
-- 向飞书 FLAi 工作空间中的共建地图、能力详情和审计空间提供只读事实投影。
+- 向当前部署域 Workspace 中的共建地图、能力详情和审计空间提供只读事实投影；内网投影不得依赖飞书在线状态。
 
 ### 2.2 FLAi Bench 永远不做什么
 
@@ -335,8 +335,8 @@ retirement_reason?
 6. T1、T3、T4 的机器证据先收敛；任何失败必须保留真实失败状态和证据，不能用报告生成成功覆盖。
 7. T2 在自动运行完成后集中进入真人评审，不在每个 Agent 中间步骤插入反复审批；评审人依据版本化 rubric 和证据记录判断。
 8. Gate Engine 对所有 mandatory 项执行严格判定，只生成证据矩阵和 `qualification_evidence`，而不是综合分或任何资格事实；只有具名真人命令可产生 `QualificationDecision`。
-9. 具名人类可在飞书内审阅精确 release、run、rubric、门结果和剩余限制；Hub 通过 prepare/commit 提交 typed qualification/deployment intent，只有 FLAi owner 返回有效 `OwnerCommitReceiptV1` 才形成资格或暴露事实。
-10. 共建地图与统计界面只读投影这些事实；任何飞书/Bitable 投影刷新或手工编辑不得改写底层 run、gate、QualificationDecision 或 DeploymentBinding。
+9. 具名人类可在当前部署域 Workspace 内审阅精确 release、run、rubric、门结果和剩余限制；Hub 通过 prepare/commit 提交 typed qualification/deployment intent，只有 FLAi owner 返回有效 `OwnerCommitReceiptV1` 才形成资格或暴露事实。外网 Feishu Hub 不能提交内网资格或部署意图。
+10. 共建地图与统计界面只读投影这些事实；任何 Workspace/协作表投影刷新或手工编辑不得改写底层 run、gate、QualificationDecision 或 DeploymentBinding。
 
 ## 12. 证据、审计与展示契约
 
@@ -358,7 +358,7 @@ retirement_reason?
 - 允许手工把节点点绿；
 - 通过颜色隐藏状态文字；
 - 把 LLM 建议者显示为签发人。
-- 把卡片已点击、Bitable 更新或 HTTP 2xx 显示为资格/部署已生效；无 `OwnerCommitReceiptV1` 必须保持待确认或 effect unknown。
+- 把卡片已点击、协作表更新、离线包已复制或 HTTP 2xx 显示为资格/部署已生效；无 `OwnerCommitReceiptV1` 必须保持待确认或 effect unknown。
 - 在 source gap、投影 stale、classification unknown 或 receipt invalid 时沿用旧绿色。
 
 ## 13. 分阶段实施边界
@@ -370,7 +370,7 @@ retirement_reason?
 3. `ACCEPTED-NOT-IMPLEMENTED` — 用 Existing Eval Runner Adapter 产出四轨统一 envelope，保持现有 task/event/eval run 为事实源；
 4. `ACCEPTED-NOT-IMPLEMENTED` — 建立三套首批 pack 与真人 rubric，分别审批资产版本；
 5. `ACCEPTED-NOT-IMPLEMENTED` — 把不可抵消门接入晋级/发布证据，并提供只读 UI 投影；
-6. `ACCEPTED-NOT-IMPLEMENTED` — 通过 Feishu Hub 的只读投影和 typed governance intent 接入工作空间；Bitable 只承载只读权威投影与协作草稿；
+6. `ACCEPTED-NOT-IMPLEMENTED` — 通过当前域 Workspace Hub 的只读投影和 typed governance intent 接入工作空间；外网飞书与内网自托管 Hub 只承载只读权威投影与协作草稿，且不能跨域发 intent；
 7. `OUT-OF-SCOPE` — 通用模型竞技场、公开排行榜、跨领域统一质量分、AI 自动审批、自动生产发布。
 
 ## 14. 机械验收
@@ -412,7 +412,7 @@ retirement_reason?
 - 会议行动 pack 至少有 tamper witness 证明虚构负责人/期限、吞掉冲突或把会议转述冒充权威指令会使门失败；
 - 每套 pack 的 threshold、rubric、环境和样本来源均有独立版本，报告显示样本量与适用 scope；
 - UI/E2E 证明四轨矩阵和所有阻断项可见，且不存在综合总分、模型排行榜、手动点绿或 LLM 签发入口。
-- 飞书投影 E2E 证明 Bitable 手改、stale/source gap、receipt invalid 和越权深链均不能改变 Bench 或资格事实。
+- 分域 Workspace 投影 E2E 证明协作表手改、stale/source gap、receipt invalid、越权深链与外网 intent 重放均不能改变内网 Bench 或资格事实。
 
 ### 14.5 兼容与回归
 

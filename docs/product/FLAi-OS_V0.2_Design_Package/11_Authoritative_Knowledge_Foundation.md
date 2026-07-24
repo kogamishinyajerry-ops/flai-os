@@ -2,7 +2,7 @@
 
 > 文档性质：V0.2 产品与架构设计读模型，不是新的决策真相源。
 > 首要依据：[ADR-0057](../../adr/ADR-0057-authoritative-knowledge-foundation.md)。
-> 相关依据：[ADR-0015](../../adr/ADR-0015-knowledge-kernel-service.md)、[ADR-0017](../../adr/ADR-0017-knowledge-qa-agent.md)、[ADR-0021](../../adr/ADR-0021-m11-b2-data-classification.md)、[ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md)、[知识与记忆标准 V0.1](../../06_Knowledge_Memory_Standard.md) 与 [CONTEXT.md](../../../CONTEXT.md)。
+> 相关依据：[ADR-0015](../../adr/ADR-0015-knowledge-kernel-service.md)、[ADR-0017](../../adr/ADR-0017-knowledge-qa-agent.md)、[ADR-0021](../../adr/ADR-0021-m11-b2-data-classification.md)、[ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)、[知识与记忆标准 V0.1](../../06_Knowledge_Memory_Standard.md) 与 [CONTEXT.md](../../../CONTEXT.md)。
 > 若本文与上述 ADR 冲突，以 ADR 为准；字段名与持久化格式仍需在实施规格中冻结。
 
 ## 1. 本文要解决的问题
@@ -74,7 +74,9 @@ FLAi-OS 不能把“检索到了相似文本”当成“找到了可执行的组
 
 ### 4.1 逻辑统一、物理联邦
 
-平台只提供一个逻辑权威目录和一个受控查询 Interface；内容字节可以留在飞书 Wiki/Docs、受控文件目录、文档管理系统、Obsidian Vault 或其他内网系统中。物理位置改变不能改变权威等级，接入新的来源也不能产生第二个事实源。
+平台只提供一个逻辑权威目录和一个受控查询 Interface；内容字节可以留在内网自托管 Wiki、
+受控文件目录、文档管理系统、Obsidian Vault、旧 OA/邮件归档或其他批准的内网系统中。物理
+位置改变不能改变权威等级，接入新的来源也不能产生第二个事实源。
 
 逻辑统一至少保证：
 
@@ -87,7 +89,14 @@ FLAi-OS 不能把“检索到了相似文本”当成“找到了可执行的组
 
 ### 4.2 编辑器不是权威源
 
-飞书 Wiki/Docs 可以成为统一的日常知识创作、协作和阅读入口，Obsidian 也可以是专业编辑、链接和策展界面，但两者都没有自动发布权。把文档放进 Wiki、修改 Docs、把 Markdown 放进 Vault、添加标签或建立双向链接，只能改变工作材料；只有受控发布动作才能产生权威知识项版本。
+内网自托管 Wiki/DMS 可以成为统一的日常知识创作、协作和阅读入口，Obsidian 也可以是专业
+编辑、链接和策展界面，但它们都没有自动发布权。把文档放进 Wiki、修改页面、把 Markdown
+放进 Vault、添加标签或建立双向链接，只能改变工作材料；只有受控发布动作才能产生权威知识项
+版本。
+
+外网飞书 Wiki/Docs 不属于内网 Knowledge Source。若研发资料确需进入内网，必须先构造成
+内容寻址、签名的 `OfflineKnowledgeImportBundle`，经分类、恶意内容检查、ACL 重建和内网
+具名真人重新发布；不得建立实时 Feishu Connector 或继承外网文档权限。
 
 同样，Word、SharePoint 类文档系统或文件共享盘的“已保存”也不自动等于 FLAi-OS 的“已发布”。若某来源系统本身是组织认可的权威系统，则必须通过受信 Adapter 验证它的身份、版本、上游真人签发状态和审批证据，形成 `source_system_attestation`；随后仍由本平台具名授权人员对精确内容摘要签发发布事件。
 
@@ -174,7 +183,7 @@ draft → in_review → published
 
 ```mermaid
 flowchart LR
-    A["飞书 Wiki/Docs / 受控目录 / DMS / Obsidian / 内网系统"] --> B["Source Adapter"]
+    A["内网 Wiki/DMS / 受控目录 / Obsidian / 旧系统只读 Adapter"] --> B["Source Adapter"]
     B --> C["权威目录与版本模块"]
     H["具名授权人员"] --> D["发布与撤销 Interface"]
     S["受信源系统 attestation"] --> D
@@ -195,7 +204,7 @@ flowchart LR
 | 权威目录与版本模块 | 深模块：统一知识项身份、版本、authority class、生命周期、有效性和替代图 | 不解析自然语言问题，不做向量排序，不充当文档编辑器 |
 | 发布与撤销模块 | 验证具名主体、权限、审批证据和版本摘要；追加发布状态事件 | 不允许 AI、自报用户名或普通文件写入触发发布 |
 | Source Adapter | 把各物理系统的版本化内容与元数据映射到统一摄取 Interface | 不解释“是否权威”，不自行降密，不写任务结论 |
-| Feishu Knowledge Surface | 在飞书内组织知识草稿、评审工作包、发布意图、目录投影和精确来源深链 | 不让 Wiki/Docs revision、Bitable 字段或卡片点击自动成为权威版本 |
+| Internal Knowledge Authoring Surface | 在内网 Workspace/Wiki 中组织知识草稿、评审工作包、发布意图、目录投影和精确来源深链 | 不让页面 revision、项目字段或消息点击自动成为权威版本 |
 | 任务时快照解析器 | 按主体、任务时刻、适用范围与策略版本冻结可用知识版本集合 | 不取“现在最新”替换历史任务实际依据 |
 | 检索模块 | 在允许的快照内返回相关候选及检索诊断 | 不输出发布状态、权威优先级或最终工程判定 |
 | 索引 Adapter | 封装 BM25、未来向量检索与 Rerank，可替换、可重建 | 不持有不可替代的权威元数据，不成为新 SSOT |
@@ -223,7 +232,7 @@ flowchart LR
 
 - **Leverage**：同一份版本、有效性、锚点、访问和冲突语义同时服务智能办公、CFD、会议、FLAi Bench 与审计，不在每个 Agent 内重复实现。
 - **Locality**：来源差异收敛在 Source Adapter，格式差异收敛在 Anchor Adapter，检索差异收敛在 Index Adapter；Agent workflow 只处理统一命中与依据链。
-- **Replaceability**：更换飞书 Wiki/Docs、Obsidian、文档系统、向量库或执行后端，不改变权威目录及历史任务事实。
+- **Replaceability**：更换内网 Wiki/DMS、Obsidian、文档系统、向量库或执行后端，不改变权威目录及历史任务事实。
 - **Auditability**：每次回答依赖的版本、策略和锚点都绑定任务，源系统后来变化也不能改写历史。
 
 ## 8. 发布知识绑定与任务时权威知识快照
@@ -338,15 +347,17 @@ V0.2 必须在现有 scope/任务级污点骨架上扩展为知识项与依据�
 产品体验应把内容生产与权威发布分开：
 
 - 普通用户可低摩擦提交材料或建议，但默认进入工作材料；
-- 飞书 Wiki/Docs 是默认组织协作 Surface；Obsidian 等专业策展界面也可组织草稿、补元数据、建议分类与锚点；
+- 内网自托管 Wiki/DMS 是默认组织协作 Surface；Obsidian 等专业策展界面也可组织草稿、补元数据、建议分类与锚点；
 - 系统集中展示缺失的发布主体、批准证据、适用范围、时态、替代关系和密级；
-- 具名授权人员在飞书内审阅冻结的 doc revision、ACL/classification、内容 digest 和适用范围，通过 Hub prepare/commit 提交 `SignKnowledgeVersion`；只有 Knowledge Authority 返回的 `OwnerCommitReceiptV1` 才构成发布；
+- 具名授权人员在内网 Workspace 审阅冻结的 source revision、ACL/classification、内容 digest 和适用范围，通过 InternalWorkspaceHub prepare/commit 提交 `SignKnowledgeVersion`；只有 Knowledge Authority 返回的 `OwnerCommitReceiptV1` 才构成发布；
 - 受信源系统只能提交包含上游签发身份、版本、内容 digest 与验证结果的 `source_system_attestation`；
 - 更正、补遗、撤销、替代均走追加式事件，并要求原因；
 - 发布后的内容变化必须形成新版本，旧签发不自动覆盖新字节；
 - AI 可做差异摘要和冲突提示，但发布按钮与 `human_signer` 永远属于具名人员；源系统 attestation 只证明来源，不拥有本平台签发身份。
 
-已签飞书文档后续编辑必须形成新的 source revision 和 drift event，只能成为新知识候选，不能静默覆盖旧 `KnowledgeVersion`。若飞书租户或目标空间未获准承载相应密级，飞书只显示脱敏目录、稳定引用或重新鉴权深链，正文不复制入飞书。
+已签来源文档后续编辑必须形成新的 source revision 和 drift event，只能成为新知识候选，不能
+静默覆盖旧 `KnowledgeVersion`。若目标自托管 Surface 未获准承载相应密级，只显示脱敏目录、
+稳定引用或重新鉴权深链；正文不复制到该 Surface。
 
 这一过程是治理 Interface，不应把每个 Agent 工作过程改造成逐步审批向导。Agent 在已授权的任务范围内持续工作，只在最终 Delivery Bundle 集中呈现依据缺口、冲突和需人签发的外部动作。
 
@@ -360,7 +371,7 @@ V0.2 不新建“真相知识库服务”与现有 Knowledge Service 并行。�
 4. 把 `KnowledgeHit` 从文件级出处扩展为知识项版本 + 精确锚点，同时保留相关性诊断；
 5. 扩展 `knowledge_search` 事件以绑定 snapshot、version、anchor 与 policy version；
 6. 把现有知识密级污点传播扩展到知识项、引用片段、会话与全部导出通道；
-7. 以 Adapter 增加飞书 Wiki/Docs、Obsidian/DMS/向量检索，不改变发布事实和历史任务事实的所有权。
+7. 以 Adapter 增加内网 Wiki/DMS、Obsidian、旧系统只读源和向量检索，不改变发布事实和历史任务事实的所有权。
 
 迁移期间必须允许旧 scope 被明确标为“非权威参考”或“合成演示”。不得因为旧目录已经可以检索，就批量默认晋升为权威知识项。
 
@@ -381,7 +392,7 @@ V0.2 不新建“真相知识库服务”与现有 Knowledge Service 并行。�
 
 实施只有在以下 invalid-first fixtures 与正向链路均通过后，才可把相应状态改为 `IMPLEMENTED-VERIFIED`：
 
-1. 未发布的飞书 Wiki/Docs revision、Obsidian 文件、普通上传、会议笔记和 AI 产物即使被索引命中，也不能支撑正式结论。
+1. 未发布的内网 Wiki/DMS revision、Obsidian 文件、普通上传、会议笔记、外网飞书导入候选和 AI 产物即使被索引命中，也不能支撑正式结论。
 2. Index Adapter 回传伪造的 authority class、生命周期或密级字段时，控制内核忽略或拒绝，不能污染权威目录。
 3. 未认证主体、授权不足主体和 AI 均不能发布、撤销、替代或改密知识项，并产生审计事件。
 4. 发布证据未绑定精确内容摘要、摘要不匹配或审批证据缺失时，发布必须失败且无半成品版本。
@@ -393,14 +404,15 @@ V0.2 不新建“真相知识库服务”与现有 Knowledge Service 并行。�
 10. 每条 `confirmed` 主张都能机械解析到知识项版本、完整内容摘要、精确锚点和任务时有效状态；仅有文件名或文末参考列表视为失败。
 11. 源系统内容在任务后更新，仍能从任务、快照和依据链重建当时实际使用的版本；不得用当前最新版替换。
 12. BM25 与未来向量索引在同一冻结快照上可互换，切换 Index Adapter 不改变 authority class、生命周期、密级或发布证据。
-13. Feishu Wiki/Docs、Obsidian、file_dir、DMS 等不同 Source Adapter 通过同一发布与快照 Interface；任何 Adapter 绕过目录直供 Agent 的路径有测试拒绝。
+13. 内网 Wiki/DMS、Obsidian、file_dir、旧系统等不同 Source Adapter 通过同一发布与快照 Interface；任何 Adapter 绕过目录直供 Agent 的路径有测试拒绝。
 14. `restricted` 或未知密级知识经检索、摘要、报告、Delivery Bundle 和 FLAi Bench 运行后仍保持不低于源内容的分类；未授权读取与导出被拒绝。
 15. CFD 账本能区分权威依据、工程师确认假设、模型建议、未知和冲突；模型建议不能通过字段更新变成权威依据。
 16. CFD 首个只读体检在无中途审批的情况下完成，并在最终 Delivery Bundle 一次性列出全部来源缺口、假设与冲突；不得静默启动求解或修改原算例。
 17. 发布、修订、替代、撤销、访问、检索、引用与拒绝都有追加式审计事件；删除或覆盖历史事件会使验收失败。
 18. 故障注入证明：目录、来源 Adapter、索引或锚点解析器任一不可用时，系统明确标记不可用，不返回旧缓存伪装成功。
-19. 飞书 doc revision 在 prepare 后变化、actor 撤权、ACL/classification 漂移或 `OwnerCommitReceiptV1` 无效时，发布 fail-closed；Bitable/卡片不能直接点为有效。
-20. 飞书空间 ceiling 低于知识分类或分类 unknown 时，正文、标题和可反推存在性的元数据被抑制，不因“唯一中枢”而放宽。
+19. source revision 在 prepare 后变化、actor 撤权、ACL/classification 漂移或 `OwnerCommitReceiptV1` 无效时，发布 fail-closed；Wiki/项目/消息 Surface 不能直接点为有效。
+20. 目标自托管 Surface ceiling 低于知识分类或分类 unknown 时，正文、标题和可反推存在性的元数据被抑制，不因“都在内网”而放宽。
+21. 外网飞书文档没有 `OfflineKnowledgeImportBundle`、AirGap admission、内部 ACL 重建和真人重新发布时，不能进入内网检索快照。
 
 ## 17. 进入实现前仍需冻结的规格
 

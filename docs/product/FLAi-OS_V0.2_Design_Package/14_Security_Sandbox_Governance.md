@@ -49,9 +49,14 @@ FLAi-OS 的安全模型不是“每一步都弹窗”，而是把复杂治理放
 - 模型输出可能错误、伪造依据、建议危险动作或尝试扩大权限；
 - 失联 worker、晚到 writer、重复提交和恢复重放可能破坏状态；
 - 内部管理员、维护者或签发者也可能误操作，因此高风险动作需要职责分离、最小权限和不可抵赖证据。
-- 飞书回调、长连接事件、卡片 payload、Bitable 字段、群成员关系和深链参数可能被伪造、重放、越权或因旧权限变得 stale；
-- 飞书租户/空间可能不具备目标 classification 承载资格，存在标题、计数、对象存在性和群成员 audience 泄露风险；
-- 现有运行时 App/Connector Secret 虽已声明迁入 `secrets-stackdocker`，运行路径、旧值撤销、最小引用、轮换和 provider 故障行为尚未验证；Safety signing material 另属独立 PKI/HSM owner。
+- 外网 Feishu/GitHub 事件与身份可能被误用为内网授权，或成为隐蔽实时跨域通道；
+- 内网通讯/Wiki/项目 Surface 的事件、字段、成员关系和深链参数可能被伪造、重放、越权或
+  因旧权限变得 stale；目标 Surface 也可能不具备目标 classification 承载资格；
+- 离线发布包可能被篡改、夹带未声明 payload、恶意依赖、压缩炸弹、路径穿越、过期签名、
+  不完整 SBOM、许可证风险或自报信任根；
+- 外网 App/Connector Secret 虽已声明迁入 `secrets-stackdocker`，运行路径、旧值撤销、
+  最小引用、轮换和 provider 故障行为尚未验证；内网必须使用独立 Secret owner，Safety
+  signing material 另属独立 PKI/HSM owner。
 
 ### 3.3 不成立的假设
 
@@ -61,7 +66,8 @@ FLAi-OS 的安全模型不是“每一步都弹窗”，而是把复杂治理放
 - “有 Docker/临时目录”不等于真正 Sandbox。
 - “用户点了同意”不等于动作、参数、策略和产物精确匹配。
 - “测试全绿”不等于没有假绿，必须有 invalid-first 与 tamper witness。
-- “飞书里能看见/能点击”不等于拥有对象权限、签发资格或 owner commit 成功。
+- “协作 Surface 里能看见/能点击”不等于拥有对象权限、签发资格或 owner commit 成功。
+- “GitHub merge/外部签名/介质已导入”不等于内网已准入、已资格、已部署或 REAL。
 - “现有 App/Connector key 已迁移”不等于其 Secret 生命周期、最小权限、审计与恢复已经通过，也不证明尚未实现的 Safety signing key 已部署。
 
 ## 4. 当前 P0 阻断项
@@ -80,8 +86,9 @@ FLAi-OS 的安全模型不是“每一步都弹窗”，而是把复杂治理放
 | P0-4B 审计防篡改 | `ACCEPTED-NOT-IMPLEMENTED` | 本地 JSONL/SQLite 可变，关键状态与审计非完全原子 | audit outbox 同事务、hash chain、独立 append-only/WORM、校验演练 |
 | P0-4C 离线供应链 | `DECLARED-NOT-VERIFIED` | wheel/cache、依赖 hash、SBOM、组织签名、断网安装不足 | quarantine、固定摘要、签名/验签、完全断网安装、回滚证据 |
 | P0-5 macOS 本机门 | `DECLARED-NOT-VERIFIED` | 睡眠唤醒、故障恢复、Sandbox/kill、代理证书与 novice 路径未证 | 固定 macOS/Apple Silicon 基线全链验收 |
-| P0-6A 飞书身份与治理入口 | `ACCEPTED-NOT-IMPLEMENTED` | 无可信 channel→ActorBinding、prepare/commit、提交时重验和 owner receipt | tenant/app/subject 防伪、防重放、职责/ACL/classification、exact digest 与 receipt 全链 |
-| P0-6B 飞书故障与安全生存 | `ACCEPTED-NOT-IMPLEMENTED` | 唯一日常入口会形成协作单点；kill/revoke 不得依赖它 | 飞书断开时新治理暂停；独立 SafetySurvivalPort 仍可强停、撤权、隔离、只开对账案并向预批准本地 WORM 封存证据 |
+| P0-6A 内网身份与治理入口 | `ACCEPTED-NOT-IMPLEMENTED` | 无可信 Internal IdP/Surface→ActorBinding、prepare/commit、提交时重验和 owner receipt | instance/subject 防伪、防重放、职责/ACL/classification、exact digest 与 receipt 全链 |
+| P0-6B Workspace 故障与安全生存 | `ACCEPTED-NOT-IMPLEMENTED` | 唯一日常入口会形成协作单点；kill/revoke 不得依赖它 | Workspace/协作/Wiki 断开时新治理暂停；独立 SafetySurvivalPort 仍可止损与本地 WORM 封存 |
+| P0-6C 双域与离线准入 | `ACCEPTED-NOT-IMPLEMENTED` | 外网研发与内网运行尚无机械隔离和 closed-world Bundle verifier | 无实时链路；quarantine、内部扫描/复测、双人准入、ReleaseSet CAS 与最小反馈出口 |
 
 只有 P0 全部有当前候选版本的机器证据，并由具名 owner 末端签发，才允许 Phase 0A 正式试点。任何一项 `unknown/failed/invalid/skipped` 都是未通过。
 
@@ -199,14 +206,23 @@ Control Kernel 只依赖 Broker Interface；Broker 内部组合三类不可互�
 
 批准对象是目标集合和动作类别，不是任意 URL。模型、Tool 和 Connector 都绑定 task classification、policy ID、最大 body、超时、并发、重试和字段允许清单。DNS/CONNECT/拒绝原因和流量量级进入审计；认证头、Cookie、Secret 值和无必要正文不得记录。
 
-### 8.2 SecretRef
+### 8.2 SecretRef 与分域
 
-- **合同状态**：`ACCEPTED-NOT-IMPLEMENTED`；`secrets-stackdocker` 迁移与生产 Adapter 状态：`DECLARED-NOT-VERIFIED`。
-- `secrets-stackdocker` 是运行时 App/Connector Secret value 的目标唯一 owner；配置只保存 opaque `SecretRef`，序列化示例 `secret://provider/scope/name@version` 不代表真实名称，业务代码不保存长期明文。人的安全硬件身份、Safety receipt-signing、Coordinator / target owner / Policy owner 三类 workload-attestation material、Egress Boundary/Wire 两类 operation-bound workload-attestation material、Policy-fence 和 Trusted-Time Authority/consumer-local Commit-Guard material 分别由独立 Safety Identity / PKI / HSM / Time owner 持有，各 attestation operation 不得互相代签；不得由普通 workload identity、应用进程自签 key、`SecretProviderPort` 或普通 Secret 栈解析。Trusted-Time epoch transition 必须具名、连续且由 continuity root 签名；每个 Safety anchor 必须把 transaction nonce/subject-bound CommitLease、受信 monotonic elapsed 的线性化 FreshnessProof 与 owner-local CAS Checkpoint 同事务冻结，Fence 的 ALIAS_COMMIT/SIGN_PRE/SIGN_POST witness 也必须冻结 exact time/lease/proof/checkpoint。F0 必须冻结每类 owner、failure-domain、key/revocation/trust policy 与 fixture/drill 规格；任一合同仍未决就阻断 F0。真实 key/runtime/outage witness 继续为 `DECLARED-NOT-VERIFIED`，在对应 D6/D7/D8 + F4 前闭合，不用实现冒充 F0 设计评审。
+- **合同状态**：`ACCEPTED-NOT-IMPLEMENTED`；外网 `secrets-stackdocker` 与内网 Secret owner
+  Adapter 状态均为 `DECLARED-NOT-VERIFIED`。
+- 外网研发与内网运行使用独立 Secret owner/instance/root/namespace/policy/backup；配置只保存
+  同域 opaque `SecretRef`，序列化示例 `secret://provider/scope/name@version` 不代表真实名称。
+  `secrets-stackdocker` 当前只属于外网研发域，不能向内网复制 value 或真实 SecretRef identity。
+  人的安全硬件身份、Safety receipt-signing、Coordinator / target owner / Policy owner 三类
+  workload-attestation material、Egress Boundary/Wire 两类 operation-bound material、
+  Policy-fence 和 Trusted-Time Authority/Commit-Guard material 分别由独立 Safety Identity /
+  PKI / HSM / Time owner 持有，各 operation 不得互相代签，也不得由普通 Secret 栈解析。
 - Secret 在 Broker/Egress Proxy 最终边界解析为短期凭据；启动或快照切换原子化，required ref 解析失败则拒绝。
 - 未知哨兵、明文残留、过期版本或 provider 不可用在任何网络活动前 fail-closed。
 - 日志同时做 exact-value 与结构化字段脱敏；记录 Secret identity/version，不记录值。SecretRef identity 本身可能暴露系统、项目或权限范围，普通工作台只显示脱敏别名，完整 identity 仅对具备 `secret.audit` 作用域的治理角色可见且导出受控。
-- 禁止回退历史 `.env`、硬编码字面量、宿主全局 Keychain 或 Agent 可见环境；Secret value 不进入飞书、Bitable、Docs、GitHub、intent、receipt、fact digest、日志、LLM prompt、Tool stdout 或测试 fixture。
+- 禁止回退历史 `.env`、硬编码字面量、宿主全局 Keychain 或 Agent 可见环境；Secret value 不
+  进入 Feishu、GitHub、内网协作/Wiki、OfflineReleaseBundle、intent、receipt、fact digest、
+  日志、LLM prompt、Tool stdout 或测试 fixture。
 - 轮换必须使 token cache、长连接、旧 lease 与相关 credential/authorization epoch 失效，并形成访问、拒绝、轮换、吊销与恢复 witness。
 - bootstrap/unseal/recovery 凭据与 Connector Secret 分离；备份/恢复不得导出明文。
 
@@ -332,7 +348,8 @@ Agent、Tool、Skill、Connector、AgentRuntime/SandboxProvider/ToolExecution Ad
 
 只有任务交付副作用且 Policy 结果为 `defer_to_delivery` 时，才以 PendingDeliveryAction 进入不可变 Delivery Bundle；`deny` 永不可覆盖。知识发布/撤销、能力资格/发布、路线图签发和 break-glass 使用各自 typed governance command，Agent 调用一律 deny，不能被通用 Bundle 吞并。具名真人对精确 bundle digest 一次授权；主体、职责、策略、参数、产物、期限或 digest 漂移均 fail-closed。消费 Authorization、建立唯一 DeliveryAttempt 和全部 ActionIntent 必须同一事务完成；动作以稳定 effect key 和 CAS 执行 `prepared → executing → succeeded|failed|effect_unknown`。外部调用后、receipt 落库前崩溃一律为 `effect_unknown`，未经外部查询/receipt 对账不得重放，重新授权也不得换 key 绕过。多动作部分成功保持 `partially_applied/needs_reconciliation`，只有全部动作及后置验证成功才能显示“已交付”；不能用“已批准”冒充“已成功”。
 
-飞书只承载上述审阅与 typed intent Surface。高影响动作在 Hub `prepare` 后冻结
+内网 FLAiWorkspace 只承载上述审阅与 typed intent Surface。高影响动作在
+InternalWorkspaceHub `prepare` 后冻结
 PreparedCommand 并返回绑定 payload/target/actor/epoch/assurance/policy/gate digest 的
 ReviewChallengeV1；`commit` 使用新鲜 channel attestation/step-up、CAS 单次 nonce，并重新
 检查 actor binding、职责、scope、ACL、classification、epoch、TTL 和职责分离；只有相应
@@ -354,11 +371,13 @@ owner 返回并由 owner-specific verifier 验证通过的 OwnerCommitReceiptV1 
 - break-glass 不能用于让 Agent 完成长任务，也不能把产生的未隔离结果直接晋级为正常 REAL 证据。
 - 正常安全治理可以请求撤销会话/Grant/Secret/包版本、停止 lane、隔离制品、验链、受控导出
   和恢复；对外导出与恢复启用仍走常规 typed governance/Delivery，不进入安全生存通道。
-- 飞书是唯一日常中枢，但安全生存通道必须独立于飞书、Hub、主协作 SSO 和普通在线 Secret
-  解析。`SafetySurvivalPort` 只允许 kill/revoke/suspend/deny/isolate、只开对账案、向预批准
+- FLAiWorkspace 是唯一内网日常入口，但安全生存通道必须独立于 Workspace、通讯/Wiki
+  Adapter、主协作 SSO 和普通在线 Secret 解析。`SafetySurvivalPort` 只允许
+  kill/revoke/suspend/deny/isolate、只开对账案、向预批准
   本地 WORM 封存证据和只验证不启用的恢复候选；不得创建项目/需求、对外导出、恢复权限、
   签发路线图/知识/能力/交付、合并代码或正常发布，因此不构成第二日常管理面。
-- 飞书不可用时，新的正常治理动作暂停；不得从缓存卡片、离线 Bitable 或通知副本执行不可逆动作。
+- Workspace/协作/Wiki 不可用时，新的正常治理动作暂停；不得从缓存卡片、离线项目表或通知
+  副本执行不可逆动作。
 
 ## 16. P0 / P1 / P2 路线图
 
@@ -372,11 +391,13 @@ owner 返回并由 owner-specific verifier 验证通过的 OwnerCommitReceiptV1 
 6. quarantine、SBOM、签名、断网发布和全资产 restore drill；
 7. macOS 本机、模型 p99/429、睡眠唤醒、恢复和 novice 全链验收；
 8. 所有 Gate 机器证据 + 具名 owner 签发。
-9. Feishu channel attestation、ActorBinding、ACL/classification projection、typed intent/receipt/reconciliation 和 outage 下安全生存演练。
-10. `secrets-stackdocker` 的最小 SecretRef、旧值撤销、轮换/吊销、无 fallback、审计与恢复 witness。
+9. 内网 IdP/Surface attestation、ActorBinding、ACL/classification projection、typed
+   intent/receipt/reconciliation 和 outage 下安全生存演练。
+10. 外网 `secrets-stackdocker` 与内网 Secret owner 分别完成最小 SecretRef、旧值撤销、
+    轮换/吊销、无 fallback、审计与恢复 witness，且无跨域共享。
 11. 独立 Safety Identity / PKI / HSM 的双人硬件 admission、不可导出 signing key、key
     epoch/轮换/吊销、trust anchor 分发与回滚、signer/verifier 职责分离、backup/restore 及与
-    飞书、主 SSO、Hub、普通 Secret 栈同时不可用的止损演练；固定 canonical receipt
+    Workspace、主 SSO、Hub、普通 Secret 栈同时不可用的止损演练；固定 canonical receipt
     profile/domain separator、algorithm/policy downgrade 门、stable effect key；admission
     必须按 `SAFETY_PREPARE | SAFETY_COMMIT | POLICY_PUBLICATION` 绑定精确 immutable
     subject/nonce/replay domain，并以 append-only `EmergencyAdmissionConsumptionV1`
@@ -447,10 +468,10 @@ owner 返回并由 owner-specific verifier 验证通过的 OwnerCommitReceiptV1 
 | 离线根、签名/验签/吊销责任 | 制品是否可验证 |
 | Phase 0B 20–30 人与正式服务的峰值任务、Tool/模型并发 | Phase 0A 已由 `phase0a-macos-v1` 冻结为每会话 Model/Tool 合计 1、全平台 Model 2/Tool 2/quarantine 2；扩大规模必须另做容量基准与新预算版本 |
 | 适用的等保、密码应用或其他组织控制 | 合规范围；本设计包不作认证结论 |
-| 飞书 tenant/app/space 可承载的正式 classification 与 audience 规则 | 未批准时只允许脱敏摘要、稳定引用、重新鉴权深链或存在性抑制 |
-| 飞书身份能否满足各级正式电子签发及所需 step-up | A1 普通协作、A2 组织 SSO、A3 exact digest/短 TTL/强认证的边界 |
-| `secrets-stackdocker` 的 workload identity、最小引用、轮换、吊销、bootstrap 与恢复责任 | 用户声明只证明迁移方向，不能证明运行和灾备闭环 |
-| ADR-0047～0062 的正式决策签发载体与签发人 | 当前会话确认只证明设计方向接受；进入实施/试点前须绑定身份、职责、时间和精确 digest |
+| 内网自托管 Surface 可承载的正式 classification 与 audience 规则 | 未批准时只允许脱敏摘要、稳定引用、重新鉴权深链或存在性抑制 |
+| 内网 IdP/Workspace 身份能否满足各级正式电子签发及所需 step-up | A1 普通协作、A2 组织 SSO、A3 exact digest/短 TTL/强认证的边界 |
+| 外网 `secrets-stackdocker` 与内网 Secret owner 的 workload identity、最小引用、轮换、吊销、bootstrap 与恢复责任 | 用户声明只证明外网迁移方向；两域分别验证且不得共享 |
+| ADR-0047～0063 的正式决策签发载体与签发人 | 当前会话确认只证明设计方向接受；进入实施/试点前须绑定身份、职责、时间和精确 digest |
 
 ## 18. 上线签发清单
 
@@ -477,9 +498,11 @@ Phase 0A 通过只证明限定机制，不证明生产就绪或真实业务价�
 - 禁止用逐工具弹窗和复杂授权表替代后台策略与末端交付。
 - 禁止让 AI 自批权限、知识、金标准、晋级、路线图或交付。
 - 禁止用单一总分抵消安全失败，或把 `unknown/null` 显示为绿色。
-- 禁止信任卡片自报 `open_id/role/classification`，禁止用 Bitable/HTTP 2xx/消息送达替代 OwnerCommitReceiptV1。
-- 禁止飞书 Adapter 直接写 FLAi 数据库，或在飞书故障时阻断 kill/revoke。
-- 禁止 `secrets-stackdocker` 不可用时回退 `.env`、硬编码或宿主全局凭据。
+- 禁止信任 Surface payload 自报 `actor/role/classification`，禁止用项目/Wiki 字段、
+  HTTP 2xx 或消息送达替代 OwnerCommitReceiptV1。
+- 禁止协作/Wiki Adapter 直接写 FLAi 数据库，或在其故障时阻断 kill/revoke。
+- 禁止建立 Feishu/GitHub ↔ 内网实时通道，或把外部签名/CI/merge 当成内部准入/部署。
+- 禁止任一域 Secret owner 不可用时回退 `.env`、硬编码或宿主全局凭据。
 - 禁止把登录、Dockerfile、目录隔离、线程 timeout、日志存在或历史截图称为安全闭环。
 - 禁止运行时从公网安装插件、技能、依赖或拉取 `latest`。
 - 禁止在未裁决正式密级与适用性前自行宣称等保、密评、适航或其他认证。
@@ -504,5 +527,7 @@ Phase 0A 通过只证明限定机制，不证明生产就绪或真实业务价�
 - [ADR-0057：权威知识底座](../../adr/ADR-0057-authoritative-knowledge-foundation.md)
 - [ADR-0058：FLAi Bench](../../adr/ADR-0058-flai-bench-evaluation-foundation.md)
 - [ADR-0061：需求治理职责分离](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)
-- [ADR-0062：飞书唯一日常组织协作与治理中枢](../../adr/ADR-0062-feishu-single-organizational-hub.md)
-- [飞书中枢详细设计](17_Feishu_Organizational_Hub.md)
+- [ADR-0062：飞书外网研发协作中枢](../../adr/ADR-0062-feishu-single-organizational-hub.md)
+- [ADR-0063：双信任域与离线准入](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)
+- [隔离交换与内网发布准入](18_AirGap_Exchange_and_Internal_Release.md)
+- [内网自托管智能协作空间](19_Internal_Self_Hosted_Workspace.md)

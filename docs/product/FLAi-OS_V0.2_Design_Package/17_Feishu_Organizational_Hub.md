@@ -1,40 +1,54 @@
-# 17｜飞书唯一组织协作与治理中枢
+# 17｜飞书外网研发协作中枢
 
 > 决策依据：
-> [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md)
+> [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 与
+> [ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)
 >
-> 状态：`ACCEPTED-NOT-IMPLEMENTED`
+> 状态：`EXTERNAL-DEVELOPMENT-ONLY / ACCEPTED-NOT-IMPLEMENTED`
 >
 > 本文只完成产品、架构、Interface、Seam、治理与迁移设计。它不修改生产 Schema、公开
 > Interface、任务状态机、飞书应用、GitHub、`secrets-stackdocker` 或任何真实数据。
+>
+> **规范范围覆盖（2026-07-24）**：owner 已明确飞书只服务于外网研发团队协作。本文历史
+> 内容中任何把飞书描述为内网 FLAi-OS、全体业务用户、内网知识、ExecutionRun、Bench、
+> Safety、Audit 或生产治理入口的条款，均已被 ADR-0063 取代，不再具有内网规范效力。内网
+> 入口是 `FLAiWorkspace`；两个信任域之间没有实时 Connector、共享身份、共享 Secret 或运行
+> 控制链，只通过受控离线发布准入交换成果。
+>
+> 本文仍可规范 `FeishuDevelopmentHub` 的研发需求、工作包、Codex/Kimi 双线程、GitHub 投影、
+> 外网研发评审和研发连续性。原 F0/F1–F5 仅作为澄清前历史设计材料；后续必须拆成
+> `DEV-HUB-F0` 与独立的 `AIRGAP-WORKSPACE-F0`，不能沿用旧 SHA 或旧批准计数。
 
 ## 1. 结论
 
-飞书可以承担 FLAi-OS 全部日常管理与治理的**唯一组织落点、工作收件箱和编排 Surface**，
+在 `EXTERNAL_DEVELOPMENT` 域，飞书可以承担 FLAi-OS 研发项目的**唯一组织落点、工作收件箱和
+编排 Surface**，
 但需要精确定义：
 
-> 飞书是唯一日常 `System of Engagement`；FLAi Control Kernel、GitHub、Knowledge
-> Authority、Audit/WORM 与 `secrets-stackdocker` 继续分别拥有自己的权威事实。
+> 飞书是外网研发的 `System of Engagement`；GitHub 拥有外网代码事实。FLAi Control Kernel、
+> 内网 Knowledge Authority、内网 Audit/WORM 与内部 Secret owner 均不在该飞书信任域。
 
-这意味着用户都从飞书发起、组织、跟踪并接收回告：
+这意味着外网研发人员从飞书发起、组织、跟踪并接收研发回告：
 
 - 团队与项目协作；
-- 需求提交、策展、领域/安全评审与路线图签发；
+- 产品需求、设计策展、架构评审与研发路线图协作；
 - 开发任务编排、Codex/Kimi-K3 协作和 GitHub 交付跟踪；代码 diff review、PR approval、
   branch protection 与 merge 仍通过重新鉴权深链进入 GitHub 原生专业 Surface；
-- 会议工作包、正式会议记录、责任事项和验收；
-- 知识起草、会签、发布意图、查询和依据链查看；
-- Agent 生命周期、FLAi Bench、QualificationDecision 和 DeploymentBinding 治理；
-- 运行异常、安全处置、审计协作、指标与领导简报；
-- ExecutionRun、Artifact、Knowledge evidence 和 DeliveryBundle 的观察与末端人签。
+- 研发会议工作包、责任事项、非敏感设计资料和测试回告。
+
+内网会议、权威知识、Agent 生命周期、FLAi Bench、QualificationDecision、DeploymentBinding、
+ExecutionRun、Artifact、DeliveryBundle、安全处置、审计和领导简报全部由
+`AIR_GAPPED_INTERNAL` 域的 `FLAiWorkspace` 与其事实 owner 负责，不得实时回流飞书。
 
 “唯一”不承诺每个专业操作都物理留在飞书客户端。FLAi 专业执行工作台、GitHub 原生代码评审/
 合并和密封安全生存通道仍是权威专业 Surface，但它们不再拥有第二套组织首页、工作收件箱或
-项目治理看板。用户在飞书中发起动作，也不代表飞书可以自行决定动作成立；所有高影响动作都
-必须由事实 owner 重新鉴权、检查精确版本并返回可验证 receipt。
+项目治理看板。外网研发人员在飞书中发起动作，也不代表飞书可以自行决定 GitHub 工程事实或
+内网准入成立；GitHub 工程事实由 GitHub 裁决，内网发布必须另走
+`AirGapReleaseAdmission`。
 
 若“唯一中枢”被解释为“所有数据、状态、权限和审计都落进飞书”，结论是 **NO**；那会形成
-第二控制面、双写冲突和不可验证的人签。正确形态是**单一人机中枢、联邦事实所有权**。
+第二控制面、双写冲突和不可验证的人签。正确形态是**外网研发协作中枢、内网自托管工作空间、
+离线准入隔离**。
 
 ### 1.1 方案比选
 

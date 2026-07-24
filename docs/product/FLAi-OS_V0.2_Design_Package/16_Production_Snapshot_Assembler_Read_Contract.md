@@ -12,7 +12,7 @@
 >
 > 正式内网生产部署结论：**NO-GO**
 >
-> 飞书中枢集成约束：[ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md)；该约束不改变本合同的公开 Interface、失败语义或冻结状态。
+> 部署域与 Workspace 集成约束：[ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)。外网飞书研发协作受 [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 约束，但不能成为内网 Assembler 的远程 ingress；这些约束不改变本合同的公开 Interface、失败语义或冻结状态。
 
 ## 1. 冻结范围与法律效力边界
 
@@ -269,14 +269,14 @@ Assembler 本身不写业务 DB 或 audit outbox。它返回最小的 `auditClas
 
 审计写入失败如何影响只读服务由 Audit Policy 决定，不能由 Assembler 临时放宽。无论审计策略如何，审计失败都不允许把 `REJECTED` 改成 `DIAGNOSTIC_ONLY` 或 `READY`。
 
-### 3.6 飞书 Hub 远程 ingress 约束
+### 3.6 分域 Workspace Hub ingress 约束
 
-`ACCEPTED-NOT-IMPLEMENTED` 飞书 FLAi 工作空间可以成为观察结果的唯一日常人机 Surface，但它只能复用第 3.1 节既有 remote state machine，不形成第三条认证状态机：
+`ACCEPTED-NOT-IMPLEMENTED` 当前部署域的 FLAi Workspace 可以成为观察结果的唯一日常人机 Surface，但它只能复用第 3.1 节既有 remote state machine，不形成第三条认证状态机。内网生产域只能接受内部 IdP 与内部 Hub workload 铸造的通道：
 
 ```text
-verified Feishu event / app login
-  -> Feishu ingress verifies tenant + app + channel + time window + replay
-  -> Identity owner maps tenant/app/subject to versioned internal ActorBinding
+verified current-zone Workspace event / app login
+  -> current-zone ingress verifies issuer + app + channel + time window + replay
+  -> current-zone Identity owner maps issuer/app/subject to versioned ActorBinding
   -> Hub workload uses mTLS to dedicated Kernel ingress
   -> protected remote envelope binds actor + workload + delegation + audience + purpose + nonce
   -> Kernel ingress verifies, consumes nonce and mints local opaque AuthenticatedReadContext
@@ -285,15 +285,16 @@ verified Feishu event / app login
 
 约束：
 
-- `open_id`、`union_id`、display name、群管理员身份、卡片参数和 Bitable 字段都不能作为 `authenticatedReadContext`、`selector` 或授权结果；
-- Feishu user/tenant token 只用于对应 Feishu Adapter 的最小平台调用，不能直接调用 Assembler；Hub workload identity 与 end-user delegation 必须同时成立；
-- 飞书事件已验签不等于内部 ActorBinding、对象 ACL、classification 或观察授权已经通过；
+- 外部或内部平台 subject id、display name、群管理员身份、卡片参数和协作表字段都不能作为 `authenticatedReadContext`、`selector` 或授权结果；
+- Workspace user/app token 只用于当前域 Adapter 的最小平台调用，不能直接调用 Assembler；Hub workload identity 与 end-user delegation 必须同时成立；
+- Workspace 事件已验签不等于 ActorBinding、对象 ACL、classification 或观察授权已经通过；
+- 外网 Feishu token、event、ActorBinding、workload identity、mTLS 证书或 envelope 在内网一律无效；不得建立跨 AirGap RPC、身份代理或 token bridge；
 - Hub 不得把 `source="control-kernel"`、`REAL`、backend、receipt validity 或 fact digest 写入 envelope 让 Assembler 信任；
-- Assembler 返回后，Feishu Projection Module 还必须按目标 chat/space audience 和 classification ceiling 做第二次最小披露；目标不允许或 unknown 时抑制正文；
-- source freshness、event gap、`DIAGNOSTIC_ONLY`、`REJECTED` 和公共 failure mapping 必须原样保留，飞书卡片不得沿用旧绿或根据 Agent 文案补状态；
-- 飞书不可用只影响投影与新的正常管理动作，不影响 Kernel 执行、kill/revoke 安全生存通道或来源事实。
+- Assembler 返回后，当前域 Projection Module 还必须按目标 chat/space audience 和 classification ceiling 做第二次最小披露；目标不允许或 unknown 时抑制正文；
+- source freshness、event gap、`DIAGNOSTIC_ONLY`、`REJECTED` 和公共 failure mapping 必须原样保留，Workspace 卡片不得沿用旧绿或根据 Agent 文案补状态；
+- 当前域 Workspace 不可用只影响投影与新的正常管理动作，不影响 Kernel 执行、kill/revoke 安全生存通道或来源事实。
 
-本节只冻结 remote ingress 的调用约束，不添加 Feishu 专用 selector、Schema、数据库列或失败码。任何实现仍须通过本合同第 13 节七域具名评审，并另获 ADR-0062 F1/F4 实施授权。
+本节只冻结 remote ingress 的调用约束，不添加平台专用 selector、Schema、数据库列或失败码。任何实现仍须通过本合同第 13 节七域具名评审；外网 Feishu Adapter 另获 ADR-0062 F1/F4 授权，内网 Workspace Adapter 与断网 witness 另获 ADR-0063 A1～A5 授权。
 
 ## 4. ACL、classification 与最小披露
 

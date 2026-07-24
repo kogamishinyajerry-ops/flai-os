@@ -2,7 +2,7 @@
 
 > 文档性质：V0.2 设计包读模型，不是新的事实源，也不授权实现。
 >
-> 主要决策依据：[ADR-0052](../../adr/ADR-0052-workbench-first-and-role-specific-governance-surfaces.md)、[ADR-0059](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)、[ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)、[ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md)。
+> 主要决策依据：[ADR-0052](../../adr/ADR-0052-workbench-first-and-role-specific-governance-surfaces.md)、[ADR-0059](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)、[ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)、[ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)。
 >
 > 当前实现依据：[UI-PARADIGM](../../design/UI-PARADIGM.md)、[UI-SIMPLIFICATION-CONVERSATION-HOME](../../design/UI-SIMPLIFICATION-CONVERSATION-HOME.md)。
 
@@ -20,24 +20,28 @@
 
 本章描述的是用户如何找到工作、理解状态并进入证据，不另建任务、身份、指标或审计事实源。若本章与 ADR 冲突，以 ADR 为准；若目标态与当前实现不同，必须同时保留二者的状态标签。
 
-## 2. IA 北极星：一个飞书 Shell、一份工作收件箱、角色化空间
+## 2. IA 北极星：一个内网 FLAi Workspace、一份工作收件箱、角色化空间
 
 `ACCEPTED-NOT-IMPLEMENTED`
 
 组织级默认心智模型不是“先找系统、再找表格、再挑 Agent”，而是：
 
-> 我在飞书 FLAi 工作空间看到该做什么、项目发生了什么，并用一句话推进工作；需要专业执行时进入同一上下文中的工程智能体工作台；状态、证据与结果主动回到我的工作收件箱。
+> 我在内网 FLAi 工作空间看到该做什么、项目发生了什么，并用一句话推进工作；需要专业执行
+> 时进入同一上下文中的工程智能体工作台；状态、证据与结果主动回到我的工作收件箱。
 
-产品只建立一个顶层应用“FLAi 工作空间”。工程执行、共建、治理与领导阅读是其中的角色化空间；它们投影联邦 owner 的事实，不是多套应用，也不是一张 Bitable 总表。
+内网产品只建立一个顶层应用“FLAi 工作空间”。工程执行、项目讨论、知识、共建、治理与领导
+阅读是其中的角色化空间；它们投影联邦 owner 的事实，不是多套应用，也不是一张聊天/Wiki/
+项目总表。Mattermost、Wiki.js 或其他自托管产品只隐藏在 Adapter 后面。
 
 | 空间／Surface | 默认受众 | 核心问题 | 入口形态 | 写入权限 |
 |---|---|---|---|---|
-| 工作收件箱 | 全体认证参与者 | “现在最值得我推进、处理或查看的是什么？” | 飞书 FLAi 工作空间默认页 | 只提交低门槛输入或 typed intent；不直接改权威状态 |
-| 工程智能体工作台 | 工程师、业务人员、试点用户 | “Agent 正在做什么，当前产物与依据是什么，我要签发什么？” | 飞书网页应用内嵌或受控深链 | 创建自治会话；在末端处理精确 Delivery Bundle |
-| GitHub 原生代码专业 Surface | 开发者、CODEOWNER、具名 reviewer | “这段 diff 是否可接受，branch protection/CI 是否满足，是否 merge？” | 飞书交付项中的重新鉴权深链 | GitHub 原生 review/approval/merge；结果回读飞书 |
-| FLAi 共建地图 | 全体认证参与者 | “平台真实具备什么，下一步做什么，我的需求去哪里了？” | 飞书工作空间内的只读空间 | 地图状态只读；自然语言需求形成不可变输入 |
-| 治理与运行中心 | 平台管理员、安全人员、Agent Owner、具名治理职责 | “哪些例外需要处置，能力为何受阻，资源与审计是否合规？” | 飞书工作空间内按职责出现 | 只提交 typed intent；权威 owner 重验并返回 receipt |
-| 智能化指挥中心 | 领导、AI 负责人 | “经验证的能力、价值和风险是什么？” | 飞书工作空间内后置只读空间 | 只读，不允许手填点绿、改任务或替代签发 |
+| 工作收件箱 | 全体内网认证参与者 | “现在最值得我推进、处理或查看的是什么？” | FLAiWorkspace 默认页 | 只提交低门槛输入或 typed intent；不直接改权威状态 |
+| 项目讨论与知识 | 项目成员 | “团队刚刚讨论、决定和沉淀了什么？” | Workspace 内嵌或受控深链到自托管 Surface | 协作草稿与来源材料；正式事实走 owner receipt |
+| 工程智能体工作台 | 工程师、业务人员、试点用户 | “Agent 正在做什么，当前产物与依据是什么，我要签发什么？” | Workspace 内专业执行 Surface | 创建自治会话；在末端处理精确 Delivery Bundle |
+| 内部代码专业 Surface | 内网开发者、具名 reviewer | “内部导入/补丁是否可接受，CI 是否满足？” | 重新鉴权到内部 Code Forge | 内部 review/merge；不连接 GitHub.com |
+| FLAi 共建地图 | 全体内网认证参与者 | “平台真实具备什么，下一步做什么，我的需求去哪里了？” | Workspace 内只读空间 | 地图状态只读；自然语言需求形成不可变输入 |
+| 治理与运行中心 | 平台管理员、安全人员、Agent Owner、具名治理职责 | “哪些例外需要处置，能力为何受阻，资源与审计是否合规？” | Workspace 内按职责出现 | 只提交 typed intent；权威 owner 重验并返回 receipt |
+| 智能化指挥中心 | 领导、AI 负责人 | “经验证的能力、价值和风险是什么？” | Workspace 内后置只读空间 | 只读，不允许手填点绿、改任务或替代签发 |
 
 `OUT-OF-SCOPE` Phase 0A 不建设领导驾驶舱、个人生产力排行、战略甘特图或独立 Management Plane 应用。智能化指挥中心是后置证据投影，不是 FLAi-OS 产品总名。
 
@@ -48,8 +52,8 @@
 用户前台只暴露完成工作所需的稳定对象；模型网关、任务队列、MCP、策略求解器等实现名词进入治理详情，而不是普通用户一级入口。
 
 ```text
-飞书
-└── FLAi 工作空间（唯一顶层入口）
+内网
+└── FLAiWorkspace（唯一顶层入口）
     ├── 工作收件箱（默认）
     │   ├── 一句话 Composer
     │   ├── 我的待处理
@@ -57,7 +61,8 @@
     │   └── 最近产物、风险与回执
     ├── 我的项目
     │   ├── 责任事项 / 决策 / 风险 / 会议
-    │   ├── GitHub 交付投影
+    │   ├── 项目讨论 / 文档 / 知识
+    │   ├── 内部代码与发布投影
     │   └── Agent 运行与产物投影
     ├── 工程智能体工作台（专业执行）
     │   ├── 自治会话与执行时间线
@@ -76,15 +81,17 @@
 1. 自治会话是普通用户的工作容器；用户不需要理解内部 Agent 数量。
 2. 产物和证据属于同一会话上下文，不能分别落入互不关联的“文件中心”和“日志中心”。
 3. Delivery Bundle 是会话末端的不可变交付对象，不是聊天消息或空白审批单。
-4. 共建地图节点引用能力发布、FLAi Bench、人工签发和运行证据，不复制或在 Bitable 中重写这些状态。
+4. 共建地图节点引用能力发布、FLAi Bench、人工签发和运行证据，不复制或在聊天、Wiki、项目表中重写这些状态。
 5. 需求信号、路线图承诺、工程 Issue 是三层事实；用户看到连接关系，但不能在展示层直接互改状态。
 6. 所有投影显示 owner、source version/digest、classification、freshness 与
-   `source_evidence_ref`；治理变迁显示适用的 owner receipt，运行事实显示 witness，GitHub
-   只读事实显示 verified provider state。缺少该类事实的必需证据时显示
+   `source_evidence_ref`；治理变迁显示适用的 owner receipt，运行事实显示 witness，内部
+   Code Forge/Registry 只读事实显示 verified provider state。缺少该类事实的必需证据时显示
    stale/unknown/suppressed，而不是强求每个只读事实都有治理 receipt。
-7. 飞书是唯一组织 landing、工作收件箱与编排入口，但 GitHub 原生代码专业 Surface、FLAi
-   专业执行 Surface 与密封安全通道仍保留；GitHub、FLAi Control Kernel、Knowledge
-   Authority、Audit/WORM 与 `secrets-stackdocker` 各守事实。
+7. FLAiWorkspace 是唯一内网 landing、工作收件箱与编排入口，但内部代码专业 Surface、
+   FLAi 专业执行 Surface 与密封安全通道仍保留；Internal Forge/Registry、FLAi Control
+   Kernel、Knowledge Authority、Audit/WORM 与内网 Secret owner 各守事实。
+8. 外网 Feishu/GitHub/Codex/Kimi 只出现在“研发来源与离线发布 provenance”中，不进入普通
+   内网导航，也不提供实时深链。
 
 ## 4. 默认工作收件箱与专业执行导航
 
@@ -92,7 +99,8 @@
 
 `ACCEPTED-NOT-IMPLEMENTED`
 
-普通用户首先进入飞书工作收件箱，首屏只承担“开始、处理、回看”，避免把组织治理分类和复杂 Bitable schema 搬到日常工作前台：
+普通用户首先进入内网 FLAi 工作收件箱，首屏只承担“开始、处理、回看”，避免把组织治理分类
+和第三方系统 schema 搬到日常工作前台：
 
 1. **一句话 Composer**：根据上下文提出“发起任务、提交需求、导入会议材料、查知识、补证据”等候选意图；无法区分时只问一次最小澄清。
 2. **我的待处理**：只显示当前用户真实需要处理的 3–7 项，按影响和时限排序，不显示全量看板。
@@ -100,7 +108,7 @@
 4. **最近工作**：会话、产物、决策和回告保持稳定引用；进入执行任务时打开工程智能体工作台。
 5. **共建与知识**：提供低门槛入口，但不取代工作收件箱。
 
-“Agent 与能力”不作为完成任务的必经一级页面。用户可在 Composer 附近只读看到平台根据目标、项目上下文、冻结 CapabilityReleasePackage 和策略推导的已批准能力，但 Phase 0A 不提供任务级 Agent、Skill、Workflow、模型、Tool、Schema 或权限调整。模型、工具、策略版本、队列和 Sandbox 只在提交后的渐进披露/证据检查器中展示；治理人员通过 Hub typed intent 发起版本化变更，owner receipt 生效后才更新投影。
+“Agent 与能力”不作为完成任务的必经一级页面。用户可在 Composer 附近只读看到平台根据目标、项目上下文、冻结 CapabilityReleasePackage 和策略推导的已批准能力，但 Phase 0A 不提供任务级 Agent、Skill、Workflow、模型、Tool、Schema 或权限调整。模型、工具、策略版本、队列和 Sandbox 只在提交后的渐进披露/证据检查器中展示；治理人员通过 InternalWorkspaceHub typed intent 发起版本化变更，owner receipt 生效后才更新投影。
 
 ### 4.2 状态不依赖导航
 
@@ -121,7 +129,7 @@ V0.2 仍缺少统一的自治会话、Delivery Bundle、执行授权 receipt 和
 
 `ACCEPTED-NOT-IMPLEMENTED`
 
-治理、共建和领导视图通过同一飞书 FLAi 工作空间中的角色化入口出现：
+治理、共建和领导视图通过同一内网 FLAiWorkspace 中的角色化入口出现：
 
 - 没有治理职责的用户看不到治理写操作；知道深链也不能越权。
 - 需求策展、领域评审、安全评审、路线图签发按职责和作用域出现，不笼统绑定全局管理员。
@@ -132,7 +140,9 @@ V0.2 仍缺少统一的自治会话、Delivery Bundle、执行授权 receipt 和
 
 `ACCEPTED-NOT-IMPLEMENTED`
 
-当用户从飞书工作收件箱进入专业执行任务后，内嵌或重新鉴权的桌面端主视图采用“稳定左轨 + 连续中央叙事 + 按需右侧检查器”，吸收 WorkBuddy 的中文工作对象与 Claude/Codex 的执行透明度，但不复制品牌或像素布局，也不形成第二套项目管理导航。
+当用户从 FLAi 工作收件箱进入专业执行任务后，桌面端主视图采用“稳定左轨、连续中央叙事、
+按需右侧检查器”，吸收 WorkBuddy 的中文工作对象与 Claude/Codex 的执行透明度，但不复制品牌
+或像素布局，也不形成第二套项目管理导航。
 
 | 区域 | 默认内容 | 展开后内容 | 不允许出现 |
 |---|---|---|---|
@@ -206,11 +216,15 @@ IA 由少量深 Module 支撑，避免每个页面各自解释状态：
 | 产物与证据 Module | 输入会话、主体和产物引用；返回可预览内容、差异与证据 | 文件/证据仓储到右侧检查器的位置 | 预览、分级、hash、权限和错误呈现集中，避免页面直接读路径 |
 | Delivery Bundle Module | 输入精确 Bundle 引用与主体；返回摘要、差异、风险、合法末端动作 | 自治执行到人类最终权威的位置 | 授权匹配、漂移、过期和 receipt 复杂度留在实现内；前台只有少量明确动作 |
 | 共建投影 Module | 输入路线图版本、发布、评测、反馈和指标事实；返回只读地图 | 多事实源到全员共建视图的位置 | 状态派生与隐私聚合集中，展示层无手工点绿能力 |
-| FeishuOrganizationalHub | `open/prepare/commit`；返回授权投影、ReviewChallengeV1、OwnerCommitReceiptV1 或 EffectUnknownV1 | Feishu、GitHub、FLAi、Knowledge、Audit 与 SecretProvider 的交界 | 一个日常入口隐藏多平台差异；事实 owner、classification、receipt 与对账规则集中 |
+| InternalWorkspaceHub | `open/prepare/commit`；返回授权投影、ReviewChallengeV1、OwnerCommitReceiptV1 或 EffectUnknownV1 | 自托管协作/知识、内部身份、FLAi、Knowledge、Audit 与 InternalSecretProvider 的交界 | 一个内网入口隐藏多平台差异；事实 owner、classification、receipt 与对账规则集中 |
+| AirGapExchange | `sealRelease/admitRelease/sealSanitizedFeedback`；返回签名 Bundle、内部候选 receipt 或 fail-closed 失败 | 外网研发域、隔离交换域与内网运行域的唯一跨域 Seam | 内容寻址、quarantine、scan、ReleaseSet CAS、出站 allowlist 和 effect unknown 集中 |
 
 只有确有多个 Adapter 的地方才建立 Seam，例如同一产物预览 Interface 下的 DOCX、文本和受控工程文件 Adapter。不要为单一当前实现虚构扩展层；新工作流优先复用既有 Interface，保持 Locality。
 
-Bitable、Docs、Chat/Card 与内嵌网页应用只是 `FeishuSurfacePort` 的不同 Adapter：Bitable 承载结构化协作草稿和高级视图，Docs/Wiki 承载叙事与知识来源，Chat/Card 承载提醒和低影响动作，内嵌页承载复杂审阅。任何 Adapter 都不能直接写 GitHub/FLAi owner 或把投影字段改成权威事实。
+频道/线程、Wiki 页面、项目表与内嵌网页应用只是不同自托管 Adapter：项目表承载结构化协作
+草稿和高级视图，Wiki/DMS 承载叙事与知识来源，Chat 承载讨论、提醒和低影响动作，FLAi
+Workspace 承载复杂审阅。任何 Adapter 都不能直接写 FLAi/Knowledge/Audit owner 或把投影字段
+改成权威事实。
 
 ## 10. 失败、未知与阻断的信息去向
 
@@ -230,7 +244,7 @@ Bitable、Docs、Chat/Card 与内嵌网页应用只是 `FeishuSurfacePort` 的�
 
 未来原型至少要机械验证：
 
-1. 新用户从飞书 FLAi 工作收件箱只写目标和附加文件即可开始三条黄金 tracer，不经过任务创建长表单。
+1. 新用户从内网 FLAi 工作收件箱只写目标和附加文件即可开始三条黄金 tracer，不经过任务创建长表单。
 2. 会话运行期间没有逐命令、逐工具、逐文件的泛化审批弹窗。
 3. 关闭右侧检查器、切换会话、刷新深链后，任务、状态和证据仍指向同一权威标识。
 4. 普通用户、需求策展人、安全评审人和领导看到的入口与动作符合各自职责；手工输入受限 URL 仍 fail-closed。
@@ -238,11 +252,13 @@ Bitable、Docs、Chat/Card 与内嵌网页应用只是 `FeishuSurfacePort` 的�
 6. `unknown`、`null`、`zero`、失败、受阻和取消在文字、图标及可访问名称上均不同。
 7. 当前 `waiting_review` 不被标为 V0.2 Delivery Bundle 已实现；目标交付需独立契约和验证。
 8. 中文文件名、长标题、中文标点和 200% 缩放下仍可完成 Composer、时间线、检查器和交付操作。
-9. 飞书卡片、Bitable 与工作台中同一对象显示相同 owner/version/digest/freshness；人工修改投影字段不能改变来源事实。
+9. 通讯、Wiki、项目投影与工作台中同一对象显示相同 owner/version/digest/freshness；人工修改投影字段不能改变来源事实。
 10. 高影响动作先形成精确 PreparedCommand/ReviewChallengeV1，提交时重新鉴权；无有效
     OwnerCommitReceiptV1 不显示“已生效”，EffectUnknownV1 不得包装成成功。
-11. 飞书不可用时新的正常治理动作暂停，但 kill/revoke/isolate/credential invalidation 不被阻断。
-12. 飞书空间密级或对象 ACL 无法确认时，正文被抑制，深链重新鉴权且不泄露受限对象存在性。
+11. Workspace/通讯/Wiki 或主协作 SSO 不可用时新的正常治理动作暂停，但 kill/revoke/isolate/credential invalidation 不被阻断。
+12. 目标自托管 Surface 密级上限、来源 ACL 或对象 classification 无法确认时，正文被抑制，深链重新鉴权且不泄露受限对象存在性。
+13. 无 Feishu 配置、无 GitHub.com、无外网 DNS、无云模型时，内网导航、执行、知识、审计和恢复仍可用。
+14. 外网 Feishu/GitHub 状态只显示为来源 provenance，不能成为内部 approval、qualification、deployment 或 REAL witness。
 
 ## 12. 非目标
 
@@ -251,6 +267,7 @@ Bitable、Docs、Chat/Card 与内嵌网页应用只是 `FeishuSurfacePort` 的�
 - 不在本章确定路由路径、数据库表、前端框架或视觉像素。
 - 不用 IA 文档绕过 ADR-0050 的末端授权语义。
 - 不把共建地图做成需求投票榜、项目管理后台或个人绩效系统。
-- 不把 Bitable 做成 GitHub、FLAi、Knowledge、Audit 或 Secret 的总数据库。
+- 不把聊天、Wiki、项目表或任何第三方 Surface 做成 FLAi、Knowledge、Audit 或 Secret 的总数据库。
+- 不在内网导航中提供 Feishu/GitHub 实时入口，也不做双向自动同步。
 - 不以 WorkBuddy、Claude 或 Codex 的界面形状代替本项目的身份、安全与证据合同。
 - 不在 Phase 0A 建实时会议伴随、全自主 CFD、Office GUI 控制或跨域自动发布入口。

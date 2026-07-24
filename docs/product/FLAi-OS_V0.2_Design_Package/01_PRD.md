@@ -22,7 +22,9 @@
 2. **工程可信**：规章、命令、边界条件和工程建议必须来自可追溯依据；缺失和冲突不能由模型猜测填平。
 3. **企业控制**：Sandbox、身份授权、数据分类、网络外联、并发预算、取消强杀、恢复和审计必须在上线前形成可证伪门。
 4. **组织共建**：真实需求要进入版本化路线图，能力要经过 FLAi Bench，使用、成本和价值要由事实派生，而不是闭门规划或手填指标。
-5. **入口割裂**：日常协作不能散落在飞书、独立管理后台和 GitHub；用户需要一个飞书工作空间完成管理与治理，同时仍由 GitHub、FLAi、Knowledge、Audit 和 Secrets Stack 各守自己的权威事实。
+5. **入口与信任域割裂**：外网研发需要飞书/GitHub 协作，内网业务用户需要一个自托管
+   FLAiWorkspace；两者不能靠实时同步、共享身份或共享 Secret 粘在一起。Internal
+   Forge/Registry、FLAi、Knowledge、Audit 和内部 Secret owner 各守权威事实。
 
 ## 3. 产品目标与非目标
 
@@ -47,9 +49,12 @@
 - Windows 适配；本阶段只验收 macOS 首发质量；
 - 声称生产就绪、适航级、通过外部认证或证明全面业务价值。
 
-### 3.3 V0.2 目标态补充：飞书唯一日常中枢
+### 3.3 V0.2 目标态补充：双环境、内网自托管入口
 
-`ACCEPTED-NOT-IMPLEMENTED` 飞书 FLAi 工作空间是目标组织级默认入口，工程智能体工作台是其内嵌或重新鉴权进入的专业执行 Surface。该目标不改变 Phase 0A 当前“无真实飞书 Connector、无真实组织写入”的冻结边界；Hub 实现按 F0～F5 另行评审、授权和验收。
+`ACCEPTED-NOT-IMPLEMENTED` 飞书只作为外网研发团队的协作 Hub；正式内网默认入口是自托管
+FLAiWorkspace，工程智能体工作台是其中的专业执行 Surface。两个域只通过
+AirGapExchange 的签名离线发布包和独立脱敏反馈包交换成果。该目标不改变 Phase 0A 当前
+“synthetic fixture、无真实协作 Connector、无内网写入”的冻结边界。
 
 ## 4. 用户与职责
 
@@ -114,7 +119,7 @@
 
 | ID | 需求 | 验收要点 | 状态 |
 |---|---|---|---|
-| WB-01 | 飞书工作收件箱与工程执行入口都以目标导向 Composer 为首要动作，可附加工作流允许的文件 | 发起三条黄金工作流不要求先填写 Agent 设计卡、权限矩阵或内部 JSON | `ACCEPTED-NOT-IMPLEMENTED` |
+| WB-01 | 内网 FLAi 工作收件箱与工程执行入口都以目标导向 Composer 为首要动作，可附加工作流允许的文件 | 发起三条黄金工作流不要求先填写 Agent 设计卡、权限矩阵或内部 JSON | `ACCEPTED-NOT-IMPLEMENTED` |
 | WB-02 | Agent 自动推导可由材料和上下文确定的字段 | 相同事实不重复询问；无法确认的事实保留为未知，不能编造 | `ACCEPTED-NOT-IMPLEMENTED` |
 | WB-03 | 会话中不出现通用逐工具、逐命令、逐文件审批 | 自动化范围只包含已授权、可逆、可停止且有 receipt 的动作 | `ACCEPTED-NOT-IMPLEMENTED` |
 | WB-04 | 提供真实进度与渐进披露 | 每个可见状态由 task/event/tool/model/file 等事实支撑；无证据不显示“完成” | `ACCEPTED-NOT-IMPLEMENTED` |
@@ -193,21 +198,22 @@
 | METRIC-04 | 节省时间来自基线与抽样 | 报区间、样本量和覆盖率；无基线不估算，不用运行时长或 LLM 自评推导 | `ACCEPTED-NOT-IMPLEMENTED` |
 | METRIC-05 | 全员视图保护隐私 | 小样本抑制/合并/脱敏；个人明细只对本人和授权治理角色可见 | `ACCEPTED-NOT-IMPLEMENTED` |
 
-### 7.9 飞书组织协作与治理中枢
+### 7.9 双环境协作、内网 Workspace 与离线准入
 
 | ID | 需求 | 验收要点 | 状态 |
 |---|---|---|---|
-| HUB-01 | 全部日常管理与治理从一个飞书 FLAi 工作空间发现和编排 | 默认是按用户生成的工作收件箱；FLAi 专业执行与 GitHub 原生代码操作通过重新鉴权深链进入，不另建组织首页 | `ACCEPTED-NOT-IMPLEMENTED` |
-| HUB-02 | 飞书投影联邦权威事实 | 每个投影绑定 owner、version/digest、classification、freshness 与适用的 source evidence；治理变迁另绑 owner receipt，Bitable 手改不反写 owner | `ACCEPTED-NOT-IMPLEMENTED` |
-| HUB-03 | 所有会创建/改变跨 owner 正式事实或受控投影的写动作编译为版本化 typed intent | 飞书自有群聊/评论/Docs 草稿保持原生协作；提交正式事实时禁止通用 approve、任意状态覆盖和客户端自报 actor/role/classification | `ACCEPTED-NOT-IMPLEMENTED` |
-| HUB-04 | 高影响动作采用 prepare/commit | commit 使用新鲜 attestation，重验对象 digest、职责、作用域、ACL、classification、epoch、职责分离与 TTL | `ACCEPTED-NOT-IMPLEMENTED` |
-| HUB-05 | 适用的治理变迁只有有效 OwnerCommitReceiptV1 才显示生效 | 运行事实可用 witness、GitHub 可用 verified provider state；卡片已点击、HTTP 2xx、消息送达或 Bitable 更新均不等于 owner commit 成功 | `ACCEPTED-NOT-IMPLEMENTED` |
-| HUB-06 | effect unknown、source gap 与投影漂移可对账 | 同一 effect key 查证；不得换键重放、最后写入者获胜或用旧绿掩盖 stale | `ACCEPTED-NOT-IMPLEMENTED` |
-| HUB-07 | GitHub 继续拥有代码交付事实 | commit、branch、PR、review、CI 和 merge 仅由 GitHub 回读；飞书可以发起受控工程意图但不伪造结果 | `ACCEPTED-NOT-IMPLEMENTED` |
-| HUB-08 | 运行时 App/Connector Secret 只从 `secrets-stackdocker` 解析 | 普通 Connector 仅持 opaque `SecretRef`；不可用、撤销或版本 unknown 时 fail-closed，禁止 `.env`/硬编码 fallback；Safety signing、Coordinator attestation、Policy fence 与 Trusted-Time Authority/consumer-local Commit-Guard material 走分离的 PKI/HSM/Time owners | `DECLARED-NOT-VERIFIED` |
-| HUB-09 | 飞书故障不阻断安全止损 | 独立密封通道仍可 kill/revoke/isolate/invalidate、只开对账案和向预批准本地 WORM 封存证据；不得承担正常管理、对外导出、恢复启用、签发或发布 | `ACCEPTED-NOT-IMPLEMENTED` |
-| HUB-10 | 飞书未获目标密级批准时不复制受限正文 | 只显示脱敏摘要、稳定引用、重新鉴权深链或存在性抑制 | `ACCEPTED-NOT-IMPLEMENTED` |
+| HUB-01 | 外网研发与内网运行属于不同 DeploymentTrustZone | 无共享身份、Secret、数据库、webhook、Runtime 控制或自动数据回流 | `ACCEPTED-NOT-IMPLEMENTED` |
+| HUB-02 | 内网日常管理与治理从一个 FLAiWorkspace 发现和编排 | 默认工作收件箱；自托管通讯/Wiki/项目只是 Adapter；工作台和内部 Code Forge 是受控专业 Surface | `ACCEPTED-NOT-IMPLEMENTED` |
+| HUB-03 | Workspace 投影同域权威事实 | 每个投影绑定 owner、version/digest、classification、freshness 和 source evidence；人工改协作字段不反写 owner | `ACCEPTED-NOT-IMPLEMENTED` |
+| HUB-04 | 正式写动作编译为版本化 typed intent，高影响动作采用 prepare/commit | commit 使用新鲜内网 attestation，重验 digest、职责、作用域、ACL、classification、epoch、职责分离和 TTL | `ACCEPTED-NOT-IMPLEMENTED` |
+| HUB-05 | 只有有效 OwnerCommitReceiptV1 才显示治理变迁生效 | 运行使用 witness，Internal Forge/Registry 使用 verified provider state；卡片/页面/HTTP 2xx 不等于 owner commit | `ACCEPTED-NOT-IMPLEMENTED` |
+| HUB-06 | effect unknown、source gap 与投影漂移可对账 | 同一 effect key 查证；不得换键重放、last-write-wins 或用旧绿掩盖 stale | `ACCEPTED-NOT-IMPLEMENTED` |
+| HUB-07 | GitHub 只拥有外网代码事实，Internal Forge/Registry 拥有已导入源码和制品 | GitHub SHA 在内网只是 provenance；内部 receipt/Qualification/Deployment/witness 才证明接纳与运行 | `ACCEPTED-NOT-IMPLEMENTED` |
+| HUB-08 | Secret 完全分域 | 外网 `secrets-stackdocker` 与内网 Secret owner 使用独立 root/namespace/value；禁止 `.env`/硬编码 fallback；Safety keys 继续独立 PKI/HSM/Time owner | `DECLARED-NOT-VERIFIED` |
+| HUB-09 | Workspace/通讯/Wiki 故障不阻断安全止损 | 独立密封通道仍可 kill/revoke/isolate/invalidate、开对账案和向本地 WORM 封存证据 | `ACCEPTED-NOT-IMPLEMENTED` |
+| HUB-10 | 目标自托管 Surface 未获目标密级批准时不复制受限正文 | 只显示脱敏摘要、稳定引用、重新鉴权深链或存在性抑制 | `ACCEPTED-NOT-IMPLEMENTED` |
 | HUB-11 | Safety TTL、Policy fence 与 provider send 边界可机械证明 | TTL 只用签名时间区间+单调 checkpoint；alias CAS 同事务推进 fence，Envelope 绑定 PRE/POST witness；Claim 不等于 send，唯一 egress 一次性消费 capability，Attempt 无 receipt 禁止重放 | `ACCEPTED-NOT-IMPLEMENTED` |
+| HUB-12 | AirGapExchange 是唯一跨域入口 | Bundle 内容寻址、签名、closed-world、quarantine、内部扫描/复测/双人准入和 ReleaseSet CAS；反馈仅 allowlist + synthetic reproducer | `ACCEPTED-NOT-IMPLEMENTED` |
 
 ## 8. 非功能与治理需求
 
@@ -219,8 +225,8 @@
 | SEC-04 | 网络外联 default-deny | egress 仅由版本化策略和目的地白名单开放；DNS/IP/重定向变化不能绕过 | `ACCEPTED-NOT-IMPLEMENTED` |
 | SEC-05 | 数据分类传播 | 输入的最高分类沿摘要、引用、任务、事件、模型调用、产物和导出传播，不能因生成而降级 | `ACCEPTED-NOT-IMPLEMENTED` |
 | SEC-06 | 追加且防篡改的审计证据 | 认证主体、策略版本、动作、结果、对象摘要、时间和 receipt 可重建；缺失记录不能以应用日志补绿 | `ACCEPTED-NOT-IMPLEMENTED` |
-| SEC-07 | 飞书 channel attestation 与内部 ActorBinding 分离 | `open_id` 只能来自受信 channel；tenant/app/subject 映射、credential epoch、职责和作用域均版本化，群管理员身份不自动授权 | `ACCEPTED-NOT-IMPLEMENTED` |
-| SEC-08 | Classification-aware projection | 目标飞书空间 ceiling、来源密级或 ACL unknown 时正文不落飞书；深链重新鉴权 | `ACCEPTED-NOT-IMPLEMENTED` |
+| SEC-07 | 自托管 Surface identity 与内部 ActorBinding 分离 | Surface user id 只能来自受信 channel/SSO；instance/subject 映射、credential epoch、职责和作用域均版本化，频道管理员不自动授权 | `ACCEPTED-NOT-IMPLEMENTED` |
+| SEC-08 | Classification-aware projection | 目标 Surface ceiling、来源密级或 ACL unknown 时正文不投影；深链重新鉴权 | `ACCEPTED-NOT-IMPLEMENTED` |
 | REL-01 | 并发与预算 | 用户、Agent、工具和后端并发有显式配额；队列拥塞、取消、超时和公平性可观测 | `ACCEPTED-NOT-IMPLEMENTED` |
 | REL-02 | 恢复与幂等 | 每类副作用标明是否可自动重试；模型/工具/provenance 变化不得静默继承旧结果 | `ACCEPTED-NOT-IMPLEMENTED` |
 | REL-03 | Hub 最终一致性与对账 | owner 调用后丢失响应进入 `effect_unknown`；投影 gap/stale/drift 不能点绿或参与签发 | `ACCEPTED-NOT-IMPLEMENTED` |
@@ -239,7 +245,8 @@
 | Capability Release / FLAi Bench | 这个精确能力版本是否具备哪类证据 | Runtime 是唯一评测执行路径；评审记录是证据输入，deterministic runner 只有满足统一 EvalExecutor Interface 时才称 Adapter | 变更一次即重评，发布规则集中 |
 | Delivery Bundle | 用户究竟对哪个输入、产物、风险和动作签发 | 提交 Adapter 按外部系统变化；Bundle Interface 不变 | 不可逆动作与 UI 分离，签发语义集中 |
 | Co-building Projection | 现有事实如何投影成路线图和指标 | 复用 task/events/tool/model/eval/promotion/feedback/stats；只读投影 | 指标定义集中，页面不各算一套 |
-| FeishuOrganizationalHub | 用户可看什么，以及 typed intent 是否已被 owner 接受 | 外部只暴露 `open/prepare/commit`；Feishu、GitHub、FLAi 与 SecretProvider 是 Adapter | 一个日常入口隐藏多平台复杂度，但不产生第二事实 owner |
+| InternalWorkspaceHub | 内网用户可看什么，以及 typed intent 是否已被 owner 接受 | 外部只暴露 `open/prepare/commit`；通讯、Wiki、内部身份、FLAi 与 SecretProvider 是 Adapter | 一个内网入口隐藏多平台复杂度，但不产生第二事实 owner |
+| AirGapExchange | 外网成果能否成为内网候选，哪些最小反馈可外发 | `sealRelease/admitRelease/sealSanitizedFeedback`；各 Registry 先写 quarantine | 跨域供应链、准入和最小化集中，不形成同步桥 |
 
 一个只有单一实现且没有测试替身或替换需求的地方，不应为了“架构感”预造 Seam。Interface 是调用与测试的共同表面，验收应通过该表面观察结果，不穿透实现细节。
 
@@ -329,7 +336,7 @@ Stage B 的产品与字段合同已由本次设计会话明确冻结，并已打
 | 权威知识 | KnowledgeItem 生命周期、真人签发、完整 ReleaseKnowledgeBinding、TaskKnowledgeSnapshot、锚点与冲突算法见 `11`/`15` | D10/D11 的 typed publish、catalog/binding/snapshot digests、ACL/conflict/tamper evidence | `ACCEPTED-NOT-IMPLEMENTED` |
 | Capability release / Bench | identity/envelope、EvaluationAdmission、四轨结果、Gate Policy、36 cases 与三套 rubric 见 `12`/`15` | D11 validator、approved pack bytes/digests、真人 review 与 qualification evidence | `ACCEPTED-NOT-IMPLEMENTED` |
 | 共建地图与需求闭环 | 节点、需求事件、签发权、通知 outbox 与指标定义合同见 `13` | Phase 0A 只读 projection 属后续获批切片；完整协作/通知/运营扩展不夹带进三条 tracer | `ACCEPTED-NOT-IMPLEMENTED` |
-| 飞书唯一中枢 | 工作收件箱、事实所有权、`open/prepare/commit`、ActorBinding、classification、receipt、reconciliation 与 SecretRef 见 `17` | F0 具名评审后，按 F1 只读投影→F2 低风险意图→F3 高影响治理递进；现阶段无生产 Schema 或真实飞书写入授权 | `ACCEPTED-NOT-IMPLEMENTED` |
+| 双环境与内网 Workspace | 外网研发 Hub 见 `17`，AirGapExchange 见 `18`，内网自托管 Workspace 见 `19` | 新 SHA 七域评审后再分别授权 POC/Adapter；现阶段无生产 Schema、真实连接、导入或部署授权 | `ACCEPTED-NOT-IMPLEMENTED` |
 
 ## 14. 追踪关系
 
@@ -343,7 +350,8 @@ Stage B 的产品与字段合同已由本次设计会话明确冻结，并已打
 | 权威知识 | ADR-0057 |
 | FLAi Bench | ADR-0058 |
 | 需求共创、路线图签发与职责分离 | ADR-0060～0061 |
-| 飞书唯一日常组织协作与治理中枢 | ADR-0062 |
+| 飞书外网研发协作中枢 | ADR-0062（范围已收窄） |
+| 双信任域、AirGapExchange 与内网自托管 Workspace | ADR-0063 |
 
 ---
 

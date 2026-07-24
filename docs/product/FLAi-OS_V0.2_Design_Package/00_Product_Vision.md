@@ -28,11 +28,21 @@ FLAi-OS 是面向航空工程组织的**工程智能体协作与治理平台**�
 
 ## 3. 产品定位
 
-### 3.1 唯一组织入口与默认工作面
+### 3.1 双环境、单域单入口
 
-`ACCEPTED-NOT-IMPLEMENTED` **飞书 FLAi 工作空间**是组织级唯一日常入口。普通用户默认看到一份按本人职责与项目范围生成的工作收件箱、一句话 Composer、需要处理的少量事项和来自权威事实的实质变化，而不是全量项目后台、复杂表格或 Agent 拓扑图。
+`ACCEPTED-NOT-IMPLEMENTED` FLAi-OS 明确拆成两个不互信环境：
 
-**工程智能体工作台**仍是首发 Agent 执行主产品，但它成为从飞书工作空间内嵌或重新鉴权进入的专业执行 Surface。一次任务的主要体验是：
+- 外网研发团队以 `FeishuDevelopmentHub + GitHub` 管理 FLAi-OS 产品开发；
+- 正式内网用户以完全自托管的 **`FLAiWorkspace`** 作为唯一日常产品入口。
+
+两个环境没有实时同步、共享身份、共享 Secret 或运行控制链，只通过受控、签名、内容寻址的
+离线发布准入交换成果。外网飞书不是内网产品依赖，GitHub SHA 在内网也只表示来源 provenance。
+
+内网普通用户默认看到按本人职责与项目范围生成的工作收件箱、一句话 Composer、需要处理的
+少量事项和来自权威事实的实质变化，而不是全量项目后台、复杂表格或 Agent 拓扑图。
+
+**工程智能体工作台**仍是首发 Agent 执行主产品，并成为 `FLAiWorkspace` 中的专业执行
+Surface。一次任务的主要体验是：
 
 ```text
 提交目标与材料
@@ -44,30 +54,45 @@ FLAi-OS 是面向航空工程组织的**工程智能体协作与治理平台**�
 
 任务中间不要求用户补填 Agent 已经能够推导的字段，也不以逐命令、逐工具、逐文件确认打断工作。需要不可逆外部效果时，Agent 只能先冻结待交付动作；真人末端授权后，控制内核再提交并记录真实 receipt。
 
-### 3.2 一个飞书 Shell，多个角色化空间
+### 3.2 一个内网 FLAi Workspace，多个角色化空间
 
-日常 Surface 共用一个飞书 FLAi 工作空间 Shell，但读取联邦 owner 的权威事实，不把所有状态复制成 Bitable 真相：
+内网日常 Surface 共用一个 `FLAiWorkspace` Shell，但读取联邦 owner 的权威事实，不把所有
+状态复制成聊天、Wiki 或项目表真相：
 
 | 空间／Surface | 主要用户 | 产品职责 | 状态 |
 |---|---|---|---|
-| 飞书工作收件箱 | 全体认证参与者 | 发起工作、查看本人待办、项目变化与回告 | `ACCEPTED-NOT-IMPLEMENTED` |
-| 工程智能体工作台 | 工程师、业务人员 | 连续执行、观察真实进展、核对证据与产物、末端签发 | `IMPLEMENTED-PARTIAL`：已有隔离原型和任务骨架；尚未接入飞书 Hub 与目标 Runtime |
-| 治理与运行中心 | 平台管理员、安全人员、Agent Owner、评测维护者 | 在飞书内组织 Agent/Workflow 生命周期、策略、授权、Sandbox、队列预算、异常恢复、审计与 Bench 治理仪式 | `IMPLEMENTED-PARTIAL`：底层注册、评测、晋级和事件骨架存在；Hub typed intent 与 owner receipt 未闭合 |
-| FLAi 共建地图 | 全体参与者 | 在飞书内查看版本、能力、需求来源、里程碑和证据化指标 | `ACCEPTED-NOT-IMPLEMENTED` |
-| 智能化指挥中心 | 领导、AI 负责人 | 在飞书内只读聚合真实业务结果、机会组合和风险例外 | `OUT-OF-SCOPE`：Phase 0A 不开放 |
+| FLAi 工作收件箱 | 全体内网认证参与者 | 发起工作、查看本人待办、项目变化与回告 | `ACCEPTED-NOT-IMPLEMENTED` |
+| 工程智能体工作台 | 工程师、业务人员 | 连续执行、观察真实进展、核对证据与产物、末端签发 | `IMPLEMENTED-PARTIAL`：已有隔离原型和任务骨架；尚未接入内网 Workspace 与目标 Runtime |
+| 项目讨论与知识 | 项目成员 | 通过自托管通讯/Wiki Adapter 协作；正式事实仍由 FLAi/Knowledge owner 拥有 | `CANDIDATE-SELECTION` |
+| 治理与运行中心 | 平台管理员、安全人员、Agent Owner、评测维护者 | 在 Workspace 内组织 Agent/Workflow 生命周期、策略、授权、Sandbox、队列预算、异常恢复、审计与 Bench 治理仪式 | `IMPLEMENTED-PARTIAL`：底层注册、评测、晋级和事件骨架存在；Workspace typed intent 与 owner receipt 未闭合 |
+| FLAi 共建地图 | 全体参与者 | 在 Workspace 内查看版本、能力、需求来源、里程碑和证据化指标 | `ACCEPTED-NOT-IMPLEMENTED` |
+| 智能化指挥中心 | 领导、AI 负责人 | 在 Workspace 内只读聚合真实业务结果、机会组合和风险例外 | `OUT-OF-SCOPE`：Phase 0A 不开放 |
 
 这些空间不是五套应用或五套状态机。“FLAi-OS 智能化指挥中心”可以作为后期领导空间名称，但不能替代产品总名，也不能成为普通用户默认页。
 
-### 3.3 飞书 Hub、控制内核与执行 Ports
+### 3.3 内网 Workspace、控制内核与执行 Ports
 
-`IMPLEMENTED-PARTIAL` 当前仓库已有 FastAPI、SQLite Job Runner、Agent Registry、Task Center、Agent Runtime、Model Gateway、Tool Registry、File Service、Event Log、评测快照与人工晋级等基础 Module。它们构成继续演进的本地骨架，但不等于 ADR-0049～0062 的目标状态已经完成。
+`IMPLEMENTED-PARTIAL` 当前仓库已有 FastAPI、SQLite Job Runner、Agent Registry、Task Center、
+Agent Runtime、Model Gateway、Tool Registry、File Service、Event Log、评测快照与人工晋级
+等基础 Module。它们构成继续演进的本地骨架，但不等于 ADR-0049～0063 的目标状态已经完成。
 
 `ACCEPTED-NOT-IMPLEMENTED` FLAi-OS 将保持唯一控制内核。ExecutionBroker 组合三类不可互换的窄 Port：OpenClaw/OpenHands 只可实现 `AgentRuntimePort`，macOS 隔离实现 `SandboxProviderPort`，Python/Office/CAE/HPC 实现 `ToolExecutionPort`。动态动作逐次取得 Kernel 的短时 ExecutionTicket；任何 Adapter 都不得持有第二套身份、任务、审计、授权或终态真相。移除任一 Adapter，不应改变 FLAi-OS 的权威任务语义。
 
 这个 Seam 的价值在于把复杂执行实现藏在窄 Interface 后面：调用方只学习一次任务、取消、结果、receipt 与失败语义，获得跨后端复用的 Leverage；后端差异与修复集中在 Adapter 内，保持 Locality。
 
-`ACCEPTED-NOT-IMPLEMENTED` `FeishuOrganizationalHub` 以
-`open → prepare → commit` 三个入口隐藏飞书 Bot/Card/Bitable/Docs、GitHub 和 FLAi owner 的差异。飞书只创建权限过滤投影和 typed intent；权威 owner 在提交时重新鉴权并返回 `OwnerCommitReceiptV1`。`secrets-stackdocker` 是运行时 App/Connector Secret value 的目标 owner，所有普通 Connector 只持有 opaque `SecretRef`；当前迁移状态仍为 `DECLARED-NOT-VERIFIED`。人的安全硬件身份与 Safety receipt-signing key 属于独立 Safety Identity / PKI / HSM 故障域。
+`ACCEPTED-NOT-IMPLEMENTED` 内网 `InternalWorkspaceHub` 以
+`open → prepare → commit` 三个入口隐藏自托管通讯、项目、知识创作和 FLAi owner 的差异。
+第三方 Surface 只创建权限过滤投影和 typed intent；权威 owner 在提交时重新鉴权并返回
+`OwnerCommitReceiptV1`。
+
+外网 `FeishuDevelopmentHub` 只组织研发需求、Codex/Kimi 工作包和 GitHub 交付，不进入内网
+身份、知识、Runtime 或发布链。跨域唯一入站是
+`OfflineReleaseBundleV1 → AirGapReleaseAdmission`；内网重新验签、扫描、Bench 和具名准入。
+
+`secrets-stackdocker` 当前只作为外网研发普通 App/Connector Secret value 的声明 owner。内网
+使用独立 Secret owner/实例、root、namespace、策略和备份；Secret value 与 SecretRef 命名
+空间都不跨域。人的安全硬件身份与 Safety receipt-signing key 继续属于独立 Safety Identity /
+PKI / HSM 故障域。
 
 ## 4. 为谁解决什么问题
 
@@ -200,7 +225,8 @@ Phase 0A 通过只证明限定机制成立，不证明生产就绪；Phase 0B �
 - FLAi Bench：ADR-0058
 - 共建地图与指标：ADR-0059
 - 需求共创与决策权：ADR-0060～0061
-- 飞书唯一日常组织协作与治理中枢：ADR-0062
+- 外网飞书研发协作中枢：ADR-0062
+- 外网开发、AirGap Exchange 与内网自托管 Workspace：ADR-0063
 
 ---
 

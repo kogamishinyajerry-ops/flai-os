@@ -3,7 +3,7 @@
 > 文档性质：V0.2 产品与开发读模型，不是新的架构事实源，也不授权修改运行时代码。
 > 术语以 [`CONTEXT.md`](../../../CONTEXT.md) 为准；已接受决策以
 > [`ADR-0049`](../../adr/ADR-0049-flai-control-kernel-and-replaceable-execution-backends.md)
-> 至 [`ADR-0062`](../../adr/ADR-0062-feishu-single-organizational-hub.md) 为准；
+> 至 [`ADR-0063`](../../adr/ADR-0063-external-development-airgap-internal-workspace.md) 为准；
 > 当前实现仍以代码、契约和现行标准为准；完整基线索引见本包 [`README`](README.md#7-现行基线与诚实边界)。
 
 ## 1. 状态标签
@@ -20,29 +20,40 @@
 
 ## 2. 架构结论
 
-FLAi-OS V0.2 采用一个权威控制内核，由 ExecutionBroker 组合三类语义不同、分别可替换的执行 Port：
+FLAi-OS V0.2 采用**外网研发、隔离交换、内网运行**三个不互信部署域。内网仍只有一个权威
+控制内核，由 ExecutionBroker 组合三类语义不同、分别可替换的执行 Port：
 
 ```text
-用户 / 治理角色
-      │
-      ▼
-飞书 FLAi 工作空间（唯一组织 landing / inbox / orchestration）
-  ├─ 工作收件箱 / 项目 / 需求 / 会议 / 知识
-  ├─ 治理 / Bench / 安全 / 指标
-  ├─ 内嵌工程智能体工作台（专业执行 Surface）
-  └─ 重新鉴权深链 → GitHub 原生 diff / approval / merge Surface
-      │  channel attestation / typed intent / authorized projection
-      ▼
-FeishuOrganizationalHub
-  ├─ open / prepare / commit
-  ├─ ActorBinding / Source Ownership / Classification
-  └─ Receipt Verifier / Outbox / Reconciliation
-      │
-      ├──────── GitHub Port（commit / PR / review / CI / merge owner）
-      ├──────── DevelopmentWorkCoordinator / DeveloperAssistant Port
-      │
-      ▼
-FastAPI Application API / FLAi Owner Ports
+EXTERNAL_DEVELOPMENT
+  FeishuDevelopmentHub（研发协作）
+       ├─ Codex / Kimi 独立工作包
+       └─ GitHub（外网 commit / PR / review / CI / merge owner）
+                    │
+                    │ OfflineReleaseBundleV1（无实时链路）
+                    ▼
+TRANSFER_QUARANTINE
+  AirGapExchange / AirGapReleaseAdmission
+       ├─ digest / signature / closed-world inventory
+       ├─ SBOM / license / malware / vulnerability / secret scan
+       ├─ offline rebuild / test / dual-control admission
+       └─ ReleaseSet CAS promotion
+                    │
+                    ▼
+AIR_GAPPED_INTERNAL
+  FLAiWorkspace（唯一内网 landing / inbox / orchestration）
+       ├─ 工作收件箱 / 项目 / 需求 / 会议 / 真相知识
+       ├─ 自托管通讯、项目、Wiki/DMS Adapters
+       ├─ 治理 / Bench / 安全 / 指标
+       └─ 工程智能体工作台
+                    │  internal actor / typed intent / authorized projection
+                    ▼
+  InternalWorkspaceHub
+       ├─ open / prepare / commit
+       ├─ Internal ActorBinding / ACL / Classification
+       └─ Owner Receipt / Outbox / Reconciliation
+                    │
+                    ▼
+  FastAPI Application API / FLAi Owner Ports
       │
       ▼
 FLAi Control Kernel（唯一权威控制面）
@@ -72,22 +83,27 @@ ExecutionBroker（组合层，不持有第二状态机）
 Model Gateway / Knowledge / Approved Connector / Tool Registry
       │
       ▼
-SecretProviderPort → secrets-stackdocker（运行时 App/Connector Secret owner）
+InternalSecretProviderPort → 内网独立 Secret owner
 SafetyIdentity/Coordinator/Fence/Time/Signer Ports
   → 独立 Safety Identity / PKI / HSM / Time owners
 ```
 
 `FLAi Control Kernel` 是普通协作/工作负载身份与资源授权、策略、任务图、队列、状态、审计、证据与交付决定的唯一事实源；分离的 Safety Identity / PKI / HSM / Time owners 拥有人的安全硬件身份、Safety admission、receipt-signing、Coordinator attestation、Policy fence 与 Trusted-Time Authority/consumer-local Commit-Guard material，Kernel 只消费可验证 admission/receipt/witness，不拥有其 credential/signing material。这些 key 不得来自普通 workload identity、应用进程、SecretProviderPort 或 `secrets-stackdocker`。OpenClaw/OpenHands 只实现 `AgentRuntimePort`，macOS 隔离只实现 `SandboxProviderPort`，CAE/HPC 只实现 `ToolExecutionPort`；它们不是彼此可替换的同类 Adapter。Agent Runtime 只能提出 replan/step proposal，不能直接调用 Tool、Model、Knowledge 或 Connector；每个动态动作必须返回 Kernel 取得短时 `ExecutionTicket`。任何 Adapter 都不能签发、授权、改变权威终态、持有第二套恢复语义或建立第二本审计账簿。这一所有权由 [ADR-0049](../../adr/ADR-0049-flai-control-kernel-and-replaceable-execution-backends.md) 固定。
 
-`FeishuOrganizationalHub` 是唯一组织 landing、工作收件箱与编排中枢，但不是控制内核或总数据库。
-它只组织 Feishu-native collaboration facts、构造权限过滤的联邦投影，并把人的操作转换为版本化
-typed intent；适用的治理变迁只有在外部 owner 返回且验证 `OwnerCommitReceiptV1` 后才显示
-生效。Hub 不直接写 FLAi 数据库，不把 Bitable 单元格当作授权、运行、Bench、发布或审计事实。
-GitHub 原生代码专业 Surface 与 FLAi 专业执行 Surface 不另建组织首页。飞书故障时，FLAi 仍
-保留独立 `SafetySurvivalPort`，只允许减权、隔离、开对账案、向预批准本地 WORM 封存证据
-和验证但不启用恢复候选。它在 sealed composition root 内组合 target owner、独立
-SafetyReceiptSigner/Verifier、唯一 SafetyResultFactory 与追加式
-SafetyEffectQuery/Reconciliation；外部 effect unknown 只能 amber，不得冒充完整成功。
+`FeishuDevelopmentHub` 只属于外网研发域，组织需求、Codex/Kimi 工作包、评审与 GitHub
+交付回告。它不是内网 landing、身份、知识、Runtime、Secret 或发布依赖。外网身份和签名只
+证明来源，不能授权内网导入或部署。
+
+`InternalWorkspaceHub` 是唯一内网 landing、工作收件箱与编排 Module，但不是控制内核或总
+数据库。它只组织自托管 collaboration facts、构造权限过滤投影，并把人的操作转换为版本化
+typed intent；适用的治理变迁只有在事实 owner 返回且验证 `OwnerCommitReceiptV1` 后才显示
+生效。通讯频道、Wiki 页面和项目表不能成为授权、运行、Bench、发布或审计事实。
+
+内网 `SafetySurvivalPort` 独立于 Workspace、协作 Adapter、主 SSO 和普通 Secret 解析，只
+允许减权、隔离、开对账案、向预批准本地 WORM 封存证据和验证但不启用恢复候选。它在 sealed
+composition root 内组合 target owner、独立 SafetyReceiptSigner/Verifier、唯一
+SafetyResultFactory 与追加式 SafetyEffectQuery/Reconciliation；外部 effect unknown 只能
+amber，不得冒充完整成功。
 
 ## 3. 现状基线
 
@@ -103,8 +119,10 @@ SafetyEffectQuery/Reconciliation；外部 effect unknown 只能 amber，不得�
 | Eval Runner | `IMPLEMENTED-PARTIAL` | eval case、snapshot、人工评审、promotion seam 已存在 | 尚未冻结完整能力发布包，仍需消除晚写翻绿等假绿路径 |
 | 文件与任务分级 | `IMPLEMENTED-PARTIAL` | `internal|sensitive`、任务级 CAS-on-NULL 与部分读取门已有实现 | 当前标签不等于完整企业授权；附件引用旁路仍是 P0 缺口 |
 | 真正的执行 Sandbox | `ACCEPTED-NOT-IMPLEMENTED` | 只有 subprocess/工作目录等局部 containment 先例 | 未证明 OS 强制文件、网络、资源与进程树隔离，不得称“已沙箱化” |
-| 独立飞书协作应用 | `IMPLEMENTED-PARTIAL` | 机器人、长连接、卡片、Bitable、项目/决策/风险/行动项等代码可作为 Adapter 候选 | 未与 FLAi ActorBinding、ACL/classification、typed intent、owner receipt 或可靠对账闭合 |
-| `secrets-stackdocker` | `DECLARED-NOT-VERIFIED` | 用户已说明现有 App/Connector key 已迁入该 Secret owner | 未验证目标工作负载最小引用、旧值撤销、轮换、故障与恢复 witness；不覆盖尚未实现的独立 Safety signing/Coordinator attestation/Policy fence/Trusted-Time key |
+| 独立飞书协作应用 | `IMPLEMENTED-PARTIAL / EXTERNAL-ONLY` | 机器人、长连接、卡片、Bitable、项目/决策/风险/行动项等代码可作为外网研发 Hub 候选 | 不得打包为内网运行依赖，也不证明内网协作 Adapter 可用 |
+| 内网自托管 Workspace Adapters | `CANDIDATE-SELECTION` | Mattermost/Wiki.js 等已有官方离线部署候选 | 尚未完成采购法务、断网 POC、身份、ACL/classification、审计、升级和恢复评审 |
+| `secrets-stackdocker` | `DECLARED-NOT-VERIFIED / EXTERNAL-ONLY` | 用户已说明外网开发现有 App/Connector key 已迁入该 Secret owner | 不得与内网共享 instance/root/namespace/SecretRef；未验证外网轮换、故障与恢复 witness；不覆盖独立 Safety keys |
+| 内网 Secret owner | `DECISION-REQUIRED` | 已冻结必须独立于外网 Secret 域 | 产品、root、namespace、PKI、备份、撤销和 outage 尚未裁决 |
 | 离线正式发布链 | `DECLARED-NOT-VERIFIED` | 有规划、校验脚本与局部备份能力 | 完整制品 hash、SBOM、组织签名、断网安装与全资产恢复尚未闭合 |
 
 当前分层基线见 [总体架构](../../01_Overall_Architecture.md)、[Agent Package 标准](../../02_Agent_Package_Standard.md)、[Tool Package 标准](../../03_Tool_Package_Standard.md)、[Model Gateway 标准](../../04_Model_Gateway_Standard.md) 和 [Task/Event 标准](../../05_Task_Event_Standard.md)。
@@ -227,32 +245,63 @@ SafetyEffectQuery/Reconciliation；外部 effect unknown 只能 amber，不得�
 - **Production Snapshot Assembler**：认证通道、ACL/classification、一致性读取、witness/receipt 与 fact digest 的候选接口见 [16_Production_Snapshot_Assembler_Read_Contract.md](16_Production_Snapshot_Assembler_Read_Contract.md)。该合同处于 `FROZEN-FOR-REVIEW / ACCEPTED-NOT-IMPLEMENTED`，不授权生产 Schema、API 或 Runtime 变更。
 - **禁止**：保存或展示完整内部思维链；用应用日志替代授权、执行、交付和撤销证据；展示层改写事实状态。
 
-### 4.13 Feishu Organizational Hub
+### 4.13 Feishu Development Hub
+
+- **状态**：`EXTERNAL-DEVELOPMENT-ONLY / ACCEPTED-NOT-IMPLEMENTED`。
+- **责任**：组织外网研发需求、Codex/Kimi 工作包、架构评审与 GitHub 交付回告。
+- **工程事实**：commit、PR、review、CI 和 merge 仍由 GitHub 拥有。
+- **Secret seam**：外网 `secrets-stackdocker` 只在最终 Connector 边界解析 opaque
+  `SecretRef`；value 不进入 Agent、LLM、前端、日志或领域对象。
+- **硬边界**：不读取内网数据，不映射内网 actor，不控制内网 Runtime，不共享 Secret，不接收
+  内网日志/遥测，也不通过 Feishu/GitHub 状态批准内网发布。
+
+### 4.14 Internal Workspace Hub
 
 - **状态**：`ACCEPTED-NOT-IMPLEMENTED`。
 - **唯一公开 Interface**：`open(actor_attestation, view_request)`、
   `prepare(actor_attestation, typed_intent)`、
   `commit(commit_actor_attestation, review_challenge_ref, confirmation_proof_ref)`。
-- **隐藏复杂度**：飞书 channel 验证、ActorBinding、source ownership、ACL/classification、exact digest、幂等/outbox、owner receipt、投影 freshness 与 reconciliation。
-- **Ports**：`FLAiGovernancePort`、`FLAiProjectionPort`、`DevelopmentWorkCoordinatorPort`、
-  `DeveloperAssistantPort`、`GitHubDeliveryPort`、`FeishuSurfacePort`、
-  `KnowledgeSourcePort`、`AuditReadPort` 和 `SecretProviderPort`。
-- **Secret seam**：`secrets-stackdocker` Adapter 只在最终 Connector 边界解析 opaque `SecretRef`；value 不穿过 Port，不进入 Agent、LLM、前端、日志或领域对象。解析失败和撤销均 fail-closed，禁止历史 `.env` 或硬编码 fallback。
-- **事实边界**：飞书原生协作内容归飞书；代码交付归 GitHub；执行、授权、Bench、交付和审计归 FLAi owner；知识权威归 Knowledge Authority；运行时 App/Connector Secret 归 `secrets-stackdocker`；人的安全硬件身份、Safety receipt-signing、Coordinator attestation、Policy fence 与 Trusted-Time key 归分离的 Safety Identity / PKI / HSM / Time owners。
-- **安全生存**：飞书不可用时停止新的正常治理动作；独立 `SafetySurvivalPort` 不依赖飞书、
-  Hub、主协作 SSO 或普通在线 Secret 解析，只允许 kill/revoke/suspend/deny/isolate、只开
-  ReconciliationCase、向预批准本地 WORM 封存证据和只验证不启用的恢复候选。对外导出与
-  恢复启用仍走正常治理。
-- **独立 Safety Ports**：`SafetyAdmissionReservationPort`、
-  `SafetyTrustedTimeAuthorityPort`、`SafetyPolicyFenceAuthorityPort`、
-  `SafetyProviderMutationPort`、`SafetyReceiptSignerPort`、`SafetyReceiptVerifierPort`、
-  `SafetyResultFactory`、`SafetyEffectQueryPort` 与 `SafetyReconciliationPort`
-  只在 sealed composition root 可见；固定 canonical digest，factory meta-integrity gate
-  必须 `is True`，subject gates 按 `INVALID > UNKNOWN > VALID` 构造 fail-closed 结果；双人签发的 Issuance/Verification Policy Head 分别约束 signer 与
-  verifier/factory/read；Policy alias CAS 与单调 fence epoch/witness 同一原子提交，signer
-  只接 target-owner SigningRequest 并把 SIGN_PRE/SIGN_POST witness 绑定进 Envelope；TTL
-  只使用 attested time 区间，mutating provider call 只经过一次性 capability 的唯一 send
-  boundary；pending→confirmed 只能追加 successor receipt 与 expected-head CAS。
+- **隐藏复杂度**：内网身份、项目 membership、source ownership、ACL/classification、exact
+  digest、幂等/outbox、owner receipt、投影 freshness、event gap 与 reconciliation。
+- **Ports**：`IdentityDirectoryPort`、`CollaborationSurfacePort`、
+  `ProjectCoordinationPort`、`KnowledgeAuthoringSurfacePort`、`InternalCodeForgePort`、
+  `InternalArtifactRegistryPort`、`AIConversationPort`、`FLAiGovernancePort`、
+  `FLAiProjectionPort` 与 `InternalSecretProviderPort`。
+- **事实边界**：聊天/Wiki/项目表只拥有原生协作内容；FLAi 拥有需求、项目正式状态、执行、
+  授权、Bench、交付和审计；Knowledge Authority 拥有权威知识；内部 Forge/Registry 拥有
+  已导入代码与制品；内部 Secret owner 拥有普通 Secret value。
+- **适配纪律**：Mattermost、Rocket.Chat、Wiki.js、Outline、Open WebUI 等都只是候选
+  Adapter；更换 Adapter 不改变领域 Interface 或历史事实。
+
+### 4.15 AirGap Exchange
+
+- **状态**：`ACCEPTED-NOT-IMPLEMENTED`；本轮只冻结设计，不创建生产 Schema。
+- **唯一公开 Interface**：
+  `sealRelease(...)`、`admitRelease(...)`、`sealSanitizedFeedback(...)`。
+- **隐藏复杂度**：closed-world inventory、digest/signature、SBOM/license、malware/
+  vulnerability/secret scan、安全解包、离线 rebuild/test、双人准入、quarantine namespace、
+  ReleaseSet CAS、介质 custody、出站 allowlist 与 effect-unknown reconciliation。
+- **不变量**：外部签名只证明来源；内网重新验签、扫描、Bench 和具名签发。`admitted` 不等于
+  qualified、deployed、REAL 或 production ready。部分对象不得对生产 Registry 可见。
+- **代码 lineage**：GitHub SHA 进入内网后只是 provenance；内部 Code Forge、ReleaseSet、
+  QualificationDecision、DeploymentBinding 和运行 witness 分别证明实际接纳与部署。
+- **反馈出口**：只允许合成 reproducer、稳定失败码和经批准的最小源码补丁；原始日志、知识、
+  数据、审计、Secret、主机/人员/项目标识永不自动外发。
+
+### 4.16 Independent Safety Ports
+
+- **状态**：`ACCEPTED-NOT-IMPLEMENTED`。
+- **安全生存**：自托管协作、Wiki、Workspace 或主 SSO 不可用时，独立
+  `SafetySurvivalPort` 仍允许 kill/revoke/suspend/deny/isolate、只开
+  ReconciliationCase、向预批准本地 WORM 封存证据和只验证不启用的恢复候选。
+- **Ports**：`SafetyAdmissionReservationPort`、`SafetyTrustedTimeAuthorityPort`、
+  `SafetyPolicyFenceAuthorityPort`、`SafetyProviderMutationPort`、
+  `SafetyReceiptSignerPort`、`SafetyReceiptVerifierPort`、`SafetyResultFactory`、
+  `SafetyEffectQueryPort` 与 `SafetyReconciliationPort` 只在 sealed composition root
+  可见。
+- **不变量**：factory meta-integrity gate 必须 `is True`；subject gates 按
+  `INVALID > UNKNOWN > VALID` 构造 fail-closed 结果；signer/verifier、Policy fence、
+  Trusted Time 和普通 Secret 栈保持独立故障域；external effect unknown 只能 amber。
 
 ## 5. 关键执行流
 
@@ -325,7 +374,9 @@ LLM-as-Judge 只能提供诊断，不能晋级、签发或把未知门写成通�
 3. **Adapter 隔离技术差异**：OpenClaw、OpenHands、macOS Sandbox、未来 Windows 或 HPC 的差异收敛在 Adapter；上层不出现其私有 session/state 名称。
 4. **现有 seam 增量演进**：复用 SQLite、Repository、Task/Event、Registry、Gateway、Stats 和 Eval；不创建第二数据库、第二任务中心、第二评测平台或第二 KPI 平台。
 5. **契约先行**：公开 Schema、状态机、持久格式和 Interface 变更必须另获实现授权，并先有 invalid-first fixture、迁移/回滚和 tamper witness。
-6. **单一入口不等于单一事实源**：飞书投影不得反向覆盖 GitHub、FLAi、Knowledge、Audit 或 Secret owner；effect unknown 必须对账，不能用“最后写入者获胜”。
+6. **单一入口不等于单一事实源**：内网 Workspace、通讯、Wiki 和项目投影不得反向覆盖
+   FLAi、Knowledge、Audit、Internal Forge/Registry 或 Secret owner；effect unknown 必须
+   对账，不能用“最后写入者获胜”。
 
 ## 8. 部署拓扑
 
@@ -336,17 +387,34 @@ LLM-as-Judge 只能提供诊断，不能晋级、签发或把未知门写成通�
 - `MacSandboxAdapter` 是 Phase 0A 受控验收候选，不是正式生产声明；必须在选定 macOS/Apple Silicon 基线上验证睡眠唤醒、异常退出、进程树强杀、网络拒绝、资源限制、升级回退和断网安装。
 - Windows Adapter 明确 `OUT-OF-SCOPE`，不要求本阶段同步 `.ps1`；公共 Broker Interface 与 `SandboxProviderPort` 不得把 macOS 私有语义泄漏给 Kernel。后续正式内网平台目标另经具名决策，不由 Phase 0A 自动外推。
 
-### 8.2 规模演进
+### 8.2 内网断网运行基线
+
+- **状态**：`ACCEPTED-NOT-IMPLEMENTED`。
+- 内网安装与运行不得依赖 Feishu SDK/token/callback、GitHub.com、外网 DNS、公共 OCI/npm/
+  PyPI、公共模型仓、CDN、在线许可证验证或外部 telemetry。
+- 所有源码、OCI、Python/npm/OS 依赖、模型、字体、文档、许可证和升级材料先通过
+  `AirGapReleaseAdmission`，再从内部 Forge/Registry 解析。
+- 内网身份与 Secret 使用独立 owner；外网 Feishu/GitHub/Kimi/Codex 身份和
+  `secrets-stackdocker` namespace 不进入内部信任链。
+- 候选通讯/Wiki Adapter 使用自己的批准数据库和对象存储，但不能改变 FLAi 核心保持
+  SQLite Repository/Job Runner 的现行约束。任何新依赖都需独立采购、供应链和运维授权。
+- 必须验证完全断网冷启动、升级、备份恢复、IdP outage、协作/Wiki outage、Registry
+  restore 和无外网 fallback。
+
+### 8.3 规模演进
 
 Phase 0A 面向 5–8 名具名技术验收人员，只用 approved `source_kind=synthetic` 数据验证机制，正常样本仅以 `fixture_class=canonical` 标识；Phase 0B 才向 20–30 名业务用户开放至少一条真实工具和真实数据工作流。多节点 HA、跨部门 execution cell 和 Windows 适配为 `OUT-OF-SCOPE`，不得用架构图暗示已具备。
 
 ## 9. 明确不做
 
 - 不以 OpenClaw/OpenHands 替换 FLAi Control Kernel。
-- 不引入 Next.js、PostgreSQL、Redis、Celery、ORM 或新的编排平台。
+- 不因本设计修改 FLAi 核心而引入 Next.js、PostgreSQL、Redis、Celery、ORM 或新的编排平台；
+  候选自托管产品的独立依赖必须另经选型和部署授权。
 - 不建立双任务状态、双审计账本、双评测平台或第二控制面。
-- 不把 Bitable、飞书卡片或 Hub cache 作为 GitHub/FLAi/Knowledge/Audit 的权威副本。
-- 不让飞书故障阻断强停、撤权、隔离或凭据失效。
+- 不把飞书、聊天频道、Wiki 页面、项目表或 Hub cache 作为 GitHub/FLAi/Knowledge/Audit 的
+  权威副本。
+- 不建立 Feishu/GitHub 与内网的在线同步 Adapter。
+- 不让 Workspace、通讯、Wiki、主 SSO 或普通 Secret 故障阻断强停、撤权、隔离或凭据失效。
 - 不让 LLM 进入授权、工程判决、评测晋级、路线图签发或最终交付签发链。
 - 不保存 chain-of-thought，不用自由文本“推理轨迹”冒充可审计证据。
 - 不把工作目录、线程 timeout 或 subprocess 本身称为真正 Sandbox。
@@ -385,5 +453,8 @@ Phase 0A 面向 5–8 名具名技术验收人员，只用 approved `source_kind
 - [ADR-0059：共建地图与证据指标](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)
 - [ADR-0060：需求共创闭环](../../adr/ADR-0060-demand-co-creation-loop.md)
 - [ADR-0061：需求决策权](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)
-- [ADR-0062：飞书唯一日常组织协作与治理中枢](../../adr/ADR-0062-feishu-single-organizational-hub.md)
-- [飞书中枢详细设计](17_Feishu_Organizational_Hub.md)
+- [ADR-0062：飞书外网研发协作中枢（范围已收窄）](../../adr/ADR-0062-feishu-single-organizational-hub.md)
+- [ADR-0063：外网研发、离线准入与内网自托管工作空间](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)
+- [飞书外网研发中枢详细设计](17_Feishu_Organizational_Hub.md)
+- [隔离交换与内网发布准入](18_AirGap_Exchange_and_Internal_Release.md)
+- [内网自托管智能协作空间](19_Internal_Self_Hosted_Workspace.md)

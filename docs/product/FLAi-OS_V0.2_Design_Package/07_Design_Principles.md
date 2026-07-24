@@ -2,7 +2,7 @@
 
 > 文档性质：V0.2 产品与交互设计读模型，不是新的裁决源。
 >
-> 决策依据：[ADR-0050](../../adr/ADR-0050-uninterrupted-session-and-final-delivery-authorization.md)、[ADR-0052](../../adr/ADR-0052-workbench-first-and-role-specific-governance-surfaces.md)、[ADR-0053](../../adr/ADR-0053-phase-0a-three-golden-workflows.md)、[ADR-0059](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)、[ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)、[ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md)。
+> 决策依据：[ADR-0050](../../adr/ADR-0050-uninterrupted-session-and-final-delivery-authorization.md)、[ADR-0052](../../adr/ADR-0052-workbench-first-and-role-specific-governance-surfaces.md)、[ADR-0053](../../adr/ADR-0053-phase-0a-three-golden-workflows.md)、[ADR-0059](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)、[ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)、[ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md)、[ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)。
 >
 > 当前设计依据：[UI-PARADIGM](../../design/UI-PARADIGM.md)、[MOTION-SYSTEM](../../design/MOTION-SYSTEM.md)。
 
@@ -38,7 +38,7 @@ FLAi-OS 应让中国企业用户获得 WorkBuddy 式的低门槛：用“任务�
 
 `ACCEPTED-NOT-IMPLEMENTED`
 
-飞书工作收件箱把单一 Composer 作为首要动作，工程工作台也用同一目标语义进入执行；首问“你要完成什么”，不是“你要创建几个 Agent”。Agent、Skill、Tool 和模型属于平台编排实现；只有当调整能力确实影响任务结果时，才在提交前渐进披露。
+当前部署域的 FLAi 工作收件箱把单一 Composer 作为首要动作，工程工作台也用同一目标语义进入执行；外网研发域可由飞书承载入口，内网生产域只能由自托管 `FLAiWorkspace` 承载。首问“你要完成什么”，不是“你要创建几个 Agent”。Agent、Skill、Tool 和模型属于平台编排实现；只有当调整能力确实影响任务结果时，才在提交前渐进披露。
 
 反模式：Agent 市场成为首页、先让用户选技术栈、把工作流配置表当成新手入口。
 
@@ -102,7 +102,7 @@ FLAi-OS 应让中国企业用户获得 WorkBuddy 式的低门槛：用“任务�
 
 `ACCEPTED-NOT-IMPLEMENTED`
 
-飞书工作收件箱、工程工作台、治理与运行中心、FLAi 共建地图和智能化指挥中心读取同一组联邦权威事实。GitHub、FLAi Control Kernel、Knowledge Authority、Audit/WORM 与 `secrets-stackdocker` 各自只有一个 owner；权限通过职责和作用域收容，不用多套状态机、用户库或 Bitable 副本。
+当前部署域的工作收件箱、工程工作台、治理与运行中心、FLAi 共建地图和智能化指挥中心读取同一组联邦权威事实。外网研发域由 GitHub、飞书和 `secrets-stackdocker` 分别拥有各自事实；内网生产域由 Internal Forge/Registry、FLAi Control Kernel、Knowledge Authority、Audit/WORM 和 Internal Secret Owner 分别拥有各自事实。两域不共享在线状态机、用户库、密钥值或协作表副本。
 
 反模式：管理大屏手工录入进度；治理中心自行改完成状态；全局管理员默认拥有所有专业签发权。
 
@@ -134,33 +134,31 @@ FLAi-OS 应让中国企业用户获得 WorkBuddy 式的低门槛：用“任务�
 
 `ACCEPTED-NOT-IMPLEMENTED`
 
-所有正常管理与治理从飞书 FLAi 工作空间发现、编排和回告；工程工作台与 GitHub 原生代码
-操作是重新鉴权的专业 Surface，不另建组织首页。飞书只拥有原生协作事实、权限过滤投影和治理
-意图，不通过 Bitable 单元格、卡片点击或缓存接管 GitHub、FLAi、Knowledge、Audit 或 Secret
-owner。
+每个网络域只有一个日常入口：外网研发协作从飞书 FLAi 研发空间发现、编排和回告；内网生产协作从自托管 `FLAiWorkspace` 发现、编排和回告。GitHub 与 Internal Forge 的原生代码操作、工程工作台和治理专业 Surface 都需要重新鉴权，但不另建同域组织首页。协作 Surface 只拥有原生协作事实、权限过滤投影和治理意图，不能通过表格字段、卡片点击或缓存接管代码、FLAi、Knowledge、Audit 或 Secret owner。跨域只允许经 `AirGapExchange` 传递签名、内容寻址、可审查的离线包。
 
-反模式：为“统一”把所有状态双写到 Bitable；最后写入者获胜；另保留一套日常管理后台。
+反模式：为“统一”把所有状态双写到协作表；让最后写入者获胜；让外网飞书成为内网运行依赖；另保留一套同域日常管理后台。
 
 ### 3.14 点击不是生效，回执才是
 
 `ACCEPTED-NOT-IMPLEMENTED`
 
-所有会创建或改变跨 owner 正式事实、受控投影或外部 effect 的飞书动作都是版本化 typed
-intent；飞书自有群聊、评论、Docs/Wiki 与协作草稿保持 Feishu-native，只有提交为
-DemandSignal、正式记录或其他 owner 事实时才进入 Hub。高影响动作先冻结 PreparedCommand 并展示精确
+所有会创建或改变跨 owner 正式事实、受控投影或外部 effect 的 Workspace 动作都是版本化 typed
+intent；协作系统自有群聊、评论、Wiki 与协作草稿保持 surface-native，只有提交为
+DemandSignal、正式记录或其他 owner 事实时才进入当前域的 Hub。外网研发 Hub 不得把 typed intent
+定向到内网生产 owner；跨域输入必须先成为通过 `AirGapExchange` 准入的离线包。高影响动作先冻结 PreparedCommand 并展示精确
 ReviewChallengeV1，提交时使用新鲜身份重新检查 payload/target digest、ActorBinding、认证
 assurance、职责、ACL、classification、epoch 和职责分离；只有有效 OwnerCommitReceiptV1
 才显示生效。EffectUnknownV1 必须对账，不能换幂等键重放。
 
-反模式：卡片显示“成功”却没有 owner receipt；用 HTTP 2xx、消息送达或改单元格代替签发。
+反模式：卡片显示“成功”却没有 owner receipt；用 HTTP 2xx、消息送达、改单元格或离线包“已复制”代替签发。
 
 ### 3.15 密钥不进入协作面，安全止损不依赖协作面
 
 `ACCEPTED-NOT-IMPLEMENTED`
 
-`secrets-stackdocker` 是运行时 App/Connector Secret value 的目标 owner，Hub 与普通 Connector 只持有 opaque `SecretRef`；解析失败、撤销或版本 unknown 时 fail-closed，不回退历史 `.env` 或硬编码。人的安全硬件身份与 Safety receipt-signing key 由独立 Safety Identity / PKI / HSM owner 持有。飞书不可用时，新的正常治理暂停，但密封、强审计、只减权的 kill/revoke/isolate/credential invalidation 通道仍可用。
+外网研发域的运行时 App/Connector Secret value 由 `secrets-stackdocker` 管理；内网生产域使用独立部署、独立信任根、独立命名空间和独立值的 Internal Secret Owner。Hub 与普通 Connector 只持有当前域的 opaque `SecretRef`；解析失败、撤销或版本 unknown 时 fail-closed，不回退历史 `.env`、硬编码或另一网络域。人的安全硬件身份与 Safety receipt-signing key 由独立 Safety Identity / PKI / HSM owner 持有。当前域 Workspace 不可用时，新的正常治理暂停，但密封、强审计、只减权的 kill/revoke/isolate/credential invalidation 通道仍可用。
 
-反模式：把 key 放入卡片、Bitable、日志或 Agent prompt；飞书故障时无法强停；把 break-glass 变成备用发布后台。
+反模式：把 key 放入卡片、协作表、离线包、日志或 Agent prompt；Workspace 故障时无法强停；把 break-glass 变成备用发布后台；复制外网密钥进入内网。
 
 ## 4. 信任视觉语法
 
@@ -262,9 +260,10 @@ CFD 当前设置、文件字段和确定性检查结果属于事实；风险解�
 8. 中文名称、键盘、缩放、减少动态效果和屏幕阅读路径是否通过验证？
 9. 新设计是增加了 Module 的 Depth，还是把实现复杂度泄露到 Interface？
 10. 关闭或撤回动作后，证据是否仍完整并可追溯？
-11. 飞书中的字段究竟是 collaboration input、draft、governed command input、authoritative projection 还是 derived metric？
+11. 当前域 Workspace 中的字段究竟是 collaboration input、draft、governed command input、authoritative projection 还是 derived metric？
 12. 任何治理“已生效”是否有匹配 owner/version/digest 的 OwnerCommitReceiptV1，而非卡片点击或 HTTP 2xx？
-13. 飞书不可用或 `secrets-stackdocker` 不可达时，系统是否 fail-closed 且仍能完成必要止损？
+13. 当前域 Workspace 或 Secret Owner 不可达时，系统是否 fail-closed 且仍能完成必要止损？
+14. 设计是否错误地让外网飞书、GitHub、模型服务或密钥成为内网在线依赖？
 
 ## 10. 非目标
 
@@ -274,5 +273,6 @@ CFD 当前设置、文件字段和确定性检查结果属于事实；风险解�
 - 不用“极简”删除安全范围、来源、限制与错误信息。
 - 不用“企业级”增加无意义审批、字段和管理层级。
 - 不以视觉设计稿证明 Runtime、Sandbox、授权、评测或审计已经实现。
-- 不把飞书、Bitable 或独立管理页建成第二控制面或第二事实源。
+- 不把飞书、自托管协作表或独立管理页建成第二控制面或第二事实源。
+- 不建设飞书到内网的在线同步、共享身份、共享密钥或远程控制通道。
 - 不在 V0.2 设计包中承诺 Windows 适配、实时会议、全自主 CFD 或自动外发。

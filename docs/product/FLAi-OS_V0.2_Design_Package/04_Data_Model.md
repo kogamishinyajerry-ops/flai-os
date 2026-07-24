@@ -25,7 +25,7 @@
 7. **unknown ≠ null ≠ zero**：未知事实、字段不适用和数值为零必须可区分。
 8. **分类污点单调不降级**：派生数据至少继承所有输入中最严格的有效分级；摘要、引用、导出或模型处理不能自动降级。
 9. **状态与审计同事务**：强治理写入与 audit outbox 原子提交；业务状态已变但审计证据不存在属于失败。
-10. **SQLite 继续承载 FLAi 本地事实**：V0.2 不引入 PostgreSQL、ORM、Redis 或 Celery；FLAi 自有任务、运行、授权、证据与审计通过仓储层、迁移和窄 Interface 演进。它不是 GitHub、飞书协作域或 `secrets-stackdocker` 的全局 SSOT。
+10. **SQLite 继续承载 FLAi 本地事实**：V0.2 不引入 PostgreSQL、ORM、Redis 或 Celery；FLAi 自有任务、运行、授权、证据与审计通过仓储层、迁移和窄 Interface 演进。它不是外网 GitHub/飞书/`secrets-stackdocker`，也不是内网 Forge/Workspace/Internal Secret Owner 的全局 SSOT。
 
 ## 3. 当前事实层
 
@@ -84,7 +84,8 @@ DomainReview / SecurityReview ──supports──> RoadmapDecision / HumanSigno
 RoadmapDecision ──accepted_as──> RoadmapCommitment ──delivered_as──> CapabilityReleasePackage
 所有强治理变化 ──atomic outbox──> AuditLedgerEvent ──projects_to──> Read Models
 
-FeishuChannelAttestation ──binds──> ExternalIdentityBinding ──maps_to──> Actor
+FeishuChannelAttestation[EXTERNAL_DEV] / InternalWorkspaceChannelAttestation[INTERNAL_PROD]
+  ──binds only within zone──> ZoneLocalIdentityBinding ──maps_to──> Actor
 SourceOwnershipRegistryHeadV1 ──selects──> SourceOwnershipRegistryV1 ──resolves_as──> SourceOwnershipResolutionV1
 HubIntent ──prepared_with_resolution_as──> PreparedCommandV1 / ReviewChallengeV1
 ReviewChallengeV1 + ConfirmationProofV1 ──committed_by_owner──> OwnerCommitReceiptV1 | EffectUnknownV1
@@ -364,17 +365,21 @@ SafetyEffectObservationV1 ──append_only_reconciles──> successor SafetyOw
 - **Observation**：`since/until`、`sample_count`、numerator/denominator、value/range、coverage、quality flags、evidence refs。
 - **不变量**：Token 只表示资源；无价格表不算成本；无基线不报节时；eval-origin 不污染真实用户采纳；共建地图不能手工改值。
 
-### 12.4 飞书中枢逻辑实体
+### 12.4 分域 Workspace、AirGap 与治理逻辑实体
 
-以下对象是 `ACCEPTED-NOT-IMPLEMENTED` 的逻辑合同，不授权创建生产表：
+以下对象是 `ACCEPTED-NOT-IMPLEMENTED` 的逻辑合同，不授权创建生产表。`Feishu*` 对象仅属于
+`EXTERNAL_DEV`；内网使用独立 IdP、独立 `InternalWorkspace*` Attestation 与独立 Secret owner。
+通用 Hub 对象必须绑定 `DeploymentTrustZone`，不得跨域重放：
 
 | 逻辑实体 | 最小语义 | 权威 owner |
 |---|---|---|
-| `FeishuChannelAttestation` | tenant/app/channel/subject、事件或免登证据、时间窗、nonce、防重放结果 | 受信 Feishu ingress |
+| `DeploymentTrustZone` | `EXTERNAL_DEV` / `TRANSFER_QUARANTINE` / `INTERNAL_PROD`、信任根、允许 audience 与网络边界 | Architecture / Security Governance |
+| `FeishuChannelAttestation` | 外网 tenant/app/channel/subject、事件或免登证据、时间窗、nonce、防重放结果 | `EXTERNAL_DEV` 受信 Feishu ingress |
+| `InternalWorkspaceChannelAttestation` | 内网 issuer/app/channel/subject、内部 IdP 证据、时间窗、nonce、防重放结果 | `INTERNAL_PROD` 受信 Workspace ingress |
 | `ActorAttestationV1` | verified channel admission、内部 actor/binding version、responsibility/scope digest、credential/authz epoch、assurance、audience/purpose | FLAi Identity / Admission |
 | `ExternalIdentityBinding` | 外部 subject 到内部 Actor 的版本化绑定、职责、scope、clearance、credential epoch 与有效期 | FLAi Identity |
-| `HubIntent` | tagged type、target ref/version/digest、payload ref/version/digest/classification、作用域、原因、幂等键、过期时间 | Feishu Organizational Hub |
-| `PreparedCommandV1` | intent/payload/target digest、prepare ActorAttestation、binding/epoch/assurance、required commit assurance profile、policy/review/gate digest、nonce/TTL/idempotency | Feishu Organizational Hub |
+| `HubIntent` | trust zone、tagged type、target ref/version/digest、payload ref/version/digest/classification、作用域、原因、幂等键、过期时间 | 当前域 Workspace Hub |
+| `PreparedCommandV1` | trust zone、intent/payload/target digest、prepare ActorAttestation、binding/epoch/assurance、required commit assurance profile、policy/review/gate digest、nonce/TTL/idempotency | 当前域 Workspace Hub |
 | `ReviewChallengeV1` | prepared command digest、规范化 challenge digest、精确对象、具名职责、required commit assurance、classification、一次性 nonce 与 TTL | 对应治理 owner |
 | `OwnerCommitReceiptV1` | intent/challenge/actor/target/effect key、fresh commit ActorAttestation/assurance/credential+authz epoch、expected/result fact、owner sequence、验证方法/策略、evidence 与规范化 receipt digest；outcome 仅 `COMMITTED` | 对应事实 owner |
 | `EffectUnknownV1` | intent/target/effect key、显式可空的 owner effect-attempt ref+digest、last-known owner fact、ReconciliationCase、`DO_NOT_REPLAY` | Hub Reconciliation Module |
@@ -392,8 +397,12 @@ SafetyEffectObservationV1 ──append_only_reconciles──> successor SafetyOw
 | `SourceOwnershipResolutionV1` | observed Head/Registry/Entry ref+digest 与确定性 resolution digest；零/多匹配都不是 resolution | SourceOwnershipRegistryPort |
 | `ConfirmationProofV1` | 精确 challenge/prepared/nonce digest、confirmation mode、actor/channel/audience/purpose、显式确认时间与 canonical digest | FLAi Admission |
 | `ReconciliationCase` | effect unknown、source gap、projection drift、auth change 或冲突及具名处置 | Hub Reconciliation Module |
-| `SecretRef` | 运行时 App/Connector 的 provider/scope/name/version selector/purpose 非秘密引用 | `secrets-stackdocker` |
+| `SecretRef` | 当前域运行时 App/Connector 的 trust zone/provider/scope/name/version selector/purpose 非秘密引用；不能跨域解析 | 外网 `secrets-stackdocker` 或内网 Internal Secret Owner |
 | `OpaqueSecretLease` | concrete version ref、lease ref、TTL、workload/purpose 和 audit ref；不含可序列化 value | SecretProviderPort |
+| `OfflineReleaseBundleV1` | external merged SHA、完整文件集、SBOM、扫描/测试/签名/classification/custody manifest 与 bundle digest | External Release Builder/Signer；仅为入网候选 |
+| `InternalReleaseCandidateReceipt` | exact bundle、quarantine checks、内部重验、review separation 与 candidate digest | Internal Release Admission；不等于 Qualification/Deployment |
+| `ReleaseSet` | 内部 code/image/config/migration/knowledge/eval 兼容集合与 CAS Head | Internal Registry / Release Governance |
+| `SanitizedFeedbackBundle` | allowlist 字段、脱敏证明、出网分类、审批、签名与 digest | Internal Export Governance |
 | `SafetySigningMaterialRef` | 独立 HSM key handle/epoch、hardware identity ref 与 public trust anchor ref；不含私钥材料 | Safety Identity / PKI / HSM |
 | `SafetyOwnerWorkloadAttestationMaterialRefV1` | owner/workload/operation/purpose-bound 的不可导出 workload attestation key handle/epoch、policy、failure domain、trust anchor、revocation 与有效期；Coordinator/target owner/Policy owner 分别实例化且不得互相代签 | 独立 Safety Owner Workload Identity / PKI / HSM |
 | `SafetyEgressWorkloadAttestationMaterialRefV1` | egress boundary identity / wire-buffer 两类 operation-bound material ref、短时不可导出 key/epoch、policy/failure-domain/trust/revocation；不得用 App/Connector credential、自签进程 key 或跨 operation 代签 | Safety Egress Workload Identity / TPM / TEE / KMS |
@@ -461,7 +470,7 @@ SafetyEffectObservationV1 ──append_only_reconciles──> successor SafetyOw
 
 不变量：
 
-- Bitable row、卡片 payload、projection cache 和通知不是来源事实；
+- 协作表 row、卡片 payload、projection cache 和通知不是来源事实；外网 Bitable 只属于外网研发域；
 - actor/role/clearance/classification 不接受客户端自报；
 - 一个 HubIntent 只提交给一个权威 owner；跨 owner 流程由多个 receipt 串联；
 - Source Ownership Registry 是 FLAi Governance owner 的具名签发事实，不是 Hub 配置；
@@ -500,13 +509,13 @@ SafetyEffectObservationV1 ──append_only_reconciles──> successor SafetyOw
 - subject ref/digest 存在不等于生成对象获授权；PrepareSubject↔PreparedCommand、
   Challenge↔CommitAttempt、PublicationChallenge↔PublicationReceipt 必须分别从冻结字段独立
   重算同一个 domain-separated projection digest 并逐字相等，任何重复字段漂移都在消费前拒绝；
-- 适用的治理变迁无有效 OwnerCommitReceiptV1 不显示生效；运行 witness、GitHub verified
+- 适用的治理变迁无有效 OwnerCommitReceiptV1 不显示生效；运行 witness、当前域代码平台 verified
   provider state 等只读证据不伪造治理 receipt；响应丢失进入 EffectUnknownV1，不换幂等键重放；
 - 普通运行时 `SecretRef` 与全部 Safety material（Signer、3 类 owner-workload、2 类
   egress operation、Policy Fence、Trusted Time/Commit Guard）属于不同 owner/failure
   domain；Safety key
   不得由 `SecretProviderPort`、
-  `secrets-stackdocker`、普通 workload identity 或应用进程解析。各类引用可以进入配置与审计，
+  外网 `secrets-stackdocker`、内网 Internal Secret Owner、普通 workload identity 或应用进程解析。各类引用可以进入配置与审计，
   Secret/private-key value 不能进入上述任何实体、digest 或日志；F0 必须冻结每类 Safety
   owner/failure-domain/key/revocation/trust 合同与 fixture/drill 规格，任一合同未决即阻断；
   真实 material/runtime/outage witness 保持 `DECLARED-NOT-VERIFIED` 并在 D6/D7/D8 + F4 闭合；
@@ -617,7 +626,7 @@ effective_classification = classification_lattice.join(
 | 会议记录签发与初始责任发行 | exact MeetingWorkPackage digest + 全部责任项五字段齐全 + expected owner version | 同一 FLAi Meeting & Responsibility owner-local transaction 创建 OfficialMeetingRecord + 全部初始 ResponsibilityItem + OwnerCommitReceiptV1 + audit outbox | 任一缺失/竞态则全部不生效；响应不明先对账，不把部分结果称会议闭环 |
 | Knowledge 发布/撤销 | expected lifecycle/version | 新 immutable version/status event | 不原位修改 |
 | Typed qualification / promotion | target type/digest 匹配 + applicable gates `is True` | 对应 decision + event/outbox | 跨类型推导、unknown/skipped/invalid 拒绝 |
-| Hub prepare/commit bookkeeping | challenge 未消费 + fresh attestation + expected owner version/digest + policy/epoch 有效 | 仅 Hub 本地 intent/challenge/effect-attempt/outbox | 不把远端 owner 或飞书投影伪装进同一事务；stale/撤权/缺门拒绝 |
+| Hub prepare/commit bookkeeping | challenge 未消费 + fresh 同域 attestation + expected owner version/digest + policy/epoch 有效 | 仅当前域 Hub 本地 intent/challenge/effect-attempt/outbox | 不把远端 owner、跨域对象或 Workspace 投影伪装进同一事务；stale/撤权/缺门拒绝 |
 | Owner fact commit | owner 本地 expected version/digest + owner policy/epoch 有效 | 仅该 owner 本地 fact + owner receipt + owner outbox | 远端响应不明转 `effect_unknown`；Hub 不直接写 owner 数据库 |
 | Remote effect dispatch | stable idempotency/effect key + frozen request digest | 仅本地 dispatch attempt + outbox | 通过 owner receipt/authenticated postcondition query 对账；禁止分布式事务幻觉 |
 | Projection apply | owner revision 连续 + destination audience/classification 允许 | manifest + projection/outbox | source gap、drift 或目标不允许时 stale/suppressed，不反写 owner |
@@ -635,7 +644,7 @@ SQLite 实现必须使用短事务和仓储层封装；长时间模型/工具调
 
 1. 对每个目标实体回答：权威 Module、消费者、稳定 ID、版本、classification、留存、授权动作和失败归属。
 2. 冻结最小 Schema；未知字段 fail-closed，避免先建万能 JSON 垃圾桶。
-3. invalid-first fixtures 至少覆盖：缺 actor、跨项目对象、附件旁路、未知分级、旧 lease 晚写、failed 翻 completed、授权重复消费、知识版本冲突、Bench skipped 冒充通过、AI 自签路线图、伪造 `open_id`、旧 challenge、Bitable 改绿、receipt invalid、effect unknown 换键重放和 Secret fallback。
+3. invalid-first fixtures 至少覆盖：缺 actor、跨项目对象、附件旁路、未知分级、旧 lease 晚写、failed 翻 completed、授权重复消费、知识版本冲突、Bench skipped 冒充通过、AI 自签路线图、伪造平台 subject、旧 challenge、协作表改绿、外网 attestation/token/Secret 在内网重放、未准入 bundle、receipt invalid、effect unknown 换键重放和 Secret fallback。
 4. 迁移必须有旧库 fixture、幂等运行、回滚/前滚策略与备份恢复演练。
 5. 公开 API 或持久格式变化另立实施 ADR；本文件不授权创建上述表。
 
@@ -653,5 +662,8 @@ SQLite 实现必须使用短事务和仓储层封装；长时间模型/工具调
 - [ADR-0059：证据化指标](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)
 - [ADR-0060：需求共创闭环](../../adr/ADR-0060-demand-co-creation-loop.md)
 - [ADR-0061：需求决策权](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)
-- [ADR-0062：飞书唯一日常组织协作与治理中枢](../../adr/ADR-0062-feishu-single-organizational-hub.md)
-- [飞书中枢详细设计](17_Feishu_Organizational_Hub.md)
+- [ADR-0062：外网飞书研发协作中枢](../../adr/ADR-0062-feishu-single-organizational-hub.md)
+- [ADR-0063：外网开发、AirGap 与内网自托管 Workspace](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)
+- [外网飞书研发中枢详细设计](17_Feishu_Organizational_Hub.md)
+- [AirGap Exchange 与内网发行](18_AirGap_Exchange_and_Internal_Release.md)
+- [内网自托管 Workspace](19_Internal_Self_Hosted_Workspace.md)

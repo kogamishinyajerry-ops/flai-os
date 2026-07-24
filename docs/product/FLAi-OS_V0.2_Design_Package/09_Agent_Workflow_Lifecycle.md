@@ -2,7 +2,7 @@
 
 > 文档状态：`ACCEPTED-NOT-IMPLEMENTED`
 >
-> 本文定义 V0.2 目标生命周期。生命周期的一级对象是**能力发布包**，不是单个 Agent。现行 Agent 状态仍以 [Agent Package 标准](../../02_Agent_Package_Standard.md) 为准；评测与发布方向以 [ADR-0058](../../adr/ADR-0058-flai-bench-evaluation-foundation.md) 为准；飞书治理入口以 [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 为准。
+> 本文定义 V0.2 目标生命周期。生命周期的一级对象是**能力发布包**，不是单个 Agent。现行 Agent 状态仍以 [Agent Package 标准](../../02_Agent_Package_Standard.md) 为准；评测与发布方向以 [ADR-0058](../../adr/ADR-0058-flai-bench-evaluation-foundation.md) 为准；外网飞书研发入口以 [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 为准，内外网边界与内网自托管入口以 [ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md) 为准。
 
 ## 1. 为什么不能只管理 Agent
 
@@ -156,7 +156,7 @@ Phase 0A 验证平台机制和黄金工作流，不验证全业务价值。试�
 - Release Module 通过 Interface 引用 Agent Registry、Knowledge、Model Gateway、Tool Registry、Sandbox Policy 和 Eval，不复制其配置；
 - OpenClaw/OpenHands 只位于 AgentRuntimePort seam，macOS 隔离位于 SandboxProviderPort，CAE/HPC 位于 ToolExecutionPort；三者无权写发布或签发状态；
 - GitHub/内网 Issue Adapter 只同步交付引用，不把 issue closed 冒充需求解决或能力发布；
-- Feishu Hub 只把生命周期事实投影为具名评审工作包，并把人的选择编译为 typed intent；Bitable、卡片和 AI 草稿无权写资格、暴露或退役事实；
+- 当前部署域 Workspace Hub 只把生命周期事实投影为具名评审工作包，并把人的选择编译为 typed intent；协作表、卡片和 AI 草稿无权写资格、暴露或退役事实；外网 Feishu Hub 不能定向内网 owner；
 - Knowledge Interface 分开 ReleaseKnowledgeBinding 与 TaskKnowledgeSnapshot；后者必须返回版本、digest、有效性、scope 与 Binding conformance，普通检索结果不能冒充快照；
 - Typed Decision Interface 分开 `AgentLifecyclePromotion`、`IssueQualificationDecision` 与 `SignDeploymentBinding`，在提交事务时重新核验身份、职责、适用门、target type/digest 和范围，并以 CAS 防重复消费；成功后分别写入既有 Agent 生命周期事实、追加式 `QualificationDecision` 与版本化 `DeploymentBinding`；
 - 所有生命周期事件追加写入审计链，Projection 可以重建视图，但不得反向覆盖源事件。
@@ -173,7 +173,7 @@ Phase 0A 验证平台机制和黄金工作流，不验证全业务价值。试�
 | Platform Ops / Admin | 受 scope 限制的运行健康、队列、审计与事故证据 | 停止 lane、隔离、恢复等运维动作 | 因 admin 身份自动拥有发布/路线图签发权 |
 | 领导/组织视图 | 经隐私聚合的只读能力、风险与价值摘要 | 无生命周期写动作 | 查看个人明细、绕过审查点绿 |
 
-前端路由可见性不是授权。深链、API、搜索、计数、导出和证据下载逐次调用统一 Authorization Interface；越权响应不得泄露对象存在性。完整治理视图只出现在飞书 FLAi 工作空间内的角色化治理与运行中心，普通工作收件箱和专业工作台只投影本人相关摘要。高影响动作必须经过 prepare/commit，绑定精确 release/Bench/policy digest 并取得 FLAi owner receipt。
+前端路由可见性不是授权。深链、API、搜索、计数、导出和证据下载逐次调用统一 Authorization Interface；越权响应不得泄露对象存在性。完整治理视图只出现在当前部署域 Workspace 的角色化治理与运行中心：外网研发域可使用飞书，内网生产域只能使用自托管 `FLAiWorkspace`。普通工作收件箱和专业工作台只投影本人相关摘要。高影响动作必须经过 prepare/commit，绑定精确 release/Bench/policy digest 并取得 FLAi owner receipt；跨域候选还必须先通过 AirGap 准入。
 
 Depth 的目标是把冻结、核权、证据完整性、密级传播和失败关闭藏在内层 Module；Locality 要求每条治理规则和状态写入只有一个 owner Module，不在页面、脚本和 Adapter 复制判定。一个治理视图可定位 manifest、证据矩阵、签发、暴露和变更，属于证据可查找性，不获得独立写权。
 
@@ -212,8 +212,9 @@ Depth 的目标是把冻结、核权、证据完整性、密级传播和失败�
 8. suspended/revoked/expired DeploymentBinding 或 retired 包不能创建新任务，历史任务和证据仍可按权限重建；
 9. 替代包不会自动继承旧包的 Bench 结论；
 10. 每次资格决定、Agent 晋级、暴露启停、恢复和退役都能回查具名操作者、时间、理由、前后版本及证据。
-11. 人工修改飞书/Bitable 生命周期投影不会改变 FLAi owner 事实，并生成 projection drift 或被恢复。
-12. 飞书 challenge 过期、actor 撤权、release digest 漂移或 receipt 无效时，不显示资格、部署或退役动作已生效。
+11. 人工修改任一 Workspace/协作表的生命周期投影不会改变 FLAi owner 事实，并生成 projection drift 或被恢复。
+12. Workspace challenge 过期、actor 撤权、release digest 漂移或 receipt 无效时，不显示资格、部署或退役动作已生效。
+13. 外网 Feishu/GitHub/模型服务全部不可用时，已准入的内网 release 仍能完成生命周期观察、暂停、撤销与退役审计。
 
 ## 11. 本阶段非目标
 

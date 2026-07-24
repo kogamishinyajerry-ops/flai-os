@@ -1,11 +1,25 @@
-# ADR-0062：飞书作为唯一日常组织协作与治理中枢
+# ADR-0062：飞书外网研发协作中枢（原全局范围已被 ADR-0063 取代）
 
-- 状态：`confirmed_in_design_session`
-- 实现状态：`ACCEPTED-NOT-IMPLEMENTED`
+- 状态：`superseded_in_part_by_adr_0063`
+- 实现状态：`EXTERNAL-DEVELOPMENT-ONLY / ACCEPTED-NOT-IMPLEMENTED`
 - 日期：2026-07-23
 - 正式签发主体：`UNRESOLVED`
 - 实施授权：否
 - 生产准入影响：无；当前仍为 `NO-GO`
+- 当前适用信任域：`EXTERNAL_DEVELOPMENT`
+
+> **范围纠偏（2026-07-24）**
+>
+> owner 已明确：飞书用于当前外网研发团队共同开发 FLAi-OS；正式植入企业内网后，FLAi-OS
+> 与飞书生态完全断开，并依赖内网自托管通讯、项目、知识、身份、代码和运行设施。自
+> [ADR-0063](ADR-0063-external-development-airgap-internal-workspace.md) 起，本文所有未显式
+> 限定作用域的“唯一组织入口”“全体人员”“内网知识/运行/治理从飞书进入”等表述，只能按
+> `FeishuDevelopmentHub` 的**外网研发协作**理解；与 ADR-0063 冲突的内网产品和部署语义全部
+> 失效。
+>
+> 本 ADR 不再定义 `AIR_GAPPED_INTERNAL` 的产品入口、身份、Secret、知识、Runtime、审计、
+> 连续性或生产准入。原飞书中心化 F0 SHA 只保留为澄清前历史快照，不能沿用为内网自托管
+> 工作空间的 F0。
 
 ## 背景
 
@@ -27,15 +41,15 @@ FLAi-OS 已经分别设计了工程智能体工作台、治理与运行中心、
 
 ### 1. 产品定位
 
-飞书被定义为 FLAi-OS 的**唯一日常组织协作与治理中枢**，即唯一标准组织 landing、
-工作收件箱与编排 `System of Engagement`：
+在 `EXTERNAL_DEVELOPMENT` 域，飞书被定义为 FLAi-OS **外网研发的唯一日常协作中枢**，
+即外网研发团队的标准 landing、工作收件箱与编排 `System of Engagement`：
 
-- 全体人员从飞书进入工作收件箱、项目空间、需求共创、会议工作包、知识、开发协作、Agent 治理、安全处置、指标和领导简报；
-- 所有正常管理与治理都从飞书发起、组织、跟踪和回告；适合的签发仪式可在飞书内嵌页完成；
-- 工程智能体工作台作为飞书网页应用中的专业执行 Surface，或从飞书重新鉴权后打开的受控 Surface；
+- 外网研发人员从飞书进入研发工作收件箱、项目空间、需求共创、设计会议工作包、非敏感研发知识、开发协作和外网研发回告；
+- 所有外网研发协作从飞书发起、组织、跟踪和回告；外网研发签发仪式可在飞书内嵌页完成；
+- 外网工程原型或研发工作台可作为飞书网页应用中的专业 Surface，或从飞书重新鉴权后打开；
 - GitHub 仍是代码、commit、branch、PR、review、CI 和 merge 的唯一工程事实源；代码 diff
   review、PR approval、branch protection 与 merge 仍在 GitHub 原生专业 Surface 完成；
-- FLAi Control Kernel 仍是 Agent 运行、Authorization、CapabilityReleasePackage、FLAi Bench、DeploymentBinding、DeliveryBundle、审计和 receipt 的唯一 owner；
+- 内网 FLAi Control Kernel、Qualification、Deployment、Execution、Delivery、Knowledge、Audit 与 Safety 不在本文信任域；它们由 ADR-0063 定义的自托管内网 owner 管理；
 - `secrets-stackdocker` 是运行时 App/Connector Secret value 的唯一 owner，普通工作负载只持有
   `SecretRef`；Safety Identity / PKI / HSM / Time 独立拥有人的硬件身份、Safety
   receipt-signing、Coordinator / target owner / Policy owner 三类 workload-attestation
@@ -43,9 +57,9 @@ FLAi-OS 已经分别设计了工程智能体工作台、治理与运行中心、
   Policy-fence 与 Trusted-Time Authority/Commit-Guard material，不能与普通 Secret 栈、普通 workload identity
   或彼此形成同一故障域。
 
-飞书不是唯一 `System of Record`，不是 FLAi Control Kernel，也不是唯一安全生存通道。
-GitHub 原生代码操作、FLAi 专业执行工作台和密封安全通道不是第二组织中枢，因为它们没有独立
-的组织首页、工作收件箱或项目治理看板。
+飞书不是唯一 `System of Record`，不是 FLAi Control Kernel，也不是内网安全生存通道。
+GitHub 原生代码操作不是第二个外网研发组织中枢；内网 `FLAiWorkspace` 属于不同网络和信任域，
+不是飞书的备用界面或同步副本。
 
 ### 2. 事实所有权
 
@@ -224,13 +238,13 @@ Challenge↔CommitAttempt、PublicationChallenge↔PublicationReceipt 必须从�
 
 当前仓库的 GitHub Issue 工作流仍保持有效，直到 Feishu Hub 的 ActorBinding、typed intent、receipt、reconciliation、classification 和迁移验收全部通过，并另有明确实施及切换决定。本文不修改 `AGENTS.md`、生产 Schema、公开 Interface、任务状态机或现行 Issue 流程。
 
-## 对既有 ADR 的影响
+## 对既有 ADR 的影响（仅外网研发域）
 
 - 保留 ADR-0049、0050、0051、0053～0058 的控制内核、交付、人签、试点、知识和 Bench 决定；
-- 调整 ADR-0052：工程智能体工作台继续是 Agent 执行的默认专业 Surface，但组织级默认入口改为飞书 FLAi 工作空间；
-- 调整 ADR-0059：FLAi 共建地图迁入飞书工作空间，仍是证据派生视图；
-- 调整 ADR-0060/0061：需求提交、策展、评审和路线图签发的日常人机 Surface 改为飞书；事实、签发和 GitHub 交付边界不变；
-- 任何冲突以本 ADR 对“Surface 与入口”的更新为准，不得据此削弱原 ADR 的安全或事实所有权。
+- 调整 ADR-0052：外网研发工作台继续是专业 Surface，但外网研发组织默认入口改为飞书研发空间；
+- 调整 ADR-0059：外网研发共建地图投影进入飞书研发空间，仍是证据派生视图；
+- 调整 ADR-0060/0061：外网研发需求提交、策展和评审的日常人机 Surface 可为飞书；事实、签发和 GitHub 交付边界不变；
+- 内网入口与治理不受本节调整，全部以 ADR-0063 为准；任何冲突不得据此削弱安全或事实所有权。
 
 ## 后果
 

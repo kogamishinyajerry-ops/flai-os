@@ -15,7 +15,7 @@
 1. `AGENTS.md`；
 2. `CONTEXT.md`；
 3. `docs/product/FLAi-OS_V0.2_Design_Package/README.md` 与本包全部文档；
-4. `docs/adr/ADR-0047-*.md` 至 `ADR-0062-*.md`；
+4. `docs/adr/ADR-0047-*.md` 至 `ADR-0063-*.md`；
 5. `docs/product/FLAi-OS_V0.2_Design_Package/15_Phase_0A_MVP_Spec.md`，并先核对其 Stage B 是否已由 owner 冻结；
 6. `docs/00_FLAi-OS_Constitution.md` 至 `docs/09_Workflow_Live_Monitor_Standard.md`；
 7. `docs/PRODUCTION-READINESS-PROGRAM.md`、`docs/DEPLOYMENT-SUPERVISION.md` 与 `docs/agents/issue-tracker.md`；
@@ -23,7 +23,11 @@
 
 权威原则：accepted ADR 裁决目标决策，`CONTEXT.md` 裁决术语，代码/Schema/测试/真实运行证据说明当前实现，现行标准说明当前合同，本设计包只是派生读模型。发现冲突时先记录，不得挑选方便的版本制造一致。
 
-ADR-0047/0048 负责决策谱系与知识发布身份澄清，ADR-0049～0062 当前只证明委托人在设计会话中确认产品方向；它们都不是组织身份系统中的正式签发。接手者必须分别记录 decision provenance 与 implementation evidence；在获得绑定 `actor_id + scope + timestamp + exact digest + evidence_ref` 的 `formally_signed` 记录前，不得把这些 ADR 当作试点、采购、发布或上线授权，也不得自行伪造 accepted_by 字段。当前 Stage B 已因 owner 于 2026-07-23 的明确原话“冻结 Stage B，进入 Stage C”标为 `FROZEN-FOR-STAGE-C`；Stage C 又因原话“以 C 为主，吸收 A 的首页”标为 `DIRECTION-SELECTED-FOR-CONVERGENCE`。两条记录的 `accepted_by_actor_id` 都是 `UNRESOLVED`；前者只打开隔离原型门，后者只选择 A 首页 → C 执行态的收敛方向，均不具有组织正式签发或 Stage D 授权效力。ADR-0062 只冻结飞书唯一日常中枢的产品、架构与治理方向，不授权 Feishu/Schema/Secret Adapter 或生产写入。
+ADR-0047/0048 负责决策谱系与知识发布身份澄清，ADR-0049～0063 当前只证明委托人在设计会话中确认产品方向；它们都不是组织身份系统中的正式签发。接手者必须分别记录 decision provenance 与 implementation evidence；在获得绑定 `actor_id + scope + timestamp + exact digest + evidence_ref` 的 `formally_signed` 记录前，不得把这些 ADR 当作试点、采购、发布或上线授权，也不得自行伪造 accepted_by 字段。当前 Stage B 已因 owner 于 2026-07-23 的明确原话“冻结 Stage B，进入 Stage C”标为 `FROZEN-FOR-STAGE-C`；Stage C 又因原话“以 C 为主，吸收 A 的首页”标为 `DIRECTION-SELECTED-FOR-CONVERGENCE`。两条记录的 `accepted_by_actor_id` 都是 `UNRESOLVED`；前者只打开隔离原型门，后者只选择 A 首页 → C 执行态的收敛方向，均不具有组织正式签发或 Stage D 授权效力。
+
+ADR-0063 已把部署拓扑纠偏为：飞书只属于外网研发协作域；内网使用完全自托管
+`FLAiWorkspace`；两个域只通过 `AirGapExchange` 的签名离线发布包和独立脱敏反馈包交换成果。
+原 ADR-0062/F0 SHA 不能继续作为内网产品基线，也没有任何真人批准可以沿用。
 
 所有结论使用且只使用：`IMPLEMENTED-VERIFIED`、`IMPLEMENTED-PARTIAL`、`ACCEPTED-NOT-IMPLEMENTED`、`DECLARED-NOT-VERIFIED`、`OUT-OF-SCOPE`。`unknown/failed/invalid/skipped` 不能判绿。
 
@@ -64,7 +68,13 @@ git log -1 --oneline
 - 后台任务：SQLite 任务表 + 轮询 Job Runner；
 - 禁止引入 Redis/Celery、Next.js/PostgreSQL 第二应用、第二套任务状态机、第二套审计账本或第二套 KPI/评测/知识事实源；
 - 当前阶段 macOS-first，质量优先；不要夹带 Windows 适配工程，也不要破坏既有跨平台脚本合同。
-- 飞书是唯一日常 System of Engagement，但不是数据库或控制内核；GitHub 保持代码/PR/CI 事实，FLAi 保持运行/授权/Bench/交付/审计事实，Knowledge Authority 保持知识有效性，`secrets-stackdocker` 保持运行时 App/Connector Secret 事实；人的硬件身份、Safety receipt-signing、Coordinator / target owner / Policy owner 三类 workload-attestation material、Egress Boundary/Wire 两类 operation-bound workload-attestation material、Policy-fence 与 Trusted-Time Authority/consumer-local Commit-Guard material 分别由独立 Safety Identity / PKI / HSM / Time owner 持有，各 operation 不得互相代签，也不得来自普通 workload identity、应用进程自签 key、SecretProviderPort 或普通 Secret 栈；
+- 外网研发以 `FeishuDevelopmentHub + GitHub` 协作；内网产品以自托管
+  `FLAiWorkspace + InternalWorkspaceHub` 协作。两域无实时 Connector、共享身份、共享 Secret、
+  共享数据库或运行控制链。`secrets-stackdocker` 当前只属于外网研发普通 Connector Secret
+  域；内网使用独立 Secret owner/instance/root/namespace。人的硬件身份、Safety
+  receipt-signing、Coordinator / target owner / Policy owner workload-attestation、
+  Egress Boundary/Wire operation-bound material、Policy-fence 与 Trusted-Time
+  Authority/Commit-Guard material分别由独立 Safety Identity / PKI / HSM / Time owner 持有；
 - 所有普通 Connector 只持有 opaque `SecretRef`；禁止恢复 `.env`、硬编码或宿主全局凭据 fallback，禁止读取或输出 Secret value。
 
 执行平面必须拆成三类窄 Port 并由 ExecutionBroker 组合：OpenClaw/OpenHands 只可实现 `AgentRuntimePort`，macOS 隔离实现 `SandboxProviderPort`，Python/Office/CAE/HPC 实现 `ToolExecutionPort`。FLAi-OS 控制内核继续唯一拥有普通协作/工作负载身份与资源授权、CanonicalTaskGraph、队列与并发、任务状态、政策、审计、产物和交付语义；独立 Safety Identity / PKI / HSM / Time owners 拥有人的安全硬件身份、Safety admission、receipt-signing、Coordinator / target owner / Policy owner 三类 operation-bound workload attestation、Egress Boundary/Wire 两类 operation-bound material、Policy fence 与 Trusted-Time Authority/consumer-local Commit-Guard material，Kernel 只消费可验证结果，不拥有其 credential/signing material。每个动态 replan/Tool/Model/Knowledge/Connector 动作必须取得绑定 step/Grant/policy/lease/budget/expiry 的短时 ExecutionTicket。不得让外部 Runtime 直接调用下游、写权威终态、绕过策略、形成第二控制面或产生真人签发。此约束来自 ADR-0049。
@@ -79,22 +89,23 @@ git log -1 --oneline
 6. **全过程审计**：输入快照、计划摘要、工具调用、策略判定、模型实际路由、Token、文件摘要、网络出口、取消/恢复、Bundle、真人授权、真实执行 receipt 和后置验证必须能关联和重建。授权不等于执行成功；可变日志或无法验证的审计不得作为生产证据。
 7. **知识不是普通 RAG**：只有具名授权人员在本平台签发、不可变、当前有效且适用的材料可支持组织或工程依据；受信源系统只能提供可验证的上游签发 `source_system_attestation`，不能成为 FLAi-OS signer。Obsidian 只是策展界面，向量/BM25 只是索引。缺失、过期、被替代、范围不明或冲突时显示“无法确认”，模型不得自行裁决。见 ADR-0057。
 8. **FLAi Bench 不做综合排行榜，也不接受测试标签旁路**：评测对象是冻结能力发布包；未资格候选必须先取得具名 Eval maintainer 签发、绑定 actor/scope、release/approved synthetic fixture/pack、预算、TTL、epoch 和零外部效果的 EvaluationAdmission，`origin=eval` 只能由 Kernel 验证后派生。确定性回归、工程质量、安全治理、运行效率四轨分别呈现；安全、诚实、依据链和关键回归是不可抵消门；LLM Judge 只能辅助。见 ADR-0058。
-9. **飞书唯一组织入口、同一控制内核**：组织级默认产品是飞书 FLAi 工作空间，承接 landing、
-   工作收件箱、编排与回告；工程智能体工作台和 GitHub diff/PR approval/merge 是重新鉴权的
-   权威专业 Surface，不另建组织首页。飞书只投影联邦 owner 事实，不能成为 Bitable 总账或
-   第二管理应用。见 ADR-0052、ADR-0059、ADR-0062。
+9. **双环境、单域单入口、同一控制内核**：飞书只承接外网研发 landing/工作包/回告，GitHub
+   拥有外网工程事实；内网默认产品是自托管 FLAiWorkspace，承接业务工作收件箱、项目、讨论、
+   知识、工作台、治理和共建。聊天/Wiki/项目 Adapter 只投影同域 owner 事实，不能成为总账或
+   第二控制面。见 ADR-0052、ADR-0059、ADR-0063。
 10. **需求共创不等于投票治产品**：AI 只预处理；策展、领域评审、安全门、路线图具名签发和交付验收职责分离。需求池、路线图承诺和工程 Issue 是相连但不同的事实层。见 ADR-0060、ADR-0061。
-11. **点击不等于生效**：会创建/改变跨 owner 正式事实、受控投影或外部 effect 的飞书动作
-    必须是 typed intent；飞书自有群聊/评论/Docs 草稿保持原生协作。高影响动作冻结
+11. **点击不等于生效**：会创建/改变跨 owner 正式事实、受控投影或外部 effect 的 Workspace
+    动作必须是 typed intent；聊天/评论/Wiki 草稿保持原生协作。高影响动作冻结
     PreparedCommand/ReviewChallengeV1，绑定 payload/target/actor/epoch/assurance/policy/gate
-    digest、新鲜 step-up 和一次性 CAS nonce。卡片点击、Bitable 更新、HTTP 2xx 或消息送达都
+    digest、新鲜 step-up 和一次性 CAS nonce。卡片点击、项目/Wiki 更新、HTTP 2xx 或消息送达都
     不能替代 OwnerCommitReceiptV1；EffectUnknownV1 先对账，不换幂等键重放。
     commit 必须提交精确 ReviewChallengeV1 ref + ConfirmationProofV1，二者和 commit attestation
     绑定 challenge/prepared/nonce digest、confirmation mode、audience/purpose；Source
     Ownership Registry 由 FLAi Governance owner 具名签发并冻结进 Prepared/Challenge，
     receipt 自报 owner/type/schema 绝不能驱动 verifier dispatch。
-12. **唯一日常入口不牺牲安全生存**：飞书不可用时新的正常治理暂停，但独立
-    SafetySurvivalPort 必须不依赖飞书、Hub、主协作 SSO 或普通在线 Secret 解析；只允许
+12. **唯一日常入口不牺牲安全生存**：Workspace、通讯/Wiki Adapter 或主协作 SSO 不可用时
+    新的正常治理暂停，但独立 SafetySurvivalPort 必须不依赖这些 Surface 或普通在线 Secret
+    解析；只允许
     kill/revoke/suspend/deny/isolate、开对账案、向预批准本地 WORM 封存证据和只验证不启用
     的恢复候选，不能承担正常签发、对外导出、恢复权限、发布或合并代码。其 receipt 必须使用
     固定 canonical payload/domain separator、独立 signer/verifier 与 verifier-only result
@@ -131,6 +142,11 @@ git log -1 --oneline
     verification bundle freshness 到期只在读取时立即降为 amber，持久 reverify 必须使用新
     verification bundle。外部 effect unknown 保持 amber，pending→confirmed 只用原 effect
     key、认证查询、追加 successor receipt 和 expected-head CAS。
+13. **跨域只走离线准入**：外网 merged SHA 必须构造成内容寻址、签名、closed-world 的
+    OfflineReleaseBundle；内网在 quarantine 重新验签、扫描、离线复测、双人准入并以
+    ReleaseSet CAS 整体晋升。外部签名只证明来源，`admitted` 不等于 qualified/deployed/REAL。
+    外发只允许经分类、DLP/Secret 检查和具名批准的合成最小反馈。禁止 Feishu/GitHub ↔ 内网
+    webhook、在线同步、共享身份、共享 Secret、自动日志或遥测。见 ADR-0063。
 
 ### 六、只按四个阶段推进
 
@@ -139,7 +155,8 @@ git log -1 --oneline
 先交付证据化架构评审，至少包括：
 
 - 当前模块、Interface、Implementation、Seam、Adapter、权威事实源和调用路径；
-- ADR-0047 至 ADR-0062 对当前系统的逐条差距矩阵，并确认编号谱系、知识发布身份、飞书事实所有权和 Secret owner 无冲突；
+- ADR-0047 至 ADR-0063 对当前系统的逐条差距矩阵，并确认编号谱系、知识发布身份、双信任域、
+  外网/内网事实所有权、AirGapExchange 和分域 Secret owner 无冲突；
 - 身份/BOLA、权限、Sandbox、网络出口、并发、取消/强杀、审计、知识、评测、Bundle 的威胁与失败路径；
 - 可复用模块与必须新增的最小 seam，说明为何保持高 Locality、避免第二控制面；
 - 当前 NO-GO 项、前置依赖、未知项和需要 owner 决策的问题；
@@ -165,11 +182,16 @@ git log -1 --oneline
 
 当前收敛方向已固定为：空任务使用 A 式低门槛首页，提交后无缝展开 C 式连续执行工作台；A/B/C 比选壳必须删除，不得继续把方案选择暴露给用户。Stage C 授权只允许隔离的 UI 原型资源与内存 fixtures，不允许连接或修改 Runtime/API、Schema、数据库、生产配置，不允许新增第三方依赖、使用真实数据、开放试点、发布或部署。优先复用现有 Vue/Vite/Element Plus 的视觉与组件基础；不建设 Dashboard-first 第二应用。原型必须覆盖正常、空、加载、失败、blocked、unknown、权限不足、取消和证据缺失状态，并通过桌面端核心路径、键盘焦点与无横向溢出的可重复检查。
 
-ADR-0062 将该原型定位为未来飞书工作空间中的专业执行 Surface，但不授权把 Stage C 连接到真实飞书。飞书 Hub 只能先做 F0 合同和具名评审；F1～F5 的只读投影、typed intent、治理签发、执行观察和迁移分别另获授权。
-F0 七域评审必须绑定 `F0ReviewManifestV1`：包含 frozen Git commit/tree 和全部 normative
+ADR-0063 将该原型定位为未来内网 FLAiWorkspace 的专业执行 Surface，但当前只能在外网隔离
+工作树使用 synthetic fixture 开发，不连接真实飞书、自托管协作/Wiki、内网 Runtime 或数据。
+Kimi K3 只是外网 UI/UX 源码贡献者，不是内网模型依赖。飞书 Hub 只做外网
+`DEV-HUB-F0`；内网 `AIRGAP-WORKSPACE-F0` 与 AirGapExchange 必须独立评审并另获实现授权。
+
+新 F0 七域评审必须绑定 `F0ReviewManifestV1`：包含 frozen Git commit/tree 和全部 normative
 文件逐项 hash、生成主体/工具及 review/generation-receipt/seal schema；另需外部验证的
 manifest-generation receipt 与七域 named review core+seal。单个文档 hash、聊天确认或未提交
-工作树不能作为冻结对象，任一 normative 变更都使旧 review stale。
+工作树不能作为冻结对象，任一 normative 变更都使旧 review stale。原飞书中心化 SHA 只是
+澄清前历史快照，不能迁移批准或 reviewer 结论。
 
 没有 owner 对原型体验、MVP 范围和诚实标签的明确接受，不进入阶段 D。
 
@@ -203,10 +225,12 @@ manifest-generation receipt 与七域 named review core+seal。单个文档 hash
 | S10 | 任一不可抵消门为 false，或结果为 failed/invalid/skipped/unknown/证据不可解析 | 晋级、发布和签发一律拒绝 |
 | S11 | 需要真实敏感数据、外部网络、第三方源码/依赖、外部系统写入或不可逆 Git/部署动作，但没有明确授权 | 停止并申请精确范围授权 |
 | S12 | 已达到当前阶段交付物，但下阶段尚未获得 owner 明确接受 | 在阶段门处停止；只给出下一步建议，不自行越级 |
-| S13 | 飞书/Bitable 可独立改写 GitHub、FLAi、Knowledge、Audit 或 Secret owner，或无 OwnerCommitReceiptV1 仍显示治理变迁生效 | 停止；恢复单 owner、typed intent 与对账合同 |
-| S14 | `secrets-stackdocker` 引用不可解析、已撤销或 provider 不可达，只能回退旧 `.env`/硬编码/全局凭据 | fail-closed；不得外联或声称 Secret 迁移已验证 |
-| S15 | 飞书租户/空间 classification 或 audience 未获批准，或飞书故障会阻断 kill/revoke | 不复制正文、不进入生产；先完成密级评审和安全生存演练 |
+| S13 | 飞书、聊天、Wiki 或项目表可独立改写 GitHub/Internal Forge、FLAi、Knowledge、Audit 或 Secret owner，或无 OwnerCommitReceiptV1 仍显示治理变迁生效 | 停止；恢复同域单 owner、typed intent 与对账合同 |
+| S14 | 适用域 SecretRef 不可解析、已撤销或 provider 不可达，只能回退旧 `.env`/硬编码/全局凭据；或外网/内网共用 SecretRef namespace/value/root | fail-closed；不得外联或声称 Secret 迁移已验证 |
+| S15 | 目标内网 Surface classification/audience 未获批准，或 Workspace/协作/Wiki 故障会阻断 kill/revoke | 不复制正文、不进入生产；先完成密级评审和安全生存演练 |
 | S16 | Safety Coordinator / target owner / Policy owner、Egress Boundary/Wire workload-attestation、Trusted-Time Authority/Commit-Guard、Fence/Signer 任一 owner/failure-domain/key/operation policy 合同仍未决、可互相代签，Time epoch transition 无具名 continuity-root 签名，commit lease/proof/checkpoint 未绑定 transaction nonce/subject 与实际线性化点，或设计仍依赖普通 Secret 栈/进程自签 key | 阻断 F0；不得以 host clock、缓存、调用前看一次时间、直连 provider 或旧 witness 回退；真实 runtime 验证 Unknown 则阻断对应 D/F4/生产门 |
+| S17 | 方案建立 Feishu/GitHub ↔ 内网实时连接、共享身份/Secret、自动遥测/日志回流，或把外网签名/CI/merge 当成内部准入/部署 | 停止；恢复 AirGapExchange、quarantine、内部复验和具名准入 |
+| S18 | OfflineReleaseBundle 有未声明/缺失对象、digest/signature/SBOM/license/classification/scan unknown，或内部只完成部分对象晋升 | 拒绝准入；隔离原包，禁止更新 ReleaseSet Head |
 
 ### 八、每阶段交付格式
 
@@ -229,7 +253,7 @@ manifest-generation receipt 与七域 named review core+seal。单个文档 hash
 
 架构评审和后续规格对账必须逐条引用并判定，不得遗漏：
 
-- ADR-0047：主线 ADR 谱系、历史 safe-auto 仅作 commit-bound evidence；ADR-0062 已用于飞书中枢方向，未来选择性吸收从 ADR-0063 起另立实施决定；
+- ADR-0047：主线 ADR 谱系、历史 safe-auto 仅作 commit-bound evidence；
 - ADR-0048：能力发布身份使用 ReleaseKnowledgeBinding，任务时 TaskKnowledgeSnapshot 只作运行证据；
 - ADR-0049：唯一控制内核、ExecutionBroker、三类可替换执行 Port 与逐步 ExecutionTicket；
 - ADR-0050：不中断自治会话与末端 Delivery Bundle 授权；
@@ -243,7 +267,13 @@ manifest-generation receipt 与七域 named review core+seal。单个文档 hash
 - ADR-0058：FLAi Bench；
 - ADR-0059：共建地图与证据化指标；
 - ADR-0060：需求共创闭环；
-- ADR-0061：需求决策权与路线图具名签发。
-- ADR-0062：飞书唯一日常组织协作与治理中枢、联邦事实、OwnerCommitReceiptV1、SecretRef 与安全生存通道。
+- ADR-0061：需求决策权与路线图具名签发；
+- ADR-0062：仅保留飞书外网研发协作中枢、Codex/Kimi 工作包和 GitHub 交付范围；
+- ADR-0063：外网研发域、AirGapExchange、内网 FLAiWorkspace、独立身份/Secret/Forge/Registry
+  与离线发布准入。
 
-先读取 README、`15_Phase_0A_MVP_Spec.md` 的阶段状态和可验证的 owner 决策记录，再选择合法的下一门：若没有可靠阶段证据，默认从阶段 A 只读评审开始；若 Stage A 已接受而 Stage B 仍为 `DRAFT-FOR-FREEZE`，只复核/收敛 Stage B 并停在冻结门；只有 Stage B 已标 `FROZEN-FOR-STAGE-C` 且有 owner 明确授权，才执行 Stage C；只有 Stage C 已接受且 owner 点名某个冻结切片，才进入该 Stage D 切片。Git 状态、文档存在、聊天摘要或 Codex 自述都不能代替阶段授权。当前 Stage C 可继续走查隔离、诚实标注且不接 Runtime/生产的 A 首页 → C 执行态；ADR-0062 的 F0 只允许合同与具名评审。两条轨道都不能自动打开 Stage D 或 F1，且不得互相冒充完成。
+先读取 README、`15_Phase_0A_MVP_Spec.md` 的阶段状态和可验证的 owner 决策记录，再选择合法的下一门：若没有可靠阶段证据，默认从阶段 A 只读评审开始；若 Stage A 已接受而 Stage B 仍为 `DRAFT-FOR-FREEZE`，只复核/收敛 Stage B 并停在冻结门；只有 Stage B 已标 `FROZEN-FOR-STAGE-C` 且有 owner 明确授权，才执行 Stage C；只有 Stage C 已接受且 owner 点名某个冻结切片，才进入该 Stage D 切片。Git 状态、文档存在、聊天摘要或 Codex 自述都不能代替阶段授权。
+
+当前 Stage C 可继续走查隔离、诚实标注且不接 Runtime/生产的 A 首页 → C 执行态；外网
+DEV-HUB-F0 与内网 AIRGAP-WORKSPACE-F0/Release Admission 评审必须分开。任何一条轨道都不能
+自动打开 Stage D、真实连接、采购、导入、试点或生产，且不得互相冒充完成。

@@ -62,7 +62,7 @@ R0 架构评审
 
 任一阶段未通过时，后续阶段保持关闭。紧急业务压力、领导关注或需求数量不能绕过阶段门。
 
-### 4.1 四条正交阶段轴
+### 4.1 五条正交阶段轴
 
 以下名称回答不同问题，不能互相替代或自动授权：
 
@@ -71,17 +71,18 @@ R0 架构评审
 | Stage A～D | 设计与开发进行到哪一步 | Stage B 产品语义已由设计会话冻结；Stage C 已选择收敛方向但未正式验收；Stage D 关闭 | 产品/UX owner 对精确原型与切片的具名决定 |
 | R0～R8 | 产品能力和证据成熟到哪一门 | 本包提供 R0/R1 设计输入与 R2 隔离原型证据；不证明 R3 以后实现 | 本路线图各 R 门的机械证据与具名签发 |
 | Phase 0A / 0B | 哪些人、数据和能力可以被暴露 | 两者都未开放；Phase 0A 仍只允许未来的 approved synthetic 受控验收 | QualificationDecision、DeploymentBinding、Entry/Exit evidence |
-| F0～F5 | 飞书组织中枢接入到哪一步 | `F0-REVIEW-PACKAGE-DRAFT`；尚无 frozen Git commit/tree + F0ReviewManifest，七域正式评审未完成，F1～F5 未授权 | [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 与 [设计 17](17_Feishu_Organizational_Hub.md) 的逐段门 |
+| F0～F5 | 外网飞书研发协作中枢接入到哪一步 | `F0-REVIEW-PACKAGE-DRAFT`；只适用于外网研发域，F1～F5 未授权 | [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 与 [设计 17](17_Feishu_Organizational_Hub.md) 的逐段门 |
+| A0～A5 | 外网发行物如何受控进入内网并在断网条件下运行 | A0 合同设计中；A1～A5 未授权，内网生产结论 `NO-GO` | [ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)、[设计 18](18_AirGap_Exchange_and_Internal_Release.md) 与 [设计 19](19_Internal_Self_Hosted_Workspace.md) |
 
 依赖规则：
 
-1. Stage C 与 F0 可以并行；当前 Stage C 只模拟飞书入口上下文，不接真实 tenant/app。
+1. Stage C、外网 F0 与 AirGap A0 可以并行；当前 Stage C 只模拟当前域 Workspace 入口上下文，不接真实 tenant/app 或内网系统。
 2. Stage D Runtime 切片必须先通过 Stage C 正式验收、适用 R0/R1 exit receipts 的正式签发，
    并另获精确实施授权；F0 设计完成不打开 Stage D。
-3. 当前 Phase 0A 不依赖真实飞书；若未来把真实飞书纳入试点，必须先通过与所用能力对应的
-   F1/F2/F3/F4 门。F1 只读不授权写，F2 低风险意图不授权高影响治理。
+3. 当前 Phase 0A 不依赖真实飞书。真实飞书只能进入外网研发流程，并须通过对应 F 门；内网
+   Phase 0A 必须通过对应 A 门和自托管 Workspace 门，不得把 F 门结果继承为内网准入。
 4. F1～F5 每段单独授权、累积验收；任一 F 段完成都不证明 R3～R8、Phase 0A/0B 或生产准入。
-5. R 门可以消费其他轴的已验证证据，但不得从“原型好看”“飞书已接通”“代码已合并”自动
+5. R 门可以消费其他轴的已验证证据，但不得从“原型好看”“飞书已接通”“离线包已复制”“代码已合并”自动
    推导 Qualification、DeploymentBinding、试点或发布。
 6. 组织身份签发未解析时，设计会话决定保持 `confirmed_in_design_session`，不能冒充
    `formally_signed`。
@@ -103,7 +104,8 @@ R0 架构评审
 - Delivery Bundle 冻结、授权 CAS、提交 receipt 和后置验证状态机；
 - 数据模型与迁移策略；所有不可变列明确 CAS-on-NULL 或等价约束；
 - 工作台、治理中心、共建地图的共享事实源和只读投影关系；
-- 飞书唯一日常中枢的 Source Ownership Registry、`open/prepare/commit`、ActorBinding、classification projection、owner receipt、reconciliation、SecretRef 与安全生存通道；
+- 分域日常中枢的 Source Ownership Registry、`open/prepare/commit`、ActorBinding、classification projection、owner receipt、reconciliation、SecretRef 与安全生存通道；
+- AirGapExchange 的签名、内容寻址、quarantine、ReleaseSet CAS、内网重验、脱敏反馈与失败码；
 - 三条工作流的 Adapter 清单、输入预算和失败模式。
 
 ### 退出门
@@ -161,7 +163,7 @@ owner 于 2026-07-23 在设计会话中明确说“以 C 为主，吸收 A 的�
 
 当前 Stage C 只允许隔离 UI 资源和内存 fixtures；不得连接或修改 Runtime/API、Schema、数据库、生产配置，不得新增第三方依赖、使用真实数据、开放试点、发布或部署。
 
-ADR-0062 形成的是后续组织级入口目标，不把当前 Stage C 原型改造成真实飞书应用。当前 A 首页 → C 执行态原型继续作为内嵌工程工作台的专业体验基线；飞书工作收件箱、真实认证和投影属于下述 F0～F5 独立门。
+ADR-0062 只形成外网研发协作入口目标；ADR-0063 决定内网生产使用自托管 `FLAiWorkspace`，并通过 `AirGapExchange` 与外网隔离。当前 A 首页 → C 执行态原型继续作为工程工作台的专业体验基线；真实飞书接入属于 F0～F5，内网 Workspace 与离线准入属于 A0～A5，均是独立门。
 
 ### 原型范围
 
@@ -318,7 +320,7 @@ ADR-0062 形成的是后续组织级入口目标，不把当前 Stage C 原型�
 - 性能盘真实专业闭环；
 - FEA、控制逻辑、FTA、P-ACE 等领域工作流；
 - 完整行动项跟踪、通知 Adapter；
-- 飞书 FLAi 工作空间内的领导只读智能化指挥中心；
+- 内网 `FLAiWorkspace` 中的领导只读智能化指挥中心；
 - Windows 适配与后续内网发行 Adapter；
 - 经证据证明需要时接入 OpenClaw/OpenHands AgentRuntimePort Adapter。
 
@@ -340,22 +342,24 @@ R3 定义 Interface，R5 才开始积累技术验收事实，R7 才允许报告�
 
 ### 14.4 治理与运行
 
-治理中心随 K1～K8 逐步形成飞书 FLAi 工作空间内的角色化视图，但普通用户不需要先进入后台才能工作。任何治理操作都通过同一 policy Seam 和追加审计，不在 UI 内复制权限判断。
+治理中心随 K1～K8 逐步形成当前部署域 Workspace 内的角色化视图；外网是飞书研发空间，内网是自托管 `FLAiWorkspace`。普通用户不需要先进入后台才能工作。任何治理操作都通过同一 policy Seam 和追加审计，不在 UI 内复制权限判断。
 
-### 14.5 飞书唯一日常中枢
+### 14.5 分域日常中枢与离线交换
 
-该横向工作流不重排 R0～R8，也不授权实现；它以独立门递进：
+该横向工作流不重排 R0～R8，也不授权实现。F 轴只适用于外网研发飞书；A 轴适用于离线交换与内网自托管环境，两者不得互相替代：
 
-| Hub 阶段 | 最小范围 | 退出门 |
+| 阶段 | 最小范围 | 退出门 |
 |---|---|---|
-| F0 合同冻结 | Source Ownership、ActorBinding、typed intent、PreparedCommand/ReviewChallengeV1、OwnerCommitReceiptV1、classification、SecretRef、reconciliation 与安全生存 | 具名身份/安全/密级/知识/GitHub/运行/Secret 七域评审，绑定精确 digest |
-| F1 只读联邦投影 | GitHub、FLAi、Knowledge、Bench、需求和共建地图进入工作收件箱 | ACL、freshness、source gap、脱敏、对账与删除/漂移恢复 |
+| F0 外网合同冻结 | 飞书研发域的 Source Ownership、ActorBinding、typed intent、classification、SecretRef 与对账 | 绑定精确 digest 的外网研发评审；不得声明内网准入 |
+| F1 外网只读投影 | GitHub、外网研发工作项与合成/脱敏证据进入研发工作收件箱 | ACL、freshness、source gap、脱敏、对账与漂移恢复 |
 | F2 低风险协作意图 | 提需求、补证据、评论、关注、接收确认 | channel attestation、ActorBinding、typed intent、幂等与真实回告 |
-| F3 高影响治理 | 路线图、知识、Qualification、DeploymentBinding、交付与安全处置 | prepare/commit、step-up、职责分离、exact digest 与 owner receipt |
-| F4 执行与交付 | ExecutionRun、Artifact、Knowledge evidence、DeliveryBundle 观察与末端人签 | Production Snapshot 合同、REAL/MOCK/TEST witness、取消、effect unknown |
-| F5 切换与退役 | 历史 TeamLedger/Bitable 分类迁移，关闭重复日常管理入口 | 双写为零、对账通过、回滚演练、用户验收；只保留专业执行 Surface 和密封安全生存通道 |
+| F3 外网高影响研发治理 | 外网路线图、代码评审与 release request | prepare/commit、step-up、职责分离、exact digest 与 owner receipt；不能定向内网 owner |
+| F4 外网发行准备 | 从 exact merged SHA 构造候选 Bundle | 外网测试、SBOM、签名与 release witness；不等于内网接受 |
+| F5 外网旧协作退役 | 历史 TeamLedger/Bitable 分类迁移，关闭重复外网研发入口 | 双写为零、对账通过、回滚演练与用户验收 |
+| A0 AirGap 合同冻结 | Exchange Interface、对象、失败码、七域职责与内网 Workspace 边界 | 新 frozen SHA + 七域具名评审入口，当前批准范围止于此 |
+| A1～A5 | 纯夹具、供应链、断网安装、恢复回滚、受控内网试点 | 逐段另行授权；详见设计 18 |
 
-当前只允许 F0 设计评审。F1～F5 的 Schema、权限、真实飞书写入、Secret Adapter 和生产配置均须逐片授权。
+当前只允许外网 F0 与 AirGap A0 设计评审。F1～F5、A1～A5 的 Schema、权限、真实外部写入、Secret Adapter、内部 Registry 与生产配置均须逐片授权。
 
 ## 15. 依赖与 Stop-if
 
@@ -371,9 +375,11 @@ R3 定义 Interface，R5 才开始积累技术验收事实，R7 才允许报告�
 8. 路线图状态、指标或能力绿色只能靠人工编辑而无法反查事实；
 9. 安全/领域评审缺失或为 false，仍试图以管理员身份、热度或领导关注绕过；
 10. 用户体验再次退化为复杂表单、逐动作审批或默认管理后台，且原型阻断问题未关闭。
-11. 飞书/Bitable 出现可独立改写 GitHub、FLAi、Knowledge、Audit 或 Secret owner 的第二事实路径。
-12. `secrets-stackdocker` 不可用时需要回退 `.env`、硬编码或宿主全局凭据才能继续。
-13. 飞书不可用会阻断 kill/revoke/isolate/credential invalidation，或密封通道可用于正常签发、发布、合并代码。
+11. 任一协作 Surface 出现可独立改写代码、FLAi、Knowledge、Audit 或 Secret owner 的第二事实路径。
+12. 当前域 Secret Owner 不可用时需要回退 `.env`、硬编码、宿主全局凭据或另一网络域凭据才能继续。
+13. 当前域 Workspace 不可用会阻断 kill/revoke/isolate/credential invalidation，或密封通道可用于正常签发、发布、合并代码。
+14. 内网运行需要飞书、GitHub.com、外网模型、公共软件源、外网 DNS 或外网 Secret 才能启动、观察、审计、恢复或治理。
+15. 入网或出网离线包缺签名、摘要、classification、custody、双人复核或可验证 receipt，仍被导入或外发。
 
 ## 16. 路线图版本与签发
 
@@ -401,7 +407,8 @@ R3 定义 Interface，R5 才开始积累技术验收事实，R7 才允许报告�
 | FLAi Bench | ADR-0058 |
 | 共建地图与指标 | ADR-0059 |
 | 需求闭环与路线图签发 | ADR-0060～0061 |
-| 飞书唯一日常中枢、联邦事实与 SecretRef | ADR-0062 |
+| 外网飞书研发协作中枢 | ADR-0062 |
+| 外网开发、AirGap Exchange 与内网自托管 Workspace | ADR-0063 |
 
 ---
 

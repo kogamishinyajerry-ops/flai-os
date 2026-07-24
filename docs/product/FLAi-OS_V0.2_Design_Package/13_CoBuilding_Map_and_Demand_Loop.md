@@ -41,7 +41,7 @@ FLAi 共建地图回答两个问题：
 
 ## 3. 产品位置
 
-默认入口改为飞书 FLAi 工作空间的工作收件箱。普通用户首页只展示共建地图摘要：当前路线图版本、本周真实解锁能力、下一目标、近期里程碑和“提交需求”入口；完整地图是同一飞书工作空间中的只读空间。治理与运行职责可以在相同节点上查看更多评测、风险、授权和审计证据，但仍通过 Hub typed intent 调用对应 owner Module，不能在 Bitable 或投影层写回事实源。
+默认入口改为当前部署域 FLAi Workspace 的工作收件箱：外网研发域可使用飞书，内网生产域只能使用自托管 `FLAiWorkspace`。普通用户首页只展示共建地图摘要：当前路线图版本、本周真实解锁能力、下一目标、近期里程碑和“提交需求”入口；完整地图是同一域 Workspace 中的只读空间。治理与运行职责可以在相同节点上查看更多评测、风险、授权和审计证据，但仍通过当前域 Hub typed intent 调用对应 owner Module，不能在协作表或投影层写回事实源，外网 Hub 也不能定向内网 owner。
 
 ```mermaid
 flowchart LR
@@ -307,7 +307,7 @@ AI 不可以：
 
 `已合并` 是原始信号的关联结果，不代表信号被删除。`已采纳` 不等于已经开发，`已发布` 也不等于原需求全部解决。已发布回告必须明确“已解决部分”和“仍未解决边界”。暂缓、不采纳、合并、拆分和关闭同样需要通知；没有回告的状态变化不算闭环完成。
 
-通知由 `NotificationOutbox` Interface 异步投递，使用事件 id 作为幂等键。ADR-0062 已选择飞书 Bot/Card 作为首选和唯一日常人机回告 Adapter；通知失败不回滚权威决策，但必须可重试并显示“待回告”。敏感信息只能发送脱敏摘要、稳定引用或重新鉴权深链；飞书空间不满足密级时不得发送正文。该选择仍为 `ACCEPTED-NOT-IMPLEMENTED`，本设计不授权真实外部写入。
+通知由 `NotificationOutbox` Interface 异步投递，使用事件 id 作为幂等键。外网研发域可选择飞书 Bot/Card，内网生产域必须选择自托管 Workspace Adapter；二者分别是所在域的日常回告入口。通知失败不回滚权威决策，但必须可重试并显示“待回告”。敏感信息只能发送脱敏摘要、稳定引用或重新鉴权深链；目标空间不满足密级时不得发送正文。两类 Adapter 仍为 `ACCEPTED-NOT-IMPLEMENTED`，本设计不授权真实写入或跨域通知。
 
 ## 9. 三层真相与稳定引用
 
@@ -387,7 +387,7 @@ Issue 关闭只表示工程追踪项结束。需求关闭还要求：
 | Metric Registry | 版本化指标定义、窗口、覆盖与缺失语义 | `evaluate_metric`, `read_definition` |
 | Notification Outbox | 状态回告、重试、幂等和脱敏 | `enqueue_from_event`, `delivery_status` |
 | Co-building Map UI | 只读地图、需求查询、证据深链 | 无事实写 Interface |
-| Feishu Organizational Hub | 工作收件箱、Bitable/Docs/Card 投影、typed intent、OwnerCommitReceiptV1 与对账 | `open`, `prepare`, `commit`；不直接写 Roadmap/GitHub/FLAi owner |
+| Workspace Hub Adapter | 当前域工作收件箱、Chat/Wiki/Card 投影、typed intent、OwnerCommitReceiptV1 与对账 | `open`, `prepare`, `commit`；不直接写 Roadmap/Code/FLAi owner，不跨域调用 |
 
 这些 Module 的物理存储可以在实施设计中合并，但 Interface 语义不能混合。例如，地图投影器不能通过共享仓储方法获得路线图写权限，AI 预处理不能复用签发 command。
 
@@ -402,9 +402,10 @@ Issue 关闭只表示工程追踪项结束。需求关闭还要求：
 | `tool_runs` / `model_calls` | 真实工具、模型调用、版本、状态、时间与部分 Token 的事实来源 | 需要 resolved model、usage 覆盖、attempt、作用域和价格表匹配检查；缺失数据必须显示 unknown/partial |
 | feedback / eval_runs / promotions / capability release facts | 可解释质量、安全、采纳与能力版本 | 需要稳定 evidence reference、分类过滤和投影规则；不得合成单一总分 |
 | [GitHub Issue tracker](../../agents/issue-tracker.md) | 当前 repo 工程交付真相和执行界面 | 缺需求池/路线图签发语义；只允许从已签发承诺显式创建，不接受 AI 或点赞自动写入 |
-| 独立飞书应用 | Bot/长连接/Card/Bitable/项目协作骨架可作 ingress/surface Adapter | 现有 TeamLedger/Bitable 记录只能作为历史来源或草稿候选；缺 ActorBinding、commit recheck、owner receipt 和 reconcile，不可直接晋升为治理事实 |
+| 独立飞书应用 | 外网 Bot/长连接/Card/Bitable/项目协作骨架可作研发域 ingress/surface Adapter | 只适用于外网研发；现有 TeamLedger/Bitable 记录只能作为历史来源或草稿候选，不可直接晋升为治理事实或进入内网 |
+| 内网自托管 Workspace | 内网 Chat/Wiki/Project/Notification 可作生产域 ingress/surface Adapter | 必须经内部 IdP、ACL/classification、owner receipt 和 reconcile；不得依赖飞书身份或公网服务 |
 
-“复用”指复用事实源和 Interface，不代表继续用一个大 API 拼装所有领域。实现应通过 Adapter 把当前表、文件资产和 GitHub 映射成稳定 evidence refs，避免复制数据后产生第二真相。
+“复用”指复用当前域事实源和 Interface，不代表继续用一个大 API 拼装所有领域。实现应通过 Adapter 把当前表、文件资产与当前域代码平台映射成稳定 evidence refs；跨域只映射已通过 `AirGapExchange` 准入的对象，避免复制数据后产生第二真相。
 
 ## 13. 机械验收
 
@@ -439,9 +440,10 @@ Issue 关闭只表示工程追踪项结束。需求关闭还要求：
 | `CB-UX01` | 普通用户首次进入平台 | 单 Composer 与三个结果型入口是首要动作；共建地图只是次级入口，不抢占首页 |
 | `CB-UX02` | Phase 0A 导航与深链扫描 | 不出现领导指挥中心或人员 KPI 驾驶舱；地图只读且不能修改路线图/指标事实 |
 | `CB-UX03` | 地图摘要数据增长 | 首屏仍是树/列表 + 证据抽屉，不因节点或指标增加自动变成高密度 KPI Dashboard |
-| `CB-H01` | 人工修改 Bitable 的路线图/Bench/发布投影字段 | 来源 owner 不变；投影被恢复或标 drift，并保留对账证据 |
+| `CB-H01` | 人工修改 Workspace 协作表的路线图/Bench/发布投影字段 | 来源 owner 不变；投影被恢复或标 drift，并保留对账证据 |
 | `CB-H02` | 卡片已点击但 owner receipt 丢失或验签失败 | 不显示已采纳/已发布；进入 effect unknown 或对账 |
-| `CB-H03` | 飞书群或工作空间不满足对象 classification/audience | 正文、标题与可反推存在性的计数被抑制；不因全员地图泄露 |
+| `CB-H03` | 当前域群组或 Workspace 不满足对象 classification/audience | 正文、标题与可反推存在性的计数被抑制；不因全员地图泄露 |
+| `CB-A01` | 外网飞书 intent、token、身份声明或未准入文件直接请求内网 owner | default-deny；不产生内网事实、投影或 effect |
 
 完成条件还包括：
 
@@ -453,8 +455,8 @@ Issue 关闭只表示工程追踪项结束。需求关闭还要求：
 
 ## 14. 共建域候选落地顺序
 
-本节描述共建域自身的候选实现顺序，不是当前 Phase 0A 入场前置，也不授权 F0～F5。四条阶段
-轴的关系以 [06_Roadmap.md §4.1](06_Roadmap.md#41-四条正交阶段轴) 为准。
+本节描述共建域自身的候选实现顺序，不是当前 Phase 0A 入场前置，也不授权 F0～F5 或
+A1～A5。五条阶段轴的关系以 [06_Roadmap.md §4.1](06_Roadmap.md#41-五条正交阶段轴) 为准。
 
 ### R0～R5 共建域切片：建立可信闭环
 
@@ -465,10 +467,10 @@ Issue 关闭只表示工程追踪项结束。需求关闭还要求：
 5. 生成不可变 RoadmapVersion，并用只读 projector 产出最小共建地图；
 6. 只在签发承诺后由授权人员显式创建 GitHub Issue，并完成稳定引用链；
 7. 为三个黄金工作流建立最小指标定义和隐私规则，不先追求大盘数量。
-8. 飞书 F1 只接需求、共建地图和回告的只读投影；F2 才接提交需求、补证据等低风险意图；
-   路线图签发和 GitHub 创建等高影响动作若通过飞书发起，必须等待 F3。
+8. 外网飞书 F1 只接外网研发需求、共建地图和回告的只读投影；F2 才接提交需求、补证据等低风险意图；
+   路线图签发和 GitHub 创建等高影响外网动作若通过飞书发起，必须等待 F3。内网流程独立通过 A 轴和内网 Workspace 门。
 
-这些领域能力可以在飞书之外按既有流程先形成事实，但每个实现切片仍须单独授权；不能因为
+这些领域能力可以在协作 Surface 之外按既有流程先形成事实，但每个实现切片仍须单独授权；不能因为
 Phase 0A 需要三条 tracer 就夹带完整需求平台。
 
 ### R6～R7 扩展切片：用真实证据扩展
@@ -481,7 +483,7 @@ Phase 0A 需要三条 tracer 就夹带完整需求平台。
 
 ### 后续阶段
 
-更丰富的组织价值模型和 Intelligence Command Center 只在基础证据链稳定后进入飞书工作空间。未来若替换 GitHub Issue tracker，必须另立 owner 迁移决定；飞书通知、地图和治理 Surface 通过既有 Interface 扩展，不获得绕过签发、分类、Benchmark 或审计的捷径。
+更丰富的组织价值模型和 Intelligence Command Center 只在基础证据链稳定后进入当前域 Workspace。未来若替换当前域工程 tracker，必须另立 owner 迁移决定；外网飞书或内网自托管通知、地图和治理 Surface 通过既有 Interface 扩展，不获得绕过签发、分类、Benchmark、AirGap 或审计的捷径。
 
 ## 15. 仍待实施设计固定的合同
 

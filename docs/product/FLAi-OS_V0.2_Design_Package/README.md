@@ -17,7 +17,7 @@
 3. 可点击或可运行原型；
 4. 经具名人员批准后的分片开发。
 
-它是 [CONTEXT.md](../../../CONTEXT.md)、[ADR-0047 至 ADR-0062](#6-约束本包的决策-adr) 和现行标准的**派生读模型**，不是第二套单一事实源（SSOT），也不能仅凭修改本目录改变架构决策、当前运行事实、安全策略、发布状态或生产准入结论。
+它是 [CONTEXT.md](../../../CONTEXT.md)、[ADR-0047 至 ADR-0063](#6-约束本包的决策-adr) 和现行标准的**派生读模型**，不是第二套单一事实源（SSOT），也不能仅凭修改本目录改变架构决策、当前运行事实、安全策略、发布状态或生产准入结论。
 
 本包描述的目标形态大量属于 `ACCEPTED-NOT-IMPLEMENTED`。文档完整不等于软件已实现，界面原型可运行不等于真实 Runtime、模型、工具、知识、安全或部署已验证。
 
@@ -25,7 +25,7 @@
 
 ### 1.1 决策接受与正式签发不是一回事
 
-ADR-0049 至 ADR-0062 中的“已接受”，只记录委托人在本次设计会话中对产品方向的明确确认；ADR-0047/0048 负责谱系与术语身份澄清。它们都不是经组织身份系统认证的电子签名，也不自动等同于立项、预算、密级、试点、发布或上线批准。当前工作副本尚未形成 clean、可复算的 release baseline，正式治理流程还必须为每项需签发决策补齐具名 `actor_id`、职责/作用域、时间、精确 ADR/制品 digest、决定和不可抵赖证据。缺少这些字段时，实施者只能把它当作已确认的设计输入，不能当作正式准入凭据。
+ADR-0049 至 ADR-0063 中的“已接受”，只记录委托人在本次设计会话中对产品方向的明确确认；ADR-0047/0048 负责谱系与术语身份澄清。它们都不是经组织身份系统认证的电子签名，也不自动等同于立项、预算、密级、试点、发布或上线批准。当前工作副本尚未形成 clean、可复算的 release baseline，正式治理流程还必须为每项需签发决策补齐具名 `actor_id`、职责/作用域、时间、精确 ADR/制品 digest、决定和不可抵赖证据。缺少这些字段时，实施者只能把它当作已确认的设计输入，不能当作正式准入凭据。
 
 决策来源与实现状态是两条正交轴。后续 Decision Record 至少记录 `decision_status=confirmed_in_design_session|formally_signed|decision_required|superseded`、`accepted_by_actor_id`、`accepted_at`、`decision_scope`、`decision_digest`、`source_evidence_ref`；只有 `formally_signed` 且字段齐全才具组织治理效力。本文五种标签只表达实现/证据状态，其中 `ACCEPTED-NOT-IMPLEMENTED` 的“accepted”在当前包仅代表 `confirmed_in_design_session`，不能代替正式签发。
 
@@ -56,19 +56,38 @@ ADR-0049 至 ADR-0062 中的“已接受”，只记录委托人在本次设计�
 
 这条记录确认的是 Stage C 的收敛方向，不是完整原型的组织正式验收，也不是 `STAGE-C-ACCEPTED-FOR-STAGE-D`。收敛后的原型仍须由 owner 走查；在 owner 另行明确接受 Stage C 且点名某个冻结切片前，Stage D 保持关闭。
 
-### 1.4 飞书唯一组织中枢方向
+### 1.4 飞书方向的部署范围纠偏
 
-owner 于 2026-07-23 进一步要求把飞书建设为类似 Notion 的唯一管理与治理中枢，同时继续由 GitHub 管理代码，并说明所有现有 key 已迁移到 `secrets-stackdocker`。本包把该声明限定为当前运行时 App/Connector key；尚未实现的 Safety signing、Coordinator attestation、Policy fence 与 Trusted-Time key 不在迁移声明范围内。据此新增
-[ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 和
-[17_Feishu_Organizational_Hub.md](17_Feishu_Organizational_Hub.md)，冻结以下含义：
+owner 于 2026-07-24 明确补充：当前接入飞书是为了让外网研发团队共同开发 FLAi-OS；正式植入
+企业内网后，FLAi-OS 与飞书生态完全断开，改用内网自托管通讯、管理、知识、身份、代码和运行
+设施。因此：
 
-- 飞书是唯一**日常人机协作与治理入口**，不是唯一数据库或安全控制面；
-- GitHub 继续拥有 commit、branch、PR、review 与 CI 事实；
-- FLAi Control Kernel 继续拥有运行、授权、证据、能力发布、Bench、交付和审计事实；
-- `secrets-stackdocker` 是运行时 App/Connector Secret value 的目标 owner，普通工作负载只能持有 `SecretRef`；“已迁移”当前为 `DECLARED-NOT-VERIFIED`，不能外推轮换、撤销、最小权限和故障演练已经通过；人的安全硬件身份、Safety receipt-signing、Coordinator attestation、Policy fence 与 Trusted-Time key 使用分离的 Safety Identity / PKI / HSM / Time 故障域；
-- FLAi 保留密封、强审计、只减权的 kill/revoke 安全生存通道，因此不会形成第二个日常中枢。
+- [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 只保留
+  `FeishuDevelopmentHub` 的外网研发适用范围；
+- GitHub 继续拥有外网研发 commit、branch、PR、review、CI 与 merge 事实；
+- Codex/Kimi 只在外网独立工作树处理源码、合成 fixture 与获准材料；
+- `secrets-stackdocker` 当前只属于外网研发普通 App/Connector Secret 域；
+- 飞书身份、GitHub 状态、Kimi/Codex 会话和外网 Secret 都不能进入内网信任链。
 
-该方向只调整产品 Surface、信息流和未来 Adapter 合同，不重新打开 Stage B/Stage C Runtime、Schema 或生产接入授权。
+原冻结的飞书中心化 F0 SHA 只保留为澄清前历史快照，不能继续作为内网产品或部署评审基线，
+也没有任何真人批准可以沿用。
+
+### 1.5 双信任域与离线发布准入
+
+[ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)、
+[18_AirGap_Exchange_and_Internal_Release.md](18_AirGap_Exchange_and_Internal_Release.md) 和
+[19_Internal_Self_Hosted_Workspace.md](19_Internal_Self_Hosted_Workspace.md) 冻结：
+
+- 外网研发域：FeishuDevelopmentHub + GitHub + Codex/Kimi；
+- 隔离交换域：内容寻址、签名、默认拒绝的 `AirGapExchange`；
+- 内网运行域：完全自托管的 `FLAiWorkspace`、内部 IdP/Forge/Registry/Secret、内网模型、
+  Knowledge、Sandbox、Audit/WORM；
+- 两域无实时同步、共享身份、共享 Secret、webhook、数据库或运行控制链；
+- 外网发布 Bundle 进入 quarantine 后必须重新验签、扫描、复测、Bench 和具名准入；
+- 外发反馈只允许 allowlist、合成复现与经批准的最小源码补丁。
+
+该方向仍只调整产品、架构与未来 Adapter 合同，不授权 Runtime、Schema、数据库、第三方采购、
+真实系统接入、数据迁移、试点或生产部署。
 
 ## 2. 权威来源与顺序
 
@@ -115,8 +134,9 @@ owner 于 2026-07-23 进一步要求把飞书建设为类似 Notion 的唯一管
 截至 owner 在设计会话中选择 Stage C 收敛方向时：
 
 - FLAi-OS V0.1 有已封板的轻内核和若干真实基础模块，但封板明确不外推内网环境与生产韧性；
-- ADR-0049 至 ADR-0062 是已接受的 V0.2 方向，绝大多数仍未实现；
-- 飞书已被选为目标唯一日常中枢，但 Hub Gateway、ActorBinding、typed intent、owner receipt、classification projection、对账和 Secrets Stack Adapter 均尚未实现或验证；
+- ADR-0049 至 ADR-0063 是已接受的 V0.2 方向，绝大多数仍未实现；
+- 飞书只被选为外网研发协作中枢；内网 FLAiWorkspace、自托管协作/Wiki Adapter、内部
+  IdP/Forge/Registry/Secret 和 AirGapExchange 均尚未实现或验证；
 - Phase 0A 产品、UX 与合同语义已冻结；Stage C 仅形成 A 首页 → C 执行态的隔离合成原型，目标 UI、Phase 0A 运行、试点和 Stage D 开发尚未因本包获准开始；任何现有 Agent 也未自动取得真实敏感数据权限；
 - OpenClaw/OpenHands 未被批准成为控制面，也未因本包获准导入依赖或进入生产；
 - 真正的可强杀 Sandbox、细粒度授权、受控网络出口、不可变执行输入与 Delivery Bundle、完整并发治理、不可抵赖审计及关键安全缺口仍须逐项验证；
@@ -127,7 +147,9 @@ owner 于 2026-07-23 进一步要求把飞书建设为类似 Notion 的唯一管
 
 本轮在隔离工作树 `codex/flai-v02-foundation`、基线 `7523edf2cb94958082c68ef3b1aeea0b66b83905` 上重新运行窄范围回归：后端 `test_m11_auth.py`、`test_runtime.py`、`test_job_runner.py`、`test_eval_snapshot.py`、`test_knowledge_service.py`、`test_file_integrity.py` 共 `90 passed, 1 warning`；前端纯函数核 `node --test` 共 `29 passed`（2026-07-23，macOS）。本轮只新增/修订文档，测试没有证明 V0.2 目标实现；由于设计文件仍未形成正式 release digest，且没有全量 E2E、真实 Sandbox、真实三条 tracer 或生产验收，本包仍把相关基线统一写为 `IMPLEMENTED-PARTIAL`，不得用这些结果提升试点或生产状态。
 
-飞书中枢改造后又对 `CONTEXT.md`、相关 ADR 与本目录 23 个 Markdown 文件执行相对链接存在性检查，并运行 `git diff --check`，两项均通过。该结果只证明文档链接和补丁格式一致，不证明 Feishu、GitHub、FLAi、Knowledge 或 `secrets-stackdocker` 的真实集成。
+此前飞书中枢改造曾对 `CONTEXT.md`、相关 ADR 与当时设计包执行相对链接和补丁格式检查。该
+历史结果不覆盖 ADR-0063 纠偏，也不证明 Feishu、GitHub、AirGapExchange、内网自托管
+Workspace、Knowledge、Secret 或 Runtime 的真实集成；本轮须重新生成验证证据。
 
 ## 5. 目录
 
@@ -136,7 +158,7 @@ owner 于 2026-07-23 进一步要求把飞书建设为类似 Notion 的唯一管
 | [00_Product_Vision.md](00_Product_Vision.md) | 产品定位、目标用户、价值与非目标 |
 | [01_PRD.md](01_PRD.md) | Phase 0A 产品需求、三条黄金工作流与验收边界 |
 | [02_System_Architecture.md](02_System_Architecture.md) | 控制内核、模块、接口、执行后端 Adapter 与关键 seam |
-| [03_Information_Architecture.md](03_Information_Architecture.md) | 飞书单一 Shell、工作收件箱与专业执行/治理/共建/领导空间的信息架构 |
+| [03_Information_Architecture.md](03_Information_Architecture.md) | 内网 FLAiWorkspace、工作收件箱与专业执行/协作/治理/共建/领导空间的信息架构 |
 | [04_Data_Model.md](04_Data_Model.md) | 权威事实、不可变快照、事件、证据和派生视图的数据语义 |
 | [05_AI_Operating_Model.md](05_AI_Operating_Model.md) | 人与 Agent 的职责、日常运行和例外处理机制 |
 | [06_Roadmap.md](06_Roadmap.md) | Phase 0A/0B 路线、门禁、依赖与明确冻结项 |
@@ -150,7 +172,9 @@ owner 于 2026-07-23 进一步要求把飞书建设为类似 Notion 的唯一管
 | [14_Security_Sandbox_Governance.md](14_Security_Sandbox_Governance.md) | 身份、权限、Sandbox、并发、出口、审计和交付门 |
 | [15_Phase_0A_MVP_Spec.md](15_Phase_0A_MVP_Spec.md) | 已冻结的 Stage B 合同：三条 tracer bullet、预算、invalid-first、Bench 门与候选实施切片 |
 | [16_Production_Snapshot_Assembler_Read_Contract.md](16_Production_Snapshot_Assembler_Read_Contract.md) | Production Snapshot Assembler 的认证通道、ACL/classification、一致性读、witness/receipt、fact digest 与失败码冻结稿 |
-| [17_Feishu_Organizational_Hub.md](17_Feishu_Organizational_Hub.md) | 飞书唯一日常中枢、联邦事实、治理意图、owner receipt、对账与 Secrets Stack 合同 |
+| [17_Feishu_Organizational_Hub.md](17_Feishu_Organizational_Hub.md) | 飞书外网研发协作、Codex/Kimi 工作包与 GitHub 交付合同 |
+| [18_AirGap_Exchange_and_Internal_Release.md](18_AirGap_Exchange_and_Internal_Release.md) | 内容寻址离线发布包、quarantine、内部准入、ReleaseSet 和脱敏反馈 |
+| [19_Internal_Self_Hosted_Workspace.md](19_Internal_Self_Hosted_Workspace.md) | 内网自托管 Workspace、替换 Ports、协作/知识候选与隔离 POC 门 |
 | [Production Snapshot Assembler 七域具名评审控制包](../../reviews/production-snapshot-assembler-read-v1/README.md) | 绑定冻结 SHA 的七域评审计划、Decision Core/Seal 模板与 fail-closed 机械检查 |
 | [CODEX_HANDOFF_PROMPT.md](CODEX_HANDOFF_PROMPT.md) | Codex 分阶段接手提示词与机械停止条件 |
 
@@ -173,7 +197,8 @@ owner 于 2026-07-23 进一步要求把飞书建设为类似 Notion 的唯一管
 - [ADR-0059：共建地图与证据化运营指标](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)
 - [ADR-0060：需求共创闭环](../../adr/ADR-0060-demand-co-creation-loop.md)
 - [ADR-0061：需求决策权与路线图签发](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)
-- [ADR-0062：飞书作为唯一日常组织协作与治理中枢](../../adr/ADR-0062-feishu-single-organizational-hub.md)
+- [ADR-0062：飞书外网研发协作中枢（范围已收窄）](../../adr/ADR-0062-feishu-single-organizational-hub.md)
+- [ADR-0063：外网研发、离线准入与内网自托管工作空间](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)
 
 ## 7. 现行基线与诚实边界
 
@@ -199,16 +224,18 @@ owner 于 2026-07-23 进一步要求把飞书建设为类似 Notion 的唯一管
 第一次接手按以下顺序阅读：
 
 1. 本 README，先理解证据等级与 NO-GO 边界；
-2. [CONTEXT.md](../../../CONTEXT.md) 与 ADR-0047 至 ADR-0062；
+2. [CONTEXT.md](../../../CONTEXT.md) 与 ADR-0047 至 ADR-0063；
 3. `00_Product_Vision`、`07_Design_Principles`、`01_PRD`；
-4. `17_Feishu_Organizational_Hub`、`03_Information_Architecture` 与 `08_Core_Workbench_UX`；
+4. `18_AirGap_Exchange_and_Internal_Release`、`19_Internal_Self_Hosted_Workspace`、
+   `03_Information_Architecture` 与 `08_Core_Workbench_UX`；
 5. `02_System_Architecture`、`04_Data_Model`、`14_Security_Sandbox_Governance`；
 6. `11_Authoritative_Knowledge_Foundation` 与 `12_FLAi_Bench`；
 7. `05_AI_Operating_Model`、`09_Agent_Workflow_Lifecycle`、`10_AI_Transformation_Playbook`；
 8. `13_CoBuilding_Map_and_Demand_Loop` 与 `06_Roadmap`；
 9. [15_Phase_0A_MVP_Spec.md](15_Phase_0A_MVP_Spec.md)，核对 Stage B 范围、预算、失败门和实施顺序；
 10. 若工作涉及 Stage C 真实运行观察，先评审 [16_Production_Snapshot_Assembler_Read_Contract.md](16_Production_Snapshot_Assembler_Read_Contract.md)，并使用[七域具名评审控制包](../../reviews/production-snapshot-assembler-read-v1/README.md)绑定冻结 SHA；在七域具名评审通过且另获实施授权前不得实现 Production Snapshot Assembler；
-11. 最后使用 [CODEX_HANDOFF_PROMPT.md](CODEX_HANDOFF_PROMPT.md)，按阶段门推进，不直接进入编码。
+11. 外网研发协作工作再读 `17_Feishu_Organizational_Hub`；它不再定义内网产品入口；
+12. 最后使用 [CODEX_HANDOFF_PROMPT.md](CODEX_HANDOFF_PROMPT.md)，按阶段门推进，不直接进入编码。
 
 ## 9. 本包的变更纪律
 

@@ -2,7 +2,7 @@
 
 > 文档状态：`ACCEPTED-NOT-IMPLEMENTED`
 >
-> 本文是 V0.2 设计包的运营读模型，不覆盖 [FLAi-OS 系统宪法](../../00_FLAi-OS_Constitution.md)、现行标准或已接受 ADR。术语以 [CONTEXT.md](../../../CONTEXT.md) 为准；需求与发布决策分别受 [ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md) 和 [ADR-0058](../../adr/ADR-0058-flai-bench-evaluation-foundation.md) 约束；日常运营入口受 [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 约束。
+> 本文是 V0.2 设计包的运营读模型，不覆盖 [FLAi-OS 系统宪法](../../00_FLAi-OS_Constitution.md)、现行标准或已接受 ADR。术语以 [CONTEXT.md](../../../CONTEXT.md) 为准；需求与发布决策分别受 [ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md) 和 [ADR-0058](../../adr/ADR-0058-flai-bench-evaluation-foundation.md) 约束；外网研发协作入口受 [ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 约束，内外网边界与内网自托管入口受 [ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md) 约束。
 
 ## 1. 目标与边界
 
@@ -41,9 +41,11 @@ FLAi-OS 的运营对象不是“多少个 Agent”，而是能否被定义、冻
 | 发布治理 | 具名发布签发、暴露范围、回滚与撤销记录 | Promotion/Release Interface | AI 自批、交付负责人自验关闭 |
 | 运行观察 | Task/Event、Tool、Model、反馈、安全与资源事实 | Evidence Projection Interface | 建个人生产力排行榜或手填绿灯 |
 | 退役治理 | 停用原因、替代关系、保留期和历史重建证据 | Suspend/Retire Interface | 删除历史证据或让旧评测继承给新包 |
-| 飞书组织中枢 | 工作收件箱、协作草稿、typed intent、联邦投影、回告和对账案件 | `open/prepare/commit` | 接管 GitHub/FLAi/Knowledge/Audit/Secret owner 或用 Bitable 改状态 |
+| 外网研发协作中枢 | 飞书中的工作收件箱、协作草稿、外网研发 typed intent、研发投影与回告 | `open/prepare/commit` | 定向控制内网 owner、接管 GitHub/FLAi/Knowledge/Audit/Secret owner 或用协作表改状态 |
+| 内网生产协作中枢 | 自托管 `FLAiWorkspace` 的工作收件箱、项目/Wiki、内网 typed intent、联邦投影、回告和对账案件 | `open/prepare/commit` | 依赖飞书、GitHub.com 或公网模型；接管内网 FLAi/Forge/Knowledge/Audit/Secret owner |
+| AirGap Exchange | 离线发行包准入、内网候选回执与脱敏反馈导出 | `admit_release/import_candidate/export_feedback` | 在线同步、共享身份/密钥、把文件复制视为发布或信任 |
 
-这些 Module 通过稳定引用协作，不复制对方的权威状态。飞书是唯一日常协作与治理入口；GitHub 是代码、PR、review 与 CI 事实源；FLAi owner Modules 拥有执行、授权、能力、Bench、交付和审计事实；Knowledge Authority 拥有知识有效性；`secrets-stackdocker` 拥有运行时 App/Connector Secret；独立 Safety Identity / PKI / HSM owner 拥有人的安全硬件身份与 Safety receipt-signing key。展示层只做投影，只有适用的有效 owner receipt 与验证证据能证明动作已生效。
+这些 Module 通过稳定引用协作，不复制对方的权威状态。外网研发域以飞书为日常入口、GitHub 为代码/PR/review/CI 事实源、`secrets-stackdocker` 为外网研发 Secret owner；内网生产域以自托管 `FLAiWorkspace` 为日常入口、Internal Forge/Registry 为代码与制品事实源、Internal Secret Owner 为内网 Secret owner。FLAi owner Modules 拥有执行、授权、能力、Bench、交付和审计事实，Knowledge Authority 拥有知识有效性，独立 Safety Identity / PKI / HSM owner 拥有人的安全硬件身份与 Safety receipt-signing key。两域之间只通过 `AirGapExchange` 的签名、内容寻址离线包传递已准入对象；展示层只做投影，只有适用的有效 owner receipt 与验证证据能证明动作已生效。
 
 ## 4. 能力发布包运营单元
 
@@ -79,20 +81,21 @@ FLAi-OS 的运营对象不是“多少个 Agent”，而是能否被定义、冻
 
 AI 只可提取、聚类、比较、生成候选验收和起草说明；AI 不得采纳需求、改变路线图、批准评测资产、判定不可抵消门、签发能力或关闭正式问题。
 
-多人开发由飞书工作收件箱组织、FLAi Delivery Governance owner Module 持有
-`DeliveryWorkItem` 生命周期、GitHub 证明代码事实。每项工作必须有一个具名人类 owner、冻结
+外网多人开发由飞书研发工作收件箱组织、FLAi Delivery Governance owner Module 持有
+`DeliveryWorkItem` 生命周期、GitHub 证明外网代码事实；内网维护由 `FLAiWorkspace` 与 Internal
+Forge/Registry 组织和证明，二者不在线同步。每项工作必须有一个具名人类 owner、冻结
 SHA、独立 branch/worktree、文件/Interface scope、执行身份、密级/egress/工具范围、并发与
 时间/Token 预算、Issue/PR、验证证据、交接 digest、所需评审和集成状态。Codex 偏主实现/
 Runtime/安全，Kimi-K3 偏 UI/UX/文案/动效，只是推荐分工，不是硬编码授权；实际 dispatch
 依赖版本化 executor qualification。两者不得并行拥有重叠文件或公共 Interface 写范围；
 dispatch/pause/resume/cancel/reconcile/handoff/rework/accept 均使用 typed intent、幂等键与
 effect-unknown 对账。AI 互审可以形成建议，但不能成为 CODEOWNER、批准人、merge owner 或
-发布 signer。完整合同见 [17_Feishu_Organizational_Hub.md §8.2](17_Feishu_Organizational_Hub.md#82-codexkimi-k3-与多人开发)。
+发布 signer。Kimi-K3 只在外网使用合成/脱敏资产协作，不能成为内网运行依赖。完整合同见 [17_Feishu_Organizational_Hub.md §8.2](17_Feishu_Organizational_Hub.md#82-codexkimi-k3-与多人开发) 与 [18_AirGap_Exchange_and_Internal_Release.md](18_AirGap_Exchange_and_Internal_Release.md)。
 
 ## 6. 标准运营回路
 
 ```text
-飞书工作收件箱中的需求信号
+当前部署域工作收件箱中的需求信号
   -> AI 预处理草稿
   -> 人工策展与适用评审
   -> 路线图负责人签发承诺
@@ -107,7 +110,7 @@ effect-unknown 对账。AI 互审可以形成建议，但不能成为 CODEOWNER�
   -> 新版本、暂停或退役
 ```
 
-每一步只消费上一步的稳定引用和证据，不通过聊天总结、Bitable 字段或会议口头结论隐式推进。人的动作先形成 typed intent，高影响动作经过 prepare/commit，只有 owner receipt 才推进权威事实。失败、未知、跳过、证据不可解析均保留原状态并生成具名处理事件；系统不得自动寻找“更容易通过”的模型、策略或数据集。
+每一步只消费上一步的稳定引用和证据，不通过聊天总结、协作表字段或会议口头结论隐式推进。人的动作先形成 typed intent，高影响动作经过 prepare/commit，只有 owner receipt 才推进权威事实。跨域输入还必须先通过 AirGap 准入。失败、未知、跳过、证据不可解析均保留原状态并生成具名处理事件；系统不得自动寻找“更容易通过”的模型、策略或数据集。
 
 ## 7. Phase 0A、R6 与 Phase 0B 的运营合同
 
@@ -143,7 +146,7 @@ Phase 0A 通过只证明限定机制成立，不证明真实业务价值、工�
 
 | 节奏 | 输入 | 输出 | 禁止 |
 |---|---|---|---|
-| 持续 | 飞书中的需求、任务失败、用户反馈、安全事件 | 不可变信号、typed intent、owner receipt 和追加式事件 | 在用户任务中强插长表单或改单元格推进状态 |
+| 持续 | 当前部署域 Workspace 中的需求、任务失败、用户反馈、安全事件 | 不可变信号、typed intent、owner receipt 和追加式事件 | 在用户任务中强插长表单或改单元格推进状态 |
 | 每周策展 | 新信号、重复项、缺证据项 | 候选、合并/拆分、异步补证据清单 | AI 自动排序、点赞晋级 |
 | 每两周能力评审 | Release Manifest 草稿、实现与风险 | 继续组装、退回或准备冻结 | 用 Demo 代替合同证据 |
 | 每个候选版本 | 冻结包与 Bench 计划 | 四轨证据矩阵和不可抵消门 | 只看平均分或 LLM 评审 |
@@ -155,8 +158,9 @@ Phase 0A 通过只证明限定机制成立，不证明真实业务价值、工�
 - **Module**：需求、路线图、能力、评测、试点、发布和退役各有单一职责；
 - **Interface**：状态变化只经版本化命令与事件合同发生，不能直接改展示字段；
 - **Seam**：复用现有 Agent Registry、Task/Event、Model Gateway、Tool Registry、Knowledge、Eval 与反馈事实，沿 seam 加深能力，不建平行平台；
-- **Adapter**：OpenClaw/OpenHands 只实现 AgentRuntimePort，macOS 隔离实现 SandboxProviderPort，Office/OpenFOAM 实现 ToolExecutionPort，GitHub/内网系统实现受控 Connector；均不能夺取控制权；
-- **Hub Adapter**：Feishu Card/Bitable/Docs/Web App 只实现 Surface 与 ingress Adapter；`secrets-stackdocker` 只通过 `SecretProviderPort` 向最终 Connector 提供 opaque lease；两者都不进入领域判决；
+- **Adapter**：OpenClaw/OpenHands 只实现 AgentRuntimePort，macOS 隔离实现 SandboxProviderPort，Office/OpenFOAM 实现 ToolExecutionPort，GitHub/Internal Forge 实现各自网络域的受控 Connector；均不能夺取控制权；
+- **Hub Adapter**：外网 Feishu Card/Bitable/Docs/Web App 与内网自托管 Chat/Wiki/Workspace 分别只实现所在域的 Surface 与 ingress Adapter；外网 `secrets-stackdocker` 和内网 Secret Owner 分别只通过当前域的 `SecretProviderPort` 向最终 Connector 提供 opaque lease；任何 Adapter 都不进入领域判决；
+- **AirGap Adapter**：只交换签名、内容寻址、带 manifest 的离线包；不提供 RPC、身份代理、密钥桥接或双向数据库同步；
 - **Depth**：权限重验、分类传播、冻结摘要、CAS、不可抵消门和审计完整性由内层 Module 吸收，普通用户只提交目标、查看证据和处理末端交付；
 - **Locality**：同一治理规则、状态转换与失败归属只在一个 owner Module 实现，消费者通过 Interface 复用，不跨模块复制判定；单一发布视图属于“证据可查找性”，它汇总引用但不成为新的事实 owner。
 
@@ -174,10 +178,11 @@ Phase 0A 通过只证明限定机制成立，不证明真实业务价值、工�
 8. 暂停和退役保留历史任务、知识快照、评测和签发证据，旧入口不能继续创建新任务；
 9. 公开运营视图不出现个人 Token、任务量或“生产力”排行；
 10. 任一状态都能解释“由哪条事实、哪位人、何时、依据什么版本产生”。
-11. 所有日常运营从飞书 FLAi 工作空间进入，但同一对象仍能回查其 GitHub、FLAi、Knowledge、Audit 或 Secret owner。
-12. 卡片点击、Bitable 变更、HTTP 2xx 和 AI 草稿都不能替代 OwnerCommitReceiptV1；
+11. 外网研发运营从飞书研发空间进入，内网生产运营从自托管 `FLAiWorkspace` 进入；同一域对象仍能回查其代码、FLAi、Knowledge、Audit 或 Secret owner。
+12. 卡片点击、协作表变更、HTTP 2xx、离线复制成功和 AI 草稿都不能替代 OwnerCommitReceiptV1；
     EffectUnknownV1 进入对账且不换键重放。
 13. Codex/Kimi-K3 工作项有不重叠文件所有权和独立 branch/worktree，合并仍由具名真人与 GitHub review/CI 控制。
+14. 内网断开飞书、GitHub.com、外网模型和外网 Secret 后，仍可完成工作收件箱、知识检索、运行观察、治理、审计与止损。
 
 ## 11. 本阶段非目标
 

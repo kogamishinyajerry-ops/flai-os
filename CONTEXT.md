@@ -181,31 +181,55 @@ _Avoid_: 生产试点、全员内测、业务上线
 受控验收通过后，由 20–30 名业务用户使用至少一条真实工具和真实数据工作流开展的限范围试用；其范围外能力仍不得被宣传为可用或已上线。
 _Avoid_: 受控验收、全面推广、正式生产
 
-**飞书组织协作与治理中枢**:
-团队开展日常项目协作、需求共创、评审组织、知识创作、运行观察、治理处置与结果回告的唯一
-组织 landing、工作收件箱与编排入口；英文 canonical identifier 固定为
-`FeishuOrganizationalHub`。它把飞书中的动作编译为受认证的 typed intent，并投影 GitHub、
-FLAi Control Kernel、Knowledge Authority 和审计 owner 的联邦事实，但不接管这些 owner。
-GitHub 原生代码操作、FLAi 专业执行和密封安全通道保留为重新鉴权的专业 Surface，不另建组织
-首页。
-_Avoid_: 飞书总数据库、Bitable 总账、第二控制内核、机器人管理员
+**部署信任域（DeploymentTrustZone）**:
+身份、Secret、网络、数据、代码/制品事实和签发只在其中有效的部署安全域；当前固定为
+`EXTERNAL_DEVELOPMENT`、`TRANSFER_QUARANTINE` 与 `AIR_GAPPED_INTERNAL`。信任不跨域传递，
+外部签名只证明来源，内部必须重新准入。
+_Avoid_: 环境标签、可自动互信的租户、共享账号域
+
+**外网研发协作面（ExternalDevelopmentCollaborationPlane）**:
+只用于 FLAi-OS 产品研发的外网协作域，由飞书研发中枢组织需求/工作包/评审，由 GitHub
+拥有外网 commit/PR/CI/merge 事实，Codex/Kimi 只处理获准源码和合成 fixture；它不读取、
+控制或代表内网。
+_Avoid_: 外网控制面、内网运维入口、跨域同步桥
+
+**飞书研发中枢（FeishuDevelopmentHub）**:
+`EXTERNAL_DEVELOPMENT` 中唯一研发组织 landing、工作收件箱与协作编排入口；它把飞书动作
+编译为研发 typed intent，并投影 GitHub 工程事实，但不进入内网身份、知识、Runtime、Secret
+或发布链。旧名 `FeishuOrganizationalHub` 仅作为 ADR-0062 历史标识，不再表示全局产品中枢。
+_Avoid_: 内网 FLAi 入口、飞书总数据库、Bitable 总账、第二控制内核
+
+**内网智能协作空间（FLAiWorkspace）**:
+`AIR_GAPPED_INTERNAL` 中面向业务用户的唯一日常产品入口，包含工作收件箱、项目、讨论、会议、
+真相知识、工程智能体工作台、共建地图、治理与后置指挥视图；自托管通讯/Wiki/项目产品只是
+其 Adapter，不拥有 FLAi 运行或治理事实。
+_Avoid_: 内网版飞书、聊天软件换皮、第二控制内核
+
+**内网工作空间编排模块（InternalWorkspaceHub）**:
+通过 `open/prepare/commit` 隐藏内网身份、通讯、项目、知识创作和 FLAi owner 差异的深
+Module；它创建权限过滤投影和 typed intent，权威状态只有 owner receipt 验证后才生效。
+_Avoid_: 第三方项目表总账、万能 Gateway、协作系统直写领域表
 
 **工程智能体工作台**:
-工程师把自然语言目标交给自治会话、持续查看真实执行状态并检查产物与证据的专业执行界面；它从飞书组织协作与治理中枢内嵌或重新鉴权进入，是 FLAi-OS 首发 Agent 执行 Surface，但不再是组织级默认入口。
+工程师把自然语言目标交给自治会话、持续查看真实执行状态并检查产物与证据的专业执行界面；
+它位于内网 FLAiWorkspace，是 FLAi-OS 首发 Agent 执行 Surface，但不是独立组织首页。
 _Avoid_: 战略驾驶舱、项目管理后台、第二组织入口
 
 **治理与运行中心**:
-飞书组织协作与治理中枢内面向平台管理员、安全人员和 Agent Owner 的角色受限空间，用于组织能力生命周期、策略、执行资源、异常与审计证据的处置；它只通过 typed intent 与 OwnerCommitReceiptV1 改变权威事实，不形成第二控制面。
+FLAiWorkspace 内面向平台管理员、安全人员和 Agent Owner 的角色受限空间，用于组织能力
+生命周期、策略、执行资源、异常与审计证据的处置；它只通过 typed intent 与
+OwnerCommitReceiptV1 改变权威事实，不形成第二控制面。
 _Avoid_: 独立管理应用、普通用户首页、第二管理平台、全员驾驶舱
 
 **智能化指挥中心**:
-飞书组织协作与治理中枢内面向领导和 AI 负责人的后期只读空间，从已验证的任务、评测、交付和风险证据派生组织层信息；它不拥有任务、授权或指标的独立事实源。
+FLAiWorkspace 内面向领导和 AI 负责人的后期只读空间，从已验证的任务、评测、交付和风险
+证据派生组织层信息；它不拥有任务、授权或指标的独立事实源。
 _Avoid_: 独立领导应用、FLAi-OS 产品总名、工程师工作台、手填战略看板
 
 **治理意图（HubIntent）**:
-经认证用户在飞书提出的版本化动作请求；它绑定目标 owner、对象与 payload
-version/digest/classification、作用域、原因、幂等键和有效期，只能由对应 owner 在提交时
-重新鉴权后生效。
+经认证用户通过适用域的 Hub 提出的版本化动作请求；它绑定部署信任域、目标 owner、对象与
+payload version/digest/classification、作用域、原因、幂等键和有效期，只能由同域对应 owner
+在提交时重新鉴权后生效。外网 HubIntent 永远不能指定内网 target。
 _Avoid_: 卡片点击即成功、改单元格即发布、通用 approve、机器人代签
 
 **准备命令（PreparedCommandV1）**:
@@ -229,25 +253,52 @@ audience/purpose。commit 不得只凭 PreparedCommand 隐式选择挑战。
 _Avoid_: 通用确认按钮、prepared ref 直接提交、客户端自报 confirmation
 
 **事实投影（FactProjection）**:
-从 GitHub、FLAi Control Kernel、Knowledge Authority、Metric Registry 或审计 owner 的版本化
-事实生成的权限过滤视图；它必须带适用的 source evidence、classification 和 freshness，
-删除或修改投影不改变来源事实。只有治理状态变迁要求 OwnerCommitReceiptV1，运行和 GitHub
-只读事实分别使用 witness 与 verified provider state。
-_Avoid_: 双向同步记录、飞书副本真相、手工点绿
+从同一部署信任域内的 Code Forge/Registry、FLAi Control Kernel、Knowledge Authority、
+Metric Registry 或审计 owner 的版本化事实生成的权限过滤视图；它必须带适用的 source
+evidence、classification 和 freshness，删除或修改投影不改变来源事实。只有治理状态变迁
+要求 OwnerCommitReceiptV1，运行和代码只读事实分别使用 witness 与 verified provider state。
+外网 GitHub 状态进入内网时只能作为离线来源 provenance。
+_Avoid_: 跨域双向同步记录、协作副本真相、手工点绿
 
 **权威所有者提交回执（OwnerCommitReceiptV1）**:
 证明一个精确 PreparedCommand 已由同一具名真人以新鲜、满足要求的 commit assurance 提交，
 并由权威 owner 接受和读回核对的结构化证据；它绑定 intent/challenge/actor/target/effect、
-credential/authorization epoch 与 owner-specific verification。飞书已点击、HTTP 2xx、消息
-送达或 Bitable 更新均不是该回执。
+credential/authorization epoch 与 owner-specific verification。协作卡片已点击、HTTP 2xx、
+消息送达或项目/Wiki 字段更新均不是该回执；外网 receipt 不能签发内网事实。
 _Avoid_: 成功提示、卡片确认、人签替代物
 
 **对账案件（ReconciliationCase）**:
-当命令效果、来源事实和飞书投影不能一致确认时形成的具名异常对象；在消解前不得换幂等键重放、按最后写入者覆盖或把未知显示为成功。
+当命令效果、来源事实和 Workspace 投影不能一致确认时形成的具名异常对象；在消解前不得换
+幂等键重放、按最后写入者覆盖或把未知显示为成功。
 _Avoid_: 自动覆盖、忽略同步失败、重复点击重试
 
+**隔离交换（AirGapExchange）**:
+外网研发域与内网运行域之间唯一允许的交换深 Module；外部 Interface 固定为
+`sealRelease`、`admitRelease` 与 `sealSanitizedFeedback`。它隐藏内容寻址、签名、closed-world
+inventory、quarantine、扫描、离线复验、双人准入、ReleaseSet CAS、介质 custody 和出站
+allowlist，不提供实时同步。
+_Avoid_: 网盘拷贝、在线 Connector、双向消息总线、远程部署通道
+
+**离线发布包（OfflineReleaseBundleV1）**:
+绑定 exact Git commit/tree、源码/制品/依赖 digest、SBOM、许可证、构建 provenance、测试/
+扫描证据、分类、回滚说明和来源签名的 closed-world 发布候选；包内出现未声明对象或缺少任一
+必需对象均拒绝。它只证明外部候选来源，不能证明内部已接纳、已资格或已部署。
+_Avoid_: Git zip、容器 tag 列表、外网 CI 绿灯、安装 U 盘
+
+**内部发布候选回执（InternalReleaseCandidateReceipt）**:
+内网 AirGapReleaseAdmission 对同一 Bundle digest 完成内部验签、扫描、离线复验、双人准入
+和 ReleaseSet 整体晋升后签发的不可变结果；它不等于 QualificationDecision、
+DeploymentBinding、REAL witness 或生产上线。
+_Avoid_: 导入成功即上线、外部签名即批准、半包发布
+
+**脱敏反馈包（SanitizedFeedbackBundle）**:
+由内网出口根据 allowlist 重新构造并经分类、DLP/Secret 检查和具名批准的最小反馈对象，只可
+包含稳定失败码、外网已知源码引用、通用环境枚举、合成 reproducer 或批准的最小补丁；原始
+日志、知识、审计、业务数据、人员/主机/项目标识和 Secret 永不自动外发。
+_Avoid_: 复制后删字段、全量日志脱敏、自动遥测、内部 Git bundle
+
 **安全生存通道**:
-飞书、Hub、主协作 SSO 或普通在线 Secret 解析不可用时，仍能通过独立
+Workspace、通讯/Wiki Adapter、主协作 SSO 或普通在线 Secret 解析不可用时，仍能通过独立
 `SafetySurvivalPort` 执行强停、撤权、隔离、凭据失效、只开对账案、向预批准本地 WORM
 封存事故证据和只验证不启用的恢复候选的密封双人通道；对外证据导出、恢复启用、正常项目
 管理、签发、发布或合并代码仍走常规治理，因此它不是第二日常中枢。已核验本地围栏但外部
@@ -317,15 +368,17 @@ path/hash/role、manifest 生成主体/工具与 review/generation-receipt/seal 
 _Avoid_: 单文档 hash、聊天同意、未提交工作树、沿用旧评审
 
 **项目上下文绑定（ProjectContextBinding）**:
-由 FLAi Project Directory 唯一拥有的版本化单向映射，把飞书协作项目关联到已授权
-Project/OrganizationalScope；群成员、项目改名、Bitable 字段或 Hub 本身都不能创建
-ProjectMembership 或改绑更高权限 scope。
-_Avoid_: 群成员即授权、Hub 项目总账、手工改 scope
+由同一部署域内的 FLAi Project Directory 唯一拥有的版本化单向映射，把内网协作空间关联到
+已授权 Project/OrganizationalScope；频道成员、项目改名、Wiki/项目字段或 Hub 本身都不能
+创建 ProjectMembership 或改绑更高权限 scope。外网 Feishu 项目永远不能映射或授予内网
+Project scope。
+_Avoid_: 群成员即授权、跨域项目映射、Hub 项目总账、手工改 scope
 
 **开发交付项（DeliveryWorkItem）**:
 由 FLAi Delivery Governance 唯一拥有的多人开发工作单元，绑定具名人类 owner、项目与密级、
 冻结 SHA、branch/worktree、文件/Interface scope、版本化 executor、预算、dispatch/handoff
-和 GitHub 集成状态；模型显示名不构成执行或合并证据。
+和适用代码 owner 状态；外网研发使用 GitHub，内网补丁使用 Internal Code Forge。模型显示名
+不构成执行或合并证据。
 _Avoid_: AI 自主 merge、共享脏工作树、模型标签即执行凭证
 
 **开发交接核心（DevelopmentHandoffV1）**:
@@ -336,9 +389,11 @@ RFC8785-JCS 规则且只排除自身摘要。无钥内容摘要不证明执行�
 _Avoid_: 自然语言总结即交接、模型自报身份、未复算 digest、handoff 即批准合并
 
 **SecretRef**:
-指向 `secrets-stackdocker` 中受控运行时 App/Connector Secret 版本的非秘密引用；业务对象、
-飞书、Bitable、GitHub、日志和事实摘要只能持有引用，不能持有 Secret value。普通
-App/Connector key 均遵守该 owner；人的硬件签名、Safety receipt-signing、Coordinator /
+指向**当前部署信任域内**受控运行时 App/Connector Secret 版本的非秘密引用；业务对象、
+协作 Surface、Code Forge、日志和事实摘要只能持有引用，不能持有 Secret value。
+`secrets-stackdocker` 当前只属于外网研发 Secret 域；内网使用独立 Secret owner/instance、
+root、namespace、策略和备份。Secret value 与 SecretRef 名称都不跨域同步。人的硬件签名、
+Safety receipt-signing、Coordinator /
 target owner / Policy owner 三类 workload-attestation material、Egress Boundary/Wire
 两类 operation-bound workload-attestation material、Policy-fence 与 Trusted-Time signing
 key 分别由独立 Safety

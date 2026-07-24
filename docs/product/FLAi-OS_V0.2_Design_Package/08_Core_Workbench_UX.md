@@ -16,7 +16,7 @@
 | `DECLARED-NOT-VERIFIED` | 原型候选或外部产品行为，未形成项目证据 |
 | `OUT-OF-SCOPE` | Phase 0A 明确冻结 |
 
-本章首先服务 macOS 桌面端受控验收。目标态中，本工作台从飞书 FLAi 工作空间内嵌或重新鉴权进入，是专业 Agent 执行 Surface，不是第二个组织管理入口。当前 Stage C 仍是隔离原型，不接真实飞书、Runtime 或生产数据。它不宣称 Windows 适配，不改变 Web 技术栈，也不以高保真原型证明 Sandbox、授权或审计存在。
+本章首先服务 macOS 桌面端受控验收。目标态中，本工作台从当前部署域的 Workspace 内嵌或重新鉴权进入，是专业 Agent 执行 Surface，不是第二个组织管理入口：外网研发域可由飞书承载入口，内网生产域只能由自托管 `FLAiWorkspace` 承载。当前 Stage C 仍是隔离原型，不接真实飞书、内网 Workspace、Runtime 或生产数据。它不宣称 Windows 适配，不改变 Web 技术栈，也不以高保真原型证明 Sandbox、授权或审计存在。
 
 ## 2. 一句话体验合同
 
@@ -39,7 +39,7 @@
 
 ```text
 ┌──────────────┬──────────────────────────────────┬─────────────────────────┐
-│ ← 飞书项目   │ 当前项目 · 范围摘要 · 状态坞     │ 实时观察与产物检查器    │
+│ ← 项目空间   │ 当前项目 · 范围摘要 · 状态坞     │ 实时观察与产物检查器    │
 │              ├──────────────────────────────────┤                         │
 │ ＋ 新任务    │ 用户目标                          │ 预览 / 差异 / 检查发现  │
 │ 最近工作     │                                  │ 来源 / hash / 验证      │
@@ -54,7 +54,7 @@
 
 ### 3.1 左轨
 
-只负责本执行 Surface 内的新建、切换、搜索和返回飞书项目上下文，不复制项目、需求、治理、知识或领导导航。组织级默认页是飞书工作收件箱；进入工作台后，“新任务/单一 Composer”仍是执行主入口。最近工作按用户能理解的任务名显示，辅以状态、更新时间和工作流类型；不以 Agent ID 或模型名作为主标题。
+只负责本执行 Surface 内的新建、切换、搜索和返回当前域项目上下文，不复制项目、需求、治理、知识或领导导航。组织级默认页是当前域工作收件箱；进入工作台后，“新任务/单一 Composer”仍是执行主入口。最近工作按用户能理解的任务名显示，辅以状态、更新时间和工作流类型；不以 Agent ID 或模型名作为主标题。
 
 ### 3.2 中央连续叙事
 
@@ -494,7 +494,7 @@ ID、不形成生效责任事项、不外发。只有完成 R6 真实路径验�
 | Artifact & Evidence Module | `产物引用 + 主体 → 预览/差异/依据/合法动作` | 文件格式、安全渲染、权限、hash、来源、错误 | DOCX、CFD、会议材料通过 Adapter 扩展 |
 | Delivery Bundle Module | `Bundle 引用 + 主体 → 摘要/决定/receipt` | 冻结、CAS、策略重检、过期、执行与后验 | 所有不可逆影响共用一个权威 Seam |
 | Status Projection Module | `权威事件 → pill/清单/速览/完整页` | 去重、未读、未知、角色过滤、恢复 | 保持“状态来找人”且不造第二状态机 |
-| Hub Entry Context Module | `授权 Hub context → project/session entry` | channel binding、重新鉴权、ACL/classification、稳定返回路由 | 工作台不复制飞书项目管理，也不相信 URL 自报 actor/project |
+| Hub Entry Context Module | `授权 Hub context → project/session entry` | channel binding、重新鉴权、ACL/classification、稳定返回路由 | 工作台不复制当前域项目管理，也不相信 URL 自报 actor/project；外网 context 不能直接在内网重放 |
 
 Interface 是测试面。每条 tracer 的验收都应从这些相同 Interface 穿过；若为某工作流复制一套时间线、授权或错误系统，就破坏了 Locality。只有 DOCX、OpenFOAM 和会议文本等真实变化格式放到各自 Adapter，保持 Module 的 Depth。
 
@@ -504,7 +504,7 @@ Interface 是测试面。每条 tracer 的验收都应从这些相同 Interface 
 
 `ACCEPTED-NOT-IMPLEMENTED`
 
-1. 用户从飞书 FLAi 工作收件箱进入，或在当前 Stage C 隔离入口模拟同一上下文；输入一句目标并附文件，单击一次开始。
+1. 用户从当前部署域的 FLAi 工作收件箱进入，或在当前 Stage C 隔离入口模拟同一上下文；输入一句目标并附文件，单击一次开始。
 2. 会话进入连续时间线；中途不出现泛化审批或长表单。
 3. 用户在不离开会话的情况下打开产物、差异和证据。
 4. 模拟网络中断、解析失败、缺来源、策略阻断和观察未知，界面不假绿、不丢上下文。
@@ -528,7 +528,7 @@ Interface 是测试面。每条 tracer 的验收都应从这些相同 Interface 
 
 可复用：对话主轴、状态坞、状态中心、任务速览、完整深链页、真实轮询、信任色锁、reduced-motion 基础、产物列表和人签现有路径。
 
-尚缺且不得用文案伪装：统一自治会话、CanonicalTaskGraph、SessionExecutionGrant、可强杀 Sandbox、不可变 Delivery Bundle、精确授权 CAS、待交付动作、效果 receipt、完整证据检查器、三条 tracer Adapter、Feishu Hub Entry Context、角色化治理投影与 invalid-first 验收。
+尚缺且不得用文案伪装：统一自治会话、CanonicalTaskGraph、SessionExecutionGrant、可强杀 Sandbox、不可变 Delivery Bundle、精确授权 CAS、待交付动作、效果 receipt、完整证据检查器、三条 tracer Adapter、分域 Hub Entry Context、内网自托管 Workspace Adapter、角色化治理投影与 invalid-first 验收。
 
 实施前必须先完成架构评审与 MVP 合同；不得直接把现有 `waiting_review` 按钮改名为“交付授权”，也不得先做漂亮右栏再宣称安全闭环成立。
 
@@ -542,4 +542,4 @@ Interface 是测试面。每条 tracer 的验收都应从这些相同 Interface 
 - Windows 专项适配；
 - 个人 Token／任务量排行榜、领导驾驶舱和手填平台完成率；
 - 通过展示内部思维链制造“透明度”。
-- 真实飞书 tenant/app 接入、Bitable 写入、组织身份签发或 `secrets-stackdocker` 运行时解析；它们属于 ADR-0062 的后续 F1～F5 切片。
+- 真实飞书 tenant/app 接入、内网自托管 Workspace、AirGapExchange、组织身份签发或任一 Secret Owner 的运行时解析；它们分别属于 ADR-0062 F1～F5 与 ADR-0063 A1～A5 后续切片。

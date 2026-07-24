@@ -14,7 +14,11 @@
 
 本规格把 V0.2 产品方向压缩成 Phase 0A 可机械验收的最小产品。它只定义结果、边界、预算、失败门、证据和未来实施切片，不修改 Runtime、Schema/API、数据库、状态机、依赖、生产配置或部署。owner 的明确原话已冻结 Stage B，并且只允许进入隔离、诚实标注的 Stage C UI 原型；Stage C 已选择“A 式首页 → C 式执行工作台”的收敛方向，但 Mock/Synthetic 原型仍不能证明本规格已实现。Stage D 的每个实施切片还要再次取得精确授权。
 
-[ADR-0062](../../adr/ADR-0062-feishu-single-organizational-hub.md) 已把飞书 FLAi 工作空间确定为未来组织级唯一日常入口，并把本工作台定位为内嵌专业执行 Surface。它不重新打开本规格的边界：Phase 0A 当前仍不接真实飞书、Bitable、组织写入或 Secret Adapter；飞书 Hub 的 F0～F5 另行评审和授权。
+[ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md) 已把部署拓扑纠偏为：
+飞书只服务外网研发，未来业务用户从内网自托管 `FLAiWorkspace` 进入本工作台，跨域只走
+`AirGapExchange`。它不重新打开本规格的边界：Phase 0A 当前仍不接真实飞书、自托管协作/
+Wiki、内网组织写入、Secret Adapter 或真实跨域发布；外网 DEV-HUB-F0、内网
+AIRGAP-WORKSPACE-F0 与 release admission 分别另行评审和授权。
 
 ### 冻结决定 provenance
 
@@ -558,7 +562,7 @@ Exit 通过只形成限定机制的完成证据，不自动扩大 DeploymentBind
 
 ## 11. Module、Interface 与 Adapter 决策
 
-Stage B 冻结语义，不冻结 HTTP 路由、数据库表或 JSON Schema。ADR-0062 已用于飞书中枢产品/架构决定；Stage D 若需要改变公共接口、Schema、状态机或持久化格式，必须从 ADR-0063 起另立实施决定和迁移/回滚规格。
+Stage B 冻结语义，不冻结 HTTP 路由、数据库表或 JSON Schema。ADR-0062 已收窄为外网飞书研发协作，ADR-0063 已冻结 AirGap 与内网自托管边界；Stage D 若需要改变公共接口、Schema、状态机或持久化格式，必须另立后续实施 ADR 和迁移/回滚规格。
 
 ### 11.1 Primary acceptance seam
 
@@ -695,7 +699,7 @@ owner 于 2026-07-23 明确说“冻结 Stage B，进入 Stage C”，因此以�
 | B-S1 | Stage B 尚未明确冻结 | 不进入 Stage C |
 | B-S2 | 需要放宽任一输入、Token、调用、超时、资源、队列、并发或模型/网络预算 | 新建预算版本、Bench digest 和变更决定，不静默放宽 |
 | B-S3 | 需要真实企业数据、真实知识、外部连接器或不可逆动作 | 移出 Phase 0A，进入单独数据/安全/Phase 0B 决策 |
-| B-S4 | 需要改变公共接口、Schema、状态机或持久化格式但无实施 ADR | 不编码，从 ADR-0063 起提交最小决定 |
+| B-S4 | 需要改变公共接口、Schema、状态机或持久化格式但无实施 ADR | 不编码，提交新的最小实施决定 |
 | B-S5 | 无法在模型前完成授权、quarantine 和不可变绑定 | fail-closed，不让输入进入模型或工具 |
 | B-S6 | Sandbox 不可强杀、Adapter 零直连或受控模型通道不可证明、会降级 host exec | 不进入 Phase 0A |
 | B-S7 | 任一 mandatory gate/P0 为 failed/invalid/skipped/unknown，或缺 formally signed QualificationDecision/DeploymentBinding | 不邀请 cohort、不以总分抵消 |
@@ -710,4 +714,4 @@ owner 于 2026-07-23 明确说“冻结 Stage B，进入 Stage C”，因此以�
 
 本规格不能证明：任何 Runtime、Sandbox、授权、知识、Bench、DOCX、CFD、会议 Adapter 或目标 UI 已实现；不能证明 OpenClaw 可安全接入；不能证明真实模型、真实工具、真实数据、5 并发、10 分钟超时或 36 cases 已通过；不能授权 Stage D、Phase 0A cohort、试点、发布或部署。Stage C 授权仅覆盖隔离、Mock/Synthetic 如实标注且不接生产的 UI 原型。
 
-本规格轨道内的下一步仍是完成并走查所选 A 首页 → C 执行态的 Stage C 收敛原型。并行可以开展 ADR-0062 的 F0 合同与七域具名评审，但不得接真实飞书或改生产 Schema。收敛原型被 owner 另行明确接受前不得进入 Stage D；F0 评审通过前不得进入 Hub F1；两条轨道都只能在 owner 点名冻结切片并给予精确开发授权后实施。
+本规格轨道内的下一步仍是完成并走查所选 A 首页 → C 执行态的 Stage C 收敛原型。并行只可开展外网飞书 F0 与 ADR-0063 AirGap/内网 Workspace A0 合同评审，不得接真实飞书、内网服务或修改生产 Schema。收敛原型被 owner 另行明确接受前不得进入 Stage D；F0 评审通过前不得进入外网 Hub F1；A0 七域评审通过并另获授权前不得进入 A1。各轨道都只能在 owner 点名冻结切片并给予精确开发授权后实施。
