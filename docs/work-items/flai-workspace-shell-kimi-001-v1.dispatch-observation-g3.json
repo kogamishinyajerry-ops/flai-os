@@ -1,0 +1,60 @@
+{
+  "record_schema": "LocalAssistantDispatchAttemptObservationV1",
+  "observation_digest": "sha256:095d244a06cf7ba29aaff0c007935b2f36fa136dac1149e5b3358b6aff18cbf2",
+  "digest_profile": "sha256-rfc8785-jcs-excluding_observation_digest",
+  "authority": "NON_AUTHORITATIVE_LOCAL_PROCESS_AND_CLIENT_WIRE_OBSERVATION",
+  "work_item_ref": "flai-workspace-shell-kimi-001@1",
+  "work_item_digest": "sha256:160337f0556ca231a472bff553f2925ce9c35f8b94fdaf79f029ea3858199266",
+  "dispatch_attempt": 3,
+  "preparation_generation": 4,
+  "preparation_digest": "sha256:2bebbd6208980243f6402c79286079ff6d71149c22780b744c3c7d0405600788",
+  "local_exec_session_id": 41028,
+  "local_process_pid": 55842,
+  "process_started_observed": true,
+  "process_state_at_observation": "ACTIVE",
+  "observed_at": "2026-07-24T11:53:11Z",
+  "kimi_session_ref": "session_1ee76ca9-2967-40b4-98f0-18d19a171910",
+  "kimi_session_created_at": "2026-07-24T11:48:18.739Z",
+  "kimi_session_workdir": "/private/tmp/flai-kimi-workspace-shell.ClhXZm",
+  "requested_model": "kimi-code/k3",
+  "local_client_wire_declaration": {
+    "provider": "kimi",
+    "model": "k3",
+    "llm_request_count_in_bound_prefix": 14,
+    "assurance": "LOCAL_CLIENT_DECLARATION_NOT_BACKEND_VERIFIED"
+  },
+  "wire_prefix_evidence": {
+    "path": "/Users/Zhuanz/.kimi-code/sessions/wd_flai-kimi-workspace-shell.clhxzm_75b95e865c76/session_1ee76ca9-2967-40b4-98f0-18d19a171910/agents/main/wire.jsonl",
+    "prefix_bytes": 389325,
+    "prefix_sha256": "4a03282090007fd76df1e50e4b6fb4a51087bdc7c975cbf8384da4ceea3c24e3",
+    "tool_call_count": 23,
+    "prohibited_tool_call_observed": false
+  },
+  "state_file_sha256": "e9626664b0b97748435771e49d4b512eea9140550102a62b6f60bbf22f4b71c2",
+  "preflight_observation": {
+    "cwd": "/private/tmp/flai-kimi-workspace-shell.ClhXZm",
+    "branch": "codex/kimi-workspace-shell-v1",
+    "head": "71ecc9eadd457dfe03d2737d112f727b4a2183fa",
+    "source_git_status": "CLEAN",
+    "result": "PASS"
+  },
+  "mandatory_read_observation": {
+    "result": "PASS",
+    "paths": [
+      "docs/design/OPEN-WEBUI-REFERENCE-AUDIT.md",
+      "docs/design/WORKSPACE-SHELL-V1-BLUEPRINT.md",
+      "docs/agents/kimi-k3-workspace-shell-pilot.md",
+      "docs/adr/ADR-0063-external-development-airgap-internal-workspace.md",
+      "docs/adr/ADR-0064-workspace-foreground-verifiable-delivery-and-dual-track-development.md",
+      "frontend/src/prototypes/stage-c/observer-contract.js",
+      "frontend/src/prototypes/stage-c/runtime-observer-adapter.js",
+      "frontend/src/prototypes/stage-c/fixtures.js"
+    ]
+  },
+  "executor_environment_ref": "docs/work-items/flai-workspace-shell-kimi-001-v1.executor-environment.json",
+  "assistant_dispatch_receipt": null,
+  "actual_runtime_identity": "DECLARED_NOT_VERIFIED",
+  "authority_projection": "EFFECT_UNKNOWN",
+  "source_candidate_state": "NOT_YET_PRODUCED",
+  "result_class": "NON_AUTHORITATIVE_EXTERNAL_SYNTHETIC_EXECUTION_IN_PROGRESS"
+}

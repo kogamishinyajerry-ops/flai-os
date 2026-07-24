@@ -1,0 +1,37 @@
+{
+  "record_schema": "LocalExecutorEnvironmentProvisionV1",
+  "provision_digest": "sha256:bb61f2139ff89d72af355e25e0cb885387bc253e6873812d6209075608a573e3",
+  "digest_profile": "sha256-rfc8785-jcs-excluding_provision_digest",
+  "authority": "NON_AUTHORITATIVE_LOCAL_EXECUTOR_ENVIRONMENT",
+  "work_item_ref": "flai-workspace-shell-kimi-001@1",
+  "work_item_digest": "sha256:160337f0556ca231a472bff553f2925ce9c35f8b94fdaf79f029ea3858199266",
+  "prepared_at": "2026-07-24T11:53:11Z",
+  "reason": "EXECUTOR_WORKTREE_LACKED_NODE_MODULES_AND_REGISTRY_EGRESS_IS_DENIED",
+  "source_effect": "IGNORED_LOCAL_ENVIRONMENT_ONLY_NOT_SOURCE_OR_COMMIT_INPUT",
+  "executor_path": "/private/tmp/flai-kimi-workspace-shell.ClhXZm/frontend/node_modules",
+  "provision_kind": "SYMLINK_TO_PREQUALIFIED_LOCAL_DEPENDENCY_TREE",
+  "donor_path": "/private/tmp/flai-os-stage-c-v4.HXqM0s/frontend/node_modules",
+  "binding": {
+    "executor_package_json_sha256": "bcaf55fc7f36e85e203bd5c3ca6c73acb55bb1472edb7e558d8fcab6416fddf7",
+    "executor_package_lock_sha256": "c2dd2e59b4b8ba3afd8429fc28d7cbecd3230ba55364b5cf5d95c122c830ccbe",
+    "donor_package_json_sha256": "bcaf55fc7f36e85e203bd5c3ca6c73acb55bb1472edb7e558d8fcab6416fddf7",
+    "donor_package_lock_sha256": "c2dd2e59b4b8ba3afd8429fc28d7cbecd3230ba55364b5cf5d95c122c830ccbe"
+  },
+  "prequalified_top_level_packages": {
+    "@vitejs/plugin-vue": "5.2.4",
+    "element-plus": "2.14.2",
+    "vite": "6.4.3",
+    "vue-router": "4.6.4",
+    "vue": "3.5.39"
+  },
+  "verification": {
+    "donor_npm_ls_depth_0_offline": "PASS",
+    "executor_npm_run_build": "PASS",
+    "executor_default_dist_index_html": "PRESENT",
+    "executor_default_dist_workspace_shell_html": "ABSENT",
+    "executor_git_status_porcelain": "CLEAN",
+    "executor_git_ignored_state": "frontend/node_modules is ignored"
+  },
+  "network_effect": "NO_NETWORK_COMMAND_USED_FOR_PROVISIONING",
+  "cleanup": "REMOVE_IGNORED_SYMLINK_AFTER_EXECUTOR_AND_REVIEW_CHECKS_COMPLETE"
+}
