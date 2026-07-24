@@ -1,0 +1,76 @@
+{
+  "schema_version": "ExecutorEnvironmentV1",
+  "work_item_ref": "flai-workspace-shell-kimi-001@4",
+  "work_item_digest": "sha256:48fa8072fc49f587700cc13ca4e43789a3bfbd1890eb823ea60151d148577b31",
+  "authorization_proposal_digest": "sha256:9bc6062c777d0f8c22ff35decc0e21b52c671c0f3627cc65fcd2be66509fee0d",
+  "captured_at_utc": "2026-07-24T16:04:40Z",
+  "environment_class": "EXTERNAL_DEVELOPMENT",
+  "fixture_class": "SYNTHETIC_ONLY",
+  "internal_data_access": "NONE",
+  "internal_runtime_dependency": "NONE",
+  "source_candidate_class": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE",
+  "executor": {
+    "kind": "kimi-cli",
+    "path": "/Users/Zhuanz/.kimi-code/bin/kimi",
+    "version": "0.29.0",
+    "binary_sha256": "5cccf53604f20c5499ea10c3094298f49a1ad59fa90cddd9fd7e0ba44815fdd3",
+    "provider_probe": "managed:kimi-code type=kimi models=3 source=oauth",
+    "provider_probe_default_model": "kimi-code/k3"
+  },
+  "source": {
+    "worktree": "/private/tmp/flai-kimi-workspace-shell-v4.2ZYv0h",
+    "branch": "codex/kimi-workspace-shell-v4",
+    "base_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "git_status_before_dispatch": "CLEAN"
+  },
+  "frontend_dependencies": {
+    "provisioning_command": "cd frontend && npm ci --offline",
+    "provisioning_owner": "Codex coordinator",
+    "provisioning_result": "PASS; 57 packages added; ignored node_modules only",
+    "network_policy": "OFFLINE_ONLY",
+    "package_json_sha256": "bcaf55fc7f36e85e203bd5c3ca6c73acb55bb1472edb7e558d8fcab6416fddf7",
+    "package_lock_sha256": "c2dd2e59b4b8ba3afd8429fc28d7cbecd3230ba55364b5cf5d95c122c830ccbe"
+  },
+  "browser_test_runtime": {
+    "probe_command": "UV_OFFLINE=1 uv run --offline --no-project --with playwright python -c <local launch probe>",
+    "probe_result": "PASS",
+    "chromium_version": "149.0.7827.55",
+    "network_policy": "OFFLINE_ONLY"
+  },
+  "screenshot_evidence": {
+    "directory": "/private/tmp/flai-kimi-workspace-shell-v4-evidence.LzDXSx",
+    "location_class": "REPO_EXTERNAL_COORDINATOR_OWNED",
+    "state_at_freeze": "EXISTS_EMPTY",
+    "executor_preflight": "EXACT_PATH_AND_EMPTY_REQUIRED"
+  },
+  "skills": {
+    "directory": "/private/tmp/flai-kimi-empty-skills-v4.uiFQyN",
+    "state_at_freeze": "EXISTS_EMPTY",
+    "auto_discovered_skills": "DISABLED_BY_EXPLICIT_SKILLS_DIR"
+  },
+  "write_boundary": {
+    "source_files": "SIX_OWNED_FILES_ONLY",
+    "build_output": "frontend/dist/** solely by required npm run build",
+    "visual_evidence": "/private/tmp/flai-kimi-workspace-shell-v4-evidence.LzDXSx/** solely by required E2E",
+    "vite_dependency_cache": "frontend/node_modules/.vite/** solely by required fixed-loopback Vite E2E server; executor inspection or reuse denied",
+    "local_git_metadata": "Required local six-file commit metadata only, including advancing the current branch; config, push, merge, rebase, tag and branch-management create/delete/switch/reset denied",
+    "approved_tool_internal_ephemeral_state": "Unavoidable state from exact required npm build and offline uv/Playwright/Vite/Chromium only; executor selection, inspection, copy, citation or reuse denied",
+    "existing_e2e_devnull": "Allowed only inside the existing E2E to discard Vite child output; no persistent result",
+    "test_build_audit_output_capture": "TOOL_STDOUT_STDERR_ONLY",
+    "output_redirection_or_tee": "DENY",
+    "temporary_logs_results_helpers_or_scratch": "DENY"
+  },
+  "mandatory_pre_red_harness_repair": {
+    "owned_file": "frontend/e2e/workspace_shell_prototype_acceptance.py",
+    "reason": "Current eager os.environ.get default creates /tmp/workspace-shell-shots-* even when the fixed screenshot environment variable is present.",
+    "required_change": "Evaluate tempfile.mkdtemp only when WORKSPACE_SHELL_SHOTS is actually absent.",
+    "frozen_run_negative_control": "No additional workspace-shell-shots-* directory may be created."
+  },
+  "secret_handling": {
+    "secret_values_recorded": false,
+    "secrets_stack_accessed": false,
+    "internal_credentials_accessed": false
+  },
+  "provision_digest_profile": "sha256-rfc8785-jcs-excluding_provision_digest",
+  "provision_digest": "sha256:e98bbbd944746abb8b70315df84d83a525535bc15ec6650407cea019afdf976f"
+}
