@@ -1,0 +1,108 @@
+{
+  "schema_version": "WorkItemAuthorizationProposalV1",
+  "proposal_ref": "flai-workspace-shell-kimi-001@3-proposal-1",
+  "proposal_status": "OWNER_APPROVAL_REQUIRED_NOT_FROZEN_NOT_DISPATCHED",
+  "human_owner": "JerryKogami",
+  "requested_owner_authorization_text": "批准 @3 最小重派",
+  "prepared_at_utc": "2026-07-24T15:04:45Z",
+  "human_readable_ref": "docs/work-items/flai-workspace-shell-kimi-001-v3-authorization-proposal.md",
+  "human_readable_sha256": "74d1f16c4b7ff0be32832be0ffbf7cdf4ef70d89082b92ecfb3f98c8b6872ebc",
+  "project": "github:kogamishinyajerry-ops/flai-os",
+  "environment": "EXTERNAL_DEVELOPMENT",
+  "fixtures": "SYNTHETIC_ONLY",
+  "internal_data_access": "NONE",
+  "internal_runtime_dependency": "NONE",
+  "result_class_if_successful": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE",
+  "rework_lineage": {
+    "source_work_item": "flai-workspace-shell-kimi-001@2",
+    "source_work_item_digest": "sha256:72b78143441303b170b124de0e24f836a8b289ee3ddc86fa9707c888ae425b19",
+    "dispatch_observation_digest": "sha256:a250e37b4868d6a00ff5829d112203cf9f4eda3ef9319692cc0125b8087716d2",
+    "source_result": "STOPPED_FAIL_CLOSED_SCOPE_VIOLATION_NO_SOURCE_CHANGE_NO_HANDOFF",
+    "source_session_ref": "session_f55a6882-e7cb-4c8a-b465-04d0bba4d950",
+    "source_session_reuse": "DENY"
+  },
+  "exact_delta_from_v2": {
+    "p1_findings_changed": false,
+    "write_scope_changed": false,
+    "production_interface_scope_changed": false,
+    "dependency_scope_changed": false,
+    "read_scope_additions": [
+      "frontend/workspace-shell.html",
+      "frontend/src/prototypes/workspace-shell/main.js"
+    ],
+    "read_scope_removals": [],
+    "ambiguity_removal": "The final @3 prompt will use an exhaustive read allowlist with no transitive-read exception."
+  },
+  "six_p1_findings": [
+    "WSK3-P1-URL-CONTRACT",
+    "WSK3-P1-DOM-CONTRACT",
+    "WSK3-P1-TRUST-COLORS",
+    "WSK3-P1-INVALID-HISTORY",
+    "WSK3-P1-NETWORK-LEDGER",
+    "WSK3-P1-RAIL-STATE"
+  ],
+  "exclusive_write_scope": [
+    "frontend/src/prototypes/workspace-shell/WorkspaceShellPrototype.vue",
+    "frontend/src/prototypes/workspace-shell/workspace-view.js",
+    "frontend/src/prototypes/workspace-shell/workspace-view.test.js",
+    "frontend/src/prototypes/workspace-shell/workspace-shell.css",
+    "frontend/e2e/workspace_shell_prototype_acceptance.py",
+    "frontend/src/prototypes/workspace-shell/NOTES.md"
+  ],
+  "exhaustive_read_only_scope": [
+    "docs/agents/kimi-k3-workspace-shell-pilot.md",
+    "docs/design/WORKSPACE-SHELL-V1-BLUEPRINT.md",
+    "frontend/src/prototypes/stage-c/stage-c.css",
+    "frontend/src/prototypes/stage-c/StageCWorkbenchPrototype.vue",
+    "frontend/src/prototypes/stage-c/observer-contract.js",
+    "frontend/src/prototypes/workspace-shell/fixtures.js",
+    "frontend/workspace-shell.html",
+    "frontend/src/prototypes/workspace-shell/main.js",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "frontend/vite.config.js",
+    "scripts/verify_all.sh"
+  ],
+  "prepared_execution_target": {
+    "base_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "branch": "codex/kimi-workspace-shell-v3",
+    "worktree": "/private/tmp/flai-kimi-workspace-shell-v3.MHDHC6",
+    "worktree_status": "CLEAN_AT_PROPOSAL",
+    "frontend_node_modules": "COORDINATOR_PROVISIONED_OFFLINE",
+    "package_json_sha256": "bcaf55fc7f36e85e203bd5c3ca6c73acb55bb1472edb7e558d8fcab6416fddf7",
+    "package_lock_sha256": "c2dd2e59b4b8ba3afd8429fc28d7cbecd3230ba55364b5cf5d95c122c830ccbe",
+    "playwright_chromium_version": "149.0.7827.55",
+    "screenshot_directory": "/private/tmp/flai-kimi-workspace-shell-v3-evidence.C5A3NE",
+    "skills_directory": "/private/tmp/flai-kimi-empty-skills-v3.haGvfE"
+  },
+  "dispatch_policy_if_authorized": {
+    "executor": "kimi-code/k3",
+    "new_session_only": true,
+    "max_new_sessions": 1,
+    "max_active_runs": 1,
+    "max_wall_clock_minutes": 90,
+    "incremental_cost_cny": 0,
+    "package_install": "DENY",
+    "implementation_runtime_network": "DENY",
+    "browser_network": "FIXED_LOOPBACK_BOOTSTRAP_ONLY",
+    "secrets_internal_data_openhands_openwebui": "DENY",
+    "tool_calls": "LIVE_AUDIT_AND_POST_RUN_COMPLETE_AUDIT",
+    "authority": "NON_AUTHORITATIVE_UNTIL_CODEX_REVIEW_AND_JERRYKOGAMI_ACCEPTANCE"
+  },
+  "codex_independent_review_if_candidate_exists": [
+    "Exact changed-file scope and production-boundary review",
+    "Complete Kimi tool-call and network audit",
+    "Independent URL and exact ten-data-testid reverse probes",
+    "Independent 96-case plus stale unknown-history review",
+    "Independent cross-navigation network-ledger active negative control",
+    "Independent three-workflow by eight-state Rail projection consistency probe",
+    "Computed trust-color and unreachable green or teal review",
+    "Fresh visual E2E at 1440, 1280, reduced-motion, keyboard, IME, queue and exception states",
+    "Node tests and production build boundary",
+    "Full scripts/verify_all.sh in a disposable verification worktree",
+    "DevelopmentHandoffV1 completeness and JerryKogami acceptance package"
+  ],
+  "authorization_effect": "Owner approval authorizes generation and freeze of the full @3 payload and one fresh Kimi dispatch; it does not authorize merge, push, production integration, human signoff, internal release, or Schema change.",
+  "proposal_digest_profile": "sha256-rfc8785-jcs-excluding_proposal_digest",
+  "proposal_digest": "sha256:f75049d9554d1d6db23403001ee4685be3996c6f146db441e194c91e1ae8fcda"
+}
