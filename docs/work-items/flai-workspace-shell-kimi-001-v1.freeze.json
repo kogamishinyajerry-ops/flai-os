@@ -1,0 +1,205 @@
+{
+  "work_item_id": "flai-workspace-shell-kimi-001",
+  "work_item_version": 1,
+  "work_item_digest": "sha256:160337f0556ca231a472bff553f2925ce9c35f8b94fdaf79f029ea3858199266",
+  "digest_profile": "sha256-rfc8785-jcs-excluding-work_item_digest",
+  "digest_authority": "OWNER_APPROVED_LOCAL_CONTENT_FREEZE_NOT_PROTOCOL_DOMAIN_SEPARATED",
+  "human_owner": "JerryKogami",
+  "owner_instruction_text": "接受路线 C，冻结并派发 flai-workspace-shell-kimi-001@1",
+  "owner_instruction_sha256": "4cafb8d13e87f27cfda9315b8ed032fdc1693efae7702609abaf7a3fc53b1c4b",
+  "authorized_project_scope_ref": "github:kogamishinyajerry-ops/flai-os",
+  "classification": "EXTERNAL_DEVELOPMENT_SYNTHETIC_ONLY",
+  "source_commitment_ref": "git:71ecc9eadd457dfe03d2737d112f727b4a2183fa",
+  "outcome_contract_ref": "git:71ecc9eadd457dfe03d2737d112f727b4a2183fa:docs/design/WORKSPACE-SHELL-V1-BLUEPRINT.md",
+  "prompt_template_ref": "docs/work-items/flai-workspace-shell-kimi-001-v1.prompt.md",
+  "prompt_template_sha256": "c29c5ab2d6b331b0b25349095e1d464af4c59216c3cd7e654e470d52932d6b11",
+  "prompt_rendering": {
+    "template_encoding": "UTF-8",
+    "replacement_token": "${WORK_ITEM_DIGEST}",
+    "replacement_value_source": "top-level work_item_digest",
+    "replacement_count": 1,
+    "newline_policy": "PRESERVE_TEMPLATE_BYTES",
+    "other_substitutions": "DENY",
+    "rendered_prompt_sha256_location": "LOCAL_DISPATCH_ATTEMPT_RECORD_NOT_FREEZE_PAYLOAD_TO_AVOID_DIGEST_CYCLE"
+  },
+  "pilot_placeholder_precedence": {
+    "source": "docs/agents/kimi-k3-workspace-shell-pilot.md",
+    "superseded_fields_for_this_work_item_only": [
+      "work_item_digest",
+      "work_item_base_sha",
+      "planned_branch",
+      "planned_worktree",
+      "executor_qualification.status",
+      "status"
+    ],
+    "all_other_constraints": "REMAIN_IN_FORCE"
+  },
+  "owned_file_scope": [
+    "frontend/workspace-shell.html",
+    "frontend/src/prototypes/workspace-shell/**",
+    "frontend/e2e/workspace_shell_prototype_acceptance.py"
+  ],
+  "read_only_scope": [
+    "docs/design/OPEN-WEBUI-REFERENCE-AUDIT.md",
+    "docs/design/WORKSPACE-SHELL-V1-BLUEPRINT.md",
+    "docs/agents/kimi-k3-workspace-shell-pilot.md",
+    "docs/adr/ADR-0063-external-development-airgap-internal-workspace.md",
+    "docs/adr/ADR-0064-workspace-foreground-verifiable-delivery-and-dual-track-development.md",
+    "frontend/src/prototypes/stage-c/observer-contract.js",
+    "frontend/src/prototypes/stage-c/runtime-observer-adapter.js",
+    "frontend/src/prototypes/stage-c/fixtures.js",
+    "frontend/src/prototypes/stage-c/StageCWorkbenchPrototype.vue",
+    "frontend/src/prototypes/stage-c/stage-c.css",
+    "frontend/e2e/stage_c_prototype_acceptance.py",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "frontend/vite.config.js",
+    "scripts/verify_all.sh"
+  ],
+  "coordinator_owned_control_artifacts": [
+    {
+      "path": "docs/work-items/flai-workspace-shell-kimi-001-v1.freeze.json",
+      "executor_access": "NOT_PRESENT_IN_EXECUTOR_BASE",
+      "purpose": "Immutable local work item content freeze"
+    },
+    {
+      "path": "docs/work-items/flai-workspace-shell-kimi-001-v1.prompt.md",
+      "executor_access": "DISPATCH_TEXT_ONLY",
+      "purpose": "Exact bounded prompt template"
+    }
+  ],
+  "owned_interface_scope": [
+    "Development-only /workspace-shell.html prototype entry; default production build must not emit dist/workspace-shell.html",
+    "Prototype query workflow=docx|meeting|cfd",
+    "Prototype query state=running|waiting_review|completed|failed|cancelled|evidence-missing|permission-denied|observation-invalid",
+    "Prototype query reality=REAL|MOCK|TEST|UNKNOWN; missing or invalid trusted observation input fails closed to UNKNOWN",
+    "Prototype-only data-testid contract: workspace-shell, workspace-rail, continuous-work-surface, focus-surface, workspace-composer, action-glyph, reality-badge, execution-state, instruction-queue, delivery-state",
+    "Prototype fixture contract: 3 workflows x 8 states x 4 requested display forms = 96 deterministic synthetic cases",
+    "Prototype keyboard contract: Ctrl/Cmd+Enter submits; IME composition never submits accidentally",
+    "No production observer contract, runtime adapter, API, Schema, authentication, ACL, classification, signing, delivery, router, store, Vite production input, package, or ADR interface changes"
+  ],
+  "frozen_sha": "71ecc9eadd457dfe03d2737d112f727b4a2183fa",
+  "branch_worktree": "codex/kimi-workspace-shell-v1@/private/tmp/flai-kimi-workspace-shell.ClhXZm",
+  "issue_ref": null,
+  "pr_ref": null,
+  "required_checks": [
+    "git merge-base --is-ancestor 71ecc9eadd457dfe03d2737d112f727b4a2183fa HEAD",
+    "git diff --check",
+    "git status --porcelain=v1 --untracked-files=all",
+    "scope union from git diff --name-only 71ecc9eadd457dfe03d2737d112f727b4a2183fa plus git ls-files --others --exclude-standard",
+    "cd frontend && node --test",
+    "cd frontend && npm run build",
+    "test -f frontend/dist/index.html && test ! -e frontend/dist/workspace-shell.html",
+    "UV_OFFLINE=1 uv run --offline --no-project --with playwright python frontend/e2e/workspace_shell_prototype_acceptance.py with a fresh WORKSPACE_SHELL_SHOTS directory",
+    "UV_OFFLINE=1 bash scripts/verify_all.sh"
+  ],
+  "required_reviewer": "Codex Platform and Integration read-only scope/security review; JerryKogami remains sole handoff acceptance authority",
+  "concurrency_budget": {
+    "max_active_runs": 1,
+    "max_new_sessions": 1
+  },
+  "time_budget": {
+    "max_wall_clock_minutes": 90,
+    "enforcement": "COORDINATOR_PROCESS_TIMEOUT",
+    "multi_day_continuation": "REQUIRES_NEW_OWNER_AUTHORIZATION"
+  },
+  "token_or_cost_budget": {
+    "max_incremental_cost_cny": 0,
+    "access_scope": "EXISTING_KIMI_MANAGED_ACCESS_ONLY",
+    "token_cap": "NOT_EXPOSED_BY_KIMI_CLI_0_29_0",
+    "auto_tool_step_cap": "NOT_EXPOSED_BY_KIMI_CLI_0_29_0",
+    "stop_on_provider_limit": true,
+    "accounting_assurance": "NO_TOKEN_OR_COST_RECEIPT_AVAILABLE_FROM_CURRENT_CLI"
+  },
+  "allowed_tools": [
+    "kimi-code-cli@0.29.0",
+    "local-git",
+    "repository-approved-file-editor",
+    "node",
+    "npm-existing-lockfile-only",
+    "uv",
+    "playwright",
+    "local-shell"
+  ],
+  "allowed_egress": {
+    "executor_model_transport": {
+      "mode": "ALLOWLISTED_PROVIDER_ONLY",
+      "provider": "managed:kimi-code",
+      "requested_model": "kimi-code/k3",
+      "purpose": "MODEL_INFERENCE_ONLY"
+    },
+    "source_context_egress": {
+      "mode": "APPROVED_EXTERNAL_DEV_PATHS_ONLY",
+      "classification": "EXTERNAL_DEVELOPMENT_SYNTHETIC_ONLY",
+      "allowed": [
+        "owned_file_scope",
+        "read_only_scope",
+        "prompt_template_ref",
+        "frozen envelope metadata"
+      ]
+    },
+    "implementation_runtime_network": "DENY",
+    "browser_test_network": "FIXED_LOOPBACK_BOOTSTRAP_ONLY",
+    "enforcement_status": "PROMPT_SCOPE_AND_TOOL_CALL_AUDIT_ONLY_NO_OS_NETWORK_SANDBOX",
+    "explicitly_denied": [
+      "OPEN_WEBUI_CLONE",
+      "SECRETS",
+      "SECRETS_STACKDOCKER",
+      "INTERNAL_DATA",
+      "NON_WHITELIST_PATHS",
+      "EXTERNAL_FETCH_XHR_WEBSOCKET_EVENTSOURCE_BEACON_SERVICE_WORKER"
+    ]
+  },
+  "executor_qualification": {
+    "requested_executor": "kimi-code/k3",
+    "client": "kimi-code-cli",
+    "client_version": "0.29.0",
+    "configuration_doctor": "PASS",
+    "provider_catalog": "managed:kimi-code type=kimi source=oauth",
+    "default_model": "kimi-code/k3",
+    "actual_runtime_identity": "REQUIRES_DISPATCH_RECEIPT",
+    "qualification_scope": "WORKSPACE_PRESENTATION_ONLY"
+  },
+  "dispatch_configuration": {
+    "session_mode": "NEW_SESSION_ONLY",
+    "resume_session": "DENY",
+    "additional_directories": "NONE",
+    "skills_dir": "/private/tmp/flai-kimi-empty-skills.UCYoSv",
+    "skills_dir_state": "EMPTY_AT_FREEZE",
+    "permission_mode": "AUTO_WITH_FROZEN_SCOPE_AND_POST_RUN_TOOL_CALL_AUDIT",
+    "output_format": "stream-json"
+  },
+  "current_blocker": null,
+  "lifecycle_state": "READY",
+  "integration_status": "NOT_INTEGRATED",
+  "authorization_evidence": "OWNER_CHAT_INSTRUCTION_CONTENT_BOUND_NOT_AUTHENTICATED_RECEIPT",
+  "dispatch_receipt_status": "PENDING",
+  "authority_projection_limit": "EFFECT_UNKNOWN_UNTIL_VERIFIABLE_ASSISTANT_DISPATCH_RECEIPT_AND_BACKEND_WITNESS",
+  "result_class": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE",
+  "acceptance_criteria": [
+    "A sparse desktop-grade Workspace shell exists only in the frozen prototype write scope",
+    "The left rail, continuous center surface, fixed composer, and state-selected right Focus Surface work across docx, meeting, and cfd fixtures",
+    "Six state-driven action glyphs stop on waiting, terminal, stale, denied, evidence-missing, and UNKNOWN states",
+    "The 96-case synthetic matrix passes and UNKNOWN remains a derived fail-closed projection",
+    "An explicit stale overlay case outside the 96-case matrix stops motion, projects UNKNOWN/unverified, and clears or hides the previous sensitive Focus preview",
+    "Queued instructions retain independent stable IDs, order, and accepted-not-completed receipts",
+    "completed never uses green and synthetic or unsigned delivery never uses teal",
+    "1440px and 1280px layouts, keyboard, IME, reduced-motion, focus visibility, contrast, and no-overflow checks pass",
+    "No application network, external request, backend API, service worker, new dependency, production entry, or production interface is introduced",
+    "Default npm build emits dist/index.html and does not emit dist/workspace-shell.html",
+    "All required checks and scripts/verify_all.sh pass",
+    "The result remains unpushed, unmerged, unaccepted, unsigned, and SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE until independent review and human acceptance"
+  ],
+  "stop_conditions": [
+    "Preflight base, branch, worktree, or clean-state mismatch",
+    "Any required write outside owned_file_scope",
+    "Any dependency, production interface, real data, secret, or non-loopback implementation network requirement",
+    "Any request to read or mount the Open WebUI clone",
+    "Any need to weaken fail-closed, trust colors, synthetic labeling, or human-signoff boundaries",
+    "Concurrent modification of an owned target file",
+    "An attributable required-check failure that cannot be fixed within scope",
+    "The 90-minute coordinator wall-clock limit is reached",
+    "The provider reports a token, rate, account, or billing limit",
+    "Any new paid resource or incremental infrastructure spend is required"
+  ]
+}
