@@ -1,0 +1,55 @@
+{
+  "record_schema": "LocalAssistantDispatchProgressObservationV1",
+  "progress_digest": "sha256:0548f32353a7c943d958401afed3519c243c317a995c17d149417f10a58fbf5b",
+  "digest_profile": "sha256-rfc8785-jcs-excluding_progress_digest",
+  "authority": "NON_AUTHORITATIVE_LOCAL_PROCESS_CLIENT_WIRE_AND_WORKTREE_OBSERVATION",
+  "work_item_ref": "flai-workspace-shell-kimi-001@1",
+  "work_item_digest": "sha256:160337f0556ca231a472bff553f2925ce9c35f8b94fdaf79f029ea3858199266",
+  "dispatch_attempt": 3,
+  "preparation_generation": 4,
+  "preparation_digest": "sha256:2bebbd6208980243f6402c79286079ff6d71149c22780b744c3c7d0405600788",
+  "kimi_session_ref": "session_1ee76ca9-2967-40b4-98f0-18d19a171910",
+  "local_exec_session_id": 41028,
+  "local_process_pid": 55842,
+  "observed_at": "2026-07-24T11:58:33Z",
+  "process_state_at_observation": "ACTIVE",
+  "wire_prefix_evidence": {
+    "prefix_bytes": 467591,
+    "prefix_sha256": "86e8957e6793d09057c435695ff357d811d320adc76ca96b7854555c79fa8d3e"
+  },
+  "first_source_progress": {
+    "path": "frontend/src/prototypes/workspace-shell/fixtures.js",
+    "sha256": "30a1e9e6ee2ff1b7bc5b631e9015ba4357d9497cee2f53ceed39396ad3696ba6",
+    "line_count": 279,
+    "git_state": "UNTRACKED_IN_EXECUTOR_WORKTREE",
+    "scope_check": "WITHIN_EXCLUSIVE_WRITE_SCOPE",
+    "commit_ref": null
+  },
+  "dependency_environment_transition": {
+    "prior_environment_ref": "docs/work-items/flai-workspace-shell-kimi-001-v1.executor-environment.json",
+    "executor_tool_call": "cd frontend && npm ci --no-audit --no-fund",
+    "executor_reported_result": "added 57 packages in 3s",
+    "coordinator_intervention": "SIGTERM_SENT_TO_REPORTED_BACKGROUND_PID_89522_AFTER_TOOL_CALL_WAS_OBSERVED",
+    "post_state": "LOCAL_NODE_MODULES_DIRECTORY_PRESENT",
+    "package_json_changed": false,
+    "package_lock_changed": false,
+    "top_level_versions_match_frozen_lock_environment": true,
+    "external_network_witness": null,
+    "egress_effect": "UNKNOWN",
+    "risk_disposition": "DISCLOSE_AND_REQUIRE_POST_RUN_REVIEW_NO_OFFLINE_CLAIM"
+  },
+  "tool_scope_observation": {
+    "open_webui_clone_read": false,
+    "internal_data_access": false,
+    "secret_access": false,
+    "source_write_paths_observed": [
+      "frontend/src/prototypes/workspace-shell/fixtures.js"
+    ],
+    "out_of_scope_source_write_observed": false
+  },
+  "assistant_dispatch_receipt": null,
+  "actual_runtime_identity": "DECLARED_NOT_VERIFIED",
+  "authority_projection": "EFFECT_UNKNOWN",
+  "source_candidate_state": "IMPLEMENTATION_IN_PROGRESS_NOT_COMMITTED_NOT_VERIFIED",
+  "result_class": "NON_AUTHORITATIVE_EXTERNAL_SYNTHETIC_SOURCE_CANDIDATE_IN_PROGRESS"
+}
