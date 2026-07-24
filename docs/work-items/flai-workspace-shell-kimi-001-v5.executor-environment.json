@@ -1,0 +1,100 @@
+{
+  "schema_version": "ExecutorEnvironmentV1",
+  "work_item_ref": "flai-workspace-shell-kimi-001@5",
+  "work_item_digest": "sha256:9c016bf400e6afdac9d26f57ad9047bace8addfdb815cbec902d832c981507f4",
+  "authorization_proposal_digest": "sha256:a0f440f0717b3a610cc2b908c5f25b15bd6f7dbf2e5524d540e0f9a911875bf2",
+  "captured_at_utc": "2026-07-24T17:04:35Z",
+  "environment_class": "EXTERNAL_DEVELOPMENT",
+  "fixture_class": "SYNTHETIC_ONLY",
+  "internal_data_access": "NONE",
+  "internal_runtime_dependency": "NONE",
+  "source_candidate_class": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE",
+  "executor": {
+    "kind": "kimi-cli",
+    "path": "/Users/Zhuanz/.kimi-code/bin/kimi",
+    "version": "0.29.0",
+    "binary_sha256": "5cccf53604f20c5499ea10c3094298f49a1ad59fa90cddd9fd7e0ba44815fdd3",
+    "provider_probe": "managed:kimi-code type=kimi models=3 source=oauth",
+    "provider_probe_default_model": "kimi-code/k3"
+  },
+  "source": {
+    "worktree": "/private/tmp/flai-kimi-workspace-shell-v5.QjU0x6",
+    "branch": "codex/kimi-workspace-shell-v5",
+    "base_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "git_status_before_dispatch": "CLEAN",
+    "previous_worktree_reuse": "DENY"
+  },
+  "frontend_dependencies": {
+    "provisioning_command": "cd frontend && npm ci --offline",
+    "provisioning_owner": "Codex coordinator",
+    "provisioning_result": "PASS; 57 packages added; ignored node_modules only",
+    "network_policy": "OFFLINE_ONLY",
+    "package_json_sha256": "bcaf55fc7f36e85e203bd5c3ca6c73acb55bb1472edb7e558d8fcab6416fddf7",
+    "package_lock_sha256": "c2dd2e59b4b8ba3afd8429fc28d7cbecd3230ba55364b5cf5d95c122c830ccbe",
+    "vite_cache_at_freeze": "ABSENT"
+  },
+  "browser_test_runtime": {
+    "probe_command": "UV_OFFLINE=1 uv run --offline --no-project --with playwright python -c <local launch probe>",
+    "probe_result": "PASS",
+    "chromium_version": "149.0.7827.55",
+    "network_policy": "OFFLINE_ONLY"
+  },
+  "screenshot_evidence": {
+    "directory": "/private/tmp/flai-kimi-workspace-shell-v5-evidence.mGixLe",
+    "location_class": "REPO_EXTERNAL_COORDINATOR_OWNED",
+    "state_at_freeze": "EXISTS_EMPTY",
+    "executor_preflight": "EXACT_PATH_AND_EMPTY_REQUIRED",
+    "v4_evidence_reuse": "DENY"
+  },
+  "skills": {
+    "directory": "/private/tmp/flai-kimi-empty-skills-v5.ipfzHH",
+    "state_at_freeze": "EXISTS_EMPTY",
+    "auto_discovered_skills": "DISABLED_BY_EXPLICIT_SKILLS_DIR"
+  },
+  "write_boundary": {
+    "source_files": "SIX_OWNED_FILES_ONLY",
+    "pre_red_source_files": "UNIT_TEST_AND_E2E_ONLY",
+    "build_output": "frontend/dist/** solely by required npm run build",
+    "visual_evidence": "/private/tmp/flai-kimi-workspace-shell-v5-evidence.mGixLe/** solely by required E2E",
+    "vite_dependency_cache": "frontend/node_modules/.vite/** solely by required fixed-loopback Vite E2E server; executor inspection or reuse denied",
+    "local_git_metadata": "Required local six-file commit metadata only, including advancing the current branch; config, push, merge, rebase, tag and branch-management create/delete/switch/reset denied",
+    "approved_tool_internal_ephemeral_state": "Unavoidable state may be created by exact tools but executor naming, enumeration, inspection, polling, copy, citation and reuse are denied",
+    "existing_e2e_devnull": "Allowed only inside the existing E2E to discard Vite child output",
+    "test_build_audit_output_capture": "CURRENT_TOOL_RESPONSE_DIRECT_STDOUT_STDERR_ONLY",
+    "test_build_audit_pipeline": "DENY",
+    "top_level_background_execution": "DENY",
+    "output_redirection_or_tee": "DENY",
+    "temporary_logs_results_helpers_or_scratch": "DENY"
+  },
+  "synchronous_red_gate": {
+    "initial_state": "LOCKED",
+    "unit_red": "FOREGROUND_DIRECT_FINAL_NONZERO_REQUIRED",
+    "e2e_red": "FOREGROUND_DIRECT_FINAL_NONZERO_REQUIRED",
+    "finding_mapping": "ALL_SIX_REQUIRED",
+    "unlock_checkpoint": "RED_GATE_COMPLETE_IN_ASSISTANT_STREAM",
+    "tool_internal_result_lookup": "DENY",
+    "product_implementation_edit_before_unlock": "STOP_CONDITION"
+  },
+  "mandatory_pre_red_harness_repair": {
+    "owned_file": "frontend/e2e/workspace_shell_prototype_acceptance.py",
+    "reason": "Current eager os.environ.get default creates /tmp/workspace-shell-shots-* even when the fixed screenshot environment variable is present.",
+    "required_change": "Evaluate tempfile.mkdtemp only when WORKSPACE_SHELL_SHOTS is actually absent.",
+    "frozen_run_negative_control": "No additional workspace-shell-shots-* directory may be created."
+  },
+  "previous_sessions": {
+    "reuse": "DENY",
+    "denied_refs": [
+      "session_2f449268-89fd-4104-bd95-fd7bd908557e",
+      "session_f55a6882-e7cb-4c8a-b465-04d0bba4d950",
+      "session_8029f845-0add-4038-87fe-9543983100a5",
+      "session_05f51f4a-867f-4b3f-848f-8b5c92554b3a"
+    ]
+  },
+  "secret_handling": {
+    "secret_values_recorded": false,
+    "secrets_stack_accessed": false,
+    "internal_credentials_accessed": false
+  },
+  "provision_digest_profile": "sha256-rfc8785-jcs-excluding_provision_digest",
+  "provision_digest": "sha256:32454ebff75225a4799a7070d06cf5d08b08e343ca0dab52cd59ab0d48870592"
+}

@@ -1,0 +1,122 @@
+{
+  "schema_version": "WorkItemAuthorizationProposalV1",
+  "proposal_ref": "flai-workspace-shell-kimi-001@5-proposal-1",
+  "proposal_status": "OWNER_APPROVED_FREEZE_PENDING_NOT_DISPATCHED",
+  "human_owner": "JerryKogami",
+  "owner_authorization_text": "批准 @5 最小重派",
+  "owner_authorization_sha256": "c94a4a5817cc56ed0d9e3a5db0de2804103ce6fa94cdf7b1709c0b4a117cab74",
+  "prepared_at_utc": "2026-07-24T17:00:52Z",
+  "human_readable_ref": "docs/work-items/flai-workspace-shell-kimi-001-v5-authorization-record.md",
+  "human_readable_sha256": "8b0567532b9292dd01ed87daa6a2c55bdc5e86399d2bf7d1cd22db0e68d8673d",
+  "project": "github:kogamishinyajerry-ops/flai-os",
+  "environment": "EXTERNAL_DEVELOPMENT",
+  "fixtures": "SYNTHETIC_ONLY",
+  "internal_data_access": "NONE",
+  "internal_runtime_dependency": "NONE",
+  "result_class_if_successful": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE",
+  "rework_lineage": {
+    "source_work_item": "flai-workspace-shell-kimi-001@4",
+    "source_work_item_digest": "sha256:48fa8072fc49f587700cc13ca4e43789a3bfbd1890eb823ea60151d148577b31",
+    "dispatch_observation_digest": "sha256:0c4dd36fac50779f37f8e09a3e4bb7e20dbeb19afca1943a6e61712c6c76c785",
+    "source_result": "STOPPED_FAIL_CLOSED_PROTOCOL_VIOLATION_NO_CANDIDATE_NO_HANDOFF",
+    "source_session_ref": "session_05f51f4a-867f-4b3f-848f-8b5c92554b3a",
+    "source_session_reuse": "DENY",
+    "source_dirty_worktree_reuse": "DENY",
+    "source_screenshot_reuse": "DENY"
+  },
+  "exact_delta_from_v4": {
+    "p1_findings_changed": false,
+    "source_write_scope_changed": false,
+    "source_read_scope_changed": false,
+    "production_interface_scope_changed": false,
+    "dependency_scope_changed": false,
+    "execution_protocol_changes": [
+      "All red, green, build and audit commands run synchronously in the foreground; background execution is denied.",
+      "After all test edits and before the first product implementation edit, the diff may contain only the owned unit-test and E2E files.",
+      "The direct unit red command and direct E2E red command must each return a non-zero exit status before any product implementation edit.",
+      "Tool-internal task output paths, including ~/.kimi-code/**/tasks/**/output.log, must never be selected, inspected, copied, cited or reused.",
+      "Test, build and audit commands are direct and unpiped; their current tool response is the only accepted stdout, stderr and exit-status witness."
+    ]
+  },
+  "six_p1_findings": [
+    "WSK3-P1-URL-CONTRACT",
+    "WSK3-P1-DOM-CONTRACT",
+    "WSK3-P1-TRUST-COLORS",
+    "WSK3-P1-INVALID-HISTORY",
+    "WSK3-P1-NETWORK-LEDGER",
+    "WSK3-P1-RAIL-STATE"
+  ],
+  "exclusive_source_write_scope": [
+    "frontend/src/prototypes/workspace-shell/WorkspaceShellPrototype.vue",
+    "frontend/src/prototypes/workspace-shell/workspace-view.js",
+    "frontend/src/prototypes/workspace-shell/workspace-view.test.js",
+    "frontend/src/prototypes/workspace-shell/workspace-shell.css",
+    "frontend/e2e/workspace_shell_prototype_acceptance.py",
+    "frontend/src/prototypes/workspace-shell/NOTES.md"
+  ],
+  "exhaustive_read_only_scope": [
+    "docs/agents/kimi-k3-workspace-shell-pilot.md",
+    "docs/design/WORKSPACE-SHELL-V1-BLUEPRINT.md",
+    "frontend/src/prototypes/stage-c/stage-c.css",
+    "frontend/src/prototypes/stage-c/StageCWorkbenchPrototype.vue",
+    "frontend/src/prototypes/stage-c/observer-contract.js",
+    "frontend/src/prototypes/workspace-shell/fixtures.js",
+    "frontend/workspace-shell.html",
+    "frontend/src/prototypes/workspace-shell/main.js",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "frontend/vite.config.js",
+    "scripts/verify_all.sh"
+  ],
+  "verification_runtime_write_scope": {
+    "build_output": "frontend/dist/** only, generated solely by the required npm run build",
+    "visual_evidence": "/private/tmp/flai-kimi-workspace-shell-v5-evidence.mGixLe/** only, generated solely by the required visual E2E",
+    "vite_dependency_cache": "frontend/node_modules/.vite/** only, generated solely by the required fixed-loopback Vite E2E",
+    "bounded_local_git_metadata": "Required local commits of the six owned files only",
+    "temporary_logs_and_results": "DENY",
+    "generic_tmp_or_scratch": "DENY",
+    "tool_internal_task_outputs": "GENERATION_MAY_BE_UNAVOIDABLE_BUT EXECUTOR_SELECTION_INSPECTION_COPY_CITATION_REUSE_DENIED"
+  },
+  "prepared_execution_target": {
+    "base_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "branch": "codex/kimi-workspace-shell-v5",
+    "worktree": "/private/tmp/flai-kimi-workspace-shell-v5.QjU0x6",
+    "worktree_status": "CLEAN_AT_PROPOSAL",
+    "frontend_node_modules": "COORDINATOR_PROVISIONED_OFFLINE",
+    "package_json_sha256": "bcaf55fc7f36e85e203bd5c3ca6c73acb55bb1472edb7e558d8fcab6416fddf7",
+    "package_lock_sha256": "c2dd2e59b4b8ba3afd8429fc28d7cbecd3230ba55364b5cf5d95c122c830ccbe",
+    "chromium_version": "149.0.7827.55",
+    "screenshot_directory": "/private/tmp/flai-kimi-workspace-shell-v5-evidence.mGixLe",
+    "skills_directory": "/private/tmp/flai-kimi-empty-skills-v5.ipfzHH"
+  },
+  "dispatch_policy_if_frozen": {
+    "executor": "kimi-code/k3",
+    "new_session_only": true,
+    "max_new_sessions": 1,
+    "max_active_runs": 1,
+    "max_wall_clock_minutes": 90,
+    "incremental_cost_cny": 0,
+    "package_install": "DENY",
+    "implementation_runtime_network": "DENY",
+    "browser_network": "FIXED_LOOPBACK_BOOTSTRAP_ONLY",
+    "secrets_internal_data_openhands_openwebui": "DENY",
+    "tool_calls": "LIVE_AUDIT_AND_POST_RUN_COMPLETE_AUDIT",
+    "authority": "NON_AUTHORITATIVE_UNTIL_CODEX_REVIEW_AND_JERRYKOGAMI_ACCEPTANCE"
+  },
+  "codex_independent_review_if_candidate_exists": [
+    "Exact changed-file scope and production-boundary review",
+    "Complete Kimi tool-call, direct-write and network audit",
+    "Independent URL and exact ten-data-testid reverse probes",
+    "Independent 96-case plus stale unknown-history review",
+    "Independent cross-navigation network-ledger active negative control",
+    "Independent three-workflow by eight-state Rail projection consistency probe",
+    "Computed trust-color and unreachable green or teal review",
+    "Fresh visual E2E at 1440, 1280, reduced-motion, keyboard, IME, queue and exception states",
+    "Node tests and production build boundary",
+    "Full scripts/verify_all.sh in a disposable verification worktree",
+    "DevelopmentHandoffV1 completeness and JerryKogami acceptance package"
+  ],
+  "authorization_effect": "Owner approval authorizes generation and freeze of the full @5 payload and one fresh Kimi dispatch; it does not authorize merge, push, production integration, human signoff, internal release or Schema change.",
+  "proposal_digest_profile": "sha256-rfc8785-jcs-excluding_proposal_digest",
+  "proposal_digest": "sha256:a0f440f0717b3a610cc2b908c5f25b15bd6f7dbf2e5524d540e0f9a911875bf2"
+}

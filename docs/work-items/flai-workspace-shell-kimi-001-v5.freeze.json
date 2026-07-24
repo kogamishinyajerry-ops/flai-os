@@ -1,0 +1,330 @@
+{
+  "work_item_id": "flai-workspace-shell-kimi-001",
+  "work_item_version": 5,
+  "work_item_digest": "sha256:9c016bf400e6afdac9d26f57ad9047bace8addfdb815cbec902d832c981507f4",
+  "digest_profile": "sha256-rfc8785-jcs-excluding_work_item_digest",
+  "digest_authority": "OWNER_APPROVED_LOCAL_CONTENT_FREEZE_NOT_PROTOCOL_DOMAIN_SEPARATED",
+  "human_owner": "JerryKogami",
+  "owner_instruction_text": "批准 @5 最小重派",
+  "owner_instruction_sha256": "c94a4a5817cc56ed0d9e3a5db0de2804103ce6fa94cdf7b1709c0b4a117cab74",
+  "frozen_at_utc": "2026-07-24T17:04:35Z",
+  "authorization_proposal_ref": "flai-workspace-shell-kimi-001@5-proposal-1",
+  "authorization_proposal_digest": "sha256:a0f440f0717b3a610cc2b908c5f25b15bd6f7dbf2e5524d540e0f9a911875bf2",
+  "authorized_project_scope_ref": "github:kogamishinyajerry-ops/flai-os",
+  "classification": "EXTERNAL_DEVELOPMENT_SYNTHETIC_ONLY",
+  "lineage": {
+    "implementation_base_ref": "flai-workspace-shell-kimi-001@1",
+    "implementation_base_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "v2_work_item_digest": "sha256:72b78143441303b170b124de0e24f836a8b289ee3ddc86fa9707c888ae425b19",
+    "v2_result": "STOPPED_FAIL_CLOSED_SCOPE_VIOLATION_NO_SOURCE_CHANGE_NO_HANDOFF",
+    "v2_session_ref": "session_f55a6882-e7cb-4c8a-b465-04d0bba4d950",
+    "v2_session_reuse": "DENY",
+    "v3_work_item_digest": "sha256:150978a00d1aa6b6539b638db66053c4d1c1cd6f0fefce9075f3299ec5a6c768",
+    "v3_dispatch_observation_digest": "sha256:9100cf8d0b1ce805d0ddd5a6029d05e850243d6146a3d20788d707411d1f0ffa",
+    "v3_result": "STOPPED_FAIL_CLOSED_NON_WHITELIST_TEMP_WRITE_NO_CANDIDATE_NO_HANDOFF",
+    "v3_session_ref": "session_8029f845-0add-4038-87fe-9543983100a5",
+    "v3_session_reuse": "DENY",
+    "v3_dirty_worktree_reuse": "DENY",
+    "v4_work_item_digest": "sha256:48fa8072fc49f587700cc13ca4e43789a3bfbd1890eb823ea60151d148577b31",
+    "v4_dispatch_observation_digest": "sha256:0c4dd36fac50779f37f8e09a3e4bb7e20dbeb19afca1943a6e61712c6c76c785",
+    "v4_result": "STOPPED_FAIL_CLOSED_PROTOCOL_VIOLATION_NO_CANDIDATE_NO_HANDOFF",
+    "v4_session_ref": "session_05f51f4a-867f-4b3f-848f-8b5c92554b3a",
+    "v4_session_reuse": "DENY",
+    "v4_dirty_worktree_reuse": "DENY",
+    "v4_evidence_reuse": "DENY"
+  },
+  "source_commitment_ref": "git:47d191cb4799ec57f4739b4d1c709f490481fe77",
+  "outcome_contract_ref": "git:71ecc9eadd457dfe03d2737d112f727b4a2183fa:docs/design/WORKSPACE-SHELL-V1-BLUEPRINT.md",
+  "prompt_template_ref": "docs/work-items/flai-workspace-shell-kimi-001-v5.prompt.md",
+  "prompt_template_sha256": "c70e9dab8b318d477db8e4994c68bec23d06641fa555407213243e1de754c43d",
+  "prompt_rendering": {
+    "template_encoding": "UTF-8",
+    "replacement_token": "${WORK_ITEM_DIGEST}",
+    "replacement_value_source": "top-level work_item_digest",
+    "replacement_count": 1,
+    "newline_policy": "PRESERVE_TEMPLATE_BYTES",
+    "other_substitutions": "DENY",
+    "rendered_prompt_sha256_location": "LOCAL_DISPATCH_PREPARATION_RECORD"
+  },
+  "owned_file_scope": [
+    "frontend/src/prototypes/workspace-shell/WorkspaceShellPrototype.vue",
+    "frontend/src/prototypes/workspace-shell/workspace-view.js",
+    "frontend/src/prototypes/workspace-shell/workspace-view.test.js",
+    "frontend/src/prototypes/workspace-shell/workspace-shell.css",
+    "frontend/e2e/workspace_shell_prototype_acceptance.py",
+    "frontend/src/prototypes/workspace-shell/NOTES.md"
+  ],
+  "pre_red_write_scope": [
+    "frontend/src/prototypes/workspace-shell/workspace-view.test.js",
+    "frontend/e2e/workspace_shell_prototype_acceptance.py"
+  ],
+  "read_only_scope": [
+    "docs/agents/kimi-k3-workspace-shell-pilot.md",
+    "docs/design/WORKSPACE-SHELL-V1-BLUEPRINT.md",
+    "frontend/src/prototypes/stage-c/stage-c.css",
+    "frontend/src/prototypes/stage-c/StageCWorkbenchPrototype.vue",
+    "frontend/src/prototypes/stage-c/observer-contract.js",
+    "frontend/src/prototypes/workspace-shell/fixtures.js",
+    "frontend/workspace-shell.html",
+    "frontend/src/prototypes/workspace-shell/main.js",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "frontend/vite.config.js",
+    "scripts/verify_all.sh"
+  ],
+  "read_scope_policy": {
+    "agent_context_allowlist_is_exhaustive": true,
+    "transitive_read_exception": "DENY",
+    "approved_verification_process_transitive_runtime_reads": "ALLOW_WITHOUT_SOURCE_INSPECTION",
+    "repo_wide_search": "DENY",
+    "tool_internal_task_output_read": "DENY_WITHOUT_EXCEPTION"
+  },
+  "verification_runtime_write_scope": {
+    "build_output": "frontend/dist/** only, generated solely by required npm run build",
+    "visual_evidence": "/private/tmp/flai-kimi-workspace-shell-v5-evidence.mGixLe/** only, generated solely by required workspace-shell visual E2E",
+    "vite_dependency_cache": "frontend/node_modules/.vite/** only, generated solely by the required fixed-loopback Vite E2E server; executor inspection or reuse denied",
+    "local_git_metadata": "Git index/object/ref writes solely for required local commits of the six owned files, including advancing the current branch; config, push, merge, rebase, tag and branch-management create/delete/switch/reset denied",
+    "approved_tool_internal_ephemeral_state": "Exact required npm build and offline uv/Playwright/Vite/Chromium processes may create unavoidable private runtime state that the executor must never name, enumerate, glob, stat, read, grep, tail, poll, copy, cite or reuse",
+    "existing_e2e_devnull": "ALLOW only inside the existing E2E to discard Vite child-process output",
+    "temporary_logs_results_helpers": "DENY",
+    "generic_tmp_or_scratch": "DENY",
+    "executor_output_capture": "CURRENT_TOOL_RESPONSE_DIRECT_STDOUT_STDERR_ONLY",
+    "test_build_audit_pipeline": "DENY",
+    "shell_background_execution": "DENY"
+  },
+  "coordinator_owned_control_artifacts": [
+    "docs/work-items/flai-workspace-shell-kimi-001-v5-authorization-record.md",
+    "docs/work-items/flai-workspace-shell-kimi-001-v5.authorization-proposal.json",
+    "docs/work-items/flai-workspace-shell-kimi-001-v5.prompt.md",
+    "docs/work-items/flai-workspace-shell-kimi-001-v5.freeze.json",
+    "docs/work-items/flai-workspace-shell-kimi-001-v5.executor-environment.json",
+    "docs/work-items/flai-workspace-shell-kimi-001-v5.dispatch-preparation.json",
+    "docs/work-items/flai-workspace-shell-kimi-001-v5.dispatch-observation.json"
+  ],
+  "rework_findings": [
+    {
+      "finding_id": "WSK3-P1-URL-CONTRACT",
+      "severity": "P1",
+      "required_outcome": "Use only reality=REAL|MOCK|TEST|UNKNOWN; missing, empty, mixed-case, invalid and form-only input fail closed to UNKNOWN.",
+      "negative_control": "The @1 implementation fails reality=MOCK, reality=FAKE, reality=, reality=mock, missing reality and form=MOCK assertions."
+    },
+    {
+      "finding_id": "WSK3-P1-DOM-CONTRACT",
+      "severity": "P1",
+      "required_outcome": "Expose all ten exact frozen data-testid values without removing required internal interaction selectors.",
+      "negative_control": "The @1 implementation exposes only action-glyph and reality-badge from the frozen ten-value contract."
+    },
+    {
+      "finding_id": "WSK3-P1-TRUST-COLORS",
+      "severity": "P1",
+      "required_outcome": "Restore clay work, REAL green, human-sign teal, true-failure red and unverified amber token semantics; synthetic unsigned UI never renders green or teal.",
+      "negative_control": "The @1 running computed color rgb(61,79,158) and data-slot=synthetic fail."
+    },
+    {
+      "finding_id": "WSK3-P1-INVALID-HISTORY",
+      "severity": "P1",
+      "required_outcome": "Every projected unknown case across the 96 fixtures plus stale has no raw history or sensitive event text.",
+      "negative_control": "The @1 observation-invalid page renders one rejected raw history row containing the work-object title."
+    },
+    {
+      "finding_id": "WSK3-P1-NETWORK-LEDGER",
+      "severity": "P1",
+      "required_outcome": "Persist separate application-attempt counters across navigation and prove the detector with an isolated one-fetch negative control.",
+      "negative_control": "The @1 ledger resets fetch from one to zero after navigation."
+    },
+    {
+      "finding_id": "WSK3-P1-RAIL-STATE",
+      "severity": "P1",
+      "required_outcome": "Selected Rail state and trust derive from the effective execution projection across three workflows by eight states.",
+      "negative_control": "The @1 cfd running page says completed in the selected Rail item."
+    }
+  ],
+  "execution_protocol_rework": {
+    "source_failure_ref": "flai-workspace-shell-kimi-001@4",
+    "source_failure": "Executor started red E2E in the background, edited product implementation before final red completion, inspected tool-internal output.log, and used untrusted no-pipefail output pipelines.",
+    "p1_scope_change": "NONE",
+    "source_write_scope_change": "NONE",
+    "source_read_scope_change": "NONE",
+    "production_boundary_change": "NONE",
+    "synchronous_red_gate": {
+      "unit_command": "(cd frontend && node --test src/prototypes/workspace-shell/workspace-view.test.js)",
+      "e2e_command": "WORKSPACE_SHELL_SHOTS=<frozen-v5-evidence> UV_OFFLINE=1 uv run --offline --no-project --with playwright python frontend/e2e/workspace_shell_prototype_acceptance.py",
+      "completion": "Each foreground tool call must return final direct stdout/stderr and final non-zero exit status",
+      "unlock": "RED_GATE_COMPLETE stream checkpoint with six finding-to-failed-assertion mappings",
+      "product_files_locked_before_unlock": [
+        "frontend/src/prototypes/workspace-shell/WorkspaceShellPrototype.vue",
+        "frontend/src/prototypes/workspace-shell/workspace-view.js",
+        "frontend/src/prototypes/workspace-shell/workspace-shell.css",
+        "frontend/src/prototypes/workspace-shell/NOTES.md"
+      ]
+    },
+    "tool_internal_result_channel": "DENY",
+    "verification_pipeline_policy": "DIRECT_UNPIPED_ONLY",
+    "pre_red_harness_repair": "Within the owned E2E file, change the WORKSPACE_SHELL_SHOTS fallback to lazy evaluation before any E2E run."
+  },
+  "owned_interface_scope": [
+    "Prototype query contract is reality=REAL|MOCK|TEST|UNKNOWN; no form alias; missing or invalid fails closed to UNKNOWN.",
+    "Prototype exact data-testid contract is workspace-shell, workspace-rail, continuous-work-surface, focus-surface, workspace-composer, action-glyph, reality-badge, execution-state, instruction-queue and delivery-state.",
+    "Prototype trust presentation preserves clay #b4562f, REAL green #1e7d46, human-sign teal #0e7c7b, true-failure red #b3352c and unverified amber #986810; synthetic never renders green or teal.",
+    "Unknown observer projection produces no raw event history.",
+    "Browser acceptance uses a cross-navigation application-attempt ledger plus an isolated active denied-fetch negative control.",
+    "Selected Rail item state/trust derives from the current effective observer projection.",
+    "No production observer contract, runtime adapter, API, Schema, authentication, ACL, classification, signing, delivery, router, store, Vite production input, package, ADR or script interface changes."
+  ],
+  "frozen_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+  "branch_worktree": "codex/kimi-workspace-shell-v5@/private/tmp/flai-kimi-workspace-shell-v5.QjU0x6",
+  "issue_ref": null,
+  "pr_ref": null,
+  "required_checks": [
+    "git merge-base --is-ancestor 47d191cb4799ec57f4739b4d1c709f490481fe77 HEAD",
+    "git diff --check",
+    "git status --porcelain=v1 --untracked-files=all",
+    "git diff --name-only 47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "Executor synchronous red: direct focused node test exits non-zero",
+    "Executor synchronous red: direct workspace-shell E2E exits non-zero",
+    "Executor synchronous red: RED_GATE_COMPLETE maps every six P1 before product implementation edit",
+    "Executor green: direct cd frontend && node --test",
+    "Executor build: direct cd frontend && npm run build",
+    "Executor build boundary: frontend/dist/index.html exists and frontend/dist/workspace-shell.html does not",
+    "Executor green: direct offline Playwright workspace-shell E2E with frozen evidence path",
+    "Coordinator: complete tool-call, file-scope, direct-write and network-command audit",
+    "Coordinator: compare pre-dispatch and post-run /tmp/workspace-shell-shots-* directory sets",
+    "Coordinator: independent URL, ten-testid, 96-plus-stale history, network negative-control, Rail 3x8 and computed trust-color probes",
+    "Coordinator: fresh visual E2E review at 1440, 1280, reduced-motion, keyboard, IME, queue and exception states",
+    "Coordinator: UV_OFFLINE=1 bash scripts/verify_all.sh in a disposable verification worktree",
+    "Coordinator: DevelopmentHandoffV1 and JerryKogami acceptance package"
+  ],
+  "required_reviewer": "Codex Platform and Integration independent re-review; JerryKogami is sole acceptance authority",
+  "concurrency_budget": {
+    "max_active_runs": 1,
+    "max_new_sessions": 1
+  },
+  "time_budget": {
+    "max_wall_clock_minutes": 90,
+    "enforcement": "COORDINATOR_PROCESS_TIMEOUT",
+    "continuation": "REQUIRES_NEW_OWNER_AUTHORIZATION"
+  },
+  "token_or_cost_budget": {
+    "max_incremental_cost_cny": 0,
+    "access_scope": "EXISTING_KIMI_MANAGED_ACCESS_ONLY",
+    "token_cap": "NOT_EXPOSED_BY_KIMI_CLI_0_29_0",
+    "auto_tool_step_cap": "NOT_EXPOSED_BY_KIMI_CLI_0_29_0",
+    "stop_on_provider_limit": true,
+    "accounting_assurance": "NO_TOKEN_OR_COST_RECEIPT_AVAILABLE_FROM_CURRENT_CLI"
+  },
+  "allowed_tools": [
+    "kimi-code-cli@0.29.0",
+    "local-git",
+    "repository-approved-file-editor",
+    "node",
+    "npm-existing-node_modules-only",
+    "uv-offline",
+    "playwright-local-chromium",
+    "local-shell"
+  ],
+  "allowed_egress": {
+    "executor_model_transport": {
+      "mode": "ALLOWLISTED_PROVIDER_ONLY",
+      "provider": "managed:kimi-code",
+      "requested_model": "kimi-code/k3",
+      "purpose": "MODEL_INFERENCE_ONLY"
+    },
+    "source_context_egress": {
+      "mode": "OWNED_AND_EXHAUSTIVE_READ_ONLY_SCOPE_ONLY",
+      "classification": "EXTERNAL_DEVELOPMENT_SYNTHETIC_ONLY"
+    },
+    "implementation_runtime_network": "DENY",
+    "browser_test_network": "FIXED_LOOPBACK_BOOTSTRAP_ONLY",
+    "enforcement_status": "PROMPT_SCOPE_PLUS_UPDATE_AND_TELEMETRY_DISABLE_ENV_PLUS_LIVE_AND_POST_RUN_TOOL_CALL_AUDIT_NO_OS_NETWORK_SANDBOX",
+    "explicitly_denied": [
+      "PACKAGE_INSTALL",
+      "PUBLIC_REGISTRY",
+      "OPEN_WEBUI",
+      "OPENHANDS",
+      "SECRETS",
+      "SECRETS_STACKDOCKER",
+      "INTERNAL_DATA",
+      "NON_WHITELIST_SOURCE_CONTEXT",
+      "UNAUTHORIZED_TEMP_OR_LOG_FILE",
+      "TOOL_INTERNAL_RESULT_FILE",
+      "TOP_LEVEL_BACKGROUND_TASK",
+      "TEST_BUILD_AUDIT_PIPELINE",
+      "EXTERNAL_FETCH_XHR_WEBSOCKET_EVENTSOURCE_BEACON_SERVICE_WORKER"
+    ]
+  },
+  "executor_qualification": {
+    "requested_executor": "kimi-code/k3",
+    "client": "kimi-code-cli",
+    "client_path": "/Users/Zhuanz/.kimi-code/bin/kimi",
+    "client_sha256": "5cccf53604f20c5499ea10c3094298f49a1ad59fa90cddd9fd7e0ba44815fdd3",
+    "client_version": "0.29.0",
+    "actual_runtime_identity": "REQUIRES_DISPATCH_OBSERVATION",
+    "qualification_scope": "WORKSPACE_PRESENTATION_REWORK_ONLY"
+  },
+  "executor_environment": {
+    "node_modules_provision": "COORDINATOR_NPM_CI_OFFLINE",
+    "package_json_sha256": "bcaf55fc7f36e85e203bd5c3ca6c73acb55bb1472edb7e558d8fcab6416fddf7",
+    "package_lock_sha256": "c2dd2e59b4b8ba3afd8429fc28d7cbecd3230ba55364b5cf5d95c122c830ccbe",
+    "chromium_version": "149.0.7827.55",
+    "screenshot_evidence_dir": "/private/tmp/flai-kimi-workspace-shell-v5-evidence.mGixLe",
+    "screenshot_evidence_dir_state": "EXISTS_EMPTY_OUTSIDE_REPOSITORY_AT_FREEZE",
+    "skills_dir": "/private/tmp/flai-kimi-empty-skills-v5.ipfzHH",
+    "skills_dir_state": "EMPTY_AT_FREEZE"
+  },
+  "dispatch_configuration": {
+    "session_mode": "NEW_SESSION_ONLY",
+    "resume_session": "DENY",
+    "denied_session_refs": [
+      "session_2f449268-89fd-4104-bd95-fd7bd908557e",
+      "session_f55a6882-e7cb-4c8a-b465-04d0bba4d950",
+      "session_8029f845-0add-4038-87fe-9543983100a5",
+      "session_05f51f4a-867f-4b3f-848f-8b5c92554b3a"
+    ],
+    "additional_directories": "NONE",
+    "permission_mode": "HEADLESS_PROMPT_IMPLICIT_AUTO",
+    "output_format": "stream-json",
+    "disable_auto_update": true,
+    "disable_telemetry": true
+  },
+  "acceptance_criteria": [
+    "Both direct foreground red commands finish non-zero and RED_GATE_COMPLETE maps all six P1s before the first product implementation edit.",
+    "No executor command names, enumerates, reads, polls, copies, cites or reuses a tool-internal task/result path.",
+    "Every unit, E2E, build and audit/verification command is direct, foreground and unpiped.",
+    "All six frozen P1 negative controls fail against @1 behavior and pass after the minimal rework.",
+    "The 96-case matrix remains present and passes; every projected unknown case plus stale has empty history.",
+    "Selected Rail agrees with effective execution projection across all three workflows and eight frozen states.",
+    "Existing visual, accessibility, queue, motion, fail-closed and build-boundary checks remain green.",
+    "Final diff contains only the six authorized source files and introduces no dependency or production interface.",
+    "No unauthorized temporary file or extra workspace-shell-shots-* directory is created.",
+    "No application or external network request is introduced; the detector retains an attempted call across navigation.",
+    "DevelopmentHandoffV1 is complete and independently reviewed.",
+    "Result remains unpushed, unmerged, unaccepted, unsigned and SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE until JerryKogami accepts."
+  ],
+  "stop_conditions": [
+    "Preflight base, branch, worktree, dependency, clean-state, screenshot-directory or skills-directory mismatch",
+    "Any product implementation or NOTES edit before both foreground red results and RED_GATE_COMPLETE",
+    "Any top-level background command, tool background option, task-id-only result, later poll, or active executor test process at first implementation edit",
+    "Any test, build or audit/verification pipeline, 2>&1 output merge, output filter, redirection or tee",
+    "Any executor selection, enumeration, inspection, copy, citation or reuse of a tool-internal task/result path or coordinator outer dispatch log",
+    "Either red command exits zero or the direct outputs cannot map every six P1 negative control",
+    "Any desired source-context read outside owned_file_scope plus exhaustive read_only_scope",
+    "Any required source write outside owned_file_scope",
+    "Any executor-authored direct non-source write outside frontend/dist/** by required build, the exact screenshot evidence directory by required E2E, frontend/node_modules/.vite/** by required fixed-loopback Vite, or bounded local Git metadata for required six-file commits",
+    "Any extra workspace-shell-shots-* temporary directory while fixed WORKSPACE_SHELL_SHOTS is present",
+    "Any package installation, dependency, production interface, real data, secret or non-loopback implementation network requirement",
+    "Any OpenWebUI, OpenHands, secrets-stackdocker, internal data, external repository or external URL access",
+    "Any need to weaken fail-closed, locked trust colors, synthetic labeling, human-signoff boundaries or an active negative control",
+    "Concurrent modification of an owned target file",
+    "An attributable required-check failure that cannot be fixed in scope",
+    "The 90-minute coordinator wall-clock limit is reached",
+    "The provider reports a token, rate, account or billing limit",
+    "Any new paid resource or incremental infrastructure spend is required"
+  ],
+  "current_blocker": null,
+  "lifecycle_state": "READY",
+  "integration_status": "NOT_INTEGRATED",
+  "authorization_evidence": "OWNER_CHAT_INSTRUCTION_CONTENT_BOUND_NOT_AUTHENTICATED_RECEIPT",
+  "dispatch_receipt_status": "PENDING",
+  "authority_projection_limit": "EFFECT_UNKNOWN_UNTIL_VERIFIABLE_ASSISTANT_DISPATCH_RECEIPT_AND_BACKEND_WITNESS",
+  "result_class": "SOURCE_CANDIDATE_NOT_INTERNAL_RELEASE"
+}
