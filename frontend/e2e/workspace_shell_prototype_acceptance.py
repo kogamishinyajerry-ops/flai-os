@@ -57,7 +57,9 @@ PORT = 8621
 # 显式绑定 127.0.0.1：本机 vite 默认只绑 IPv6 ::1，会导致健康探测假阴性
 BASE = f"http://127.0.0.1:{PORT}"
 SHOTS = Path(
-    os.environ.get("WORKSPACE_SHELL_SHOTS", tempfile.mkdtemp(prefix="workspace-shell-shots-"))
+    os.environ["WORKSPACE_SHELL_SHOTS"]
+    if "WORKSPACE_SHELL_SHOTS" in os.environ
+    else tempfile.mkdtemp(prefix="workspace-shell-shots-")
 )
 
 try:
