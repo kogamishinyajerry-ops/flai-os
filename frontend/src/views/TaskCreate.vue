@@ -1,6 +1,7 @@
 <template>
   <div class="task-create">
     <div class="page-header">
+      <BackLink label="任务台" fallback="/tasks" />
       <h2>创建任务</h2>
     </div>
 
@@ -62,7 +63,7 @@
         <div class="inputs-field">
           <el-alert
             v-if="prefilledFromGuide"
-            type="success"
+            type="info"
             :closable="false"
             show-icon
             class="prefill-note"
@@ -129,7 +130,7 @@
             <span class="upload-name">{{ item.name }}</span>
             <el-tag v-if="item.status === 'pending'" size="small">待上传</el-tag>
             <el-tag v-else-if="item.status === 'uploading'" type="info" size="small">上传中…</el-tag>
-            <el-tag v-else-if="item.status === 'done'" type="success" size="small">已上传</el-tag>
+            <el-tag v-else-if="item.status === 'done'" type="info" size="small">已上传</el-tag>
             <el-tag v-else type="danger" size="small">失败：{{ item.error }}</el-tag>
             <el-button size="small" text :disabled="submitting" @click="removeUploadItem(item)">移除</el-button>
           </div>
@@ -161,6 +162,7 @@
 import { reactive, ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
+import BackLink from "../components/BackLink.vue";
 import { listAgents, getAgent } from "../api/agents";
 import { createTask } from "../api/tasks";
 import { concludeConversation } from "../api/conversations";
@@ -438,19 +440,26 @@ async function handleSubmit() {
       inputFileIds: uploadItems.value.filter((i) => i.status === "done").map((i) => i.fileId),
       conversationId: prefillConversationId.value,
     });
-    // 单 Agent 导引流程：任务已创建成功，此刻再归档本会话（fire-and-forget，归档失败
-    // 不影响已建任务；多 Agent 由工作台「结束协作」显式归档）。必须后于 createTask——
-    // 会话须在创建时仍 active（异源 Codex R2-#3：结束协作=真只读）。
+    // 单 Agent 导引流程：任务已创建成功，此刻再归档本会话。必须后于
+    // createTask（会话在创建时须仍 active），且进入详情前必须 await：
+    // concluded 是真只读，不能把用户回流到刚归档的对话输入框。
     if (prefillConcludeAfter.value && prefillConversationId.value) {
-      concludeConversation(prefillConversationId.value).catch(() => {});
+      try {
+        await concludeConversation(prefillConversationId.value);
+      } catch {
+        // 任务已在真实接口落库：conclude 是其后的次级收口，失败不得
+        // 把已建任务伪装成整体提交失败。诚实记下归档欠账，继续落任务详情。
+        ElMessage.warning("任务已创建，但会话归档失败；任务已保留，请稍后从协作会话重试归档");
+      }
     }
     ElMessage.success("任务已创建");
     await playSubmitRise();
-    // 范式 2a 对话轴闭环：从导引来（back=chat）且会话仍活跃 → 回流对话，任务卡
-    // 在流里原地亮起（Claude 式零跳页）。单 Agent conclude_after 已归档会话，
-    // 回一个刚被归档的会话反而突兀——仍走详情页；工作台来的召集同样走详情页
-    // （m8_collab_chain e2e 断言④=提交后落详情，该路径不带 back=chat）。
-    if (route.query.back === "chat" && prefillConversationId.value && !prefillConcludeAfter.value) {
+    // 范式 2a：多 Agent 导引会话仍 active 才回流对话轴；单 Agent
+    // conclude_after 沿用 M6 「一次会话=一个任务」归档语义，归档后落新任务详情。
+    // Workbench 召集不带 back=chat，手动创建无会话，两者也都落详情。
+    if (prefillConcludeAfter.value) {
+      router.push(`/tasks/${task.id}`);
+    } else if (route.query.back === "chat" && prefillConversationId.value) {
       router.push({ path: "/", query: { c: prefillConversationId.value } });
     } else {
       router.push(`/tasks/${task.id}`);

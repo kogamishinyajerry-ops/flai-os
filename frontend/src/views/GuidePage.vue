@@ -1631,7 +1631,7 @@ watch(
   border-radius: 10px;
   padding: 8px 14px;
   cursor: pointer;
-  transition: all var(--motion-fast) var(--ease-out-soft);
+  transition: background var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
 }
 .agent-cta::after {
   content: "→";
@@ -1782,7 +1782,7 @@ watch(
   cursor: pointer;
   display: grid;
   place-items: center;
-  transition: all var(--motion-fast) var(--ease-out-soft);
+  transition: background var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
 }
 .icon-btn:hover:not(:disabled) { background: var(--paper-rail); color: var(--ink-soft); }
 .icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -1819,7 +1819,7 @@ watch(
   width: 15px; height: 15px; border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.4);
   border-top-color: #fff;
-  animation: spin 0.7s linear infinite;
+  animation: spin var(--motion-med) linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .composer-hint {

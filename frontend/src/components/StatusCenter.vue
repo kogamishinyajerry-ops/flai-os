@@ -146,14 +146,15 @@
           <!-- 内联签发卡（祈使句④）：同一 review API，人具名，fail-closed 全承袭 -->
           <div v-if="isPeekWaiting" class="peek-block peek-review-card">
             <div class="peek-label">签发</div>
+            <MockSeal ref="mockSealRef" :task-id="peekTask.id" :status="peekTask.status" />
             <div class="peek-review-note">批准即代表你作为工程师背书该产物——签发权在你，平台不代签。</div>
             <div class="peek-review-signer">签发人：{{ signerName }}（登录身份，不可代填）</div>
             <el-input v-model="reviewComment" type="textarea" :rows="2" placeholder="意见（可选）" class="peek-review-input" />
             <div class="peek-review-actions">
               <!-- teal=人签唯一色；成功迸发=burstSigned 唯一许可点之一。
-                   产物预览未完成首次尝试前禁批准（先看后签）；驳回是安全方向不设门。 -->
-              <el-button ref="peekApproveEl" class="peek-approve" :loading="reviewing" :disabled="artifactsPending" @click="doReview('approve')">批准放行</el-button>
-              <el-button type="danger" plain :loading="reviewing" @click="doReview('reject')">驳回</el-button>
+                   数据来源核验未落定时，批准/驳回都不得形成具名签发记录。 -->
+              <el-button ref="peekApproveEl" class="peek-approve" :loading="reviewing" :disabled="artifactsPending || mockVerificationBlocked" @click="doReview('approve')">批准放行</el-button>
+              <el-button type="danger" plain :loading="reviewing" :disabled="mockVerificationBlocked" @click="doReview('reject')">驳回</el-button>
             </div>
           </div>
 
@@ -185,20 +186,20 @@
 // TaskDetail 完全同源（reviewTask API），只是把「去哪签」变成了「签发来找你」。
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage } from "element-plus";
 import { statusCenter, openTaskPeek, backToInbox, closeCenter } from "../stores/statusCenter";
-import { acquireChannel, pokeTask } from "../stores/liveFeed";
-import { reviewTask } from "../api/tasks";
+import { acquireChannel } from "../stores/liveFeed";
 import { request } from "../api/client";
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import { statusLabel, statusTagType, taskLampColor, formatTime, formatFileSize, TASK_WORK_STATES } from "../utils/format";
 import { displayName } from "../stores/session";
 import { markTaskSeen } from "../utils/lastSeen";
-import { burstSigned } from "../effects/burst";
+import { useTaskReview } from "../composables/useTaskReview";
 import WorkLog from "./WorkLog.vue";
 import MarkdownLite from "./MarkdownLite.vue";
 import InboxZero from "./artwork/InboxZero.vue";
 import CompletionSeal from "./CompletionSeal.vue";
+import MockSeal from "./MockSeal.vue";
 
 const router = useRouter();
 
@@ -379,8 +380,12 @@ function releasePeekFeed() {
 // 打开抽屉懒补一次（onOpen），保证「一次具名全站免问」（Codex 审 P2）。
 const signerName = computed(() => displayName());
 const reviewComment = ref("");
-const reviewing = ref(false);
 const peekApproveEl = ref(null);
+const mockSealRef = ref(null);
+// 子组件尚未挂载也算未知：只有 MockSeal 明确返回 false 才解除 fail-closed。
+const mockVerificationBlocked = computed(
+  () => mockSealRef.value?.isSignoffBlocked?.() !== false,
+);
 const acceptedSamples = ref([]);
 const sampleFixResults = ref([]);
 const sampleFixing = ref(false);
@@ -439,46 +444,32 @@ async function fixAcceptedSamples() {
   }
 }
 
+// 签发动作链走 useTaskReview SSOT（与 TaskDetail 同源，防两处行为漂移）；
+// 本组件的差异通过 options 表达：续体绑定（await 期间抽屉已关/任务已切则不在
+// 旧任务上迸发刷新）+ loadAcceptedSamples 静默旁路 + 文案差异（已驳回/再看看）。
+// reviewing/submitReview 由 composable 提供，peek UI 保持原样。
+const { reviewing, submitReview } = useTaskReview({
+  getTaskId: () => statusCenter.taskId, // 调用时捕获：await 期间任务可能被切换
+  getComment: () => reviewComment.value,
+  setComment: (v) => { reviewComment.value = v; },
+  getApproveEl: () => peekApproveEl.value?.ref,
+  shouldSettle: (capturedId) => statusCenter.open && statusCenter.taskId === capturedId,
+  afterSuccess: (action, capturedId) => {
+    if (action === "approve") loadAcceptedSamples(capturedId); // 静默旁路：失败不影响签发主流程
+  },
+  text: {
+    confirmTitle: "签发确认",
+    confirmOk: (action, label) => `确认${label}`,
+    confirmCancel: "再看看",
+    successOf: (action) => (action === "approve" ? "已批准放行" : "已驳回"),
+  },
+});
 async function doReview(action) {
-  const taskId = statusCenter.taskId; // 调用前捕获：await 期间任务可能被切换
-  if (!taskId) return;
-  const label = action === "approve" ? "批准放行" : "拒绝";
-  try {
-    // 与 TaskDetail 同款二次确认：内联签发不降低宪法路径的操作摩擦
-    await ElMessageBox.confirm(`确认${label}该任务？`, "签发确认", {
-      confirmButtonText: `确认${label}`,
-      cancelButtonText: "再看看",
-      type: "warning",
-    });
-  } catch {
-    return; // 用户取消
+  if (mockVerificationBlocked.value) {
+    ElMessage.warning("数据来源尚未核验，暂不可签发");
+    return;
   }
-  reviewing.value = true;
-  try {
-    await reviewTask(taskId, {
-      action,
-      comment: reviewComment.value || null,
-    });
-    markTaskSeen(taskId); // 亲手签发=已看过：其后完成不得对签发者亮未读
-    reviewComment.value = ""; // 签发落定即清，绝不残留到下一个任务
-    ElMessage.success(action === "approve" ? "已批准放行" : "已驳回");
-    if (action === "approve") loadAcceptedSamples(taskId); // 静默旁路：失败不影响签发主流程
-    // 续体绑定：await 期间抽屉可能已关/任务已切——只有还在看同一任务时才迸发+刷新
-    if (statusCenter.open && statusCenter.taskId === taskId) {
-      if (action === "approve") {
-        burstSigned(peekApproveEl.value?.ref); // teal 迸发：人签成功唯一许可点
-      }
-      // 带外补拉（Task 4 同款）：不等下一轮询，channel 落地后 task watch
-      // 自动回填 peekTask 并 patchInboxTask，不再本地二次拉取。await（Task 12
-      // 修复 4）：reviewing 须在数据真落地后才解锁，否则用户可能在旧数据仍
-      // 显示 waiting_review 时二次点击提交，触发后端 409。
-      await pokeTask(taskId);
-    }
-  } catch (err) {
-    ElMessage.error(err.detail || err.message || "签发失败");
-  } finally {
-    reviewing.value = false;
-  }
+  await submitReview(action);
 }
 
 function goFullPage() {

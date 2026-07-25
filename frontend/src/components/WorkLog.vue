@@ -45,7 +45,7 @@
           v-for="e in events"
           :key="e.event_id"
           :timestamp="formatTime(e.created_at)"
-          :color="LEVEL_COLOR[e.level] || LEVEL_COLOR.info"
+          :color="eventTimelineColor(e)"
           :class="{ 'fx-ink-in': isWorking }"
         >
           <div class="event-type">
@@ -69,7 +69,7 @@
 // computed 从 props 算，组件内绝不复制/缓存 events——父页有「轮询整包作废」
 // 竞态守卫，本组件必须无状态跟随，否则会显示已被父页判定为 stale 的快照。
 import { ref, computed } from "vue";
-import { TASK_WORK_STATES, formatDuration, taskElapsedMs, formatTime, LEVEL_COLOR, eventTypeLabel } from "../utils/format";
+import { TASK_WORK_STATES, formatDuration, taskElapsedMs, formatTime, eventTimelineColor, eventTypeLabel } from "../utils/format";
 import { listToolRuns } from "../api/tasks";
 import EmptyState from "./EmptyState.vue";
 
@@ -324,5 +324,8 @@ const rawLine = computed(() => {
   border-radius: 4px;
   font-size: 12px;
   overflow-x: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .worklog-arrow { transition: none; }
 }
 </style>

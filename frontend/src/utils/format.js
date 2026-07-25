@@ -38,8 +38,55 @@ export const taskLampColor = (status) => {
   return "var(--ink-faint)";
 };
 
-// 事件 level → timeline 颜色
-export const LEVEL_COLOR = { info: "#409EFF", warning: "#E6A23C", error: "#F56C6C" };
+// 时间轴颜色按领域事件含义判定，绝不把通用 severity 当成信任状态：同为 info 的
+// review_approved / task_completed / tool_started 分属人签 / 中性落定 / 工作三槽。
+const EVENT_TRUST_COLOR = Object.freeze({
+  review_approved: "var(--trust-signed)",
+  review_rejected: "var(--trust-fail)",
+  validation_failed: "var(--trust-fail)",
+  tool_failed: "var(--trust-fail)",
+  task_failed: "var(--trust-fail)",
+  error: "var(--trust-fail)",
+  review_requested: "var(--trust-pending)",
+  warning: "var(--trust-pending)",
+  validation_started: "var(--clay)",
+  running_started: "var(--clay)",
+  parsing_started: "var(--clay)",
+  analyzing_started: "var(--clay)",
+  tool_started: "var(--clay)",
+});
+
+export function eventTimelineColor(event) {
+  const eventType = event?.event_type;
+  if (eventType && EVENT_TRUST_COLOR[eventType]) return EVENT_TRUST_COLOR[eventType];
+  // 未知事件只对明确 error/warning 做安全语义降级；普通 info 保持中性，
+  // 防止未来新增的 completed/人签类事件被误涂成 clay 工作态。
+  if (event?.level === "error") return "var(--trust-fail)";
+  if (event?.level === "warning") return "var(--trust-pending)";
+  if (eventType === "task_completed") return "var(--ink-soft)";
+  return "var(--ink-faint)";
+}
+
+export function evaluationCompletionNotice(run) {
+  if (run?.status !== "completed") {
+    return { type: "warning", message: `评测收口为 ${run?.status || "未知"}` };
+  }
+  const count = (value) => (Number.isInteger(value) && value >= 0 ? value : null);
+  const passed = count(run.passed);
+  const failed = count(run.failed);
+  const skipped = count(run.skipped);
+  const total = count(run.total);
+  const allGreen = total !== null && total > 0
+    && passed === total && failed === 0 && skipped === 0;
+  if (allGreen) {
+    return { type: "success", message: `评测全绿：通过 ${passed}/${total}` };
+  }
+  const shown = (value) => (value === null ? "未知" : value);
+  return {
+    type: "warning",
+    message: `评测完成，但存在未通过或跳过：通过 ${shown(passed)}/${shown(total)} · 失败 ${shown(failed)} · 跳过 ${shown(skipped)}`,
+  };
+}
 
 // 事件类型 → 人话标签（详情页时间轴不再直显开发术语；未知类型回退原串）。
 export const EVENT_TYPE_LABEL = {

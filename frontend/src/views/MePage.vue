@@ -1,6 +1,7 @@
 <template>
   <div class="me-page">
     <div class="page-header">
+      <BackLink label="任务台" fallback="/tasks" />
       <h2>我的贡献</h2>
       <p class="page-sub">仅你本人可见 · 只统计可精确归因的贡献</p>
     </div>
@@ -60,6 +61,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from "vue";
 import { fetchMyContributions, fetchMyTasks } from "../api/me";
+import BackLink from "../components/BackLink.vue";
 import { request } from "../api/client";
 import EmptyState from "../components/EmptyState.vue";
 import { formatTime, statusLabel } from "../utils/format";

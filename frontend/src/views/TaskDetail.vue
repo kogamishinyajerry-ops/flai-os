@@ -1,6 +1,6 @@
 <template>
   <div class="task-detail">
-    <el-alert v-if="loadError" type="error" :title="loadError" show-icon :closable="false" />
+    <ErrorState v-if="loadError" :message="loadError" :retry="() => pokeTask(taskId)" />
 
     <!-- 首载骨架（A3）：只在「从未 loaded 且无错误」时撑主区轮廓，轮询期间/
          带旧值刷新绝不回骨架；失败态走上面 el-alert，骨架不吞错误。 -->
@@ -21,6 +21,11 @@
         <el-button text type="primary" @click="$router.push(`/workbench/${task.conversation_id}`)">
           ← 返回协作会话
         </el-button>
+        <!-- 回流对话轴（范式 2a 闭环）：同属一个会话的第二条返回路径——对话是一级 Surface，
+             工作台是深链视图，两条入口并存不互替（新 class 不影响既有断言）。 -->
+        <el-button text type="primary" class="sess-backlink-chat" @click="$router.push({ path: '/', query: { c: task.conversation_id } })">
+          ← 返回对话
+        </el-button>
       </div>
       <div class="page-header">
         <!-- 工作态流光带（P3，动效系统 v1）：v-if 绑真实 work-state，状态回落随之
@@ -32,10 +37,16 @@
         <!-- 待你签发常驻徽章：与 el-tag 共存不替换（e2e 可能断言 el-tag 文案），
              复用 App.vue 全局 .pill-amber（工作台会话页同款用法）。 -->
         <span v-if="isWaitingReview" class="pill-amber">待你签发</span>
+        <!-- 演示数据标注（红线「mock 如实标注」）：任一工具 mock=true 即盖琥珀
+             「未核」标；来源未知也显式 amber 并阻断签发。只有 verified 且无 mock
+             才零渲染，不能把「查不到」伪装成「没有 mock」。 -->
+        <MockSeal ref="mockSealRef" :task-id="taskId" :status="task.status" />
         <!-- 批量任务摘要（P2）：消解「全失败 case 仍显示绿色已完成」的误导——
              ok/failed 计数取自最后一条 summary_generated 折叠事件，纯前端派生。 -->
         <template v-if="batchSummary">
-          <el-tag size="small" type="success">成功 {{ batchSummary.ok }}</el-tag>
+          <!-- 信任色锁：成功计数不给绿（绿仅真实 REAL 结果，当前跑 mock 给绿即假
+               REAL）——与 completed 同一诚实口径，中性 info；失败>0 才亮红。 -->
+          <el-tag size="small" type="info">成功 {{ batchSummary.ok }}</el-tag>
           <el-tag size="small" :type="batchSummary.failed > 0 ? 'danger' : 'info'">
             失败 {{ batchSummary.failed }}
           </el-tag>
@@ -57,6 +68,17 @@
            零占位，不产生 a[href]/新文案与既有 e2e 断言冲突。animate=sealAnimate：
            仪式只属于亲历者，见下方 onTransition 订阅注释。 -->
       <CompletionSeal :task="task" :animate="sealAnimate" />
+
+      <!-- 排队预期管理（UX 修复）：created/queued 时告知「已提交，等待调度」，状态经
+           liveFeed channel 自动推送到本页，无需刷新。保留 .el-alert 类（e2e 可能断言）。 -->
+      <el-alert
+        v-if="task && (task.status === 'created' || task.status === 'queued')"
+        type="info"
+        title="任务已提交，正在排队等待调度——状态更新会自动推送到本页，无需刷新"
+        show-icon
+        :closable="false"
+        class="queue-expect-banner"
+      />
 
       <!-- 首屏只留一行轻量上下文；完整元数据（ID/版本/时间）折叠为次要，让产物与决策优先。 -->
       <div class="task-context">
@@ -197,8 +219,8 @@
             <el-form-item>
               <!-- 批准=人签，用信任锁的 teal（--trust-signed），绝不用绿（绿仅表真实结果）。
                    ref 供放行成功后的 teal burst 定位元素（动效系统 v1 E2，唯一 teal 许可点）。 -->
-              <el-button ref="approveBtnEl" class="approve-btn" :loading="reviewing" @click="handleReview('approve')">批准放行</el-button>
-              <el-button type="danger" :loading="reviewing" @click="handleReview('reject')">拒绝</el-button>
+              <el-button ref="approveBtnEl" class="approve-btn" :loading="reviewing" :disabled="mockVerificationBlocked" @click="handleReview('approve')">批准放行</el-button>
+              <el-button type="danger" :loading="reviewing" :disabled="mockVerificationBlocked" @click="handleReview('reject')">拒绝</el-button>
             </el-form-item>
           </el-form>
         </el-card>
@@ -239,7 +261,9 @@
         <EmptyState v-if="feedbackList.length === 0 && !feedbackError" description="暂无反馈" :image-size="84" />
         <ul v-else class="feedback-list">
           <li v-for="f in feedbackList" :key="f.id">
-            <el-tag size="small" :type="f.rating === 'good' ? 'success' : 'danger'">
+            <!-- 信任色锁：「可用」是主观评价非真实 REAL 结果，不给绿（绿越权）；
+                 中性 info 表中性正向，「不可用」亮红表真负向信号。 -->
+            <el-tag size="small" :type="f.rating === 'good' ? 'info' : 'danger'">
               {{ f.rating === "good" ? "可用" : "不可用" }}
             </el-tag>
             <span class="feedback-category">{{ categoryLabel(f.category) }}</span>
@@ -258,7 +282,7 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { cancelTask, reviewTask } from "../api/tasks";
+import { cancelTask } from "../api/tasks";
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import { acquireChannel, pokeTask, onTransition } from "../stores/liveFeed";
 import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
@@ -269,9 +293,11 @@ import { statusLabel, statusTagType, formatTime, formatFileSize, TASK_WORK_STATE
 import MarkdownLite from "../components/MarkdownLite.vue";
 import WorkLog from "../components/WorkLog.vue";
 import CompletionSeal from "../components/CompletionSeal.vue";
+import MockSeal from "../components/MockSeal.vue";
+import ErrorState from "../components/ErrorState.vue";
 import { displayName } from "../stores/session";
 import { markTaskSeen } from "../utils/lastSeen";
-import { burstSigned } from "../effects/burst";
+import { useTaskReview } from "../composables/useTaskReview";
 
 const route = useRoute();
 const taskId = route.params.taskId;
@@ -320,10 +346,30 @@ const { task, events, modelCalls, modelCallsError, loaded, error: loadError } = 
 
 const reviewForm = reactive({ comment: "" });
 const signerName = computed(() => displayName());
-const reviewing = ref(false);
 // 批准按钮元素（动效系统 v1 E2）：放行成功后 burstSigned(el) 的定位来源；
 // el-button 组件 ref 通过 .ref 暴露原生 DOM（element-plus expose 契约）。
 const approveBtnEl = ref(null);
+const mockSealRef = ref(null);
+// 子组件尚未挂载也算未知：只有 MockSeal 明确返回 false 才解除 fail-closed。
+const mockVerificationBlocked = computed(
+  () => mockSealRef.value?.isSignoffBlocked?.() !== false,
+);
+// 签发动作链走 useTaskReview SSOT（与 StatusCenter 同源，防两处行为漂移）；
+// reviewing/submitReview 由 composable 提供，UI（el-card 表单）保持原样。
+const { reviewing, submitReview } = useTaskReview({
+  getTaskId: () => taskId,
+  getComment: () => reviewForm.comment,
+  setComment: (v) => { reviewForm.comment = v; },
+  getApproveEl: () => approveBtnEl.value?.ref,
+  text: { successOf: (action) => `已${action === "approve" ? "批准放行" : "拒绝"}` },
+});
+async function handleReview(action) {
+  if (mockVerificationBlocked.value) {
+    ElMessage.warning("数据来源尚未核验，暂不可签发");
+    return;
+  }
+  await submitReview(action);
+}
 
 // 盖章动效仪式只属于亲历者（批A Task 9）：本次会话内亲眼观察到「活跃→终态」
 // 迁移才播；历史页面直开（首载即终态）sealAnimate 恒 false——一次性置真不
@@ -433,7 +479,7 @@ function artifactLineCount(a) {
   return a.isText && a.text ? a.text.split("\n").length : null;
 }
 
-const feedbackForm = reactive({ rating: "good", category: "", message: "" });
+const feedbackForm = reactive({ rating: "", category: "", message: "" });
 const submittingFeedback = ref(false);
 const feedbackList = ref([]);
 const feedbackError = ref("");
@@ -541,32 +587,11 @@ async function handleCancel() {
   }
 }
 
-async function handleReview(action) {
-  const label = action === "approve" ? "批准放行" : "拒绝";
-  try {
-    await ElMessageBox.confirm(`确认${label}该任务？`, label, { type: "warning" });
-  } catch {
+async function handleSubmitFeedback() {
+  if (!feedbackForm.rating) {
+    ElMessage.error("请选择评价（可用/不可用）");
     return;
   }
-  reviewing.value = true;
-  try {
-    await reviewTask(taskId, { action, comment: reviewForm.comment || null });
-    markTaskSeen(taskId); // 亲手签发=已看过：其后完成不得对签发者亮未读
-    // 人签放行成功时刻（唯一 teal 许可点，动效系统硬约束）：仅 approve 分支触发；
-    // 驳回/失败绝不放庆祝动效。元素取不到（ref 未挂载等）burstSigned 自兜 null。
-    if (action === "approve") {
-      burstSigned(approveBtnEl.value?.ref);
-    }
-    ElMessage.success(`已${label}`);
-    await pokeTask(taskId); // 带外补拉：不等下一 tick，动作结果立即回显
-  } catch (err) {
-    ElMessage.error(err.detail || err.message);
-  } finally {
-    reviewing.value = false;
-  }
-}
-
-async function handleSubmitFeedback() {
   if (!feedbackForm.category) {
     ElMessage.error("请选择分类");
     return;
@@ -705,6 +730,10 @@ onUnmounted(() => {
 }
 .section {
   margin-top: 24px;
+}
+/* 排队预期横幅（UX 修复）：贴 CompletionSeal 之下、上下文行之上。 */
+.queue-expect-banner {
+  margin-bottom: 12px;
 }
 .section h3,
 .source-panel h3 {

@@ -1,7 +1,7 @@
 <template>
   <div class="welcome-gate" role="dialog" aria-modal="true" aria-labelledby="welcome-gate-title">
     <main class="welcome-gate__content fx-rise">
-      <img class="welcome-gate__art" :src="badgeArt" alt="" />
+      <img class="welcome-gate__art" :src="badgeArt" alt="" width="170" height="170" />
       <h1 id="welcome-gate-title" class="welcome-gate__title">欢迎来到 FLAi-OS</h1>
       <p class="welcome-gate__note">登录后开始工作——签发永远由你亲手完成。</p>
 

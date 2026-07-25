@@ -1,6 +1,7 @@
 <template>
   <div class="feedback-page">
     <div class="page-header">
+      <BackLink label="任务台" fallback="/tasks" />
       <h2>提交反馈</h2>
     </div>
 
@@ -57,7 +58,7 @@
       <EmptyState v-if="feedbackList.length === 0 && !feedbackError" description="暂无反馈" />
       <ul v-else class="feedback-list">
         <li v-for="f in feedbackList" :key="f.id">
-          <el-tag size="small" :type="f.rating === 'good' ? 'success' : 'danger'">
+          <el-tag size="small" :type="f.rating === 'good' ? 'info' : 'danger'">
             {{ f.rating === "good" ? "可用" : "不可用" }}
           </el-tag>
           <span class="feedback-category">{{ categoryLabel(f.category) }}</span>
@@ -79,6 +80,7 @@ import { listTasks } from "../api/tasks";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
 import { statusLabel, formatTime } from "../utils/format";
 import EmptyState from "../components/EmptyState.vue";
+import BackLink from "../components/BackLink.vue";
 
 const route = useRoute();
 
@@ -86,10 +88,11 @@ const tasks = ref([]);
 const tasksLoadError = ref("");
 const taskId = ref(typeof route.query.task_id === "string" ? route.query.task_id : "");
 
-const feedbackForm = reactive({ rating: "good", category: "", message: "" });
+const feedbackForm = reactive({ rating: "", category: "", message: "" });
 const submitting = ref(false);
 const feedbackList = ref([]);
 const feedbackError = ref("");
+let feedbackEpoch = 0;
 
 const CATEGORY_LABEL_MAP = Object.fromEntries(FEEDBACK_CATEGORIES.map((c) => [c.value, c.label]));
 const categoryLabel = (c) => CATEGORY_LABEL_MAP[c] ?? c;
@@ -103,37 +106,56 @@ async function loadTasks() {
   }
 }
 
-async function loadFeedback() {
-  if (!taskId.value) return;
+async function loadFeedback(requestedTaskId = taskId.value) {
+  const epoch = ++feedbackEpoch;
+  if (!requestedTaskId) {
+    feedbackList.value = [];
+    feedbackError.value = "";
+    return;
+  }
   try {
-    feedbackList.value = await listTaskFeedback(taskId.value);
+    const list = await listTaskFeedback(requestedTaskId);
+    if (epoch !== feedbackEpoch || taskId.value !== requestedTaskId) return;
+    feedbackList.value = list;
     feedbackError.value = "";
   } catch (err) {
+    if (epoch !== feedbackEpoch || taskId.value !== requestedTaskId) return;
     feedbackError.value = `反馈列表加载失败：${err.detail || err.message}`;
   }
 }
 
 function handleTaskChange() {
+  feedbackForm.rating = "";
+  feedbackForm.category = "";
+  feedbackForm.message = "";
   feedbackList.value = [];
-  loadFeedback();
+  feedbackError.value = "";
+  loadFeedback(taskId.value);
 }
 
 async function handleSubmit() {
+  if (!feedbackForm.rating) {
+    ElMessage.error("请选择评价（可用/不可用）");
+    return;
+  }
   if (!feedbackForm.category) {
     ElMessage.error("请选择分类");
     return;
   }
   submitting.value = true;
+  const submittedTaskId = taskId.value;
   try {
     await submitFeedback({
-      taskId: taskId.value,
+      taskId: submittedTaskId,
       rating: feedbackForm.rating,
       category: feedbackForm.category,
       message: feedbackForm.message || null,
     });
-    ElMessage.success("反馈已提交");
-    feedbackForm.message = "";
-    await loadFeedback();
+    ElMessage.info("反馈已提交");
+    if (taskId.value === submittedTaskId) {
+      feedbackForm.message = "";
+      await loadFeedback(submittedTaskId);
+    }
   } catch (err) {
     ElMessage.error(err.detail || err.message);
   } finally {
@@ -144,7 +166,7 @@ async function handleSubmit() {
 onMounted(async () => {
   await loadTasks();
   if (taskId.value) {
-    await loadFeedback();
+    await loadFeedback(taskId.value);
   }
 });
 </script>

@@ -67,6 +67,12 @@
     </aside>
 
     <section class="console-main">
+      <!-- 窄屏返回入口（UX 修复）：窄屏下选中任务后左栏 display:none，浏览器后退是唯一
+           出口——补一条「← 任务列表」链接。宽屏 display:none，零占位不影响桌面布局。 -->
+      <div v-if="selectedId" class="console-back-narrow">
+        <el-button text type="primary" @click="$router.push('/tasks')">← 任务列表</el-button>
+      </div>
+
       <!-- 选中任务：TaskDetail 完整复用（叙事流+签发+输出/来源栏全承袭，
            m2 验收契约原样保留）；:key 保证切换任务时干净重建。 -->
       <TaskDetail v-if="selectedId" :key="selectedId" />
@@ -74,6 +80,12 @@
       <!-- 未选中空态 -->
       <div v-else class="console-empty">
         <EmptyState variant="action" description="从左栏选择一个任务，或从对话召集一个新任务" />
+        <!-- 空态行动召唤（UX 修复）：EmptyState 不透传 slot，按钮并列其下——两个真实
+             出口：回对话发起（一级 Surface）/ 手动创建（深链表单）。 -->
+        <div class="console-empty-actions">
+          <el-button type="primary" @click="$router.push('/')">去对话发起</el-button>
+          <el-button @click="$router.push('/tasks/new')">手动创建任务</el-button>
+        </div>
       </div>
     </section>
   </div>
@@ -257,6 +269,18 @@ onUnmounted(releaseTaskFeed);
 .console-empty {
   padding-top: 10vh;
 }
+/* 空态行动按钮：居中，与上方 EmptyState 协调。 */
+.console-empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+/* 窄屏返回列表入口：宽屏隐藏（零占位），窄屏（≤900px）选中任务时显示。 */
+.console-back-narrow {
+  display: none;
+  margin-bottom: 8px;
+}
 @media (prefers-reduced-motion: reduce) {
   .cl-lamp.is-pulsing {
     animation: none;
@@ -267,9 +291,12 @@ onUnmounted(releaseTaskFeed);
   }
 }
 @media (max-width: 900px) {
-  /* 窄屏：选中任务时列表让位给叙事流（返回走浏览器后退/左栏入口） */
+  /* 窄屏：选中任务时列表让位给叙事流（返回走顶部「← 任务列表」链接/浏览器后退） */
   .console-list.is-collapsed {
     display: none;
+  }
+  .console-back-narrow {
+    display: block;
   }
   .console {
     gap: 0;

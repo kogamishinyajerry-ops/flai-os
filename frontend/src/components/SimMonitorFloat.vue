@@ -233,7 +233,8 @@ const pill = computed(() => {
 let timer = null;
 onMounted(() => {
   window.addEventListener("message", onMessage);
-  timer = window.setInterval(() => { nowTick.value = Date.now(); }, 2000);
+  // 页面隐藏时跳过 tick，避免后台空跑（nowTick 仅驱动相对时间显示，恢复后下一拍即刷新）
+  timer = window.setInterval(() => { if (document.hidden) return; nowTick.value = Date.now(); }, 2000);
   maybeAdoptParam();
 });
 onUnmounted(() => {

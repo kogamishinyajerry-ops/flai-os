@@ -55,6 +55,7 @@
         </span>
       </template>
     </div>
+    <div v-if="summaryError" class="delivery-summary-error">{{ summaryError }}</div>
   </div>
 </template>
 
@@ -120,6 +121,9 @@ async function loadArtifacts(taskId, ids) {
 // 均为数字才计，两者皆无算未知）；batch_ok/batch_failed 为 null=非批量 Agent
 // 正常态或超出端点 50 条事件有界扫描（诚实降级：不显示批量行，不猜）。 ──
 const summary = ref(null);
+// 摘要拉取失败的诚实可见性：summary=null 时尾行已降级「模型调用：未知」，
+// 但用户不知道为什么——补一行 12px ink-faint 小字提示，不静默。
+const summaryError = ref("");
 
 const modelCallText = computed(() => {
   const s = summary.value;
@@ -142,7 +146,10 @@ onMounted(() => {
   loadArtifacts(t.id, t.output_file_ids);
   getDeliverySummary(t.id)
     .then((s) => { summary.value = s; })
-    .catch(() => { summary.value = null; });
+    .catch(() => {
+      summary.value = null;
+      summaryError.value = "摘要暂时不可用";
+    });
 });
 </script>
 
@@ -220,5 +227,13 @@ onMounted(() => {
 }
 .delivery-tail-fail {
   color: var(--trust-fail);
+}
+.delivery-summary-error {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+@media (prefers-reduced-motion: reduce) {
+  .delivery-card { transition: none; }
+  .delivery-card:hover { transform: none; }
 }
 </style>
