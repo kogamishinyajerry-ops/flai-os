@@ -1,0 +1,151 @@
+{
+  "schema_version": "WorkItemPreparationAuthorizationProposalV1",
+  "proposal_ref": "flai-workspace-shell-kimi-001@6C-proposal-1",
+  "proposal_status": "FINALIZED_PENDING_COMMIT_AND_OWNER_EXACT_RECEIPT",
+  "proposal_class": "DIAGNOSTIC_AND_PREPARATION_THEN_FULL_GATE_RERUN",
+  "human_owner": "JerryKogami",
+  "requested_owner_authorization_text_template": "批准 @6C proposal_ref=flai-workspace-shell-kimi-001@6C-proposal-1 proposal_digest=<sha256:JCS> markdown_sha256=<sha256:hex> coordinator_commit=<40hex>；仅限本地 mock，不创建真实 K3 会话",
+  "prepared_by": "Kimi K3 (DECLARED-NOT-VERIFIED)",
+  "prepared_at_local": "2026-07-25",
+  "human_readable_ref": "docs/work-items/flai-workspace-shell-kimi-001-v6c-authorization-proposal.md",
+  "human_readable_sha256": "9fb9a2f3351fc326177b30943c25dc9fd1ec6ffd3e733b7b07ee110c182458cf",
+  "environment": "EXTERNAL_DEVELOPMENT",
+  "fixtures": "SYNTHETIC_ONLY",
+  "internal_data_access": "NONE",
+  "real_k3_or_external_llm_authorized": false,
+  "real_provider_network_authorized": false,
+  "real_secret_or_credential_value_access_authorized": false,
+  "product_implementation_authorized": false,
+  "push_or_merge_authorized": false,
+  "six_d_execution_authorized": false,
+  "rework_lineage": {
+    "source_work_item": "flai-workspace-shell-kimi-001@6A",
+    "source_result": "NO_GO_FOR_6B",
+    "source_proposal_digest": "sha256:95a2d671a0816bccc796adf222f4273a4610bfc72608dd23adc90582ac9ef62a",
+    "blocker_1": "ACP_SESSION_NEW_INTERNAL_ERROR_SPAWN_EPERM",
+    "blocker_1_outcome_digest": "sha256:162a449fd086506e1bf58489a6020bd76349d8683708568dee2d80ef3b82e090",
+    "blocker_2": "PRESENT_EMPTY_WORKSPACE_SHELL_SHOTS_CALLS_MKDTEMP",
+    "failed_precondition_commit": "43f02f19e4f130e1bc30a96d6551ef42353de2ba",
+    "failed_precondition_commit_reuse": "DENY",
+    "k3_handoff_r2_digest": "sha256:9b65ca10f1d9a07a1e3e814970535d147d419f7e95489674a20afc4110ffabc2",
+    "old_control_root_worktree_session_budget_reuse": "DENY",
+    "old_failure_evidence_as_go_evidence": "DENY"
+  },
+  "owner_decisions_resolved": {
+    "D1_build_dependency_strategy": "D1A_ONE_TIME_LOCKED_FETCH_THEN_SEAL_NETWORK",
+    "D2_execution_base_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "D3_track_d_patch": "AS_FROZEN_IN_THIS_PROPOSAL",
+    "D4_track_g_scope": "EVIDENCE_ONLY_EXECUTION_REQUIRES_SEPARATE_6D_APPROVAL"
+  },
+  "source_forensics": {
+    "pinned_source_commit": "8bf5bacba9e524c38fb808c0122070037ead25a8",
+    "call_chain": [
+      "packages/acp-adapter/src/server.ts:638-642 ensureInnerKaos -> LocalKaos.create",
+      "packages/kaos/src/local.ts:220 LocalKaos.create -> applyLoginShellPathFromNode (unconditional)",
+      "packages/kaos/src/login-shell-path.ts:62-66 probeLoginShellPath spawns $SHELL -l -c /usr/bin/env"
+    ],
+    "existing_disable_flag_in_8bf5bac": "NONE_CONFIRMED_BY_FULL_TREE_SEARCH",
+    "memoization_constraint": "appliedLoginShellPath memoize semantics must be preserved",
+    "confidence": "STRONG_SOURCE_CORRELATION_NOT_SYSCALL_TARGET_ATTESTATION"
+  },
+  "track_p_precondition_fix": {
+    "base_sha": "47d191cb4799ec57f4739b4d1c709f490481fe77",
+    "new_independent_precondition_commit": true,
+    "precondition_file": "frontend/e2e/workspace_shell_prototype_acceptance.py",
+    "frozen_contract": "CALL_MKDTEMP_ONLY_WHEN_WORKSPACE_SHELL_SHOTS_IS_ABSENT",
+    "exact_diff": "--- a/frontend/e2e/workspace_shell_prototype_acceptance.py\n+++ b/frontend/e2e/workspace_shell_prototype_acceptance.py\n@@ -57,7 +57,9 @@\n  # 显式绑定 127.0.0.1：本机 vite 默认只绑 IPv6 ::1，会导致健康探测假阴性\n  BASE = f\"http://127.0.0.1:{PORT}\"\n  SHOTS = Path(\n-    os.environ.get(\"WORKSPACE_SHELL_SHOTS\", tempfile.mkdtemp(prefix=\"workspace-shell-shots-\"))\n+    os.environ[\"WORKSPACE_SHELL_SHOTS\"]\n+    if \"WORKSPACE_SHELL_SHOTS\" in os.environ\n+    else tempfile.mkdtemp(prefix=\"workspace-shell-shots-\")\n  )\n",
+    "acceptance_probes": [
+      "absent key -> exactly 1 mkdtemp call, sentinel path",
+      "present empty value -> 0 mkdtemp calls, value used as-is",
+      "present nonempty value -> 0 mkdtemp calls, value used as-is",
+      "full-file AST finds exactly one mkdtemp call site",
+      "diff contains only this expression",
+      "no assertion, screenshot, network or other test semantic change"
+    ],
+    "present_empty_negative_test_required": true,
+    "bind_negative_into_6d_test_lock_receipt": true
+  },
+  "track_d_spawn_eperm_diagnosis": {
+    "patch_file": "packages/kaos/src/login-shell-path.ts",
+    "patch_env_gate": "KIMI_KAOS_DISABLE_LOGIN_SHELL_PATH_PROBE=1",
+    "exact_diff": " export function applyLoginShellPathFromNode(): Promise<void> {\n   if (appliedLoginShellPath !== undefined) return appliedLoginShellPath;\n+  if (process.env['KIMI_KAOS_DISABLE_LOGIN_SHELL_PATH_PROBE'] === '1') {\n+    appliedLoginShellPath = Promise.resolve();\n+    return appliedLoginShellPath;\n+  }\n   appliedLoginShellPath = applyLoginShellPath({\n     platform: process.platform,\n     env: process.env as Record<string, string | undefined>,\n",
+    "default_behavior_unchanged": true,
+    "gate_injection_scope": "ISOLATED_ACP_STARTUP_ONLY",
+    "general_shell_surface_relaxation": "DENY",
+    "behavior_diff_limit": "ONLY_THIS_PROBE_GATE_DIFF_LEVEL_PROOF_REQUIRED",
+    "build": {
+      "source": "kimi-code-8bf5bac.tar.gz (pinned public source, already in old control root; re-verify digest before use)",
+      "dependency_strategy": "ONE_TIME_OWNER_APPROVED_LOCKED_FETCH_PER_PNPM_LOCK_YAML_WITH_INTEGRITY_LEDGER_THEN_NETWORK_SEALED",
+      "frozen_outputs": [
+        "build artifact digest",
+        "patch digest",
+        "toolchain versions",
+        "codesign status",
+        "dependency fetch ledger with integrity hashes"
+      ]
+    },
+    "diagnostic_replay": {
+      "steps": "initialize then session/new in fresh cage with patched binary",
+      "pass_meaning": "blocker_1 root cause confirmed",
+      "fail_meaning": "collect new failure frame, FAIL_CLOSED, escalate to owner"
+    }
+  },
+  "track_g_full_gate_rerun": {
+    "prerequisites": "TRACK_P_GREEN_AND_TRACK_D_GREEN",
+    "gates": [
+      "actual v1 tool inventory",
+      "23-tool permission policy matrix",
+      "ask/reject and cancel bridge probes",
+      "broker and proxy negative matrices",
+      "TestRunnerCage",
+      "BuildRunnerCage",
+      "state machine fault injections",
+      "focused baseline unit and E2E"
+    ],
+    "scope": "EVIDENCE_ONLY",
+    "execution_after_track_g": "DENY_REQUIRES_NEW_6D_EXACT_APPROVAL"
+  },
+  "one_shot_budgets": {
+    "kimi_acp_processes": 1,
+    "new_sessions": 1,
+    "acp_prompts": 64,
+    "provider_requests": 128,
+    "control_root": "ONE_FRESH_MKTEMP_D_0700",
+    "execution_worktree": "ONE_FRESH_FROM_47d191c_WITH_NEW_PRECONDITION_COMMIT",
+    "external_network": "DENY_EXCEPT_D1A_ONE_TIME_FETCH_WINDOW_THEN_SEALED",
+    "retry_or_second_mock_session": "DENY"
+  },
+  "safety_invariants": [
+    "no relaxation of general shell, /bin/zsh, /bin/sh or /usr/bin/env execution surface",
+    "synthetic HOME, isolated KIMI_CODE_HOME, dummy credential only",
+    "no real Kimi home, session or secret access beyond pinned executable metadata exception",
+    "any deny entering execute, any non-loopback request or any uncontained side effect fails closed",
+    "LLM is never in the verdict chain; the human owner is the only signer"
+  ],
+  "explicit_non_authorizations": [
+    "real K3 session",
+    "real LLM or provider traffic",
+    "any real secret value",
+    "product implementation",
+    "six-file source candidate commit",
+    "push, merge, production integration or internal release",
+    "second mock process or session retry",
+    "general shell allowance",
+    "any @6D execution"
+  ],
+  "approval_flow": [
+    "coordinator commits proposal json and md, producing coordinator_commit",
+    "recompute proposal JCS digest and markdown sha256 from the committed blobs",
+    "owner signs the exact authorization text binding proposal_ref, proposal_digest, markdown_sha256 and coordinator_commit",
+    "receipt persisted CAS-on-NULL in the new control root and hash-bound into cage preflight",
+    "only then: new control root and worktree, D1A fetch window, build, Track P commit, Track D replay, Track G rerun"
+  ],
+  "stop_conditions": [
+    "any second Kimi ACP process or session, real provider, external network outside the D1A window, or secret access",
+    "patched binary digest mismatch or any second behavioral difference from the official binary",
+    "any write outside authorized paths or any attempt to rewrite a bound commit or receipt",
+    "Track D replay still fails and diagnosis exceeds this proposal scope"
+  ],
+  "proposal_digest_profile": "sha256-rfc8785-jcs-excluding_proposal_digest",
+  "proposal_digest": "sha256:2d6076dd5b584fa3c4b748a1deba613f096c4f8583752e8c311177075cc1b231"
+}
