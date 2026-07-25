@@ -2,7 +2,7 @@
 
 > 后续状态（2026-07-21）：P1-A 的 owner 选项①已由 ADR-0031 落地。direct task、
 > interactive conversation、eval admission、safe_auto 与 task review 共享
-> `visibility ∩ allowed_roles` 默认拒绝门；最终 capability/RBAC 矩阵仍须另立并审批。
+> `visibility ∩ allowed_roles` 默认拒绝门；最终 capability/RBAC 矩阵仍见 ADR-0029 S1。
 
 - **状态**：Accepted（2026-07-13）
 - **关联**：ADR-0022（allow_shell_command 子进程边界先例）· ADR-0026（CFD 解析器

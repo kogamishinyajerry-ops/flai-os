@@ -163,7 +163,7 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 14. **已有真鉴权与窄角色门，但不是完整 RBAC**：ADR-0019 后 `/api/*` 默认要求有效
     会话；ADR-0031 后 direct task、interactive conversation、eval admission、safe_auto
     与 task review 同时核对 Agent `visibility`/`allowed_roles`。Agent 发布/晋升、样本策展、
-    sensitive 访问和审计读取仍需另立并审批 capability 矩阵。
+    sensitive 访问和审计读取仍需 ADR-0029 S1 的 capability 矩阵。
 15. **卡死任务回收仅覆盖「进程重启」时点**（R4 批收窄）：worker 启动时持单实例
     文件锁（跨平台，拒绝并行第二个 worker），并把上次进程遗留的执行态任务
     （validating/running/parsing/analyzing）置 failed、留 `worker_interrupted`
