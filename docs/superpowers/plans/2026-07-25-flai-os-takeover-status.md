@@ -68,17 +68,21 @@
 | codex/kimi-workspace-shell-v6a-prep / v6c-prep | 各 1 个独立 prep 提交 |
 | codex/flai-v02-foundation | `9023776`，V0.2 设计包线（/tmp worktree 有未提交 F0/Stage C 工作，见 §5） |
 
-### 可归档候选（已完全并入 origin/main 或为冗余指针，删除前逐一确认）
+### 归档执行记录（2026-07-25，owner 批准「全部归档·仅本地」，origin 侧全保留）
 
-- 已并入 main（ahead 0）：feat/inline-summon、feat/novice-first-run、feat/uiux-craft-fine-grain、
-  feat/uiux-desktop-language、feat/uiux-novice-minimal-b4、feat/uiux-gap-batch8(=feat/usage-telemetry)、
-  feat/cfd-flai-os-integration、feat/collab-runtime、feat/control-step-response-shot、
-  feat/fea-solve-eval-shot、feat/migration-9-created-by-username、feat/today-workbench-batch-b、
-  feat/ui-simplify-conversation-home、feat/workbench-ux-batch-a、novice-first-run-backup-pre-rebase
-- 冗余指针：codex/selfharness-v03-owner-plan(=main)、codex/kimi-workspace-shell-v2/v3/v4/v5(均=v1)、
-  codex/platform-integration-v1(=flai-airgap-boundary)、codex/integrate-safe-auto-dag 之外的链内中间节点
+- 已删除本地分支 17 个：feat/inline-summon、feat/usage-telemetry、feat/cfd-flai-os-integration、
+  feat/collab-runtime、feat/control-step-response-shot、feat/fea-solve-eval-shot、
+  feat/migration-9-created-by-username、feat/today-workbench-batch-b、
+  feat/ui-simplify-conversation-home、feat/workbench-ux-batch-a、feat/uiux-craft-fine-grain、
+  feat/uiux-desktop-language、feat/uiux-novice-minimal-b4、novice-first-run-backup-pre-rebase、
+  codex/selfharness-v03-owner-plan、codex/kimi-workspace-shell-v2、codex/platform-integration-v1
+  （后 6 个经核实内容已被 origin/main 或已推送分支完全包含后方以 -D 删除）；
+  失效 worktree 登记已 prune（8 个），2 个干净 /tmp worktree 已移除。
+- 暂缓归档 5 个（原因如实记录）：feat/novice-first-run、feat/uiux-gap-batch8（仍被
+  projects 下持久 worktree 占用）；codex/kimi-workspace-shell-v3/v4/v5（对应 /tmp worktree
+  有未提交 prototype 改动，不毁未提交工作，待用户确认后处理）。
 - feat/eval-async-queue（`567de2d`）：历史使命完成（评测队列早已入 main；safe-auto 6 提交由
-  integrate-safe-auto-dag 承载），归档候选
+  integrate-safe-auto-dag 承载），归档候选，待确认。
 
 ## 4. 当前阶段与下一执行切片
 
