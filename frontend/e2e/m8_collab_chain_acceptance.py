@@ -35,8 +35,10 @@ from typing import Any
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
+from _artifacts import artifact_dir
+
 DIST = REPO / "frontend" / "dist"
-SHOTS = REPO / "docs" / "reviews" / "m8-collab-chain-shots"
+SHOTS = artifact_dir(REPO, "m8-collab-chain-shots")
 
 if not (DIST / "index.html").is_file():
     sys.exit("诚实失败：frontend/dist 未构建。先执行  cd frontend && npm run build")
@@ -108,7 +110,6 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(("PASS" if ok is True else "FAIL"), name, ("| " + detail if detail and ok is not True else ""))
 
 
-
 def force_legacy_plan_only(route) -> None:
     """本脚本保留历史 plan_only 人工回退链验收；产品默认 safe_auto 另由 M6/M8 验收。"""
     request = route.request
@@ -120,6 +121,7 @@ def force_legacy_plan_only(route) -> None:
         post_data=json.dumps(payload, ensure_ascii=False),
         headers={**headers, "content-type": "application/json"},
     )
+
 
 
 from _auth import login_context, seed_user  # noqa: E402

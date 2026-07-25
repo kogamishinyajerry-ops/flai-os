@@ -83,6 +83,8 @@
   ⑦ 失败态互斥：FeedbackPage 用 `page.route` 拦截反馈列表接口返 500，选中
     任务后断言 error alert 在屏 且「暂无反馈」EmptyState 不在屏（源码里两者
     本就是 `v-if="...&&!feedbackError"` 互斥关系，这里是行为验证非重复实现）。
+  ⑧ 反馈任务快速切换：A 的迟到响应不得覆盖 B，且评分/分类/说明全部重置。
+  ⑨ ErrorState 只保留 Element Plus 自带的一个 alert live region，避免重复播报。
 
 运行（仓根）：
   cd frontend && npm run build && cd ..
@@ -109,8 +111,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
+from _artifacts import artifact_dir
+
 DIST = REPO / "frontend" / "dist"
-SHOTS = REPO / "docs" / "reviews" / "batch-d-shots"
+SHOTS = artifact_dir(REPO, "batch-d-shots")
 
 if not (DIST / "index.html").is_file():
     sys.exit("诚实失败：frontend/dist 未构建。先执行  cd frontend && npm run build")
@@ -185,8 +189,51 @@ try:
         created_by="验收工程师",
         created_by_username="e2e_engineer",
     )
+    TASK_B_ID = f"task_{uuid.uuid4().hex}"
+    repos.create_task(
+        _conn,
+        task_id=TASK_B_ID,
+        agent_id="hello_agent",
+        agent_version="0.1.0",
+        name="批D反馈B",
+        created_by="验收工程师",
+        created_by_username="e2e_engineer",
+    )
+    repos.create_feedback(
+        _conn,
+        task_id=TASK_ID,
+        agent_id="hello_agent",
+        agent_version="0.1.0",
+        rating="good",
+        category="suggestion",
+        message="反馈-A",
+        created_by="验收工程师",
+    )
+    repos.create_feedback(
+        _conn,
+        task_id=TASK_B_ID,
+        agent_id="hello_agent",
+        agent_version="0.1.0",
+        rating="good",
+        category="suggestion",
+        message="反馈-B",
+        created_by="验收工程师",
+    )
 finally:
     _conn.close()
+
+# 制造真实迟到响应：A 的读取在 FastAPI 线程池中延迟，B 立即返回。前端必须按
+# taskId/epoch 丢弃 A，而不是依赖请求恰好按发起顺序返回。
+_real_list_feedback = repos.list_feedback
+
+
+def _delayed_list_feedback(conn, task_id: str):
+    if task_id == TASK_ID:
+        time.sleep(1.2)
+    return _real_list_feedback(conn, task_id)
+
+
+repos.list_feedback = _delayed_list_feedback
 
 # ── 种一条真实 workbench 会话：/workbench/<id> 需要真会话才能渲染（Task 9 R0
 # ③）。走真实 POST /api/conversations（非直插库），与创建页的正规入口同径。
@@ -478,6 +525,52 @@ with sync_playwright() as p:
     check("⑦失败态互斥：暂无反馈 EmptyState 不在屏（与 error alert 互斥）", empty_present is False, f"empty_present={empty_present}")
     page.screenshot(path=str(SHOTS / "7_feedback_error_mutex.png"), full_page=True)
     page.unroute("**/api/tasks/*/feedback")
+
+    # ── ⑧ 反馈切换竞态：A 请求在途时填草稿并切 B；B 的初始表单必须为空，
+    # 且 A 的迟到列表不能覆盖已经选中的 B。──
+    page.goto(BASE + "/feedback", wait_until="networkidle")
+    task_selector = page.locator(".task-select-form .el-select")
+    task_selector.click()
+    page.get_by_role("option", name=re.compile("批D视觉验收种子任务")).click()
+    page.locator(".feedback-form .el-radio", has_text=re.compile(r"^可用$")).click()
+    page.locator(".feedback-form .el-select").click()
+    page.get_by_role("option", name="改进建议").click()
+    page.locator(".feedback-form textarea").fill("A 的未提交草稿")
+
+    task_selector.click()
+    page.get_by_role("option", name=re.compile("批D反馈B")).click()
+    poke_wait(page, lambda: "反馈-B" in page.locator("body").inner_text(), 5)
+    page.wait_for_timeout(1400)  # 确保 A 的 1.2s 迟到响应已经抵达并被 epoch 丢弃
+    feedback_text = page.locator(".feedback-list").inner_text()
+    draft_cleared = (
+        page.locator(".feedback-form .el-radio.is-checked").count() == 0
+        and page.locator(".feedback-form textarea").input_value() == ""
+        and "请选择" in page.locator(".feedback-form .el-select").inner_text()
+    )
+    check(
+        "⑧切换任务重置反馈草稿且丢弃上一任务迟到响应",
+        draft_cleared and "反馈-B" in feedback_text and "反馈-A" not in feedback_text,
+        f"draft_cleared={draft_cleared} feedback={feedback_text!r}",
+    )
+
+    # ── ⑨ ErrorState：外层仅布局，live region 由 el-alert 单独承担。──
+    def fail_agents(route) -> None:
+        route.fulfill(
+            status=500,
+            content_type="application/json",
+            body='{"detail":"injected agent-list outage"}',
+        )
+
+    page.route("**/api/agents", fail_agents)
+    page.goto(BASE + "/portal", wait_until="networkidle")
+    poke_wait(page, lambda: page.locator(".error-state").count() == 1, 5)
+    check(
+        "⑨ErrorState 仅一个 alert live region",
+        page.locator(".error-state").is_visible()
+        and page.get_by_role("alert").count() == 1,
+        f"alerts={page.get_by_role('alert').count()}",
+    )
+    page.unroute("**/api/agents", fail_agents)
 
     browser.close()
 

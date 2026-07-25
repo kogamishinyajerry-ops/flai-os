@@ -23,8 +23,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
+from _artifacts import artifact_dir
+
 DIST = REPO / "frontend" / "dist"
-SHOTS = REPO / "docs" / "reviews" / "m11-auth-shots"
+SHOTS = artifact_dir(REPO, "m11-auth-shots")
 
 if not (DIST / "index.html").is_file():
     sys.exit("诚实失败：frontend/dist 未构建。先执行  cd frontend && npm run build")

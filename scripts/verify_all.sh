@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
-# 一键执行前端构建、后端全量测试与五组浏览器验收；任一步失败立即汇总退出。
+# 一键执行前端构建、后端全量测试与全部浏览器验收；任一步失败立即汇总退出。
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+# 全量门的截图证据默认写临时目录，避免重跑验收时改写 tracked docs/reviews。
+# 显式传入 FLAI_E2E_ARTIFACT_ROOT 时保留调用方指定的位置。
+if [[ -z "${FLAI_E2E_ARTIFACT_ROOT:-}" ]]; then
+  FLAI_E2E_ARTIFACT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/flai-e2e-artifacts.XXXXXX")"
+fi
+export FLAI_E2E_ARTIFACT_ROOT
+echo "E2E artifacts: ${FLAI_E2E_ARTIFACT_ROOT}"
 
 COMPLETED_STEPS=()
 FAILED_STEPS=()
@@ -74,6 +82,7 @@ E2E_SCRIPTS=(
   "frontend/e2e/m8_workbench_acceptance.py"
   "frontend/e2e/m9_guide_loop_acceptance.py"
   "frontend/e2e/m10_governance_acceptance.py"
+  "frontend/e2e/trust_ui_acceptance.py"
   "frontend/e2e/m11_auth_acceptance.py"
   "frontend/e2e/cfd_flow_acceptance.py"
   "frontend/e2e/batch_a_livefeed_acceptance.py"

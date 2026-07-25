@@ -8,7 +8,9 @@
   ⑤下载输出 ⑥提交反馈；
   附加——任务历史 / SPA 深链刷新 / **waiting_review 人工放行 UI 全链**
   （宪法「人是唯一签发者」的界面落点：tmp 复制 hello_agent 为
-  requires_human_review=true 的 review_agent 驱动出该状态）。
+  requires_human_review=true 的 review_agent 驱动出该状态）；签发前真实核验
+  mock 工具来源，tool_runs 接口故障时双动作 fail-closed，恢复后方可继续；
+  批准提示为中性 info，驳回提示为 error，人签结果绝不借用绿色 REAL。
 
 运行（仓根）：
   cd frontend && npm run build && cd ..
@@ -33,8 +35,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
+from _artifacts import artifact_dir
+
 DIST = REPO / "frontend" / "dist"
-SHOTS = REPO / "docs" / "reviews" / "m2-acceptance-shots"
+SHOTS = artifact_dir(REPO, "m2-acceptance-shots")
 
 if not (DIST / "index.html").is_file():
     sys.exit("诚实失败：frontend/dist 未构建。先执行  cd frontend && npm run build")
@@ -156,7 +160,10 @@ with sync_playwright() as p:
     # ── ⑥提交反馈（终态详情页——细削后反馈折叠，先展开再填表）──
     page.locator(".feedback-collapse .el-collapse-item__header").click()
     page.wait_for_selector(".feedback-form", state="visible", timeout=3000)
-    page.get_by_role("radio", name="可用").first.check()
+    # rating 无默认值（默认空，防「可用」被隐式当默认灌进样本库=假绿）后，EP 的
+    # 自定义 radio 真实 input 被 .el-radio__inner 遮挡，get_by_role("radio").check()
+    # 点 input 中心会超时。改为点 label 文本（el-radio 的可点容器），对 EP 结构健壮。
+    page.locator(".feedback-form .el-radio", has_text="可用").first.click()
     page.locator(".feedback-form .el-select").click()
     page.get_by_role("option", name="改进建议").click()
     page.locator(".feedback-form textarea").fill("M2 验收走查：整链路可用")
@@ -190,19 +197,107 @@ with sync_playwright() as p:
     review_card_visible = page.locator(".review-card").is_visible()
     check("附加:任务进入 waiting_review 且放行卡片可见", review_card_visible,
           page.locator("body").inner_text()[:400])
+
+    # mock=true 必须在签发前显式披露；review_agent 是 hello_agent 副本，真实
+    # JobRunner 已调用 mock_echo，故此断言不是人工拼出的 UI fixture。
+    verified_seal = page.locator(
+        '.task-detail .mock-seal[data-verification-state="verified"]'
+    )
+    expect(verified_seal).to_contain_text("演示数据", timeout=8000)
+    review_card = page.locator(".review-card")
+    approve_button = review_card.get_by_role("button", name="批准放行")
+    reject_button = review_card.get_by_role("button", name="拒绝")
+    check(
+        "附加:mock 工具来源在签发前显式披露",
+        approve_button.is_enabled() and reject_button.is_enabled(),
+        verified_seal.inner_text(),
+    )
+
+    # 数据来源接口不可用时，未知绝不能降级成「非 mock」；两个具名审核动作
+    # 都必须被阻断。移除故障并重载后，重新核验成功才恢复签发。
+    tool_runs_pattern = f"**/api/tasks/{review_task_id}/tool_runs"
+
+    def fail_tool_runs(route) -> None:
+        route.fulfill(
+            status=500,
+            content_type="application/json",
+            body='{"detail":"injected tool-runs outage"}',
+        )
+
+    page.route(tool_runs_pattern, fail_tool_runs)
+    page.reload(wait_until="networkidle")
+    failed_seal = page.locator(
+        '.task-detail .mock-seal[data-verification-state="error"]'
+    )
+    expect(failed_seal).to_contain_text("核验失败", timeout=8000)
+    review_card = page.locator(".review-card")
+    approve_button = review_card.get_by_role("button", name="批准放行")
+    reject_button = review_card.get_by_role("button", name="拒绝")
+    check(
+        "附加:tool_runs 失败时 TaskDetail 双签发动作 fail-closed",
+        approve_button.is_disabled() and reject_button.is_disabled(),
+        failed_seal.inner_text(),
+    )
+    page.unroute(tool_runs_pattern, fail_tool_runs)
+    page.reload(wait_until="networkidle")
+    verified_seal = page.locator(
+        '.task-detail .mock-seal[data-verification-state="verified"]'
+    )
+    expect(verified_seal).to_contain_text("演示数据", timeout=8000)
+    review_card = page.locator(".review-card")
+    approve_button = review_card.get_by_role("button", name="批准放行")
+    reject_button = review_card.get_by_role("button", name="拒绝")
+    check(
+        "附加:来源核验恢复后 TaskDetail 才重新允许签发",
+        approve_button.is_enabled() and reject_button.is_enabled(),
+        verified_seal.inner_text(),
+    )
     page.screenshot(path=str(SHOTS / "6_waiting_review.png"), full_page=True)
 
     # 签发人=登录身份（验收工程师），审核卡只余意见框——先断言身份行如实展示
     check("附加:签发人=登录身份展示", "验收工程师" in page.locator(".review-card").inner_text(),
           page.locator(".review-card").inner_text()[:200])
-    page.locator(".review-card textarea").fill("结果核对无误，批准")
-    page.get_by_role("button", name="批准放行").click()
+    review_card.locator("textarea").fill("结果核对无误，批准")
+    approve_button.click()
     page.get_by_role("button", name="确定").click()  # ElMessageBox 二次确认
+    approve_notice = page.locator(".el-message--info", has_text="已批准放行")
+    expect(approve_notice).to_be_visible(timeout=5000)
+    check(
+        "附加:人工批准只用中性 info 提示，不给绿色 REAL",
+        page.locator(".el-message--success", has_text="已批准放行").count() == 0,
+    )
     page.wait_for_timeout(1500)
     body = page.locator("body").inner_text()
     check("附加:人工批准→completed+review_approved 事件上时间轴",
           "已完成" in body and "review_approved" in body, body[:600])
     page.screenshot(path=str(SHOTS / "7_review_approved.png"), full_page=True)
+
+    # 驳回走同一个真实签发界面与 API；另建一条 waiting_review
+    # 任务，避免在已批准终态上伪造可重入审核。
+    page.goto(BASE + "/tasks/new?agent_id=review_agent", wait_until="networkidle")
+    expect(page.locator(".agent-preview")).to_be_visible(timeout=5000)
+    page.locator('input[placeholder="请填写姓名"]').first.fill("待人工驳回")
+    page.get_by_role("button", name="提交任务").click()
+    page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if "等待人工审核" in page.locator("body").inner_text():
+            break
+        time.sleep(1)
+    reject_card = page.locator(".review-card")
+    reject_seal = page.locator(
+        '.task-detail .mock-seal[data-verification-state="verified"]'
+    )
+    expect(reject_seal).to_contain_text("演示数据", timeout=8000)
+    reject_card.locator("textarea").fill("核验未通过，驳回")
+    reject_card.get_by_role("button", name="拒绝").click()
+    page.get_by_role("button", name="确定").click()
+    reject_notice = page.locator(".el-message--error", has_text="已拒绝")
+    expect(reject_notice).to_be_visible(timeout=5000)
+    check(
+        "附加:人工驳回只用 error 提示，不给绿色 REAL",
+        page.locator(".el-message--success", has_text="已拒绝").count() == 0,
+    )
 
     browser.close()
 

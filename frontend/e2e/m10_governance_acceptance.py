@@ -9,13 +9,16 @@
   ②跑评测→全绿摘要 3/3（真实 runtime 全链，同步等待）
   ③fail-closed UI 见证：不勾人工确认直接晋升→逐条拒绝原因可见
   ④勾选确认→晋升成功→maturity 徽章 L1
+  ④a 父层 Agent 列表刷新失败时，本地 L1 仍立即可见且晋升按钮消失
   ④'磁盘铁证：tmp 包 agent.yaml 的 maturity 行真实变 L1
   ④''晋升区随 L1 消失（transition_supported 只认 L0→L1）
   ⑤晋升记录 L0→L1 可见
   ⑥用户任务→waiting_review→状态坞 peek 批准放行
+  ⑥a 状态坞 tool_runs 核验失败时双签发动作 fail-closed，恢复后才解锁
   ⑦固化入口出现→固化→case_file 回显
   ⑦'磁盘铁证：case_*_from_sample.json 落盘且 curation=draft
   ⑧固化后再跑评测：draft 不计数仍 3/3，待策展一节可见
+  ⑧a completed 但含失败用例时只给 warning，绝不弹绿色全绿
   ⑨eval 任务隔离：任务历史页不出现 eval:case 任务
 
 运行（仓根）：
@@ -39,8 +42,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
+from _artifacts import artifact_dir
+
 DIST = REPO / "frontend" / "dist"
-SHOTS = REPO / "docs" / "reviews" / "m10-acceptance-shots"
+SHOTS = artifact_dir(REPO, "m10-acceptance-shots")
 
 if not (DIST / "index.html").is_file():
     sys.exit("诚实失败：frontend/dist 未构建。先执行  cd frontend && npm run build")
@@ -188,16 +193,37 @@ with sync_playwright() as p:
     page.screenshot(path=str(SHOTS / "3_promote_rejected.png"), full_page=True)
 
     # ── ④ 勾选确认 → 晋升成功 → L1 ──
+    # POST 成功后的父层列表刷新属于次级同步，失败不得把已经成立的 L1 翻回 L0。
+    def fail_agent_list(route) -> None:
+        route.fulfill(
+            status=500,
+            content_type="application/json",
+            body='{"detail":"injected agent-list refresh outage"}',
+        )
+
+    page.route("**/api/agents", fail_agent_list)
     page.locator(".gov-promote-confirm").click()
     page.locator(".gov-promote-submit").click()
     deadline = time.time() + 15
     promoted = False
     while time.time() < deadline:
-        if "L1" in page.locator(".gov-dialog").inner_text():
+        maturity_text = page.locator(".gov-maturity-tag").inner_text()
+        if "L1" in maturity_text and page.locator(".gov-promote-submit").count() == 0:
             promoted = True
             break
         time.sleep(0.5)
-    check("④勾选确认→晋升成功→面板见 L1", promoted, page.locator(".gov-dialog").inner_text()[:300])
+    check(
+        "④勾选确认→晋升成功→成熟度标签见 L1",
+        promoted,
+        page.locator(".gov-maturity-tag").inner_text(),
+    )
+    check(
+        "④a父层列表刷新失败仍立即提交本地 L1",
+        "L1" in page.locator(".gov-maturity-tag").inner_text()
+        and page.locator(".gov-promote-submit").count() == 0,
+        page.locator(".gov-dialog").inner_text()[:300],
+    )
+    page.unroute("**/api/agents", fail_agent_list)
 
     # ④' 磁盘铁证：tmp 包 yaml 真实改写
     yaml_after = _yaml.read_text(encoding="utf-8")
@@ -230,6 +256,18 @@ with sync_playwright() as p:
         if "等待人工审核" in page.locator("body").inner_text():
             break
         time.sleep(1)
+    # 状态坞签发面与任务详情执行同一来源核验契约。先注入 tool_runs 故障，
+    # 证明未知态显式可见且批准/驳回都 fail-closed；恢复后重新挂载才允许签发。
+    tool_runs_pattern = f"**/api/tasks/{task_id}/tool_runs"
+
+    def fail_tool_runs(route) -> None:
+        route.fulfill(
+            status=500,
+            content_type="application/json",
+            body='{"detail":"injected tool-runs outage"}',
+        )
+
+    page.route(tool_runs_pattern, fail_tool_runs)
     page.locator(".status-dock").click()
     # sc-item 主名回退任务 id（本任务未命名——「治理链样本」是 hello 的姓名参数非任务名）
     sc_item = page.locator(".sc-item", has_text="governed_agent")
@@ -238,6 +276,34 @@ with sync_playwright() as p:
     expect(page.locator(".peek-approve")).to_be_visible(timeout=8000)
     # 签发人=登录身份行如实展示（不可代填）
     assert "验收工程师" in page.locator(".peek-review-card").inner_text()
+    failed_seal = page.locator(
+        '.peek-review-card .mock-seal[data-verification-state="error"]'
+    )
+    expect(failed_seal).to_contain_text("核验失败", timeout=8000)
+    reject_button = page.locator(".peek-review-card").get_by_role("button", name="驳回")
+    check(
+        "⑥a tool_runs 失败时状态坞双签发动作 fail-closed",
+        page.locator(".peek-approve").is_disabled() and reject_button.is_disabled(),
+        failed_seal.inner_text(),
+    )
+
+    page.unroute(tool_runs_pattern, fail_tool_runs)
+    page.locator(".sc-close").click()
+    expect(page.locator(".sc-shell")).to_be_hidden(timeout=5000)
+    page.locator(".status-dock").click()
+    sc_item = page.locator(".sc-item", has_text="governed_agent")
+    expect(sc_item.first).to_be_visible(timeout=5000)
+    sc_item.first.click()
+    verified_seal = page.locator(
+        '.peek-review-card .mock-seal[data-verification-state="verified"]'
+    )
+    expect(verified_seal).to_contain_text("演示数据", timeout=8000)
+    reject_button = page.locator(".peek-review-card").get_by_role("button", name="驳回")
+    check(
+        "⑥a 来源核验恢复后状态坞才重新允许签发",
+        page.locator(".peek-approve").is_enabled() and reject_button.is_enabled(),
+        verified_seal.inner_text(),
+    )
     page.locator(".peek-approve").click()
     # StatusCenter 与 TaskDetail 同款二次确认，按钮文案=「确认批准放行」
     page.get_by_role("button", name="确认批准放行").click()
@@ -292,6 +358,33 @@ with sync_playwright() as p:
         time.sleep(1)
     check("⑧draft 不计数仍 3/3 且待策展可见", ok8, page.locator(".gov-dialog").inner_text()[:400])
     page.screenshot(path=str(SHOTS / "6_draft_not_counted.png"), full_page=True)
+
+    # completed 只是 runner 生命周期结束，不等于全绿。把一个正式 case 改成必败，
+    # 最新 run 应为 2/3，通知必须是 warning 且给出失败计数。
+    failing_case_path = GOV_CASES / "case_001.json"
+    failing_case = json.loads(failing_case_path.read_text(encoding="utf-8"))
+    failing_case["checks"] = [{"kind": "status_is", "value": "completed"}]
+    failing_case_path.write_text(
+        json.dumps(failing_case, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    page.locator(".gov-run-btn").click()
+    deadline = time.time() + 60
+    failed_summary = ""
+    while time.time() < deadline:
+        if page.locator(".gov-run-summary").count() > 0:
+            failed_summary = page.locator(".gov-run-summary").first.inner_text()
+            if "2/3" in failed_summary:
+                break
+        time.sleep(1)
+    failed_notice = page.locator(".el-message", has_text="评测完成，但存在未通过或跳过").last
+    expect(failed_notice).to_be_visible(timeout=5000)
+    check(
+        "⑧a completed 含失败用例只给 warning，不给绿色全绿",
+        "2/3" in failed_summary
+        and "失败 1" in failed_notice.inner_text()
+        and "el-message--success" not in (failed_notice.get_attribute("class") or ""),
+        f"summary={failed_summary!r} notice={failed_notice.inner_text()!r}",
+    )
     page.keyboard.press("Escape")
 
     # ── ⑨ eval 任务隔离：任务历史页不出现 eval:case 任务 ──
