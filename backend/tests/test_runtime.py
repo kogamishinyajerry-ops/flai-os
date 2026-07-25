@@ -27,7 +27,7 @@ import jsonschema
 import pytest
 import yaml
 
-from backend.app.config import AGENTS_DIR, CONTRACTS_DIR, TOOLS_DIR
+from backend.app.config import AGENTS_DIR, CONTRACTS_DIR, REPO_ROOT, TOOLS_DIR
 from backend.app.runtime.registry import AgentRegistry
 from backend.app.runtime.runtime import AgentRuntime
 from backend.app.storage import repos
@@ -371,6 +371,85 @@ def test_model_gateway_context_emits_error_model_call_event_and_reraises(tmp_pat
         assert "上游炸了" in mc[0]["payload"]["error"]
     finally:
         conn.close()
+
+
+def test_vision_unavailable_terminalizes_task_with_one_failed_audit_and_error_event(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from backend.app.model_gateway import gateway as gateway_mod
+    from backend.app.model_gateway.gateway import ModelGateway
+
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    vision_dir = agents_dir / "vision_unavailable_agent"
+    shutil.copytree(AGENTS_DIR / "hello_agent", vision_dir)
+
+    yaml_path = vision_dir / "agent.yaml"
+    yaml_text = yaml_path.read_text(encoding="utf-8")
+    yaml_text = yaml_text.replace("id: hello_agent", "id: vision_unavailable_agent")
+    yaml_text = yaml_text.replace("profile: none", "profile: reasoning")
+    yaml_text = yaml_text.replace("requires_human_review: false", "requires_human_review: true")
+    yaml_path.write_text(yaml_text, encoding="utf-8")
+    (vision_dir / "workflow.py").write_text(
+        "def run(context):\n"
+        "    context['model_gateway'].vision(\n"
+        "        'reasoning', '/missing/diagram.png', '识别图纸'\n"
+        "    )\n"
+        "    raise AssertionError('vision unavailable 必须中止 workflow')\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("FLAI_LLM_BASE_URL", "https://fake-llm.internal")
+    monkeypatch.setenv("FLAI_LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("FLAI_LLM_MODEL_REASONING", "vision-probe-model")
+
+    def forbidden_http_post(*args, **kwargs):
+        raise AssertionError("vision 未接入时绝不能发出 HTTP 请求")
+
+    monkeypatch.setattr(gateway_mod.httpx, "post", forbidden_http_post)
+
+    db_path = tmp_path / "vision_runtime.db"
+    init_db(db_path)
+    registry = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    registry.scan()
+    assert registry.errors == [], f"意外的无效包：{registry.errors}"
+    gateway = ModelGateway(
+        REPO_ROOT / "backend" / "app" / "model_gateway" / "profiles.yaml",
+        conn_factory=lambda: get_conn(db_path),
+    )
+    runtime = AgentRuntime(
+        agent_registry=registry,
+        tool_registry=_RealishToolRegistry(TOOLS_DIR),
+        model_gateway=gateway,
+        conn_factory=lambda: get_conn(db_path),
+        task_runs_dir=tmp_path / "task_runs",
+        uploads_dir=tmp_path / "uploads",
+    )
+    task_id = _create_and_queue_task(
+        db_path, agent_id="vision_unavailable_agent", inputs={"name": "图纸"}
+    )
+
+    result = runtime.execute(task_id)
+
+    assert result["status"] == "failed"
+    assert result["task"]["status"] == "failed"
+    assert result["task"]["error_message"].startswith("ModelCapabilityUnavailableError:")
+
+    conn = get_conn(db_path)
+    try:
+        calls = repos.list_model_calls(conn, task_id)
+        events = repos.list_events(conn, task_id)
+    finally:
+        conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+    assert calls[0]["model_profile"] == "reasoning"
+    assert calls[0]["model_name"] == "vision-probe-model"
+    model_events = [event for event in events if event["event_type"] == "model_call"]
+    assert len(model_events) == 1
+    assert model_events[0]["level"] == "error"
+    assert model_events[0]["payload"]["kind"] == "vision"
+    assert [event["event_type"] for event in events][-1] == "task_failed"
 
 
 # ── P2-2：工具契约可恢复失败（status:"failed"）如实记 tool_failed ─────────

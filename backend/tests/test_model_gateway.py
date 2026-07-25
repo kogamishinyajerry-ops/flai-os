@@ -2,6 +2,7 @@
 
 覆盖：
 - profile 未在 profiles.yaml 声明 → ProfileNotConfiguredError；
+- vision 同样先解析 profile，未知 profile 失败且 model_calls 恰留一条；
 - 对应环境变量缺失 → ModelUpstreamError，且 model_calls 记 failed；
 - httpx.MockTransport 假 200 → 成功且 model_calls 记 success（绝无真网络）；
 - 上游 500 → ModelUpstreamError + model_calls 记 failed。
@@ -50,6 +51,30 @@ def test_chat_profile_not_configured_raises() -> None:
     gateway = ModelGateway(PROFILES_PATH)
     with pytest.raises(ProfileNotConfiguredError):
         gateway.chat("no_such_profile", [{"role": "user", "content": "hi"}])
+
+
+def test_vision_unknown_profile_preserves_profile_contract_and_records_failed(tmp_path) -> None:
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    with pytest.raises(ProfileNotConfiguredError):
+        gateway.vision(
+            "no_such_profile",
+            "/missing/diagram.png",
+            "识别图纸",
+            task_id="task_vision_unknown_profile",
+        )
+
+    conn = db_mod.get_conn(db_path)
+    try:
+        calls = repos.list_model_calls(conn, "task_vision_unknown_profile")
+    finally:
+        conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+    assert calls[0]["model_profile"] == "no_such_profile"
+    assert calls[0]["model_name"] is None
+    assert "no_such_profile" in calls[0]["error_message"]
 
 
 # ── env 缺失 → ModelUpstreamError + model_calls 记 failed ──────────────────

@@ -6,6 +6,7 @@
 
 错误映射（fail-closed，绝不把上游失败降级为绿）：
 - 会话/agent 不存在 → 404；会话已结束 → 409；对非 interactive Agent 发起会话 → 409；
+- 模型能力尚未接入 → 501（非临时故障，不误导用户重试）；
 - 模型上游失败/workflow 诚实抛错 → 502（如实透出「本轮对话失败，可重试」，不伪造回复）。
 """
 
@@ -23,6 +24,7 @@ from ..core.errors import (
     ConversationConflictError,
     ConversationNotFoundError,
     FileNotFoundInStoreError,
+    ModelCapabilityUnavailableError,
     ModelConfigError,
     ModelUpstreamError,
     NotInteractiveAgentError,
@@ -145,6 +147,13 @@ def post_message(
     except ConversationAccessDeniedError as exc:
         # 自动执行会产生真实任务；会话所有者不匹配时必须在模型调用前 fail-closed。
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ModelCapabilityUnavailableError as exc:
+        # 能力尚未接入是实现/部署边界，不是临时上游故障；同一请求重试不会恢复。
+        raise HTTPException(
+            status_code=501,
+            detail=f"模型能力未接入，导引当前不可用：{exc}。此为能力接入问题（非临时故障），"
+            "请联系管理员确认当前支持范围。",
+        ) from exc
     except ModelConfigError as exc:
         # 模型网关未配置（缺 FLAI_LLM_*）=永久性错误：重试无效，需运维配置后恢复。
         # 与临时上游故障分流，绝不谎报「可重试」误导用户反复点发送（PM 战略审 top）。

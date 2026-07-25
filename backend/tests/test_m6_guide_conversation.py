@@ -11,7 +11,8 @@
   存活则整份作废（fail-closed）；预填非法字段逐字段剥离记名。
 - 人是唯一签发者红线：导引全程不创建任何任务；预填草案由人在 tasks 端点亲手提交。
 - 诚实失败（事务性单轮，ADR-0013）：无内网 key（清空 FLAI_LLM_*）=永久配置错
-  → 本轮 **503**（非「可重试」）；临时上游故障 → 502「可重试」；均**零消息落库**；
+  → 本轮 **503**；能力未接入 → **501**；临时上游故障 → 502「可重试」；
+  永久错误均不标「可重试」，且所有失败均**零消息落库**；
   并发轮冲突 → 409 且零落库。
 """
 
@@ -382,7 +383,7 @@ def test_guide_never_creates_task_and_human_signs(app_env) -> None:
 
 
 class _RaisingStub:
-    """chat 抛指定异常的 stub gateway，用于测临时上游故障（非配置错）路径。"""
+    """chat 抛指定异常的 stub gateway，用于测 API 的模型错误分流。"""
 
     def __init__(self, exc: Exception) -> None:
         self._exc = exc
@@ -411,6 +412,33 @@ def test_missing_config_503_transactional_no_partial_write(app_env) -> None:
     assert resp2.status_code == 503
     got2 = client.get(f"/api/conversations/{conv_id}").json()
     assert [m["role"] for m in got2["messages"]] == [], "重试不得堆出重复 user 行"
+
+
+def test_vision_capability_unavailable_501_non_retryable_and_zero_partial_write(app_env) -> None:
+    from backend.app.core.errors import ModelCapabilityUnavailableError
+
+    client, app = app_env
+    conv_id = _open_conversation(client)
+    _inject(
+        app,
+        _RaisingStub(
+            ModelCapabilityUnavailableError(
+                "vision 能力未实装：openai_compatible 报文形态待内网侦察"
+            )
+        ),
+    )
+
+    resp = client.post(
+        f"/api/conversations/{conv_id}/messages", json={"content": "识别这张图纸"}
+    )
+
+    assert resp.status_code == 501
+    detail = resp.json()["detail"]
+    assert "模型能力未接入" in detail
+    assert "可重试" not in detail
+    got = client.get(f"/api/conversations/{conv_id}").json()
+    assert [message["role"] for message in got["messages"]] == []
+    assert got["recommendation"] is None
 
 
 def test_transient_upstream_502_still_retryable(app_env) -> None:

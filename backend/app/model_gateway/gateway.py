@@ -3,6 +3,7 @@
 宪法/ADR-0003 fail-closed 条款：
 - profile 未在 profiles.yaml 声明 → ``ProfileNotConfiguredError``。
 - 对应环境变量缺失 / 上游网络错误 / 上游非 2xx → ``ModelUpstreamError``。
+- profile 已解析但能力尚未接入 → ``ModelCapabilityUnavailableError``（非临时故障）。
 - 任何路径（成败）都必须落一条 ``model_calls`` 记录（"无事件=没发生"，docs/04 §7
   违规判定）——绝不静默降级、绝不编造回答顶替。
 
@@ -24,7 +25,12 @@ import yaml
 from jsonschema import validate
 
 from ..config import CONTRACTS_DIR
-from ..core.errors import ModelConfigError, ModelUpstreamError, ProfileNotConfiguredError
+from ..core.errors import (
+    ModelCapabilityUnavailableError,
+    ModelConfigError,
+    ModelUpstreamError,
+    ProfileNotConfiguredError,
+)
 from ..storage import repos
 
 _PROFILE_SCHEMA_PATH = CONTRACTS_DIR / "model_profile.schema.json"
@@ -284,32 +290,22 @@ class ModelGateway:
     ) -> dict[str, Any]:
         model_name: str | None = None
         request_summary = f"vision：{prompt[:80]}"
+        # fail-closed（红线）：openai_compatible 的 vision 报文形态未与内网端点对齐，
+        # V0.1 若按占位协议（image_path 字段）发包，上游必然不认——发出即假请求。
+        # 与其 fail-open 发一个必败的占位报文，不如显式记 failed 留痕后 raise，
+        # 让调用方诚实面对「视觉能力未实装」，绝不让上游误答被当成真实视觉结论。
         try:
             cfg, base_url, api_key, model_name = self._resolve(profile)
-            del cfg
-            # openai_compatible 报文形态待内网侦察确认；V0.1 沿用 chat 端点 + 图片路径占位。
-            payload = {
-                "model": model_name,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_path", "image_path": image_path},
-                        ],
-                    }
-                ],
-            }
-            data = self._post(base_url, "/chat/completions", payload, api_key)
-            try:
-                choice = (data.get("choices") or [{}])[0]
-                message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
-                content = message.get("content")
-                token_usage = data.get("usage")
-                result = {"content": content, "token_usage": token_usage, "model_name": model_name}
-            except (AttributeError, IndexError, KeyError, TypeError) as exc:
-                raise ModelUpstreamError(f"上游返回 200 但 vision 响应形状漂移：{exc}") from exc
-        except (ProfileNotConfiguredError, ModelUpstreamError) as exc:
+            del cfg, base_url, api_key
+            raise ModelCapabilityUnavailableError(
+                "vision 能力未实装：openai_compatible 报文形态待内网侦察，"
+                "V0.1 不发出占位请求（fail-closed，防假视觉结论）"
+            )
+        except (
+            ModelCapabilityUnavailableError,
+            ModelUpstreamError,
+            ProfileNotConfiguredError,
+        ) as exc:
             self._record(
                 task_id=task_id, conversation_id=conversation_id, agent_id=agent_id,
                 profile=profile, model_name=model_name,
@@ -317,12 +313,3 @@ class ModelGateway:
                 error_message=str(exc), token_usage=None,
             )
             raise
-
-        self._record(
-            task_id=task_id, conversation_id=conversation_id, agent_id=agent_id,
-            profile=profile, model_name=model_name,
-            status="success", request_summary=request_summary,
-            response_summary=_summarize(result["content"]), error_message=None,
-            token_usage=result["token_usage"],
-        )
-        return result

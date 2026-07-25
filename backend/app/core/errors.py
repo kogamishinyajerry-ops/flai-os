@@ -59,6 +59,13 @@ class ModelAccessDeniedError(FlaiError):
     LLM、自动 completed、经 resolver 传未签发判决。故 profile:none 运行时强制无 LLM。"""
 
 
+class ModelCapabilityUnavailableError(FlaiError):
+    """模型画像已解析，但请求的能力尚未接入。
+
+    这是部署/实现能力缺口，不是临时上游故障；在能力接入前重试同一请求不会恢复。
+    """
+
+
 class ModelUpstreamError(FlaiError):
     """模型网关上游调用失败（env 缺失/网络错误/非 2xx）。"""
 
