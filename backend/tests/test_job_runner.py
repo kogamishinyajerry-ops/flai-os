@@ -98,6 +98,103 @@ def test_run_once_executes_queued_hello_agent_task(runtime_env) -> None:
     assert runner2.run_once() is False
 
 
+class _RecordingRuntime:
+    def __init__(self) -> None:
+        self.executed_task_ids: list[str] = []
+
+    def execute(self, task_id: str) -> None:
+        self.executed_task_ids.append(task_id)
+
+
+def test_run_once_does_not_claim_when_fault_arrives_after_outer_precheck(
+    runtime_env,
+) -> None:
+    """外层预查后才建立的 promotion fault 也必须在 claim 事务内挡住。"""
+
+    conn_factory = runtime_env["conn_factory"]
+    conn = conn_factory()
+    try:
+        task = repos.create_task(
+            conn,
+            task_id="task_fault_after_outer_precheck",
+            agent_id="hello_agent",
+            agent_version="0.1.0",
+            name="claim transaction fault race",
+            created_by="tester",
+            inputs={"name": "不得认领"},
+            input_file_ids=[],
+            metadata={},
+        )
+        repos.set_task_status(conn, task["id"], "queued")
+    finally:
+        conn.close()
+
+    rival = conn_factory()
+    outer_precheck_seen = False
+    queue_probe_seen = False
+    begin_interposed = False
+    fault_inserted = False
+    callback_errors: list[Exception] = []
+
+    def trace(statement: str) -> None:
+        nonlocal outer_precheck_seen, queue_probe_seen
+        nonlocal begin_interposed, fault_inserted
+        normalized = " ".join(statement.upper().split())
+        if normalized.startswith(
+            "SELECT * FROM WORKER_HEARTBEATS WHERE WORKER_ID ="
+        ):
+            outer_precheck_seen = True
+        elif normalized.startswith(
+            "SELECT 1 FROM TASKS WHERE STATUS = 'QUEUED' "
+            "AND ORIGIN = 'USER' LIMIT 1"
+        ):
+            queue_probe_seen = True
+        elif (
+            normalized.startswith("BEGIN IMMEDIATE")
+            and outer_precheck_seen
+            and queue_probe_seen
+            and not begin_interposed
+        ):
+            begin_interposed = True
+            try:
+                fault_inserted = repos.record_promotion_attestation_fault(
+                    rival,
+                    detail='{"reason":"test-claim-race"}',
+                )
+            except Exception as exc:  # trace callback 异常会被 sqlite 吞掉
+                callback_errors.append(exc)
+
+    def racing_conn_factory():
+        racing_conn = conn_factory()
+        racing_conn.set_trace_callback(trace)
+        return racing_conn
+
+    runtime = _RecordingRuntime()
+    runner = JobRunner(runtime, racing_conn_factory)
+    try:
+        did_work = runner.run_once()
+    finally:
+        rival.close()
+
+    conn = conn_factory()
+    try:
+        queued_after = repos.get_task(
+            conn,
+            "task_fault_after_outer_precheck",
+        )
+    finally:
+        conn.close()
+    assert outer_precheck_seen is True
+    assert queue_probe_seen is True
+    assert begin_interposed is True
+    assert fault_inserted is True
+    assert callback_errors == []
+    assert did_work is False
+    assert runtime.executed_task_ids == []
+    assert queued_after is not None
+    assert queued_after["status"] == "queued"
+
+
 # ── P2-5：cancel 竞态兜底，run_once 绝不裸抛 ──────────────────────────────
 
 

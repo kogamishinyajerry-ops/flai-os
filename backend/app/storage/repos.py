@@ -669,6 +669,12 @@ def claim_next_queued(conn: sqlite3.Connection) -> dict[str, Any] | None:
 
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # 权威 fault 裁决必须与 claim 的状态更新同处一个写事务。runner 外层
+        # 预查仅是快路径；fault 若在预查后建立，这里仍须在任何候选/UPDATE
+        # 之前 fail-closed。BEGIN IMMEDIATE 也阻止其他写者在裁决后插入 fault。
+        if get_promotion_attestation_fault(conn) is not None:
+            conn.execute("COMMIT")
+            return None
         row = conn.execute(
             "SELECT id FROM tasks WHERE status = 'queued' AND origin = 'user' "
             "ORDER BY created_at ASC LIMIT 1"
@@ -1382,6 +1388,11 @@ def claim_next_queued_eval_run(
         return None
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # 与用户任务 claim 同口径：poller 外层预查不是权威裁决。fault 若在
+        # 预查后建立，必须在同一写事务内、任何配额/FIFO/UPDATE 之前挡回。
+        if get_promotion_attestation_fault(conn) is not None:
+            conn.execute("COMMIT")
+            return None
         running = conn.execute(
             "SELECT COUNT(*) FROM eval_runs WHERE status = 'running'"
         ).fetchone()[0]
