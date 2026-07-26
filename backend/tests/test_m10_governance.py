@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -927,6 +928,7 @@ def test_promotion_rolls_back_yaml_when_audit_record_fails(
             eval_run_id=run["id"],
             confirmations={"exception_paths_handled": True},
             confirmed_by="王工",
+            attestation_records=[],
         )
 
     assert yaml_path.read_text(encoding="utf-8") == yaml_before
@@ -1088,6 +1090,82 @@ def test_rejected_agents_not_resurrected_by_promotion(
         assert client.get("/api/agents/violator_agent").status_code == 404
         assert client.get("/api/agents/unattested_agent").status_code == 404
         assert client.get("/api/agents/governed_agent").json()["maturity"] == "L1"
+
+
+def test_inflight_l1_is_not_published_before_audit_commit(
+    governance_env: GovernanceEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """审计事务提交前，任何并发读者都只能看见原 L0 活表。"""
+
+    run = _run_eval(governance_env)
+    entered_record = threading.Event()
+    allow_record = threading.Event()
+    original_record = repos.record_promotion
+
+    def _blocked_record(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        entered_record.set()
+        if allow_record.wait(timeout=5.0) is not True:
+            raise TimeoutError("测试未及时放行 promotion 审计提交")
+        return original_record(*args, **kwargs)
+
+    monkeypatch.setattr(repos, "record_promotion", _blocked_record)
+    result: dict[str, Any] = {}
+
+    def _request_promotion() -> None:
+        result["response"] = _promote(
+            governance_env,
+            run["id"],
+            confirmations={"exception_paths_handled": True},
+        )
+
+    request_thread = threading.Thread(target=_request_promotion, daemon=True)
+    request_thread.start()
+    assert entered_record.wait(timeout=5.0) is True
+    try:
+        observed = governance_env.client.get("/api/agents/governed_agent")
+        assert observed.status_code == 200
+        assert observed.json()["maturity"] == "L0"
+    finally:
+        allow_record.set()
+        request_thread.join(timeout=5.0)
+
+    assert request_thread.is_alive() is False
+    response = result["response"]
+    assert response.status_code == 200, response.text
+    assert governance_env.client.get("/api/agents/governed_agent").json()[
+        "maturity"
+    ] == "L1"
+
+
+def test_runtime_attestation_rejection_updates_health(
+    governance_env: GovernanceEnv,
+) -> None:
+    """启动后出现的磁盘漂移必须在下一次重扫令 health sticky-fail。"""
+
+    initial_health = governance_env.client.get("/api/health").json()
+    assert initial_health["promotion_attestation_ok"] is True
+    assert initial_health["promotion_attestation_rejected_count"] == 0
+
+    drifted_yaml = governance_env.agents_dir / "hello_agent" / "agent.yaml"
+    yaml_text = drifted_yaml.read_text(encoding="utf-8")
+    assert yaml_text.count("maturity: L0") == 1
+    drifted_yaml.write_text(
+        yaml_text.replace("maturity: L0", "maturity: L1"),
+        encoding="utf-8",
+    )
+
+    run = _run_eval(governance_env)
+    response = _promote(
+        governance_env,
+        run["id"],
+        confirmations={"exception_paths_handled": True},
+    )
+    assert response.status_code == 200, response.text
+    assert governance_env.client.get("/api/agents/hello_agent").status_code == 404
+
+    health = governance_env.client.get("/api/health").json()
+    assert health["promotion_attestation_ok"] is False
+    assert health["promotion_attestation_rejected_count"] == 1
 
 
 def test_digest_covers_custom_named_schema(tmp_path: Path) -> None:

@@ -163,6 +163,7 @@ def promote(agent_id: str, body: PromoteRequest, request: Request) -> dict[str, 
             eval_run_id=body.eval_run_id,
             confirmations=body.confirmations,
             confirmed_by=request.state.user["display_name"],  # ADR-0019 D5
+            attestation_records=request.app.state.promotion_attestation_records,
         )
     except promotion.PromotionRejected as exc:
         raise HTTPException(

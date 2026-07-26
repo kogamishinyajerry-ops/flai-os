@@ -90,11 +90,20 @@ def _make_app(tmp_path: Path, *, include_l0_control: bool = False):
 def _seed_promotion(db_path: Path, **overrides: object) -> None:
     init_db(db_path)
     package_dir = db_path.parent / "agents" / AGENT_ID
-    manifest = yaml.safe_load((package_dir / "agent.yaml").read_text(encoding="utf-8"))
-    approved, _drafts, broken = load_eval_cases(package_dir)
-    assert broken == []
-    digest = compute_digest(approved, package_dir, manifest)
-    assert digest is not None
+    yaml_path = package_dir / "agent.yaml"
+    l1_yaml = yaml_path.read_text(encoding="utf-8")
+    assert l1_yaml.count("maturity: L1") == 1
+    l0_yaml = l1_yaml.replace("maturity: L1", "maturity: L0")
+    yaml_path.write_text(l0_yaml, encoding="utf-8")
+    try:
+        manifest = yaml.safe_load(l0_yaml)
+        approved, _drafts, broken = load_eval_cases(package_dir)
+        assert broken == []
+        digest = compute_digest(approved, package_dir, manifest)
+        assert digest is not None
+    finally:
+        # 模拟真实提交：eval 对 L0 取证，promotion 随后只把 maturity 行写成 L1。
+        yaml_path.write_text(l1_yaml, encoding="utf-8")
     conn = get_conn(db_path)
     try:
         repos.create_eval_run(

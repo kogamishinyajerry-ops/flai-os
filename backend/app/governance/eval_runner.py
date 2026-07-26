@@ -131,12 +131,16 @@ def compute_digest(
     approved: list[dict[str, Any]],
     pkg_dir: Path | None = None,
     agent: dict[str, Any] | None = None,
+    *,
+    package_file_overrides: dict[str, bytes] | None = None,
 ) -> str | None:
     """评测证据指纹：approved case 原文 + 引用的输入文件实体 + 配置实际引用的包文件。
 
     按文件名排序拼接后 sha256；无 approved case 返回 None。
     绑定被测对象本体（异源审 P1-4/F3）：同版本号下改 workflow/prompt/schema/
-    输入文件后旧证据必须失效。tool/model/scope 级完整 manifest 是 V0.2 槽位。
+    输入文件后旧证据必须失效。package_file_overrides 仅供 promotion attestation
+    把 L1 manifest 的 maturity 行还原为取证时 L0 原文；其余文件仍读真实磁盘。
+    tool/model/scope 级完整 manifest 是 V0.2 槽位。
     """
     if not approved:
         return None
@@ -156,7 +160,10 @@ def compute_digest(
         for name in _referenced_package_files(agent):
             f = pkg_dir / name
             h.update(f"pkg:{name}\n".encode("utf-8"))
-            h.update(f.read_bytes() if f.is_file() else b"<missing>")
+            if package_file_overrides is not None and name in package_file_overrides:
+                h.update(package_file_overrides[name])
+            else:
+                h.update(f.read_bytes() if f.is_file() else b"<missing>")
             h.update(b"\n")
     return h.hexdigest()
 

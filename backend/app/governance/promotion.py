@@ -28,6 +28,7 @@ import re
 import sqlite3
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable
 
 from ..knowledge.scopes import reconcile_agent_scopes
@@ -62,6 +63,87 @@ class PromotionRejected(Exception):
         self.checks = checks
         failed_names = [k for k, v in checks.items() if v.get("ok") is not True]
         super().__init__(f"晋升条件未全部满足：{failed_names}")
+
+
+def _pre_promotion_digest(
+    approved: list[dict[str, Any]],
+    package_dir: Path,
+    agent: dict[str, Any],
+    *,
+    from_maturity: str,
+    to_maturity: str,
+) -> str | None:
+    """逆转唯一 maturity 行，复算评测真正见过的晋升前包指纹。"""
+
+    yaml_path = package_dir / "agent.yaml"
+    raw = yaml_path.read_bytes()
+    pattern = re.compile(
+        rb"^(maturity:[ \t]*)"
+        + re.escape(to_maturity.encode("utf-8"))
+        + rb"([ \t]*\r?)$",
+        flags=re.MULTILINE,
+    )
+    matches = list(pattern.finditer(raw))
+    if len(matches) != 1:
+        return None
+    pre_promotion_yaml = pattern.sub(
+        lambda match: (
+            match.group(1)
+            + from_maturity.encode("utf-8")
+            + match.group(2)
+        ),
+        raw,
+        count=1,
+    )
+    return compute_digest(
+        approved,
+        package_dir,
+        agent,
+        package_file_overrides={"agent.yaml": pre_promotion_yaml},
+    )
+
+
+def _coverage_is_sufficient(
+    approved: list[dict[str, Any]], broken: list[dict[str, Any]]
+) -> bool:
+    return (
+        len(broken) == 0
+        and len(approved) >= 3
+        and _has_failure_path_case(approved) is True
+    )
+
+
+def _changelog_is_nonempty(package_dir: Path) -> bool:
+    changelog = package_dir / "changelog.md"
+    return changelog.is_file() and changelog.read_text(encoding="utf-8").strip() != ""
+
+
+def _eval_evidence_conditions(
+    run: dict[str, Any],
+    *,
+    agent_id: str,
+    agent_version: str,
+    expected_digest: str | None,
+) -> dict[str, bool]:
+    """晋升与重启 attestation 共用同一组全绿证据谓词。"""
+
+    total = run.get("total")
+    passed = run.get("passed")
+    return {
+        "属于本 agent": run.get("agent_id") == agent_id,
+        "run 已完成": run.get("status") == "completed",
+        "版本一致": str(run.get("agent_version")) == agent_version,
+        "total>0": type(total) is int and total > 0,
+        "passed==total": (
+            type(passed) is int and type(total) is int and passed == total
+        ),
+        "failed==0": type(run.get("failed")) is int and run.get("failed") == 0,
+        "skipped==0": type(run.get("skipped")) is int and run.get("skipped") == 0,
+        "digest 一致（内容自评测以来未变）": (
+            expected_digest is not None
+            and run.get("eval_cases_digest") == expected_digest
+        ),
+    }
 
 
 def _promotion_record_attests(
@@ -102,38 +184,30 @@ def _promotion_record_attests(
 
     try:
         run = repos.get_eval_run(conn, eval_run_id)
+        if run is None:
+            return False
         package_dir = agent_registry.package_dir(str(agent.get("id")))
         approved, _drafts, broken = load_eval_cases(package_dir)
-        current_digest = compute_digest(approved, package_dir, agent)
-        changelog = package_dir / "changelog.md"
-        changelog_ok = (
-            changelog.is_file()
-            and changelog.read_text(encoding="utf-8").strip() != ""
+        current_digest = _pre_promotion_digest(
+            approved,
+            package_dir,
+            agent,
+            from_maturity="L0",
+            to_maturity="L1",
         )
+        evidence_conditions = _eval_evidence_conditions(
+            run,
+            agent_id=str(agent.get("id")),
+            agent_version=str(agent.get("version")),
+            expected_digest=current_digest,
+        )
+        changelog_ok = _changelog_is_nonempty(package_dir)
     except (sqlite3.Error, OSError, ValueError, TypeError, RecursionError):
         return False
-    if run is None:
-        return False
-    total = run.get("total")
-    passed = run.get("passed")
     return (
-        len(broken) == 0
-        and len(approved) >= 3
-        and _has_failure_path_case(approved) is True
+        _coverage_is_sufficient(approved, broken) is True
         and changelog_ok is True
-        and run.get("agent_id") == agent.get("id")
-        and run.get("agent_version") == agent.get("version")
-        and run.get("status") == "completed"
-        and isinstance(total, int)
-        and not isinstance(total, bool)
-        and total > 0
-        and isinstance(passed, int)
-        and not isinstance(passed, bool)
-        and passed == total
-        and run.get("failed") == 0
-        and run.get("skipped") == 0
-        and current_digest is not None
-        and run.get("eval_cases_digest") == current_digest
+        and all(value is True for value in evidence_conditions.values())
     )
 
 
@@ -211,6 +285,7 @@ def promote_agent(
     eval_run_id: str,
     confirmations: Any,
     confirmed_by: Any,
+    attestation_records: list[dict[str, str]],
 ) -> dict[str, Any]:
     """执行 L0→L1 晋升；全部条件 is True 才生效，否则 PromotionRejected。
 
@@ -226,22 +301,23 @@ def promote_agent(
             eval_run_id=eval_run_id,
             confirmations=confirmations,
             confirmed_by=confirmed_by,
+            attestation_records=attestation_records,
         )
 
 
-def _rescan_with_reconcile(
+def _build_reconciled_shadow(
     agent_registry: Any,
     scope_registry: Any,
     conn_factory: Callable[[], Any],
     *,
     exempt_agent_id: str | None = None,
-) -> None:
+) -> tuple[Any, list[dict[str, str]]]:
     """重扫必须复刻装配路径的对账顺序（异源审 P1-2）：scan 会把启动期因
     knowledge scope 违规被注销的 Agent 重新载入，reconcile 不跟上=静态安全门
     被晋升动作复活绕过。顺序契约同 bootstrap.assemble：reconcile 先于 sync。
 
-    影子实例+原子发布（异源审 F1）：scan/reconcile 全程发生在影子上，活注册表
-    经 adopt 一次性切换——其他请求线程绝不会读到「已重载未对账」的中间态。
+    scan/reconcile/attestation 全程发生在影子上；调用方必须等 DB 投影与 promotion
+    审计事务提交后才能 adopt，避免并发读者观察到无 durable 证明的 L1。
     """
     shadow = type(agent_registry)(agent_registry.agents_dir, agent_registry.schema_path)
     shadow.scan()
@@ -251,7 +327,7 @@ def _rescan_with_reconcile(
         )
     conn = conn_factory()
     try:
-        reconcile_promotion_attestations(
+        rejected = reconcile_promotion_attestations(
             shadow,
             conn,
             actor="promotion-rescan",
@@ -259,7 +335,7 @@ def _rescan_with_reconcile(
         )
     finally:
         conn.close()
-    agent_registry.adopt(shadow)
+    return shadow, rejected
 
 
 def _promote_agent_locked(
@@ -272,6 +348,7 @@ def _promote_agent_locked(
     eval_run_id: str,
     confirmations: Any,
     confirmed_by: Any,
+    attestation_records: list[dict[str, str]],
 ) -> dict[str, Any]:
     agent = agent_registry.get(agent_id)
     if agent is None:
@@ -291,9 +368,7 @@ def _promote_agent_locked(
 
     # 1) 最小评测覆盖（D1）
     approved, _drafts, broken = load_eval_cases(pkg_dir)
-    coverage_ok = (
-        len(broken) == 0 and len(approved) >= 3 and _has_failure_path_case(approved) is True
-    )
+    coverage_ok = _coverage_is_sufficient(approved, broken)
     checks["min_eval_coverage"] = {
         "ok": coverage_ok is True,
         "detail": (
@@ -314,25 +389,18 @@ def _promote_agent_locked(
         evidence_ok = False
         evidence_detail = f"eval_run 不存在：{eval_run_id!r}"
     else:
-        conditions = {
-            "属于本 agent": run["agent_id"] == agent_id,
-            "run 已完成": run["status"] == "completed",
-            "版本一致": str(run["agent_version"]) == current_version,
-            "total>0": run["total"] > 0,
-            "failed==0": run["failed"] == 0,
-            "skipped==0": run["skipped"] == 0,
-            "digest 一致（内容自评测以来未变）": (
-                run.get("eval_cases_digest") is not None
-                and run.get("eval_cases_digest") == current_digest
-            ),
-        }
+        conditions = _eval_evidence_conditions(
+            run,
+            agent_id=agent_id,
+            agent_version=current_version,
+            expected_digest=current_digest,
+        )
         evidence_ok = all(v is True for v in conditions.values())
         evidence_detail = "; ".join(f"{k}={v}" for k, v in conditions.items())
     checks["eval_evidence"] = {"ok": evidence_ok is True, "detail": evidence_detail}
 
     # 3) changelog 非空
-    changelog = pkg_dir / "changelog.md"
-    changelog_ok = changelog.is_file() and changelog.read_text(encoding="utf-8").strip() != ""
+    changelog_ok = _changelog_is_nonempty(pkg_dir)
     checks["changelog_nonempty"] = {
         "ok": changelog_ok is True,
         "detail": "changelog.md 存在且非空" if changelog_ok else "changelog.md 缺失或为空文件",
@@ -398,31 +466,42 @@ def _promote_agent_locked(
             fh.write(text)
         with open(changelog_path, "w", encoding="utf-8", newline="") as fh:
             fh.write(changelog_original)
-        _rescan_with_reconcile(agent_registry, scope_registry, conn_factory)
+        restored_shadow, restored_rejections = _build_reconciled_shadow(
+            agent_registry, scope_registry, conn_factory
+        )
+        for record in restored_rejections:
+            if record not in attestation_records:
+                attestation_records.append(record)
         conn = conn_factory()
         try:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                agent_registry.sync_to_db(conn)
+                restored_shadow.sync_to_db(conn)
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
         finally:
             conn.close()
+        agent_registry.adopt(restored_shadow)
 
     try:
         with open(yaml_path, "w", encoding="utf-8", newline="") as fh:
             fh.write(new_text)
         with open(changelog_path, "a", encoding="utf-8", newline="") as fh:
             fh.write(changelog_entry)
-        _rescan_with_reconcile(
+        promoted_shadow, runtime_rejections = _build_reconciled_shadow(
             agent_registry,
             scope_registry,
             conn_factory,
             exempt_agent_id=agent_id,
         )
-        refreshed = agent_registry.get(agent_id)
+        # 运行期拒载一旦发生即 sticky-fail；health/deploy_selfcheck 不能因启动时
+        # 干净而继续假绿。去重避免回滚重扫把同一拒载重复计数。
+        for record in runtime_rejections:
+            if record not in attestation_records:
+                attestation_records.append(record)
+        refreshed = promoted_shadow.get(agent_id)
         if refreshed is None or str(refreshed.get("maturity")) != to_maturity:
             raise RuntimeError(
                 f"晋升重扫后 agent {agent_id} 状态异常（不存在或 maturity 未落 {to_maturity}），回滚"
@@ -433,7 +512,7 @@ def _promote_agent_locked(
             # 「有 L1 投影无审计」分叉在事务边界上被消除。
             conn.execute("BEGIN IMMEDIATE")
             try:
-                agent_registry.sync_to_db(conn)
+                promoted_shadow.sync_to_db(conn)
                 promotion = repos.record_promotion(
                     conn,
                     agent_id=agent_id,
@@ -451,6 +530,9 @@ def _promote_agent_locked(
                 raise
         finally:
             conn.close()
+        # DB 投影与 promotion 审计已 durable 后才一次性公开 L1；commit→adopt
+        # 窗口只会保守地继续呈现 L0，不会产生假绿。
+        agent_registry.adopt(promoted_shadow)
     except Exception as commit_exc:
         logger.exception("晋升提交段异常，恢复磁盘与投影原状（agent=%s）", agent_id)
         try:
