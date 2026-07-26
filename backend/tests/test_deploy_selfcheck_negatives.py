@@ -200,6 +200,21 @@ def test_worker_gen_wrong_generation_fails(tmp_path: Path) -> None:
     assert deploy_selfcheck.WORKER_GENERATION in c.detail
 
 
+def test_worker_gen_before_promotion_attestation_fails(tmp_path: Path) -> None:
+    """GH #3：API 已升级但 worker 仍是启动 attestation 前代际，不能假绿。"""
+    db = _valid_db(tmp_path)
+    _insert_beat(
+        db,
+        generation=(
+            "collab-resolver+t2-eval-snapshot+b3-llm-timeout+b8-disabled-gate"
+        ),
+        last_beat_at=datetime.now(timezone.utc).isoformat(),
+    )
+    c = _run_worker_gen(db)
+    assert c.ok is False
+    assert deploy_selfcheck.WORKER_GENERATION in c.detail
+
+
 def test_worker_gen_stale_beat_fails(tmp_path: Path) -> None:
     """代际对但心跳 120s 前——worker 已死/挂起，超 60s 窗口必 FAIL。"""
     db = _valid_db(tmp_path)
@@ -370,6 +385,47 @@ def test_live_eval_snapshot_axis_truthy_not_true_fails(monkeypatch) -> None:
 def test_live_eval_snapshot_axis_true_passes(monkeypatch) -> None:
     _fake_http(monkeypatch, payload={"eval_snapshot_axis": True})
     assert deploy_selfcheck.check_live_eval_snapshot_generation("http://x").ok is True
+
+
+# ---- 8d. check_live_promotion_attestation（GH #3 启动签发代际 + 结果）----
+
+def test_live_promotion_attestation_missing_fails(monkeypatch) -> None:
+    """旧 API 没有启动核对代际与结果，无法证明 L1 来自 promotion，必 FAIL。"""
+    _fake_http(monkeypatch, payload={"status": "ok"})
+    assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+
+
+def test_live_promotion_attestation_rejection_fails(monkeypatch) -> None:
+    _fake_http(monkeypatch, payload={
+        "promotion_attestation_axis": True,
+        "promotion_attestation_ok": False,
+        "promotion_attestation_rejected_count": 1,
+    })
+    assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+
+
+def test_live_promotion_attestation_truthy_not_true_fails(monkeypatch) -> None:
+    """axis/result 都只认布尔真；字符串与整数不能冒充安全门通过。"""
+    for truthy in ("true", 1, "1"):
+        _fake_http(monkeypatch, payload={
+            "promotion_attestation_axis": truthy,
+            "promotion_attestation_ok": True,
+        })
+        assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+        _fake_http(monkeypatch, payload={
+            "promotion_attestation_axis": True,
+            "promotion_attestation_ok": truthy,
+        })
+        assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+
+
+def test_live_promotion_attestation_clean_passes(monkeypatch) -> None:
+    _fake_http(monkeypatch, payload={
+        "promotion_attestation_axis": True,
+        "promotion_attestation_ok": True,
+        "promotion_attestation_rejected_count": 0,
+    })
+    assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is True
 
 
 # ---------- 9. check_auth_generation（default-deny 见证） ----------

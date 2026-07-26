@@ -130,6 +130,7 @@ def create_app(
             app.state.uploads_dir = uploads_dir
             app.state.task_runs_dir = task_runs_dir
             app.state.agents_dir = agents_dir
+            app.state.promotion_attestation_records = asm.promotion_attestation_records
 
             yield
         finally:
@@ -177,6 +178,16 @@ def create_app(
             # operator 据此知 API 未重启；否则旧 API 入队无 handle 的 run、worker 回退活磁盘，
             # 不可变保证静默失效。仍是布尔位，不含数据。
             "eval_snapshot_axis": True,
+            # GH #3 启动签发代际：axis 证明活进程含核对代码；ok/count 证明本次
+            # 装配是否隔离过无 promotion 的 L1。HTTP 仍作为 liveness 返回 200，
+            # deploy_selfcheck 另以 is True 严格判 ok。
+            "promotion_attestation_axis": True,
+            "promotion_attestation_ok": (
+                len(app.state.promotion_attestation_records) == 0
+            ),
+            "promotion_attestation_rejected_count": len(
+                app.state.promotion_attestation_records
+            ),
             # 库身份指纹（Codex R1 审 P2）：自检门比对「服务实际连的库」与
             # 「探针检查的库」是否同一——FLAI_DB_PATH 两侧不一致时，探针查
             # 有账户的库 A、服务连空库 B，全部 PASS 却无人能登录。路径哈希

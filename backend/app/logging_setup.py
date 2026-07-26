@@ -7,7 +7,8 @@
 - API：main.py lifespan，log_dir 派生 db_path.parent/logs，process_tag="api"，
   写 flai-os-api.log + audit.log；lifespan 退出调 reset_logging（D5 防泄漏）。
 - worker：jobs/runner.py `_run_default_worker`，process_tag="worker"，
-  enable_audit_file=False（审计事件全 API 侧，worker 不写 audit.log 避争用）。
+  enable_audit_file=False；共享 bootstrap 的启动签证审计随进程日志写入
+  flai-os-worker.log，worker 不写 audit.log 以避免跨进程争用。
 
 file-only（D4）：绝不往 root 挂 console handler——uvicorn 自带 console，
 root 挂 StreamHandler 会污染 capsys 断言的测试。
@@ -36,6 +37,9 @@ _AUDIT_ALLOWED_FIELDS = frozenset({
     # actor 同类已入白名单）；self_review_basis='username'|'display_name' 标注自审
     # 判定的证据等级（精确 vs legacy 近似）。二者皆枚举/受控标识，无自由文本。
     "created_by_username", "self_review_basis",
+    # GH #3 启动 promotion attestation：只记受控包身份与治理轴，不含
+    # prompt、输入或凭据。
+    "agent_id", "agent_version", "maturity",
 })
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"

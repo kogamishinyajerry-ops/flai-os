@@ -517,7 +517,7 @@ def _assemble_default_worker_runtime() -> tuple[Any, Any, Callable[[], sqlite3.C
     """装配 worker 进程共享的 (assembly, runtime, conn_factory)——JobRunner 与
     EvalRunner（T1 异步评测队列，GH #2）复用同一份，避免 worker 启动跑两遍昂贵的
     bootstrap.assemble。走共享路径（ADR-0015 Finding 1）：与 API 进程同一条
-    「scan→scope scan→reconcile→sync」。
+    「scan→scope reconcile→promotion attestation→sync」。
     """
     from .. import config
     from ..bootstrap import assemble
@@ -638,7 +638,8 @@ def _run_default_worker() -> int:
 
     # worker 进程日志（ADR-0023）：恢复中断任务/心跳失败/未预期异常等 fail-closed
     # 事件落 flai-os-worker.log，不再随 detached 启动蒸发。enable_audit_file=False：
-    # 审计事件全 API 侧产生，worker 不写 audit.log 避跨进程争用（D2）。
+    # 共享 bootstrap 的启动签证审计也随 worker 进程日志落盘；worker 不写
+    # audit.log，以避免跨进程争用（D2）。
     from ..logging_setup import configure_logging
     configure_logging(
         Path(config.DB_PATH).parent / "logs", process_tag="worker", enable_audit_file=False

@@ -69,7 +69,13 @@ DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 # 故 bump 逼 worker 重启到读 env 的新代码。
 # 批八（Codex R0 P1）：runtime._execute 新增执行期 disabled 兜底——worker 可见
 # 行为变更（缺此分支的旧 worker 会硬跑已禁用 agent 的滞留任务），bump 逼重启。
-WORKER_GENERATION = "collab-resolver+t2-eval-snapshot+b3-llm-timeout+b8-disabled-gate"
+# GH #3：共享 bootstrap 新增 L1↔promotions 启动 attestation。旧 worker 不走此门，
+# 仍可能把磁盘直改/崩溃窗口留下的无审计 L1 装进运行 registry；仅 API health
+# axis 不能证明独立 worker 已升级，故再次 bump，和 API 8d 组成双向偏斜门。
+WORKER_GENERATION = (
+    "collab-resolver+t2-eval-snapshot+b3-llm-timeout+b8-disabled-gate"
+    "+gh3-promotion-attestation"
+)
 
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。
 # monitor_adapter_recon 工具经此子进程调核起草 adapter 草案；未配置=核不可达=工具

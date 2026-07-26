@@ -25,6 +25,8 @@
     8c. health 含 eval_snapshot_axis=true（T2/#5 运行进程代际，Codex R0 审 P1：enqueue
         须冻结不可变快照——旧 API 未重启会入队无 handle 的 run、worker 回退活磁盘执行，
         「评的就是晋升的那版」不可变保证静默失效。配合 WORKER_GENERATION bump 双向见证）
+    8d. health 含 promotion_attestation_axis=true 且 promotion_attestation_ok=true
+        （GH #3：活 API 已执行 L1↔promotions 启动核对，且本次没有拒载漂移 L1）
     9. health.db_identity = 探针侧库路径指纹（Codex R1 审 P2：两侧 FLAI_DB_PATH
        不一致时，探针查有账户的库 A、服务连空库 B，其余全 PASS 却无人能登录）
     10. 未认证 GET /api/agents → 401（鉴权代际见证：200=裸奔旧代际，404=旧代码，
@@ -304,6 +306,33 @@ def check_live_eval_snapshot_generation(base_url: str) -> Check:
     )
 
 
+def check_live_promotion_attestation(base_url: str) -> Check:
+    """GH #3 的活进程 L1 签发核对见证；代际与本次结果均只认布尔真。"""
+
+    url = f"{base_url}/api/health"
+    try:
+        _, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check("运行进程晋升签发核对", False, f"{url} 不可达或非 JSON：{exc}")
+    axis_ok = payload.get("promotion_attestation_axis") is True
+    result_ok = payload.get("promotion_attestation_ok") is True
+    if axis_ok is True and result_ok is True:
+        return Check(
+            "运行进程晋升签发核对",
+            True,
+            "活进程自报 promotion_attestation_axis=true 且本次核对无拒载",
+        )
+    rejected_count = payload.get("promotion_attestation_rejected_count")
+    return Check(
+        "运行进程晋升签发核对",
+        False,
+        "health 未同时给出 promotion_attestation_axis=true 与 "
+        "promotion_attestation_ok=true"
+        f"（rejected_count={rejected_count!r}）；旧进程或存在无审计 L1，fail-closed",
+    )
+
+
 def check_auth_generation(base_url: str) -> Check:
     """鉴权代际见证：匿名打有数据的端点，401 才是新代际的证词。
 
@@ -385,6 +414,7 @@ def main() -> int:
     checks.append(check_live_classification_generation(base_url))
     checks.append(check_live_created_by_username_generation(base_url))
     checks.append(check_live_eval_snapshot_generation(base_url))
+    checks.append(check_live_promotion_attestation(base_url))
     checks.append(check_db_identity(base_url, db_path))
     checks.append(check_auth_generation(base_url))
     checks.append(check_frontend_dist())
