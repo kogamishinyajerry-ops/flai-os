@@ -119,11 +119,91 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _load_json(path: Path, label: str) -> dict[str, Any]:
-    if path.is_symlink():
-        raise EvidenceError(f"{label} path must not be a symlink")
+def _open_directory_nofollow(path: Path, label: str) -> int:
+    if not RACE_SAFE_DIR_FD:
+        raise EvidenceError(
+            "platform lacks race-safe dir_fd and O_NOFOLLOW support"
+        )
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory_fd: int | None = None
     try:
-        raw = path.read_text(encoding="utf-8")
+        if path.is_absolute():
+            directory_fd = os.open(path.anchor, directory_flags)
+            parts = path.parts[1:]
+        else:
+            directory_fd = os.open(".", directory_flags)
+            parts = path.parts
+        if any(part in {"", ".", ".."} for part in parts):
+            raise EvidenceError(
+                f"{label} directory must use canonical path components"
+            )
+        for part in parts:
+            next_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        return directory_fd
+    except EvidenceError:
+        if directory_fd is not None:
+            os.close(directory_fd)
+        raise
+    except OSError as exc:
+        if directory_fd is not None:
+            os.close(directory_fd)
+        raise EvidenceError(
+            f"{label} directory is missing, unreadable, symlinked, or changed"
+        ) from exc
+
+
+def _file_version(file_stat: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        file_stat.st_dev,
+        file_stat.st_ino,
+        file_stat.st_size,
+        file_stat.st_mtime_ns,
+        file_stat.st_ctime_ns,
+    )
+
+
+def _read_regular_file_nofollow(path: Path, label: str) -> bytes:
+    directory_fd: int | None = None
+    file_fd: int | None = None
+    try:
+        if not path.name or path.name in {".", ".."}:
+            raise EvidenceError(f"{label} path must name a regular file")
+        directory_fd = _open_directory_nofollow(path.parent, label)
+        file_fd = os.open(
+            path.name,
+            os.O_RDONLY | os.O_NOFOLLOW,
+            dir_fd=directory_fd,
+        )
+        file_stat = os.fstat(file_fd)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise EvidenceError(f"{label} must remain a regular file")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(file_fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        if _file_version(os.fstat(file_fd)) != _file_version(file_stat):
+            raise EvidenceError(f"{label} changed while being read")
+        return b"".join(chunks)
+    except EvidenceError:
+        raise
+    except OSError as exc:
+        raise EvidenceError(
+            f"{label} is missing, unreadable, symlinked, or changed"
+        ) from exc
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def _load_json(path: Path, label: str) -> dict[str, Any]:
+    try:
+        raw = _read_regular_file_nofollow(path, label).decode("utf-8")
         value = json.loads(
             raw,
             object_pairs_hook=_reject_duplicate_keys,
@@ -248,7 +328,7 @@ def _sha256_artifact_file(
     directory_fd: int | None = None
     file_fd: int | None = None
     try:
-        directory_fd = os.open(evidence_parent, directory_flags)
+        directory_fd = _open_directory_nofollow(evidence_parent, label)
         directory_parts = artifact_root.parts + log_path.parts[:-1]
         for part in directory_parts:
             next_fd = os.open(
@@ -268,6 +348,8 @@ def _sha256_artifact_file(
             if not chunk:
                 break
             digest.update(chunk)
+        if _file_version(os.fstat(file_fd)) != _file_version(file_stat):
+            raise EvidenceError(f"{label} changed while being read")
         return digest.hexdigest(), (file_stat.st_dev, file_stat.st_ino)
     except OSError as exc:
         raise EvidenceError(

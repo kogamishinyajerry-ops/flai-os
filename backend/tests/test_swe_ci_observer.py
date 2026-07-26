@@ -604,6 +604,71 @@ def test_symlinked_artifact_root_is_rejected(tmp_path: Path) -> None:
     not observer.RACE_SAFE_DIR_FD,
     reason="race-safe dir_fd traversal unavailable on this platform",
 )
+def test_symlinked_json_ancestor_is_rejected(tmp_path: Path) -> None:
+    real_root = tmp_path / "real-bundle"
+    _, _, _, _ = _bundle(
+        real_root,
+        name="current",
+        iteration=1,
+        candidate_commit=CANDIDATE_SHA,
+        statuses={"python-tests": "passed", "scope-audit": "passed"},
+    )
+    alias_root = tmp_path / "bundle-alias"
+    alias_root.symlink_to(real_root, target_is_directory=True)
+
+    with pytest.raises(observer.EvidenceError, match="symlink"):
+        observer.observe(
+            alias_root / "manifest.json",
+            alias_root / "current" / "iteration.json",
+        )
+
+
+@pytest.mark.skipif(
+    not observer.RACE_SAFE_DIR_FD,
+    reason="race-safe dir_fd traversal unavailable on this platform",
+)
+@pytest.mark.parametrize("target", ["manifest", "evidence"])
+def test_json_file_swap_cannot_redirect_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    manifest_path, evidence_path, manifest, evidence = _bundle(
+        tmp_path,
+        name="current",
+        iteration=1,
+        candidate_commit=CANDIDATE_SHA,
+        statuses={"python-tests": "passed", "scope-audit": "passed"},
+    )
+    target_path = manifest_path if target == "manifest" else evidence_path
+    outside_path = tmp_path / f"outside-{target}.json"
+    _write_json(outside_path, manifest if target == "manifest" else evidence)
+    real_open = observer.os.open
+    swapped = False
+
+    def swapping_open(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if (
+            path == target_path.name
+            and kwargs.get("dir_fd") is not None
+            and not swapped
+        ):
+            moved_path = target_path.with_name(f"{target_path.name}.before-swap")
+            target_path.rename(moved_path)
+            target_path.symlink_to(outside_path)
+            swapped = True
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(observer.os, "open", swapping_open)
+    with pytest.raises(observer.EvidenceError, match="symlink"):
+        observer.observe(manifest_path, evidence_path)
+    assert swapped is True
+
+
+@pytest.mark.skipif(
+    not observer.RACE_SAFE_DIR_FD,
+    reason="race-safe dir_fd traversal unavailable on this platform",
+)
 def test_parent_directory_swap_cannot_redirect_log_hash(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

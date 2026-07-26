@@ -2,12 +2,12 @@
   "work_item_id": "flai-swe-ci-evidence-observer-codex-001",
   "work_item_version": 1,
   "human_owner": "JerryKogami",
-  "authorization_evidence": "Current Codex task owner instruction: 配合 SWE-CI 帮助更加可控高质量的开发",
+  "authorization_evidence": "Current Codex task owner instructions: 配合 SWE-CI 帮助更加可控高质量的开发; 授权，批准; 继续",
   "authorization_status": "OWNER_CHAT_INSTRUCTION_DECLARED_NOT_AUTHENTICATED_RECEIPT",
   "formal_receipt_status": "NOT_AVAILABLE",
-  "execution_scope": "LOCAL_DEVELOPMENT_EVIDENCE_OBSERVER_ONLY",
-  "external_write_authorization": "NONE",
-  "push_merge_authorization": "NONE",
+  "execution_scope": "DEVELOPMENT_EVIDENCE_OBSERVER_AND_DRAFT_PR_REVIEW_ONLY",
+  "external_write_authorization": "GITHUB_BRANCH_PUSH_DRAFT_PR_AND_REVIEW_REPLY_ONLY",
+  "push_merge_authorization": "PUSH_AUTHORIZED_MERGE_NOT_AUTHORIZED",
   "base_ref": "origin/main",
   "base_sha": "ec43768ff1ad2cb6bc3e571486bfda2d04c35780",
   "upstream_reference": {
@@ -36,7 +36,7 @@
     "SWE-CI source vendoring or imports",
     "Docker images or Hugging Face datasets",
     "OpenCode, iFlow, LLM API keys or external model calls",
-    "automatic requirement truth, signing, promotion, push or merge"
+    "automatic requirement truth, signing, promotion or merge"
   ],
   "acceptance_criteria": [
     "The observer is Python standard-library only and never executes verifier commands.",
@@ -45,6 +45,7 @@
     "Evidence binds a candidate commit, manifest digest, verifier digest, offset-aware timestamps, exact named-gate results and content-addressed logs.",
     "The R0 observer proves only schema, digest and content self-consistency; without a separately trusted producer or attestation it does not prove that the verifier actually ran.",
     "Missing fields, extra fields, duplicate JSON keys, NaN or Infinity, duplicate IDs, truthy non-integers, manifest drift, gate-set drift, path escape, symlink traversal, digest mismatch, invalid time order and inconsistent exit codes fail closed.",
+    "Manifest, current or previous evidence, and log files are opened through component-wise dir_fd plus O_NOFOLLOW traversal, must remain regular and unchanged while read, and reject symlinked ancestors or swap races.",
     "Passed is derived only when every named gate is passed and the verifier exit code is exactly zero.",
     "Mixed named-gate status precedence is error, then unknown, then failed, then passed; all-pass with nonzero exit or any non-pass with zero exit is invalid evidence.",
     "Comparison is allowed only against the immediately preceding iteration under the same manifest and compares every gate independently, including when the previous top-level observation was not passed.",
@@ -73,7 +74,7 @@
     "the observer would be used as human signoff or automatic release authority",
     "origin/main changes and affects an owned path before local completion"
   ],
-  "lifecycle_state": "AUTHORIZED_LOCAL_EXECUTION",
+  "lifecycle_state": "AUTHORIZED_PR_REVIEW_EXECUTION",
   "integration_status": "NOT_INTEGRATED",
-  "release_status": "LOCAL_CANDIDATE_NOT_RELEASED"
+  "release_status": "DRAFT_PR_CANDIDATE_NOT_RELEASED"
 }
