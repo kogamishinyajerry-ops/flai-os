@@ -17,6 +17,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from backend.app import config
+from backend.app.governance.eval_runner import compute_digest, load_eval_cases
 from backend.app.jobs.runner import _build_default_runner
 from backend.app.main import create_app
 from backend.app.storage import repos
@@ -88,6 +89,35 @@ def _make_app(tmp_path: Path, *, include_l0_control: bool = False):
 
 def _seed_promotion(db_path: Path, **overrides: object) -> None:
     init_db(db_path)
+    package_dir = db_path.parent / "agents" / AGENT_ID
+    manifest = yaml.safe_load((package_dir / "agent.yaml").read_text(encoding="utf-8"))
+    approved, _drafts, broken = load_eval_cases(package_dir)
+    assert broken == []
+    digest = compute_digest(approved, package_dir, manifest)
+    assert digest is not None
+    conn = get_conn(db_path)
+    try:
+        repos.create_eval_run(
+            conn,
+            run_id="eval-startup-attestation",
+            agent_id=AGENT_ID,
+            agent_version=AGENT_VERSION,
+            triggered_by="测试签发人",
+        )
+        repos.finish_eval_run(
+            conn,
+            "eval-startup-attestation",
+            status="completed",
+            total=len(approved),
+            passed=len(approved),
+            failed=0,
+            skipped=0,
+            case_results=[],
+            draft_cases=[],
+            eval_cases_digest=digest,
+        )
+    finally:
+        conn.close()
     values: dict[str, object] = {
         "agent_id": AGENT_ID,
         "agent_version": AGENT_VERSION,
@@ -96,7 +126,10 @@ def _seed_promotion(db_path: Path, **overrides: object) -> None:
         "eval_run_id": "eval-startup-attestation",
         "checks": {
             "transition_supported": {"ok": True},
+            "min_eval_coverage": {"ok": True},
             "eval_evidence": {"ok": True},
+            "changelog_nonempty": {"ok": True},
+            "feedback_channel": {"ok": True},
             "manual_confirmation": {"ok": True},
         },
         "confirmations": {"exception_paths_handled": True},
@@ -182,20 +215,28 @@ def test_l1_with_exact_promotion_is_published(tmp_path: Path) -> None:
     "override",
     [
         {"agent_version": "9.9.9"},
+        {"from_maturity": "L1"},
         {"to_maturity": "L0"},
         {"checks": {}},
+        {"checks": {"anything": {"ok": True}}},
         {"checks": {"gate": {"ok": 1}}},
         {"checks": {"gate": {"ok": "true"}}},
+        {"eval_run_id": ""},
+        {"eval_run_id": "missing-eval"},
         {"confirmations": {"exception_paths_handled": 1}},
         {"confirmations": {"exception_paths_handled": "true"}},
         {"confirmed_by": "   "},
     ],
     ids=[
         "wrong-version",
+        "wrong-source",
         "wrong-target",
         "empty-checks",
+        "invented-check",
         "integer-check-ok",
         "string-check-ok",
+        "blank-eval-reference",
+        "missing-eval-reference",
         "integer-confirmation",
         "string-confirmation",
         "blank-signer",
@@ -206,6 +247,61 @@ def test_only_strict_promotion_fields_attest(
 ) -> None:
     app, db_path = _make_app(tmp_path)
     _seed_promotion(db_path, **override)
+
+    with TestClient(app) as client:
+        assert app.state.agent_registry.get(AGENT_ID) is None
+        health = client.get("/api/health").json()
+        assert health["promotion_attestation_ok"] is False
+        assert health["promotion_attestation_rejected_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("agent_id", "different-agent"),
+        ("agent_version", "9.9.9"),
+        ("status", "error"),
+        ("total", 0),
+        ("passed", 0),
+        ("failed", 1),
+        ("skipped", 1),
+        ("eval_cases_digest", "tampered-digest"),
+    ],
+    ids=[
+        "different-agent",
+        "different-version",
+        "not-completed",
+        "empty-run",
+        "incomplete-pass-count",
+        "failed-case",
+        "skipped-case",
+        "stale-package-digest",
+    ],
+)
+def test_referenced_eval_must_be_matching_green_evidence(
+    tmp_path: Path, column: str, value: object
+) -> None:
+    app, db_path = _make_app(tmp_path)
+    _seed_promotion(db_path)
+    conn = get_conn(db_path)
+    try:
+        assert column in {
+            "agent_id",
+            "agent_version",
+            "status",
+            "total",
+            "passed",
+            "failed",
+            "skipped",
+            "eval_cases_digest",
+        }
+        conn.execute(
+            f"UPDATE eval_runs SET {column} = ? WHERE id = ?",
+            (value, "eval-startup-attestation"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
     with TestClient(app) as client:
         assert app.state.agent_registry.get(AGENT_ID) is None

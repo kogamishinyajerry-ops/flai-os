@@ -1025,16 +1025,17 @@ def test_eval_task_reaches_terminal_failed_when_runtime_raises(
         conn.close()
 
 
-def test_scope_violating_agent_not_resurrected_by_promotion(
+def test_rejected_agents_not_resurrected_by_promotion(
     tmp_path: Path,
 ) -> None:
-    """F1/P1-2：启动期因 knowledge scope 违规被注销的 Agent，任意其他 Agent
-    晋升触发的重扫（影子+对账+原子发布）后仍必须不可见。"""
+    """F1/P1-2：启动期被静态门拒绝的 Agent，任意其他 Agent 晋升触发的
+    重扫（影子+全门对账+原子发布）后仍必须不可见。"""
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
     shutil.copytree(REPO / "agents" / "hello_agent", agents_dir / "hello_agent")
     shutil.copytree(REPO / "agents" / "hello_agent", agents_dir / "governed_agent")
     shutil.copytree(REPO / "agents" / "hello_agent", agents_dir / "violator_agent")
+    shutil.copytree(REPO / "agents" / "hello_agent", agents_dir / "unattested_agent")
 
     gov_yaml = agents_dir / "governed_agent" / "agent.yaml"
     gov_yaml.write_text(
@@ -1051,6 +1052,13 @@ def test_scope_violating_agent_not_resurrected_by_promotion(
     )
     assert "ghost_scope" in vio_text
     vio_yaml.write_text(vio_text, encoding="utf-8")
+    unattested_yaml = agents_dir / "unattested_agent" / "agent.yaml"
+    unattested_yaml.write_text(
+        unattested_yaml.read_text(encoding="utf-8")
+        .replace("id: hello_agent", "id: unattested_agent")
+        .replace("maturity: L0", "maturity: L1"),
+        encoding="utf-8",
+    )
     _write_eval_cases(agents_dir, _base_cases())
 
     db_path = tmp_path / "flai_os.db"
@@ -1064,17 +1072,21 @@ def test_scope_violating_agent_not_resurrected_by_promotion(
     )
     with TestClient(app) as client:
         seed_and_login(client, db_path)
-        # 启动对账已注销违规者
+        # 启动对账已注销 scope 违规者与无 promotion 证明的 L1。
         ids = {a["id"] for a in client.get("/api/agents").json()}
         assert "violator_agent" not in ids
+        assert "unattested_agent" not in ids
         env = GovernanceEnv(client=client, app=app, agents_dir=agents_dir)
         run = _run_eval(env)
         response = _promote(env, run["id"], confirmations={"exception_paths_handled": True})
         assert response.status_code == 200, response.text
-        # 晋升重扫后：违规者仍不可见，governed 已 L1
+        # 晋升重扫后：两个被拒者都不能复活，唯独本次已过门的 governed 可在
+        # 审计行同事务落库前作为明确的 in-flight 例外进入影子 registry。
         ids_after = {a["id"] for a in client.get("/api/agents").json()}
         assert "violator_agent" not in ids_after
+        assert "unattested_agent" not in ids_after
         assert client.get("/api/agents/violator_agent").status_code == 404
+        assert client.get("/api/agents/unattested_agent").status_code == 404
         assert client.get("/api/agents/governed_agent").json()["maturity"] == "L1"
 
 

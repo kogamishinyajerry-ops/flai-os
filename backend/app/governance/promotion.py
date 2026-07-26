@@ -25,17 +25,29 @@ from __future__ import annotations
 
 import logging
 import re
+import sqlite3
 import threading
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..knowledge.scopes import reconcile_agent_scopes
+from ..logging_setup import audit_event
 from ..storage import repos
 from .eval_runner import compute_digest, load_eval_cases
 
 logger = logging.getLogger(__name__)
 
 _SUPPORTED = {("L0", "L1")}
+_PROMOTION_GATE_CHECKS = frozenset(
+    {
+        "transition_supported",
+        "min_eval_coverage",
+        "eval_evidence",
+        "changelog_nonempty",
+        "feedback_channel",
+        "manual_confirmation",
+    }
+)
 
 # 晋升串行化（异源审 P1-6）：两个并发 promote 同一进程内串行——后到者在锁内
 # 重读 registry 看到 L1 即被 transition_supported 拒绝。多进程部署下的跨进程
@@ -50,6 +62,128 @@ class PromotionRejected(Exception):
         self.checks = checks
         failed_names = [k for k, v in checks.items() if v.get("ok") is not True]
         super().__init__(f"晋升条件未全部满足：{failed_names}")
+
+
+def _promotion_record_attests(
+    agent_registry: Any,
+    agent: dict[str, Any],
+    promotion: dict[str, Any],
+    conn: sqlite3.Connection,
+) -> bool:
+    """严格核对一条 promotion 是否足以证明当前包的 L1 投影。"""
+
+    checks = promotion.get("checks")
+    checks_ok = (
+        isinstance(checks, dict)
+        and _PROMOTION_GATE_CHECKS.issubset(checks.keys())
+        and all(
+            isinstance(check, dict) and check.get("ok") is True
+            for check in checks.values()
+        )
+    )
+    confirmations = promotion.get("confirmations")
+    confirmed_by = promotion.get("confirmed_by")
+    eval_run_id = promotion.get("eval_run_id")
+    record_ok = (
+        promotion.get("agent_id") == agent.get("id")
+        and promotion.get("agent_version") == agent.get("version")
+        and promotion.get("from_maturity") == "L0"
+        and promotion.get("to_maturity") == "L1"
+        and checks_ok is True
+        and isinstance(eval_run_id, str)
+        and eval_run_id.strip() != ""
+        and isinstance(confirmations, dict)
+        and confirmations.get("exception_paths_handled") is True
+        and isinstance(confirmed_by, str)
+        and confirmed_by.strip() != ""
+    )
+    if record_ok is not True:
+        return False
+
+    try:
+        run = repos.get_eval_run(conn, eval_run_id)
+        package_dir = agent_registry.package_dir(str(agent.get("id")))
+        approved, _drafts, broken = load_eval_cases(package_dir)
+        current_digest = compute_digest(approved, package_dir, agent)
+        changelog = package_dir / "changelog.md"
+        changelog_ok = (
+            changelog.is_file()
+            and changelog.read_text(encoding="utf-8").strip() != ""
+        )
+    except (sqlite3.Error, OSError, ValueError, TypeError, RecursionError):
+        return False
+    if run is None:
+        return False
+    total = run.get("total")
+    passed = run.get("passed")
+    return (
+        len(broken) == 0
+        and len(approved) >= 3
+        and _has_failure_path_case(approved) is True
+        and changelog_ok is True
+        and run.get("agent_id") == agent.get("id")
+        and run.get("agent_version") == agent.get("version")
+        and run.get("status") == "completed"
+        and isinstance(total, int)
+        and not isinstance(total, bool)
+        and total > 0
+        and isinstance(passed, int)
+        and not isinstance(passed, bool)
+        and passed == total
+        and run.get("failed") == 0
+        and run.get("skipped") == 0
+        and current_digest is not None
+        and run.get("eval_cases_digest") == current_digest
+    )
+
+
+def reconcile_promotion_attestations(
+    agent_registry: Any,
+    conn: sqlite3.Connection,
+    *,
+    actor: str,
+    exempt_agent_id: str | None = None,
+) -> list[dict[str, str]]:
+    """把无严格 promotion 证据的 L1 移出影子表；仅容许单个在途晋升例外。"""
+
+    rejected: list[dict[str, str]] = []
+    for agent in agent_registry.list():
+        if agent.get("maturity") != "L1":
+            continue
+        agent_id = str(agent.get("id"))
+        if exempt_agent_id is not None and agent_id == exempt_agent_id:
+            continue
+        try:
+            promotions = repos.list_promotions(conn, agent_id)
+        except (sqlite3.Error, ValueError, TypeError, RecursionError):
+            promotions = []
+        matched = any(
+            _promotion_record_attests(agent_registry, agent, promotion, conn) is True
+            for promotion in promotions
+        )
+        if matched is True:
+            continue
+        agent_version = str(agent.get("version"))
+        reason = (
+            f"Agent {agent_id}@{agent_version} maturity=L1 但无严格匹配的 "
+            "promotion 审计记录，fail-closed 拒绝发布"
+        )
+        agent_registry.deregister(agent_id, reason)
+        record = {
+            "agent_id": agent_id,
+            "agent_version": agent_version,
+            "maturity": "L1",
+            "reason": "missing-or-invalid-promotion",
+        }
+        rejected.append(record)
+        logger.warning("promotion attestation 拒绝注册 Agent %s：%s", agent_id, reason)
+        audit_event(
+            "promotion_attestation",
+            actor=actor,
+            outcome="rejected",
+            **record,
+        )
+    return rejected
 
 
 def _has_failure_path_case(approved: list[dict[str, Any]]) -> bool:
@@ -95,7 +229,13 @@ def promote_agent(
         )
 
 
-def _rescan_with_reconcile(agent_registry: Any, scope_registry: Any) -> None:
+def _rescan_with_reconcile(
+    agent_registry: Any,
+    scope_registry: Any,
+    conn_factory: Callable[[], Any],
+    *,
+    exempt_agent_id: str | None = None,
+) -> None:
     """重扫必须复刻装配路径的对账顺序（异源审 P1-2）：scan 会把启动期因
     knowledge scope 违规被注销的 Agent 重新载入，reconcile 不跟上=静态安全门
     被晋升动作复活绕过。顺序契约同 bootstrap.assemble：reconcile 先于 sync。
@@ -109,6 +249,16 @@ def _rescan_with_reconcile(agent_registry: Any, scope_registry: Any) -> None:
         logger.warning(
             "晋升重扫对账拒绝注册 Agent %s：%s", rec["agent_id"], rec["reason"]
         )
+    conn = conn_factory()
+    try:
+        reconcile_promotion_attestations(
+            shadow,
+            conn,
+            actor="promotion-rescan",
+            exempt_agent_id=exempt_agent_id,
+        )
+    finally:
+        conn.close()
     agent_registry.adopt(shadow)
 
 
@@ -248,7 +398,7 @@ def _promote_agent_locked(
             fh.write(text)
         with open(changelog_path, "w", encoding="utf-8", newline="") as fh:
             fh.write(changelog_original)
-        _rescan_with_reconcile(agent_registry, scope_registry)
+        _rescan_with_reconcile(agent_registry, scope_registry, conn_factory)
         conn = conn_factory()
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -266,7 +416,12 @@ def _promote_agent_locked(
             fh.write(new_text)
         with open(changelog_path, "a", encoding="utf-8", newline="") as fh:
             fh.write(changelog_entry)
-        _rescan_with_reconcile(agent_registry, scope_registry)
+        _rescan_with_reconcile(
+            agent_registry,
+            scope_registry,
+            conn_factory,
+            exempt_agent_id=agent_id,
+        )
         refreshed = agent_registry.get(agent_id)
         if refreshed is None or str(refreshed.get("maturity")) != to_maturity:
             raise RuntimeError(
