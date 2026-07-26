@@ -31,6 +31,7 @@ from ..core.errors import (
 )
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
+from .package_snapshot import AgentPackageSnapshot, SNAPSHOT_CONTRACT
 
 logger = logging.getLogger(__name__)
 
@@ -468,28 +469,59 @@ class AgentRuntime:
         """驱动任务 task_id（调用前须已处于 validating 态）走完生命周期，返回最终 task dict。"""
         conn = self.conn_factory()
         try:
-            return self._execute(conn, task_id)
+            task = repos.get_task(conn, task_id)
+            snapshot_getter = getattr(self.agent_registry, "package_snapshot", None)
+            snapshot = (
+                snapshot_getter(task["agent_id"])
+                if task is not None and callable(snapshot_getter)
+                else None
+            )
+            if snapshot is None:
+                return self._execute(
+                    conn,
+                    task_id,
+                    package_snapshot=None,
+                    package_dir=None,
+                )
+            with snapshot.materialized(
+                parent=self.task_runs_dir / task_id
+            ) as package_dir:
+                return self._execute(
+                    conn,
+                    task_id,
+                    package_snapshot=snapshot,
+                    package_dir=package_dir,
+                )
         finally:
             conn.close()
 
-    def _execute(self, conn: sqlite3.Connection, task_id: str) -> dict[str, Any]:
+    def _execute(
+        self,
+        conn: sqlite3.Connection,
+        task_id: str,
+        *,
+        package_snapshot: AgentPackageSnapshot | None,
+        package_dir: Path | None,
+    ) -> dict[str, Any]:
         task = repos.get_task(conn, task_id)
         if task is None:
             return {"status": "failed", "error_message": f"任务不存在：{task_id}"}
 
         agent_id = task["agent_id"]
-        agent = self.agent_registry.get(agent_id)
-        if agent is None:
-            repos.set_task_status(conn, task_id, "failed", error_message=f"Agent 未注册：{agent_id}")
+        if package_snapshot is None or package_dir is None:
+            message = f"Agent 未注册或缺少不可变包快照：{agent_id}"
+            repos.set_task_status(conn, task_id, "failed", error_message=message)
             repos.append_event(
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",
-                level="error", message=f"Agent 未注册：{agent_id}",
+                level="error", message=message,
             )
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
+        agent = package_snapshot.manifest
 
-        # Codex 命中即审 R2 P1（K1 签发见证的前提）：_execute 按 agent_id 载**当前** registry，
-        # 而 task.agent_version 是创建期锁定值（tasks.py 建时 = 当时当前版本）。跨升级窗口二者可
-        # drift——任务实际跑当前版本而 task.agent_version 停旧值，则 K1 签发见证（键 task.agent_version
+        # Codex 命中即审 R2 P1（K1 签发见证的前提）：_execute 只使用本次一次取得的
+        # Registry package snapshot，而 task.agent_version 是创建期锁定值（tasks.py 建时
+        # = 当时当前版本）。跨升级窗口二者可 drift——任务实际跑当前版本而
+        # task.agent_version 停旧值，则 K1 签发见证（键 task.agent_version
         # 历史 manifest）检的不是真跑版本，判据失真。fail-closed 拒版本漂移 → task.agent_version 恒等
         # 真跑版本，K1 键之即权威（provenance 诚实：绝不静默在异于锁定版本上执行；跨升级排队任务
         # 失败、由用户对新版本重建，优于悄悄跑异版本产出错误归因的产物）。
@@ -525,7 +557,7 @@ class AgentRuntime:
             )
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
-        pkg_dir = self.agent_registry.package_dir(agent_id)
+        pkg_dir = package_dir
 
         # ADR-0025：执行期算一次任务级分级（文件∨知识∨工具三轴）并**落库为不可变列**。
         # 落在产出任何内容（产物/样本/tool_runs/事件正文/error_message）之前，故每条
@@ -542,11 +574,15 @@ class AgentRuntime:
         repos.append_event(
             conn, task_id=task_id, agent_id=agent_id, event_type="validation_started",
             level="info", message="开始校验输入",
+            payload={
+                "package_snapshot_contract": SNAPSHOT_CONTRACT,
+                "package_snapshot_digest": package_snapshot.digest,
+            },
         )
         verified_files: list[tuple[dict[str, Any], BinaryIO]] = []
         try:
             self._validate_inputs(pkg_dir, agent, task["inputs"])
-            verified_files = self._open_input_files(conn, task)
+            verified_files = self._open_input_files(conn, task, agent)
         except Exception as exc:
             repos.append_event(
                 conn, task_id=task_id, agent_id=agent_id, event_type="validation_failed",
@@ -766,9 +802,12 @@ class AgentRuntime:
         jsonschema_validate(inputs, schema)
 
     def _open_input_files(
-        self, conn: sqlite3.Connection, task: dict[str, Any]
+        self,
+        conn: sqlite3.Connection,
+        task: dict[str, Any],
+        agent: dict[str, Any],
     ) -> list[tuple[dict[str, Any], BinaryIO]]:
-        """校验所有签发输入并持有句柄至 workflow 返回；任一失败即整体拒绝执行。"""
+        """按本次包快照校验输入并持有句柄；任一失败即整体拒绝执行。"""
         verified: list[tuple[dict[str, Any], BinaryIO]] = []
         # 批七 3-lens P1：消费点密级复核（ADR-0030）——创建时点 gate 只见直提交
         # 文件；带 depends_on 的下游任务创建时 input_file_ids=[]（材料级=public 恒
@@ -787,9 +826,8 @@ class AgentRuntime:
             if _rec is not None and _rec.get("kind") == "output":
                 _piped_ids.append(_fid)
         if _piped_ids:
-            _agent = self.agent_registry.get(task.get("agent_id")) or {}
             _allowed, _material_level, _agent_max = cgate.agent_clearance_allows(
-                conn, _agent, _piped_ids
+                conn, agent, _piped_ids
             )
             if _allowed is False:
                 raise FileIntegrityError(

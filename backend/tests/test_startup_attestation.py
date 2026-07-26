@@ -28,6 +28,10 @@ from backend.app.governance.eval_runner import (
 )
 from backend.app.jobs.runner import _build_default_runner
 from backend.app.main import create_app
+from backend.app.runtime.package_snapshot import (
+    SNAPSHOT_CONTRACT,
+    capture_agent_package,
+)
 from backend.app.storage import repos
 from backend.app.storage.db import get_conn, init_db
 
@@ -38,7 +42,8 @@ AGENT_VERSION = "1.2.3"
 CONTROL_AGENT_ID = "startup_l0_control"
 
 
-def _valid_promotion_checks() -> dict[str, dict[str, bool]]:
+def _valid_promotion_checks(package_dir: Path) -> dict[str, dict[str, object]]:
+    package_snapshot = capture_agent_package(package_dir)
     return {
         "transition_supported": {"ok": True},
         "min_eval_coverage": {"ok": True},
@@ -46,6 +51,12 @@ def _valid_promotion_checks() -> dict[str, dict[str, bool]]:
         "changelog_nonempty": {"ok": True},
         "feedback_channel": {"ok": True},
         "manual_confirmation": {"ok": True},
+        "package_snapshot": {
+            "ok": True,
+            "contract": SNAPSHOT_CONTRACT,
+            "digest": package_snapshot.digest,
+            "file_count": package_snapshot.file_count,
+        },
     }
 
 
@@ -93,7 +104,15 @@ def _make_app(tmp_path: Path, *, include_l0_control: bool = False):
     knowledge_dir = tmp_path / "knowledge"
     knowledge_dir.mkdir()
     db_path = tmp_path / "flai_os.db"
-    app = create_app(
+    app = _app_from_existing_paths(tmp_path)
+    return app, db_path
+
+
+def _app_from_existing_paths(tmp_path: Path):
+    agents_dir = tmp_path / "agents"
+    knowledge_dir = tmp_path / "knowledge"
+    db_path = tmp_path / "flai_os.db"
+    return create_app(
         agents_dir=agents_dir,
         tools_dir=REPO_ROOT / "tools_impl",
         contracts_dir=REPO_ROOT / "contracts",
@@ -103,7 +122,6 @@ def _make_app(tmp_path: Path, *, include_l0_control: bool = False):
         task_runs_dir=tmp_path / "task_runs",
         frontend_dist_dir=tmp_path / "frontend-dist",
     )
-    return app, db_path
 
 
 def _seed_promotion(db_path: Path, **overrides: object) -> None:
@@ -173,7 +191,7 @@ def _seed_promotion(db_path: Path, **overrides: object) -> None:
         "from_maturity": "L0",
         "to_maturity": "L1",
         "eval_run_id": "eval-startup-attestation",
-        "checks": _valid_promotion_checks(),
+        "checks": _valid_promotion_checks(package_dir),
         "confirmations": {"exception_paths_handled": True},
         "confirmed_by": "测试签发人",
     }
@@ -253,6 +271,51 @@ def test_l1_with_exact_promotion_is_published(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing-workflow", "workflow-symlink"],
+)
+def test_restarted_invalid_promoted_package_is_rejected_and_health_red(
+    tmp_path: Path, mutation: str
+) -> None:
+    app, db_path = _make_app(tmp_path)
+    _seed_promotion(db_path)
+    with TestClient(app) as client:
+        assert app.state.agent_registry.get(AGENT_ID) is not None
+        assert client.get("/api/health").json()["promotion_attestation_ok"] is True
+
+    workflow_path = tmp_path / "agents" / AGENT_ID / "workflow.py"
+    workflow_path.unlink()
+    if mutation == "workflow-symlink":
+        outside = tmp_path / "outside-workflow.py"
+        outside.write_text(
+            "def run(context):\n"
+            "    return {'status': 'success', 'outputs': ['outside']}\n",
+            encoding="utf-8",
+        )
+        try:
+            workflow_path.symlink_to(outside)
+        except (NotImplementedError, OSError) as exc:
+            pytest.skip(f"当前平台不能创建 symlink：{exc}")
+
+    restarted = _app_from_existing_paths(tmp_path)
+    with TestClient(restarted) as client:
+        assert restarted.state.agent_registry.get(AGENT_ID) is None
+        health = client.get("/api/health").json()
+        assert health["promotion_attestation_ok"] is False
+        assert health["promotion_attestation_rejected_count"] == 1
+
+    rejected = [
+        record
+        for record in _audit_records(db_path)
+        if record.get("action") == "promotion_attestation"
+        and record.get("outcome") == "rejected"
+        and record.get("agent_id") == AGENT_ID
+        and record.get("reason") == "missing-or-invalid-package-snapshot"
+    ]
+    assert len(rejected) == 1
+
+
 def test_health_reads_attestation_records_from_one_snapshot(tmp_path: Path) -> None:
     """health 的 ok/count 必须来自同一次列表快照，不能两次 len 撕裂。"""
 
@@ -322,7 +385,9 @@ def test_each_promotion_check_ok_requires_literal_boolean_true(
     """完整合法 checks 只污染一个 ok；拒绝必须由 strict bool 本身咬住。"""
 
     app, db_path = _make_app(tmp_path)
-    checks: dict[str, dict[str, object]] = _valid_promotion_checks()
+    checks: dict[str, dict[str, object]] = _valid_promotion_checks(
+        tmp_path / "agents" / AGENT_ID
+    )
     checks["eval_evidence"]["ok"] = truthy_ok
     _seed_promotion(db_path, checks=checks)
 

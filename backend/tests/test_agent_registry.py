@@ -31,6 +31,83 @@ def test_scan_registers_real_hello_agent() -> None:
     assert registry.errors == []
 
 
+def test_adopt_publishes_the_exact_shadow_snapshot_not_live_bytes(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    package_dir = _copy_hello_agent(agents_dir / "hello_agent")
+    active = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    shadow = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    active.scan()
+    shadow.scan()
+    captured = shadow.package_snapshot("hello_agent")
+    assert captured is not None
+
+    workflow_path = package_dir / "workflow.py"
+    workflow_path.write_text(
+        "def run(context):\n"
+        "    return {'status': 'success', 'outputs': ['live B']}\n",
+        encoding="utf-8",
+    )
+    active.adopt(shadow)
+
+    assert active.package_snapshot("hello_agent") is captured
+    assert dict(captured.files)["workflow.py"] != workflow_path.read_bytes()
+
+
+def test_get_and_list_cannot_mutate_the_published_snapshot() -> None:
+    registry = AgentRegistry(AGENTS_DIR, _AGENT_SCHEMA)
+    registry.scan()
+    snapshot = registry.package_snapshot("hello_agent")
+    assert snapshot is not None
+
+    projected = registry.get("hello_agent")
+    assert projected is not None
+    projected["status"] = "disabled"
+    listed = registry.list()
+    listed_hello = next(agent for agent in listed if agent["id"] == "hello_agent")
+    listed_hello["clearance"] = {"max_data_classification": "sensitive"}
+
+    assert registry.get("hello_agent")["status"] == snapshot.manifest["status"]
+    assert registry.get("hello_agent").get("clearance") == snapshot.manifest.get(
+        "clearance"
+    )
+
+
+def test_snapshot_view_keeps_one_registry_generation_and_private_directories(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    package_dir = _copy_hello_agent(agents_dir / "hello_agent")
+    registry = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    registry.scan()
+    published = registry.package_snapshot("hello_agent")
+    assert published is not None
+
+    with registry.snapshot_view() as view:
+        workflow_path = package_dir / "workflow.py"
+        workflow_path.write_text(
+            "def run(context):\n"
+            "    return {'status': 'success', 'outputs': ['live B']}\n",
+            encoding="utf-8",
+        )
+        registry.scan()
+        private_dir = view.package_dir("hello_agent")
+        assert private_dir is not None
+        materialized = private_dir
+        assert view.package_snapshot("hello_agent") is published
+        assert (private_dir / "workflow.py").read_bytes() == dict(published.files)[
+            "workflow.py"
+        ]
+        projected = view.get("hello_agent")
+        projected["status"] = "disabled"
+        assert view.get("hello_agent")["status"] == published.manifest["status"]
+
+    assert materialized.exists() is False
+
+
 def test_scan_marks_package_missing_workflow_as_invalid(tmp_path: Path) -> None:
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()

@@ -9,9 +9,15 @@ tamper witness：
 
 from __future__ import annotations
 
-from typing import Any
+import shutil
+import uuid
+from pathlib import Path
+from typing import Any, Callable
+
+import yaml
 
 from backend.app.jobs.runner import JobRunner
+from backend.app.runtime.registry import AgentRegistry
 from backend.app.storage import repos
 
 
@@ -44,6 +50,41 @@ def _save_team(client, app, name: str = "验收团队") -> dict[str, Any]:
 
 def _task_count(client) -> int:
     return len(client.get("/api/tasks").json())
+
+
+def _publish_agent_manifest(
+    app,
+    tmp_path: Path,
+    agent_id: str,
+    mutate: Callable[[dict[str, Any]], None],
+) -> None:
+    snapshot = app.state.agent_registry.package_snapshot(agent_id)
+    assert snapshot is not None
+    shadow_root = tmp_path / f"{agent_id}-shadow-{uuid.uuid4().hex}"
+    shadow_root.mkdir()
+    with snapshot.materialized(parent=tmp_path) as frozen_dir:
+        package_dir = shadow_root / agent_id
+        shutil.copytree(frozen_dir, package_dir)
+    yaml_path = package_dir / "agent.yaml"
+    manifest = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    mutate(manifest)
+    yaml_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    shadow = AgentRegistry(shadow_root, app.state.agent_registry.schema_path)
+    shadow.scan()
+    assert shadow.errors == []
+    app.state.agent_registry.adopt(shadow)
+
+
+def _publish_agent_status(app, tmp_path: Path, agent_id: str, status: str) -> None:
+    _publish_agent_manifest(
+        app,
+        tmp_path,
+        agent_id,
+        lambda manifest: manifest.__setitem__("status", status),
+    )
 
 
 # ── 存蓝本 ──────────────────────────────────────────────────────────────────
@@ -91,11 +132,10 @@ def test_summon_seat_mismatch_rejected_G5(app_env):
     assert _task_count(client) == before, "对账不过必须零写入"
 
 
-def test_summon_disabled_member_rejected_G2(app_env):
+def test_summon_disabled_member_rejected_G2(app_env, tmp_path: Path):
     client, app = app_env
     team = _save_team(client, app)
-    agent = app.state.agent_registry.get("hello_agent")
-    agent["status"] = "disabled"
+    _publish_agent_status(app, tmp_path, "hello_agent", "disabled")
     try:
         before = _task_count(client)
         r = client.post(
@@ -106,7 +146,7 @@ def test_summon_disabled_member_rejected_G2(app_env):
         assert "已下线" in r.text
         assert _task_count(client) == before
     finally:
-        agent["status"] = "active"
+        app.state.agent_registry.scan()
 
 
 def test_summon_unregistered_member_rejected_G1(app_env):
@@ -121,12 +161,20 @@ def test_summon_unregistered_member_rejected_G1(app_env):
     assert "不在注册表" in r.text
 
 
-def test_summon_interactive_flip_rejected_G3(app_env):
+def test_summon_interactive_flip_rejected_G3(app_env, tmp_path: Path):
     client, app = app_env
     team = _save_team(client, app)
-    agent = app.state.agent_registry.get("hello_agent")
-    original_mode = agent["workflow"]["mode"]
-    agent["workflow"]["mode"] = "interactive"
+
+    def _make_valid_interactive(manifest: dict[str, Any]) -> None:
+        manifest["workflow"]["mode"] = "interactive"
+        manifest["tools"] = []
+
+    _publish_agent_manifest(
+        app,
+        tmp_path,
+        "hello_agent",
+        _make_valid_interactive,
+    )
     try:
         r = client.post(
             f"/api/teams/{team['id']}/summon",
@@ -135,16 +183,20 @@ def test_summon_interactive_flip_rejected_G3(app_env):
         assert r.status_code == 422
         assert "interactive" in r.text
     finally:
-        agent["workflow"]["mode"] = original_mode
+        app.state.agent_registry.scan()
 
 
-def test_summon_version_drift_G4(app_env):
+def test_summon_version_drift_G4(app_env, tmp_path: Path):
     client, app = app_env
     team = _save_team(client, app)
-    agent = app.state.agent_registry.get("hello_agent")
     try:
         # 0.x 期 minor 变化 → 拒
-        agent["version"] = "0.2.0"
+        _publish_agent_manifest(
+            app,
+            tmp_path,
+            "hello_agent",
+            lambda manifest: manifest.__setitem__("version", "0.2.0"),
+        )
         r = client.post(
             f"/api/teams/{team['id']}/summon",
             json={"items": [{"seq": 0, "inputs": {"name": "a"}}, {"seq": 1, "inputs": {"name": "b"}}]},
@@ -152,7 +204,12 @@ def test_summon_version_drift_G4(app_env):
         assert r.status_code == 422
         assert "版本漂移" in r.text
         # patch 变化 → 放行 + warnings 如实列名
-        agent["version"] = "0.1.1"
+        _publish_agent_manifest(
+            app,
+            tmp_path,
+            "hello_agent",
+            lambda manifest: manifest.__setitem__("version", "0.1.1"),
+        )
         r2 = client.post(
             f"/api/teams/{team['id']}/summon",
             json={"items": [{"seq": 0, "inputs": {"name": "a"}}, {"seq": 1, "inputs": {"name": "b"}}]},
@@ -160,7 +217,7 @@ def test_summon_version_drift_G4(app_env):
         assert r2.status_code == 200, r2.text
         assert any("0.1.0 → 0.1.1" in w for w in r2.json()["warnings"])
     finally:
-        agent["version"] = "0.1.0"
+        app.state.agent_registry.scan()
 
 
 # ── summon 成功链 + seq 重排（auditor F3）──────────────────────────────────
@@ -189,15 +246,14 @@ def test_summon_reverse_order_items_builds_correct_deps(app_env):
 
 # ── 执行期 disabled 兜底（auditor F1 真修，O9 后端半）──────────────────────
 
-def test_execute_disabled_agent_fails_honestly_O9(app_env):
+def test_execute_disabled_agent_fails_honestly_O9(app_env, tmp_path: Path):
     """任务入队后 agent 被禁用（版本不变）→ 执行期诚实 failed 不硬跑——修前
     _execute 只查未注册+版本漂移，禁用成员任务照跑（B7 继承缺口）。"""
     client, app = app_env
     r = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "x"}})
     assert r.status_code == 200, r.text
     task_id = r.json()["id"]
-    agent = app.state.agent_registry.get("hello_agent")
-    agent["status"] = "disabled"
+    _publish_agent_status(app, tmp_path, "hello_agent", "disabled")
     try:
         runner = JobRunner(app.state.runtime, app.state.conn_factory)
         runner.run_once()
@@ -209,7 +265,7 @@ def test_execute_disabled_agent_fails_honestly_O9(app_env):
         assert task["status"] == "failed"
         assert "已下线" in (task.get("error_message") or "")
     finally:
-        agent["status"] = "active"
+        app.state.agent_registry.scan()
 
 
 # ── Codex R0 修复回归（P1 钉版本 / P2 材料校验 / P3 缺位密级展示）──────────

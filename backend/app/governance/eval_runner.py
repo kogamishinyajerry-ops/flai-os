@@ -33,6 +33,10 @@ from typing import Any, Callable
 
 import yaml
 
+from ..runtime.package_snapshot import (
+    AgentPackageSnapshot,
+    capture_agent_package,
+)
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
 
@@ -505,6 +509,7 @@ class _SnapshotRegistry:
         self._agent_id = agent_id
         self._frozen_agent = frozen_agent
         self._dir = materialized_dir
+        self._package_snapshot: AgentPackageSnapshot | None = None
 
     def get(self, agent_id: str) -> Any:
         if agent_id != self._agent_id:
@@ -520,6 +525,20 @@ class _SnapshotRegistry:
 
     def package_dir(self, agent_id: str) -> Any:
         return self._dir if agent_id == self._agent_id else self._base.package_dir(agent_id)
+
+    def package_snapshot(self, agent_id: str) -> AgentPackageSnapshot | None:
+        if agent_id != self._agent_id:
+            return self._base.package_snapshot(agent_id)
+        if self._base.get(agent_id) is None:
+            return None
+        if self._package_snapshot is None:
+            package_snapshot = capture_agent_package(self._dir)
+            if package_snapshot.manifest != self._frozen_agent:
+                raise ValueError(
+                    f"eval snapshot agent {agent_id!r} 的材化 agent.yaml 与冻结配置不一致"
+                )
+            self._package_snapshot = package_snapshot
+        return self._package_snapshot
 
     def __getattr__(self, name: str) -> Any:  # 其余方法（list/scan/deregister…）委托活注册表
         return getattr(self._base, name)

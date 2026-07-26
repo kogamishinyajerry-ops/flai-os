@@ -1,7 +1,7 @@
 """L0→L1 晋升门（M10 治理闭环，ADR-0018）。
 
 maturity 从「手改 yaml 即晋升的声明」变为「必须引用评测证据的可审计事实」。
-docs/02 §L0-L3 准入条件表的 L1 行分解为五条判定——机器可判的机器判，机器
+docs/02 §L0-L3 准入条件表的 L1 行分解为五条准入判定——机器可判的机器判，机器
 不可判的显式人工确认记名，绝不冒充（loop-auditor 设计审 D1/D2/D4/D6 落地）：
 
   1. 最小评测覆盖：approved case ≥ 3 且至少 1 个含 status_is failed 的失败
@@ -16,6 +16,9 @@ docs/02 §L0-L3 准入条件表的 L1 行分解为五条判定——机器可判
   5. 异常路径处理：机器难判 → confirmations.exception_paths_handled **is True**
      （字符串 "true"/整数 1 等 truthy 非 bool 一律拒——本仓 requires_human_review
      truthiness fail-open 事故的同族防御）+ confirmed_by 记名。
+  6. 发布不变量：完整 Agent Package 双遍稳定捕获为
+     `agent_package_snapshot.v1`；最终复核、审计、Registry 与 Runtime 全部绑定
+     该快照，不再以活目录“最后再读一次”冒充不可变发布。
 
 全部通过才写回 agent.yaml（行级手术，byte 级保持其余内容）→ registry 重扫
 → promotions 表落审计记录。任何一条不过 → PromotionRejected 携逐条判定结果。
@@ -36,6 +39,7 @@ from typing import Any, Callable
 
 from ..knowledge.scopes import reconcile_agent_scopes
 from ..logging_setup import audit_event
+from ..runtime.package_snapshot import SNAPSHOT_CONTRACT
 from ..storage import repos
 from .eval_runner import (
     compute_digest,
@@ -54,6 +58,7 @@ _PROMOTION_GATE_CHECKS = frozenset(
         "changelog_nonempty",
         "feedback_channel",
         "manual_confirmation",
+        "package_snapshot",
     }
 )
 
@@ -320,6 +325,20 @@ def _promotion_record_attests(
         return False
 
     try:
+        current_snapshot = agent_registry.package_snapshot(str(agent.get("id")))
+        package_check = checks.get("package_snapshot")
+        package_snapshot_ok = (
+            current_snapshot is not None
+            and isinstance(package_check, dict)
+            and package_check.get("ok") is True
+            and package_check.get("contract") == SNAPSHOT_CONTRACT
+            and isinstance(package_check.get("digest"), str)
+            and package_check.get("digest") == current_snapshot.digest
+            and type(package_check.get("file_count")) is int
+            and package_check.get("file_count") == current_snapshot.file_count
+        )
+        if package_snapshot_ok is not True:
+            return False
         run = repos.get_eval_run(conn, eval_run_id)
         if run is None:
             return False
@@ -332,23 +351,23 @@ def _promotion_record_attests(
         ):
             return False
         snapshot = _snapshot_for_run(conn, run)
-        package_dir = agent_registry.package_dir(str(agent.get("id")))
-        approved, _drafts, broken = load_eval_cases(package_dir)
-        current_digest = _pre_promotion_digest(
-            approved,
-            package_dir,
-            agent,
-            from_maturity="L0",
-            to_maturity="L1",
-        )
-        evidence_conditions = _eval_evidence_conditions(
-            run,
-            agent_id=str(agent.get("id")),
-            agent_version=str(agent.get("version")),
-            expected_digest=current_digest,
-            snapshot=snapshot,
-        )
-        changelog_ok = _changelog_is_nonempty(package_dir)
+        with current_snapshot.materialized() as package_dir:
+            approved, _drafts, broken = load_eval_cases(package_dir)
+            current_digest = _pre_promotion_digest(
+                approved,
+                package_dir,
+                agent,
+                from_maturity="L0",
+                to_maturity="L1",
+            )
+            evidence_conditions = _eval_evidence_conditions(
+                run,
+                agent_id=str(agent.get("id")),
+                agent_version=str(agent.get("version")),
+                expected_digest=current_digest,
+                snapshot=snapshot,
+            )
+            changelog_ok = _changelog_is_nonempty(package_dir)
     except (sqlite3.Error, OSError, ValueError, TypeError, RecursionError):
         return False
     return (
@@ -368,7 +387,43 @@ def reconcile_promotion_attestations(
     """把无严格 promotion 证据的 L1 移出影子表；仅容许单个在途晋升例外。"""
 
     rejected: list[dict[str, str]] = []
-    for agent in agent_registry.list():
+    published_agents = agent_registry.list()
+    published_ids = {
+        str(agent.get("id"))
+        for agent in published_agents
+        if agent.get("id") is not None
+    }
+
+    # Registry.scan 对不安全/缺件包的正确行为是拒载，但仅遍历 list() 会令一个
+    # 上次已投影的 L1 在重启后完全“消失于对账视野”，health 反而假绿。DB 中
+    # 的既有 L1 投影是启动前最后一次已发布集合；当前 Registry 缺位必须作为
+    # package snapshot 拒载记录显式置红，直到人工修复或正式退役该投影。
+    prior_l1_rows = conn.execute(
+        "SELECT id, version, maturity FROM agents WHERE maturity = 'L1'"
+    ).fetchall()
+    for prior in prior_l1_rows:
+        agent_id = str(prior["id"])
+        if agent_id in published_ids:
+            continue
+        record = {
+            "agent_id": agent_id,
+            "agent_version": str(prior["version"]),
+            "maturity": str(prior["maturity"]),
+            "reason": "missing-or-invalid-package-snapshot",
+        }
+        rejected.append(record)
+        logger.warning(
+            "promotion attestation 拒绝既有 L1 %s：当前 Registry 缺少可发布的完整包快照",
+            agent_id,
+        )
+        audit_event(
+            "promotion_attestation",
+            actor=actor,
+            outcome="rejected",
+            **record,
+        )
+
+    for agent in published_agents:
         if agent.get("maturity") != "L1":
             continue
         agent_id = str(agent.get("id"))
@@ -854,17 +909,32 @@ def _promote_agent_locked(
             raise RuntimeError(
                 f"晋升重扫后 agent {agent_id} 状态异常（不存在或 maturity 未落 {to_maturity}），回滚"
             )
+        promoted_snapshot = promoted_shadow.package_snapshot(agent_id)
+        if promoted_snapshot is None:
+            raise RuntimeError(
+                f"晋升重扫后 agent {agent_id} 缺少不可变包快照，回滚"
+            )
         # 初次五门判定与磁盘手术之间仍存在并发改包窗口。按目标 id 豁免只是允许
         # “刚写入 L1、审计尚待同事务提交”的 shadow 被扫描，绝不等于豁免证据。
-        # 发布前从 shadow 对应的当前磁盘包重载 case/manifest，并只把唯一
+        # 发布前从 shadow 已捕获的同一个不可变包快照重载 case/manifest，并只把唯一
         # maturity L1 行逆变换回 L0 后重算 eval digest；prompt/workflow/schema/
-        # case 任一额外字节变化都会令旧证据失效，随后走既有补偿回滚。
-        refreshed_approved, _refreshed_drafts, refreshed_broken = load_eval_cases(
-            pkg_dir
-        )
-        refreshed_coverage_ok = _coverage_is_sufficient(
-            refreshed_approved, refreshed_broken
-        )
+        # case 任一额外字节变化都会令旧证据失效；通过后审计、Registry、Runtime
+        # 继续携带这个对象，不再回读可变活目录。
+        with promoted_snapshot.materialized() as published_pkg_dir:
+            refreshed_approved, _refreshed_drafts, refreshed_broken = load_eval_cases(
+                published_pkg_dir
+            )
+            refreshed_coverage_ok = _coverage_is_sufficient(
+                refreshed_approved, refreshed_broken
+            )
+            refreshed_digest = _pre_promotion_digest(
+                refreshed_approved,
+                published_pkg_dir,
+                refreshed,
+                from_maturity=current_maturity,
+                to_maturity=to_maturity,
+            )
+            refreshed_changelog_ok = _changelog_is_nonempty(published_pkg_dir)
         checks["min_eval_coverage"] = {
             "ok": refreshed_coverage_ok is True,
             "detail": (
@@ -874,13 +944,6 @@ def _promote_agent_locked(
                 "发布前已重载当前包复核"
             ),
         }
-        refreshed_digest = _pre_promotion_digest(
-            refreshed_approved,
-            pkg_dir,
-            refreshed,
-            from_maturity=current_maturity,
-            to_maturity=to_maturity,
-        )
         evidence_conn = conn_factory()
         try:
             refreshed_run = repos.get_eval_run(
@@ -908,13 +971,23 @@ def _promote_agent_locked(
             )
             + "; 发布前已重载当前包复核",
         }
-        refreshed_changelog_ok = _changelog_is_nonempty(pkg_dir)
         checks["changelog_nonempty"] = {
             "ok": refreshed_changelog_ok is True,
             "detail": (
                 "changelog.md 存在且非空（发布前复核）"
                 if refreshed_changelog_ok
                 else "changelog.md 缺失或为空文件（发布前复核）"
+            ),
+        }
+        checks["package_snapshot"] = {
+            "ok": True,
+            "contract": SNAPSHOT_CONTRACT,
+            "digest": promoted_snapshot.digest,
+            "file_count": promoted_snapshot.file_count,
+            "detail": (
+                f"{SNAPSHOT_CONTRACT} digest={promoted_snapshot.digest}; "
+                f"files={promoted_snapshot.file_count}; "
+                "最终门禁、审计、Registry 与 Runtime 绑定同一完整包快照"
             ),
         }
         if (

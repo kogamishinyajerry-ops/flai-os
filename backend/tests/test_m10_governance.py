@@ -15,7 +15,7 @@ from typing import Any, Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import TEST_DISPLAY_NAME, seed_and_login
+from conftest import TEST_DISPLAY_NAME, login, seed_and_login
 
 from backend.app.main import create_app
 from backend.app.storage import repos
@@ -1336,6 +1336,102 @@ def test_promotion_revalidates_package_bytes_before_publishing_l1(
     assert governance_env.client.get(
         "/api/agents/governed_agent/promotions"
     ).json() == []
+
+
+def test_promotion_publishes_frozen_package_when_live_dir_changes_at_audit_boundary(
+    governance_env: GovernanceEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """最终门禁后的并发 A→B 不能令审计 A、Registry/Runtime 却发布活目录 B。"""
+
+    run = _run_eval(governance_env)
+    workflow_path = governance_env.governed_dir / "workflow.py"
+    marker_path = governance_env.governed_dir / "live_b_executed.marker"
+    live_b_source = (
+        "from pathlib import Path\n\n"
+        "def run(context):\n"
+        f"    Path({str(marker_path)!r}).write_text("
+        "'live B executed', encoding='utf-8')\n"
+        "    return {'status': 'success', 'outputs': []}\n"
+    )
+    entered_audit_boundary = threading.Event()
+    mutation_done = threading.Event()
+    real_record_promotion = repos.record_promotion
+
+    def _publish_live_b() -> None:
+        if entered_audit_boundary.wait(timeout=5.0) is not True:
+            return
+        workflow_path.write_text(live_b_source, encoding="utf-8")
+        mutation_done.set()
+
+    def _record_after_concurrent_mutation(*args: Any, **kwargs: Any):
+        entered_audit_boundary.set()
+        if mutation_done.wait(timeout=5.0) is not True:
+            raise TimeoutError("测试未及时完成最终门禁后的活目录 A→B 修改")
+        return real_record_promotion(*args, **kwargs)
+
+    monkeypatch.setattr(repos, "record_promotion", _record_after_concurrent_mutation)
+    writer = threading.Thread(target=_publish_live_b, daemon=True)
+    writer.start()
+
+    response = _promote(
+        governance_env,
+        run["id"],
+        confirmations={"exception_paths_handled": True},
+    )
+    writer.join(timeout=5.0)
+
+    assert writer.is_alive() is False
+    assert mutation_done.is_set() is True
+    assert response.status_code == 200, response.text
+    assert workflow_path.read_text(encoding="utf-8") == live_b_source
+
+    task_id, result = _create_and_execute_user_task(governance_env)
+    assert result["status"] == "waiting_review"
+    assert marker_path.exists() is False
+    assert result["task"]["output_file_ids"]
+
+    package_check = response.json()["checks"]["package_snapshot"]
+    assert package_check["ok"] is True
+    assert package_check["contract"] == "agent_package_snapshot.v1"
+    registry_snapshot = governance_env.app.state.agent_registry.package_snapshot(
+        "governed_agent"
+    )
+    assert registry_snapshot is not None
+    assert registry_snapshot.digest == package_check["digest"]
+    conn = governance_env.app.state.conn_factory()
+    try:
+        validation_event = next(
+            event
+            for event in repos.list_events(conn, task_id)
+            if event["event_type"] == "validation_started"
+        )
+    finally:
+        conn.close()
+    assert validation_event["payload"]["package_snapshot_digest"] == (
+        package_check["digest"]
+    )
+
+    conn = governance_env.app.state.conn_factory()
+    try:
+        database_file = conn.execute("PRAGMA database_list").fetchone()["file"]
+    finally:
+        conn.close()
+    restart_root = governance_env.agents_dir.parent
+    restarted_app = create_app(
+        agents_dir=governance_env.agents_dir,
+        tools_dir=REPO / "tools_impl",
+        contracts_dir=REPO / "contracts",
+        db_path=Path(database_file),
+        uploads_dir=restart_root / "restart-uploads",
+        task_runs_dir=restart_root / "restart-task-runs",
+    )
+    with TestClient(restarted_app) as restarted_client:
+        login(restarted_client)
+        assert restarted_client.get("/api/agents/governed_agent").status_code == 404
+        health = restarted_client.get("/api/health").json()
+        assert health["promotion_attestation_axis"] is True
+        assert health["promotion_attestation_ok"] is False
+        assert health["promotion_attestation_rejected_count"] >= 1
 
 
 def test_eval_run_invalidated_when_package_changes_during_run(

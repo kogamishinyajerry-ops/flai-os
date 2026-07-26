@@ -386,8 +386,57 @@ def test_clearance_reenforced_at_consumption_point(app_env):
             "input_file_ids": [rec["id"]],
             "depends_on": ["task_b7_upstream"],
         }
+        package_snapshot = app.state.agent_registry.package_snapshot("hello_agent")
+        assert package_snapshot is not None
         with pytest.raises(FileIntegrityError, match="密级复核失败"):
-            app.state.runtime._open_input_files(conn, task)
+            app.state.runtime._open_input_files(
+                conn, task, package_snapshot.manifest
+            )
+    finally:
+        conn.close()
+
+
+def test_clearance_recheck_uses_the_execution_snapshot_not_live_projection(
+    app_env, monkeypatch
+):
+    """即使活 Registry 投影被放宽，消费门也必须按本次 workflow 的同一快照判定。"""
+    import pytest
+
+    from backend.app.core.errors import FileIntegrityError
+
+    _client, app = app_env
+    package_snapshot = app.state.agent_registry.package_snapshot("hello_agent")
+    assert package_snapshot is not None
+    frozen_agent = package_snapshot.manifest
+    monkeypatch.setattr(
+        app.state.agent_registry,
+        "get",
+        lambda _agent_id: {
+            **frozen_agent,
+            "clearance": {"max_data_classification": "sensitive"},
+        },
+    )
+    conn = app.state.conn_factory()
+    try:
+        rec = repos.create_file(
+            conn,
+            file_id="file_b7_snapshot_clearance",
+            task_id=None,
+            kind="output",
+            filename="snapshot-clearance.json",
+            path="/nonexistent/snapshot-clearance.json",
+            size_bytes=10,
+            sha256="0" * 64,
+            classification="sensitive",
+        )
+        task = {
+            "id": "task_b7_snapshot_clearance",
+            "agent_id": "hello_agent",
+            "input_file_ids": [rec["id"]],
+            "depends_on": ["task_b7_upstream"],
+        }
+        with pytest.raises(FileIntegrityError, match="密级复核失败"):
+            app.state.runtime._open_input_files(conn, task, frozen_agent)
     finally:
         conn.close()
 
@@ -419,8 +468,12 @@ def test_clearance_consumption_point_lets_internal_reach_provenance(app_env):
             "input_file_ids": [rec["id"]],
             "depends_on": [],  # 产物未声明依赖 → 应撞 provenance 校验而非密级门
         }
+        package_snapshot = app.state.agent_registry.package_snapshot("hello_agent")
+        assert package_snapshot is not None
         with pytest.raises(FileIntegrityError) as exc:
-            app.state.runtime._open_input_files(conn, task)
+            app.state.runtime._open_input_files(
+                conn, task, package_snapshot.manifest
+            )
         assert "密级复核" not in str(exc.value)
     finally:
         conn.close()

@@ -25,6 +25,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from backend.app.jobs.runner import JobRunner
+from backend.app.runtime.package_snapshot import capture_agent_package
 from backend.app.storage import repos
 from backend.app.tools.registry import ToolRegistry
 
@@ -59,21 +60,44 @@ def _create_and_run(client: TestClient, app, agent_id: str, inputs: dict[str, An
 # ── 人工审核 gate fail-closed（宪法「安全 gate 判定一律 is True/is False」）──
 
 
-def test_review_gate_fail_closed_when_flag_missing(app_env) -> None:
+def test_review_gate_fail_closed_when_flag_missing(
+    app_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """requires_human_review 字段缺失（schema 之外的任何原因）→ 必须走
     waiting_review 而非静默 completed——错误方向只能是「多审」不能是「漏审」。
     此前 truthiness 判定下缺失即跳审（fail-open）。"""
     client, app = app_env
-    agent = app.state.agent_registry.get("hello_agent")
-    assert agent["workflow"]["requires_human_review"] is False  # 前置：正常态显式 False
-    removed = agent["workflow"].pop("requires_human_review")
-    try:
-        task = _create_and_run(client, app, "hello_agent", {"name": "缺字段场景"})
-        assert task["status"] == "waiting_review", (
-            f"字段缺失必须 fail-closed 进 waiting_review，实得 {task['status']}"
+    registry = app.state.agent_registry
+    published = registry.package_snapshot("hello_agent")
+    assert published is not None
+    assert (
+        published.manifest["workflow"]["requires_human_review"] is False
+    )  # 前置：正常态显式 False
+    with published.materialized() as package_dir:
+        yaml_path = package_dir / "agent.yaml"
+        malformed = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        malformed["workflow"].pop("requires_human_review")
+        yaml_path.write_text(
+            yaml.safe_dump(malformed, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
         )
-    finally:
-        agent["workflow"]["requires_human_review"] = removed  # 还原，避免串扰
+        malformed_snapshot = capture_agent_package(package_dir)
+
+    real_snapshot_getter = registry.package_snapshot
+    monkeypatch.setattr(
+        registry,
+        "package_snapshot",
+        lambda agent_id: (
+            malformed_snapshot
+            if agent_id == "hello_agent"
+            else real_snapshot_getter(agent_id)
+        ),
+    )
+
+    task = _create_and_run(client, app, "hello_agent", {"name": "缺字段场景"})
+    assert task["status"] == "waiting_review", (
+        f"字段缺失必须 fail-closed 进 waiting_review，实得 {task['status']}"
+    )
 
 
 def test_review_gate_explicit_false_still_completes(app_env) -> None:
