@@ -524,6 +524,100 @@ def test_duplicate_keys_and_non_finite_json_are_rejected(
         observer.observe(manifest_path, evidence_path)
 
 
+def _overdeep_json() -> str:
+    return '{"value":' + ("[" * 10_000) + "0" + ("]" * 10_000) + "}"
+
+
+def test_decoder_value_error_is_invalid_evidence_with_original_cause(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+
+    def fail_decode(*args, **kwargs):
+        raise ValueError("decoder value sentinel")
+
+    monkeypatch.setattr(observer.json, "loads", fail_decode)
+
+    with pytest.raises(
+        observer.EvidenceError,
+        match="not readable strict JSON: decoder value sentinel",
+    ) as raised:
+        observer._load_json(manifest_path, "manifest")
+    assert type(raised.value.__cause__) is ValueError
+    assert str(raised.value.__cause__) == "decoder value sentinel"
+
+
+def test_decoder_recursion_limit_is_invalid_evidence(tmp_path: Path) -> None:
+    manifest_path, evidence_path, _, _ = _bundle(
+        tmp_path,
+        name="current",
+        iteration=1,
+        candidate_commit=CANDIDATE_SHA,
+        statuses={"python-tests": "passed", "scope-audit": "passed"},
+    )
+    raw = _overdeep_json()
+    assert len(raw.encode("utf-8")) < observer.MAX_JSON_BYTES
+    with pytest.raises(RecursionError):
+        json.loads(raw)
+    manifest_path.write_text(raw, encoding="utf-8")
+
+    with pytest.raises(
+        observer.EvidenceError,
+        match="not readable strict JSON",
+    ) as raised:
+        observer.observe(manifest_path, evidence_path)
+    assert type(raised.value.__cause__) is RecursionError
+
+
+def test_read_layer_value_error_is_not_mislabeled_as_strict_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_read(*args, **kwargs) -> bytes:
+        raise ValueError("read layer sentinel")
+
+    monkeypatch.setattr(observer, "_read_regular_file_nofollow", fail_read)
+
+    with pytest.raises(ValueError, match="^read layer sentinel$") as raised:
+        observer._load_json(tmp_path / "manifest.json", "manifest")
+    assert type(raised.value) is ValueError
+
+
+def test_cli_decoder_recursion_limit_is_machine_readable(tmp_path: Path) -> None:
+    manifest_path, evidence_path, _, _ = _bundle(
+        tmp_path,
+        name="current",
+        iteration=1,
+        candidate_commit=CANDIDATE_SHA,
+        statuses={"python-tests": "passed", "scope-audit": "passed"},
+    )
+    manifest_path.write_text(_overdeep_json(), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--manifest",
+            str(manifest_path),
+            "--evidence",
+            str(evidence_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stderr == ""
+    payload = json.loads(completed.stdout)
+    assert payload["status"] == "invalid"
+    assert payload["human_signoff_required"] is True
+    assert payload["automatic_gate_eligible"] is False
+    assert "not readable strict JSON" in payload["error"]
+
+
 def test_isolated_unicode_surrogate_is_rejected_without_cli_traceback(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

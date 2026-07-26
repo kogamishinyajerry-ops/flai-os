@@ -220,6 +220,11 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
             label,
             max_bytes=MAX_JSON_BYTES,
         ).decode("utf-8")
+    except EvidenceError:
+        raise
+    except (OSError, UnicodeError) as exc:
+        raise EvidenceError(f"{label} is not readable strict JSON: {exc}") from exc
+    try:
         value = json.loads(
             raw,
             object_pairs_hook=_reject_duplicate_keys,
@@ -227,7 +232,7 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
         )
     except EvidenceError:
         raise
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (ValueError, RecursionError) as exc:
         raise EvidenceError(f"{label} is not readable strict JSON: {exc}") from exc
     if type(value) is not dict:
         raise EvidenceError(f"{label} root must be a JSON object")
