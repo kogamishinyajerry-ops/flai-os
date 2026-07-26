@@ -11,6 +11,8 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -663,6 +665,56 @@ def test_json_file_swap_cannot_redirect_read(
     with pytest.raises(observer.EvidenceError, match="symlink"):
         observer.observe(manifest_path, evidence_path)
     assert swapped is True
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or not hasattr(os, "mkfifo"),
+    reason="FIFO behavior is POSIX-only",
+)
+@pytest.mark.parametrize("target", ["manifest", "evidence", "log"])
+def test_fifo_input_fails_closed_without_blocking(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    manifest_path, evidence_path, _, evidence = _bundle(
+        tmp_path,
+        name="current",
+        iteration=1,
+        candidate_commit=CANDIDATE_SHA,
+        statuses={"python-tests": "passed", "scope-audit": "passed"},
+    )
+    if target == "manifest":
+        target_path = manifest_path
+    elif target == "evidence":
+        target_path = evidence_path
+    else:
+        target_path = (
+            evidence_path.parent
+            / evidence["artifact_root"]
+            / evidence["gate_results"][0]["log_path"]
+        )
+    target_path.unlink()
+    os.mkfifo(target_path)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--manifest",
+            str(manifest_path),
+            "--evidence",
+            str(evidence_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+
+    assert completed.returncode == 2
+    payload = json.loads(completed.stdout)
+    assert payload["status"] == "invalid"
+    assert "regular file" in payload["error"]
 
 
 @pytest.mark.skipif(

@@ -45,7 +45,7 @@
     "Evidence binds a candidate commit, manifest digest, verifier digest, offset-aware timestamps, exact named-gate results and content-addressed logs.",
     "The R0 observer proves only schema, digest and content self-consistency; without a separately trusted producer or attestation it does not prove that the verifier actually ran.",
     "Missing fields, extra fields, duplicate JSON keys, NaN or Infinity, duplicate IDs, truthy non-integers, manifest drift, gate-set drift, path escape, symlink traversal, digest mismatch, invalid time order and inconsistent exit codes fail closed.",
-    "Manifest, current or previous evidence, and log files are opened through component-wise dir_fd plus O_NOFOLLOW traversal, must remain regular and unchanged while read, and reject symlinked ancestors or swap races.",
+    "Manifest, current or previous evidence, and log files are opened through component-wise dir_fd plus O_NOFOLLOW and O_NONBLOCK traversal, must remain regular and unchanged while read, and reject symlinked ancestors, swap races or blocking special files such as FIFOs.",
     "Passed is derived only when every named gate is passed and the verifier exit code is exactly zero.",
     "Mixed named-gate status precedence is error, then unknown, then failed, then passed; all-pass with nonzero exit or any non-pass with zero exit is invalid evidence.",
     "Comparison is allowed only against the immediately preceding iteration under the same manifest and compares every gate independently, including when the previous top-level observation was not passed.",
@@ -54,7 +54,7 @@
     "Evidence timestamps use RFC3339 with an explicit offset, finish is not before start, and a current iteration cannot start before the preceding iteration finished.",
     "Manifest digest is lowercase SHA-256 over UTF-8 canonical JSON with sorted keys, compact separators and ensure_ascii=false.",
     "artifact_root and unique log_path values are relative POSIX paths anchored at the evidence file parent and artifact root respectively; every path component is non-symlink and every gate resolves to a distinct physical log file identity.",
-    "R0 runs only on local POSIX platforms that provide race-safe dir_fd, O_DIRECTORY and O_NOFOLLOW semantics; unsupported platforms, including Windows, fail closed and are not integration targets for this slice.",
+    "R0 runs only on local POSIX platforms that provide race-safe dir_fd, O_DIRECTORY, O_NOFOLLOW and O_NONBLOCK semantics; unsupported platforms, including Windows, fail closed and are not integration targets for this slice.",
     "The R0 exit_code contract is normalized to 0 through 255; any future Windows producer must define and test its own normalization before integration.",
     "Output is deterministic, contains no wall-clock field, labels authenticity as unattested self-consistency only, declares automatic_gate_eligible=false, and always states that human signoff is still required.",
     "No runtime, API, database, verifier, dependency or promotion behavior changes."

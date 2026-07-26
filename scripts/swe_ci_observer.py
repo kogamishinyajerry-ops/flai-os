@@ -74,6 +74,7 @@ RACE_SAFE_DIR_FD = (
     os.open in os.supports_dir_fd
     and hasattr(os, "O_DIRECTORY")
     and hasattr(os, "O_NOFOLLOW")
+    and hasattr(os, "O_NONBLOCK")
 )
 
 
@@ -173,7 +174,7 @@ def _read_regular_file_nofollow(path: Path, label: str) -> bytes:
         directory_fd = _open_directory_nofollow(path.parent, label)
         file_fd = os.open(
             path.name,
-            os.O_RDONLY | os.O_NOFOLLOW,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
             dir_fd=directory_fd,
         )
         file_stat = os.fstat(file_fd)
@@ -324,7 +325,7 @@ def _sha256_artifact_file(
             "platform lacks race-safe dir_fd and O_NOFOLLOW support"
         )
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    file_flags = os.O_RDONLY | os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
     directory_fd: int | None = None
     file_fd: int | None = None
     try:
