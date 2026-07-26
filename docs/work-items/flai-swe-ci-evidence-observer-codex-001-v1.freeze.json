@@ -1,0 +1,79 @@
+{
+  "work_item_id": "flai-swe-ci-evidence-observer-codex-001",
+  "work_item_version": 1,
+  "human_owner": "JerryKogami",
+  "authorization_evidence": "Current Codex task owner instruction: 配合 SWE-CI 帮助更加可控高质量的开发",
+  "authorization_status": "OWNER_CHAT_INSTRUCTION_DECLARED_NOT_AUTHENTICATED_RECEIPT",
+  "formal_receipt_status": "NOT_AVAILABLE",
+  "execution_scope": "LOCAL_DEVELOPMENT_EVIDENCE_OBSERVER_ONLY",
+  "external_write_authorization": "NONE",
+  "push_merge_authorization": "NONE",
+  "base_ref": "origin/main",
+  "base_sha": "ec43768ff1ad2cb6bc3e571486bfda2d04c35780",
+  "upstream_reference": {
+    "repository": "https://github.com/SKYLENAGE-AI/SWE-CI",
+    "code_commit": "b2a0620f0168a5a89681be7919a98d9a49ab22af",
+    "license": "Apache-2.0",
+    "integration_mode": "INSPIRED_BY_CONCEPTS_NOT_CODE_IMPORT"
+  },
+  "classification": "DEVELOPMENT_TOOL_MONITOR_ONLY",
+  "owned_file_scope": [
+    "scripts/swe_ci_observer.py",
+    "backend/tests/test_swe_ci_observer.py",
+    "docs/research/swe-ci-official-assessment-2026-07-26.md",
+    "docs/work-items/flai-swe-ci-evidence-observer-codex-001-v1.freeze.json"
+  ],
+  "explicitly_excluded": [
+    "backend/app/**",
+    "frontend/**",
+    "agents/**",
+    "tools_impl/**",
+    "scripts/verify_all.sh",
+    "scripts/verify_all.ps1",
+    "database migrations",
+    "runtime schemas and public interfaces",
+    "task or promotion state machines",
+    "SWE-CI source vendoring or imports",
+    "Docker images or Hugging Face datasets",
+    "OpenCode, iFlow, LLM API keys or external model calls",
+    "automatic requirement truth, signing, promotion, push or merge"
+  ],
+  "acceptance_criteria": [
+    "The observer is Python standard-library only and never executes verifier commands.",
+    "A manifest freezes one to five non-authoritative requirement references, exact named gates, commands, a baseline commit, an iteration budget and the verifier digest.",
+    "Requirement references only point back to the approved issue or freeze contract; the observer never declares a requirement resolved and does not become a second requirement truth source.",
+    "Evidence binds a candidate commit, manifest digest, verifier digest, offset-aware timestamps, exact named-gate results and content-addressed logs.",
+    "The R0 observer proves only schema, digest and content self-consistency; without a separately trusted producer or attestation it does not prove that the verifier actually ran.",
+    "Missing fields, extra fields, duplicate JSON keys, NaN or Infinity, duplicate IDs, truthy non-integers, manifest drift, gate-set drift, path escape, symlink traversal, digest mismatch, invalid time order and inconsistent exit codes fail closed.",
+    "Passed is derived only when every named gate is passed and the verifier exit code is exactly zero.",
+    "Mixed named-gate status precedence is error, then unknown, then failed, then passed; all-pass with nonzero exit or any non-pass with zero exit is invalid evidence.",
+    "Comparison is allowed only against the immediately preceding iteration under the same manifest and compares every gate independently, including when the previous top-level observation was not passed.",
+    "Without a comparable previous iteration, zero_regression_since_previous is null rather than true.",
+    "A comparison output binds distinct current_bundle_digest and nullable previous_bundle_digest values into an observation_digest, so different histories cannot share one comparison identity.",
+    "Evidence timestamps use RFC3339 with an explicit offset, finish is not before start, and a current iteration cannot start before the preceding iteration finished.",
+    "Manifest digest is lowercase SHA-256 over UTF-8 canonical JSON with sorted keys, compact separators and ensure_ascii=false.",
+    "artifact_root and unique log_path values are relative POSIX paths anchored at the evidence file parent and artifact root respectively; every path component is non-symlink and every gate resolves to a distinct physical log file identity.",
+    "R0 runs only on local POSIX platforms that provide race-safe dir_fd, O_DIRECTORY and O_NOFOLLOW semantics; unsupported platforms, including Windows, fail closed and are not integration targets for this slice.",
+    "The R0 exit_code contract is normalized to 0 through 255; any future Windows producer must define and test its own normalization before integration.",
+    "Output is deterministic, contains no wall-clock field, labels authenticity as unattested self-consistency only, declares automatic_gate_eligible=false, and always states that human signoff is still required.",
+    "No runtime, API, database, verifier, dependency or promotion behavior changes."
+  ],
+  "required_checks": [
+    "git diff --check",
+    "python3 -m json.tool docs/work-items/flai-swe-ci-evidence-observer-codex-001-v1.freeze.json",
+    "uv run --no-project --with pytest --with jsonschema --with pyyaml --with fastapi --with httpx --with python-multipart --with 'pydantic>2' --with jieba --with openpyxl python -m pytest backend/tests/test_swe_ci_observer.py -q",
+    "uv run --no-project --with pytest --with pytest-xdist --with jsonschema --with pyyaml --with fastapi --with httpx --with python-multipart --with 'pydantic>2' --with jieba --with openpyxl python -m pytest -q -n auto",
+    "env UV_OFFLINE=1 bash scripts/verify_all.sh in a disposable verification worktree",
+    "scope allowlist audit against origin/main"
+  ],
+  "stop_if": [
+    "implementation requires executing untrusted commands or importing SWE-CI",
+    "implementation requires Docker, dataset, model, network or secret access",
+    "implementation requires a runtime schema, public API, database or state-machine change",
+    "the observer would be used as human signoff or automatic release authority",
+    "origin/main changes and affects an owned path before local completion"
+  ],
+  "lifecycle_state": "AUTHORIZED_LOCAL_EXECUTION",
+  "integration_status": "NOT_INTEGRATED",
+  "release_status": "LOCAL_CANDIDATE_NOT_RELEASED"
+}
