@@ -1398,6 +1398,127 @@ def test_eval_task_reaches_terminal_failed_when_runtime_raises(
         conn.close()
 
 
+def test_running_eval_does_not_execute_later_cases_when_fault_arrives_at_claim_begin(
+    governance_env: GovernanceEnv,
+) -> None:
+    """run 已开始后新建 persistent fault：后续 case 可如实 failed，但绝不执行。
+
+    fault 精确插入第二个 case 已 queued、``claim_task`` 的 ``BEGIN IMMEDIATE``
+    即将执行之时。若裁决只在事务外预查，或 ``claim_task`` 完全不查 fault，第二个
+    case 仍会进入 validating 并调用 runtime.execute，本测试必须稳定 RED。
+    """
+    from backend.app.governance import eval_runner as runner_mod
+
+    run_id = "eval_fault_after_first_case"
+    agent = governance_env.app.state.agent_registry.get("governed_agent")
+    assert agent is not None
+    conn = governance_env.app.state.conn_factory()
+    try:
+        repos.create_eval_run(
+            conn,
+            run_id=run_id,
+            agent_id="governed_agent",
+            agent_version=str(agent["version"]),
+            triggered_by="tester",
+            status="running",
+        )
+    finally:
+        conn.close()
+
+    state: dict[str, Any] = {
+        "first_executed": False,
+        "claim_begin_interposed": False,
+        "fault_inserted": False,
+        "callback_errors": [],
+        "executed_task_ids": [],
+    }
+    rival = governance_env.app.state.conn_factory()
+
+    class _RecordingRuntime:
+        def execute(self, task_id: str) -> dict[str, Any]:
+            result = governance_env.app.state.runtime.execute(task_id)
+            state["executed_task_ids"].append(task_id)
+            if len(state["executed_task_ids"]) == 1:
+                state["first_executed"] = True
+            return result
+
+    def racing_conn_factory():
+        racing_conn = governance_env.app.state.conn_factory()
+        queued_transition_seen = False
+
+        def trace(statement: str) -> None:
+            nonlocal queued_transition_seen
+            if state["first_executed"] is not True:
+                return
+            normalized = " ".join(statement.upper().split())
+            if normalized.startswith("UPDATE TASKS SET STATUS = 'QUEUED'"):
+                queued_transition_seen = True
+            elif (
+                normalized.startswith("BEGIN IMMEDIATE")
+                and queued_transition_seen
+                and state["claim_begin_interposed"] is False
+            ):
+                state["claim_begin_interposed"] = True
+                try:
+                    state["fault_inserted"] = repos.record_promotion_attestation_fault(
+                        rival,
+                        detail='{"reason":"test-in-flight-eval-case-claim"}',
+                    )
+                except Exception as exc:  # trace callback 异常会被 sqlite 吞掉
+                    state["callback_errors"].append(exc)
+
+        racing_conn.set_trace_callback(trace)
+        return racing_conn
+
+    try:
+        run = runner_mod.execute_eval_run(
+            run_id=run_id,
+            conn_factory=racing_conn_factory,
+            agent_registry=governance_env.app.state.agent_registry,
+            runtime=_RecordingRuntime(),
+            uploads_dir=governance_env.app.state.uploads_dir,
+            task_runs_dir=governance_env.app.state.task_runs_dir,
+        )
+    finally:
+        rival.close()
+
+    conn = governance_env.app.state.conn_factory()
+    try:
+        eval_tasks = repos.list_tasks(
+            conn, agent_id="governed_agent", origin="eval", limit=20
+        )
+        persistent_fault = repos.get_promotion_attestation_fault(conn)
+    finally:
+        conn.close()
+
+    tasks_by_case = {
+        task["metadata"]["eval_case_file"]: task
+        for task in eval_tasks
+        if task["metadata"].get("eval_case_file") in _base_cases()
+    }
+    results_by_case = {
+        result["case_file"]: result
+        for result in run["case_results"]
+        if result["case_file"] in _base_cases()
+    }
+
+    assert state["first_executed"] is True
+    assert state["claim_begin_interposed"] is True
+    assert state["fault_inserted"] is True
+    assert state["callback_errors"] == []
+    assert persistent_fault is not None
+    assert set(tasks_by_case) == set(_base_cases())
+    assert state["executed_task_ids"] == [tasks_by_case["case_001.json"]["id"]]
+    assert tasks_by_case["case_001.json"]["status"] != "queued"
+    for case_file in ("case_002.json", "case_003.json"):
+        assert tasks_by_case[case_file]["status"] == "queued"
+        assert results_by_case[case_file]["verdict"] == "failed"
+        assert "认领失败" in results_by_case[case_file]["detail"]
+    assert run["status"] == "completed"
+    assert run["passed"] == 1
+    assert run["failed"] == 2
+
+
 def test_rejected_agents_not_resurrected_by_promotion(
     tmp_path: Path,
 ) -> None:

@@ -705,6 +705,12 @@ def claim_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
     """
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # run 已在 running 也不能绕过 sticky fault：每个 eval case 的指定任务
+        # 都在同一写事务内重新裁决，且必须早于任何 queued→validating 更新。
+        # BEGIN IMMEDIATE 保证裁决后到提交前没有其他写者能新建 fault。
+        if get_promotion_attestation_fault(conn) is not None:
+            conn.execute("COMMIT")
+            return None
         row = conn.execute(
             "SELECT status, origin FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()
