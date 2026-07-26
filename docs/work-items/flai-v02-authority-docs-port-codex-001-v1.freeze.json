@@ -2,15 +2,15 @@
   "work_item_id": "flai-v02-authority-docs-port-codex-001",
   "work_item_version": 1,
   "human_owner": "JerryKogami",
-  "authorization_evidence": "Current Codex task owner instruction: 继续推进开发",
+  "authorization_evidence": "Current Codex task owner instructions: 继续推进开发; 授权，批准; 继续",
   "authorization_status": "OWNER_CHAT_INSTRUCTION_DECLARED_NOT_AUTHENTICATED_RECEIPT",
   "formal_receipt_status": "NOT_AVAILABLE",
-  "execution_scope": "LOCAL_DOCUMENT_PORT_ONLY",
-  "external_write_authorization": "NONE",
-  "push_merge_authorization": "NONE",
+  "execution_scope": "DOCUMENT_PORT_AND_GITHUB_PR_REVIEW_ONLY",
+  "external_write_authorization": "GITHUB_PR_BRANCH_PUSH_AND_REVIEW_REPLY_ONLY",
+  "push_merge_authorization": "PUSH_AUTHORIZED_MERGE_NOT_AUTHORIZED",
   "base_ref": "origin/main",
   "base_sha": "ec43768ff1ad2cb6bc3e571486bfda2d04c35780",
-  "activation_commit": "39010f5",
+  "activation_integration_mode": "ATOMIC_WITH_THIS_DOCUMENT_PORT",
   "donor_refs": [
     "215c5ce",
     "9023776",
@@ -66,7 +66,7 @@
     "docs/product/FLAi-OS_V0.2_Design_Package/README.md",
     "docs/work-items/flai-v02-authority-docs-port-codex-001-v1.freeze.json"
   ],
-  "prerequisite_activation_files": [
+  "atomic_activation_files": [
     "docs/superpowers/plans/2026-07-25-flai-os-takeover-status.md",
     "docs/superpowers/plans/2026-07-25-flai-os-unique-development-baseline-owner-decision.md"
   ],
@@ -83,16 +83,16 @@
     "Stage D implementation",
     "dependency changes",
     "branch deletion",
-    "push",
     "merge"
   ],
   "acceptance_criteria": [
     "Every imported file comes from donor snapshot 9220cc3 except explicit current-main reconciliation edits.",
     "ADR filenames 0047 through 0064 are complete and no pre-numbered ADR 0033 through 0046 is introduced.",
     "The active owner-accepted takeover SSOT and restricted-option-2 direction review remain present and are not replaced by donor history.",
+    "The owner decision and takeover status files are integrated atomically with this document port and do not depend on a separate pre-squash commit remaining reachable.",
     "Ported documents label design-session decisions as not formally signed and preserve Stage D frozen and production NO-GO.",
     "All relative Markdown links among the ported authority documents resolve or are explicitly converted to non-link donor-only references.",
-    "No runtime code, executable review package, JSON Schema, dependency, database, public interface, push, or merge is introduced."
+    "No runtime code, executable review package, JSON Schema, dependency, database, public interface, or merge is introduced."
   ],
   "required_checks": [
     "git diff --check",
@@ -109,7 +109,7 @@
     "the current main SSOT or direction review would need deletion or replacement",
     "verification would write into the primary worktree or protected user screenshot assets"
   ],
-  "lifecycle_state": "AUTHORIZED_LOCAL_EXECUTION",
+  "lifecycle_state": "AUTHORIZED_PR_REVIEW_EXECUTION",
   "integration_status": "NOT_INTEGRATED",
   "release_status": "SOURCE_DOCUMENT_PORT_CANDIDATE_NOT_INTERNAL_RELEASE"
 }
