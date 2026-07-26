@@ -631,7 +631,7 @@ diff、invalid-first、可回滚、无 drive-by refactor。D16 是部署绑定�
 | D15 | Phase 0A Entry 候选 | D8、D9、D12–D14 | 36 cases、P0 全表、双人 review、离线/恢复/Mac 门全部有精确 digest | 只形成 qualification evidence；不自动写 QualificationDecision 或暴露 |
 | D16 | Cohort-scoped Phase 0A 运行与 Exit 报告 | formally signed QualificationDecision + active DeploymentBinding | 5–8 人 Entry/Exit 双门证据与具名退出报告 | 撤销/到期 DeploymentBinding；不扩权 Phase 0B |
 
-D1、D2、D4、D5、D6、D7、D8、D10、D11 几乎必然触及安全、Schema、状态机或持久化合同，必须在实现前形成具体 ADR/规格、迁移、兼容和回滚计划。历史 `feat/eval-async-queue@567de2d` 只能作为 commit-bound evidence 选择性吸收，不能整体 cherry-pick；新实施 ADR 从 0063 起编号。
+D1、D2、D4、D5、D6、D7、D8、D10、D11 几乎必然触及安全、Schema、状态机或持久化合同，必须在实现前形成具体 ADR/规格、迁移、兼容和回滚计划。历史 `feat/eval-async-queue@567de2d` 只能作为 commit-bound evidence 选择性吸收，不能整体 cherry-pick；新实施 ADR 从 0065 起编号。
 
 ## 13. 测试决策
 
