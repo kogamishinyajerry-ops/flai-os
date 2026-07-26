@@ -101,6 +101,7 @@ def main() -> int:
             to_maturity="L1", eval_run_id=run["id"],
             confirmations={"exception_paths_handled": True},
             confirmed_by=confirmed_by,
+            attestation_records=asm.promotion_attestation_records,
         )
     except promotion.PromotionRejected as exc:
         print("晋升被拒，逐条判定：")

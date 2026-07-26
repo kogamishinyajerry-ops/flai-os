@@ -60,6 +60,7 @@ from backend.app import config  # noqa: E402
 
 WORKER_GENERATION = config.WORKER_GENERATION
 _WORKER_STALE_SECONDS = 60
+_PROMOTION_ATTESTATION_FAULT_ID = "promotion-attestation-fault"
 
 # 缺任何一张=init_db 没跑或库文件指错——直接列全量九表+鉴权两表，不挑子集。
 REQUIRED_TABLES = frozenset({
@@ -139,22 +140,57 @@ def check_worker_generation(conn: sqlite3.Connection) -> Check:
     匹配才 PASS。无表/无行/过期/代际不符/时间戳畸形（含 naive）全 FAIL。"""
     name = "worker 心跳代际"
     try:
+        persistent_fault = conn.execute(
+            "SELECT detail FROM worker_heartbeats WHERE worker_id = ?",
+            (_PROMOTION_ATTESTATION_FAULT_ID,),
+        ).fetchone()
         row = conn.execute(
-            "SELECT generation, last_beat_at FROM worker_heartbeats WHERE worker_id='default'"
+            "SELECT generation, last_beat_at, detail "
+            "FROM worker_heartbeats WHERE worker_id='default'"
         ).fetchone()
     except sqlite3.Error as exc:
         return Check(name, False, f"worker_heartbeats 表不可读（旧库未迁移？）：{exc}")
+    if persistent_fault is not None:
+        return Check(
+            name,
+            False,
+            "存在未解除的 promotion attestation 持久故障 latch："
+            f"{persistent_fault[0]!r}；须人工核查磁盘/DB/审计一致性后显式清除",
+        )
     if row is None:
         return Check(
             name, False,
             "无 worker 心跳——worker 未启动，或为 B2 前旧代际（旧代码不写心跳）。"
             "部署顺序：先起 API+worker 再跑自检",
         )
-    generation, last_beat = row[0], row[1]
+    generation, last_beat, detail = row[0], row[1], row[2]
     if generation != WORKER_GENERATION:
         return Check(
             name, False,
             f"worker 代际 {generation!r} ≠ 当前 {WORKER_GENERATION!r}——worker 未重启到新代码",
+        )
+    try:
+        attestation = json.loads(detail)
+    except (json.JSONDecodeError, TypeError, RecursionError) as exc:
+        return Check(
+            name,
+            False,
+            f"worker 心跳 detail 不是严格 attestation JSON：{detail!r}（{exc}）",
+        )
+    if isinstance(attestation, dict) is not True:
+        return Check(name, False, "worker 心跳 attestation detail 必须是 JSON object")
+    axis_ok = attestation.get("promotion_attestation_axis") is True
+    result_ok = attestation.get("promotion_attestation_ok") is True
+    rejected_count = attestation.get("promotion_attestation_rejected_count")
+    count_ok = type(rejected_count) is int and rejected_count == 0
+    if axis_ok is not True or result_ok is not True or count_ok is not True:
+        return Check(
+            name,
+            False,
+            "worker 心跳未严格证明 promotion attestation 干净："
+            f"axis={attestation.get('promotion_attestation_axis')!r} "
+            f"ok={attestation.get('promotion_attestation_ok')!r} "
+            f"rejected_count={rejected_count!r}",
         )
     try:
         beat_time = datetime.fromisoformat(last_beat)
@@ -317,13 +353,14 @@ def check_live_promotion_attestation(base_url: str) -> Check:
         return Check("运行进程晋升签发核对", False, f"{url} 不可达或非 JSON：{exc}")
     axis_ok = payload.get("promotion_attestation_axis") is True
     result_ok = payload.get("promotion_attestation_ok") is True
-    if axis_ok is True and result_ok is True:
+    rejected_count = payload.get("promotion_attestation_rejected_count")
+    count_ok = type(rejected_count) is int and rejected_count == 0
+    if axis_ok is True and result_ok is True and count_ok is True:
         return Check(
             "运行进程晋升签发核对",
             True,
-            "活进程自报 promotion_attestation_axis=true 且本次核对无拒载",
+            "活进程自报 promotion_attestation_axis=true、ok=true 且 rejected_count=0",
         )
-    rejected_count = payload.get("promotion_attestation_rejected_count")
     return Check(
         "运行进程晋升签发核对",
         False,

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import shutil
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -276,6 +278,33 @@ def test_runner_all_green_records_eval_tasks(governance_env: GovernanceEnv) -> N
             assert task["origin"] == "eval"
     finally:
         conn.close()
+
+
+def test_synchronous_eval_path_freezes_immutable_snapshot(
+    governance_env: GovernanceEnv,
+) -> None:
+    """官方 promote CLI 使用的同步 eval 路径也必须产出 snapshot_handle。"""
+
+    from backend.app.governance.eval_runner import run_agent_evals
+
+    run = run_agent_evals(
+        conn_factory=governance_env.app.state.conn_factory,
+        agent_registry=governance_env.app.state.agent_registry,
+        runtime=governance_env.app.state.runtime,
+        uploads_dir=governance_env.app.state.uploads_dir,
+        task_runs_dir=governance_env.app.state.task_runs_dir,
+        agent_id="governed_agent",
+        triggered_by=TEST_DISPLAY_NAME,
+    )
+    assert isinstance(run["snapshot_handle"], str)
+    assert run["snapshot_handle"].startswith("snap_")
+    conn = governance_env.app.state.conn_factory()
+    try:
+        snapshot = repos.get_eval_snapshot(conn, run["snapshot_handle"])
+    finally:
+        conn.close()
+    assert snapshot is not None
+    assert snapshot["eval_cases_digest"] == run["eval_cases_digest"]
 
 
 def test_runner_counts_wrong_oracle_as_failed(governance_env: GovernanceEnv) -> None:
@@ -949,6 +978,285 @@ def test_promotion_rolls_back_yaml_when_audit_record_fails(
         conn.close()
 
 
+def test_promotion_rollback_failure_sets_sticky_attestation_fault(
+    governance_env: GovernanceEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """提交失败且补偿写盘也失败时，health 必须 sticky-fail，不能保留假绿。"""
+
+    from backend.app.governance import promotion as promotion_mod
+
+    run = _run_eval(governance_env)
+    yaml_path = governance_env.governed_dir / "agent.yaml"
+    original_open = builtins.open
+    yaml_write_count = 0
+
+    def _fail_restore_write(file: Any, *args: Any, **kwargs: Any):
+        nonlocal yaml_write_count
+        mode = args[0] if args else kwargs.get("mode", "r")
+        candidate = Path(file) if isinstance(file, (str, Path)) else None
+        if candidate == yaml_path and mode == "w":
+            yaml_write_count += 1
+            if yaml_write_count == 2:
+                raise OSError("注入：补偿恢复 agent.yaml 失败")
+        return original_open(file, *args, **kwargs)
+
+    def _fail_record(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("注入：promotion 审计提交失败")
+
+    monkeypatch.setattr(builtins, "open", _fail_restore_write)
+    monkeypatch.setattr(promotion_mod.repos, "record_promotion", _fail_record)
+
+    with pytest.raises(RuntimeError, match="审计提交失败"):
+        promotion_mod.promote_agent(
+            conn_factory=governance_env.app.state.conn_factory,
+            agent_registry=governance_env.app.state.agent_registry,
+            scope_registry=governance_env.app.state.scope_registry,
+            agent_id="governed_agent",
+            to_maturity="L1",
+            eval_run_id=run["id"],
+            confirmations={"exception_paths_handled": True},
+            confirmed_by="王工",
+            attestation_records=(
+                governance_env.app.state.promotion_attestation_records
+            ),
+        )
+
+    assert yaml_write_count == 2
+    faults = governance_env.app.state.promotion_attestation_records
+    assert len(faults) == 1
+    assert faults[0]["agent_id"] == "governed_agent"
+    assert faults[0]["reason"] == "promotion-rollback-failed"
+    conn = governance_env.app.state.conn_factory()
+    try:
+        persistent_fault = repos.get_promotion_attestation_fault(conn)
+    finally:
+        conn.close()
+    assert persistent_fault is not None
+    assert json.loads(persistent_fault["detail"])["reason"] == (
+        "promotion-rollback-failed"
+    )
+    # 模拟原 CLI 进程退出/另一 API 进程无该内存 list：共享 DB latch 仍令 health 红。
+    governance_env.app.state.promotion_attestation_records = []
+    health = governance_env.client.get("/api/health").json()
+    assert health["promotion_attestation_ok"] is False
+    assert health["promotion_attestation_rejected_count"] == 1
+
+
+def test_promotion_requires_persistent_pending_latch_before_disk_write(
+    governance_env: GovernanceEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """共享 DB 只读时必须在首次 YAML 手术前失败。
+
+    若等提交/回滚失败后才尝试写 fault latch，同一个只读故障会令 latch 也写不进，
+    磁盘却已经进入过 L1 半提交窗口。
+    """
+
+    from backend.app.governance import promotion as promotion_mod
+
+    run = _run_eval(governance_env)
+    yaml_path = governance_env.governed_dir / "agent.yaml"
+    yaml_before = yaml_path.read_text(encoding="utf-8")
+    probe = governance_env.app.state.conn_factory()
+    try:
+        db_path = Path(probe.execute("PRAGMA database_list").fetchone()["file"])
+    finally:
+        probe.close()
+
+    def _read_only_conn_factory() -> sqlite3.Connection:
+        conn = sqlite3.connect(
+            f"file:{db_path}?mode=ro",
+            uri=True,
+            isolation_level=None,
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    original_open = builtins.open
+    yaml_write_count = 0
+
+    def _count_yaml_writes(file: Any, *args: Any, **kwargs: Any):
+        nonlocal yaml_write_count
+        mode = args[0] if args else kwargs.get("mode", "r")
+        candidate = Path(file) if isinstance(file, (str, Path)) else None
+        if candidate == yaml_path and mode == "w":
+            yaml_write_count += 1
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _count_yaml_writes)
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        promotion_mod.promote_agent(
+            conn_factory=_read_only_conn_factory,
+            agent_registry=governance_env.app.state.agent_registry,
+            scope_registry=governance_env.app.state.scope_registry,
+            agent_id="governed_agent",
+            to_maturity="L1",
+            eval_run_id=run["id"],
+            confirmations={"exception_paths_handled": True},
+            confirmed_by="王工",
+            attestation_records=[],
+        )
+
+    assert yaml_write_count == 0
+    assert yaml_path.read_text(encoding="utf-8") == yaml_before
+    assert governance_env.client.get(
+        "/api/agents/governed_agent/promotions"
+    ).json() == []
+
+
+def test_stale_registry_cannot_repeat_promotion_after_latch_aba(
+    governance_env: GovernanceEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """两个进程各持一份 L0 registry：B 在 latch 前暂停，A 完成并清 latch；
+    B 随后虽能重新拿到同一 latch，也必须在首次触盘前用新鲜磁盘+DB 拒绝。
+    """
+
+    from backend.app.governance import promotion as promotion_mod
+
+    run = _run_eval(governance_env)
+    conn = governance_env.app.state.conn_factory()
+    try:
+        repos.record_promotion(
+            conn,
+            agent_id="governed_agent",
+            agent_version="0.1.0",
+            from_maturity="L0",
+            to_maturity="L1",
+            eval_run_id=run["id"],
+            checks={"historical": {"ok": True}},
+            confirmations={"exception_paths_handled": True},
+            confirmed_by="历史签发人",
+        )
+        baseline_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM promotions
+            WHERE agent_id = 'governed_agent' AND agent_version = '0.1.0'
+              AND from_maturity = 'L0' AND to_maturity = 'L1'
+            """
+        ).fetchone()[0]
+        db_maturity = conn.execute(
+            "SELECT maturity FROM agents WHERE id = 'governed_agent'"
+        ).fetchone()["maturity"]
+    finally:
+        conn.close()
+    assert baseline_count == 1
+    assert db_maturity == "L0"
+
+    live_registry = governance_env.app.state.agent_registry
+    stale_registry = type(live_registry)(
+        live_registry.agents_dir,
+        live_registry.schema_path,
+    )
+    stale_registry.scan()
+    assert stale_registry.get("governed_agent")["maturity"] == "L0"
+
+    stale_entered_latch = threading.Event()
+    allow_stale_latch = threading.Event()
+    original_latch = promotion_mod.repos.record_promotion_attestation_fault
+    original_open = builtins.open
+    stale_disk_writes: list[tuple[str, str]] = []
+
+    def _block_stale_latch(*args: Any, **kwargs: Any):
+        if threading.current_thread().name == "stale-promoter":
+            stale_entered_latch.set()
+            if allow_stale_latch.wait(timeout=5.0) is not True:
+                raise TimeoutError("测试未及时放行 stale promoter latch")
+        return original_latch(*args, **kwargs)
+
+    def _observe_stale_writes(file: Any, *args: Any, **kwargs: Any):
+        mode = args[0] if args else kwargs.get("mode", "r")
+        candidate = Path(file) if isinstance(file, (str, Path)) else None
+        if (
+            threading.current_thread().name == "stale-promoter"
+            and candidate
+            in {
+                governance_env.governed_dir / "agent.yaml",
+                governance_env.governed_dir / "changelog.md",
+            }
+            and mode in {"w", "a"}
+        ):
+            stale_disk_writes.append((candidate.name, mode))
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(
+        promotion_mod.repos,
+        "record_promotion_attestation_fault",
+        _block_stale_latch,
+    )
+    monkeypatch.setattr(builtins, "open", _observe_stale_writes)
+    stale_result: dict[str, Any] = {}
+
+    def _run_stale_promotion() -> None:
+        try:
+            stale_result["record"] = promotion_mod._promote_agent_locked(
+                conn_factory=governance_env.app.state.conn_factory,
+                agent_registry=stale_registry,
+                scope_registry=governance_env.app.state.scope_registry,
+                agent_id="governed_agent",
+                to_maturity="L1",
+                eval_run_id=run["id"],
+                confirmations={"exception_paths_handled": True},
+                confirmed_by="B 工程师",
+                attestation_records=[],
+            )
+        except Exception as exc:  # 线程边界：由主线程断言精确异常
+            stale_result["error"] = exc
+
+    stale_thread = threading.Thread(
+        target=_run_stale_promotion,
+        daemon=True,
+        name="stale-promoter",
+    )
+    stale_thread.start()
+    assert stale_entered_latch.wait(timeout=5.0) is True
+
+    response_a = _promote(
+        governance_env,
+        run["id"],
+        confirmations={"exception_paths_handled": True},
+    )
+    assert response_a.status_code == 200, response_a.text
+    yaml_after_a = (
+        governance_env.governed_dir / "agent.yaml"
+    ).read_text(encoding="utf-8")
+    changelog_after_a = (
+        governance_env.governed_dir / "changelog.md"
+    ).read_text(encoding="utf-8")
+
+    allow_stale_latch.set()
+    stale_thread.join(timeout=5.0)
+    assert stale_thread.is_alive() is False
+    assert isinstance(
+        stale_result.get("error"),
+        promotion_mod.PromotionRejected,
+    )
+    assert "record" not in stale_result
+    assert stale_disk_writes == []
+    assert (
+        governance_env.governed_dir / "agent.yaml"
+    ).read_text(encoding="utf-8") == yaml_after_a
+    assert (
+        governance_env.governed_dir / "changelog.md"
+    ).read_text(encoding="utf-8") == changelog_after_a
+
+    conn = governance_env.app.state.conn_factory()
+    try:
+        promotion_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM promotions
+            WHERE agent_id = 'governed_agent' AND agent_version = '0.1.0'
+              AND from_maturity = 'L0' AND to_maturity = 'L1'
+            """
+        ).fetchone()[0]
+        persistent_fault = repos.get_promotion_attestation_fault(conn)
+    finally:
+        conn.close()
+    assert promotion_count == baseline_count + 1
+    assert persistent_fault is None
+
+
 def test_promotion_rejects_referenced_schema_changed_after_run(
     governance_env: GovernanceEnv,
 ) -> None:
@@ -965,6 +1273,69 @@ def test_promotion_rejects_referenced_schema_changed_after_run(
     )
     assert checks["eval_evidence"]["ok"] is False
     assert "digest" in checks["eval_evidence"]["detail"]
+
+
+def test_promotion_revalidates_package_bytes_before_publishing_l1(
+    governance_env: GovernanceEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """初次 digest 后并发改 prompt，发布边界必须重验并回滚，不能按 id 全豁免。"""
+
+    run = _run_eval(governance_env)
+    yaml_path = governance_env.governed_dir / "agent.yaml"
+    prompt_path = governance_env.governed_dir / "prompt.md"
+    yaml_before = yaml_path.read_text(encoding="utf-8")
+    prompt_before = prompt_path.read_text(encoding="utf-8")
+    entered_yaml_boundary = threading.Event()
+    allow_yaml_read = threading.Event()
+    original_open = builtins.open
+    blocked_once = False
+
+    def _blocking_open(file: Any, *args: Any, **kwargs: Any):
+        nonlocal blocked_once
+        mode = args[0] if args else kwargs.get("mode", "r")
+        candidate = Path(file) if isinstance(file, (str, Path)) else None
+        if (
+            blocked_once is False
+            and candidate == yaml_path
+            and mode == "r"
+        ):
+            blocked_once = True
+            entered_yaml_boundary.set()
+            if allow_yaml_read.wait(timeout=5.0) is not True:
+                raise TimeoutError("测试未及时放行 YAML 读取")
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _blocking_open)
+    result: dict[str, Any] = {}
+
+    def _request_promotion() -> None:
+        result["response"] = _promote(
+            governance_env,
+            run["id"],
+            confirmations={"exception_paths_handled": True},
+        )
+
+    request_thread = threading.Thread(target=_request_promotion, daemon=True)
+    request_thread.start()
+    assert entered_yaml_boundary.wait(timeout=5.0) is True
+    prompt_path.write_text(
+        prompt_before + "\n并发注入：这段 prompt 未经本次 eval。\n",
+        encoding="utf-8",
+    )
+    allow_yaml_read.set()
+    request_thread.join(timeout=5.0)
+
+    assert request_thread.is_alive() is False
+    checks = _rejection_checks(result["response"])
+    assert checks["eval_evidence"]["ok"] is False
+    assert yaml_path.read_text(encoding="utf-8") == yaml_before
+    assert prompt_path.read_text(encoding="utf-8") != prompt_before
+    assert governance_env.client.get("/api/agents/governed_agent").json()[
+        "maturity"
+    ] == "L0"
+    assert governance_env.client.get(
+        "/api/agents/governed_agent/promotions"
+    ).json() == []
 
 
 def test_eval_run_invalidated_when_package_changes_during_run(
@@ -1095,20 +1466,39 @@ def test_rejected_agents_not_resurrected_by_promotion(
 def test_inflight_l1_is_not_published_before_audit_commit(
     governance_env: GovernanceEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """审计事务提交前，任何并发读者都只能看见原 L0 活表。"""
+    """卡住真正 COMMIT：提交前并发读者只能看见 L0 且审计行不可见。"""
 
     run = _run_eval(governance_env)
-    entered_record = threading.Event()
-    allow_record = threading.Event()
-    original_record = repos.record_promotion
+    entered_commit = threading.Event()
+    allow_commit = threading.Event()
+    original_conn_factory = governance_env.app.state.conn_factory
 
-    def _blocked_record(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        entered_record.set()
-        if allow_record.wait(timeout=5.0) is not True:
-            raise TimeoutError("测试未及时放行 promotion 审计提交")
-        return original_record(*args, **kwargs)
+    class _CommitBlockingConnection:
+        def __init__(self, real: Any) -> None:
+            self._real = real
+            self._contains_promotion_insert = False
 
-    monkeypatch.setattr(repos, "record_promotion", _blocked_record)
+        def execute(self, sql: str, *args: Any, **kwargs: Any):
+            normalized = " ".join(sql.split()).upper()
+            if normalized.startswith("INSERT INTO PROMOTIONS"):
+                self._contains_promotion_insert = True
+            if normalized == "COMMIT" and self._contains_promotion_insert is True:
+                entered_commit.set()
+                if allow_commit.wait(timeout=5.0) is not True:
+                    raise TimeoutError("测试未及时放行 promotion COMMIT")
+            return self._real.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._real, name)
+
+    def _blocking_conn_factory() -> _CommitBlockingConnection:
+        return _CommitBlockingConnection(original_conn_factory())
+
+    monkeypatch.setattr(
+        governance_env.app.state,
+        "conn_factory",
+        _blocking_conn_factory,
+    )
     result: dict[str, Any] = {}
 
     def _request_promotion() -> None:
@@ -1120,13 +1510,16 @@ def test_inflight_l1_is_not_published_before_audit_commit(
 
     request_thread = threading.Thread(target=_request_promotion, daemon=True)
     request_thread.start()
-    assert entered_record.wait(timeout=5.0) is True
+    assert entered_commit.wait(timeout=5.0) is True
     try:
         observed = governance_env.client.get("/api/agents/governed_agent")
         assert observed.status_code == 200
         assert observed.json()["maturity"] == "L0"
+        assert governance_env.client.get(
+            "/api/agents/governed_agent/promotions"
+        ).json() == []
     finally:
-        allow_record.set()
+        allow_commit.set()
         request_thread.join(timeout=5.0)
 
     assert request_thread.is_alive() is False
@@ -1135,6 +1528,11 @@ def test_inflight_l1_is_not_published_before_audit_commit(
     assert governance_env.client.get("/api/agents/governed_agent").json()[
         "maturity"
     ] == "L1"
+    assert len(
+        governance_env.client.get(
+            "/api/agents/governed_agent/promotions"
+        ).json()
+    ) == 1
 
 
 def test_runtime_attestation_rejection_updates_health(

@@ -18,6 +18,7 @@ run_forever() 循环体再兜一层，防御 run_once 之外的意外（如 conn
 from __future__ import annotations
 
 import errno
+import json
 import logging
 import os
 import sys
@@ -60,6 +61,35 @@ class WorkerAlreadyRunningError(RuntimeError):
         super().__init__(
             f"已有 worker 正在运行，拒绝并行启动第二个 worker（锁文件：{lock_path}）"
         )
+
+
+class WorkerPromotionAttestationError(RuntimeError):
+    """worker 装配发现未获 promotion 证明的 L1，拒绝进入任何轮询。"""
+
+    def __init__(self, rejected_count: int) -> None:
+        super().__init__(
+            "worker promotion attestation 拒载 "
+            f"{rejected_count} 个 L1；拒绝启动 job/eval poller"
+        )
+
+
+def _promotion_attestation_heartbeat_detail(
+    records: list[dict[str, str]] | None,
+) -> str:
+    """心跳内的 worker 独立签发见证；None 表示调用方未提供证据轴。"""
+
+    axis = records is not None
+    rejected_count = len(records) if records is not None else -1
+    return json.dumps(
+        {
+            "promotion_attestation_axis": axis is True,
+            "promotion_attestation_ok": axis is True and rejected_count == 0,
+            "promotion_attestation_rejected_count": rejected_count,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def _lock_file_nonblocking(handle: BinaryIO, lock_path: Path) -> None:
@@ -344,10 +374,15 @@ class JobRunner:
         runtime: object,
         conn_factory: Callable[[], sqlite3.Connection],
         poll_interval: float = 1.0,
+        *,
+        promotion_attestation_records: list[dict[str, str]] | None = None,
     ) -> None:
         self._runtime = runtime
         self._conn_factory = conn_factory
         self._poll_interval = poll_interval
+        self._heartbeat_detail = _promotion_attestation_heartbeat_detail(
+            promotion_attestation_records
+        )
         self._last_beat_monotonic: float | None = None
         self._last_resolve_monotonic: float | None = None
 
@@ -365,7 +400,7 @@ class JobRunner:
             repos.beat_worker_heartbeat(
                 conn,
                 generation=WORKER_GENERATION,
-                detail=f"pid={os.getpid()}",
+                detail=self._heartbeat_detail,
             )
             self._last_beat_monotonic = time.monotonic()
         except Exception:
@@ -404,6 +439,8 @@ class JobRunner:
         """
         conn = self._conn_factory()
         try:
+            if repos.get_promotion_attestation_fault(conn) is not None:
+                return False
             task = repos.claim_next_queued(conn)
         finally:
             conn.close()
@@ -538,6 +575,24 @@ def _assemble_default_worker_runtime() -> tuple[Any, Any, Callable[[], sqlite3.C
         knowledge_dir=config.KNOWLEDGE_DIR,
         conn_factory=conn_factory,
     )
+    if asm.promotion_attestation_records:
+        # worker 是独立进程，不能只依赖 API health 的启动见证。先把本进程拒载
+        # 结果写入心跳 JSON（selfcheck 严格解析），随后在创建任一 Runner/poller
+        # 前退出；绝不让“当前 generation + 仍在轮询”伪装成健康 worker。
+        conn = conn_factory()
+        try:
+            repos.beat_worker_heartbeat(
+                conn,
+                generation=WORKER_GENERATION,
+                detail=_promotion_attestation_heartbeat_detail(
+                    asm.promotion_attestation_records
+                ),
+            )
+        finally:
+            conn.close()
+        raise WorkerPromotionAttestationError(
+            len(asm.promotion_attestation_records)
+        )
     runtime = AgentRuntime(
         asm.agent_registry, asm.tool_registry, asm.model_gateway, conn_factory,
         config.TASK_RUNS_DIR, knowledge_service=asm.knowledge_service,
@@ -551,8 +606,12 @@ def _assemble_default_worker_runtime() -> tuple[Any, Any, Callable[[], sqlite3.C
 def _build_default_runner() -> JobRunner:
     """用 config 默认路径装配一个 JobRunner（真实 data/ 目录）。薄壳，复用
     _assemble_default_worker_runtime（与 EvalRunner 同源装配）。"""
-    _asm, runtime, conn_factory = _assemble_default_worker_runtime()
-    return JobRunner(runtime, conn_factory)
+    asm, runtime, conn_factory = _assemble_default_worker_runtime()
+    return JobRunner(
+        runtime,
+        conn_factory,
+        promotion_attestation_records=asm.promotion_attestation_records,
+    )
 
 
 def run_worker_forever(
@@ -665,7 +724,11 @@ def _run_default_worker() -> int:
             task_runs_dir=config.TASK_RUNS_DIR,
             quota=config.DEFAULT_EVAL_QUOTA,
         )
-        return JobRunner(runtime, cf)
+        return JobRunner(
+            runtime,
+            cf,
+            promotion_attestation_records=asm.promotion_attestation_records,
+        )
 
     def eval_factory() -> EvalRunner:
         return _stash["eval"]

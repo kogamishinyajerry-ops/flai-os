@@ -23,10 +23,13 @@ docs/02 §L0-L3 准入条件表的 L1 行分解为五条判定——机器可判
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 import sqlite3
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -34,7 +37,11 @@ from typing import Any, Callable
 from ..knowledge.scopes import reconcile_agent_scopes
 from ..logging_setup import audit_event
 from ..storage import repos
-from .eval_runner import compute_digest, load_eval_cases
+from .eval_runner import (
+    compute_digest,
+    inspect_snapshot_evidence,
+    load_eval_cases,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -118,17 +125,126 @@ def _changelog_is_nonempty(package_dir: Path) -> bool:
     return changelog.is_file() and changelog.read_text(encoding="utf-8").strip() != ""
 
 
+def _parse_evidence_timestamp(value: Any) -> datetime | None:
+    if isinstance(value, str) is not True or value.strip() == "":
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
+
+
 def _eval_evidence_conditions(
     run: dict[str, Any],
     *,
     agent_id: str,
     agent_version: str,
     expected_digest: str | None,
+    snapshot: dict[str, Any] | None,
 ) -> dict[str, bool]:
-    """晋升与重启 attestation 共用同一组全绿证据谓词。"""
+    """晋升与重启 attestation 共用同一组全绿且不可变的证据谓词。"""
 
     total = run.get("total")
     passed = run.get("passed")
+    failed = run.get("failed")
+    skipped = run.get("skipped")
+    case_results = run.get("case_results")
+    verdict_counts = {"passed": 0, "failed": 0, "skipped": 0}
+    case_result_files: list[str] = []
+    case_results_shape_ok = isinstance(case_results, list)
+    if case_results_shape_ok is True:
+        for result in case_results:
+            if isinstance(result, dict) is not True:
+                case_results_shape_ok = False
+                break
+            verdict = result.get("verdict")
+            if verdict not in verdict_counts:
+                case_results_shape_ok = False
+                break
+            case_file = result.get("case_file")
+            if isinstance(case_file, str) is not True or case_file.strip() == "":
+                case_results_shape_ok = False
+                break
+            case_result_files.append(case_file)
+            verdict_counts[verdict] += 1
+    case_results_match = (
+        case_results_shape_ok is True
+        and type(total) is int
+        and type(passed) is int
+        and type(failed) is int
+        and type(skipped) is int
+        and len(case_results) == total
+        and verdict_counts["passed"] == passed
+        and verdict_counts["failed"] == failed
+        and verdict_counts["skipped"] == skipped
+        and total == passed + failed + skipped
+    )
+
+    snapshot_handle = run.get("snapshot_handle")
+    snapshot_exists = (
+        isinstance(snapshot_handle, str)
+        and snapshot_handle.strip() != ""
+        and isinstance(snapshot, dict)
+    )
+    content_json = snapshot.get("content_json") if snapshot_exists is True else None
+    snapshot_handle_matches = (
+        isinstance(content_json, str)
+        and snapshot_handle
+        == "snap_" + hashlib.sha256(content_json.encode("utf-8")).hexdigest()
+    )
+    try:
+        snapshot_content = (
+            json.loads(content_json) if isinstance(content_json, str) else None
+        )
+    except (json.JSONDecodeError, RecursionError):
+        snapshot_content = None
+    snapshot_evidence = (
+        inspect_snapshot_evidence(snapshot_content)
+        if isinstance(snapshot_content, dict)
+        else None
+    )
+    snapshot_recomputed_digest = (
+        snapshot_evidence[0] if snapshot_evidence is not None else None
+    )
+    snapshot_approved_case_files = (
+        snapshot_evidence[1] if snapshot_evidence is not None else None
+    )
+    case_files_match_snapshot = (
+        case_results_shape_ok is True
+        and snapshot_approved_case_files is not None
+        and len(case_result_files) == len(set(case_result_files))
+        and frozenset(case_result_files) == snapshot_approved_case_files
+    )
+    snapshot_identity_matches = (
+        isinstance(snapshot_content, dict)
+        and snapshot.get("agent_id") == agent_id
+        and snapshot.get("agent_version") == agent_version
+        and snapshot_content.get("agent_id") == agent_id
+        and snapshot_content.get("agent_version") == agent_version
+    )
+    snapshot_digest_matches = (
+        expected_digest is not None
+        and isinstance(snapshot_content, dict)
+        and snapshot.get("eval_cases_digest") == expected_digest
+        and snapshot_content.get("eval_cases_digest") == expected_digest
+        and snapshot_recomputed_digest == expected_digest
+        and run.get("eval_cases_digest") == expected_digest
+    )
+    snapshot_created = _parse_evidence_timestamp(
+        snapshot.get("created_at") if isinstance(snapshot, dict) else None
+    )
+    run_started = _parse_evidence_timestamp(run.get("started_at"))
+    run_finished = _parse_evidence_timestamp(run.get("finished_at"))
+    evidence_timeline_ok = (
+        snapshot_created is not None
+        and run_started is not None
+        and run_finished is not None
+        and snapshot_created <= run_started <= run_finished
+    )
+
     return {
         "属于本 agent": run.get("agent_id") == agent_id,
         "run 已完成": run.get("status") == "completed",
@@ -143,7 +259,28 @@ def _eval_evidence_conditions(
             expected_digest is not None
             and run.get("eval_cases_digest") == expected_digest
         ),
+        "case_results 与四计数一致": case_results_match is True,
+        "case_results 与 snapshot approved case 一一对应": (
+            case_files_match_snapshot is True
+        ),
+        "snapshot 存在且 handle 绑定不可变内容": (
+            snapshot_exists is True and snapshot_handle_matches is True
+        ),
+        "snapshot 身份一致": snapshot_identity_matches is True,
+        "snapshot digest 与 run/当前包一致": snapshot_digest_matches is True,
+        "snapshot<=run start<=finished 时间线有效": evidence_timeline_ok is True,
     }
+
+
+def _snapshot_for_run(
+    conn: sqlite3.Connection, run: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    if run is None:
+        return None
+    handle = run.get("snapshot_handle")
+    if isinstance(handle, str) is not True or handle.strip() == "":
+        return None
+    return repos.get_eval_snapshot(conn, handle)
 
 
 def _promotion_record_attests(
@@ -186,6 +323,15 @@ def _promotion_record_attests(
         run = repos.get_eval_run(conn, eval_run_id)
         if run is None:
             return False
+        promotion_created = _parse_evidence_timestamp(promotion.get("created_at"))
+        run_finished = _parse_evidence_timestamp(run.get("finished_at"))
+        if (
+            promotion_created is None
+            or run_finished is None
+            or (run_finished <= promotion_created) is not True
+        ):
+            return False
+        snapshot = _snapshot_for_run(conn, run)
         package_dir = agent_registry.package_dir(str(agent.get("id")))
         approved, _drafts, broken = load_eval_cases(package_dir)
         current_digest = _pre_promotion_digest(
@@ -200,6 +346,7 @@ def _promotion_record_attests(
             agent_id=str(agent.get("id")),
             agent_version=str(agent.get("version")),
             expected_digest=current_digest,
+            snapshot=snapshot,
         )
         changelog_ok = _changelog_is_nonempty(package_dir)
     except (sqlite3.Error, OSError, ValueError, TypeError, RecursionError):
@@ -382,6 +529,7 @@ def _promote_agent_locked(
     conn = conn_factory()
     try:
         run = repos.get_eval_run(conn, str(eval_run_id)) if eval_run_id else None
+        snapshot = _snapshot_for_run(conn, run)
     finally:
         conn.close()
     current_digest = compute_digest(approved, pkg_dir, agent)
@@ -394,6 +542,7 @@ def _promote_agent_locked(
             agent_id=agent_id,
             agent_version=current_version,
             expected_digest=current_digest,
+            snapshot=snapshot,
         )
         evidence_ok = all(v is True for v in conditions.values())
         evidence_detail = "; ".join(f"{k}={v}" for k, v in conditions.items())
@@ -454,6 +603,40 @@ def _promote_agent_locked(
         f"\n- {stamp} maturity {current_maturity}→{to_maturity}"
         f"（晋升门放行，eval_run={eval_run_id}，confirmed_by={confirmed_by.strip()}）\n"
     )
+    operation_token = uuid.uuid4().hex
+    pending_fault = {
+        "agent_id": agent_id,
+        "agent_version": current_version,
+        "maturity": to_maturity,
+        "operation_token": operation_token,
+        "reason": "promotion-operation-pending",
+    }
+    pending_detail = json.dumps(
+        pending_fault,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    baseline_conn = conn_factory()
+    try:
+        baseline_promotion_count = int(
+            baseline_conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM promotions
+                WHERE agent_id = ? AND agent_version = ?
+                  AND from_maturity = ? AND to_maturity = ?
+                """,
+                (
+                    agent_id,
+                    current_version,
+                    current_maturity,
+                    to_maturity,
+                ),
+            ).fetchone()["n"]
+        )
+    finally:
+        baseline_conn.close()
 
     # 提交序（异源审 P1-3/F2 补偿式回滚）：磁盘写入 → 重扫+对账 → 单事务内
     # DB 投影+审计记录。任何异常都恢复磁盘原文、重扫并把 DB 投影同步回原状
@@ -485,6 +668,111 @@ def _promote_agent_locked(
             conn.close()
         agent_registry.adopt(restored_shadow)
 
+    def _clear_operation_latch() -> bool:
+        latch_conn = None
+        try:
+            latch_conn = conn_factory()
+            return repos.clear_promotion_attestation_fault(
+                latch_conn,
+                expected_detail=pending_detail,
+            )
+        except Exception:
+            logger.critical(
+                "promotion operation latch 无法 CAS 清除；保持治理轴红态",
+                exc_info=True,
+            )
+            return False
+        finally:
+            if latch_conn is not None:
+                latch_conn.close()
+
+    # write-ahead fault latch：必须在首次磁盘手术前 durable。若共享 DB 已只读/
+    # 不可写，此处直接失败且 YAML 尚未触碰；不能等提交/回滚失败后才 best-effort
+    # 写故障，因为导致提交失败的同一 DB 故障也会让迟到的 latch 写不进去。
+    latch_conn = conn_factory()
+    try:
+        if repos.record_promotion_attestation_fault(
+            latch_conn,
+            detail=pending_detail,
+        ) is not True:
+            raise PromotionRejected(
+                {
+                    **checks,
+                    "promotion_operation_latch": {
+                        "ok": False,
+                        "detail": (
+                            "已有未解除的 promotion operation/fault latch；"
+                            "拒绝触碰磁盘，须先人工核查"
+                        ),
+                    },
+                }
+            )
+        # 跨进程 stale-registry ABA：另一进程可能在本调用完成初始五门后先拿
+        # latch、完成 L0→L1 并清 latch；本调用随后重新拿到空 latch，内存仍是
+        # 旧 L0。故 latch 获取只是互斥，不是新鲜性证明。首次触盘前在同一 latch
+        # 持有期把磁盘原文、DB 投影及成功审计记录与本次早先捕获做 CAS 式核对。
+        with open(yaml_path, encoding="utf-8", newline="") as fh:
+            fresh_yaml = fh.read()
+        with open(changelog_path, encoding="utf-8", newline="") as fh:
+            fresh_changelog = fh.read()
+        db_agent = latch_conn.execute(
+            "SELECT version, maturity FROM agents WHERE id = ?",
+            (agent_id,),
+        ).fetchone()
+        current_promotion_count = int(latch_conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM promotions
+            WHERE agent_id = ? AND agent_version = ?
+              AND from_maturity = ? AND to_maturity = ?
+            """,
+            (
+                agent_id,
+                current_version,
+                current_maturity,
+                to_maturity,
+            ),
+        ).fetchone()["n"])
+        disk_fresh = (
+            fresh_yaml == text and fresh_changelog == changelog_original
+        )
+        db_fresh = (
+            db_agent is not None
+            and str(db_agent["version"]) == current_version
+            and str(db_agent["maturity"]) == current_maturity
+            and current_promotion_count == baseline_promotion_count
+        )
+        if disk_fresh is not True or db_fresh is not True:
+            latch_cleared = repos.clear_promotion_attestation_fault(
+                latch_conn,
+                expected_detail=pending_detail,
+            )
+            if latch_cleared is not True:
+                latch_fault = {
+                    "agent_id": agent_id,
+                    "agent_version": current_version,
+                    "maturity": current_maturity,
+                    "reason": "promotion-operation-latch-clear-failed",
+                }
+                if latch_fault not in attestation_records:
+                    attestation_records.append(latch_fault)
+            raise PromotionRejected(
+                {
+                    **checks,
+                    "promotion_freshness": {
+                        "ok": False,
+                        "detail": (
+                            "获取 operation latch 后新鲜性复核失败，拒绝触盘："
+                            f"disk_fresh={disk_fresh}; db_fresh={db_fresh}; "
+                            "promotion_count="
+                            f"{baseline_promotion_count}→{current_promotion_count}"
+                        ),
+                    },
+                }
+            )
+    finally:
+        latch_conn.close()
+
     try:
         with open(yaml_path, "w", encoding="utf-8", newline="") as fh:
             fh.write(new_text)
@@ -506,6 +794,75 @@ def _promote_agent_locked(
             raise RuntimeError(
                 f"晋升重扫后 agent {agent_id} 状态异常（不存在或 maturity 未落 {to_maturity}），回滚"
             )
+        # 初次五门判定与磁盘手术之间仍存在并发改包窗口。按目标 id 豁免只是允许
+        # “刚写入 L1、审计尚待同事务提交”的 shadow 被扫描，绝不等于豁免证据。
+        # 发布前从 shadow 对应的当前磁盘包重载 case/manifest，并只把唯一
+        # maturity L1 行逆变换回 L0 后重算 eval digest；prompt/workflow/schema/
+        # case 任一额外字节变化都会令旧证据失效，随后走既有补偿回滚。
+        refreshed_approved, _refreshed_drafts, refreshed_broken = load_eval_cases(
+            pkg_dir
+        )
+        refreshed_coverage_ok = _coverage_is_sufficient(
+            refreshed_approved, refreshed_broken
+        )
+        checks["min_eval_coverage"] = {
+            "ok": refreshed_coverage_ok is True,
+            "detail": (
+                f"approved case={len(refreshed_approved)}（需 ≥3）；失败路径 case="
+                f"{_has_failure_path_case(refreshed_approved)}（需含 status_is failed）；"
+                f"损坏 case={len(refreshed_broken)}（需 0）。"
+                "发布前已重载当前包复核"
+            ),
+        }
+        refreshed_digest = _pre_promotion_digest(
+            refreshed_approved,
+            pkg_dir,
+            refreshed,
+            from_maturity=current_maturity,
+            to_maturity=to_maturity,
+        )
+        evidence_conn = conn_factory()
+        try:
+            refreshed_run = repos.get_eval_run(
+                evidence_conn, str(eval_run_id)
+            )
+            refreshed_snapshot = _snapshot_for_run(
+                evidence_conn, refreshed_run
+            )
+        finally:
+            evidence_conn.close()
+        refreshed_conditions = _eval_evidence_conditions(
+            refreshed_run or {},
+            agent_id=agent_id,
+            agent_version=str(refreshed.get("version")),
+            expected_digest=refreshed_digest,
+            snapshot=refreshed_snapshot,
+        )
+        refreshed_evidence_ok = all(
+            value is True for value in refreshed_conditions.values()
+        )
+        checks["eval_evidence"] = {
+            "ok": refreshed_evidence_ok is True,
+            "detail": "; ".join(
+                f"{key}={value}" for key, value in refreshed_conditions.items()
+            )
+            + "; 发布前已重载当前包复核",
+        }
+        refreshed_changelog_ok = _changelog_is_nonempty(pkg_dir)
+        checks["changelog_nonempty"] = {
+            "ok": refreshed_changelog_ok is True,
+            "detail": (
+                "changelog.md 存在且非空（发布前复核）"
+                if refreshed_changelog_ok
+                else "changelog.md 缺失或为空文件（发布前复核）"
+            ),
+        }
+        if (
+            refreshed_coverage_ok is not True
+            or refreshed_evidence_ok is not True
+            or refreshed_changelog_ok is not True
+        ):
+            raise PromotionRejected(checks)
         conn = conn_factory()
         try:
             # 投影与审计记录同一显式事务（F2）：sync 已提交而 record 失败的
@@ -535,14 +892,79 @@ def _promote_agent_locked(
         agent_registry.adopt(promoted_shadow)
     except Exception as commit_exc:
         logger.exception("晋升提交段异常，恢复磁盘与投影原状（agent=%s）", agent_id)
+        restored = False
         try:
             _restore_disk_and_projection()
+            restored = True
         except Exception:
             # 恢复自身失败=磁盘/内存/DB 可能不一致——critical 留痕但绝不遮蔽
-            # 原始异常（原异常才是根因，恢复失败是它的连带）。
+            # 原始异常（原异常才是根因，恢复失败是它的连带）。同时把故障写入
+            # 进程内 sticky attestation 轴：即使 live registry 仍保守显示 L0，
+            # health/deploy_selfcheck 也必须红，直到人工核查并重启重建事实。
+            rollback_fault = {
+                "agent_id": agent_id,
+                "agent_version": current_version,
+                "maturity": to_maturity,
+                "operation_token": operation_token,
+                "reason": "promotion-rollback-failed",
+            }
+            if rollback_fault not in attestation_records:
+                attestation_records.append(rollback_fault)
+            # CLI 与 API/worker 是不同进程，单写调用方内存列表会在 CLI 退出后
+            # 消失。复用 worker_heartbeats 的独立保留行持久锁存；default 周期
+            # 心跳不会覆盖它，后续 health/readyz/selfcheck/worker 装配均可见。
+            fault_conn = None
+            try:
+                fault_conn = conn_factory()
+                rollback_detail = json.dumps(
+                    rollback_fault,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                if repos.update_promotion_attestation_fault(
+                    fault_conn,
+                    expected_detail=pending_detail,
+                    detail=rollback_detail,
+                ) is not True:
+                    repos.record_promotion_attestation_fault(
+                        fault_conn,
+                        detail=rollback_detail,
+                    )
+            except Exception:
+                logger.critical(
+                    "promotion 回滚故障无法写入跨进程持久 latch；"
+                    "当前进程仍保持内存红态",
+                    exc_info=True,
+                )
+            finally:
+                if fault_conn is not None:
+                    fault_conn.close()
             logger.critical(
                 "晋升回滚失败，agent %s 状态可能不一致，需人工核查（yaml SSOT 为准）",
                 agent_id, exc_info=True,
             )
+        if restored is True and _clear_operation_latch() is not True:
+            latch_fault = {
+                "agent_id": agent_id,
+                "agent_version": current_version,
+                "maturity": current_maturity,
+                "reason": "promotion-operation-latch-clear-failed",
+            }
+            if latch_fault not in attestation_records:
+                attestation_records.append(latch_fault)
         raise commit_exc
+    if _clear_operation_latch() is not True:
+        latch_fault = {
+            "agent_id": agent_id,
+            "agent_version": current_version,
+            "maturity": to_maturity,
+            "reason": "promotion-operation-latch-clear-failed",
+        }
+        if latch_fault not in attestation_records:
+            attestation_records.append(latch_fault)
+        raise RuntimeError(
+            "promotion 已提交但 operation latch 清除失败；"
+            "治理健康保持红态，须人工核查"
+        )
     return promotion

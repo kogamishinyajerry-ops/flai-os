@@ -1524,6 +1524,10 @@ def list_promotions_all(conn: sqlite3.Connection, limit: int = 20) -> list[dict[
 
 # ── worker heartbeats（迁移 #7，ADR-0021/Codex R1 审 P1）────────────────
 
+_PROMOTION_ATTESTATION_FAULT_ID = "promotion-attestation-fault"
+_PROMOTION_ATTESTATION_FAULT_GENERATION = "promotion-fault-v1"
+
+
 def beat_worker_heartbeat(conn: sqlite3.Connection, *, generation: str, detail: str | None = None) -> None:
     """worker 心跳 upsert：单实例锁保证同库唯一 worker，固定主键单行不增长。
 
@@ -1547,6 +1551,80 @@ def beat_worker_heartbeat(conn: sqlite3.Connection, *, generation: str, detail: 
 def get_worker_heartbeat(conn: sqlite3.Connection) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT * FROM worker_heartbeats WHERE worker_id = 'default'"
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def record_promotion_attestation_fault(
+    conn: sqlite3.Connection, *, detail: str
+) -> bool:
+    """用 heartbeat 现有表锁存跨进程 promotion 故障。
+
+    独立保留行不会被 ``default`` worker 的周期 upsert 覆盖；INSERT OR IGNORE
+    同时充当跨进程 operation latch。成功提交或完整回滚只按原 detail 做 CAS
+    清除；崩溃、半回滚或清除失败则保留为 sticky 红态，须人工核查。
+    """
+
+    now = _now_iso()
+    cursor = conn.execute(
+        """
+        INSERT OR IGNORE INTO worker_heartbeats
+            (worker_id, generation, detail, started_at, last_beat_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            _PROMOTION_ATTESTATION_FAULT_ID,
+            _PROMOTION_ATTESTATION_FAULT_GENERATION,
+            detail,
+            now,
+            now,
+        ),
+    )
+    return cursor.rowcount == 1
+
+
+def update_promotion_attestation_fault(
+    conn: sqlite3.Connection,
+    *,
+    expected_detail: str,
+    detail: str,
+) -> bool:
+    """仅当前 operation token 仍持有 latch 时更新诊断，绝不覆盖他人故障。"""
+
+    cursor = conn.execute(
+        """
+        UPDATE worker_heartbeats
+        SET detail = ?, last_beat_at = ?
+        WHERE worker_id = ? AND detail = ?
+        """,
+        (
+            detail,
+            _now_iso(),
+            _PROMOTION_ATTESTATION_FAULT_ID,
+            expected_detail,
+        ),
+    )
+    return cursor.rowcount == 1
+
+
+def clear_promotion_attestation_fault(
+    conn: sqlite3.Connection, *, expected_detail: str
+) -> bool:
+    """CAS 清除当前 operation token；显式 expected_detail 防误删历史故障。"""
+
+    cursor = conn.execute(
+        "DELETE FROM worker_heartbeats WHERE worker_id = ? AND detail = ?",
+        (_PROMOTION_ATTESTATION_FAULT_ID, expected_detail),
+    )
+    return cursor.rowcount == 1
+
+
+def get_promotion_attestation_fault(
+    conn: sqlite3.Connection,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM worker_heartbeats WHERE worker_id = ?",
+        (_PROMOTION_ATTESTATION_FAULT_ID,),
     ).fetchone()
     return dict(row) if row is not None else None
 

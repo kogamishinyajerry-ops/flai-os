@@ -11,6 +11,7 @@ Agent 仍会 upsert 进 agents 表（见 registry.deregister docstring）。任�
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from dataclasses import dataclass, field
@@ -76,6 +77,32 @@ def assemble(
         promotion_attestation_records = reconcile_promotion_attestations(
             agent_registry, conn, actor="bootstrap"
         )
+        persistent_fault = repos.get_promotion_attestation_fault(conn)
+        if persistent_fault is not None:
+            try:
+                fault_detail = json.loads(persistent_fault.get("detail"))
+            except (json.JSONDecodeError, TypeError, RecursionError):
+                fault_detail = {}
+            if isinstance(fault_detail, dict) is not True:
+                fault_detail = {}
+            promotion_attestation_records.append(
+                {
+                    "agent_id": str(
+                        fault_detail.get("agent_id")
+                        or "<promotion-attestation-fault>"
+                    ),
+                    "agent_version": str(
+                        fault_detail.get("agent_version") or "<unknown>"
+                    ),
+                    "maturity": str(
+                        fault_detail.get("maturity") or "<unknown>"
+                    ),
+                    "reason": str(
+                        fault_detail.get("reason")
+                        or "persistent-promotion-attestation-fault"
+                    ),
+                }
+            )
         agent_registry.sync_to_db(conn)
         # ADR-0025 D4：存量任务不可变分级回填。放此处（registry 已载、conn 可用），
         # 迁移只加列不回填（init_db 无注册表算不出 sensitive 工具集）。sensitive 工具集

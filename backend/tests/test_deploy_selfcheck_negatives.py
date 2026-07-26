@@ -17,6 +17,9 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
+from backend.app.storage import repos
 from backend.app.storage.db import get_conn, init_db
 from scripts import deploy_selfcheck
 
@@ -30,14 +33,31 @@ def _valid_db(tmp_path: Path) -> Path:
     return db
 
 
-def _insert_beat(db: Path, *, generation: str, last_beat_at: str) -> None:
+_GREEN_ATTESTATION_DETAIL = json.dumps(
+    {
+        "promotion_attestation_axis": True,
+        "promotion_attestation_ok": True,
+        "promotion_attestation_rejected_count": 0,
+    },
+    separators=(",", ":"),
+    sort_keys=True,
+)
+
+
+def _insert_beat(
+    db: Path,
+    *,
+    generation: str,
+    last_beat_at: str,
+    detail: str | None = _GREEN_ATTESTATION_DETAIL,
+) -> None:
     conn = get_conn(db)
     try:
         conn.execute(
             "INSERT OR REPLACE INTO worker_heartbeats"
             " (worker_id, generation, detail, started_at, last_beat_at)"
-            " VALUES ('default', ?, NULL, ?, ?)",
-            (generation, last_beat_at, last_beat_at),
+            " VALUES ('default', ?, ?, ?, ?)",
+            (generation, detail, last_beat_at, last_beat_at),
         )
         conn.commit()
     finally:
@@ -239,11 +259,98 @@ def test_worker_gen_malformed_timestamp_fails(tmp_path: Path) -> None:
     assert _run_worker_gen(db).ok is False
 
 
+@pytest.mark.parametrize(
+    "detail",
+    [
+        None,
+        "not-json",
+        json.dumps(
+            {
+                "promotion_attestation_axis": 1,
+                "promotion_attestation_ok": True,
+                "promotion_attestation_rejected_count": 0,
+            }
+        ),
+        json.dumps(
+            {
+                "promotion_attestation_axis": True,
+                "promotion_attestation_ok": "true",
+                "promotion_attestation_rejected_count": 0,
+            }
+        ),
+        json.dumps(
+            {
+                "promotion_attestation_axis": True,
+                "promotion_attestation_ok": True,
+                "promotion_attestation_rejected_count": False,
+            }
+        ),
+        json.dumps(
+            {
+                "promotion_attestation_axis": True,
+                "promotion_attestation_ok": True,
+                "promotion_attestation_rejected_count": "0",
+            }
+        ),
+        json.dumps(
+            {
+                "promotion_attestation_axis": True,
+                "promotion_attestation_ok": False,
+                "promotion_attestation_rejected_count": 1,
+            }
+        ),
+    ],
+    ids=[
+        "missing-json",
+        "malformed-json",
+        "truthy-axis",
+        "truthy-ok",
+        "bool-count-is-not-zero",
+        "string-count",
+        "rejected-l1",
+    ],
+)
+def test_worker_generation_requires_strict_green_attestation_detail(
+    tmp_path: Path, detail: str | None
+) -> None:
+    db = _valid_db(tmp_path)
+    _insert_beat(
+        db,
+        generation=deploy_selfcheck.WORKER_GENERATION,
+        last_beat_at=datetime.now(timezone.utc).isoformat(),
+        detail=detail,
+    )
+    assert _run_worker_gen(db).ok is False
+
+
 def test_worker_gen_fresh_and_current_passes(tmp_path: Path) -> None:
     db = _valid_db(tmp_path)
     _insert_beat(db, generation=deploy_selfcheck.WORKER_GENERATION,
                  last_beat_at=datetime.now(timezone.utc).isoformat())
     assert _run_worker_gen(db).ok is True
+
+
+def test_worker_generation_fails_on_persistent_promotion_fault(
+    tmp_path: Path,
+) -> None:
+    db = _valid_db(tmp_path)
+    _insert_beat(
+        db,
+        generation=deploy_selfcheck.WORKER_GENERATION,
+        last_beat_at=datetime.now(timezone.utc).isoformat(),
+    )
+    conn = get_conn(db)
+    try:
+        repos.record_promotion_attestation_fault(
+            conn,
+            detail='{"reason":"promotion-rollback-failed"}',
+        )
+    finally:
+        conn.close()
+
+    check = _run_worker_gen(db)
+    assert check.ok is False
+    assert "持久故障" in check.detail
 
 
 # ---------- 6. check_db_identity（库身份一致——服务侧=探针侧） ----------
@@ -417,6 +524,24 @@ def test_live_promotion_attestation_truthy_not_true_fails(monkeypatch) -> None:
             "promotion_attestation_ok": truthy,
         })
         assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+
+
+@pytest.mark.parametrize(
+    "rejected_count",
+    [None, False, "0", 1],
+    ids=["missing", "bool-false", "string-zero", "nonzero"],
+)
+def test_live_promotion_attestation_requires_strict_zero_rejected_count(
+    monkeypatch, rejected_count: object
+) -> None:
+    payload = {
+        "promotion_attestation_axis": True,
+        "promotion_attestation_ok": True,
+    }
+    if rejected_count is not None:
+        payload["promotion_attestation_rejected_count"] = rejected_count
+    _fake_http(monkeypatch, payload=payload)
+    assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
 
 
 def test_live_promotion_attestation_clean_passes(monkeypatch) -> None:

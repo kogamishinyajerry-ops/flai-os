@@ -31,6 +31,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+import yaml
+
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
 
@@ -353,6 +355,30 @@ def freeze_eval_snapshot(conn: Any, *, agent_registry: Any, agent_id: str) -> st
     for name in _referenced_package_files(agent):
         _grab(name)
     _grab("workflow.py")
+    # registry 是早先 scan 的缓存，agent.yaml 是本次 freeze 独立读盘；若二者
+    # 已经发生漂移，绝不能把缓存配置 A 与冻结文件 B 混装成一个 snapshot。
+    # 先从刚捕获的原始字节重解析，并要求与已通过 Registry 全量校验的缓存语义
+    # 完全一致；不一致时让调用方先 rescan，再重新 freeze。
+    try:
+        frozen_agent = yaml.safe_load(
+            base64.b64decode(files["agent.yaml"]).decode("utf-8")
+        )
+    except (
+        KeyError,
+        UnicodeDecodeError,
+        ValueError,
+        yaml.YAMLError,
+        RecursionError,
+    ) as exc:
+        raise ValueError(
+            f"agent {agent_id!r} 的冻结 agent.yaml 无法解析，拒绝建立 snapshot"
+        ) from exc
+    if isinstance(frozen_agent, dict) is not True or frozen_agent != agent:
+        raise ValueError(
+            f"agent {agent_id!r} 的 agent.yaml 与 registry 缓存语义不一致，"
+            "拒绝建立撕裂 snapshot；请先重扫 registry"
+        )
+    agent = frozen_agent
     # eval_cases/ 递归全量冻结（Codex R0 审 P1）：iterdir 非递归、只抓直接子文件，会漏
     # 掉 case 的 input_files 引用的嵌套 fixture（如 cfd_evaluate_agent 的
     # fixtures/<run>/postProcessing/.../forceCoeffs.dat）。材化后这些文件缺席，
@@ -446,10 +472,16 @@ def run_agent_evals(
     run_id = f"eval_{uuid.uuid4().hex}"
     conn = conn_factory()
     try:
+        snapshot_handle = freeze_eval_snapshot(
+            conn,
+            agent_registry=agent_registry,
+            agent_id=agent_id,
+        )
         repos.create_eval_run(
             conn, run_id=run_id, agent_id=agent_id,
             agent_version=str(agent.get("version")), triggered_by=triggered_by,
             status="running",
+            snapshot_handle=snapshot_handle,
         )
     finally:
         conn.close()
@@ -509,6 +541,53 @@ def _materialize_snapshot(content: dict[str, Any], dest_dir: Path) -> None:
             continue
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(base64.b64decode(b64))
+
+
+def inspect_snapshot_evidence(
+    content: dict[str, Any],
+) -> tuple[str | None, frozenset[str]] | None:
+    """从实际冻结字节重建 digest 与 approved case 文件集。
+
+    promotion attestation 同时绑定结果计数和逐 case 身份；两者必须来自同一次材化，
+    避免对同一不可信 ``content_json`` 做两次独立解释。畸形/损坏内容一律返回 None。
+    """
+    agent = content.get("agent")
+    if isinstance(agent, dict) is not True:
+        return None
+    try:
+        with tempfile.TemporaryDirectory(prefix="flai_eval_verify_") as _td:
+            materialized = Path(_td)
+            _materialize_snapshot(content, materialized)
+            frozen_agent = yaml.safe_load(
+                (materialized / "agent.yaml").read_text(encoding="utf-8")
+            )
+            if isinstance(frozen_agent, dict) is not True or frozen_agent != agent:
+                return None
+            approved, _drafts, broken = load_eval_cases(materialized)
+            if broken:
+                return None
+            return (
+                compute_digest(approved, materialized, agent),
+                frozenset(str(case["_file"]) for case in approved),
+            )
+    except (
+        OSError,
+        AttributeError,
+        TypeError,
+        ValueError,
+        KeyError,
+        UnicodeError,
+        yaml.YAMLError,
+        RecursionError,
+    ):
+        return None
+
+
+def recompute_snapshot_digest(content: dict[str, Any]) -> str | None:
+    """从快照实际冻结字节重算 digest；畸形/损坏内容一律返回 None。"""
+
+    evidence = inspect_snapshot_evidence(content)
+    return evidence[0] if evidence is not None else None
 
 
 def _clone_runtime_with_registry(runtime: Any, registry: Any) -> Any:
