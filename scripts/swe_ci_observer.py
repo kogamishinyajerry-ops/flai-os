@@ -28,6 +28,8 @@ OBSERVATION_SCHEMA = "flai.swe-ci-observation.v1"
 AUTHENTICITY = "UNATTESTED_SELF_CONSISTENCY_ONLY"
 STATUS_PRECEDENCE = ("error", "unknown", "failed", "passed")
 GATE_STATUSES = frozenset(STATUS_PRECEDENCE)
+MAX_JSON_BYTES = 1024 * 1024
+_READ_CHUNK_BYTES = 1024 * 1024
 
 _MANIFEST_FIELDS = {
     "schema_version",
@@ -165,7 +167,12 @@ def _file_version(file_stat: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
-def _read_regular_file_nofollow(path: Path, label: str) -> bytes:
+def _read_regular_file_nofollow(
+    path: Path,
+    label: str,
+    *,
+    max_bytes: int | None = None,
+) -> bytes:
     directory_fd: int | None = None
     file_fd: int | None = None
     try:
@@ -180,12 +187,16 @@ def _read_regular_file_nofollow(path: Path, label: str) -> bytes:
         file_stat = os.fstat(file_fd)
         if not stat.S_ISREG(file_stat.st_mode):
             raise EvidenceError(f"{label} must remain a regular file")
+        if max_bytes is not None and file_stat.st_size > max_bytes:
+            raise EvidenceError(f"{label} exceeds {max_bytes}-byte limit")
         chunks: list[bytes] = []
-        while True:
-            chunk = os.read(file_fd, 1024 * 1024)
+        remaining = file_stat.st_size
+        while remaining:
+            chunk = os.read(file_fd, min(_READ_CHUNK_BYTES, remaining))
             if not chunk:
-                break
+                raise EvidenceError(f"{label} changed while being read")
             chunks.append(chunk)
+            remaining -= len(chunk)
         if _file_version(os.fstat(file_fd)) != _file_version(file_stat):
             raise EvidenceError(f"{label} changed while being read")
         return b"".join(chunks)
@@ -204,7 +215,11 @@ def _read_regular_file_nofollow(path: Path, label: str) -> bytes:
 
 def _load_json(path: Path, label: str) -> dict[str, Any]:
     try:
-        raw = _read_regular_file_nofollow(path, label).decode("utf-8")
+        raw = _read_regular_file_nofollow(
+            path,
+            label,
+            max_bytes=MAX_JSON_BYTES,
+        ).decode("utf-8")
         value = json.loads(
             raw,
             object_pairs_hook=_reject_duplicate_keys,
@@ -344,11 +359,13 @@ def _sha256_artifact_file(
         if not stat.S_ISREG(file_stat.st_mode):
             raise EvidenceError(f"{label} must remain a regular file")
         digest = hashlib.sha256()
-        while True:
-            chunk = os.read(file_fd, 1024 * 1024)
+        remaining = file_stat.st_size
+        while remaining:
+            chunk = os.read(file_fd, min(_READ_CHUNK_BYTES, remaining))
             if not chunk:
-                break
+                raise EvidenceError(f"{label} changed while being read")
             digest.update(chunk)
+            remaining -= len(chunk)
         if _file_version(os.fstat(file_fd)) != _file_version(file_stat):
             raise EvidenceError(f"{label} changed while being read")
         return digest.hexdigest(), (file_stat.st_dev, file_stat.st_ino)

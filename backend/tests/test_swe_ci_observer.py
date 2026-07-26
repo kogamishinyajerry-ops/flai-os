@@ -668,6 +668,93 @@ def test_json_file_swap_cannot_redirect_read(
 
 
 @pytest.mark.skipif(
+    not observer.RACE_SAFE_DIR_FD,
+    reason="race-safe dir_fd traversal unavailable on this platform",
+)
+@pytest.mark.parametrize("target", ["manifest", "evidence", "log"])
+def test_growing_input_is_rejected_after_the_opening_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    manifest_path, evidence_path, _, evidence = _bundle(
+        tmp_path,
+        name="current",
+        iteration=1,
+        candidate_commit=CANDIDATE_SHA,
+        statuses={"python-tests": "passed", "scope-audit": "passed"},
+    )
+    if target == "manifest":
+        target_path = manifest_path
+    elif target == "evidence":
+        target_path = evidence_path
+    else:
+        target_path = (
+            evidence_path.parent
+            / evidence["artifact_root"]
+            / evidence["gate_results"][0]["log_path"]
+        )
+
+    target_stat = target_path.stat()
+    target_identity = (target_stat.st_dev, target_stat.st_ino)
+    opening_size = target_stat.st_size
+    real_read = observer.os.read
+    target_read_count = 0
+    target_returned_bytes = 0
+
+    def append_before_each_read(file_fd: int, byte_count: int) -> bytes:
+        nonlocal target_read_count, target_returned_bytes
+        opened_stat = os.fstat(file_fd)
+        if (opened_stat.st_dev, opened_stat.st_ino) == target_identity:
+            target_read_count += 1
+            with target_path.open("ab", buffering=0) as growing_file:
+                growing_file.write(b"x" * max(byte_count, 1))
+        chunk = real_read(file_fd, byte_count)
+        if (opened_stat.st_dev, opened_stat.st_ino) == target_identity:
+            target_returned_bytes += len(chunk)
+            if target_returned_bytes > opening_size:
+                raise AssertionError("observer read beyond the opening snapshot")
+        return chunk
+
+    monkeypatch.setattr(observer.os, "read", append_before_each_read)
+    with pytest.raises(observer.EvidenceError, match="changed while being read"):
+        observer.observe(manifest_path, evidence_path)
+
+    assert target_read_count >= 1
+    assert target_returned_bytes <= opening_size
+
+
+@pytest.mark.skipif(
+    not observer.RACE_SAFE_DIR_FD,
+    reason="race-safe dir_fd traversal unavailable on this platform",
+)
+@pytest.mark.parametrize("target", ["manifest", "evidence"])
+def test_json_input_over_one_mebibyte_is_rejected(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    manifest_path, evidence_path, _, _ = _bundle(
+        tmp_path,
+        name="current",
+        iteration=1,
+        candidate_commit=CANDIDATE_SHA,
+        statuses={"python-tests": "passed", "scope-audit": "passed"},
+    )
+    target_path = manifest_path if target == "manifest" else evidence_path
+    json_limit = 1024 * 1024
+    original = target_path.read_bytes()
+    target_path.write_bytes(
+        original + (b" " * (json_limit - len(original) + 1))
+    )
+
+    with pytest.raises(
+        observer.EvidenceError,
+        match=rf"{target} exceeds {json_limit}-byte limit",
+    ):
+        observer.observe(manifest_path, evidence_path)
+
+
+@pytest.mark.skipif(
     os.name == "nt" or not hasattr(os, "mkfifo"),
     reason="FIFO behavior is POSIX-only",
 )

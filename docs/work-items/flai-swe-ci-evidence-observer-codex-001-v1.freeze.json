@@ -45,7 +45,7 @@
     "Evidence binds a candidate commit, manifest digest, verifier digest, offset-aware timestamps, exact named-gate results and content-addressed logs.",
     "The R0 observer proves only schema, digest and content self-consistency; without a separately trusted producer or attestation it does not prove that the verifier actually ran.",
     "Missing fields, extra fields, duplicate JSON keys, NaN or Infinity, duplicate IDs, truthy non-integers, manifest drift, gate-set drift, path escape, symlink traversal, digest mismatch, invalid time order and inconsistent exit codes fail closed.",
-    "Manifest, current or previous evidence, and log files are opened through component-wise dir_fd plus O_NOFOLLOW and O_NONBLOCK traversal, must remain regular and unchanged while read, and reject symlinked ancestors, swap races or blocking special files such as FIFOs.",
+    "Manifest, current or previous evidence, and log files are opened through component-wise dir_fd plus O_NOFOLLOW and O_NONBLOCK traversal, are read only up to the size captured by the opening fstat, must remain regular and unchanged while read, and reject symlinked ancestors, swap races, continuously growing inputs or blocking special files such as FIFOs; manifest and evidence JSON are limited to 1048576 bytes.",
     "Passed is derived only when every named gate is passed and the verifier exit code is exactly zero.",
     "Mixed named-gate status precedence is error, then unknown, then failed, then passed; all-pass with nonzero exit or any non-pass with zero exit is invalid evidence.",
     "Comparison is allowed only against the immediately preceding iteration under the same manifest and compares every gate independently, including when the previous top-level observation was not passed.",
