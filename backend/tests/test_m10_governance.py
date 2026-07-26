@@ -1538,7 +1538,9 @@ def test_inflight_l1_is_not_published_before_audit_commit(
 def test_runtime_attestation_rejection_updates_health(
     governance_env: GovernanceEnv,
 ) -> None:
-    """启动后出现的磁盘漂移必须在下一次重扫令 health sticky-fail。"""
+    """运行期重扫拒载必须跨进程 sticky-fail，且 worker 不得继续 claim。"""
+
+    from backend.app.jobs.runner import JobRunner
 
     initial_health = governance_env.client.get("/api/health").json()
     assert initial_health["promotion_attestation_ok"] is True
@@ -1553,17 +1555,185 @@ def test_runtime_attestation_rejection_updates_health(
     )
 
     run = _run_eval(governance_env)
+    queued = governance_env.client.post(
+        "/api/tasks",
+        json={
+            "agent_id": "governed_agent",
+            "inputs": {"name": "持久故障后不得 claim"},
+        },
+    )
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["status"] == "queued"
+    queued_task_id = queued.json()["id"]
+
     response = _promote(
         governance_env,
         run["id"],
         confirmations={"exception_paths_handled": True},
     )
-    assert response.status_code == 200, response.text
+    checks = _rejection_checks(response)
+    assert checks["runtime_attestation"]["ok"] is False
     assert governance_env.client.get("/api/agents/hello_agent").status_code == 404
+    assert governance_env.client.get("/api/agents/governed_agent").json()[
+        "maturity"
+    ] == "L0"
+    assert governance_env.client.get(
+        "/api/agents/governed_agent/promotions"
+    ).json() == []
 
     health = governance_env.client.get("/api/health").json()
     assert health["promotion_attestation_ok"] is False
     assert health["promotion_attestation_rejected_count"] == 1
+
+    conn = governance_env.app.state.conn_factory()
+    try:
+        persistent_fault = repos.get_promotion_attestation_fault(conn)
+    finally:
+        conn.close()
+    assert persistent_fault is not None
+    assert json.loads(persistent_fault["detail"])["reason"] == (
+        "promotion-runtime-attestation-rejected"
+    )
+
+    # 模拟独立 worker/API 进程没有本进程内 rejection list；共享 DB 故障仍须
+    # 令 health/readyz 红，并在 claim 之前挡住已排队工作。
+    governance_env.app.state.promotion_attestation_records = []
+    cross_process_health = governance_env.client.get("/api/health").json()
+    assert cross_process_health["promotion_attestation_ok"] is False
+    assert cross_process_health["promotion_attestation_rejected_count"] == 1
+    readyz = governance_env.client.get("/api/readyz")
+    assert readyz.status_code == 503
+    assert readyz.json()["worker"]["reason"] == (
+        "persistent_promotion_attestation_fault"
+    )
+
+    independent_worker = JobRunner(
+        governance_env.app.state.runtime,
+        governance_env.app.state.conn_factory,
+        promotion_attestation_records=[],
+    )
+    assert independent_worker.run_once() is False
+    queued_after = governance_env.client.get(
+        f"/api/tasks/{queued_task_id}"
+    ).json()
+    assert queued_after["status"] == "queued"
+
+
+def test_runtime_attestation_fault_update_failure_preserves_pending_latch(
+    governance_env: GovernanceEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """持久故障升级失败时，补偿成功也不得把原 pending latch 清成绿。"""
+
+    drifted_yaml = governance_env.agents_dir / "hello_agent" / "agent.yaml"
+    drifted_yaml.write_text(
+        drifted_yaml.read_text(encoding="utf-8").replace(
+            "maturity: L0",
+            "maturity: L1",
+        ),
+        encoding="utf-8",
+    )
+    run = _run_eval(governance_env)
+
+    monkeypatch.setattr(
+        repos,
+        "update_promotion_attestation_fault",
+        lambda *args, **kwargs: False,
+    )
+    checks = _rejection_checks(
+        _promote(
+            governance_env,
+            run["id"],
+            confirmations={"exception_paths_handled": True},
+        )
+    )
+    assert checks["runtime_attestation"]["ok"] is False
+
+    governance_env.app.state.promotion_attestation_records = []
+    conn = governance_env.app.state.conn_factory()
+    try:
+        persistent_fault = repos.get_promotion_attestation_fault(conn)
+    finally:
+        conn.close()
+    assert persistent_fault is not None
+    assert json.loads(persistent_fault["detail"])["reason"] == (
+        "promotion-operation-pending"
+    )
+    assert governance_env.client.get("/api/health").json()[
+        "promotion_attestation_ok"
+    ] is False
+    readyz = governance_env.client.get("/api/readyz")
+    assert readyz.status_code == 503
+    assert readyz.json()["worker"]["reason"] == (
+        "persistent_promotion_attestation_fault"
+    )
+
+
+def test_restore_rescan_rejection_persists_fault_before_latch_clear(
+    governance_env: GovernanceEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """首次重扫干净、补偿重扫才拒载时，也必须跨进程闭锁。"""
+
+    from backend.app.governance import promotion as promotion_mod
+
+    run = _run_eval(governance_env)
+    drifted_yaml = governance_env.agents_dir / "hello_agent" / "agent.yaml"
+
+    def _drift_then_fail_record(*args: Any, **kwargs: Any) -> None:
+        drifted_yaml.write_text(
+            drifted_yaml.read_text(encoding="utf-8").replace(
+                "maturity: L0",
+                "maturity: L1",
+            ),
+            encoding="utf-8",
+        )
+        raise RuntimeError("注入：审计提交失败后出现运行期拒载")
+
+    monkeypatch.setattr(
+        promotion_mod.repos,
+        "record_promotion",
+        _drift_then_fail_record,
+    )
+    with pytest.raises(RuntimeError, match="审计提交失败后出现运行期拒载"):
+        promotion_mod.promote_agent(
+            conn_factory=governance_env.app.state.conn_factory,
+            agent_registry=governance_env.app.state.agent_registry,
+            scope_registry=governance_env.app.state.scope_registry,
+            agent_id="governed_agent",
+            to_maturity="L1",
+            eval_run_id=run["id"],
+            confirmations={"exception_paths_handled": True},
+            confirmed_by="王工",
+            attestation_records=(
+                governance_env.app.state.promotion_attestation_records
+            ),
+        )
+
+    governance_env.app.state.promotion_attestation_records = []
+    conn = governance_env.app.state.conn_factory()
+    try:
+        persistent_fault = repos.get_promotion_attestation_fault(conn)
+    finally:
+        conn.close()
+    assert persistent_fault is not None
+    assert json.loads(persistent_fault["detail"])["reason"] == (
+        "promotion-runtime-attestation-rejected"
+    )
+    assert governance_env.client.get("/api/agents/governed_agent").json()[
+        "maturity"
+    ] == "L0"
+    assert governance_env.client.get(
+        "/api/agents/governed_agent/promotions"
+    ).json() == []
+    assert governance_env.client.get("/api/health").json()[
+        "promotion_attestation_ok"
+    ] is False
+    readyz = governance_env.client.get("/api/readyz")
+    assert readyz.status_code == 503
+    assert readyz.json()["worker"]["reason"] == (
+        "persistent_promotion_attestation_fault"
+    )
 
 
 def test_digest_covers_custom_named_schema(tmp_path: Path) -> None:

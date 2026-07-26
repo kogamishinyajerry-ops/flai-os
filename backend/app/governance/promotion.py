@@ -617,6 +617,7 @@ def _promote_agent_locked(
         separators=(",", ":"),
         sort_keys=True,
     )
+    preserve_operation_latch_on_failure = False
     baseline_conn = conn_factory()
     try:
         baseline_promotion_count = int(
@@ -638,6 +639,68 @@ def _promote_agent_locked(
     finally:
         baseline_conn.close()
 
+    def _persist_new_runtime_rejections(
+        records: list[dict[str, str]],
+    ) -> bool:
+        """把本次新发现的拒载升级为跨进程故障；返回是否存在新拒载。"""
+
+        nonlocal preserve_operation_latch_on_failure
+        new_rejections = [
+            record for record in records if record not in attestation_records
+        ]
+        for record in new_rejections:
+            attestation_records.append(record)
+        if not new_rejections:
+            return False
+
+        # 独立 worker 只认共享 DB。先把本次 write-ahead pending latch CAS
+        # 升级为持久故障；CAS 失败/写库异常时也保留原 pending latch。
+        preserve_operation_latch_on_failure = True
+        runtime_fault = {
+            "agent_id": agent_id,
+            "agent_version": current_version,
+            "maturity": to_maturity,
+            "operation_token": operation_token,
+            "reason": "promotion-runtime-attestation-rejected",
+            "rejections": new_rejections,
+        }
+        runtime_fault_detail = json.dumps(
+            runtime_fault,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        fault_conn = None
+        persistent_fault_updated = False
+        try:
+            fault_conn = conn_factory()
+            persistent_fault_updated = (
+                repos.update_promotion_attestation_fault(
+                    fault_conn,
+                    expected_detail=pending_detail,
+                    detail=runtime_fault_detail,
+                )
+                is True
+            )
+        except Exception:
+            logger.critical(
+                "运行期 promotion attestation 拒载无法升级持久 latch；"
+                "保留 operation pending latch，拒绝继续晋升",
+                exc_info=True,
+            )
+        finally:
+            if fault_conn is not None:
+                fault_conn.close()
+        checks["runtime_attestation"] = {
+            "ok": False,
+            "detail": (
+                f"运行期重扫新拒载 {len(new_rejections)} 个 L1；"
+                f"persistent_fault_updated={persistent_fault_updated}；"
+                "拒绝晋升并保留持久 latch"
+            ),
+        }
+        return True
+
     # 提交序（异源审 P1-3/F2 补偿式回滚）：磁盘写入 → 重扫+对账 → 单事务内
     # DB 投影+审计记录。任何异常都恢复磁盘原文、重扫并把 DB 投影同步回原状
     # ——绝不留下「yaml 已 L1 但无 promotions 审计记录」或「DB 已 L1 而 yaml
@@ -652,9 +715,7 @@ def _promote_agent_locked(
         restored_shadow, restored_rejections = _build_reconciled_shadow(
             agent_registry, scope_registry, conn_factory
         )
-        for record in restored_rejections:
-            if record not in attestation_records:
-                attestation_records.append(record)
+        _persist_new_runtime_rejections(restored_rejections)
         conn = conn_factory()
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -784,11 +845,10 @@ def _promote_agent_locked(
             conn_factory,
             exempt_agent_id=agent_id,
         )
-        # 运行期拒载一旦发生即 sticky-fail；health/deploy_selfcheck 不能因启动时
-        # 干净而继续假绿。去重避免回滚重扫把同一拒载重复计数。
-        for record in runtime_rejections:
-            if record not in attestation_records:
-                attestation_records.append(record)
+        # 新拒载必须在本次晋升继续前持久闭锁；启动时已知且已在内存轴红色的
+        # 同一拒载不重复升级，保持既有“其他合法 Agent 可晋升但拒载者不复活”契约。
+        if _persist_new_runtime_rejections(runtime_rejections):
+            raise PromotionRejected(checks)
         refreshed = promoted_shadow.get(agent_id)
         if refreshed is None or str(refreshed.get("maturity")) != to_maturity:
             raise RuntimeError(
@@ -944,7 +1004,11 @@ def _promote_agent_locked(
                 "晋升回滚失败，agent %s 状态可能不一致，需人工核查（yaml SSOT 为准）",
                 agent_id, exc_info=True,
             )
-        if restored is True and _clear_operation_latch() is not True:
+        if (
+            restored is True
+            and preserve_operation_latch_on_failure is not True
+            and _clear_operation_latch() is not True
+        ):
             latch_fault = {
                 "agent_id": agent_id,
                 "agent_version": current_version,
