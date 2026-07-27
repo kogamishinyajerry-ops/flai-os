@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import pytest
 
 from backend.app.config import AGENTS_DIR, CONTRACTS_DIR
 from backend.app.core.errors import DuplicateAgentIdError
+from backend.app.runtime import package_snapshot as snapshot_mod
 from backend.app.runtime.registry import AgentRegistry
 from backend.app.storage.db import get_conn, init_db
 
@@ -29,6 +31,83 @@ def test_scan_registers_real_hello_agent() -> None:
     assert registry.package_dir("hello_agent") == AGENTS_DIR / "hello_agent"
     assert any(a["id"] == "hello_agent" for a in registry.list())
     assert registry.errors == []
+
+
+def test_adopt_publishes_the_exact_shadow_snapshot_not_live_bytes(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    package_dir = _copy_hello_agent(agents_dir / "hello_agent")
+    active = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    shadow = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    active.scan()
+    shadow.scan()
+    captured = shadow.package_snapshot("hello_agent")
+    assert captured is not None
+
+    workflow_path = package_dir / "workflow.py"
+    workflow_path.write_text(
+        "def run(context):\n"
+        "    return {'status': 'success', 'outputs': ['live B']}\n",
+        encoding="utf-8",
+    )
+    active.adopt(shadow)
+
+    assert active.package_snapshot("hello_agent") is captured
+    assert dict(captured.files)["workflow.py"] != workflow_path.read_bytes()
+
+
+def test_get_and_list_cannot_mutate_the_published_snapshot() -> None:
+    registry = AgentRegistry(AGENTS_DIR, _AGENT_SCHEMA)
+    registry.scan()
+    snapshot = registry.package_snapshot("hello_agent")
+    assert snapshot is not None
+
+    projected = registry.get("hello_agent")
+    assert projected is not None
+    projected["status"] = "disabled"
+    listed = registry.list()
+    listed_hello = next(agent for agent in listed if agent["id"] == "hello_agent")
+    listed_hello["clearance"] = {"max_data_classification": "sensitive"}
+
+    assert registry.get("hello_agent")["status"] == snapshot.manifest["status"]
+    assert registry.get("hello_agent").get("clearance") == snapshot.manifest.get(
+        "clearance"
+    )
+
+
+def test_snapshot_view_keeps_one_registry_generation_and_private_directories(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    package_dir = _copy_hello_agent(agents_dir / "hello_agent")
+    registry = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    registry.scan()
+    published = registry.package_snapshot("hello_agent")
+    assert published is not None
+
+    with registry.snapshot_view() as view:
+        workflow_path = package_dir / "workflow.py"
+        workflow_path.write_text(
+            "def run(context):\n"
+            "    return {'status': 'success', 'outputs': ['live B']}\n",
+            encoding="utf-8",
+        )
+        registry.scan()
+        private_dir = view.package_dir("hello_agent")
+        assert private_dir is not None
+        materialized = private_dir
+        assert view.package_snapshot("hello_agent") is published
+        assert (private_dir / "workflow.py").read_bytes() == dict(published.files)[
+            "workflow.py"
+        ]
+        projected = view.get("hello_agent")
+        projected["status"] = "disabled"
+        assert view.get("hello_agent")["status"] == published.manifest["status"]
+
+    assert materialized.exists() is False
 
 
 def test_scan_marks_package_missing_workflow_as_invalid(tmp_path: Path) -> None:
@@ -58,6 +137,90 @@ def test_scan_marks_package_missing_readme_as_invalid(tmp_path: Path) -> None:
     assert registry.get("hello_agent") is None
     assert len(registry.errors) == 1
     assert "README.md" in registry.errors[0]["error"]
+
+
+def test_scan_isolates_package_with_non_utf8_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _copy_hello_agent(agents_dir / "hello_agent")
+    broken = _copy_hello_agent(agents_dir / "broken_agent")
+    witness = broken / "invalid-path.bin"
+    witness.write_bytes(b"invalid path witness")
+    real_scandir = snapshot_mod.os.scandir
+
+    class _SurrogateEntry:
+        name = "invalid-\udcff.bin"
+        path = str(witness)
+
+        @staticmethod
+        def stat(*, follow_symlinks: bool = True):
+            return os.stat(witness, follow_symlinks=follow_symlinks)
+
+    class _ScandirResult:
+        def __init__(self, entries) -> None:
+            self._entries = entries
+
+        def __enter__(self):
+            return iter(self._entries)
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    def _scandir_with_surrogate(path):
+        if isinstance(path, int):
+            return real_scandir(path)
+        if Path(path) != broken:
+            return real_scandir(path)
+        with real_scandir(path) as entries:
+            replaced = [
+                _SurrogateEntry() if entry.name == witness.name else entry
+                for entry in entries
+            ]
+        return _ScandirResult(replaced)
+
+    monkeypatch.setattr(snapshot_mod.os, "scandir", _scandir_with_surrogate)
+
+    registry = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    registry.scan()
+
+    assert registry.get("hello_agent") is not None
+    assert len(registry.errors) == 1
+    assert registry.errors[0]["path"] == str(broken)
+    assert "UTF-8" in registry.errors[0]["error"]
+
+
+def test_scan_isolates_manifest_with_non_utf8_scalar(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _copy_hello_agent(agents_dir / "hello_agent")
+    broken = _copy_hello_agent(agents_dir / "broken_agent")
+    yaml_path = broken / "agent.yaml"
+    text = yaml_path.read_text(encoding="utf-8")
+    text = text.replace("id: hello_agent", "id: surrogate_agent")
+    text = text.replace(
+        'name: "Hello Agent（平台闭环验证示例）"',
+        'name: "\\uD800"',
+    )
+    yaml_path.write_text(text, encoding="utf-8")
+
+    registry = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    registry.scan()
+    db_path = tmp_path / "registry.db"
+    init_db(db_path)
+    conn = get_conn(db_path)
+    try:
+        registry.sync_to_db(conn)
+    finally:
+        conn.close()
+
+    assert registry.get("hello_agent") is not None
+    assert registry.get("surrogate_agent") is None
+    assert len(registry.errors) == 1
+    assert registry.errors[0]["path"] == str(broken)
+    assert "UTF-8" in registry.errors[0]["error"]
 
 
 def test_scan_marks_trial_status_with_tbd_maintainer_as_invalid(tmp_path: Path) -> None:

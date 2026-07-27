@@ -19,19 +19,43 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from typing import Any, Iterator
+import shutil
 from pathlib import Path
+from typing import Any, Iterator
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from conftest import TEST_DISPLAY_NAME
 
+from backend.app.runtime.registry import AgentRegistry
 from backend.app.storage import repos
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _LLM_ENV_VARS = ("FLAI_LLM_BASE_URL", "FLAI_LLM_API_KEY", "FLAI_LLM_MODEL_REASONING", "FLAI_LLM_MODEL_FAST")
+
+
+def _publish_agent_status(app, tmp_path: Path, agent_id: str, status: str) -> None:
+    snapshot = app.state.agent_registry.package_snapshot(agent_id)
+    assert snapshot is not None
+    shadow_root = tmp_path / f"{agent_id}-{status}-shadow"
+    shadow_root.mkdir()
+    with snapshot.materialized(parent=tmp_path) as frozen_dir:
+        package_dir = shadow_root / agent_id
+        shutil.copytree(frozen_dir, package_dir)
+    yaml_path = package_dir / "agent.yaml"
+    manifest = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    manifest["status"] = status
+    yaml_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    shadow = AgentRegistry(shadow_root, app.state.agent_registry.schema_path)
+    shadow.scan()
+    assert shadow.errors == []
+    app.state.agent_registry.adopt(shadow)
 
 
 class _CannedStub:
@@ -580,18 +604,45 @@ def test_plan_matches_output_schema(app_env) -> None:
 # ── 会话存续期 Agent 被下线 → 拒绝继续对话（反方 P3-4）────────────────────
 
 
-def test_post_message_rejected_if_agent_disabled_midway(app_env) -> None:
+def test_post_message_rejected_if_agent_disabled_midway(
+    app_env, tmp_path: Path
+) -> None:
     client, app = app_env
     app.state.conversation_service.model_gateway = _CannedStub("你好")
     conv_id = _open_conversation(client)
 
-    app.state.agent_registry.get("guide_agent")["status"] = "disabled"
+    _publish_agent_status(app, tmp_path, "guide_agent", "disabled")
     try:
         resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "继续"})
         assert resp.status_code == 409
         assert "不可用" in resp.json()["detail"]
     finally:
-        app.state.agent_registry.get("guide_agent")["status"] = "draft"
+        app.state.agent_registry.scan()
+
+
+def test_post_message_never_reads_live_package_dir(
+    app_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, app = app_env
+    app.state.conversation_service.model_gateway = _CannedStub("你好")
+    conv_id = _open_conversation(client)
+
+    def _forbidden_live_dir(_agent_id: str):
+        raise AssertionError("Conversation 不得读取可变 package_dir")
+
+    monkeypatch.setattr(
+        app.state.agent_registry,
+        "package_dir",
+        _forbidden_live_dir,
+    )
+
+    response = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "继续"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["message"]["content"]
 
 
 # ── agents API 暴露 mode（前端路由信号，Codex P2）─────────────────────────

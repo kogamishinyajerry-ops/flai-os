@@ -121,6 +121,41 @@ def test_enqueue_snapshot_is_content_derived_and_deduped(conn_factory, tmp_path)
     assert n == 1, "内容派生 + insert-once → 快照去重到一行"
 
 
+def test_freeze_rejects_registry_and_agent_yaml_torn_read(
+    conn_factory, tmp_path
+) -> None:
+    """registry 缓存与本次捕获的 agent.yaml 必须是同一语义版本。
+
+    否则 snapshot 的 ``content.agent`` 会驱动执行 A，而 ``files/agent.yaml``/
+    digest 证明的是 B，形成“评 A、晋升 B”的内部撕裂。
+    """
+    import yaml as _yaml
+
+    from backend.app.governance import eval_runner
+
+    reg, pkg = _fresh_registry(tmp_path)
+    yaml_path = pkg / "agent.yaml"
+    manifest = _yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    manifest["workflow"]["requires_human_review"] = not (
+        manifest["workflow"]["requires_human_review"]
+    )
+    yaml_path.write_text(
+        _yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    conn = conn_factory()
+    try:
+        with pytest.raises(ValueError, match="agent.yaml.*registry"):
+            eval_runner.freeze_eval_snapshot(
+                conn,
+                agent_registry=reg,
+                agent_id="hello_agent",
+            )
+    finally:
+        conn.close()
+
+
 def test_materialized_snapshot_is_frozen_against_live_edits(conn_factory, tmp_path) -> None:
     """#5 核心：enqueue 冻结后改活磁盘包（case/workflow），材化快照得到的仍是冻结原文——
     执行读快照非活磁盘，enqueue 后改活包对该 run 无影响（materialization 层确定性验证）。"""

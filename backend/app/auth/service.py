@@ -12,6 +12,7 @@ import secrets
 import sqlite3
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -26,8 +27,36 @@ USERNAME_MAX = 100
 PASSWORD_MAX = 200
 
 
+@dataclass(frozen=True, slots=True)
+class AuthenticatedSessionContext:
+    """一次已认证请求的稳定身份与会话证据（明文 token 永不进入上下文）。"""
+
+    token_hash: str
+    user_id: int
+    username: str
+    display_name: str
+    user_created_at: str
+    session_created_at: str
+    expires_at: str
+
+    def user_projection(self) -> dict[str, Any]:
+        """保留现有 request.state.user / get_session_user 的公开形态。"""
+        return {
+            "id": self.user_id,
+            "username": self.username,
+            "display_name": self.display_name,
+            "is_active": 1,
+            "created_at": self.user_created_at,
+        }
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def current_auth_time() -> datetime:
+    """认证域统一时钟；签发复核复用它以冻结同一个 verified_at。"""
+    return _now()
 
 
 def _hash_token(token: str) -> str:
@@ -188,31 +217,90 @@ def open_session_for_credentials(
     return user, token
 
 
-def get_session_user(conn: sqlite3.Connection, token: str) -> dict[str, Any] | None:
-    """有效会话 → 用户 dict；过期/不存在/账户停用 → None（fail-closed 单出口）。"""
-    if not token:
+def _valid_token_hash(token_hash: Any) -> bool:
+    return (
+        isinstance(token_hash, str)
+        and len(token_hash) == 64
+        and all(char in "0123456789abcdef" for char in token_hash)
+    )
+
+
+def get_authenticated_session_by_hash(
+    conn: sqlite3.Connection,
+    token_hash: str,
+    *,
+    at: datetime | None = None,
+) -> AuthenticatedSessionContext | None:
+    """按精确 token hash 复核有效会话；任一身份/时间字段异常均 fail-closed。"""
+    if _valid_token_hash(token_hash) is not True:
         return None
     row = conn.execute(
-        "SELECT u.*, s.expires_at FROM auth_sessions s JOIN users u ON u.id = s.user_id"
+        "SELECT u.id AS user_id, u.username, u.display_name, u.is_active,"
+        " u.created_at AS user_created_at, s.created_at AS session_created_at,"
+        " s.expires_at"
+        " FROM auth_sessions s JOIN users u ON u.id = s.user_id"
         " WHERE s.token_hash = ?",
-        (_hash_token(token),),
+        (token_hash,),
     ).fetchone()
     if row is None:
         return None
     if row["is_active"] != 1:
         return None
+    user_id = row["user_id"]
+    username = row["username"]
+    display_name = row["display_name"]
+    user_created_at = row["user_created_at"]
+    if (
+        not isinstance(user_id, int)
+        or isinstance(user_id, bool)
+        or user_id <= 0
+        or not isinstance(username, str)
+        or not username.strip()
+        or not isinstance(display_name, str)
+        or not display_name.strip()
+        or not isinstance(user_created_at, str)
+        or not user_created_at
+    ):
+        return None
     try:
+        created = datetime.fromisoformat(row["session_created_at"])
         expires = datetime.fromisoformat(row["expires_at"])
     except (ValueError, TypeError):
         return None  # 库里日期非法=会话不可信，拒
-    if expires.tzinfo is None:
+    if created.tzinfo is None or expires.tzinfo is None:
         # 合法会话恒为 tz-aware UTC（create_session 只写 _now().isoformat()）——
         # naive 时间戳=库损坏/人工注入，直接拒；绝不 coerce 后当有效，也绝不
         # 让 tz-naive 与 tz-aware 比较抛 TypeError 逃到中间件变 500（fail-closed）。
         return None
-    if not _now() < expires:
+    now = current_auth_time() if at is None else at
+    if not isinstance(now, datetime) or now.tzinfo is None:
         return None
-    return _row_to_user(row)
+    if not created <= now < expires:
+        return None
+    return AuthenticatedSessionContext(
+        token_hash=token_hash,
+        user_id=user_id,
+        username=username,
+        display_name=display_name,
+        user_created_at=user_created_at,
+        session_created_at=row["session_created_at"],
+        expires_at=row["expires_at"],
+    )
+
+
+def get_authenticated_session(
+    conn: sqlite3.Connection, token: str
+) -> AuthenticatedSessionContext | None:
+    """明文 cookie → 不可变已认证会话上下文；明文只用于本次 SHA-256。"""
+    if not token:
+        return None
+    return get_authenticated_session_by_hash(conn, _hash_token(token))
+
+
+def get_session_user(conn: sqlite3.Connection, token: str) -> dict[str, Any] | None:
+    """兼容旧调用方：有效会话投影为用户 dict。"""
+    session = get_authenticated_session(conn, token)
+    return session.user_projection() if session is not None else None
 
 
 def delete_session(conn: sqlite3.Connection, token: str) -> None:

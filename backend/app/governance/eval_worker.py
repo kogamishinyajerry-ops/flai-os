@@ -78,7 +78,12 @@ class EvalRunner:
 
         conn = self._conn_factory()
         try:
-            run = repos.claim_next_queued_eval_run(conn, quota=self._quota)
+            if repos.get_promotion_attestation_fault(conn) is not None:
+                run = None
+            else:
+                run = repos.claim_next_queued_eval_run(
+                    conn, quota=self._quota
+                )
         finally:
             conn.close()
         if run is None:

@@ -100,7 +100,9 @@
 ### 3. L0→L1 晋升门（backend/app/governance/promotion.py）
 
 - `POST /api/agents/{agent_id}/promote`，body
-  `{to_maturity: "L1", eval_run_id, confirmations: {exception_paths_handled: true}, confirmed_by}`。
+  `{to_maturity: "L1", eval_run_id, confirmations: {exception_paths_handled: true}}`。
+  `confirmed_by` 与 signer 来源由服务端认证上下文派生；客户端携带任何 signer
+  字段均 422（来源与迁移契约见 ADR-0019 R2）。
 - **docs/02 L1 四条准入的判定分解（机器判/人工确认显式分离，不冒充）**：
   1. **最小评测覆盖（审计 D1 增强）**：approved case 总数 `>= 3` **且**至少 1 个
      approved case 的 checks 含 `status_is: "failed"`（失败路径必须真被评测——
@@ -114,11 +116,12 @@
   4. 反馈入口=平台级 `POST /api/feedback` 提供，晋升记录如实标注"平台级提供"
      而非 per-agent 验证；
   5. "对已知异常路径有处理"机器难判 → `confirmations.exception_paths_handled is True`
-     + `confirmed_by` 记名，**缺失/false/非 bool 一律拒**（fail-closed 于无法验证）。
+     + 受支持的 signer provenance 记名，**缺失/false/非 bool 或来源复核失败一律拒**
+     （fail-closed 于无法验证）。
 - 全部通过 → `agents/<id>/agent.yaml` 的 `maturity:` 行**行级手术替换**（不做 yaml
   round-trip，byte 级保持其余内容）→ registry 重扫 → `promotions` 表落记录
   （agent_id/agent_version/from/to/eval_run_id/confirmations_json/confirmed_by/
-  created_at）。
+  signer_source/signer_user_id/signer_username/signer_session_hash/created_at）。
 - 任何一条不过 → 422 + 逐条判定结果（工程师能看到差哪条）。
 - **interactive 型（guide_agent）推论**：runner 不覆盖 → 永无全绿 run → 不可晋升。
   这是 fail-closed 的正确行为而非缺陷：会话评测属 docs/07 人工评审集范畴（V0.2）。
@@ -149,8 +152,9 @@
   yaml 的人同样能改门代码本身，该域防线=git 审查与部署包只读，不冒充运行时
   可防；**固化通道当前仅覆盖 requires_human_review 型 agent**（审核回填是唯一
   accepted 定标入口，sample 级认可 API 递延）；**digest 已绑定包核心文件
-  （agent.yaml/prompt/workflow/双 schema）与 case 引用的输入文件实体**，tool/
-  model/scope 级完整 manifest 是 V0.2 槽位；**并发防线（晋升锁/eval single-
+  （agent.yaml/prompt/workflow/双 schema）与 case 引用的输入文件实体；最终
+  发布另以 `agent_package_snapshot.v1` 绑定完整 Agent Package 文件树**，tool/
+  model/scope 等包外状态仍是 V0.2 槽位；**并发防线（晋升锁/eval single-
   flight/固化锁）为进程内**，多进程部署需外置锁；task.schema.json 的 origin
   演进与消费者同仓同步（循 ADR-0016 conversation_id 先例），外部消费者版本化
   留待 API 正式对外时处理。
@@ -158,13 +162,37 @@
   ①**磁盘↔DB 崩溃窗口**——yaml/changelog 写入与 DB 事务提交之间进程崩溃，
   重启以 yaml SSOT 重新装配，但 promotions 审计记录可能缺失：发现 L1 而无
   对应 promotions 记录须人工核查，单机无 WAL 式提交日志架构下该窗口不可
-  消除；②**评测非不可变快照执行**——digest 起点采样+终点复核已闭合「执行
-  期间内容变化」（不一致即证据作废），但复核是采样级非快照级，同内容 ABA
-  级篡改理论上不可见，不可变快照执行是 V0.2 槽位；③**registry 跨调用混合
-  快照**——adopt 单次发布原子（_agents 收尾保证可见 id 必有 dir），但读者
-  跨两次调用（get→package_dir）横跨发布点可新旧混读，快照句柄 API 是
-  V0.2 槽位（主控终裁：具体威胁不成立——违规 agent 在新旧两份表中均不
-  存在，与 R2 审方分歧双记录于 M10-review-record）。
+  消除；②**包外状态不在快照内**——Agent Package 内全部常规文件已冻结，但
+  tool/model/knowledge/environment 读取的外部状态仍按各自 provenance/gate
+  管理，不得把包快照解读成整套运行环境镜像；③**快照字节当前仅驻进程内存**——
+  audit 持久记录 contract/digest/file_count，Registry 与 Runtime 持有字节。
+  若重启时活目录已从已签 A 变成 B，系统严格比对 digest 后拒载 B 并把健康轴
+  置红，不会从审计摘要反向恢复 A；恢复 A 或对 B 重新评测晋升是人工部署动作。
+- `agent_package_snapshot.v1` 发布不变量：影子 Registry 对完整包做两遍稳定
+  捕获，拒绝 symlink、Windows reparse/junction、FIFO/device、大小写碰撞与
+  撕裂读取；所有相对路径及 canonical manifest JSON 必须可严格编码为 UTF-8，
+  非法包只进入 `registry.errors`，不得以裸编码异常打断其他包扫描。以
+  4096 entries / 单文件 16 MiB / 总计 64 MiB / 深度 32 作为误放大包的
+  fail-closed 资源边界；最终 coverage/eval/changelog 门只读该快照。
+  promotion `checks_json.package_snapshot`、活 Registry `_entries`
+  与 Job/Conversation Runtime 私有材化目录沿用同一个 snapshot 对象。
+  活 `AgentRegistry.package_dir()` 仅保留为治理写回/运维定位的 authoring
+  路径，执行路径不得调用；Conversation 注入的 `snapshot_view.package_dir()`
+  是兼容既有 workflow 的冻结私有目录，不是活目录。`get()/list()` 每次返回
+  snapshot 派生副本，外部不能修改已发布代际；`snapshot_view()` 一次钉住
+  完整 Registry 代际，`adopt()` 单次替换 `_entries`，不再存在
+  `get→package_snapshot/package_dir` 跨代拼接。每轮执行在开始时钉住一个
+  代际，status/mode/clearance/schema/workflow 均以实际执行快照为准；之后的
+  adopt 从下一轮生效。历史 promotion 若缺少 `package_snapshot`
+  contract/digest/file_count，不具备证明当前完整包的能力，启动核对一律
+  fail-closed 拒载；须对当前包重新评测并由人重新晋升，不做兼容性假放行。
+  若 DB 中上次已投影的 L1 在重启扫描中因缺件、不安全文件或目录缺失而未进入
+  Registry，启动核对仍必须生成 `missing-or-invalid-package-snapshot` 拒载记录
+  并置红，不能因 `Registry.list()` 看不见它而假绿。
+  每次 Job Runtime 的 `validation_started` 事件同时记录 contract+digest，
+  使任务审计能反查实际执行代际。若任务已入队但执行时 Agent/快照缺失，必须
+  在写固定系统失败诊断前用 CAS-on-NULL 落 `internal`；不得放宽
+  classification gate 对 `NULL + error_message` 的 fail-closed 遮蔽规则。
 - 测试红线（docs/07 §3 清单适用于治理组件自身；审计 D4/D5/D6 补齐负例）：
   - runner：正常路/case 失败如实计数/agent 不存在/eval_cases 空/checks 缺失即
     skipped/**未识别 kind 或必填字段缺失即 failed**/**draft case 不执行不计数**；
@@ -172,8 +200,15 @@
     `claim_next_queued` 选中**；**collect_samples=true agent 的 eval-origin 执行后
     samples 表行数不变**；**`list_tasks` 无 origin 参数默认不返回 eval 任务**；
   - 固化：幂等/未认可拒绝/**生成物 curation 字段必为 draft**；
-  - 晋升五条 AND 门逐条负例（D4）：**eval_cases 不足 3 或无失败路径 case 拒**/
+  - 晋升五条准入 AND 门逐条负例（D4）+ 不可变发布门：**eval_cases 不足 3 或无失败路径 case 拒**/
     无证据拒/证据不绿拒/版本不匹配拒/**digest 不一致拒**/**changelog 缺失拒 +
     空文件拒**/**promotions 记录含"平台级提供"字面（条件4 不冒充 per-agent）**/
     确认项三分裂（D6）：**缺失拒、`false` 拒、非 bool（字符串 `"true"`/整数 `1`）拒**。
+  - 不可变包：**最终门禁后、审计 INSERT 前并发把活目录 A→B，晋升仍只执行 A；
+    同进程 audit/Registry/Runtime digest 恒等；用 B 重启必须拒载并置红**；捕获层
+    对 symlink/reparse、非普通文件、两遍读取间变化、跨 Windows 大小写碰撞及
+    entry/单文件/总字节/深度资源上限逐项负测；surrogateescape 路径与 YAML
+    lone-surrogate scalar 必须只拒载坏包、合法兄弟包照常发布和 DB 同步；
+    **上次已发布 L1 的 workflow 缺失或改为 symlink 后重启，Registry 拒载且
+    health 必须同步置红**。
   - e2e：m10_governance_acceptance 全链 + tamper 实证（cp 备份法）。

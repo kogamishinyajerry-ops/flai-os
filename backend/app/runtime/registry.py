@@ -12,14 +12,22 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import ExitStack
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 import yaml
 from jsonschema import ValidationError, validate
 
 from ..core.errors import DuplicateAgentIdError, InvalidPackageError
+from .package_snapshot import (
+    AgentPackageSnapshot,
+    PackageSnapshotError,
+    capture_agent_package,
+)
 
 # output_schema.json 字节上界（Codex R2 P2）：正常输出契约在 KB 量级；病态大/
 # 深嵌套 schema（json.loads 可 RecursionError）解析前先挡。
@@ -37,6 +45,64 @@ _REQUIRED_FILES: tuple[str, ...] = (
 _REQUIRED_DIRS: tuple[str, ...] = ("eval_cases",)
 
 
+@dataclass(frozen=True, slots=True)
+class _RegistryEntry:
+    source_dir: Path
+    snapshot: AgentPackageSnapshot
+
+
+class AgentRegistrySnapshotView:
+    """One immutable Registry generation with snapshot-backed package paths.
+
+    `package_dir()` exists only as a compatibility surface for package workflows
+    that read sibling schemas.  The returned directory is private materialized
+    snapshot content, never the mutable authoring tree.
+    """
+
+    def __init__(self, snapshots: dict[str, AgentPackageSnapshot]) -> None:
+        self._snapshots = snapshots
+        self._stack: ExitStack | None = None
+        self._materialized: dict[str, Path] = {}
+
+    def __enter__(self) -> "AgentRegistrySnapshotView":
+        if self._stack is not None:
+            raise RuntimeError("Registry snapshot view is already active")
+        self._stack = ExitStack()
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _traceback: Any) -> None:
+        stack = self._stack
+        self._stack = None
+        self._materialized = {}
+        if stack is not None:
+            stack.close()
+
+    def get(self, agent_id: str) -> dict[str, Any] | None:
+        snapshot = self._snapshots.get(agent_id)
+        return snapshot.manifest if snapshot is not None else None
+
+    def list(self) -> list[dict[str, Any]]:
+        return [snapshot.manifest for snapshot in self._snapshots.values()]
+
+    def package_snapshot(self, agent_id: str) -> AgentPackageSnapshot | None:
+        return self._snapshots.get(agent_id)
+
+    def package_dir(self, agent_id: str) -> Path | None:
+        if self._stack is None:
+            raise RuntimeError(
+                "Registry snapshot package_dir is valid only inside its context"
+            )
+        cached = self._materialized.get(agent_id)
+        if cached is not None:
+            return cached
+        snapshot = self._snapshots.get(agent_id)
+        if snapshot is None:
+            return None
+        materialized = self._stack.enter_context(snapshot.materialized())
+        self._materialized[agent_id] = materialized
+        return materialized
+
+
 class AgentRegistry:
     """扫描 `agents_dir` 下的 Agent Package，维护内存注册表并可同步进 DB。"""
 
@@ -44,49 +110,63 @@ class AgentRegistry:
         self.agents_dir = Path(agents_dir)
         self.schema_path = Path(schema_path)
         self._schema: dict[str, Any] = json.loads(self.schema_path.read_text(encoding="utf-8"))
-        self._agents: dict[str, dict[str, Any]] = {}
-        self._dirs: dict[str, Path] = {}
+        self._entries: dict[str, _RegistryEntry] = {}
         self.errors: list[dict[str, str]] = []
+        self._lock = RLock()
 
     def adopt(self, other: "AgentRegistry") -> None:
         """原子采纳另一实例的扫描结果（M10/ADR-0018 异源审 F1）。
 
-        运行期重扫必须先在影子实例上完成 scan+reconcile，再一次性发布到
-        活注册表——直接对活实例 scan 会先清空再逐项重建，期间其他请求线程
-        可短暂读到部分注册表、甚至读到本应被 knowledge 对账注销的 Agent。
+        这是整代替换而非增量合并：`other` 缺少的 Agent 会在发布时注销。
+        需要额外 reconcile 的运行期重扫，必须先在影子实例完成
+        scan+reconcile，再一次性发布到活注册表。
 
-        发布序（R2 残余加固）：_dirs/errors 先行、_agents 收尾——_agents 是
-        全部读者的入口（get/list），一个在 _agents 可见的 id 必已有对应 dir。
-        单次 get() 或 package_dir() 各自原子；跨两次调用横跨发布点的读者可能
-        新旧混读（dict 与 dir 同键、路径恒同，无既知危害路径）——完整快照
-        句柄 API 是 V0.2 槽位（ADR-0018 已声明限制）。
+        `_entries` 是 copy-on-write 的单张不可变值映射；一次引用替换同时发布
+        manifest、源目录和完整包字节，读者不可能跨代拼接。
         """
-        self._dirs = other._dirs
-        self.errors = other.errors
-        self._agents = other._agents
+        with other._lock:
+            next_errors = list(other.errors)
+            next_entries = other._entries
+        with self._lock:
+            self.errors = next_errors
+            self._entries = next_entries
 
     def scan(self) -> None:
-        """重新扫描 agents_dir，覆盖式重建内存注册表（幂等：可重复调用）。"""
-        self._agents = {}
-        self._dirs = {}
-        self.errors = []
+        """在局部映射完成扫描后，原子覆盖注册表（幂等：可重复调用）。"""
+        next_entries: dict[str, _RegistryEntry] = {}
+        next_errors: list[dict[str, str]] = []
         if not self.agents_dir.is_dir():
+            with self._lock:
+                self.errors = next_errors
+                self._entries = next_entries
             return
         for entry in sorted(self.agents_dir.iterdir()):
             if not entry.is_dir():
                 continue
             try:
-                data = self._load_one(entry)
-            except InvalidPackageError as exc:
-                self.errors.append({"path": str(entry), "error": str(exc)})
+                snapshot = capture_agent_package(entry)
+                with snapshot.materialized() as frozen_dir:
+                    data = self._load_one(frozen_dir)
+                if data != snapshot.manifest:
+                    raise InvalidPackageError(
+                        f"{entry} 快照 manifest 与 Registry 校验结果不一致"
+                    )
+            except (InvalidPackageError, PackageSnapshotError) as exc:
+                next_errors.append({"path": str(entry), "error": str(exc)})
                 continue
             agent_id = data["id"]
-            if agent_id in self._agents:
+            if agent_id in next_entries:
                 raise DuplicateAgentIdError(
-                    f"重复的 Agent id: {agent_id!r}（{entry} 与 {self._dirs[agent_id]} 冲突）"
+                    f"重复的 Agent id: {agent_id!r}"
+                    f"（{entry} 与 {next_entries[agent_id].source_dir} 冲突）"
                 )
-            self._agents[agent_id] = data
-            self._dirs[agent_id] = entry
+            next_entries[agent_id] = _RegistryEntry(
+                source_dir=entry,
+                snapshot=snapshot,
+            )
+        with self._lock:
+            self.errors = next_errors
+            self._entries = next_entries
 
     def _load_one(self, entry: Path) -> dict[str, Any]:
         yaml_path = entry / "agent.yaml"
@@ -311,7 +391,9 @@ class AgentRegistry:
 
     def get(self, agent_id: str) -> dict[str, Any] | None:
         """按 id 取已注册 Agent 的 agent.yaml 解析结果；未注册返回 None（不抛异常）。"""
-        return self._agents.get(agent_id)
+        with self._lock:
+            entry = self._entries.get(agent_id)
+        return entry.snapshot.manifest if entry is not None else None
 
     def deregister(self, agent_id: str, reason: str) -> None:
         """把已注册 Agent 移出注册表并记录原因（ADR-0015 knowledge scope 启动对账用）。
@@ -321,24 +403,48 @@ class AgentRegistry:
         使 DB agents 表不再 upsert 该 id（历史行保留，属审计痕迹非可调用入口）。
         未注册 id 调用为 no-op（幂等，重扫场景安全）。
         """
-        if agent_id not in self._agents:
-            return
-        entry = self._dirs.get(agent_id)
-        del self._agents[agent_id]
-        self._dirs.pop(agent_id, None)
-        self.errors.append({"path": str(entry) if entry else agent_id, "error": reason})
+        with self._lock:
+            entry = self._entries.get(agent_id)
+            if entry is None:
+                return
+            next_entries = dict(self._entries)
+            del next_entries[agent_id]
+            self.errors = [
+                *self.errors,
+                {"path": str(entry.source_dir), "error": reason},
+            ]
+            self._entries = next_entries
 
     def list(self) -> list[dict[str, Any]]:
-        return list(self._agents.values())
+        with self._lock:
+            entries = self._entries
+        return [entry.snapshot.manifest for entry in entries.values()]
 
     def package_dir(self, agent_id: str) -> Path | None:
-        """取 Agent 包所在目录（Runtime 定位 workflow.py / *_schema.json 用）。
+        """取 Agent 包的可变编辑源目录；执行路径不得使用本方法。
 
-        注：M1 接口契约未列出本方法，是 Runtime 依赖包目录定位 workflow.py
-        的必要补充，随 `.get()/.list()` 一起在 `scan()` 后可用，同一扫描周期
-        内与 `.get(agent_id)` 返回的 yaml 数据一一对应。
+        保留给治理写回/运维定位。Runtime 与 Conversation 必须使用
+        `package_snapshot()`，从同一代际的私有材化目录执行。
         """
-        return self._dirs.get(agent_id)
+        with self._lock:
+            entry = self._entries.get(agent_id)
+        return entry.source_dir if entry is not None else None
+
+    def package_snapshot(self, agent_id: str) -> AgentPackageSnapshot | None:
+        """一次取得 manifest、摘要和完整包字节的同代不可变视图。"""
+        with self._lock:
+            entry = self._entries.get(agent_id)
+        return entry.snapshot if entry is not None else None
+
+    def snapshot_view(self) -> AgentRegistrySnapshotView:
+        """Atomically pin the complete Registry generation for one execution."""
+
+        with self._lock:
+            snapshots = {
+                agent_id: entry.snapshot
+                for agent_id, entry in self._entries.items()
+            }
+        return AgentRegistrySnapshotView(snapshots)
 
     def sync_to_db(self, conn: sqlite3.Connection) -> None:
         """把内存注册表写入 agents 表（upsert）+ agent_versions 表（追加，UNIQUE 冲突忽略）。
@@ -347,7 +453,10 @@ class AgentRegistry:
         agent_versions 按 (agent_id, version) 唯一约束，已存在的版本不重复插入。
         """
         now = datetime.now(timezone.utc).isoformat()
-        for agent_id, data in self._agents.items():
+        with self._lock:
+            entries = self._entries
+        for agent_id, entry in entries.items():
+            data = entry.snapshot.manifest
             yaml_json = json.dumps(data, ensure_ascii=False)
             conn.execute(
                 """

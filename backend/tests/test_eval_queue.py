@@ -138,6 +138,86 @@ from backend.app.governance import eval_runner  # noqa: E402
 from backend.app.governance.eval_worker import EvalRunner  # noqa: E402
 
 
+def test_eval_run_once_does_not_claim_when_fault_arrives_after_outer_precheck(
+    conn_factory,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """外层预查后才建立的 fault 也不得把 queued eval run 改成 running。"""
+
+    _seed_queued(conn_factory, "fault_race", 1)
+    rival = conn_factory()
+    outer_precheck_seen = False
+    queue_probe_seen = False
+    begin_interposed = False
+    fault_inserted = False
+    callback_errors: list[Exception] = []
+
+    def trace(statement: str) -> None:
+        nonlocal outer_precheck_seen, queue_probe_seen
+        nonlocal begin_interposed, fault_inserted
+        normalized = " ".join(statement.upper().split())
+        if normalized.startswith(
+            "SELECT * FROM WORKER_HEARTBEATS WHERE WORKER_ID ="
+        ):
+            outer_precheck_seen = True
+        elif normalized.startswith(
+            "SELECT 1 FROM EVAL_RUNS WHERE STATUS = 'QUEUED' LIMIT 1"
+        ):
+            queue_probe_seen = True
+        elif (
+            normalized.startswith("BEGIN IMMEDIATE")
+            and outer_precheck_seen
+            and queue_probe_seen
+            and not begin_interposed
+        ):
+            begin_interposed = True
+            try:
+                fault_inserted = repos.record_promotion_attestation_fault(
+                    rival,
+                    detail='{"reason":"test-eval-claim-race"}',
+                )
+            except Exception as exc:  # trace callback 异常会被 sqlite 吞掉
+                callback_errors.append(exc)
+
+    def racing_conn_factory():
+        racing_conn = conn_factory()
+        racing_conn.set_trace_callback(trace)
+        return racing_conn
+
+    # 旧实现会认领后创建执行线程；禁用线程启动只为冻结状态观察点，不介入
+    # storage claim 裁决。修复后在 claim 内即返回，根本不会走到线程创建。
+    import threading
+
+    monkeypatch.setattr(threading.Thread, "start", lambda self: None)
+    worker = EvalRunner(
+        agent_registry=None,
+        runtime=None,
+        conn_factory=racing_conn_factory,
+        uploads_dir=tmp_path,
+        task_runs_dir=tmp_path,
+        quota=1,
+    )
+    try:
+        did_work = worker.run_once()
+    finally:
+        rival.close()
+
+    conn = conn_factory()
+    try:
+        queued_after = repos.get_eval_run(conn, "eval_fault_race_000")
+    finally:
+        conn.close()
+    assert outer_precheck_seen is True
+    assert queue_probe_seen is True
+    assert begin_interposed is True
+    assert fault_inserted is True
+    assert callback_errors == []
+    assert did_work is False
+    assert queued_after is not None
+    assert queued_after["status"] == "queued"
+
+
 def test_recover_interrupted_frees_quota(conn_factory, tmp_path) -> None:
     """P1（Codex R1）：上次 worker 崩溃遗留的 running 行是无执行线程的僵尸，永久占配额
     （quota=1 立即锁死队列）。recover_interrupted() 收口 error 释放名额。"""

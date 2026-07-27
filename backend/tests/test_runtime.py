@@ -178,6 +178,10 @@ def test_execute_success_full_event_sequence(tmp_path: Path) -> None:
         ]
         folded_types = [e["payload"]["workflow_event_type"] for e in events if e["event_type"] == "agent_log"]
         assert folded_types == ["agent_started", "agent_completed"]
+        assert events[0]["payload"]["package_snapshot_contract"] == (
+            "agent_package_snapshot.v1"
+        )
+        assert len(events[0]["payload"]["package_snapshot_digest"]) == 64
 
         files = conn.execute(
             "SELECT * FROM files WHERE task_id = ? AND kind = 'output'", (task_id,)
@@ -195,6 +199,63 @@ def test_execute_success_full_event_sequence(tmp_path: Path) -> None:
         assert tool_runs[0]["mock"] is True
     finally:
         conn.close()
+
+
+def test_execute_fails_closed_without_package_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, db_path = _make_runtime(AGENTS_DIR, tmp_path)
+    task_id = _create_and_queue_task(
+        db_path,
+        agent_id="hello_agent",
+        inputs={"name": "世界"},
+    )
+    monkeypatch.setattr(
+        runtime.agent_registry,
+        "package_snapshot",
+        lambda _agent_id: None,
+    )
+
+    result = runtime.execute(task_id)
+
+    assert result["status"] == "failed"
+    assert "不可变包快照" in result["task"]["error_message"]
+    conn = get_conn(db_path)
+    try:
+        stored = repos.get_task(conn, task_id)
+        assert stored is not None
+        assert stored["data_classification"] == "internal"
+        assert repos.list_tool_runs(conn, task_id) == []
+        assert [
+            event["event_type"] for event in repos.list_events(conn, task_id)
+        ] == ["task_failed"]
+    finally:
+        conn.close()
+
+
+def test_execute_never_reads_live_package_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, db_path = _make_runtime(AGENTS_DIR, tmp_path)
+    task_id = _create_and_queue_task(
+        db_path,
+        agent_id="hello_agent",
+        inputs={"name": "世界"},
+    )
+
+    def _forbidden_live_dir(_agent_id: str):
+        raise AssertionError("Runtime 不得读取可变 package_dir")
+
+    monkeypatch.setattr(
+        runtime.agent_registry,
+        "package_dir",
+        _forbidden_live_dir,
+    )
+
+    result = runtime.execute(task_id)
+
+    assert result["status"] == "completed"
+    assert result["task"]["output_file_ids"]
 
 
 def test_execute_validation_failure(tmp_path: Path) -> None:

@@ -31,13 +31,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import socket
 import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
@@ -58,6 +62,7 @@ import uvicorn
 
 from backend.app.jobs.runner import JobRunner
 from backend.app.main import create_app
+from backend.app.runtime.registry import AgentRegistry
 from backend.app.storage import repos
 
 WORK = Path(tempfile.mkdtemp(prefix="flai_batch_h_"))
@@ -163,7 +168,39 @@ from _auth import login_context, login_httpx, seed_user  # noqa: E402
 seed_user(WORK / "flai_os.db", "王工")
 API = login_httpx(BASE)
 
-HELLO = app.state.agent_registry.get("hello_agent")
+def publish_agent_manifest(
+    agent_id: str,
+    mutate: Callable[[dict[str, Any]], None],
+) -> dict[str, Any]:
+    """Publish a new immutable Registry generation for a test-only manifest change."""
+    shadow_root = WORK / f"{agent_id}-shadow-{uuid.uuid4().hex}"
+    shadow_root.mkdir()
+    with app.state.agent_registry.snapshot_view() as registry_view:
+        current_agents = registry_view.list()
+        expected_ids = {current["id"] for current in current_agents}
+        for current in current_agents:
+            current_id = current["id"]
+            snapshot = registry_view.package_snapshot(current_id)
+            assert snapshot is not None
+            with snapshot.materialized(parent=WORK) as frozen_dir:
+                shutil.copytree(frozen_dir, shadow_root / current_id)
+    package_dir = shadow_root / agent_id
+    assert package_dir.is_dir()
+    yaml_path = package_dir / "agent.yaml"
+    manifest = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    mutate(manifest)
+    yaml_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    shadow = AgentRegistry(shadow_root, app.state.agent_registry.schema_path)
+    shadow.scan()
+    assert shadow.errors == []
+    assert {current["id"] for current in shadow.list()} == expected_ids
+    app.state.agent_registry.adopt(shadow)
+    published = app.state.agent_registry.get(agent_id)
+    assert published is not None
+    return published
 
 
 def task_count() -> int:
@@ -220,7 +257,9 @@ with sync_playwright() as p:
     team_id = team.get("id", "")
 
     # ── O2：G2 disable → 门户预览置灰 + API 整单 422 零写入 ────────────────
-    HELLO["status"] = "disabled"
+    original_status = (app.state.agent_registry.get("hello_agent") or {}).get("status")
+    assert isinstance(original_status, str)
+    publish_agent_manifest("hello_agent", lambda manifest: manifest.__setitem__("status", "disabled"))
     try:
         before = task_count()
         r = summon(team_id, _TWO)
@@ -240,29 +279,37 @@ with sync_playwright() as p:
             check("O2d 门户预览置灰（下线提示+按钮禁用）", False, f"面缺失：{exc}")
         page.screenshot(path=str(SHOTS / "2_disabled_preview.png"))
     finally:
-        HELLO["status"] = "active"
+        publish_agent_manifest(
+            "hello_agent",
+            lambda manifest: manifest.__setitem__("status", original_status),
+        )
 
     # ── O2b：G1 卸载 / G3 翻 interactive / G5 席位不对齐 ───────────────────
     app.state.agent_registry.deregister("hello_agent", "b8 e2e G1")
     r = summon(team_id, _TWO)
     check("O2e G1 卸载→422 指名不在注册表", r.status_code == 422 and "不在注册表" in r.text, r.text[:160])
     app.state.agent_registry.scan()
-    HELLO = app.state.agent_registry.get("hello_agent")
 
-    orig_mode = HELLO["workflow"]["mode"]
-    HELLO["workflow"]["mode"] = "interactive"
+    def make_valid_interactive(manifest: dict[str, Any]) -> None:
+        manifest["workflow"]["mode"] = "interactive"
+        manifest["tools"] = []
+
+    publish_agent_manifest(
+        "hello_agent",
+        make_valid_interactive,
+    )
     r = summon(team_id, _TWO)
     check("O2f G3 翻 interactive→422", r.status_code == 422 and "interactive" in r.text, r.text[:160])
-    HELLO["workflow"]["mode"] = orig_mode
+    app.state.agent_registry.scan()
 
     r = summon(team_id, [{"seq": 0, "inputs": {"name": "只来一半"}}])
     check("O2g G5 缺席位→422", r.status_code == 422 and "缺席位" in r.text, r.text[:160])
 
     # ── O4：版本漂移 ────────────────────────────────────────────────────────
-    HELLO["version"] = "0.2.0"
+    publish_agent_manifest("hello_agent", lambda manifest: manifest.__setitem__("version", "0.2.0"))
     r = summon(team_id, _TWO)
     check("O4a 0.x-minor 漂移→422 指名", r.status_code == 422 and "版本漂移" in r.text, r.text[:200])
-    HELLO["version"] = "0.1.0"
+    publish_agent_manifest("hello_agent", lambda manifest: manifest.__setitem__("version", "0.1.0"))
 
     # ── O5：密级不稀释（batch gate 第四路复用）──────────────────────────────
     conn = app.state.conn_factory()
@@ -283,7 +330,10 @@ with sync_playwright() as p:
     check("O5b 零任务写入", task_count() == before)
 
     # ── O3b：乱序提交（API 逆 seq 序）→ 依赖边仍正确 + patch warnings ──────
-    HELLO["version"] = "0.1.1"  # 顺路验 O4b patch 放行 + warnings
+    publish_agent_manifest(  # 顺路验 O4b patch 放行 + warnings
+        "hello_agent",
+        lambda manifest: manifest.__setitem__("version", "0.1.1"),
+    )
     r = summon(team_id, [
         {"seq": 1, "inputs": {"problem_description": FAULT_PROBLEM}},
         {"seq": 0, "inputs": {"name": "乱序上游"}},
@@ -300,7 +350,7 @@ with sync_playwright() as p:
               json.dumps({"up": up["status"], "down": down["status"]}, ensure_ascii=False))
     else:
         check("O3b 乱序提交依赖边仍正确", False, r.text[:200])
-    HELLO["version"] = "0.1.0"
+    publish_agent_manifest("hello_agent", lambda manifest: manifest.__setitem__("version", "0.1.0"))
 
     # ── O3：UI 填参面板成功链（归属会话，供 O6 复用）────────────────────────
     page.goto(BASE + "/portal")

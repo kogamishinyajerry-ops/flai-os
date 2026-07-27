@@ -173,6 +173,39 @@ def test_create_task_success_then_run_once_completes(client: TestClient, app_env
     assert download_resp.status_code == 200
 
 
+def test_missing_package_snapshot_failure_is_visible_via_task_api(
+    client: TestClient,
+    app_env,
+) -> None:
+    _, app = app_env
+    created = client.post(
+        "/api/tasks",
+        json={"agent_id": "hello_agent", "inputs": {"name": "小明"}},
+    )
+    assert created.status_code == 200
+    task_id = created.json()["id"]
+
+    app.state.agent_registry.deregister(
+        "hello_agent",
+        "test: package removed after enqueue",
+    )
+    try:
+        runner = JobRunner(app.state.runtime, app.state.conn_factory)
+        assert runner.run_once() is True
+
+        response = client.get(f"/api/tasks/{task_id}")
+        assert response.status_code == 200
+        failed = response.json()
+        assert failed["status"] == "failed"
+        assert failed["data_classification"] == "internal"
+        assert failed["error_message"] == (
+            "Agent 未注册或缺少不可变包快照：hello_agent"
+        )
+        assert failed.get("content_withheld") is not True
+    finally:
+        app.state.agent_registry.scan()
+
+
 def test_create_task_captures_creator_username_from_session(client: TestClient) -> None:
     """迁移 #9：创建任务从登录会话落 created_by_username（不可变唯一身份），
     与 created_by（display_name）并存。TEST_USERNAME=test_engineer /

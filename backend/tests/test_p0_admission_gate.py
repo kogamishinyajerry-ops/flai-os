@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import shutil
 from pathlib import Path
 
@@ -183,6 +184,15 @@ def test_n2_clean_interactive_registers(tmp_path: Path) -> None:
 # ══ P0-M2†：/api/readyz worker 心跳新鲜度 ════════════════════════════════════
 # tamper：把 readyz 的 status_code 恒 200（或 fresh 恒 True）→ no_worker/stale 变红。
 
+_GREEN_PROMOTION_ATTESTATION = json.dumps(
+    {
+        "promotion_attestation_axis": True,
+        "promotion_attestation_ok": True,
+        "promotion_attestation_rejected_count": 0,
+    }
+)
+
+
 def test_readyz_503_when_no_worker(app_env) -> None:
     client, _app = app_env
     r = client.get("/api/readyz")
@@ -194,12 +204,36 @@ def test_readyz_200_when_fresh(app_env) -> None:
     client, app = app_env
     conn = app.state.conn_factory()
     try:
-        repos.beat_worker_heartbeat(conn, generation="test-gen")
+        repos.beat_worker_heartbeat(
+            conn,
+            generation=config.WORKER_GENERATION,
+            detail=_GREEN_PROMOTION_ATTESTATION,
+        )
     finally:
         conn.close()
     r = client.get("/api/readyz")
     assert r.status_code == 200
     assert r.json()["worker"]["fresh"] is True
+
+
+def test_readyz_503_when_fresh_heartbeat_has_wrong_generation(
+    app_env,
+) -> None:
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        repos.beat_worker_heartbeat(
+            conn,
+            generation="stale-worker-generation",
+            detail=_GREEN_PROMOTION_ATTESTATION,
+        )
+    finally:
+        conn.close()
+
+    r = client.get("/api/readyz")
+    assert r.status_code == 503
+    assert r.json()["worker"]["fresh"] is False
+    assert r.json()["worker"]["reason"] == "worker_generation_mismatch"
 
 
 def test_readyz_503_when_stale(app_env) -> None:
@@ -208,15 +242,71 @@ def test_readyz_503_when_stale(app_env) -> None:
     try:
         conn.execute(
             "INSERT INTO worker_heartbeats (worker_id, generation, detail, started_at, last_beat_at) "
-            "VALUES ('default', 'g', NULL, ?, ?) "
-            "ON CONFLICT(worker_id) DO UPDATE SET last_beat_at = excluded.last_beat_at",
-            ("2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00"),
+            "VALUES ('default', ?, ?, ?, ?) "
+            "ON CONFLICT(worker_id) DO UPDATE SET "
+            "generation = excluded.generation, detail = excluded.detail, "
+            "last_beat_at = excluded.last_beat_at",
+            (
+                config.WORKER_GENERATION,
+                _GREEN_PROMOTION_ATTESTATION,
+                "2020-01-01T00:00:00+00:00",
+                "2020-01-01T00:00:00+00:00",
+            ),
         )
     finally:
         conn.close()
     r = client.get("/api/readyz")
     assert r.status_code == 503  # 心跳过期 → 不就绪
     assert r.json()["worker"]["fresh"] is False
+    assert r.json()["worker"]["reason"] == "heartbeat_stale"
+    assert r.json()["worker"]["age_s"] > _WORKER_STALE_S
+
+
+def test_readyz_503_when_fresh_worker_attestation_is_red(app_env) -> None:
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        repos.beat_worker_heartbeat(
+            conn,
+            generation=config.WORKER_GENERATION,
+            detail=json.dumps(
+                {
+                    "promotion_attestation_axis": True,
+                    "promotion_attestation_ok": False,
+                    "promotion_attestation_rejected_count": 1,
+                }
+            ),
+        )
+    finally:
+        conn.close()
+
+    r = client.get("/api/readyz")
+    assert r.status_code == 503
+    assert r.json()["worker"]["fresh"] is False
+    assert r.json()["worker"]["reason"] == "promotion_attestation_not_clean"
+
+
+def test_readyz_503_when_persistent_promotion_fault_exists(app_env) -> None:
+    client, app = app_env
+    conn = app.state.conn_factory()
+    try:
+        repos.beat_worker_heartbeat(
+            conn,
+            generation="test-gen",
+            detail=_GREEN_PROMOTION_ATTESTATION,
+        )
+        repos.record_promotion_attestation_fault(
+            conn,
+            detail='{"reason":"promotion-rollback-failed"}',
+        )
+    finally:
+        conn.close()
+
+    r = client.get("/api/readyz")
+    assert r.status_code == 503
+    assert r.json()["worker"]["reason"] == (
+        "persistent_promotion_attestation_fault"
+    )
 
 
 # ══ P1-3（Codex 命中即审）：心跳独立于任务执行 ═══════════════════════════════
@@ -233,7 +323,11 @@ def test_p1_3_beat_freshens_heartbeat(tmp_path: Path) -> None:
     期间维持 readyz 新鲜。beat 只用 conn_factory，无需真 runtime。"""
     p = tmp_path / "hb.db"
     db_mod.init_db(p)
-    JobRunner(None, lambda: db_mod.get_conn(p)).beat()
+    JobRunner(
+        None,
+        lambda: db_mod.get_conn(p),
+        promotion_attestation_records=[],
+    ).beat()
     conn = db_mod.get_conn(p)
     try:
         wf = _worker_freshness(conn)

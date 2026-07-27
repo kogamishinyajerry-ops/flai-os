@@ -17,6 +17,9 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
+from backend.app.storage import repos
 from backend.app.storage.db import get_conn, init_db
 from scripts import deploy_selfcheck
 
@@ -30,14 +33,31 @@ def _valid_db(tmp_path: Path) -> Path:
     return db
 
 
-def _insert_beat(db: Path, *, generation: str, last_beat_at: str) -> None:
+_GREEN_ATTESTATION_DETAIL = json.dumps(
+    {
+        "promotion_attestation_axis": True,
+        "promotion_attestation_ok": True,
+        "promotion_attestation_rejected_count": 0,
+    },
+    separators=(",", ":"),
+    sort_keys=True,
+)
+
+
+def _insert_beat(
+    db: Path,
+    *,
+    generation: str,
+    last_beat_at: str,
+    detail: str | None = _GREEN_ATTESTATION_DETAIL,
+) -> None:
     conn = get_conn(db)
     try:
         conn.execute(
             "INSERT OR REPLACE INTO worker_heartbeats"
             " (worker_id, generation, detail, started_at, last_beat_at)"
-            " VALUES ('default', ?, NULL, ?, ?)",
-            (generation, last_beat_at, last_beat_at),
+            " VALUES ('default', ?, ?, ?, ?)",
+            (generation, detail, last_beat_at, last_beat_at),
         )
         conn.commit()
     finally:
@@ -175,6 +195,31 @@ def test_classification_axis_present_passes(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_promotion_signer_axis_missing_columns_fails(tmp_path: Path) -> None:
+    """表名存在但仍是 ADR-0019 前形态时，部署自检必须识别旧代际。"""
+    db = tmp_path / "old-promotions.db"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "CREATE TABLE promotions (id INTEGER PRIMARY KEY, confirmed_by TEXT)"
+        )
+        result = deploy_selfcheck.check_promotion_signer_axis(conn)
+    finally:
+        conn.close()
+    assert result.ok is False
+    assert "signer_source" in result.detail
+    assert "signer_session_hash" in result.detail
+
+
+def test_promotion_signer_axis_present_passes(tmp_path: Path) -> None:
+    db = _valid_db(tmp_path)
+    conn = get_conn(db)
+    try:
+        assert deploy_selfcheck.check_promotion_signer_axis(conn).ok is True
+    finally:
+        conn.close()
+
+
 # ---------- 5. check_worker_generation（代际见证——五种失败模式全咬） ----------
 
 def _run_worker_gen(db: Path):
@@ -195,6 +240,21 @@ def test_worker_gen_wrong_generation_fails(tmp_path: Path) -> None:
     db = _valid_db(tmp_path)
     _insert_beat(db, generation="m0-ancient-generation",
                  last_beat_at=datetime.now(timezone.utc).isoformat())
+    c = _run_worker_gen(db)
+    assert c.ok is False
+    assert deploy_selfcheck.WORKER_GENERATION in c.detail
+
+
+def test_worker_gen_before_promotion_attestation_fails(tmp_path: Path) -> None:
+    """GH #3：API 已升级但 worker 仍是启动 attestation 前代际，不能假绿。"""
+    db = _valid_db(tmp_path)
+    _insert_beat(
+        db,
+        generation=(
+            "collab-resolver+t2-eval-snapshot+b3-llm-timeout+b8-disabled-gate"
+        ),
+        last_beat_at=datetime.now(timezone.utc).isoformat(),
+    )
     c = _run_worker_gen(db)
     assert c.ok is False
     assert deploy_selfcheck.WORKER_GENERATION in c.detail
@@ -224,11 +284,98 @@ def test_worker_gen_malformed_timestamp_fails(tmp_path: Path) -> None:
     assert _run_worker_gen(db).ok is False
 
 
+@pytest.mark.parametrize(
+    "detail",
+    [
+        None,
+        "not-json",
+        json.dumps(
+            {
+                "promotion_attestation_axis": 1,
+                "promotion_attestation_ok": True,
+                "promotion_attestation_rejected_count": 0,
+            }
+        ),
+        json.dumps(
+            {
+                "promotion_attestation_axis": True,
+                "promotion_attestation_ok": "true",
+                "promotion_attestation_rejected_count": 0,
+            }
+        ),
+        json.dumps(
+            {
+                "promotion_attestation_axis": True,
+                "promotion_attestation_ok": True,
+                "promotion_attestation_rejected_count": False,
+            }
+        ),
+        json.dumps(
+            {
+                "promotion_attestation_axis": True,
+                "promotion_attestation_ok": True,
+                "promotion_attestation_rejected_count": "0",
+            }
+        ),
+        json.dumps(
+            {
+                "promotion_attestation_axis": True,
+                "promotion_attestation_ok": False,
+                "promotion_attestation_rejected_count": 1,
+            }
+        ),
+    ],
+    ids=[
+        "missing-json",
+        "malformed-json",
+        "truthy-axis",
+        "truthy-ok",
+        "bool-count-is-not-zero",
+        "string-count",
+        "rejected-l1",
+    ],
+)
+def test_worker_generation_requires_strict_green_attestation_detail(
+    tmp_path: Path, detail: str | None
+) -> None:
+    db = _valid_db(tmp_path)
+    _insert_beat(
+        db,
+        generation=deploy_selfcheck.WORKER_GENERATION,
+        last_beat_at=datetime.now(timezone.utc).isoformat(),
+        detail=detail,
+    )
+    assert _run_worker_gen(db).ok is False
+
+
 def test_worker_gen_fresh_and_current_passes(tmp_path: Path) -> None:
     db = _valid_db(tmp_path)
     _insert_beat(db, generation=deploy_selfcheck.WORKER_GENERATION,
                  last_beat_at=datetime.now(timezone.utc).isoformat())
     assert _run_worker_gen(db).ok is True
+
+
+def test_worker_generation_fails_on_persistent_promotion_fault(
+    tmp_path: Path,
+) -> None:
+    db = _valid_db(tmp_path)
+    _insert_beat(
+        db,
+        generation=deploy_selfcheck.WORKER_GENERATION,
+        last_beat_at=datetime.now(timezone.utc).isoformat(),
+    )
+    conn = get_conn(db)
+    try:
+        repos.record_promotion_attestation_fault(
+            conn,
+            detail='{"reason":"promotion-rollback-failed"}',
+        )
+    finally:
+        conn.close()
+
+    check = _run_worker_gen(db)
+    assert check.ok is False
+    assert "持久故障" in check.detail
 
 
 # ---------- 6. check_db_identity（库身份一致——服务侧=探针侧） ----------
@@ -370,6 +517,105 @@ def test_live_eval_snapshot_axis_truthy_not_true_fails(monkeypatch) -> None:
 def test_live_eval_snapshot_axis_true_passes(monkeypatch) -> None:
     _fake_http(monkeypatch, payload={"eval_snapshot_axis": True})
     assert deploy_selfcheck.check_live_eval_snapshot_generation("http://x").ok is True
+
+
+# ---- 8d. check_live_promotion_attestation（GH #3 启动签发代际 + 结果）----
+
+def test_live_promotion_attestation_missing_fails(monkeypatch) -> None:
+    """旧 API 没有启动核对代际与结果，无法证明 L1 来自 promotion，必 FAIL。"""
+    _fake_http(monkeypatch, payload={"status": "ok"})
+    assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+
+
+def test_live_promotion_attestation_old_axis_without_signer_generation_fails(
+    monkeypatch,
+) -> None:
+    """旧 API 的 GH#3 轴虽绿，也不能证明已升级到 ADR-0019 signer 门。"""
+    _fake_http(monkeypatch, payload={
+        "promotion_attestation_axis": True,
+        "promotion_attestation_ok": True,
+        "promotion_attestation_rejected_count": 0,
+    })
+    assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+
+
+def test_live_promotion_attestation_wrong_signer_generation_fails(
+    monkeypatch,
+) -> None:
+    """代际不是 truthy 开关；旧/未知版本即使其余轴全绿也必须 fail-closed。"""
+    _fake_http(monkeypatch, payload={
+        "promotion_attestation_axis": True,
+        "promotion_signer_provenance_generation": "promotion-signer-v0",
+        "promotion_attestation_ok": True,
+        "promotion_attestation_rejected_count": 0,
+    })
+    assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+
+
+def test_live_promotion_attestation_rejection_fails(monkeypatch) -> None:
+    _fake_http(monkeypatch, payload={
+        "promotion_attestation_axis": True,
+        "promotion_signer_provenance_generation": (
+            deploy_selfcheck.PROMOTION_SIGNER_PROVENANCE_GENERATION
+        ),
+        "promotion_attestation_ok": False,
+        "promotion_attestation_rejected_count": 1,
+    })
+    assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+
+
+def test_live_promotion_attestation_truthy_not_true_fails(monkeypatch) -> None:
+    """axis/result 都只认布尔真；字符串与整数不能冒充安全门通过。"""
+    for truthy in ("true", 1, "1"):
+        _fake_http(monkeypatch, payload={
+            "promotion_attestation_axis": truthy,
+            "promotion_signer_provenance_generation": (
+                deploy_selfcheck.PROMOTION_SIGNER_PROVENANCE_GENERATION
+            ),
+            "promotion_attestation_ok": True,
+        })
+        assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+        _fake_http(monkeypatch, payload={
+            "promotion_attestation_axis": True,
+            "promotion_signer_provenance_generation": (
+                deploy_selfcheck.PROMOTION_SIGNER_PROVENANCE_GENERATION
+            ),
+            "promotion_attestation_ok": truthy,
+        })
+        assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+
+
+@pytest.mark.parametrize(
+    "rejected_count",
+    [None, False, "0", 1],
+    ids=["missing", "bool-false", "string-zero", "nonzero"],
+)
+def test_live_promotion_attestation_requires_strict_zero_rejected_count(
+    monkeypatch, rejected_count: object
+) -> None:
+    payload = {
+        "promotion_attestation_axis": True,
+        "promotion_signer_provenance_generation": (
+            deploy_selfcheck.PROMOTION_SIGNER_PROVENANCE_GENERATION
+        ),
+        "promotion_attestation_ok": True,
+    }
+    if rejected_count is not None:
+        payload["promotion_attestation_rejected_count"] = rejected_count
+    _fake_http(monkeypatch, payload=payload)
+    assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+
+
+def test_live_promotion_attestation_clean_passes(monkeypatch) -> None:
+    _fake_http(monkeypatch, payload={
+        "promotion_attestation_axis": True,
+        "promotion_signer_provenance_generation": (
+            deploy_selfcheck.PROMOTION_SIGNER_PROVENANCE_GENERATION
+        ),
+        "promotion_attestation_ok": True,
+        "promotion_attestation_rejected_count": 0,
+    })
+    assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is True
 
 
 # ---------- 9. check_auth_generation（default-deny 见证） ----------

@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import uuid
 from pathlib import Path
 
 import pytest
+import yaml
 
 from backend.app.jobs.runner import JobRunner, resolve_dependencies_once
 from backend.app.model_gateway.gateway import ModelGateway
@@ -272,7 +274,15 @@ def test_missing_upstream_cancels_fail_closed(dbf):
 def runtime_env(tmp_path):
     db_path = tmp_path / "flai_os.db"
     init_db(db_path)
-    agent_registry = AgentRegistry(REPO_ROOT / "agents", REPO_ROOT / "contracts" / "agent.schema.json")
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    shutil.copytree(
+        REPO_ROOT / "agents" / "hello_agent",
+        agents_dir / "hello_agent",
+    )
+    agent_registry = AgentRegistry(
+        agents_dir, REPO_ROOT / "contracts" / "agent.schema.json"
+    )
     agent_registry.scan()
     tool_registry = ToolRegistry(REPO_ROOT / "tools_impl", REPO_ROOT / "contracts" / "tool.schema.json")
     tool_registry.scan()
@@ -291,7 +301,11 @@ def runtime_env(tmp_path):
     runtime = AgentRuntime(
         agent_registry, tool_registry, model_gateway, conn_factory, tmp_path / "task_runs"
     )
-    return {"conn_factory": conn_factory, "runtime": runtime}
+    return {
+        "agents_dir": agents_dir,
+        "conn_factory": conn_factory,
+        "runtime": runtime,
+    }
 
 
 def test_E2E_main_chain_a_then_b(runtime_env):
@@ -365,8 +379,17 @@ def test_E2E_taint_chain_sensitive_upstream_derives_downstream(runtime_env):
     # ADR-0030（批七）：B 消费 sensitive 管道产物须合法持有 sensitive 准入——
     # 消费点密级复核对 internal 缺省上限会如实拒执行（那是另一条测试的职责，
     # test_b7_batch_and_clearance）。本测试的对象是 ADR-0025 派生传播语义，
-    # 故给本 registry 实例的 hello 显式授 sensitive（in-memory，不动包文件）。
-    runtime.agent_registry.get("hello_agent")["clearance"] = {"max_data_classification": "sensitive"}
+    # 故给隔离测试包的 hello 显式授 sensitive，再 scan 原子发布新快照；不靠
+    # `get()` 泄漏的可变 dict 伪造运行时治理状态。
+    yaml_path = runtime_env["agents_dir"] / "hello_agent" / "agent.yaml"
+    manifest = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    manifest["clearance"] = {"max_data_classification": "sensitive"}
+    yaml_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    runtime.agent_registry.scan()
+    assert runtime.agent_registry.errors == []
 
     # A 的 sensitive 输入：真字节落 uploads_dir/{fid}/input.txt，可过 _open_input_files 校验
     in_fid = str(uuid.uuid4())

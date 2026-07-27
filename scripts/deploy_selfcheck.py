@@ -25,6 +25,9 @@
     8c. health 含 eval_snapshot_axis=true（T2/#5 运行进程代际，Codex R0 审 P1：enqueue
         须冻结不可变快照——旧 API 未重启会入队无 handle 的 run、worker 回退活磁盘执行，
         「评的就是晋升的那版」不可变保证静默失效。配合 WORKER_GENERATION bump 双向见证）
+    8d. health 含 promotion_attestation_axis=true、promotion_attestation_ok=true，
+        且 signer provenance 代际精确匹配（GH #3 + ADR-0019：活 API 已执行
+        L1↔promotions 及来源核对，且本次没有拒载漂移 L1）
     9. health.db_identity = 探针侧库路径指纹（Codex R1 审 P2：两侧 FLAI_DB_PATH
        不一致时，探针查有账户的库 A、服务连空库 B，其余全 PASS 却无人能登录）
     10. 未认证 GET /api/agents → 401（鉴权代际见证：200=裸奔旧代际，404=旧代码，
@@ -57,7 +60,11 @@ sys.path.insert(0, str(REPO))
 from backend.app import config  # noqa: E402
 
 WORKER_GENERATION = config.WORKER_GENERATION
+PROMOTION_SIGNER_PROVENANCE_GENERATION = (
+    config.PROMOTION_SIGNER_PROVENANCE_GENERATION
+)
 _WORKER_STALE_SECONDS = 60
+_PROMOTION_ATTESTATION_FAULT_ID = "promotion-attestation-fault"
 
 # 缺任何一张=init_db 没跑或库文件指错——直接列全量九表+鉴权两表，不挑子集。
 REQUIRED_TABLES = frozenset({
@@ -132,27 +139,87 @@ def check_classification_axis(conn: sqlite3.Connection) -> Check:
     return Check("数据分级轴（ADR-0021）", True, "files/samples 均有 classification 列")
 
 
+def check_promotion_signer_axis(conn: sqlite3.Connection) -> Check:
+    """ADR-0019 签发者来源列必须完整；只存在旧 promotions 表不能算已迁移。"""
+    required = {
+        "signer_source",
+        "signer_user_id",
+        "signer_username",
+        "signer_session_hash",
+    }
+    present = {
+        row[1] for row in conn.execute("PRAGMA table_info(promotions)")
+    }
+    missing = sorted(required - present)
+    if missing:
+        return Check(
+            "签发者来源轴（ADR-0019）",
+            False,
+            f"promotions 缺列 {missing}——先跑 scripts/init_db 迁移 #14",
+        )
+    return Check(
+        "签发者来源轴（ADR-0019）",
+        True,
+        "promotions signer source/user/session 列全部在位",
+    )
+
+
 def check_worker_generation(conn: sqlite3.Connection) -> Check:
     """独立 worker 进程的代际见证（Codex R1 审 P1）：心跳 60s 内新鲜 + 代际
     匹配才 PASS。无表/无行/过期/代际不符/时间戳畸形（含 naive）全 FAIL。"""
     name = "worker 心跳代际"
     try:
+        persistent_fault = conn.execute(
+            "SELECT detail FROM worker_heartbeats WHERE worker_id = ?",
+            (_PROMOTION_ATTESTATION_FAULT_ID,),
+        ).fetchone()
         row = conn.execute(
-            "SELECT generation, last_beat_at FROM worker_heartbeats WHERE worker_id='default'"
+            "SELECT generation, last_beat_at, detail "
+            "FROM worker_heartbeats WHERE worker_id='default'"
         ).fetchone()
     except sqlite3.Error as exc:
         return Check(name, False, f"worker_heartbeats 表不可读（旧库未迁移？）：{exc}")
+    if persistent_fault is not None:
+        return Check(
+            name,
+            False,
+            "存在未解除的 promotion attestation 持久故障 latch："
+            f"{persistent_fault[0]!r}；须人工核查磁盘/DB/审计一致性后显式清除",
+        )
     if row is None:
         return Check(
             name, False,
             "无 worker 心跳——worker 未启动，或为 B2 前旧代际（旧代码不写心跳）。"
             "部署顺序：先起 API+worker 再跑自检",
         )
-    generation, last_beat = row[0], row[1]
+    generation, last_beat, detail = row[0], row[1], row[2]
     if generation != WORKER_GENERATION:
         return Check(
             name, False,
             f"worker 代际 {generation!r} ≠ 当前 {WORKER_GENERATION!r}——worker 未重启到新代码",
+        )
+    try:
+        attestation = json.loads(detail)
+    except (json.JSONDecodeError, TypeError, RecursionError) as exc:
+        return Check(
+            name,
+            False,
+            f"worker 心跳 detail 不是严格 attestation JSON：{detail!r}（{exc}）",
+        )
+    if isinstance(attestation, dict) is not True:
+        return Check(name, False, "worker 心跳 attestation detail 必须是 JSON object")
+    axis_ok = attestation.get("promotion_attestation_axis") is True
+    result_ok = attestation.get("promotion_attestation_ok") is True
+    rejected_count = attestation.get("promotion_attestation_rejected_count")
+    count_ok = type(rejected_count) is int and rejected_count == 0
+    if axis_ok is not True or result_ok is not True or count_ok is not True:
+        return Check(
+            name,
+            False,
+            "worker 心跳未严格证明 promotion attestation 干净："
+            f"axis={attestation.get('promotion_attestation_axis')!r} "
+            f"ok={attestation.get('promotion_attestation_ok')!r} "
+            f"rejected_count={rejected_count!r}",
         )
     try:
         beat_time = datetime.fromisoformat(last_beat)
@@ -304,6 +371,49 @@ def check_live_eval_snapshot_generation(base_url: str) -> Check:
     )
 
 
+def check_live_promotion_attestation(base_url: str) -> Check:
+    """GH #3 的活进程 L1 签发核对见证；代际与本次结果均只认布尔真。"""
+
+    url = f"{base_url}/api/health"
+    try:
+        _, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check("运行进程晋升签发核对", False, f"{url} 不可达或非 JSON：{exc}")
+    axis_ok = payload.get("promotion_attestation_axis") is True
+    signer_generation = payload.get(
+        "promotion_signer_provenance_generation"
+    )
+    signer_generation_ok = (
+        signer_generation == PROMOTION_SIGNER_PROVENANCE_GENERATION
+    )
+    result_ok = payload.get("promotion_attestation_ok") is True
+    rejected_count = payload.get("promotion_attestation_rejected_count")
+    count_ok = type(rejected_count) is int and rejected_count == 0
+    if (
+        axis_ok is True
+        and signer_generation_ok is True
+        and result_ok is True
+        and count_ok is True
+    ):
+        return Check(
+            "运行进程晋升签发核对",
+            True,
+            "活进程 signer provenance 代际匹配、"
+            "promotion_attestation_axis=true、ok=true 且 rejected_count=0",
+        )
+    return Check(
+        "运行进程晋升签发核对",
+        False,
+        "health 未同时给出匹配的 signer provenance 代际、"
+        "promotion_attestation_axis=true 与 "
+        "promotion_attestation_ok=true"
+        f"（signer_generation={signer_generation!r}; "
+        f"rejected_count={rejected_count!r}）；"
+        "旧进程或存在无审计 L1，fail-closed",
+    )
+
+
 def check_auth_generation(base_url: str) -> Check:
     """鉴权代际见证：匿名打有数据的端点，401 才是新代际的证词。
 
@@ -367,7 +477,7 @@ def main() -> int:
         try:
             for fn in (
                 check_tables, check_active_user, check_classification_axis,
-                check_worker_generation,
+                check_promotion_signer_axis, check_worker_generation,
             ):
                 try:
                     checks.append(fn(conn))
@@ -377,7 +487,13 @@ def main() -> int:
         finally:
             conn.close()
     else:
-        for name in ("核心表齐全", "≥1 活跃账户", "数据分级轴（ADR-0021）", "worker 心跳代际"):
+        for name in (
+            "核心表齐全",
+            "≥1 活跃账户",
+            "数据分级轴（ADR-0021）",
+            "签发者来源轴（ADR-0019）",
+            "worker 心跳代际",
+        ):
             checks.append(Check(name, False, "跳过：DB 文件缺失"))
 
     checks.append(check_health(base_url))
@@ -385,6 +501,7 @@ def main() -> int:
     checks.append(check_live_classification_generation(base_url))
     checks.append(check_live_created_by_username_generation(base_url))
     checks.append(check_live_eval_snapshot_generation(base_url))
+    checks.append(check_live_promotion_attestation(base_url))
     checks.append(check_db_identity(base_url, db_path))
     checks.append(check_auth_generation(base_url))
     checks.append(check_frontend_dist())

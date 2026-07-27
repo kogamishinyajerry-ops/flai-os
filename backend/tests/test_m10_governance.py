@@ -2,24 +2,42 @@
 
 from __future__ import annotations
 
+import builtins
+import hashlib
 import json
 import shutil
+import sqlite3
+import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import TEST_DISPLAY_NAME, seed_and_login
+from conftest import (
+    TEST_DISPLAY_NAME,
+    TEST_USERNAME,
+    login,
+    seed_and_login,
+    seed_user,
+)
 
+from backend.app.governance.signer_provenance import (
+    SignerContext,
+)
 from backend.app.main import create_app
 from backend.app.storage import repos
 
 
 REPO = Path(__file__).resolve().parents[2]
 _MISSING = object()
+
+
+def _server_cli_signer(label: str = "王工") -> SignerContext:
+    return SignerContext.from_server_cli(label)
 
 
 @dataclass
@@ -275,6 +293,33 @@ def test_runner_all_green_records_eval_tasks(governance_env: GovernanceEnv) -> N
             assert task["origin"] == "eval"
     finally:
         conn.close()
+
+
+def test_synchronous_eval_path_freezes_immutable_snapshot(
+    governance_env: GovernanceEnv,
+) -> None:
+    """官方 promote CLI 使用的同步 eval 路径也必须产出 snapshot_handle。"""
+
+    from backend.app.governance.eval_runner import run_agent_evals
+
+    run = run_agent_evals(
+        conn_factory=governance_env.app.state.conn_factory,
+        agent_registry=governance_env.app.state.agent_registry,
+        runtime=governance_env.app.state.runtime,
+        uploads_dir=governance_env.app.state.uploads_dir,
+        task_runs_dir=governance_env.app.state.task_runs_dir,
+        agent_id="governed_agent",
+        triggered_by=TEST_DISPLAY_NAME,
+    )
+    assert isinstance(run["snapshot_handle"], str)
+    assert run["snapshot_handle"].startswith("snap_")
+    conn = governance_env.app.state.conn_factory()
+    try:
+        snapshot = repos.get_eval_snapshot(conn, run["snapshot_handle"])
+    finally:
+        conn.close()
+    assert snapshot is not None
+    assert snapshot["eval_cases_digest"] == run["eval_cases_digest"]
 
 
 def test_runner_counts_wrong_oracle_as_failed(governance_env: GovernanceEnv) -> None:
@@ -589,6 +634,27 @@ def test_promotion_happy_path_updates_yaml_projection_and_audit_record(
     governance_env: GovernanceEnv,
 ) -> None:
     """验证全绿证据通过五门后晋升 L1 并写回 YAML、API 投影与审计记录。"""
+    # 同显示名的另一账户 + 当前账户的另一活会话，钉死“当前 cookie 精确绑定”：
+    # 不能按 display_name 猜用户，也不能随便取该用户任一 session。
+    decoy_user = seed_user(
+        governance_env.app.state.db_path,
+        username="same_display_decoy",
+        display_name=TEST_DISPLAY_NAME,
+        password="decoy-password",
+    )
+    decoy_client = TestClient(governance_env.app)
+    login(
+        decoy_client,
+        username="same_display_decoy",
+        password="decoy-password",
+    )
+    decoy_client.close()
+    other_session_client = TestClient(governance_env.app)
+    login(other_session_client)
+    other_token = other_session_client.cookies.get("flai_session")
+    assert other_token
+    other_session_client.close()
+
     run = _run_eval(governance_env)
 
     response = _promote(
@@ -602,6 +668,10 @@ def test_promotion_happy_path_updates_yaml_projection_and_audit_record(
     assert promotion["from_maturity"] == "L0"
     assert promotion["to_maturity"] == "L1"
     assert promotion["confirmed_by"] == TEST_DISPLAY_NAME
+    assert promotion["signer_source"] == "authenticated_session"
+    assert promotion["signer_username"] == TEST_USERNAME
+    assert promotion["signer_session_bound"] is True
+    assert "signer_session_hash" not in promotion
     yaml_text = (governance_env.governed_dir / "agent.yaml").read_text(encoding="utf-8")
     assert "\nmaturity: L1\n" in f"\n{yaml_text}\n"
 
@@ -618,13 +688,71 @@ def test_promotion_happy_path_updates_yaml_projection_and_audit_record(
 
     conn = governance_env.app.state.conn_factory()
     try:
-        raw_checks = conn.execute(
-            "SELECT checks_json FROM promotions WHERE id = ?",
+        raw = conn.execute(
+            "SELECT checks_json, signer_source, signer_user_id, signer_username,"
+            " signer_session_hash FROM promotions WHERE id = ?",
             (records[0]["id"],),
-        ).fetchone()["checks_json"]
+        ).fetchone()
     finally:
         conn.close()
-    assert "平台级提供" in raw_checks
+    assert "平台级提供" in raw["checks_json"]
+    assert raw["signer_source"] == "authenticated_session"
+    assert raw["signer_user_id"] > 0
+    assert raw["signer_user_id"] != decoy_user["id"]
+    assert raw["signer_username"] == TEST_USERNAME
+    current_token = governance_env.client.cookies.get("flai_session")
+    assert current_token
+    assert raw["signer_session_hash"] == hashlib.sha256(
+        current_token.encode()
+    ).hexdigest()
+    assert raw["signer_session_hash"] != hashlib.sha256(
+        other_token.encode()
+    ).hexdigest()
+    assert "signer_session_hash" not in records[0]
+
+
+def test_authenticated_promotion_remains_valid_after_logout_and_restart(
+    governance_env: GovernanceEnv,
+) -> None:
+    """真实 HTTP 签发→logout 删 session→新 app 启动，历史事实仍可核验。"""
+    run = _run_eval(governance_env)
+    promoted = _promote(
+        governance_env,
+        run["id"],
+        confirmations={"exception_paths_handled": True},
+    )
+    assert promoted.status_code == 200, promoted.text
+    assert promoted.json()["signer_session_bound"] is True
+    token = governance_env.client.cookies.get("flai_session")
+    assert token
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    logout = governance_env.client.post("/api/auth/logout")
+    assert logout.status_code == 200
+    conn = governance_env.app.state.conn_factory()
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM auth_sessions WHERE token_hash = ?",
+            (token_hash,),
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    restarted = create_app(
+        agents_dir=governance_env.agents_dir,
+        tools_dir=REPO / "tools_impl",
+        contracts_dir=REPO / "contracts",
+        db_path=governance_env.app.state.db_path,
+        uploads_dir=governance_env.app.state.uploads_dir,
+        task_runs_dir=governance_env.app.state.task_runs_dir,
+    )
+    with TestClient(restarted) as restarted_client:
+        registered = restarted.state.agent_registry.get("governed_agent")
+        assert registered is not None
+        assert registered["maturity"] == "L1"
+        health = restarted_client.get("/api/health").json()
+        assert health["promotion_attestation_ok"] is True
+        assert health["promotion_attestation_rejected_count"] == 0
 
 
 def test_promotion_rejects_fewer_than_three_approved_cases(
@@ -845,30 +973,165 @@ def test_promotion_manual_confirmation_is_strict_boolean_true(
     ) is True
 
 
-def test_promotion_rejects_client_confirmed_by_and_derives_session_identity(
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("confirmed_by", "冒名者"),
+        ("signer_source", "server_cli"),
+        ("signer_user_id", 999),
+        ("signer_username", "forged"),
+        ("signer_session_hash", "0" * 64),
+        ("signer", {"source": "server_cli", "operator_label": "冒名者"}),
+    ],
+    ids=[
+        "confirmed-by",
+        "source",
+        "user-id",
+        "username",
+        "session-hash",
+        "nested-signer",
+    ],
+)
+def test_promotion_rejects_client_signer_provenance_fields(
     governance_env: GovernanceEnv,
+    field: str,
+    value: Any,
 ) -> None:
-    """confirmed_by 已删除：显式发送字段 422；省略时由会话身份记名。"""
+    """客户端不能选择或覆盖任何签发来源字段；均由认证适配层派生。"""
     run = _run_eval(governance_env)
 
+    body = {
+        "to_maturity": "L1",
+        "eval_run_id": run["id"],
+        "confirmations": {"exception_paths_handled": True},
+        field: value,
+    }
     forged = governance_env.client.post(
         "/api/agents/governed_agent/promote",
-        json={
-            "to_maturity": "L1",
-            "eval_run_id": run["id"],
-            "confirmations": {"exception_paths_handled": True},
-            "confirmed_by": "",
-        },
+        json=body,
     )
     assert forged.status_code == 422
 
-    honest = _promote(
+
+def test_promotion_revalidates_exact_session_inside_final_transaction(
+    governance_env: GovernanceEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """入门认证后、最终事务前吊销精确会话：拒绝签发并完整补偿磁盘/投影。"""
+    from backend.app.governance import promotion as promotion_mod
+
+    run = _run_eval(governance_env)
+    yaml_path = governance_env.governed_dir / "agent.yaml"
+    changelog_path = governance_env.governed_dir / "changelog.md"
+    yaml_before = yaml_path.read_text(encoding="utf-8")
+    changelog_before = changelog_path.read_text(encoding="utf-8")
+    token = governance_env.client.cookies.get("flai_session")
+    assert token
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    real_build_shadow = promotion_mod._build_reconciled_shadow
+    revoked = False
+
+    def _revoke_after_first_shadow(*args: Any, **kwargs: Any):
+        nonlocal revoked
+        result = real_build_shadow(*args, **kwargs)
+        if revoked is False:
+            conn = governance_env.app.state.conn_factory()
+            try:
+                deleted = conn.execute(
+                    "DELETE FROM auth_sessions WHERE token_hash = ?",
+                    (token_hash,),
+                )
+                assert deleted.rowcount == 1
+            finally:
+                conn.close()
+            revoked = True
+        return result
+
+    monkeypatch.setattr(
+        promotion_mod,
+        "_build_reconciled_shadow",
+        _revoke_after_first_shadow,
+    )
+    response = _promote(
         governance_env,
         run["id"],
         confirmations={"exception_paths_handled": True},
     )
-    assert honest.status_code == 200, honest.text
-    assert honest.json()["confirmed_by"] == TEST_DISPLAY_NAME
+
+    assert response.status_code == 422
+    checks = response.json()["detail"]["checks"]
+    assert checks["signer_session_revalidation"]["ok"] is False
+    assert yaml_path.read_text(encoding="utf-8") == yaml_before
+    assert changelog_path.read_text(encoding="utf-8") == changelog_before
+    assert governance_env.app.state.agent_registry.get("governed_agent")[
+        "maturity"
+    ] == "L0"
+    conn = governance_env.app.state.conn_factory()
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM promotions").fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT maturity FROM agents WHERE id = 'governed_agent'"
+        ).fetchone()["maturity"] == "L0"
+        assert repos.get_promotion_attestation_fault(conn) is None
+    finally:
+        conn.close()
+
+
+def test_promotion_rejects_session_expiring_during_final_projection_sync(
+    governance_env: GovernanceEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BEGIN IMMEDIATE 只能挡吊销写，不能冻结时钟；签发时点必须仍早于 expiry。"""
+    from backend.app.auth import service as auth_service
+
+    run = _run_eval(governance_env)
+    clock = {"now": datetime.now(timezone.utc)}
+    expires = clock["now"] + timedelta(seconds=1)
+    token = governance_env.client.cookies.get("flai_session")
+    assert token
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    conn = governance_env.app.state.conn_factory()
+    try:
+        conn.execute(
+            "UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ?",
+            (expires.isoformat(), token_hash),
+        )
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(auth_service, "_now", lambda: clock["now"])
+    monkeypatch.setattr(repos, "_now_iso", lambda: clock["now"].isoformat())
+    registry_type = type(governance_env.app.state.agent_registry)
+    real_sync = registry_type.sync_to_db
+    advanced = False
+
+    def _sync_then_expire(self: Any, conn: sqlite3.Connection) -> None:
+        nonlocal advanced
+        real_sync(self, conn)
+        if advanced is False and self.get("governed_agent")["maturity"] == "L1":
+            clock["now"] = expires
+            advanced = True
+
+    monkeypatch.setattr(registry_type, "sync_to_db", _sync_then_expire)
+    response = _promote(
+        governance_env,
+        run["id"],
+        confirmations={"exception_paths_handled": True},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["checks"]["signer_session_revalidation"][
+        "ok"
+    ] is False
+    conn = governance_env.app.state.conn_factory()
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM promotions").fetchone()[0] == 0
+    finally:
+        conn.close()
+    assert governance_env.app.state.agent_registry.get("governed_agent")[
+        "maturity"
+    ] == "L0"
 
 
 def test_promotion_rejects_l1_to_l1_transition(
@@ -926,7 +1189,8 @@ def test_promotion_rolls_back_yaml_when_audit_record_fails(
             to_maturity="L1",
             eval_run_id=run["id"],
             confirmations={"exception_paths_handled": True},
-            confirmed_by="王工",
+            signer=_server_cli_signer(),
+            attestation_records=[],
         )
 
     assert yaml_path.read_text(encoding="utf-8") == yaml_before
@@ -947,6 +1211,285 @@ def test_promotion_rolls_back_yaml_when_audit_record_fails(
         conn.close()
 
 
+def test_promotion_rollback_failure_sets_sticky_attestation_fault(
+    governance_env: GovernanceEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """提交失败且补偿写盘也失败时，health 必须 sticky-fail，不能保留假绿。"""
+
+    from backend.app.governance import promotion as promotion_mod
+
+    run = _run_eval(governance_env)
+    yaml_path = governance_env.governed_dir / "agent.yaml"
+    original_open = builtins.open
+    yaml_write_count = 0
+
+    def _fail_restore_write(file: Any, *args: Any, **kwargs: Any):
+        nonlocal yaml_write_count
+        mode = args[0] if args else kwargs.get("mode", "r")
+        candidate = Path(file) if isinstance(file, (str, Path)) else None
+        if candidate == yaml_path and mode == "w":
+            yaml_write_count += 1
+            if yaml_write_count == 2:
+                raise OSError("注入：补偿恢复 agent.yaml 失败")
+        return original_open(file, *args, **kwargs)
+
+    def _fail_record(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("注入：promotion 审计提交失败")
+
+    monkeypatch.setattr(builtins, "open", _fail_restore_write)
+    monkeypatch.setattr(promotion_mod.repos, "record_promotion", _fail_record)
+
+    with pytest.raises(RuntimeError, match="审计提交失败"):
+        promotion_mod.promote_agent(
+            conn_factory=governance_env.app.state.conn_factory,
+            agent_registry=governance_env.app.state.agent_registry,
+            scope_registry=governance_env.app.state.scope_registry,
+            agent_id="governed_agent",
+            to_maturity="L1",
+            eval_run_id=run["id"],
+            confirmations={"exception_paths_handled": True},
+            signer=_server_cli_signer(),
+            attestation_records=(
+                governance_env.app.state.promotion_attestation_records
+            ),
+        )
+
+    assert yaml_write_count == 2
+    faults = governance_env.app.state.promotion_attestation_records
+    assert len(faults) == 1
+    assert faults[0]["agent_id"] == "governed_agent"
+    assert faults[0]["reason"] == "promotion-rollback-failed"
+    conn = governance_env.app.state.conn_factory()
+    try:
+        persistent_fault = repos.get_promotion_attestation_fault(conn)
+    finally:
+        conn.close()
+    assert persistent_fault is not None
+    assert json.loads(persistent_fault["detail"])["reason"] == (
+        "promotion-rollback-failed"
+    )
+    # 模拟原 CLI 进程退出/另一 API 进程无该内存 list：共享 DB latch 仍令 health 红。
+    governance_env.app.state.promotion_attestation_records = []
+    health = governance_env.client.get("/api/health").json()
+    assert health["promotion_attestation_ok"] is False
+    assert health["promotion_attestation_rejected_count"] == 1
+
+
+def test_promotion_requires_persistent_pending_latch_before_disk_write(
+    governance_env: GovernanceEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """共享 DB 只读时必须在首次 YAML 手术前失败。
+
+    若等提交/回滚失败后才尝试写 fault latch，同一个只读故障会令 latch 也写不进，
+    磁盘却已经进入过 L1 半提交窗口。
+    """
+
+    from backend.app.governance import promotion as promotion_mod
+
+    run = _run_eval(governance_env)
+    yaml_path = governance_env.governed_dir / "agent.yaml"
+    yaml_before = yaml_path.read_text(encoding="utf-8")
+    probe = governance_env.app.state.conn_factory()
+    try:
+        db_path = Path(probe.execute("PRAGMA database_list").fetchone()["file"])
+    finally:
+        probe.close()
+
+    def _read_only_conn_factory() -> sqlite3.Connection:
+        conn = sqlite3.connect(
+            f"file:{db_path}?mode=ro",
+            uri=True,
+            isolation_level=None,
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    original_open = builtins.open
+    yaml_write_count = 0
+
+    def _count_yaml_writes(file: Any, *args: Any, **kwargs: Any):
+        nonlocal yaml_write_count
+        mode = args[0] if args else kwargs.get("mode", "r")
+        candidate = Path(file) if isinstance(file, (str, Path)) else None
+        if candidate == yaml_path and mode == "w":
+            yaml_write_count += 1
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _count_yaml_writes)
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        promotion_mod.promote_agent(
+            conn_factory=_read_only_conn_factory,
+            agent_registry=governance_env.app.state.agent_registry,
+            scope_registry=governance_env.app.state.scope_registry,
+            agent_id="governed_agent",
+            to_maturity="L1",
+            eval_run_id=run["id"],
+            confirmations={"exception_paths_handled": True},
+            signer=_server_cli_signer(),
+            attestation_records=[],
+        )
+
+    assert yaml_write_count == 0
+    assert yaml_path.read_text(encoding="utf-8") == yaml_before
+    assert governance_env.client.get(
+        "/api/agents/governed_agent/promotions"
+    ).json() == []
+
+
+def test_stale_registry_cannot_repeat_promotion_after_latch_aba(
+    governance_env: GovernanceEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """两个进程各持一份 L0 registry：B 在 latch 前暂停，A 完成并清 latch；
+    B 随后虽能重新拿到同一 latch，也必须在首次触盘前用新鲜磁盘+DB 拒绝。
+    """
+
+    from backend.app.governance import promotion as promotion_mod
+
+    run = _run_eval(governance_env)
+    conn = governance_env.app.state.conn_factory()
+    try:
+        repos.record_promotion(
+            conn,
+            agent_id="governed_agent",
+            agent_version="0.1.0",
+            from_maturity="L0",
+            to_maturity="L1",
+            eval_run_id=run["id"],
+            checks={"historical": {"ok": True}},
+            confirmations={"exception_paths_handled": True},
+            signer=_server_cli_signer("历史签发人"),
+        )
+        baseline_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM promotions
+            WHERE agent_id = 'governed_agent' AND agent_version = '0.1.0'
+              AND from_maturity = 'L0' AND to_maturity = 'L1'
+            """
+        ).fetchone()[0]
+        db_maturity = conn.execute(
+            "SELECT maturity FROM agents WHERE id = 'governed_agent'"
+        ).fetchone()["maturity"]
+    finally:
+        conn.close()
+    assert baseline_count == 1
+    assert db_maturity == "L0"
+
+    live_registry = governance_env.app.state.agent_registry
+    stale_registry = type(live_registry)(
+        live_registry.agents_dir,
+        live_registry.schema_path,
+    )
+    stale_registry.scan()
+    assert stale_registry.get("governed_agent")["maturity"] == "L0"
+
+    stale_entered_latch = threading.Event()
+    allow_stale_latch = threading.Event()
+    original_latch = promotion_mod.repos.record_promotion_attestation_fault
+    original_open = builtins.open
+    stale_disk_writes: list[tuple[str, str]] = []
+
+    def _block_stale_latch(*args: Any, **kwargs: Any):
+        if threading.current_thread().name == "stale-promoter":
+            stale_entered_latch.set()
+            if allow_stale_latch.wait(timeout=5.0) is not True:
+                raise TimeoutError("测试未及时放行 stale promoter latch")
+        return original_latch(*args, **kwargs)
+
+    def _observe_stale_writes(file: Any, *args: Any, **kwargs: Any):
+        mode = args[0] if args else kwargs.get("mode", "r")
+        candidate = Path(file) if isinstance(file, (str, Path)) else None
+        if (
+            threading.current_thread().name == "stale-promoter"
+            and candidate
+            in {
+                governance_env.governed_dir / "agent.yaml",
+                governance_env.governed_dir / "changelog.md",
+            }
+            and mode in {"w", "a"}
+        ):
+            stale_disk_writes.append((candidate.name, mode))
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(
+        promotion_mod.repos,
+        "record_promotion_attestation_fault",
+        _block_stale_latch,
+    )
+    monkeypatch.setattr(builtins, "open", _observe_stale_writes)
+    stale_result: dict[str, Any] = {}
+
+    def _run_stale_promotion() -> None:
+        try:
+            stale_result["record"] = promotion_mod._promote_agent_locked(
+                conn_factory=governance_env.app.state.conn_factory,
+                agent_registry=stale_registry,
+                scope_registry=governance_env.app.state.scope_registry,
+                agent_id="governed_agent",
+                to_maturity="L1",
+                eval_run_id=run["id"],
+                confirmations={"exception_paths_handled": True},
+                signer=_server_cli_signer("B 工程师"),
+                attestation_records=[],
+            )
+        except Exception as exc:  # 线程边界：由主线程断言精确异常
+            stale_result["error"] = exc
+
+    stale_thread = threading.Thread(
+        target=_run_stale_promotion,
+        daemon=True,
+        name="stale-promoter",
+    )
+    stale_thread.start()
+    assert stale_entered_latch.wait(timeout=5.0) is True
+
+    response_a = _promote(
+        governance_env,
+        run["id"],
+        confirmations={"exception_paths_handled": True},
+    )
+    assert response_a.status_code == 200, response_a.text
+    yaml_after_a = (
+        governance_env.governed_dir / "agent.yaml"
+    ).read_text(encoding="utf-8")
+    changelog_after_a = (
+        governance_env.governed_dir / "changelog.md"
+    ).read_text(encoding="utf-8")
+
+    allow_stale_latch.set()
+    stale_thread.join(timeout=5.0)
+    assert stale_thread.is_alive() is False
+    assert isinstance(
+        stale_result.get("error"),
+        promotion_mod.PromotionRejected,
+    )
+    assert "record" not in stale_result
+    assert stale_disk_writes == []
+    assert (
+        governance_env.governed_dir / "agent.yaml"
+    ).read_text(encoding="utf-8") == yaml_after_a
+    assert (
+        governance_env.governed_dir / "changelog.md"
+    ).read_text(encoding="utf-8") == changelog_after_a
+
+    conn = governance_env.app.state.conn_factory()
+    try:
+        promotion_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM promotions
+            WHERE agent_id = 'governed_agent' AND agent_version = '0.1.0'
+              AND from_maturity = 'L0' AND to_maturity = 'L1'
+            """
+        ).fetchone()[0]
+        persistent_fault = repos.get_promotion_attestation_fault(conn)
+    finally:
+        conn.close()
+    assert promotion_count == baseline_count + 1
+    assert persistent_fault is None
+
+
 def test_promotion_rejects_referenced_schema_changed_after_run(
     governance_env: GovernanceEnv,
 ) -> None:
@@ -963,6 +1506,165 @@ def test_promotion_rejects_referenced_schema_changed_after_run(
     )
     assert checks["eval_evidence"]["ok"] is False
     assert "digest" in checks["eval_evidence"]["detail"]
+
+
+def test_promotion_revalidates_package_bytes_before_publishing_l1(
+    governance_env: GovernanceEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """初次 digest 后并发改 prompt，发布边界必须重验并回滚，不能按 id 全豁免。"""
+
+    run = _run_eval(governance_env)
+    yaml_path = governance_env.governed_dir / "agent.yaml"
+    prompt_path = governance_env.governed_dir / "prompt.md"
+    yaml_before = yaml_path.read_text(encoding="utf-8")
+    prompt_before = prompt_path.read_text(encoding="utf-8")
+    entered_yaml_boundary = threading.Event()
+    allow_yaml_read = threading.Event()
+    original_open = builtins.open
+    blocked_once = False
+
+    def _blocking_open(file: Any, *args: Any, **kwargs: Any):
+        nonlocal blocked_once
+        mode = args[0] if args else kwargs.get("mode", "r")
+        candidate = Path(file) if isinstance(file, (str, Path)) else None
+        if (
+            blocked_once is False
+            and candidate == yaml_path
+            and mode == "r"
+        ):
+            blocked_once = True
+            entered_yaml_boundary.set()
+            if allow_yaml_read.wait(timeout=5.0) is not True:
+                raise TimeoutError("测试未及时放行 YAML 读取")
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _blocking_open)
+    result: dict[str, Any] = {}
+
+    def _request_promotion() -> None:
+        result["response"] = _promote(
+            governance_env,
+            run["id"],
+            confirmations={"exception_paths_handled": True},
+        )
+
+    request_thread = threading.Thread(target=_request_promotion, daemon=True)
+    request_thread.start()
+    assert entered_yaml_boundary.wait(timeout=5.0) is True
+    prompt_path.write_text(
+        prompt_before + "\n并发注入：这段 prompt 未经本次 eval。\n",
+        encoding="utf-8",
+    )
+    allow_yaml_read.set()
+    request_thread.join(timeout=5.0)
+
+    assert request_thread.is_alive() is False
+    checks = _rejection_checks(result["response"])
+    assert checks["eval_evidence"]["ok"] is False
+    assert yaml_path.read_text(encoding="utf-8") == yaml_before
+    assert prompt_path.read_text(encoding="utf-8") != prompt_before
+    assert governance_env.client.get("/api/agents/governed_agent").json()[
+        "maturity"
+    ] == "L0"
+    assert governance_env.client.get(
+        "/api/agents/governed_agent/promotions"
+    ).json() == []
+
+
+def test_promotion_publishes_frozen_package_when_live_dir_changes_at_audit_boundary(
+    governance_env: GovernanceEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """最终门禁后的并发 A→B 不能令审计 A、Registry/Runtime 却发布活目录 B。"""
+
+    run = _run_eval(governance_env)
+    workflow_path = governance_env.governed_dir / "workflow.py"
+    marker_path = governance_env.governed_dir / "live_b_executed.marker"
+    live_b_source = (
+        "from pathlib import Path\n\n"
+        "def run(context):\n"
+        f"    Path({str(marker_path)!r}).write_text("
+        "'live B executed', encoding='utf-8')\n"
+        "    return {'status': 'success', 'outputs': []}\n"
+    )
+    entered_audit_boundary = threading.Event()
+    mutation_done = threading.Event()
+    real_record_promotion = repos.record_promotion
+
+    def _publish_live_b() -> None:
+        if entered_audit_boundary.wait(timeout=5.0) is not True:
+            return
+        workflow_path.write_text(live_b_source, encoding="utf-8")
+        mutation_done.set()
+
+    def _record_after_concurrent_mutation(*args: Any, **kwargs: Any):
+        entered_audit_boundary.set()
+        if mutation_done.wait(timeout=5.0) is not True:
+            raise TimeoutError("测试未及时完成最终门禁后的活目录 A→B 修改")
+        return real_record_promotion(*args, **kwargs)
+
+    monkeypatch.setattr(repos, "record_promotion", _record_after_concurrent_mutation)
+    writer = threading.Thread(target=_publish_live_b, daemon=True)
+    writer.start()
+
+    response = _promote(
+        governance_env,
+        run["id"],
+        confirmations={"exception_paths_handled": True},
+    )
+    writer.join(timeout=5.0)
+
+    assert writer.is_alive() is False
+    assert mutation_done.is_set() is True
+    assert response.status_code == 200, response.text
+    assert workflow_path.read_text(encoding="utf-8") == live_b_source
+
+    task_id, result = _create_and_execute_user_task(governance_env)
+    assert result["status"] == "waiting_review"
+    assert marker_path.exists() is False
+    assert result["task"]["output_file_ids"]
+
+    package_check = response.json()["checks"]["package_snapshot"]
+    assert package_check["ok"] is True
+    assert package_check["contract"] == "agent_package_snapshot.v1"
+    registry_snapshot = governance_env.app.state.agent_registry.package_snapshot(
+        "governed_agent"
+    )
+    assert registry_snapshot is not None
+    assert registry_snapshot.digest == package_check["digest"]
+    conn = governance_env.app.state.conn_factory()
+    try:
+        validation_event = next(
+            event
+            for event in repos.list_events(conn, task_id)
+            if event["event_type"] == "validation_started"
+        )
+    finally:
+        conn.close()
+    assert validation_event["payload"]["package_snapshot_digest"] == (
+        package_check["digest"]
+    )
+
+    conn = governance_env.app.state.conn_factory()
+    try:
+        database_file = conn.execute("PRAGMA database_list").fetchone()["file"]
+    finally:
+        conn.close()
+    restart_root = governance_env.agents_dir.parent
+    restarted_app = create_app(
+        agents_dir=governance_env.agents_dir,
+        tools_dir=REPO / "tools_impl",
+        contracts_dir=REPO / "contracts",
+        db_path=Path(database_file),
+        uploads_dir=restart_root / "restart-uploads",
+        task_runs_dir=restart_root / "restart-task-runs",
+    )
+    with TestClient(restarted_app) as restarted_client:
+        login(restarted_client)
+        assert restarted_client.get("/api/agents/governed_agent").status_code == 404
+        health = restarted_client.get("/api/health").json()
+        assert health["promotion_attestation_axis"] is True
+        assert health["promotion_attestation_ok"] is False
+        assert health["promotion_attestation_rejected_count"] >= 1
 
 
 def test_eval_run_invalidated_when_package_changes_during_run(
@@ -1025,16 +1727,138 @@ def test_eval_task_reaches_terminal_failed_when_runtime_raises(
         conn.close()
 
 
-def test_scope_violating_agent_not_resurrected_by_promotion(
+def test_running_eval_does_not_execute_later_cases_when_fault_arrives_at_claim_begin(
+    governance_env: GovernanceEnv,
+) -> None:
+    """run 已开始后新建 persistent fault：后续 case 可如实 failed，但绝不执行。
+
+    fault 精确插入第二个 case 已 queued、``claim_task`` 的 ``BEGIN IMMEDIATE``
+    即将执行之时。若裁决只在事务外预查，或 ``claim_task`` 完全不查 fault，第二个
+    case 仍会进入 validating 并调用 runtime.execute，本测试必须稳定 RED。
+    """
+    from backend.app.governance import eval_runner as runner_mod
+
+    run_id = "eval_fault_after_first_case"
+    agent = governance_env.app.state.agent_registry.get("governed_agent")
+    assert agent is not None
+    conn = governance_env.app.state.conn_factory()
+    try:
+        repos.create_eval_run(
+            conn,
+            run_id=run_id,
+            agent_id="governed_agent",
+            agent_version=str(agent["version"]),
+            triggered_by="tester",
+            status="running",
+        )
+    finally:
+        conn.close()
+
+    state: dict[str, Any] = {
+        "first_executed": False,
+        "claim_begin_interposed": False,
+        "fault_inserted": False,
+        "callback_errors": [],
+        "executed_task_ids": [],
+    }
+    rival = governance_env.app.state.conn_factory()
+
+    class _RecordingRuntime:
+        def execute(self, task_id: str) -> dict[str, Any]:
+            result = governance_env.app.state.runtime.execute(task_id)
+            state["executed_task_ids"].append(task_id)
+            if len(state["executed_task_ids"]) == 1:
+                state["first_executed"] = True
+            return result
+
+    def racing_conn_factory():
+        racing_conn = governance_env.app.state.conn_factory()
+        queued_transition_seen = False
+
+        def trace(statement: str) -> None:
+            nonlocal queued_transition_seen
+            if state["first_executed"] is not True:
+                return
+            normalized = " ".join(statement.upper().split())
+            if normalized.startswith("UPDATE TASKS SET STATUS = 'QUEUED'"):
+                queued_transition_seen = True
+            elif (
+                normalized.startswith("BEGIN IMMEDIATE")
+                and queued_transition_seen
+                and state["claim_begin_interposed"] is False
+            ):
+                state["claim_begin_interposed"] = True
+                try:
+                    state["fault_inserted"] = repos.record_promotion_attestation_fault(
+                        rival,
+                        detail='{"reason":"test-in-flight-eval-case-claim"}',
+                    )
+                except Exception as exc:  # trace callback 异常会被 sqlite 吞掉
+                    state["callback_errors"].append(exc)
+
+        racing_conn.set_trace_callback(trace)
+        return racing_conn
+
+    try:
+        run = runner_mod.execute_eval_run(
+            run_id=run_id,
+            conn_factory=racing_conn_factory,
+            agent_registry=governance_env.app.state.agent_registry,
+            runtime=_RecordingRuntime(),
+            uploads_dir=governance_env.app.state.uploads_dir,
+            task_runs_dir=governance_env.app.state.task_runs_dir,
+        )
+    finally:
+        rival.close()
+
+    conn = governance_env.app.state.conn_factory()
+    try:
+        eval_tasks = repos.list_tasks(
+            conn, agent_id="governed_agent", origin="eval", limit=20
+        )
+        persistent_fault = repos.get_promotion_attestation_fault(conn)
+    finally:
+        conn.close()
+
+    tasks_by_case = {
+        task["metadata"]["eval_case_file"]: task
+        for task in eval_tasks
+        if task["metadata"].get("eval_case_file") in _base_cases()
+    }
+    results_by_case = {
+        result["case_file"]: result
+        for result in run["case_results"]
+        if result["case_file"] in _base_cases()
+    }
+
+    assert state["first_executed"] is True
+    assert state["claim_begin_interposed"] is True
+    assert state["fault_inserted"] is True
+    assert state["callback_errors"] == []
+    assert persistent_fault is not None
+    assert set(tasks_by_case) == set(_base_cases())
+    assert state["executed_task_ids"] == [tasks_by_case["case_001.json"]["id"]]
+    assert tasks_by_case["case_001.json"]["status"] != "queued"
+    for case_file in ("case_002.json", "case_003.json"):
+        assert tasks_by_case[case_file]["status"] == "queued"
+        assert results_by_case[case_file]["verdict"] == "failed"
+        assert "认领失败" in results_by_case[case_file]["detail"]
+    assert run["status"] == "completed"
+    assert run["passed"] == 1
+    assert run["failed"] == 2
+
+
+def test_rejected_agents_not_resurrected_by_promotion(
     tmp_path: Path,
 ) -> None:
-    """F1/P1-2：启动期因 knowledge scope 违规被注销的 Agent，任意其他 Agent
-    晋升触发的重扫（影子+对账+原子发布）后仍必须不可见。"""
+    """F1/P1-2：启动期被静态门拒绝的 Agent，任意其他 Agent 晋升触发的
+    重扫（影子+全门对账+原子发布）后仍必须不可见。"""
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
     shutil.copytree(REPO / "agents" / "hello_agent", agents_dir / "hello_agent")
     shutil.copytree(REPO / "agents" / "hello_agent", agents_dir / "governed_agent")
     shutil.copytree(REPO / "agents" / "hello_agent", agents_dir / "violator_agent")
+    shutil.copytree(REPO / "agents" / "hello_agent", agents_dir / "unattested_agent")
 
     gov_yaml = agents_dir / "governed_agent" / "agent.yaml"
     gov_yaml.write_text(
@@ -1051,6 +1875,13 @@ def test_scope_violating_agent_not_resurrected_by_promotion(
     )
     assert "ghost_scope" in vio_text
     vio_yaml.write_text(vio_text, encoding="utf-8")
+    unattested_yaml = agents_dir / "unattested_agent" / "agent.yaml"
+    unattested_yaml.write_text(
+        unattested_yaml.read_text(encoding="utf-8")
+        .replace("id: hello_agent", "id: unattested_agent")
+        .replace("maturity: L0", "maturity: L1"),
+        encoding="utf-8",
+    )
     _write_eval_cases(agents_dir, _base_cases())
 
     db_path = tmp_path / "flai_os.db"
@@ -1064,18 +1895,295 @@ def test_scope_violating_agent_not_resurrected_by_promotion(
     )
     with TestClient(app) as client:
         seed_and_login(client, db_path)
-        # 启动对账已注销违规者
+        # 启动对账已注销 scope 违规者与无 promotion 证明的 L1。
         ids = {a["id"] for a in client.get("/api/agents").json()}
         assert "violator_agent" not in ids
+        assert "unattested_agent" not in ids
         env = GovernanceEnv(client=client, app=app, agents_dir=agents_dir)
         run = _run_eval(env)
         response = _promote(env, run["id"], confirmations={"exception_paths_handled": True})
         assert response.status_code == 200, response.text
-        # 晋升重扫后：违规者仍不可见，governed 已 L1
+        # 晋升重扫后：两个被拒者都不能复活，唯独本次已过门的 governed 可在
+        # 审计行同事务落库前作为明确的 in-flight 例外进入影子 registry。
         ids_after = {a["id"] for a in client.get("/api/agents").json()}
         assert "violator_agent" not in ids_after
+        assert "unattested_agent" not in ids_after
         assert client.get("/api/agents/violator_agent").status_code == 404
+        assert client.get("/api/agents/unattested_agent").status_code == 404
         assert client.get("/api/agents/governed_agent").json()["maturity"] == "L1"
+
+
+def test_inflight_l1_is_not_published_before_audit_commit(
+    governance_env: GovernanceEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """卡住真正 COMMIT：提交前并发读者只能看见 L0 且审计行不可见。"""
+
+    run = _run_eval(governance_env)
+    entered_commit = threading.Event()
+    allow_commit = threading.Event()
+    original_conn_factory = governance_env.app.state.conn_factory
+
+    class _CommitBlockingConnection:
+        def __init__(self, real: Any) -> None:
+            self._real = real
+            self._contains_promotion_insert = False
+
+        def execute(self, sql: str, *args: Any, **kwargs: Any):
+            normalized = " ".join(sql.split()).upper()
+            if normalized.startswith("INSERT INTO PROMOTIONS"):
+                self._contains_promotion_insert = True
+            if normalized == "COMMIT" and self._contains_promotion_insert is True:
+                entered_commit.set()
+                if allow_commit.wait(timeout=5.0) is not True:
+                    raise TimeoutError("测试未及时放行 promotion COMMIT")
+            return self._real.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._real, name)
+
+    def _blocking_conn_factory() -> _CommitBlockingConnection:
+        return _CommitBlockingConnection(original_conn_factory())
+
+    monkeypatch.setattr(
+        governance_env.app.state,
+        "conn_factory",
+        _blocking_conn_factory,
+    )
+    result: dict[str, Any] = {}
+
+    def _request_promotion() -> None:
+        result["response"] = _promote(
+            governance_env,
+            run["id"],
+            confirmations={"exception_paths_handled": True},
+        )
+
+    request_thread = threading.Thread(target=_request_promotion, daemon=True)
+    request_thread.start()
+    assert entered_commit.wait(timeout=5.0) is True
+    try:
+        observed = governance_env.client.get("/api/agents/governed_agent")
+        assert observed.status_code == 200
+        assert observed.json()["maturity"] == "L0"
+        assert governance_env.client.get(
+            "/api/agents/governed_agent/promotions"
+        ).json() == []
+    finally:
+        allow_commit.set()
+        request_thread.join(timeout=5.0)
+
+    assert request_thread.is_alive() is False
+    response = result["response"]
+    assert response.status_code == 200, response.text
+    assert governance_env.client.get("/api/agents/governed_agent").json()[
+        "maturity"
+    ] == "L1"
+    assert len(
+        governance_env.client.get(
+            "/api/agents/governed_agent/promotions"
+        ).json()
+    ) == 1
+
+
+def test_runtime_attestation_rejection_updates_health(
+    governance_env: GovernanceEnv,
+) -> None:
+    """运行期重扫拒载必须跨进程 sticky-fail，且 worker 不得继续 claim。"""
+
+    from backend.app.jobs.runner import JobRunner
+
+    initial_health = governance_env.client.get("/api/health").json()
+    assert initial_health["promotion_attestation_ok"] is True
+    assert initial_health["promotion_attestation_rejected_count"] == 0
+
+    drifted_yaml = governance_env.agents_dir / "hello_agent" / "agent.yaml"
+    yaml_text = drifted_yaml.read_text(encoding="utf-8")
+    assert yaml_text.count("maturity: L0") == 1
+    drifted_yaml.write_text(
+        yaml_text.replace("maturity: L0", "maturity: L1"),
+        encoding="utf-8",
+    )
+
+    run = _run_eval(governance_env)
+    queued = governance_env.client.post(
+        "/api/tasks",
+        json={
+            "agent_id": "governed_agent",
+            "inputs": {"name": "持久故障后不得 claim"},
+        },
+    )
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["status"] == "queued"
+    queued_task_id = queued.json()["id"]
+
+    response = _promote(
+        governance_env,
+        run["id"],
+        confirmations={"exception_paths_handled": True},
+    )
+    checks = _rejection_checks(response)
+    assert checks["runtime_attestation"]["ok"] is False
+    assert governance_env.client.get("/api/agents/hello_agent").status_code == 404
+    assert governance_env.client.get("/api/agents/governed_agent").json()[
+        "maturity"
+    ] == "L0"
+    assert governance_env.client.get(
+        "/api/agents/governed_agent/promotions"
+    ).json() == []
+
+    health = governance_env.client.get("/api/health").json()
+    assert health["promotion_attestation_ok"] is False
+    assert health["promotion_attestation_rejected_count"] == 1
+
+    conn = governance_env.app.state.conn_factory()
+    try:
+        persistent_fault = repos.get_promotion_attestation_fault(conn)
+    finally:
+        conn.close()
+    assert persistent_fault is not None
+    assert json.loads(persistent_fault["detail"])["reason"] == (
+        "promotion-runtime-attestation-rejected"
+    )
+
+    # 模拟独立 worker/API 进程没有本进程内 rejection list；共享 DB 故障仍须
+    # 令 health/readyz 红，并在 claim 之前挡住已排队工作。
+    governance_env.app.state.promotion_attestation_records = []
+    cross_process_health = governance_env.client.get("/api/health").json()
+    assert cross_process_health["promotion_attestation_ok"] is False
+    assert cross_process_health["promotion_attestation_rejected_count"] == 1
+    readyz = governance_env.client.get("/api/readyz")
+    assert readyz.status_code == 503
+    assert readyz.json()["worker"]["reason"] == (
+        "persistent_promotion_attestation_fault"
+    )
+
+    independent_worker = JobRunner(
+        governance_env.app.state.runtime,
+        governance_env.app.state.conn_factory,
+        promotion_attestation_records=[],
+    )
+    assert independent_worker.run_once() is False
+    queued_after = governance_env.client.get(
+        f"/api/tasks/{queued_task_id}"
+    ).json()
+    assert queued_after["status"] == "queued"
+
+
+def test_runtime_attestation_fault_update_failure_preserves_pending_latch(
+    governance_env: GovernanceEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """持久故障升级失败时，补偿成功也不得把原 pending latch 清成绿。"""
+
+    drifted_yaml = governance_env.agents_dir / "hello_agent" / "agent.yaml"
+    drifted_yaml.write_text(
+        drifted_yaml.read_text(encoding="utf-8").replace(
+            "maturity: L0",
+            "maturity: L1",
+        ),
+        encoding="utf-8",
+    )
+    run = _run_eval(governance_env)
+
+    monkeypatch.setattr(
+        repos,
+        "update_promotion_attestation_fault",
+        lambda *args, **kwargs: False,
+    )
+    checks = _rejection_checks(
+        _promote(
+            governance_env,
+            run["id"],
+            confirmations={"exception_paths_handled": True},
+        )
+    )
+    assert checks["runtime_attestation"]["ok"] is False
+
+    governance_env.app.state.promotion_attestation_records = []
+    conn = governance_env.app.state.conn_factory()
+    try:
+        persistent_fault = repos.get_promotion_attestation_fault(conn)
+    finally:
+        conn.close()
+    assert persistent_fault is not None
+    assert json.loads(persistent_fault["detail"])["reason"] == (
+        "promotion-operation-pending"
+    )
+    assert governance_env.client.get("/api/health").json()[
+        "promotion_attestation_ok"
+    ] is False
+    readyz = governance_env.client.get("/api/readyz")
+    assert readyz.status_code == 503
+    assert readyz.json()["worker"]["reason"] == (
+        "persistent_promotion_attestation_fault"
+    )
+
+
+def test_restore_rescan_rejection_persists_fault_before_latch_clear(
+    governance_env: GovernanceEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """首次重扫干净、补偿重扫才拒载时，也必须跨进程闭锁。"""
+
+    from backend.app.governance import promotion as promotion_mod
+
+    run = _run_eval(governance_env)
+    drifted_yaml = governance_env.agents_dir / "hello_agent" / "agent.yaml"
+
+    def _drift_then_fail_record(*args: Any, **kwargs: Any) -> None:
+        drifted_yaml.write_text(
+            drifted_yaml.read_text(encoding="utf-8").replace(
+                "maturity: L0",
+                "maturity: L1",
+            ),
+            encoding="utf-8",
+        )
+        raise RuntimeError("注入：审计提交失败后出现运行期拒载")
+
+    monkeypatch.setattr(
+        promotion_mod.repos,
+        "record_promotion",
+        _drift_then_fail_record,
+    )
+    with pytest.raises(RuntimeError, match="审计提交失败后出现运行期拒载"):
+        promotion_mod.promote_agent(
+            conn_factory=governance_env.app.state.conn_factory,
+            agent_registry=governance_env.app.state.agent_registry,
+            scope_registry=governance_env.app.state.scope_registry,
+            agent_id="governed_agent",
+            to_maturity="L1",
+            eval_run_id=run["id"],
+            confirmations={"exception_paths_handled": True},
+            signer=_server_cli_signer(),
+            attestation_records=(
+                governance_env.app.state.promotion_attestation_records
+            ),
+        )
+
+    governance_env.app.state.promotion_attestation_records = []
+    conn = governance_env.app.state.conn_factory()
+    try:
+        persistent_fault = repos.get_promotion_attestation_fault(conn)
+    finally:
+        conn.close()
+    assert persistent_fault is not None
+    assert json.loads(persistent_fault["detail"])["reason"] == (
+        "promotion-runtime-attestation-rejected"
+    )
+    assert governance_env.client.get("/api/agents/governed_agent").json()[
+        "maturity"
+    ] == "L0"
+    assert governance_env.client.get(
+        "/api/agents/governed_agent/promotions"
+    ).json() == []
+    assert governance_env.client.get("/api/health").json()[
+        "promotion_attestation_ok"
+    ] is False
+    readyz = governance_env.client.get("/api/readyz")
+    assert readyz.status_code == 503
+    assert readyz.json()["worker"]["reason"] == (
+        "persistent_promotion_attestation_fault"
+    )
 
 
 def test_digest_covers_custom_named_schema(tmp_path: Path) -> None:

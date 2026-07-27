@@ -8,6 +8,7 @@ knowledge 对账 + sync_to_db，与 Job Runner 共享同一装配路径，ADR-00
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 from contextlib import asynccontextmanager
@@ -46,11 +47,29 @@ _WORKER_STALE_S = 60  # 与 deploy_selfcheck 同口径：心跳超 60s 视为 wo
 
 def _worker_freshness(conn: sqlite3.Connection) -> dict[str, object]:
     """P0-M2†（导入准入门）：worker 心跳新鲜度（复用 worker_heartbeats 表）。
-    naive/畸形时间戳一律 fail-closed 判不新鲜（宁误报死，不假报活）。"""
+    naive/畸形时间戳或非严格绿色 promotion attestation 一律 fail-closed 判不新鲜
+    （宁误报死，不假报活）。"""
+    persistent_fault = repos.get_promotion_attestation_fault(conn)
     hb = repos.get_worker_heartbeat(conn)
+    if persistent_fault is not None:
+        return {
+            "present": hb is not None,
+            "fresh": False,
+            "age_s": None,
+            "generation": hb.get("generation") if hb is not None else None,
+            "reason": "persistent_promotion_attestation_fault",
+        }
     if hb is None:
         return {"present": False, "fresh": False, "age_s": None, "generation": None}
     generation = hb.get("generation")
+    if generation != config.WORKER_GENERATION:
+        return {
+            "present": True,
+            "fresh": False,
+            "age_s": None,
+            "generation": generation,
+            "reason": "worker_generation_mismatch",
+        }
     try:
         beat_time = datetime.fromisoformat(str(hb.get("last_beat_at")))
     except (ValueError, TypeError):
@@ -61,7 +80,42 @@ def _worker_freshness(conn: sqlite3.Connection) -> dict[str, object]:
                 "generation": generation, "reason": "naive_timestamp"}
     age = (datetime.now(timezone.utc) - beat_time).total_seconds()
     fresh = -5.0 <= age <= float(_WORKER_STALE_S)
-    return {"present": True, "fresh": fresh, "age_s": round(age, 1), "generation": generation}
+    result: dict[str, object] = {
+        "present": True,
+        "fresh": fresh,
+        "age_s": round(age, 1),
+        "generation": generation,
+    }
+    if fresh is not True:
+        return {**result, "reason": "heartbeat_stale"}
+
+    try:
+        attestation = json.loads(hb.get("detail"))
+    except (json.JSONDecodeError, TypeError):
+        return {
+            **result,
+            "fresh": False,
+            "reason": "promotion_attestation_not_clean",
+        }
+    rejected_count = (
+        attestation.get("promotion_attestation_rejected_count")
+        if isinstance(attestation, dict)
+        else None
+    )
+    attestation_ok = (
+        isinstance(attestation, dict)
+        and attestation.get("promotion_attestation_axis") is True
+        and attestation.get("promotion_attestation_ok") is True
+        and type(rejected_count) is int
+        and rejected_count == 0
+    )
+    if attestation_ok is not True:
+        return {
+            **result,
+            "fresh": False,
+            "reason": "promotion_attestation_not_clean",
+        }
+    return {**result, "promotion_attestation_ok": True}
 
 
 def create_app(
@@ -130,6 +184,7 @@ def create_app(
             app.state.uploads_dir = uploads_dir
             app.state.task_runs_dir = task_runs_dir
             app.state.agents_dir = agents_dir
+            app.state.promotion_attestation_records = asm.promotion_attestation_records
 
             yield
         finally:
@@ -155,6 +210,26 @@ def create_app(
 
     @app.get("/api/health")
     def health() -> dict[str, object]:
+        startup_attestation_rejected_count = len(
+            app.state.promotion_attestation_records
+        )
+        fault_conn = None
+        try:
+            fault_conn = conn_factory()
+            persistent_fault_present = (
+                repos.get_promotion_attestation_fault(fault_conn) is not None
+            )
+        except Exception:
+            # health 是 liveness，仍返回 200；但无法核实持久 latch 时治理轴
+            # 必须红，不能因读库异常假称 promotion attestation 干净。
+            persistent_fault_present = True
+        finally:
+            if fault_conn is not None:
+                fault_conn.close()
+        promotion_attestation_rejected_count = max(
+            startup_attestation_rejected_count,
+            1 if persistent_fault_present is True else 0,
+        )
         return {
             "status": "ok",
             "agents": len(app.state.agent_registry.list()),
@@ -177,6 +252,22 @@ def create_app(
             # operator 据此知 API 未重启；否则旧 API 入队无 handle 的 run、worker 回退活磁盘，
             # 不可变保证静默失效。仍是布尔位，不含数据。
             "eval_snapshot_axis": True,
+            # GH #3 启动签发代际：axis 证明活进程含核对代码；ok/count 证明本次
+            # 装配是否隔离过无 promotion 的 L1。HTTP 仍作为 liveness 返回 200，
+            # deploy_selfcheck 另以 is True 严格判 ok。
+            "promotion_attestation_axis": True,
+            # ADR-0019 R2 signer 来源代际：旧 API 已有上面的 GH#3 布尔轴，
+            # 仅看旧轴无法证明活进程会拒 legacy/畸形来源。版本串精确匹配，
+            # 与 WORKER_GENERATION 一起闭合 API/worker 分离重启偏斜。
+            "promotion_signer_provenance_generation": (
+                config.PROMOTION_SIGNER_PROVENANCE_GENERATION
+            ),
+            "promotion_attestation_ok": (
+                promotion_attestation_rejected_count == 0
+            ),
+            "promotion_attestation_rejected_count": (
+                promotion_attestation_rejected_count
+            ),
             # 库身份指纹（Codex R1 审 P2）：自检门比对「服务实际连的库」与
             # 「探针检查的库」是否同一——FLAI_DB_PATH 两侧不一致时，探针查
             # 有账户的库 A、服务连空库 B，全部 PASS 却无人能登录。路径哈希

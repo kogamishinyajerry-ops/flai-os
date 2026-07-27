@@ -20,6 +20,12 @@ from jsonschema import ValidationError, validate
 from ..config import CONTRACTS_DIR
 from ..core.errors import TaskNotFoundError
 from ..core.statemachine import assert_transition, is_terminal
+from ..governance.signer_provenance import (
+    SignerContext,
+    VerifiedSigner,
+    resolve_signer,
+    stored_signer_attests,
+)
 
 _EVENT_SCHEMA_PATH = CONTRACTS_DIR / "event.schema.json"
 _event_schema_cache: dict[str, Any] | None = None
@@ -669,6 +675,12 @@ def claim_next_queued(conn: sqlite3.Connection) -> dict[str, Any] | None:
 
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # 权威 fault 裁决必须与 claim 的状态更新同处一个写事务。runner 外层
+        # 预查仅是快路径；fault 若在预查后建立，这里仍须在任何候选/UPDATE
+        # 之前 fail-closed。BEGIN IMMEDIATE 也阻止其他写者在裁决后插入 fault。
+        if get_promotion_attestation_fault(conn) is not None:
+            conn.execute("COMMIT")
+            return None
         row = conn.execute(
             "SELECT id FROM tasks WHERE status = 'queued' AND origin = 'user' "
             "ORDER BY created_at ASC LIMIT 1"
@@ -699,6 +711,12 @@ def claim_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
     """
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # run 已在 running 也不能绕过 sticky fault：每个 eval case 的指定任务
+        # 都在同一写事务内重新裁决，且必须早于任何 queued→validating 更新。
+        # BEGIN IMMEDIATE 保证裁决后到提交前没有其他写者能新建 fault。
+        if get_promotion_attestation_fault(conn) is not None:
+            conn.execute("COMMIT")
+            return None
         row = conn.execute(
             "SELECT status, origin FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()
@@ -1382,6 +1400,11 @@ def claim_next_queued_eval_run(
         return None
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # 与用户任务 claim 同口径：poller 外层预查不是权威裁决。fault 若在
+        # 预查后建立，必须在同一写事务内、任何配额/FIFO/UPDATE 之前挡回。
+        if get_promotion_attestation_fault(conn) is not None:
+            conn.execute("COMMIT")
+            return None
         running = conn.execute(
             "SELECT COUNT(*) FROM eval_runs WHERE status = 'running'"
         ).fetchone()[0]
@@ -1469,21 +1492,46 @@ def record_promotion(
     eval_run_id: str,
     checks: dict[str, Any],
     confirmations: dict[str, Any],
-    confirmed_by: str,
-) -> dict[str, Any]:
-    now = _now_iso()
+    signer: SignerContext,
+    expected_signer: VerifiedSigner | None = None,
+) -> dict[str, Any] | None:
+    verified_signer = resolve_signer(conn, signer)
+    if (
+        verified_signer is None
+        or (
+            expected_signer is not None
+            and verified_signer.same_binding(expected_signer) is not True
+        )
+        or stored_signer_attests(
+            {
+                "confirmed_by": verified_signer.confirmed_by,
+                "signer_source": verified_signer.source,
+                "signer_user_id": verified_signer.user_id,
+                "signer_username": verified_signer.username,
+                "signer_session_hash": verified_signer.session_hash,
+            }
+        )
+        is not True
+    ):
+        return None
+    # created_at 就是本连接上最终复核的 verified_at；不能在复核后另取墙钟，
+    # 否则短会话可在 sync/INSERT 间过期却留下“提交时有效”的假证明。
+    now = verified_signer.verified_at
     cur = conn.execute(
         """
         INSERT INTO promotions
             (agent_id, agent_version, from_maturity, to_maturity, eval_run_id,
-             checks_json, confirmations_json, confirmed_by, created_at)
-        VALUES (?,?,?,?,?,?,?,?,?)
+             checks_json, confirmations_json, confirmed_by, signer_source,
+             signer_user_id, signer_username, signer_session_hash, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             agent_id, agent_version, from_maturity, to_maturity, eval_run_id,
             json.dumps(checks, ensure_ascii=False),
             json.dumps(confirmations, ensure_ascii=False),
-            confirmed_by, now,
+            verified_signer.confirmed_by, verified_signer.source,
+            verified_signer.user_id, verified_signer.username,
+            verified_signer.session_hash, now,
         ),
     )
     row = conn.execute("SELECT * FROM promotions WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -1524,6 +1572,10 @@ def list_promotions_all(conn: sqlite3.Connection, limit: int = 20) -> list[dict[
 
 # ── worker heartbeats（迁移 #7，ADR-0021/Codex R1 审 P1）────────────────
 
+_PROMOTION_ATTESTATION_FAULT_ID = "promotion-attestation-fault"
+_PROMOTION_ATTESTATION_FAULT_GENERATION = "promotion-fault-v1"
+
+
 def beat_worker_heartbeat(conn: sqlite3.Connection, *, generation: str, detail: str | None = None) -> None:
     """worker 心跳 upsert：单实例锁保证同库唯一 worker，固定主键单行不增长。
 
@@ -1547,6 +1599,80 @@ def beat_worker_heartbeat(conn: sqlite3.Connection, *, generation: str, detail: 
 def get_worker_heartbeat(conn: sqlite3.Connection) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT * FROM worker_heartbeats WHERE worker_id = 'default'"
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def record_promotion_attestation_fault(
+    conn: sqlite3.Connection, *, detail: str
+) -> bool:
+    """用 heartbeat 现有表锁存跨进程 promotion 故障。
+
+    独立保留行不会被 ``default`` worker 的周期 upsert 覆盖；INSERT OR IGNORE
+    同时充当跨进程 operation latch。成功提交或完整回滚只按原 detail 做 CAS
+    清除；崩溃、半回滚或清除失败则保留为 sticky 红态，须人工核查。
+    """
+
+    now = _now_iso()
+    cursor = conn.execute(
+        """
+        INSERT OR IGNORE INTO worker_heartbeats
+            (worker_id, generation, detail, started_at, last_beat_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            _PROMOTION_ATTESTATION_FAULT_ID,
+            _PROMOTION_ATTESTATION_FAULT_GENERATION,
+            detail,
+            now,
+            now,
+        ),
+    )
+    return cursor.rowcount == 1
+
+
+def update_promotion_attestation_fault(
+    conn: sqlite3.Connection,
+    *,
+    expected_detail: str,
+    detail: str,
+) -> bool:
+    """仅当前 operation token 仍持有 latch 时更新诊断，绝不覆盖他人故障。"""
+
+    cursor = conn.execute(
+        """
+        UPDATE worker_heartbeats
+        SET detail = ?, last_beat_at = ?
+        WHERE worker_id = ? AND detail = ?
+        """,
+        (
+            detail,
+            _now_iso(),
+            _PROMOTION_ATTESTATION_FAULT_ID,
+            expected_detail,
+        ),
+    )
+    return cursor.rowcount == 1
+
+
+def clear_promotion_attestation_fault(
+    conn: sqlite3.Connection, *, expected_detail: str
+) -> bool:
+    """CAS 清除当前 operation token；显式 expected_detail 防误删历史故障。"""
+
+    cursor = conn.execute(
+        "DELETE FROM worker_heartbeats WHERE worker_id = ? AND detail = ?",
+        (_PROMOTION_ATTESTATION_FAULT_ID, expected_detail),
+    )
+    return cursor.rowcount == 1
+
+
+def get_promotion_attestation_fault(
+    conn: sqlite3.Connection,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM worker_heartbeats WHERE worker_id = ?",
+        (_PROMOTION_ATTESTATION_FAULT_ID,),
     ).fetchone()
     return dict(row) if row is not None else None
 

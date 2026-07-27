@@ -266,13 +266,29 @@ class ConversationService:
                     )
 
             agent_id = conv["agent_id"]
-            agent = self.agent_registry.get(agent_id)
-            if agent is None:
+            snapshot_view_factory = getattr(
+                self.agent_registry, "snapshot_view", None
+            )
+            if callable(snapshot_view_factory) is not True:
+                raise ConversationNotFoundError(
+                    f"会话所属 agent Registry 不支持不可变执行视图：{agent_id}"
+                )
+            # 一次引用快照钉住完整 Registry 代际；后续目标 Agent 与 guide 候选
+            # schema 均从此 view 读取，adopt/scan 不能在同一轮拼接 A/B。
+            execution_registry = snapshot_view_factory()
+            package_snapshot = execution_registry.package_snapshot(agent_id)
+            if package_snapshot is None:
                 # 会话存续期间 Agent 被下架/删除——诚实拒绝，不硬跑
-                raise ConversationNotFoundError(f"会话所属 agent 已不可用：{agent_id}")
+                raise ConversationNotFoundError(
+                    f"会话所属 agent 已不可用或缺少不可变包快照：{agent_id}"
+                )
+            agent = package_snapshot.manifest
             # 反方 P3-4：会话存续期间 Agent 若被 disabled 或改成非 interactive（重扫
             # registry），不再以 interactive 形态硬跑——诚实拒绝，语义不错位。
-            if agent.get("status") == "disabled" or not is_interactive(agent):
+            if (
+                agent.get("status") == "disabled"
+                or not is_interactive(agent)
+            ):
                 raise ConversationClosedError(
                     f"会话所属 agent {agent_id} 已不可用于对话（已下线或非 interactive）"
                 )
@@ -310,17 +326,19 @@ class ConversationService:
                     )
             history = self._render_history_attachments(conn, history)
 
-            pkg_dir = self.agent_registry.package_dir(agent_id)
-            workflow = _load_workflow_module(agent_id, pkg_dir / "workflow.py")
-            context = {
-                "messages": history,
-                "model_gateway": _ConversationGatewayContext(
-                    self.model_gateway, conversation_id, agent_id
-                ),
-                "agent_registry": self.agent_registry,
-                "agent_config": agent,
-            }
-            result = workflow.run(context)  # 抛异常即冒泡（不吞）；此前尚未落任何消息
+            with execution_registry, package_snapshot.materialized() as pkg_dir:
+                workflow = _load_workflow_module(agent_id, pkg_dir / "workflow.py")
+                context = {
+                    "messages": history,
+                    "model_gateway": _ConversationGatewayContext(
+                        self.model_gateway, conversation_id, agent_id
+                    ),
+                    "agent_registry": execution_registry,
+                    "agent_config": agent,
+                }
+                # 抛异常即冒泡（不吞）；此前尚未落任何消息。workflow 完整执行期
+                # 都在私有材化目录生命周期内，绝不回读可变 authoring 目录。
+                result = workflow.run(context)
 
             if not isinstance(result, dict):
                 raise ValueError("interactive workflow.run() 返回值必须是 dict")
