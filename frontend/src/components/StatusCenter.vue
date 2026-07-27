@@ -506,7 +506,7 @@ async function loadAcceptedSamples(taskId) {
 }
 
 function sampleFixErrorText(err) {
-  if (err.status === 409) return "已固化";
+  if (err.status === 409) return err.detail || err.message || "固化冲突";
   if (err.status === 422) return err.detail || err.message || "前置条件未满足";
   return err.detail || err.message || "固化失败";
 }

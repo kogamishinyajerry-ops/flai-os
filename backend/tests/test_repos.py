@@ -335,6 +335,68 @@ def test_migration_14_survives_rival_alter_mid_flight(
     } <= columns
 
 
+# ── 迁移 #15：sample 级认可稳定 actor（Issue #4）──────────────────────
+
+
+_LEGACY_SAMPLES_DDL_PRE_15 = """
+CREATE TABLE samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    agent_version TEXT NOT NULL,
+    tool_id TEXT,
+    tool_version TEXT,
+    case_id TEXT,
+    input_json TEXT NOT NULL,
+    output_json TEXT,
+    raw_input_path TEXT,
+    raw_output_path TEXT,
+    validation_status TEXT,
+    accepted_by_engineer INTEGER,
+    created_at TEXT NOT NULL,
+    classification TEXT NOT NULL DEFAULT 'internal'
+)
+"""
+
+
+def test_migration_15_preserves_legacy_sample_without_actor_inference(
+    tmp_path,
+) -> None:
+    """旧 accepted=true 只证明旧动作结果，不能事后猜成某个 username 的签发。"""
+    db_path = tmp_path / "legacy-samples.db"
+    legacy = db_mod.get_conn(db_path)
+    try:
+        legacy.execute(_LEGACY_SAMPLES_DDL_PRE_15)
+        legacy.execute(
+            "INSERT INTO samples"
+            " (task_id, agent_id, agent_version, input_json, output_json,"
+            " validation_status, accepted_by_engineer, created_at, classification)"
+            " VALUES ('task-old', 'hello_agent', '0.1.0', '{}', '{}',"
+            " 'success', 1, '2026-01-01T00:00:00+00:00', 'internal')"
+        )
+        legacy.commit()
+        cols_before = {
+            row[1] for row in legacy.execute("PRAGMA table_info(samples)")
+        }
+        assert "acknowledged_by_username" not in cols_before
+        assert "acknowledged_at" not in cols_before
+    finally:
+        legacy.close()
+
+    db_mod.init_db(db_path)
+    migrated = db_mod.get_conn(db_path)
+    try:
+        sample = repos.get_sample(migrated, 1)
+        assert sample is not None
+        assert sample["accepted_by_engineer"] is True
+        assert sample["acknowledged_by_username"] is None
+        assert sample["acknowledged_at"] is None
+    finally:
+        migrated.close()
+
+    db_mod.init_db(db_path)
+
+
 def test_record_promotion_rejects_fabricated_authenticated_signer(conn) -> None:
     """形状正确的手造身份不能绕过 auth_sessions 精确复核。"""
     fabricated = SignerContext.from_authenticated_session(
@@ -680,6 +742,58 @@ def test_record_and_list_sample(conn) -> None:
 
     samples = repos.list_samples(conn, task["id"])
     assert len(samples) == 1
+
+
+def test_acknowledge_sample_once_reports_exactly_one_cas_winner(conn) -> None:
+    """两个无外层锁写者都幂等成功，但 created=True 只能来自 SQL CAS 胜者。"""
+    import threading
+
+    task = _new_task(conn)
+    sample = repos.record_sample(
+        conn,
+        task_id=task["id"],
+        agent_id="hello_agent",
+        agent_version="0.1.0",
+        input_json={"name": "并发"},
+        output_json={"greeting": "你好"},
+        validation_status="success",
+        classification="internal",
+    )
+    db_path = conn.execute("PRAGMA database_list").fetchone()["file"]
+    barrier = threading.Barrier(2)
+    outcomes: list[object | None] = [None, None]
+
+    def acknowledge(index: int) -> None:
+        thread_conn = db_mod.get_conn(db_path)
+        try:
+            barrier.wait(timeout=5)
+            outcomes[index] = repos.acknowledge_sample_once(
+                thread_conn,
+                sample["id"],
+                actor_username=f"reviewer_{index}",
+                acknowledged_at=f"2026-07-27T00:00:0{index}+00:00",
+            )
+        except (sqlite3.Error, ValueError) as exc:
+            outcomes[index] = exc
+        finally:
+            thread_conn.close()
+
+    threads = [threading.Thread(target=acknowledge, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert all(thread.is_alive() is False for thread in threads)
+
+    assert not any(
+        isinstance(outcome, Exception) for outcome in outcomes
+    ), outcomes
+    records = [outcome[0] for outcome in outcomes]  # type: ignore[index]
+    created = [outcome[1] for outcome in outcomes]  # type: ignore[index]
+    assert sorted(created) == [False, True]
+    assert records[0] == records[1]
+    assert records[0]["acknowledged_by_username"] in {"reviewer_0", "reviewer_1"}
+    assert records[0]["accepted_by_engineer"] is True
 
 
 def test_list_tasks_filters_by_created_by_username(conn):

@@ -188,7 +188,7 @@ def _capture_once(source: Path) -> _CapturedTree:
             seen_casefolded[folded] = relative
 
             try:
-                before = entry.stat(follow_symlinks=False)
+                before = Path(entry.path).lstat()
             except OSError as exc:
                 raise PackageSnapshotError(f"cannot inspect {relative}: {exc}") from exc
             if stat.S_ISLNK(before.st_mode):

@@ -1,5 +1,6 @@
-# 一键执行前端构建、后端全量测试与五组浏览器验收；任一步失败立即汇总退出。
-# DECLARED-NOT-VERIFIED：本脚本在 macOS 开发机上无法实测，Windows 内网首跑时验证。
+# Run the frontend build, full backend test suite, and browser acceptance gates.
+# DECLARED-NOT-VERIFIED: Windows evidence is commit-specific; run this full gate on the exact commit.
+# Stop immediately on failure and print the completed/failed step summary.
 $ErrorActionPreference = "Stop"
 
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -9,19 +10,19 @@ $script:FailedSteps = @()
 
 function Show-Summary {
     Write-Host ""
-    Write-Host "验证步骤汇总："
+    Write-Host "Verification summary:"
     if ($script:CompletedSteps.Count -eq 0) {
-        Write-Host "- [完成] （无）"
+        Write-Host "- [completed] (none)"
     } else {
         foreach ($Step in $script:CompletedSteps) {
-            Write-Host "- [完成] $Step"
+            Write-Host "- [completed] $Step"
         }
     }
     if ($script:FailedSteps.Count -eq 0) {
-        Write-Host "- [失败] （无）"
+        Write-Host "- [failed] (none)"
     } else {
         foreach ($Step in $script:FailedSteps) {
-            Write-Host "- [失败] $Step"
+            Write-Host "- [failed] $Step"
         }
     }
 }
@@ -33,29 +34,29 @@ function Invoke-Step {
     )
 
     Write-Host ""
-    Write-Host "开始：$Name"
+    Write-Host "Starting: $Name"
     $global:LASTEXITCODE = 0
     try {
         & $Action
         $ExitCode = $LASTEXITCODE
     } catch {
         $ExitCode = if ($LASTEXITCODE -ne 0) { $LASTEXITCODE } else { 1 }
-        $script:FailedSteps += "$Name（退出码 $ExitCode；$($_.Exception.Message)）"
+        $script:FailedSteps += "$Name (exit code $ExitCode; $($_.Exception.Message))"
         Show-Summary
         exit $ExitCode
     }
 
     if ($ExitCode -ne 0) {
-        $script:FailedSteps += "$Name（退出码 $ExitCode）"
+        $script:FailedSteps += "$Name (exit code $ExitCode)"
         Show-Summary
         exit $ExitCode
     }
 
     $script:CompletedSteps += $Name
-    Write-Host "完成：$Name"
+    Write-Host "Completed: $Name"
 }
 
-Invoke-Step -Name "① frontend npm run build" -Action {
+Invoke-Step -Name "1. frontend npm run build" -Action {
     Push-Location "frontend"
     try {
         npm run build
@@ -64,9 +65,9 @@ Invoke-Step -Name "① frontend npm run build" -Action {
     }
 }
 
-# 不限定路径：跑满 pyproject testpaths（tests/ + tools_impl/ + backend/tests），
-# 与 verify_all.sh 保持逐字对齐（Codex 互审 P2）。
-Invoke-Step -Name "② 全量 pytest -n auto（三个 testpaths）" -Action {
+# Keep pytest unscoped so pyproject testpaths run in full
+# (tests/ + tools_impl/ + backend/tests), matching verify_all.sh.
+Invoke-Step -Name "2. full pytest -n auto (all three testpaths)" -Action {
     uv run --no-project `
         --with pytest --with pytest-xdist --with jsonschema --with pyyaml `
         --with fastapi --with httpx --with python-multipart --with "pydantic>2" `
@@ -80,6 +81,7 @@ $E2EScripts = @(
     "frontend/e2e/m8_collab_chain_acceptance.py",
     "frontend/e2e/m8_guide_orchestrator_acceptance.py",
     "frontend/e2e/m8_workbench_acceptance.py",
+    "frontend/e2e/m10_governance_acceptance.py",
     "frontend/e2e/batch_c_rewards_acceptance.py",
     "frontend/e2e/batch_d_visual_acceptance.py",
     "frontend/e2e/inline_summon_acceptance.py",
@@ -89,7 +91,7 @@ $E2EScripts = @(
 )
 
 foreach ($E2EScript in $E2EScripts) {
-    Invoke-Step -Name "③ E2E $E2EScript" -Action {
+    Invoke-Step -Name "3. E2E $E2EScript" -Action {
         uv run --no-project `
             --with playwright --with uvicorn --with pytest --with pytest-xdist `
             --with jsonschema --with pyyaml --with fastapi --with httpx `

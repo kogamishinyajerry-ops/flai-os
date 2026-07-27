@@ -72,6 +72,58 @@ def test_logging_setup_is_stdlib_only_and_writes(tmp_path):
         reset_logging()
 
 
+def test_sample_acknowledgement_audit_fields_are_allowlisted_without_secret_spill(
+    tmp_path,
+) -> None:
+    """sample/case/curation/signer 可对账；误传 token 仍只能记键名。"""
+    log_dir = tmp_path / "logs"
+    configure_logging(log_dir, process_tag="unit")
+    try:
+        audit_event(
+            "sample_acknowledgement",
+            actor="requester",
+            outcome="idempotent_replay",
+            agent_id="hello_agent",
+            sample_id=17,
+            case_file="case_004_from_sample.json",
+            curation="draft",
+            acknowledged_by_username="first_signer",
+            token="must-not-leak",
+        )
+        path = log_dir / "audit.log"
+        records = [
+            json.loads(line)
+            for line in path.read_text("utf-8").splitlines()
+            if line.strip()
+        ]
+        event = [
+            record
+            for record in records
+            if record.get("action") == "sample_acknowledgement"
+        ]
+        assert len(event) == 1
+        assert {key: value for key, value in event[0].items() if key != "ts"} == {
+            "action": "sample_acknowledgement",
+            "outcome": "idempotent_replay",
+            "actor": "requester",
+            "agent_id": "hello_agent",
+            "sample_id": 17,
+            "case_file": "case_004_from_sample.json",
+            "curation": "draft",
+            "acknowledged_by_username": "first_signer",
+        }
+        dropped = [
+            record
+            for record in records
+            if record.get("action") == "audit_field_dropped"
+        ]
+        assert len(dropped) == 1
+        assert dropped[0]["dropped_keys"] == ["token"]
+        assert "must-not-leak" not in path.read_text("utf-8")
+    finally:
+        reset_logging()
+
+
 def test_audit_event_is_injection_safe(tmp_path):
     """P1-3：actor 含 CR/LF/空格/`=` 不能伪造额外审计行（日志注入）。JSON Lines
     把换行转义在字符串内，单条记录恒单行；伪造内容不产生第二条可解析的假记录。"""
