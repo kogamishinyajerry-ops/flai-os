@@ -58,6 +58,7 @@ import httpx
 import uvicorn
 
 from backend.app.governance.eval_worker import EvalRunner
+from backend.app.governance.signer_provenance import SignerContext
 from backend.app.jobs.runner import JobRunner
 from backend.app.main import create_app
 from backend.app.storage import repos
@@ -166,7 +167,7 @@ try:
         eval_run_id="seed-hist",
         checks={},
         confirmations={},
-        confirmed_by="历史签发人",
+        signer=SignerContext.from_server_cli("历史签发人"),
     )
     for i in range(3):
         _seed_task(_conn, created_by="验收工程师", created_by_username="e2e_engineer",

@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from backend.app.auth import service as auth_service
@@ -256,6 +257,67 @@ def test_session_token_stored_as_sha256_not_plaintext(app_env):
         conn.close()
     assert token not in hashes, "cookie 明文绝不落库（F4）"
     assert hashlib.sha256(token.encode()).hexdigest() in hashes, "库中必须是 sha256(明文)"
+
+
+def test_authenticated_session_context_binds_exact_token_and_stable_identity(app_env):
+    """治理签发拿到的是不可变会话上下文，而非只有 display_name 的用户投影。"""
+    client, app = app_env
+    token = client.cookies.get("flai_session")
+    assert token
+    expected_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    conn = get_conn(app.state.db_path)
+    try:
+        session_row = conn.execute(
+            "SELECT created_at, expires_at FROM auth_sessions WHERE token_hash = ?",
+            (expected_hash,),
+        ).fetchone()
+        context = auth_service.get_authenticated_session(conn, token)
+    finally:
+        conn.close()
+
+    assert context is not None
+    assert context.token_hash == expected_hash
+    assert context.user_id > 0
+    assert context.username == TEST_USERNAME
+    assert context.display_name == TEST_DISPLAY_NAME
+    assert context.session_created_at == session_row["created_at"]
+    assert context.expires_at == session_row["expires_at"]
+    assert context.user_projection() == {
+        "id": context.user_id,
+        "username": TEST_USERNAME,
+        "display_name": TEST_DISPLAY_NAME,
+        "is_active": 1,
+        "created_at": context.user_created_at,
+    }
+
+
+def test_auth_gate_injects_authenticated_session_context(app_env):
+    """受保护处理器可取得同一认证查验产生的 user 投影和不可变 session 上下文。"""
+    client, app = app_env
+    captured = {}
+    token = client.cookies.get("flai_session")
+    assert token
+
+    def session_probe(request: Request) -> dict[str, bool]:
+        captured["session"] = request.state.auth_session
+        captured["user"] = request.state.user
+        return {"ok": True}
+
+    inner = FastAPI()
+    inner.add_api_route("/api/_test/session-context", session_probe, methods=["GET"])
+    guarded = AuthGateMiddleware(inner, lambda: get_conn(app.state.db_path))
+    with TestClient(guarded) as probe_client:
+        response = probe_client.get(
+            "/api/_test/session-context",
+            headers={"Cookie": f"flai_session={token}"},
+        )
+        assert response.status_code == 200
+
+    context = captured["session"]
+    assert isinstance(context, auth_service.AuthenticatedSessionContext)
+    assert captured["user"] == context.user_projection()
+    assert context.username == TEST_USERNAME
 
 
 # ── AC3：记名字段认证化 ──────────────────────────────────────────────────

@@ -26,6 +26,10 @@ from backend.app.governance.eval_runner import (
     freeze_eval_snapshot,
     load_eval_cases,
 )
+from backend.app.governance.signer_provenance import (
+    SERVER_CLI,
+    SignerContext,
+)
 from backend.app.jobs.runner import _build_default_runner
 from backend.app.main import create_app
 from backend.app.runtime.package_snapshot import (
@@ -193,8 +197,12 @@ def _seed_promotion(db_path: Path, **overrides: object) -> None:
         "eval_run_id": "eval-startup-attestation",
         "checks": _valid_promotion_checks(package_dir),
         "confirmations": {"exception_paths_handled": True},
-        "confirmed_by": "测试签发人",
+        "signer": SignerContext.from_server_cli("测试签发人"),
     }
+    if "confirmed_by" in overrides:
+        values["signer"] = SignerContext.from_server_cli(
+            str(overrides.pop("confirmed_by"))
+        )
     values.update(overrides)
     conn = get_conn(db_path)
     try:
@@ -262,6 +270,9 @@ def test_l1_with_exact_promotion_is_published(tmp_path: Path) -> None:
 
         health = client.get("/api/health").json()
         assert health["promotion_attestation_axis"] is True
+        assert health["promotion_signer_provenance_generation"] == (
+            config.PROMOTION_SIGNER_PROVENANCE_GENERATION
+        )
         assert health["promotion_attestation_ok"] is True
         assert health["promotion_attestation_rejected_count"] == 0
         assert not any(
@@ -269,6 +280,30 @@ def test_l1_with_exact_promotion_is_published(tmp_path: Path) -> None:
             and record.get("agent_id") == AGENT_ID
             for record in _audit_records(db_path)
         )
+
+
+def test_legacy_promotion_is_readable_but_cannot_attest_l1(tmp_path: Path) -> None:
+    """迁移后的历史行保留审计可读性，但绝不冒充有认证来源的启动证明。"""
+    app, db_path = _make_app(tmp_path)
+    _seed_promotion(db_path)
+    conn = get_conn(db_path)
+    try:
+        conn.execute(
+            "UPDATE promotions SET signer_source = 'legacy_unverified',"
+            " signer_user_id = NULL, signer_username = NULL,"
+            " signer_session_hash = NULL"
+        )
+        readable = repos.list_promotions(conn, AGENT_ID)
+        assert readable[0]["confirmed_by"] == "测试签发人"
+        assert readable[0]["signer_source"] == "legacy_unverified"
+    finally:
+        conn.close()
+
+    with TestClient(app) as client:
+        assert app.state.agent_registry.get(AGENT_ID) is None
+        health = client.get("/api/health").json()
+        assert health["promotion_attestation_ok"] is False
+        assert health["promotion_attestation_rejected_count"] == 1
 
 
 @pytest.mark.parametrize(
@@ -350,7 +385,6 @@ def test_health_reads_attestation_records_from_one_snapshot(tmp_path: Path) -> N
         {"eval_run_id": "missing-eval"},
         {"confirmations": {"exception_paths_handled": 1}},
         {"confirmations": {"exception_paths_handled": "true"}},
-        {"confirmed_by": "   "},
     ],
     ids=[
         "wrong-version",
@@ -362,7 +396,6 @@ def test_health_reads_attestation_records_from_one_snapshot(tmp_path: Path) -> N
         "missing-eval-reference",
         "integer-confirmation",
         "string-confirmation",
-        "blank-signer",
     ],
 )
 def test_only_strict_promotion_fields_attest(
@@ -370,6 +403,77 @@ def test_only_strict_promotion_fields_attest(
 ) -> None:
     app, db_path = _make_app(tmp_path)
     _seed_promotion(db_path, **override)
+
+    with TestClient(app) as client:
+        assert app.state.agent_registry.get(AGENT_ID) is None
+        health = client.get("/api/health").json()
+        assert health["promotion_attestation_ok"] is False
+        assert health["promotion_attestation_rejected_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"confirmed_by": "   "},
+        {"signer_source": "unknown_source"},
+        {
+            "signer_source": "authenticated_session",
+            "signer_user_id": None,
+            "signer_username": "engineer",
+            "signer_session_hash": "0" * 64,
+        },
+        {
+            "signer_source": "authenticated_session",
+            "signer_user_id": 0,
+            "signer_username": "engineer",
+            "signer_session_hash": "0" * 64,
+        },
+        {
+            "signer_source": "authenticated_session",
+            "signer_user_id": 1,
+            "signer_username": " ",
+            "signer_session_hash": "0" * 64,
+        },
+        {
+            "signer_source": "authenticated_session",
+            "signer_user_id": 1,
+            "signer_username": "engineer",
+            "signer_session_hash": "NOT-A-SHA256",
+        },
+        {
+            "signer_source": "server_cli",
+            "signer_user_id": 1,
+            "signer_username": None,
+            "signer_session_hash": None,
+        },
+        {"signer_source": "legacy_unverified"},
+    ],
+    ids=[
+        "blank-display",
+        "unknown-source",
+        "auth-missing-user-id",
+        "auth-nonpositive-user-id",
+        "auth-blank-username",
+        "auth-invalid-hash",
+        "cli-mixed-auth-fields",
+        "legacy-unverified",
+    ],
+)
+def test_malformed_signer_provenance_cannot_attest_l1(
+    tmp_path: Path,
+    updates: dict[str, object],
+) -> None:
+    app, db_path = _make_app(tmp_path)
+    _seed_promotion(db_path)
+    conn = get_conn(db_path)
+    try:
+        assignments = ", ".join(f"{column} = ?" for column in updates)
+        conn.execute(
+            f"UPDATE promotions SET {assignments}",
+            tuple(updates.values()),
+        )
+    finally:
+        conn.close()
 
     with TestClient(app) as client:
         assert app.state.agent_registry.get(AGENT_ID) is None
@@ -648,8 +752,9 @@ def test_malformed_promotion_json_isolates_only_the_l1(
             """
             INSERT INTO promotions
                 (agent_id, agent_version, from_maturity, to_maturity, eval_run_id,
-                 checks_json, confirmations_json, confirmed_by, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?)
+                 checks_json, confirmations_json, confirmed_by, signer_source,
+                 signer_user_id, signer_username, signer_session_hash, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 AGENT_ID,
@@ -660,6 +765,10 @@ def test_malformed_promotion_json_isolates_only_the_l1(
                 checks_json,
                 '{"exception_paths_handled": true}',
                 "测试签发人",
+                "server_cli",
+                None,
+                None,
+                None,
                 "2026-07-26T00:00:00+00:00",
             ),
         )
@@ -905,3 +1014,9 @@ def test_official_promotion_cli_forwards_startup_attestation_records(
 
     assert promote_agent_l1.main() == 0
     assert captured["attestation_records"] is attestation_records
+    signer = captured["signer"]
+    assert isinstance(signer, SignerContext)
+    assert signer.source == SERVER_CLI
+    assert signer.operator_label == "测试签发人"
+    assert signer.authenticated_session is None
+    assert "confirmed_by" not in captured

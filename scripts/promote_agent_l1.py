@@ -54,7 +54,7 @@ def main() -> int:
 
     from backend.app import config
     from backend.app.bootstrap import assemble
-    from backend.app.governance import eval_runner, promotion
+    from backend.app.governance import eval_runner, promotion, signer_provenance
     from backend.app.runtime.runtime import AgentRuntime
     from backend.app.storage.db import get_conn, init_db
 
@@ -100,7 +100,7 @@ def main() -> int:
             scope_registry=asm.scope_registry, agent_id=agent_id,
             to_maturity="L1", eval_run_id=run["id"],
             confirmations={"exception_paths_handled": True},
-            confirmed_by=confirmed_by,
+            signer=signer_provenance.SignerContext.from_server_cli(confirmed_by),
             attestation_records=asm.promotion_attestation_records,
         )
     except promotion.PromotionRejected as exc:

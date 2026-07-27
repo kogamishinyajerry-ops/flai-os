@@ -229,6 +229,12 @@ CREATE TABLE IF NOT EXISTS promotions (
     checks_json TEXT NOT NULL,
     confirmations_json TEXT NOT NULL,
     confirmed_by TEXT NOT NULL,
+    -- ADR-0019：confirmed_by 仅为显示快照；来源与稳定身份单独落列。历史行只能
+    -- 标为 legacy_unverified，绝不按显示名/时间反推用户或会话。
+    signer_source TEXT NOT NULL DEFAULT 'legacy_unverified',
+    signer_user_id INTEGER,
+    signer_username TEXT,
+    signer_session_hash TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -433,6 +439,23 @@ def init_db(db_path: str | Path) -> None:
             task_cols_v12 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
             if "retry_of" not in task_cols_v12:
                 conn.execute("ALTER TABLE tasks ADD COLUMN retry_of TEXT")
+            # 迁移 #14（ADR-0019）：promotion 签发者来源与稳定身份。历史
+            # confirmed_by 是自报显示名，唯一诚实回填是 legacy_unverified；
+            # user/session 字段必须留 NULL，禁止按 users/display_name 或现存会话猜测。
+            promotion_cols_v14 = {
+                row[1] for row in conn.execute("PRAGMA table_info(promotions)")
+            }
+            if "signer_source" not in promotion_cols_v14:
+                conn.execute(
+                    "ALTER TABLE promotions ADD COLUMN signer_source TEXT"
+                    " NOT NULL DEFAULT 'legacy_unverified'"
+                )
+            if "signer_user_id" not in promotion_cols_v14:
+                conn.execute("ALTER TABLE promotions ADD COLUMN signer_user_id INTEGER")
+            if "signer_username" not in promotion_cols_v14:
+                conn.execute("ALTER TABLE promotions ADD COLUMN signer_username TEXT")
+            if "signer_session_hash" not in promotion_cols_v14:
+                conn.execute("ALTER TABLE promotions ADD COLUMN signer_session_hash TEXT")
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:

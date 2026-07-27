@@ -100,7 +100,9 @@
 ### 3. L0→L1 晋升门（backend/app/governance/promotion.py）
 
 - `POST /api/agents/{agent_id}/promote`，body
-  `{to_maturity: "L1", eval_run_id, confirmations: {exception_paths_handled: true}, confirmed_by}`。
+  `{to_maturity: "L1", eval_run_id, confirmations: {exception_paths_handled: true}}`。
+  `confirmed_by` 与 signer 来源由服务端认证上下文派生；客户端携带任何 signer
+  字段均 422（来源与迁移契约见 ADR-0019 R2）。
 - **docs/02 L1 四条准入的判定分解（机器判/人工确认显式分离，不冒充）**：
   1. **最小评测覆盖（审计 D1 增强）**：approved case 总数 `>= 3` **且**至少 1 个
      approved case 的 checks 含 `status_is: "failed"`（失败路径必须真被评测——
@@ -114,11 +116,12 @@
   4. 反馈入口=平台级 `POST /api/feedback` 提供，晋升记录如实标注"平台级提供"
      而非 per-agent 验证；
   5. "对已知异常路径有处理"机器难判 → `confirmations.exception_paths_handled is True`
-     + `confirmed_by` 记名，**缺失/false/非 bool 一律拒**（fail-closed 于无法验证）。
+     + 受支持的 signer provenance 记名，**缺失/false/非 bool 或来源复核失败一律拒**
+     （fail-closed 于无法验证）。
 - 全部通过 → `agents/<id>/agent.yaml` 的 `maturity:` 行**行级手术替换**（不做 yaml
   round-trip，byte 级保持其余内容）→ registry 重扫 → `promotions` 表落记录
   （agent_id/agent_version/from/to/eval_run_id/confirmations_json/confirmed_by/
-  created_at）。
+  signer_source/signer_user_id/signer_username/signer_session_hash/created_at）。
 - 任何一条不过 → 422 + 逐条判定结果（工程师能看到差哪条）。
 - **interactive 型（guide_agent）推论**：runner 不覆盖 → 永无全绿 run → 不可晋升。
   这是 fail-closed 的正确行为而非缺陷：会话评测属 docs/07 人工评审集范畴（V0.2）。

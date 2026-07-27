@@ -3,26 +3,41 @@
 from __future__ import annotations
 
 import builtins
+import hashlib
 import json
 import shutil
 import sqlite3
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import TEST_DISPLAY_NAME, login, seed_and_login
+from conftest import (
+    TEST_DISPLAY_NAME,
+    TEST_USERNAME,
+    login,
+    seed_and_login,
+    seed_user,
+)
 
+from backend.app.governance.signer_provenance import (
+    SignerContext,
+)
 from backend.app.main import create_app
 from backend.app.storage import repos
 
 
 REPO = Path(__file__).resolve().parents[2]
 _MISSING = object()
+
+
+def _server_cli_signer(label: str = "王工") -> SignerContext:
+    return SignerContext.from_server_cli(label)
 
 
 @dataclass
@@ -619,6 +634,27 @@ def test_promotion_happy_path_updates_yaml_projection_and_audit_record(
     governance_env: GovernanceEnv,
 ) -> None:
     """验证全绿证据通过五门后晋升 L1 并写回 YAML、API 投影与审计记录。"""
+    # 同显示名的另一账户 + 当前账户的另一活会话，钉死“当前 cookie 精确绑定”：
+    # 不能按 display_name 猜用户，也不能随便取该用户任一 session。
+    decoy_user = seed_user(
+        governance_env.app.state.db_path,
+        username="same_display_decoy",
+        display_name=TEST_DISPLAY_NAME,
+        password="decoy-password",
+    )
+    decoy_client = TestClient(governance_env.app)
+    login(
+        decoy_client,
+        username="same_display_decoy",
+        password="decoy-password",
+    )
+    decoy_client.close()
+    other_session_client = TestClient(governance_env.app)
+    login(other_session_client)
+    other_token = other_session_client.cookies.get("flai_session")
+    assert other_token
+    other_session_client.close()
+
     run = _run_eval(governance_env)
 
     response = _promote(
@@ -632,6 +668,10 @@ def test_promotion_happy_path_updates_yaml_projection_and_audit_record(
     assert promotion["from_maturity"] == "L0"
     assert promotion["to_maturity"] == "L1"
     assert promotion["confirmed_by"] == TEST_DISPLAY_NAME
+    assert promotion["signer_source"] == "authenticated_session"
+    assert promotion["signer_username"] == TEST_USERNAME
+    assert promotion["signer_session_bound"] is True
+    assert "signer_session_hash" not in promotion
     yaml_text = (governance_env.governed_dir / "agent.yaml").read_text(encoding="utf-8")
     assert "\nmaturity: L1\n" in f"\n{yaml_text}\n"
 
@@ -648,13 +688,71 @@ def test_promotion_happy_path_updates_yaml_projection_and_audit_record(
 
     conn = governance_env.app.state.conn_factory()
     try:
-        raw_checks = conn.execute(
-            "SELECT checks_json FROM promotions WHERE id = ?",
+        raw = conn.execute(
+            "SELECT checks_json, signer_source, signer_user_id, signer_username,"
+            " signer_session_hash FROM promotions WHERE id = ?",
             (records[0]["id"],),
-        ).fetchone()["checks_json"]
+        ).fetchone()
     finally:
         conn.close()
-    assert "平台级提供" in raw_checks
+    assert "平台级提供" in raw["checks_json"]
+    assert raw["signer_source"] == "authenticated_session"
+    assert raw["signer_user_id"] > 0
+    assert raw["signer_user_id"] != decoy_user["id"]
+    assert raw["signer_username"] == TEST_USERNAME
+    current_token = governance_env.client.cookies.get("flai_session")
+    assert current_token
+    assert raw["signer_session_hash"] == hashlib.sha256(
+        current_token.encode()
+    ).hexdigest()
+    assert raw["signer_session_hash"] != hashlib.sha256(
+        other_token.encode()
+    ).hexdigest()
+    assert "signer_session_hash" not in records[0]
+
+
+def test_authenticated_promotion_remains_valid_after_logout_and_restart(
+    governance_env: GovernanceEnv,
+) -> None:
+    """真实 HTTP 签发→logout 删 session→新 app 启动，历史事实仍可核验。"""
+    run = _run_eval(governance_env)
+    promoted = _promote(
+        governance_env,
+        run["id"],
+        confirmations={"exception_paths_handled": True},
+    )
+    assert promoted.status_code == 200, promoted.text
+    assert promoted.json()["signer_session_bound"] is True
+    token = governance_env.client.cookies.get("flai_session")
+    assert token
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    logout = governance_env.client.post("/api/auth/logout")
+    assert logout.status_code == 200
+    conn = governance_env.app.state.conn_factory()
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM auth_sessions WHERE token_hash = ?",
+            (token_hash,),
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    restarted = create_app(
+        agents_dir=governance_env.agents_dir,
+        tools_dir=REPO / "tools_impl",
+        contracts_dir=REPO / "contracts",
+        db_path=governance_env.app.state.db_path,
+        uploads_dir=governance_env.app.state.uploads_dir,
+        task_runs_dir=governance_env.app.state.task_runs_dir,
+    )
+    with TestClient(restarted) as restarted_client:
+        registered = restarted.state.agent_registry.get("governed_agent")
+        assert registered is not None
+        assert registered["maturity"] == "L1"
+        health = restarted_client.get("/api/health").json()
+        assert health["promotion_attestation_ok"] is True
+        assert health["promotion_attestation_rejected_count"] == 0
 
 
 def test_promotion_rejects_fewer_than_three_approved_cases(
@@ -875,30 +973,165 @@ def test_promotion_manual_confirmation_is_strict_boolean_true(
     ) is True
 
 
-def test_promotion_rejects_client_confirmed_by_and_derives_session_identity(
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("confirmed_by", "冒名者"),
+        ("signer_source", "server_cli"),
+        ("signer_user_id", 999),
+        ("signer_username", "forged"),
+        ("signer_session_hash", "0" * 64),
+        ("signer", {"source": "server_cli", "operator_label": "冒名者"}),
+    ],
+    ids=[
+        "confirmed-by",
+        "source",
+        "user-id",
+        "username",
+        "session-hash",
+        "nested-signer",
+    ],
+)
+def test_promotion_rejects_client_signer_provenance_fields(
     governance_env: GovernanceEnv,
+    field: str,
+    value: Any,
 ) -> None:
-    """confirmed_by 已删除：显式发送字段 422；省略时由会话身份记名。"""
+    """客户端不能选择或覆盖任何签发来源字段；均由认证适配层派生。"""
     run = _run_eval(governance_env)
 
+    body = {
+        "to_maturity": "L1",
+        "eval_run_id": run["id"],
+        "confirmations": {"exception_paths_handled": True},
+        field: value,
+    }
     forged = governance_env.client.post(
         "/api/agents/governed_agent/promote",
-        json={
-            "to_maturity": "L1",
-            "eval_run_id": run["id"],
-            "confirmations": {"exception_paths_handled": True},
-            "confirmed_by": "",
-        },
+        json=body,
     )
     assert forged.status_code == 422
 
-    honest = _promote(
+
+def test_promotion_revalidates_exact_session_inside_final_transaction(
+    governance_env: GovernanceEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """入门认证后、最终事务前吊销精确会话：拒绝签发并完整补偿磁盘/投影。"""
+    from backend.app.governance import promotion as promotion_mod
+
+    run = _run_eval(governance_env)
+    yaml_path = governance_env.governed_dir / "agent.yaml"
+    changelog_path = governance_env.governed_dir / "changelog.md"
+    yaml_before = yaml_path.read_text(encoding="utf-8")
+    changelog_before = changelog_path.read_text(encoding="utf-8")
+    token = governance_env.client.cookies.get("flai_session")
+    assert token
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    real_build_shadow = promotion_mod._build_reconciled_shadow
+    revoked = False
+
+    def _revoke_after_first_shadow(*args: Any, **kwargs: Any):
+        nonlocal revoked
+        result = real_build_shadow(*args, **kwargs)
+        if revoked is False:
+            conn = governance_env.app.state.conn_factory()
+            try:
+                deleted = conn.execute(
+                    "DELETE FROM auth_sessions WHERE token_hash = ?",
+                    (token_hash,),
+                )
+                assert deleted.rowcount == 1
+            finally:
+                conn.close()
+            revoked = True
+        return result
+
+    monkeypatch.setattr(
+        promotion_mod,
+        "_build_reconciled_shadow",
+        _revoke_after_first_shadow,
+    )
+    response = _promote(
         governance_env,
         run["id"],
         confirmations={"exception_paths_handled": True},
     )
-    assert honest.status_code == 200, honest.text
-    assert honest.json()["confirmed_by"] == TEST_DISPLAY_NAME
+
+    assert response.status_code == 422
+    checks = response.json()["detail"]["checks"]
+    assert checks["signer_session_revalidation"]["ok"] is False
+    assert yaml_path.read_text(encoding="utf-8") == yaml_before
+    assert changelog_path.read_text(encoding="utf-8") == changelog_before
+    assert governance_env.app.state.agent_registry.get("governed_agent")[
+        "maturity"
+    ] == "L0"
+    conn = governance_env.app.state.conn_factory()
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM promotions").fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT maturity FROM agents WHERE id = 'governed_agent'"
+        ).fetchone()["maturity"] == "L0"
+        assert repos.get_promotion_attestation_fault(conn) is None
+    finally:
+        conn.close()
+
+
+def test_promotion_rejects_session_expiring_during_final_projection_sync(
+    governance_env: GovernanceEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BEGIN IMMEDIATE 只能挡吊销写，不能冻结时钟；签发时点必须仍早于 expiry。"""
+    from backend.app.auth import service as auth_service
+
+    run = _run_eval(governance_env)
+    clock = {"now": datetime.now(timezone.utc)}
+    expires = clock["now"] + timedelta(seconds=1)
+    token = governance_env.client.cookies.get("flai_session")
+    assert token
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    conn = governance_env.app.state.conn_factory()
+    try:
+        conn.execute(
+            "UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ?",
+            (expires.isoformat(), token_hash),
+        )
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(auth_service, "_now", lambda: clock["now"])
+    monkeypatch.setattr(repos, "_now_iso", lambda: clock["now"].isoformat())
+    registry_type = type(governance_env.app.state.agent_registry)
+    real_sync = registry_type.sync_to_db
+    advanced = False
+
+    def _sync_then_expire(self: Any, conn: sqlite3.Connection) -> None:
+        nonlocal advanced
+        real_sync(self, conn)
+        if advanced is False and self.get("governed_agent")["maturity"] == "L1":
+            clock["now"] = expires
+            advanced = True
+
+    monkeypatch.setattr(registry_type, "sync_to_db", _sync_then_expire)
+    response = _promote(
+        governance_env,
+        run["id"],
+        confirmations={"exception_paths_handled": True},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["checks"]["signer_session_revalidation"][
+        "ok"
+    ] is False
+    conn = governance_env.app.state.conn_factory()
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM promotions").fetchone()[0] == 0
+    finally:
+        conn.close()
+    assert governance_env.app.state.agent_registry.get("governed_agent")[
+        "maturity"
+    ] == "L0"
 
 
 def test_promotion_rejects_l1_to_l1_transition(
@@ -956,7 +1189,7 @@ def test_promotion_rolls_back_yaml_when_audit_record_fails(
             to_maturity="L1",
             eval_run_id=run["id"],
             confirmations={"exception_paths_handled": True},
-            confirmed_by="王工",
+            signer=_server_cli_signer(),
             attestation_records=[],
         )
 
@@ -1015,7 +1248,7 @@ def test_promotion_rollback_failure_sets_sticky_attestation_fault(
             to_maturity="L1",
             eval_run_id=run["id"],
             confirmations={"exception_paths_handled": True},
-            confirmed_by="王工",
+            signer=_server_cli_signer(),
             attestation_records=(
                 governance_env.app.state.promotion_attestation_records
             ),
@@ -1093,7 +1326,7 @@ def test_promotion_requires_persistent_pending_latch_before_disk_write(
             to_maturity="L1",
             eval_run_id=run["id"],
             confirmations={"exception_paths_handled": True},
-            confirmed_by="王工",
+            signer=_server_cli_signer(),
             attestation_records=[],
         )
 
@@ -1125,7 +1358,7 @@ def test_stale_registry_cannot_repeat_promotion_after_latch_aba(
             eval_run_id=run["id"],
             checks={"historical": {"ok": True}},
             confirmations={"exception_paths_handled": True},
-            confirmed_by="历史签发人",
+            signer=_server_cli_signer("历史签发人"),
         )
         baseline_count = conn.execute(
             """
@@ -1197,7 +1430,7 @@ def test_stale_registry_cannot_repeat_promotion_after_latch_aba(
                 to_maturity="L1",
                 eval_run_id=run["id"],
                 confirmations={"exception_paths_handled": True},
-                confirmed_by="B 工程师",
+                signer=_server_cli_signer("B 工程师"),
                 attestation_records=[],
             )
         except Exception as exc:  # 线程边界：由主线程断言精确异常
@@ -1921,7 +2154,7 @@ def test_restore_rescan_rejection_persists_fault_before_latch_clear(
             to_maturity="L1",
             eval_run_id=run["id"],
             confirmations={"exception_paths_handled": True},
-            confirmed_by="王工",
+            signer=_server_cli_signer(),
             attestation_records=(
                 governance_env.app.state.promotion_attestation_records
             ),

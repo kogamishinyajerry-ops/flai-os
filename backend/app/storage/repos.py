@@ -20,6 +20,12 @@ from jsonschema import ValidationError, validate
 from ..config import CONTRACTS_DIR
 from ..core.errors import TaskNotFoundError
 from ..core.statemachine import assert_transition, is_terminal
+from ..governance.signer_provenance import (
+    SignerContext,
+    VerifiedSigner,
+    resolve_signer,
+    stored_signer_attests,
+)
 
 _EVENT_SCHEMA_PATH = CONTRACTS_DIR / "event.schema.json"
 _event_schema_cache: dict[str, Any] | None = None
@@ -1486,21 +1492,46 @@ def record_promotion(
     eval_run_id: str,
     checks: dict[str, Any],
     confirmations: dict[str, Any],
-    confirmed_by: str,
-) -> dict[str, Any]:
-    now = _now_iso()
+    signer: SignerContext,
+    expected_signer: VerifiedSigner | None = None,
+) -> dict[str, Any] | None:
+    verified_signer = resolve_signer(conn, signer)
+    if (
+        verified_signer is None
+        or (
+            expected_signer is not None
+            and verified_signer.same_binding(expected_signer) is not True
+        )
+        or stored_signer_attests(
+            {
+                "confirmed_by": verified_signer.confirmed_by,
+                "signer_source": verified_signer.source,
+                "signer_user_id": verified_signer.user_id,
+                "signer_username": verified_signer.username,
+                "signer_session_hash": verified_signer.session_hash,
+            }
+        )
+        is not True
+    ):
+        return None
+    # created_at 就是本连接上最终复核的 verified_at；不能在复核后另取墙钟，
+    # 否则短会话可在 sync/INSERT 间过期却留下“提交时有效”的假证明。
+    now = verified_signer.verified_at
     cur = conn.execute(
         """
         INSERT INTO promotions
             (agent_id, agent_version, from_maturity, to_maturity, eval_run_id,
-             checks_json, confirmations_json, confirmed_by, created_at)
-        VALUES (?,?,?,?,?,?,?,?,?)
+             checks_json, confirmations_json, confirmed_by, signer_source,
+             signer_user_id, signer_username, signer_session_hash, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             agent_id, agent_version, from_maturity, to_maturity, eval_run_id,
             json.dumps(checks, ensure_ascii=False),
             json.dumps(confirmations, ensure_ascii=False),
-            confirmed_by, now,
+            verified_signer.confirmed_by, verified_signer.source,
+            verified_signer.user_id, verified_signer.username,
+            verified_signer.session_hash, now,
         ),
     )
     row = conn.execute("SELECT * FROM promotions WHERE id = ?", (cur.lastrowid,)).fetchone()

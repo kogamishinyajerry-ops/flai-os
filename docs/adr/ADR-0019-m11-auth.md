@@ -1,6 +1,6 @@
 # ADR-0019: 真鉴权最小落点（本地账户 + 服务端会话）
 
-- 状态：已采纳 R1（loop-auditor 设计审 BLOCK→F1-F8 修订闭合；实现后 Codex 异源审同步阻塞）
+- 状态：已采纳 R2（2026-07-27 补齐 promotion 签发者来源、会话绑定与历史迁移）
 - 日期：2026-07-12
 - 关联：ADR-0018（治理闭环——记名字段的可信度地基）、docs/PM-M11-DIRECTION.md（三个「0」之二）
 
@@ -63,24 +63,53 @@ ASGI 中间件挂 `create_app()` 内、覆盖全部路由：
 - 非 `/api/*`（静态资产 + SPA fallback）放行——登录页本身要能加载。
 - 未认证 → 401 JSON `{"detail": "未登录或会话已过期"}`；**默认拒绝**：
   新增路由自动落在门内，忘配置=被拒而非裸奔（fail-closed）。
-- 通过后 `request.state.user = {id, username, display_name}` 供处理器取用。
+- 通过后同时写入：
+  - `request.state.user = {id, username, display_name}`：兼容既有处理器的公开投影；
+  - `request.state.auth_session = AuthenticatedSessionContext(...)`：冻结的内部
+    会话上下文，含稳定用户轴、session 创建/过期时间与 token SHA-256，不含
+    明文 token。治理签发只接受此上下文。
 
 ### D5 记名字段认证化（服务端派生，不再信请求体）
 
 `created_by`（tasks/feedback/conversations）、`reviewer`（人工放行）、
-`triggered_by`（eval-runs）、`confirmed_by`（promote）一律改为
+`triggered_by`（eval-runs）、`confirmed_by`（promote 显示快照）一律改为
 **服务端从会话身份取 `display_name`**，请求体中对应字段删除；
 前端各 api 客户端停发。晋升门五条中的「confirmed_by 记名」从此指向
-认证身份而非自报文本。DB 列与实体 schema 不变（值的来源变可信）。
+认证身份而非自报文本。
+
+promotion 另设不可混用的来源轴（迁移 #14）：
+
+- `signer_source TEXT NOT NULL DEFAULT 'legacy_unverified'`
+- `signer_user_id INTEGER`
+- `signer_username TEXT`
+- `signer_session_hash TEXT`
+
+来源只允许三类：
+
+- `authenticated_session`：四个身份字段必须完整；HTTP 适配层从
+  `request.state.auth_session` 构造，客户端不能提交或覆盖任何 signer 字段；
+- `server_cli`：服务器直连运维脚本的显式边界，只保留 `confirmed_by`
+  operator label，user/session 三列必须为 NULL；
+- `legacy_unverified`：仅表示迁移前历史，永远不能通过严格 L1 启动核对。
+
+认证来源在进入晋升门时先复核一次；磁盘手术与最终写库之间可能发生登出、
+停用或过期，因此在最终 `BEGIN IMMEDIATE` 事务内完成 Registry→DB 投影后、
+紧邻 promotion `INSERT` 再按精确 session hash 查询，且要求 user id /
+username / display name / session 时间上下文与请求入门时完全一致。审计行的
+`created_at` 直接采用这次复核的 `verified_at`，不能在复核后另取墙钟冒充
+签发时点。复核失败则 promotion、L1 DB 投影回滚，YAML/changelog 补偿恢复。
+写入成功后，证明语义冻结为「提交时该会话有效」；之后登出不会追溯抹掉历史。
+HTTP 审计接口返回 source / user id / username / `signer_session_bound`，但绝不
+返回 `signer_session_hash`。
 
 **历史数据对账口径（F7，PM 裁决）**：本 ADR 生效前落库的记名行
-（含默认值 `anonymous`、e2e 注入名等）是**自报时代数据，如实保留，
-不回填不打标不冒充**——分界即 `users` 表建立时间。当前库内数据均为
-mock/演示期产物（M4 未解锁，真实工程数据尚未进场），打标成本>收益；
-将来治理链溯源历史 promotions/eval_runs 时，早于分界的记名一律按
-「自报未认证」的证据等级看待。CLI 侧（scripts/promote_agent_l1.py 等
-服务器上运维脚本）的记名仍走 argv——能上服务器执行脚本者即运维身份，
-与 ADR-0018 P1-1 同一边界裁决。
+（含默认值 `anonymous`、e2e 注入名等）是**自报时代数据，如实保留**。
+其中旧 promotions 明确迁移为 `legacy_unverified`，保留原 `confirmed_by`，
+其余 signer 列为 NULL；即使显示名与唯一用户吻合，也禁止按显示名、时间或
+现存 session 猜测身份。历史记录仍可查询与统计，但不能为当前 L1 启动提供
+attestation，必须重新评测并经认证 UI 或服务器 CLI 重新晋升。其他早期记名
+行仍按「自报未认证」证据等级看待。CLI 的 argv 只作为服务器 operator label，
+落库必须显式标为 `server_cli`，不得伪装应用用户或会话。
 
 ### D6 登录失败节流（进程内，诚实边界）
 
@@ -110,7 +139,10 @@ mock/演示期产物（M4 未解锁，真实工程数据尚未进场），打标
 老库升级后 `users` 为空 → 所有人被锁在门外，这是**有意的 fail-closed**：
 部署步骤第一条即 `user_admin.py create`；C2 部署自检门加「users 表存在
 且 ≥1 活跃账户」检查项。**不提供任何 `AUTH_OFF` 旁路开关**——旁路 flag
-必然漂进内网部署（fail-open 大忌）。开发/e2e 同样走真登录。
+必然漂进内网部署（fail-open 大忌）。开发/e2e 同样走真登录。健康端点另暴露
+精确版本 `promotion_signer_provenance_generation`；部署自检必须与当前常量
+完全相等，不能只看旧版 `promotion_attestation_axis=true`，避免 DB/worker
+已升级但活 API 仍使用旧签发逻辑时假绿。
 
 ## 威胁模型（诚实边界）
 
@@ -145,3 +177,15 @@ mock/演示期产物（M4 未解锁，真实工程数据尚未进场），打标
    绝不 DB 直插 session 行/monkeypatch 短路中间件（那是活在 conftest 里的
    AUTH_OFF，D9 明文拒绝的模式）。配结构检查钉死：扫描 backend/tests/*.py，
    `INSERT INTO auth_sessions` 零命中且 conftest 含真实登录调用。
+9. 真实登录后晋升：DB `signer_session_hash == sha256(cookie)`，稳定 user id /
+   username 与当前登录者一致；HTTP response/list 均不含 hash。
+10. 客户端伪造 `confirmed_by/signer_source/signer_user_id/signer_username/
+    signer_session_hash/signer` 全部 422。
+11. 入门认证后、最终事务前吊销会话，或最终 Registry→DB 投影期间自然过期
+    → 422，promotion=0，YAML/changelog/DB 投影恢复，持久 operation latch 清除。
+12. 迁移前 promotion → `legacy_unverified + NULL identity`，重复迁移幂等；
+    显示名即使唯一也不推断。该行可读但不能使 L1 启动。
+13. `server_cli` 严格互斥字段可启动；未知来源、缺 user、空 username、坏 hash、
+    CLI 混入 auth 字段均 fail-closed；已提交认证签发在 logout 后仍可重启核验。
+14. 旧 API 即使仍自报 GH #3 三个绿色字段，只要缺失或错报精确 signer
+    provenance 代际，部署自检仍 FAIL。

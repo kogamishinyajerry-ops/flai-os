@@ -23,7 +23,7 @@ from typing import Any, Callable
 
 import anyio.to_thread
 
-from .service import COOKIE_NAME, get_session_user
+from .service import COOKIE_NAME, get_authenticated_session
 
 _ALLOWLIST = {("POST", "/api/auth/login"), ("GET", "/api/health"), ("GET", "/api/readyz")}
 
@@ -71,14 +71,14 @@ class AuthGateMiddleware:
             await self.app(scope, receive, send)
             return
 
-        user = None
+        session = None
         token = self._session_token(scope)
         if token:
             # 同步 SQLite（连接+PRAGMA+查询）放到工作线程做（Codex R1 审 P2）：
             # 中间件跑在事件循环线程，锁争用/慢盘时同步 DB 调用会冻住所有 HTTP/
             # 静态/health 流量（不像 FastAPI 同步 handler 会被自动 offload）。
-            user = await anyio.to_thread.run_sync(self._lookup_user, token)
-        if user is None:
+            session = await anyio.to_thread.run_sync(self._lookup_session, token)
+        if session is None:
             body = json.dumps({"detail": "未登录或会话已过期"}, ensure_ascii=False).encode("utf-8")
             await send({
                 "type": "http.response.start",
@@ -91,14 +91,17 @@ class AuthGateMiddleware:
             await send({"type": "http.response.body", "body": body})
             return
 
-        # starlette Request.state 背靠 scope["state"]——处理器经 request.state.user 取用
-        scope.setdefault("state", {})["user"] = user
+        # 同一次会话查验同时产出兼容 user 投影与不可变内部上下文；治理签发只读后者，
+        # 避免 display_name 被当成稳定身份或让处理器自行重建会话来源。
+        state = scope.setdefault("state", {})
+        state["user"] = session.user_projection()
+        state["auth_session"] = session
         await self.app(scope, receive, send)
 
-    def _lookup_user(self, token: str) -> Any:
+    def _lookup_session(self, token: str) -> Any:
         conn = self._conn_factory()
         try:
-            return get_session_user(conn, token)
+            return get_authenticated_session(conn, token)
         finally:
             conn.close()
 

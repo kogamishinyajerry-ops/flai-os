@@ -46,6 +46,11 @@ from .eval_runner import (
     inspect_snapshot_evidence,
     load_eval_cases,
 )
+from .signer_provenance import (
+    SignerContext,
+    resolve_signer,
+    stored_signer_attests,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +325,7 @@ def _promotion_record_attests(
         and confirmations.get("exception_paths_handled") is True
         and isinstance(confirmed_by, str)
         and confirmed_by.strip() != ""
+        and stored_signer_attests(promotion) is True
     )
     if record_ok is not True:
         return False
@@ -486,7 +492,7 @@ def promote_agent(
     to_maturity: str,
     eval_run_id: str,
     confirmations: Any,
-    confirmed_by: Any,
+    signer: SignerContext,
     attestation_records: list[dict[str, str]],
 ) -> dict[str, Any]:
     """执行 L0→L1 晋升；全部条件 is True 才生效，否则 PromotionRejected。
@@ -502,7 +508,7 @@ def promote_agent(
             to_maturity=to_maturity,
             eval_run_id=eval_run_id,
             confirmations=confirmations,
-            confirmed_by=confirmed_by,
+            signer=signer,
             attestation_records=attestation_records,
         )
 
@@ -549,7 +555,7 @@ def _promote_agent_locked(
     to_maturity: str,
     eval_run_id: str,
     confirmations: Any,
-    confirmed_by: Any,
+    signer: SignerContext,
     attestation_records: list[dict[str, str]],
 ) -> dict[str, Any]:
     agent = agent_registry.get(agent_id)
@@ -583,6 +589,7 @@ def _promote_agent_locked(
     # 2) eval 证据（含 D2 digest 咬合）
     conn = conn_factory()
     try:
+        verified_signer = resolve_signer(conn, signer)
         run = repos.get_eval_run(conn, str(eval_run_id)) if eval_run_id else None
         snapshot = _snapshot_for_run(conn, run)
     finally:
@@ -618,12 +625,15 @@ def _promote_agent_locked(
 
     # 5) 人工确认项（D6：缺失/false/非 bool 一律拒）
     confirm_value = confirmations.get("exception_paths_handled") if isinstance(confirmations, dict) else None
-    confirm_ok = confirm_value is True and isinstance(confirmed_by, str) and confirmed_by.strip() != ""
+    confirmed_by = (
+        verified_signer.confirmed_by if verified_signer is not None else None
+    )
+    confirm_ok = confirm_value is True and verified_signer is not None
     checks["manual_confirmation"] = {
         "ok": confirm_ok is True,
         "detail": (
             f"exception_paths_handled={confirm_value!r}（必须是布尔 true）；"
-            f"confirmed_by={confirmed_by!r}（必须记名）"
+            f"confirmed_by={confirmed_by!r}（必须来自有效认证会话或服务器 CLI）"
         ),
     }
 
@@ -656,7 +666,7 @@ def _promote_agent_locked(
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     changelog_entry = (
         f"\n- {stamp} maturity {current_maturity}→{to_maturity}"
-        f"（晋升门放行，eval_run={eval_run_id}，confirmed_by={confirmed_by.strip()}）\n"
+        f"（晋升门放行，eval_run={eval_run_id}，confirmed_by={confirmed_by}）\n"
     )
     operation_token = uuid.uuid4().hex
     pending_fault = {
@@ -1012,8 +1022,22 @@ def _promote_agent_locked(
                     eval_run_id=str(eval_run_id),
                     checks=checks,
                     confirmations={"exception_paths_handled": True},
-                    confirmed_by=confirmed_by.strip(),
+                    signer=signer,
+                    expected_signer=verified_signer,
                 )
+                if promotion is None:
+                    raise PromotionRejected(
+                        {
+                            **checks,
+                            "signer_session_revalidation": {
+                                "ok": False,
+                                "detail": (
+                                    "最终事务内签发者来源复核失败；"
+                                    "会话已吊销/过期、账户已停用或身份快照已变化"
+                                ),
+                            },
+                        }
+                    )
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")

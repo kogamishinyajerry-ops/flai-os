@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from datetime import datetime
 
 import pytest
 
+from backend.app.auth.service import AuthenticatedSessionContext
 from backend.app.core.errors import IllegalTransitionError, TaskNotFoundError
+from backend.app.governance.signer_provenance import SignerContext
 from backend.app.storage import db as db_mod
 from backend.app.storage import repos
 
@@ -180,6 +183,211 @@ def test_migration_9_adds_column_to_legacy_db_existing_rows_null(tmp_path) -> No
         c2.close()
     # 幂等：再跑 init_db 不炸（列已存在，探测跳过）
     db_mod.init_db(db_path)
+
+
+# ── 迁移 #14：promotion 签发者来源（ADR-0019）───────────────────────
+
+
+_LEGACY_PROMOTIONS_DDL_PRE_14 = """
+CREATE TABLE promotions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL,
+    agent_version TEXT NOT NULL,
+    from_maturity TEXT NOT NULL,
+    to_maturity TEXT NOT NULL,
+    eval_run_id TEXT NOT NULL,
+    checks_json TEXT NOT NULL,
+    confirmations_json TEXT NOT NULL,
+    confirmed_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+)
+"""
+
+
+def test_migration_14_marks_legacy_promotion_without_identity_inference(
+    tmp_path,
+) -> None:
+    """历史 confirmed_by 只是显示名，迁移不得据此猜 user/session 身份。"""
+    db_path = tmp_path / "legacy-promotions.db"
+    legacy = db_mod.get_conn(db_path)
+    try:
+        legacy.execute(_LEGACY_PROMOTIONS_DDL_PRE_14)
+        legacy.execute(
+            "CREATE TABLE users ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " username TEXT NOT NULL UNIQUE,"
+            " display_name TEXT NOT NULL,"
+            " password_hash TEXT NOT NULL,"
+            " is_active INTEGER NOT NULL DEFAULT 1,"
+            " created_at TEXT NOT NULL"
+            ")"
+        )
+        legacy.execute(
+            "INSERT INTO users"
+            " (username, display_name, password_hash, is_active, created_at)"
+            " VALUES ('unique-user', '历史签发人', 'not-a-real-hash', 1,"
+            " '2026-01-01T00:00:00+00:00')"
+        )
+        legacy.execute(
+            "INSERT INTO promotions"
+            " (agent_id, agent_version, from_maturity, to_maturity, eval_run_id,"
+            " checks_json, confirmations_json, confirmed_by, created_at)"
+            " VALUES ('legacy-agent', '0.1.0', 'L0', 'L1', 'eval-old',"
+            " '{}', '{}', '历史签发人', '2026-01-02T00:00:00+00:00')"
+        )
+        legacy.commit()
+        cols_before = {
+            row[1] for row in legacy.execute("PRAGMA table_info(promotions)")
+        }
+        assert "signer_source" not in cols_before
+    finally:
+        legacy.close()
+
+    db_mod.init_db(db_path)
+    migrated = db_mod.get_conn(db_path)
+    try:
+        rows = repos.list_promotions(migrated, agent_id="legacy-agent")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["confirmed_by"] == "历史签发人"
+        assert row["signer_source"] == "legacy_unverified"
+        assert row["signer_user_id"] is None
+        assert row["signer_username"] is None
+        assert row["signer_session_hash"] is None
+    finally:
+        migrated.close()
+
+    db_mod.init_db(db_path)
+
+
+def test_migration_14_survives_rival_alter_mid_flight(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """API/worker 并发启动时，来源列迁移必须由同一 BEGIN IMMEDIATE 串行化。"""
+    import threading
+
+    db_path = tmp_path / "legacy-promotions-race.db"
+    legacy = db_mod.get_conn(db_path)
+    try:
+        legacy.execute(_LEGACY_PROMOTIONS_DDL_PRE_14)
+    finally:
+        legacy.close()
+
+    about_to_alter = threading.Event()
+    rival_done = threading.Event()
+    real_get_conn = db_mod.get_conn
+
+    def instrumented_get_conn(path):
+        conn = real_get_conn(path)
+
+        def trace(statement: str) -> None:
+            if "ALTER TABLE promotions ADD COLUMN signer_source" in statement:
+                about_to_alter.set()
+                rival_done.wait(timeout=10)
+
+        conn.set_trace_callback(trace)
+        return conn
+
+    monkeypatch.setattr(db_mod, "get_conn", instrumented_get_conn)
+    errors: list[Exception] = []
+
+    def migrate() -> None:
+        try:
+            db_mod.init_db(db_path)
+        except Exception as exc:  # 线程边界：主线程断言精确结果
+            errors.append(exc)
+
+    thread = threading.Thread(target=migrate)
+    thread.start()
+    assert about_to_alter.wait(timeout=10), "迁移未走到 signer_source ALTER"
+
+    rival = sqlite3.connect(
+        str(db_path),
+        isolation_level=None,
+        timeout=1.0,
+    )
+    try:
+        rival.execute(
+            "ALTER TABLE promotions ADD COLUMN signer_source TEXT"
+            " NOT NULL DEFAULT 'legacy_unverified'"
+        )
+    except sqlite3.OperationalError:
+        pass  # 正确实现：loser 已持 BEGIN IMMEDIATE 写锁
+    finally:
+        rival.close()
+        rival_done.set()
+
+    thread.join(timeout=15)
+    assert not thread.is_alive()
+    assert errors == []
+    check = sqlite3.connect(str(db_path))
+    check.row_factory = sqlite3.Row
+    try:
+        columns = {row[1] for row in check.execute("PRAGMA table_info(promotions)")}
+    finally:
+        check.close()
+    assert {
+        "signer_source",
+        "signer_user_id",
+        "signer_username",
+        "signer_session_hash",
+    } <= columns
+
+
+def test_record_promotion_rejects_fabricated_authenticated_signer(conn) -> None:
+    """形状正确的手造身份不能绕过 auth_sessions 精确复核。"""
+    fabricated = SignerContext.from_authenticated_session(
+        AuthenticatedSessionContext(
+            token_hash="0" * 64,
+            user_id=4242,
+            username="forged",
+            display_name="伪造签发人",
+            user_created_at="2026-01-01T00:00:00+00:00",
+            session_created_at="2026-01-01T00:00:00+00:00",
+            expires_at="2999-01-01T00:00:00+00:00",
+        )
+    )
+    result = repos.record_promotion(
+        conn,
+        agent_id="forged-agent",
+        agent_version="0.1.0",
+        from_maturity="L0",
+        to_maturity="L1",
+        eval_run_id="eval-forged",
+        checks={},
+        confirmations={"exception_paths_handled": True},
+        signer=fabricated,
+    )
+    assert result is None
+    assert conn.execute("SELECT COUNT(*) FROM promotions").fetchone()[0] == 0
+
+
+def test_record_promotion_rejects_naive_verification_clock(
+    conn,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """签发时点必须是带时区 UTC 语义；naive 墙钟不能生成可审计证明。"""
+    from backend.app.governance import signer_provenance
+
+    monkeypatch.setattr(
+        signer_provenance,
+        "current_auth_time",
+        lambda: datetime(2026, 7, 27, 12, 0, 0),
+    )
+    result = repos.record_promotion(
+        conn,
+        agent_id="naive-clock-agent",
+        agent_version="0.1.0",
+        from_maturity="L0",
+        to_maturity="L1",
+        eval_run_id="eval-naive-clock",
+        checks={},
+        confirmations={"exception_paths_handled": True},
+        signer=SignerContext.from_server_cli("服务器运维"),
+    )
+    assert result is None
+    assert conn.execute("SELECT COUNT(*) FROM promotions").fetchone()[0] == 0
 
 
 def test_list_tasks_filters_by_agent_and_status(conn) -> None:

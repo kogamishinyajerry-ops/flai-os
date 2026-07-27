@@ -256,6 +256,12 @@ def create_app(
             # 装配是否隔离过无 promotion 的 L1。HTTP 仍作为 liveness 返回 200，
             # deploy_selfcheck 另以 is True 严格判 ok。
             "promotion_attestation_axis": True,
+            # ADR-0019 R2 signer 来源代际：旧 API 已有上面的 GH#3 布尔轴，
+            # 仅看旧轴无法证明活进程会拒 legacy/畸形来源。版本串精确匹配，
+            # 与 WORKER_GENERATION 一起闭合 API/worker 分离重启偏斜。
+            "promotion_signer_provenance_generation": (
+                config.PROMOTION_SIGNER_PROVENANCE_GENERATION
+            ),
             "promotion_attestation_ok": (
                 promotion_attestation_rejected_count == 0
             ),

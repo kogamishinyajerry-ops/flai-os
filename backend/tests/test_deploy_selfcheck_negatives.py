@@ -195,6 +195,31 @@ def test_classification_axis_present_passes(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_promotion_signer_axis_missing_columns_fails(tmp_path: Path) -> None:
+    """表名存在但仍是 ADR-0019 前形态时，部署自检必须识别旧代际。"""
+    db = tmp_path / "old-promotions.db"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "CREATE TABLE promotions (id INTEGER PRIMARY KEY, confirmed_by TEXT)"
+        )
+        result = deploy_selfcheck.check_promotion_signer_axis(conn)
+    finally:
+        conn.close()
+    assert result.ok is False
+    assert "signer_source" in result.detail
+    assert "signer_session_hash" in result.detail
+
+
+def test_promotion_signer_axis_present_passes(tmp_path: Path) -> None:
+    db = _valid_db(tmp_path)
+    conn = get_conn(db)
+    try:
+        assert deploy_selfcheck.check_promotion_signer_axis(conn).ok is True
+    finally:
+        conn.close()
+
+
 # ---------- 5. check_worker_generation（代际见证——五种失败模式全咬） ----------
 
 def _run_worker_gen(db: Path):
@@ -502,9 +527,37 @@ def test_live_promotion_attestation_missing_fails(monkeypatch) -> None:
     assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
 
 
+def test_live_promotion_attestation_old_axis_without_signer_generation_fails(
+    monkeypatch,
+) -> None:
+    """旧 API 的 GH#3 轴虽绿，也不能证明已升级到 ADR-0019 signer 门。"""
+    _fake_http(monkeypatch, payload={
+        "promotion_attestation_axis": True,
+        "promotion_attestation_ok": True,
+        "promotion_attestation_rejected_count": 0,
+    })
+    assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+
+
+def test_live_promotion_attestation_wrong_signer_generation_fails(
+    monkeypatch,
+) -> None:
+    """代际不是 truthy 开关；旧/未知版本即使其余轴全绿也必须 fail-closed。"""
+    _fake_http(monkeypatch, payload={
+        "promotion_attestation_axis": True,
+        "promotion_signer_provenance_generation": "promotion-signer-v0",
+        "promotion_attestation_ok": True,
+        "promotion_attestation_rejected_count": 0,
+    })
+    assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
+
+
 def test_live_promotion_attestation_rejection_fails(monkeypatch) -> None:
     _fake_http(monkeypatch, payload={
         "promotion_attestation_axis": True,
+        "promotion_signer_provenance_generation": (
+            deploy_selfcheck.PROMOTION_SIGNER_PROVENANCE_GENERATION
+        ),
         "promotion_attestation_ok": False,
         "promotion_attestation_rejected_count": 1,
     })
@@ -516,11 +569,17 @@ def test_live_promotion_attestation_truthy_not_true_fails(monkeypatch) -> None:
     for truthy in ("true", 1, "1"):
         _fake_http(monkeypatch, payload={
             "promotion_attestation_axis": truthy,
+            "promotion_signer_provenance_generation": (
+                deploy_selfcheck.PROMOTION_SIGNER_PROVENANCE_GENERATION
+            ),
             "promotion_attestation_ok": True,
         })
         assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
         _fake_http(monkeypatch, payload={
             "promotion_attestation_axis": True,
+            "promotion_signer_provenance_generation": (
+                deploy_selfcheck.PROMOTION_SIGNER_PROVENANCE_GENERATION
+            ),
             "promotion_attestation_ok": truthy,
         })
         assert deploy_selfcheck.check_live_promotion_attestation("http://x").ok is False
@@ -536,6 +595,9 @@ def test_live_promotion_attestation_requires_strict_zero_rejected_count(
 ) -> None:
     payload = {
         "promotion_attestation_axis": True,
+        "promotion_signer_provenance_generation": (
+            deploy_selfcheck.PROMOTION_SIGNER_PROVENANCE_GENERATION
+        ),
         "promotion_attestation_ok": True,
     }
     if rejected_count is not None:
@@ -547,6 +609,9 @@ def test_live_promotion_attestation_requires_strict_zero_rejected_count(
 def test_live_promotion_attestation_clean_passes(monkeypatch) -> None:
     _fake_http(monkeypatch, payload={
         "promotion_attestation_axis": True,
+        "promotion_signer_provenance_generation": (
+            deploy_selfcheck.PROMOTION_SIGNER_PROVENANCE_GENERATION
+        ),
         "promotion_attestation_ok": True,
         "promotion_attestation_rejected_count": 0,
     })

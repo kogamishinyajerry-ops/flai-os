@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..governance import curation, eval_runner, promotion
+from ..governance import curation, eval_runner, promotion, signer_provenance
 from ..storage import repos
 
 router = APIRouter(prefix="/api", tags=["governance"])
@@ -154,7 +154,7 @@ class PromoteRequest(BaseModel):
 def promote(agent_id: str, body: PromoteRequest, request: Request) -> dict[str, Any]:
     _agent_or_404(request, agent_id)
     try:
-        return promotion.promote_agent(
+        record = promotion.promote_agent(
             conn_factory=request.app.state.conn_factory,
             agent_registry=request.app.state.agent_registry,
             scope_registry=request.app.state.scope_registry,
@@ -162,9 +162,12 @@ def promote(agent_id: str, body: PromoteRequest, request: Request) -> dict[str, 
             to_maturity=body.to_maturity,
             eval_run_id=body.eval_run_id,
             confirmations=body.confirmations,
-            confirmed_by=request.state.user["display_name"],  # ADR-0019 D5
+            signer=signer_provenance.SignerContext.from_authenticated_session(
+                request.state.auth_session
+            ),
             attestation_records=request.app.state.promotion_attestation_records,
         )
+        return signer_provenance.public_promotion_record(record)
     except promotion.PromotionRejected as exc:
         raise HTTPException(
             status_code=422,
@@ -177,9 +180,10 @@ def list_promotions(agent_id: str, request: Request) -> list[dict[str, Any]]:
     _agent_or_404(request, agent_id)
     conn = request.app.state.conn_factory()
     try:
-        return repos.list_promotions(conn, agent_id)
+        records = repos.list_promotions(conn, agent_id)
     finally:
         conn.close()
+    return [signer_provenance.public_promotion_record(record) for record in records]
 
 
 @router.get("/promotions")
@@ -188,9 +192,10 @@ def list_promotions_all(request: Request, limit: int = 20) -> list[dict[str, Any
     limit = max(1, min(int(limit), 100))
     conn = request.app.state.conn_factory()
     try:
-        return repos.list_promotions_all(conn, limit)
+        records = repos.list_promotions_all(conn, limit)
     finally:
         conn.close()
+    return [signer_provenance.public_promotion_record(record) for record in records]
 
 
 @router.get("/agents/{agent_id}/curated_cases_count")

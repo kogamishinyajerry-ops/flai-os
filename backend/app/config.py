@@ -74,9 +74,13 @@ DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 # axis 不能证明独立 worker 已升级，故再次 bump，和 API 8d 组成双向偏斜门。
 # GH #3 review：快照拒载诊断须先落 internal，且非 UTF-8 路径/manifest 必须
 # 软拒载而非打崩整次 Registry scan；两项均属 worker 可见行为，再 bump 逼重启。
+# ADR-0019：startup promotion attestation 新增严格 signer provenance；旧 worker
+# 仍会接受 legacy/畸形来源为 L1 证明，故 bump 逼独立 worker 同步升级。
+PROMOTION_SIGNER_PROVENANCE_GENERATION = "promotion-signer-v1"
 WORKER_GENERATION = (
     "collab-resolver+t2-eval-snapshot+b3-llm-timeout+b8-disabled-gate"
     "+gh3-promotion-attestation+gh3-package-snapshot+gh3-snapshot-diagnostics"
+    "+adr19-signer-provenance"
 )
 
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。
