@@ -1,5 +1,5 @@
 # Run the frontend build, full backend test suite, and browser acceptance gates.
-# DECLARED-NOT-VERIFIED: parsing is verified on Windows PowerShell 5.1, but the full gate still awaits dependencies.
+# DECLARED-NOT-VERIFIED: Windows evidence is commit-specific; run this full gate on the exact commit.
 # Stop immediately on failure and print the completed/failed step summary.
 $ErrorActionPreference = "Stop"
 

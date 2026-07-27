@@ -109,6 +109,55 @@ def test_capture_rejects_change_between_two_full_passes(
     assert calls == 2
 
 
+def test_capture_uses_path_identity_when_windows_scandir_omits_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows DirEntry.stat() can report zero device/inode for unchanged files."""
+
+    package_dir = _package(tmp_path)
+    nested = package_dir / "nested"
+    nested.mkdir()
+    (nested / "case.txt").write_text("stable", encoding="utf-8")
+    real_scandir = snapshot_mod.os.scandir
+
+    class _ZeroIdentityStat:
+        def __init__(self, real: os.stat_result) -> None:
+            self._real = real
+
+        def __getattr__(self, name: str):
+            if name in {"st_dev", "st_ino"}:
+                return 0
+            return getattr(self._real, name)
+
+    class _Entry:
+        def __init__(self, real) -> None:
+            self._real = real
+            self.name = real.name
+            self.path = real.path
+
+        def stat(self, *, follow_symlinks: bool = True):
+            return _ZeroIdentityStat(
+                self._real.stat(follow_symlinks=follow_symlinks)
+            )
+
+    class _Scandir:
+        def __init__(self, path: Path) -> None:
+            self._context = real_scandir(path)
+
+        def __enter__(self):
+            return (_Entry(entry) for entry in self._context.__enter__())
+
+        def __exit__(self, *args):
+            return self._context.__exit__(*args)
+
+    monkeypatch.setattr(snapshot_mod.os, "scandir", _Scandir)
+
+    snapshot = capture_agent_package(package_dir)
+
+    assert snapshot.manifest["id"] == "snapshot_probe"
+    assert dict(snapshot.files)["nested/case.txt"] == b"stable"
+
+
 def test_capture_rejects_case_insensitive_path_collision(tmp_path: Path) -> None:
     package_dir = _package(tmp_path)
     (package_dir / "Data.txt").write_text("A", encoding="utf-8")
