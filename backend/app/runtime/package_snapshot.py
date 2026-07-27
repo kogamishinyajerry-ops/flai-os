@@ -120,9 +120,10 @@ def capture_agent_package(package_dir: Path) -> AgentPackageSnapshot:
             sort_keys=True,
             separators=(",", ":"),
         )
+        manifest_json.encode("utf-8")
     except (TypeError, ValueError, RecursionError) as exc:
         raise PackageSnapshotError(
-            f"{source} agent.yaml cannot be represented as canonical JSON: {exc}"
+            f"{source} agent.yaml cannot be represented as canonical UTF-8 JSON: {exc}"
         ) from exc
     digest = _snapshot_digest(directories, files)
     return AgentPackageSnapshot(
@@ -374,6 +375,12 @@ def _is_reparse_point(value: Any) -> bool:
 
 
 def _validate_relative_path(relative: str) -> None:
+    try:
+        relative.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise PackageSnapshotError(
+            f"package path is not valid UTF-8: {relative!r}"
+        ) from exc
     candidate = PurePosixPath(relative)
     if (
         not relative

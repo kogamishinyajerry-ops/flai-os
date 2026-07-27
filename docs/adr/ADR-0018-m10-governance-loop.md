@@ -167,9 +167,11 @@
   置红，不会从审计摘要反向恢复 A；恢复 A 或对 B 重新评测晋升是人工部署动作。
 - `agent_package_snapshot.v1` 发布不变量：影子 Registry 对完整包做两遍稳定
   捕获，拒绝 symlink、Windows reparse/junction、FIFO/device、大小写碰撞与
-  撕裂读取，并以 4096 entries / 单文件 16 MiB / 总计 64 MiB / 深度 32
-  作为误放大包的 fail-closed 资源边界；最终 coverage/eval/changelog 门只读
-  该快照。promotion `checks_json.package_snapshot`、活 Registry `_entries`
+  撕裂读取；所有相对路径及 canonical manifest JSON 必须可严格编码为 UTF-8，
+  非法包只进入 `registry.errors`，不得以裸编码异常打断其他包扫描。以
+  4096 entries / 单文件 16 MiB / 总计 64 MiB / 深度 32 作为误放大包的
+  fail-closed 资源边界；最终 coverage/eval/changelog 门只读该快照。
+  promotion `checks_json.package_snapshot`、活 Registry `_entries`
   与 Job/Conversation Runtime 私有材化目录沿用同一个 snapshot 对象。
   活 `AgentRegistry.package_dir()` 仅保留为治理写回/运维定位的 authoring
   路径，执行路径不得调用；Conversation 注入的 `snapshot_view.package_dir()`
@@ -185,7 +187,9 @@
   Registry，启动核对仍必须生成 `missing-or-invalid-package-snapshot` 拒载记录
   并置红，不能因 `Registry.list()` 看不见它而假绿。
   每次 Job Runtime 的 `validation_started` 事件同时记录 contract+digest，
-  使任务审计能反查实际执行代际。
+  使任务审计能反查实际执行代际。若任务已入队但执行时 Agent/快照缺失，必须
+  在写固定系统失败诊断前用 CAS-on-NULL 落 `internal`；不得放宽
+  classification gate 对 `NULL + error_message` 的 fail-closed 遮蔽规则。
 - 测试红线（docs/07 §3 清单适用于治理组件自身；审计 D4/D5/D6 补齐负例）：
   - runner：正常路/case 失败如实计数/agent 不存在/eval_cases 空/checks 缺失即
     skipped/**未识别 kind 或必填字段缺失即 failed**/**draft case 不执行不计数**；
@@ -200,6 +204,8 @@
   - 不可变包：**最终门禁后、审计 INSERT 前并发把活目录 A→B，晋升仍只执行 A；
     同进程 audit/Registry/Runtime digest 恒等；用 B 重启必须拒载并置红**；捕获层
     对 symlink/reparse、非普通文件、两遍读取间变化、跨 Windows 大小写碰撞及
-    entry/单文件/总字节/深度资源上限逐项负测；**上次已发布 L1 的 workflow
-    缺失或改为 symlink 后重启，Registry 拒载且 health 必须同步置红**。
+    entry/单文件/总字节/深度资源上限逐项负测；surrogateescape 路径与 YAML
+    lone-surrogate scalar 必须只拒载坏包、合法兄弟包照常发布和 DB 同步；
+    **上次已发布 L1 的 workflow 缺失或改为 symlink 后重启，Registry 拒载且
+    health 必须同步置红**。
   - e2e：m10_governance_acceptance 全链 + tamper 实证（cp 备份法）。

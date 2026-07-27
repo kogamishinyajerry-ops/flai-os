@@ -510,6 +510,7 @@ class AgentRuntime:
         agent_id = task["agent_id"]
         if package_snapshot is None or package_dir is None:
             message = f"Agent 未注册或缺少不可变包快照：{agent_id}"
+            repos.set_task_data_classification(conn, task_id, "internal")
             repos.set_task_status(conn, task_id, "failed", error_message=message)
             repos.append_event(
                 conn, task_id=task_id, agent_id=agent_id, event_type="task_failed",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import pytest
 
 from backend.app.config import AGENTS_DIR, CONTRACTS_DIR
 from backend.app.core.errors import DuplicateAgentIdError
+from backend.app.runtime import package_snapshot as snapshot_mod
 from backend.app.runtime.registry import AgentRegistry
 from backend.app.storage.db import get_conn, init_db
 
@@ -135,6 +137,90 @@ def test_scan_marks_package_missing_readme_as_invalid(tmp_path: Path) -> None:
     assert registry.get("hello_agent") is None
     assert len(registry.errors) == 1
     assert "README.md" in registry.errors[0]["error"]
+
+
+def test_scan_isolates_package_with_non_utf8_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _copy_hello_agent(agents_dir / "hello_agent")
+    broken = _copy_hello_agent(agents_dir / "broken_agent")
+    witness = broken / "invalid-path.bin"
+    witness.write_bytes(b"invalid path witness")
+    real_scandir = snapshot_mod.os.scandir
+
+    class _SurrogateEntry:
+        name = "invalid-\udcff.bin"
+        path = str(witness)
+
+        @staticmethod
+        def stat(*, follow_symlinks: bool = True):
+            return os.stat(witness, follow_symlinks=follow_symlinks)
+
+    class _ScandirResult:
+        def __init__(self, entries) -> None:
+            self._entries = entries
+
+        def __enter__(self):
+            return iter(self._entries)
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    def _scandir_with_surrogate(path):
+        if isinstance(path, int):
+            return real_scandir(path)
+        if Path(path) != broken:
+            return real_scandir(path)
+        with real_scandir(path) as entries:
+            replaced = [
+                _SurrogateEntry() if entry.name == witness.name else entry
+                for entry in entries
+            ]
+        return _ScandirResult(replaced)
+
+    monkeypatch.setattr(snapshot_mod.os, "scandir", _scandir_with_surrogate)
+
+    registry = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    registry.scan()
+
+    assert registry.get("hello_agent") is not None
+    assert len(registry.errors) == 1
+    assert registry.errors[0]["path"] == str(broken)
+    assert "UTF-8" in registry.errors[0]["error"]
+
+
+def test_scan_isolates_manifest_with_non_utf8_scalar(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _copy_hello_agent(agents_dir / "hello_agent")
+    broken = _copy_hello_agent(agents_dir / "broken_agent")
+    yaml_path = broken / "agent.yaml"
+    text = yaml_path.read_text(encoding="utf-8")
+    text = text.replace("id: hello_agent", "id: surrogate_agent")
+    text = text.replace(
+        'name: "Hello Agent（平台闭环验证示例）"',
+        'name: "\\uD800"',
+    )
+    yaml_path.write_text(text, encoding="utf-8")
+
+    registry = AgentRegistry(agents_dir, _AGENT_SCHEMA)
+    registry.scan()
+    db_path = tmp_path / "registry.db"
+    init_db(db_path)
+    conn = get_conn(db_path)
+    try:
+        registry.sync_to_db(conn)
+    finally:
+        conn.close()
+
+    assert registry.get("hello_agent") is not None
+    assert registry.get("surrogate_agent") is None
+    assert len(registry.errors) == 1
+    assert registry.errors[0]["path"] == str(broken)
+    assert "UTF-8" in registry.errors[0]["error"]
 
 
 def test_scan_marks_trial_status_with_tbd_maintainer_as_invalid(tmp_path: Path) -> None:

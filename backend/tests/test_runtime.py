@@ -222,6 +222,9 @@ def test_execute_fails_closed_without_package_snapshot(
     assert "不可变包快照" in result["task"]["error_message"]
     conn = get_conn(db_path)
     try:
+        stored = repos.get_task(conn, task_id)
+        assert stored is not None
+        assert stored["data_classification"] == "internal"
         assert repos.list_tool_runs(conn, task_id) == []
         assert [
             event["event_type"] for event in repos.list_events(conn, task_id)

@@ -72,9 +72,11 @@ DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 # GH #3：共享 bootstrap 新增 L1↔promotions 启动 attestation。旧 worker 不走此门，
 # 仍可能把磁盘直改/崩溃窗口留下的无审计 L1 装进运行 registry；仅 API health
 # axis 不能证明独立 worker 已升级，故再次 bump，和 API 8d 组成双向偏斜门。
+# GH #3 review：快照拒载诊断须先落 internal，且非 UTF-8 路径/manifest 必须
+# 软拒载而非打崩整次 Registry scan；两项均属 worker 可见行为，再 bump 逼重启。
 WORKER_GENERATION = (
     "collab-resolver+t2-eval-snapshot+b3-llm-timeout+b8-disabled-gate"
-    "+gh3-promotion-attestation+gh3-package-snapshot"
+    "+gh3-promotion-attestation+gh3-package-snapshot+gh3-snapshot-diagnostics"
 )
 
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。
