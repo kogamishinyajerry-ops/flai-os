@@ -159,6 +159,10 @@ CREATE TABLE IF NOT EXISTS samples (
     raw_output_path TEXT,
     validation_status TEXT,
     accepted_by_engineer INTEGER,
+    -- Issue #4：sample 级认可的人签来源。仅新 acknowledge API 写入稳定
+    -- username；旧 task-review 批量标签与历史行均留 NULL，禁止从显示名反推。
+    acknowledged_by_username TEXT,
+    acknowledged_at TEXT,
     created_at TEXT NOT NULL,
     classification TEXT NOT NULL DEFAULT 'internal'
 );
@@ -456,6 +460,18 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute("ALTER TABLE promotions ADD COLUMN signer_username TEXT")
             if "signer_session_hash" not in promotion_cols_v14:
                 conn.execute("ALTER TABLE promotions ADD COLUMN signer_session_hash TEXT")
+            # 迁移 #15（Issue #4）：sample 级认可的人签稳定轴。存量
+            # accepted_by_engineer 只证明旧标签结果，不能据此猜 username/时间；
+            # 两列均无 DEFAULT，历史行诚实保留 NULL。认可写入走 CAS-on-NULL。
+            sample_cols_v15 = {
+                row[1] for row in conn.execute("PRAGMA table_info(samples)")
+            }
+            if "acknowledged_by_username" not in sample_cols_v15:
+                conn.execute(
+                    "ALTER TABLE samples ADD COLUMN acknowledged_by_username TEXT"
+                )
+            if "acknowledged_at" not in sample_cols_v15:
+                conn.execute("ALTER TABLE samples ADD COLUMN acknowledged_at TEXT")
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:

@@ -25,3 +25,11 @@ def test_shell_and_powershell_with_dependencies_match(stem: str) -> None:
     assert shell_packages, f"{stem}.sh 未提取到任何 --with 依赖，需检查正则或脚本格式"
     assert powershell_packages, f"{stem}.ps1 未提取到任何 --with 依赖，需检查正则或脚本格式"
     assert shell_packages == powershell_packages
+
+
+def test_m10_governance_e2e_runs_in_both_full_verification_scripts() -> None:
+    required_script = "frontend/e2e/m10_governance_acceptance.py"
+
+    for script_name in ("verify_all.sh", "verify_all.ps1"):
+        script = (SCRIPTS_DIR / script_name).read_text(encoding="utf-8")
+        assert required_script in script, f"{script_name} 未执行 {required_script}"

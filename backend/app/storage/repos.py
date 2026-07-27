@@ -1064,6 +1064,11 @@ def list_model_calls_for_conversation(
 
 # ── samples ────────────────────────────────────────────────────────────
 
+
+class SampleAcknowledgementConflictError(ValueError):
+    """sample 已有不可覆盖的拒绝或不一致认可证据。"""
+
+
 def _decode_sample(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     _decode_json(d, "input_json", "input", default=None)
@@ -1124,6 +1129,76 @@ def list_samples(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]
         "SELECT * FROM samples WHERE task_id = ? ORDER BY id ASC", (task_id,)
     ).fetchall()
     return [_decode_sample(r) for r in rows]
+
+
+def acknowledge_sample_once(
+    conn: sqlite3.Connection,
+    sample_id: int,
+    *,
+    actor_username: str,
+    acknowledged_at: str,
+) -> tuple[dict[str, Any] | None, bool]:
+    """CAS-on-NULL 记录 sample 级认可；调用方负责外层事务。
+
+    - 首次：accepted NULL/1 → 1，并一次性冻结 username + acknowledged_at；
+    - 重试：返回首次记录，绝不覆盖 actor/时间，created=False；
+    - 已明确 reject（accepted=0）或半截 provenance：fail-closed。
+
+    返回 ``(record, created)``；created 只取 SQL UPDATE.rowcount，不按 username
+    或文件存在性猜测。这里不自行 BEGIN/COMMIT，curation orchestration 会把
+    DB CAS 与 draft case ensure 放在同一串行临界区；发布后异常保留待核现场，
+    不做可能误伤并发写者的文件删除/覆盖补偿。
+    """
+    if not isinstance(actor_username, str) or not actor_username.strip():
+        raise ValueError("sample 认可 actor_username 必须是非空字符串")
+    if not isinstance(acknowledged_at, str) or not acknowledged_at.strip():
+        raise ValueError("sample 认可 acknowledged_at 必须是非空字符串")
+
+    cur = conn.execute(
+        """
+        UPDATE samples
+        SET accepted_by_engineer = 1,
+            acknowledged_by_username = ?,
+            acknowledged_at = ?
+        WHERE id = ?
+          AND acknowledged_by_username IS NULL
+          AND acknowledged_at IS NULL
+          AND (accepted_by_engineer IS NULL OR accepted_by_engineer = 1)
+        """,
+        (actor_username, acknowledged_at, sample_id),
+    )
+    if cur.rowcount == 1:
+        created = get_sample(conn, sample_id)
+        if created is None:
+            raise SampleAcknowledgementConflictError(
+                f"样本 {sample_id} 认可 CAS 后记录消失，fail-closed"
+            )
+        return created, True
+
+    sample = get_sample(conn, sample_id)
+    if sample is None:
+        return None, False
+    if sample.get("accepted_by_engineer") is False:
+        raise SampleAcknowledgementConflictError(
+            f"样本 {sample_id} 已被人工拒绝，sample 级认可不得覆盖"
+        )
+    stored_actor = sample.get("acknowledged_by_username")
+    stored_at = sample.get("acknowledged_at")
+    if (stored_actor is None) != (stored_at is None):
+        raise SampleAcknowledgementConflictError(
+            f"样本 {sample_id} 的认可 provenance 不完整，fail-closed"
+        )
+    if (
+        not isinstance(stored_actor, str)
+        or not stored_actor.strip()
+        or not isinstance(stored_at, str)
+        or not stored_at.strip()
+        or sample.get("accepted_by_engineer") is not True
+    ):
+        raise SampleAcknowledgementConflictError(
+            f"样本 {sample_id} 认可 CAS 失败且既有 provenance 非法，fail-closed"
+        )
+    return sample, False
 
 
 def set_sample_review_outcome(

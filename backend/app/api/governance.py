@@ -4,6 +4,7 @@
 - GET  /api/agents/{id}/eval-runs      跑批历史（证据链，最近优先）
 - GET  /api/agents/{id}/eval-runs/{id} 单条状态（T1 轮询 queued→running→completed）
 - POST /api/agents/{id}/eval-cases     认可样本固化为 draft eval case
+- POST /api/samples/{id}/acknowledge   认证人按 sample id 认可并幂等 ensure draft
 - POST /api/agents/{id}/promote        L0→L1 晋升（fail-closed，422 携逐条判定）
 - GET  /api/agents/{id}/promotions     晋升审计记录
 """
@@ -17,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..governance import curation, eval_runner, promotion, signer_provenance
+from ..logging_setup import audit_event
 from ..storage import repos
 
 router = APIRouter(prefix="/api", tags=["governance"])
@@ -135,8 +137,57 @@ def fix_sample(agent_id: str, body: FixSampleRequest, request: Request) -> dict[
             status_code=409,
             detail=f"样本已固化为 {exc.case_file}，拒绝重复生成",
         ) from exc
+    except curation.CurationPackageConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except curation.CurationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class AcknowledgeSampleRequest(BaseModel):
+    """Issue #4：actor 字段不存在；extra=forbid 钉死客户端伪造身份。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+@router.post("/samples/{sample_id}/acknowledge")
+def acknowledge_sample(
+    sample_id: int,
+    body: AcknowledgeSampleRequest,
+    request: Request,
+) -> dict[str, Any]:
+    del body  # 空模型只承担 extra-forbid 契约
+    actor_username = request.state.auth_session.username
+    try:
+        outcome = curation.acknowledge_sample(
+            conn_factory=request.app.state.conn_factory,
+            agent_registry=request.app.state.agent_registry,
+            sample_id=sample_id,
+            actor_username=actor_username,
+        )
+    except curation.SampleNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except curation.SampleAcknowledgementConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except curation.CurationPackageConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except curation.CurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result = outcome.record
+    audit_event(
+        "sample_acknowledgement",
+        actor=actor_username,
+        outcome=(
+            "acknowledged"
+            if outcome.created is True
+            else "idempotent_replay"
+        ),
+        sample_id=sample_id,
+        agent_id=result["agent_id"],
+        case_file=result["case_file"],
+        curation=result["curation"],
+        acknowledged_by_username=result["acknowledged_by_username"],
+    )
+    return result
 
 
 class PromoteRequest(BaseModel):
@@ -200,9 +251,24 @@ def list_promotions_all(request: Request, limit: int = 20) -> list[dict[str, Any
 
 @router.get("/agents/{agent_id}/curated_cases_count")
 def curated_cases_count(agent_id: str, request: Request) -> dict[str, Any]:
-    """该 agent 已固化 eval case 数（批C Agent 成长档案）。按仓内落盘文件计
-    （ADR-0018 固化即落盘无 DB 行）。agent 不存在 404；目录缺失=0（不抛）。只读。"""
+    """该 agent curation 两态计数（Issue #4）。
+
+    分类直接复用 EvalRunner/Promotion 承重的 load_eval_cases：approved 才可进
+    评测/晋升；draft 只是候选；broken 会使晋升 fail-closed。count 保留旧客户端
+    的总数投影（approved + draft + broken），新增三字段消除原 raw-glob 混计。
+    """
     _agent_or_404(request, agent_id)
-    cases_dir = request.app.state.agents_dir / agent_id / "eval_cases"
-    count = sum(1 for _ in cases_dir.glob("case_*.json")) if cases_dir.is_dir() else 0
-    return {"agent_id": agent_id, "count": count}
+    pkg_dir = request.app.state.agent_registry.package_dir(agent_id)
+    if pkg_dir is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"agent {agent_id} 的 Registry package source 不可用",
+        )
+    approved, drafts, broken = eval_runner.load_eval_cases(pkg_dir)
+    return {
+        "agent_id": agent_id,
+        "count": len(approved) + len(drafts) + len(broken),
+        "approved": len(approved),
+        "draft": len(drafts),
+        "broken": len(broken),
+    }
