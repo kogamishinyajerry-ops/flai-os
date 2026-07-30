@@ -156,12 +156,9 @@ const signoff = computed(() => deriveSignoff(props.events));
   font-weight: 600;
   color: var(--ink);
 }
+/* 批次 D 去盒化：标题/行内图标不再各自带框带底，纯图标与文字基线对齐，
+   分区由既有 hairline（.verify-row 顶线）承担。 */
 .verify-title > .el-icon {
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--hairline);
-  border-radius: 8px;
-  background: var(--paper-rail);
   color: var(--ink-soft);
   font-size: 16px;
 }
@@ -174,12 +171,9 @@ const signoff = computed(() => deriveSignoff(props.events));
 }
 .verify-icon {
   flex: none;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: var(--paper-rail);
+  align-self: center;
   color: var(--ink-soft);
-  font-size: 15px;
+  font-size: 14px;
 }
 .verify-row + .verify-row {
   border-top: 1px solid var(--hairline-soft);

@@ -2028,7 +2028,8 @@ watch(
   font-weight: 700;
   letter-spacing: 1.4px;
   text-transform: uppercase;
-  color: var(--clay);
+  /* clay 预算（批次五 C3）：eyebrow 降灰，与 WorkbenchSession .sess-goal-kicker 同语法。 */
+  color: var(--ink-faint);
 }
 .plan-kicker.refuse { color: var(--trust-pending); margin-bottom: 10px; display: inline-block; }
 .plan-count {
@@ -2190,13 +2191,23 @@ watch(
 }
 
 /* codex 式子 agent 行：紧凑、实时、灰阶纪律（彩色只给状态灯与信任色语义）。
-   注意特异性：.agent-card 基类是 flex 且声明在后，必须用双类压制。 */
+   注意特异性：.agent-card 基类是 flex 且声明在后，必须用双类压制。
+   去盒化（批次五 C3）：降盒为 hairline 分隔的扁平行——去同色底+描边，
+   行间发丝线分隔；hover 只留 --hover-tint 底，不抬不影。 */
 .agent-card.sa-row {
   display: block;
   padding: 10px 14px;
   gap: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--hairline-soft);
 }
-.agent-card.sa-row:hover { transform: none; }
+.agent-card.sa-row:hover {
+  transform: none;
+  box-shadow: none;
+  background: var(--hover-tint);
+}
 .sa-head {
   display: flex;
   align-items: center;
@@ -2336,12 +2347,11 @@ watch(
   background: color-mix(in srgb, var(--trust-pending) 8%, transparent);
   color: var(--trust-pending);
 }
+/* 去盒化（批次五 C3）：去底色+描边，只留顶部发丝线与上方 chip 分隔。 */
 .sa-evidence-expand {
   margin: 8px 0 0 17px;
   padding: 10px 12px;
-  border: 1px solid var(--hairline-soft);
-  border-radius: 10px;
-  background: var(--surface-raised);
+  border-top: 1px solid var(--hairline-soft);
 }
 
 /* T6 拒答行：amber 非红——诚实拒答是履约不是失败（O6 探针） */
@@ -2381,9 +2391,9 @@ watch(
   border-color: var(--border-warm-hover);
 }
 /* 死 CSS 清理（W5，grep 实证模板零消费）：.agent-main/.agent-top 属旧大卡布局，
- * sa-row 改版后无 DOM 承载——删规则；.agent-card 基类是 sa-row 的承重底座
- * （背景/描边/圆角/hover 阴影），保留；class token 本身是 m9 e2e 的 nth 钩子，
- * 模板中的 "agent-card" 字符串绝不可摘。 */
+ * sa-row 改版后无 DOM 承载——删规则；.agent-card 基类保留（class token 本身是
+ * m9 e2e 的 nth 钩子，模板中的 "agent-card" 字符串绝不可摘）；批次五 C3 去盒化
+ * 后，其背景/描边/hover 影由 .agent-card.sa-row 覆盖为 hairline 扁平行。 */
 .agent-name {
   font-weight: 700;
   font-size: 15px;
@@ -2466,8 +2476,13 @@ watch(
 }
 .artifact-open {
   font-weight: 700;
-  color: var(--clay);
+  /* clay 预算（批次五 C3）：与 .status-peek 同语法——常驻 ink-soft，行 hover 回 clay。 */
+  color: var(--ink-soft);
   font-size: 11.5px;
+  transition: color var(--motion-fast) var(--ease-out-soft);
+}
+.status-artifact:hover .artifact-open {
+  color: var(--clay);
 }
 @media (prefers-reduced-motion: reduce) {
   .status-lamp.is-pulsing { animation: none; }

@@ -178,6 +178,12 @@
           <span>显示另外 {{ hiddenArtifactCount }} 个</span>
           <el-icon class="artifact-more-icon" aria-hidden="true"><ArrowDown /></el-icon>
         </button>
+        <!-- 渐进披露说明行（批次 D P1）：默认先给可读报告，数据/日志类产物由
+             shouldCollapseArtifactForReview 自动收纳——把「为什么有的产物折着」
+             讲成一句人话，下钻路径显式可见。计数来自真实折叠态，不估。 -->
+        <p v-if="collapsedArtifactCount > 0" class="artifact-collapsed-hint">
+          数据与日志类产物已默认收纳 <span class="num-token">{{ collapsedArtifactCount }}</span> 件——先读报告，展开即可逐项核对原始数据。
+        </p>
       </div>
 
       <!-- 核验自证段（F3，kit11「校验方式」语法）：产物之后、动作之前——签发前
@@ -715,6 +721,10 @@ const visibleArtifacts = computed(() =>
   artifactsExpanded.value ? artifacts.value : artifacts.value.slice(0, ARTIFACT_PREVIEW_COUNT),
 );
 const hiddenArtifactCount = computed(() => artifacts.value.length - visibleArtifacts.value.length);
+// 默认收纳计数（批次 D P1）：含自动收纳与手动收起，纯真实视图态投影。
+const collapsedArtifactCount = computed(() =>
+  artifacts.value.filter((a) => a.collapsed).length,
+);
 
 // 产物类型标签（F6）走 utils/format 的 artifactTypeLabel SSOT——StatusCenter
 // 速览同款徽章共用一份词表（3-lens 抓过孪生点漂移），本地副本已删。
@@ -1285,6 +1295,12 @@ onUnmounted(() => {
   width: 13px;
   height: 13px;
   font-size: 13px;
+}
+/* 渐进披露说明行（批次 D P1）：安静一行灰字，零盒零底色（空态 line 态纪律）。 */
+.artifact-collapsed-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--ink-faint);
 }
 .source-panel {
   border: 1px solid var(--hairline);

@@ -44,7 +44,7 @@
                 <!-- 行级紧凑时钟（批次三 G4）：全量 locale 串收敛为同日 HH:MM/跨日 MM-DD HH:MM。 -->
                 <span class="sc-item-sub">{{ t.agent_id }} · {{ rowClock(t.created_at) }}</span>
               </span>
-              <span class="sc-item-cta">审阅 →</span>
+              <span class="sc-item-cta is-review">审阅 →</span>
             </div>
           </div>
           <div v-else class="sc-zero">
@@ -887,6 +887,11 @@ onUnmounted(() => {
   font-weight: 600;
   color: var(--clay);
 }
+/* amber=待人签强 CTA（信任色锁：amber 仅待审语义）——与 GuidePage
+   .status-peek.is-review 同槽同语义，签发来找人。 */
+.sc-item-cta.is-review {
+  color: var(--trust-pending);
+}
 .sc-zero {
   display: flex;
   flex-direction: column;
@@ -1080,11 +1085,17 @@ onUnmounted(() => {
   font-size: 11px;
   color: var(--ink-faint);
 }
+/* 下载链接（批次五 C3 裁决，DeliveryCard .delivery-chip 同语法）：常驻非状态
+   语义的链接降 ink-soft+下划线，hover 回 clay。 */
 .peek-artifact-dl {
   flex: none;
   font-size: 12px;
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.peek-artifact-dl:hover {
   color: var(--clay);
-  text-decoration: none;
 }
 .peek-artifact-body {
   padding: 10px 12px;

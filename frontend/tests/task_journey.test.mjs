@@ -197,6 +197,30 @@ test("buildTaskJourney: completed 但签发请求无决策时，签发与交付�
   assert.equal(byId(steps, "delivery").detail, "完成状态待核");
 });
 
+test("buildTaskJourney: completed 不推导「所有环节都可信」，各环节只投影各自真值", () => {
+  // 批次 D P1 锁定：completed 是中性落定，不是信任通行证——无签发事件时
+  // 签发/交付不得借 completed 染任何通过色；无调用记录时调用节点如实报「无」，
+  // 不得反推「调用都成功」。
+  const steps = buildTaskJourney({
+    task: { status: "completed", inputs: {}, input_file_ids: [], output_file_ids: ["o1"] },
+    events: [],
+    modelCalls: [],
+    modelCallsLoaded: true,
+  });
+
+  assert.equal(byId(steps, "execution").tone, "neutral");
+  assert.equal(byId(steps, "calls").tone, "neutral");
+  assert.equal(byId(steps, "calls").detail, "无工具或模型调用记录");
+  assert.equal(byId(steps, "review").tone, "neutral");
+  assert.equal(byId(steps, "review").detail, "未进入人工签发");
+  assert.equal(byId(steps, "delivery").tone, "neutral");
+  assert.equal(
+    steps.every((step) => ["neutral", "pending", "fail", "work", "signed"].includes(step.tone)),
+    true,
+  );
+  assert.equal(steps.some((step) => step.tone === "signed"), false);
+});
+
 test("buildTaskJourney: 输入校验失败只归因输入节点，未知任务状态保持 amber", () => {
   const invalid = buildTaskJourney({
     task: { status: "failed", inputs: {}, input_file_ids: [], output_file_ids: [] },

@@ -170,7 +170,9 @@
             <span class="upload-name">{{ item.name }}</span>
             <el-tag v-if="item.status === 'pending'" size="small">待上传</el-tag>
             <el-tag v-else-if="item.status === 'uploading'" type="info" size="small">上传中…</el-tag>
-            <el-tag v-else-if="item.status === 'done'" type="success" size="small">已上传</el-tag>
+            <!-- 信任色锁：已上传=文件就位的中性事实，不是真实核验通过——不得用
+                 success 绿（绿仅严格真实核验 REAL），改中性 info。文案不动（m6 锚）。 -->
+            <el-tag v-else-if="item.status === 'done'" type="info" size="small">已上传</el-tag>
             <el-tag v-else type="danger" size="small">失败：{{ item.error }}</el-tag>
             <el-button size="small" text :disabled="submitting" @click="removeUploadItem(item)">移除</el-button>
           </div>
@@ -749,34 +751,28 @@ onUnmounted(() => window.removeEventListener("resize", onResize));
   font-size: 12px;
   color: var(--ink-faint);
 }
+/* 策略边界区去盒化（批 B P1）：外框+三个内盒改为上下 hairline 分区 + 留白，
+   图标与短文字标签成对保留；字号从 9-10.5px 提到可读的 11-12px。 */
 .create-policy {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 12px;
   margin: 0 0 18px 100px;
-  padding: 10px;
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  background: var(--paper-rail);
+  padding: 12px 2px;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
 }
 .create-policy-item {
   min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px;
-  border: 1px solid var(--hairline-soft);
-  border-radius: 9px;
-  background: var(--surface-raised);
+  align-items: flex-start;
+  gap: 8px;
 }
 .create-policy-item > .el-icon {
   flex: none;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
+  margin-top: 2px;
   color: var(--ink-soft);
-  background: var(--paper-canvas-b, var(--paper-rail));
-  font-size: 17px;
+  font-size: 15px;
 }
 .create-policy-item > span {
   min-width: 0;
@@ -786,20 +782,23 @@ onUnmounted(() => window.removeEventListener("resize", onResize));
 }
 .create-policy-item strong {
   color: var(--ink);
-  font-size: 10.5px;
+  font-size: 12px;
+  font-weight: 600;
 }
 .create-policy-item small {
   color: var(--ink-faint);
-  font-size: 9px;
-  line-height: 1.3;
+  font-size: 11px;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 .create-policy > p {
   grid-column: 1 / -1;
   margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline-soft);
   color: var(--trust-pending);
-  font-size: 10.5px;
-  line-height: 1.45;
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 .limits-label {
   font-weight: 600;

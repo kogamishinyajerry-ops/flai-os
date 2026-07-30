@@ -7,15 +7,19 @@
         <p>评测通过只是证据；人工确认、服务端准入和持久化晋升记录缺一不可。</p>
       </div>
     </div>
+    <!-- 阅读顺序（P0 修订）：两行均左→右，mono 序号 1-6 承载顺序语义；
+         行内箭头恒 →，行间换行箭头在下行起点恒 ↓——撤销旧蛇形（下行 ←）
+         的方向矛盾。窄屏（container ≤430px）塌缩为单列，全部箭头 ↓。 -->
     <div class="governance-map" role="list">
       <article
-        v-for="step in steps"
+        v-for="(step, idx) in steps"
         :key="step.id"
         class="governance-step"
         :class="[`step-${step.id}`, `tone-${step.tone}`]"
         role="listitem"
-        :aria-label="`${step.label}：${step.detail}`"
+        :aria-label="`第 ${idx + 1} 步，${step.label}：${step.detail}`"
       >
+        <span class="governance-num num-token" aria-hidden="true">{{ idx + 1 }}</span>
         <el-icon class="governance-icon" aria-hidden="true">
           <component :is="ICONS[step.id]" />
         </el-icon>
@@ -25,8 +29,8 @@
       <el-icon class="governance-arrow arrow-a" aria-hidden="true"><ArrowRight /></el-icon>
       <el-icon class="governance-arrow arrow-b" aria-hidden="true"><ArrowRight /></el-icon>
       <el-icon class="governance-arrow arrow-turn" aria-hidden="true"><ArrowDown /></el-icon>
-      <el-icon class="governance-arrow arrow-c" aria-hidden="true"><ArrowLeft /></el-icon>
-      <el-icon class="governance-arrow arrow-d" aria-hidden="true"><ArrowLeft /></el-icon>
+      <el-icon class="governance-arrow arrow-c" aria-hidden="true"><ArrowRight /></el-icon>
+      <el-icon class="governance-arrow arrow-d" aria-hidden="true"><ArrowRight /></el-icon>
     </div>
     <div v-if="draftCount > 0" class="governance-draft-branch">
       <el-icon aria-hidden="true"><CollectionTag /></el-icon>
@@ -39,7 +43,6 @@
 import { computed } from "vue";
 import {
   ArrowDown,
-  ArrowLeft,
   ArrowRight,
   Collection,
   CollectionTag,
@@ -120,11 +123,12 @@ const draftCount = computed(() =>
   grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr) 18px minmax(0, 1fr);
   grid-template-areas:
     "cases arrow-a dispatch arrow-b result"
-    ". . . . arrow-turn"
-    "promotion arrow-d gate arrow-c confirmation";
+    "arrow-turn . . . ."
+    "confirmation arrow-c gate arrow-d promotion";
   gap: 5px 2px;
 }
 .governance-step {
+  position: relative; /* mono 序号锚点 */
   min-width: 0;
   min-height: 82px;
   display: flex;
@@ -143,6 +147,15 @@ const draftCount = computed(() =>
 .step-confirmation { grid-area: confirmation; }
 .step-gate { grid-area: gate; }
 .step-promotion { grid-area: promotion; }
+/* 序号=阅读顺序的形状通道（顺序不靠颜色/箭头方向单独承担） */
+.governance-num {
+  position: absolute;
+  top: 4px;
+  left: 7px;
+  color: var(--ink-faint);
+  font-size: 9.5px;
+  line-height: 1;
+}
 .governance-icon {
   width: 30px;
   height: 30px;
@@ -171,8 +184,10 @@ const draftCount = computed(() =>
 .arrow-b { grid-area: arrow-b; }
 .arrow-c { grid-area: arrow-c; }
 .arrow-d { grid-area: arrow-d; }
+/* 换行箭头锚在下行起点（confirmation 上方），方向恒 ↓ 与序号 3→4 一致 */
 .arrow-turn {
   grid-area: arrow-turn;
+  justify-self: center;
 }
 .tone-work .governance-icon {
   color: var(--clay);
@@ -194,6 +209,14 @@ const draftCount = computed(() =>
 .tone-fail small {
   color: var(--trust-fail);
 }
+/* 状态分区的形状通道：tone 同时落在步骤左边框色条上（queued/running/error/
+   严格全通过/人工确认/晋升成功六态=文字 detail + 色条 + 图标三重承载，
+   颜色永不单独表达状态） */
+.tone-work { border-left: 2px solid var(--clay); }
+.tone-pending { border-left: 2px solid var(--trust-pending); }
+.tone-real { border-left: 2px solid var(--trust-real); }
+.tone-signed { border-left: 2px solid var(--trust-signed); }
+.tone-fail { border-left: 2px solid var(--trust-fail); }
 .governance-draft-branch {
   display: flex;
   align-items: center;
@@ -222,15 +245,13 @@ const draftCount = computed(() =>
   }
   .governance-step { min-height: 64px; }
   .arrow-a,
-  .arrow-b {
+  .arrow-b,
+  .arrow-c,
+  .arrow-d {
     transform: rotate(90deg);
   }
   .arrow-turn {
     transform: none;
-  }
-  .arrow-c,
-  .arrow-d {
-    transform: rotate(-90deg);
   }
 }
 </style>

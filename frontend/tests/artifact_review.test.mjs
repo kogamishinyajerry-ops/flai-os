@@ -59,6 +59,18 @@ test("shouldCollapseArtifactForReview: 没有人读报告时保持首份原始�
   assert.equal(shouldCollapseArtifactForReview(reviewSet[1], reviewSet), true);
 });
 
+test("orderArtifactsForReview: 显式 ext 字段优先于文件名后缀，缺 ext 才回退文件名", () => {
+  const artifacts = [
+    { fileId: "a", filename: "download.bin", ext: "md" },
+    { fileId: "b", filename: "report.txt" },
+  ];
+
+  assert.deepEqual(
+    orderArtifactsForReview(artifacts).map((item) => item.fileId),
+    ["a", "b"],
+  );
+});
+
 test("shouldCollapseArtifactForReview: 加载失败的首项仍展开显示错误", () => {
   const reviewSet = [
     { fileId: "broken", filename: "broken.md", error: "下载失败" },

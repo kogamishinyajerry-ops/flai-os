@@ -111,7 +111,11 @@
                 <div v-for="t in tasksFor(a)" :key="t.id" class="chip-group">
                   <div
                     :class="['task-chip', { review: t.status === 'waiting_review' }]"
+                    role="button"
+                    tabindex="0"
                     @click="goTask(t)"
+                    @keydown.enter.self.prevent="goTask(t)"
+                    @keydown.space.self.prevent="goTask(t)"
                   >
                     <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status), 'is-hollow': chipStatusWord(t) === '等待接力' }" :style="{ background: chipStatusWord(t) === '等待接力' ? 'transparent' : taskLampColor(t.status) }"></span>
                     <span class="chip-name">{{ taskDisplayName(t, agentNames.map) }}</span>
@@ -121,7 +125,8 @@
                     <span class="chip-status" :style="{ color: chipStatusColor(t) }">{{ chipStatusWord(t) }}</span>
                     <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
                     <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
-                    <!-- B2 速览接入（additive）：chip 本体点击仍走 goTask 跳详情；速览用 @click.stop 独立打开。 -->
+                    <!-- B2 速览接入（additive）：chip 本体点击仍走 goTask 跳详情；速览用 @click.stop 独立打开。
+                         chip 键盘三件套用 .self：嵌套速览钮上的 Enter/Space 冒泡不得双触发 goTask。 -->
                     <button type="button" class="chip-peek-btn" @click.stop="openTaskPeek(t.id)">速览</button>
                   </div>
                   <div v-if="taskLastWord[t.id]" class="chip-lastword">{{ taskLastWord[t.id] }}</div>
@@ -160,7 +165,7 @@
         >
           <span v-if="doneUnseen(a)" class="rg-unread-ring"></span>
           <span class="rg-name" :class="{ 'is-unread': doneUnseen(a) }">{{ a.agent_name }}</span>
-          <span class="rg-gray">{{ doneLineFor(a) }}</span>
+          <span class="rg-gray"><template v-for="(seg, si) in doneLineFor(a)" :key="si"><span v-if="seg.fail" class="rg-fail-word">{{ seg.text }}</span><template v-else>{{ seg.text }}</template></template></span>
           <span
             v-if="doneEvidenceText(a)"
             class="rg-evi"
@@ -202,7 +207,7 @@
       <div v-if="otherTasks.length" class="sess-block">
         <div class="block-label">其它归属本会话的任务</div>
         <div class="task-chips">
-          <div v-for="t in otherTasks" :key="t.id" :class="['task-chip', { review: t.status === 'waiting_review' }]" @click="goTask(t)">
+          <div v-for="t in otherTasks" :key="t.id" :class="['task-chip', { review: t.status === 'waiting_review' }]" role="button" tabindex="0" @click="goTask(t)" @keydown.enter.self.prevent="goTask(t)" @keydown.space.self.prevent="goTask(t)">
             <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status), 'is-hollow': chipStatusWord(t) === '等待接力' }" :style="{ background: chipStatusWord(t) === '等待接力' ? 'transparent' : taskLampColor(t.status) }"></span>
             <span class="chip-name">{{ taskDisplayName(t, agentNames.map) }}</span>
             <span class="chip-time">{{ sessClock(t.created_at) }}</span>
@@ -349,17 +354,19 @@ function waitingLineFor(a) {
 }
 
 // 已完成折叠单行：过去式+用时（时态即状态；失败玫红词只给真失败）。
+// W16 分段返回：真失败只染「失败」状态词 token（模板 .rg-fail-word），
+// 其余段与完成/取消一样保持中性，绝不整行染色。
 function doneLineFor(a) {
   const t = latestTaskFor(a);
-  if (!t) return "";
+  if (!t) return [];
   const extra = tasksFor(a).length - 1;
   const suffix = extra > 0 ? ` · +${extra} 更早任务` : "";
   if (t.status === "completed") {
     const d = durTextOf(t);
-    return (d ? `已完成 · 用时 ${d}` : "已完成") + suffix;
+    return [{ text: (d ? `已完成 · 用时 ${d}` : "已完成") + suffix }];
   }
-  if (t.status === "failed") return `失败 · 查看失败详情 →${suffix}`;
-  return `已取消${suffix}`;
+  if (t.status === "failed") return [{ text: "失败", fail: true }, { text: ` · 查看失败详情 →${suffix}` }];
+  return [{ text: `已取消${suffix}` }];
 }
 
 function doneUnseen(a) {
@@ -731,6 +738,8 @@ onUnmounted(() => {
 .rg-name { font-weight: 600; color: var(--ink); white-space: nowrap; }
 .rg-name.is-unread { font-weight: 700; }
 .rg-gray { color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* W16：真失败只染状态词 token（红仅真实失败），行内其余文字保持中性。 */
+.rg-fail-word { color: var(--trust-fail); }
 .rg-spacer { flex: 1 1 auto; }
 .rg-evi {
   flex: none;

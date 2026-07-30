@@ -84,33 +84,30 @@ const steps = computed(() => buildTaskJourney({
 </script>
 
 <style scoped>
+/* 批次 D 去盒化：整链与六节点不再各自带框带底（旧版 rail 底色盒套 6 个凸起
+   盒），改 hairline 分区 + 字重/字号分层。自身即查询容器——窄宿主（任务台
+   中栏/375px/速览）蛇形栅格改纵向单链，箭头让位序号与 hairline，无横向溢出。 */
 .task-journey {
   margin-top: 16px;
-  padding: 14px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-lg, 12px);
-  background: var(--paper-rail);
+  padding: 12px 0 0;
+  border-top: 1px solid var(--hairline);
   container-type: inline-size;
 }
 .task-journey.is-compact {
   margin: 0 0 16px;
-  padding: 10px;
+  padding-top: 10px;
 }
 .journey-head {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  margin-bottom: 12px;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 .journey-head-icon {
   flex: none;
-  width: 30px;
-  height: 30px;
-  border: 1px solid var(--hairline);
-  border-radius: 9px;
-  background: var(--surface-raised);
+  margin-top: 1px;
   color: var(--ink-soft);
-  font-size: 17px;
+  font-size: 16px;
 }
 .journey-head h3 {
   margin: 0 0 2px;
@@ -126,26 +123,22 @@ const steps = computed(() => buildTaskJourney({
 }
 .journey-map {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 22px minmax(0, 1fr) 22px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr) 16px minmax(0, 1fr);
   grid-template-areas:
     "input arrow-a execution arrow-b calls"
     ". . . . arrow-turn"
     "delivery arrow-d review arrow-c artifacts";
-  gap: 7px 2px;
+  gap: 6px 2px;
   align-items: stretch;
 }
 .journey-step {
   position: relative;
   min-width: 0;
-  min-height: 96px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 10px 6px 9px;
-  border: 1px solid var(--hairline-soft);
-  border-radius: 10px;
-  background: var(--surface-raised);
+  gap: 3px;
+  padding: 8px 4px 6px;
   text-align: center;
 }
 .step-input { grid-area: input; }
@@ -156,30 +149,25 @@ const steps = computed(() => buildTaskJourney({
 .step-delivery { grid-area: delivery; }
 .journey-index {
   position: absolute;
-  top: 6px;
-  left: 7px;
+  top: 4px;
+  left: 6px;
   font-family: var(--mono, ui-monospace, monospace);
   font-size: 9px;
   color: var(--ink-faint);
 }
 .journey-icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: var(--paper-canvas-b, var(--paper-rail));
   color: var(--ink-soft);
-  font-size: 20px;
+  font-size: 19px;
 }
 .journey-label {
   font-size: 11.5px;
   font-weight: 700;
   color: var(--ink);
-  white-space: nowrap;
 }
 .journey-detail {
   max-width: 100%;
   font-size: 10px;
-  line-height: 1.35;
+  line-height: 1.4;
   color: var(--ink-faint);
   overflow-wrap: anywhere;
 }
@@ -187,7 +175,7 @@ const steps = computed(() => buildTaskJourney({
   align-self: center;
   justify-self: center;
   color: var(--ink-faint);
-  font-size: 15px;
+  font-size: 14px;
 }
 .arrow-a { grid-area: arrow-a; }
 .arrow-b { grid-area: arrow-b; }
@@ -196,7 +184,6 @@ const steps = computed(() => buildTaskJourney({
 .arrow-d { grid-area: arrow-d; }
 .tone-work .journey-icon {
   color: var(--clay);
-  background: var(--clay-soft);
 }
 .tone-pending .journey-icon,
 .tone-pending .journey-detail {
@@ -211,15 +198,54 @@ const steps = computed(() => buildTaskJourney({
   color: var(--trust-fail);
 }
 .is-compact .journey-step {
-  min-height: 82px;
-  padding-block: 8px;
+  padding-block: 6px;
 }
 .is-compact .journey-icon {
-  width: 30px;
-  height: 30px;
-  font-size: 18px;
+  font-size: 17px;
 }
 .is-compact .journey-detail {
   font-size: 9.5px;
+}
+/* 窄宿主纵向单链：DOM 序即流程序（输入→交付自上而下），蛇形箭头整体让位，
+   步骤间 hairline 分区，序号回流行首。 */
+@container (max-width: 620px) {
+  .journey-map {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .journey-step {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 0;
+    text-align: left;
+  }
+  .journey-step + .journey-step {
+    border-top: 1px solid var(--hairline-soft);
+  }
+  .journey-index {
+    position: static;
+    flex: none;
+    min-width: 12px;
+    margin-top: 3px;
+    font-size: 10px;
+  }
+  .journey-icon {
+    flex: none;
+    margin-top: 1px;
+    font-size: 16px;
+  }
+  .journey-label {
+    flex: none;
+    margin-top: 1px;
+  }
+  .journey-detail {
+    flex: 1 1 auto;
+    margin-top: 2px;
+  }
+  .journey-arrow {
+    display: none;
+  }
 }
 </style>

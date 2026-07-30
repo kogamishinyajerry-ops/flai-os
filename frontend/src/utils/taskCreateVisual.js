@@ -13,9 +13,28 @@ function hasErrors(value) {
   return Array.isArray(value) && value.length > 0;
 }
 
+// 旅程节点状态三通道（批 B 深度打磨）：tone 只承担色彩通道，state 决定状态图标、
+// stateLabel 是给读屏与扫读的短文字标签——状态绝不只靠颜色表达。
+// ready=已就绪（中性墨，不给绿）；review=数据已载入、待人核对（amber 待核语义）；
+// pending=缺数据/待处理；working=真实在途；error=真实失败。
+const STEP_STATES = new Set(["ready", "review", "pending", "working", "error"]);
+
+function withState(step, state, stateLabel) {
+  if (!STEP_STATES.has(state)) {
+    // fail-closed：编程错误给出未知状态时不得渲染成「已就绪」。
+    state = "pending";
+    stateLabel = "状态待核";
+  }
+  return { ...step, state, stateLabel };
+}
+
 function policyDetail(agent) {
   if (!agent || typeof agent !== "object") {
-    return { tone: "pending", detail: "选择 Agent 后核对策略边界" };
+    return withState(
+      { tone: "pending", detail: "选择 Agent 后核对策略边界" },
+      "pending",
+      "待核对"
+    );
   }
 
   let clearance;
@@ -45,7 +64,13 @@ function policyDetail(agent) {
     || !Array.isArray(agent.limitations)
   ) ? "pending" : "neutral";
 
-  return { tone, detail: `${clearance} · ${evidence} · ${limitations}` };
+  return withState(
+    { tone, detail: `${clearance} · ${evidence} · ${limitations}` },
+    // 策略字段齐备≠人已核对：只标「请核对」（review，amber 待核语义）；
+    // 任一字段未知/畸形则 pending「策略待核」，绝不呈现成已就绪。
+    tone === "neutral" ? "review" : "pending",
+    tone === "neutral" ? "请核对" : "策略待核"
+  );
 }
 
 export function buildTaskCreateJourney({
@@ -80,29 +105,43 @@ export function buildTaskCreateJourney({
 
   let agentStep;
   if (hasText(agentsListError) || hasText(agentLoadError)) {
-    agentStep = { tone: "fail", detail: "Agent 信息加载失败" };
+    agentStep = withState({ tone: "fail", detail: "Agent 信息加载失败" }, "error", "加载失败");
   } else if (journeyAgent) {
-    agentStep = { tone: "neutral", detail: `已选择 ${journeyAgent.name || journeyAgent.id}` };
+    // 下拉值与详情身份一致才是「已选定」（中性墨；就绪不给绿，绿仅真实核验）。
+    agentStep = withState(
+      { tone: "neutral", detail: `已选择 ${journeyAgent.name || journeyAgent.id}` },
+      "ready",
+      "已选定"
+    );
   } else if (hasText(agentId)) {
-    agentStep = { tone: "pending", detail: "正在核对 Agent 信息" };
+    agentStep = withState({ tone: "pending", detail: "正在核对 Agent 信息" }, "pending", "核对中");
   } else {
-    agentStep = { tone: "pending", detail: "请选择 Agent" };
+    agentStep = withState({ tone: "pending", detail: "请选择 Agent" }, "pending", "待选择");
   }
 
   let capabilityStep;
   if (!journeyAgent) {
-    capabilityStep = { tone: "pending", detail: "能力说明待 Agent 选定" };
+    capabilityStep = withState(
+      { tone: "pending", detail: "能力说明待 Agent 选定" },
+      "pending",
+      "待核对"
+    );
   } else {
     const category = CATEGORY_LABELS[journeyAgent.category] || "能力类型待核";
     const maturity = hasText(journeyAgent.maturity)
       ? `成熟度 ${journeyAgent.maturity}`
       : "成熟度待核";
-    capabilityStep = {
-      tone: CATEGORY_LABELS[journeyAgent.category] && hasText(journeyAgent.maturity)
-        ? "neutral"
-        : "pending",
-      detail: `${category} · ${maturity} · 请核对适用范围`,
-    };
+    const known = CATEGORY_LABELS[journeyAgent.category] && hasText(journeyAgent.maturity);
+    capabilityStep = withState(
+      {
+        tone: known ? "neutral" : "pending",
+        detail: `${category} · ${maturity} · 请核对适用范围`,
+      },
+      // 能力信息载入完成也只到「请核对」（review）——核对人的动作，平台不预支；
+      // 类别/成熟度缺失则 pending「信息待核」，fail-closed 不升级。
+      known ? "review" : "pending",
+      known ? "请核对" : "信息待核"
+    );
   }
 
   let inputStep;
@@ -112,32 +151,71 @@ export function buildTaskCreateJourney({
     || uploadFailure
     || hasText(submitError)
   ) {
-    inputStep = { tone: "fail", detail: "输入或附件存在真实错误" };
+    inputStep = withState(
+      { tone: "fail", detail: "输入或附件存在真实错误" },
+      "error",
+      "有错误"
+    );
   } else if (uploadingFiles || uploadWorking || submitting) {
-    inputStep = {
-      tone: "work",
-      detail: uploadingFiles || uploadWorking ? "正在上传附件" : "正在锁定本次输入",
-    };
+    inputStep = withState(
+      {
+        tone: "work",
+        detail: uploadingFiles || uploadWorking ? "正在上传附件" : "正在锁定本次输入",
+      },
+      "working",
+      "进行中"
+    );
   } else if (hasText(prefillOrigin)) {
-    inputStep = { tone: "pending", detail: "预填草案待核，请你确认" };
+    // 预填草案恒 amber 待核——机器带入内容未经人确认，绝不升级就绪。
+    inputStep = withState(
+      { tone: "pending", detail: "预填草案待核，请你确认" },
+      "pending",
+      "草案待核"
+    );
   } else if (journeyAgent && jsonMode && schemaRenderable !== true) {
-    inputStep = { tone: "pending", detail: "改用 JSON，结构仍待后端校验" };
+    inputStep = withState(
+      { tone: "pending", detail: "改用 JSON，结构仍待后端校验" },
+      "pending",
+      "结构待核"
+    );
   } else if (journeyAgent) {
-    inputStep = {
-      tone: "neutral",
-      detail: doneCount > 0
-        ? `已上传 ${doneCount} 件，尚未提交`
-        : "填写参数并按需添加附件",
-    };
+    // 前端不做合法性预支：真实判定由后端 fail-closed 承担，故这里只到
+    // review（待人填写/复核），即使无错误记录也不标「已就绪」。
+    inputStep = withState(
+      {
+        tone: "neutral",
+        detail: doneCount > 0
+          ? `已上传 ${doneCount} 件，尚未提交`
+          : "填写参数并按需添加附件",
+      },
+      "review",
+      doneCount > 0 ? "附件已就绪" : "待你填写"
+    );
   } else {
-    inputStep = { tone: "pending", detail: "输入契约待 Agent 选定" };
+    inputStep = withState(
+      { tone: "pending", detail: "输入契约待 Agent 选定" },
+      "pending",
+      "待核对"
+    );
   }
 
   const submitStep = hasText(submitError)
-    ? { tone: "fail", detail: "任务未创建，请处理错误后重试" }
+    ? withState(
+        { tone: "fail", detail: "任务未创建，请处理错误后重试" },
+        "error",
+        "创建失败"
+      )
     : submitting
-      ? { tone: "work", detail: uploadingFiles ? "上传后将按快照创建" : "正在创建任务" }
-      : { tone: "pending", detail: "等待你亲手提交；提交不等于签发" };
+      ? withState(
+          { tone: "work", detail: uploadingFiles ? "上传后将按快照创建" : "正在创建任务" },
+          "working",
+          "进行中"
+        )
+      : withState(
+          { tone: "pending", detail: "等待你亲手提交；提交不等于签发" },
+          "pending",
+          "待你提交"
+        );
 
   return [
     { id: "agent", label: "选择 Agent", ...agentStep },

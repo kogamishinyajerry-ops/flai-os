@@ -148,6 +148,29 @@ export function promotionChecksSummary(checks) {
   return { tone: "pending", detail: "准入判定记录不完整" };
 }
 
+/**
+ * 评测通过率趋势点：只画 summarizeEvalRun 判定「字段与用例明细严格对上」的
+ * 已完成跑批（evidenceReady）——畸形/在途/报错 run 一律剔除，未知计数绝不
+ * 压成 0。pct=null 表示 total=0「无有效用例」；tone 直接承袭 summarizeEvalRun
+ * 的信任色（real=严格全通过才给绿，fail=真实失败，pending=含跳过待核，
+ * neutral=无有效用例恒中性）。返回旧→新（时间轴左旧右新），最多 limit 条。
+ */
+export function buildEvalTrend(runs, { limit = 8 } = {}) {
+  if (!Array.isArray(runs)) return [];
+  return runs
+    .filter((run) => summarizeEvalRun(run).evidenceReady === true)
+    .slice(0, limit)
+    .map((run) => ({
+      id: run.id,
+      passed: run.passed ?? 0,
+      total: run.total ?? 0,
+      pct: run.total > 0 ? Math.round((run.passed / run.total) * 100) : null,
+      at: run.finished_at || run.started_at,
+      tone: summarizeEvalRun(run).tone,
+    }))
+    .reverse();
+}
+
 export function buildGovernanceJourney({
   maturity,
   curatedCasesCount = null,

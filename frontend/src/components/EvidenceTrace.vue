@@ -1,28 +1,29 @@
 <template>
+  <!-- 依据链三节点（批次 D 去盒化重排）：hairline 分区取代「卡中卡中卡」——
+       节点不再各自带框带底，宽容器横向流（箭头右指），窄容器（含 260px 环境
+       rail）经容器查询改纵向流（箭头下指），长说明自由换行绝不裁切——旧版定高
+       盒 + 绝对定位箭头在 1440px 下把「人工判断」说明拦腰裁掉（P0）。
+       tone 仍只有 neutral/pending/fail 三槽：resolved=true 恒中性，绿不外借；
+       状态词随文字同行，不靠颜色单独表达。 -->
   <section class="evidence-trace" :class="{ 'is-compact': compact }" :aria-label="title">
     <div class="evidence-trace-head">
       <el-icon aria-hidden="true"><Link /></el-icon>
-      <div>
-        <strong>{{ title }}</strong>
-        <small>{{ subtitle }}</small>
-      </div>
+      <strong>{{ title }}</strong>
+      <small>{{ subtitle }}</small>
     </div>
     <ol class="evidence-trace-map">
-      <li
-        v-for="(step, index) in steps"
-        :key="step.id"
-        class="evidence-trace-step"
-        :class="`tone-${step.tone}`"
-      >
-        <el-icon aria-hidden="true"><component :is="icons[step.id]" /></el-icon>
-        <span>
-          <strong>{{ step.label }}</strong>
-          <small>{{ step.detail }}</small>
-        </span>
-        <el-icon v-if="index < steps.length - 1" class="evidence-trace-arrow" aria-hidden="true">
-          <ArrowRight />
-        </el-icon>
-      </li>
+      <template v-for="(step, index) in steps" :key="step.id">
+        <li class="evidence-trace-step" :class="`tone-${step.tone}`">
+          <el-icon aria-hidden="true"><component :is="icons[step.id]" /></el-icon>
+          <span class="evidence-trace-text">
+            <strong>{{ step.label }}</strong>
+            <small>{{ step.detail }}</small>
+          </span>
+        </li>
+        <li v-if="index < steps.length - 1" class="evidence-trace-arrow" aria-hidden="true">
+          <el-icon><ArrowRight /></el-icon>
+        </li>
+      </template>
     </ol>
   </section>
 </template>
@@ -71,124 +72,113 @@ const icons = computed(() =>
 </script>
 
 <style scoped>
+/* 自身即查询容器（W3 同款纪律）：按真实宿主几何切换横/纵——详情页主列宽宿主
+   横向三节点，260px 环境 rail / 窄屏自动纵向，不靠视口媒查猜宿主。 */
 .evidence-trace {
+  container-type: inline-size;
   margin: 0 0 12px;
-  padding: 11px 12px;
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  background: var(--paper-rail);
+  padding: 10px 0 0;
+  border-top: 1px solid var(--hairline-soft);
 }
 .evidence-trace-head {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .evidence-trace-head > .el-icon {
-  flex: none;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--hairline);
-  border-radius: 8px;
-  background: var(--surface-raised);
+  align-self: center;
   color: var(--ink-soft);
-  font-size: 16px;
-}
-.evidence-trace-head > div {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
+  font-size: 14px;
 }
 .evidence-trace-head strong {
   color: var(--ink);
-  font-size: 12px;
+  font-size: 12.5px;
+  font-weight: 600;
 }
 .evidence-trace-head small {
   color: var(--ink-faint);
-  font-size: 10px;
+  font-size: 11px;
 }
 .evidence-trace-map {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 8px 0 0;
   padding: 0;
   list-style: none;
 }
 .evidence-trace-step {
-  position: relative;
+  flex: 1 1 0;
   min-width: 0;
-  min-height: 58px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
-  padding: 7px 20px 7px 8px;
-  border: 1px solid var(--hairline-soft);
-  border-radius: 9px;
-  background: var(--surface-raised);
 }
-.evidence-trace-step > .el-icon:first-child {
+.evidence-trace-step > .el-icon {
   flex: none;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--paper-canvas-b, var(--paper-rail));
+  margin-top: 1px;
   color: var(--ink-soft);
-  font-size: 16px;
+  font-size: 15px;
 }
-.evidence-trace-step > span {
+.evidence-trace-text {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
-.evidence-trace-step strong {
+.evidence-trace-text strong {
   color: var(--ink);
-  font-size: 10.5px;
+  font-size: 11.5px;
+  font-weight: 600;
 }
-.evidence-trace-step small {
+/* 说明文字自由换行是 P0 裁切修复的本体：无定高、无裁切、无给箭头预留的
+   右 padding——信息完整优先于节点等高。 */
+.evidence-trace-text small {
   color: var(--ink-faint);
-  font-size: 9px;
-  line-height: 1.3;
+  font-size: 10.5px;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 .evidence-trace-arrow {
-  position: absolute;
-  right: -12px;
-  z-index: 1;
+  flex: none;
+  display: flex;
+  margin-top: 1px;
   color: var(--ink-faint);
   font-size: 13px;
 }
-.tone-pending > .el-icon:first-child,
+.tone-pending > .el-icon,
 .tone-pending small {
   color: var(--trust-pending);
 }
-.tone-fail > .el-icon:first-child,
+.tone-fail > .el-icon,
 .tone-fail small {
   color: var(--trust-fail);
 }
 .is-compact {
-  padding: 8px;
+  padding-top: 8px;
 }
 .is-compact .evidence-trace-head small {
   display: none;
 }
-.is-compact .evidence-trace-step {
-  min-height: 48px;
-  padding-block: 5px;
-}
-@media (max-width: 520px) {
+/* 窄宿主纵向流：箭头转向下（静态旋转变换，非动效，reduced-motion 无涉），
+   步骤间用 hairline 分区。 */
+@container (max-width: 540px) {
   .evidence-trace-map {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+    gap: 0;
   }
   .evidence-trace-step {
-    min-height: 52px;
-    padding-right: 8px;
+    padding: 7px 0;
+  }
+  .evidence-trace-step + .evidence-trace-arrow + .evidence-trace-step {
+    border-top: 1px solid var(--hairline-soft);
   }
   .evidence-trace-arrow {
-    right: 50%;
-    bottom: -12px;
-    transform: translateX(50%) rotate(90deg);
+    margin: 0 0 0 1px;
+  }
+  .evidence-trace-arrow .el-icon {
+    transform: rotate(90deg);
   }
 }
 </style>

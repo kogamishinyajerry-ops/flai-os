@@ -73,7 +73,9 @@
 
             <!-- 次级 meta 一行（批次四 Q4）：类型/成熟度/id·版本合并为一行
                  安静小字——释义走 :title；id 字面保持可见 DOM（m10 has_text
-                 锚 + m2 body 断言），只降视觉权重不降可见性。 -->
+                 锚 + m2 body 断言），只降视觉权重不降可见性。
+                 批次 A+C：「N 项不适用边界」chip 撤下——与下方「不适用范围 · N」
+                 折叠标题纯重复（P1 文字墙）；治理入口移至动作行与主 CTA 同列。 -->
             <div class="agent-tags">
               <span
                 class="cat-pill"
@@ -93,12 +95,7 @@
                 <el-icon aria-hidden="true"><TrendCharts /></el-icon>
                 成熟度 · {{ agent.maturity }}
               </el-tag>
-              <span v-if="agent.limitations && agent.limitations.length" class="agent-boundary-token">
-                <el-icon aria-hidden="true"><Warning /></el-icon>
-                {{ agent.limitations.length }} 项不适用边界
-              </span>
               <span class="agent-meta-token">{{ agent.id }} · v{{ agent.version }}</span>
-              <button type="button" class="gov-entry" @click="openGovernance(agent)">治理</button>
             </div>
 
           <el-collapse v-if="agent.limitations && agent.limitations.length">
@@ -116,6 +113,7 @@
           </el-collapse>
 
             <div class="agent-actions">
+              <button type="button" class="gov-entry" @click="openGovernance(agent)">治理</button>
               <el-button
                 v-if="agent.mode === 'interactive'"
                 type="primary"
@@ -235,11 +233,6 @@
       @closed="resetGovernanceDialog"
     >
       <div v-if="governanceAgent" v-loading="governanceLoading" class="gov-panel">
-        <div class="gov-maturity-tag">
-          <span>成熟度</span>
-          <el-tag type="info" effect="plain" size="small">{{ governanceAgent.maturity }}</el-tag>
-        </div>
-
         <el-alert
           v-if="governanceLoadError"
           type="error"
@@ -250,7 +243,18 @@
 
         <template v-else>
           <div class="gov-ladder">
-            <div class="section-label">成熟度</div>
+            <!-- 「成熟度」全弹窗只出现这一次（P0 修订）：顶部曾另有一行
+                 成熟度+pill 与阶梯重复、信息层级自相矛盾，已撤——当前档位的
+                 pill 并入阶梯标题行，阶梯本身是唯一的成熟度呈现。 -->
+            <div class="gov-ladder-head">
+              <span class="section-label">成熟度</span>
+              <el-tag
+                type="info"
+                effect="plain"
+                size="small"
+                :title="maturityTip(governanceAgent.maturity)"
+              >{{ governanceAgent.maturity }}</el-tag>
+            </div>
             <div class="gov-ladder-track">
               <span
                 v-for="step in maturityLadder"
@@ -276,16 +280,32 @@
 
           <div v-if="evalTrend.length" class="gov-eval-trend">
             <div class="section-label">评测通过率（近 {{ evalTrend.length }} 次）</div>
-            <!-- 柱值数字（W7c）：与下方柱子逐一对位，无有效用例显 —，轻触不重构弹窗结构。 -->
+            <!-- 语义化趋势（P0 修订）：每柱=mono 数字+状态图标+信任色 tone
+                 （严格全通过才绿/真实失败红/含跳过 amber/无有效用例中性 —），
+                 hairline 基线为唯一零轴；柱列固定宽度左对齐，单次评测不再拉成
+                 一根撑满全宽的无语义灰条。颜色永不单独表达状态（图标+数字同在）。 -->
             <div class="gov-trend-vals">
-              <span v-for="run in evalTrend" :key="run.id" class="gov-trend-val num-token">{{ run.pct === null ? "—" : run.pct }}</span>
+              <span
+                v-for="run in evalTrend"
+                :key="run.id"
+                class="gov-trend-val num-token"
+                :class="`tone-${run.tone}`"
+              >
+                <el-icon aria-hidden="true">
+                  <CircleCheckFilled v-if="run.tone === 'real'" />
+                  <CircleCloseFilled v-else-if="run.tone === 'fail'" />
+                  <QuestionFilled v-else-if="run.tone === 'pending'" />
+                  <Minus v-else />
+                </el-icon>
+                {{ run.pct === null ? "—" : run.pct }}
+              </span>
             </div>
             <div class="gov-trend-bars">
               <span
                 v-for="run in evalTrend"
                 :key="run.id"
                 class="gov-trend-bar"
-                :class="{ 'is-empty': run.pct === null }"
+                :class="[`tone-${run.tone}`, { 'is-empty': run.pct === null }]"
                 :style="run.pct !== null ? { height: Math.max(6, run.pct) + '%' } : {}"
                 :title="run.pct === null
                   ? `无有效用例 · ${formatTime(run.at)}`
@@ -422,6 +442,7 @@ import {
   CircleCloseFilled,
   Document,
   Key,
+  Minus,
   QuestionFilled,
   Reading,
   Tools,
@@ -441,6 +462,7 @@ import SchemaForm from "../components/SchemaForm.vue";
 import { parseSchema, blankInputs, collectInputs, validateInputs } from "../utils/schemaForm";
 import { uploadFile as apiUploadFile } from "../api/files";
 import {
+  buildEvalTrend,
   buildMaturityLadder,
   PROMOTION_CHECK_LABELS,
   promotionIdentity,
@@ -529,21 +551,9 @@ const checkVisual = (check) => {
   if (check?.ok === false) return { tone: "fail", label: "未通过" };
   return { tone: "pending", label: "待核" };
 };
-// 最近 ≤8 次评测，旧→新（时间轴左旧右新）；pct=null 表示 total=0「无有效用例」
-const evalTrend = computed(() =>
-  (governanceRuns.value || [])
-    .filter((r) => summarizeEvalRun(r).evidenceReady === true)
-    // 只画字段与用例明细均严格对上的已完成跑批——未知计数不压成 0
-    .slice(0, 8)
-    .map((r) => ({
-      id: r.id,
-      passed: r.passed ?? 0,
-      total: r.total ?? 0,
-      pct: r.total > 0 ? Math.round((r.passed / r.total) * 100) : null,
-      at: r.finished_at || r.started_at,
-    }))
-    .reverse()
-);
+// 最近 ≤8 次评测，旧→新（时间轴左旧右新），逐点带信任色 tone（P0 趋势语义化）；
+// 只画 summarizeEvalRun 严格对账通过的跑批——未知计数不压成 0，pct=null=无有效用例。
+const evalTrend = computed(() => buildEvalTrend(governanceRuns.value));
 
 async function load() {
   loading.value = true;
@@ -1117,7 +1127,6 @@ onMounted(load);
   align-items: center;
   gap: 4px;
 }
-.agent-boundary-token,
 .limitations-title {
   display: inline-flex;
   align-items: center;
@@ -1137,11 +1146,16 @@ onMounted(load);
   font-size: 12px;
   cursor: pointer;
   padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
 }
-.gov-entry:hover,
-.gov-entry:focus-visible {
+.gov-entry:hover {
   color: var(--ink);
   text-decoration: underline;
+}
+.gov-entry:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
+  color: var(--ink);
 }
 .agent-summary {
   color: var(--ink-soft);
@@ -1184,21 +1198,20 @@ onMounted(load);
 .agent-actions {
   margin-top: auto;
   padding-top: var(--space-3);
-  text-align: right;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
 }
 .gov-panel {
   color: var(--ink);
   min-height: 180px;
 }
-.gov-maturity-tag {
+.gov-ladder-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 14px;
-  margin-bottom: var(--space-4);
-  border-bottom: 1px solid var(--hairline);
-  color: var(--ink-soft);
-  font-size: 13px;
+  gap: var(--space-2);
 }
 .gov-run-block {
   margin-top: 2px;
@@ -1293,29 +1306,50 @@ onMounted(load);
   font-size: 11px;
 }
 .gov-eval-trend { margin: 14px 0; }
-/* 柱值数字行（W7c）：与下方 .gov-trend-bars 逐一对位的 mono 微标数字，null 用 —。 */
+/* 趋势列（P0 语义化）：固定宽度左对齐——1 次评测也是一根窄柱而非撑满全宽；
+   数字行与柱行同宽逐一对位，hairline 基线为唯一零轴。 */
 .gov-trend-vals {
   display: flex;
-  gap: var(--space-1);
+  gap: 10px;
 }
 .gov-trend-val {
-  flex: 1;
-  text-align: center;
+  flex: none;
+  width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
   font-size: var(--fs-2xs);
   color: var(--ink-faint);
 }
+.gov-trend-val .el-icon { font-size: 10px; }
 .gov-trend-bars {
-  display: flex; align-items: flex-end; gap: var(--space-1); height: 48px;
+  display: flex; align-items: flex-end; gap: 10px; height: 48px;
   padding: var(--space-1) 0; margin-top: var(--space-1);
   border-bottom: 1px solid var(--hairline); /* W7c：hairline 基线，柱子有零轴可读 */
 }
 .gov-trend-bar {
-  flex: 1; min-height: 6px; background: var(--ink-mid); border-radius: 2px 2px 0 0;
+  flex: none; width: 34px; min-height: 6px; background: var(--ink-mid); border-radius: 2px 2px 0 0;
   opacity: 0.75;
 }
 .gov-trend-bar.is-empty {
   background: transparent; border: 1px dashed var(--hairline); min-height: 100%;
   opacity: 1;
+}
+/* 柱 tone 承袭 summarizeEvalRun 严格判定：绿仅严格全通过，红仅真实失败，
+   amber=含跳过待核，中性=无有效用例（completed 恒中性）。 */
+.gov-trend-bar.tone-real { background: var(--trust-real); }
+.gov-trend-bar.tone-fail { background: var(--trust-fail); }
+.gov-trend-bar.tone-pending { background: var(--trust-pending); }
+.gov-trend-val.tone-real { color: var(--trust-real); }
+.gov-trend-val.tone-fail { color: var(--trust-fail); }
+.gov-trend-val.tone-pending { color: var(--trust-pending); }
+/* 窄屏（375px 弹窗内容 ~300px）：柱列收窄保 8 柱无横向溢出，数字/柱仍逐一对位。 */
+@media (max-width: 480px) {
+  .gov-trend-vals,
+  .gov-trend-bars { gap: 6px; }
+  .gov-trend-val,
+  .gov-trend-bar { width: 26px; }
 }
 .gov-cases-count { margin-top: var(--space-3); color: var(--ink-soft); font-size: 12.5px; }
 .gov-cases-count b { color: var(--ink); }
