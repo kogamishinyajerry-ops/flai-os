@@ -15,6 +15,7 @@
         :rows="4"
         :maxlength="f.maxLength"
         :show-word-limit="!!f.maxLength"
+        :disabled="disabled"
         :placeholder="`请填写${f.label}`"
       />
       <!-- 单行文本 -->
@@ -22,6 +23,7 @@
         v-else-if="f.kind === 'text'"
         v-model="model[f.key]"
         :maxlength="f.maxLength"
+        :disabled="disabled"
         :placeholder="`请填写${f.label}`"
       />
       <!-- 数字 -->
@@ -32,15 +34,17 @@
         :max="f.max"
         :step="1"
         :step-strictly="f.integer"
+        :disabled="disabled"
         controls-position="right"
         class="sf-control"
       />
       <!-- 布尔 -->
-      <el-switch v-else-if="f.kind === 'boolean'" v-model="model[f.key]" />
+      <el-switch v-else-if="f.kind === 'boolean'" v-model="model[f.key]" :disabled="disabled" />
       <!-- 枚举 -->
       <el-select
         v-else-if="f.kind === 'enum'"
         v-model="model[f.key]"
+        :disabled="disabled"
         :placeholder="`请选择${f.label}`"
         class="sf-control"
       >
@@ -52,12 +56,14 @@
           <el-input
             v-model="model[f.key][i]"
             :maxlength="f.itemMaxLength"
+            :disabled="disabled"
             :placeholder="f.itemPlaceholder || `${f.label} 第 ${i + 1} 项`"
           />
           <el-button text :disabled="disabled" class="sf-remove" @click="removeAt(f.key, i)">移除</el-button>
         </div>
         <el-button size="small" :disabled="disabled || atMax(f)" @click="addString(f.key)">
-          ＋ 添加{{ f.label }}
+          <el-icon aria-hidden="true"><Plus /></el-icon>
+          添加{{ f.label }}
         </el-button>
       </div>
       <!-- 对象列表：动态增删子表单 -->
@@ -80,13 +86,19 @@
               :min="sub.min"
               :max="sub.max"
               :step-strictly="sub.integer"
+              :disabled="disabled"
               controls-position="right"
               class="sf-control"
             />
-            <el-switch v-else-if="sub.kind === 'boolean'" v-model="model[f.key][i][sub.key]" />
+            <el-switch
+              v-else-if="sub.kind === 'boolean'"
+              v-model="model[f.key][i][sub.key]"
+              :disabled="disabled"
+            />
             <el-select
               v-else-if="sub.kind === 'enum'"
               v-model="model[f.key][i][sub.key]"
+              :disabled="disabled"
               :placeholder="`请选择${sub.label}`"
               class="sf-control"
             >
@@ -95,12 +107,14 @@
             <el-input
               v-else
               v-model="model[f.key][i][sub.key]"
+              :disabled="disabled"
               :placeholder="`请填写${sub.label}`"
             />
           </el-form-item>
         </div>
         <el-button size="small" :disabled="disabled || atMax(f)" @click="addRow(f)">
-          ＋ 添加{{ f.label }}
+          <el-icon aria-hidden="true"><Plus /></el-icon>
+          添加{{ f.label }}
         </el-button>
       </div>
 
@@ -111,6 +125,7 @@
 
 <script setup>
 import { computed } from "vue";
+import { Plus } from "@element-plus/icons-vue";
 import { parseSchema, blankObjectRow } from "../utils/schemaForm";
 
 const props = defineProps({
@@ -161,11 +176,13 @@ function removeAt(key, i) {
   flex-direction: column;
   gap: 8px;
   width: 100%;
+  min-width: 0;
 }
 .sf-row {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 .sf-remove {
   flex: 0 0 auto;
@@ -175,6 +192,7 @@ function removeAt(key, i) {
   color: var(--trust-fail, #be3a3a);
 }
 .sf-objcard {
+  min-width: 0;
   border: 1px solid var(--hairline);
   border-radius: 10px;
   padding: 12px 14px 4px;
@@ -193,11 +211,22 @@ function removeAt(key, i) {
 }
 .sf-subitem {
   margin-bottom: 10px;
+  min-width: 0;
 }
 .sf-hint {
   color: var(--ink-faint);
   font-size: 12px;
   line-height: 1.5;
   margin-top: 4px;
+}
+@media (max-width: 480px) {
+  .sf-row {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+  .sf-row > :first-child {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
 }
 </style>

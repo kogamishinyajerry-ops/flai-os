@@ -52,8 +52,9 @@
     <!-- 批七 §3-13 依据区（字段缺省渲染无，全存量 agent 向后兼容）：findings
          摘要 chip + 拒答 amber 行——数据走 taskEvidence 模块缓存（与 GuidePage/
          WorkbenchSession 同源，同任务零重复拉取）。 -->
-    <div v-if="evidenceSummary" class="delivery-evidence" :class="{ 'has-unverified': evidenceSummary.unverified > 0 }">
-      依据 {{ evidenceSummary.total }} 条（{{ evidenceSummary.verified }} 已核验 · {{ evidenceSummary.unverified }} 未核）<template v-if="evidenceSummary.level"> · 置信度 {{ evidenceSummary.level }}（模型自评）</template>
+    <div v-if="evidenceSummary" class="delivery-evidence" :class="{ 'has-unverified': evidenceSummary.invalid || evidenceSummary.unverified > 0 }">
+      <template v-if="evidenceSummary.invalid">依据结构待核</template>
+      <template v-else>依据 {{ evidenceSummary.total }} 条（{{ evidenceSummary.verified }} 已核验 · {{ evidenceSummary.unverified }} 未核）<template v-if="evidenceSummary.level"> · 置信度 {{ evidenceSummary.level }}（模型自评）</template></template>
     </div>
     <div v-if="refusalCount > 0" class="delivery-refusals">
       已如实说明：{{ refusalCount }} 项超出能力范围
@@ -82,6 +83,7 @@ import CompletionSeal from "./CompletionSeal.vue";
 import { downloadUrl } from "../api/files";
 import { getDeliverySummary, listOutputFiles } from "../api/tasks";
 import { taskElapsedMs, formatDuration, formatTokens, taskDisplayName } from "../utils/format";
+import { orderArtifactsForReview } from "../utils/artifactReview";
 import { useAgentNames } from "../stores/agentNames";
 import { ensureTaskEvidence, taskEvidenceOf, taskEvidenceSummary } from "../stores/taskEvidence";
 
@@ -120,7 +122,7 @@ async function loadArtifacts(taskId, ids) {
   }
   try {
     const files = await listOutputFiles(taskId);
-    artifacts.value = files.slice(0, 3);
+    artifacts.value = orderArtifactsForReview(files).slice(0, 3);
     extraCount.value = Math.max(0, files.length - artifacts.value.length);
   } catch (err) {
     const targets = uniqueIds.slice(0, 3);

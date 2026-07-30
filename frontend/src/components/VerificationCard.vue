@@ -7,12 +7,16 @@
        真失败计数 ·「均为真实执行」用中性墨**不给绿**——绿解锁是性能盘真结果
        接入后的项目级决策，本组件不越权。 -->
   <div v-if="visible" class="verify-card">
-    <h3 class="verify-title">核验</h3>
+    <h3 class="verify-title">
+      <el-icon aria-hidden="true"><DocumentChecked /></el-icon>
+      核验三面
+    </h3>
 
     <!-- ①工具真实性：数据源只认 tool_runs 落库记录（runner 如实记 mock 位），
          措辞限定在「记录」层，不越权声称运行时真相；拉取失败诚实降级为
          「不可用」（中性——网络失败≠任务失败，红不外借）。 -->
     <div class="verify-row">
+      <el-icon class="verify-icon" aria-hidden="true"><Tools /></el-icon>
       <span class="verify-label">工具</span>
       <span v-if="toolState === 'loading'" class="verify-muted">核验信息加载中…</span>
       <span v-else-if="toolState === 'error'" class="verify-muted">工具核验信息不可用（拉取失败）</span>
@@ -34,6 +38,7 @@
          内容受限」呈现成「未经签发」；「未经人工签发流程」严格收窄到 events
          里根本不存在 review_* 事件。 -->
     <div class="verify-row">
+      <el-icon class="verify-icon" aria-hidden="true"><UserFilled /></el-icon>
       <span class="verify-label">签发</span>
       <span v-if="signoff && signoff.redacted" class="verify-muted">签发记录不可用（内容受限）</span>
       <!-- unknown（Codex R0-P2）：无遮蔽标记的缺字段=「不完整」，不编「受限」。 -->
@@ -51,6 +56,7 @@
     <!-- ③批量结果：有 summary_generated 事件才渲染（batchSummary=null 整行
          不出现，不编「成功 0 · 失败 0」）。 -->
     <div v-if="batchSummary" class="verify-row">
+      <el-icon class="verify-icon" aria-hidden="true"><DataAnalysis /></el-icon>
       <span class="verify-label">批量</span>
       <span class="verify-text">
         成功 <span class="num-token">{{ batchSummary.ok }}</span> · 失败
@@ -62,6 +68,7 @@
 
 <script setup>
 import { ref, computed, watch } from "vue";
+import { DataAnalysis, DocumentChecked, Tools, UserFilled } from "@element-plus/icons-vue";
 import { getToolRunsSummary } from "../api/tasks";
 import { deriveSignoff, signoffText } from "../utils/format";
 
@@ -141,10 +148,22 @@ const signoff = computed(() => deriveSignoff(props.events));
    .section h3 是 scoped 规则（选择器尾项打宿主 data-v），进不了子组件内部，
    此处按同值复刻保持同屏节奏一致（15px/600/ink/底距 12px）。 */
 .verify-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   margin: 0 0 12px;
   font-size: 15px;
   font-weight: 600;
   color: var(--ink);
+}
+.verify-title > .el-icon {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--paper-rail);
+  color: var(--ink-soft);
+  font-size: 16px;
 }
 .verify-row {
   display: flex;
@@ -152,6 +171,15 @@ const signoff = computed(() => deriveSignoff(props.events));
   gap: 10px;
   padding: 5px 0;
   font-size: 12.5px;
+}
+.verify-icon {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--paper-rail);
+  color: var(--ink-soft);
+  font-size: 15px;
 }
 .verify-row + .verify-row {
   border-top: 1px solid var(--hairline-soft);

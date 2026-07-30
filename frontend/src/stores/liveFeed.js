@@ -54,6 +54,7 @@ function buildTaskChannel(ch, taskId) {
     task: ref(null),
     events: ref([]),
     modelCalls: ref([]),
+    modelCallsLoaded: ref(false),
     modelCallsError: ref(""),
     loaded: ref(false),
     error: ref(""),
@@ -89,10 +90,12 @@ function buildTaskChannel(ch, taskId) {
       .then((modelCalls) => {
         if (!fresh() || seq !== ch.modelCallsSeq) return;
         ch.state.modelCalls.value = modelCalls;
+        ch.state.modelCallsLoaded.value = true;
         ch.state.modelCallsError.value = "";
       })
       .catch((err) => {
         if (!fresh() || seq !== ch.modelCallsSeq) return;
+        ch.state.modelCallsLoaded.value = true;
         ch.state.modelCallsError.value = err.detail || err.message || "加载失败";
       });
   };

@@ -23,11 +23,41 @@
     <template v-else>
       <div v-if="feedError" class="today-error" role="alert">{{ feedErrorDisplay }}</div>
 
+      <div class="today-overview" aria-label="今日任务状态总览">
+        <div class="today-overview-item is-waiting">
+          <el-icon aria-hidden="true"><Stamp /></el-icon>
+          <span class="today-overview-copy">
+            <strong v-if="waitingTasks.length" class="num-token">{{ waitingTasks.length }}</strong>
+            <strong v-else class="today-overview-empty">当前无</strong>
+            <span>待签发</span>
+          </span>
+        </div>
+        <div class="today-overview-item">
+          <el-icon aria-hidden="true"><Timer /></el-icon>
+          <span class="today-overview-copy">
+            <strong v-if="workingTasks.length" class="num-token">{{ workingTasks.length }}</strong>
+            <strong v-else class="today-overview-empty">当前无</strong>
+            <span>进行中</span>
+          </span>
+        </div>
+        <div class="today-overview-item">
+          <el-icon aria-hidden="true"><Files /></el-icon>
+          <span class="today-overview-copy">
+            <strong v-if="deliveryTasks.length" class="num-token">{{ deliveryTasks.length }}</strong>
+            <strong v-else class="today-overview-empty">今天无</strong>
+            <span>今日交付</span>
+          </span>
+        </div>
+      </div>
+
       <!-- 版块 1：待你签发（amber 置顶，行动召唤最高优先）。零值不显示（批次四
            Q2，cd-bg-tasks-panel 语法全站化）：N=0 时组头不渲染「· 0」——版块
            容器恒在（batch_b ① 钉五版块），只收计数后缀。 -->
       <section class="today-section">
-        <div class="today-section-head waiting">✍ 待你签发<template v-if="waitingTasks.length"> · <span class="num-token">{{ waitingTasks.length }}</span></template></div>
+        <div class="today-section-head waiting">
+          <el-icon aria-hidden="true"><Stamp /></el-icon>
+          <span>待你签发<template v-if="waitingTasks.length"> · <span class="num-token">{{ waitingTasks.length }}</span></template></span>
+        </div>
         <div v-if="waitingTasks.length" class="today-list">
           <div
             v-for="t in waitingTasks"
@@ -42,7 +72,10 @@
             <!-- lamp 走 taskLampColor SSOT（B-T3 审 P3）。耗时：待签行不再显示
                  「运行 Xs」——taskElapsedMs 对停驻态返回 null（批次六 B6-5：
                  无 finished_at 时墙钟端锚只属于工作态，待签期间膨胀的时长=假声明）。 -->
-            <span class="today-lamp" :style="{ background: taskLampColor(t.status) }"></span>
+            <span class="today-card-visual" aria-hidden="true">
+              <el-icon><Stamp /></el-icon>
+              <span class="today-lamp" :style="{ background: taskLampColor(t.status) }"></span>
+            </span>
             <span class="today-card-main">
               <!-- 人话称呼（批次四 Q1）：缺名回退 Agent 显示名，taskDisplayName
                    三级诚实降级 SSOT；裸 id 退居详情 rail。 -->
@@ -60,7 +93,10 @@
 
       <!-- 版块 2：进行中 -->
       <section class="today-section">
-        <div class="today-section-head working">进行中<template v-if="workingTasks.length"> · <span class="num-token">{{ workingTasks.length }}</span></template></div>
+        <div class="today-section-head working">
+          <el-icon aria-hidden="true"><Timer /></el-icon>
+          <span>进行中<template v-if="workingTasks.length"> · <span class="num-token">{{ workingTasks.length }}</span></template></span>
+        </div>
         <div v-if="workingTasks.length" class="today-list">
           <div
             v-for="t in workingTasks"
@@ -72,7 +108,10 @@
             @keydown.enter.prevent="openTask(t.id)"
             @keydown.space.prevent="openTask(t.id)"
           >
-            <span class="today-lamp" :class="{ 'is-pulsing': isWork(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
+            <span class="today-card-visual" aria-hidden="true">
+              <el-icon><Cpu /></el-icon>
+              <span class="today-lamp" :class="{ 'is-pulsing': isWork(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
+            </span>
             <span class="today-card-main">
               <span class="today-card-name">{{ taskDisplayName(t, agentNames.map) }}</span>
               <span class="today-card-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }} · {{ todayClock(t.created_at) }}</span>
@@ -89,7 +128,8 @@
            标注「显示最近 N 条」（诚实口径，canon 纪律）。 -->
       <section class="today-section">
         <div class="today-section-head">
-          今日交付<template v-if="deliveryTasks.length"> · <span class="num-token">{{ deliveryTasks.length }}</span></template><template v-if="deliveryTasks.length > DELIVERY_DISPLAY_CAP">（显示最近 <span class="num-token">{{ DELIVERY_DISPLAY_CAP }}</span> 条）</template>
+          <el-icon aria-hidden="true"><Files /></el-icon>
+          <span>今日交付<template v-if="deliveryTasks.length"> · <span class="num-token">{{ deliveryTasks.length }}</span></template><template v-if="deliveryTasks.length > DELIVERY_DISPLAY_CAP">（显示最近 <span class="num-token">{{ DELIVERY_DISPLAY_CAP }}</span> 条）</template></span>
         </div>
         <div v-if="deliveryTasks.length" class="today-list">
           <DeliveryCard v-for="t in visibleDeliveryTasks" :key="t.id" :task="t" :animate="sealAnimateIds.has(t.id)" />
@@ -102,7 +142,10 @@
            listGlobalPromotions 的结果做本地 weekStartMs 过滤而非直接取前 5——
            否则「本周暂无晋升」空态文案可能在有更早晋升时误判有数据。 -->
       <section class="today-section">
-        <div class="today-section-head">Agent 动态</div>
+        <div class="today-section-head">
+          <el-icon aria-hidden="true"><TrendCharts /></el-icon>
+          <span>Agent 动态</span>
+        </div>
         <!-- 晋升/统计只在挂载+零点拉取、无轮询——「自动重试中」在此是假声明，
              诚实的「何为」=行内手动重试（批次五 C2）。 -->
         <div v-if="promotionsError" class="today-error" role="alert">
@@ -121,10 +164,13 @@
         <template v-else>
           <div v-if="recentPromotions.length" class="today-list">
             <div v-for="p in recentPromotions" :key="p.id" class="today-promo-row">
-              <span class="today-promo-main">
-                {{ p.agent_id }} 晋升 {{ maturityLabel(p.from_maturity) }} → {{ maturityLabel(p.to_maturity) }}
+              <el-icon class="today-promo-icon" aria-hidden="true"><Promotion /></el-icon>
+              <span class="today-promo-copy">
+                <span class="today-promo-main">
+                  {{ p.agent_id }} 晋升 {{ maturityLabel(p.from_maturity) }} → {{ maturityLabel(p.to_maturity) }}
+                </span>
+                <span class="today-promo-sub">{{ formatRelativeTime(p.created_at) }} · 签发人 {{ p.confirmed_by }}</span>
               </span>
-              <span class="today-promo-sub">{{ formatRelativeTime(p.created_at) }} · 签发人 {{ p.confirmed_by }}</span>
             </div>
           </div>
           <EmptyState v-else variant="data" tier="line" description="本周暂无晋升" />
@@ -138,7 +184,8 @@
           <div class="today-subhead">今日最活跃 Agent</div>
           <div v-if="topActiveAgents.length" class="today-active-row">
             <span v-for="a in topActiveAgents" :key="a.agent_id" class="today-active-chip">
-              {{ a.agent_id }} · {{ a.count }}
+              <el-icon aria-hidden="true"><User /></el-icon>
+              <span>{{ a.agent_id }} · {{ a.count }}</span>
             </span>
           </div>
           <EmptyState v-else variant="data" tier="line" description="今天暂无任务" />
@@ -150,13 +197,17 @@
            0 不是信息；data-stat 语义锚供 e2e 按字段对表（隐藏格由 API 真值
            证实确为 0，绝不是数据丢失）。方法论括注降 title（Q3）。 -->
       <section class="today-section">
-        <div class="today-section-head">团队总量</div>
+        <div class="today-section-head">
+          <el-icon aria-hidden="true"><DataAnalysis /></el-icon>
+          <span>团队总量</span>
+        </div>
         <div v-if="statsError" class="today-error" role="alert">
           {{ statsError }}
           <button type="button" class="today-retry" @click="fetchStats">重试</button>
         </div>
         <div v-else-if="stats && visibleStats.length" class="today-stats-bar">
           <div v-for="s in visibleStats" :key="s.key" class="today-stat-tile" :data-stat="s.key" :title="s.tip || null">
+            <el-icon class="today-stat-icon" aria-hidden="true"><component :is="s.icon" /></el-icon>
             <span class="today-stat-num">{{ typeof s.value === "number" ? s.value : "—" }}</span>
             <span class="today-stat-label">{{ s.label }}</span>
           </div>
@@ -176,6 +227,18 @@
 // 卸载即 release（channel 无其它订阅者时自停）。
 import { computed, onUnmounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
+import {
+  Collection,
+  Cpu,
+  DataAnalysis,
+  Files,
+  Finished,
+  Promotion,
+  Stamp,
+  Timer,
+  TrendCharts,
+  User,
+} from "@element-plus/icons-vue";
 import { acquireChannel, onTransition } from "../stores/liveFeed";
 import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import { getStatsOverview, listGlobalPromotions } from "../api/stats";
@@ -274,10 +337,10 @@ const todayClock = (iso) => formatClockCompact(iso, todayKey.value);
 // 字段定义与 MePage 团队行同一后端投影（tasks_completed/reviews_approved/
 // curated_cases_total/promotions），此处只做展示映射不再造口径。
 const STAT_DEFS = [
-  { key: "tasks_completed", label: "本周完成" },
-  { key: "reviews_approved", label: "本周人签放行" },
-  { key: "curated_cases_total", label: "累计固化 case", tip: "按仓内固化文件计" },
-  { key: "promotions", label: "本周晋升" },
+  { key: "tasks_completed", label: "本周完成", icon: Finished },
+  { key: "reviews_approved", label: "本周人签放行", icon: Stamp },
+  { key: "curated_cases_total", label: "累计固化 case", tip: "按仓内固化文件计", icon: Collection },
+  { key: "promotions", label: "本周晋升", icon: TrendCharts },
 ];
 const visibleStats = computed(() => {
   const s = stats.value;
@@ -454,15 +517,76 @@ onUnmounted(() => {
   flex-direction: column;
   gap: var(--space-3);
 }
+.today-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-bottom: var(--space-6);
+}
+.today-overview-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg, 12px);
+  background: var(--paper-rail);
+  box-shadow: var(--shadow-card);
+}
+.today-overview-item > :deep(.el-icon) {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  color: var(--ink-soft);
+  font-size: 23px;
+}
+.today-overview-item.is-waiting > :deep(.el-icon) {
+  color: var(--trust-pending);
+}
+.today-overview-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.today-overview-copy strong {
+  color: var(--ink);
+  font-size: 19px;
+  line-height: 1.1;
+}
+.today-overview-copy .today-overview-empty {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+@media (max-width: 520px) {
+  .today-overview {
+    grid-template-columns: 1fr;
+  }
+}
 .today-section {
   margin-bottom: var(--space-6);
 }
 .today-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--fs-sm);
   font-weight: 700;
   letter-spacing: 0.5px;
   color: var(--ink-faint);
   margin-bottom: var(--space-2);
+}
+.today-section-head :deep(.el-icon) {
+  flex: none;
+  font-size: 15px;
 }
 .today-section-head.waiting {
   color: var(--trust-pending);
@@ -502,6 +626,27 @@ onUnmounted(() => {
   border-radius: 50%;
   transition: background var(--motion-med) var(--ease-out-soft);
 }
+.today-card-visual {
+  position: relative;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 9px;
+  background: var(--paper-rail);
+  color: var(--ink-soft);
+}
+.today-card-visual :deep(.el-icon) {
+  font-size: 17px;
+}
+.today-card-visual .today-lamp {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  box-shadow: 0 0 0 2px var(--card-bg);
+}
 .today-lamp.is-pulsing {
   animation: flai-work-pulse var(--pulse-duration) ease-in-out infinite;
 }
@@ -529,12 +674,29 @@ onUnmounted(() => {
 }
 .today-promo-row {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--hairline-soft);
   border-radius: 10px;
   background: var(--card-bg);
+}
+.today-promo-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 9px;
+  background: var(--paper-rail);
+  color: var(--ink-soft);
+  font-size: 17px;
+}
+.today-promo-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 .today-promo-main {
   font-size: 13px;
@@ -561,6 +723,9 @@ onUnmounted(() => {
   gap: var(--space-2);
 }
 .today-active-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
   color: var(--ink);
   padding: var(--space-1) var(--space-2);
@@ -571,6 +736,16 @@ onUnmounted(() => {
      参照 delivery-chip max-width 先例截断。 */
   max-width: 220px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.today-active-chip :deep(.el-icon) {
+  flex: none;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+.today-active-chip > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -585,16 +760,31 @@ onUnmounted(() => {
   }
 }
 .today-stat-tile {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    "icon number"
+    "icon label";
+  column-gap: var(--space-2);
+  align-items: center;
   padding: var(--space-3) var(--space-3);
   border: 1px solid var(--hairline-soft);
   border-radius: 10px;
   background: var(--card-bg);
   box-shadow: var(--shadow-card);
 }
+.today-stat-icon {
+  grid-area: icon;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 10px;
+  background: var(--paper-rail);
+  color: var(--ink-soft);
+  font-size: 19px;
+}
 .today-stat-num {
+  grid-area: number;
   font-size: 22px;
   font-weight: 700;
   color: var(--ink);
@@ -602,6 +792,7 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
 }
 .today-stat-label {
+  grid-area: label;
   font-size: 10.5px;
   color: var(--ink-faint);
   line-height: 1.35;

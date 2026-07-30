@@ -4,6 +4,8 @@
       <h2>创建任务</h2>
     </div>
 
+    <TaskCreateJourney :steps="createJourney" @navigate="navigateCreateStep" />
+
     <el-alert
       v-if="agentsListError"
       type="error"
@@ -14,11 +16,12 @@
     />
 
     <el-form :label-width="narrow ? '0' : '100px'" :label-position="narrow ? 'top' : 'right'" class="create-form fx-rise">
-      <el-form-item label="Agent" required>
+      <el-form-item ref="agentAnchor" label="Agent" required>
         <el-select
           v-model="form.agentId"
           placeholder="请选择 Agent"
           filterable
+          :disabled="submitting"
           style="width: 100%"
           @change="handleAgentChange"
         >
@@ -41,26 +44,51 @@
         class="inline-alert"
       />
 
-      <el-card v-if="selectedAgent" class="agent-preview" shadow="never">
+      <el-card v-if="activeAgent" ref="capabilityAnchor" class="agent-preview" shadow="never">
         <div class="agent-preview-header">
-          <strong>{{ selectedAgent.name }}</strong>
-          <el-tag :type="statusTagType(selectedAgent.status)" size="small">
-            {{ statusLabel(selectedAgent.status) }}
+          <strong>{{ activeAgent.name }}</strong>
+          <el-tag
+            :type="statusTagType(activeAgent.status)"
+            size="small"
+            :title="agentStatusTip(activeAgent.status)"
+          >
+            {{ agentStatusLabel(activeAgent.status) }}
           </el-tag>
         </div>
-        <p class="agent-preview-summary">{{ selectedAgent.summary }}</p>
-        <div v-if="selectedAgent.limitations && selectedAgent.limitations.length" class="agent-preview-limits">
-          <span class="limits-label">不适用范围：</span>{{ selectedAgent.limitations.join("；") }}
+        <p class="agent-preview-summary">{{ activeAgent.summary }}</p>
+        <div v-if="activeAgent.limitations && activeAgent.limitations.length" class="agent-preview-limits">
+          <span class="limits-label">不适用范围：</span>{{ activeAgent.limitations.join("；") }}
         </div>
       </el-card>
+
+      <section v-if="activeAgent" ref="policyAnchor" class="create-policy" aria-label="本次任务策略边界">
+        <div class="create-policy-item">
+          <el-icon aria-hidden="true"><Lock /></el-icon>
+          <span><strong>密级边界</strong><small>{{ clearancePolicyText }}</small></span>
+        </div>
+        <div class="create-policy-item">
+          <el-icon aria-hidden="true"><DocumentChecked /></el-icon>
+          <span><strong>依据要求</strong><small>{{ evidencePolicyText }}</small></span>
+        </div>
+        <div class="create-policy-item">
+          <el-icon aria-hidden="true"><Warning /></el-icon>
+          <span><strong>适用范围</strong><small>{{ limitationsPolicyText }}</small></span>
+        </div>
+        <p>任务由你亲手提交；提交不是签发。运行后是否进入待签发状态，以任务真实状态为准。</p>
+      </section>
 
       <el-form-item label="任务名称">
         <!-- @input 清 nameWasPrefilled（R2 P2）：用户一旦手改任务名，即视为人工
              输入，后续预填重入不再撤它。程序化预填赋值不触发 @input，flag 不误清。 -->
-        <el-input v-model="form.name" placeholder="可选，便于在历史中辨认" @input="onNameInput" />
+        <el-input
+          v-model="form.name"
+          :disabled="submitting"
+          placeholder="可选，便于在历史中辨认"
+          @input="onNameInput"
+        />
       </el-form-item>
 
-      <el-form-item label="输入参数">
+      <el-form-item ref="inputAnchor" label="输入参数">
         <div class="inputs-field">
           <!-- 信任色锁（W7）：绿=仅真实结果，预填草案是「未核对」内容，不是已验证
                的真结果——success 绿在此处会误读成「已确认」，改 warning（amber
@@ -75,11 +103,11 @@
           />
 
           <!-- 表单模式：按 Agent input_schema 动态生成带标签+校验的字段 -->
-          <template v-if="selectedAgent && schemaRenderable && !jsonMode">
+          <template v-if="activeAgent && schemaRenderable && !jsonMode">
             <!-- 入场动效只在「刚选中 Agent」时播（modeToggled 门控）：表单/JSON
                  来回切换是同一份数据换展示形态，不重播「刚落地」视觉（信任审 P2）。 -->
             <SchemaForm
-              :schema="selectedAgent.input_schema"
+              :schema="activeAgent.input_schema"
               :model="formInputs"
               :disabled="submitting"
               :class="{ 'fx-stagger': !modeToggled }"
@@ -88,7 +116,7 @@
               <div v-for="(e, i) in inputsErrors" :key="i">{{ e }}</div>
             </div>
             <div class="field-foot">
-              <el-button text size="small" class="mode-toggle" @click="toggleToJson">
+              <el-button text size="small" class="mode-toggle" :disabled="submitting" @click="toggleToJson">
                 高级：直接编辑 JSON
               </el-button>
             </div>
@@ -98,27 +126,29 @@
                （modeToggled 门控同上）；不用 max-height 过渡。 -->
           <template v-else>
             <div :class="{ 'fx-rise': !modeToggled }">
-              <div v-if="selectedAgent && !schemaRenderable" class="field-hint json-fallback-note">
+              <div v-if="activeAgent && !schemaRenderable" class="field-hint json-fallback-note">
                 该 Agent 的输入结构较复杂，请按其输入契约直接填写 JSON。
               </div>
               <el-input
                 v-model="form.inputsText"
                 type="textarea"
                 :rows="8"
+                :disabled="submitting"
                 placeholder='请按该 Agent 的输入契约填写 JSON，例如：{"name": "张三"}'
               />
               <div v-if="inputsJsonError" class="field-error">{{ inputsJsonError }}</div>
               <div class="field-foot">
                 <el-button
-                  v-if="selectedAgent && schemaRenderable"
+                  v-if="activeAgent && schemaRenderable"
                   text
                   size="small"
                   class="mode-toggle"
+                  :disabled="submitting"
                   @click="toggleToForm"
                 >
                   ← 用表单填写
                 </el-button>
-                <span v-if="!selectedAgent" class="field-hint">请先在上方选择 Agent。</span>
+                <span v-if="!activeAgent" class="field-hint">请先在上方选择 Agent。</span>
               </div>
             </div>
           </template>
@@ -126,8 +156,14 @@
       </el-form-item>
 
       <el-form-item label="附件">
-        <el-upload :auto-upload="false" :show-file-list="false" multiple :on-change="handleFileSelect">
-          <el-button>选择文件上传</el-button>
+        <el-upload
+          :auto-upload="false"
+          :show-file-list="false"
+          :disabled="submitting"
+          multiple
+          :on-change="handleFileSelect"
+        >
+          <el-button :disabled="submitting">选择文件上传</el-button>
         </el-upload>
         <div v-if="uploadItems.length" class="upload-list">
           <div v-for="item in uploadItems" :key="item.uid" class="upload-item">
@@ -153,7 +189,7 @@
 
       <el-form-item>
         <span ref="submitAnchor" class="submit-anchor">
-          <el-button type="primary" :loading="submitting" @click="handleSubmit">
+          <el-button type="primary" :loading="submitting" :disabled="submitting" @click="handleSubmit">
             {{ uploadingFiles ? "上传附件中…" : "提交任务" }}
           </el-button>
         </span>
@@ -166,13 +202,23 @@
 import { reactive, ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
+import { DocumentChecked, Lock, Warning } from "@element-plus/icons-vue";
 import { listAgents, getAgent } from "../api/agents";
 import { createTask } from "../api/tasks";
 import { concludeConversation } from "../api/conversations";
 import { uploadFile as apiUploadFile } from "../api/files";
-import { statusLabel, statusTagType } from "../utils/format";
+import {
+  agentStatusLabel,
+  agentStatusTip,
+  statusTagType,
+} from "../utils/format";
 import SchemaForm from "../components/SchemaForm.vue";
+import TaskCreateJourney from "../components/TaskCreateJourney.vue";
 import { parseSchema, blankInputs, collectInputs, validateInputs } from "../utils/schemaForm";
+import {
+  buildTaskCreateJourney,
+  captureTaskSubmission,
+} from "../utils/taskCreateVisual";
 
 const route = useRoute();
 const router = useRouter();
@@ -198,6 +244,8 @@ const submitting = ref(false);
 const uploadingFiles = ref(false);
 const submitError = ref("");
 const uploadItems = ref([]);
+let createRouteEpoch = 0;
+let deferredPrefillRefresh = false;
 // 预填来源（"" | guide | demo | retry）：guide=导引草案（m6 锚文案逐字不动）；
 // demo=首登引导的 Hello 演示（评审 N2）；retry=失败任务「复制为新任务」
 // （评审 N4a，带血缘 retry_of）。三种预填都是「机器带入待人核」内容，
@@ -232,7 +280,71 @@ const prefillConversationId = ref(null);
 // API 真只读拒新任务，故归档必须后于创建，不能像旧流程那样先归档再跳创建页）。
 const prefillConcludeAfter = ref(false);
 // 提交飞入（批A T10）：提交成功、跳转前在提交按钮附近播一次 fx-rise（列表飞入感）。
+const agentAnchor = ref(null);
+const capabilityAnchor = ref(null);
+const inputAnchor = ref(null);
+const policyAnchor = ref(null);
 const submitAnchor = ref(null);
+let agentLoadSeq = 0;
+const form = reactive({
+  agentId: typeof route.query.agent_id === "string" ? route.query.agent_id : "",
+  name: "",
+  inputsText: "{}",
+});
+const activeAgent = computed(() =>
+  selectedAgent.value?.id === form.agentId ? selectedAgent.value : null
+);
+const createJourney = computed(() => buildTaskCreateJourney({
+  agentId: form.agentId,
+  selectedAgent: activeAgent.value,
+  agentsListError: agentsListError.value,
+  agentLoadError: agentLoadError.value,
+  prefillOrigin: prefillOrigin.value,
+  schemaRenderable: schemaRenderable.value,
+  jsonMode: jsonMode.value,
+  inputsErrors: inputsErrors.value,
+  inputsJsonError: inputsJsonError.value,
+  uploadItems: uploadItems.value,
+  submitting: submitting.value,
+  uploadingFiles: uploadingFiles.value,
+  submitError: submitError.value,
+}));
+const clearancePolicyText = computed(() => {
+  const value = activeAgent.value?.clearance;
+  if (value === "public") return "公开";
+  if (value === "internal") return "内部";
+  if (value === "sensitive") return "敏感";
+  if (value === null || value === undefined) return "未声明，按内部数据上限保守处理";
+  return "密级策略待核";
+});
+const evidencePolicyText = computed(() =>
+  activeAgent.value?.evidence_policy_required === true
+    ? "产物要求附依据"
+    : activeAgent.value?.evidence_policy_required === false
+      ? "未强制要求附依据"
+      : "依据策略待核"
+);
+const limitationsPolicyText = computed(() =>
+  Array.isArray(activeAgent.value?.limitations)
+    ? `${activeAgent.value.limitations.length} 项不适用边界`
+    : "不适用边界待核"
+);
+function anchorElement(anchor) {
+  return anchor?.value?.$el || anchor?.value || null;
+}
+function navigateCreateStep(stepId) {
+  const anchor = {
+    agent: agentAnchor,
+    capability: capabilityAnchor.value ? capabilityAnchor : agentAnchor,
+    input: inputAnchor,
+    policy: policyAnchor.value ? policyAnchor : agentAnchor,
+    submit: submitAnchor,
+  }[stepId];
+  anchorElement(anchor)?.scrollIntoView({
+    behavior: prefersReducedMotion() ? "auto" : "smooth",
+    block: "center",
+  });
+}
 function prefersReducedMotion() {
   return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
@@ -249,12 +361,6 @@ function playSubmitRise() {
     }, 120);
   });
 }
-
-const form = reactive({
-  agentId: typeof route.query.agent_id === "string" ? route.query.agent_id : "",
-  name: "",
-  inputsText: "{}",
-});
 
 // M6 人确认接缝：从智能导引带入的预填草案（sessionStorage 传递，不走 URL）。
 // 只带入 inputs，仍由人补全 + 亲手点「提交任务」——导引不代签（ADR-0012）。
@@ -368,18 +474,32 @@ function replaceReactive(target, source) {
 }
 
 async function handleAgentChange(agentId) {
+  const seq = ++agentLoadSeq;
   inputsErrors.value = [];
   inputsJsonError.value = "";
+  agentLoadError.value = "";
   modeToggled.value = false; // 新 Agent 的字段区=真「刚落地」，恢复入场动效
   if (!agentId) {
     selectedAgent.value = null;
     schemaRenderable.value = false;
     return;
   }
-  agentLoadError.value = "";
+  // 新选择到详情返回之间不继续展示旧 Agent 的能力/策略，避免视觉与 agentId
+  // 短暂错配；请求世代守卫再阻止迟到响应覆盖新选择。
+  selectedAgent.value = null;
+  schemaRenderable.value = false;
   try {
-    selectedAgent.value = await getAgent(agentId);
+    const detail = await getAgent(agentId);
+    if (seq !== agentLoadSeq || form.agentId !== agentId) return;
+    if (!detail || typeof detail !== "object" || detail.id !== agentId) {
+      selectedAgent.value = null;
+      schemaRenderable.value = false;
+      agentLoadError.value = "Agent 信息身份不一致，请刷新后重试";
+      return;
+    }
+    selectedAgent.value = detail;
   } catch (err) {
+    if (seq !== agentLoadSeq || form.agentId !== agentId) return;
     selectedAgent.value = null;
     schemaRenderable.value = false;
     agentLoadError.value = err.detail || err.message;
@@ -428,6 +548,7 @@ function toggleToForm() {
 // 杜绝「选中即上传」在移除/弃页/创建失败时留下的孤儿 blob。
 let uploadSeq = 0;
 function handleFileSelect(uploadFile) {
+  if (submitting.value) return;
   uploadItems.value.push(
     reactive({
       uid: uploadFile.uid ?? `up_${++uploadSeq}`,
@@ -444,9 +565,9 @@ function removeUploadItem(item) {
   uploadItems.value = uploadItems.value.filter((i) => i.uid !== item.uid);
 }
 
-async function uploadPendingFiles() {
+async function uploadPendingFiles(items) {
   // 顺序上传全部未完成项（含上一轮失败重试项）；任一失败即中止并如实报错。
-  for (const item of uploadItems.value) {
+  for (const item of items) {
     if (item.status === "done") continue;
     item.status = "uploading";
     item.error = "";
@@ -466,6 +587,10 @@ async function uploadPendingFiles() {
 async function handleSubmit() {
   if (!form.agentId) {
     ElMessage.error("请选择 Agent");
+    return;
+  }
+  if (!selectedAgent.value || selectedAgent.value.id !== form.agentId) {
+    ElMessage.error("Agent 信息仍在核对，请稍后再提交");
     return;
   }
   let inputs = {};
@@ -489,12 +614,22 @@ async function handleSubmit() {
     inputsJsonError.value = "";
   }
   submitError.value = "";
+  const submitRouteEpoch = createRouteEpoch;
+  const submissionDraft = captureTaskSubmission({
+    form,
+    inputs,
+    uploadItems: uploadItems.value,
+    conversationId: prefillConversationId.value,
+    retryOf: prefillRetryOf.value,
+    concludeAfter: prefillConcludeAfter.value,
+    returnToChat: route.query.back === "chat",
+  });
 
   submitting.value = true;
   try {
-    if (uploadItems.value.some((i) => i.status !== "done")) {
+    if (submissionDraft.uploadItems.some((i) => i.status !== "done")) {
       uploadingFiles.value = true;
-      const failed = await uploadPendingFiles();
+      const failed = await uploadPendingFiles(submissionDraft.uploadItems);
       uploadingFiles.value = false;
       if (failed) {
         // 持久错误提示（非瞬时 toast）：中止提交，已成的项保留 done 状态，
@@ -505,27 +640,32 @@ async function handleSubmit() {
     }
 
     const task = await createTask({
-      agentId: form.agentId,
-      name: form.name.trim() || null,
-      inputs,
-      inputFileIds: uploadItems.value.filter((i) => i.status === "done").map((i) => i.fileId),
-      conversationId: prefillConversationId.value,
-      retryOf: prefillRetryOf.value,
+      agentId: submissionDraft.agentId,
+      name: submissionDraft.name,
+      inputs: submissionDraft.inputs,
+      inputFileIds: submissionDraft.uploadItems
+        .filter((i) => i.status === "done")
+        .map((i) => i.fileId),
+      conversationId: submissionDraft.conversationId,
+      retryOf: submissionDraft.retryOf,
     });
     // 单 Agent 导引流程：任务已创建成功，此刻再归档本会话（fire-and-forget，归档失败
     // 不影响已建任务；多 Agent 由工作台「结束协作」显式归档）。必须后于 createTask——
     // 会话须在创建时仍 active（异源 Codex R2-#3：结束协作=真只读）。
-    if (prefillConcludeAfter.value && prefillConversationId.value) {
-      concludeConversation(prefillConversationId.value).catch(() => {});
+    if (submissionDraft.concludeAfter && submissionDraft.conversationId) {
+      concludeConversation(submissionDraft.conversationId).catch(() => {});
     }
     ElMessage.success("任务已创建");
     await playSubmitRise();
+    // 上传/创建 await 期间若用户已打开另一份创建草案或离开本页，尊重后来的
+    // 导航意图：旧任务照实创建，但不再用旧请求的自动跳转覆盖新位置。
+    if (createRouteEpoch !== submitRouteEpoch || route.name !== "task-create") return;
     // 范式 2a 对话轴闭环：从导引来（back=chat）且会话仍活跃 → 回流对话，任务卡
     // 在流里原地亮起（Claude 式零跳页）。单 Agent conclude_after 已归档会话，
     // 回一个刚被归档的会话反而突兀——仍走详情页；工作台来的召集同样走详情页
     // （m8_collab_chain e2e 断言④=提交后落详情，该路径不带 back=chat）。
-    if (route.query.back === "chat" && prefillConversationId.value && !prefillConcludeAfter.value) {
-      router.push({ path: "/", query: { c: prefillConversationId.value } });
+    if (submissionDraft.returnToChat && submissionDraft.conversationId && !submissionDraft.concludeAfter) {
+      router.push({ path: "/", query: { c: submissionDraft.conversationId } });
     } else {
       router.push(`/tasks/${task.id}`);
     }
@@ -534,6 +674,17 @@ async function handleSubmit() {
   } finally {
     uploadingFiles.value = false;
     submitting.value = false;
+    // 同路由新草案在提交期间只排队、不提前消费 sessionStorage；旧请求收口后
+    // 再消费当前最新 query，避免新 retry 草案被吞或污染旧任务快照。
+    if (deferredPrefillRefresh) {
+      deferredPrefillRefresh = false;
+      if (route.name === "task-create") {
+        consumePrefillDraft();
+        if (["guide", "demo", "retry"].includes(route.query.from) && form.agentId) {
+          handleAgentChange(form.agentId);
+        }
+      }
+    }
   }
 }
 
@@ -544,9 +695,15 @@ async function handleSubmit() {
 watch(
   () => [route.query.from, route.query.agent_id, route.query.draft_id],
   () => {
-    if (!["guide", "demo", "retry"].includes(route.query.from)) return;
+    createRouteEpoch += 1;
+    if (submitting.value) {
+      deferredPrefillRefresh = true;
+      return;
+    }
     consumePrefillDraft();
-    if (form.agentId) handleAgentChange(form.agentId);
+    if (["guide", "demo", "retry"].includes(route.query.from) && form.agentId) {
+      handleAgentChange(form.agentId);
+    }
   }
 );
 
@@ -591,6 +748,58 @@ onUnmounted(() => window.removeEventListener("resize", onResize));
 .agent-preview-limits {
   font-size: 12px;
   color: var(--ink-faint);
+}
+.create-policy {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 18px 100px;
+  padding: 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--paper-rail);
+}
+.create-policy-item {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 9px;
+  background: var(--surface-raised);
+}
+.create-policy-item > .el-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: var(--paper-canvas-b, var(--paper-rail));
+  font-size: 17px;
+}
+.create-policy-item > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.create-policy-item strong {
+  color: var(--ink);
+  font-size: 10.5px;
+}
+.create-policy-item small {
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.create-policy > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--trust-pending);
+  font-size: 10.5px;
+  line-height: 1.45;
 }
 .limits-label {
   font-weight: 600;
@@ -648,6 +857,12 @@ onUnmounted(() => window.removeEventListener("resize", onResize));
 @media (prefers-reduced-motion: reduce) {
   .upload-item:hover {
     transform: none;
+  }
+}
+@media (max-width: 639px) {
+  .create-policy {
+    margin-left: 0;
+    grid-template-columns: 1fr;
   }
 }
 </style>

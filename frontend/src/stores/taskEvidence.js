@@ -7,6 +7,7 @@
 import { reactive } from "vue";
 import { listOutputFiles } from "../api/tasks";
 import { fetchOutputFile } from "../api/files";
+import { summarizeEvidenceFindings } from "../utils/evidenceTrace";
 
 const cache = reactive({}); // taskId -> {loaded, findings, refusals}
 
@@ -79,21 +80,5 @@ export function taskEvidenceWithheld(taskId) {
 // 依据摘要计数：置信度报最低档（诚实地板——多 finding 取最保守）。
 export function taskEvidenceSummary(taskId) {
   const ev = taskEvidenceOf(taskId);
-  if (!ev || ev.findings.length === 0) return null;
-  let verified = 0;
-  let unverified = 0;
-  for (const f of ev.findings) {
-    for (const e of f.evidence || []) {
-      if (e.resolved === true) verified += 1;
-      else unverified += 1;
-    }
-  }
-  const rank = { low: 0, medium: 1, high: 2 };
-  const LV = { low: "低", medium: "中", high: "高" };
-  let worst = null;
-  for (const f of ev.findings) {
-    const l = f.confidence && f.confidence.level;
-    if (l && rank[l] !== undefined && (worst === null || rank[l] < rank[worst])) worst = l;
-  }
-  return { total: verified + unverified, verified, unverified, level: worst ? LV[worst] : "" };
+  return ev ? summarizeEvidenceFindings(ev.findings) : null;
 }

@@ -5,9 +5,32 @@
       <!-- 减重批：hero 只剩问候+一句主标题（Claude 精髓=留白克制，信任靠交互
            建立不靠说教）。价值主张/政策句收进 composer 下一行；名字由
            WelcomeGate 身份门一次收齐，此处不再询问。 -->
-      <div class="hero-mark">导</div>
+      <div class="hero-mark" aria-hidden="true">
+        <el-icon><Guide /></el-icon>
+      </div>
       <p class="hero-greeting">{{ greeting }}</p>
       <h1 class="hero-title">说说你要做的工程活儿</h1>
+      <div class="hero-route" aria-label="平台工作路径">
+        <div class="hero-route-step">
+          <el-icon aria-hidden="true"><ChatLineRound /></el-icon>
+          <span>说需求</span>
+        </div>
+        <el-icon class="hero-route-arrow" aria-hidden="true"><ArrowRight /></el-icon>
+        <div class="hero-route-step">
+          <el-icon aria-hidden="true"><Grid /></el-icon>
+          <span>匹配能力</span>
+        </div>
+        <el-icon class="hero-route-arrow" aria-hidden="true"><ArrowRight /></el-icon>
+        <div class="hero-route-step">
+          <el-icon aria-hidden="true"><Cpu /></el-icon>
+          <span>Agent 执行</span>
+        </div>
+        <el-icon class="hero-route-arrow" aria-hidden="true"><ArrowRight /></el-icon>
+        <div class="hero-route-step is-review">
+          <el-icon aria-hidden="true"><Stamp /></el-icon>
+          <span>审阅交付</span>
+        </div>
+      </div>
       <!-- 四意图卡（原 hero-examples/ex-chip 原地升级）：数据=四分类 AGENT_CATEGORY
            一一配对，点击只填 draft + focusComposer，绝不代发（同 setExample 语义）。 -->
       <div class="hero-intents">
@@ -22,9 +45,12 @@
           @keydown.space.prevent="setExample(item.example)"
         >
           <span class="intent-accent" :style="{ background: categoryColor(item.category) }"></span>
+          <span class="intent-visual" :style="{ color: categoryColor(item.category) }" aria-hidden="true">
+            <el-icon><component :is="item.icon" /></el-icon>
+          </span>
           <!-- 减重批：tip 收进 title 悬浮，卡面只留标题+例句两行 -->
           <div class="intent-body" :title="categoryTip(item.category)">
-            <div class="intent-title"><IntentGlyph :name="item.glyph" :size="21" />{{ categoryLabel(item.category) }}</div>
+            <div class="intent-title">{{ categoryLabel(item.category) }}</div>
             <p class="intent-example">{{ item.example }}</p>
           </div>
         </div>
@@ -210,13 +236,13 @@
                   <div
                     v-if="agentTaskInfo(a) && evidenceSummaryOf(a)"
                     class="sa-evidence-chip"
-                    :class="{ 'has-unverified': evidenceSummaryOf(a).unverified > 0 }"
+                    :class="{ 'has-unverified': evidenceSummaryOf(a).invalid || evidenceSummaryOf(a).unverified > 0 }"
                     role="button"
                     tabindex="0"
                     @click.stop="toggleEvidence(agentTaskInfo(a).latest.id)"
                     @keydown.enter.stop.prevent="toggleEvidence(agentTaskInfo(a).latest.id)"
                     @keydown.space.stop.prevent="toggleEvidence(agentTaskInfo(a).latest.id)"
-                  >依据 {{ evidenceSummaryOf(a).total }} 条（{{ evidenceSummaryOf(a).verified }} 已核验 · {{ evidenceSummaryOf(a).unverified }} 未核）<template v-if="evidenceSummaryOf(a).level"> · 置信度 {{ evidenceSummaryOf(a).level }}（模型自评）</template></div>
+                  ><template v-if="evidenceSummaryOf(a).invalid">依据结构待核</template><template v-else>依据 {{ evidenceSummaryOf(a).total }} 条（{{ evidenceSummaryOf(a).verified }} 已核验 · {{ evidenceSummaryOf(a).unverified }} 未核）<template v-if="evidenceSummaryOf(a).level"> · 置信度 {{ evidenceSummaryOf(a).level }}（模型自评）</template></template></div>
                   <!-- 批八 withheld（O6）：密级受限产物零下载零计数——静态遮蔽标记，
                        不可点击展开（无内容可展），绝不编造「依据 N 条」。 -->
                   <div
@@ -469,6 +495,18 @@
 import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
+import {
+  Aim,
+  ArrowRight,
+  ChatLineRound,
+  Connection,
+  Cpu,
+  Grid,
+  Guide,
+  Search,
+  Stamp,
+  Tools,
+} from "@element-plus/icons-vue";
 import { createConversation, postMessage, getConversation } from "../api/conversations";
 import { createTeam } from "../api/teams";
 import { unwrapDetail } from "../api/client";
@@ -489,7 +527,6 @@ import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";
 import ThinkingInk from "../components/artwork/ThinkingInk.vue";
-import IntentGlyph from "../components/artwork/IntentGlyph.vue";
 import MarkdownLite from "../components/MarkdownLite.vue";
 import OnboardingCard from "../components/OnboardingCard.vue";
 import { displayName } from "../stores/session";
@@ -533,13 +570,12 @@ const greeting = computed(() => {
 
 // 空状态四意图卡（Claude 起手 chips 升级版）：与 AGENT_CATEGORY 四分类一一配对，
 // 点一下把示例填进输入框并聚焦，用户再改再发（绝不代发）。
-// glyph=IntentGlyph 墨线图标（Codex 绘）：disk=性能包线/knowledge=书+放大镜/
-// logic=状态机/fta=故障树——各配四分类的旗舰意象。
+// 图标统一来自 Element Plus 矢量库；分类色与信任色分轴，只用于能力类别识别。
 const INTENT_EXAMPLES = [
-  { category: "tool_automation", glyph: "disk", example: "给这批性能盘 case 做批量核算，出汇总" },
-  { category: "knowledge_qa", glyph: "knowledge", example: "查一下供电系统适航规范的相关依据" },
-  { category: "structured_gen", glyph: "logic", example: "做双通道供电系统的控制逻辑和故障树分析" },
-  { category: "reasoning_assist", glyph: "fta", example: "帮我起草一份 XX 系统失效的 FTA 顶事件分析" },
+  { category: "tool_automation", icon: Tools, example: "给这批性能盘 case 做批量核算，出汇总" },
+  { category: "knowledge_qa", icon: Search, example: "查一下供电系统适航规范的相关依据" },
+  { category: "structured_gen", icon: Connection, example: "做双通道供电系统的控制逻辑和故障树分析" },
+  { category: "reasoning_assist", icon: Aim, example: "帮我起草一份 XX 系统失效的 FTA 顶事件分析" },
 ];
 function setExample(text) {
   draft.value = text;
@@ -1692,6 +1728,9 @@ watch(
   background: linear-gradient(160deg, var(--clay), var(--clay-deep));
   box-shadow: 0 6px 18px rgba(var(--clay-rgb), 0.26);
 }
+.hero-mark :deep(.el-icon) {
+  font-size: 24px;
+}
 /* 时段感问候：抒情场合走衬线，字号克制小于主标题，颜色降一级不抢戏。 */
 .hero-greeting {
   font-family: var(--serif);
@@ -1707,6 +1746,59 @@ watch(
   color: var(--ink);
   margin: 0 0 14px;
   letter-spacing: 0.3px;
+}
+.hero-route {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin: 20px auto 0;
+  color: var(--ink-faint);
+}
+.hero-route-step {
+  min-width: 74px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.hero-route-step :deep(.el-icon) {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--ink-soft);
+  font-size: 19px;
+  box-shadow: var(--shadow-card);
+}
+.hero-route-step.is-review :deep(.el-icon) {
+  color: var(--trust-pending);
+}
+.hero-route-arrow {
+  flex: none;
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+@media (max-width: 460px) {
+  .hero-route {
+    flex-direction: column;
+    gap: 5px;
+  }
+  .hero-route-step {
+    width: 154px;
+    min-width: 0;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 10px;
+    text-align: left;
+  }
+  .hero-route-arrow {
+    transform: rotate(90deg);
+  }
 }
 /* 四意图卡：≥520px 宽 2×2，窄屏 1 列（原 hero-examples/ex-chip 原地升级）。 */
 .hero-intents {
@@ -1745,6 +1837,20 @@ watch(
   flex: 0 0 auto;
   width: 3px;
   border-radius: 3px;
+}
+.intent-visual {
+  flex: 0 0 50px;
+  width: 50px;
+  height: 50px;
+  display: grid;
+  place-items: center;
+  align-self: center;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 12px;
+  background: var(--paper-rail);
+}
+.intent-visual :deep(.el-icon) {
+  font-size: 27px;
 }
 .intent-body { flex: 1 1 auto; min-width: 0; }
 .intent-title {

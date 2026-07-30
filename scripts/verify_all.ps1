@@ -64,6 +64,15 @@ Invoke-Step -Name "① frontend npm run build" -Action {
     }
 }
 
+Invoke-Step -Name "①a 前端分包体积预算" -Action {
+    Push-Location "frontend"
+    try {
+        npm run check:bundle
+    } finally {
+        Pop-Location
+    }
+}
+
 # 不限定路径：跑满 pyproject testpaths（tests/ + tools_impl/ + backend/tests），
 # 与 verify_all.sh 保持逐字对齐（Codex 互审 P2）。
 Invoke-Step -Name "② 全量 pytest -n auto（三个 testpaths）" -Action {

@@ -377,6 +377,12 @@ function doneEvidenceText(a) {
   const s = taskEvidenceSummary(t.id);
   if (withheld && !s) return { text: "依据〔按密级隐藏〕", unverified: 0 };
   if (!s) return null;
+  if (s.invalid) {
+    return {
+      text: withheld ? "依据结构待核·另有密级隐藏项" : "依据结构待核",
+      unverified: 1,
+    };
+  }
   const base = `依据 ${s.total} 条${s.unverified > 0 ? `（${s.unverified} 未核）` : ""}`;
   return { text: withheld ? `${base}·另有密级隐藏项` : base, unverified: s.unverified };
 }
