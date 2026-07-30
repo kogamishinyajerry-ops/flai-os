@@ -286,7 +286,9 @@
           </el-form-item>
         </el-form>
 
-        <EmptyState v-if="feedbackList.length === 0 && !feedbackError" description="暂无反馈" :image-size="84" />
+        <!-- 纯数据空态=line 轻量态（W2 空态纪律，与 FeedbackPage 孪生面同律）：
+             「暂无反馈」不庆祝也不引导行动，一行安静文字；文案逐字不动。 -->
+        <EmptyState v-if="feedbackList.length === 0 && !feedbackError" tier="line" description="暂无反馈" />
         <ul v-else class="feedback-list">
           <li v-for="f in feedbackList" :key="f.id">
             <el-tag size="small" :type="f.rating === 'good' ? 'success' : 'danger'">

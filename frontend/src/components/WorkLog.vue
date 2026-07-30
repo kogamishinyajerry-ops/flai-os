@@ -70,7 +70,9 @@
          展开态时间轴的逐条 .event-type-raw 里（m2 断言同批改走展开路径）——
          折叠态是给新人的扫读面，只留人话头行/工具聚合行/签发口播。 -->
     <div v-if="expanded" class="worklog-timeline">
-      <EmptyState v-if="!events.length" variant="log" description="暂无事件" />
+      <!-- 纯数据空态=line 轻量态（W2）：事件流为空不庆祝不引导，一行安静文字；
+           variant="log" 语义分类保留（line 态不选图）。文案逐字不动。 -->
+      <EmptyState v-if="!events.length" variant="log" tier="line" description="暂无事件" />
       <el-timeline v-else>
         <!-- 墨迹入场只在真实工作态生效：工作中轮询追加的新事件晕开入场；已终态
              任务展开日志时不重播「新事件」视觉（诚实地板——信任镜头 P2）。 -->

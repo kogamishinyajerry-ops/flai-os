@@ -36,7 +36,10 @@
         <span class="skel-sr">任务列表加载中…</span>
         <SkeletonBlock v-for="i in 3" :key="i" height="38px" />
       </div>
-      <EmptyState v-else-if="!loading && !loadError && !myTasks.length" description="你还没有发起任务" />
+      <!-- 纯数据空态=line 轻量态（W2）：列表为空一行安静文字，与本页其余三处
+           空态同律（全屏 0 插画 ≤1 上限）；引导语义由版块1「从对话发起第一个
+           任务吧」承担。文案逐字不动。 -->
+      <EmptyState v-else-if="!loading && !loadError && !myTasks.length" tier="line" description="你还没有发起任务" />
       <div v-else class="me-task-list">
         <router-link v-for="t in myTasks" :key="t.id" class="me-task-item" :to="`/tasks/${t.id}`">
           <!-- 人话称呼（批次四 Q1）：缺名回退 Agent 显示名（原为裸 agent_id）。 -->

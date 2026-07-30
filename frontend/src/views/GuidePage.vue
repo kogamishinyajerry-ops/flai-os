@@ -402,14 +402,24 @@
     <div class="composer" :class="{ 'composer-fixed': started || messages.length }">
       <div class="composer-inner">
       <div v-if="pendingFiles.length" class="composer-files">
+        <!-- 附件 chip 四件：图标+名称+大小+移除。逐文件上传相位如实呈现
+             （uploadPhase 同源真实状态）：uploading=clay「上传中…」（工作/进行中
+             槽位）、done=中性墨「已上传」（completed 恒中性，不给绿）、error=
+             只染状态词 trust-fail（W1 语法：文件名保持墨色，失败是状态不是文件）。
+             「（上传失败）」字面沿用旧文案未动。 -->
         <span
           v-for="f in pendingFiles"
           :key="f.uid"
-          :class="['file-chip', 'closable', { error: f.status === 'error' }]"
+          :class="['file-chip', 'closable', { error: f.status === 'error', uploading: f.status === 'uploading' }]"
           :title="f.status === 'error' ? f.error : ''"
         >
-          📎 {{ f.name }}{{ f.status === "error" ? "（上传失败）" : "" }}
-          <span class="chip-x" @click="removePendingFile(f)">×</span>
+          <svg class="chip-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.49"/></svg>
+          <span class="chip-name">{{ f.name }}</span>
+          <span v-if="formatFileSize(f.size)" class="chip-size num-token">{{ formatFileSize(f.size) }}</span>
+          <span v-if="f.status === 'uploading'" class="chip-phase">上传中…</span>
+          <span v-else-if="f.status === 'done'" class="chip-phase is-done">已上传</span>
+          <span v-else-if="f.status === 'error'" class="chip-phase is-error">（上传失败）</span>
+          <button type="button" class="chip-x" :aria-label="`移除附件 ${f.name}`" @click="removePendingFile(f)">×</button>
         </span>
       </div>
       <div class="composer-shell">
@@ -450,6 +460,7 @@
                 tabindex="0"
                 @click="pickAgent(a)"
                 @keydown.enter.prevent="pickAgent(a)"
+                @keydown.space.prevent="pickAgent(a)"
               >
                 <span class="ap-dot" :style="{ background: categoryColor(a.category) }"></span>
                 <span class="ap-main">
@@ -474,7 +485,7 @@
             class="composer-input"
             @keydown.enter.exact.prevent="send"
           />
-          <button class="send-btn cta-clay" :disabled="sending || !draft.trim()" aria-label="发送" @click="send">
+          <button class="send-btn cta-clay" :class="{ 'is-sending': sending }" :disabled="sending || !draft.trim()" aria-label="发送" @click="send">
             <svg v-if="!sending" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
             <span v-else class="send-spin"></span>
           </button>
@@ -519,7 +530,7 @@ import {
   taskEvidenceSummary,
   taskEvidenceWithheld,
 } from "../stores/taskEvidence";
-import { categoryColor, categoryLabel, categoryTip, maturityTip, agentStatusLabel, MATURITY, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime } from "../utils/format";
+import { categoryColor, categoryLabel, categoryTip, maturityTip, agentStatusLabel, MATURITY, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime, formatFileSize } from "../utils/format";
 import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
 import { useAgentNames } from "../stores/agentNames";
 import EvidenceList from "../components/EvidenceList.vue";
@@ -591,6 +602,7 @@ function handleFileSelect(uploadFile) {
     reactive({
       uid: uploadFile.uid ?? `gf_${++fileSeq}`,
       name: uploadFile.name,
+      size: uploadFile.size || 0, // el-upload 给的本地真实字节数，chip 大小行忠实投影
       raw: uploadFile.raw,
       status: "pending", // pending | done | error
       fileId: null,
@@ -2670,30 +2682,60 @@ watch(
 }
 .plan-note strong { color: var(--ink-soft); font-weight: 600; }
 
-/* 文件 chip */
+/* 文件 chip（composer 待发区与 user 气泡共用）：几何走 token，四件（图标/名称/
+   大小/相位）baseline 对齐；名称超宽截断，大小等宽防抖。 */
 .file-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-soft);
   background: var(--paper-rail);
   border: 1px solid var(--hairline);
-  border-radius: 8px;
-  padding: 3px 9px;
+  border-radius: var(--radius-md);
+  padding: var(--space-1) 10px;
+  max-width: 100%;
 }
-.file-chip.error { color: var(--trust-fail); border-color: var(--error-chip-border); background: var(--error-chip-bg); }
+.chip-icon { flex: 0 0 auto; display: inline-flex; color: var(--ink-faint); }
+.chip-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip-size { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--ink-faint); }
+.chip-phase { flex: 0 0 auto; font-size: var(--fs-xs); }
+/* 上传中=工作/进行中槽位（真实相位，非装饰进度）；已上传=中性墨（completed
+   恒中性，不给绿）。 */
+.file-chip.uploading .chip-phase { color: var(--clay); }
+.chip-phase.is-done { color: var(--ink-faint); }
+/* 失败只染状态词（W1 语法），文件名/大小保持墨色——失败是状态不是文件。 */
+.file-chip.error { border-color: var(--error-chip-border); background: var(--error-chip-bg); }
+.chip-phase.is-error { color: var(--trust-fail); font-weight: 600; }
+/* 移除钮=原生 button（键盘可达，:focus-visible 走全局 clay 环）；视觉 18px
+   静谧点，hover 才给底色 affordance。 */
 .chip-x {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
   cursor: pointer;
   color: var(--ink-faint);
+  font-size: var(--fs-sm);
   font-weight: 700;
   line-height: 1;
-  padding: 0 2px;
+  padding: 0;
+  transition: background var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
 }
-.chip-x:hover { color: var(--ink); }
+.chip-x:hover { background: var(--hover-tint); color: var(--ink); }
 
 /* ── composer ── */
-.composer { margin-top: 18px; }
+/* 空态时与 hero 同组垂直居中：本 margin 即 hero↔composer 的唯一直接间距（token 归位）。 */
+.composer { margin-top: var(--space-5); }
 /* 会话开始后：固定悬浮在视口底部，上缘渐隐让消息从下方穿过（Claude 布局）。 */
 .composer.composer-fixed {
   position: fixed;
@@ -2718,9 +2760,9 @@ watch(
 .composer-files {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
-  padding: 0 4px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding: 0 var(--space-1);
 }
 .composer-shell {
   background: var(--surface-raised);
@@ -2728,11 +2770,16 @@ watch(
   border-radius: 22px;
   box-shadow: var(--shadow-composer);
   padding: 6px;
-  transition: border-color var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
+  /* focus-within 抬升：位移走 --motion-med（比描边慢半拍的落地感），描边/投影
+     保持 fast 即时反馈；reduced-motion 全静化见下方媒体块。 */
+  transition: border-color var(--motion-fast) var(--ease-out-soft),
+    box-shadow var(--motion-fast) var(--ease-out-soft),
+    transform var(--motion-med) var(--ease-out-soft);
 }
 .composer-shell:focus-within {
   border-color: var(--focus-ring-clay);
   box-shadow: var(--shadow-composer), 0 0 0 4px rgba(var(--clay-rgb), 0.08);
+  transform: translateY(-1px);
 }
 .composer-row {
   display: flex;
@@ -2743,7 +2790,7 @@ watch(
 .icon-btn {
   width: 40px;
   height: 40px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: none;
   background: transparent;
   color: var(--ink-faint);
@@ -2772,11 +2819,14 @@ watch(
   flex: 0 0 auto;
   width: 40px;
   height: 40px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   display: grid;
   place-items: center;
 }
 .send-btn:disabled { opacity: 0.4; box-shadow: none; }
+/* 发送在途（真实状态非装饰）：spinner 保持全亮可读——禁用降透明度只服务
+   「内容为空不可发」的 idle 禁用态，不该把在途信号一并压暗。 */
+.send-btn.is-sending:disabled { opacity: 1; }
 .send-spin {
   width: 15px; height: 15px; border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.4);
@@ -2792,7 +2842,7 @@ watch(
   justify-content: space-between;
   gap: 8px;
   padding: 6px 14px 0;
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-faint);
 }
 /* 按键提示段静止态隐去，composer 区域 hover / focus-within 时渐显——
@@ -2812,6 +2862,11 @@ watch(
 @media (prefers-reduced-motion: reduce) {
   .composer-hint .keys { transition: none; }
   .send-spin { animation: none; }
+  /* focus-within 抬升/描边过渡与 chip 交互态在 reduce 下瞬时呈现（状态本身
+     由描边/环色承担，无需动画传达）。 */
+  .composer-shell { transition: none; }
+  .composer-shell:focus-within { transform: none; }
+  .chip-x { transition: none; }
 }
 
 kbd {
@@ -2819,7 +2874,7 @@ kbd {
   font-size: 10.5px;
   background: var(--paper-rail);
   border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   padding: 1px 5px;
   color: var(--ink-soft);
 }
@@ -2867,8 +2922,17 @@ kbd {
   gap: 9px;
   padding: 7px 14px;
   cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-out-soft);
 }
-.agent-pick .ap-item:hover { background: var(--paper-rail); }
+/* 行态语法收口（W0 两态）：hover/键盘焦点=中性 hover-tint；:active 按压瞬间=
+   select-tint-clay（clay=选中槽位，点选即填草稿的瞬时确认，popover 无常驻选中态）。
+   :focus-visible 的 clay 描边环由全局 [role=button] 语法供给，此处只补底色。 */
+.agent-pick .ap-item:hover,
+.agent-pick .ap-item:focus-visible { background: var(--hover-tint); }
+.agent-pick .ap-item:active { background: var(--select-tint-clay); }
+@media (prefers-reduced-motion: reduce) {
+  .agent-pick .ap-item { transition: none; }
+}
 .agent-pick .ap-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .agent-pick .ap-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .agent-pick .ap-name { font-size: 13px; font-weight: 600; color: var(--ink); }
