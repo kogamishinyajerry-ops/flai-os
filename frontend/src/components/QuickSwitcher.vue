@@ -3,7 +3,7 @@
     <div v-if="quickSwitcher.open" class="qs-overlay" @click="close">
       <div class="qs-panel" role="dialog" aria-modal="true" aria-label="快速切换" @click.stop>
         <div class="qs-search">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+          <el-icon :size="18" aria-hidden="true"><Search /></el-icon>
           <input
             ref="inputRef"
             v-model="query"
@@ -71,6 +71,7 @@
 // 与数据/跳转逻辑全封在这里，不外溢到 App.vue。
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from "vue";
 import { useRouter } from "vue-router";
+import { Search } from "@element-plus/icons-vue";
 import { listConversations } from "../api/conversations";
 import { listTasks } from "../api/tasks";
 import { listAgents } from "../api/agents";
@@ -307,7 +308,7 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
 .qs-overlay {
   position: fixed;
   inset: 0;
-  z-index: 200;
+  z-index: var(--z-switcher);
   display: flex;
   justify-content: center;
   padding-top: 12vh;
@@ -322,7 +323,7 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
   flex-direction: column;
   background: var(--paper-surface);
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-hero);
   overflow: hidden;
 }
@@ -361,9 +362,9 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
   border-radius: 6px;
 }
 .qs-group-label {
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   font-weight: 700;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.6px;
   text-transform: uppercase;
   color: var(--ink-faint);
   padding: 10px 10px 4px;
@@ -374,7 +375,7 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
   justify-content: space-between;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border-left: 3px solid transparent;
   cursor: pointer;
   transition: background var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft);
@@ -390,7 +391,7 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
   gap: 1px;
 }
 .qs-item-title {
-  font-size: 13.5px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--ink);
   white-space: nowrap;
@@ -398,7 +399,9 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
   text-overflow: ellipsis;
 }
 .qs-item-sub {
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
+  /* 任务副行含紧凑时钟（formatClockCompact）——数字等宽防抖，与全站行级时钟同语法 */
+  font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
   white-space: nowrap;
   overflow: hidden;
@@ -406,7 +409,7 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
 }
 .qs-item-status {
   flex: none;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -420,7 +423,7 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
 .qs-degraded {
   padding: 8px 12px 4px;
   color: var(--trust-fail);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .qs-loading {
   display: flex;

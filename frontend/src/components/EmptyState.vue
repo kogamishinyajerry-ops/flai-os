@@ -15,6 +15,21 @@
 // tier="line"（W2 新增）：纯数据空态的轻量态，无插画单行文字——variant 语义
 // 不变（仍决定 log/action/data 分类），line 态下只是不选图不渲染 el-empty。
 // 默认 tier="full" 保持插画渲染路径，向后兼容。
+//
+// variant × tier 选用矩阵（W2 空态纪律，SSOT=docs/design/UI-DESKTOP-CRAFT.md；
+// 调用方自查表，注释级约定）：
+//   ┌─────────────────────────────┬─────────┬──────┬───────────────────────────────┐
+//   │ 场景                        │ variant │ tier │ 仓内实例                      │
+//   ├─────────────────────────────┼─────────┼──────┼───────────────────────────────┤
+//   │ 纯数据空（列表/统计无记录） │ data    │ line │ 「当前没有进行中的任务」      │
+//   │ 日志/事件流空               │ log     │ line │ 「暂无事件」                  │
+//   │ 值得庆祝（清零）            │ action  │ full │ 「没有等你签发的任务」        │
+//   │ 需要引导行动                │ action  │ full │ 「先在上方选择一个任务…」     │
+//   │ 空目录（整页主内容）        │ data    │ full │ 「暂无可用 Agent」            │
+//   └─────────────────────────────┴─────────┴──────┴───────────────────────────────┘
+// 三条钉死规则：①纯数据空态一律 tier="line"；②每屏至多一张 tier="full" 插画；
+// ③插画只留给「值得庆祝/需要引导行动」的空态。description 逐字不动=e2e 锚，
+// 形态纠偏只准调 variant/tier。
 import { computed } from "vue";
 import imgData from "../assets/illustrations/empty-data.png";
 import imgAction from "../assets/illustrations/empty-action.png";

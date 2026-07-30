@@ -140,17 +140,20 @@ onUnmounted(releaseTaskFeed);
 <style scoped>
 .console {
   display: flex;
-  gap: 24px;
+  gap: var(--space-6);
   align-items: flex-start;
 }
 .console-list {
   flex: none;
-  width: 264px;
+  /* 栏间发丝线（三栏密度工艺）：hairline 贴列表栏右缘，padding-right 给行
+     hover/选中盒留 12px 呼吸——content-box 下 252+12+1≈原 265 栏 footprint 不变。 */
+  width: 252px;
   position: sticky;
   top: 20px;
   max-height: calc(100vh - 72px);
   overflow-y: auto;
-  padding: 4px 4px 12px 0;
+  padding: 2px var(--space-3) var(--space-3) 0;
+  border-right: 1px solid var(--hairline);
 }
 .console-main {
   flex: 1 1 auto;
@@ -180,11 +183,13 @@ onUnmounted(releaseTaskFeed);
   padding: 4px 10px;
 }
 .cl-group-label {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 700;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.5px;
   color: var(--ink-faint);
-  margin: 14px 0 6px;
+  /* 与首行咬合：上 12 分组、下 4 贴行；左 10px 对齐行盒内灯位（行 padding 同值） */
+  margin: var(--space-3) 0 var(--space-1);
+  padding: 0 10px;
 }
 .cl-group-label.waiting {
   color: var(--trust-pending);
@@ -192,18 +197,22 @@ onUnmounted(releaseTaskFeed);
 .cl-item {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 8px 10px;
-  border-radius: 9px;
+  gap: 10px;
+  /* 扫读密度：9px 上下 + 双行文本 ≈52px 行高（Codex 列表区间下限，与
+     StatusCenter .sc-item 9px 12px 姊妹节奏同律） */
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
   cursor: pointer;
   transition: background var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft);
 }
+/* hover/选中=W0 收口语法：中性行 hover=--hover-tint；选中=--select-tint-clay
+   （clay 锁定许可含「选中」槽），hairline 描边保选中轮廓。 */
 .cl-item:hover {
-  background: var(--paper-rail);
+  background: var(--hover-tint);
 }
 .cl-item.is-active {
-  background: var(--paper-rail);
+  background: var(--select-tint-clay);
   border-color: var(--hairline);
 }
 .cl-lamp {
@@ -239,7 +248,7 @@ onUnmounted(releaseTaskFeed);
   gap: 1px;
 }
 .cl-name {
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--ink);
   white-space: nowrap;
@@ -247,24 +256,26 @@ onUnmounted(releaseTaskFeed);
   text-overflow: ellipsis;
 }
 .cl-sub {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-faint);
+  /* 紧凑时钟逐秒/逐轮刷新不抖宽（等宽数字） */
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .cl-zero {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-faint);
-  padding: 10px 2px;
+  padding: var(--space-2) 10px;
   line-height: 1.6;
 }
 .cl-foot-note {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--ink-faint);
   border-top: 1px dashed var(--hairline);
-  margin-top: 14px;
-  padding-top: 8px;
+  margin-top: var(--space-3);
+  padding-top: 10px;
 }
 .console-empty {
   padding-top: 10vh;
@@ -282,6 +293,13 @@ onUnmounted(releaseTaskFeed);
   /* 窄屏：选中任务时列表让位给叙事流（返回走浏览器后退/左栏入口） */
   .console-list.is-collapsed {
     display: none;
+  }
+  /* 未选中时列表=整页：放全宽、撤栏间发丝线与嵌套滚动盒（375px 无横向溢出） */
+  .console-list {
+    width: auto;
+    max-height: none;
+    padding-right: 0;
+    border-right: none;
   }
   .console {
     gap: 0;

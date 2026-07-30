@@ -4,7 +4,7 @@
   <div class="app-shell" :class="{ 'sidebar-open': sidebarOpen }" :inert="!identityReady">
     <!-- 窄屏汉堡：<860px 侧栏收起，靠它唤出抽屉（P2-7：不再让导航凭空消失）。 -->
     <button class="sb-hamburger" aria-label="打开菜单" @click="toggleSidebar">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      <el-icon :size="20" aria-hidden="true"><Menu /></el-icon>
     </button>
     <div class="sb-backdrop" @click="closeSidebar"></div>
 
@@ -19,7 +19,7 @@
       </div>
 
       <button class="sb-new" @click="newConversation">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        <el-icon :size="16" aria-hidden="true"><Plus /></el-icon>
         新对话
       </button>
 
@@ -63,13 +63,12 @@
       <!-- 侧栏脚部（美化批）：⌘K 可见入口（可点性+快捷键教学）+ 主题三段切换。 -->
       <div class="sb-foot">
         <button class="sb-foot-btn" title="搜索任务 / 会话 / Agent（⌘K）" @click="openQuickSwitcher">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <el-icon :size="14" aria-hidden="true"><Search /></el-icon>
           搜索
           <kbd class="sb-kbd">⌘K</kbd>
         </button>
         <button class="sb-foot-btn sb-theme" :title="`主题：${themeLabel}（点击切换）`" @click="cycleTheme">
-          <svg v-if="resolvedTheme === 'dark'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
-          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+          <el-icon :size="14" aria-hidden="true"><Moon v-if="resolvedTheme === 'dark'" /><Sunny v-else /></el-icon>
           {{ themeLabel }}
         </button>
       </div>
@@ -134,6 +133,7 @@ import { ref, computed, watch, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { listConversations } from "./api/conversations";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { Menu, Plus, Search, Sunny, Moon } from "@element-plus/icons-vue";
 import { formatTime } from "./utils/format";
 import { currentUser, fetchMe, logout } from "./stores/session";
 import { themeMode, resolvedTheme, setThemeMode } from "./stores/theme";
@@ -801,8 +801,7 @@ body {
 .sb-section-label {
   font-size: var(--fs-2xs);
   font-weight: 700;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
+  letter-spacing: 0.6px;
   color: var(--ink-faint);
   padding: 4px 12px 6px;
 }
@@ -827,6 +826,8 @@ body {
 .convo-dot.plan { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink-soft); }
 .convo-dot.refuse { background: var(--trust-pending); }
 .convo-title {
+  flex: 1 1 auto;
+  min-width: 0; /* flex 子项默认 min-width:auto 会顶住省略——收窄才不出横行 */
   font-size: var(--fs-sm);
   color: var(--ink-soft);
   white-space: nowrap;
@@ -851,8 +852,14 @@ body {
 .sb-mine {
   display: block; padding: 6px 10px; margin: 0 8px 4px; cursor: pointer;
   color: var(--ink-soft); font-size: var(--fs-sm); border-radius: var(--radius-sm);
+  transition: background var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
 }
-.sb-mine:hover, .sb-mine.is-active { color: var(--ink); background: var(--paper-rail); }
+/* hover 走 W0 中性语法 --hover-tint；选中态刻意不染 select-tint-clay——
+   ⑭C3 clay census 在 /me 逐元素普查 computed 色，现有 clay 命中（brand-mark
+   阴影环 + sb-new 文字色）已占满 ≤2 预算，sb-mine 在 /me 恒 is-active，再染
+   clay-tint 背景必超限。选中由墨色+字重 600 双通道承担（形状/字重不色块）。 */
+.sb-mine:hover { color: var(--ink); background: var(--hover-tint); }
+.sb-mine.is-active { color: var(--ink); font-weight: 600; }
 
 /* ── 工作身份行 ── */
 .sb-identity {
@@ -865,6 +872,7 @@ body {
   border-radius: var(--radius-md);
   background: none;
   font-size: var(--fs-sm);
+  font-weight: 500; /* 身份是壳层第三信息（你是谁）：字重节奏略高于普通历史行 */
   color: var(--ink-soft);
   cursor: pointer;
   transition: background var(--motion-fast) var(--ease-out-soft);
@@ -877,7 +885,7 @@ body {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  border: 1.5px solid var(--ink-faint);
+  border: 1.5px solid var(--ink-soft);
 }
 
 /* ── 侧栏脚部：搜索（⌘K 教学）+ 主题切换 ── */
@@ -894,6 +902,8 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  min-height: 32px; /* 两钮同高锚定（内容高低差不再左右互偏） */
+  box-sizing: border-box;
   padding: 7px var(--space-2);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
@@ -910,13 +920,16 @@ body {
 .sb-kbd {
   font-size: var(--fs-2xs);
   font-family: var(--mono);
+  line-height: 1.5;
   padding: 0 4px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-xs);
+  background: var(--surface-raised); /* 键帽微浮起（中性表面 token，非语义色） */
   color: var(--ink-faint);
 }
 @media (prefers-reduced-motion: reduce) {
   .convo-time,
+  .sb-mine,
   .sb-foot-btn {
     transition: none;
   }

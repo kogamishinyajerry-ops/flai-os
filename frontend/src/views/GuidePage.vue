@@ -5,9 +5,32 @@
       <!-- 减重批：hero 只剩问候+一句主标题（Claude 精髓=留白克制，信任靠交互
            建立不靠说教）。价值主张/政策句收进 composer 下一行；名字由
            WelcomeGate 身份门一次收齐，此处不再询问。 -->
-      <div class="hero-mark">导</div>
+      <div class="hero-mark" aria-hidden="true">
+        <el-icon><Guide /></el-icon>
+      </div>
       <p class="hero-greeting">{{ greeting }}</p>
       <h1 class="hero-title">说说你要做的工程活儿</h1>
+      <div class="hero-route" aria-label="平台工作路径">
+        <div class="hero-route-step">
+          <el-icon aria-hidden="true"><ChatLineRound /></el-icon>
+          <span>说需求</span>
+        </div>
+        <el-icon class="hero-route-arrow" aria-hidden="true"><ArrowRight /></el-icon>
+        <div class="hero-route-step">
+          <el-icon aria-hidden="true"><Grid /></el-icon>
+          <span>匹配能力</span>
+        </div>
+        <el-icon class="hero-route-arrow" aria-hidden="true"><ArrowRight /></el-icon>
+        <div class="hero-route-step">
+          <el-icon aria-hidden="true"><Cpu /></el-icon>
+          <span>Agent 执行</span>
+        </div>
+        <el-icon class="hero-route-arrow" aria-hidden="true"><ArrowRight /></el-icon>
+        <div class="hero-route-step is-review">
+          <el-icon aria-hidden="true"><Stamp /></el-icon>
+          <span>审阅交付</span>
+        </div>
+      </div>
       <!-- 四意图卡（原 hero-examples/ex-chip 原地升级）：数据=四分类 AGENT_CATEGORY
            一一配对，点击只填 draft + focusComposer，绝不代发（同 setExample 语义）。 -->
       <div class="hero-intents">
@@ -22,9 +45,12 @@
           @keydown.space.prevent="setExample(item.example)"
         >
           <span class="intent-accent" :style="{ background: categoryColor(item.category) }"></span>
+          <span class="intent-visual" :style="{ color: categoryColor(item.category) }" aria-hidden="true">
+            <el-icon><component :is="item.icon" /></el-icon>
+          </span>
           <!-- 减重批：tip 收进 title 悬浮，卡面只留标题+例句两行 -->
           <div class="intent-body" :title="categoryTip(item.category)">
-            <div class="intent-title"><IntentGlyph :name="item.glyph" :size="21" />{{ categoryLabel(item.category) }}</div>
+            <div class="intent-title">{{ categoryLabel(item.category) }}</div>
             <p class="intent-example">{{ item.example }}</p>
           </div>
         </div>
@@ -168,7 +194,7 @@
                       :class="{ 'is-sensitive': clearanceOf(a) === 'sensitive' }"
                     >{{ clearanceLabelOf(a) }}</span>
                     <span v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</span>
-                    <span class="agent-maturity">{{ a.maturity }} / {{ a.status }}</span>
+                    <span class="agent-maturity">{{ maturityLabel(a.maturity) }} / {{ agentStatusLabel(a.status) }}</span>
                     <span class="sa-spacer"></span>
 
                     <!-- 右槽①已召集：实时状态词+秒表，点击直开速览（B1 对话轴督战原语义） -->
@@ -210,13 +236,13 @@
                   <div
                     v-if="agentTaskInfo(a) && evidenceSummaryOf(a)"
                     class="sa-evidence-chip"
-                    :class="{ 'has-unverified': evidenceSummaryOf(a).unverified > 0 }"
+                    :class="{ 'has-unverified': evidenceSummaryOf(a).invalid || evidenceSummaryOf(a).unverified > 0 }"
                     role="button"
                     tabindex="0"
                     @click.stop="toggleEvidence(agentTaskInfo(a).latest.id)"
                     @keydown.enter.stop.prevent="toggleEvidence(agentTaskInfo(a).latest.id)"
                     @keydown.space.stop.prevent="toggleEvidence(agentTaskInfo(a).latest.id)"
-                  >依据 {{ evidenceSummaryOf(a).total }} 条（{{ evidenceSummaryOf(a).verified }} 已核验 · {{ evidenceSummaryOf(a).unverified }} 未核）<template v-if="evidenceSummaryOf(a).level"> · 置信度 {{ evidenceSummaryOf(a).level }}（模型自评）</template></div>
+                  ><template v-if="evidenceSummaryOf(a).invalid">依据结构待核</template><template v-else>依据 {{ evidenceSummaryOf(a).total }} 条（{{ evidenceSummaryOf(a).verified }} 已核验 · {{ evidenceSummaryOf(a).unverified }} 未核）<template v-if="evidenceSummaryOf(a).level"> · 置信度 {{ evidenceSummaryOf(a).level }}（模型自评）</template></template></div>
                   <!-- 批八 withheld（O6）：密级受限产物零下载零计数——静态遮蔽标记，
                        不可点击展开（无内容可展），绝不编造「依据 N 条」。 -->
                   <div
@@ -376,14 +402,24 @@
     <div class="composer" :class="{ 'composer-fixed': started || messages.length }">
       <div class="composer-inner">
       <div v-if="pendingFiles.length" class="composer-files">
+        <!-- 附件 chip 四件：图标+名称+大小+移除。逐文件上传相位如实呈现
+             （uploadPhase 同源真实状态）：uploading=clay「上传中…」（工作/进行中
+             槽位）、done=中性墨「已上传」（completed 恒中性，不给绿）、error=
+             只染状态词 trust-fail（W1 语法：文件名保持墨色，失败是状态不是文件）。
+             「（上传失败）」字面沿用旧文案未动。 -->
         <span
           v-for="f in pendingFiles"
           :key="f.uid"
-          :class="['file-chip', 'closable', { error: f.status === 'error' }]"
+          :class="['file-chip', 'closable', { error: f.status === 'error', uploading: f.status === 'uploading' }]"
           :title="f.status === 'error' ? f.error : ''"
         >
-          📎 {{ f.name }}{{ f.status === "error" ? "（上传失败）" : "" }}
-          <span class="chip-x" @click="removePendingFile(f)">×</span>
+          <svg class="chip-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.49"/></svg>
+          <span class="chip-name">{{ f.name }}</span>
+          <span v-if="formatFileSize(f.size)" class="chip-size num-token">{{ formatFileSize(f.size) }}</span>
+          <span v-if="f.status === 'uploading'" class="chip-phase">上传中…</span>
+          <span v-else-if="f.status === 'done'" class="chip-phase is-done">已上传</span>
+          <span v-else-if="f.status === 'error'" class="chip-phase is-error">（上传失败）</span>
+          <button type="button" class="chip-x" :aria-label="`移除附件 ${f.name}`" @click="removePendingFile(f)">×</button>
         </span>
       </div>
       <div class="composer-shell">
@@ -424,6 +460,7 @@
                 tabindex="0"
                 @click="pickAgent(a)"
                 @keydown.enter.prevent="pickAgent(a)"
+                @keydown.space.prevent="pickAgent(a)"
               >
                 <span class="ap-dot" :style="{ background: categoryColor(a.category) }"></span>
                 <span class="ap-main">
@@ -448,7 +485,7 @@
             class="composer-input"
             @keydown.enter.exact.prevent="send"
           />
-          <button class="send-btn cta-clay" :disabled="sending || !draft.trim()" aria-label="发送" @click="send">
+          <button class="send-btn cta-clay" :class="{ 'is-sending': sending }" :disabled="sending || !draft.trim()" aria-label="发送" @click="send">
             <svg v-if="!sending" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
             <span v-else class="send-spin"></span>
           </button>
@@ -469,6 +506,18 @@
 import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
+import {
+  Aim,
+  ArrowRight,
+  ChatLineRound,
+  Connection,
+  Cpu,
+  Grid,
+  Guide,
+  Search,
+  Stamp,
+  Tools,
+} from "@element-plus/icons-vue";
 import { createConversation, postMessage, getConversation } from "../api/conversations";
 import { createTeam } from "../api/teams";
 import { unwrapDetail } from "../api/client";
@@ -481,7 +530,7 @@ import {
   taskEvidenceSummary,
   taskEvidenceWithheld,
 } from "../stores/taskEvidence";
-import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime } from "../utils/format";
+import { categoryColor, categoryLabel, categoryTip, maturityTip, agentStatusLabel, MATURITY, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime, formatFileSize } from "../utils/format";
 import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
 import { useAgentNames } from "../stores/agentNames";
 import EvidenceList from "../components/EvidenceList.vue";
@@ -489,7 +538,6 @@ import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";
 import ThinkingInk from "../components/artwork/ThinkingInk.vue";
-import IntentGlyph from "../components/artwork/IntentGlyph.vue";
 import MarkdownLite from "../components/MarkdownLite.vue";
 import OnboardingCard from "../components/OnboardingCard.vue";
 import { displayName } from "../stores/session";
@@ -533,13 +581,12 @@ const greeting = computed(() => {
 
 // 空状态四意图卡（Claude 起手 chips 升级版）：与 AGENT_CATEGORY 四分类一一配对，
 // 点一下把示例填进输入框并聚焦，用户再改再发（绝不代发）。
-// glyph=IntentGlyph 墨线图标（Codex 绘）：disk=性能包线/knowledge=书+放大镜/
-// logic=状态机/fta=故障树——各配四分类的旗舰意象。
+// 图标统一来自 Element Plus 矢量库；分类色与信任色分轴，只用于能力类别识别。
 const INTENT_EXAMPLES = [
-  { category: "tool_automation", glyph: "disk", example: "给这批性能盘 case 做批量核算，出汇总" },
-  { category: "knowledge_qa", glyph: "knowledge", example: "查一下供电系统适航规范的相关依据" },
-  { category: "structured_gen", glyph: "logic", example: "做双通道供电系统的控制逻辑和故障树分析" },
-  { category: "reasoning_assist", glyph: "fta", example: "帮我起草一份 XX 系统失效的 FTA 顶事件分析" },
+  { category: "tool_automation", icon: Tools, example: "给这批性能盘 case 做批量核算，出汇总" },
+  { category: "knowledge_qa", icon: Search, example: "查一下供电系统适航规范的相关依据" },
+  { category: "structured_gen", icon: Connection, example: "做双通道供电系统的控制逻辑和故障树分析" },
+  { category: "reasoning_assist", icon: Aim, example: "帮我起草一份 XX 系统失效的 FTA 顶事件分析" },
 ];
 function setExample(text) {
   draft.value = text;
@@ -555,6 +602,7 @@ function handleFileSelect(uploadFile) {
     reactive({
       uid: uploadFile.uid ?? `gf_${++fileSeq}`,
       name: uploadFile.name,
+      size: uploadFile.size || 0, // el-upload 给的本地真实字节数，chip 大小行忠实投影
       raw: uploadFile.raw,
       status: "pending", // pending | done | error
       fileId: null,
@@ -1392,6 +1440,10 @@ function clearanceLabelOf(a) {
   return c ? CLEARANCE_LABEL[c] || c : "";
 }
 
+// 成熟度人话标签走 format.js SSOT（与 TodayPage maturityLabel 同口径），
+// 未声明成熟度的存量包诚实回落原值，不编造。
+const maturityLabel = (m) => MATURITY[m]?.label ?? m;
+
 function evidenceOfTask(taskId) {
   return taskEvidenceOf(taskId);
 }
@@ -1679,6 +1731,7 @@ watch(
    * 一次=真「刚落地」无需门控；用全局类天然继承 App.vue 的 reduced-motion
    * 降级（双镜头审合流 finding——本地 animation 没有降级覆盖，已迁移根治）。 */
 }
+/* 品牌徽记=身份标识，非信任语义，clay 预算豁免（与 App.vue .cta-clay 徽记例外同裁决） */
 .hero-mark {
   width: 46px;
   height: 46px;
@@ -1691,6 +1744,9 @@ watch(
   font-size: 21px;
   background: linear-gradient(160deg, var(--clay), var(--clay-deep));
   box-shadow: 0 6px 18px rgba(var(--clay-rgb), 0.26);
+}
+.hero-mark :deep(.el-icon) {
+  font-size: 24px;
 }
 /* 时段感问候：抒情场合走衬线，字号克制小于主标题，颜色降一级不抢戏。 */
 .hero-greeting {
@@ -1707,6 +1763,59 @@ watch(
   color: var(--ink);
   margin: 0 0 14px;
   letter-spacing: 0.3px;
+}
+.hero-route {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin: 20px auto 0;
+  color: var(--ink-faint);
+}
+.hero-route-step {
+  min-width: 74px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.hero-route-step :deep(.el-icon) {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--ink-soft);
+  font-size: 19px;
+  box-shadow: var(--shadow-card);
+}
+.hero-route-step.is-review :deep(.el-icon) {
+  color: var(--trust-pending);
+}
+.hero-route-arrow {
+  flex: none;
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+@media (max-width: 460px) {
+  .hero-route {
+    flex-direction: column;
+    gap: 5px;
+  }
+  .hero-route-step {
+    width: 154px;
+    min-width: 0;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 10px;
+    text-align: left;
+  }
+  .hero-route-arrow {
+    transform: rotate(90deg);
+  }
 }
 /* 四意图卡：≥520px 宽 2×2，窄屏 1 列（原 hero-examples/ex-chip 原地升级）。 */
 .hero-intents {
@@ -1745,6 +1854,20 @@ watch(
   flex: 0 0 auto;
   width: 3px;
   border-radius: 3px;
+}
+.intent-visual {
+  flex: 0 0 50px;
+  width: 50px;
+  height: 50px;
+  display: grid;
+  place-items: center;
+  align-self: center;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 12px;
+  background: var(--paper-rail);
+}
+.intent-visual :deep(.el-icon) {
+  font-size: 27px;
 }
 .intent-body { flex: 1 1 auto; min-width: 0; }
 .intent-title {
@@ -1805,15 +1928,17 @@ watch(
   gap: 6px;
   margin-top: 8px;
 }
-/* 悬浮时间戳：静止态隐去，hover 整行气泡才渐显（历史消息/新回合皆可能无
- * createdAt——user 乐观推送不带时间戳，v-if 已兜底不渲染空占位）。 */
+/* 悬浮时间戳：静止态隐去，hover 或行内焦点（focus-within，触屏/键盘可达）整行
+ * 气泡才渐显（历史消息/新回合皆可能无 createdAt——user 乐观推送不带时间戳，
+ * v-if 已兜底不渲染空占位）。 */
 .bubble-time {
   opacity: 0;
   font-size: 11px;
   color: var(--ink-faint);
   transition: opacity var(--motion-fast) var(--ease-out-soft);
 }
-.bubble-row:hover .bubble-time { opacity: 1; }
+.bubble-row:hover .bubble-time,
+.bubble-row:focus-within .bubble-time { opacity: 1; }
 .user-bubble .bubble-time {
   display: block;
   margin-top: 6px;
@@ -1922,7 +2047,8 @@ watch(
   font-weight: 700;
   letter-spacing: 1.4px;
   text-transform: uppercase;
-  color: var(--clay);
+  /* clay 预算（批次五 C3）：eyebrow 降灰，与 WorkbenchSession .sess-goal-kicker 同语法。 */
+  color: var(--ink-faint);
 }
 .plan-kicker.refuse { color: var(--trust-pending); margin-bottom: 10px; display: inline-block; }
 .plan-count {
@@ -2084,13 +2210,23 @@ watch(
 }
 
 /* codex 式子 agent 行：紧凑、实时、灰阶纪律（彩色只给状态灯与信任色语义）。
-   注意特异性：.agent-card 基类是 flex 且声明在后，必须用双类压制。 */
+   注意特异性：.agent-card 基类是 flex 且声明在后，必须用双类压制。
+   去盒化（批次五 C3）：降盒为 hairline 分隔的扁平行——去同色底+描边，
+   行间发丝线分隔；hover 只留 --hover-tint 底，不抬不影。 */
 .agent-card.sa-row {
   display: block;
   padding: 10px 14px;
   gap: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--hairline-soft);
 }
-.agent-card.sa-row:hover { transform: none; }
+.agent-card.sa-row:hover {
+  transform: none;
+  box-shadow: none;
+  background: var(--hover-tint);
+}
 .sa-head {
   display: flex;
   align-items: center;
@@ -2172,7 +2308,7 @@ watch(
 .sa-squad-line .squad-sep { color: var(--ink-faint); }
 .squad-seg.tone-clay { color: var(--clay); font-weight: 600; }
 .squad-seg.tone-amber { color: var(--trust-pending); font-weight: 600; }
-.squad-seg.tone-rose { color: var(--el-color-danger, #c04545); font-weight: 600; }
+.squad-seg.tone-rose { color: var(--trust-fail); font-weight: 600; }
 
 /* 等待接力=空心灯（T1）：1px ink 描边圆，绝无 is-pulsing（O2 探针断言互斥） */
 .status-lamp.is-hollow {
@@ -2230,12 +2366,11 @@ watch(
   background: color-mix(in srgb, var(--trust-pending) 8%, transparent);
   color: var(--trust-pending);
 }
+/* 去盒化（批次五 C3）：去底色+描边，只留顶部发丝线与上方 chip 分隔。 */
 .sa-evidence-expand {
   margin: 8px 0 0 17px;
   padding: 10px 12px;
-  border: 1px solid var(--hairline-soft);
-  border-radius: 10px;
-  background: var(--surface-raised);
+  border-top: 1px solid var(--hairline-soft);
 }
 
 /* T6 拒答行：amber 非红——诚实拒答是履约不是失败（O6 探针） */
@@ -2275,9 +2410,9 @@ watch(
   border-color: var(--border-warm-hover);
 }
 /* 死 CSS 清理（W5，grep 实证模板零消费）：.agent-main/.agent-top 属旧大卡布局，
- * sa-row 改版后无 DOM 承载——删规则；.agent-card 基类是 sa-row 的承重底座
- * （背景/描边/圆角/hover 阴影），保留；class token 本身是 m9 e2e 的 nth 钩子，
- * 模板中的 "agent-card" 字符串绝不可摘。 */
+ * sa-row 改版后无 DOM 承载——删规则；.agent-card 基类保留（class token 本身是
+ * m9 e2e 的 nth 钩子，模板中的 "agent-card" 字符串绝不可摘）；批次五 C3 去盒化
+ * 后，其背景/描边/hover 影由 .agent-card.sa-row 覆盖为 hairline 扁平行。 */
 .agent-name {
   font-weight: 700;
   font-size: 15px;
@@ -2360,8 +2495,13 @@ watch(
 }
 .artifact-open {
   font-weight: 700;
-  color: var(--clay);
+  /* clay 预算（批次五 C3）：与 .status-peek 同语法——常驻 ink-soft，行 hover 回 clay。 */
+  color: var(--ink-soft);
   font-size: 11.5px;
+  transition: color var(--motion-fast) var(--ease-out-soft);
+}
+.status-artifact:hover .artifact-open {
+  color: var(--clay);
 }
 @media (prefers-reduced-motion: reduce) {
   .status-lamp.is-pulsing { animation: none; }
@@ -2542,30 +2682,60 @@ watch(
 }
 .plan-note strong { color: var(--ink-soft); font-weight: 600; }
 
-/* 文件 chip */
+/* 文件 chip（composer 待发区与 user 气泡共用）：几何走 token，四件（图标/名称/
+   大小/相位）baseline 对齐；名称超宽截断，大小等宽防抖。 */
 .file-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-soft);
   background: var(--paper-rail);
   border: 1px solid var(--hairline);
-  border-radius: 8px;
-  padding: 3px 9px;
+  border-radius: var(--radius-md);
+  padding: var(--space-1) 10px;
+  max-width: 100%;
 }
-.file-chip.error { color: var(--trust-fail); border-color: var(--error-chip-border); background: var(--error-chip-bg); }
+.chip-icon { flex: 0 0 auto; display: inline-flex; color: var(--ink-faint); }
+.chip-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip-size { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--ink-faint); }
+.chip-phase { flex: 0 0 auto; font-size: var(--fs-xs); }
+/* 上传中=工作/进行中槽位（真实相位，非装饰进度）；已上传=中性墨（completed
+   恒中性，不给绿）。 */
+.file-chip.uploading .chip-phase { color: var(--clay); }
+.chip-phase.is-done { color: var(--ink-faint); }
+/* 失败只染状态词（W1 语法），文件名/大小保持墨色——失败是状态不是文件。 */
+.file-chip.error { border-color: var(--error-chip-border); background: var(--error-chip-bg); }
+.chip-phase.is-error { color: var(--trust-fail); font-weight: 600; }
+/* 移除钮=原生 button（键盘可达，:focus-visible 走全局 clay 环）；视觉 18px
+   静谧点，hover 才给底色 affordance。 */
 .chip-x {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
   cursor: pointer;
   color: var(--ink-faint);
+  font-size: var(--fs-sm);
   font-weight: 700;
   line-height: 1;
-  padding: 0 2px;
+  padding: 0;
+  transition: background var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
 }
-.chip-x:hover { color: var(--ink); }
+.chip-x:hover { background: var(--hover-tint); color: var(--ink); }
 
 /* ── composer ── */
-.composer { margin-top: 18px; }
+/* 空态时与 hero 同组垂直居中：本 margin 即 hero↔composer 的唯一直接间距（token 归位）。 */
+.composer { margin-top: var(--space-5); }
 /* 会话开始后：固定悬浮在视口底部，上缘渐隐让消息从下方穿过（Claude 布局）。 */
 .composer.composer-fixed {
   position: fixed;
@@ -2590,9 +2760,9 @@ watch(
 .composer-files {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
-  padding: 0 4px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding: 0 var(--space-1);
 }
 .composer-shell {
   background: var(--surface-raised);
@@ -2600,11 +2770,16 @@ watch(
   border-radius: 22px;
   box-shadow: var(--shadow-composer);
   padding: 6px;
-  transition: border-color var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
+  /* focus-within 抬升：位移走 --motion-med（比描边慢半拍的落地感），描边/投影
+     保持 fast 即时反馈；reduced-motion 全静化见下方媒体块。 */
+  transition: border-color var(--motion-fast) var(--ease-out-soft),
+    box-shadow var(--motion-fast) var(--ease-out-soft),
+    transform var(--motion-med) var(--ease-out-soft);
 }
 .composer-shell:focus-within {
   border-color: var(--focus-ring-clay);
   box-shadow: var(--shadow-composer), 0 0 0 4px rgba(var(--clay-rgb), 0.08);
+  transform: translateY(-1px);
 }
 .composer-row {
   display: flex;
@@ -2615,7 +2790,7 @@ watch(
 .icon-btn {
   width: 40px;
   height: 40px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: none;
   background: transparent;
   color: var(--ink-faint);
@@ -2644,11 +2819,14 @@ watch(
   flex: 0 0 auto;
   width: 40px;
   height: 40px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   display: grid;
   place-items: center;
 }
 .send-btn:disabled { opacity: 0.4; box-shadow: none; }
+/* 发送在途（真实状态非装饰）：spinner 保持全亮可读——禁用降透明度只服务
+   「内容为空不可发」的 idle 禁用态，不该把在途信号一并压暗。 */
+.send-btn.is-sending:disabled { opacity: 1; }
 .send-spin {
   width: 15px; height: 15px; border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.4);
@@ -2656,13 +2834,15 @@ watch(
   animation: spin 0.7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* 诚实地板句（Claude「can make mistakes」哲学）：常驻同一 composer 容器内，
+ * 会话进行中（composer 变 fixed 悬浮）也不消失；放进容器内部避免布局跳动。 */
 .composer-hint {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   padding: 6px 14px 0;
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-faint);
 }
 /* 按键提示段静止态隐去，composer 区域 hover / focus-within 时渐显——
@@ -2682,18 +2862,19 @@ watch(
 @media (prefers-reduced-motion: reduce) {
   .composer-hint .keys { transition: none; }
   .send-spin { animation: none; }
+  /* focus-within 抬升/描边过渡与 chip 交互态在 reduce 下瞬时呈现（状态本身
+     由描边/环色承担，无需动画传达）。 */
+  .composer-shell { transition: none; }
+  .composer-shell:focus-within { transform: none; }
+  .chip-x { transition: none; }
 }
 
-/* 诚实地板句（Claude「can make mistakes」哲学）：常驻同一 composer 容器内，
- * 会话进行中（composer 变 fixed 悬浮）也不消失；放进容器内部避免布局跳动。 */
-@media (max-width: 640px) {
-}
 kbd {
   font-family: var(--mono);
   font-size: 10.5px;
   background: var(--paper-rail);
   border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   padding: 1px 5px;
   color: var(--ink-soft);
 }
@@ -2741,8 +2922,17 @@ kbd {
   gap: 9px;
   padding: 7px 14px;
   cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-out-soft);
 }
-.agent-pick .ap-item:hover { background: var(--paper-rail); }
+/* 行态语法收口（W0 两态）：hover/键盘焦点=中性 hover-tint；:active 按压瞬间=
+   select-tint-clay（clay=选中槽位，点选即填草稿的瞬时确认，popover 无常驻选中态）。
+   :focus-visible 的 clay 描边环由全局 [role=button] 语法供给，此处只补底色。 */
+.agent-pick .ap-item:hover,
+.agent-pick .ap-item:focus-visible { background: var(--hover-tint); }
+.agent-pick .ap-item:active { background: var(--select-tint-clay); }
+@media (prefers-reduced-motion: reduce) {
+  .agent-pick .ap-item { transition: none; }
+}
 .agent-pick .ap-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .agent-pick .ap-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .agent-pick .ap-name { font-size: 13px; font-weight: 600; color: var(--ink); }
@@ -2771,7 +2961,6 @@ kbd {
 .qa-refusal:last-child { margin-bottom: 0; }
 .qa-refusal-reason { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink); }
 .qa-refusal-suggestion { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-soft); }
-</style>
-<style>
+
 .agent-pick .ap-zero { font-size: 12px; color: var(--ink-faint); padding: 4px 14px 8px; }
 </style>

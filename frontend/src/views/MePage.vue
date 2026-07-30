@@ -36,7 +36,10 @@
         <span class="skel-sr">任务列表加载中…</span>
         <SkeletonBlock v-for="i in 3" :key="i" height="38px" />
       </div>
-      <EmptyState v-else-if="!loading && !loadError && !myTasks.length" description="你还没有发起任务" />
+      <!-- 纯数据空态=line 轻量态（W2）：列表为空一行安静文字，与本页其余三处
+           空态同律（全屏 0 插画 ≤1 上限）；引导语义由版块1「从对话发起第一个
+           任务吧」承担。文案逐字不动。 -->
+      <EmptyState v-else-if="!loading && !loadError && !myTasks.length" tier="line" description="你还没有发起任务" />
       <div v-else class="me-task-list">
         <router-link v-for="t in myTasks" :key="t.id" class="me-task-item" :to="`/tasks/${t.id}`">
           <!-- 人话称呼（批次四 Q1）：缺名回退 Agent 显示名（原为裸 agent_id）。 -->
@@ -232,9 +235,11 @@ watch(() => currentUser.value?.username, (next, prev) => {
   border: 1px solid transparent; border-radius: var(--radius-lg); background: var(--paper-rail);
   box-shadow: 0 0 0 1px var(--hairline);
 }
-.me-stat-num { font-size: 26px; font-weight: 700; color: var(--ink); font-family: var(--serif); }
+/* 统计数字 tabular-nums（与今日页 .today-stat-num 同律）：多格并排扫读时
+   同位数数字等宽对齐，宽度不随字形跳。serif 字体家族保持不动（本页既定设计）。 */
+.me-stat-num { font-size: 26px; font-weight: 700; color: var(--ink); font-family: var(--serif); font-variant-numeric: tabular-nums; }
 .me-stat-label { font-size: 12px; color: var(--ink-soft); }
-.me-section { margin-bottom: 22px; }
+.me-section { margin-bottom: var(--space-6); }
 .me-task-skel { display: flex; flex-direction: column; gap: var(--space-2); }
 /* 读屏专用（视觉裁剪，AT 可读；Codex R2 P2）。 */
 .skel-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -248,9 +253,9 @@ watch(() => currentUser.value?.username, (next, prev) => {
 .me-task-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 13.5px; }
 .me-task-status { color: var(--ink-soft); font-size: 12px; }
 .me-task-time { color: var(--ink-faint); font-size: 11.5px; }
-.me-feedback-count { font-size: 18px; font-weight: 700; color: var(--ink); }
+.me-feedback-count { font-size: 18px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
 .me-feedback-note { color: var(--ink-faint); font-size: 11.5px; margin-top: var(--space-1); }
-.me-team-bar { display: flex; gap: 18px; color: var(--ink-soft); font-size: 13px; }
+.me-team-bar { display: flex; gap: 18px; color: var(--ink-soft); font-size: 13px; font-variant-numeric: tabular-nums; }
 .me-team-note { color: var(--ink-faint); font-size: 11px; margin-top: 6px; }
 .me-honest-gap {
   margin-top: var(--space-6); padding: var(--space-3) 14px; border: 1px dashed var(--hairline);

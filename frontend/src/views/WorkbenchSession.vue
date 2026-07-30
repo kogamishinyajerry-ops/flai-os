@@ -96,7 +96,7 @@
             <div class="member-inner">
               <div class="member-head">
                 <span class="member-name">{{ a.agent_name }}</span>
-                <span class="member-pill" :style="{ color: categoryColor(a.category), background: categoryColor(a.category) + '18' }">
+                <span class="member-pill" :style="{ '--member-cat': categoryColor(a.category), background: categoryColor(a.category) + '18' }">
                   {{ categoryLabel(a.category) }}
                 </span>
                 <span class="member-state summoned">已召集 · <span class="num-token">{{ tasksFor(a).length }}</span> 个任务</span>
@@ -111,7 +111,11 @@
                 <div v-for="t in tasksFor(a)" :key="t.id" class="chip-group">
                   <div
                     :class="['task-chip', { review: t.status === 'waiting_review' }]"
+                    role="button"
+                    tabindex="0"
                     @click="goTask(t)"
+                    @keydown.enter.self.prevent="goTask(t)"
+                    @keydown.space.self.prevent="goTask(t)"
                   >
                     <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status), 'is-hollow': chipStatusWord(t) === '等待接力' }" :style="{ background: chipStatusWord(t) === '等待接力' ? 'transparent' : taskLampColor(t.status) }"></span>
                     <span class="chip-name">{{ taskDisplayName(t, agentNames.map) }}</span>
@@ -121,7 +125,8 @@
                     <span class="chip-status" :style="{ color: chipStatusColor(t) }">{{ chipStatusWord(t) }}</span>
                     <span v-if="t.status === 'waiting_review'" class="chip-review">待人工放行 →</span>
                     <span v-else-if="chipActionLabel(t.status)" class="chip-action">{{ chipActionLabel(t.status) }}</span>
-                    <!-- B2 速览接入（additive）：chip 本体点击仍走 goTask 跳详情；速览用 @click.stop 独立打开。 -->
+                    <!-- B2 速览接入（additive）：chip 本体点击仍走 goTask 跳详情；速览用 @click.stop 独立打开。
+                         chip 键盘三件套用 .self：嵌套速览钮上的 Enter/Space 冒泡不得双触发 goTask。 -->
                     <button type="button" class="chip-peek-btn" @click.stop="openTaskPeek(t.id)">速览</button>
                   </div>
                   <div v-if="taskLastWord[t.id]" class="chip-lastword">{{ taskLastWord[t.id] }}</div>
@@ -160,7 +165,7 @@
         >
           <span v-if="doneUnseen(a)" class="rg-unread-ring"></span>
           <span class="rg-name" :class="{ 'is-unread': doneUnseen(a) }">{{ a.agent_name }}</span>
-          <span class="rg-gray">{{ doneLineFor(a) }}</span>
+          <span class="rg-gray"><template v-for="(seg, si) in doneLineFor(a)" :key="si"><span v-if="seg.fail" class="rg-fail-word">{{ seg.text }}</span><template v-else>{{ seg.text }}</template></template></span>
           <span
             v-if="doneEvidenceText(a)"
             class="rg-evi"
@@ -174,7 +179,7 @@
             <div class="member-inner">
               <div class="member-head">
                 <span class="member-name">{{ a.agent_name }}</span>
-                <span class="member-pill" :style="{ color: categoryColor(a.category), background: categoryColor(a.category) + '18' }">
+                <span class="member-pill" :style="{ '--member-cat': categoryColor(a.category), background: categoryColor(a.category) + '18' }">
                   {{ categoryLabel(a.category) }}
                 </span>
                 <span class="member-state pending">尚未召集</span>
@@ -202,7 +207,7 @@
       <div v-if="otherTasks.length" class="sess-block">
         <div class="block-label">其它归属本会话的任务</div>
         <div class="task-chips">
-          <div v-for="t in otherTasks" :key="t.id" :class="['task-chip', { review: t.status === 'waiting_review' }]" @click="goTask(t)">
+          <div v-for="t in otherTasks" :key="t.id" :class="['task-chip', { review: t.status === 'waiting_review' }]" role="button" tabindex="0" @click="goTask(t)" @keydown.enter.self.prevent="goTask(t)" @keydown.space.self.prevent="goTask(t)">
             <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status), 'is-hollow': chipStatusWord(t) === '等待接力' }" :style="{ background: chipStatusWord(t) === '等待接力' ? 'transparent' : taskLampColor(t.status) }"></span>
             <span class="chip-name">{{ taskDisplayName(t, agentNames.map) }}</span>
             <span class="chip-time">{{ sessClock(t.created_at) }}</span>
@@ -349,17 +354,19 @@ function waitingLineFor(a) {
 }
 
 // 已完成折叠单行：过去式+用时（时态即状态；失败玫红词只给真失败）。
+// W16 分段返回：真失败只染「失败」状态词 token（模板 .rg-fail-word），
+// 其余段与完成/取消一样保持中性，绝不整行染色。
 function doneLineFor(a) {
   const t = latestTaskFor(a);
-  if (!t) return "";
+  if (!t) return [];
   const extra = tasksFor(a).length - 1;
   const suffix = extra > 0 ? ` · +${extra} 更早任务` : "";
   if (t.status === "completed") {
     const d = durTextOf(t);
-    return (d ? `已完成 · 用时 ${d}` : "已完成") + suffix;
+    return [{ text: (d ? `已完成 · 用时 ${d}` : "已完成") + suffix }];
   }
-  if (t.status === "failed") return `失败 · 查看失败详情 →${suffix}`;
-  return `已取消${suffix}`;
+  if (t.status === "failed") return [{ text: "失败", fail: true }, { text: ` · 查看失败详情 →${suffix}` }];
+  return [{ text: `已取消${suffix}` }];
 }
 
 function doneUnseen(a) {
@@ -377,6 +384,12 @@ function doneEvidenceText(a) {
   const s = taskEvidenceSummary(t.id);
   if (withheld && !s) return { text: "依据〔按密级隐藏〕", unverified: 0 };
   if (!s) return null;
+  if (s.invalid) {
+    return {
+      text: withheld ? "依据结构待核·另有密级隐藏项" : "依据结构待核",
+      unverified: 1,
+    };
+  }
   const base = `依据 ${s.total} 条${s.unverified > 0 ? `（${s.unverified} 未核）` : ""}`;
   return { text: withheld ? `${base}·另有密级隐藏项` : base, unverified: s.unverified };
 }
@@ -617,7 +630,15 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--ink-faint);
   display: flex;
+  /* 窄屏防横向溢出：长发起人名 + 16 位会话 id 允许换行（桌面内容放得下时
+     flex-wrap 不改变排版，视觉不变）。 */
+  flex-wrap: wrap;
   gap: 6px;
+}
+.sess-meta > span {
+  /* 弹性子项可缩到内容以下；无断点的 hex id 片段允许任意处折行。 */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .sess-progress {
   text-align: right;
@@ -725,6 +746,8 @@ onUnmounted(() => {
 .rg-name { font-weight: 600; color: var(--ink); white-space: nowrap; }
 .rg-name.is-unread { font-weight: 700; }
 .rg-gray { color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* W16：真失败只染状态词 token（红仅真实失败），行内其余文字保持中性。 */
+.rg-fail-word { color: var(--trust-fail); }
 .rg-spacer { flex: 1 1 auto; }
 .rg-evi {
   flex: none;
@@ -781,6 +804,13 @@ onUnmounted(() => {
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 999px;
+  /* 分类色经 --member-cat 传入（亮主题直吃分类色，与改前逐位一致）。 */
+  color: var(--member-cat);
+}
+/* 暗主题仅提亮文字：四分类色直接吃在暗底上对比 2.7–3.1:1 不达 AA，
+ * 向白混 45% 保持色相、对比拉过 4.5；分类轴身份语义与背景 tint 机制不动。 */
+:root[data-theme="dark"] .member-pill {
+  color: color-mix(in srgb, var(--member-cat) 45%, #fff);
 }
 .member-state {
   font-size: 12px;

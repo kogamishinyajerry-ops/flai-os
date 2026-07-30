@@ -17,6 +17,11 @@
       class="page-alert"
     />
 
+    <AgentCapabilityMap
+      v-if="!loading && !loadError && agents.length"
+      :agents="agents"
+    />
+
     <!-- 首载骨架（A3）：只在「从未加载完成且无错误」时撑卡片栅格轮廓，轮询期间
          /带旧值刷新绝不回骨架（本页无轮询，loading 天然只在首载为真）；失败态
          走上面 el-alert，骨架不吞错误。 -->
@@ -36,7 +41,16 @@
         <el-card class="agent-card" shadow="never" :body-style="{ padding: '0' }">
           <div class="card-inner">
             <div class="agent-card-header">
-              <span class="agent-name">{{ agent.name }}</span>
+              <span class="agent-identity">
+                <span
+                  class="agent-type-glyph"
+                  :style="{ color: categoryColor(agent.category), background: categoryColor(agent.category) + '14' }"
+                  aria-hidden="true"
+                >
+                  <el-icon><component :is="categoryIcon(agent.category)" /></el-icon>
+                </span>
+                <span class="agent-name">{{ agent.name }}</span>
+              </span>
               <el-tag
                 :type="statusTagType(agent.status)"
                 size="small"
@@ -59,26 +73,39 @@
 
             <!-- 次级 meta 一行（批次四 Q4）：类型/成熟度/id·版本合并为一行
                  安静小字——释义走 :title；id 字面保持可见 DOM（m10 has_text
-                 锚 + m2 body 断言），只降视觉权重不降可见性。 -->
+                 锚 + m2 body 断言），只降视觉权重不降可见性。
+                 批次 A+C：「N 项不适用边界」chip 撤下——与下方「不适用范围 · N」
+                 折叠标题纯重复（P1 文字墙）；治理入口移至动作行与主 CTA 同列。 -->
             <div class="agent-tags">
               <span
                 class="cat-pill"
                 :style="{ color: categoryColor(agent.category), background: categoryColor(agent.category) + '18' }"
                 :title="categoryTip(agent.category)"
-              >{{ categoryLabel(agent.category) }}</span>
+              >
+                <el-icon aria-hidden="true"><component :is="categoryIcon(agent.category)" /></el-icon>
+                {{ categoryLabel(agent.category) }}
+              </span>
               <el-tag
                 v-if="agent.maturity"
                 type="info"
                 effect="plain"
                 size="small"
                 :title="maturityTip(agent.maturity)"
-              >{{ agent.maturity }}</el-tag>
+              >
+                <el-icon aria-hidden="true"><TrendCharts /></el-icon>
+                成熟度 · {{ agent.maturity }}
+              </el-tag>
               <span class="agent-meta-token">{{ agent.id }} · v{{ agent.version }}</span>
-              <button type="button" class="gov-entry" @click="openGovernance(agent)">治理</button>
             </div>
 
           <el-collapse v-if="agent.limitations && agent.limitations.length">
-            <el-collapse-item title="不适用范围">
+            <el-collapse-item>
+              <template #title>
+                <span class="limitations-title">
+                  <el-icon aria-hidden="true"><Warning /></el-icon>
+                  不适用范围 · {{ agent.limitations.length }}
+                </span>
+              </template>
               <ul class="limitations-list">
                 <li v-for="(item, idx) in agent.limitations" :key="idx">{{ item }}</li>
               </ul>
@@ -86,6 +113,7 @@
           </el-collapse>
 
             <div class="agent-actions">
+              <button type="button" class="gov-entry" @click="openGovernance(agent)">治理</button>
               <el-button
                 v-if="agent.mode === 'interactive'"
                 type="primary"
@@ -200,16 +228,11 @@
     <el-dialog
       v-model="governanceOpen"
       :title="governanceAgent?.name || ''"
-      width="560px"
+      width="min(680px, 94vw)"
       class="gov-dialog"
       @closed="resetGovernanceDialog"
     >
       <div v-if="governanceAgent" v-loading="governanceLoading" class="gov-panel">
-        <div class="gov-maturity-tag">
-          <span>成熟度</span>
-          <el-tag type="info" effect="plain" size="small">{{ governanceAgent.maturity }}</el-tag>
-        </div>
-
         <el-alert
           v-if="governanceLoadError"
           type="error"
@@ -220,7 +243,18 @@
 
         <template v-else>
           <div class="gov-ladder">
-            <div class="section-label">成熟度</div>
+            <!-- 「成熟度」全弹窗只出现这一次（P0 修订）：顶部曾另有一行
+                 成熟度+pill 与阶梯重复、信息层级自相矛盾，已撤——当前档位的
+                 pill 并入阶梯标题行，阶梯本身是唯一的成熟度呈现。 -->
+            <div class="gov-ladder-head">
+              <span class="section-label">成熟度</span>
+              <el-tag
+                type="info"
+                effect="plain"
+                size="small"
+                :title="maturityTip(governanceAgent.maturity)"
+              >{{ governanceAgent.maturity }}</el-tag>
+            </div>
             <div class="gov-ladder-track">
               <span
                 v-for="step in maturityLadder"
@@ -231,20 +265,47 @@
               >{{ step.level }}<em v-if="step.outOfScope" class="gov-oos-tag">范围外</em></span>
             </div>
             <div class="gov-ladder-note">仅 L0→L1 机器化把关；L2/L3 范围外</div>
+            <div v-if="!maturityState.known" class="gov-maturity-unknown">
+              成熟度字段待核，未默认回退为 L0
+            </div>
           </div>
+
+          <GovernanceJourney
+            :maturity="governanceAgent.maturity"
+            :curated-cases-count="curatedCasesCount"
+            :latest-run="latestGovernanceRun"
+            :promotion-confirmed="promotionConfirmed"
+            :promotions="governancePromotions"
+          />
 
           <div v-if="evalTrend.length" class="gov-eval-trend">
             <div class="section-label">评测通过率（近 {{ evalTrend.length }} 次）</div>
-            <!-- 柱值数字（W7c）：与下方柱子逐一对位，无有效用例显 —，轻触不重构弹窗结构。 -->
+            <!-- 语义化趋势（P0 修订）：每柱=mono 数字+状态图标+信任色 tone
+                 （严格全通过才绿/真实失败红/含跳过 amber/无有效用例中性 —），
+                 hairline 基线为唯一零轴；柱列固定宽度左对齐，单次评测不再拉成
+                 一根撑满全宽的无语义灰条。颜色永不单独表达状态（图标+数字同在）。 -->
             <div class="gov-trend-vals">
-              <span v-for="run in evalTrend" :key="run.id" class="gov-trend-val num-token">{{ run.pct === null ? "—" : run.pct }}</span>
+              <span
+                v-for="run in evalTrend"
+                :key="run.id"
+                class="gov-trend-val num-token"
+                :class="`tone-${run.tone}`"
+              >
+                <el-icon aria-hidden="true">
+                  <CircleCheckFilled v-if="run.tone === 'real'" />
+                  <CircleCloseFilled v-else-if="run.tone === 'fail'" />
+                  <QuestionFilled v-else-if="run.tone === 'pending'" />
+                  <Minus v-else />
+                </el-icon>
+                {{ run.pct === null ? "—" : run.pct }}
+              </span>
             </div>
             <div class="gov-trend-bars">
               <span
                 v-for="run in evalTrend"
                 :key="run.id"
                 class="gov-trend-bar"
-                :class="{ 'is-empty': run.pct === null }"
+                :class="[`tone-${run.tone}`, { 'is-empty': run.pct === null }]"
                 :style="run.pct !== null ? { height: Math.max(6, run.pct) + '%' } : {}"
                 :title="run.pct === null
                   ? `无有效用例 · ${formatTime(run.at)}`
@@ -261,8 +322,7 @@
             </div>
             <div class="gov-run-summary">
               <template v-if="latestGovernanceRun">
-                通过 {{ latestGovernanceRun.passed }}/{{ latestGovernanceRun.total }} ·
-                跳过 {{ latestGovernanceRun.skipped }} ·
+                <span :class="`tone-${latestRunVisual.tone}`">{{ latestRunVisual.detail }}</span> ·
                 {{ formatTime(latestGovernanceRun.finished_at || latestGovernanceRun.started_at) }}
               </template>
               <template v-else>尚未跑过评测</template>
@@ -333,13 +393,32 @@
             >
               <div class="gov-promotion-head">
                 <span class="gov-promotion-jump">{{ p.from_maturity }}→{{ p.to_maturity }}</span>
-                <span class="gov-promotion-meta">{{ p.confirmed_by }} · {{ formatTime(p.created_at) }}</span>
+                <span class="gov-promotion-meta">{{ p.confirmed_by || "记名人待核" }} · {{ formatTime(p.created_at) }}</span>
+              </div>
+              <div
+                class="gov-promotion-identity"
+                :class="`tone-${promotionIdentityOf(p).tone}`"
+              >
+                <el-icon aria-hidden="true">
+                  <UserFilled v-if="promotionIdentityOf(p).tone === 'signed'" />
+                  <Key v-else-if="promotionIdentityOf(p).tone === 'neutral'" />
+                  <QuestionFilled v-else />
+                </el-icon>
+                {{ promotionIdentityOf(p).detail }}
               </div>
               <el-collapse v-if="p.checks && Object.keys(p.checks).length">
-                <el-collapse-item title="五门判定快照">
+                <el-collapse-item title="准入判定快照">
                   <ul class="gov-checks-list">
                     <li v-for="(check, name) in p.checks" :key="name">
-                      {{ name }}：{{ check && check.ok === true ? '✓' : '✗' }}
+                      {{ promotionCheckLabel(name) }}：
+                      <span :class="`tone-${checkVisual(check).tone}`">
+                        <el-icon aria-hidden="true">
+                          <CircleCheckFilled v-if="checkVisual(check).tone === 'real'" />
+                          <CircleCloseFilled v-else-if="checkVisual(check).tone === 'fail'" />
+                          <QuestionFilled v-else />
+                        </el-icon>
+                        {{ checkVisual(check).label }}
+                      </span>
                       <span v-if="check && check.detail"> · {{ check.detail }}</span>
                     </li>
                   </ul>
@@ -357,15 +436,38 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
+import {
+  Aim,
+  CircleCheckFilled,
+  CircleCloseFilled,
+  Document,
+  Key,
+  Minus,
+  QuestionFilled,
+  Reading,
+  Tools,
+  TrendCharts,
+  UserFilled,
+  Warning,
+} from "@element-plus/icons-vue";
 import { listAgents, getAgent } from "../api/agents";
 import { listTeams, summonTeam as summonTeamApi } from "../api/teams";
 import { request, unwrapDetail } from "../api/client";
 import { burstNeutral } from "../effects/burst.js";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
+import AgentCapabilityMap from "../components/AgentCapabilityMap.vue";
+import GovernanceJourney from "../components/GovernanceJourney.vue";
 import SchemaForm from "../components/SchemaForm.vue";
 import { parseSchema, blankInputs, collectInputs, validateInputs } from "../utils/schemaForm";
 import { uploadFile as apiUploadFile } from "../api/files";
+import {
+  buildEvalTrend,
+  buildMaturityLadder,
+  PROMOTION_CHECK_LABELS,
+  promotionIdentity,
+  summarizeEvalRun,
+} from "../utils/governanceJourney";
 import {
   statusTagType,
   agentStatusLabel,
@@ -399,6 +501,13 @@ const usefulnessTip = (l) =>
   })[l] || "";
 const CLEARANCE_LABEL_MAP = { public: "公开", internal: "内部", sensitive: "敏感" };
 const clearanceLabel = (c) => CLEARANCE_LABEL_MAP[c] || c;
+const CATEGORY_ICONS = {
+  tool_automation: Tools,
+  knowledge_qa: Reading,
+  structured_gen: Document,
+  reasoning_assist: Aim,
+};
+const categoryIcon = (category) => CATEGORY_ICONS[category] || QuestionFilled;
 
 const router = useRouter();
 const agents = ref([]);
@@ -432,31 +541,19 @@ const latestRunInFlight = computed(() => {
   const s = latestGovernanceRun.value?.status;
   return s === "queued" || s === "running";
 });
-const MATURITY_LADDER = ["L0", "L1", "L2", "L3"];
-const maturityLadder = computed(() => {
-  const current = governanceAgent.value?.maturity || "L0";
-  const curIdx = MATURITY_LADDER.indexOf(current);
-  return MATURITY_LADDER.map((level, idx) => ({
-    level,
-    reached: idx <= curIdx,
-    current: idx === curIdx,
-    outOfScope: idx >= 2, // L2/L3 仅 L0→L1 机器化把关，诚实标范围外
-  }));
-});
-// 最近 ≤8 次评测，旧→新（时间轴左旧右新）；pct=null 表示 total=0「无有效用例」
-const evalTrend = computed(() =>
-  (governanceRuns.value || [])
-    .filter((r) => r.status === "completed") // 只画已完成跑批——running(total=0)/error(部分) 不作通过率证据（Codex R2）
-    .slice(0, 8)
-    .map((r) => ({
-      id: r.id,
-      passed: r.passed ?? 0,
-      total: r.total ?? 0,
-      pct: r.total > 0 ? Math.round((r.passed / r.total) * 100) : null,
-      at: r.finished_at || r.started_at,
-    }))
-    .reverse()
-);
+const maturityState = computed(() => buildMaturityLadder(governanceAgent.value?.maturity));
+const maturityLadder = computed(() => maturityState.value.items);
+const latestRunVisual = computed(() => summarizeEvalRun(latestGovernanceRun.value));
+const promotionIdentityOf = (promotion) => promotionIdentity(promotion);
+const promotionCheckLabel = (name) => PROMOTION_CHECK_LABELS[name] || name;
+const checkVisual = (check) => {
+  if (check?.ok === true) return { tone: "real", label: "通过" };
+  if (check?.ok === false) return { tone: "fail", label: "未通过" };
+  return { tone: "pending", label: "待核" };
+};
+// 最近 ≤8 次评测，旧→新（时间轴左旧右新），逐点带信任色 tone（P0 趋势语义化）；
+// 只画 summarizeEvalRun 严格对账通过的跑批——未知计数不压成 0，pct=null=无有效用例。
+const evalTrend = computed(() => buildEvalTrend(governanceRuns.value));
 
 async function load() {
   loading.value = true;
@@ -967,15 +1064,32 @@ onMounted(load);
 }
 .agent-card-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-2);
   margin-bottom: 10px;
 }
+.agent-identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.agent-type-glyph {
+  flex: none;
+  width: 46px;
+  height: 46px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 12px;
+  font-size: 24px;
+}
 .agent-name {
+  min-width: 0;
   font-weight: 700;
   font-size: 15.5px;
   color: var(--ink);
+  overflow-wrap: anywhere;
 }
 .agent-tags {
   display: flex;
@@ -1000,11 +1114,29 @@ onMounted(load);
   font-family: var(--mono);
 }
 .cat-pill {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
   font-weight: 600;
   padding: 3px 10px;
   border-radius: var(--radius-pill);
+}
+.agent-tags .el-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.limitations-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-soft);
+  font-size: 11.5px;
+}
+.limitations-title {
+  min-height: 24px;
+  font-size: 13px;
 }
 .gov-entry {
   border: none;
@@ -1014,11 +1146,16 @@ onMounted(load);
   font-size: 12px;
   cursor: pointer;
   padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
 }
-.gov-entry:hover,
-.gov-entry:focus-visible {
+.gov-entry:hover {
   color: var(--ink);
   text-decoration: underline;
+}
+.gov-entry:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
+  color: var(--ink);
 }
 .agent-summary {
   color: var(--ink-soft);
@@ -1061,27 +1198,26 @@ onMounted(load);
 .agent-actions {
   margin-top: auto;
   padding-top: var(--space-3);
-  text-align: right;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
 }
 .gov-panel {
   color: var(--ink);
   min-height: 180px;
 }
-.gov-maturity-tag {
+.gov-ladder-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 14px;
-  margin-bottom: var(--space-4);
-  border-bottom: 1px solid var(--hairline);
-  color: var(--ink-soft);
-  font-size: 13px;
+  gap: var(--space-2);
 }
 .gov-run-block {
   margin-top: 2px;
 }
 .gov-resume-error {
-  color: var(--trust-fail);
+  color: var(--trust-pending);
   font-size: 12px;
   margin-bottom: 6px;
 }
@@ -1164,30 +1300,56 @@ onMounted(load);
 .gov-ladder-step.oos { opacity: 0.6; }
 .gov-oos-tag { display: block; font-size: 9px; font-style: normal; font-weight: 500; }
 .gov-ladder-note { color: var(--ink-faint); font-size: 11px; }
+.gov-maturity-unknown {
+  margin-top: 5px;
+  color: var(--trust-pending);
+  font-size: 11px;
+}
 .gov-eval-trend { margin: 14px 0; }
-/* 柱值数字行（W7c）：与下方 .gov-trend-bars 逐一对位的 mono 微标数字，null 用 —。 */
+/* 趋势列（P0 语义化）：固定宽度左对齐——1 次评测也是一根窄柱而非撑满全宽；
+   数字行与柱行同宽逐一对位，hairline 基线为唯一零轴。 */
 .gov-trend-vals {
   display: flex;
-  gap: var(--space-1);
+  gap: 10px;
 }
 .gov-trend-val {
-  flex: 1;
-  text-align: center;
+  flex: none;
+  width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
   font-size: var(--fs-2xs);
   color: var(--ink-faint);
 }
+.gov-trend-val .el-icon { font-size: 10px; }
 .gov-trend-bars {
-  display: flex; align-items: flex-end; gap: var(--space-1); height: 48px;
+  display: flex; align-items: flex-end; gap: 10px; height: 48px;
   padding: var(--space-1) 0; margin-top: var(--space-1);
   border-bottom: 1px solid var(--hairline); /* W7c：hairline 基线，柱子有零轴可读 */
 }
 .gov-trend-bar {
-  flex: 1; min-height: 6px; background: var(--ink-mid); border-radius: 2px 2px 0 0;
+  flex: none; width: 34px; min-height: 6px; background: var(--ink-mid); border-radius: 2px 2px 0 0;
   opacity: 0.75;
 }
 .gov-trend-bar.is-empty {
   background: transparent; border: 1px dashed var(--hairline); min-height: 100%;
   opacity: 1;
+}
+/* 柱 tone 承袭 summarizeEvalRun 严格判定：绿仅严格全通过，红仅真实失败，
+   amber=含跳过待核，中性=无有效用例（completed 恒中性）。 */
+.gov-trend-bar.tone-real { background: var(--trust-real); }
+.gov-trend-bar.tone-fail { background: var(--trust-fail); }
+.gov-trend-bar.tone-pending { background: var(--trust-pending); }
+.gov-trend-val.tone-real { color: var(--trust-real); }
+.gov-trend-val.tone-fail { color: var(--trust-fail); }
+.gov-trend-val.tone-pending { color: var(--trust-pending); }
+/* 窄屏（375px 弹窗内容 ~300px）：柱列收窄保 8 柱无横向溢出，数字/柱仍逐一对位。 */
+@media (max-width: 480px) {
+  .gov-trend-vals,
+  .gov-trend-bars { gap: 6px; }
+  .gov-trend-val,
+  .gov-trend-bar { width: 26px; }
 }
 .gov-cases-count { margin-top: var(--space-3); color: var(--ink-soft); font-size: 12.5px; }
 .gov-cases-count b { color: var(--ink); }
@@ -1203,6 +1365,28 @@ onMounted(load);
 }
 .gov-promotion-jump { color: var(--ink); font-weight: 700; font-size: 13px; }
 .gov-promotion-meta { color: var(--ink-faint); font-size: 11.5px; }
+.gov-promotion-identity {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  color: var(--ink-faint);
+  font-size: 11.5px;
+}
+.gov-promotion-identity.tone-signed { color: var(--trust-signed); }
+.gov-promotion-identity.tone-pending { color: var(--trust-pending); }
+.gov-run-summary .tone-real,
+.gov-checks-list .tone-real { color: var(--trust-real); }
+.gov-run-summary .tone-pending,
+.gov-checks-list .tone-pending { color: var(--trust-pending); }
+.gov-run-summary .tone-work { color: var(--clay); }
+.gov-run-summary .tone-fail,
+.gov-checks-list .tone-fail { color: var(--trust-fail); }
+.gov-checks-list li > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
 .gov-checks-list {
   margin: var(--space-1) 0 0; padding-left: var(--space-4); color: var(--ink-soft);
   font-size: 11.5px; line-height: 1.7;

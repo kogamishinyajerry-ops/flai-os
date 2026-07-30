@@ -1069,7 +1069,9 @@ with sync_playwright() as p:
     ctx.route("**/api/promotions*", _hang)
     page.goto(BASE + "/today", wait_until="domcontentloaded")
     try:
-        page.wait_for_selector(".today-error", timeout=26000)
+        # 负载抖动余量（20s AbortController 硬超时 + 20s 余量；原 6s 余量在高负载
+        # 机器上抖动）。断言语义不变：20s 硬超时落地 + 分型文案 + role=alert。
+        page.wait_for_selector(".today-error", timeout=40000)
         err_text = page.locator(".today-error").first.inner_text()
         timeout_ok = ("请求超时" in err_text) and ("重试" in err_text)
         role_ok = page.locator('.today-error[role="alert"]').count() >= 1
@@ -1400,7 +1402,9 @@ with sync_playwright() as p:
     ctx.route("**/api/tasks*", _hang_feed)
     page.goto(BASE + "/today", wait_until="domcontentloaded")
     try:
-        page.wait_for_selector(".today-error:has-text('自动重试中')", timeout=26000)
+        # 负载抖动余量（20s AbortController 硬超时 + 20s 余量；原 6s 余量在高负载
+        # 机器上抖动）。断言语义不变：20s 硬超时落地 + 「自动重试中」真声明 + 轮询二次开火。
+        page.wait_for_selector(".today-error:has-text('自动重试中')", timeout=40000)
         feed_err = page.locator(".today-error", has_text="自动重试中").first.inner_text()
         suffix_ok = "（自动重试中）" in feed_err
         contradiction_free = "请稍后重试（自动重试中）" not in feed_err

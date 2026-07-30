@@ -97,6 +97,14 @@
         </template>
       </div>
 
+      <TaskJourney
+        :task="task"
+        :events="events"
+        :model-calls="modelCalls"
+        :model-calls-loaded="modelCallsLoaded"
+        :model-calls-error="modelCallsError"
+      />
+
       <el-alert
         v-if="task.error_message"
         type="error"
@@ -130,9 +138,12 @@
               type="button"
               class="artifact-toggle"
               :aria-expanded="!a.collapsed"
-              @click="a.collapsed = !a.collapsed"
+              @click="toggleArtifact(a)"
             >
-              <span class="artifact-chevron" aria-hidden="true">{{ a.collapsed ? "▸" : "▾" }}</span>
+              <el-icon class="artifact-chevron" aria-hidden="true">
+                <ArrowRight v-if="a.collapsed" />
+                <ArrowDown v-else />
+              </el-icon>
               <span class="artifact-name">{{ a.filename }}</span>
               <!-- 类型标签（F6，Codex R6「文档 · MD」语法）：类型词+格式，不再裸后缀。 -->
             <span v-if="a.ext" class="artifact-ext-badge">{{ artifactTypeLabel(a.ext) }}</span>
@@ -163,7 +174,16 @@
           class="artifact-more"
           :aria-expanded="false"
           @click="artifactsExpanded = true"
-        >显示另外 {{ hiddenArtifactCount }} 个 ⌄</button>
+        >
+          <span>显示另外 {{ hiddenArtifactCount }} 个</span>
+          <el-icon class="artifact-more-icon" aria-hidden="true"><ArrowDown /></el-icon>
+        </button>
+        <!-- 渐进披露说明行（批次 D P1）：默认先给可读报告，数据/日志类产物由
+             shouldCollapseArtifactForReview 自动收纳——把「为什么有的产物折着」
+             讲成一句人话，下钻路径显式可见。计数来自真实折叠态，不估。 -->
+        <p v-if="collapsedArtifactCount > 0" class="artifact-collapsed-hint">
+          数据与日志类产物已默认收纳 <span class="num-token">{{ collapsedArtifactCount }}</span> 件——先读报告，展开即可逐项核对原始数据。
+        </p>
       </div>
 
       <!-- 核验自证段（F3，kit11「校验方式」语法）：产物之后、动作之前——签发前
@@ -185,7 +205,16 @@
         <div v-if="evidenceWithheld" class="evidence-withheld">
           依据清单〔按密级隐藏〕——原文未拉取，签发前请经授权渠道核对
         </div>
-        <EvidenceList v-if="evidenceFindings.length" :findings="evidenceFindings" />
+        <EvidenceTrace
+          v-if="!evidenceFindings.length"
+          :findings="[]"
+          :withheld="evidenceWithheld"
+          :required-missing="evidenceRequiredMissing"
+        />
+        <EvidenceList
+          v-if="evidenceFindings.length"
+          :findings="evidenceFindings"
+        />
         <ul v-if="evidenceRefusals.length" class="evidence-refusals">
           <li v-for="(r, ri) in evidenceRefusals" :key="ri">
             已如实说明超出范围：{{ r.reason }}<span v-if="r.suggestion" class="refusal-suggestion">{{ r.suggestion }}</span>
@@ -257,7 +286,9 @@
           </el-form-item>
         </el-form>
 
-        <EmptyState v-if="feedbackList.length === 0 && !feedbackError" description="暂无反馈" :image-size="84" />
+        <!-- 纯数据空态=line 轻量态（W2 空态纪律，与 FeedbackPage 孪生面同律）：
+             「暂无反馈」不庆祝也不引导行动，一行安静文字；文案逐字不动。 -->
+        <EmptyState v-if="feedbackList.length === 0 && !feedbackError" tier="line" description="暂无反馈" />
         <ul v-else class="feedback-list">
           <li v-for="f in feedbackList" :key="f.id">
             <el-tag size="small" :type="f.rating === 'good' ? 'success' : 'danger'">
@@ -355,6 +386,11 @@
                m2 e2e 的产物链接 DOM 序锚点。 -->
           <div class="source-block knowledge-citations" v-if="knowledgeCitations.length">
             <div class="source-label">知识引用</div>
+            <EvidenceTrace
+              kind="knowledge"
+              :citations="knowledgeTraceCitations"
+              compact
+            />
             <div class="citation-hint">执行期知识检索命中的语料块——签发前可回源核对原文。</div>
             <div v-for="c in knowledgeCitations" :key="c.key" class="citation-item">
               <button
@@ -363,7 +399,10 @@
                 :aria-expanded="citState(c.key).open ? 'true' : 'false'"
                 @click="toggleCitation(c)"
               >
-                <span class="citation-chevron">{{ citState(c.key).open ? "▾" : "▸" }}</span>
+                <el-icon class="citation-chevron" aria-hidden="true">
+                  <ArrowDown v-if="citState(c.key).open" />
+                  <ArrowRight v-else />
+                </el-icon>
                 <span class="citation-id">{{ c.chunkId }}</span>
                 <span class="citation-scope">{{ c.scopeId }}</span>
                 <span class="citation-action">{{ citState(c.key).open ? "收起" : "查看原文" }}</span>
@@ -376,7 +415,10 @@
                   <div class="citation-meta">{{ citState(c.key).chunk.source }} · 指纹 <span class="num-token">{{ citState(c.key).chunk.fingerprint }}</span></div>
                   <!-- 漂移实证（R1 P2）：检索时指纹与回源现值不一致 → 如实警示，
                        不假装「原文即检索所见」。amber 未核语义（形状+字重承载）。 -->
-                  <div v-if="citState(c.key).drifted" class="citation-note citation-drift">⚠ 语料在检索后已变动：检索时指纹 <span class="num-token">{{ c.searchFingerprint }}</span>，与当前不一致——请以当前原文为准重新核对。</div>
+                  <div v-if="citState(c.key).drifted" class="citation-note citation-drift">
+                    <el-icon aria-hidden="true"><Warning /></el-icon>
+                    语料在检索后已变动：检索时指纹 <span class="num-token">{{ c.searchFingerprint }}</span>，与当前不一致——请以当前原文为准重新核对。
+                  </div>
                   <div v-else class="citation-note">显示的是当前语料——检索之后语料若被更新，内容可能与执行当时不同。</div>
                 </template>
               </div>
@@ -393,10 +435,15 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { ArrowDown, ArrowRight, Warning } from "@element-plus/icons-vue";
 import { cancelTask, reviewTask, getTask } from "../api/tasks";
 import { downloadUrl, fetchOutputFile } from "../api/files";
 import { readChunk } from "../api/knowledge";
 import { buildRetryRoute } from "../utils/retryPrefill";
+import {
+  orderArtifactsForReview,
+  shouldCollapseArtifactForReview,
+} from "../utils/artifactReview";
 import { acquireChannel, pokeTask, onTransition } from "../stores/liveFeed";
 import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import EmptyState from "../components/EmptyState.vue";
@@ -406,8 +453,10 @@ import { statusLabel, statusTagType, formatTime, formatFileSize, formatTokens, a
 import MarkdownLite from "../components/MarkdownLite.vue";
 import WorkLog from "../components/WorkLog.vue";
 import CompletionSeal from "../components/CompletionSeal.vue";
+import TaskJourney from "../components/TaskJourney.vue";
 import VerificationCard from "../components/VerificationCard.vue";
 import EvidenceList from "../components/EvidenceList.vue";
+import EvidenceTrace from "../components/EvidenceTrace.vue";
 import { ensureTaskEvidence, taskEvidenceWithheld } from "../stores/taskEvidence";
 import { useAgentNames } from "../stores/agentNames";
 import { displayName } from "../stores/session";
@@ -458,7 +507,15 @@ const simRunTitle = computed(() =>
 // 删除——防 stale 语义已由 channel 的 epoch guard 统一承接（liveFeedCore.
 // makeEpochGuard，release 时 bump epoch，在途响应整包作废）。
 const taskChannel = acquireChannel(`task:${taskId}`, { modelCalls: true }); // 详情页消费模型调用记录（detail opt-in）
-const { task, events, modelCalls, modelCallsError, loaded, error: loadError } = taskChannel.state;
+const {
+  task,
+  events,
+  modelCalls,
+  modelCallsLoaded,
+  modelCallsError,
+  loaded,
+  error: loadError,
+} = taskChannel.state;
 
 const reviewForm = reactive({ comment: "" });
 const signerName = computed(() => displayName());
@@ -580,13 +637,14 @@ async function syncArtifacts(ids) {
         size: 0,
         loading: true,
         error: "",
-        collapsed: false, // 逐卡收起 affordance（W3）：默认展开，仅本地视图态
+        collapsed: false,
+        collapseTouched: false,
       });
       next.push(ph);
       toFetch.push(ph);
     }
   }
-  artifacts.value = next;
+  artifacts.value = orderArtifactsForReview(next);
   for (const ph of toFetch) {
     try {
       Object.assign(ph, await fetchOutputFile(ph.fileId), { loading: false, error: "" });
@@ -595,6 +653,18 @@ async function syncArtifacts(ids) {
       ph.error = err.detail || err.message || "加载失败";
     }
   }
+  const ordered = orderArtifactsForReview(artifacts.value);
+  for (const artifact of ordered) {
+    if (artifact.collapseTouched !== true) {
+      artifact.collapsed = shouldCollapseArtifactForReview(artifact, ordered);
+    }
+  }
+  artifacts.value = ordered;
+}
+
+function toggleArtifact(artifact) {
+  artifact.collapseTouched = true;
+  artifact.collapsed = !artifact.collapsed;
 }
 
 // 模型调用消耗披露（B1）：modelCalls 现由 task:<id> channel 每轮询整包重拉
@@ -653,6 +723,10 @@ const visibleArtifacts = computed(() =>
   artifactsExpanded.value ? artifacts.value : artifacts.value.slice(0, ARTIFACT_PREVIEW_COUNT),
 );
 const hiddenArtifactCount = computed(() => artifacts.value.length - visibleArtifacts.value.length);
+// 默认收纳计数（批次 D P1）：含自动收纳与手动收起，纯真实视图态投影。
+const collapsedArtifactCount = computed(() =>
+  artifacts.value.filter((a) => a.collapsed).length,
+);
 
 // 产物类型标签（F6）走 utils/format 的 artifactTypeLabel SSOT——StatusCenter
 // 速览同款徽章共用一份词表（3-lens 抓过孪生点漂移），本地副本已删。
@@ -763,6 +837,15 @@ const EMPTY_CITATION = Object.freeze({ open: false, loading: false, error: "", c
 function citState(key) {
   return citationStates[key] || EMPTY_CITATION;
 }
+const knowledgeTraceCitations = computed(() =>
+  knowledgeCitations.value.map((citation) => {
+    const state = citState(citation.key);
+    return {
+      searchFingerprint: citation.searchFingerprint,
+      currentFingerprint: state.chunk?.fingerprint ?? null,
+    };
+  })
+);
 
 // 错误文案按后果说话：403/404/409 的后端 detail 本就是给人看的中文如实口径
 //（受限拒绝/当前语料无此块/同名歧义），直接透出不二次翻译；403 追加一句
@@ -1155,7 +1238,9 @@ onUnmounted(() => {
 }
 .artifact-chevron {
   flex: none;
-  font-size: 11px;
+  width: 12px;
+  height: 12px;
+  font-size: 12px;
   color: var(--ink-faint);
 }
 .artifact-name {
@@ -1193,7 +1278,9 @@ onUnmounted(() => {
 /* 产物尾部折叠链接（F5）：Codex 折叠行同款安静灰文字（非按钮面），hover 走
    clay 工作色；button-reset 保真语义（Enter/Space 原生）。 */
 .artifact-more {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   margin: 2px 0 0;
   padding: 4px 2px;
   border: none;
@@ -1205,6 +1292,17 @@ onUnmounted(() => {
 }
 .artifact-more:hover {
   color: var(--clay);
+}
+.artifact-more-icon {
+  width: 13px;
+  height: 13px;
+  font-size: 13px;
+}
+/* 渐进披露说明行（批次 D P1）：安静一行灰字，零盒零底色（空态 line 态纪律）。 */
+.artifact-collapsed-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--ink-faint);
 }
 .source-panel {
   border: 1px solid var(--hairline);
@@ -1372,9 +1470,10 @@ onUnmounted(() => {
 }
 .citation-toggle {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   width: 100%;
+  min-height: 44px;
   margin: 0;
   padding: 0;
   border: none;
@@ -1441,10 +1540,17 @@ onUnmounted(() => {
 .citation-error {
   color: var(--ink-soft);
 }
-/* 漂移警示：形状（⚠）+字重承载，用 amber 未核语义色（信任色锁 amber 槽）。 */
+/* 漂移警示：官方矢量图标+字重承载，用 amber 未核语义色。 */
 .citation-drift {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
   color: var(--trust-pending, var(--ink-soft));
   font-weight: 600;
+}
+.citation-drift > .el-icon {
+  flex: none;
+  margin-top: 2px;
 }
 .muted {
   color: var(--ink-faint);

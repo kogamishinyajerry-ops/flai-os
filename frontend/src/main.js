@@ -1,11 +1,14 @@
 import { createApp } from "vue";
-import ElementPlus from "element-plus";
+import { provideGlobalConfig } from "element-plus";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
-import "element-plus/dist/index.css";
+import "element-plus/es/components/message/style/css";
+import "element-plus/es/components/message-box/style/css";
 
 import App from "./App.vue";
 import router from "./router";
 
-// V0.1 全量引入 Element Plus（页面简洁优先，不引入按需加载的构建复杂度——
-// 内网静态托管场景 bundle 体积不是瓶颈，构建确定性是）。
-createApp(App).use(router).use(ElementPlus, { locale: zhCn }).mount("#app");
+// Element Plus 由 Vite resolver 按模板实际使用量导入；全局配置仍明确注入，
+// 保持表单、分页和服务型组件（ElMessage/ElMessageBox）的中文 locale。
+const app = createApp(App);
+provideGlobalConfig({ locale: zhCn }, app, true);
+app.use(router).mount("#app");

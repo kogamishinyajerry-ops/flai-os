@@ -48,6 +48,12 @@ build_frontend() {
 
 run_step "① frontend npm run build" build_frontend
 
+check_frontend_bundle() {
+  (cd frontend && npm run check:bundle)
+}
+
+run_step "①a 前端分包体积预算" check_frontend_bundle
+
 # 不限定路径：跑满 pyproject testpaths（tests/ + tools_impl/ + backend/tests），
 # 只跑 backend/tests 会漏掉契约与工具包测试（Codex 互审 P2）。
 run_step "② 全量 pytest -n auto（三个 testpaths）" \

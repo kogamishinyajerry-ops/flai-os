@@ -44,7 +44,7 @@
                 <!-- 行级紧凑时钟（批次三 G4）：全量 locale 串收敛为同日 HH:MM/跨日 MM-DD HH:MM。 -->
                 <span class="sc-item-sub">{{ t.agent_id }} · {{ rowClock(t.created_at) }}</span>
               </span>
-              <span class="sc-item-cta">审阅 →</span>
+              <span class="sc-item-cta is-review">审阅 →</span>
             </div>
           </div>
           <div v-else class="sc-zero">
@@ -117,6 +117,15 @@
             <span>敏感数据任务——产物按部门数据口径流转，不外发。</span>
           </div>
 
+          <TaskJourney
+            :task="peekTask"
+            :events="peekEvents"
+            :model-calls="peekModelCalls"
+            :model-calls-loaded="peekModelCallsLoaded"
+            :model-calls-error="peekModelCallsError"
+            compact
+          />
+
           <!-- 终态盖章：落定任务先给一行官宣（Codex「─ Worked for Xs ─」哲学） -->
           <CompletionSeal :task="peekTask" class="peek-block" />
 
@@ -153,17 +162,30 @@
             <template v-else>
               <div v-for="a in peekArtifacts" :key="a.fileId" class="peek-artifact">
                 <!-- Artifact 容器头（Claude 哲学）：名 + 类型徽 + 尺寸 + 动作——产物是一等公民 -->
-                <div class="peek-artifact-head">
-                  <span class="peek-artifact-name">{{ a.filename }}</span>
-                  <!-- 类型标签（F6 同款，SSOT=utils/format artifactTypeLabel）：与 TaskDetail 产物卡同语法。 -->
-                  <span v-if="a.ext" class="peek-artifact-ext">{{ artifactTypeLabel(a.ext) }}</span>
-                  <span v-if="a.size" class="peek-artifact-size">{{ formatFileSize(a.size) }}</span>
+                <div class="peek-artifact-head" :class="{ 'is-collapsed': a.collapsed }">
+                  <button
+                    type="button"
+                    class="peek-artifact-toggle"
+                    :aria-expanded="!a.collapsed"
+                    @click="togglePeekArtifact(a)"
+                  >
+                    <el-icon class="peek-artifact-chevron" aria-hidden="true">
+                      <ArrowRight v-if="a.collapsed" />
+                      <ArrowDown v-else />
+                    </el-icon>
+                    <span class="peek-artifact-name">{{ a.filename }}</span>
+                    <!-- 类型标签（F6 同款，SSOT=utils/format artifactTypeLabel）：与 TaskDetail 产物卡同语法。 -->
+                    <span v-if="a.ext" class="peek-artifact-ext">{{ artifactTypeLabel(a.ext) }}</span>
+                    <span v-if="a.size" class="peek-artifact-size">{{ formatFileSize(a.size) }}</span>
+                  </button>
                   <a :href="downloadUrl(a.fileId)" download class="peek-artifact-dl">下载</a>
                 </div>
-                <div v-if="a.error" class="peek-artifact-err">产物加载失败：{{ a.error }}</div>
-                <MarkdownLite v-else-if="a.isText && (a.ext === 'md' || a.ext === 'markdown')" :text="a.text" class="peek-artifact-body" />
-                <pre v-else-if="a.isText" class="peek-artifact-body peek-pre">{{ a.text }}</pre>
-                <div v-else class="peek-artifact-muted">二进制文件，请下载后查看。</div>
+                <div v-show="!a.collapsed">
+                  <div v-if="a.error" class="peek-artifact-err">产物加载失败：{{ a.error }}</div>
+                  <MarkdownLite v-else-if="a.isText && (a.ext === 'md' || a.ext === 'markdown')" :text="a.text" class="peek-artifact-body" />
+                  <pre v-else-if="a.isText" class="peek-artifact-body peek-pre">{{ a.text }}</pre>
+                  <div v-else class="peek-artifact-muted">二进制文件，请下载后查看。</div>
+                </div>
               </div>
               <!-- 截断必披露：签发背书的是全部产物，没看全就要说清楚 -->
               <div v-if="peekFileIds.length > peekArtifacts.length" class="peek-artifact-more">
@@ -220,11 +242,16 @@
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { ArrowDown, ArrowRight } from "@element-plus/icons-vue";
 import { statusCenter, openTaskPeek, backToInbox, closeCenter } from "../stores/statusCenter";
 import { acquireChannel, pokeTask } from "../stores/liveFeed";
-import { reviewTask } from "../api/tasks";
+import { reviewTask, listOutputFiles } from "../api/tasks";
 import { request } from "../api/client";
 import { downloadUrl, fetchOutputFile } from "../api/files";
+import {
+  orderArtifactsForReview,
+  shouldCollapseArtifactForReview,
+} from "../utils/artifactReview";
 // formatTime 保留给授权链行（N8）——签发决策面的检视级全量时间戳；行级扫读
 // 面（待签/落定行）走 formatClockCompact 紧凑时钟（批次三 G4 边界：检视面
 // 全量精度，扫读面紧凑）。
@@ -239,6 +266,7 @@ import WorkLog from "./WorkLog.vue";
 import MarkdownLite from "./MarkdownLite.vue";
 import InboxZero from "./artwork/InboxZero.vue";
 import CompletionSeal from "./CompletionSeal.vue";
+import TaskJourney from "./TaskJourney.vue";
 
 const router = useRouter();
 
@@ -251,7 +279,16 @@ function openAllTasks() {
   closeForNavigation();
   router.push("/tasks");
 }
-const drawerSize = window.innerWidth < 640 ? "100%" : "540px";
+// 抽屉宽度两档（<640px 全屏 / 否则 540px）：原为 setup 一次性求值，窗口跨档
+// 拖放不更新——改 ref + matchMedia change 监听（max-width:639px ≡ innerWidth<640
+// 的整数像素等价），挂载期持续跟随，卸载即清；两档取值不变。
+const drawerSize = ref(window.innerWidth < 640 ? "100%" : "540px");
+const drawerMedia = window.matchMedia("(max-width: 639px)");
+const onDrawerMediaChange = (e) => {
+  drawerSize.value = e.matches ? "100%" : "540px";
+};
+drawerMedia.addEventListener("change", onDrawerMediaChange);
+onUnmounted(() => drawerMedia.removeEventListener("change", onDrawerMediaChange));
 
 // ── 收件箱行级活面（批次三 G3/G4）：1s ticker 仅抽屉打开期间存活、关闭即清
 // ——驱动「运行中」行活跳时长（cd-bg-tasks-panel Running 卡字段序「时长实时」）
@@ -359,6 +396,8 @@ const peekTask = ref(null);
 const peekEvents = ref([]);
 const peekArtifacts = ref([]);
 const peekModelCalls = ref([]);
+const peekModelCallsLoaded = ref(false);
+const peekModelCallsError = ref("");
 const peekLoading = ref(false);
 const peekError = ref("");
 
@@ -401,12 +440,24 @@ async function syncPeekArtifacts(taskId, ids) {
   const fp = `${taskId}::${(ids || []).join(",")}`;
   if (fp === artifactsFingerprint) return; // 同一指纹已加载/加载中，不重复拉
   artifactsFingerprint = fp;
-  const targets = (ids || []).slice(0, 3); // 速览最多预览 3 件，完整页看全部
-  if (!targets.length) {
+  const uniqueIds = [...new Set(ids || [])];
+  if (!uniqueIds.length) {
     peekArtifacts.value = [];
     artifactsLoading.value = false;
     return;
   }
+  let targets = uniqueIds.slice(0, 3);
+  // 先拉轻量元数据决定审阅顺序，再只下载前三件内容。元数据失败则诚实退回
+  // output_file_ids 原顺序；无论哪条路径，内容预览仍严格有界为 3 件。
+  try {
+    const files = await listOutputFiles(taskId);
+    const byId = new Map(files.map((file) => [file.id, file]));
+    const candidates = uniqueIds.map((id) => byId.get(id) || { id, filename: id.slice(0, 8) });
+    targets = orderArtifactsForReview(candidates).slice(0, 3).map((file) => file.id);
+  } catch {
+    // 元数据不可用不阻断产物审阅；下面按任务声明顺序继续拉取。
+  }
+  if (fp !== artifactsFingerprint) return;
   artifactsLoading.value = true;
   const out = [];
   for (const fid of targets) {
@@ -417,8 +468,18 @@ async function syncPeekArtifacts(taskId, ids) {
     }
   }
   if (fp !== artifactsFingerprint) return; // 期间换了任务/产物集，本次结果作废
-  peekArtifacts.value = out;
+  const ordered = orderArtifactsForReview(out);
+  for (const artifact of ordered) {
+    artifact.collapsed = shouldCollapseArtifactForReview(artifact, ordered);
+    artifact.collapseTouched = false;
+  }
+  peekArtifacts.value = ordered;
   artifactsLoading.value = false;
+}
+
+function togglePeekArtifact(artifact) {
+  artifact.collapseTouched = true;
+  artifact.collapsed = !artifact.collapsed;
 }
 
 // 产物集变化即触发（Task 4 / TaskDetail 同款姿势）：channel 每轮询整包重拉
@@ -444,6 +505,8 @@ function acquirePeekFeed(taskId) {
     }, { immediate: true }),
     watch(peekHandle.state.events, (v) => { peekEvents.value = v; }, { immediate: true }),
     watch(peekHandle.state.modelCalls, (v) => { peekModelCalls.value = v; }, { immediate: true }),
+    watch(peekHandle.state.modelCallsLoaded, (v) => { peekModelCallsLoaded.value = v; }, { immediate: true }),
+    watch(peekHandle.state.modelCallsError, (v) => { peekModelCallsError.value = v; }, { immediate: true }),
     // loading 双源联动（Task 12 修复 5）：单独 watch loaded 时,已 loaded 的
     // channel 若之后拉取失败,loaded 不回落 false,peekLoading 会卡在 false
     // 却无内容可看——error 分支需同样能把 loading 状态收口,而不是只镜像展示。
@@ -467,6 +530,8 @@ function releasePeekFeed() {
   peekTask.value = null;
   peekEvents.value = [];
   peekModelCalls.value = [];
+  peekModelCallsLoaded.value = false;
+  peekModelCallsError.value = "";
   peekLoading.value = false;
   peekError.value = "";
 }
@@ -831,6 +896,11 @@ onUnmounted(() => {
   font-weight: 600;
   color: var(--clay);
 }
+/* amber=待人签强 CTA（信任色锁：amber 仅待审语义）——与 GuidePage
+   .status-peek.is-review 同槽同语义，签发来找人。 */
+.sc-item-cta.is-review {
+  color: var(--trust-pending);
+}
 .sc-zero {
   display: flex;
   flex-direction: column;
@@ -976,6 +1046,29 @@ onUnmounted(() => {
   background: var(--paper-rail);
   border-bottom: 1px solid var(--hairline-soft);
 }
+.peek-artifact-head.is-collapsed {
+  border-bottom-color: transparent;
+}
+.peek-artifact-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.peek-artifact-chevron {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  color: var(--ink-faint);
+  font-size: 10px;
+}
 .peek-artifact-name {
   flex: 1 1 auto;
   min-width: 0;
@@ -1001,11 +1094,17 @@ onUnmounted(() => {
   font-size: 11px;
   color: var(--ink-faint);
 }
+/* 下载链接（批次五 C3 裁决，DeliveryCard .delivery-chip 同语法）：常驻非状态
+   语义的链接降 ink-soft+下划线，hover 回 clay。 */
 .peek-artifact-dl {
   flex: none;
   font-size: 12px;
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.peek-artifact-dl:hover {
   color: var(--clay);
-  text-decoration: none;
 }
 .peek-artifact-body {
   padding: 10px 12px;
