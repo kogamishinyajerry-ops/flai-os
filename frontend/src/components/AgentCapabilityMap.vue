@@ -26,7 +26,11 @@
             <strong>{{ categoryLabel(item.id) }}</strong>
             <small>{{ CATEGORY_VISUALS[item.id].description }}</small>
           </span>
-          <span class="capability-count num-token">{{ item.count }}</span>
+          <span
+            class="capability-count num-token"
+            :class="{ 'is-empty': item.count === 0 }"
+            :title="item.count === 0 ? '该分类暂无可用 Agent' : undefined"
+          >{{ item.count }}</span>
         </div>
         <!-- 关系行（批次 A+C P1）：能力类型 → 可用 Agent → 适用边界 → 发起方式，
              全部由 buildPortalCategoryOverview 从 agent 投影真实派生；字段畸形
@@ -203,6 +207,10 @@ function launchText(item) {
   align-self: start;
   color: var(--ink-mid);
   font-size: 13px;
+}
+/* 零计数降噪：分类卡兼图例职责保留显示，但 0 不抢视觉权重（非零样式不变）。 */
+.capability-count.is-empty {
+  color: var(--ink-faint);
 }
 .capability-node.is-unknown .capability-glyph,
 .capability-node.is-unknown .capability-count {

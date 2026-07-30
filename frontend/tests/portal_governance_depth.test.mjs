@@ -72,6 +72,28 @@ test("能力地图：可用 Agent 名单 name 优先 id 兜底，双缺不崩溃
   assert.equal(overview.unknownCount, 2);
 });
 
+test("能力地图：零计数分类结构完整——四类槽位齐、字段不塌缩，UI 降噪有真实数据可依", () => {
+  const overview = buildPortalCategoryOverview([
+    { id: "a1", name: "甲", category: "tool_automation", mode: "task", limitations: [] },
+  ]);
+  // 四类分类槽位恒在（兼图例职责），顺序稳定
+  assert.deepEqual(
+    overview.items.map((item) => item.id),
+    ["tool_automation", "knowledge_qa", "structured_gen", "reasoning_assist"],
+  );
+  const empty = overview.items.filter((item) => item.count === 0);
+  assert.equal(empty.length, 3);
+  for (const item of empty) {
+    assert.deepEqual(item.members, []);
+    assert.equal(item.boundaryCount, null); // 无成员=不计数不标待核
+    assert.deepEqual(item.launch, { chat: 0, task: 0, unknown: 0 });
+  }
+  // 非零分类的字段不受零计数降噪影响
+  const tool = overview.items.find((item) => item.id === "tool_automation");
+  assert.equal(tool.count, 1);
+  assert.equal(tool.boundaryCount, 0);
+});
+
 test("评测趋势：畸形 run 被剔除，未知计数绝不压成 0 或假绿", () => {
   const runs = [
     { id: "bad-1", status: "completed", total: 3, passed: 3, failed: 0, skipped: 0, case_results: [] }, // 明细未对上

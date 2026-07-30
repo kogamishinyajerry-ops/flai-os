@@ -96,7 +96,7 @@
             <div class="member-inner">
               <div class="member-head">
                 <span class="member-name">{{ a.agent_name }}</span>
-                <span class="member-pill" :style="{ color: categoryColor(a.category), background: categoryColor(a.category) + '18' }">
+                <span class="member-pill" :style="{ '--member-cat': categoryColor(a.category), background: categoryColor(a.category) + '18' }">
                   {{ categoryLabel(a.category) }}
                 </span>
                 <span class="member-state summoned">已召集 · <span class="num-token">{{ tasksFor(a).length }}</span> 个任务</span>
@@ -179,7 +179,7 @@
             <div class="member-inner">
               <div class="member-head">
                 <span class="member-name">{{ a.agent_name }}</span>
-                <span class="member-pill" :style="{ color: categoryColor(a.category), background: categoryColor(a.category) + '18' }">
+                <span class="member-pill" :style="{ '--member-cat': categoryColor(a.category), background: categoryColor(a.category) + '18' }">
                   {{ categoryLabel(a.category) }}
                 </span>
                 <span class="member-state pending">尚未召集</span>
@@ -804,6 +804,13 @@ onUnmounted(() => {
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 999px;
+  /* 分类色经 --member-cat 传入（亮主题直吃分类色，与改前逐位一致）。 */
+  color: var(--member-cat);
+}
+/* 暗主题仅提亮文字：四分类色直接吃在暗底上对比 2.7–3.1:1 不达 AA，
+ * 向白混 45% 保持色相、对比拉过 4.5；分类轴身份语义与背景 tint 机制不动。 */
+:root[data-theme="dark"] .member-pill {
+  color: color-mix(in srgb, var(--member-cat) 45%, #fff);
 }
 .member-state {
   font-size: 12px;

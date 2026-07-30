@@ -148,20 +148,23 @@ onUnmounted(() => {
   position: fixed;
   top: 16px;
   right: 20px;
-  z-index: 150; /* 低于 ⌘K 面板(200)，高于页面内容 */
+  z-index: var(--z-dock); /* 低于 ⌘K 面板(--z-switcher)，高于页面内容 */
   display: flex;
   align-items: center;
   gap: 8px;
   cursor: pointer;
   user-select: none;
+  /* 焦点环形态（壳层焦点审计）：容器是 pill 条，全局 :focus-visible 环
+     沿外接矩形走角——补同级圆角让环贴合 pill 族几何。 */
+  border-radius: var(--radius-pill);
 }
 .dock-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
-  border-radius: 999px;
-  font-size: 12px;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-sm);
   font-weight: 600;
   box-shadow: var(--shadow-card);
   transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
@@ -210,12 +213,12 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 4px 10px;
-  border-radius: 999px;
+  padding: var(--space-1) 10px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--hairline);
   background: var(--surface-raised);
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   text-decoration: none;
   box-shadow: var(--shadow-card);
@@ -230,11 +233,13 @@ onUnmounted(() => {
 }
 @media (prefers-reduced-motion: reduce) {
   .dock-pill,
-  .dock-core {
+  .dock-core,
+  .dock-monitor {
     transition: none;
   }
   .status-dock:hover .dock-pill,
-  .status-dock:hover .dock-core {
+  .status-dock:hover .dock-core,
+  .dock-monitor:hover {
     transform: none;
   }
   .dock-pill-waiting.dock-pulse-echo {

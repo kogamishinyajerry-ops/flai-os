@@ -68,7 +68,10 @@
       </el-alert>
 
       <h3 class="section-label">该任务已有反馈</h3>
-      <EmptyState v-if="feedbackList.length === 0 && !feedbackError" description="暂无反馈" />
+      <!-- 纯数据空态=line 轻量态（W2 空态纪律）：本屏插画预算已给「先选任务」
+           引导空态；「暂无反馈」一行安静文字即可。description 逐字不动（batch_d
+           ⑦ 失败态互斥锚只咬文案，不咬形态）。 -->
+      <EmptyState v-if="feedbackList.length === 0 && !feedbackError" variant="data" tier="line" description="暂无反馈" />
       <ul v-else class="feedback-list">
         <li v-for="f in feedbackList" :key="f.id">
           <el-tag size="small" :type="f.rating === 'good' ? 'success' : 'danger'">
@@ -192,6 +195,12 @@ onMounted(async () => {
 .feedback-form {
   margin-top: var(--space-4);
 }
+/* h3 的 UA 默认 margin-top（1em）会叠在全局 .section-label 的 8px 底距之上，
+   比 MePage 的 div.section-label 节奏多一块顶部空隙——归零对齐（只动 margin，
+   字级/字重仍走全局 .section-label SSOT）。 */
+.section-label {
+  margin-top: 0;
+}
 .feedback-list {
   list-style: none;
   padding: 0;
@@ -205,8 +214,16 @@ onMounted(async () => {
   border-bottom: 1px solid var(--hairline);
   font-size: 13px;
 }
+/* 末行不再垂一条悬空 hairline（层级靠留白收尾，hairline 只做行间分隔）。 */
+.feedback-list li:last-child {
+  border-bottom: none;
+}
 .feedback-message {
   flex: 1;
+  /* 375px 硬化：flex 项 min-width:auto 会以最长单词为最小宽，超长无断行
+     字符串（如粘贴的 URL）此前会把行撑出视口——min-width:0 让位 + 断词兜底。 */
+  min-width: 0;
+  overflow-wrap: break-word;
   color: var(--ink-soft);
 }
 .feedback-meta {
