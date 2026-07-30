@@ -630,7 +630,15 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--ink-faint);
   display: flex;
+  /* 窄屏防横向溢出：长发起人名 + 16 位会话 id 允许换行（桌面内容放得下时
+     flex-wrap 不改变排版，视觉不变）。 */
+  flex-wrap: wrap;
   gap: 6px;
+}
+.sess-meta > span {
+  /* 弹性子项可缩到内容以下；无断点的 hex id 片段允许任意处折行。 */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .sess-progress {
   text-align: right;

@@ -194,7 +194,7 @@
                       :class="{ 'is-sensitive': clearanceOf(a) === 'sensitive' }"
                     >{{ clearanceLabelOf(a) }}</span>
                     <span v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</span>
-                    <span class="agent-maturity">{{ a.maturity }} / {{ a.status }}</span>
+                    <span class="agent-maturity">{{ maturityLabel(a.maturity) }} / {{ agentStatusLabel(a.status) }}</span>
                     <span class="sa-spacer"></span>
 
                     <!-- 右槽①已召集：实时状态词+秒表，点击直开速览（B1 对话轴督战原语义） -->
@@ -519,7 +519,7 @@ import {
   taskEvidenceSummary,
   taskEvidenceWithheld,
 } from "../stores/taskEvidence";
-import { categoryColor, categoryLabel, categoryTip, maturityTip, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime } from "../utils/format";
+import { categoryColor, categoryLabel, categoryTip, maturityTip, agentStatusLabel, MATURITY, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime } from "../utils/format";
 import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
 import { useAgentNames } from "../stores/agentNames";
 import EvidenceList from "../components/EvidenceList.vue";
@@ -1428,6 +1428,10 @@ function clearanceLabelOf(a) {
   return c ? CLEARANCE_LABEL[c] || c : "";
 }
 
+// 成熟度人话标签走 format.js SSOT（与 TodayPage maturityLabel 同口径），
+// 未声明成熟度的存量包诚实回落原值，不编造。
+const maturityLabel = (m) => MATURITY[m]?.label ?? m;
+
 function evidenceOfTask(taskId) {
   return taskEvidenceOf(taskId);
 }
@@ -1715,6 +1719,7 @@ watch(
    * 一次=真「刚落地」无需门控；用全局类天然继承 App.vue 的 reduced-motion
    * 降级（双镜头审合流 finding——本地 animation 没有降级覆盖，已迁移根治）。 */
 }
+/* 品牌徽记=身份标识，非信任语义，clay 预算豁免（与 App.vue .cta-clay 徽记例外同裁决） */
 .hero-mark {
   width: 46px;
   height: 46px;
@@ -1911,15 +1916,17 @@ watch(
   gap: 6px;
   margin-top: 8px;
 }
-/* 悬浮时间戳：静止态隐去，hover 整行气泡才渐显（历史消息/新回合皆可能无
- * createdAt——user 乐观推送不带时间戳，v-if 已兜底不渲染空占位）。 */
+/* 悬浮时间戳：静止态隐去，hover 或行内焦点（focus-within，触屏/键盘可达）整行
+ * 气泡才渐显（历史消息/新回合皆可能无 createdAt——user 乐观推送不带时间戳，
+ * v-if 已兜底不渲染空占位）。 */
 .bubble-time {
   opacity: 0;
   font-size: 11px;
   color: var(--ink-faint);
   transition: opacity var(--motion-fast) var(--ease-out-soft);
 }
-.bubble-row:hover .bubble-time { opacity: 1; }
+.bubble-row:hover .bubble-time,
+.bubble-row:focus-within .bubble-time { opacity: 1; }
 .user-bubble .bubble-time {
   display: block;
   margin-top: 6px;
@@ -2289,7 +2296,7 @@ watch(
 .sa-squad-line .squad-sep { color: var(--ink-faint); }
 .squad-seg.tone-clay { color: var(--clay); font-weight: 600; }
 .squad-seg.tone-amber { color: var(--trust-pending); font-weight: 600; }
-.squad-seg.tone-rose { color: var(--el-color-danger, #c04545); font-weight: 600; }
+.squad-seg.tone-rose { color: var(--trust-fail); font-weight: 600; }
 
 /* 等待接力=空心灯（T1）：1px ink 描边圆，绝无 is-pulsing（O2 探针断言互斥） */
 .status-lamp.is-hollow {
@@ -2777,6 +2784,8 @@ watch(
   animation: spin 0.7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* 诚实地板句（Claude「can make mistakes」哲学）：常驻同一 composer 容器内，
+ * 会话进行中（composer 变 fixed 悬浮）也不消失；放进容器内部避免布局跳动。 */
 .composer-hint {
   display: flex;
   align-items: center;
@@ -2805,10 +2814,6 @@ watch(
   .send-spin { animation: none; }
 }
 
-/* 诚实地板句（Claude「can make mistakes」哲学）：常驻同一 composer 容器内，
- * 会话进行中（composer 变 fixed 悬浮）也不消失；放进容器内部避免布局跳动。 */
-@media (max-width: 640px) {
-}
 kbd {
   font-family: var(--mono);
   font-size: 10.5px;
@@ -2892,7 +2897,6 @@ kbd {
 .qa-refusal:last-child { margin-bottom: 0; }
 .qa-refusal-reason { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink); }
 .qa-refusal-suggestion { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-soft); }
-</style>
-<style>
+
 .agent-pick .ap-zero { font-size: 12px; color: var(--ink-faint); padding: 4px 14px 8px; }
 </style>

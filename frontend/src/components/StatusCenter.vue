@@ -279,7 +279,16 @@ function openAllTasks() {
   closeForNavigation();
   router.push("/tasks");
 }
-const drawerSize = window.innerWidth < 640 ? "100%" : "540px";
+// 抽屉宽度两档（<640px 全屏 / 否则 540px）：原为 setup 一次性求值，窗口跨档
+// 拖放不更新——改 ref + matchMedia change 监听（max-width:639px ≡ innerWidth<640
+// 的整数像素等价），挂载期持续跟随，卸载即清；两档取值不变。
+const drawerSize = ref(window.innerWidth < 640 ? "100%" : "540px");
+const drawerMedia = window.matchMedia("(max-width: 639px)");
+const onDrawerMediaChange = (e) => {
+  drawerSize.value = e.matches ? "100%" : "540px";
+};
+drawerMedia.addEventListener("change", onDrawerMediaChange);
+onUnmounted(() => drawerMedia.removeEventListener("change", onDrawerMediaChange));
 
 // ── 收件箱行级活面（批次三 G3/G4）：1s ticker 仅抽屉打开期间存活、关闭即清
 // ——驱动「运行中」行活跳时长（cd-bg-tasks-panel Running 卡字段序「时长实时」）
