@@ -243,12 +243,12 @@
             <div class="review-chain">
               授权链：{{ task.created_by }} 于 {{ formatTime(task.created_at) }} 创建本任务；除你此刻的批准外，平台没有任何自动放行路径。
             </div>
-            <el-form-item>
+            <el-form-item class="review-actions">
               <!-- 批准=人签，用信任锁的 teal（--trust-signed），绝不用绿（绿仅表真实结果）。
                    ref 供放行成功后的 teal burst 定位元素（动效系统 v1 E2，唯一 teal 许可点）。 -->
-              <el-button ref="approveBtnEl" class="approve-btn" :loading="reviewing" @click="handleReview('approve')">批准放行</el-button>
+              <el-button ref="approveBtnEl" class="approve-btn review-action-btn" :loading="reviewing" @click="handleReview('approve')">批准放行</el-button>
               <!-- 措辞统一（W7）：与 StatusCenter 速览同用「驳回」——同一动作一种中文。 -->
-              <el-button type="danger" :loading="reviewing" @click="handleReview('reject')">驳回</el-button>
+              <el-button class="review-action-btn" type="danger" :loading="reviewing" @click="handleReview('reject')">驳回</el-button>
             </el-form-item>
           </el-form>
         </el-card>
@@ -944,7 +944,12 @@ async function handleCancel() {
 async function handleReview(action) {
   const label = action === "approve" ? "批准放行" : "驳回";
   try {
-    await ElMessageBox.confirm(`确认${label}该任务？`, label, { type: "warning" });
+    await ElMessageBox.confirm(`确认${label}该任务？`, label, {
+      type: "warning",
+      // B6a：确认签发（approve）属人签槽，确认钮 teal（.sign-confirm-btn，
+      // 全局定义见 App.vue）；驳回不占人签槽，维持既有形态。
+      ...(action === "approve" ? { confirmButtonClass: "sign-confirm-btn" } : {}),
+    });
   } catch {
     return;
   }
@@ -1178,6 +1183,15 @@ onUnmounted(() => {
   --el-button-hover-text-color: #fff;
   --el-button-active-bg-color: var(--trust-signed-deep);
   --el-button-active-border-color: var(--trust-signed-deep);
+}
+.review-actions :deep(.el-form-item__content) {
+  gap: 12px;
+}
+.review-action-btn {
+  min-height: 44px;
+}
+.review-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 .review-note {
   font-size: 12.5px;

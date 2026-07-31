@@ -5,34 +5,13 @@
       <!-- 减重批：hero 只剩问候+一句主标题（Claude 精髓=留白克制，信任靠交互
            建立不靠说教）。价值主张/政策句收进 composer 下一行；名字由
            WelcomeGate 身份门一次收齐，此处不再询问。 -->
-      <div class="hero-mark" aria-hidden="true">
-        <el-icon><Guide /></el-icon>
-      </div>
+      <FlaiBloom class="hero-mark" :size="38" />
       <p class="hero-greeting">{{ greeting }}</p>
       <h1 class="hero-title">说说你要做的工程活儿</h1>
-      <div class="hero-route" aria-label="平台工作路径">
-        <div class="hero-route-step">
-          <el-icon aria-hidden="true"><ChatLineRound /></el-icon>
-          <span>说需求</span>
-        </div>
-        <el-icon class="hero-route-arrow" aria-hidden="true"><ArrowRight /></el-icon>
-        <div class="hero-route-step">
-          <el-icon aria-hidden="true"><Grid /></el-icon>
-          <span>匹配能力</span>
-        </div>
-        <el-icon class="hero-route-arrow" aria-hidden="true"><ArrowRight /></el-icon>
-        <div class="hero-route-step">
-          <el-icon aria-hidden="true"><Cpu /></el-icon>
-          <span>Agent 执行</span>
-        </div>
-        <el-icon class="hero-route-arrow" aria-hidden="true"><ArrowRight /></el-icon>
-        <div class="hero-route-step is-review">
-          <el-icon aria-hidden="true"><Stamp /></el-icon>
-          <span>审阅交付</span>
-        </div>
-      </div>
-      <!-- 四意图卡（原 hero-examples/ex-chip 原地升级）：数据=四分类 AGENT_CATEGORY
-           一一配对，点击只填 draft + focusComposer，绝不代发（同 setExample 语义）。 -->
+      <!-- 四意图卡·一排紧凑条目（原 hero-examples/ex-chip 原地升级；压缩批由两排
+           卡片收成单行四枚「图标+短标签」，示例句退出视觉层只做点击预填）：
+           数据=四分类 AGENT_CATEGORY 一一配对，点击只填 draft + focusComposer，
+           绝不代发（同 setExample 语义）。 -->
       <div class="hero-intents">
         <div
           v-for="item in INTENT_EXAMPLES"
@@ -40,6 +19,7 @@
           class="intent-card"
           role="button"
           tabindex="0"
+          :aria-describedby="`intent-tip-${item.category}`"
           @click="setExample(item.example)"
           @keydown.enter.prevent="setExample(item.example)"
           @keydown.space.prevent="setExample(item.example)"
@@ -48,11 +28,14 @@
           <span class="intent-visual" :style="{ color: categoryColor(item.category) }" aria-hidden="true">
             <el-icon><component :is="item.icon" /></el-icon>
           </span>
-          <!-- 减重批：tip 收进 title 悬浮，卡面只留标题+例句两行 -->
+          <!-- tip 三通道：title 给鼠标悬浮；.intent-tip 气泡给键盘 :focus-visible
+               （绝对定位不撑布局）；aria-describedby 给读屏。 -->
           <div class="intent-body" :title="categoryTip(item.category)">
             <div class="intent-title">{{ categoryLabel(item.category) }}</div>
-            <p class="intent-example">{{ item.example }}</p>
           </div>
+          <span :id="`intent-tip-${item.category}`" class="intent-tip" role="tooltip">
+            {{ categoryTip(item.category) }}
+          </span>
         </div>
       </div>
       <!-- 首登三步引导（评审 N2）：只在起手空态出现；「去跑演示」只预填创建页、
@@ -74,22 +57,48 @@
       <div v-for="(m, idx) in messages" :key="idx" :class="['bubble-row', m.role]">
 
         <!-- 用户消息：靠右暖气泡 -->
-        <div v-if="m.role === 'user'" class="user-bubble" :class="{ 'fx-ink-in': m.fresh }">
+        <div v-if="m.role === 'user'" class="user-bubble">
           <div class="user-text">{{ m.content }}</div>
           <div v-if="m.attachments && m.attachments.length" class="user-files">
             <span v-for="a in m.attachments" :key="a.id" class="file-chip">📎 {{ a.filename }}</span>
           </div>
+          <!-- 「保存待核」amber 小标记（B3）：与助手侧未知条同槽同语义
+               （--trust-pending=仅未核/降级）——对账锁期间用户轮同样未确认，
+               核对后随权威会话重渲染消失。 -->
+          <span v-if="m.persistenceUnknown" class="user-unknown-chip">保存待核</span>
           <div v-if="m.createdAt" class="bubble-time">{{ formatTime(m.createdAt) }}</div>
         </div>
 
         <!-- 助手消息：小 mark + 流动排版，plan-card 内联渲染 -->
         <template v-else>
-          <div class="ai-mark">导</div>
-          <div class="ai-body" :class="{ 'fx-ink-in': m.fresh }">
-            <div class="ai-name">智能导引<span v-if="m.createdAt" class="bubble-time">{{ formatTime(m.createdAt) }}</span></div>
+          <FlaiBloom
+            class="ai-mark"
+            :state="m.streaming ? 'generating' : 'idle'"
+            :size="26"
+          />
+          <div class="ai-body">
+            <div class="ai-name">FLAi<span v-if="m.createdAt" class="bubble-time">{{ formatTime(m.createdAt) }}</span></div>
             <!-- 助手正文走 MarkdownLite（W5）：列表/标题/引用成块渲染——桌面级
                  富文本；纯插值零 v-html，XSS 面不变。用户气泡仍纯文本忠实显示。 -->
             <MarkdownLite v-if="m.content" :text="m.content" class="ai-lead" />
+            <p
+              v-if="m.streamError"
+              class="stream-interrupted"
+              :class="{ 'is-unknown': m.persistenceUnknown, 'is-stopped': m.streamStopped }"
+            >
+              <strong>{{ m.streamErrorTitle || "流式中断 · 保存状态待核" }}</strong>
+              <span v-if="m.streamErrorDetail"> — {{ m.streamErrorDetail }}</span>
+              <span v-if="m.streamErrorAction" class="stream-interrupted-action">
+                {{ m.streamErrorAction }}
+              </span>
+              <button
+                v-if="m.persistenceUnknown"
+                type="button"
+                class="stream-reconcile-btn"
+                :disabled="reconciling"
+                @click="reconcileConversation"
+              >{{ reconciling ? "核对中…" : "刷新会话核对" }}</button>
+            </p>
 
             <!-- 导引计划（M8 编排官）：refuse=显式拒绝 -->
             <div v-if="m.recommendation && m.recommendation.decision === 'refuse'" class="plan-card refuse" :class="{ 'fx-rise': m.fresh }">
@@ -380,16 +389,15 @@
         </template>
       </div>
 
-      <div v-if="sending" class="bubble-row assistant">
-        <div class="ai-mark">导</div>
+      <div v-if="sending && !hasStreamingAssistant" class="bubble-row assistant">
+        <FlaiBloom class="ai-mark" state="generating" :size="26" />
         <div class="ai-thinking">
           <div class="think-row">
-            <ThinkingInk />
             <!-- 真耗时（评审 N3）：≥3s 才显示，快回合不闪数字；tabular-nums 逐秒活跳不抖宽。 -->
             <!-- 分阶段真话（Codex R0 审 P2）：附件上传期显示「正在上传附件 X/Y」，
                  模型等待期才是「导引思考中」——300s 上传宽限下两者可能都以分钟计，
                  不许互相冒名。秒数计时随阶段重锚，只算当前阶段耗时。 -->
-            <span class="tlabel">{{ uploadPhase || "导引思考中…" }}<span v-if="!uploadPhase && thinkingSeconds >= 3" class="think-elapsed num-token">{{ thinkingSeconds }}s</span></span>
+            <span class="tlabel">{{ uploadPhase || "FLAi 正在响应…" }}<span v-if="!uploadPhase && thinkingSeconds >= 3" class="think-elapsed num-token">{{ thinkingSeconds }}s</span></span>
           </div>
           <!-- 诚实预期管理（评审 N3）：内网大模型单轮可达一两分钟（B3 超时旋钮按内网
                p99 放宽后尤甚）——超 30s 给一行真话；绝不做假进度条（诚实地板）。 -->
@@ -419,86 +427,158 @@
           <span v-if="f.status === 'uploading'" class="chip-phase">上传中…</span>
           <span v-else-if="f.status === 'done'" class="chip-phase is-done">已上传</span>
           <span v-else-if="f.status === 'error'" class="chip-phase is-error">（上传失败）</span>
-          <button type="button" class="chip-x" :aria-label="`移除附件 ${f.name}`" @click="removePendingFile(f)">×</button>
+          <button
+            type="button"
+            class="chip-x"
+            :disabled="interactionPolicy.canAttach !== true"
+            :aria-label="`移除附件 ${f.name}`"
+            @click="removePendingFile(f)"
+          >×</button>
         </span>
       </div>
       <div class="composer-shell">
         <div class="composer-row">
           <el-upload
+            v-attach-shell-a11y
             class="composer-attach"
             :auto-upload="false"
             :show-file-list="false"
             multiple
             :on-change="handleFileSelect"
-            :disabled="sending"
+            :disabled="interactionPolicy.canAttach !== true"
           >
-            <button class="icon-btn" :disabled="sending" title="添加附件（≤5 个/条；文本类直读、xlsx 预览）" aria-label="添加附件">
+            <button class="icon-btn" :disabled="interactionPolicy.canAttach !== true" title="添加附件（≤5 个/条；文本类直读、xlsx 预览）" aria-label="添加附件">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.49"/></svg>
             </button>
           </el-upload>
           <!-- Agent 选择器（范式 2b：门户降级为 composer 内浏览）：点选只把
                Agent 名填进草稿并聚焦——问导引怎么用它，绝不代发（人是唯一发起者）。 -->
-          <el-popover placement="top-start" :width="320" trigger="click" popper-class="agent-pick-pop">
+          <el-popover
+            v-model:visible="agentPickerOpen"
+            placement="top-start"
+            :width="320"
+            :popper-options="agentPickerPopperOptions"
+            trigger="click"
+            popper-class="agent-pick-pop"
+          >
             <template #reference>
-              <button class="icon-btn" :disabled="sending" title="浏览可用 Agent" aria-label="浏览可用 Agent">
+              <button
+                ref="agentPickerTriggerEl"
+                class="icon-btn"
+                :disabled="interactionPolicy.canSelectAgent !== true"
+                title="浏览可用 Agent"
+                aria-label="浏览可用 Agent"
+                aria-haspopup="dialog"
+                :aria-expanded="agentPickerOpen"
+              >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>
               </button>
             </template>
-            <div class="agent-pick">
+            <!-- D-4 键盘语义：Esc 关闭并返还焦点给触发钮；↑↓ 在 .ap-item 间真焦点
+                 roving（原生 button，Enter/Space 由浏览器激活走既有 pickAgent）。 -->
+            <div class="agent-pick" role="dialog" aria-label="选择 Agent" @keydown="onAgentPickerKeydown">
               <!-- 错误态只显示错误行（「· 0」会被误读成平台真没有 Agent——
                    AgentPortal 同款语义区分）；真零态如实显示空态文案。 -->
               <div v-if="pickAgentsError" class="ap-error">{{ pickAgentsError }}</div>
               <template v-else>
-                <div class="ap-title">可用 Agent · {{ pickAgents.length }}</div>
-                <div v-if="!pickAgents.length" class="ap-zero">暂无可用 Agent</div>
+                <div class="ap-head">
+                  <div class="ap-title">
+                    可用 Agent · {{ agentPickerVisibleCount }}<template v-if="agentPickerQuery.trim()"> / {{ pickAgents.length }}</template>
+                  </div>
+                  <input
+                    ref="agentPickerSearchEl"
+                    v-model="agentPickerQuery"
+                    type="search"
+                    class="ap-search"
+                    :disabled="interactionPolicy.canSelectAgent !== true"
+                    placeholder="搜索 Agent"
+                    aria-label="搜索可用 Agent"
+                  />
+                </div>
+                <div class="ap-scroll">
+                  <button
+                    v-for="a in agentPickerItems"
+                    :key="a.id"
+                    type="button"
+                    class="ap-item"
+                    :disabled="interactionPolicy.canSelectAgent !== true"
+                    :aria-label="`选择 ${a.name}，${categoryLabel(a.category)}，${agentPickerDetail(a)}`"
+                    @click="pickAgent(a)"
+                  >
+                    <span class="ap-dot" :style="{ background: categoryColor(a.category) }"></span>
+                    <span class="ap-main">
+                      <span class="ap-name-row">
+                        <span class="ap-name" :title="a.name">{{ a.name }}</span>
+                        <span v-if="a.maturity" class="ap-maturity" :title="maturityTip(a.maturity)">{{ a.maturity }}</span>
+                      </span>
+                      <!-- 快速选择只保留一行安全优先信息：有边界先显边界，无边界才
+                           回退能力摘要；完整说明仍在门户，避免弹层变成第二个门户。 -->
+                      <span class="ap-detail" :title="agentPickerDetail(a)">{{ agentPickerDetail(a) }}</span>
+                    </span>
+                  </button>
+                  <div v-if="!agentPickerItems.length" class="ap-zero">
+                    {{ pickAgents.length ? "没有匹配的 Agent" : "暂无可用 Agent" }}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  class="ap-portal-link"
+                  :disabled="interactionPolicy.canSelectAgent !== true"
+                  @click="openAgentPortal"
+                >完整门户 →</button>
               </template>
-              <div
-                v-for="a in pickAgents"
-                :key="a.id"
-                class="ap-item"
-                role="button"
-                tabindex="0"
-                @click="pickAgent(a)"
-                @keydown.enter.prevent="pickAgent(a)"
-                @keydown.space.prevent="pickAgent(a)"
-              >
-                <span class="ap-dot" :style="{ background: categoryColor(a.category) }"></span>
-                <span class="ap-main">
-                  <span class="ap-name">{{ a.name }}
-                    <span v-if="a.maturity" class="ap-maturity" :title="maturityTip(a.maturity)">{{ a.maturity }}</span>
-                  </span>
-                  <span class="ap-sub" :title="a.summary">{{ a.summary }}</span>
-                  <!-- 诚实前置（宪法五条）：信任边界随第一次点选同屏可见，
-                       不许「L0/模拟」藏在两跳深的 /portal 里 -->
-                  <span v-if="a.limitations && a.limitations.length" class="ap-limit">{{ a.limitations[0] }}</span>
-                </span>
-              </div>
-              <a class="ap-portal-link" @click="$router.push('/portal')">浏览完整门户 →</a>
             </div>
           </el-popover>
           <el-input
             v-model="draft"
             type="textarea"
             :autosize="{ minRows: 1, maxRows: 6 }"
-            :disabled="sending"
+            :disabled="interactionPolicy.canSend !== true"
             :placeholder="composerPlaceholder"
             class="composer-input"
             @keydown.enter.exact.prevent="send"
           />
-          <button class="send-btn cta-clay" :class="{ 'is-sending': sending }" :disabled="sending || !draft.trim()" aria-label="发送" @click="send">
-            <svg v-if="!sending" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
-            <span v-else class="send-spin"></span>
+          <!-- 流式在飞期间发送钮换形为停止钮（中性墨方块，不用红——主动停止是
+               中性控制不是失败，也不另占 clay）：abort 断连 → 后端走既有
+               断连零落库路径。EP 图标库无停止语义字形（仅 Stopwatch/VideoPause），
+               方块字形沿用本行内联 SVG 约定。 -->
+          <button
+            v-if="canStopStream"
+            class="send-btn stop-btn"
+            aria-label="停止生成"
+            title="停止生成"
+            @click="stopStreaming"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
+          </button>
+          <button v-else class="send-btn cta-clay" :disabled="interactionPolicy.canSend !== true || !draft.trim()" aria-label="发送" @click="send">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
           </button>
         </div>
       </div>
-      <!-- 减重批：政策句+诚实地板合一行（「导引不会替你创建」是 m6 e2e 锚，
-           字面保留）；快捷键仍 hover/聚焦才显。 -->
+      <!-- 政策句压成一句（「导引不会替你创建」是 m6 e2e 锚，字面保留）；
+           快捷键仍 hover/聚焦才显。 -->
       <div class="composer-hint">
-        <span>导引不会替你创建或签发任务——产出是草案，判定权在你。</span>
+        <span>导引不会替你创建或签发；这里产出的只是草案。</span>
         <span class="keys"><kbd>Enter</kbd> 发送<span class="sep">·</span><kbd>⇧ Enter</kbd> 换行<span class="sep">·</span>📎 可带附件</span>
       </div>
       </div>
     </div>
+
+    <!-- 回到底部浮钮（流式滚动跟随守卫）：用户上滚脱离贴底跟随时出现，悬浮于
+         composer 上方右侧不挡主操作；脱离期间新到达的 delta 计数作为新内容
+         指示。点击平滑归底并恢复跟随。 -->
+    <button
+      v-if="backToBottomVisible"
+      type="button"
+      class="back-to-bottom"
+      aria-label="回到底部"
+      @click="jumpToBottom"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 13l5 5 5-5M12 18V5"/></svg>
+      <span>回到底部</span>
+      <span v-if="newContentCount > 0" class="btb-count">{{ newContentCount > 99 ? "99+" : newContentCount }}</span>
+    </button>
   </div>
 </template>
 
@@ -508,17 +588,11 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import {
   Aim,
-  ArrowRight,
-  ChatLineRound,
   Connection,
-  Cpu,
-  Grid,
-  Guide,
   Search,
-  Stamp,
   Tools,
 } from "@element-plus/icons-vue";
-import { createConversation, postMessage, getConversation } from "../api/conversations";
+import { createConversation, postMessageStream, getConversation } from "../api/conversations";
 import { createTeam } from "../api/teams";
 import { unwrapDetail } from "../api/client";
 import { createTask, createTasksBatch } from "../api/tasks";
@@ -537,29 +611,93 @@ import EvidenceList from "../components/EvidenceList.vue";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";
-import ThinkingInk from "../components/artwork/ThinkingInk.vue";
+import { agentPickerDetail, filterAgentPickerItems } from "../utils/agentPickerVisual";
+import {
+  conversationInteractionPolicy,
+  conversationStreamFailurePolicy,
+  reconciliationLockAfterRefresh,
+} from "../utils/ndjsonStream.js";
+import { distanceFromBottom, shouldFollowScroll } from "../utils/scrollFollow.js";
+import { recordConversationFirstUserContent } from "../utils/conversationTitles.js";
+import FlaiBloom from "../components/artwork/FlaiBloom.vue";
 import MarkdownLite from "../components/MarkdownLite.vue";
 import OnboardingCard from "../components/OnboardingCard.vue";
 import { displayName } from "../stores/session";
 
+// UI 验收台通过独立 Vite 开发入口传入状态快照。正式应用永远忽略该 prop：
+// 它只控制可视状态，不模拟网络、不写会话、不产生“假流式”。
+const props = defineProps({
+  acceptanceFixture: {
+    type: Object,
+    default: null,
+  },
+});
+const acceptanceFixture = import.meta.env.DEV ? props.acceptanceFixture : null;
+const acceptanceMode = Boolean(acceptanceFixture);
+
 const router = useRouter();
+
+// 附件控件双 Tab 停靠修复（B6c）：el-upload 外壳被 EP 硬编码 tabindex=0 +
+// role=button，与内层 icon-btn（aria-label「添加附件」，m6 锚不动）重复一站。
+// 外壳去 Tab 序与按钮角色，键盘语义由 icon-btn 全权承担；鼠标点击外壳开文件
+// 框的既有行为不受影响。updated 钩子覆盖 disabled 切换引发的外壳属性重渲染。
+// 不加 aria-hidden——外壳是 icon-btn 祖先，挂上会把真控件一并对 AT 藏掉。
+function neutralizeAttachShell(el) {
+  el.removeAttribute("tabindex");
+  el.removeAttribute("role");
+}
+const vAttachShellA11y = { mounted: neutralizeAttachShell, updated: neutralizeAttachShell };
 
 const GUIDE_AGENT_ID = "guide_agent";
 const MAX_FILES_PER_MESSAGE = 5; // 与后端 PostMessageRequest / 运行时同值
+const agentPickerPopperOptions = {
+  modifiers: [
+    {
+      name: "preventOverflow",
+      options: { padding: 12 },
+    },
+  ],
+};
 
-const started = ref(false);
-const conversationId = ref("");
-const messages = ref([]);
-const draft = ref("");
-const sending = ref(false);
-const pageError = ref("");
+const started = ref(acceptanceFixture?.started === true);
+const conversationId = ref(acceptanceFixture?.conversationId || "");
+const messages = ref(
+  (acceptanceFixture?.messages || []).map((message) => ({
+    ...message,
+    attachments: message.attachments
+      ? message.attachments.map((item) => ({ ...item }))
+      : undefined,
+  }))
+);
+const hasStreamingAssistant = computed(() =>
+  messages.value.some((message) => message.role === "assistant" && message.streaming === true)
+);
+const draft = ref(acceptanceFixture?.draft || "");
+const sending = ref(acceptanceFixture?.sending === true);
+const restoring = ref(acceptanceFixture?.restoring === true);
+const reconciliationRequired = ref(
+  acceptanceFixture?.reconciliationRequired === true
+);
+const reconciling = ref(false);
+const interactionPolicy = computed(() =>
+  conversationInteractionPolicy({
+    sending: sending.value,
+    restoring: restoring.value,
+    reconciliationRequired: reconciliationRequired.value,
+  })
+);
+const pageError = ref(acceptanceFixture?.pageError || "");
 const streamEl = ref(null);
-// composer placeholder 语境分化：未起手空会话引导点意图卡；会话中改为「继续说下去」，
-// 不再重复「回答导引的追问」（此刻输入框已在真实对话流里，无需再解释这是什么）。
+// composer placeholder 只保留动作词；意图卡已在同屏，不在输入框里重复解释。
+// 对账锁期间（B4）换成核对指引——锁定期输入被 interactionPolicy 禁用，
+// placeholder 如实说明解锁路径；非锁定期两个字面原样不动（e2e 锚核查：
+// m6 等套件未断言 composer placeholder 字面）。
 const composerPlaceholder = computed(() =>
-  !started.value && messages.value.length === 0
-    ? "描述你的工程需求，或点一张下方的意图卡…"
-    : "回复导引，继续说下去…"
+  reconciliationRequired.value
+    ? "保存状态待核——请先刷新会话核对"
+    : !started.value && messages.value.length === 0
+      ? "描述工程需求…"
+      : "继续说下去…"
 );
 // 待发送附件（M7）：选中只入列（raw 留本地），发送时才上传——同 TaskCreate 的
 // P2-A 反孤儿纪律；已上传项记 fileId，失败重试不重复上传。
@@ -594,6 +732,7 @@ function setExample(text) {
 }
 
 function handleFileSelect(uploadFile) {
+  if (interactionPolicy.value.canAttach !== true) return;
   if (pendingFiles.value.length >= MAX_FILES_PER_MESSAGE) {
     ElMessage.error(`单条消息最多 ${MAX_FILES_PER_MESSAGE} 个附件`);
     return;
@@ -612,6 +751,7 @@ function handleFileSelect(uploadFile) {
 }
 
 function removePendingFile(item) {
+  if (interactionPolicy.value.canAttach !== true) return;
   pendingFiles.value = pendingFiles.value.filter((f) => f.uid !== item.uid);
 }
 
@@ -667,9 +807,23 @@ function focusComposer() {
 // ── Agent 选择器（范式 2b：门户降级为 composer 内浏览）──
 // 只列可被召集的执行型 Agent（过滤 disabled 与 interactive——导引自己不列
 // 自己）；点选只填草稿+聚焦，人自己描述需求再发送。
-const pickAgents = ref([]);
+const pickAgents = ref(
+  (acceptanceFixture?.agents || []).map((agent) => ({
+    ...agent,
+    limitations: Array.isArray(agent.limitations)
+      ? [...agent.limitations]
+      : [],
+  }))
+);
 const pickAgentsError = ref("");
+const agentPickerOpen = ref(acceptanceFixture?.agentPickerOpen === true);
+const agentPickerQuery = ref("");
+const agentPickerSearchEl = ref(null);
+const agentPickerTriggerEl = ref(null);
+const agentPickerItems = computed(() => filterAgentPickerItems(pickAgents.value, agentPickerQuery.value));
+const agentPickerVisibleCount = computed(() => agentPickerItems.value.length);
 onMounted(async () => {
+  if (acceptanceMode) return;
   try {
     const list = await listAgents();
     pickAgents.value = (list || []).filter((a) => a.status !== "disabled" && a.mode !== "interactive");
@@ -678,11 +832,48 @@ onMounted(async () => {
   }
 });
 function pickAgent(a) {
+  if (interactionPolicy.value.canSelectAgent !== true) return;
   draft.value = `我想用「${a.name}」做：`;
-  focusComposer();
+  agentPickerOpen.value = false;
+  nextTick(focusComposer);
+}
+function openAgentPortal() {
+  if (interactionPolicy.value.canSelectAgent !== true) return;
+  agentPickerOpen.value = false;
+  router.push("/portal");
+}
+watch(agentPickerOpen, (open) => {
+  if (open) nextTick(() => agentPickerSearchEl.value?.focus());
+  else agentPickerQuery.value = "";
+});
+// D-4 键盘语义（选改动小的真焦点方案，不引 aria-activedescendant）：
+// - Esc：关闭弹层并把焦点还给触发钮（dialog 关闭焦点返还的 WAI 约定）；
+// - ↑↓：在列表项间 roving——真 DOM 焦点在 .ap-item（原生 button）间循环，
+//   搜索框内 ↓ 落首项、↑ 落末项；Enter/Space 选中由浏览器原生激活 button，
+//   走既有 @click="pickAgent" 语义（点选只填草稿绝不代发），逻辑零分叉；
+// - 打开时焦点落搜索框由上方既有 watch 保持。
+function onAgentPickerKeydown(e) {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    agentPickerOpen.value = false;
+    nextTick(() => agentPickerTriggerEl.value?.focus());
+    return;
+  }
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  // popper teleport 到 body，按 class 取当前实例；政策门全禁时列表为空，直接返回。
+  const items = Array.from(document.querySelectorAll(".agent-pick .ap-item:not(:disabled)"));
+  if (!items.length) return;
+  e.preventDefault();
+  const idx = items.indexOf(document.activeElement);
+  const next =
+    e.key === "ArrowDown"
+      ? idx < 0 ? 0 : (idx + 1) % items.length
+      : idx < 0 ? items.length - 1 : (idx - 1 + items.length) % items.length;
+  items[next].focus();
 }
 
 function adoptReframe(text) {
+  if (interactionPolicy.value.canSend !== true) return;
   // Codex 问题卡哲学：点一条重述建议只是把它填进草稿并聚焦输入框，人仍要
   // 自己按发送——导引绝不代人发起这条消息（红线：人是唯一发起者）。
   draft.value = text;
@@ -787,34 +978,152 @@ async function copyRefusedNeed(idx) {
   else ElMessage.error("复制失败——请手动选取文字复制");
 }
 
+// ── 流式滚动跟随守卫 + 回到底部浮钮 ─────────────────────────────────────
+// 跟随判定内核在 utils/scrollFollow.js（纯函数，node 可测）；这里只接 DOM。
+// atBottom=false 时新 delta 不再拉回，改累计 newContentCount 喂浮钮指示。
+const atBottom = ref(true);
+const newContentCount = ref(0);
+const backToBottomVisible = computed(() => atBottom.value !== true && messages.value.length > 0);
+// 程序性平滑滚动在飞标记：其间的 scroll 事件不改判跟随态（动画中途会经过
+// 距底 >阈值 区间，照用户滚动同法判定会把跟随误杀在半路上）。
+let programmaticScroll = false;
+let programmaticScrollTimer = null;
+
+function currentDistanceFromBottom() {
+  return distanceFromBottom({
+    scrollHeight: document.documentElement.scrollHeight,
+    clientHeight: window.innerHeight,
+    scrollTop: window.scrollY,
+  });
+}
+
+function handleWindowScroll() {
+  const distance = currentDistanceFromBottom();
+  if (shouldFollowScroll(distance, { programmatic: programmaticScroll })) {
+    if (programmaticScroll) return; // 程序性滚动在飞：不改判
+    atBottom.value = true;
+    newContentCount.value = 0;
+  } else {
+    atBottom.value = false;
+  }
+}
+
+function endProgrammaticScroll() {
+  if (programmaticScrollTimer) { clearTimeout(programmaticScrollTimer); programmaticScrollTimer = null; }
+  if (!programmaticScroll) return;
+  programmaticScroll = false;
+  // 用真实距底重判一次：平滑滚动可能被用户 wheel 打断，此时绝不可替用户恢复跟随。
+  handleWindowScroll();
+}
+
+function handleDocumentScrollEnd() {
+  if (programmaticScroll) endProgrammaticScroll();
+}
+
+function markProgrammaticScroll() {
+  programmaticScroll = true;
+  if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
+  // 兜底：scrollend 不可达/动画被打断且无后续滚动时也能解除标记。
+  programmaticScrollTimer = setTimeout(endProgrammaticScroll, 800);
+}
+
+function resetScrollFollow() {
+  if (programmaticScrollTimer) { clearTimeout(programmaticScrollTimer); programmaticScrollTimer = null; }
+  programmaticScroll = false;
+  atBottom.value = true;
+  newContentCount.value = 0;
+}
+
+function jumpToBottom() {
+  atBottom.value = true;
+  newContentCount.value = 0;
+  markProgrammaticScroll();
+  const reduceMotion = window.matchMedia
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  window.scrollTo({
+    top: document.documentElement.scrollHeight,
+    behavior: reduceMotion ? "auto" : "smooth",
+  });
+}
+
+onMounted(() => {
+  window.addEventListener("scroll", handleWindowScroll, { passive: true });
+  document.addEventListener("scrollend", handleDocumentScrollEnd);
+});
+onUnmounted(() => {
+  window.removeEventListener("scroll", handleWindowScroll);
+  document.removeEventListener("scrollend", handleDocumentScrollEnd);
+  if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
+});
+
 async function scrollToBottom() {
   // 会话流走自然页面流（不再是内嵌定长滚动框）——把最新一条滚到视口顶部起读，
   // 让高高的协作方案卡从「目标句」开始展开，而不是被塞进 62vh 的小盒里。
   await nextTick();
   const last = streamEl.value && streamEl.value.lastElementChild;
-  if (last) last.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (!last) return;
+  markProgrammaticScroll();
+  last.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// 流式跟随口：仅贴底时新 delta 才自动跟随滚底；用户上滚脱离后停止拉回，
+// 新内容计数喂给「回到底部」浮钮的到达指示。
+function followScrollToBottom() {
+  if (atBottom.value) {
+    void scrollToBottom();
+  } else {
+    newContentCount.value += 1;
+  }
+}
+
+// ── 流式停止钮 ──────────────────────────────────────────────────────────
+// streamAbort=在飞流式请求的 AbortController（停止钮的物理把手）；stopRequested
+// 是「本次中断由用户主动停止发起」的本地标记——catch 里先于失败策略拦截，
+// 不落入「保存状态待核」对账锁（中止是用户主动行为，后端走既有断连零落库路径）。
+const STREAM_STOPPED_TITLE = "已停止 · 本轮未保存";
+const streamAbort = ref(null);
+const stopRequested = ref(false);
+const canStopStream = computed(() => sending.value === true && streamAbort.value !== null);
+function stopStreaming() {
+  if (!streamAbort.value) return;
+  stopRequested.value = true;
+  streamAbort.value.abort();
 }
 
 async function send() {
-  if (restoring.value) return; // 会话恢复在途不收发言——防止意外新建会话
+  if (interactionPolicy.value.canSend !== true) return;
   const content = draft.value.trim();
   if (!content) return;
+  if (acceptanceMode) {
+    ElMessage.info("这是只读 UI 状态快照；真实发送请回到正式对话页面");
+    return;
+  }
   pageError.value = "";
 
-  // 乐观追加用户气泡（附件 chips 一并显示；失败整体回滚）
+  // 上一轮若在收到部分 delta 后中断，页面会保留一组明确标成「未保存」的
+  // 临时消息帮助用户判断。下一次发送前清掉它，避免重试堆出重复幽灵轮次。
+  messages.value = messages.value.filter((message) => message.transient !== true);
+
+  // 乐观追加用户气泡（附件 chips 一并显示）。收到 canonical done 后才把
+  // transient 清掉；流式未完成以前，这一轮在前端同样不冒充已落库。
   const optimisticAttachments = pendingFiles.value.map((f) => ({ id: f.uid, filename: f.name }));
-  messages.value.push({
+  const optimisticUser = reactive({
     role: "user",
     content,
     attachments: optimisticAttachments.length ? optimisticAttachments : undefined,
-    // fresh：仅本次会话中「刚落地」的气泡播墨迹入场；历史加载不带此标记——
-    // 诚实地板：不让三天前的旧对话表演"刚发生"（信任镜头 P2）。
-    fresh: true,
+    transient: true,
   });
+  messages.value.push(optimisticUser);
   draft.value = "";
+  // 用户亲手发送=明确回到最新内容的意图：复位跟随守卫再滚底——上一轮若处于
+  // 上滚脱离态，新一轮仍从贴底跟随开始。
+  atBottom.value = true;
+  newContentCount.value = 0;
   await scrollToBottom();
 
   sending.value = true;
+  let provisionalAssistant = null;
+  let messageRequestStarted = false;
   try {
     // 先传附件（已 done 的跳过，失败即中止——本轮消息不发送）
     const fileIds = await uploadPendingFiles();
@@ -832,47 +1141,181 @@ async function send() {
       // URL 反映当前会话（可刷新/分享/回退），并让左栏历史即时收录这条新会话。
       router.replace({ path: "/", query: { c: conv.id } });
     }
-    const res = await postMessage(conversationId.value, content, fileIds);
-    // 成功：附件已随消息落库，清空待发区；气泡 chips 换用真实文件 id
-    const sent = messages.value[messages.value.length - 1];
-    if (sent && sent.role === "user" && optimisticAttachments.length) {
-      sent.attachments = pendingFiles.value.map((f) => ({ id: f.fileId, filename: f.name }));
+    messageRequestStarted = true;
+    // 流式停止钮把手：请求级 AbortController 透传到 fetch 层，停止即真实断连
+    // （后端 50ms 轮询 is_disconnected → 提交前 is_cancelled 检查 → 零落库）。
+    streamAbort.value = new AbortController();
+    stopRequested.value = false;
+    const res = await postMessageStream(
+      conversationId.value,
+      content,
+      fileIds,
+      {
+        signal: streamAbort.value.signal,
+        onDelta(text) {
+          if (!provisionalAssistant) {
+            provisionalAssistant = reactive({
+              role: "assistant",
+              content: "",
+              recommendation: null,
+              fresh: true,
+              streaming: true,
+              transient: true,
+            });
+            messages.value.push(provisionalAssistant);
+          }
+          provisionalAssistant.content += text;
+          // 只跟随真实网络 delta；不把完整结果在前端拆字制造假流式。
+          // 跟随守卫：仅贴底时滚底，用户上滚阅读中不被拉回（改喂浮钮计数）。
+          followScrollToBottom();
+        },
+      },
+    );
+
+    // canonical done 已抵达：这一轮才算后端原子落库成功。用权威 message
+    // 整体替换临时增量（含 recommendation / created_at），消除分片差异。
+    optimisticUser.transient = false;
+    if (optimisticAttachments.length) {
+      optimisticUser.attachments = pendingFiles.value.map((f) => ({
+        id: f.fileId,
+        filename: f.name,
+      }));
     }
     pendingFiles.value = [];
-    messages.value.push({
+    const canonicalAssistant = {
       role: "assistant",
       content: res.message.content,
       recommendation: res.message.recommendation || null,
       fresh: true,
       createdAt: res.message.created_at || null,
-    });
-    await scrollToBottom();
+      streaming: false,
+      transient: false,
+    };
+    const provisionalIndex = provisionalAssistant
+      ? messages.value.indexOf(provisionalAssistant)
+      : -1;
+    if (provisionalIndex >= 0) {
+      messages.value.splice(provisionalIndex, 1, canonicalAssistant);
+    } else {
+      messages.value.push(canonicalAssistant);
+    }
+    if (res.conversation && res.conversation.status) {
+      conversationStatus.value = res.conversation.status;
+    }
+    // canonical done 的滚底同样走跟随守卫：用户上滚阅读中不被收尾拉回。
+    followScrollToBottom();
     ensureConversationTasksFeed(); // 本轮若刚给出 orchestrate 方案，开始为其召集状态保鲜
     ensureAgentSchemasForMessages(); // 内联召集就绪判据的契约预取（fail-closed）
   } catch (err) {
-    // 本轮失败：后端契约是「失败零落库」（幂等重试，ADR-0013），本地同样回滚
-    // 乐观气泡并把原文还原到输入框——不在界面上留一条服务端不存在的幽灵消息，
-    // 重试也不会堆出重复 user 气泡（Codex R1-P2）。附件 chips 留在待发区
-    // （已上传项带 fileId，重试不重复上传）。不伪造 assistant 回复。
-    const last = messages.value[messages.value.length - 1];
-    if (last && last.role === "user" && last.content === content) {
-      messages.value.pop();
+    const detail = err.detail || err.message || "流式连接中断";
+    const hasPartial = Boolean(provisionalAssistant && provisionalAssistant.content);
+    if (!messageRequestStarted) {
+      // 附件上传或建会阶段失败：消息请求尚未发起，本地可确定该用户轮未落库。
+      const optimisticIndex = messages.value.indexOf(optimisticUser);
+      if (optimisticIndex >= 0) messages.value.splice(optimisticIndex, 1);
+      draft.value = content;
+      pageError.value = detail;
+    } else if (stopRequested.value) {
+      // 用户主动停止（先于失败策略拦截）：中止是用户主动行为，后端断连零落库
+      // 路径在案，可如实断言本轮未保存——中性提示而非失败红，也绝不进
+      // 「保存状态待核」对账锁（不触碰 reconciliationRequired）。
+      if (hasPartial) {
+        // 已收部分如实保留并标注未保存；气泡保持 transient，下次发送由 send()
+        // 开头的 transient 清扫去掉，不堆幽灵轮次；原话还稿可直接续写重发。
+        provisionalAssistant.streaming = false;
+        provisionalAssistant.streamError = true;
+        provisionalAssistant.streamStopped = true;
+        provisionalAssistant.streamErrorTitle = STREAM_STOPPED_TITLE;
+        draft.value = content;
+        pageError.value = "";
+        void scrollToBottom();
+      } else {
+        // 首 token 前停止：与零落库同语义回滚乐观气泡、原话还稿。
+        const optimisticIndex = messages.value.indexOf(optimisticUser);
+        if (optimisticIndex >= 0) messages.value.splice(optimisticIndex, 1);
+        if (provisionalAssistant) {
+          const provisionalIndex = messages.value.indexOf(provisionalAssistant);
+          if (provisionalIndex >= 0) messages.value.splice(provisionalIndex, 1);
+        }
+        draft.value = content;
+        pageError.value = "";
+        ElMessage.info("已停止生成——本轮未保存，原话已退回输入框");
+      }
+    } else {
+      const failure = conversationStreamFailurePolicy(err, { hasPartial });
+      reconciliationRequired.value = failure.reconciliationRequired;
+      if (failure.canRetry) {
+        if (!failure.discardOptimisticUser) {
+          // 只有服务端 error 事件明确 persisted:false 才可断言零落库、自动还稿，
+          // 并把本组标为 transient 供安全重试时清理。
+          provisionalAssistant.streaming = false;
+          provisionalAssistant.streamError = true;
+          provisionalAssistant.streamErrorTitle = failure.title;
+          provisionalAssistant.streamErrorDetail = detail;
+          draft.value = content;
+          pageError.value = "";
+          void scrollToBottom();
+        } else {
+          const optimisticIndex = messages.value.indexOf(optimisticUser);
+          if (optimisticIndex >= 0) messages.value.splice(optimisticIndex, 1);
+          draft.value = content;
+          pageError.value = `${failure.title} — ${detail}`;
+        }
+      } else if (failure.retainUnconfirmedTurn) {
+        // 超时、读流断开、提前 EOF、畸形 done 都可能发生在服务端 COMMIT 之后。
+        // 保留本地未确认轮次且不自动还稿，明确要求刷新会话核对后再继续。
+        agentPickerOpen.value = false;
+        if (!provisionalAssistant) {
+          provisionalAssistant = reactive({
+            role: "assistant",
+            content: "",
+            recommendation: null,
+            fresh: false,
+            streaming: false,
+            transient: false,
+          });
+          messages.value.push(provisionalAssistant);
+        }
+        optimisticUser.transient = false;
+        optimisticUser.persistenceUnknown = true;
+        provisionalAssistant.streaming = false;
+        provisionalAssistant.transient = false;
+        provisionalAssistant.persistenceUnknown = true;
+        provisionalAssistant.streamError = true;
+        provisionalAssistant.streamErrorTitle = failure.title;
+        provisionalAssistant.streamErrorDetail = detail;
+        provisionalAssistant.streamErrorAction = detail.includes("刷新会话")
+          ? ""
+          : "请刷新会话核对后再继续。";
+        pageError.value = "";
+        void scrollToBottom();
+      }
     }
-    draft.value = content;
-    pageError.value = err.detail || err.message;
   } finally {
     sending.value = false;
     uploadPhase.value = ""; // 上传中途失败的清扫口（成功路径在 uploadPendingFiles 尾清）
+    streamAbort.value = null;
+    stopRequested.value = false;
+    // 流结束复位跟随守卫（不动程序性滚动标记——收尾平滑滚动可能仍在飞，
+    // 其间的 scroll 事件仍需按程序性对待，否则会把跟随误杀在半路上）。
+    atBottom.value = true;
+    newContentCount.value = 0;
   }
 }
 
 function collectCarriedFiles() {
   // 会话里发送成功的附件（真实 fileId）去重收集——随草案带入创建页。
-  // 成功气泡按构造只含真实 fileId（失败气泡已回滚、成功时 chips 已换真 id）。
+  // transient / 保存待核轮次不进入创建草案；只有 canonical done 后换成真实
+  // fileId 的成功气泡才可携带，避免本地 uid 冒充服务端文件 id。
   const carried = [];
   const seen = new Set();
   for (const m of messages.value) {
-    if (m.role !== "user" || !m.attachments) continue;
+    if (
+      m.role !== "user" ||
+      !m.attachments ||
+      m.transient === true ||
+      m.persistenceUnknown === true
+    ) continue;
     for (const a of m.attachments) {
       if (a.id && !seen.has(a.id)) {
         seen.add(a.id);
@@ -906,7 +1349,7 @@ const opening = ref(null); // 「照此方案开工」进行中的会话 id（�
 const locallySummoned = reactive({});
 // 会话可写态（Codex R0-P2）：getConversation/createConversation 如实带出，concluded
 // 只读会话不提供内联召集（否则创建必 409）。未知（null）= fail-closed 不提供。
-const conversationStatus = ref(null);
+const conversationStatus = ref(acceptanceFixture?.conversationStatus || null);
 // Agent 输入契约缓存（Codex R0-P1）：POST /api/tasks 不做即时 schema 校验（校验在
 // worker 运行期），故「预填就绪」必须由前端按 input_schema.required 逐键判定后才
 // 提供内联路径——schema 拉不到 / 未知一律 fail-closed 回创建页路径。
@@ -1633,9 +2076,12 @@ function resetToFresh(clearError = true) {
   started.value = false;
   conversationId.value = "";
   conversationStatus.value = null;
+  reconciliationRequired.value = false;
+  agentPickerOpen.value = false;
   draft.value = "";
   pendingFiles.value = [];
   releaseConversationTasksFeed();
+  resetScrollFollow(); // 新会话/切换会话：滚动跟随守卫一并复位
   if (clearError) pageError.value = "";
 }
 
@@ -1659,14 +2105,16 @@ function qaRecommendation(rec) {
 // 恢复在途标记：?c 深链（含 2a 回流）落地时 getConversation 在途的窗口里，
 // 不渲染可交互的空态 hero（「假起手」）、send 早退——否则此刻发消息会因
 // conversationId 尚空而意外新建会话（双镜头 P2 实审咬出的竞态）。
-const restoring = ref(false);
-
-async function loadConversation(id) {
-  resetToFresh();
+async function loadConversation(id, { preserveOnFailure = false } = {}) {
+  if (!preserveOnFailure) resetToFresh();
   restoring.value = true;
   try {
     const conv = await getConversation(id);
+    // 对账模式在请求成功前保留「保存状态待核」轮次和核对按钮；只有拿到
+    // 服务端权威会话后才清掉本地快照与 reconciliationRequired 锁。
+    if (preserveOnFailure) resetToFresh();
     conversationId.value = conv.id;
+    recordConversationFirstUserContent(conv.id, conv.messages); // E-4 侧栏标题数据面：拉过全量的会话才供得起首条用户消息
     conversationStatus.value = conv.status || null; // 只读会话如实带出（Codex R0-P2）
     started.value = true;
     messages.value = (conv.messages || []).map((m) => ({
@@ -1679,14 +2127,66 @@ async function loadConversation(id) {
     await scrollToBottom();
     ensureConversationTasksFeed(); // 恢复的历史会话若已带 orchestrate 方案，立即接上订阅
     ensureAgentSchemasForMessages(); // 历史方案卡同样预取输入契约（内联就绪判据）
+    return true;
   } catch (err) {
     pageError.value = err.detail || err.message || "会话加载失败";
+    return false;
   } finally {
     restoring.value = false;
   }
 }
 
+async function reconcileConversation() {
+  if (reconciliationRequired.value !== true || reconciling.value === true) return;
+  if (acceptanceMode) {
+    ElMessage.info("这是保存待核状态快照；真实核对请回到正式对话页面");
+    return;
+  }
+  const id = conversationId.value;
+  if (!id) {
+    pageError.value = "无法核对：当前会话标识缺失，请从左侧历史重新打开会话";
+    return;
+  }
+
+  reconciling.value = true;
+  pageError.value = "";
+  const requiredBeforeRefresh = reconciliationRequired.value;
+  // 对账前快照滞留的未确认用户原文（B2）：核对成功后若服务端权威会话确认
+  // 该轮未落库，把原文还回输入草稿（现状原文随本地快照被清、草稿为空）。
+  // fail-closed：只有权威会话确认无此轮才还稿；确认已落库则清本地快照不还稿。
+  const unconfirmedTurn = messages.value.find(
+    (m) => m.role === "user" && m.persistenceUnknown === true,
+  );
+  const unconfirmedContent = unconfirmedTurn ? unconfirmedTurn.content : "";
+  try {
+    const reconciled = await loadConversation(id, { preserveOnFailure: true });
+    reconciliationRequired.value = reconciliationLockAfterRefresh({
+      required: requiredBeforeRefresh,
+      succeeded: reconciled,
+    });
+    if (reconciled === true && unconfirmedContent) {
+      // loadConversation 成功后 messages 已是服务端权威清单：查得到同文用户
+      // 轮=已落库（不还稿）；查不到=确认未落库，原文还稿供用户续写重发。
+      const persisted = messages.value.some(
+        (m) => m.role === "user" && m.content === unconfirmedContent,
+      );
+      if (!persisted) {
+        draft.value = unconfirmedContent;
+        ElMessage.info("服务端确认该轮未保存——原话已退回输入框");
+      }
+    }
+  } catch (err) {
+    // loadConversation 当前会把读取错误转成 false；此 catch 仍为未来改动保底：
+    // 任意未预期异常都不能误解锁，也不能吞掉对账失败原因。
+    reconciliationRequired.value = true;
+    pageError.value = err.detail || err.message || "会话核对失败";
+  } finally {
+    reconciling.value = false;
+  }
+}
+
 onMounted(() => {
+  if (acceptanceMode) return;
   const c = route.query.c;
   if (typeof c === "string" && c) loadConversation(c);
 });
@@ -1699,6 +2199,7 @@ onUnmounted(() => {
 watch(
   () => route.query.c,
   (c) => {
+    if (acceptanceMode) return;
     if (typeof c === "string" && c) {
       if (c !== conversationId.value) loadConversation(c);
     } else if (started.value || messages.value.length) {
@@ -1712,12 +2213,12 @@ watch(
 .guide-page {
   max-width: 784px;
   margin: 0 auto;
-  padding-bottom: 178px; /* 让会话内容避开固定悬浮 composer（含常驻诚实地板句一行） */
+  padding-bottom: 132px; /* 让会话内容避开紧凑后的固定 composer（含诚实地板句） */
 }
-/* 空状态：hero + composer 作为一组在视口垂直居中（Claude 起手布局）。*/
+/* 空状态：hero + composer 作为一组在可用视口内居中。 */
 .guide-page.is-empty {
   padding-bottom: 0;
-  min-height: 72vh;
+  min-height: calc(100vh - 56px);
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -1726,117 +2227,56 @@ watch(
 /* ── 起手 hero ── */
 .guide-hero {
   text-align: center;
-  padding: 40px 12px 30px;
+  padding: 12px 12px 14px;
   /* 入场动效走全局 .fx-rise（模板上加类）：起手 hero 只在「零消息」落地态渲染
    * 一次=真「刚落地」无需门控；用全局类天然继承 App.vue 的 reduced-motion
    * 降级（双镜头审合流 finding——本地 animation 没有降级覆盖，已迁移根治）。 */
 }
-/* 品牌徽记=身份标识，非信任语义，clay 预算豁免（与 App.vue .cta-clay 徽记例外同裁决） */
+/* 品牌徽记使用严格六重旋转对称的真实图形资产；idle 静止。 */
 .hero-mark {
-  width: 46px;
-  height: 46px;
-  border-radius: 14px;
-  margin: 0 auto 20px;
-  display: grid;
-  place-items: center;
-  color: #fff;
-  font-weight: 800;
-  font-size: 21px;
-  background: linear-gradient(160deg, var(--clay), var(--clay-deep));
-  box-shadow: 0 6px 18px rgba(var(--clay-rgb), 0.26);
-}
-.hero-mark :deep(.el-icon) {
-  font-size: 24px;
+  margin: 0 auto 11px;
 }
 /* 时段感问候：抒情场合走衬线，字号克制小于主标题，颜色降一级不抢戏。 */
 .hero-greeting {
   font-family: var(--serif);
-  font-size: 15px;
+  font-size: 13.5px;
   font-weight: 500;
   color: var(--ink-soft);
-  margin: 0 0 8px;
+  margin: 0 0 3px;
 }
 .hero-title {
   font-family: var(--serif);
-  font-size: var(--fs-display-lg);
+  font-size: 26px;
   font-weight: 600;
   color: var(--ink);
-  margin: 0 0 14px;
-  letter-spacing: 0.3px;
+  margin: 0;
+  letter-spacing: 0.2px;
 }
-.hero-route {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  margin: 20px auto 0;
-  color: var(--ink-faint);
-}
-.hero-route-step {
-  min-width: 74px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--ink-soft);
-}
-.hero-route-step :deep(.el-icon) {
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  background: var(--surface-raised);
-  color: var(--ink-soft);
-  font-size: 19px;
-  box-shadow: var(--shadow-card);
-}
-.hero-route-step.is-review :deep(.el-icon) {
-  color: var(--trust-pending);
-}
-.hero-route-arrow {
-  flex: none;
-  font-size: 13px;
-  color: var(--ink-faint);
-}
-@media (max-width: 460px) {
-  .hero-route {
-    flex-direction: column;
-    gap: 5px;
-  }
-  .hero-route-step {
-    width: 154px;
-    min-width: 0;
-    flex-direction: row;
-    justify-content: flex-start;
-    gap: 10px;
-    text-align: left;
-  }
-  .hero-route-arrow {
-    transform: rotate(90deg);
-  }
-}
-/* 四意图卡：≥520px 宽 2×2，窄屏 1 列（原 hero-examples/ex-chip 原地升级）。 */
+/* 四意图卡·一排紧凑条目（压缩批，原两排卡片原地升级）：≥600px 单行四枚，
+   窄屏 2×2 更紧凑仍守住 40px 触控目标；条目只留图标+短标签。 */
 .hero-intents {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
-  margin-top: 26px;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  margin-top: 12px;
   text-align: left;
 }
-@media (min-width: 520px) {
+@media (min-width: 600px) {
   .hero-intents {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 .intent-card {
+  position: relative;
   display: flex;
-  gap: 12px;
+  align-items: center;
+  gap: 7px;
+  box-sizing: border-box;
+  height: 40px;
   background: var(--surface-raised);
   border: 1px solid var(--hairline);
-  border-radius: 14px;
-  padding: 14px 16px;
+  border-radius: 10px;
+  padding: 4px 10px;
   cursor: pointer;
   box-shadow: var(--shadow-card);
   transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
@@ -1850,40 +2290,63 @@ watch(
   outline: 2px solid var(--clay-softer);
   outline-offset: 1px;
 }
+/* 键盘可达 tip：只随 :focus-visible 浮现（鼠标走 title 悬浮），绝对定位小气泡
+   不参与布局、不撑卡高；反转墨色底保证亮/暗两档对比。触屏无 hover/focus 保持
+   语义，tip 仍由 aria-describedby 供读屏。宽度随紧凑条目新几何校准：气泡以
+   条目中心对齐，窄屏贴边条目不让气泡溢出视口。 */
+.intent-tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(240px, calc(100vw - 32px));
+  padding: 4px 9px;
+  border-radius: var(--radius-md);
+  background: var(--ink);
+  color: var(--paper-surface);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: normal;
+  text-align: center;
+  box-shadow: var(--shadow-card-hover);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--motion-fast) var(--ease-out-soft);
+  z-index: 5;
+}
+.intent-card:focus-visible .intent-tip {
+  opacity: 1;
+  visibility: visible;
+}
 .intent-accent {
   flex: 0 0 auto;
+  align-self: stretch;
   width: 3px;
   border-radius: 3px;
 }
 .intent-visual {
-  flex: 0 0 50px;
-  width: 50px;
-  height: 50px;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
   display: grid;
   place-items: center;
-  align-self: center;
   border: 1px solid var(--hairline-soft);
-  border-radius: 12px;
+  border-radius: 7px;
   background: var(--paper-rail);
 }
 .intent-visual :deep(.el-icon) {
-  font-size: 27px;
+  font-size: 14px;
 }
 .intent-body { flex: 1 1 auto; min-width: 0; }
 .intent-title {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13.5px;
+  font-size: 12.5px;
   font-weight: 700;
   color: var(--ink);
-  margin-bottom: 4px;
-}
-.intent-example {
-  font-size: 12.5px;
-  color: var(--ink-soft);
-  margin: 0;
-  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 @media (prefers-reduced-motion: reduce) {
   .intent-card { transition: none; }
@@ -1897,8 +2360,8 @@ watch(
 .thread {
   display: flex;
   flex-direction: column;
-  gap: 30px;
-  padding: 20px 2px 8px;
+  gap: 22px;
+  padding: 14px 2px 6px;
 }
 
 .bubble-row { display: flex; scroll-margin-top: 84px; }
@@ -1911,15 +2374,13 @@ watch(
   background: var(--bubble-user-bg);
   border: 1px solid var(--bubble-user-border);
   color: var(--bubble-user-ink);
-  padding: 12px 16px;
-  border-radius: 18px 18px 4px 18px;
+  padding: 9px 13px;
+  border-radius: 16px 16px 4px 16px;
   box-shadow: var(--shadow-card);
-  /* 入场动效交给全局 .fx-ink-in（墨迹晕开，见 App.vue）——本地 rise 动画让位，
-   * 避免 scoped 选择器特异度盖过全局工具类导致新类无效播放。 */
 }
 .user-text {
   white-space: pre-wrap;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.55;
 }
 .user-files {
@@ -1944,38 +2405,42 @@ watch(
   margin-top: 6px;
   text-align: right;
 }
+/* 「保存待核」amber 小标记（B3）：与助手侧 .stream-interrupted.is-unknown
+ * 同槽同语义（--trust-pending=仅未核/降级），几何沿用 stream-reconcile-btn
+ * 同款描边/圆角/字号档。 */
+.user-unknown-chip {
+  display: inline-block;
+  margin-top: 7px;
+  padding: 1px 8px;
+  border: 1px solid rgba(var(--trust-pending-rgb), 0.45);
+  border-radius: 7px;
+  background: rgba(var(--trust-pending-rgb), 0.08);
+  color: var(--trust-pending);
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1.6;
+}
 @media (prefers-reduced-motion: reduce) {
   .bubble-time { transition: none; }
 }
 
 /* 助手：小 mark + 流动排版 */
-.bubble-row.assistant { gap: 14px; }
+.bubble-row.assistant { gap: 10px; }
 .ai-mark {
   flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
   margin-top: 2px;
-  display: grid;
-  place-items: center;
-  color: var(--clay);
-  font-weight: 800;
-  font-size: 14px;
-  background: var(--surface-raised);
-  border: 1px solid var(--hairline);
-  box-shadow: var(--shadow-card);
 }
 .ai-body {
   flex: 1 1 auto;
   min-width: 0;
-  max-width: calc(100% - 44px);
+  max-width: calc(100% - 36px);
 }
 .ai-name {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--ink-faint);
   font-weight: 600;
   letter-spacing: 0.3px;
-  margin-bottom: 7px;
+  margin-bottom: 5px;
 }
 .ai-name .bubble-time {
   margin-left: 8px;
@@ -1985,17 +2450,17 @@ watch(
 /* ai-lead 现为 MarkdownLite 容器（W5）：块结构由组件内 md-* 承担，容器只定
  * 基础字号/行高/下距；pre-wrap 移除（段落切分已由块级渲染接管）。 */
 .ai-lead {
-  font-size: 15px;
-  line-height: 1.72;
+  font-size: 14.25px;
+  line-height: 1.62;
   color: var(--ink);
-  margin: 0 0 16px;
+  margin: 0 0 12px;
 }
 .ai-lead :deep(.md-p:first-child),
 .ai-lead :deep(.md-h:first-child) {
   margin-top: 0;
 }
 
-/* 思考指示（N3 改双行容器：首行=墨滴+状态词+秒表，次行=慢等待诚实提示） */
+/* 思考指示（N3 双行容器：旋转对称品牌标+状态词+秒表，次行=慢等待诚实提示） */
 .ai-thinking {
   display: flex;
   flex-direction: column;
@@ -2009,7 +2474,7 @@ watch(
   align-items: center;
   gap: 5px;
 }
-.ai-thinking .tlabel { margin-left: 6px; }
+.ai-thinking .tlabel { margin-left: 0; }
 .think-elapsed {
   margin-left: 7px;
   font-size: 12px;
@@ -2021,6 +2486,61 @@ watch(
   font-size: 12px;
   line-height: 1.65;
   color: var(--ink-faint);
+}
+.stream-interrupted {
+  margin: 8px 0 0;
+  padding: 7px 10px;
+  border-left: 2px solid var(--trust-fail);
+  background: var(--error-chip-bg);
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.stream-interrupted strong {
+  color: var(--trust-fail);
+  font-weight: 700;
+}
+.stream-interrupted.is-unknown {
+  border-left-color: var(--trust-pending);
+  background: rgba(var(--trust-pending-rgb), 0.08);
+}
+.stream-interrupted.is-unknown strong {
+  color: var(--trust-pending);
+}
+/* 用户主动停止（流式停止钮）：中性墨——主动控制不是失败，与 persisted=false
+ * 的红边失败、保存待核的 amber 严格区分；不占 clay 以外新色槽。 */
+.stream-interrupted.is-stopped {
+  border-left-color: var(--hairline);
+  background: var(--surface-raised);
+}
+.stream-interrupted.is-stopped strong {
+  color: var(--ink-soft);
+}
+.stream-interrupted-action {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink-soft);
+}
+.stream-reconcile-btn {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 7px;
+  padding: 4px 9px;
+  border: 1px solid rgba(var(--trust-pending-rgb), 0.45);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--trust-pending);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.stream-reconcile-btn:hover:not(:disabled) {
+  background: rgba(var(--trust-pending-rgb), 0.08);
+}
+.stream-reconcile-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 /* ── 协作方案 / 拒绝 卡片 ── */
@@ -2732,10 +3252,11 @@ watch(
   transition: background var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
 }
 .chip-x:hover { background: var(--hover-tint); color: var(--ink); }
+.chip-x:disabled { opacity: 0.4; cursor: not-allowed; background: transparent; }
 
 /* ── composer ── */
 /* 空态时与 hero 同组垂直居中：本 margin 即 hero↔composer 的唯一直接间距（token 归位）。 */
-.composer { margin-top: var(--space-5); }
+.composer { margin-top: 12px; }
 /* 会话开始后：固定悬浮在视口底部，上缘渐隐让消息从下方穿过（Claude 布局）。 */
 .composer.composer-fixed {
   position: fixed;
@@ -2745,7 +3266,7 @@ watch(
   z-index: 15;
   margin-top: 0;
   /* 底部悬浮条减重（W5）：多轮对话时视觉更轻，渐隐遮罩起点不变 */
-  padding: var(--space-4) var(--space-6) var(--space-5);
+  padding: 8px var(--space-6) 10px;
   background: linear-gradient(180deg, rgba(var(--page-bg-rgb), 0) 0%, rgba(var(--page-bg-rgb), 0.88) 42%, var(--page-bg) 74%);
   pointer-events: none;
 }
@@ -2767,9 +3288,9 @@ watch(
 .composer-shell {
   background: var(--surface-raised);
   border: 1px solid var(--hairline);
-  border-radius: 22px;
+  border-radius: 18px;
   box-shadow: var(--shadow-composer);
-  padding: 6px;
+  padding: 4px;
   /* focus-within 抬升：位移走 --motion-med（比描边慢半拍的落地感），描边/投影
      保持 fast 即时反馈；reduced-motion 全静化见下方媒体块。 */
   transition: border-color var(--motion-fast) var(--ease-out-soft),
@@ -2788,9 +3309,9 @@ watch(
 }
 .composer-attach { flex: 0 0 auto; }
 .icon-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-lg);
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
   border: none;
   background: transparent;
   color: var(--ink-faint);
@@ -2807,33 +3328,36 @@ watch(
   box-shadow: none;
   background: transparent;
   resize: none;
-  padding: 10px 4px;
+  padding: 7px 4px;
   font-family: inherit;
-  font-size: 15px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.5;
   color: var(--ink);
 }
 .composer-input :deep(.el-textarea__inner::placeholder) { color: var(--ink-faint); }
 /* 渐变/投影/hover/过渡走全局 .cta-clay（W0 真归位，模板已接线）——本类只留结构。 */
 .send-btn {
   flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-lg);
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
   display: grid;
   place-items: center;
 }
 .send-btn:disabled { opacity: 0.4; box-shadow: none; }
-/* 发送在途（真实状态非装饰）：spinner 保持全亮可读——禁用降透明度只服务
-   「内容为空不可发」的 idle 禁用态，不该把在途信号一并压暗。 */
-.send-btn.is-sending:disabled { opacity: 1; }
-.send-spin {
-  width: 15px; height: 15px; border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.4);
-  border-top-color: #fff;
-  animation: spin 0.7s linear infinite;
+/* 停止钮（流式在飞时替换发送钮）：中性墨实心方块——主动停止是中性控制，
+ * 不用红、不占 clay；结构尺寸与 .send-btn 一致，换形不抖动。 */
+.stop-btn {
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: all var(--motion-fast) var(--ease-out-soft);
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+.stop-btn:hover { color: var(--ink); border-color: var(--ink-faint); }
+@media (prefers-reduced-motion: reduce) {
+  .stop-btn { transition: none; }
+}
 /* 诚实地板句（Claude「can make mistakes」哲学）：常驻同一 composer 容器内，
  * 会话进行中（composer 变 fixed 悬浮）也不消失；放进容器内部避免布局跳动。 */
 .composer-hint {
@@ -2841,8 +3365,8 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 14px 0;
-  font-size: var(--fs-xs);
+  padding: 3px 10px 0;
+  font-size: 10.5px;
   color: var(--ink-faint);
 }
 /* 按键提示段静止态隐去，composer 区域 hover / focus-within 时渐显——
@@ -2861,7 +3385,6 @@ watch(
 .composer-hint .sep { color: var(--hairline); }
 @media (prefers-reduced-motion: reduce) {
   .composer-hint .keys { transition: none; }
-  .send-spin { animation: none; }
   /* focus-within 抬升/描边过渡与 chip 交互态在 reduce 下瞬时呈现（状态本身
      由描边/环色承担，无需动画传达）。 */
   .composer-shell { transition: none; }
@@ -2879,24 +3402,127 @@ kbd {
   color: var(--ink-soft);
 }
 
+/* 回到底部浮钮：悬浮于 composer 上方右侧（fixed，垂直向避开发送钮主操作），
+ * 样式全走 token——surface-raised 底 + hairline 描边 + ink-soft 字，clay 不占用。 */
+.back-to-bottom {
+  position: fixed;
+  right: 28px;
+  bottom: 128px;
+  z-index: 16;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 13px;
+  border-radius: 17px;
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-card);
+  color: var(--ink-soft);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--ease-out-soft),
+    border-color var(--motion-fast) var(--ease-out-soft);
+}
+.back-to-bottom:hover { color: var(--ink); border-color: var(--ink-faint); }
+.btb-count {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--paper-rail);
+  border: 1px solid var(--hairline-soft);
+  color: var(--ink-soft);
+  font-size: 10.5px;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+  .back-to-bottom { transition: none; }
+}
 @media (max-width: 640px) {
-  .ai-body { max-width: calc(100% - 44px); }
+  /* 375px：右缩进收紧，底部抬升量与移动端 composer 实高对齐，不遮发送钮。 */
+  .back-to-bottom { right: 16px; bottom: 118px; }
+}
+
+@media (max-width: 640px) {
+  .ai-body { max-width: calc(100% - 36px); }
   .plan-goal-title { font-size: 21px; }
   .agent-maturity { display: none; }
+  .composer.composer-fixed { padding: 7px 12px 9px; }
+  .composer-hint .keys { display: none; }
+  .icon-btn,
+  .send-btn {
+    width: 44px;
+    height: 44px;
+  }
 }
 </style>
 
 <style>
 /* Agent 选择器 popover（EP popper 渲染在 body，需全局作用域）。 */
-.agent-pick-pop { padding: 10px 0 !important; }
+.agent-pick-pop {
+  max-width: calc(100vw - 24px) !important;
+  max-height: min(390px, calc(100vh - 24px));
+  padding: 0 !important;
+  overflow: hidden;
+}
+/* 移动端贴边对称（审计 P2：375px 下 PopperJS 按触发钮 top-start 对齐，
+   实测左 43/右 12 不对称）。宽度随视口 calc(100vw - 24px) 后，preventOverflow
+   （padding:12）把弹层钳到 left=12，左右各 12px。桌面档宽度仍由 :width="320"
+   决定，不碰。 */
+@media (max-width: 640px) {
+  .agent-pick-pop {
+    width: calc(100vw - 24px) !important;
+  }
+}
+.agent-pick {
+  display: flex;
+  flex-direction: column;
+  max-height: min(390px, calc(100vh - 24px));
+}
+.agent-pick .ap-head {
+  flex: none;
+  padding: 9px 10px 8px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
 .agent-pick .ap-title {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.5px;
   color: var(--ink-faint);
-  padding: 2px 14px 8px;
+  margin-bottom: 6px;
 }
-.agent-pick .ap-error { color: var(--trust-fail); font-size: 12px; padding: 4px 14px; }
+.agent-pick .ap-search {
+  width: 100%;
+  min-height: 34px;
+  box-sizing: border-box;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--paper-surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 0 10px;
+  outline: none;
+}
+.agent-pick .ap-search:focus-visible {
+  border-color: var(--focus-ring-clay);
+  box-shadow: 0 0 0 2px rgba(var(--clay-rgb), 0.12);
+}
+.agent-pick .ap-search:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.agent-pick .ap-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 0;
+}
+.agent-pick .ap-error { color: var(--trust-fail); font-size: 12px; padding: 8px 10px; }
 .agent-pick .ap-maturity {
   font-family: var(--mono);
   font-size: 10px;
@@ -2904,23 +3530,19 @@ kbd {
   border: 1px solid var(--border-soft, var(--hairline));
   border-radius: 4px;
   padding: 0 4px;
-  margin-left: 6px;
-  vertical-align: 1px;
-}
-.agent-pick .ap-limit {
-  display: block;
-  font-size: 11px;
-  color: var(--ink-faint);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 268px;
+  margin-left: 4px;
 }
 .agent-pick .ap-item {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 14px;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
   transition: background var(--motion-fast) var(--ease-out-soft);
 }
@@ -2930,28 +3552,59 @@ kbd {
 .agent-pick .ap-item:hover,
 .agent-pick .ap-item:focus-visible { background: var(--hover-tint); }
 .agent-pick .ap-item:active { background: var(--select-tint-clay); }
+.agent-pick .ap-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.agent-pick .ap-item:disabled:hover,
+.agent-pick .ap-item:disabled:focus-visible,
+.agent-pick .ap-item:disabled:active {
+  background: transparent;
+}
 @media (prefers-reduced-motion: reduce) {
   .agent-pick .ap-item { transition: none; }
 }
 .agent-pick .ap-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
-.agent-pick .ap-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.agent-pick .ap-name { font-size: 13px; font-weight: 600; color: var(--ink); }
-.agent-pick .ap-sub {
+.agent-pick .ap-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.agent-pick .ap-name-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.agent-pick .ap-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.agent-pick .ap-detail {
   font-size: 11px;
   color: var(--ink-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.25;
 }
 .agent-pick .ap-portal-link {
-  display: block;
-  padding: 8px 14px 2px;
-  margin-top: 4px;
+  flex: none;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: none;
   border-top: 1px solid var(--hairline-soft);
+  background: var(--paper-surface);
+  text-align: left;
   font-size: 12px;
   font-weight: 600;
   color: var(--clay);
   cursor: pointer;
+}
+.agent-pick .ap-portal-link:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* 垂类问答依据卡（Codex R0 P1 接线）：中性纸面，依据行交给 EvidenceList
@@ -2962,5 +3615,5 @@ kbd {
 .qa-refusal-reason { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink); }
 .qa-refusal-suggestion { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-soft); }
 
-.agent-pick .ap-zero { font-size: 12px; color: var(--ink-faint); padding: 4px 14px 8px; }
+.agent-pick .ap-zero { font-size: 12px; color: var(--ink-faint); padding: 4px 10px 8px; }
 </style>

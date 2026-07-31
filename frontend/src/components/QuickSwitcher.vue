@@ -76,6 +76,7 @@ import { listConversations } from "../api/conversations";
 import { listTasks } from "../api/tasks";
 import { listAgents } from "../api/agents";
 import { statusLabel, taskLampColor, taskDisplayName, formatClockCompact } from "../utils/format";
+import { conversationTitle, conversationTitlesVersion } from "../utils/conversationTitles";
 import { useTodayKey } from "../composables/useTodayKey";
 import { statusCenter, closeCenter } from "../stores/statusCenter";
 import { quickSwitcher, openQuickSwitcher, closeQuickSwitcher } from "../stores/quickSwitcher";
@@ -96,12 +97,11 @@ const conversations = ref([]);
 const tasks = ref([]);
 const agents = ref([]);
 
-// 会话标题：与 App.vue 左栏 convoTitle 同一口径（未接住会话前缀「未接住」）。
+// 会话标题：与 App.vue 左栏 convoTitle 同一 SSOT（conversationTitles.conversationTitle，
+// 三层回退=列表投影 → 缓存 → 「与 X 的对话」，含未接住会话前缀）。
 function convoTitle(c) {
-  const r = c.recommendation;
-  if (r && r.decision === "orchestrate" && r.goal) return r.goal;
-  if (r && r.decision === "refuse" && r.reason) return "（未接住）" + r.reason;
-  return `与 ${c.created_by || "你"} 的对话`;
+  void conversationTitlesVersion.value; // 渲染依赖：缓存 bump 后重算标题
+  return conversationTitle(c);
 }
 
 // 任务标题人话化（批次四 Q1）：⌘K 面板已并行拉了 agents 三源之一，直接用它

@@ -70,6 +70,14 @@
     </aside>
 
     <section class="console-main">
+      <button
+        v-if="selectedId"
+        type="button"
+        class="console-mobile-back"
+        @click="backToTasks"
+      >
+        ← 返回任务台
+      </button>
       <!-- 选中任务：TaskDetail 完整复用（叙事流+签发+输出/来源栏全承袭，
            m2 验收契约原样保留）；:key 保证切换任务时干净重建。 -->
       <TaskDetail v-if="selectedId" :key="selectedId" />
@@ -130,6 +138,10 @@ function select(t) {
   if (t.id !== selectedId.value) router.push(`/tasks/${t.id}`);
 }
 
+function backToTasks() {
+  router.push("/tasks");
+}
+
 onMounted(() => {
   ensureTaskBaseline(); // 首次进任务台锚定未读基线（幂等）
   acquireTaskFeed();
@@ -158,6 +170,9 @@ onUnmounted(releaseTaskFeed);
 .console-main {
   flex: 1 1 auto;
   min-width: 0;
+}
+.console-mobile-back {
+  display: none;
 }
 .cl-head {
   display: flex;
@@ -290,9 +305,23 @@ onUnmounted(releaseTaskFeed);
   }
 }
 @media (max-width: 900px) {
-  /* 窄屏：选中任务时列表让位给叙事流（返回走浏览器后退/左栏入口） */
+  /* 窄屏：选中任务时列表让位给叙事流；显式返回入口避免依赖浏览器历史。 */
   .console-list.is-collapsed {
     display: none;
+  }
+  .console-mobile-back {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    margin: 0 0 var(--space-3);
+    padding: 0 4px;
+    border: none;
+    background: transparent;
+    color: var(--clay);
+    font: inherit;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    cursor: pointer;
   }
   /* 未选中时列表=整页：放全宽、撤栏间发丝线与嵌套滚动盒（375px 无横向溢出） */
   .console-list {

@@ -1146,6 +1146,11 @@ def set_sample_review_outcome(
 
 # ── conversations（M6 导引 Agent，interactive 会话运行时，ADR-0012）──────
 
+# 列表投影首条用户消息预览的服务端截断上限（E-4 侧栏标题人话化的数据面）：
+# 前端再截 18 字，120 留足余量；无用户消息 → NULL（前端三层回退，绝不编造标题）。
+_FIRST_USER_MESSAGE_PREVIEW_MAX = 120
+
+
 def _decode_conversation(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     _decode_json(d, "recommendation_json", "recommendation", default=None)
@@ -1201,8 +1206,21 @@ def list_conversations(
         params.append(created_by)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     params.extend([limit, offset])
+    # first_user_message（additive 投影）：首条 role=user 消息的服务端截断预览，
+    # 供侧栏历史标题直接消费。相关子查询走 idx_conversation_messages_conversation_id
+    # 取 MIN(id) 一行——整条列表仍是一条 SQL，无 N+1；无用户消息 → NULL。
     rows = conn.execute(
-        f"SELECT * FROM conversations {where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+        f"""
+        SELECT c.*, (
+            SELECT substr(trim(m.content), 1, {_FIRST_USER_MESSAGE_PREVIEW_MAX})
+            FROM conversation_messages m
+            WHERE m.conversation_id = c.id AND m.role = 'user'
+            ORDER BY m.id ASC
+            LIMIT 1
+        ) AS first_user_message
+        FROM conversations c {where}
+        ORDER BY c.created_at DESC, c.id DESC LIMIT ? OFFSET ?
+        """,
         params,
     ).fetchall()
     return [_decode_conversation(r) for r in rows]
