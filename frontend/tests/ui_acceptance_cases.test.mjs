@@ -1,0 +1,204 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+
+import {
+  UI_ACCEPTANCE_CASES,
+  getUiAcceptanceCase,
+} from "../src/ui-lab/uiAcceptanceCases.js";
+import { installUiAcceptanceBoundary } from "../src/ui-lab/acceptanceBoundary.js";
+import { conversationInteractionPolicy } from "../src/utils/ndjsonStream.js";
+
+const appSource = readFileSync(
+  new URL("../src/App.vue", import.meta.url),
+  "utf8",
+);
+const guideSource = readFileSync(
+  new URL("../src/views/GuidePage.vue", import.meta.url),
+  "utf8",
+);
+const routerSource = readFileSync(
+  new URL("../src/router/index.js", import.meta.url),
+  "utf8",
+);
+const viteSource = readFileSync(
+  new URL("../vite.config.js", import.meta.url),
+  "utf8",
+);
+const labAppSource = readFileSync(
+  new URL("../src/ui-lab/UiLabApp.vue", import.meta.url),
+  "utf8",
+);
+
+const REQUIRED_CASES = [
+  "landing-desktop",
+  "picker-desktop",
+  "streaming-desktop",
+  "persistence-unknown-desktop",
+  "landing-mobile",
+  "picker-mobile",
+];
+
+test("UI 验收台固定覆盖六个关键视图，未知 ID fail-closed", () => {
+  assert.deepEqual(
+    UI_ACCEPTANCE_CASES.map((item) => item.id),
+    REQUIRED_CASES,
+  );
+  assert.equal(
+    new Set(UI_ACCEPTANCE_CASES.map((item) => item.id)).size,
+    UI_ACCEPTANCE_CASES.length,
+  );
+  assert.equal(getUiAcceptanceCase(null).id, "landing-desktop");
+  assert.throws(
+    () => getUiAcceptanceCase("missing"),
+    /未知 UI 验收场景：missing/,
+  );
+});
+
+test("每个视图声明真实 viewport 与可逐项讨论的检查点", () => {
+  for (const item of UI_ACCEPTANCE_CASES) {
+    assert.ok(item.viewport.width > 0);
+    assert.ok(item.viewport.height > 0);
+    assert.ok(item.reviewPoints.length >= 2);
+    assert.equal(item.app.displayName, "验收工程师");
+  }
+
+  assert.equal(getUiAcceptanceCase("landing-desktop").viewport.width, 1440);
+  assert.equal(getUiAcceptanceCase("landing-mobile").viewport.width, 375);
+});
+
+test("流式视图只展示真实 streaming 状态，不用定时假打字", () => {
+  const fixture = getUiAcceptanceCase("streaming-desktop").guide;
+  assert.equal(fixture.sending, true);
+  assert.ok(
+    fixture.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        message.streaming === true &&
+        message.content.length > 0,
+    ),
+  );
+});
+
+test("保存状态待核视图显式保锁，不能伪装成失败或完成", () => {
+  const fixture = getUiAcceptanceCase("persistence-unknown-desktop").guide;
+  const assistant = fixture.messages.find(
+    (message) => message.role === "assistant",
+  );
+
+  assert.equal(fixture.reconciliationRequired, true);
+  assert.equal(fixture.sending, false);
+  assert.equal(assistant.persistenceUnknown, true);
+  assert.equal(assistant.streamError, true);
+  assert.match(assistant.streamErrorTitle, /保存状态待核/);
+  assert.deepEqual(
+    conversationInteractionPolicy({
+      sending: fixture.sending,
+      restoring: fixture.restoring,
+      reconciliationRequired: fixture.reconciliationRequired,
+    }),
+    {
+      locked: true,
+      reconciliationLocked: true,
+      canSend: false,
+      canAttach: false,
+      canSelectAgent: false,
+    },
+  );
+});
+
+test("Agent 选择器视图使用真实紧凑行所需字段", () => {
+  for (const id of ["picker-desktop", "picker-mobile"]) {
+    const fixture = getUiAcceptanceCase(id).guide;
+    assert.equal(fixture.agentPickerOpen, true);
+    assert.ok(fixture.agents.length >= 4);
+    assert.ok(
+      fixture.agents.every(
+        (agent) =>
+          agent.id &&
+          agent.name &&
+          agent.category &&
+          Array.isArray(agent.limitations),
+      ),
+    );
+  }
+});
+
+test("六重旋转标记资产保持已验收的 256px RGBA 基线", () => {
+  const bloomAsset = readFileSync(
+    new URL("../src/assets/flai-bloom.png", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(bloomAsset).digest("hex"),
+    "5e5618f6ca01243b75eb14e149510df2f27a6892383b0ef24cd319c0713cd963",
+  );
+});
+
+test("验收 fixture 只在开发态生效，且不进入正式路由或生产构建入口", () => {
+  assert.match(
+    appSource,
+    /const acceptanceFixture = import\.meta\.env\.DEV \? props\.acceptanceFixture : null/,
+  );
+  assert.match(
+    guideSource,
+    /const acceptanceFixture = import\.meta\.env\.DEV \? props\.acceptanceFixture : null/,
+  );
+  assert.doesNotMatch(routerSource, /ui-lab|acceptanceFixture/);
+  assert.doesNotMatch(viteSource, /rollupOptions|input:\s*.*ui-lab/);
+  assert.match(viteSource, /cors:\s*\{\s*origin:\s*"null"\s*\}/);
+  assert.match(labAppSource, /sandbox="allow-scripts"/);
+  assert.doesNotMatch(labAppSource, /allow-same-origin/);
+});
+
+test("验收入口统一阻止网络和存储副作用", () => {
+  class FakeStorage {
+    setItem() {}
+    removeItem() {}
+    clear() {}
+  }
+
+  const runtime = {
+    fetch: async () => "unexpected",
+    XMLHttpRequest: class {},
+    WebSocket: class {},
+    EventSource: class {},
+    Storage: FakeStorage,
+    navigator: { sendBeacon: () => true },
+    indexedDB: {
+      open() {},
+      deleteDatabase() {},
+    },
+  };
+
+  const boundary = installUiAcceptanceBoundary(runtime);
+  assert.equal(boundary.mode, "read-only");
+  assert.throws(() => runtime.fetch("/api/health"), /已阻止 fetch/);
+  assert.throws(() => new runtime.XMLHttpRequest(), /已阻止 XMLHttpRequest/);
+  assert.throws(() => new runtime.WebSocket("ws://example"), /已阻止 WebSocket/);
+  assert.throws(() => new runtime.EventSource("/events"), /已阻止 EventSource/);
+  assert.equal(runtime.navigator.sendBeacon("/audit", "x"), false);
+  assert.throws(
+    () => new runtime.Storage().setItem("flai_theme_mode", "dark"),
+    /已阻止 Storage\.setItem/,
+  );
+  assert.throws(() => runtime.indexedDB.open("flai"), /已阻止 indexedDB\.open/);
+  assert.equal(installUiAcceptanceBoundary(runtime), boundary);
+});
+
+test("任一已存在出口无法替换时，验收边界 fail-closed", () => {
+  const escapedFetch = async () => "escaped";
+  const runtime = {};
+  Object.defineProperty(runtime, "fetch", {
+    configurable: false,
+    writable: false,
+    value: escapedFetch,
+  });
+
+  assert.throws(
+    () => installUiAcceptanceBoundary(runtime),
+    /已阻止 无法封锁 fetch/,
+  );
+  assert.equal(runtime.fetch, escapedFetch);
+  assert.equal(runtime.__FLAI_UI_ACCEPTANCE_BOUNDARY__, undefined);
+});

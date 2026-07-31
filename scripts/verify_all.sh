@@ -73,6 +73,7 @@ test_frontend_core() {
 run_step "①b 前端纯函数核 node --test" test_frontend_core
 
 E2E_SCRIPTS=(
+  "frontend/e2e/ui_lab_acceptance.py"
   "frontend/e2e/m2_acceptance.py"
   "frontend/e2e/m6_guide_acceptance.py"
   "frontend/e2e/m8_collab_chain_acceptance.py"

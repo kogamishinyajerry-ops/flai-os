@@ -273,12 +273,14 @@ with sync_playwright() as p:
     hon.get_by_role("button", name="浏览可用 Agent").click()
     hon.wait_for_selector(".agent-pick .ap-item", timeout=5000)
     maturity_texts = hon.locator(".agent-pick .ap-maturity").all_inner_texts()
-    limit_count = hon.locator(".agent-pick .ap-limit").count()
+    detail_texts = hon.locator(".agent-pick .ap-detail").all_inner_texts()
     item_count = hon.locator(".agent-pick .ap-item").count()
     check("⑨选择器诚实前置：每条目 maturity 角标+limitation 摘要同屏",
           item_count > 0 and len(maturity_texts) == item_count
-          and all(m.startswith("L") for m in maturity_texts) and limit_count == item_count,
-          f"items={item_count} maturity={maturity_texts} limits={limit_count}")
+          and all(m.startswith("L") for m in maturity_texts)
+          and len(detail_texts) == item_count
+          and all(detail.startswith("边界：") for detail in detail_texts),
+          f"items={item_count} maturity={maturity_texts} details={detail_texts}")
     hon.close()
 
     browser.close()

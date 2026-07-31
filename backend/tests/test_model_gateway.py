@@ -165,6 +165,114 @@ def test_chat_success_via_mock_transport_records_success(tmp_path, monkeypatch) 
     assert calls[0]["model_name"] == "glm-mock"
 
 
+def test_chat_on_delta_uses_upstream_stream_and_records_once(tmp_path, monkeypatch) -> None:
+    """传入 on_delta 后必须向 OpenAI-compatible 上游发送 stream=true，并把真实
+    SSE delta 即时交给调用方；完整 content 与 model_calls 仍只在正常收尾后确认。"""
+    monkeypatch.setenv("FLAI_LLM_BASE_URL", "https://fake-llm.internal")
+    monkeypatch.setenv("FLAI_LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("FLAI_LLM_MODEL_REASONING", "glm-mock")
+    captured: dict = {}
+
+    class FakeStreamResponse:
+        status_code = 200
+        text = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def iter_lines(self):
+            return iter(
+                [
+                    'data: {"choices":[{"delta":{"role":"assistant"}}]}',
+                    'data: {"choices":[{"delta":{"content":"你好"}}]}',
+                    'data: {"choices":[{"delta":{"content":"，世界"},"finish_reason":"stop"}],'
+                    '"usage":{"total_tokens":8}}',
+                    "data: [DONE]",
+                ]
+            )
+
+    def fake_stream(method, url, *, json, headers, timeout):
+        captured.update(
+            method=method, url=url, payload=json, headers=headers, timeout=timeout
+        )
+        return FakeStreamResponse()
+
+    monkeypatch.setattr(gateway_mod.httpx, "stream", fake_stream)
+    db_path, conn_factory = _make_conn_factory(tmp_path)
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+    deltas: list[str] = []
+
+    result = gateway.chat(
+        "reasoning",
+        [{"role": "user", "content": "你好"}],
+        task_id="task_stream",
+        on_delta=deltas.append,
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["payload"]["stream"] is True
+    assert captured["headers"]["Authorization"] == "Bearer fake-key"
+    assert deltas == ["你好", "，世界"]
+    assert result["content"] == "你好，世界"
+    assert result["finish_reason"] == "stop"
+    assert result["token_usage"] == {"total_tokens": 8}
+
+    conn = db_mod.get_conn(db_path)
+    calls = repos.list_model_calls(conn, "task_stream")
+    conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "success"
+
+
+def test_chat_stream_clean_eof_without_done_records_failed_once(tmp_path, monkeypatch) -> None:
+    """有非空正文但没有 [DONE] 仍是中断，不能把干净 EOF 误记 success。"""
+    monkeypatch.setenv("FLAI_LLM_BASE_URL", "https://fake-llm.internal")
+    monkeypatch.setenv("FLAI_LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("FLAI_LLM_MODEL_REASONING", "glm-mock")
+
+    class TruncatedStreamResponse:
+        status_code = 200
+        text = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def iter_lines(self):
+            return iter(
+                ['data: {"choices":[{"delta":{"content":"只有半截"}}]}']
+            )
+
+    def fake_stream(method, url, *, json, headers, timeout):
+        assert method == "POST"
+        return TruncatedStreamResponse()
+
+    monkeypatch.setattr(gateway_mod.httpx, "stream", fake_stream)
+    db_path, conn_factory = _make_conn_factory(tmp_path, "truncated-stream.db")
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+    deltas: list[str] = []
+
+    with pytest.raises(ModelUpstreamError, match=r"\[DONE\]"):
+        gateway.chat(
+            "reasoning",
+            [{"role": "user", "content": "你好"}],
+            task_id="task_stream_truncated",
+            on_delta=deltas.append,
+        )
+
+    assert deltas == ["只有半截"]
+    conn = db_mod.get_conn(db_path)
+    calls = repos.list_model_calls(conn, "task_stream_truncated")
+    conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+
+
 # ── 上游 500 → ModelUpstreamError + model_calls 记 failed ──────────────────
 
 def test_chat_upstream_500_raises_model_upstream_error_and_records_failed(tmp_path, monkeypatch) -> None:

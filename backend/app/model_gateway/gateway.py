@@ -179,6 +179,157 @@ class ModelGateway:
             )
         return data
 
+    def _stream_chat(
+        self,
+        base_url: str,
+        payload: dict[str, Any],
+        api_key: str | None,
+        on_delta: Callable[[str], None],
+    ) -> dict[str, Any]:
+        """消费 OpenAI-compatible SSE，并返回与普通 chat 相同的完整结果形状。
+
+        只有上游真实 ``delta.content`` 会交给调用方；任何解析/传输/消费异常都折叠
+        为 ``ModelUpstreamError``，由 ``chat()`` 的统一出口只记一条 failed 留痕。
+        已经发出 delta 后不自动重试，避免用户看到重复片段。
+        """
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        stream_payload = dict(payload)
+        stream_payload["stream"] = True
+        emitted_any = False
+
+        for attempt in range(2):
+            try:
+                with httpx.stream(
+                    "POST",
+                    f"{base_url}/chat/completions",
+                    json=stream_payload,
+                    headers=headers,
+                    timeout=self._timeout_s,
+                ) as resp:
+                    if resp.status_code in {502, 503, 504} and attempt == 0:
+                        time.sleep(0.5)
+                        continue
+                    if not (200 <= resp.status_code < 300):
+                        try:
+                            read = getattr(resp, "read", None)
+                            if callable(read):
+                                read()
+                            body = str(getattr(resp, "text", ""))[:500]
+                        except Exception:
+                            body = ""
+                        raise ModelUpstreamError(
+                            f"上游返回非 2xx（status={resp.status_code}）：{body}"
+                        )
+
+                    parts: list[str] = []
+                    finish_reason: Any = None
+                    token_usage: dict[str, Any] | None = None
+                    saw_done = False
+                    for raw_line in resp.iter_lines():
+                        if isinstance(raw_line, bytes):
+                            line = raw_line.decode("utf-8")
+                        elif isinstance(raw_line, str):
+                            line = raw_line
+                        else:
+                            raise ModelUpstreamError(
+                                "上游流式响应行不是文本，响应形状漂移"
+                            )
+                        line = line.strip()
+                        if not line or line.startswith(":"):
+                            continue
+                        # OpenAI SSE 还可能带 event:/id: 等字段；只有 data: 承载
+                        # chat chunk，其他字段可安全忽略。
+                        if not line.startswith("data:"):
+                            continue
+                        raw_data = line[len("data:"):].strip()
+                        if raw_data == "[DONE]":
+                            saw_done = True
+                            break
+                        try:
+                            chunk = json.loads(raw_data)
+                        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                            raise ModelUpstreamError(
+                                "上游返回 200 但流式 data 不是合法 JSON"
+                            ) from exc
+                        if not isinstance(chunk, dict):
+                            raise ModelUpstreamError(
+                                "上游返回 200 但流式 chunk 顶层不是 object，响应形状漂移"
+                            )
+
+                        usage = chunk.get("usage")
+                        if usage is not None:
+                            if not isinstance(usage, dict):
+                                raise ModelUpstreamError(
+                                    "上游流式 usage 不是 object，响应形状漂移"
+                                )
+                            token_usage = usage
+
+                        choices = chunk.get("choices", [])
+                        if not isinstance(choices, list):
+                            raise ModelUpstreamError(
+                                "上游流式 choices 不是 array，响应形状漂移"
+                            )
+                        if not choices:
+                            # OpenAI 的 include_usage 尾块允许 choices=[]。
+                            continue
+                        choice = choices[0]
+                        if not isinstance(choice, dict):
+                            raise ModelUpstreamError(
+                                "上游流式 choice 不是 object，响应形状漂移"
+                            )
+                        if choice.get("finish_reason") is not None:
+                            finish_reason = choice.get("finish_reason")
+                        delta = choice.get("delta", {})
+                        if not isinstance(delta, dict):
+                            raise ModelUpstreamError(
+                                "上游流式 delta 不是 object，响应形状漂移"
+                            )
+                        text = delta.get("content")
+                        if text is None:
+                            continue
+                        if not isinstance(text, str):
+                            raise ModelUpstreamError(
+                                "上游流式 delta.content 不是文本，响应形状漂移"
+                            )
+                        if not text:
+                            continue
+                        try:
+                            on_delta(text)
+                        except Exception as exc:
+                            raise ModelUpstreamError(
+                                f"流式响应消费中断：{exc}"
+                            ) from exc
+                        parts.append(text)
+                        emitted_any = True
+
+                    if not saw_done:
+                        raise ModelUpstreamError(
+                            "上游流式响应未收到 [DONE] 就结束——按中途中断处理"
+                        )
+                    content = "".join(parts)
+                    if not content.strip():
+                        raise ModelUpstreamError(
+                            "上游返回 200 但流式 chat content 为空——按上游失败处理"
+                        )
+                    return {
+                        "content": content,
+                        "token_usage": token_usage,
+                        "finish_reason": finish_reason,
+                    }
+            except ModelUpstreamError:
+                raise
+            except httpx.TransportError as exc:
+                if attempt == 0 and not emitted_any:
+                    time.sleep(0.5)
+                    continue
+                raise ModelUpstreamError(f"上游流式网络错误：{exc}") from exc
+            except httpx.HTTPError as exc:
+                raise ModelUpstreamError(f"上游流式网络错误：{exc}") from exc
+            except Exception as exc:
+                raise ModelUpstreamError(f"上游流式响应读取失败：{exc}") from exc
+
+        raise ModelUpstreamError("上游流式请求重试后仍失败")
+
     # ── 对外三方法（docs/04 §3）─────────────────────────────────────────
 
     def chat(
@@ -189,6 +340,7 @@ class ModelGateway:
         task_id: str | None = None,
         conversation_id: str | None = None,
         agent_id: str | None = None,
+        on_delta: Callable[[str], None] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         model_name: str | None = None
@@ -200,22 +352,34 @@ class ModelGateway:
                 value = kwargs.get(key, cfg.get(key))
                 if value is not None:
                     payload[key] = value
-            data = self._post(base_url, "/chat/completions", payload, api_key)
-            try:
-                choice = (data.get("choices") or [{}])[0]
-                message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
-                content = message.get("content")
-                token_usage = data.get("usage")
+            if on_delta is not None:
+                if callable(on_delta) is not True:
+                    raise ModelUpstreamError("on_delta 必须是可调用对象")
+                streamed = self._stream_chat(base_url, payload, api_key, on_delta)
+                content = streamed["content"]
                 result = {
                     "content": content,
-                    "token_usage": token_usage,
+                    "token_usage": streamed["token_usage"],
                     "model_name": model_name,
-                    "finish_reason": choice.get("finish_reason"),
+                    "finish_reason": streamed["finish_reason"],
                 }
-            except (AttributeError, IndexError, KeyError, TypeError) as exc:
-                # P2-4：上游 200 但字段形状漂移（choices 元素非 object 等）——
-                # 折叠为 ModelUpstreamError 走下方统一留痕路径，绝不裸逃。
-                raise ModelUpstreamError(f"上游返回 200 但 chat 响应形状漂移：{exc}") from exc
+            else:
+                data = self._post(base_url, "/chat/completions", payload, api_key)
+                try:
+                    choice = (data.get("choices") or [{}])[0]
+                    message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+                    content = message.get("content")
+                    token_usage = data.get("usage")
+                    result = {
+                        "content": content,
+                        "token_usage": token_usage,
+                        "model_name": model_name,
+                        "finish_reason": choice.get("finish_reason"),
+                    }
+                except (AttributeError, IndexError, KeyError, TypeError) as exc:
+                    # P2-4：上游 200 但字段形状漂移（choices 元素非 object 等）——
+                    # 折叠为 ModelUpstreamError 走下方统一留痕路径，绝不裸逃。
+                    raise ModelUpstreamError(f"上游返回 200 但 chat 响应形状漂移：{exc}") from exc
             if not isinstance(content, str) or not content.strip():
                 # 审计硬化（ADR-0013）：上游 200 但 content 为空/非文本——若记
                 # success 就是把「无回答」伪装成成功调用（fail-open）。按上游失败

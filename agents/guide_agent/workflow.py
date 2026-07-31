@@ -25,7 +25,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from jsonschema import validate
 
@@ -47,6 +47,61 @@ _MAX_STRIPPED = 32           # 单 Agent stripped_fields 条数上限
 _MAX_ID_CHARS = 64           # 审计列表里单个 id/字段名的展示长度上限
 
 
+class _VisibleReplyStream:
+    """只把计划块之前的可见正文交给 UI，且能识别跨 chunk 的 sentinel。
+
+    末尾可能是 ``<<PLAN>>`` 的一部分时先暂存；只有确认它不是 sentinel 后才发出。
+    一旦命中计划块起始标记，本轮后续内容全部隐藏，最终持久化文本仍由
+    ``_split_plan`` 的完整响应确定，控制 JSON 不会在流式阶段闪现。
+    """
+
+    def __init__(self, emit: Callable[[str], None]) -> None:
+        self._emit = emit
+        self._pending = ""
+        self._hidden = False
+        self._finished = False
+
+    def feed(self, chunk: str) -> None:
+        if self._finished:
+            raise ValueError("可见回复流已结束，不能继续写入")
+        if not isinstance(chunk, str):
+            raise ValueError("可见回复流只接受文本 chunk")
+        if not chunk or self._hidden:
+            return
+
+        self._pending += chunk
+        marker_at = self._pending.find(_PLAN_START)
+        if marker_at != -1:
+            visible = self._pending[:marker_at]
+            if visible:
+                self._emit(visible)
+            self._pending = ""
+            self._hidden = True
+            return
+
+        # 保留「pending 末尾 == marker 前缀」的最长后缀，防止 <<PL / AN>>
+        # 横跨上游 delta 时先把半截控制标记发到用户界面。
+        held = 0
+        for length in range(
+            min(len(self._pending), len(_PLAN_START) - 1), 0, -1
+        ):
+            if self._pending.endswith(_PLAN_START[:length]):
+                held = length
+                break
+        safe = self._pending[:-held] if held else self._pending
+        if safe:
+            self._emit(safe)
+        self._pending = self._pending[-held:] if held else ""
+
+    def finish(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        if not self._hidden and self._pending:
+            self._emit(self._pending)
+        self._pending = ""
+
+
 def _load_system_prompt() -> str:
     return Path(__file__).with_name("prompt.md").read_text(encoding="utf-8").strip()
 
@@ -65,13 +120,25 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     # ModelUpstreamError 刻意不捕获：冒泡 → ConversationService 原样抛出，诚实失败。
     # conversation_id/agent_id 归因由运行时 _ConversationGatewayContext 自动注入
     # （ADR-0013）——workflow 不手工传身份，与 job 路径 _ModelGatewayContext 对称。
-    result = model_gateway.chat(profile, chat_messages)
+    stream_delta = context.get("stream_delta")
+    visible_stream = (
+        _VisibleReplyStream(stream_delta) if callable(stream_delta) else None
+    )
+    result = model_gateway.chat(
+        profile,
+        chat_messages,
+        **({"on_delta": visible_stream.feed} if visible_stream is not None else {}),
+    )
     reply = result.get("content")
     if not isinstance(reply, str) or not reply.strip():
         raise ValueError("导引模型返回空内容，无法继续对话（诚实失败，不伪造对话）")
 
     assistant_message, raw_plan = _split_plan(reply)
     plan = _validate_plan(raw_plan, registry, candidates) if raw_plan else None
+    # 仅在完整回复通过形状检查与计划校验后冲刷「可能是 sentinel 前缀」的尾部。
+    # 任一异常都不 finish，避免失败轮把未确认控制片段继续展示。
+    if visible_stream is not None:
+        visible_stream.finish()
     # 传输键保持 `recommendation`（存储列 recommendation_json / API 字段皆不变，
     # 免迁移）——其形状自 M8 起是「导引计划」（orchestrate | refuse），前端按
     # decision 分支渲染。
@@ -163,8 +230,11 @@ def _split_plan(reply: str) -> tuple[str, str | None]:
         return reply.strip(), None
     end = reply.find(_PLAN_END, start)
     if end == -1:
-        # 有起始无结束：块不完整，当作纯文本（不冒险解析半个 JSON）
-        return reply.strip(), None
+        # 有起始无结束意味着控制块被截断。若当纯文本保存，sentinel 与半截 JSON
+        # 会经 done/历史永久外露；必须整轮失败，由会话事务保证零消息落库。
+        raise ValueError(
+            "导引模型计划块缺少 <<END>>，响应不完整——本轮不落库"
+        )
     raw = reply[start + len(_PLAN_START):end].strip()
     tail = reply[end + len(_PLAN_END):]
     next_block = tail.find(_PLAN_START)
