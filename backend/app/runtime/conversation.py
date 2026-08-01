@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -50,6 +51,12 @@ _HISTORY_MAX_CHARS = 60_000
 # （与截窗同哲学：诚实降级）。单消息附件数上限（防御纵深，API 层同限）。
 _ATTACHMENT_BUDGET_CHARS = 24_000
 _MAX_FILES_PER_MESSAGE = 5
+# 当前会话服务没有 actor role 入参，不能安全泛化到任意 interactive Agent。
+# 先仅允许这两个面向 business_user 的已审定问答包；未来在角色化授权进入
+# ConversationService 后，再由权限投影替代此 allowlist。
+_GUIDE_INTERACTIVE_HANDOFF_IDS = frozenset(
+    {"policy_qa_agent", "standards_qa_agent"}
+)
 
 
 def is_interactive(agent: dict[str, Any]) -> bool:
@@ -68,6 +75,56 @@ def _window(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         tail.append(m)
     tail.reverse()
     return tail
+
+
+def _created_strictly_after(created_at: Any, boundary: Any) -> bool:
+    """ISO 时间严格晚于工作段边界；脏/缺时间戳按不属于当前段 fail-closed。"""
+    if not isinstance(created_at, str) or not isinstance(boundary, str):
+        return False
+    try:
+        return datetime.fromisoformat(created_at) > datetime.fromisoformat(boundary)
+    except (TypeError, ValueError):
+        return False
+
+
+def _latest_valid_iso(values: list[Any]) -> str | None:
+    """取合法 ISO 时间中的最大值；坏值不参与工作段推进。"""
+    parsed: list[tuple[datetime, str]] = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        try:
+            parsed.append((datetime.fromisoformat(value), value))
+        except ValueError:
+            continue
+    return max(parsed, key=lambda item: item[0])[1] if parsed else None
+
+
+def _is_guide_refuse_delivery(message: dict[str, Any]) -> bool:
+    """已持久化且通过 Guide workflow 校验的 refuse assistant 是工作段终点。"""
+    recommendation = message.get("recommendation")
+    return (
+        message.get("role") == "assistant"
+        and isinstance(recommendation, dict)
+        and recommendation.get("decision") == "refuse"
+    )
+
+
+def _is_canonical_qa_delivery(message: dict[str, Any]) -> bool:
+    """识别 policy/standards QA 已校验后落库的统一交付形状。"""
+    recommendation = message.get("recommendation")
+    if message.get("role") != "assistant" or not isinstance(recommendation, dict):
+        return False
+    findings = recommendation.get("findings")
+    refusals = recommendation.get("refusals")
+    return (
+        set(recommendation) == {"answer", "findings", "refusals"}
+        and isinstance(recommendation.get("answer"), str)
+        and recommendation["answer"] == message.get("content")
+        and isinstance(findings, list)
+        and isinstance(refusals, list)
+        and bool(findings or refusals)
+    )
 
 
 class _ConversationGatewayContext:
@@ -303,25 +360,72 @@ class ConversationService:
             # 成功后才进事务落库。baseline 计数供提交前乐观并发检查。
             persisted = repos.list_messages(conn, conversation_id)
             baseline_count = len(persisted)
+            # 任务签发或 Guide 的 canonical 终点代表上一段工程工作已经闭合。此后
+            # 新一轮仍看到完整文字历史，但附件正文/密级/转交 gate 只消费最近终点
+            # 之后的持久化附件；本轮尚未落库的 file_ids 始终属于当前段。
+            latest_tasks = repos.list_tasks(
+                conn, conversation_id=conversation_id, limit=1
+            )
+            boundary_values = [
+                latest_tasks[0].get("created_at") if latest_tasks else None
+            ]
+            if agent_id == "guide_agent":
+                boundary_values.extend(
+                    m.get("created_at")
+                    for m in persisted
+                    if _is_guide_refuse_delivery(m)
+                    or _is_canonical_qa_delivery(m)
+                )
+            attachment_boundary = _latest_valid_iso(boundary_values)
             history = [
-                {"role": m["role"], "content": m["content"], "file_ids": m.get("file_ids") or []}
+                {
+                    "role": m["role"],
+                    "content": m["content"],
+                    "file_ids": (
+                        (m.get("file_ids") or [])
+                        if (
+                            attachment_boundary is None
+                            or _created_strictly_after(
+                                m.get("created_at"), attachment_boundary
+                            )
+                        )
+                        else []
+                    ),
+                }
                 for m in persisted
             ]
             history.append({"role": "user", "content": content, "file_ids": file_ids})
-            history = _window(history)
             # 批七 Codex R2 P1（verbatim）：交互附件同受 ADR-0030 密级 gate——此前
             # 仅任务路径强制，internal 上限的交互 Agent（policy_qa/standards_qa）可被
-            # 喂 sensitive 附件直进模型上下文。渲染前对**在窗全部附件**（本轮新提交
-            # + 历史在窗）复核 Agent 密级上限；已被清理的缺位文件只渲占位行、无内容
-            # 可越级，不参与判定（与 runtime 消费点复核同口径：只判在册记录，缺位
+            # 喂 sensitive 附件直进模型上下文。渲染前对**完整当前工作段的附件**
+            # （本轮新提交 + 边界后历史）复核 Agent 密级上限；正文虽会在下方截窗，
+            # 名册/绑定/开工对账与密级 gate 不能随消息窗口丢失。已被清理的缺位文件
+            # 只渲占位行，不含可越级内容，也不参与判定（与 runtime 消费点复核同
+            # 口径：只判在册记录，缺位
             # 交由渲染器「读取失败」路径诚实兜底）。局部 import 避免 api↔runtime
             # 模块环（runtime.py 消费点同款）。
             from ..api import classification_gate as cgate
 
-            _window_ids = [fid for m in history for fid in (m.get("file_ids") or [])]
-            if _window_ids:
-                _present = {r["id"] for r in repos.list_files_by_ids(conn, _window_ids)}
-                _present_ids = [fid for fid in _window_ids if fid in _present]
+            _segment_ids = [fid for m in history for fid in (m.get("file_ids") or [])]
+            _present_ids: list[str] = []
+            attachment_roster: list[dict[str, str]] = []
+            if _segment_ids:
+                present_rows = repos.list_files_by_ids(conn, _segment_ids)
+                present_by_id = {row["id"]: row for row in present_rows}
+                # 同一 file_id 跨消息再次引用只算一份；首次出现顺序决定稳定标签。
+                _present_ids = list(
+                    dict.fromkeys(
+                        fid for fid in _segment_ids if fid in present_by_id
+                    )
+                )
+                attachment_roster = [
+                    {
+                        "label": f"附件{index}",
+                        "file_id": fid,
+                        "filename": str(present_by_id[fid]["filename"]),
+                    }
+                    for index, fid in enumerate(_present_ids, start=1)
+                ]
                 _allowed, _material_level, _agent_max = cgate.agent_clearance_allows(
                     conn, agent, _present_ids
                 )
@@ -330,10 +434,78 @@ class ConversationService:
                         f"该专家的密级准入上限为「{_agent_max}」，无法处理「{_material_level}」"
                         "级附件——请改派密级上限足够的 Agent 或移除受控附件（ADR-0030）"
                     )
+            # 只有给模型的对话正文受消息/字符窗限制；上面的 current-segment roster
+            # 保持完整，避免附件在多轮澄清后从 Guide 消失、却仍被前端开工闸门看见。
+            history = _window(history)
             history = self._render_history_attachments(conn, history)
 
             with execution_registry, package_snapshot.materialized() as pkg_dir:
                 workflow = _load_workflow_module(agent_id, pkg_dir / "workflow.py")
+
+                def delegate_interactive(target_agent_id: str) -> dict[str, Any]:
+                    """在同一不可变 Registry 代际内把当前轮交给垂类对话专家。
+
+                    Guide 的 ``delegate`` 只是模型提议；这里重新校验真实包、运行
+                    模式、下线状态与附件密级，再以目标 Agent 身份调用模型。整个
+                    转交仍属于当前 conversation，既不创建任务，也不改变会话壳的
+                    agent_id，因而工程师无需看见或选择内部路由。
+                    """
+                    target_snapshot = execution_registry.package_snapshot(target_agent_id)
+                    if target_snapshot is None:
+                        raise ConversationNotFoundError(
+                            f"自动转交目标 agent 已不可用：{target_agent_id}"
+                        )
+                    target_agent = target_snapshot.manifest
+                    allowed_roles = (
+                        (target_agent.get("permissions") or {}).get("allowed_roles")
+                        or []
+                    )
+                    if (
+                        target_agent_id not in _GUIDE_INTERACTIVE_HANDOFF_IDS
+                        or not isinstance(allowed_roles, list)
+                        or "business_user" not in allowed_roles
+                        or target_agent_id == agent_id
+                        or target_agent.get("status") == "disabled"
+                        or is_interactive(target_agent) is False
+                    ):
+                        raise ConversationClosedError(
+                            f"自动转交目标 agent 不可用于垂类对话：{target_agent_id}"
+                        )
+
+                    if _present_ids:
+                        allowed, material_level, agent_max = cgate.agent_clearance_allows(
+                            conn, target_agent, _present_ids
+                        )
+                        if allowed is False:
+                            raise ClearanceDeniedError(
+                                f"自动路由专家的密级准入上限为「{agent_max}」，无法处理"
+                                f"「{material_level}」级附件——系统不会绕过密级闸门"
+                            )
+
+                    target_pkg_dir = execution_registry.package_dir(target_agent_id)
+                    if target_pkg_dir is None:
+                        raise ConversationNotFoundError(
+                            f"自动转交目标 agent 缺少不可变包快照：{target_agent_id}"
+                        )
+                    target_workflow = _load_workflow_module(
+                        target_agent_id, target_pkg_dir / "workflow.py"
+                    )
+                    target_context = {
+                        "messages": history,
+                        "model_gateway": _ConversationGatewayContext(
+                            self.model_gateway, conversation_id, target_agent_id
+                        ),
+                        "agent_registry": execution_registry,
+                        "agent_config": target_agent,
+                        "stream_delta": on_delta,
+                    }
+                    delegated_result = target_workflow.run(target_context)
+                    if not isinstance(delegated_result, dict):
+                        raise ValueError(
+                            "自动转交的 interactive workflow.run() 返回值必须是 dict"
+                        )
+                    return delegated_result
+
                 context = {
                     "messages": history,
                     "model_gateway": _ConversationGatewayContext(
@@ -341,11 +513,22 @@ class ConversationService:
                     ),
                     "agent_registry": execution_registry,
                     "agent_config": agent,
+                    # 仅以在窗且仍在 File Store 的真实 id 派生；Guide 不从用户文本
+                    # 猜测附件存在性。目标专家收到的附件正文仍来自上面的受控渲染。
+                    "attachment_context_present": bool(_present_ids),
+                    # Guide 只能按此系统可信名册里的稳定标签提议绑定；filename 可重复，
+                    # label/file_id 仍唯一可区分。workflow 不从附件正文或用户文本猜 id。
+                    "attachment_roster": attachment_roster,
                     # interactive workflow 可选择消费；guide_agent 会把它继续接到
                     # Model Gateway 的真实 SSE delta，并先过滤控制计划块。其他既有
                     # workflow 忽略此键，最终仍只发 done 事件。
                     "stream_delta": on_delta,
                 }
+                if agent_id == "guide_agent":
+                    # 自动转交是统一入口的专用能力，不向其它 Agent 包暴露任意
+                    # interactive 调用器。目标仍须同时通过 Guide 候选对账与这里的
+                    # 运行时安全复核。
+                    context["delegate_interactive"] = delegate_interactive
                 # 抛异常即冒泡（不吞）；此前尚未落任何消息。workflow 完整执行期
                 # 都在私有材化目录生命周期内，绝不回读可变 authoring 目录。
                 result = workflow.run(context)

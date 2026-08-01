@@ -134,7 +134,10 @@ def test_m3_e2e_full_chain_with_50_case_table(app_env) -> None:
     assert all(r[mock_col] is True for r in data_rows), "数据行 mock 列必须全 True（逐行如实标注）"
 
     # ④ samples.jsonl：行数=有效 case 数；失败行有 error_message；每行 mock 如实
-    sample_lines = [json.loads(l) for l in outputs["samples.jsonl"].decode("utf-8").splitlines()]
+    sample_lines = [
+        json.loads(line)
+        for line in outputs["samples.jsonl"].decode("utf-8").splitlines()
+    ]
     assert len(sample_lines) == EXPECTED["total_cases"]
     failed_lines = [s for s in sample_lines if s["status"] == "failed"]
     assert len(failed_lines) == EXPECTED["failed_count"]
@@ -202,8 +205,8 @@ def test_all_cases_fail_task_still_completed(app_env) -> None:
 # ── 多附件（Codex P2-2：绝不盲取 files[0]）───────────────────────────────
 
 
-def test_txt_plus_xlsx_uses_the_xlsx(app_env) -> None:
-    """txt 在前 + xlsx 在后：必须按后缀选中 xlsx（旧实现盲取 files[0] 会拿 txt 炸解析）。"""
+def test_txt_plus_xlsx_is_rejected_by_final_snapshot_contract(app_env) -> None:
+    """file_upload 最终只能收到一件匹配附件；路由层不能把无关 txt 一并塞入。"""
     client, app = app_env
     txt_resp = client.post(
         "/api/files/upload",
@@ -217,14 +220,11 @@ def test_txt_plus_xlsx_uses_the_xlsx(app_env) -> None:
         ["case_002", 2000, 0.4, 900],
     ]), "small.xlsx")
 
-    # txt 在前：input_file_ids 顺序 = [txt, xlsx]
+    # 直接 API 绕过 Guide 分区并塞入两件文件时，Runtime 必须在 workflow 前拒绝。
     task = _create_and_run(client, app, [txt_id, xlsx_id])
-    assert task["status"] == "completed"
-
-    outputs = _outputs_by_name(client, app, task)
-    ws = openpyxl.load_workbook(io.BytesIO(outputs["result_summary.xlsx"]))["result_summary"]
-    data_rows = list(ws.iter_rows(values_only=True))[1:]
-    assert len(data_rows) == 2, "必须解析的是 xlsx（2 case），不是 txt"
+    assert task["status"] == "failed"
+    assert "必须且只能有 1 个附件" in task["error_message"]
+    assert "实际 2 个" in task["error_message"]
 
 
 def test_two_xlsx_files_task_failed_honestly(app_env) -> None:
@@ -235,8 +235,8 @@ def test_two_xlsx_files_task_failed_honestly(app_env) -> None:
 
     task = _create_and_run(client, app, [id_a, id_b])
     assert task["status"] == "failed"
-    assert "2 个 xlsx" in task["error_message"]
-    assert "只上传一个" in task["error_message"]
+    assert "必须且只能有 1 个附件" in task["error_message"]
+    assert "实际 2 个" in task["error_message"]
 
 
 # ── 空表 / 无输入文件：任务 failed 诚实 ───────────────────────────────────
@@ -256,4 +256,5 @@ def test_no_input_file_task_failed_honestly(app_env) -> None:
     client, app = app_env
     task = _create_and_run(client, app, [])
     assert task["status"] == "failed"
-    assert "无输入文件" in task["error_message"]
+    assert "必须且只能有 1 个附件" in task["error_message"]
+    assert "实际 0 个" in task["error_message"]

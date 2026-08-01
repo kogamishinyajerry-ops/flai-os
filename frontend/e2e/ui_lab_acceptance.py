@@ -7,7 +7,7 @@
   ① 未知 case fail-closed；
   ② 十个固定镜头、精确 viewport 与桌面布局数值基线；
   ③ opaque-origin iframe + 只读边界阻止网络和主题偏好写入；
-  ④ Agent 选择器宽高、单行边界和移动端左右各 12px 的对称贴边；
+  ④ 自动路由摘要默认收敛，Agent/模型/工具依据按需披露；
   ⑤ 流式快照使用真实 generating 标记，正文给固定 composer 留足空间；
   ⑥ 保存待核使用 amber，且发送、附件、Agent 共同锁定；
   ⑦ Asset Builder 单焦点九问、待审桌面/移动与 needs_revision 阻断；
@@ -16,7 +16,7 @@
 运行（仓根）：
   uv run --no-project --with playwright python frontend/e2e/ui_lab_acceptance.py
 
-截图落 docs/reviews/ui-lab-shots/，每次重跑覆盖十个固定镜头与一张焦点过渡证据。
+截图落 docs/reviews/ui-lab-shots/，每次重跑覆盖十个固定镜头与焦点过渡证据。
 """
 from __future__ import annotations
 
@@ -117,9 +117,6 @@ def embedded_frame(page, case_id: str):
 def select_case(page, case_id: str, label: str):
     page.locator(".case-button", has_text=label).click()
     frame = embedded_frame(page, case_id)
-    if "picker" in case_id:
-        expect(frame.locator(".agent-pick")).to_be_visible()
-        page.wait_for_timeout(350)
     if case_id.startswith("asset-"):
         expect(frame.locator(".asset-builder-drawer")).to_be_visible()
         page.wait_for_timeout(250)
@@ -237,43 +234,73 @@ try:
             """() => {
               const rect = selector =>
                 document.querySelector(selector).getBoundingClientRect();
-              const cards = [...document.querySelectorAll('.intent-card')];
+              const send = document.querySelector('.send-btn');
+              const tokenProbe = document.createElement('span');
+              tokenProbe.style.background = 'var(--paper-rail)';
+              tokenProbe.style.color = 'var(--ink-faint)';
+              document.body.append(tokenProbe);
+              const sendStyle = getComputedStyle(send);
+              const tokenStyle = getComputedStyle(tokenProbe);
+              const sendSurface = sendStyle.backgroundColor;
+              const sendInk = sendStyle.color;
+              const neutralSurface = tokenStyle.backgroundColor;
+              const faintInk = tokenStyle.color;
+              tokenProbe.remove();
               return {
                 sidebarWidth: rect('.sidebar').width,
                 guideWidth: rect('.guide-page').width,
                 guideMainWidth: rect('.guide-main').width,
-                contextRailWidth: rect('.guide-context-rail').width,
-                guideColumnGap: parseFloat(
-                  getComputedStyle(document.querySelector('.guide-page')).columnGap
-                ),
                 heroTitlePx: parseFloat(
                   getComputedStyle(document.querySelector('.hero-title')).fontSize
                 ),
-                intentCount: cards.length,
-                intentRows: new Set(cards.map(card =>
-                  Math.round(card.getBoundingClientRect().top)
-                )).size,
-                intentCardPx: Math.max(...cards.map(card =>
-                  card.getBoundingClientRect().height
-                )),
                 composerWidth: rect('.composer-shell').width,
                 iconButtonPx: rect('.icon-btn').height,
+                textInputs: document.querySelectorAll(
+                  '.composer-input textarea'
+                ).length,
+                attachmentInputs: document.querySelectorAll(
+                  '.composer-attach input[type="file"]'
+                ).length,
+                otherEditable: document.querySelectorAll(
+                  '.guide-page input:not([type="file"]), .guide-page select, '
+                  + '.guide-page form, .guide-page [contenteditable="true"]'
+                ).length,
+                intentCount: document.querySelectorAll('.intent-card').length,
+                contextRails: document.querySelectorAll('.guide-context-rail').length,
+                agentPickers: document.querySelectorAll(
+                  '[aria-label="浏览可用 Agent"]'
+                ).length,
+                sendDisabled: send.disabled,
+                sendSurface,
+                sendInk,
+                neutralSurface,
+                faintInk,
+                promise: document.querySelector('.hero-routing-promise')?.innerText || '',
+                humanBoundaryCount: (
+                  document.body.innerText.match(/开工与签发仍由你确认/g) || []
+                ).length,
               };
             }"""
         )
         check(
-            "桌面起手页布局数值基线",
+            "桌面起手页只有一个文字/附件入口且无手工路由控件",
             abs(landing_signature["sidebarWidth"] - 264) <= 0.5
-            and abs(landing_signature["guideWidth"] - 1104) <= 0.5
+            and abs(landing_signature["guideWidth"] - 784) <= 0.5
             and abs(landing_signature["guideMainWidth"] - 784) <= 0.5
-            and abs(landing_signature["contextRailWidth"] - 296) <= 0.5
-            and abs(landing_signature["guideColumnGap"] - 24) <= 0.5
             and landing_signature["heroTitlePx"] == 26
-            and landing_signature["intentCount"] == 4
-            and landing_signature["intentRows"] == 1
-            and landing_signature["intentCardPx"] <= 44
             and abs(landing_signature["composerWidth"] - 784) <= 0.5
-            and landing_signature["iconButtonPx"] == 36,
+            and landing_signature["iconButtonPx"] == 36
+            and landing_signature["textInputs"] == 1
+            and landing_signature["attachmentInputs"] == 1
+            and landing_signature["otherEditable"] == 0
+            and landing_signature["intentCount"] == 0
+            and landing_signature["contextRails"] == 0
+            and landing_signature["agentPickers"] == 0
+            and landing_signature["sendDisabled"] is True
+            and landing_signature["sendSurface"] == landing_signature["neutralSurface"]
+            and landing_signature["sendInk"] == landing_signature["faintInk"]
+            and landing_signature["humanBoundaryCount"] == 1
+            and "系统会在后台自动编排所需能力" in landing_signature["promise"],
             str(landing_signature),
         )
         capture(frame, "landing-desktop.png")
@@ -303,38 +330,79 @@ try:
             ),
         )
 
-        frame = select_case(page, "picker-desktop", "桌面 · Agent 选择器")
-        picker_metrics = frame.locator(".agent-pick").evaluate(
-            """element => {
-              const rect = element.getBoundingClientRect();
-              const details = [...element.querySelectorAll('.ap-detail')];
-              const popperStyle = getComputedStyle(element.closest('.el-popper'));
-              return {
-                width: rect.width,
-                height: rect.height,
-                rows: element.querySelectorAll('.ap-item').length,
-                details: details.length,
-                opacity: parseFloat(popperStyle.opacity),
-                background: popperStyle.backgroundColor,
-                oneLine: details.every(item =>
-                  item.scrollHeight <= item.clientHeight + 1 &&
-                  getComputedStyle(item).whiteSpace === 'nowrap'
-                ),
-              };
-            }"""
+        frame = select_case(
+            page,
+            "routing-desktop",
+            "桌面 · 自动路由待确认",
+        )
+        route_disclosure = frame.locator(".route-disclosure")
+        route_before = frame.evaluate(
+            """() => ({
+              textInputs: document.querySelectorAll('.composer-input textarea').length,
+              attachmentInputs: document.querySelectorAll(
+                '.composer-attach input[type="file"]'
+              ).length,
+              otherEditable: document.querySelectorAll(
+                '.guide-page input:not([type="file"]), .guide-page select, '
+                + '.guide-page form, .guide-page [contenteditable="true"]'
+              ).length,
+              manualAgentButtons: document.querySelectorAll(
+                '[aria-label="浏览可用 Agent"]'
+              ).length,
+              routeOpen: document.querySelector('.route-disclosure').open,
+              routeRowsVisible: [...document.querySelectorAll('.agent-card')].some(
+                item => item.getClientRects().length > 0
+              ),
+              summaryLiveRegions: document.querySelectorAll('.route-summary[aria-live]').length,
+              stateLiveRegions: document.querySelectorAll('.route-summary-state[aria-live="polite"]').length,
+              primaryActions: [...document.querySelectorAll('.plan-foot button')]
+                .filter(item => item.getClientRects().length > 0)
+                .map(item => item.innerText.trim()),
+            })"""
         )
         check(
-            "桌面 Agent 选择器紧凑且每项仅一行边界",
-            318 <= picker_metrics["width"] <= 322
-            and picker_metrics["height"] <= 390
-            and picker_metrics["rows"] == 4
-            and picker_metrics["details"] == picker_metrics["rows"]
-            and picker_metrics["opacity"] == 1
-            and picker_metrics["background"] not in ("", "rgba(0, 0, 0, 0)")
-            and picker_metrics["oneLine"] is True,
-            str(picker_metrics),
+            "自动路由默认只显示摘要与一个人工开工动作",
+            route_before["textInputs"] == 1
+            and route_before["attachmentInputs"] == 1
+            and route_before["otherEditable"] == 0
+            and route_before["manualAgentButtons"] == 0
+            and route_before["routeOpen"] is False
+            and route_before["routeRowsVisible"] is False
+            and route_before["summaryLiveRegions"] == 0
+            and route_before["stateLiveRegions"] == 1
+            and route_before["primaryActions"] == ["按方案开工"],
+            str(route_before),
         )
-        capture(frame, "picker-desktop.png")
+        route_disclosure.locator("summary").click()
+        expect(route_disclosure).to_have_attribute("open", "")
+        route_after = route_disclosure.evaluate(
+            """element => ({
+              rows: element.querySelectorAll('.agent-card').length,
+              reasonVisible: element.innerText.includes('任务首先需要结构化检查开算条件'),
+              summaryText: element.querySelector('summary').innerText.trim(),
+              rosterText: element.querySelector('.roster-label').innerText.trim(),
+              materialChips: [...element.querySelectorAll('.plan-material-chip')]
+                .map(item => item.innerText.trim()),
+              ignoredNarrated: element.innerText.includes('系统已明确忽略，不会静默带入'),
+              noFormControls: element.querySelectorAll(
+                'input, textarea, select, form, [contenteditable="true"]'
+              ).length === 0,
+            })"""
+        )
+        check(
+            "路由依据可按需展开且仍无参数表或手工选择",
+            route_after == {
+                "rows": 2,
+                "reasonVisible": True,
+                "summaryText": "查看路由依据与边界",
+                "rosterText": "执行单元 · 2",
+                "materialChips": ["稳态算例输入表.xlsx", "旧版背景说明.pdf"],
+                "ignoredNarrated": True,
+                "noFormControls": True,
+            },
+            str(route_after),
+        )
+        capture(frame, "routing-desktop.png")
 
         frame = select_case(page, "streaming-desktop", "桌面 · 流式中")
         streaming_metrics = frame.evaluate(
@@ -394,9 +462,6 @@ try:
                 attachDisabled: document.querySelector(
                   '.composer-attach .icon-btn'
                 ).disabled,
-                agentDisabled: document.querySelector(
-                  '[aria-label="浏览可用 Agent"]'
-                ).disabled,
                 inputDisabled: document.querySelector(
                   '.composer-input textarea'
                 ).disabled,
@@ -407,14 +472,13 @@ try:
             }"""
         )
         check(
-            "保存待核为 amber，且发送/附件/Agent 共同锁定",
+            "保存待核为 amber，且文字/附件入口共同锁定",
             persistence["pendingToken"] == "#a8761a"
             and persistence["pending"] == persistence["border"]
             and persistence["pending"] == persistence["strong"]
             and persistence["background"] not in ("", "rgba(0, 0, 0, 0)")
             and persistence["sendDisabled"] is True
             and persistence["attachDisabled"] is True
-            and persistence["agentDisabled"] is True
             and persistence["inputDisabled"] is True
             and persistence["hasReconcile"] is True,
             str(persistence),
@@ -430,11 +494,23 @@ try:
               clientWidth: document.documentElement.clientWidth,
               minTouch: Math.min(
                 ...[...document.querySelectorAll(
-                  '.intent-card, .send-btn, .icon-btn'
+                  '.send-btn, .icon-btn'
                 )].map(item => item.getBoundingClientRect().height)
               ),
               touchCount: document.querySelectorAll(
-                '.intent-card, .send-btn, .icon-btn'
+                '.send-btn, .icon-btn'
+              ).length,
+              intentCount: document.querySelectorAll('.intent-card').length,
+              manualAgentButtons: document.querySelectorAll(
+                '[aria-label="浏览可用 Agent"]'
+              ).length,
+              textInputs: document.querySelectorAll('.guide-page textarea').length,
+              attachmentInputs: document.querySelectorAll(
+                '.guide-page input[type="file"]'
+              ).length,
+              otherEditable: document.querySelectorAll(
+                '.guide-page input:not([type="file"]), .guide-page select, '
+                + '.guide-page form, .guide-page [contenteditable="true"]'
               ).length,
             })"""
         )
@@ -444,61 +520,76 @@ try:
             and mobile["height"] == 812
             and mobile["scrollWidth"] <= mobile["clientWidth"]
             and mobile["touchCount"] > 0
-            and mobile["minTouch"] >= 40,
+            and mobile["minTouch"] >= 44
+            and mobile["intentCount"] == 0
+            and mobile["manualAgentButtons"] == 0
+            and mobile["textInputs"] == 1
+            and mobile["attachmentInputs"] == 1
+            and mobile["otherEditable"] == 0,
             str(mobile),
         )
         capture(frame, "landing-mobile.png")
 
-        frame = select_case(page, "picker-mobile", "移动端 · Agent 选择器")
-        mobile_picker = frame.locator(".agent-pick").evaluate(
-            """element => {
-              const rect = element.getBoundingClientRect();
-              const popper = element.closest('.el-popper');
-              const popperRect = popper.getBoundingClientRect();
-              const popperStyle = getComputedStyle(popper);
+        frame = select_case(
+            page,
+            "routing-mobile",
+            "移动端 · 自动路由待确认",
+        )
+        mobile_route = frame.evaluate(
+            """() => {
+              const disclosure = document.querySelector('.route-disclosure');
+              const summary = disclosure.querySelector('summary');
+              const primary = document.querySelector('.plan-foot .open-plan-btn');
               return {
                 viewport: { width: innerWidth, height: innerHeight },
-                left: popperRect.left,
-                rightGap: innerWidth - popperRect.right,
-                width: popperRect.width,
-                height: rect.height,
-                opacity: parseFloat(popperStyle.opacity),
-                background: popperStyle.backgroundColor,
-                scrollMode: getComputedStyle(
-                  element.querySelector('.ap-scroll')
-                ).overflowY,
-                minFacetTouch: Math.min(...[...element.querySelectorAll(
-                  '.context-facet'
-                )].map(item => item.getBoundingClientRect().height)),
-                minAgentTouch: Math.min(...[...element.querySelectorAll(
-                  '.ap-item'
-                )].map(item => item.getBoundingClientRect().height)),
-                portalTouch: element.querySelector(
-                  '.context-portal'
-                ).getBoundingClientRect().height,
                 documentFits:
                   document.documentElement.scrollWidth <=
                   document.documentElement.clientWidth,
+                routeOpen: disclosure.open,
+                summaryTouch: summary.getBoundingClientRect().height,
+                primaryTouch: primary.getBoundingClientRect().height,
+                textInputs: document.querySelectorAll('.composer-input textarea').length,
+                attachmentInputs: document.querySelectorAll(
+                  '.composer-attach input[type="file"]'
+                ).length,
+                otherEditable: document.querySelectorAll(
+                  '.guide-page input:not([type="file"]), .guide-page select, '
+                  + '.guide-page form, .guide-page [contenteditable="true"]'
+                ).length,
+                manualAgentButtons: document.querySelectorAll(
+                  '[aria-label="浏览可用 Agent"]'
+                ).length,
               };
             }"""
         )
         check(
-            "移动 Agent 选择器左右各 12px 对称贴边且内部滚动",
-            mobile_picker["viewport"] == {"width": 375, "height": 812}
-            and abs(mobile_picker["left"] - 12) <= 0.5
-            and abs(mobile_picker["rightGap"] - 12) <= 0.5
-            and abs(mobile_picker["width"] - (mobile_picker["viewport"]["width"] - 24)) <= 1
-            and mobile_picker["height"] <= 390
-            and mobile_picker["opacity"] == 1
-            and mobile_picker["background"] not in ("", "rgba(0, 0, 0, 0)")
-            and mobile_picker["scrollMode"] == "auto"
-            and mobile_picker["minFacetTouch"] >= 44
-            and mobile_picker["minAgentTouch"] >= 44
-            and mobile_picker["portalTouch"] >= 44
-            and mobile_picker["documentFits"] is True,
-            str(mobile_picker),
+            "移动自动路由默认折叠、单一输入且无横向溢出",
+            mobile_route["viewport"] == {"width": 375, "height": 812}
+            and mobile_route["documentFits"] is True
+            and mobile_route["routeOpen"] is False
+            and mobile_route["summaryTouch"] >= 44
+            and mobile_route["primaryTouch"] >= 44
+            and mobile_route["textInputs"] == 1
+            and mobile_route["attachmentInputs"] == 1
+            and mobile_route["otherEditable"] == 0
+            and mobile_route["manualAgentButtons"] == 0,
+            str(mobile_route),
         )
-        capture(frame, "picker-mobile.png")
+        frame.locator(".route-disclosure summary").click()
+        mobile_route_expanded = frame.evaluate(
+            """() => ({
+              documentFits:
+                document.documentElement.scrollWidth <=
+                document.documentElement.clientWidth,
+              rows: document.querySelectorAll('.route-disclosure .agent-card').length,
+            })"""
+        )
+        check(
+            "移动路由依据展开后仍无横向溢出",
+            mobile_route_expanded == {"documentFits": True, "rows": 2},
+            str(mobile_route_expanded),
+        )
+        capture(frame, "routing-mobile.png")
 
         frame = select_case(
             page,
@@ -628,6 +719,97 @@ try:
             and frame.locator(".asset-summary-toggle").inner_text().startswith("已整理 3 / 9 项")
             and frame.get_by_role("button", name="生成待审草稿").is_enabled(),
         )
+
+        # 成功态 DOM 回归：隔离挂载真实 AssetBuilderDrawer，从公开按钮走完整的
+        # Q4→Q9→预览成功链。仅在浏览器网络边界返回 ready fixture；不注入内部
+        # showReview、不增加测试专用 prop，也不削弱 UI Lab 的只读边界。
+        component_page = context.new_page()
+        component_page.route(
+            "**/src/ui-lab/main.js",
+            lambda route: route.fulfill(
+                content_type="application/javascript",
+                body="export {};",
+            ),
+        )
+        component_page.goto(BASE + "/ui-lab.html", wait_until="networkidle")
+        ready_preview = component_page.evaluate(
+            """async () => (
+              await import('/src/ui-lab/uiAcceptanceCases.js')
+            ).getUiAcceptanceCase('asset-review-desktop').guide.assetDraftPreview"""
+        )
+
+        def asset_preview_route(route):
+            request_path = urlparse(route.request.url).path
+            if (
+                route.request.method == "POST"
+                and request_path.endswith(
+                    "/api/conversations/ui-asset-work-case/asset-draft-preview"
+                )
+            ):
+                route.fulfill(status=200, json=ready_preview)
+                return
+            route.abort()
+
+        component_page.route("**/api/**", asset_preview_route)
+        component_page.evaluate(
+            """async () => {
+              const [Vue, ElementPlus, zhCn, drawerModule, casesModule] =
+                await Promise.all([
+                  import('/node_modules/.vite/deps/vue.js'),
+                  import('/node_modules/.vite/deps/element-plus.js'),
+                  import('/node_modules/.vite/deps/element-plus_es_locale_lang_zh-cn.js'),
+                  import('/src/components/AssetBuilderDrawer.vue'),
+                  import('/src/ui-lab/uiAcceptanceCases.js'),
+                ]);
+              const fixture = casesModule.getUiAcceptanceCase('asset-review-desktop').guide;
+              const app = Vue.createApp(drawerModule.default, {
+                modelValue: true,
+                conversationId: fixture.conversationId,
+                messages: fixture.messages,
+                initialStep: 2,
+                initialGeneralization: fixture.assetDraftGeneralization,
+              });
+              app.use(ElementPlus.default, { locale: zhCn.default });
+              app.mount('#app');
+            }"""
+        )
+        expect(component_page.locator(".asset-builder-drawer")).to_be_visible()
+        expect(component_page.locator("#asset-field-inputs")).to_be_focused()
+        for expected_id in [
+            "asset-field-outputs",
+            "asset-field-steps",
+            "asset-field-evidence",
+            "asset-field-human-boundaries",
+            "asset-field-limitations",
+        ]:
+            component_page.get_by_role("button", name="下一问").click()
+            expect(component_page.locator(f"#{expected_id}")).to_be_focused()
+        component_page.get_by_role("button", name="生成待审草稿").click()
+        expect(component_page.locator("#asset-review-title")).to_be_visible()
+        expect(component_page.locator("#asset-review-title")).to_be_focused()
+        success_dom = component_page.locator(".asset-builder-drawer").evaluate(
+            """element => ({
+              currentStep: element.querySelector('[aria-current="step"]')?.innerText || '',
+              reviewStatus: element.querySelector('.asset-review-status')?.innerText || '',
+              editBoxes: element.querySelectorAll(
+                '.asset-builder-form input, .asset-builder-form textarea'
+              ).length,
+              downloadDisabled: [...element.querySelectorAll('button')].find(
+                item => item.innerText.includes('下载待审 JSON')
+              )?.disabled,
+              hasError: Boolean(element.querySelector('.asset-builder-error')),
+            })"""
+        )
+        check(
+            "生成待审草稿成功后真实进入只读待审 DOM",
+            "待审草稿" in success_dom["currentStep"]
+            and "结构校验完成 · 等待人工审核" in success_dom["reviewStatus"]
+            and success_dom["editBoxes"] == 0
+            and success_dom["downloadDisabled"] is False
+            and success_dom["hasError"] is False,
+            str(success_dom),
+        )
+        component_page.close()
 
         frame = select_case(
             page,

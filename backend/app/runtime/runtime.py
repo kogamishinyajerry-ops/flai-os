@@ -35,6 +35,9 @@ from .package_snapshot import AgentPackageSnapshot, SNAPSHOT_CONTRACT
 
 logger = logging.getLogger(__name__)
 
+_PACKAGE_SNAPSHOT_DIGEST_METADATA_KEY = "package_snapshot_digest"
+_SHA256_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+
 # event.schema.json 的 event_type 枚举（供折叠判断参考；本文件不据此做「豁免」——
 # ADR-0008 原文「workflow 自定义事件统一折叠为 agent_log」是无条件折叠，见
 # `_WorkflowEventLogger.log()`，这里留作文档标注用途）。
@@ -519,6 +522,44 @@ class AgentRuntime:
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
         agent = package_snapshot.manifest
 
+        # Guide/batch 创建期把用户确认过的精确 Agent 包摘要钉在 metadata；只要
+        # 任务携带该钉，执行期就必须在任何输入校验、workflow 加载、工具调用或
+        # 产物写入前复核。agent_version 不足以识别「同版本换包」，而 Registry
+        # rescan 会发布新的不可变快照，所以必须比较本次实际执行快照的 digest。
+        # 未携带该字段的旧任务/单建任务保持兼容；携带但格式非法也按漂移失败，
+        # 避免空串、非规范摘要等值被当成未启用 gate。
+        metadata = task.get("metadata")
+        if (
+            isinstance(metadata, dict)
+            and _PACKAGE_SNAPSHOT_DIGEST_METADATA_KEY in metadata
+        ):
+            pinned_package_digest = metadata.get(
+                _PACKAGE_SNAPSHOT_DIGEST_METADATA_KEY
+            )
+            digest_matches = (
+                isinstance(pinned_package_digest, str)
+                and _SHA256_DIGEST_RE.fullmatch(pinned_package_digest) is not None
+                and pinned_package_digest == package_snapshot.digest
+            )
+            if digest_matches is not True:
+                msg = (
+                    "Agent 包快照摘要漂移或无效：任务锁定 "
+                    f"package_snapshot_digest={pinned_package_digest!r}，当前注册包摘要="
+                    f"{package_snapshot.digest!r}——拒绝执行同版本换包或未规范钉；"
+                    "请重新核对方案并创建任务"
+                )
+                repos.set_task_data_classification(conn, task_id, "internal")
+                repos.set_task_status(conn, task_id, "failed", error_message=msg)
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="task_failed",
+                    level="error",
+                    message=msg,
+                )
+                return {"status": "failed", "task": repos.get_task(conn, task_id)}
+
         # Codex 命中即审 R2 P1（K1 签发见证的前提）：_execute 只使用本次一次取得的
         # Registry package snapshot，而 task.agent_version 是创建期锁定值（tasks.py 建时
         # = 当时当前版本）。跨升级窗口二者可 drift——任务实际跑当前版本而
@@ -810,6 +851,53 @@ class AgentRuntime:
     ) -> list[tuple[dict[str, Any], BinaryIO]]:
         """按本次包快照校验输入并持有句柄；任一失败即整体拒绝执行。"""
         verified: list[tuple[dict[str, Any], BinaryIO]] = []
+        file_ids = task.get("input_file_ids", [])
+        input_contract = agent.get("input") or {}
+        input_type = input_contract.get("type")
+        allowed_extensions: tuple[str, ...] = ()
+
+        # 创建期只看直提交附件；resolver 会在依赖完成后改写最终 input_file_ids。
+        # 此处消费同一次 package_snapshot 取得的 manifest（调用方的 agent），在
+        # workflow/tool/output 前对最终集合重做数量/后缀契约。只约束 manifest 声明：
+        # kind/provenance/完整性仍由下方既有 gate 独立强制，故合法上游 output 可消费。
+        if input_type == "none" and len(file_ids) != 0:
+            raise FileIntegrityError(
+                "最终输入文件契约校验失败：input.type=none 必须有 0 个附件，"
+                f"实际 {len(file_ids)} 个"
+            )
+        if input_type == "file_upload":
+            if len(file_ids) != 1:
+                raise FileIntegrityError(
+                    "最终输入文件契约校验失败：input.type=file_upload 必须且只能有 "
+                    f"1 个附件，实际 {len(file_ids)} 个"
+                )
+            raw_extensions = input_contract.get("allowed_extensions")
+            if (
+                not isinstance(raw_extensions, list)
+                or len(raw_extensions) == 0
+                or len(raw_extensions) > 32
+            ):
+                raise FileIntegrityError(
+                    "最终输入文件契约校验失败：file_upload.allowed_extensions "
+                    "声明缺失或不合法"
+                )
+            normalized_extensions: list[str] = []
+            for raw_extension in raw_extensions:
+                if not isinstance(raw_extension, str):
+                    raise FileIntegrityError(
+                        "最终输入文件契约校验失败：file_upload.allowed_extensions "
+                        "声明不合法"
+                    )
+                extension = raw_extension.strip().lower()
+                if not extension.startswith(".") or not 2 <= len(extension) <= 16:
+                    raise FileIntegrityError(
+                        "最终输入文件契约校验失败：file_upload.allowed_extensions "
+                        "声明不合法"
+                    )
+                if extension not in normalized_extensions:
+                    normalized_extensions.append(extension)
+            allowed_extensions = tuple(normalized_extensions)
+
         # 批七 3-lens P1：消费点密级复核（ADR-0030）——创建时点 gate 只见直提交
         # 文件；带 depends_on 的下游任务创建时 input_file_ids=[]（材料级=public 恒
         # 过门），resolver 事后把上游产物（可能 sensitive）管道注入 input_file_ids。
@@ -822,7 +910,7 @@ class AgentRuntime:
         from ..api import classification_gate as cgate
 
         _piped_ids = []
-        for _fid in task.get("input_file_ids", []):
+        for _fid in file_ids:
             _rec = repos.get_file(conn, _fid)
             if _rec is not None and _rec.get("kind") == "output":
                 _piped_ids.append(_fid)
@@ -836,12 +924,21 @@ class AgentRuntime:
                     f"密级准入上限「{_agent_max}」——上游产物同受 ADR-0030 约束（消费点复核，fail-closed）"
                 )
         try:
-            for file_id in task.get("input_file_ids", []):
+            for file_id in file_ids:
                 record = repos.get_file(conn, file_id)
                 if record is None:
                     raise FileIntegrityError(
                         f"输入文件完整性校验失败：file_id={file_id}，File Store 无登记记录"
                     )
+                if input_type == "file_upload":
+                    filename = record.get("filename")
+                    if not isinstance(filename, str) or not filename.lower().endswith(
+                        allowed_extensions
+                    ):
+                        raise FileIntegrityError(
+                            "最终输入文件扩展名不符合已钉死的 Agent 包契约："
+                            f"{filename!r}，允许 {list(allowed_extensions)}"
+                        )
                 # 权威根按文件 kind 选（协作运行时 §3.3 管道跨信任边界）：上传输入
                 # 在 uploads_dir，上游产物（管道进来的 kind=output）在 task_runs_dir——
                 # 二者都是**装配注入**的权威根，根由 DB 的 kind 字段选、绝不从待验 path

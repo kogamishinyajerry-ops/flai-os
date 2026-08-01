@@ -1,13 +1,14 @@
-"""M8 P4 协作工作台全链验收：导引召集 → 工作台会话 → 召集 Agent → 任务归会话。
+"""M8 P4 协作工作台全链验收：导引规划 → 工作台只读蓝图 → 回对话补充 → 任务归会话。
 
 这是 M8 编排官愿景的端到端闭环（真浏览器）：
   ① 导引给出 orchestrate 协作方案（2 个 Agent）；
-  ② 「进入协作工作台」→ 落 /workbench/:sessionId，见目标 + 分工架构（蓝图）+
+  ② 深链 /workbench/:sessionId 见目标 + 分工架构（蓝图）+
      roster（2 个 Agent，均「尚未召集」）+ 进度 0/2；
-  ③ 从蓝图点某 Agent「去创建此任务」→ 落创建页（带预填 + 会话归属）；
-  ④ 补全输入、亲手「提交任务」→ 任务创建（人签发），详情页有「← 返回协作会话」；
-  ⑤ 回工作台会话 → 该 Agent 变「已召集 · 1 个任务」，进度 1/2，任务归本会话；
-  ⑥ 协作工作台首页出现该会话卡片。
+  ③ 成员卡零手工启动 CTA，全页只留一个「回到对话补充信息」；
+  ④ 点击后回 /?c=<session>，只用文字/附件继续说明；
+  ⑤ 认证 API 仅准备工作台夹具任务，再回会话验证任务归属与进度 1/2；
+  ⑥ 结束协作后蓝图只读，既有任务不受影响；
+  ⑦ /workbench 旧深链继续重定向任务台。
 
 自包含：自起后端（tmp）+ stub gateway（本机无内网 key）+ 真 chromium。**不起 worker**
 （任务停在 queued 即可证分组，避免 fta 无内网 key 的非确定失败干扰断言）。
@@ -123,11 +124,16 @@ with sync_playwright() as p:
     page.locator(".composer textarea").fill("做双通道供电的控制逻辑和故障树")
     page.get_by_role("button", name="发送").click()
     expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
-    check("①导引给出 orchestrate 协作方案", "协作方案" in page.locator("body").inner_text())
+    check("①导引给出 orchestrate 协作方案", page.locator(".plan-card").count() == 1)
 
-    # ② 进入协作工作台会话
-    page.get_by_role("button", name="进入协作工作台 →").click()
-    page.wait_for_url(re.compile(r"/workbench/conv_[0-9a-f]+"), timeout=5000)
+    session_match = re.search(r"[?&]c=(conv_[0-9a-f]+)", page.url)
+    check("①'导引会话写入 URL，可作为工作台血缘", session_match is not None, page.url)
+    if session_match is None:
+        raise RuntimeError(f"导引会话 URL 缺少 c 参数：{page.url}")
+    session_id = session_match.group(1)
+
+    # ② 工作台是历史/治理深链，不再从方案卡暴露第二套执行入口。
+    page.goto(BASE + f"/workbench/{session_id}", wait_until="networkidle")
     session_url = page.url
     page.wait_for_selector(".member", timeout=5000)
     body = page.locator("body").inner_text()
@@ -143,28 +149,49 @@ with sync_playwright() as p:
           f"members={page.locator('.member').count()} body={body[-500:]}")
     page.screenshot(path=str(SHOTS / "1_session_before.png"), full_page=True)
 
-    # ③ 从蓝图召集 fta_agent（第 2 张 member 卡，带 top_event 预填）
-    page.locator(".member").nth(1).get_by_role("button", name="去创建此任务").click()
-    page.wait_for_url(re.compile(r"/tasks/new"), timeout=5000)
-    expect(page.locator(".prefill-note")).to_be_visible(timeout=5000)
-    # 结构化表单：预填落在 top_event 字段（非 JSON 文本域）
-    top_event_val = page.locator('input[placeholder="请填写顶事件"]').first.input_value()
-    check("③召集→落创建页带预填草案", "供电完全丧失" in top_event_val, f"top_event={top_event_val!r}")
+    # ③ 成员卡只读，全页只保留一个返回主对话的澄清动作。
+    clarify = page.get_by_role("button", name="回到对话补充信息")
+    read_only_ok = (
+        page.locator(".member button").count() == 0
+        and clarify.count() == 1
+        and page.get_by_role("button", name="去创建此任务").count() == 0
+    )
+    check("③工作台成员卡零手工启动，全页唯一澄清动作", read_only_ok,
+          f"member_buttons={page.locator('.member button').count()} clarify={clarify.count()}")
 
-    # ④ 结构化表单补全剩余必填（系统描述 + 组件，无需手写 JSON）+ 亲手提交（人签发）
-    page.locator('textarea[placeholder="请填写系统描述"]').first.fill("双通道供电系统（发电机A/B + 汇流条 + 转换开关）")
-    page.locator('input[placeholder="组件列表 第 1 项"]').first.fill("发电机A")
-    page.get_by_role("button", name="提交任务").click()
-    page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
-    expect(page.get_by_role("heading", name="任务详情")).to_be_visible(timeout=5000)
-    backlink_ok = page.get_by_role("button", name="← 返回协作会话").count() == 1
-    check("④任务创建（人签发）+ 详情页有返回协作会话入口", backlink_ok,
-          f"backlink={page.get_by_role('button', name='← 返回协作会话').count()}")
-    page.screenshot(path=str(SHOTS / "2_task_created.png"), full_page=True)
+    # ④ 缺信息回原对话，用唯一文字框/附件入口继续补充。
+    clarify.click()
+    page.wait_for_url(re.compile(rf"/\?c={session_id}$"), timeout=5000)
+    clarification_ok = (
+        page.locator(".composer textarea").count() == 1
+        and page.locator('input[type="file"]').count() == 1
+        and page.locator(".agent-preview").count() == 0
+    )
+    check("④回原对话自然澄清：唯一文字框 + 附件，零字段表", clarification_ok, page.url)
+    page.screenshot(path=str(SHOTS / "2_back_to_conversation.png"), full_page=True)
 
-    # ⑤ 返回会话 → fta 已召集，进度 1/2
-    page.get_by_role("button", name="← 返回协作会话").click()
-    page.wait_for_url(re.compile(r"/workbench/conv_"), timeout=5000)
+    # ⑤ 任务详情/工作台分组的前置数据由认证 API 创建；这只是测试夹具，不冒充
+    # 工程师 UI 流程。带 conversation_id 验证真实会话血缘。
+    created = page.request.post(
+        BASE + "/api/tasks",
+        data={
+            "agent_id": "fta_agent",
+            "conversation_id": session_id,
+            "inputs": {
+                "top_event": "供电完全丧失",
+                "system_description": "双通道供电系统（发电机A/B + 汇流条 + 转换开关）",
+                "components": ["发电机A"],
+            },
+        },
+    )
+    created_body = created.json() if created.status in (200, 201) else {}
+    task_id = created_body.get("id", "")
+    created_ok = created.status in (200, 201) and task_id.startswith("task_")
+    check("⑤前置：认证 API 创建会话归属任务成功", created_ok,
+          f"status={created.status} body={created.text()[:200]}")
+    if created_ok is not True:
+        raise RuntimeError(f"M8 前置任务创建失败 {created.status}: {created.text()[:200]}")
+    page.goto(session_url, wait_until="networkidle")
     page.wait_for_selector(".member", timeout=5000)
     body = page.locator("body").inner_text()
     summoned_ok = (
@@ -215,7 +242,7 @@ with sync_playwright() as p:
     page.wait_for_selector(".chip-review", timeout=15000)
     page.screenshot(path=str(SHOTS / "3_session_after.png"), full_page=True)
 
-    # ⑥ 结束协作 → 归档 + 召集入口消失（结束 = 真的结束；成员任务不受影响）
+    # ⑥ 结束协作 → 归档只读（结束 = 真的结束；成员任务不受影响）
     assert page.get_by_role("button", name="结束协作").count() == 1, "active 会话应有结束协作入口"
     page.get_by_role("button", name="结束协作").click()
     page.get_by_role("button", name="确定结束").click()  # ElMessageBox 二次确认
@@ -224,12 +251,13 @@ with sync_playwright() as p:
     conclude_ok = (
         "已归档" in body
         and page.get_by_role("button", name="结束协作").count() == 0   # 归档后不再可结束
-        and page.get_by_role("button", name="去创建此任务").count() == 0  # 归档后不再召集
+        and page.get_by_role("button", name="去创建此任务").count() == 0
+        and page.get_by_role("button", name="回到对话补充信息").count() == 0
         and "会话已归档" in body
         and "已召集 · 1 个任务" in body                                  # 已建任务仍在
     )
-    check("⑥结束协作→归档只读（召集入口消失，成员任务不受影响）", conclude_ok,
-          f"conclude_btn={page.get_by_role('button', name='结束协作').count()} summon={page.get_by_role('button', name='去创建此任务').count()} body={body[-400:]}")
+    check("⑥结束协作→归档只读（澄清入口消失，成员任务不受影响）", conclude_ok,
+          f"conclude_btn={page.get_by_role('button', name='结束协作').count()} clarify={page.get_by_role('button', name='回到对话补充信息').count()} body={body[-400:]}")
     page.screenshot(path=str(SHOTS / "4_session_concluded.png"), full_page=True)
 
     # ⑦（2b 契约重立）：/workbench 旧深链重定向任务台，且左栏「最近对话」

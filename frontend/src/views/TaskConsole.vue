@@ -6,7 +6,7 @@
     <aside class="console-list" :class="{ 'is-collapsed': selectedId }">
       <div class="cl-head">
         <span class="cl-title">任务台</span>
-        <el-button size="small" text type="primary" @click="$router.push('/tasks/new')">+ 新任务</el-button>
+        <el-button size="small" text type="primary" @click="$router.push('/')">发起新对话</el-button>
       </div>
 
       <div v-if="feedError" class="cl-error">{{ feedError }}</div>
@@ -63,7 +63,7 @@
           </span>
           <span v-if="unseen(t)" class="cl-unseen-dot" title="完成后你还没看过"></span>
         </div>
-        <div v-if="feedLoaded && !feedTasks.length" class="cl-zero">还没有任务——从对话召集，或点上方「+ 新任务」。</div>
+        <div v-if="feedLoaded && !feedTasks.length" class="cl-zero">还没有任务——先在主对话里说明目标，系统会自动编排。</div>
       </template>
 
       <div class="cl-foot-note">清单来自最近任务窗口（100 条）真实轮询——窗口外不虚报。</div>

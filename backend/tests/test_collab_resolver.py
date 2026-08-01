@@ -65,7 +65,10 @@ def _register_agent_version(conn, agent_id, version="0.1.0", *, profile="none", 
 def dbf(tmp_path):
     db_path = tmp_path / "flai_os.db"
     init_db(db_path)
-    factory = lambda: get_conn(db_path)
+
+    def factory():
+        return get_conn(db_path)
+
     # K1 签发见证（Codex 增量2审 R5-1 + loop-auditor）：resolver 机制测试的默认上游 agent
     # 注册为 profile=none（确定性）——其 completed 产物经 task_output_is_signed_off 的
     # profile=none 支放行（等价"确定性上游合法自动完成"）。需未签/review-gated 上游的测试
@@ -803,7 +806,11 @@ def test_R3_resolve_if_due_throttles(runtime_env, monkeypatch):
     长时对无变化阻塞集重扫）。拆节流 → 三次全跑。"""
     import backend.app.jobs.runner as runner_mod
     calls = {"n": 0}
-    monkeypatch.setattr(runner_mod, "resolve_dependencies_once", lambda cf: calls.__setitem__("n", calls["n"] + 1))
+    monkeypatch.setattr(
+        runner_mod,
+        "resolve_dependencies_once",
+        lambda cf, **_kwargs: calls.__setitem__("n", calls["n"] + 1),
+    )
     runner = runner_mod.JobRunner(runtime_env["runtime"], runtime_env["conn_factory"])
     runner._resolve_if_due()  # 首次：跑
     runner._resolve_if_due()  # 间隔内：跳过
@@ -1163,7 +1170,7 @@ def test_hitreview_R3_operational_error_not_quarantined(dbf, monkeypatch):
     finally:
         conn.close()
 
-    def _boom(_conn, _task):
+    def _boom(_conn, _task, **_kwargs):
         raise _sqlite3.OperationalError("database is locked")  # 瞬时 operational 故障
 
     monkeypatch.setattr(runner_mod, "_resolve_one_candidate", _boom)

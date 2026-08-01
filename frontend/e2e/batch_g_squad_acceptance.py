@@ -477,10 +477,18 @@ with sync_playwright() as p:
     r1 = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "x"}, "input_file_ids": [fid]})
     check("O4a 单建路 400 + 中性文案", r1.status_code == 400 and "密级准入上限" in r1.json().get("detail", ""), r1.text[:160])
     before = len(API.get("/api/tasks").json())
-    r2 = API.post("/api/tasks/batch", json={"items": [
-        {"agent_id": "hello_agent", "inputs": {"name": "a"}},
-        {"agent_id": "hello_agent", "inputs": {"name": "b"}, "input_file_ids": [fid]},
-    ]})
+    hello_snapshot = API.get("/api/agents/hello_agent").json()
+    r2 = API.post("/api/tasks/batch", json={
+        "operation_id": "batch_g_clearance_o4",
+        "pinned_versions": {"hello_agent": hello_snapshot["version"]},
+        "pinned_package_digests": {
+            "hello_agent": hello_snapshot["package_snapshot_digest"],
+        },
+        "items": [
+            {"agent_id": "hello_agent", "inputs": {"name": "a"}},
+            {"agent_id": "hello_agent", "inputs": {"name": "b"}, "input_file_ids": [fid]},
+        ],
+    })
     after_cnt = len(API.get("/api/tasks").json())
     check(
         "O4b batch 路 422 批错清单 + 全有全无零写入",

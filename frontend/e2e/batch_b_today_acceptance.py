@@ -105,6 +105,7 @@ seed_user(WORK / "flai_os.db", "本机查看者")
 # 第二个账户=「跨会话签发工程师」，与本机浏览器登录身份彻底不同（不同
 # username/cookie jar），而非同一账户借第二个 httpx.Client 重登。
 seed_user(WORK / "flai_os.db", "跨会话签发工程师", username="e2e_approver", password="e2e-approver-pass")
+creator = login_httpx(BASE)
 
 runner = JobRunner(app.state.runtime, app.state.conn_factory, poll_interval=0.2)
 threading.Thread(target=runner.run_forever, daemon=True).start()
@@ -136,13 +137,20 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")
     login_context(page.context, BASE)  # ADR-0019：本机浏览器会话——「等着看」的那一方
 
-    # ── 建 review_agent 任务，驱动到 waiting_review（后续跨会话批准的目标）──
-    page.goto(BASE + "/tasks/new?agent_id=review_agent", wait_until="networkidle")
-    page.wait_for_selector(".agent-preview", state="visible", timeout=5000)
-    page.locator('input[placeholder="请填写姓名"]').first.fill("批B今日交付验收")
-    page.get_by_role("button", name="提交任务").click()
-    page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
-    task_id = page.url.rsplit("/", 1)[-1]
+    # ── 建 review_agent 夹具任务（后续跨会话批准的目标）。工程师面不再有
+    #    字段表；认证 API 只负责准备今日页要观察的真实状态机数据。──
+    created = creator.post(
+        "/api/tasks",
+        json={"agent_id": "review_agent", "inputs": {"name": "批B今日交付验收"}},
+    )
+    created_body = created.json() if created.status_code in (200, 201) else {}
+    task_id = created_body.get("id", "")
+    created_ok = created.status_code in (200, 201) and task_id.startswith("task_")
+    check("前置：认证 API 创建待签任务成功", created_ok,
+          f"status={created.status_code} body={created.text[:200]}")
+    if created_ok is not True:
+        raise RuntimeError(f"批B前置任务创建失败 {created.status_code}: {created.text[:200]}")
+    page.goto(BASE + f"/tasks/{task_id}", wait_until="networkidle")
     # 批次四 Q1：缺名任务主文本=Agent 显示名（不再显裸 id）——交付卡定位改走
     # data-task-id 属性（DeliveryCard 根节点），不再依赖 id 切片字面。
     delivery_sel = f'.delivery-card[data-task-id="{task_id}"]'

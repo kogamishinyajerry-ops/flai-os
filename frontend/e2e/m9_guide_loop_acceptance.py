@@ -1,16 +1,13 @@
-"""范式 2a 对话轴闭环验收（真浏览器）：召集任务零跳页 + 状态来找人全链。
+"""范式 2a 对话轴闭环验收（真浏览器）：自动路由→整方案开工→状态来找人。
 
-把「零跳页」这一范式核心承诺纳入回归网（双镜头 P2：back=chat 回流分支此前
-在 5 套 e2e 中执行次数=0，只有代码走读级信心）：
-  ① 导引 orchestrate 方案（对话流内方案卡）；
-  ② 从对话流点「去创建此任务」→ 创建页 URL 带 back=chat（GuidePage 专属，
-     WorkbenchSession 召集不带——m8_collab_chain 断言④的详情页契约不受影响）；
-  ③ 补全表单亲手提交 → **回流对话轴 /?c=conv_xxx**（不跳详情页）；
-  ④ 回流后 hero 不闪现（restoring 门控）+ 对话流督战条原地亮起（排队中）；
-  ⑤ 夹具把任务翻成 completed+产物 → 轮询窗口内「N 件产物」锚点行长出
+把「工程师零填表、执行零跳页」纳入回归网：
+  ① 导引把自然语言自动路由成完整的两 Agent 方案，细节默认折叠；
+  ② 全方案 ready 后只出现一个「按方案开工」主按钮，点击前任务数仍为 0；
+  ③ 人确认一次后，系统通过 batch 全有全无地原地创建两项任务，并保留依赖；
+  ④ URL 始终为 /?c=conv_xxx，督战状态在原对话轴亮起，无 /tasks/new 字段墙；
+  ⑤ 夹具把首项任务翻成 completed+产物 → 轮询窗口内「N 件产物」锚点行长出
      （夹具直写 temp DB：只为渲染路径提供 fixture，不冒充业务状态机行为）；
-  ⑥ 点锚点 → 状态中心速览打开，产物区可见（加载失败也如实显示非静默）；
-  ⑦ 对照组：workbench 路径召集 URL 不带 back=chat（回流不越界）。
+  ⑥ 点锚点 → 状态中心速览打开，产物区可见（加载失败也如实显示非静默）。
 
 自包含：自起后端（tmp DB）+ stub gateway + 真 chromium，不起 worker。
 
@@ -25,7 +22,6 @@
 from __future__ import annotations
 
 import json
-import re
 import socket
 import sys
 import tempfile
@@ -64,8 +60,30 @@ class _StubGateway:
             "goal": "完成双通道供电的控制逻辑与故障树分析。",
             "workflow": "control_logic_agent 先出控制逻辑，fta_agent 再做故障树。",
             "agents": [
-                {"agent_id": "control_logic_agent", "role": "生成控制逻辑状态机", "rationale": "结构化生成", "prefilled_inputs": {}},
-                {"agent_id": "fta_agent", "role": "搭建并分析故障树", "rationale": "推理辅助", "prefilled_inputs": {"top_event": "供电完全丧失"}},
+                {
+                    "agent_id": "control_logic_agent",
+                    "role": "生成控制逻辑状态机",
+                    "rationale": "结构化生成",
+                    "prefilled_inputs": {
+                        "system_name": "双通道供电控制系统",
+                        "states": ["双路供电", "单路供电", "供电丧失"],
+                        "transitions": [
+                            {"from": "双路供电", "to": "单路供电", "condition": "任一发电机失效"},
+                            {"from": "单路供电", "to": "供电丧失", "condition": "剩余发电机失效"},
+                        ],
+                    },
+                },
+                {
+                    "agent_id": "fta_agent",
+                    "role": "搭建并分析故障树",
+                    "rationale": "推理辅助",
+                    "prefilled_inputs": {
+                        "top_event": "供电完全丧失",
+                        "system_description": "双通道发电机经汇流条与转换开关供电",
+                        "components": ["发电机A", "发电机B", "汇流条", "转换开关"],
+                    },
+                    "after": [0],
+                },
             ],
         }
         reply = f"这需要两个 Agent 接力协作。\n<<PLAN>>\n{json.dumps(plan, ensure_ascii=False)}\n<<END>>"
@@ -135,7 +153,7 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
     login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie
 
-    # ① 导引对话 → orchestrate 方案卡
+    # ① 导引对话 → 自动路由方案卡；详情默认折叠，壳层不出现 picker/字段表。
     page.goto(BASE + "/", wait_until="networkidle")
     page.locator(".composer textarea").fill("做双通道供电的控制逻辑和故障树")
     page.get_by_role("button", name="发送").click()
@@ -143,48 +161,59 @@ with sync_playwright() as p:
     convs = API.get("/api/conversations?limit=5").json()
     conv_list = convs if isinstance(convs, list) else convs.get("items", [])
     conv_id = conv_list[0]["id"] if conv_list else None
-    check("①对话流出方案卡+拿到会话id", bool(conv_id))
-
-    # ①b 批次五 C3 clay 预算：方案卡逐成员行的分工徽章/未就绪召集钮常驻降灰
-    #    （clay 只留工作灯与主 CTA）——computed 色直断，回染必咬。
-    # 运行时解析 --clay（诚实 P2：硬编码字面量随调色静默过期→oracle 失咬）。
-    clay_rgb = page.evaluate(
-        "() => { const s = document.createElement('span'); s.style.color = 'var(--clay)';"
-        " document.body.appendChild(s); const v = getComputedStyle(s).color; s.remove(); return v; }")
-    # 在场先断言（Codex R0 P2）："(none)" sentinel 会让 agent-cta 被删除时静默
-    # 跳过——夹具方案卡两成员均参数未齐、必有召集钮，缺席应当红。
-    check("①b0 agent-cta 在场（夹具契约：方案卡未就绪成员有召集钮）",
-          (page.locator(".agent-cta").count() >= 1) is True,
-          f"count={page.locator('.agent-cta').count()}")
-    rt_c = page.locator(".role-tag").first.evaluate("el => getComputedStyle(el).color")
-    cta_c = page.locator(".agent-cta").first.evaluate("el => getComputedStyle(el).color")
-    check("①b clay 预算：role-tag/agent-cta 常驻非 clay（降灰）",
-          (rt_c != clay_rgb and cta_c != clay_rgb) is True,
-          f"clay={clay_rgb} role_tag={rt_c} agent_cta={cta_c}")
+    plan_card = page.locator(".plan-card")
+    disclosure = plan_card.locator(".route-disclosure")
+    check("①对话流出方案卡+拿到会话 id", bool(conv_id))
+    check("①自动路由摘要常驻、2 个执行单元细节默认折叠",
+          "已自动编排 · 2 个执行单元" in plan_card.locator(".route-summary").inner_text()
+          and disclosure.get_attribute("open") is None
+          and plan_card.locator(".agent-card").first.is_visible() is False)
+    check("①壳层零手工编排/字段表",
+          page.get_by_role("button", name="浏览可用 Agent").count() == 0
+          and page.get_by_role("button", name="去创建此任务").count() == 0
+          and plan_card.locator("input, textarea, select").count() == 0)
+    disclosure.locator("summary").click()
+    expect(plan_card.locator(".agent-card").first).to_be_visible(timeout=3000)
     page.screenshot(path=str(SHOTS / "1_plan_card.png"), full_page=True)
 
-    # ② 对话流点 fta「去创建此任务」→ URL 带 back=chat
-    page.locator(".agent-card").nth(1).get_by_role("button", name="去创建此任务").click()
-    page.wait_for_url(re.compile(r"/tasks/new"), timeout=5000)
-    check("②GuidePage 召集路径带 back=chat", "back=chat" in page.url)
+    # ② 全方案 ready 才只给一个主按钮；渲染不等于开工。
+    open_btn = plan_card.get_by_role("button", name="按方案开工")
+    expect(open_btn).to_be_visible(timeout=8000)
+    before_tasks = API.get(f"/api/conversations/{conv_id}/tasks").json()
+    check("②全方案 ready：只有一个『按方案开工』主按钮",
+          plan_card.locator(".plan-foot .cta-clay").count() == 1)
+    check("②按钮渲染不等于开工：点击前任务数=0", len(before_tasks) == 0)
 
-    # ③ 补全+亲手提交 → 回流对话轴（零跳页，2a 核心承诺）
-    page.locator('textarea[placeholder="请填写系统描述"]').first.fill("双通道供电系统（发电机A/B + 汇流条 + 转换开关）")
-    page.locator('input[placeholder="组件列表 第 1 项"]').first.fill("发电机A")
-    page.get_by_role("button", name="提交任务").click()
-    page.wait_for_url(re.compile(r"\?c=conv_[0-9a-f]+"), timeout=8000)
-    check("③提交后回流对话轴 /?c=<conv>（零跳页）", f"c={conv_id}" in page.url)
+    # ③ 一次确认 → batch 原子创建整份方案，不允许部分 ready 子集开工。
+    open_btn.click()
+    deadline = time.time() + 8
+    tasks: list[dict[str, Any]] = []
+    while time.time() < deadline:
+        raw = API.get(f"/api/conversations/{conv_id}/tasks").json()
+        tasks = raw if isinstance(raw, list) else raw.get("items", [])
+        if len(tasks) == 2:
+            break
+        time.sleep(0.3)
+    by_agent = {t.get("agent_id"): t for t in tasks}
+    fta_detail = API.get(f"/api/tasks/{by_agent['fta_agent']['id']}").json() if "fta_agent" in by_agent else {}
+    check("③一次确认原子创建完整 2-Agent 方案（恰好各一项）",
+          len(tasks) == 2
+          and set(by_agent) == {"control_logic_agent", "fta_agent"}
+          and all(sum(t.get("agent_id") == agent_id for t in tasks) == 1 for agent_id in by_agent))
+    check("③方案依赖保留：FTA 等待控制逻辑任务",
+          fta_detail.get("depends_on") == [by_agent.get("control_logic_agent", {}).get("id")],
+          json.dumps(fta_detail, ensure_ascii=False)[:240])
 
-    # ④ 回流后：hero 不闪现（restoring 门控）+ 督战条原地亮起
-    check("④回流落地不露空态 hero（restoring 门控）", page.locator(".guide-hero").count() == 0)
+    # ④ 任务状态原地来找人：URL 不跳、hero 不闪、督战条亮起。
+    check("④开工后仍在对话轴 /?c=<conv>，零 /tasks/new", f"c={conv_id}" in page.url and "/tasks/new" not in page.url, page.url)
+    check("④执行中不露空态 hero", page.locator(".guide-hero").count() == 0)
     page.wait_for_selector(".agent-status", timeout=8000)
     body = page.locator("body").inner_text()
-    check("④督战条原地亮起（排队中）", page.locator(".agent-status").count() >= 1 and "排队中" in body)
+    check("④两名成员督战状态原地亮起", page.locator(".agent-status").count() == 2 and "排队中" in body)
     page.screenshot(path=str(SHOTS / "2_returned_live_chip.png"), full_page=True)
 
     # ⑤ 夹具翻完成+产物 → 轮询窗口内锚点行长出
-    tasks = API.get(f"/api/conversations/{conv_id}/tasks").json()
-    flip_task_completed_with_artifact(tasks[0]["id"])
+    flip_task_completed_with_artifact(by_agent["control_logic_agent"]["id"])
     page.wait_for_selector(".status-artifact", timeout=12000)
     check("⑤产物锚点行长出（1 件产物）", "1 件产物" in page.locator(".status-artifact").inner_text())
     page.screenshot(path=str(SHOTS / "3_artifact_anchor.png"), full_page=True)
@@ -199,14 +228,6 @@ with sync_playwright() as p:
     page.wait_for_timeout(300)
     page.keyboard.press("Escape")
     page.wait_for_timeout(400)
-
-    # ⑦ 对照组：workbench 召集路径不带 back=chat（回流不越界；
-    #    「提交后落详情页」由 m8_collab_chain 断言④实测覆盖，此处不重复）
-    page.goto(BASE + f"/workbench/{conv_id}", wait_until="networkidle")
-    page.wait_for_selector(".member", timeout=5000)
-    page.locator(".member").nth(0).get_by_role("button", name="去创建此任务").click()
-    page.wait_for_url(re.compile(r"/tasks/new"), timeout=5000)
-    check("⑦workbench 召集路径不带 back=chat（契约不越界）", "back=chat" not in page.url)
 
     browser.close()
 

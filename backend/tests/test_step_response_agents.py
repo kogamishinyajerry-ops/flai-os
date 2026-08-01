@@ -338,7 +338,7 @@ def test_chain_solve_signoff_then_evaluate(env):
         conn.close()
 
     # 2) K1 签发见证闸：solve 未签发（仍 waiting_review）→ resolver 绝不放行下游
-    assert resolve_dependencies_once(cf) == 0
+    assert resolve_dependencies_once(cf, env["registry"]) == 0
     conn = cf()
     try:
         assert repos.get_task(conn, "eval1")["status"] == "created"  # 未签则下游滞留
@@ -354,7 +354,7 @@ def test_chain_solve_signoff_then_evaluate(env):
         conn.close()
 
     # 4) resolver 现在管道 solve 产物入 evaluate 并入队
-    assert resolve_dependencies_once(cf) == 1
+    assert resolve_dependencies_once(cf, env["registry"]) == 1
     conn = cf()
     try:
         assert repos.get_task(conn, "eval1")["status"] == "queued"

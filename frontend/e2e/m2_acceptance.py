@@ -4,7 +4,7 @@
 + 真 chromium 走 UI。除 frontend/dist 构建产物外无外部前置。
 
 覆盖：
-  §12.3 六条——①前端连 FastAPI ②Agent 列表 ③创建任务 ④任务事件
+  §12.3 六条——①前端连 FastAPI ②Agent 能力目录 ③主对话单输入边界 ④任务事件
   ⑤下载输出 ⑥提交反馈；
   附加——任务历史 / SPA 深链刷新 / **waiting_review 人工放行 UI 全链**
   （宪法「人是唯一签发者」的界面落点：tmp 复制 hello_agent 为
@@ -21,7 +21,6 @@
 """
 from __future__ import annotations
 
-import re
 import shutil
 import socket
 import sys
@@ -94,9 +93,10 @@ for _ in range(50):
 else:
     sys.exit("诚实失败：后端 5s 内未就绪")
 
-from _auth import login_context, seed_user  # noqa: E402（须在后端就绪后种账户）
+from _auth import login_context, login_httpx, seed_user  # noqa: E402（须在后端就绪后种账户）
 
 seed_user(WORK / "flai_os.db", "验收工程师")
+API = login_httpx(BASE)
 
 runner = JobRunner(app.state.runtime, app.state.conn_factory, poll_interval=0.2)
 threading.Thread(target=runner.run_forever, daemon=True).start()
@@ -115,26 +115,44 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
     login_context(page.context, BASE)  # ADR-0019：真实登录换会话 cookie，登录门不拦
 
-    # ── ①②门户：连接后端 + Agent 列表（两个 agent 卡片）──
+    # ── ①②门户：连接后端 + Agent 能力目录（两个只读卡片）──
     # M6 起首页 "/" 是智能导引，Agent 门户移至 /portal（ADR-0012 前端路由）。
     page.goto(BASE + "/portal", wait_until="networkidle")
     body = page.locator("body").inner_text()
     check("①前端连接 FastAPI + ②Agent 列表可见",
           "hello_agent" in body and "review_agent" in body and "不适用范围" in body,
           body[:300])
+    no_launch_controls = (
+        page.get_by_role("button", name="创建任务").count() == 0
+        and page.get_by_role("button", name="开始对话").count() == 0
+        and page.get_by_role("button", name="召集此团队").count() == 0
+        and page.locator(".gov-entry").count() == 2
+    )
+    check("②'Agent 门户只读：保留治理，零手工启动/团队填参入口", no_launch_controls,
+          f"gov={page.locator('.gov-entry').count()}")
     page.screenshot(path=str(SHOTS / "1_portal.png"), full_page=True)
 
-    # ── ③创建任务（门户按钮→表单→提交,全真实点击链路）──
-    page.get_by_role("button", name="创建任务").first.click()
-    page.wait_for_url(re.compile(r"/tasks/new"), timeout=5000)
-    expect(page.locator(".agent-preview")).to_be_visible(timeout=5000)
-    # 结构化表单：hello_agent 的 name 字段（不再手写 JSON）；创建人=登录身份，无输入框
-    page.locator('input[placeholder="请填写姓名"]').first.fill("M2验收")
-    page.screenshot(path=str(SHOTS / "2_create_filled.png"), full_page=True)
-    page.get_by_role("button", name="提交任务").click()
-    page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
-    task_id = page.url.rsplit("/", 1)[-1]
-    check("③创建 Hello Agent 任务", task_id.startswith("task_"), page.url)
+    # ── ③历史创建深链必须回主对话；工程师面只剩文字与附件。后续任务详情
+    #    链的前置数据由已认证 API 创建，不把测试夹具冒充工程师交互。──
+    page.goto(BASE + "/tasks/new?agent_id=hello_agent", wait_until="networkidle")
+    redirected_to_conversation = (
+        page.url.rstrip("/") == BASE
+        and page.locator(".composer textarea").count() == 1
+        and page.locator('input[type="file"]').count() == 1
+        and page.locator(".agent-preview").count() == 0
+    )
+    check("③/tasks/new 旧深链回主对话，原始输入只有文字与附件", redirected_to_conversation, page.url)
+    page.screenshot(path=str(SHOTS / "2_conversation_only.png"), full_page=True)
+
+    created = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "M2验收"}})
+    created_body = created.json() if created.status_code in (200, 201) else {}
+    task_id = created_body.get("id", "")
+    created_ok = created.status_code in (200, 201) and task_id.startswith("task_")
+    check("③任务详情前置数据由认证 API 创建", created_ok,
+          f"status={created.status_code} body={created.text[:200]}")
+    if created_ok is not True:
+        raise RuntimeError(f"M2 前置任务创建失败 {created.status_code}: {created.text[:200]}")
+    page.goto(BASE + f"/tasks/{task_id}", wait_until="networkidle")
 
     # ── ④任务事件（worker 驱动到 completed,页面 2s 轮询）──
     deadline = time.time() + 30
@@ -180,12 +198,23 @@ with sync_playwright() as p:
     check("附加:历史页+深链刷新", hist_ok and deep_ok, f"hist={hist_ok} deep={deep_ok}")
 
     # ── 附加(P1-2)：waiting_review 人工放行 UI 全链 ──
-    page.goto(BASE + "/tasks/new?agent_id=review_agent", wait_until="networkidle")
-    expect(page.locator(".agent-preview")).to_be_visible(timeout=5000)
-    page.locator('input[placeholder="请填写姓名"]').first.fill("待人工审核")
-    page.get_by_role("button", name="提交任务").click()
-    page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
-    review_task_id = page.url.rsplit("/", 1)[-1]
+    review_created = API.post(
+        "/api/tasks",
+        json={"agent_id": "review_agent", "inputs": {"name": "待人工审核"}},
+    )
+    review_body = review_created.json() if review_created.status_code in (200, 201) else {}
+    review_task_id = review_body.get("id", "")
+    review_created_ok = (
+        review_created.status_code in (200, 201)
+        and review_task_id.startswith("task_")
+    )
+    check("附加:认证 API 创建待签任务成功", review_created_ok,
+          f"status={review_created.status_code} body={review_created.text[:200]}")
+    if review_created_ok is not True:
+        raise RuntimeError(
+            f"M2 待签前置任务创建失败 {review_created.status_code}: {review_created.text[:200]}"
+        )
+    page.goto(BASE + f"/tasks/{review_task_id}", wait_until="networkidle")
 
     deadline = time.time() + 30
     while time.time() < deadline:

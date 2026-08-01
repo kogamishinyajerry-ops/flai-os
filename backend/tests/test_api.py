@@ -101,10 +101,11 @@ def test_get_agent_found(client: TestClient) -> None:
 
 
 def test_get_agent_exposes_input_schema(client: TestClient) -> None:
-    """详情端点透出 input_schema，供前端按契约动态渲染创建表单（P0-1）。
+    """详情端点透出 input_schema，供自动路由按契约核对输入（P0-1）。
 
     列表端点不带（省带宽）；详情端点必带，且为该 Agent 真实 input_schema.json
-    的解析结果（hello_agent required=[name]）。schema 缺失时为 None 而非 500。
+    的解析结果（hello_agent required=[name]）。schema 缺失时为 None 而非 500，
+    由对话继续追问而不是降级成工程师手填 JSON。
     """
     resp = client.get("/api/agents/hello_agent")
     body = resp.json()
@@ -118,6 +119,33 @@ def test_get_agent_exposes_input_schema(client: TestClient) -> None:
     listed = client.get("/api/agents").json()
     hello = next(a for a in listed if a["id"] == "hello_agent")
     assert "input_schema" not in hello
+
+
+def test_get_agent_exposes_file_contract_only_on_detail(client: TestClient) -> None:
+    """自动路由必须能在显示开工按钮前核对附件后缀，不能让工程师补表。"""
+    detail = client.get("/api/agents/performance_disk_agent")
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["input_mode"] == "file_upload"
+    assert body["input_allowed_extensions"] == [".xlsx"]
+
+    listed = client.get("/api/agents").json()
+    projected = next(a for a in listed if a["id"] == "performance_disk_agent")
+    assert "input_allowed_extensions" not in projected
+
+
+def test_file_contract_projection_is_bounded_and_fail_closed() -> None:
+    from backend.app.api.agents import _input_allowed_extensions
+
+    assert _input_allowed_extensions({}) == []
+    assert _input_allowed_extensions(
+        {"input": {"allowed_extensions": [" .XLSX ", ".xlsx", ".CSV"]}}
+    ) == [".xlsx", ".csv"]
+    assert _input_allowed_extensions({"input": {"allowed_extensions": "*.xlsx"}}) is None
+    assert _input_allowed_extensions({"input": {"allowed_extensions": ["xlsx"]}}) is None
+    assert _input_allowed_extensions(
+        {"input": {"allowed_extensions": [f".{i}" for i in range(33)]}}
+    ) is None
 
 
 # ── tasks: create -> queued + task_created 事件 ──────────────────────────

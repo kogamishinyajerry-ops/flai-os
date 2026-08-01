@@ -19,6 +19,10 @@ const guideSource = readFileSync(
   new URL("../src/views/GuidePage.vue", import.meta.url),
   "utf8",
 );
+const conversationPlansSource = readFileSync(
+  new URL("../src/utils/conversationPlans.js", import.meta.url),
+  "utf8",
+);
 const routerSource = readFileSync(
   new URL("../src/router/index.js", import.meta.url),
   "utf8",
@@ -31,22 +35,22 @@ const labAppSource = readFileSync(
   new URL("../src/ui-lab/UiLabApp.vue", import.meta.url),
   "utf8",
 );
-const shellContextSource = readFileSync(
-  new URL("../src/components/ShellContextPanel.vue", import.meta.url),
-  "utf8",
-);
 const assetBuilderSource = readFileSync(
   new URL("../src/components/AssetBuilderDrawer.vue", import.meta.url),
+  "utf8",
+);
+const quickSwitcherSource = readFileSync(
+  new URL("../src/components/QuickSwitcher.vue", import.meta.url),
   "utf8",
 );
 
 const REQUIRED_CASES = [
   "landing-desktop",
-  "picker-desktop",
+  "routing-desktop",
   "streaming-desktop",
   "persistence-unknown-desktop",
   "landing-mobile",
-  "picker-mobile",
+  "routing-mobile",
   "asset-intake-desktop",
   "asset-review-desktop",
   "asset-review-mobile",
@@ -196,59 +200,96 @@ test("保存状态待核视图显式保锁，不能伪装成失败或完成", ()
       reconciliationLocked: true,
       canSend: false,
       canAttach: false,
-      canSelectAgent: false,
     },
   );
 });
 
-test("Agent 选择器视图使用真实紧凑行所需字段", () => {
-  for (const id of ["picker-desktop", "picker-mobile"]) {
+test("自动路由镜头只暴露方案与人工治理动作，不暴露手工选择", () => {
+  for (const id of ["routing-desktop", "routing-mobile"]) {
     const fixture = getUiAcceptanceCase(id).guide;
-    assert.equal(fixture.agentPickerOpen, true);
-    assert.equal(fixture.agentShell.schema_version, "agent_shell.v1");
-    assert.equal(fixture.agentShell.source.read_only, true);
-    assert.ok(fixture.agentShell.agents.length >= 4);
-    assert.ok(
-      fixture.agentShell.agents.every(
-        (agent) =>
-          agent.identity.agent_id &&
-          agent.identity.name &&
-          agent.classification.category &&
-          Array.isArray(agent.trust.limitations) &&
-          agent.launch.kind === "task",
-      ),
-    );
+    const recommendation = fixture.messages.find(
+      (message) => message.recommendation?.decision === "orchestrate",
+    )?.recommendation;
+    assert.ok(recommendation);
+    assert.ok(recommendation.agents.length >= 1);
+    assert.ok(recommendation.agents.every((agent) => Array.isArray(agent.attachments)));
+    assert.ok(Array.isArray(recommendation.ignored_attachments));
+    assert.ok(fixture.agentSchemas);
+    assert.equal("agentPickerOpen" in fixture, false);
+    assert.equal("agentShell" in fixture, false);
   }
 });
 
-test("Agent 选择器只给待核片段 amber，不让外层引用状态吞掉中性治理语义", () => {
+test("Agent 壳只接受文字与附件，自动路由并把内部编排按需披露", () => {
+  assert.equal((guideSource.match(/<el-input/g) || []).length, 1);
+  assert.equal((guideSource.match(/<el-upload/g) || []).length, 1);
+  assert.match(guideSource, /系统会在后台自动编排所需能力/);
+  assert.match(guideSource, /开工与签发仍由你确认/);
+  assert.equal((guideSource.match(/开工与签发仍由你确认/g) || []).length, 1);
+  assert.match(guideSource, /查看路由依据与边界/);
+  assert.match(guideSource, /class="route-disclosure"/);
+  assert.doesNotMatch(guideSource, /class="route-summary" aria-live=/);
+  assert.match(guideSource, /class="route-summary-state[^\"]*" aria-live="polite"/);
+  assert.doesNotMatch(guideSource, /route-disclosure-count/);
+  assert.match(guideSource, /class="section-label roster-label">执行单元 ·/);
+  assert.doesNotMatch(guideSource, />召集的 Agent/);
+  assert.doesNotMatch(guideSource, /Agent、模型与工具/);
+  assert.doesNotMatch(guideSource, /浏览可用 Agent/);
+  assert.doesNotMatch(guideSource, /<ShellContextPanel/);
+  assert.doesNotMatch(guideSource, /guide-context-rail/);
+  assert.doesNotMatch(guideSource, /INTENT_EXAMPLES|intent-card/);
+  assert.doesNotMatch(guideSource, /stageAgentPrompt|getAgentShell/);
+  assert.doesNotMatch(guideSource, /去创建此任务/);
+  assert.doesNotMatch(guideSource, /router\.push\(\{ path: "\/tasks\/new"/);
+  assert.match(guideSource, /plan\.agents\.length >= 1/);
   assert.match(
-    shellContextSource,
-    /<span v-if="isPicker" class="context-agent-relation">/,
+    guideSource,
+    /plan\.agents\.every\(\(agent\) => \{[\s\S]*?return agentReady\(agent, assignedFiles\) === true;/,
   );
-  assert.doesNotMatch(
-    shellContextSource,
-    /<span v-if="isPicker" class="context-agent-relation" :class=/,
-  );
+  assert.match(conversationPlansSource, /export function currentWorkSegmentFiles/);
+  assert.match(guideSource, /currentWorkSegmentFiles\(/);
+  assert.match(guideSource, /conversationTasksLoaded\.value === true/);
+  assert.doesNotMatch(guideSource, /aria-label="沉淀本次工作"/);
+  assert.match(guideSource, /v-if="acceptanceMode && assetBuilderOpen"/);
+  assert.match(guideSource, /el\.querySelector\("\.el-upload"\)/);
+  assert.doesNotMatch(guideSource, /📎/);
+  assert.match(guideSource, /<div v-if="idx === latestPlanIdx" class="plan-foot">/);
+  assert.doesNotMatch(guideSource, /<form\b|<select\b|contenteditable=/);
   assert.match(
-    shellContextSource,
-    /:class="\{ 'context-pending-token': part\.pending \}"/,
-  );
-  assert.match(
-    shellContextSource,
-    /<span v-else class="context-agent-relation" :class="`is-\$\{agent\.referenceState\}`">/,
-  );
-  assert.match(
-    shellContextSource,
-    /\.context-agent-relation\.is-unresolved,\s*\.context-agent-relation\.is-unknown \{ color: var\(--trust-pending\); \}/,
+    guideSource,
+    /\.send-btn\.cta-clay:disabled\s*\{[\s\S]*?background:\s*var\(--paper-rail\)[\s\S]*?color:\s*var\(--ink-faint\)/,
+    "空输入发送按钮必须回到中性 surface/ink，不继续占用 clay 工作色",
   );
 });
 
-test("任务上下文 loading 动画服从 reduced-motion", () => {
+test("全局快速切换只检索工程任务与会话，不把 Agent 暴露成工程师选项", () => {
+  assert.match(quickSwitcherSource, /placeholder="搜索会话、任务…"/);
+  assert.doesNotMatch(quickSwitcherSource, /listAgents/);
+  assert.doesNotMatch(quickSwitcherSource, /filteredAgents/);
+  assert.doesNotMatch(quickSwitcherSource, /key: "agent"/);
+  assert.doesNotMatch(quickSwitcherSource, /type === "agent"/);
+  assert.doesNotMatch(appSource, /搜索会话 \/ 任务 \/ Agent/);
   assert.match(
-    shellContextSource,
-    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.context-loading \.is-loading \{ animation: none; \}/,
+    quickSwitcherSource,
+    /type === "conversation"\) router\.push\(\{ path: "\/", query: \{ c: item\.id \} \}\)/,
   );
+  assert.doesNotMatch(quickSwitcherSource, /router\.push\(`\/workbench\/\$\{item\.id\}`\)/);
+});
+
+test("全局快速切换以可聚焦 listbox 暴露当前结果，并把焦点约束在弹窗内", () => {
+  assert.match(quickSwitcherSource, /role="combobox"/);
+  assert.match(quickSwitcherSource, /aria-controls="quick-switcher-results"/);
+  assert.match(quickSwitcherSource, /:aria-activedescendant="activeOptionId"/);
+  assert.match(quickSwitcherSource, /id="quick-switcher-results"/);
+  assert.match(quickSwitcherSource, /role="listbox"/);
+  assert.match(quickSwitcherSource, /role="option"/);
+  assert.match(quickSwitcherSource, /:aria-selected="entry\.globalIndex === selectedIndex"/);
+  assert.match(quickSwitcherSource, /:tabindex="entry\.globalIndex === selectedIndex \? 0 : -1"/);
+  assert.match(quickSwitcherSource, /@focus="selectedIndex = entry\.globalIndex"/);
+  assert.match(quickSwitcherSource, /@keydown\.enter\.stop\.prevent="activate\(group\.key, entry\.item\)"/);
+  assert.match(quickSwitcherSource, /if \(e\.key === "Tab"\) \{[\s\S]*?trapFocus\(e\);/);
+  assert.match(quickSwitcherSource, /function trapFocus\(e\)/);
+  assert.match(quickSwitcherSource, /nextTick\(\(\) => el\.focus\(\)\)/);
 });
 
 test("六重旋转标记资产保持已验收的 256px RGBA 基线", () => {

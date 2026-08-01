@@ -43,7 +43,7 @@
           <router-link
             v-for="c in convos"
             :key="c.id"
-            :to="{ path: '/', query: { c: c.id } }"
+            :to="conversationRoute(c)"
             class="convo-item"
             :class="{ 'is-active': activeConvoId === c.id }"
             :title="convoTitle(c)"
@@ -66,7 +66,7 @@
 
       <!-- 侧栏脚部（美化批）：⌘K 可见入口（可点性+快捷键教学）+ 主题三段切换。 -->
       <div class="sb-foot">
-        <button class="sb-foot-btn" title="搜索任务 / 会话 / Agent（⌘K）" @click="openQuickSwitcher">
+        <button class="sb-foot-btn" title="搜索任务 / 会话（⌘K）" @click="openQuickSwitcher">
           <el-icon :size="14" aria-hidden="true"><Search /></el-icon>
           搜索
           <kbd class="sb-kbd">⌘K</kbd>
@@ -263,6 +263,14 @@ const activeMenu = computed(() => (route.path === "/" || route.path === "/today"
 
 // 当前恢复中的会话 id（导引页 /?c=<id>），用于左栏高亮。
 const activeConvoId = computed(() => (typeof route.query.c === "string" ? route.query.c : ""));
+function conversationRoute(conversation) {
+  const query = { c: conversation.id };
+  const retryOf = typeof route.query.retry_of === "string" ? route.query.retry_of.trim() : "";
+  // 点当前恢复会话的高亮项不能把系统审计血缘从 URL 静默擦掉；切换到其它
+  // 会话则正常退出这次恢复上下文，且 Guide 的 fresh 轮次门仍会阻止旧方案复活。
+  if (retryOf && activeConvoId.value === conversation.id) query.retry_of = retryOf;
+  return { path: "/", query };
+}
 
 // 窄屏抽屉开合（P2-7）；宽屏 CSS 让侧栏常驻，此状态不生效。
 const sidebarOpen = ref(false);

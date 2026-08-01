@@ -110,11 +110,11 @@ export async function postMessageStream(
   return completed;
 }
 
-// 结束会话（active→concluded）：「确认草案去创建任务」时归档会话（ADR-0013）。
+// 结束会话（active→concluded）：由人明确点击「结束协作」归档（ADR-0013）。
 export const concludeConversation = (conversationId) =>
   request(`/api/conversations/${conversationId}/conclude`, { method: "POST" });
 
-// 协作会话成员任务（M8/ADR-0016）：一次会话分流出的 N 个人签发任务，协作工作台
-// 据此聚合展示。仅读——任务仍由人在创建页亲手签发。
+// 协作会话成员任务（M8/ADR-0016）：一次会话自动编排并经人确认开工的 N 个任务，
+// 协作工作台据此聚合展示。仅读——结果仍由人逐项审核与签发。
 export const listConversationTasks = (conversationId) =>
   request(`/api/conversations/${conversationId}/tasks`);

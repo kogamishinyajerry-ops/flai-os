@@ -108,7 +108,6 @@ test("保存状态待核时会话输入面整体锁定，显式未保存不额�
       reconciliationLocked: true,
       canSend: false,
       canAttach: false,
-      canSelectAgent: false,
     },
   );
   assert.deepEqual(
@@ -118,7 +117,6 @@ test("保存状态待核时会话输入面整体锁定，显式未保存不额�
       reconciliationLocked: false,
       canSend: true,
       canAttach: true,
-      canSelectAgent: true,
     },
   );
 });
@@ -138,7 +136,7 @@ test("对账锁只有刷新会话成功后解除，失败或异常结果继续�
   );
 });
 
-test("GuidePage 暴露刷新核对按钮，并把发送、附件、Agent 选择接到同一锁", () => {
+test("GuidePage 暴露刷新核对按钮，并把文字与附件入口接到同一锁", () => {
   assert.match(guidePageSource, /刷新会话核对/);
   assert.match(
     guidePageSource,
@@ -151,12 +149,9 @@ test("GuidePage 暴露刷新核对按钮，并把发送、附件、Agent 选择�
   );
   assert.match(
     guidePageSource,
-    /:disabled="interactionPolicy\.canSelectAgent !== true"/,
+    /:disabled="interactionPolicy\.canSend !== true \|\| \(!draft\.trim\(\) && pendingFiles\.length === 0\)"/,
   );
-  assert.match(
-    guidePageSource,
-    /:disabled="interactionPolicy\.canSend !== true \|\| !draft\.trim\(\)"/,
-  );
+  assert.doesNotMatch(guidePageSource, /canSelectAgent|浏览可用 Agent/);
   assert.match(guidePageSource, /if \(failure\.canRetry\)/);
 });
 

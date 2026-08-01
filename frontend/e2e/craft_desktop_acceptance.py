@@ -538,42 +538,38 @@ with sync_playwright() as p:
           and empty_composer_box["y"] + empty_composer_box["height"] <= 720,
           f"guide={guide_box} composer={empty_composer_box}")
 
-    # ⑧' Composer Agent 选择器：窄屏必须留在视口内、列表内部滚动；
-    # 搜索后选择只填草稿并把焦点还给 Composer，不替人发送。
+    # ⑧' 工程师壳层硬规则：窄屏仍只有文字与附件两个原始输入；其余能力由
+    # 系统在后台编排，不出现 picker、参数字段或常驻上下文墙。
     page.set_viewport_size({"width": 375, "height": 812})
-    page.get_by_role("button", name="浏览可用 Agent").click()
-    picker = page.get_by_role("dialog", name="选择 Agent")
-    picker_box = picker.bounding_box()
-    first_picker_row = picker.locator(".ap-item").first.bounding_box()
-    picker_scroll = picker.locator(".ap-scroll").evaluate(
-        "el => ({ client: el.clientHeight, scroll: el.scrollHeight,"
-        " overflow: getComputedStyle(el).overflowY })")
-    check("⑧'Agent 选择器≤390px、单行≤56px且内部滚动",
-          picker_box is not None
-          and picker_box["y"] >= 0
-          and picker_box["y"] + picker_box["height"] <= 812
-          and picker_box["height"] <= 390
-          and first_picker_row is not None
-          and first_picker_row["height"] <= 56
-          and picker_scroll["overflow"] == "auto"
-          and picker_scroll["scroll"] > picker_scroll["client"],
-          f"box={picker_box} row={first_picker_row} scroll={picker_scroll}")
-    check("⑧'Agent 快选每项只显示名称+一条安全优先说明",
-          picker.locator(".ap-sub").count() == 0
-          and picker.locator(".ap-limit").count() == 0
-          and picker.locator(".ap-detail").count() == picker.locator(".ap-item").count())
-    picker.get_by_role("searchbox", name="搜索可用 Agent").fill("性能盘")
-    check("⑧'Agent 搜索只保留匹配项",
-          picker.locator(".ap-item").count() == 1
-          and "性能盘批量计算 Agent" in picker.locator(".ap-item").inner_text())
-    picker.locator(".ap-item").click()
-    page.wait_for_timeout(100)
     composer = page.locator(".composer textarea")
-    check("⑧'选择后收起、填入草稿并聚焦 Composer",
-          not picker.is_visible()
-          and composer.input_value() == "我想用「性能盘批量计算 Agent（模拟阶段）」做："
+    composer.click()
+    attach_box = page.locator(".composer .icon-btn").first.bounding_box()
+    send_box = page.locator(".composer .send-btn").bounding_box()
+    mobile_shell_width = page.evaluate(
+        "() => ({ viewport: innerWidth, body: document.body.scrollWidth,"
+        " root: document.documentElement.scrollWidth })"
+    )
+    check("⑧'375px 壳层只有一个文字输入和一个附件入口",
+          page.locator(".guide-page textarea").count() == 1
+          and page.locator('.guide-page input[type="file"]').count() == 1
+          and page.locator(
+              '.guide-page input:not([type="file"]), .guide-page select, '
+              '.guide-page form, .guide-page [contenteditable="true"]'
+          ).count() == 0)
+    check("⑧'零手工编排：无执行单元 picker、意图卡、常驻上下文栏",
+          page.get_by_role("button", name="浏览可用 Agent").count() == 0
+          and page.locator(".agent-pick, .intent-card, .guide-context-rail").count() == 0
+          and "系统会在后台自动编排所需能力" in page.locator("body").inner_text())
+    check("⑧'移动端附件与发送按钮触控高度均≥44px",
+          attach_box is not None and send_box is not None
+          and attach_box["height"] >= 44 and send_box["height"] >= 44,
+          f"attach={attach_box} send={send_box}")
+    check("⑧'375px 单一 Composer 无横向溢出且保持焦点",
+          mobile_shell_width["body"] <= mobile_shell_width["viewport"]
+          and mobile_shell_width["root"] <= mobile_shell_width["viewport"]
           and page.evaluate(
-              "() => document.activeElement === document.querySelector('.composer textarea')"))
+              "() => document.activeElement === document.querySelector('.composer textarea')"),
+          str(mobile_shell_width))
     page.set_viewport_size({"width": 1440, "height": 900})
     page.locator(".composer textarea").fill("- 这行是用户输入不该变列表\n先做什么？")
     # ② CTA 探针（真实渲染元素，非合成节点）：send-btn 必须真接 .cta-clay 类，

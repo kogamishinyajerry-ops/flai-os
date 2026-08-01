@@ -5,6 +5,7 @@
     :role="isPicker ? 'dialog' : undefined"
     :aria-label="isPicker ? '选择 Agent' : '任务上下文'"
     :tabindex="isPicker ? -1 : undefined"
+    @keydown="onPanelKeydown"
   >
     <header class="context-head">
       <div class="context-head-copy">
@@ -45,7 +46,7 @@
           <span>工作类型</span>
           <span class="context-count num-token">{{ navigator.totalCount }} 个候选</span>
         </div>
-        <div class="context-facets" aria-label="按工作类型筛选">
+        <div class="context-facets" role="group" aria-label="按工作类型筛选">
           <button
             type="button"
             :class="['context-facet', { 'is-active': workType === 'all' }]"
@@ -181,7 +182,7 @@ const props = defineProps({
   loading: { type: Boolean, default: false },
   variant: { type: String, default: "rail" },
 });
-const emit = defineEmits(["stage", "open-portal"]);
+const emit = defineEmits(["stage", "open-portal", "request-close"]);
 
 const query = ref("");
 const workType = ref("all");
@@ -221,6 +222,12 @@ function contextCategoryLabel(value) {
 function stage(agent) {
   if (props.disabled) return;
   emit("stage", agent);
+}
+function onPanelKeydown(event) {
+  if (!isPicker.value || event.key !== "Escape") return;
+  event.preventDefault();
+  event.stopPropagation();
+  emit("request-close");
 }
 function pickerGateParts(agent) {
   const parts = [];

@@ -5,11 +5,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from jsonschema import validate as jsonschema_validate
+from jsonschema.exceptions import SchemaError, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from . import classification_gate as cgate
@@ -22,6 +25,12 @@ router = APIRouter(prefix="/api", tags=["tasks"])
 # 审计 P2（DoS 面）：inputs 此前无大小上限——超大 JSON 会被原样落库并进入
 # runtime/事件链路放大。256KB 对 params 型输入绰绰有余；大数据走文件上传通道。
 _INPUTS_MAX_BYTES = 256 * 1024
+
+# Guide batch operation 的 task id 使用稳定 UUIDv5：同一认证用户、同一 operation_id、
+# 同一批下标永远映射同一主键。这样无需新增表/列，也能让 BEGIN IMMEDIATE 内的
+# 「查原任务或全建」串行化；metadata_json 再钉请求指纹，阻止同 key 换载荷复用。
+_BATCH_OPERATION_NAMESPACE = uuid.UUID("af40d035-cba9-4db2-a370-e6c8c4e25164")
+_BATCH_OPERATION_META_KEY = "guide_batch_operation"
 
 
 class InputBinding(BaseModel):
@@ -73,8 +82,8 @@ class CreateTaskRequest(BaseModel):
     depends_on: list[str] = Field(default_factory=list, max_length=32)
     input_binding: InputBinding | None = Field(default=None)
     # 迁移 #12（评审 N4b）：血缘注记——本任务是对哪个既有任务的「复制为新任务」
-    # 重跑。纯元数据：不入队逻辑、不管道产物、不改审计语义；创建期只校验目标
-    # 存在（防悬空血缘），供详情页渲染恢复链（failed 死端 → 最短恢复路径）。
+    # 重跑。纯元数据：不入队逻辑、不管道产物、不改审计语义；创建期校验目标
+    # 真实存在且状态严格为 failed（防悬空/伪恢复血缘），供详情页渲染恢复链。
     retry_of: str | None = Field(default=None, max_length=64)
 
     @field_validator("inputs")
@@ -145,9 +154,10 @@ class CreateTaskRequest(BaseModel):
 
 class BatchTaskItem(BaseModel):
     """批量召集单项（批七 §3-B6）。字段口径与 CreateTaskRequest 同源（各 validator
-    的理由注释见彼处，此处不复述）；差异仅一处：**after=同批下标依赖**替代
-    depends_on——批内成员的 task_id 生成于提交时，无法预先引用，故以下标声明、
-    创建时映射为真 depends_on。只允许引用更早条目 ⟹ 按构造即 DAG，零环检测。"""
+    的理由注释见彼处，此处不复述）；**after=同批下标依赖**替代 depends_on——
+    批内成员的 task_id 生成于提交时，无法预先引用，故以下标声明、创建时映射为
+    真 depends_on。只允许引用更早条目 ⟹ 按构造即 DAG，零环检测。retry_of 是
+    可选的系统恢复血缘，与单建请求同口径。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -155,6 +165,9 @@ class BatchTaskItem(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     inputs: dict[str, Any] = Field(default_factory=dict)
     input_file_ids: list[str] = Field(default_factory=list, max_length=64)
+    # 失败任务回到主对话后的恢复血缘。它仍是系统元数据，不是工程师字段；
+    # Guide 只把它写到恢复方案的根任务，下游成员沿 depends_on 接力。
+    retry_of: str | None = Field(default=None, max_length=64)
     # StrictInt（Codex R1 P2）：非严格 list[int] 会把 JSON 的 false/true 静默强转
     # 0/1、"3" 强转 3——伪造出提交者没写的依赖边；下标必须字面整数，其余 422。
     after: list[StrictInt] = Field(default_factory=list, max_length=32)
@@ -193,6 +206,15 @@ class BatchTaskItem(BaseModel):
             seen.add(fid)
         return v
 
+    @field_validator("retry_of")
+    @classmethod
+    def retry_of_sane(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if not v.strip() or len(v) > 64:
+            raise ValueError(f"非法 retry_of task_id：{v!r}")
+        return v
+
     @field_validator("after")
     @classmethod
     def after_sane_and_unique(cls, v: list[int]) -> list[int]:
@@ -213,6 +235,51 @@ class CreateTasksBatchRequest(BaseModel):
 
     conversation_id: str | None = Field(default=None, max_length=100)
     items: list[BatchTaskItem] = Field(min_length=1, max_length=32)
+    # Guide 在展示「可开工」前读取并校验的是某个确切 Agent 版本的输入契约；
+    # 提交时把该版本逐 Agent 带回，服务端在任何写入前复核，闭合 schema→create
+    # 之间的热更新窗口。公共 batch API 必填且必须覆盖整批；内部调用可保留兼容。
+    pinned_versions: dict[str, str] | None = Field(default=None, max_length=32)
+    # 版本不足以区分同版本包内容漂移；Guide 同时钉 registry 不可变包摘要。
+    # 公共 batch API 必填且必须逐 Agent 覆盖，并与 pinned_versions 一起在首行
+    # 写入前对同一个 package_snapshot 复核。
+    pinned_package_digests: dict[str, str] | None = Field(default=None, max_length=32)
+    # 客户端一次人工开工动作的稳定标识。后续用于 COMMIT 后响应丢失的幂等重放；
+    # 当前先收紧为有界、安全字符，绝不把任意文本写入审计元数据。
+    operation_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+
+    @field_validator("pinned_versions")
+    @classmethod
+    def pinned_versions_sane(
+        cls, value: dict[str, str] | None
+    ) -> dict[str, str] | None:
+        if value is None:
+            return None
+        for agent_id, version in value.items():
+            if not agent_id.strip() or len(agent_id) > 128:
+                raise ValueError(f"非法 pinned_versions agent_id：{agent_id!r}")
+            parts = version.split(".")
+            if len(parts) != 3 or any(not part.isdigit() for part in parts):
+                raise ValueError(f"非法 Agent 版本：{agent_id}={version!r}")
+        return value
+
+    @field_validator("pinned_package_digests")
+    @classmethod
+    def pinned_package_digests_sane(
+        cls, value: dict[str, str] | None
+    ) -> dict[str, str] | None:
+        if value is None:
+            return None
+        for agent_id, digest in value.items():
+            if not agent_id.strip() or len(agent_id) > 128:
+                raise ValueError(f"非法 pinned_package_digests agent_id：{agent_id!r}")
+            if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+                raise ValueError(f"非法 Agent 包摘要：{agent_id}={digest!r}")
+        return value
 
 
 class ReviewTaskRequest(BaseModel):
@@ -243,6 +310,289 @@ def _get_agent_or_none(registry: Any, agent_id: str) -> dict[str, Any] | None:
     except KeyError:
         return None
     return agent
+
+
+def _get_package_snapshot_or_none(registry: Any, agent_id: str) -> Any | None:
+    getter = getattr(registry, "package_snapshot", None)
+    if not callable(getter):
+        return None
+    try:
+        return getter(agent_id)
+    except KeyError:
+        return None
+
+
+def _require_complete_batch_pin_contract(
+    *,
+    items: list[BatchTaskItem],
+    operation_id: str | None,
+    pinned_versions: dict[str, str] | None,
+    pinned_package_digests: dict[str, str] | None,
+    require_for_version_only: bool,
+) -> None:
+    """Atomic Guide pin group; direct team version-only calls remain compatible."""
+    contract_requested = (
+        require_for_version_only is True
+        or operation_id is not None
+        or pinned_package_digests is not None
+    )
+    if contract_requested is False:
+        return
+
+    missing_fields: list[str] = []
+    if operation_id is None:
+        missing_fields.append("operation_id")
+    if pinned_versions is None:
+        missing_fields.append("pinned_versions")
+    if pinned_package_digests is None:
+        missing_fields.append("pinned_package_digests")
+
+    coverage_errors: list[dict[str, Any]] = []
+    expected_agent_ids = {item.agent_id for item in items}
+    for index, item in enumerate(items):
+        item_errors: list[str] = []
+        if pinned_versions is not None and item.agent_id not in pinned_versions:
+            item_errors.append(f"缺少创建时版本钉：{item.agent_id}")
+        if (
+            pinned_package_digests is not None
+            and item.agent_id not in pinned_package_digests
+        ):
+            item_errors.append(f"缺少创建时包摘要钉：{item.agent_id}")
+        if len(item_errors) > 0:
+            coverage_errors.append(
+                {"index": index, "agent_id": item.agent_id, "errors": item_errors}
+            )
+
+    unexpected_agents = {
+        "pinned_versions": sorted(
+            set((pinned_versions or {}).keys()) - expected_agent_ids
+        ),
+        "pinned_package_digests": sorted(
+            set((pinned_package_digests or {}).keys()) - expected_agent_ids
+        ),
+    }
+
+    if (
+        len(missing_fields) > 0
+        or len(coverage_errors) > 0
+        or any(len(agent_ids) > 0 for agent_ids in unexpected_agents.values())
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "batch_pin_contract_incomplete",
+                "message": (
+                    "批量开工的 operation_id、pinned_versions 与 "
+                    "pinned_package_digests 必须原子成组且覆盖全部 Agent"
+                ),
+                "missing_fields": missing_fields,
+                "batch_errors": coverage_errors,
+                "unexpected_agents": unexpected_agents,
+            },
+        )
+
+
+def _snapshot_input_validation_error(
+    *,
+    snapshot: Any,
+    inputs: dict[str, Any],
+    input_file_ids: list[str] | None = None,
+    conn: Any | None = None,
+    defer_file_upload_to_resolver: bool = False,
+) -> str | None:
+    """Validate inputs from bytes in the exact package snapshot already gated."""
+    file_ids = input_file_ids or []
+    agent = getattr(snapshot, "manifest", None)
+    if not isinstance(agent, dict):
+        return "Agent 包快照缺少 manifest"
+    input_contract = agent.get("input")
+    if not isinstance(input_contract, dict):
+        return "Agent 包缺少 input 契约"
+    input_type = input_contract.get("type")
+    if input_type == "none":
+        if len(inputs) > 0:
+            return "input.type=none 的 Agent 不接受 inputs 字段"
+        if len(file_ids) > 0:
+            return "input.type=none 的 Agent 不接受附件"
+        return None
+    if input_type not in {"params", "file_upload"}:
+        return f"Agent 包 input.type 无法识别：{input_type!r}"
+    if input_type == "file_upload" and (
+        len(file_ids) > 1
+        or (len(file_ids) == 0 and defer_file_upload_to_resolver is False)
+    ):
+        return "input.type=file_upload 的 Agent 必须且只能接收恰好 1 个附件"
+    file_records: list[dict[str, Any]] = []
+    if len(file_ids) > 0:
+        if conn is None:
+            return "附件仓储不可用，无法核验输入文件"
+        for file_id in file_ids:
+            file_record = repos.get_file(conn, file_id)
+            if file_record is None:
+                return f"附件不存在：{file_id}"
+            if file_record.get("kind") != "input":
+                return (
+                    f"附件必须是上传件（kind=input）：{file_id} 的 kind="
+                    f"{file_record.get('kind')!r}"
+                )
+            file_records.append(file_record)
+    if input_type == "file_upload":
+        raw_allowed_extensions = input_contract.get("allowed_extensions")
+        if (
+            not isinstance(raw_allowed_extensions, list)
+            or len(raw_allowed_extensions) == 0
+            or len(raw_allowed_extensions) > 32
+        ):
+            return "Agent 包 file_upload.allowed_extensions 声明缺失或不合法"
+        allowed_extensions: list[str] = []
+        for raw_extension in raw_allowed_extensions:
+            if not isinstance(raw_extension, str):
+                return "Agent 包 file_upload.allowed_extensions 声明不合法"
+            extension = raw_extension.strip().lower()
+            if not extension.startswith(".") or not 2 <= len(extension) <= 16:
+                return "Agent 包 file_upload.allowed_extensions 声明不合法"
+            if extension not in allowed_extensions:
+                allowed_extensions.append(extension)
+        if len(file_records) == 1:
+            file_record = file_records[0]
+            filename = file_record.get("filename")
+            if not isinstance(filename, str) or not any(
+                filename.lower().endswith(extension) for extension in allowed_extensions
+            ):
+                return (
+                    f"附件扩展名不符合已钉死的 Agent 包契约：{filename!r}，"
+                    f"允许 {allowed_extensions}"
+                )
+    schema_name = input_contract.get("schema")
+    if not isinstance(schema_name, str) or schema_name.strip() == "":
+        return "Agent 包缺少 input schema 声明"
+
+    schema_payload: bytes | None = None
+    for relative_path, payload in snapshot.files:
+        if relative_path == schema_name:
+            schema_payload = payload
+            break
+    if schema_payload is None:
+        return f"Agent 包快照缺少输入契约文件：{schema_name}"
+
+    try:
+        schema = json.loads(schema_payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return f"Agent 包输入契约不是合法 UTF-8 JSON：{schema_name}"
+    if not isinstance(schema, dict):
+        return f"Agent 包输入契约必须是 JSON object：{schema_name}"
+
+    try:
+        jsonschema_validate(instance=inputs, schema=schema)
+    except ValidationError as exc:
+        location = ".".join(str(part) for part in exc.absolute_path)
+        if location == "":
+            location = "$"
+        return f"inputs 不符合 {schema_name}（{location}）：{exc.message}"
+    except SchemaError:
+        return f"Agent 包输入契约不是合法 JSON Schema：{schema_name}"
+    return None
+
+
+def _batch_request_fingerprint(
+    *,
+    items: list[BatchTaskItem],
+    conversation_id: str | None,
+    pinned_versions: dict[str, str] | None,
+    pinned_package_digests: dict[str, str] | None,
+) -> str:
+    """对一次 batch 的语义载荷做稳定摘要；operation_id 本身是索引，不入摘要。"""
+    canonical = {
+        "conversation_id": conversation_id,
+        "items": [item.model_dump(mode="json") for item in items],
+        "pinned_versions": dict(sorted((pinned_versions or {}).items())),
+    }
+    # 保持未提供 digest pin 的旧 operation 指纹逐字兼容；显式提供时摘要成为
+    # 语义载荷的一部分，同 key 不得换包重放。
+    if pinned_package_digests is not None:
+        canonical["pinned_package_digests"] = dict(
+            sorted(pinned_package_digests.items())
+        )
+    encoded = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _batch_operation_task_ids(
+    *, created_by_username: str, operation_id: str, count: int
+) -> list[str]:
+    return [
+        "task_"
+        + uuid.uuid5(
+            _BATCH_OPERATION_NAMESPACE,
+            json.dumps(
+                [created_by_username, operation_id, index],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        ).hex
+        for index in range(count)
+    ]
+
+
+def _load_batch_operation_replay(
+    *,
+    conn: Any,
+    task_ids: list[str],
+    operation_id: str,
+    fingerprint: str,
+    conversation_id: str | None,
+    created_by_username: str,
+) -> list[dict[str, Any]] | None:
+    """返回完整、同载荷的既有 batch；不存在返回 None，残缺/换载荷一律 409。
+
+    task_ids 是认证用户名 + operation_id + 下标的确定性主键，因此无需扫描 JSON，
+    也不需要新增唯一索引。写事务内二次调用时，BEGIN IMMEDIATE 保证并发重放只会
+    有一个创建者；其余调用读取并返回同一组权威任务。
+    """
+    tasks = [repos.get_task(conn, task_id) for task_id in task_ids]
+    present = [task for task in tasks if task is not None]
+    if not present:
+        return None
+    if len(present) != len(task_ids):
+        message = (
+            f"创建操作 {operation_id} 的任务记录不完整——状态待人工核对，"
+            "禁止自动补建或换 key 重试"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "batch_operation_conflict", "message": message},
+        )
+
+    expected_count = len(task_ids)
+    for index, task in enumerate(tasks):
+        assert task is not None
+        operation = (task.get("metadata") or {}).get(_BATCH_OPERATION_META_KEY)
+        valid = (
+            task.get("created_by_username") == created_by_username
+            and task.get("conversation_id") == conversation_id
+            and isinstance(operation, dict)
+            and operation.get("operation_id") == operation_id
+            and operation.get("fingerprint") == fingerprint
+            and type(operation.get("index")) is int
+            and operation.get("index") == index
+            and type(operation.get("count")) is int
+            and operation.get("count") == expected_count
+        )
+        if valid is not True:
+            message = (
+                f"创建操作 {operation_id} 已被不同载荷使用或记录不一致——"
+                "禁止覆盖；请先核对原任务"
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "batch_operation_conflict", "message": message},
+            )
+    return [task for task in tasks if task is not None]
 
 
 @router.post("/tasks")
@@ -343,14 +693,22 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                     status_code=422,
                     detail=f"input_binding 引用了 depends_on 之外的任务（越权）：{stray}",
                 )
-        # retry_of（迁移 #12）：血缘目标必须真实存在——悬空血缘会让详情页的恢复链
-        # 指向虚空（404 fail-closed，不静默落 NULL 冒充「非重跑」）。纯元数据不做
-        # 更多约束：不复位原任务、不搬产物，复制的 inputs 走本请求体正常校验。
+        # retry_of（迁移 #12 / ADR-0033）：血缘目标必须真实存在且状态严格为
+        # failed。不存在 404；存在但非失败 422，且两者都发生在建行之前，保证零任务
+        # 落库。纯元数据不复位原任务、不搬产物，复制 inputs 仍走本请求体正常校验。
         if body.retry_of is not None:
             retry_origin = repos.get_task(conn, body.retry_of)
             if retry_origin is None:
                 raise HTTPException(
                     status_code=404, detail=f"retry_of 指向的任务不存在：{body.retry_of}"
+                )
+            if retry_origin.get("status") != "failed":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"retry_of 只能指向失败任务：{body.retry_of} 当前状态为"
+                        f" {retry_origin.get('status')!r}"
+                    ),
                 )
         create_kwargs = dict(
             task_id=task_id,
@@ -465,6 +823,10 @@ def create_tasks_batch(body: CreateTasksBatchRequest, request: Request) -> dict[
             conversation_id=body.conversation_id,
             created_by=request.state.user["display_name"],
             created_by_username=request.state.user["username"],
+            pinned_versions=body.pinned_versions,
+            pinned_package_digests=body.pinned_package_digests,
+            operation_id=body.operation_id,
+            require_complete_pin_group_for_versions=True,
         )
     finally:
         conn.close()
@@ -479,21 +841,82 @@ def run_batch_creation(
     created_by: str,
     created_by_username: str,
     pinned_versions: dict[str, str] | None = None,
+    pinned_package_digests: dict[str, str] | None = None,
+    operation_id: str | None = None,
+    require_complete_pin_group_for_versions: bool = False,
 ) -> dict[str, Any]:
     """批量创建内核（批七 batch 端点原实现整体提取，语义零改动）：逐项静态校验
-    全收集（全有全无 422）→ BEGIN IMMEDIATE 单事务建行+入队+task_created/charter
+    全收集（含 retry_of 仅允许指向 failed 任务；全有全无 422）→ BEGIN IMMEDIATE 单事务建行+入队+task_created/charter
     事件 → 提交后取回投影。调用方持 conn 生命周期。
 
-    pinned_versions（批八 Codex R0 P1）：调用方（teams summon）在对账 gate 时点
+    pinned_versions（批八 Codex R0 P1）：调用方（teams summon / Guide）在对账 gate 时点
     观察到的 {agent_id: version}。此处对**同一次 registry 读取的对象**做钉版本
     校验并从同对象盖章 agent_version——registry 若在对账后热切换到不兼容新版，
     本校验 422 拒发，闭合「新注册表版本被盖进任务→runtime 漂移复检恒过」的
-    TOCTOU 旁路。None=不校验（batch 直建端点无对账语义，行为不变）。"""
+    TOCTOU 旁路。pinned_package_digests 进一步钉同版本包的完整内容摘要；提供时
+    写前从一次 package_snapshot 读取 manifest+digest+input schema，先验全批 inputs，
+    再把摘要写入 task.metadata。API 的 operation_id/两种 pin 必须原子成组；内部
+    teams 既有 version-only 调用继续兼容。operation_id 非空时，task id 由认证
+    username + operation_id + 下标确定性派生，并用 metadata 请求指纹做幂等重放/
+    冲突拒绝；不改持久化 schema。"""
+    _require_complete_batch_pin_contract(
+        items=items,
+        operation_id=operation_id,
+        pinned_versions=pinned_versions,
+        pinned_package_digests=pinned_package_digests,
+        require_for_version_only=require_complete_pin_group_for_versions,
+    )
+
+    operation_fingerprint: str | None = None
+    if operation_id is not None:
+        operation_fingerprint = _batch_request_fingerprint(
+            items=items,
+            conversation_id=conversation_id,
+            pinned_versions=pinned_versions,
+            pinned_package_digests=pinned_package_digests,
+        )
+        task_ids = _batch_operation_task_ids(
+            created_by_username=created_by_username,
+            operation_id=operation_id,
+            count=len(items),
+        )
+        # COMMIT 后响应丢失的常见重放不应再受现势 Registry 漂移影响：先按
+        # 确定性主键核对既有权威任务。同一检查会在写锁内再做一次封并发窗口。
+        replay = _load_batch_operation_replay(
+            conn=conn,
+            task_ids=task_ids,
+            operation_id=operation_id,
+            fingerprint=operation_fingerprint,
+            conversation_id=conversation_id,
+            created_by_username=created_by_username,
+        )
+        if replay is not None:
+            return {
+                "tasks": replay,
+                "operation_id": operation_id,
+                "replayed": True,
+            }
+    else:
+        task_ids = [f"task_{uuid.uuid4().hex}" for _ in items]
+
     errors: list[dict[str, Any]] = []
     agents: list[dict[str, Any] | None] = []
     for idx, item in enumerate(items):
         item_errors: list[str] = []
         agent = _get_agent_or_none(agent_registry, item.agent_id)
+        if (pinned_versions is not None or pinned_package_digests is not None) and (
+            pinned_versions is None or item.agent_id not in pinned_versions
+        ):
+            item_errors.append(
+                f"缺少创建时版本钉：{item.agent_id}——请重新核对方案后开工"
+            )
+        if (
+            pinned_package_digests is not None
+            and item.agent_id not in pinned_package_digests
+        ):
+            item_errors.append(
+                f"缺少创建时包摘要钉：{item.agent_id}——请重新核对方案后开工"
+            )
         if (
             agent is not None
             and pinned_versions is not None
@@ -517,13 +940,29 @@ def run_batch_creation(
                 item_errors.append(
                     f"after 下标 {dep_idx} 非法：只能引用本批更早条目（0..{idx - 1}）——按构造即 DAG"
                 )
+        pinned_file_contract_pending = False
         for fid in item.input_file_ids:
             rec = repos.get_file(conn, fid)
-            if rec is not None and rec.get("kind") != "input":
+            if pinned_package_digests is not None and (
+                rec is None or rec.get("kind") != "input"
+            ):
+                # 完整 pin 路径由同一 package snapshot 的输入合同统一给出稳定
+                # batch_inputs_invalid；这里不让密级 gate 的保守兜底抢先吞掉根因。
+                pinned_file_contract_pending = True
+            elif rec is not None and rec.get("kind") != "input":
                 item_errors.append(
                     f"input_file_ids 只接受上传件（kind=input）：{fid} 的 kind={rec.get('kind')!r}"
                 )
-        if agent is not None:
+        if item.retry_of is not None:
+            retry_origin = repos.get_task(conn, item.retry_of)
+            if retry_origin is None:
+                item_errors.append(f"retry_of 指向的任务不存在：{item.retry_of}")
+            elif retry_origin.get("status") != "failed":
+                item_errors.append(
+                    f"retry_of 只能指向失败任务：{item.retry_of} 当前状态为"
+                    f" {retry_origin.get('status')!r}"
+                )
+        if agent is not None and pinned_file_contract_pending is False:
             # 批七 ADR-0030 密级 gate（batch 路径，与 create_task 同函数同判定式）。
             _allowed, _material_level, _agent_max = cgate.agent_clearance_allows(
                 conn, agent, item.input_file_ids
@@ -544,9 +983,25 @@ def run_batch_creation(
             },
         )
 
-    task_ids = [f"task_{uuid.uuid4().hex}" for _ in items]
     conn.execute("BEGIN IMMEDIATE")
     try:
+        if operation_id is not None:
+            assert operation_fingerprint is not None
+            replay = _load_batch_operation_replay(
+                conn=conn,
+                task_ids=task_ids,
+                operation_id=operation_id,
+                fingerprint=operation_fingerprint,
+                conversation_id=conversation_id,
+                created_by_username=created_by_username,
+            )
+            if replay is not None:
+                conn.execute("COMMIT")
+                return {
+                    "tasks": replay,
+                    "operation_id": operation_id,
+                    "replayed": True,
+                }
         if conversation_id is not None:
             conv = repos.get_conversation(conn, conversation_id)
             if conv is None:
@@ -554,15 +1009,129 @@ def run_batch_creation(
                     status_code=404, detail=f"归属的导引会话不存在：{conversation_id}"
                 )
             if conv["status"] != "active":
+                message = (
+                    f"归属的导引会话已 {conv['status']}，不再接受新任务"
+                    f"（结束协作=真只读）：{conversation_id}"
+                )
                 raise HTTPException(
                     status_code=409,
-                    detail=(
-                        f"归属的导引会话已 {conv['status']}，不再接受新任务"
-                        f"（结束协作=真只读）：{conversation_id}"
-                    ),
+                    detail={"code": "conversation_not_active", "message": message},
+                )
+        # 对所有引用 Agent 在首条任务写入前做第二次现势读取。上面的静态校验是
+        # 友好错误收集，不是并发裁决；真正的 TOCTOU gate 必须紧贴写入且先全查
+        # 后全写，任一漂移都整批回滚为零行。digest pin 路径每项只取一次
+        # package_snapshot，并从同一不可变对象读取 manifest+digest；后续盖章版本、
+        # 摘要和 charter 都只消费这组对象，绝不再回读可变 authoring source。
+        package_snapshots: list[Any | None] = [None for _ in items]
+        if pinned_versions is not None or pinned_package_digests is not None:
+            live_agents: list[dict[str, Any] | None] = []
+            live_snapshots: list[Any | None] = []
+            drift_errors: list[dict[str, Any]] = []
+            for idx, item in enumerate(items):
+                if pinned_package_digests is not None:
+                    snapshot = _get_package_snapshot_or_none(
+                        agent_registry, item.agent_id
+                    )
+                    live_agent = snapshot.manifest if snapshot is not None else None
+                else:
+                    snapshot = None
+                    live_agent = _get_agent_or_none(agent_registry, item.agent_id)
+                live_agents.append(live_agent)
+                live_snapshots.append(snapshot)
+                item_drift_errors: list[str] = []
+                pinned_version = (pinned_versions or {}).get(item.agent_id)
+                current_version = (live_agent or {}).get("version") or ""
+                if (
+                    live_agent is None
+                    or pinned_version is None
+                    or current_version != pinned_version
+                ):
+                    item_drift_errors.append(
+                        f"agent 版本在方案核对后发生变化：{item.agent_id} "
+                        f"{pinned_version or '未钉版本'} → "
+                        f"{current_version or '不在注册表'}——请重新核对后开工"
+                    )
+                if pinned_package_digests is not None:
+                    pinned_digest = pinned_package_digests.get(item.agent_id)
+                    current_digest = snapshot.digest if snapshot is not None else ""
+                    if (
+                        snapshot is None
+                        or pinned_digest is None
+                        or current_digest != pinned_digest
+                    ):
+                        item_drift_errors.append(
+                            f"agent 包摘要在方案核对后发生变化：{item.agent_id} "
+                            f"{pinned_digest or '未钉摘要'} → "
+                            f"{current_digest or '不在注册表'}——请重新核对后开工"
+                        )
+                if item_drift_errors:
+                    drift_errors.append(
+                        {
+                            "index": idx,
+                            "agent_id": item.agent_id,
+                            "errors": item_drift_errors,
+                        }
+                    )
+            if drift_errors:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "message": "整批未创建（Agent 版本或包内容已变化）——请重新核对方案",
+                        "batch_errors": drift_errors,
+                    },
+                )
+            agents = live_agents
+            package_snapshots = live_snapshots
+
+        # ADR-0033：完整 pin 链不只证明「是同一个包」，还必须用这个刚取得的
+        # 不可变包校验每项 inputs。先全验后全写，任一项非法整批 422/零落库；
+        # 不通过 package_dir 回读 authoring source，也不再次获取 snapshot。
+        if pinned_package_digests is not None:
+            input_errors: list[dict[str, Any]] = []
+            for idx, item in enumerate(items):
+                snapshot = package_snapshots[idx]
+                agent = agents[idx]
+                if snapshot is None or agent is None:
+                    validation_error = "Agent 不可变包快照不可用"
+                else:
+                    validation_error = _snapshot_input_validation_error(
+                        snapshot=snapshot,
+                        inputs=item.inputs,
+                        input_file_ids=item.input_file_ids,
+                        conn=conn,
+                        defer_file_upload_to_resolver=len(item.after) > 0,
+                    )
+                if validation_error is not None:
+                    input_errors.append(
+                        {
+                            "index": idx,
+                            "agent_id": item.agent_id,
+                            "errors": [validation_error],
+                        }
+                    )
+            if len(input_errors) > 0:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "batch_inputs_invalid",
+                        "message": "整批未创建（输入不符合已钉死的 Agent 包契约）",
+                        "batch_errors": input_errors,
+                    },
                 )
         for idx, item in enumerate(items):
             deps = [task_ids[d] for d in item.after]
+            metadata: dict[str, Any] = {}
+            if pinned_package_digests is not None:
+                snapshot = package_snapshots[idx]
+                assert snapshot is not None
+                metadata["package_snapshot_digest"] = snapshot.digest
+            if operation_id is not None:
+                metadata[_BATCH_OPERATION_META_KEY] = {
+                    "operation_id": operation_id,
+                    "fingerprint": operation_fingerprint,
+                    "index": idx,
+                    "count": len(items),
+                }
             repos.create_task(
                 conn,
                 task_id=task_ids[idx],
@@ -573,11 +1142,11 @@ def run_batch_creation(
                 created_by_username=created_by_username,
                 inputs=item.inputs,
                 input_file_ids=item.input_file_ids,
-                metadata={},
+                metadata=metadata,
                 depends_on=deps or None,
                 input_binding=None,
                 conversation_id=conversation_id,
-                retry_of=None,
+                retry_of=item.retry_of,
             )
         # 入队与创建事件并入同一事务（Codex R0 P1-1：两阶段窗口下，收尾任一
         # 写失败会让「行已存在但报错返回」——导引重试路径造重复任务；worker
@@ -632,7 +1201,11 @@ def run_batch_creation(
         conn.execute("ROLLBACK")
         raise
     out_tasks = [repos.get_task(conn, task_ids[idx]) for idx in range(len(items))]
-    return {"tasks": out_tasks}
+    result: dict[str, Any] = {"tasks": out_tasks}
+    if operation_id is not None:
+        result["operation_id"] = operation_id
+        result["replayed"] = False
+    return result
 
 
 @router.get("/tasks")

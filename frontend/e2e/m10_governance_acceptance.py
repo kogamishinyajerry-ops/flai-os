@@ -143,9 +143,10 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 
-from _auth import login_context, seed_user  # noqa: E402
+from _auth import login_context, login_httpx, seed_user  # noqa: E402
 
 seed_user(WORK / "flai_os.db", "验收工程师")
+API = login_httpx(BASE)
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
@@ -226,14 +227,20 @@ with sync_playwright() as p:
     page.screenshot(path=str(SHOTS / "4_promoted.png"), full_page=True)
     page.keyboard.press("Escape")
 
-    # ── ⑥ 用户任务 → waiting_review → 状态坞批准放行 ──
-    page.goto(BASE + "/tasks/new?agent_id=governed_agent", wait_until="networkidle")
-    expect(page.locator(".agent-preview")).to_be_visible(timeout=5000)
-    # 创建人=登录身份（ADR-0019），无输入框
-    page.locator('input[placeholder="请填写姓名"]').first.fill("治理链样本")
-    page.get_by_role("button", name="提交任务").click()
-    page.wait_for_url(re.compile(r"/tasks/task_[0-9a-f]+"), timeout=8000)
-    task_id = page.url.rsplit("/", 1)[-1]
+    # ── ⑥ 用户任务 → waiting_review → 状态坞批准放行。门户继续保留治理动作，
+    #    但不再承担工程师任务填参；认证 API 只负责准备本治理验收的样本任务。──
+    created = API.post(
+        "/api/tasks",
+        json={"agent_id": "governed_agent", "inputs": {"name": "治理链样本"}},
+    )
+    created_body = created.json() if created.status_code in (200, 201) else {}
+    task_id = created_body.get("id", "")
+    created_ok = created.status_code in (200, 201) and task_id.startswith("task_")
+    check("⑥前置：认证 API 创建治理样本任务成功", created_ok,
+          f"status={created.status_code} body={created.text[:200]}")
+    if created_ok is not True:
+        raise RuntimeError(f"M10 前置任务创建失败 {created.status_code}: {created.text[:200]}")
+    page.goto(BASE + f"/tasks/{task_id}", wait_until="networkidle")
     deadline = time.time() + 30
     while time.time() < deadline:
         if "等待人工审核" in page.locator("body").inner_text():

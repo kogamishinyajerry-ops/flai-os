@@ -1,15 +1,17 @@
 {
   "case_id": "case_001",
-  "description": "导引会话期望口径：用户描述一个故障树需求 → 导引经多轮澄清后推荐 fta_agent 并预填 top_event → 推荐经确定性校验（agent_id 真实、字段过 input_schema）→ 作为预填草案返回，交人确认。导引本身不创建任务。",
+  "description": "会话优先自动路由：工程师只用自然语言给出完整故障树需求 → Guide 自动选择 fta_agent 并整理全部必需执行输入 → Registry + 完整 input_schema 确定性校验通过 → 在原对话轴等待工程师点击开工。Guide 本身不创建任务、不作工程签发。",
   "conversation": [
-    {"role": "user", "content": "我想对双通道供电系统做故障树分析，顶事件是供电完全丧失。"}
+    {"role": "user", "content": "请对双通道供电系统做故障树分析。系统由发电机A、发电机B和两条独立供电通道组成，顶事件是供电完全丧失；组件列表为发电机A、发电机B、通道A、通道B。"}
   ],
   "expected": {
     "recommended_agent_id": "fta_agent",
-    "prefilled_inputs_contains": ["top_event"],
+    "prefilled_inputs_contains": ["top_event", "system_description", "components"],
     "recommendation_validated_against_target_schema": true,
     "guide_creates_task": false,
-    "human_confirms_before_submit": true
+    "missing_required_inputs": [],
+    "human_confirms_before_start": true,
+    "engineer_raw_inputs": ["text", "attachment"]
   },
-  "notes": "本 case 的真实对话质量需内网模型（FLAI_LLM_*）真跑验证；本机以 stub gateway 验证会话链 + 推荐确定性校验 + 人确认接缝。"
+  "notes": "本 case 的真实对话质量需内网模型（FLAI_LLM_*）真跑验证；本机以 stub gateway 验证会话链、自动路由、完整输入闸门与原对话开工确认接缝。"
 }

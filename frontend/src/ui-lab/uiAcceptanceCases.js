@@ -36,145 +36,6 @@ const APP_FIXTURE = {
   ],
 };
 
-const AGENTS = [
-  {
-    id: "cfd_input_check",
-    name: "CFD 参数核对 Agent",
-    category: "tool_automation",
-    summary: "核对算例输入、边界和求解设置",
-    limitations: ["产物需工程师复核"],
-    maturity: "试运行",
-    status: "active",
-  },
-  {
-    id: "standard_qa",
-    name: "标准问答 Agent",
-    category: "knowledge_qa",
-    summary: "检索已接入标准并返回依据",
-    limitations: ["缺少受控依据时如实拒答"],
-    maturity: "试运行",
-    status: "active",
-  },
-  {
-    id: "fta_assist",
-    name: "FTA 分析 Agent",
-    category: "reasoning_assist",
-    summary: "辅助拆解顶事件和失效路径",
-    limitations: ["不替代工程判断或签发"],
-    maturity: "候选",
-    status: "active",
-  },
-  {
-    id: "report_draft",
-    name: "工程报告草拟 Agent",
-    category: "structured_gen",
-    summary: "按受控模板生成可审阅草案",
-    limitations: ["只生成草案，不代提交"],
-    maturity: "候选",
-    status: "active",
-  },
-];
-
-const WORK_TYPE_IDS = [
-  "tool_automation",
-  "knowledge_qa",
-  "structured_gen",
-  "reasoning_assist",
-];
-
-function unavailableSchema(filename) {
-  return {
-    state: "unavailable",
-    reason: "file_missing",
-    filename,
-    property_count: 0,
-    required_count: 0,
-  };
-}
-
-// 真实 AgentShellCatalog 响应的静态验收快照。UiLab 只做可视状态，不联网、
-// 不替代 API 契约测试；字段完整保留“只读本体”与人工门语义。
-const AGENT_SHELL = {
-  schema_version: "agent_shell.v1",
-  source: { kind: "registry_snapshot", read_only: true },
-  summary: {
-    agent_count: AGENTS.length,
-    work_type_count: WORK_TYPE_IDS.length,
-    domain_count: 0,
-    unresolved_reference_count: 0,
-    defaulted_clearance_count: AGENTS.length,
-    mock_tool_reference_count: 0,
-  },
-  facets: {
-    work_types: WORK_TYPE_IDS.map((id) => ({
-      id,
-      total_count: AGENTS.filter((agent) => agent.category === id).length,
-      task_count: AGENTS.filter((agent) => agent.category === id).length,
-      conversation_count: 0,
-      unknown_launch_count: 0,
-    })),
-    domains: [],
-    launch_kinds: [
-      {
-        id: "task",
-        total_count: AGENTS.length,
-        task_count: AGENTS.length,
-        conversation_count: 0,
-        unknown_launch_count: 0,
-      },
-      {
-        id: "conversation",
-        total_count: 0,
-        task_count: 0,
-        conversation_count: 0,
-        unknown_launch_count: 0,
-      },
-      {
-        id: "unknown",
-        total_count: 0,
-        task_count: 0,
-        conversation_count: 0,
-        unknown_launch_count: 0,
-      },
-    ],
-  },
-  agents: AGENTS.map((agent) => ({
-    identity: {
-      agent_id: agent.id,
-      name: agent.name,
-      version: "0.1.0",
-      summary: agent.summary,
-    },
-    classification: {
-      category: agent.category,
-      domain: null,
-      specialty: null,
-      usefulness_level: null,
-    },
-    capability: {
-      input: { type: "params", schema: unavailableSchema("input_schema.json") },
-      output: {
-        formats: [".json"],
-        schema: unavailableSchema("output_schema.json"),
-      },
-      tools: [],
-      knowledge_scopes: [],
-    },
-    trust: {
-      status: "draft",
-      maturity: "L0",
-      limitations: [...agent.limitations],
-      visibility: "all",
-      allowed_roles: ["business_user"],
-      clearance: { effective: "internal", source: "defaulted" },
-      requires_human_review: true,
-      evidence: { required: false, kinds: [] },
-    },
-    launch: { kind: "task" },
-  })),
-  diagnostics: [],
-};
-
 const LANDING_GUIDE = {
   started: false,
   conversationId: "",
@@ -182,9 +43,102 @@ const LANDING_GUIDE = {
   messages: [],
   sending: false,
   reconciliationRequired: false,
-  agentPickerOpen: false,
-  agents: AGENTS,
-  agentShell: AGENT_SHELL,
+};
+
+const ROUTING_RECOMMENDATION = {
+  decision: "orchestrate",
+  goal: "完成稳态算例开算前复核并形成可签认清单",
+  analysis: "系统已从你的描述中识别出输入核对与报告整理两段工作，并自动选择可用能力。",
+  workflow: "先核对算例输入与边界条件，再把已核结果整理为工程师可签认的复核清单。",
+  agents: [
+    {
+      agent_id: "cfd_input_check",
+      agent_name: "CFD 参数核对 Agent",
+      role: "核对输入、边界与求解设置",
+      rationale: "任务首先需要结构化检查开算条件。",
+      prefilled_inputs: {
+        case_scope: "本轮上传的稳态算例",
+        review_goal: "开算前完整性复核",
+      },
+      attachments: [
+        { file_id: "file-routing-case", filename: "稳态算例输入表.xlsx" },
+      ],
+      stripped_fields: [],
+      after: [],
+    },
+    {
+      agent_id: "report_draft",
+      agent_name: "工程报告草拟 Agent",
+      role: "整理可签认的复核清单",
+      rationale: "核对结果需要形成统一、可审阅的工程交付物。",
+      prefilled_inputs: {
+        deliverable: "稳态算例开算前复核清单",
+      },
+      attachments: [],
+      stripped_fields: [],
+      after: [0],
+    },
+  ],
+  ignored_attachments: [
+    { file_id: "file-routing-note", filename: "旧版背景说明.pdf" },
+  ],
+  dropped_agents: [],
+  capped: false,
+};
+
+const ROUTING_SCHEMAS = {
+  cfd_input_check: {
+    loaded: true,
+    version: "0.1.0",
+    packageDigest: "a".repeat(64),
+    inputMode: "params",
+    schema: {
+      type: "object",
+      required: ["case_scope", "review_goal"],
+      properties: {
+        case_scope: { type: "string" },
+        review_goal: { type: "string" },
+      },
+    },
+  },
+  report_draft: {
+    loaded: true,
+    version: "0.1.0",
+    packageDigest: "b".repeat(64),
+    inputMode: "params",
+    schema: {
+      type: "object",
+      required: ["deliverable"],
+      properties: { deliverable: { type: "string" } },
+    },
+  },
+};
+
+const ROUTING_GUIDE = {
+  started: true,
+  conversationId: "ui-auto-routing",
+  conversationStatus: "active",
+  sending: false,
+  reconciliationRequired: false,
+  agentSchemas: ROUTING_SCHEMAS,
+  messages: [
+    {
+      role: "user",
+      content: "帮我核对这批稳态算例能不能开算，并整理一份可签认清单。",
+      createdAt: "2026-07-31T06:28:00Z",
+      attachments: [
+        { id: "file-routing-case", filename: "稳态算例输入表.xlsx" },
+        { id: "file-routing-note", filename: "旧版背景说明.pdf" },
+      ],
+    },
+    {
+      role: "assistant",
+      content: "我已经整理好协作方案。执行前请核对目标，其余能力由系统在后台编排。",
+      recommendation: ROUTING_RECOMMENDATION,
+      createdAt: "2026-07-31T06:28:12Z",
+      fresh: true,
+    },
+  ],
 };
 
 const STREAMING_GUIDE = {
@@ -193,9 +147,6 @@ const STREAMING_GUIDE = {
   conversationStatus: "active",
   sending: true,
   reconciliationRequired: false,
-  agentPickerOpen: false,
-  agents: AGENTS,
-  agentShell: AGENT_SHELL,
   messages: [
     {
       role: "user",
@@ -218,9 +169,6 @@ const PERSISTENCE_UNKNOWN_GUIDE = {
   conversationStatus: "active",
   sending: false,
   reconciliationRequired: true,
-  agentPickerOpen: false,
-  agents: AGENTS,
-  agentShell: AGENT_SHELL,
   messages: [
     {
       role: "user",
@@ -393,9 +341,6 @@ const ASSET_WORK_GUIDE = {
   conversationStatus: "active",
   sending: false,
   reconciliationRequired: false,
-  agentPickerOpen: false,
-  agents: AGENTS,
-  agentShell: AGENT_SHELL,
   messages: [
     {
       id: "ui-asset-user-1",
@@ -436,30 +381,27 @@ export const UI_ACCEPTANCE_CASES = [
   acceptanceCase({
     id: "landing-desktop",
     label: "桌面 · 起手页",
-    summary: "784px 对话主线与 296px 本体上下文轨道",
+    summary: "单一文字/附件入口与后台编排承诺",
     viewport: VIEWPORTS.desktop,
     guide: LANDING_GUIDE,
     reviewPoints: [
       "首屏是否在 900px 高度内保持足够内容容量",
-      "一排紧凑意图条目（图标+短标签）是否清晰可扫读",
-      "输入栏是否足够轻，且发送与附件目标仍可点",
-      "右侧轨道是否只展示 Registry 快照、未知关系与人工边界",
+      "首屏是否只有一个主任务和一个主输入",
+      "文字与附件入口是否清晰且没有执行单元或字段选择",
+      "后台编排与人工确认边界是否一句说清",
     ],
   }),
   acceptanceCase({
-    id: "picker-desktop",
-    label: "桌面 · Agent 选择器",
-    summary: "320px 本体快选与一行边界说明",
+    id: "routing-desktop",
+    label: "桌面 · 自动路由待确认",
+    summary: "编排摘要常驻，执行单元与输入依据按需披露",
     viewport: VIEWPORTS.desktop,
-    guide: {
-      ...LANDING_GUIDE,
-      agentPickerOpen: true,
-    },
+    guide: ROUTING_GUIDE,
     reviewPoints: [
-      "弹层是否只占必要空间，不变成第二个门户",
-      "名称、成熟度和一条边界信息是否可快速扫读",
-      "搜索和完整门户入口是否保持明确层级",
-      "选择 Agent 是否只暂存草稿，不发送、不建任务",
+      "默认是否只展示目标、解释摘要与一个开工动作",
+      "执行能力是否没有手工选择入口",
+      "路由依据与边界是否默认折叠且可键盘展开",
+      "单执行单元与多执行单元是否走同一原地确认链",
     ],
   }),
   acceptanceCase({
@@ -483,7 +425,7 @@ export const UI_ACCEPTANCE_CASES = [
     reviewPoints: [
       "保存未知是否与真正失败明确区分",
       "刷新核对动作是否比错误说明更容易找到",
-      "发送、附件和 Agent 入口是否共同锁定",
+      "发送与附件入口是否共同锁定",
     ],
   }),
   acceptanceCase({
@@ -494,24 +436,21 @@ export const UI_ACCEPTANCE_CASES = [
     guide: LANDING_GUIDE,
     reviewPoints: [
       "375px 宽度是否无横向溢出",
-      "2×2 紧凑意图条目是否守住触控目标且可扫读",
+      "首屏是否没有分类卡与候选列表",
       "44px 触控目标与内容容量是否平衡",
     ],
   }),
   acceptanceCase({
-    id: "picker-mobile",
-    label: "移动端 · Agent 选择器",
-    summary: "375px 下左右各 12px 的本体快选与内部滚动",
+    id: "routing-mobile",
+    label: "移动端 · 自动路由待确认",
+    summary: "375px 下的折叠编排依据与单一治理动作",
     viewport: VIEWPORTS.mobile,
-    guide: {
-      ...LANDING_GUIDE,
-      agentPickerOpen: true,
-    },
+    guide: ROUTING_GUIDE,
     reviewPoints: [
-      "弹层边缘是否留出足够安全区",
-      "四个 Agent 是否可在内部滚动中快速辨认",
-      "关闭弹层后 composer 是否仍保持上下文",
-      "工作类型筛选是否在窄屏内无横向溢出",
+      "默认折叠态是否只保留目标、摘要与主动作",
+      "展开路由依据后是否仍无横向溢出",
+      "折叠控件与开工按钮是否守住 44px 触控目标",
+      "composer 是否始终只有文字与附件入口",
     ],
   }),
   acceptanceCase({

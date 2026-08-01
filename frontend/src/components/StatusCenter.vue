@@ -148,11 +148,11 @@
 
           <el-alert v-if="peekTask.error_message" type="error" :title="peekTask.error_message" show-icon :closable="false" class="peek-block" />
 
-          <!-- N4a 速览里的失败任务同样给下一步：与 TaskDetail 同源 util，
-               预填需人工核对亲手提交，绝不自动重跑。 -->
+          <!-- 速览里的失败任务同样回到原对话补充自然语言/附件；与 TaskDetail
+               同源导航，绝不进入字段表或自动重跑。 -->
           <div v-if="peekTask.status === 'failed'" class="peek-block peek-retry">
-            <button type="button" class="peek-retry-btn" @click="retryFromPeek">复制为新任务</button>
-            <span class="peek-retry-hint">带原输入进创建页，核对后重新提交。</span>
+            <button type="button" class="peek-retry-btn" @click="retryFromPeek">回到对话说明问题</button>
+            <span class="peek-retry-hint">补充文字或附件，由系统结合原会话重新编排。</span>
           </div>
 
           <!-- 产物先于动作（信任核心 P0-2：先看要签的东西，再决定放行）。
@@ -667,7 +667,7 @@ function goFullPage() {
   if (id) router.push(`/tasks/${id}`);
 }
 
-// N4a：失败任务速览 → 复制为新任务（buildRetryRoute 写 flai_prefill 草案）。
+// 失败任务速览 → 回到原对话补充信息（buildRetryRoute 只构造对话路由）。
 // 与 goFullPage 同款退场纪律：先同步卸 peek 子树再导航，堵选择器重影窗口。
 function retryFromPeek() {
   const t = peekTask.value;

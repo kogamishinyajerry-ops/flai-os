@@ -17,7 +17,7 @@
     grep 自身任何非零返回码（含它自己报错的 2）都当「无匹配」误判通过，语义
     脆弱。pathlib 版跨平台、且「命中即失败」精确到 file:line，不依赖外部进程
     返回码。
-  ③ 375px 无横向溢出：/portal、/tasks/new、/tasks/<id>（含真实选中任务——
+  ③ 375px 无横向溢出：/portal、/、/tasks/<id>（含真实选中任务——
     TaskConsole 中栏切到 TaskDetail 选中态面板，非空任务台）+ **Task 9 R0
     新增** `/workbench/<sessionId>`（WorkbenchSession 会话页，先经真实
     POST /api/conversations 用 guide_agent 种一条会话）共四页逐一断言
@@ -54,20 +54,19 @@
     真红。
   ⑥ 页标题字号全等：GuidePage 的 `.plan-goal-title` 是对话气泡内的目标标题
     （仅在推荐消息落地后才挂载、且字号 20/21px 是刻意的气泡层级而非页级
-    token），排除在断言范围外并在此明示；改为对 6 个有稳定单一页标题元素的
+    token），排除在断言范围外并在此明示；改为对 5 个有稳定单一页标题元素的
     视图取 computed font-size，断言集合 size==1：
       /portal（AgentPortal .page-header h2）
       /me（MePage .page-header h2）
       /tasks/<id>（TaskDetail .page-header h2，选中态）
       /today（TodayPage .today-title，同用 var(--fs-title) token）
       /feedback（FeedbackPage .page-header h2）
-      /tasks/new（TaskCreate .page-header h2）
-    这 6 个视图的标题元素在源码里都是 `font-size: var(--fs-title)`（AgentPortal/
-    FeedbackPage/MePage/TaskCreate/TaskDetail/TodayPage 六处 grep 命中），是
+    这 5 个视图的标题元素在源码里都是 `font-size: var(--fs-title)`（AgentPortal/
+    FeedbackPage/MePage/TaskDetail/TodayPage 五处 grep 命中），是
     「页标题」这一语义类目里唯一具有单一稳定选择器的全集——不是任务书字面的
     「9 view」（该数字数不出 9 个语义不同的页标题，已核实源码后诚实收窄，非
-    偷懒放水）。**Task 9 R0 owner 裁决补三个排除项的具体理由**（凑齐 9 view
-    字面数、逐一核实为何不进 6-view 全集）：
+    偷懒放水）。**Task 9 R0 owner 裁决补四个排除项的具体理由**（凑齐 9 view
+    字面数、逐一核实为何不进 5-view 全集）：
       - GuidePage `.hero-title`：h1，30px，是页面 hero 大标题，语义层级高于
         「页标题」（其下 `.plan-goal-title` 气泡内标题另有 20/21px 的气泡层级
         原因，已在上面说明）；
@@ -78,7 +77,9 @@
         类型标签**（同 TaskConsole `.cl-title` 一个语义层级），不是页标题——
         真正的内容标题是其下 var(--fs-display)=24px serif 的 `.sess-goal`（桌面工艺批归 token）；该 h2 已从裸 20px
         魔数迁到 `var(--fs-h3)`（16px，版块标题档位，Task 9 R0 ④），但迁移
-        目标 token 是 `--fs-h3` 而非 `--fs-title`，仍不进本 6-view 全集。
+        目标 token 是 `--fs-h3` 而非 `--fs-title`，仍不进本 5-view 全集。
+      - TaskCreate：`/tasks/new` 已退役为回主对话的兼容重定向，不再存在可验收
+        的工程师页面；其旧源码不进入运行时路由，也不应继续撑大标题计数。
   ⑦ 失败态互斥：FeedbackPage 用 `page.route` 拦截反馈列表接口返 500，选中
     任务后断言 error alert 在屏 且「暂无反馈」EmptyState 不在屏（源码里两者
     本就是 `v-if="...&&!feedbackError"` 互斥关系，这里是行为验证非重复实现）。
@@ -90,7 +91,7 @@
     --with "pydantic>2" --with jieba python frontend/e2e/batch_d_visual_acceptance.py
 
 截图落 docs/reviews/batch-d-shots/（每次重跑覆盖，保持证据与代码同步）：
-  亮/暗 × 桌面/375px × {portal, tasks_new, task_detail, workbench}（Task 9 R0
+  亮/暗 × 桌面/375px × {portal, guide, task_detail, workbench}（Task 9 R0
   新增 workbench）共 16 张。
 """
 from __future__ import annotations
@@ -223,8 +224,8 @@ def poke_wait(page, predicate, timeout_s: float) -> bool:
 
 
 def _title_font_size(page) -> str | None:
-    """取当前页「页标题」元素的 computed font-size；两种选择器覆盖 6 个
-    视图（.page-header h2 命中 5 个，.today-title 命中 TodayPage）。"""
+    """取当前页「页标题」元素的 computed font-size；两种选择器覆盖 5 个
+    视图（.page-header h2 命中 4 个，.today-title 命中 TodayPage）。"""
     return page.evaluate(
         """() => {
           const el = document.querySelector('.page-header h2') || document.querySelector('.today-title');
@@ -305,7 +306,7 @@ check(
 
 AFFECTED = [
     ("portal", "/portal"),
-    ("tasks_new", "/tasks/new"),
+    ("guide", "/"),
     ("task_detail", f"/tasks/{TASK_ID}"),
 ]
 
@@ -323,6 +324,17 @@ with sync_playwright() as p:
         }"""
     )
     check("① token 地基已定义（--sans/--mono/--fs-title/--radius-lg 非空）", all(v for v in vals), str(vals))
+
+    # 历史创建页不再是视觉 Surface：任何旧深链丢弃手工 Agent query，回到
+    # 只有文字与附件的主对话入口。
+    page.goto(BASE + "/tasks/new?agent_id=hello_agent", wait_until="networkidle")
+    legacy_redirect_ok = (
+        page.url.rstrip("/") == BASE
+        and page.locator(".composer textarea").count() == 1
+        and page.locator('input[type="file"]').count() == 1
+        and page.locator(".agent-preview").count() == 0
+    )
+    check("③前置：/tasks/new 历史深链回主对话，零 TaskCreate 字段表", legacy_redirect_ok, page.url)
 
     # ── ③ 375px 无横向溢出 + 亮色桌面/375 截图（affected 三页）──
     for slug, path in AFFECTED:
@@ -451,14 +463,13 @@ with sync_playwright() as p:
     page.evaluate("() => localStorage.setItem('flai_theme_mode', 'light')")
     page.goto(BASE + "/portal", wait_until="networkidle")
 
-    # ── ⑥ 9-view 断言收窄为 6 个有稳定单一页标题元素的视图（见文件头注释）──
+    # ── ⑥ 9-view 断言收窄为 5 个有稳定单一页标题元素的视图（见文件头注释）──
     title_views = [
         ("/portal", "AgentPortal"),
         ("/me", "MePage"),
         (f"/tasks/{TASK_ID}", "TaskDetail(选中态)"),
         ("/today", "TodayPage"),
         ("/feedback", "FeedbackPage"),
-        ("/tasks/new", "TaskCreate"),
     ]
     sizes: dict[str, str | None] = {}
     for path, label in title_views:
@@ -467,7 +478,7 @@ with sync_playwright() as p:
         sizes[f"{label} {path}"] = _title_font_size(page)
     distinct = set(sizes.values())
     check(
-        "⑥ 6 视图页标题 font-size 全等（.page-header h2 / .today-title，见文件头收窄说明）",
+        "⑥ 5 视图页标题 font-size 全等（.page-header h2 / .today-title，见文件头收窄说明）",
         None not in distinct and len(distinct) == 1,
         str(sizes),
     )

@@ -14,7 +14,9 @@ const routes = [
   { path: "/portal", name: "portal", component: () => import("../views/AgentPortal.vue"), meta: { title: "Agent 门户" } },
   { path: "/workbench", redirect: "/tasks" },
   { path: "/workbench/:sessionId", name: "workbench-session", component: () => import("../views/WorkbenchSession.vue"), meta: { title: "协作会话" } },
-  { path: "/tasks/new", name: "task-create", component: () => import("../views/TaskCreate.vue"), meta: { title: "创建任务" } },
+  // 历史创建页只保留为源码兼容面，不再是工程师可达 Surface。旧书签、旧通知
+  // 或手工输入的 /tasks/new 一律丢弃 Agent/参数 query，回到唯一主对话入口。
+  { path: "/tasks/new", redirect: () => ({ path: "/", query: {} }) },
   // 任务台（Codex 三栏）：/tasks=列表+空态；/tasks/:taskId=选中任务的叙事流
   // +输出/来源面板。两路由同组件，meta.pageKey 让 page-turn 过渡不因选中
   // 切换整页重挂（中栏 TaskDetail 靠 :key=taskId 自行重建）。

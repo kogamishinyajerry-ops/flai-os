@@ -1,10 +1,11 @@
-"""M8 P2 导引编排官验收走查（refuse + 多 Agent orchestrate 的真浏览器渲染）。
+"""M8 P2 导引编排官验收走查（refuse + 多 Agent 自动路由的真浏览器渲染）。
 
 M6 e2e 已覆盖单 Agent orchestrate 卡片；本脚本补 M8 编排官的两个新分支：
-  ① refuse：平台接不住 → 显式拒绝卡片（理由 + 残留问题 + 重述建议），无「去创建
-     此任务」按钮（拒绝不产生任何可召集 Agent）；
-  ② 多 Agent orchestrate：召集 2 个真实 Agent → 各带分工 role + 各自「去创建此
-     任务」按钮，dropped_agents 剔除告警可见。
+  ① refuse：平台接不住 → 显式拒绝卡片（理由 + 残留问题 + 重述建议），不产生
+     任何开工入口；
+  ② 多 Agent orchestrate：系统自动路由 2 个真实 Agent，摘要常驻、路由依据按需
+     披露；任一成员输入未齐时整份方案 fail-closed，只给一个「继续说明缺失信息」
+     主按钮，绝不出现成员级创建按钮或 /tasks/new 字段表。
 
 自包含：自起后端（tmp）+ stub gateway（本机无内网 key）+ 真 chromium。
 
@@ -138,10 +139,24 @@ with sync_playwright() as p:
         and "performance_disk_agent 可接" in body  # reframe
     )
     check("①refuse 卡片：拒绝理由+残留问题+重述建议", refuse_ok, body[-400:])
-    # refuse 无可召集 Agent → 不出现「去创建此任务」按钮
-    no_create_btn = page.get_by_role("button", name="去创建此任务").count() == 0
-    check("①refuse 不产生任何『去创建此任务』按钮（拒绝零副作用）", no_create_btn,
-          f"btn_count={page.get_by_role('button', name='去创建此任务').count()}")
+    # refuse 无可执行方案 → 不产生开工 CTA，也不回退到成员级创建表单。
+    no_start = (
+        page.locator(".open-plan-btn").count() == 0
+        and page.get_by_role("button", name="去创建此任务").count() == 0
+    )
+    refuse_conv_id = (
+        page.url.split("?c=", 1)[1].split("&", 1)[0]
+        if "?c=" in page.url
+        else None
+    )
+    refuse_tasks = (
+        page.context.request.get(f"{BASE}/api/conversations/{refuse_conv_id}/tasks").json()
+        if refuse_conv_id
+        else []
+    )
+    check("①refuse 不产生开工入口、成员级创建按钮或后台任务（拒绝零副作用）",
+          no_start and bool(refuse_conv_id) and len(refuse_tasks) == 0,
+          f"conversation={refuse_conv_id} tasks={len(refuse_tasks)}")
     page.screenshot(path=str(SHOTS / "1_refuse.png"), full_page=True)
 
     # ── ② 多 Agent orchestrate：召集 2 个真实 Agent + 1 个幻觉（被剔除）──
@@ -157,33 +172,52 @@ with sync_playwright() as p:
         ],
     }
     _start_and_send(page, "li_gong", "做双通道供电的控制逻辑和故障树")
-    expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
-    page.wait_for_selector(".agent-card", timeout=5000)
+    plan_card = page.locator(".plan-card")
+    expect(plan_card).to_be_visible(timeout=8000)
+    expect(plan_card.locator(".route-summary")).to_be_visible(timeout=5000)
+    disclosure = plan_card.locator(".route-disclosure")
+    collapsed_ok = (
+        disclosure.get_attribute("open") is None
+        and plan_card.locator(".agent-card").count() == 2
+        and plan_card.locator(".agent-card").first.is_visible() is False
+        and "已自动编排 · 2 个执行单元" in plan_card.locator(".route-summary").inner_text()
+        and "还需通过对话补充执行信息" in plan_card.locator(".route-summary").inner_text()
+    )
+    check("②多 Agent 自动路由：摘要常驻、2 个执行单元的细节默认折叠", collapsed_ok)
+    disclosure.locator("summary").click()
+    expect(plan_card.locator(".agent-card").first).to_be_visible(timeout=3000)
     body = page.locator("body").inner_text()
-    agent_cards = page.locator(".agent-card").count()
-    create_btns = page.get_by_role("button", name="去创建此任务").count()
+    agent_cards = plan_card.locator(".agent-card").count()
+    create_btns = plan_card.get_by_role("button", name="去创建此任务").count()
     multi_ok = (
         "协作方案" in body
-        and "召集的 Agent · 2" in body  # 计数唯一承载点（plan-count pill 已按五律③撤除，降噪批原子同批）
+        and "执行单元 · 2" in body  # 计数唯一承载点（披露 summary 不再重复人数）
         and agent_cards == 2          # 幻觉 ghost_agent 被剔除，只剩 2 张真实卡片
-        and create_btns == 2          # 每个真实 Agent 一个创建按钮
+        and create_btns == 0          # 成员行不提供手工创建/填参数入口
         and "生成控制逻辑状态机" in body  # role
         and "搭建并分析故障树" in body
         and "ghost_agent" in body      # dropped 剔除告警如实记名
+        and plan_card.locator("input, textarea, select").count() == 0
     )
-    check("②多 Agent orchestrate：2 张 Agent 卡+各自分工+各自创建按钮+幻觉剔除告警",
+    check("②按需披露：2 个路由结果+分工+幻觉剔除告警，零成员级按钮/字段表",
           multi_ok, f"cards={agent_cards} btns={create_btns} body={body[-400:]}")
     page.screenshot(path=str(SHOTS / "2_multi_agent.png"), full_page=True)
 
-    # ── ③ 点某个 Agent 的「去创建此任务」→ 落创建页，仅带该 Agent 的预填 ──
-    page.get_by_role("button", name="去创建此任务").nth(1).click()  # fta_agent（第二张）
-    page.wait_for_url(lambda url: "/tasks/new" in url, timeout=5000)
-    expect(page.locator(".prefill-note")).to_be_visible(timeout=5000)
-    top_event_val = page.locator('input[placeholder="请填写顶事件"]').first.input_value()
-    create_ok = "供电完全丧失" in top_event_val and "提交任务" in page.locator("body").inner_text()
-    check("③点 Agent 的创建按钮→落创建页带该 Agent 预填（签发仍由人）", create_ok,
-          f"top_event={top_event_val!r}")
-    page.screenshot(path=str(SHOTS / "3_create_from_agent.png"), full_page=True)
+    # ── ③ 任一成员未 ready，整份方案不开工；唯一主动作回到同一个文字输入，
+    # 不允许只启动 ready 子集，也不把工程师送去 /tasks/new 补字段。──
+    continue_btn = plan_card.get_by_role("button", name="继续说明缺失信息")
+    expect(continue_btn).to_be_visible(timeout=3000)
+    check("③全方案 fail-closed：只有一个『继续说明缺失信息』主按钮",
+          plan_card.locator(".plan-foot .cta-clay").count() == 1
+          and plan_card.get_by_role("button", name="按方案开工").count() == 0)
+    continue_btn.click()
+    expect(page.locator(".composer textarea")).to_be_focused(timeout=3000)
+    focus_ok = page.evaluate(
+        "() => document.activeElement === document.querySelector('.composer textarea')"
+    )
+    check("③缺失信息通过对话继续补充：聚焦唯一 Composer，零 /tasks/new 跳转",
+          focus_ok and "/tasks/new" not in page.url, page.url)
+    page.screenshot(path=str(SHOTS / "3_continue_in_composer.png"), full_page=True)
 
     browser.close()
 

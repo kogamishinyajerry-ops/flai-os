@@ -9,7 +9,9 @@ const MAX_SYNC_JS_GZIP_BYTES = 220 * 1024;
 const MAX_SYNC_CSS_GZIP_BYTES = 40 * 1024;
 const MAX_ROUTE_JS_GZIP_BYTES = 220 * 1024;
 const MAX_ROUTE_CSS_GZIP_BYTES = 40 * 1024;
-const MIN_DYNAMIC_ENTRIES = 8;
+// `/tasks/new` 的表单路由已按 ADR-0033 退役并重定向到主对话，因此当前共有
+// 7 个真实懒加载页面。这个下限仍会咬住误把任一剩余页面并回同步入口的回归。
+const MIN_DYNAMIC_ENTRIES = 7;
 
 if (!fs.existsSync(MANIFEST_PATH)) {
   throw new Error("缺少 dist/.vite/manifest.json；请先运行 npm run build");

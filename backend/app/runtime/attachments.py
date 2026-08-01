@@ -121,7 +121,10 @@ def _render_xlsx_file(handle: BinaryIO, limit: int) -> str:
     """
     ok, reason = _xlsx_parse_budget_ok(handle)
     if not ok:
-        return f"[未解析：xlsx 超出解析预算（{reason}）——请拆分文件，或在创建任务页上传交目标 Agent 处理]"
+        return (
+            f"[未解析：xlsx 超出解析预算（{reason}）——请在当前对话拆分或补充附件，"
+            "系统会自动路由到合适的 Agent]"
+        )
 
     import openpyxl  # 项目既有依赖（M3 工具链引入）
 

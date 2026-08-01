@@ -47,7 +47,6 @@ export function conversationInteractionPolicy({
     reconciliationLocked,
     canSend: !locked,
     canAttach: !locked,
-    canSelectAgent: !locked,
   };
 }
 

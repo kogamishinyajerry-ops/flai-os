@@ -9,6 +9,7 @@ tamper witness：
 from __future__ import annotations
 
 import importlib.util
+import itertools
 from typing import Any
 
 from backend.app.config import REPO_ROOT
@@ -19,6 +20,30 @@ def _mk_item(name: str, **extra) -> dict[str, Any]:
     item = {"agent_id": "hello_agent", "name": name, "inputs": {"name": name}}
     item.update(extra)
     return item
+
+
+_BATCH_OPERATION_SEQ = itertools.count(1)
+
+
+def _batch_payload(app, items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Public batch fixtures carry the same atomic package envelope as Guide."""
+    versions: dict[str, str] = {}
+    digests: dict[str, str] = {}
+    for agent_id in {item["agent_id"] for item in items}:
+        try:
+            snapshot = app.state.agent_registry.package_snapshot(agent_id)
+        except KeyError:
+            snapshot = None
+        versions[agent_id] = (
+            snapshot.manifest["version"] if snapshot is not None else "0.0.0"
+        )
+        digests[agent_id] = snapshot.digest if snapshot is not None else "0" * 64
+    return {
+        "operation_id": f"b7_contract_{next(_BATCH_OPERATION_SEQ)}",
+        "pinned_versions": versions,
+        "pinned_package_digests": digests,
+        "items": items,
+    }
 
 
 def _seed_input_file(app, file_id: str, classification: str) -> str:
@@ -43,11 +68,11 @@ def _seed_input_file(app, file_id: str, classification: str) -> str:
 # ── batch：after 下标 → 真 depends_on 映射 + 条件短路 ───────────────────────
 
 def test_batch_after_maps_depends_on_and_holds_created(app_env):
-    client, _ = app_env
-    r = client.post("/api/tasks/batch", json={"items": [
+    client, app = app_env
+    r = client.post("/api/tasks/batch", json=_batch_payload(app, [
         _mk_item("上游"),
         _mk_item("下游", after=[0]),
-    ]})
+    ]))
     assert r.status_code == 200
     tasks = r.json()["tasks"]
     assert len(tasks) == 2
@@ -57,12 +82,12 @@ def test_batch_after_maps_depends_on_and_holds_created(app_env):
 
 
 def test_batch_all_or_nothing_zero_writes(app_env):
-    client, _ = app_env
+    client, app = app_env
     before = len(client.get("/api/tasks").json())
-    r = client.post("/api/tasks/batch", json={"items": [
+    r = client.post("/api/tasks/batch", json=_batch_payload(app, [
         _mk_item("好的"),
         _mk_item("坏的", agent_id="no_such_agent_xyz"),
-    ]})
+    ]))
     assert r.status_code == 422
     detail = r.json()["detail"]
     assert detail["batch_errors"][0]["index"] == 1
@@ -75,11 +100,11 @@ def test_batch_emits_creation_and_charter_events(app_env):
     """Codex R0 P1/P2：batch 每项落 task_created 事件（status_to 如实）；有 charter
     的 agent 另落 charter_intro 开场白事件（创建时点快照，防包升级伪史）；
     无 charter 的 agent 绝不发空开场白。"""
-    client, _ = app_env
-    r = client.post("/api/tasks/batch", json={"items": [
+    client, app = app_env
+    r = client.post("/api/tasks/batch", json=_batch_payload(app, [
         {"agent_id": "fault_history_agent", "name": "检索", "inputs": {"problem_description": "液压压力波动"}},
         _mk_item("下游", after=[0]),
-    ]})
+    ]))
     assert r.status_code == 200
     tasks = r.json()["tasks"]
 
@@ -117,10 +142,10 @@ def test_single_create_emits_charter_event(app_env):
 
 
 def test_batch_self_or_forward_after_rejected(app_env):
-    client, _ = app_env
-    r = client.post("/api/tasks/batch", json={"items": [
+    client, app = app_env
+    r = client.post("/api/tasks/batch", json=_batch_payload(app, [
         _mk_item("自引", after=[0]),
-    ]})
+    ]))
     assert r.status_code == 422
     assert "after 下标" in str(r.json()["detail"])
 
@@ -128,15 +153,91 @@ def test_batch_self_or_forward_after_rejected(app_env):
 def test_batch_after_boolean_rejected_not_coerced(app_env):
     """Codex R1 P2：非严格 list[int] 会把 JSON false 静默强转 0——伪造出提交者
     没写的依赖边。StrictInt 下布尔/字符串下标必须 422，且零写入。"""
-    client, _ = app_env
+    client, app = app_env
     before = len(client.get("/api/tasks").json())
     for bad in ([False], [True], ["0"]):
-        r = client.post("/api/tasks/batch", json={"items": [
+        r = client.post("/api/tasks/batch", json=_batch_payload(app, [
             _mk_item("上游"),
             _mk_item("下游", after=bad),
-        ]})
+        ]))
         assert r.status_code == 422, f"after={bad!r} 竟未被拒"
     assert len(client.get("/api/tasks").json()) == before, "非法下标必须零写入"
+
+
+def test_batch_retry_lineage_persists_on_each_declared_root(app_env):
+    """失败任务回到主对话后，自动编排的根任务保留 retry_of；依赖成员只沿
+    depends_on 接力，避免把同一旧任务伪装成每个下游成员的直接重跑来源。"""
+    client, app = app_env
+    origin = client.post(
+        "/api/tasks",
+        json={"agent_id": "hello_agent", "inputs": {"name": "原失败任务"}},
+    )
+    assert origin.status_code == 200, origin.text
+    origin_id = origin.json()["id"]
+    conn = app.state.conn_factory()
+    try:
+        conn.execute(
+            "UPDATE tasks SET status = 'failed', error_message = ? WHERE id = ?",
+            ("测试构造的真实失败", origin_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = client.post(
+        "/api/tasks/batch",
+        json=_batch_payload(app, [
+            _mk_item("恢复根任务", retry_of=origin_id),
+            _mk_item("恢复下游", after=[0]),
+        ]),
+    )
+
+    assert response.status_code == 200, response.text
+    tasks = response.json()["tasks"]
+    assert tasks[0]["retry_of"] == origin_id
+    assert tasks[1]["retry_of"] is None
+    assert tasks[1]["depends_on"] == [tasks[0]["id"]]
+
+
+def test_batch_retry_lineage_rejects_nonfailed_origin(app_env):
+    """retry_of 是失败恢复血缘，不得由 URL 把 queued/completed 任务伪装成重跑来源。"""
+    client, app = app_env
+    origin = client.post(
+        "/api/tasks",
+        json={"agent_id": "hello_agent", "inputs": {"name": "仍在排队的任务"}},
+    )
+    assert origin.status_code == 200, origin.text
+    origin_id = origin.json()["id"]
+    before = len(client.get("/api/tasks").json())
+
+    response = client.post(
+        "/api/tasks/batch",
+        json=_batch_payload(app, [_mk_item("伪造恢复任务", retry_of=origin_id)]),
+    )
+
+    assert response.status_code == 422, response.text
+    errors = response.json()["detail"]["batch_errors"]
+    assert "只能指向失败任务" in "；".join(errors[0]["errors"])
+    assert len(client.get("/api/tasks").json()) == before
+
+
+def test_batch_dangling_retry_lineage_rejects_whole_batch(app_env):
+    """自动重试血缘不可悬空；任一 retry_of 不存在时整批零写入。"""
+    client, app = app_env
+    before = len(client.get("/api/tasks").json())
+    response = client.post(
+        "/api/tasks/batch",
+        json=_batch_payload(
+            app,
+            [_mk_item("恢复任务", retry_of="task_missing_retry_origin")],
+        ),
+    )
+
+    assert response.status_code == 422, response.text
+    errors = response.json()["detail"]["batch_errors"]
+    assert errors[0]["index"] == 0
+    assert "retry_of" in "；".join(errors[0]["errors"])
+    assert len(client.get("/api/tasks").json()) == before
 
 
 # ── 交互附件密级 gate（Codex R2 P1：会话路径与任务路径同受 ADR-0030）───────
@@ -238,10 +339,10 @@ def test_clearance_gate_blocks_in_batch_path(app_env):
     client, app = app_env
     fid = _seed_input_file(app, "file_b7_sens2", "sensitive")
     before = len(client.get("/api/tasks").json())
-    r = client.post("/api/tasks/batch", json={"items": [
+    r = client.post("/api/tasks/batch", json=_batch_payload(app, [
         _mk_item("干净的"),
         _mk_item("越级的", input_file_ids=[fid]),
-    ]})
+    ]))
     assert r.status_code == 422
     assert "密级准入上限" in str(r.json()["detail"]["batch_errors"])
     assert len(client.get("/api/tasks").json()) == before
@@ -274,9 +375,9 @@ class _NoSchemaRegistry:
 
 
 _CANDS = [
-    {"id": "a_one", "name": "甲", "category": "tool_automation", "status": "released", "maturity": "L1"},
-    {"id": "a_two", "name": "乙", "category": "tool_automation", "status": "released", "maturity": "L1"},
-    {"id": "a_three", "name": "丙", "category": "tool_automation", "status": "released", "maturity": "L1"},
+    {"id": "a_one", "name": "甲", "category": "tool_automation", "status": "released", "maturity": "L1", "mode": "job", "input_type": "none"},
+    {"id": "a_two", "name": "乙", "category": "tool_automation", "status": "released", "maturity": "L1", "mode": "job", "input_type": "none"},
+    {"id": "a_three", "name": "丙", "category": "tool_automation", "status": "released", "maturity": "L1", "mode": "job", "input_type": "none"},
 ]
 
 
@@ -301,28 +402,26 @@ def test_guide_after_valid_chain_kept():
     assert "after" not in result["agents"][1]["stripped_fields"]
 
 
-def test_guide_after_remaps_across_dropped_entries():
-    """原始下标 2 的成员 after=[1]——下标 0 是幻觉被剪，重映射后指向最终下标 0。"""
+def test_guide_dropped_prerequisite_closes_whole_plan():
+    """依赖图含被剔除成员时不得重映射后开放残缺方案。"""
     wf = _load_wf()
     result = wf._validate_orchestrate(
         _plan([_entry("ghost_agent"), _entry("a_one"), _entry("a_two", after=[1])]),
         _NoSchemaRegistry(), _CANDS,
     )
-    assert result is not None
-    assert [a["agent_id"] for a in result["agents"]] == ["a_one", "a_two"]
-    assert result["agents"][1]["after"] == [0], "raw→final 重映射必须落到存活条目"
+    assert isinstance(result, wf._ClarificationNeeded)
+    assert "工作环节" in result.gaps[0][1][0]
 
 
-def test_guide_after_invalid_ref_stripped_whole():
-    """引用被剪条目 → 整个 after 剥离为无依赖 + stripped_fields 留痕（绝不半保留）。"""
+def test_guide_after_reference_to_dropped_member_closes_plan():
+    """引用被剔除成员说明方案语义已不完整，不能降级成无依赖并继续。"""
     wf = _load_wf()
     result = wf._validate_orchestrate(
         _plan([_entry("ghost_agent"), _entry("a_one"), _entry("a_two", after=[0, 1])]),
         _NoSchemaRegistry(), _CANDS,
     )
-    assert result is not None
-    assert result["agents"][1]["after"] == []
-    assert "after" in result["agents"][1]["stripped_fields"]
+    assert isinstance(result, wf._ClarificationNeeded)
+    assert "工作环节" in result.gaps[0][1][0]
 
 
 def test_guide_after_forward_ref_stripped():

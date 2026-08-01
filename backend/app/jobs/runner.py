@@ -154,13 +154,17 @@ def worker_singleton_lock(lock_path: str | Path) -> Iterator[None]:
             handle.close()
 
 
-def resolve_dependencies_once(conn_factory: Callable[[], sqlite3.Connection]) -> int:
+def resolve_dependencies_once(
+    conn_factory: Callable[[], sqlite3.Connection],
+    agent_registry: Any | None = None,
+) -> int:
     """一趟依赖解析（协作运行时 §3.3，确定性、无 LLM、无 model_gateway 调用）。
 
     对每个 created 且 depends_on 非空的 user 任务：
       - 任一上游 failed/cancelled/缺失 → created→cancelled(reason=upstream_failed)，
         fail-closed 绝不在失败上游上执行下游。
-      - 全部上游 completed → 拷全部上游 output_file_ids 入 input_file_ids + created→queued
+      - 全部上游 completed → 按下游不可变包的输入后缀契约筛出有效产物，再写入
+        input_file_ids + created→queued
         （repos.enqueue_dependent_task 原子）。**绝不写 data_classification**——分级 100%
         交下游执行期既有派生（_task_input_classification 读刚管道进来的产物文件污点）。
       - 否则（上游 waiting_review/进行中/created）→ 保持 created，下 tick 再看。
@@ -176,7 +180,7 @@ def resolve_dependencies_once(conn_factory: Callable[[], sqlite3.Connection]) ->
     for task in candidates:
         conn = conn_factory()
         try:
-            if _resolve_one_candidate(conn, task):
+            if _resolve_one_candidate(conn, task, agent_registry=agent_registry):
                 advanced += 1
         except Exception as exc:
             # R1（loop-auditor）+ 命中即审 R3 + final-confirm：**单候选毒丸隔离，黑名单-瞬时**。
@@ -199,7 +203,68 @@ def resolve_dependencies_once(conn_factory: Callable[[], sqlite3.Connection]) ->
     return advanced
 
 
-def _resolve_one_candidate(conn: sqlite3.Connection, task: dict[str, Any]) -> bool:
+def _filter_piped_outputs_for_agent_contract(
+    *,
+    agent_registry: Any | None,
+    task: dict[str, Any],
+    outputs: list[tuple[str, dict[str, Any]]],
+) -> list[str]:
+    """Deterministically route dependency artifacts by the downstream snapshot.
+
+    Runtime remains the authoritative final gate. This producer-side filter keeps
+    valid multi-artifact upstreams usable: a file_upload Agent receives only files
+    matching its immutable allowlist, while none receives no artifacts and params
+    preserves the existing attachable-context behavior. Missing/malformed snapshots
+    fall through unchanged so Runtime can emit its precise fail-closed diagnosis.
+    """
+    all_ids = [file_id for file_id, _record in outputs]
+    if agent_registry is None:
+        return all_ids
+    try:
+        snapshot = agent_registry.package_snapshot(task.get("agent_id"))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return all_ids
+    manifest = getattr(snapshot, "manifest", None)
+    input_contract = manifest.get("input") if isinstance(manifest, dict) else None
+    if not isinstance(input_contract, dict):
+        return all_ids
+    input_type = input_contract.get("type")
+    if input_type == "none":
+        return []
+    if input_type != "file_upload":
+        return all_ids
+
+    raw_extensions = input_contract.get("allowed_extensions")
+    if (
+        not isinstance(raw_extensions, list)
+        or len(raw_extensions) == 0
+        or len(raw_extensions) > 32
+    ):
+        return all_ids
+    normalized: list[str] = []
+    for raw_extension in raw_extensions:
+        if not isinstance(raw_extension, str):
+            return all_ids
+        extension = raw_extension.strip().lower()
+        if not extension.startswith(".") or not 2 <= len(extension) <= 16:
+            return all_ids
+        if extension not in normalized:
+            normalized.append(extension)
+    allowed_extensions = tuple(normalized)
+    return [
+        file_id
+        for file_id, record in outputs
+        if isinstance(record.get("filename"), str)
+        and record["filename"].lower().endswith(allowed_extensions)
+    ]
+
+
+def _resolve_one_candidate(
+    conn: sqlite3.Connection,
+    task: dict[str, Any],
+    *,
+    agent_registry: Any | None = None,
+) -> bool:
     """处理单个 created 依赖候选，返回是否推进（入队/级联取消）。任何异常交调用方
     quarantine 隔离（R1），故遇畸形持久数据可自然抛、绝不自吞。"""
     task_id = task["id"]
@@ -265,7 +330,7 @@ def _resolve_one_candidate(conn: sqlite3.Connection, task: dict[str, Any]) -> bo
     # sensitive）。空/None=默认拷全部上游 output。
     binding = task.get("input_binding") or {}
     from_tasks = binding.get("from_tasks") or None
-    piped: list[str] = []
+    piped_outputs: list[tuple[str, dict[str, Any]]] = []
     invalid: list[str] = []
     for u in upstreams:
         if from_tasks is not None and u["id"] not in from_tasks:
@@ -279,7 +344,7 @@ def _resolve_one_candidate(conn: sqlite3.Connection, task: dict[str, Any]) -> bo
             if rec is None or rec.get("kind") != "output" or rec.get("task_id") != u["id"]:
                 invalid.append(fid)
             else:
-                piped.append(fid)
+                piped_outputs.append((fid, rec))
     if invalid:
         return repos.cancel_dependent_task(
             conn, task_id,
@@ -291,6 +356,11 @@ def _resolve_one_candidate(conn: sqlite3.Connection, task: dict[str, Any]) -> bo
                 "payload": {"reason": "upstream_output_integrity", "invalid_file_ids": invalid},
             },
         ) is not None
+    piped = _filter_piped_outputs_for_agent_contract(
+        agent_registry=agent_registry,
+        task=task,
+        outputs=piped_outputs,
+    )
     return repos.enqueue_dependent_task(
         conn, task_id, piped,
         event={  # R2 P2：dependency_resolved 事件与 created→queued 同事务原子写
@@ -427,7 +497,10 @@ class JobRunner:
             return
         self._last_resolve_monotonic = now
         try:
-            resolve_dependencies_once(self._conn_factory)
+            resolve_dependencies_once(
+                self._conn_factory,
+                agent_registry=getattr(self._runtime, "agent_registry", None),
+            )
         except Exception:
             logger.exception("run_forever：resolve_dependencies_once 抛异常，继续轮询")
 
