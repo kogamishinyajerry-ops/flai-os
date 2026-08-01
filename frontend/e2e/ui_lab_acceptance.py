@@ -237,6 +237,11 @@ try:
               return {
                 sidebarWidth: rect('.sidebar').width,
                 guideWidth: rect('.guide-page').width,
+                guideMainWidth: rect('.guide-main').width,
+                contextRailWidth: rect('.guide-context-rail').width,
+                guideColumnGap: parseFloat(
+                  getComputedStyle(document.querySelector('.guide-page')).columnGap
+                ),
                 heroTitlePx: parseFloat(
                   getComputedStyle(document.querySelector('.hero-title')).fontSize
                 ),
@@ -255,7 +260,10 @@ try:
         check(
             "桌面起手页布局数值基线",
             abs(landing_signature["sidebarWidth"] - 264) <= 0.5
-            and abs(landing_signature["guideWidth"] - 784) <= 0.5
+            and abs(landing_signature["guideWidth"] - 1104) <= 0.5
+            and abs(landing_signature["guideMainWidth"] - 784) <= 0.5
+            and abs(landing_signature["contextRailWidth"] - 296) <= 0.5
+            and abs(landing_signature["guideColumnGap"] - 24) <= 0.5
             and landing_signature["heroTitlePx"] == 26
             and landing_signature["intentCount"] == 4
             and landing_signature["intentRows"] == 1
@@ -455,6 +463,15 @@ try:
                 scrollMode: getComputedStyle(
                   element.querySelector('.ap-scroll')
                 ).overflowY,
+                minFacetTouch: Math.min(...[...element.querySelectorAll(
+                  '.context-facet'
+                )].map(item => item.getBoundingClientRect().height)),
+                minAgentTouch: Math.min(...[...element.querySelectorAll(
+                  '.ap-item'
+                )].map(item => item.getBoundingClientRect().height)),
+                portalTouch: element.querySelector(
+                  '.context-portal'
+                ).getBoundingClientRect().height,
                 documentFits:
                   document.documentElement.scrollWidth <=
                   document.documentElement.clientWidth,
@@ -471,6 +488,9 @@ try:
             and mobile_picker["opacity"] == 1
             and mobile_picker["background"] not in ("", "rgba(0, 0, 0, 0)")
             and mobile_picker["scrollMode"] == "auto"
+            and mobile_picker["minFacetTouch"] >= 44
+            and mobile_picker["minAgentTouch"] >= 44
+            and mobile_picker["portalTouch"] >= 44
             and mobile_picker["documentFits"] is True,
             str(mobile_picker),
         )

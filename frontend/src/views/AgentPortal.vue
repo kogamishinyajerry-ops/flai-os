@@ -16,10 +16,19 @@
       :closable="false"
       class="page-alert"
     />
+    <el-alert
+      v-else-if="agentShellError"
+      type="warning"
+      :title="agentShellError"
+      description="Agent 目录仍可浏览，但能力关系与引用状态不作展示。"
+      show-icon
+      :closable="false"
+      class="page-alert"
+    />
 
     <AgentCapabilityMap
-      v-if="!loading && !loadError && agents.length"
-      :agents="agents"
+      v-if="!loading && !loadError && agents.length && agentShellSnapshot"
+      :snapshot="agentShellSnapshot"
     />
 
     <!-- 首载骨架（A3）：只在「从未加载完成且无错误」时撑卡片栅格轮廓，轮询期间
@@ -450,10 +459,11 @@ import {
   UserFilled,
   Warning,
 } from "@element-plus/icons-vue";
-import { listAgents, getAgent } from "../api/agents";
+import { listAgents, getAgent, getAgentShell } from "../api/agents";
 import { listTeams, summonTeam as summonTeamApi } from "../api/teams";
 import { request, unwrapDetail } from "../api/client";
 import { burstNeutral } from "../effects/burst.js";
+import { buildAgentShellOverview } from "../utils/agentShell.js";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import AgentCapabilityMap from "../components/AgentCapabilityMap.vue";
@@ -511,6 +521,8 @@ const categoryIcon = (category) => CATEGORY_ICONS[category] || QuestionFilled;
 
 const router = useRouter();
 const agents = ref([]);
+const agentShellSnapshot = ref(null);
+const agentShellError = ref("");
 const loading = ref(true);
 const loadError = ref("");
 const governanceOpen = ref(false);
@@ -558,13 +570,29 @@ const evalTrend = computed(() => buildEvalTrend(governanceRuns.value));
 async function load() {
   loading.value = true;
   loadError.value = "";
-  try {
-    agents.value = await listAgents();
-  } catch (err) {
-    loadError.value = err.detail || err.message;
-  } finally {
-    loading.value = false;
+  agentShellError.value = "";
+  agentShellSnapshot.value = null;
+  const [agentsResult, shellResult] = await Promise.allSettled([
+    listAgents(),
+    getAgentShell(),
+  ]);
+  if (agentsResult.status === "fulfilled") {
+    agents.value = agentsResult.value;
+  } else {
+    const err = agentsResult.reason || {};
+    loadError.value = err.detail || err.message || "Agent 目录加载失败";
   }
+  if (shellResult.status === "fulfilled") {
+    if (buildAgentShellOverview(shellResult.value).available === true) {
+      agentShellSnapshot.value = shellResult.value;
+    } else {
+      agentShellError.value = "Agent 本体投影契约不兼容";
+    }
+  } else {
+    const err = shellResult.reason || {};
+    agentShellError.value = err.detail || err.message || "Agent 本体投影加载失败";
+  }
+  loading.value = false;
   // 批八：团队列表并行拉取——失败不污染 Agent 门户主面（区块诚实缺席）。
   try {
     teams.value = await listTeams();

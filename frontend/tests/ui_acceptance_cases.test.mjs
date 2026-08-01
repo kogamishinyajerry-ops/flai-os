@@ -30,6 +30,10 @@ const labAppSource = readFileSync(
   new URL("../src/ui-lab/UiLabApp.vue", import.meta.url),
   "utf8",
 );
+const shellContextSource = readFileSync(
+  new URL("../src/components/ShellContextPanel.vue", import.meta.url),
+  "utf8",
+);
 
 const REQUIRED_CASES = [
   "landing-desktop",
@@ -112,17 +116,50 @@ test("Agent 选择器视图使用真实紧凑行所需字段", () => {
   for (const id of ["picker-desktop", "picker-mobile"]) {
     const fixture = getUiAcceptanceCase(id).guide;
     assert.equal(fixture.agentPickerOpen, true);
-    assert.ok(fixture.agents.length >= 4);
+    assert.equal(fixture.agentShell.schema_version, "agent_shell.v1");
+    assert.equal(fixture.agentShell.source.read_only, true);
+    assert.ok(fixture.agentShell.agents.length >= 4);
     assert.ok(
-      fixture.agents.every(
+      fixture.agentShell.agents.every(
         (agent) =>
-          agent.id &&
-          agent.name &&
-          agent.category &&
-          Array.isArray(agent.limitations),
+          agent.identity.agent_id &&
+          agent.identity.name &&
+          agent.classification.category &&
+          Array.isArray(agent.trust.limitations) &&
+          agent.launch.kind === "task",
       ),
     );
   }
+});
+
+test("Agent 选择器只给待核片段 amber，不让外层引用状态吞掉中性治理语义", () => {
+  assert.match(
+    shellContextSource,
+    /<span v-if="isPicker" class="context-agent-relation">/,
+  );
+  assert.doesNotMatch(
+    shellContextSource,
+    /<span v-if="isPicker" class="context-agent-relation" :class=/,
+  );
+  assert.match(
+    shellContextSource,
+    /:class="\{ 'context-pending-token': part\.pending \}"/,
+  );
+  assert.match(
+    shellContextSource,
+    /<span v-else class="context-agent-relation" :class="`is-\$\{agent\.referenceState\}`">/,
+  );
+  assert.match(
+    shellContextSource,
+    /\.context-agent-relation\.is-unresolved,\s*\.context-agent-relation\.is-unknown \{ color: var\(--trust-pending\); \}/,
+  );
+});
+
+test("任务上下文 loading 动画服从 reduced-motion", () => {
+  assert.match(
+    shellContextSource,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.context-loading \.is-loading \{ animation: none; \}/,
+  );
 });
 
 test("六重旋转标记资产保持已验收的 256px RGBA 基线", () => {

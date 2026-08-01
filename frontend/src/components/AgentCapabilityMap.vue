@@ -3,8 +3,23 @@
     <div class="capability-overview-head">
       <el-icon aria-hidden="true"><Grid /></el-icon>
       <div>
-        <h3 id="capability-map-title">能力地图</h3>
-        <p>先看它擅长哪类工作，再进入卡片核对能力边界。</p>
+        <h3 id="capability-map-title">能力本体</h3>
+        <p>工作类型、专业域与发起方式统一来自只读 Registry 快照。</p>
+      </div>
+      <div class="capability-summary" aria-label="本体摘要">
+        <span>专业域 <strong class="num-token">{{ overview.domainCount }}</strong></span>
+        <span :class="{ 'is-unknown': overview.unresolvedReferenceCount > 0 }">
+          引用待核 <strong class="num-token">{{ overview.unresolvedReferenceCount }}</strong>
+        </span>
+        <span :class="{ 'is-unknown': overview.defaultedClearanceCount > 0 }">
+          密级默认 <strong class="num-token">{{ overview.defaultedClearanceCount }}</strong>
+        </span>
+        <span :class="{ 'is-unknown': overview.mockToolReferenceCount > 0 }">
+          MOCK 工具 <strong class="num-token">{{ overview.mockToolReferenceCount }}</strong>
+        </span>
+        <span :class="{ 'is-unknown': overview.unknownMockToolReferenceCount > 0 }">
+          工具真伪待核 <strong class="num-token">{{ overview.unknownMockToolReferenceCount }}</strong>
+        </span>
       </div>
     </div>
     <div class="capability-grid" role="list">
@@ -20,52 +35,30 @@
             :style="{ color: categoryColor(item.id), background: categoryColor(item.id) + '14' }"
             aria-hidden="true"
           >
-            <el-icon><component :is="CATEGORY_VISUALS[item.id].icon" /></el-icon>
+            <el-icon><component :is="visualOf(item.id).icon" /></el-icon>
           </span>
           <span class="capability-copy">
             <strong>{{ categoryLabel(item.id) }}</strong>
-            <small>{{ CATEGORY_VISUALS[item.id].description }}</small>
+            <small>{{ visualOf(item.id).description }}</small>
           </span>
           <span
             class="capability-count num-token"
-            :class="{ 'is-empty': item.count === 0 }"
-            :title="item.count === 0 ? '该分类暂无可用 Agent' : undefined"
-          >{{ item.count }}</span>
+            :class="{ 'is-empty': item.total === 0 }"
+            :title="item.total === 0 ? '该分类暂无已注册 Agent' : undefined"
+          >{{ item.total }}</span>
         </div>
-        <!-- 关系行（批次 A+C P1）：能力类型 → 可用 Agent → 适用边界 → 发起方式，
-             全部由 buildPortalCategoryOverview 从 agent 投影真实派生；字段畸形
-             如实「待核」，绝不压成 0 或回退成通过。零成员分类不渲染关系行。 -->
-        <div v-if="item.count > 0" class="capability-relations">
-          <span class="cap-relation" :title="`该分类下的可用 Agent：${item.members.join('、')}`">
+        <div v-if="item.total > 0" class="capability-relations">
+          <span class="cap-relation">
             <el-icon aria-hidden="true"><User /></el-icon>
-            {{ membersText(item) }}
+            已注册 {{ item.total }} 个 Agent
           </span>
           <span
             class="cap-relation"
-            :class="{ 'is-unknown': item.boundaryCount === null }"
-          >
-            <el-icon aria-hidden="true"><Warning /></el-icon>
-            {{ boundaryText(item) }}
-          </span>
-          <span
-            class="cap-relation"
-            :class="{ 'is-unknown': item.launch.unknown > 0 }"
+            :class="{ 'is-unknown': item.unknown > 0 }"
           >
             <el-icon aria-hidden="true"><Promotion /></el-icon>
             {{ launchText(item) }}
           </span>
-        </div>
-      </article>
-      <article v-if="overview.unknownCount > 0" class="capability-node is-unknown" role="listitem">
-        <div class="capability-node-head">
-          <span class="capability-glyph" aria-hidden="true">
-            <el-icon><QuestionFilled /></el-icon>
-          </span>
-          <span class="capability-copy">
-            <strong>分类待核</strong>
-            <small>未归入现有四类</small>
-          </span>
-          <span class="capability-count num-token">{{ overview.unknownCount }}</span>
         </div>
       </article>
     </div>
@@ -83,13 +76,12 @@ import {
   Reading,
   Tools,
   User,
-  Warning,
 } from "@element-plus/icons-vue";
 import { categoryColor, categoryLabel } from "../utils/format";
-import { buildPortalCategoryOverview } from "../utils/portalVisual";
+import { buildAgentShellOverview } from "../utils/agentShell.js";
 
 const props = defineProps({
-  agents: { type: Array, default: () => [] },
+  snapshot: { type: Object, default: null },
 });
 
 const CATEGORY_VISUALS = {
@@ -99,27 +91,21 @@ const CATEGORY_VISUALS = {
   reasoning_assist: { icon: Aim, description: "提供候选与分析路径" },
 };
 
-const overview = computed(() => buildPortalCategoryOverview(props.agents));
-
-// 名单太长只露前两位，余量折叠为「等 N 位」；全量名单在 title 可查。
-function membersText(item) {
-  const shown = item.members.slice(0, 2).join("、");
-  return item.count > 2 ? `${shown} 等 ${item.count} 位` : shown;
+const overview = computed(() => buildAgentShellOverview(props.snapshot));
+function visualOf(category) {
+  return CATEGORY_VISUALS[category] || {
+    icon: QuestionFilled,
+    description: "分类语义待核",
+  };
 }
 
-// 适用边界：null=有成员字段畸形（待核，amber）；0=如实声明无边界；N=真实计数。
-function boundaryText(item) {
-  if (item.boundaryCount === null) return "边界待核";
-  return item.boundaryCount === 0 ? "未声明不适用边界" : `${item.boundaryCount} 项不适用边界`;
-}
-
-// 发起方式：只认服务端明确投影的 mode；未知/畸形如实待核，不回退。
 function launchText(item) {
-  const { chat, task, unknown } = item.launch;
-  if (unknown > 0) return "发起方式待核";
-  if (chat > 0 && task > 0) return "对话或任务发起";
-  if (chat > 0) return "对话发起";
-  return "任务发起";
+  if (item.unknown > 0) return `${item.unknown} 项发起方式待核`;
+  if (item.conversation > 0 && item.task > 0) {
+    return `任务 ${item.task} · 对话 ${item.conversation}`;
+  }
+  if (item.conversation > 0) return `对话发起 ${item.conversation}`;
+  return `任务发起 ${item.task}`;
 }
 </script>
 
@@ -134,7 +120,7 @@ function launchText(item) {
 .capability-overview-head {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--space-2);
   margin-bottom: 12px;
 }
 .capability-overview-head > .el-icon {
@@ -147,6 +133,18 @@ function launchText(item) {
   color: var(--ink-soft);
   font-size: 18px;
 }
+.capability-summary {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ink-faint);
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+}
+.capability-summary strong { color: var(--ink-soft); font-weight: 650; }
+.capability-summary .is-unknown,
+.capability-summary .is-unknown strong { color: var(--trust-pending); }
 .capability-overview h3 {
   margin: 0 0 2px;
   font-size: 14px;
@@ -246,10 +244,18 @@ function launchText(item) {
   color: var(--trust-pending);
 }
 @media (max-width: 980px) {
+  .capability-overview-head { flex-wrap: wrap; }
+  .capability-summary {
+    width: 100%;
+    margin-left: calc(var(--space-8) + var(--space-2));
+    flex-wrap: wrap;
+    white-space: normal;
+  }
   .capability-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 520px) {
   .capability-overview { padding-inline: 12px; }
+  .capability-summary { margin-left: 0; }
   .capability-grid { grid-template-columns: 1fr; }
 }
 </style>

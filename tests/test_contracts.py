@@ -1,4 +1,4 @@
-"""M0 契约自校验门：六份 schema 合法 + 示例包过校验 + 反例必咬。
+"""M0 契约自校验门：全部 schema 合法 + 示例包过校验 + 反例必咬。
 
 这是仓库的第一道 gate。它咬三类漂移：
 1. contracts/*.schema.json 本身不是合法 JSON Schema（schema 腐坏）；
@@ -21,6 +21,7 @@ CONTRACTS = REPO / "contracts"
 
 SCHEMA_FILES = [
     "agent.schema.json",
+    "agent_shell.schema.json",
     "tool.schema.json",
     "task.schema.json",
     "event.schema.json",
@@ -186,3 +187,55 @@ def test_event_schema_smoke() -> None:
     bad = dict(sample, level="fatal")
     with pytest.raises(ValidationError):
         validate(bad, schema)
+
+
+def _valid_agent_shell_snapshot() -> dict:
+    def facet(kind: str) -> dict:
+        return {
+            "id": kind,
+            "total_count": 0,
+            "task_count": 0,
+            "conversation_count": 0,
+            "unknown_launch_count": 0,
+        }
+
+    return {
+        "schema_version": "agent_shell.v1",
+        "source": {"kind": "registry_snapshot", "read_only": True},
+        "summary": {
+            "agent_count": 0,
+            "work_type_count": 0,
+            "domain_count": 0,
+            "unresolved_reference_count": 0,
+            "defaulted_clearance_count": 0,
+            "mock_tool_reference_count": 0,
+        },
+        "facets": {
+            "work_types": [],
+            "domains": [],
+            "launch_kinds": [facet("task"), facet("conversation"), facet("unknown")],
+        },
+        "agents": [],
+        "diagnostics": [],
+    }
+
+
+def test_agent_shell_schema_accepts_minimal_read_only_snapshot() -> None:
+    validate(_valid_agent_shell_snapshot(), _load_schema("agent_shell.schema.json"))
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value["source"].__setitem__("read_only", False),
+        lambda value: value.__setitem__("can_launch", True),
+        lambda value: value["summary"].__setitem__("agent_count", -1),
+        lambda value: value["facets"].__setitem__("launch_kinds", []),
+        lambda value: value["facets"]["launch_kinds"][1].__setitem__("id", "task"),
+    ],
+)
+def test_agent_shell_schema_bites_authority_and_shape_drift(mutate) -> None:
+    invalid = _valid_agent_shell_snapshot()
+    mutate(invalid)
+    with pytest.raises(ValidationError):
+        validate(invalid, _load_schema("agent_shell.schema.json"))

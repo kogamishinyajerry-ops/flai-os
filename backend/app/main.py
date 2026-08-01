@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config
+from .api import agent_shell as agent_shell_api
 from .api import agents as agents_api
 from .api import auth as auth_api
 from .api import conversations as conversations_api
@@ -37,6 +38,7 @@ from .auth.middleware import AuthGateMiddleware
 from .auth.service import LoginThrottle
 from .bootstrap import assemble
 from .logging_setup import configure_logging, reset_logging
+from .ontology import AgentShellCatalog
 from .runtime.conversation import ConversationService
 from .runtime.runtime import AgentRuntime
 from .storage import repos
@@ -175,6 +177,11 @@ def create_app(
             app.state.agent_registry = asm.agent_registry
             app.state.tool_registry = asm.tool_registry
             app.state.scope_registry = asm.scope_registry
+            app.state.agent_shell_catalog = AgentShellCatalog(
+                asm.agent_registry,
+                asm.tool_registry,
+                asm.scope_registry,
+            )
             app.state.knowledge_service = asm.knowledge_service
             app.state.model_gateway = asm.model_gateway
             app.state.runtime = runtime
@@ -295,6 +302,7 @@ def create_app(
         )
 
     app.include_router(auth_api.router)
+    app.include_router(agent_shell_api.router)
     app.include_router(agents_api.router)
     app.include_router(tasks_api.router)
     app.include_router(files_api.router)

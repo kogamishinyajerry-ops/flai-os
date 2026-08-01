@@ -38,6 +38,7 @@ def _load_schema(name: str) -> dict[str, Any]:
 
 TASK_SCHEMA = _load_schema("task.schema.json")
 EVENT_SCHEMA = _load_schema("event.schema.json")
+AGENT_SHELL_SCHEMA = _load_schema("agent_shell.schema.json")
 
 
 @pytest.fixture()
@@ -53,6 +54,12 @@ def test_create_task_response_matches_task_schema(client: TestClient) -> None:
     )
     assert resp.status_code == 200
     validate(resp.json(), TASK_SCHEMA)
+
+
+def test_agent_shell_response_matches_catalog_schema(client: TestClient) -> None:
+    resp = client.get("/api/agent-shell")
+    assert resp.status_code == 200
+    validate(resp.json(), AGENT_SHELL_SCHEMA)
 
 
 def test_get_task_response_matches_task_schema(client: TestClient) -> None:

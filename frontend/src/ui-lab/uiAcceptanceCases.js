@@ -75,6 +75,106 @@ const AGENTS = [
   },
 ];
 
+const WORK_TYPE_IDS = [
+  "tool_automation",
+  "knowledge_qa",
+  "structured_gen",
+  "reasoning_assist",
+];
+
+function unavailableSchema(filename) {
+  return {
+    state: "unavailable",
+    reason: "file_missing",
+    filename,
+    property_count: 0,
+    required_count: 0,
+  };
+}
+
+// 真实 AgentShellCatalog 响应的静态验收快照。UiLab 只做可视状态，不联网、
+// 不替代 API 契约测试；字段完整保留“只读本体”与人工门语义。
+const AGENT_SHELL = {
+  schema_version: "agent_shell.v1",
+  source: { kind: "registry_snapshot", read_only: true },
+  summary: {
+    agent_count: AGENTS.length,
+    work_type_count: WORK_TYPE_IDS.length,
+    domain_count: 0,
+    unresolved_reference_count: 0,
+    defaulted_clearance_count: AGENTS.length,
+    mock_tool_reference_count: 0,
+  },
+  facets: {
+    work_types: WORK_TYPE_IDS.map((id) => ({
+      id,
+      total_count: AGENTS.filter((agent) => agent.category === id).length,
+      task_count: AGENTS.filter((agent) => agent.category === id).length,
+      conversation_count: 0,
+      unknown_launch_count: 0,
+    })),
+    domains: [],
+    launch_kinds: [
+      {
+        id: "task",
+        total_count: AGENTS.length,
+        task_count: AGENTS.length,
+        conversation_count: 0,
+        unknown_launch_count: 0,
+      },
+      {
+        id: "conversation",
+        total_count: 0,
+        task_count: 0,
+        conversation_count: 0,
+        unknown_launch_count: 0,
+      },
+      {
+        id: "unknown",
+        total_count: 0,
+        task_count: 0,
+        conversation_count: 0,
+        unknown_launch_count: 0,
+      },
+    ],
+  },
+  agents: AGENTS.map((agent) => ({
+    identity: {
+      agent_id: agent.id,
+      name: agent.name,
+      version: "0.1.0",
+      summary: agent.summary,
+    },
+    classification: {
+      category: agent.category,
+      domain: null,
+      specialty: null,
+      usefulness_level: null,
+    },
+    capability: {
+      input: { type: "params", schema: unavailableSchema("input_schema.json") },
+      output: {
+        formats: [".json"],
+        schema: unavailableSchema("output_schema.json"),
+      },
+      tools: [],
+      knowledge_scopes: [],
+    },
+    trust: {
+      status: "draft",
+      maturity: "L0",
+      limitations: [...agent.limitations],
+      visibility: "all",
+      allowed_roles: ["business_user"],
+      clearance: { effective: "internal", source: "defaulted" },
+      requires_human_review: true,
+      evidence: { required: false, kinds: [] },
+    },
+    launch: { kind: "task" },
+  })),
+  diagnostics: [],
+};
+
 const LANDING_GUIDE = {
   started: false,
   conversationId: "",
@@ -84,6 +184,7 @@ const LANDING_GUIDE = {
   reconciliationRequired: false,
   agentPickerOpen: false,
   agents: AGENTS,
+  agentShell: AGENT_SHELL,
 };
 
 const STREAMING_GUIDE = {
@@ -94,6 +195,7 @@ const STREAMING_GUIDE = {
   reconciliationRequired: false,
   agentPickerOpen: false,
   agents: AGENTS,
+  agentShell: AGENT_SHELL,
   messages: [
     {
       role: "user",
@@ -118,6 +220,7 @@ const PERSISTENCE_UNKNOWN_GUIDE = {
   reconciliationRequired: true,
   agentPickerOpen: false,
   agents: AGENTS,
+  agentShell: AGENT_SHELL,
   messages: [
     {
       role: "user",
@@ -162,19 +265,20 @@ export const UI_ACCEPTANCE_CASES = [
   acceptanceCase({
     id: "landing-desktop",
     label: "桌面 · 起手页",
-    summary: "引导区、意图卡与 composer 的首屏密度",
+    summary: "784px 对话主线与 296px 本体上下文轨道",
     viewport: VIEWPORTS.desktop,
     guide: LANDING_GUIDE,
     reviewPoints: [
       "首屏是否在 900px 高度内保持足够内容容量",
       "一排紧凑意图条目（图标+短标签）是否清晰可扫读",
       "输入栏是否足够轻，且发送与附件目标仍可点",
+      "右侧轨道是否只展示 Registry 快照、未知关系与人工边界",
     ],
   }),
   acceptanceCase({
     id: "picker-desktop",
     label: "桌面 · Agent 选择器",
-    summary: "320px 紧凑弹层与一行边界说明",
+    summary: "320px 本体快选与一行边界说明",
     viewport: VIEWPORTS.desktop,
     guide: {
       ...LANDING_GUIDE,
@@ -184,6 +288,7 @@ export const UI_ACCEPTANCE_CASES = [
       "弹层是否只占必要空间，不变成第二个门户",
       "名称、成熟度和一条边界信息是否可快速扫读",
       "搜索和完整门户入口是否保持明确层级",
+      "选择 Agent 是否只暂存草稿，不发送、不建任务",
     ],
   }),
   acceptanceCase({
@@ -225,7 +330,7 @@ export const UI_ACCEPTANCE_CASES = [
   acceptanceCase({
     id: "picker-mobile",
     label: "移动端 · Agent 选择器",
-    summary: "375px 下左右各 12px 的贴边弹层与内部滚动",
+    summary: "375px 下左右各 12px 的本体快选与内部滚动",
     viewport: VIEWPORTS.mobile,
     guide: {
       ...LANDING_GUIDE,
@@ -235,6 +340,7 @@ export const UI_ACCEPTANCE_CASES = [
       "弹层边缘是否留出足够安全区",
       "四个 Agent 是否可在内部滚动中快速辨认",
       "关闭弹层后 composer 是否仍保持上下文",
+      "工作类型筛选是否在窄屏内无横向溢出",
     ],
   }),
 ];

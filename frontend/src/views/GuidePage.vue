@@ -1,5 +1,6 @@
 <template>
   <div class="guide-page" :class="{ 'is-empty': !started && messages.length === 0 }">
+    <div class="guide-main">
     <!-- 起手 hero（未开始且无消息）：衬线问候 + 具名，随 composer 在视口垂直居中。 -->
     <div v-if="!started && messages.length === 0 && !restoring" class="guide-hero fx-rise">
       <!-- 减重批：hero 只剩问候+一句主标题（Claude 精髓=留白克制，信任靠交互
@@ -475,58 +476,17 @@
             </template>
             <!-- D-4 键盘语义：Esc 关闭并返还焦点给触发钮；↑↓ 在 .ap-item 间真焦点
                  roving（原生 button，Enter/Space 由浏览器激活走既有 pickAgent）。 -->
-            <div class="agent-pick" role="dialog" aria-label="选择 Agent" @keydown="onAgentPickerKeydown">
-              <!-- 错误态只显示错误行（「· 0」会被误读成平台真没有 Agent——
-                   AgentPortal 同款语义区分）；真零态如实显示空态文案。 -->
-              <div v-if="pickAgentsError" class="ap-error">{{ pickAgentsError }}</div>
-              <template v-else>
-                <div class="ap-head">
-                  <div class="ap-title">
-                    可用 Agent · {{ agentPickerVisibleCount }}<template v-if="agentPickerQuery.trim()"> / {{ pickAgents.length }}</template>
-                  </div>
-                  <input
-                    ref="agentPickerSearchEl"
-                    v-model="agentPickerQuery"
-                    type="search"
-                    class="ap-search"
-                    :disabled="interactionPolicy.canSelectAgent !== true"
-                    placeholder="搜索 Agent"
-                    aria-label="搜索可用 Agent"
-                  />
-                </div>
-                <div class="ap-scroll">
-                  <button
-                    v-for="a in agentPickerItems"
-                    :key="a.id"
-                    type="button"
-                    class="ap-item"
-                    :disabled="interactionPolicy.canSelectAgent !== true"
-                    :aria-label="`选择 ${a.name}，${categoryLabel(a.category)}，${agentPickerDetail(a)}`"
-                    @click="pickAgent(a)"
-                  >
-                    <span class="ap-dot" :style="{ background: categoryColor(a.category) }"></span>
-                    <span class="ap-main">
-                      <span class="ap-name-row">
-                        <span class="ap-name" :title="a.name">{{ a.name }}</span>
-                        <span v-if="a.maturity" class="ap-maturity" :title="maturityTip(a.maturity)">{{ a.maturity }}</span>
-                      </span>
-                      <!-- 快速选择只保留一行安全优先信息：有边界先显边界，无边界才
-                           回退能力摘要；完整说明仍在门户，避免弹层变成第二个门户。 -->
-                      <span class="ap-detail" :title="agentPickerDetail(a)">{{ agentPickerDetail(a) }}</span>
-                    </span>
-                  </button>
-                  <div v-if="!agentPickerItems.length" class="ap-zero">
-                    {{ pickAgents.length ? "没有匹配的 Agent" : "暂无可用 Agent" }}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  class="ap-portal-link"
-                  :disabled="interactionPolicy.canSelectAgent !== true"
-                  @click="openAgentPortal"
-                >完整门户 →</button>
-              </template>
-            </div>
+            <ShellContextPanel
+              ref="agentPickerPanelEl"
+              variant="picker"
+              :snapshot="agentShellSnapshot"
+              :error="pickAgentsError"
+              :loading="agentShellLoading"
+              :disabled="interactionPolicy.canSelectAgent !== true"
+              @stage="pickAgent"
+              @open-portal="openAgentPortal"
+              @keydown="onAgentPickerKeydown"
+            />
           </el-popover>
           <el-input
             v-model="draft"
@@ -578,6 +538,18 @@
       <span>回到底部</span>
       <span v-if="newContentCount > 0" class="btb-count">{{ newContentCount > 99 ? "99+" : newContentCount }}</span>
     </button>
+    </div>
+
+    <aside class="guide-context-rail" aria-label="Agent Shell 任务上下文">
+      <ShellContextPanel
+        :snapshot="agentShellSnapshot"
+        :error="pickAgentsError"
+        :loading="agentShellLoading"
+        :disabled="interactionPolicy.canSelectAgent !== true"
+        @stage="pickAgent"
+        @open-portal="openAgentPortal"
+      />
+    </aside>
   </div>
 </template>
 
@@ -595,7 +567,7 @@ import { createConversation, postMessageStream, getConversation } from "../api/c
 import { createTeam } from "../api/teams";
 import { unwrapDetail } from "../api/client";
 import { createTask, createTasksBatch } from "../api/tasks";
-import { listAgents, getAgent } from "../api/agents";
+import { getAgent, getAgentShell } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
 import {
   ensureTaskEvidence,
@@ -610,7 +582,7 @@ import EvidenceList from "../components/EvidenceList.vue";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";
-import { agentPickerDetail, filterAgentPickerItems } from "../utils/agentPickerVisual";
+import { stageAgentPrompt } from "../utils/agentShell.js";
 import {
   conversationInteractionPolicy,
   conversationStreamFailurePolicy,
@@ -621,6 +593,7 @@ import { recordConversationFirstUserContent } from "../utils/conversationTitles.
 import FlaiBloom from "../components/artwork/FlaiBloom.vue";
 import MarkdownLite from "../components/MarkdownLite.vue";
 import OnboardingCard from "../components/OnboardingCard.vue";
+import ShellContextPanel from "../components/ShellContextPanel.vue";
 import { displayName } from "../stores/session";
 
 // UI 验收台通过独立 Vite 开发入口传入状态快照。正式应用永远忽略该 prop：
@@ -806,33 +779,27 @@ function focusComposer() {
 // ── Agent 选择器（范式 2b：门户降级为 composer 内浏览）──
 // 只列可被召集的执行型 Agent（过滤 disabled 与 interactive——导引自己不列
 // 自己）；点选只填草稿+聚焦，人自己描述需求再发送。
-const pickAgents = ref(
-  (acceptanceFixture?.agents || []).map((agent) => ({
-    ...agent,
-    limitations: Array.isArray(agent.limitations)
-      ? [...agent.limitations]
-      : [],
-  }))
-);
+const agentShellSnapshot = ref(acceptanceFixture?.agentShell || null);
+const agentShellLoading = ref(!acceptanceMode);
 const pickAgentsError = ref("");
 const agentPickerOpen = ref(acceptanceFixture?.agentPickerOpen === true);
-const agentPickerQuery = ref("");
-const agentPickerSearchEl = ref(null);
+const agentPickerPanelEl = ref(null);
 const agentPickerTriggerEl = ref(null);
-const agentPickerItems = computed(() => filterAgentPickerItems(pickAgents.value, agentPickerQuery.value));
-const agentPickerVisibleCount = computed(() => agentPickerItems.value.length);
 onMounted(async () => {
   if (acceptanceMode) return;
   try {
-    const list = await listAgents();
-    pickAgents.value = (list || []).filter((a) => a.status !== "disabled" && a.mode !== "interactive");
+    agentShellSnapshot.value = await getAgentShell();
   } catch (err) {
-    pickAgentsError.value = err.detail || err.message || "Agent 列表加载失败";
+    pickAgentsError.value = err.detail || err.message || "Agent 本体投影加载失败";
+  } finally {
+    agentShellLoading.value = false;
   }
 });
 function pickAgent(a) {
   if (interactionPolicy.value.canSelectAgent !== true) return;
-  draft.value = `我想用「${a.name}」做：`;
+  const prompt = stageAgentPrompt(a);
+  if (prompt === null) return;
+  draft.value = prompt;
   agentPickerOpen.value = false;
   nextTick(focusComposer);
 }
@@ -842,8 +809,13 @@ function openAgentPortal() {
   router.push("/portal");
 }
 watch(agentPickerOpen, (open) => {
-  if (open) nextTick(() => agentPickerSearchEl.value?.focus());
-  else agentPickerQuery.value = "";
+  if (open) nextTick(() => agentPickerPanelEl.value?.focusInitial());
+  else agentPickerPanelEl.value?.reset();
+});
+watch(agentShellLoading, (loading) => {
+  if (loading === false && agentPickerOpen.value === true) {
+    nextTick(() => agentPickerPanelEl.value?.focusInitial());
+  }
 });
 // D-4 键盘语义（选改动小的真焦点方案，不引 aria-activedescendant）：
 // - Esc：关闭弹层并把焦点还给触发钮（dialog 关闭焦点返还的 WAI 约定）；
@@ -2224,17 +2196,41 @@ watch(
 
 <style scoped>
 .guide-page {
-  max-width: 784px;
+  --shell-context-w: 296px;
+  --shell-context-gap: var(--space-6);
+  --shell-context-inset: calc(var(--space-6) + var(--space-1));
+  max-width: calc(784px + var(--shell-context-w) + var(--shell-context-gap));
   margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 784px) var(--shell-context-w);
+  align-items: start;
+  gap: var(--shell-context-gap);
   padding-bottom: 132px; /* 让会话内容避开紧凑后的固定 composer（含诚实地板句） */
+}
+.guide-main { min-width: 0; }
+.guide-context-rail {
+  min-width: 0;
+  position: sticky;
+  top: var(--shell-context-inset);
+  align-self: start;
 }
 /* 空状态：hero + composer 作为一组在可用视口内居中。 */
 .guide-page.is-empty {
   padding-bottom: 0;
   min-height: calc(100vh - 56px);
+}
+.guide-page.is-empty .guide-main {
+  min-height: calc(100vh - 56px);
   display: flex;
   flex-direction: column;
   justify-content: center;
+}
+@media (max-width: 1439px) {
+  .guide-page {
+    max-width: 784px;
+    display: block;
+  }
+  .guide-context-rail { display: none; }
 }
 
 /* ── 起手 hero ── */
@@ -3267,6 +3263,10 @@ watch(
   background: linear-gradient(180deg, rgba(var(--page-bg-rgb), 0) 0%, rgba(var(--page-bg-rgb), 0.88) 42%, var(--page-bg) 74%);
   pointer-events: none;
 }
+@media (min-width: 1440px) {
+  .composer.composer-fixed { right: calc(var(--shell-context-w) + var(--shell-context-gap)); }
+  .guide-page .back-to-bottom { right: calc(var(--shell-context-w) + var(--shell-context-gap) + var(--shell-context-inset)); }
+}
 @media (max-width: 860px) {
   .composer.composer-fixed { left: 0; }
 }
@@ -3459,8 +3459,8 @@ kbd {
 <style>
 /* Agent 选择器 popover（EP popper 渲染在 body，需全局作用域）。 */
 .agent-pick-pop {
-  max-width: calc(100vw - 24px) !important;
-  max-height: min(390px, calc(100vh - 24px));
+  max-width: calc(100vw - var(--space-6)) !important;
+  max-height: min(390px, calc(100vh - var(--space-6)));
   padding: 0 !important;
   overflow: hidden;
 }
@@ -3470,137 +3470,8 @@ kbd {
    决定，不碰。 */
 @media (max-width: 640px) {
   .agent-pick-pop {
-    width: calc(100vw - 24px) !important;
+    width: calc(100vw - var(--space-6)) !important;
   }
-}
-.agent-pick {
-  display: flex;
-  flex-direction: column;
-  max-height: min(390px, calc(100vh - 24px));
-}
-.agent-pick .ap-head {
-  flex: none;
-  padding: 9px 10px 8px;
-  border-bottom: 1px solid var(--hairline-soft);
-}
-.agent-pick .ap-title {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  color: var(--ink-faint);
-  margin-bottom: 6px;
-}
-.agent-pick .ap-search {
-  width: 100%;
-  min-height: 34px;
-  box-sizing: border-box;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-md);
-  background: var(--paper-surface);
-  color: var(--ink);
-  font: inherit;
-  font-size: 13px;
-  padding: 0 10px;
-  outline: none;
-}
-.agent-pick .ap-search:focus-visible {
-  border-color: var(--focus-ring-clay);
-  box-shadow: 0 0 0 2px rgba(var(--clay-rgb), 0.12);
-}
-.agent-pick .ap-search:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.agent-pick .ap-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 4px 0;
-}
-.agent-pick .ap-error { color: var(--trust-fail); font-size: 12px; padding: 8px 10px; }
-.agent-pick .ap-maturity {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--ink-mid);
-  border: 1px solid var(--border-soft, var(--hairline));
-  border-radius: 4px;
-  padding: 0 4px;
-  margin-left: 4px;
-}
-.agent-pick .ap-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 10px;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--motion-fast) var(--ease-out-soft);
-}
-/* 行态语法收口（W0 两态）：hover/键盘焦点=中性 hover-tint；:active 按压瞬间=
-   select-tint-clay（clay=选中槽位，点选即填草稿的瞬时确认，popover 无常驻选中态）。
-   :focus-visible 的 clay 描边环由全局 [role=button] 语法供给，此处只补底色。 */
-.agent-pick .ap-item:hover,
-.agent-pick .ap-item:focus-visible { background: var(--hover-tint); }
-.agent-pick .ap-item:active { background: var(--select-tint-clay); }
-.agent-pick .ap-item:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.agent-pick .ap-item:disabled:hover,
-.agent-pick .ap-item:disabled:focus-visible,
-.agent-pick .ap-item:disabled:active {
-  background: transparent;
-}
-@media (prefers-reduced-motion: reduce) {
-  .agent-pick .ap-item { transition: none; }
-}
-.agent-pick .ap-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
-.agent-pick .ap-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.agent-pick .ap-name-row {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-}
-.agent-pick .ap-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink);
-}
-.agent-pick .ap-detail {
-  font-size: 11px;
-  color: var(--ink-faint);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.25;
-}
-.agent-pick .ap-portal-link {
-  flex: none;
-  width: 100%;
-  min-height: 36px;
-  padding: 7px 10px;
-  border: none;
-  border-top: 1px solid var(--hairline-soft);
-  background: var(--paper-surface);
-  text-align: left;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--clay);
-  cursor: pointer;
-}
-.agent-pick .ap-portal-link:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 /* 垂类问答依据卡（Codex R0 P1 接线）：中性纸面，依据行交给 EvidenceList
@@ -3611,5 +3482,4 @@ kbd {
 .qa-refusal-reason { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink); }
 .qa-refusal-suggestion { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-soft); }
 
-.agent-pick .ap-zero { font-size: 12px; color: var(--ink-faint); padding: 4px 10px 8px; }
 </style>
