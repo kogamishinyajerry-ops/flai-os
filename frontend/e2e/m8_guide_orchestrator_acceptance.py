@@ -164,7 +164,7 @@ with sync_playwright() as p:
     create_btns = page.get_by_role("button", name="去创建此任务").count()
     multi_ok = (
         "协作方案" in body
-        and "2 个 Agent 协作" in body
+        and "召集的 Agent · 2" in body  # 计数唯一承载点（plan-count pill 已按五律③撤除，降噪批原子同批）
         and agent_cards == 2          # 幻觉 ghost_agent 被剔除，只剩 2 张真实卡片
         and create_btns == 2          # 每个真实 Agent 一个创建按钮
         and "生成控制逻辑状态机" in body  # role

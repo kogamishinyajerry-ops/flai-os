@@ -21,10 +21,14 @@
             style="width: 100%"
             @change="handleTaskChange"
           >
+            <!-- 人话称呼（批次四 Q1 残留收口）：选项主文本=taskDisplayName SSOT
+                 （任务名→Agent 显示名→id 切片诚实回退），不再以裸 task_ id 切片
+                 打头；id 切片退尾段作同名行消歧锚（与任务台左栏行 meta 同律），
+                 回退态下主名已是 id 切片则尾段不重复。 -->
             <el-option
               v-for="t in tasks"
               :key="t.id"
-              :label="`${t.id.slice(0, 12)} · ${t.name || '(未命名)'} · ${statusLabel(t.status)}`"
+              :label="taskOptionLabel(t)"
               :value="t.id"
             />
           </el-select>
@@ -94,11 +98,23 @@ import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
 import { listTasks } from "../api/tasks";
 import { submitFeedback, listTaskFeedback, FEEDBACK_CATEGORIES } from "../api/feedback";
-import { statusLabel, formatTime } from "../utils/format";
+import { statusLabel, formatTime, taskDisplayName } from "../utils/format";
+import { useAgentNames } from "../stores/agentNames";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 
 const route = useRoute();
+
+// Agent 人话名册（批次四 Q1）：任务选项缺名时回退注册表显示名，缺位再回退
+// id 切片（taskDisplayName 内置，绝不编名字）。
+const agentNames = useAgentNames();
+
+// 选项标签：人话主名打头，id 切片退尾段消歧；SSOT 已回退 id 切片时尾段去重。
+function taskOptionLabel(t) {
+  const name = taskDisplayName(t, agentNames.map);
+  const idSlice = t.id.slice(0, 12);
+  return `${name} · ${statusLabel(t.status)}${name === idSlice ? "" : ` · ${idSlice}`}`;
+}
 
 const tasks = ref([]);
 const tasksLoadError = ref("");

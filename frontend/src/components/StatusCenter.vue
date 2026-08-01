@@ -107,7 +107,9 @@
             <div v-if="isPeekWorking" class="work-flow-strip-peek" aria-hidden="true"></div>
             <span v-if="isPeekWorking" class="work-pulse-dot"></span>
             <el-tag :type="statusTagType(peekTask.status)">{{ statusLabel(peekTask.status) }}</el-tag>
-            <span class="peek-agent">{{ peekTask.agent_id }} · {{ peekTask.agent_version || "—" }}</span>
+            <!-- 版本缺失=段不出现（零值/缺位不硬凑「—」，与 DeliveryCard 行
+                 同款语法对齐——孪生面同一缺位同一形态，不各造一份占位）。 -->
+            <span class="peek-agent">{{ peekTask.agent_id }}<template v-if="peekTask.agent_version"> · {{ peekTask.agent_version }}</template></span>
             <button class="peek-fullpage" @click="goFullPage">打开完整页 ↗</button>
           </div>
 

@@ -149,9 +149,10 @@
               class="plan-card"
               :class="{ 'fx-rise': m.fresh }"
             >
+              <!-- 顶行只留 kicker：成员计数由 roster-label「召集的 Agent · N」
+                   一处承担（五律③一处一行——原 plan-count pill 与之同屏重复，降噪批撤）。 -->
               <div class="plan-topline">
                 <span class="plan-kicker">协作方案</span>
-                <span class="plan-count">{{ m.recommendation.agents.length }} 个 Agent 协作</span>
               </div>
               <h2 v-if="m.recommendation.goal" class="plan-goal-title">{{ m.recommendation.goal }}</h2>
               <p v-if="m.recommendation.analysis" class="plan-reason">{{ m.recommendation.analysis }}</p>
@@ -193,17 +194,15 @@
                                 'sa-relay-echo': agentTaskInfo(a) && relayEchoIds.has(agentTaskInfo(a).latest.id) }"
                       :style="{ background: memberLampBg(a) }"
                     ></span>
-                    <span class="agent-name">{{ a.agent_name }}</span>
-                    <!-- domain 徽 + 密级 pill（批七 §1.3-T1）：注册表 expertise/clearance
-                         忠实投影，存量包无声明零占位；敏感=amber 描边（信任色锁）。 -->
-                    <span v-if="domainLabelOf(a)" class="sa-domain-pill">{{ domainLabelOf(a) }}</span>
+                    <span class="agent-name" :title="agentTaxonomyTip(a)">{{ a.agent_name }}</span>
+                    <!-- 分类学进披露（降噪批，五律④）：domain/密级/成熟度/发布状态
+                         收进 agent-name 的 title 悬浮，不上成员行主视觉；唯敏感密级
+                         是信任信号（amber=受控/未核槽），常驻行内不折。 -->
                     <span
-                      v-if="clearanceOf(a)"
-                      class="sa-clearance-pill"
-                      :class="{ 'is-sensitive': clearanceOf(a) === 'sensitive' }"
+                      v-if="clearanceOf(a) === 'sensitive'"
+                      class="sa-clearance-pill is-sensitive"
                     >{{ clearanceLabelOf(a) }}</span>
                     <span v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</span>
-                    <span class="agent-maturity">{{ maturityLabel(a.maturity) }} / {{ agentStatusLabel(a.status) }}</span>
                     <span class="sa-spacer"></span>
 
                     <!-- 右槽①已召集：实时状态词+秒表，点击直开速览（B1 对话轴督战原语义） -->
@@ -1887,6 +1886,20 @@ function clearanceLabelOf(a) {
 // 未声明成熟度的存量包诚实回落原值，不编造。
 const maturityLabel = (m) => MATURITY[m]?.label ?? m;
 
+// 成员行分类学披露（降噪批，五律④行话进披露）：domain/密级/成熟度/发布状态
+// 拼一行收进 agent-name 的 title 悬浮——全部走既有 SSOT 人话标签
+// （L0→「L0 · 原型」、draft→「草案态」），忠实投影，缺项不占位不编造。
+function agentTaxonomyTip(a) {
+  const parts = [];
+  const d = domainLabelOf(a);
+  if (d) parts.push(`领域 ${d}`);
+  const c = clearanceLabelOf(a);
+  if (c) parts.push(`密级 ${c}`);
+  if (a.maturity) parts.push(`成熟度 ${maturityLabel(a.maturity)}`);
+  if (a.status) parts.push(agentStatusLabel(a.status));
+  return parts.length ? parts.join(" · ") : null;
+}
+
 function evidenceOfTask(taskId) {
   return taskEvidenceOf(taskId);
 }
@@ -2571,15 +2584,6 @@ watch(
   color: var(--ink-faint);
 }
 .plan-kicker.refuse { color: var(--trust-pending); margin-bottom: 10px; display: inline-block; }
-.plan-count {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-soft);
-  background: var(--paper-rail);
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
-  padding: 2px 10px;
-}
 .plan-goal-title {
   font-family: var(--serif);
   font-size: var(--fs-display);
@@ -2755,7 +2759,6 @@ watch(
 }
 .sa-head .agent-name { flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sa-head .agent-role { margin: 0; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sa-head .agent-maturity { margin-left: 0; }
 .sa-spacer { flex: 1 1 auto; min-width: 8px; }
 .sa-head .agent-status { margin: 0; flex: 0 0 auto; }
 .sa-head .agent-actions { margin: 0; flex: 0 0 auto; }
@@ -2842,9 +2845,9 @@ watch(
 }
 .sa-stageline.is-waiting-upstream { color: var(--ink-soft); }
 
-/* domain 徽 + 密级 pill：中性描边（信任色五槽已锁满，domain 不引新色轴）；
-   敏感=amber 描边（amber=未核/受控语义槽） */
-.sa-domain-pill,
+/* 敏感密级 pill（降噪批后唯一常驻的分类学标记）：amber=受控/未核语义槽，
+   是信任信号不是行话——domain/非敏感密级/成熟度/发布状态已收进 agent-name
+   title（五律④），不再上成员行主视觉。 */
 .sa-clearance-pill {
   flex: none;
   font-size: 11px;
@@ -2937,12 +2940,6 @@ watch(
   font-weight: 700;
   font-size: 15px;
   color: var(--ink);
-}
-.agent-maturity {
-  margin-left: auto;
-  font-size: 11.5px;
-  font-family: var(--mono, "SF Mono", ui-monospace, monospace);
-  color: var(--ink-faint);
 }
 /* B1 对话轴督战：该会话已召集时的内联状态 chip（只在有真任务时渲染）。 */
 .agent-status {
@@ -3449,7 +3446,6 @@ kbd {
 @media (max-width: 640px) {
   .ai-body { max-width: calc(100% - 36px); }
   .plan-goal-title { font-size: 21px; }
-  .agent-maturity { display: none; }
   .composer.composer-fixed { padding: 7px 12px 9px; }
   .composer-hint .keys { display: none; }
   .icon-btn,
