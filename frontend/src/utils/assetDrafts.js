@@ -64,6 +64,186 @@ const LIST_FIELDS = [
   "limitations",
 ];
 
+export const ASSET_DRAFT_FOCUS_QUESTIONS = Object.freeze([
+  {
+    id: "work-title",
+    field: "title",
+    fieldId: "asset-field-title",
+    step: 1,
+    group: "本次工作",
+    label: "工作名称",
+    prompt: "如果以后再遇到，这类工作应该叫什么？",
+    helper: "用工程师一眼能认出的短名称，不写泛泛的“完成某任务”。",
+    placeholder: "例如：稳态算例入口边界复核",
+    multiline: false,
+    minRows: 1,
+    maxRows: 1,
+    maxlength: 120,
+  },
+  {
+    id: "work-trigger",
+    field: "trigger",
+    fieldId: "asset-field-trigger",
+    step: 1,
+    group: "本次工作",
+    label: "复用触发条件",
+    prompt: "什么情况下，应该再次启动这套方法？",
+    helper: "写清可观察的起点；系统不会从对话里自动猜测触发条件。",
+    placeholder: "例如：收到待计算算例，需要在开算前核对入口边界",
+    multiline: true,
+    minRows: 3,
+    maxRows: 6,
+  },
+  {
+    id: "work-outcome",
+    field: "desired_outcome",
+    fieldId: "asset-field-desired-outcome",
+    step: 1,
+    group: "本次工作",
+    label: "可检查的交付结果",
+    prompt: "工作结束时，必须留下什么可检查结果？",
+    helper: "描述能复核、能交接的产物，不把“完成任务”本身当作结果。",
+    placeholder: "例如：形成可逐项签认的入口边界复核清单",
+    multiline: true,
+    minRows: 3,
+    maxRows: 6,
+  },
+  {
+    id: "method-inputs",
+    field: "inputs",
+    fieldId: "asset-field-inputs",
+    step: 2,
+    group: "复用方法",
+    label: "所需输入",
+    prompt: "开始前，工程师手里必须有哪些输入？",
+    helper: "每行一项，只写真实需要的文件、参数或上下文。",
+    placeholder: "算例清单\n入口边界条件表",
+    multiline: true,
+    minRows: 4,
+    maxRows: 8,
+  },
+  {
+    id: "method-outputs",
+    field: "outputs",
+    fieldId: "asset-field-outputs",
+    step: 2,
+    group: "复用方法",
+    label: "必要输出",
+    prompt: "这套方法必须留下哪些输出？",
+    helper: "每行一项，优先写可检查、可交接的产物。",
+    placeholder: "入口边界复核清单",
+    multiline: true,
+    minRows: 4,
+    maxRows: 8,
+  },
+  {
+    id: "method-steps",
+    field: "steps",
+    fieldId: "asset-field-steps",
+    step: 2,
+    group: "复用方法",
+    label: "复用步骤",
+    prompt: "哪些步骤在不同任务中仍然稳定？",
+    helper: "每行一个动作；保留可复用骨架，不把本次任务细节硬编码进去。",
+    placeholder: "逐项核对入口总压、总温与工况标识\n记录缺失、冲突和需要裁决的边界",
+    multiline: true,
+    minRows: 5,
+    maxRows: 10,
+  },
+  {
+    id: "method-evidence",
+    field: "evidence_requirements",
+    fieldId: "asset-field-evidence",
+    step: 2,
+    group: "复用方法",
+    label: "核验依据",
+    prompt: "靠什么证明工作做过，而且可以复核？",
+    helper: "每行一项，写明原始证据、定位或检查记录。",
+    placeholder: "每项结论保留原始表格位置",
+    multiline: true,
+    minRows: 4,
+    maxRows: 8,
+  },
+  {
+    id: "method-human-boundaries",
+    field: "human_decision_points",
+    fieldId: "asset-field-human-boundaries",
+    step: 2,
+    group: "复用方法",
+    label: "人工判断点",
+    prompt: "在哪些地方必须停下来，等工程师判断？",
+    helper: "把人工裁决写成明确停点；Agent 不能越过这些边界。",
+    placeholder: "冲突边界由责任工程师确认采用值",
+    multiline: true,
+    minRows: 4,
+    maxRows: 8,
+  },
+  {
+    id: "method-limitations",
+    field: "limitations",
+    fieldId: "asset-field-limitations",
+    step: 2,
+    group: "复用方法",
+    label: "不适用边界",
+    prompt: "哪些情况绝不能直接套用这套方法？",
+    helper: "每行一项，明确会让方法失效或必须重新评估的条件。",
+    placeholder: "不适用于瞬态工况或未冻结的边界版本",
+    multiline: true,
+    minRows: 4,
+    maxRows: 8,
+  },
+].map((question) => Object.freeze(question)));
+
+const ASSET_DRAFT_ISSUE_QUESTIONS = Object.freeze({
+  "/task_pattern/title": "work-title",
+  "/task_pattern/trigger": "work-trigger",
+  "/task_pattern/desired_outcome": "work-outcome",
+  "/task_pattern/inputs": "method-inputs",
+  "/task_pattern/outputs": "method-outputs",
+  "/skill/instructions": "method-steps",
+  "/skill/verification": "method-evidence",
+  "/skill/human_boundaries": "method-human-boundaries",
+  "/skill/when_not_to_use": "method-limitations",
+});
+
+function hasAssetDraftAnswer(value) {
+  if (typeof value === "string") return value.trim() !== "";
+  return (
+    Array.isArray(value) &&
+    value.some((item) => typeof item === "string" && item.trim() !== "")
+  );
+}
+
+export function assetDraftFocusState(questionId, generalization = {}) {
+  const index = ASSET_DRAFT_FOCUS_QUESTIONS.findIndex(
+    (question) => question.id === questionId,
+  );
+  if (index < 0) throw new RangeError(`未知资产草稿问题：${questionId}`);
+
+  const question = ASSET_DRAFT_FOCUS_QUESTIONS[index];
+  const answeredIds = ASSET_DRAFT_FOCUS_QUESTIONS
+    .filter((item) => hasAssetDraftAnswer(generalization?.[item.field]))
+    .map((item) => item.id);
+
+  return {
+    question,
+    questionId: question.id,
+    step: question.step,
+    index,
+    position: index + 1,
+    total: ASSET_DRAFT_FOCUS_QUESTIONS.length,
+    previousId: ASSET_DRAFT_FOCUS_QUESTIONS[index - 1]?.id || null,
+    nextId: ASSET_DRAFT_FOCUS_QUESTIONS[index + 1]?.id || null,
+    answeredIds,
+    answeredCount: answeredIds.length,
+  };
+}
+
+export function assetDraftQuestionForIssue(path) {
+  if (typeof path !== "string") return null;
+  return ASSET_DRAFT_ISSUE_QUESTIONS[path] || null;
+}
+
 function cleanText(value) {
   return typeof value === "string" ? value.trim() : "";
 }

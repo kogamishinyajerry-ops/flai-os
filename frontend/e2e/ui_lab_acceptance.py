@@ -10,13 +10,13 @@
   ④ Agent 选择器宽高、单行边界和移动端左右各 12px 的对称贴边；
   ⑤ 流式快照使用真实 generating 标记，正文给固定 composer 留足空间；
   ⑥ 保存待核使用 amber，且发送、附件、Agent 共同锁定；
-  ⑦ Asset Builder 起步、待审桌面/移动与 needs_revision 阻断；
+  ⑦ Asset Builder 单焦点九问、待审桌面/移动与 needs_revision 阻断；
   ⑧ 375px 无横向溢出。
 
 运行（仓根）：
   uv run --no-project --with playwright python frontend/e2e/ui_lab_acceptance.py
 
-截图落 docs/reviews/ui-lab-shots/，每次重跑覆盖十个固定镜头。
+截图落 docs/reviews/ui-lab-shots/，每次重跑覆盖十个固定镜头与一张焦点过渡证据。
 """
 from __future__ import annotations
 
@@ -503,7 +503,7 @@ try:
         frame = select_case(
             page,
             "asset-intake-desktop",
-            "桌面 · 资产沉淀起步",
+            "桌面 · 资产沉淀单焦点",
         )
         asset_intake = frame.locator(".asset-builder-drawer").evaluate(
             """element => {
@@ -517,16 +517,20 @@ try:
                 headerTop: header.getBoundingClientRect().top,
                 footerBottom: innerHeight - footer.getBoundingClientRect().bottom,
                 bodyOverflow: getComputedStyle(body).overflowY,
-                sourceBound: element.innerText.includes('已绑定当前会话') &&
+                sourceBound: element.innerText.includes('当前会话') &&
                   element.innerText.includes('生成时由平台解析并校验'),
                 conversationVisible: element.innerText.includes('ui-asset-work-case'),
                 step: element.querySelector('[aria-current="step"]')?.innerText,
                 fields: element.querySelectorAll('.asset-builder-form textarea, .asset-builder-form input').length,
+                question: element.querySelector('#asset-focus-question-title')?.innerText,
+                progress: element.querySelector('.asset-focus-count')?.innerText,
+                activeId: document.activeElement?.id || '',
+                answered: element.querySelector('.asset-summary-toggle')?.innerText,
               };
             }"""
         )
         check(
-            "桌面 Asset Builder 为 560px 三步抽屉并绑定 Work Case",
+            "桌面 Asset Builder 为 560px 单焦点抽屉并绑定 Work Case",
             abs(asset_intake["width"] - 560) <= 1
             and asset_intake["height"] == 900
             and abs(asset_intake["headerTop"]) <= 0.5
@@ -535,10 +539,95 @@ try:
             and asset_intake["sourceBound"] is True
             and asset_intake["conversationVisible"] is True
             and "本次工作" in (asset_intake["step"] or "")
-            and asset_intake["fields"] == 3,
+            and asset_intake["fields"] == 1
+            and asset_intake["question"] == "如果以后再遇到，这类工作应该叫什么？"
+            and asset_intake["progress"] == "问题 1 / 9"
+            and asset_intake["activeId"] == "asset-field-title"
+            and "已整理 2 / 9 项" in (asset_intake["answered"] or ""),
             str(asset_intake),
         )
         capture(frame, "asset-intake-desktop.png")
+
+        for expected_id in [
+            "asset-field-trigger",
+            "asset-field-desired-outcome",
+            "asset-field-inputs",
+        ]:
+            frame.get_by_role("button", name="下一问").click()
+            expect(frame.locator(f"#{expected_id}")).to_be_focused()
+
+        asset_method_focus = frame.locator(".asset-builder-drawer").evaluate(
+            """element => ({
+              fields: element.querySelectorAll('.asset-builder-form textarea, .asset-builder-form input').length,
+              step: element.querySelector('[aria-current="step"]')?.innerText,
+              progress: element.querySelector('.asset-focus-count')?.innerText,
+              activeId: document.activeElement?.id || '',
+              answered: element.querySelector('.asset-summary-toggle')?.innerText,
+              documentFits: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+            })"""
+        )
+        check(
+            "九问流程跨阶段仍只有一个输入并保留焦点与回答",
+            asset_method_focus["fields"] == 1
+            and "复用方法" in (asset_method_focus["step"] or "")
+            and asset_method_focus["progress"] == "问题 4 / 9"
+            and asset_method_focus["activeId"] == "asset-field-inputs"
+            and "已整理 2 / 9 项" in (asset_method_focus["answered"] or "")
+            and asset_method_focus["documentFits"] is True,
+            str(asset_method_focus),
+        )
+        frame.locator(".asset-summary-toggle").click()
+        check(
+            "折叠摘要保留先前回答且不新增编辑框",
+            "稳态算例入口边界复核" in frame.locator(".asset-answered-list").inner_text()
+            and frame.locator(".asset-builder-form input, .asset-builder-form textarea").count() == 1,
+        )
+        frame.locator(".el-drawer__body").evaluate("element => { element.scrollTop = element.scrollHeight; }")
+        frame.locator(".asset-answered-list button").first.click()
+        expect(frame.locator("#asset-field-title")).to_be_focused()
+        check(
+            "摘要回跳同阶段也归顶并聚焦唯一问题",
+            frame.locator(".el-drawer__body").evaluate("element => element.scrollTop") == 0,
+        )
+        for expected_id in [
+            "asset-field-trigger",
+            "asset-field-desired-outcome",
+            "asset-field-inputs",
+        ]:
+            frame.get_by_role("button", name="下一问").click()
+            expect(frame.locator(f"#{expected_id}")).to_be_focused()
+        capture(frame, "asset-method-focus-desktop.png")
+
+        frame.locator("#asset-field-inputs").fill("单焦点回归输入")
+        frame.get_by_role("button", name="关闭此对话框").click()
+        frame.get_by_role("button", name="沉淀本次工作").click()
+        expect(frame.locator("#asset-field-inputs")).to_be_focused()
+        check(
+            "同一会话关闭重开保留当前问题、回答与宏观阶段",
+            frame.locator(".asset-focus-count").inner_text() == "问题 4 / 9"
+            and frame.locator("#asset-field-inputs").input_value() == "单焦点回归输入"
+            and "复用方法" in frame.locator('[aria-current="step"]').inner_text()
+            and frame.locator(".asset-builder-form input, .asset-builder-form textarea").count() == 1,
+        )
+
+        for expected_id in [
+            "asset-field-outputs",
+            "asset-field-steps",
+            "asset-field-evidence",
+            "asset-field-human-boundaries",
+            "asset-field-limitations",
+        ]:
+            frame.get_by_role("button", name="下一问").click()
+            expect(frame.locator(f"#{expected_id}")).to_be_focused()
+        frame.get_by_role("button", name="生成待审草稿").click()
+        expect(frame.locator(".asset-builder-error")).to_contain_text("已阻止 fetch")
+        check(
+            "预览失败停留第九问、保留回答并恢复可编辑",
+            frame.locator(".asset-focus-count").inner_text() == "问题 9 / 9"
+            and frame.locator("#asset-field-limitations").is_enabled()
+            and frame.locator(".asset-summary-toggle").inner_text().startswith("已整理 3 / 9 项")
+            and frame.get_by_role("button", name="生成待审草稿").is_enabled(),
+        )
 
         frame = select_case(
             page,
@@ -622,6 +711,38 @@ try:
         )
         capture(frame, "asset-review-mobile.png")
 
+        frame.get_by_role("button", name="返回整理").click()
+        expect(frame.locator("#asset-field-limitations")).to_be_focused()
+        asset_focus_mobile = frame.locator(".asset-builder-drawer").evaluate(
+            """element => {
+              const rect = element.getBoundingClientRect();
+              const footerButtons = [...element.querySelectorAll('.asset-builder-actions button')];
+              return {
+                viewport: { width: innerWidth, height: innerHeight },
+                width: rect.width,
+                height: rect.height,
+                fields: element.querySelectorAll('.asset-builder-form textarea, .asset-builder-form input').length,
+                progress: element.querySelector('.asset-focus-count')?.innerText,
+                activeId: document.activeElement?.id || '',
+                minFooterTouch: Math.min(...footerButtons.map(item => item.getBoundingClientRect().height)),
+                documentFits: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+              };
+            }"""
+        )
+        check(
+            "移动单焦点问题保持全屏、单输入与 44px 底栏",
+            asset_focus_mobile["viewport"] == {"width": 375, "height": 812}
+            and abs(asset_focus_mobile["width"] - 375) <= 1
+            and abs(asset_focus_mobile["height"] - 812) <= 1
+            and asset_focus_mobile["fields"] == 1
+            and asset_focus_mobile["progress"] == "问题 9 / 9"
+            and asset_focus_mobile["activeId"] == "asset-field-limitations"
+            and asset_focus_mobile["minFooterTouch"] >= 44
+            and asset_focus_mobile["documentFits"] is True,
+            str(asset_focus_mobile),
+        )
+        capture(frame, "asset-focus-mobile.png")
+
         frame = select_case(
             page,
             "asset-blocked-mobile",
@@ -664,6 +785,18 @@ try:
             str(asset_blocked),
         )
         capture(frame, "asset-blocked-mobile.png")
+
+        verification_issue = frame.locator(
+            ".asset-issue-list li",
+            has_text="/skill/verification",
+        )
+        verification_issue.get_by_role("button", name="返回补全").click()
+        expect(frame.locator("#asset-field-evidence")).to_be_focused()
+        check(
+            "阻断项返回补全落到唯一对应问题",
+            frame.locator(".asset-focus-count").inner_text() == "问题 7 / 9"
+            and frame.locator(".asset-builder-form input, .asset-builder-form textarea").count() == 1,
+        )
 
         check("验收加载期间未发真实 API 请求", len(api_requests) == 0, str(api_requests))
         browser.close()

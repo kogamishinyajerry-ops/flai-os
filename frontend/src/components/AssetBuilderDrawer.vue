@@ -8,6 +8,7 @@
     :close-on-click-modal="!generating"
     :close-on-press-escape="!generating"
     :before-close="beforeClose"
+    @opened="focusActiveSurface"
     @update:model-value="emit('update:modelValue', $event)"
   >
     <template #header="{ titleId, titleClass }">
@@ -31,84 +32,89 @@
         </li>
       </ol>
 
-      <section v-if="step === 1" class="asset-builder-section" aria-labelledby="asset-intake-title">
-        <div class="asset-section-head">
-          <span class="asset-section-index">01 · WORK CASE</span>
-          <h3 id="asset-intake-title" tabindex="-1">先说清这项工作是什么</h3>
-          <p>标题和结果可从会话原话起步；触发条件必须由工程师补充，不会自动猜。</p>
+      <section v-if="step < 3" class="asset-builder-section asset-focus-flow" aria-labelledby="asset-focus-question-title">
+        <div class="asset-focus-status">
+          <span class="asset-section-index">
+            {{ currentQuestion.step === 1 ? "01 · WORK CASE" : "02 · GENERALIZE" }}
+          </span>
+          <span class="asset-focus-count num-token">问题 {{ focusState.position }} / {{ focusState.total }}</span>
         </div>
 
-        <div class="asset-source-card">
+        <div
+          class="asset-focus-progress"
+          role="progressbar"
+          aria-label="资产草稿问题进度"
+          aria-valuemin="1"
+          :aria-valuemax="focusState.total"
+          :aria-valuenow="focusState.position"
+        >
+          <span :style="{ width: `${focusProgress}%` }"></span>
+        </div>
+
+        <div v-if="currentQuestion.step === 1" class="asset-source-line" aria-label="当前 Work Case 来源">
           <el-icon aria-hidden="true"><Link /></el-icon>
-          <span>
-            <small>已绑定当前会话</small>
-            <strong class="num-token">{{ conversationId }}</strong>
-          </span>
+          <span>当前会话</span>
+          <strong class="num-token">{{ conversationId }}</strong>
           <span class="asset-source-state">生成时由平台解析并校验</span>
         </div>
 
-        <el-form label-position="top" class="asset-builder-form" :disabled="generating">
-          <el-form-item label="这类工作叫什么">
-            <el-input
-              v-model="form.title"
-              id="asset-field-title"
-              maxlength="120"
-              show-word-limit
-              placeholder="例如：稳态算例入口边界复核"
-            />
-          </el-form-item>
-          <el-form-item label="什么时候应该再次使用">
-            <el-input
-              v-model="form.trigger"
-              id="asset-field-trigger"
-              type="textarea"
-              :autosize="{ minRows: 2, maxRows: 4 }"
-              placeholder="例如：收到待计算算例，需要在开算前核对入口边界"
-            />
-          </el-form-item>
-          <el-form-item label="必须交付什么结果">
-            <el-input
-              v-model="form.desired_outcome"
-              id="asset-field-desired-outcome"
-              type="textarea"
-              :autosize="{ minRows: 3, maxRows: 6 }"
-              placeholder="描述可检查、可交接的结果，不写泛泛的“完成任务”"
-            />
-          </el-form-item>
-        </el-form>
-      </section>
-
-      <section v-else-if="step === 2" class="asset-builder-section" aria-labelledby="asset-method-title">
-        <div class="asset-section-head">
-          <span class="asset-section-index">02 · GENERALIZE</span>
-          <h3 id="asset-method-title" tabindex="-1">把做法抽成可复用方法</h3>
-          <p>每行一项。保留工程师判断点和不适用边界，避免把经验误写成全自动流程。</p>
+        <div class="asset-focus-copy">
+          <span>{{ currentQuestion.group }} · {{ currentQuestion.label }}</span>
+          <h3 id="asset-focus-question-title" tabindex="-1">{{ currentQuestion.prompt }}</h3>
+          <p id="asset-focus-question-helper">{{ currentQuestion.helper }}</p>
         </div>
 
-        <el-form label-position="top" class="asset-builder-form asset-method-grid" :disabled="generating">
-          <el-form-item label="开始前需要的输入">
-            <el-input id="asset-field-inputs" v-model="form.inputs" type="textarea" :rows="3" placeholder="算例清单&#10;入口边界条件表" />
-          </el-form-item>
-          <el-form-item label="必须留下的输出">
-            <el-input id="asset-field-outputs" v-model="form.outputs" type="textarea" :rows="3" placeholder="入口边界复核清单" />
-          </el-form-item>
-          <el-form-item label="稳定、可复用的步骤" class="asset-method-wide">
-            <el-input id="asset-field-steps" v-model="form.steps" type="textarea" :rows="5" placeholder="逐项核对入口总压、总温与工况标识&#10;记录缺失、冲突和需要裁决的边界" />
-          </el-form-item>
-          <el-form-item label="证明工作已做且可核的依据">
-            <el-input id="asset-field-evidence" v-model="form.evidence_requirements" type="textarea" :rows="3" placeholder="每项结论保留原始表格位置" />
-          </el-form-item>
-          <el-form-item label="必须停下来等待工程师判断的位置">
-            <el-input id="asset-field-human-boundaries" v-model="form.human_decision_points" type="textarea" :rows="3" placeholder="冲突边界由责任工程师确认采用值" />
-          </el-form-item>
-          <el-form-item label="绝不能直接套用的情况" class="asset-method-wide">
-            <el-input id="asset-field-limitations" v-model="form.limitations" type="textarea" :rows="3" placeholder="不适用于瞬态工况或未冻结的边界版本" />
+        <el-form label-position="top" class="asset-builder-form asset-focus-form" :disabled="generating" @submit.prevent>
+          <el-form-item :label="currentQuestion.label">
+            <el-input
+              :key="currentQuestion.id"
+              :id="currentQuestion.fieldId"
+              :model-value="form[currentQuestion.field]"
+              :type="currentQuestion.multiline ? 'textarea' : 'text'"
+              :autosize="currentQuestion.multiline ? { minRows: currentQuestion.minRows, maxRows: currentQuestion.maxRows } : undefined"
+              :maxlength="currentQuestion.maxlength"
+              :show-word-limit="Boolean(currentQuestion.maxlength)"
+              :placeholder="currentQuestion.placeholder"
+              :aria-label="currentQuestion.prompt"
+              aria-describedby="asset-focus-question-helper"
+              @update:model-value="setCurrentAnswer"
+            />
           </el-form-item>
         </el-form>
 
         <div v-if="previewError" class="asset-builder-error" role="alert">
           <el-icon aria-hidden="true"><Warning /></el-icon>
           <span>{{ previewError }}</span>
+        </div>
+
+        <div class="asset-answer-summary">
+          <button
+            type="button"
+            class="asset-summary-toggle"
+            :aria-expanded="summaryOpen"
+            aria-controls="asset-answered-list"
+            @click="summaryOpen = !summaryOpen"
+          >
+            <span>已整理 {{ focusState.answeredCount }} / {{ focusState.total }} 项</span>
+            <span>{{ summaryOpen ? "收起摘要" : "查看摘要" }}</span>
+          </button>
+          <div id="asset-answered-list" v-show="summaryOpen">
+            <ul v-if="answeredQuestions.length" class="asset-answered-list">
+              <li v-for="question in answeredQuestions" :key="question.id">
+                <button
+                  type="button"
+                  :class="{ 'is-current': question.id === currentQuestion.id }"
+                  @click="goToQuestion(question.id)"
+                >
+                  <span>{{ question.label }}</span>
+                  <strong>{{ answerSummary(question) }}</strong>
+                </button>
+              </li>
+            </ul>
+            <p v-else class="asset-summary-empty">
+              还没有已整理的回答。可以先跳到下一问，稍后再补。
+            </p>
+          </div>
         </div>
       </section>
 
@@ -221,15 +227,18 @@
       <div class="asset-builder-footer">
         <p>关闭后本会话内保留草稿 · 只生成与下载待审 JSON · 不执行 · 不注册 · 不晋级</p>
         <div class="asset-builder-actions">
-          <button v-if="step > 1" type="button" class="asset-btn is-secondary" :disabled="generating" @click="goToStep(step - 1)">
-            <el-icon aria-hidden="true"><ArrowLeft /></el-icon>上一步
+          <button v-if="step < 3 && focusState.previousId" type="button" class="asset-btn is-secondary" :disabled="generating" @click="goToQuestion(focusState.previousId)">
+            <el-icon aria-hidden="true"><ArrowLeft /></el-icon>上一问
+          </button>
+          <button v-else-if="step === 3" type="button" class="asset-btn is-secondary" :disabled="generating" @click="goToQuestion(lastQuestion.id)">
+            <el-icon aria-hidden="true"><ArrowLeft /></el-icon>返回整理
           </button>
           <button v-else type="button" class="asset-btn is-secondary" :disabled="generating" @click="closeDrawer">取消</button>
 
-          <button v-if="step === 1" type="button" class="asset-btn is-primary" :disabled="generating" @click="goToStep(2)">
-            继续整理方法<el-icon aria-hidden="true"><ArrowRight /></el-icon>
+          <button v-if="step < 3 && focusState.nextId" type="button" class="asset-btn is-primary" :disabled="generating" @click="goToQuestion(focusState.nextId)">
+            下一问<el-icon aria-hidden="true"><ArrowRight /></el-icon>
           </button>
-          <button v-else-if="step === 2" type="button" class="asset-btn is-primary" :disabled="generating" @click="generatePreview">
+          <button v-else-if="step < 3" type="button" class="asset-btn is-primary" :disabled="generating" @click="generatePreview">
             <el-icon v-if="generating" class="is-loading" aria-hidden="true"><Loading /></el-icon>
             {{ generating ? "正在确定性校验…" : "生成待审草稿" }}
           </button>
@@ -255,6 +264,9 @@ import {
 } from "@element-plus/icons-vue";
 import { previewConversationAssetDraft } from "../api/assetDrafts.js";
 import {
+  ASSET_DRAFT_FOCUS_QUESTIONS,
+  assetDraftFocusState,
+  assetDraftQuestionForIssue,
   buildAssetDraftPreviewRequest,
   normalizeAssetDraftPreview,
   seedAssetDraftGeneralization,
@@ -284,22 +296,6 @@ const LIST_FIELDS = [
   "human_decision_points",
   "limitations",
 ];
-const STEP_HEADING_IDS = {
-  1: "asset-intake-title",
-  2: "asset-method-title",
-  3: "asset-review-title",
-};
-const ISSUE_TARGETS = {
-  "/task_pattern/title": { step: 1, fieldId: "asset-field-title" },
-  "/task_pattern/trigger": { step: 1, fieldId: "asset-field-trigger" },
-  "/task_pattern/desired_outcome": { step: 1, fieldId: "asset-field-desired-outcome" },
-  "/task_pattern/inputs": { step: 2, fieldId: "asset-field-inputs" },
-  "/task_pattern/outputs": { step: 2, fieldId: "asset-field-outputs" },
-  "/skill/instructions": { step: 2, fieldId: "asset-field-steps" },
-  "/skill/verification": { step: 2, fieldId: "asset-field-evidence" },
-  "/skill/human_boundaries": { step: 2, fieldId: "asset-field-human-boundaries" },
-  "/skill/when_not_to_use": { step: 2, fieldId: "asset-field-limitations" },
-};
 const form = reactive({
   title: "",
   trigger: "",
@@ -312,12 +308,27 @@ const form = reactive({
   limitations: "",
 });
 const step = ref(1);
+const activeQuestionId = ref(ASSET_DRAFT_FOCUS_QUESTIONS[0].id);
+const summaryOpen = ref(false);
 const generating = ref(false);
 const previewError = ref("");
 const preview = ref(null);
 const builderBody = ref(null);
 const loadedConversationId = ref(null);
 const drawerDescriptionId = `asset-builder-description-${useId()}`;
+
+const focusState = computed(() =>
+  assetDraftFocusState(activeQuestionId.value, form),
+);
+const currentQuestion = computed(() => focusState.value.question);
+const lastQuestion = ASSET_DRAFT_FOCUS_QUESTIONS.at(-1);
+const focusProgress = computed(() =>
+  Math.round((focusState.value.position / focusState.value.total) * 100),
+);
+const answeredQuestions = computed(() => {
+  const answered = new Set(focusState.value.answeredIds);
+  return ASSET_DRAFT_FOCUS_QUESTIONS.filter((question) => answered.has(question.id));
+});
 
 const reviewReady = computed(
   () =>
@@ -352,6 +363,12 @@ function resetFromSource() {
     ? normalizeAssetDraftPreview(props.initialPreview)
     : null;
   if (step.value === 3 && !preview.value) step.value = 2;
+  if (step.value < 3) {
+    activeQuestionId.value =
+      ASSET_DRAFT_FOCUS_QUESTIONS.find((question) => question.step === step.value)?.id ||
+      ASSET_DRAFT_FOCUS_QUESTIONS[0].id;
+  }
+  summaryOpen.value = false;
   loadedConversationId.value = props.conversationId;
 }
 
@@ -365,25 +382,60 @@ watch(
   { immediate: true },
 );
 
-async function goToStep(nextStep, fieldId = "") {
-  if (![1, 2, 3].includes(nextStep)) return;
-  step.value = nextStep;
+function setCurrentAnswer(value) {
+  form[currentQuestion.value.field] = value;
+}
+
+function answerSummary(question) {
+  const value = form[question.field];
+  const text = (Array.isArray(value) ? value.join("、") : String(value || ""))
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > 72 ? `${text.slice(0, 69)}…` : text;
+}
+
+async function focusActiveSurface() {
+  await nextTick();
+  const targetId = step.value === 3
+    ? "asset-review-title"
+    : currentQuestion.value.fieldId;
+  const target = builderBody.value?.querySelector(`[id="${targetId}"]`);
+  target?.focus({ preventScroll: true });
+}
+
+async function goToQuestion(questionId) {
+  let next;
+  try {
+    next = assetDraftFocusState(questionId, form);
+  } catch {
+    return;
+  }
+  activeQuestionId.value = next.questionId;
+  step.value = next.step;
+  summaryOpen.value = false;
   await nextTick();
   const scrollContainer = builderBody.value?.closest(".el-drawer__body");
   if (scrollContainer) scrollContainer.scrollTop = 0;
-  const targetId = fieldId || STEP_HEADING_IDS[nextStep];
-  const heading = builderBody.value?.querySelector(`[id="${targetId}"]`);
-  heading?.focus({ preventScroll: true });
+  await focusActiveSurface();
+}
+
+async function showReview() {
+  step.value = 3;
+  summaryOpen.value = false;
+  await nextTick();
+  const scrollContainer = builderBody.value?.closest(".el-drawer__body");
+  if (scrollContainer) scrollContainer.scrollTop = 0;
+  await focusActiveSurface();
 }
 
 function issueTarget(path) {
-  return ISSUE_TARGETS[path] || null;
+  return assetDraftQuestionForIssue(path);
 }
 
 async function goToIssue(path) {
-  const target = issueTarget(path);
-  if (!target) return;
-  await goToStep(target.step, target.fieldId);
+  const questionId = issueTarget(path);
+  if (!questionId) return;
+  await goToQuestion(questionId);
 }
 
 function closeDrawer() {
@@ -402,7 +454,7 @@ async function generatePreview() {
   previewError.value = "";
   try {
     preview.value = await previewConversationAssetDraft(props.conversationId, form);
-    await goToStep(3);
+    await showReview();
   } catch (error) {
     previewError.value = error?.detail || error?.message || "资产草稿预览生成失败";
   } finally {
@@ -528,9 +580,151 @@ function downloadPreview() {
 .asset-builder-steps li.is-current .asset-step-num {
   border-color: var(--focus-ring-clay);
   background: var(--select-tint-clay);
-  color: var(--clay);
+  color: var(--ink);
 }
 .asset-builder-section { padding: var(--space-6); }
+.asset-focus-flow {
+  min-height: min(640px, calc(100vh - 210px));
+  display: flex;
+  flex-direction: column;
+}
+.asset-focus-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.asset-focus-count { color: var(--ink-soft); font-size: var(--fs-2xs); }
+.asset-focus-progress {
+  width: 100%;
+  height: 2px;
+  margin-top: var(--space-3);
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--hairline-soft);
+}
+.asset-focus-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--clay);
+  transition: width var(--motion-fast) var(--ease-out-soft);
+}
+.asset-source-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-top: var(--space-4);
+  color: var(--ink-soft);
+  font-size: var(--fs-2xs);
+}
+.asset-source-line > strong {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: var(--fs-2xs);
+}
+.asset-focus-copy { max-width: 480px; margin-top: clamp(36px, 7vh, 72px); }
+.asset-focus-copy > span {
+  color: var(--clay-deep);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
+.asset-focus-copy h3 {
+  margin: var(--space-2) 0 0;
+  font-family: var(--serif);
+  font-size: clamp(1.45rem, 3vw, 1.8rem);
+  font-weight: 600;
+  line-height: 1.28;
+  text-wrap: balance;
+}
+.asset-focus-copy h3:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+.asset-focus-copy p {
+  max-width: 440px;
+  margin: var(--space-3) 0 0;
+  color: var(--ink-soft);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+.asset-focus-form { margin-top: var(--space-6); }
+.asset-focus-form .el-form-item { margin-bottom: 0; }
+.asset-focus-form .el-form-item__label { color: var(--ink-soft); font-size: var(--fs-xs); }
+.asset-focus-form .el-input__wrapper,
+.asset-focus-form .el-textarea__inner {
+  font-size: var(--fs-body);
+  line-height: 1.65;
+}
+.asset-answer-summary { margin-top: auto; padding-top: clamp(36px, 7vh, 72px); }
+.asset-summary-toggle {
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0;
+  border: 0;
+  border-top: 1px solid var(--hairline-soft);
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.asset-summary-toggle span:first-child { color: var(--ink); font-weight: 650; }
+.asset-summary-toggle:hover span:last-child { color: var(--ink); }
+.asset-summary-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+.asset-answered-list {
+  max-height: 230px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2) 0 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.asset-answered-list button {
+  width: 100%;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: minmax(90px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.asset-answered-list button:hover,
+.asset-answered-list button.is-current { border-color: var(--hairline); background: var(--paper-rail); }
+.asset-answered-list button:focus-visible { outline: 2px solid var(--focus-ring-clay); outline-offset: 2px; }
+.asset-answered-list span { color: var(--ink); font-size: var(--fs-xs); font-weight: 650; }
+.asset-answered-list strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  font-weight: 450;
+}
+.asset-summary-empty { margin: var(--space-2) 0 0; color: var(--ink-soft); font-size: var(--fs-xs); }
 .asset-section-head { margin-bottom: var(--space-5); }
 .asset-section-head h3 {
   margin: var(--space-1) 0 0;
@@ -549,20 +743,6 @@ function downloadPreview() {
   font-size: var(--fs-sm);
   line-height: 1.55;
 }
-.asset-source-card {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-bottom: var(--space-5);
-  padding: var(--space-3);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-md);
-  background: var(--paper-rail);
-  color: var(--ink-soft);
-}
-.asset-source-card > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: var(--space-1); }
-.asset-source-card small { color: var(--ink-soft); font-size: var(--fs-2xs); }
-.asset-source-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: var(--fs-xs); }
 .asset-source-state { flex: none; display: inline-flex; align-items: center; gap: var(--space-1); color: var(--ink-soft); font-size: var(--fs-2xs); }
 .asset-source-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--trust-pending); }
 .asset-builder-form .el-form-item { margin-bottom: var(--space-5); }
@@ -583,8 +763,6 @@ function downloadPreview() {
 .asset-builder-form .el-textarea__inner:focus {
   box-shadow: 0 0 0 1px var(--focus-ring-clay) inset, 0 0 0 3px rgba(var(--clay-rgb), 0.08);
 }
-.asset-method-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--space-4); }
-.asset-method-wide { grid-column: 1 / -1; }
 .asset-builder-error {
   display: flex;
   align-items: flex-start;
@@ -596,6 +774,7 @@ function downloadPreview() {
   font-size: var(--fs-sm);
   line-height: 1.45;
 }
+.asset-builder-error .el-icon { color: var(--trust-fail); }
 .asset-review { display: flex; flex-direction: column; gap: var(--space-4); }
 .asset-review-head { margin-bottom: 0; }
 .asset-review-status {
@@ -743,6 +922,10 @@ function downloadPreview() {
 .asset-btn.is-primary:hover:not(:disabled) { box-shadow: 0 0 0 3px rgba(var(--clay-rgb), 0.12); }
 .asset-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 :root[data-theme="dark"] .asset-builder-drawer { --asset-primary-ink: #2b2622; }
+:root[data-theme="dark"] .asset-review-status.needs-revision,
+:root[data-theme="dark"] .asset-review-status.needs-revision .asset-review-state,
+:root[data-theme="dark"] .asset-builder-error,
+:root[data-theme="dark"] .asset-issue-list li.is-blocking strong { color: var(--ink); }
 @media (max-width: 639px) {
   .asset-builder-drawer { width: 100vw !important; }
   .asset-builder-drawer .el-drawer__header { padding: var(--space-4); }
@@ -751,9 +934,17 @@ function downloadPreview() {
   .asset-builder-steps li { gap: var(--space-1); font-size: var(--fs-2xs); }
   .asset-builder-steps li:not(:last-child)::after { display: none; }
   .asset-builder-section { padding: var(--space-4); }
-  .asset-method-grid { display: block; }
-  .asset-source-card { align-items: flex-start; flex-wrap: wrap; }
-  .asset-source-state { width: 100%; padding-left: calc(var(--space-3) + 1em); }
+  .asset-focus-flow { min-height: calc(100vh - 210px); }
+  .asset-focus-copy { margin-top: var(--space-6); }
+  .asset-focus-copy h3 { font-size: 1.4rem; }
+  .asset-source-line { align-items: flex-start; flex-wrap: wrap; }
+  .asset-source-line > strong { flex-basis: calc(100% - 90px); }
+  .asset-source-state { width: 100%; padding-left: calc(var(--space-2) + 1em); }
+  .asset-focus-form { margin-top: var(--space-5); }
+  .asset-answer-summary { padding-top: var(--space-6); }
+  .asset-summary-toggle { min-height: 44px; }
+  .asset-answered-list { max-height: 180px; }
+  .asset-answered-list button { grid-template-columns: 88px minmax(0, 1fr); }
   .asset-draft-facts { grid-template-columns: 1fr; }
   .asset-builder-footer { padding: var(--space-3) var(--space-4) max(var(--space-4), env(safe-area-inset-bottom)); }
   .asset-builder-footer > p { text-align: left; }
@@ -762,7 +953,11 @@ function downloadPreview() {
   .asset-issue-action { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .el-drawer-fade-enter-active,
+  .el-drawer-fade-leave-active,
+  .asset-builder-drawer { transition: none !important; }
   .asset-btn { transition: none; }
+  .asset-focus-progress > span { transition: none; }
   .asset-builder-drawer .is-loading { animation: none !important; }
 }
 </style>

@@ -75,6 +75,9 @@ test("Asset Builder 四镜头覆盖起步、待审与 needs_revision 阻断", ()
   assert.equal(intake.assetBuilderStep, 1);
   assert.ok(intake.conversationId);
   assert.ok(intake.messages.some((message) => message.role === "user"));
+  assert.equal(intake.assetDraftGeneralization.trigger, "");
+  assert.deepEqual(intake.assetDraftGeneralization.inputs, []);
+  assert.deepEqual(intake.assetDraftGeneralization.steps, []);
 
   for (const id of ["asset-review-desktop", "asset-review-mobile"]) {
     const fixture = getUiAcceptanceCase(id).guide;
@@ -119,18 +122,31 @@ test("Asset Builder 只提供待审 JSON 下载，不提供执行、注册、晋
     assetBuilderSource,
     /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.asset-builder-drawer \.is-loading \{ animation: none !important; \}/,
   );
+  assert.match(
+    assetBuilderSource,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.el-drawer-fade-enter-active,[\s\S]*?\.asset-builder-drawer \{ transition: none !important; \}/,
+  );
   assert.doesNotMatch(assetBuilderSource, /request\([^)]*\/register/);
   assert.doesNotMatch(assetBuilderSource, /request\([^)]*\/promote/);
 });
 
-test("Asset Builder 保留同一会话的本地草稿，并在步骤切换与生成期间守住可访问边界", () => {
+test("Asset Builder 以单焦点问题流保留草稿，并在切题与生成期间守住可访问边界", () => {
   assert.match(assetBuilderSource, /#header="\{ titleId, titleClass \}"/);
   assert.match(assetBuilderSource, /:aria-describedby="drawerDescriptionId"/);
   assert.match(assetBuilderSource, /<h2 :id="titleId" :class="titleClass">/);
   assert.match(assetBuilderSource, /<el-form[^>]*:disabled="generating"/);
-  assert.match(assetBuilderSource, /async function goToStep\(/);
-  assert.match(assetBuilderSource, /heading\?\.focus\(\{ preventScroll: true \}\)/);
+  assert.equal((assetBuilderSource.match(/<el-input/g) || []).length, 1);
+  assert.match(assetBuilderSource, /:key="currentQuestion\.id"/);
+  assert.match(assetBuilderSource, /问题 \{\{ focusState\.position \}\} \/ \{\{ focusState\.total \}\}/);
+  assert.match(assetBuilderSource, /async function goToQuestion\(/);
+  assert.match(assetBuilderSource, /target\?\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(assetBuilderSource, /assetDraftQuestionForIssue\(path\)/);
+  assert.match(assetBuilderSource, /已整理 \{\{ focusState\.answeredCount \}\}/);
   assert.match(assetBuilderSource, /loadedConversationId\.value === props\.conversationId/);
+  assert.match(
+    assetBuilderSource,
+    /preview\.value = await previewConversationAssetDraft\(props\.conversationId, form\);[\s\S]*?await showReview\(\);[\s\S]*?previewError\.value = error\?\.detail \|\| error\?\.message[\s\S]*?generating\.value = false;/,
+  );
 });
 
 test("每个视图声明真实 viewport 与可逐项讨论的检查点", () => {

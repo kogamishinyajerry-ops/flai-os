@@ -257,6 +257,18 @@ const ASSET_DRAFT_GENERALIZATION = {
   limitations: ["不适用于瞬态工况或未冻结的边界版本"],
 };
 
+const ASSET_INTAKE_GENERALIZATION = {
+  title: ASSET_DRAFT_GENERALIZATION.title,
+  trigger: "",
+  desired_outcome: ASSET_DRAFT_GENERALIZATION.desired_outcome,
+  inputs: [],
+  outputs: [],
+  steps: [],
+  evidence_requirements: [],
+  human_decision_points: [],
+  limitations: [],
+};
+
 const ASSET_DRAFT_PREVIEW = {
   schema_version: "asset_draft_bundle.v1",
   builder_version: "asset_draft_builder.v1",
@@ -504,19 +516,19 @@ export const UI_ACCEPTANCE_CASES = [
   }),
   acceptanceCase({
     id: "asset-intake-desktop",
-    label: "桌面 · 资产沉淀起步",
-    summary: "从已保存 Work Case 进入三步 Asset Builder",
+    label: "桌面 · 资产沉淀单焦点",
+    summary: "从已保存 Work Case 进入九问线性 Asset Builder",
     viewport: VIEWPORTS.desktop,
     guide: {
       ...ASSET_WORK_GUIDE,
       assetBuilderOpen: true,
       assetBuilderStep: 1,
-      assetDraftGeneralization: ASSET_DRAFT_GENERALIZATION,
+      assetDraftGeneralization: ASSET_INTAKE_GENERALIZATION,
     },
     reviewPoints: [
-      "抽屉是否明确绑定真实会话来源而非一张空白表",
-      "标题、触发与结果是否能在第一屏清楚完成",
-      "是否明确说明不会自动猜测触发条件",
+      "任一时刻是否只有一个可编辑问题与一个主行动",
+      "问题进度和已整理摘要是否足够安静，不与当前回答争抢注意力",
+      "跨越本次工作与复用方法时是否继续保留回答和输入焦点",
     ],
   }),
   acceptanceCase({
