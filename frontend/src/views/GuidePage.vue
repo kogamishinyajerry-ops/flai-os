@@ -488,6 +488,17 @@
               @keydown="onAgentPickerKeydown"
             />
           </el-popover>
+          <button
+            type="button"
+            class="icon-btn asset-builder-entry-composer"
+            :disabled="assetDraftPolicy.canOpen !== true"
+            :title="assetDraftPolicy.canOpen ? '沉淀本次工作' : assetDraftPolicy.reason"
+            :aria-describedby="assetDraftPolicy.canOpen ? undefined : 'asset-builder-entry-reason-mobile'"
+            aria-label="沉淀本次工作"
+            @click="openAssetBuilder"
+          >
+            <el-icon aria-hidden="true"><Collection /></el-icon>
+          </button>
           <el-input
             v-model="draft"
             type="textarea"
@@ -518,7 +529,12 @@
       <!-- 政策句压成一句（「导引不会替你创建」是 m6 e2e 锚，字面保留）；
            快捷键仍 hover/聚焦才显。 -->
       <div class="composer-hint">
-        <span>导引不会替你创建或签发；这里产出的只是草案。</span>
+        <span :class="['composer-policy', { 'is-supplanted': assetDraftPolicy.canOpen !== true }]">导引不会替你创建或签发；这里产出的只是草案。</span>
+        <span
+          v-if="assetDraftPolicy.canOpen !== true"
+          id="asset-builder-entry-reason-mobile"
+          class="asset-entry-reason-mobile"
+        >沉淀暂不可用：{{ assetDraftPolicy.reason }}</span>
         <span class="keys"><kbd>Enter</kbd> 发送<span class="sep">·</span><kbd>⇧ Enter</kbd> 换行<span class="sep">·</span>📎 可带附件</span>
       </div>
       </div>
@@ -548,8 +564,35 @@
         :disabled="interactionPolicy.canSelectAgent !== true"
         @stage="pickAgent"
         @open-portal="openAgentPortal"
-      />
+      >
+        <template #footer-action>
+          <div class="asset-builder-entry-rail-wrap">
+            <button
+              type="button"
+              class="asset-builder-entry-rail"
+              :disabled="assetDraftPolicy.canOpen !== true"
+              :title="assetDraftPolicy.canOpen ? '沉淀本次工作' : assetDraftPolicy.reason"
+              @click="openAssetBuilder"
+            >
+              <span><el-icon aria-hidden="true"><Collection /></el-icon>沉淀本次工作</span>
+              <el-icon aria-hidden="true"><ArrowRight /></el-icon>
+            </button>
+            <p v-if="assetDraftPolicy.canOpen !== true" class="asset-builder-entry-reason">
+              {{ assetDraftPolicy.reason }}
+            </p>
+          </div>
+        </template>
+      </ShellContextPanel>
     </aside>
+
+    <AssetBuilderDrawer
+      v-model="assetBuilderOpen"
+      :conversation-id="conversationId"
+      :messages="messages"
+      :initial-step="assetBuilderInitialStep"
+      :initial-generalization="assetBuilderInitialGeneralization"
+      :initial-preview="assetBuilderInitialPreview"
+    />
   </div>
 </template>
 
@@ -559,6 +602,8 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import {
   Aim,
+  ArrowRight,
+  Collection,
   Connection,
   Search,
   Tools,
@@ -593,8 +638,10 @@ import { recordConversationFirstUserContent } from "../utils/conversationTitles.
 import FlaiBloom from "../components/artwork/FlaiBloom.vue";
 import MarkdownLite from "../components/MarkdownLite.vue";
 import OnboardingCard from "../components/OnboardingCard.vue";
+import AssetBuilderDrawer from "../components/AssetBuilderDrawer.vue";
 import ShellContextPanel from "../components/ShellContextPanel.vue";
 import { displayName } from "../stores/session";
+import { assetDraftEntryPolicy } from "../utils/assetDrafts.js";
 
 // UI 验收台通过独立 Vite 开发入口传入状态快照。正式应用永远忽略该 prop：
 // 它只控制可视状态，不模拟网络、不写会话、不产生“假流式”。
@@ -658,6 +705,33 @@ const interactionPolicy = computed(() =>
     reconciliationRequired: reconciliationRequired.value,
   })
 );
+const assetBuilderOpen = ref(acceptanceFixture?.assetBuilderOpen === true);
+const assetBuilderInitialStep = acceptanceFixture?.assetBuilderStep || 1;
+const assetBuilderInitialGeneralization = acceptanceFixture?.assetDraftGeneralization || null;
+const assetBuilderInitialPreview = acceptanceFixture?.assetDraftPreview || null;
+const hasSavedUserWorkCase = computed(() =>
+  messages.value.some(
+    (message) =>
+      message?.role === "user" &&
+      message.transient !== true &&
+      message.persistenceUnknown !== true &&
+      typeof message.content === "string" &&
+      message.content.trim() !== "",
+  ),
+);
+const assetDraftPolicy = computed(() =>
+  assetDraftEntryPolicy({
+    conversationId: conversationId.value,
+    hasSavedUserMessage: hasSavedUserWorkCase.value,
+    sending: sending.value,
+    restoring: restoring.value,
+    reconciliationRequired: reconciliationRequired.value,
+  })
+);
+function openAssetBuilder() {
+  if (assetDraftPolicy.value.canOpen !== true) return;
+  assetBuilderOpen.value = true;
+}
 const pageError = ref(acceptanceFixture?.pageError || "");
 const streamEl = ref(null);
 // composer placeholder 只保留动作词；意图卡已在同屏，不在输入框里重复解释。
@@ -2063,6 +2137,7 @@ function resetToFresh(clearError = true) {
   conversationStatus.value = null;
   reconciliationRequired.value = false;
   agentPickerOpen.value = false;
+  assetBuilderOpen.value = false;
   draft.value = "";
   pendingFiles.value = [];
   releaseConversationTasksFeed();
@@ -2213,6 +2288,42 @@ watch(
   position: sticky;
   top: var(--shell-context-inset);
   align-self: start;
+}
+.asset-builder-entry-rail-wrap {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.asset-builder-entry-rail {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--clay) 42%, var(--hairline));
+  border-radius: var(--radius-md);
+  background: var(--select-tint-clay);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  cursor: pointer;
+}
+.asset-builder-entry-rail > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.asset-builder-entry-rail .el-icon { color: var(--clay-deep); }
+.asset-builder-entry-rail:disabled { opacity: 0.5; cursor: not-allowed; }
+.asset-builder-entry-reason {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--trust-pending);
+  color: var(--ink-soft);
+  font-size: var(--fs-2xs);
+  line-height: 1.4;
 }
 /* 空状态：hero + composer 作为一组在可用视口内居中。 */
 .guide-page.is-empty {
@@ -3319,6 +3430,7 @@ watch(
 }
 .icon-btn:hover:not(:disabled) { background: var(--paper-rail); color: var(--ink-soft); }
 .icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.asset-builder-entry-composer { display: none; }
 .composer-input { flex: 1 1 auto; }
 .composer-input :deep(.el-textarea__inner) {
   border: none;
@@ -3366,6 +3478,8 @@ watch(
   font-size: 10.5px;
   color: var(--ink-faint);
 }
+.asset-entry-reason-mobile { display: none; color: var(--ink-soft); }
+.asset-entry-reason-mobile::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: var(--space-1); border-radius: 50%; background: var(--trust-pending); vertical-align: 1px; }
 /* 按键提示段静止态隐去，composer 区域 hover / focus-within 时渐显——
  * 「导引不会替你创建或签发任务」政策句留在旁边常驻，不受此规则影响。 */
 .composer-hint .keys {
@@ -3441,6 +3555,12 @@ kbd {
 @media (max-width: 640px) {
   /* 375px：右缩进收紧，底部抬升量与移动端 composer 实高对齐，不遮发送钮。 */
   .back-to-bottom { right: 16px; bottom: 118px; }
+}
+
+@media (max-width: 1439px) {
+  .asset-builder-entry-composer { display: grid; }
+  .asset-entry-reason-mobile { display: inline; }
+  .composer-policy.is-supplanted { display: none; }
 }
 
 @media (max-width: 640px) {

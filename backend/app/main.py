@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from . import config
 from .api import agent_shell as agent_shell_api
 from .api import agents as agents_api
+from .api import asset_drafts as asset_drafts_api
 from .api import auth as auth_api
 from .api import conversations as conversations_api
 from .api import feedback as feedback_api
@@ -38,7 +39,7 @@ from .auth.middleware import AuthGateMiddleware
 from .auth.service import LoginThrottle
 from .bootstrap import assemble
 from .logging_setup import configure_logging, reset_logging
-from .ontology import AgentShellCatalog
+from .ontology import AgentShellCatalog, AssetDraftBuilder
 from .runtime.conversation import ConversationService
 from .runtime.runtime import AgentRuntime
 from .storage import repos
@@ -182,6 +183,7 @@ def create_app(
                 asm.tool_registry,
                 asm.scope_registry,
             )
+            app.state.asset_draft_builder = AssetDraftBuilder()
             app.state.knowledge_service = asm.knowledge_service
             app.state.model_gateway = asm.model_gateway
             app.state.runtime = runtime
@@ -303,6 +305,7 @@ def create_app(
 
     app.include_router(auth_api.router)
     app.include_router(agent_shell_api.router)
+    app.include_router(asset_drafts_api.router)
     app.include_router(agents_api.router)
     app.include_router(tasks_api.router)
     app.include_router(files_api.router)

@@ -5,17 +5,18 @@
 
 覆盖：
   ① 未知 case fail-closed；
-  ② 六个固定镜头、精确 viewport 与桌面布局数值基线；
+  ② 十个固定镜头、精确 viewport 与桌面布局数值基线；
   ③ opaque-origin iframe + 只读边界阻止网络和主题偏好写入；
   ④ Agent 选择器宽高、单行边界和移动端左右各 12px 的对称贴边；
   ⑤ 流式快照使用真实 generating 标记，正文给固定 composer 留足空间；
   ⑥ 保存待核使用 amber，且发送、附件、Agent 共同锁定；
-  ⑦ 375px 无横向溢出。
+  ⑦ Asset Builder 起步、待审桌面/移动与 needs_revision 阻断；
+  ⑧ 375px 无横向溢出。
 
 运行（仓根）：
   uv run --no-project --with playwright python frontend/e2e/ui_lab_acceptance.py
 
-截图落 docs/reviews/ui-lab-shots/，每次重跑覆盖六个固定镜头。
+截图落 docs/reviews/ui-lab-shots/，每次重跑覆盖十个固定镜头。
 """
 from __future__ import annotations
 
@@ -119,6 +120,9 @@ def select_case(page, case_id: str, label: str):
     if "picker" in case_id:
         expect(frame.locator(".agent-pick")).to_be_visible()
         page.wait_for_timeout(350)
+    if case_id.startswith("asset-"):
+        expect(frame.locator(".asset-builder-drawer")).to_be_visible()
+        page.wait_for_timeout(250)
     return frame
 
 
@@ -180,9 +184,9 @@ try:
 
         page.goto(BASE + "/ui-lab.html", wait_until="networkidle")
         check(
-            "固定六镜头与三项检查点",
-            page.locator(".case-button").count() == 6
-            and page.locator(".review-strip li").count() == 3,
+            "固定十镜头与逐项检查点",
+            page.locator(".case-button").count() == 10
+            and page.locator(".review-strip li").count() >= 3,
         )
 
         frame = embedded_frame(page, "landing-desktop")
@@ -495,6 +499,171 @@ try:
             str(mobile_picker),
         )
         capture(frame, "picker-mobile.png")
+
+        frame = select_case(
+            page,
+            "asset-intake-desktop",
+            "桌面 · 资产沉淀起步",
+        )
+        asset_intake = frame.locator(".asset-builder-drawer").evaluate(
+            """element => {
+              const rect = element.getBoundingClientRect();
+              const header = element.querySelector('.el-drawer__header');
+              const body = element.querySelector('.el-drawer__body');
+              const footer = element.querySelector('.el-drawer__footer');
+              return {
+                width: rect.width,
+                height: rect.height,
+                headerTop: header.getBoundingClientRect().top,
+                footerBottom: innerHeight - footer.getBoundingClientRect().bottom,
+                bodyOverflow: getComputedStyle(body).overflowY,
+                sourceBound: element.innerText.includes('已绑定当前会话') &&
+                  element.innerText.includes('生成时由平台解析并校验'),
+                conversationVisible: element.innerText.includes('ui-asset-work-case'),
+                step: element.querySelector('[aria-current="step"]')?.innerText,
+                fields: element.querySelectorAll('.asset-builder-form textarea, .asset-builder-form input').length,
+              };
+            }"""
+        )
+        check(
+            "桌面 Asset Builder 为 560px 三步抽屉并绑定 Work Case",
+            abs(asset_intake["width"] - 560) <= 1
+            and asset_intake["height"] == 900
+            and abs(asset_intake["headerTop"]) <= 0.5
+            and abs(asset_intake["footerBottom"]) <= 0.5
+            and asset_intake["bodyOverflow"] == "auto"
+            and asset_intake["sourceBound"] is True
+            and asset_intake["conversationVisible"] is True
+            and "本次工作" in (asset_intake["step"] or "")
+            and asset_intake["fields"] == 3,
+            str(asset_intake),
+        )
+        capture(frame, "asset-intake-desktop.png")
+
+        frame = select_case(
+            page,
+            "asset-review-desktop",
+            "桌面 · 待审资产草稿",
+        )
+        asset_review = frame.locator(".asset-builder-drawer").evaluate(
+            """element => {
+              const rootStyle = getComputedStyle(document.documentElement);
+              const probe = document.createElement('span');
+              probe.style.color = rootStyle.getPropertyValue('--trust-pending');
+              document.body.append(probe);
+              const pending = getComputedStyle(probe).color;
+              probe.remove();
+              const state = element.querySelector('.asset-review-status');
+              const stateIcon = state.querySelector('.asset-review-state .el-icon');
+              const buttons = [...element.querySelectorAll('button')].map(item => item.innerText.trim());
+              return {
+                stateIconColor: getComputedStyle(stateIcon).color,
+                pending,
+                taskPattern: element.innerText.includes('TASK PATTERN · DRAFT'),
+                skill: element.innerText.includes('SKILL · DRAFT'),
+                reviewGate: element.innerText.includes('HUMAN REVIEW GATE'),
+                honesty: element.innerText.includes('下载不等于注册'),
+                zeroEffects: element.innerText.includes('未写数据库') && element.innerText.includes('未注册或晋级'),
+                hasDownload: buttons.some(text => text.includes('下载待审 JSON')),
+                hasApprove: buttons.some(text => /批准|注册|晋级/.test(text)),
+              };
+            }"""
+        )
+        check(
+            "待审资产链使用 amber 且没有批准/注册/晋级动作",
+            asset_review["stateIconColor"] == asset_review["pending"]
+            and asset_review["taskPattern"] is True
+            and asset_review["skill"] is True
+            and asset_review["reviewGate"] is True
+            and asset_review["honesty"] is True
+            and asset_review["zeroEffects"] is True
+            and asset_review["hasDownload"] is True
+            and asset_review["hasApprove"] is False,
+            str(asset_review),
+        )
+        capture(frame, "asset-review-desktop.png")
+
+        frame = select_case(
+            page,
+            "asset-review-mobile",
+            "移动端 · 待审资产草稿",
+        )
+        asset_mobile = frame.locator(".asset-builder-drawer").evaluate(
+            """element => {
+              const rect = element.getBoundingClientRect();
+              const body = element.querySelector('.el-drawer__body');
+              const footer = element.querySelector('.el-drawer__footer');
+              const download = [...element.querySelectorAll('button')].find(item =>
+                item.innerText.includes('下载待审 JSON')
+              );
+              return {
+                viewport: { width: innerWidth, height: innerHeight },
+                width: rect.width,
+                height: rect.height,
+                left: rect.left,
+                bodyOverflow: getComputedStyle(body).overflowY,
+                footerBottom: innerHeight - footer.getBoundingClientRect().bottom,
+                downloadTouch: download?.getBoundingClientRect().height || 0,
+                documentFits: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+              };
+            }"""
+        )
+        check(
+            "移动 Asset Builder 全屏、正文内部滚动且底栏触控目标可用",
+            asset_mobile["viewport"] == {"width": 375, "height": 812}
+            and abs(asset_mobile["width"] - 375) <= 1
+            and abs(asset_mobile["height"] - 812) <= 1
+            and abs(asset_mobile["left"]) <= 0.5
+            and asset_mobile["bodyOverflow"] == "auto"
+            and abs(asset_mobile["footerBottom"]) <= 0.5
+            and asset_mobile["downloadTouch"] >= 44
+            and asset_mobile["documentFits"] is True,
+            str(asset_mobile),
+        )
+        capture(frame, "asset-review-mobile.png")
+
+        frame = select_case(
+            page,
+            "asset-blocked-mobile",
+            "移动端 · 草稿阻断待补",
+        )
+        asset_blocked = frame.locator(".asset-builder-drawer").evaluate(
+            """element => {
+              const rootStyle = getComputedStyle(document.documentElement);
+              const probe = document.createElement('span');
+              probe.style.color = rootStyle.getPropertyValue('--trust-fail');
+              document.body.append(probe);
+              const fail = getComputedStyle(probe).color;
+              probe.remove();
+              const state = element.querySelector('.asset-review-status.needs-revision');
+              const download = [...element.querySelectorAll('button')].find(item =>
+                item.innerText.includes('下载待审 JSON')
+              );
+              const rect = element.getBoundingClientRect();
+              return {
+                viewport: { width: innerWidth, height: innerHeight },
+                width: rect.width,
+                stateColor: state ? getComputedStyle(state).color : '',
+                fail,
+                blockingSummary: state?.innerText || '',
+                issueCount: element.querySelectorAll('.asset-issue-list .is-blocking').length,
+                downloadDisabled: download?.disabled,
+                documentFits: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+              };
+            }"""
+        )
+        check(
+            "needs_revision 用红色阻断摘要且禁止下载",
+            asset_blocked["viewport"] == {"width": 375, "height": 812}
+            and abs(asset_blocked["width"] - 375) <= 1
+            and asset_blocked["stateColor"] == asset_blocked["fail"]
+            and "需补全 · 2 项阻断" in asset_blocked["blockingSummary"]
+            and asset_blocked["issueCount"] == 2
+            and asset_blocked["downloadDisabled"] is True
+            and asset_blocked["documentFits"] is True,
+            str(asset_blocked),
+        )
+        capture(frame, "asset-blocked-mobile.png")
 
         check("验收加载期间未发真实 API 请求", len(api_requests) == 0, str(api_requests))
         browser.close()

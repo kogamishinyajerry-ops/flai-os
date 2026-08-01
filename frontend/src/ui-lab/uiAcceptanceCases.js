@@ -242,6 +242,165 @@ const PERSISTENCE_UNKNOWN_GUIDE = {
   ],
 };
 
+const ASSET_DRAFT_GENERALIZATION = {
+  title: "稳态算例入口边界复核",
+  trigger: "收到一批待计算的稳态算例，需要在开算前核对入口边界",
+  desired_outcome: "形成可逐项签认的入口边界复核清单",
+  inputs: ["算例清单", "入口边界条件表"],
+  outputs: ["入口边界复核清单"],
+  steps: [
+    "逐项核对入口总压、总温与工况标识",
+    "记录缺失、冲突和需要工程师裁决的边界",
+  ],
+  evidence_requirements: ["每项结论保留原始表格位置"],
+  human_decision_points: ["冲突边界由责任工程师确认采用值"],
+  limitations: ["不适用于瞬态工况或未冻结的边界版本"],
+};
+
+const ASSET_DRAFT_PREVIEW = {
+  schema_version: "asset_draft_bundle.v1",
+  builder_version: "asset_draft_builder.v1",
+  status: "draft",
+  work_case: {
+    source_kind: "conversation",
+    source_id: "ui-asset-work-case",
+    source_state: "platform_resolved",
+    conversation_status: "active",
+    message_count: 2,
+    user_message_count: 1,
+    attachment_reference_count: 1,
+    source_revision: "sha256:60ec7e1447ef98d410d7941a36d78f32391462be8d64ae5cd1b97956c12ea687",
+  },
+  task_pattern: {
+    schema_version: "task_pattern_draft.v1",
+    status: "draft",
+    derived_from_work_case_revision: "sha256:60ec7e1447ef98d410d7941a36d78f32391462be8d64ae5cd1b97956c12ea687",
+    suggested_id: "task_pattern_candidate_528a3dbbf28d",
+    content_digest: "sha256:528a3dbbf28d65ff2bb0f3fc069189cdccdb0fe84635fdb744cc5863f32a0cd5",
+    ...ASSET_DRAFT_GENERALIZATION,
+  },
+  skill: {
+    schema_version: "skill_draft.v1",
+    status: "draft",
+    operationalizes_task_pattern_digest: "sha256:528a3dbbf28d65ff2bb0f3fc069189cdccdb0fe84635fdb744cc5863f32a0cd5",
+    suggested_id: "skill_candidate_8ea5d04c38ee",
+    content_digest: "sha256:8ea5d04c38ee98d275224f8904d591bfd9f50223668b5298287a69215798a61b",
+    name: ASSET_DRAFT_GENERALIZATION.title,
+    description: `${ASSET_DRAFT_GENERALIZATION.desired_outcome}；适用于：${ASSET_DRAFT_GENERALIZATION.trigger}`,
+    when_to_use: ASSET_DRAFT_GENERALIZATION.trigger,
+    when_not_to_use: ASSET_DRAFT_GENERALIZATION.limitations,
+    inputs: ASSET_DRAFT_GENERALIZATION.inputs,
+    outputs: ASSET_DRAFT_GENERALIZATION.outputs,
+    instructions: ASSET_DRAFT_GENERALIZATION.steps,
+    verification: ASSET_DRAFT_GENERALIZATION.evidence_requirements,
+    human_boundaries: ASSET_DRAFT_GENERALIZATION.human_decision_points,
+  },
+  validation: {
+    schema_version: "asset_draft_validation.v1",
+    policy_version: "core.v1",
+    state: "ready_for_human_review",
+    blocking_count: 0,
+    warning_count: 0,
+    issues: [],
+  },
+  review: {
+    required: true,
+    ready: true,
+    state: "awaiting_human_review",
+    decision_state: "not_recorded",
+    requirements: [
+      "核对草稿是否忠实对应原始 Work Case",
+      "核对步骤、输入输出与不适用边界是否真的可复用",
+      "核对人工判断点与证据要求是否充分",
+    ],
+  },
+  generation: { kind: "deterministic_projection", llm_used: false },
+  effects: {
+    writes_database: false,
+    executes_work: false,
+    registers_asset: false,
+    promotes_asset: false,
+  },
+  draft_digest: "sha256:ac82e6b78fd1dfbdb314837c63fcbd2ab482403708c91ce698f4c68d2082518d",
+};
+
+const ASSET_BLOCKED_GENERALIZATION = {
+  ...ASSET_DRAFT_GENERALIZATION,
+  evidence_requirements: [],
+  human_decision_points: [],
+};
+
+const ASSET_BLOCKED_PREVIEW = {
+  ...ASSET_DRAFT_PREVIEW,
+  task_pattern: {
+    ...ASSET_DRAFT_PREVIEW.task_pattern,
+    ...ASSET_BLOCKED_GENERALIZATION,
+    suggested_id: "task_pattern_candidate_555555555555",
+    content_digest: "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+  },
+  skill: {
+    ...ASSET_DRAFT_PREVIEW.skill,
+    operationalizes_task_pattern_digest: "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+    suggested_id: "skill_candidate_666666666666",
+    content_digest: "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+    verification: [],
+    human_boundaries: [],
+  },
+  validation: {
+    schema_version: "asset_draft_validation.v1",
+    policy_version: "core.v1",
+    state: "needs_revision",
+    blocking_count: 2,
+    warning_count: 0,
+    issues: [
+      {
+        code: "skill.human_boundary.required",
+        severity: "blocking",
+        path: "/skill/human_boundaries",
+        message: "至少声明一个必须停下来等待工程师判断的位置",
+      },
+      {
+        code: "skill.verification.required",
+        severity: "blocking",
+        path: "/skill/verification",
+        message: "至少声明一项证明工作已做且可核的依据",
+      },
+    ],
+  },
+  review: {
+    ...ASSET_DRAFT_PREVIEW.review,
+    ready: false,
+    state: "not_ready",
+  },
+  draft_digest: "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+};
+
+const ASSET_WORK_GUIDE = {
+  started: true,
+  conversationId: "ui-asset-work-case",
+  conversationStatus: "active",
+  sending: false,
+  reconciliationRequired: false,
+  agentPickerOpen: false,
+  agents: AGENTS,
+  agentShell: AGENT_SHELL,
+  messages: [
+    {
+      id: "ui-asset-user-1",
+      role: "user",
+      content: "核对这批稳态算例的入口边界，并形成复核清单。",
+      createdAt: "2026-07-31T06:42:10Z",
+      attachments: [{ id: "file-boundaries", filename: "入口边界条件表.xlsx" }],
+    },
+    {
+      id: "ui-asset-assistant-1",
+      role: "assistant",
+      content: "已按输入完整性、边界适用性和证据位置整理了检查方法。",
+      createdAt: "2026-07-31T06:42:18Z",
+    },
+  ],
+};
+
 function acceptanceCase({
   id,
   label,
@@ -341,6 +500,77 @@ export const UI_ACCEPTANCE_CASES = [
       "四个 Agent 是否可在内部滚动中快速辨认",
       "关闭弹层后 composer 是否仍保持上下文",
       "工作类型筛选是否在窄屏内无横向溢出",
+    ],
+  }),
+  acceptanceCase({
+    id: "asset-intake-desktop",
+    label: "桌面 · 资产沉淀起步",
+    summary: "从已保存 Work Case 进入三步 Asset Builder",
+    viewport: VIEWPORTS.desktop,
+    guide: {
+      ...ASSET_WORK_GUIDE,
+      assetBuilderOpen: true,
+      assetBuilderStep: 1,
+      assetDraftGeneralization: ASSET_DRAFT_GENERALIZATION,
+    },
+    reviewPoints: [
+      "抽屉是否明确绑定真实会话来源而非一张空白表",
+      "标题、触发与结果是否能在第一屏清楚完成",
+      "是否明确说明不会自动猜测触发条件",
+    ],
+  }),
+  acceptanceCase({
+    id: "asset-review-desktop",
+    label: "桌面 · 待审资产草稿",
+    summary: "Task Pattern + Skill + 校验 + 人工门的受治理草稿包",
+    viewport: VIEWPORTS.desktop,
+    guide: {
+      ...ASSET_WORK_GUIDE,
+      assetBuilderOpen: true,
+      assetBuilderStep: 3,
+      assetDraftGeneralization: ASSET_DRAFT_GENERALIZATION,
+      assetDraftPreview: ASSET_DRAFT_PREVIEW,
+    },
+    reviewPoints: [
+      "Task Pattern、Skill 和校验是否构成一条可扫读的资产链",
+      "待审状态是否只用 amber/中性而没有伪绿色",
+      "下载不等于注册、未执行/未晋级是否常驻可见",
+    ],
+  }),
+  acceptanceCase({
+    id: "asset-review-mobile",
+    label: "移动端 · 待审资产草稿",
+    summary: "375px 全屏抽屉中的固定头、滚动正文与底栏",
+    viewport: VIEWPORTS.mobile,
+    guide: {
+      ...ASSET_WORK_GUIDE,
+      assetBuilderOpen: true,
+      assetBuilderStep: 3,
+      assetDraftGeneralization: ASSET_DRAFT_GENERALIZATION,
+      assetDraftPreview: ASSET_DRAFT_PREVIEW,
+    },
+    reviewPoints: [
+      "抽屉是否在 375px 下全屏且无横向溢出",
+      "固定头、滚动内容与下载底栏是否互不遮挡",
+      "44px 触控目标与待审边界文案是否保留",
+    ],
+  }),
+  acceptanceCase({
+    id: "asset-blocked-mobile",
+    label: "移动端 · 草稿阻断待补",
+    summary: "缺人工判断点与证据时 needs_revision，禁止下载",
+    viewport: VIEWPORTS.mobile,
+    guide: {
+      ...ASSET_WORK_GUIDE,
+      assetBuilderOpen: true,
+      assetBuilderStep: 3,
+      assetDraftGeneralization: ASSET_BLOCKED_GENERALIZATION,
+      assetDraftPreview: ASSET_BLOCKED_PREVIEW,
+    },
+    reviewPoints: [
+      "缺人工判断点与证据时是否出现红色阻断摘要",
+      "阻断草稿的下载按钮是否禁用且没有旁路",
+      "375px 全屏抽屉是否无横向溢出",
     ],
   }),
 ];

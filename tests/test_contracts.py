@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,8 @@ CONTRACTS = REPO / "contracts"
 SCHEMA_FILES = [
     "agent.schema.json",
     "agent_shell.schema.json",
+    "asset_draft_preview_request.schema.json",
+    "asset_draft_bundle.schema.json",
     "tool.schema.json",
     "task.schema.json",
     "event.schema.json",
@@ -239,3 +242,165 @@ def test_agent_shell_schema_bites_authority_and_shape_drift(mutate) -> None:
     mutate(invalid)
     with pytest.raises(ValidationError):
         validate(invalid, _load_schema("agent_shell.schema.json"))
+
+
+def _valid_asset_draft_request() -> dict:
+    return {
+        "schema_version": "asset_draft_preview_request.v1",
+        "generalization": {
+            "title": "入口边界复核",
+            "trigger": "收到待计算的稳态算例",
+            "desired_outcome": "形成可签认的复核清单",
+            "inputs": ["边界条件表"],
+            "outputs": ["复核清单"],
+            "steps": ["核输入", "标缺口"],
+            "evidence_requirements": ["保留原始位置"],
+            "human_decision_points": ["冲突值由工程师确认"],
+            "limitations": ["不适用于瞬态工况"],
+        },
+    }
+
+
+def test_asset_draft_request_contract_accepts_editable_semantic_gaps() -> None:
+    schema = _load_schema("asset_draft_preview_request.schema.json")
+    validate(_valid_asset_draft_request(), schema)
+
+    incomplete = _valid_asset_draft_request()
+    incomplete["generalization"]["outputs"] = []
+    incomplete["generalization"]["steps"] = []
+    validate(incomplete, schema)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value.__setitem__("approved", True),
+        lambda value: value["generalization"].__setitem__("inputs", [""]),
+        lambda value: value["generalization"].__setitem__("steps", [1]),
+    ],
+)
+def test_asset_draft_request_contract_rejects_authority_and_shape_drift(mutate) -> None:
+    invalid = _valid_asset_draft_request()
+    mutate(invalid)
+    with pytest.raises(ValidationError):
+        validate(invalid, _load_schema("asset_draft_preview_request.schema.json"))
+
+
+def test_asset_draft_bundle_contract_locks_no_side_effects_and_no_recorded_decision() -> None:
+    from backend.app.ontology.asset_builder import AssetDraftBuilder
+
+    conversation = {
+        "id": "conv_contract",
+        "agent_id": "guide_agent",
+        "status": "active",
+        "messages": [
+            {"id": "msg_1", "role": "user", "content": "核对入口边界", "file_ids": []}
+        ],
+    }
+    bundle = AssetDraftBuilder().preview(
+        conversation=conversation,
+        generalization=_valid_asset_draft_request()["generalization"],
+    )
+    schema = _load_schema("asset_draft_bundle.schema.json")
+    validate(bundle, schema)
+
+    for field in (
+        "writes_database",
+        "executes_work",
+        "registers_asset",
+        "promotes_asset",
+    ):
+        invalid = deepcopy(bundle)
+        invalid["effects"][field] = True
+        with pytest.raises(ValidationError):
+            validate(invalid, schema)
+
+    invalid = deepcopy(bundle)
+    invalid["review"]["decision_state"] = "approved"
+    with pytest.raises(ValidationError):
+        validate(invalid, schema)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value["review"].__setitem__("ready", False),
+        lambda value: value["review"].__setitem__("state", "not_ready"),
+        lambda value: value["validation"].__setitem__("blocking_count", 1),
+        lambda value: value["validation"].update(
+            {
+                "issues": [
+                    {
+                        "code": "fake.blocker",
+                        "severity": "blocking",
+                        "path": "/task_pattern/title",
+                        "message": "不能在 ready 状态隐藏阻断项",
+                    }
+                ]
+            }
+        ),
+    ],
+)
+def test_asset_draft_bundle_contract_rejects_fake_review_readiness(mutate) -> None:
+    from backend.app.ontology.asset_builder import AssetDraftBuilder
+
+    bundle = AssetDraftBuilder().preview(
+        conversation={
+            "id": "conv_contract_readiness",
+            "agent_id": "guide_agent",
+            "status": "active",
+            "messages": [
+                {
+                    "id": "msg_1",
+                    "role": "user",
+                    "content": "核对入口边界",
+                    "file_ids": [],
+                }
+            ],
+        },
+        generalization=_valid_asset_draft_request()["generalization"],
+    )
+    mutate(bundle)
+
+    with pytest.raises(ValidationError):
+        validate(bundle, _load_schema("asset_draft_bundle.schema.json"))
+
+
+def test_asset_draft_bundle_contract_accepts_blocked_editable_draft() -> None:
+    from backend.app.ontology.asset_builder import AssetDraftBuilder
+
+    bundle = AssetDraftBuilder().preview(
+        conversation={
+            "id": "conv_contract_blocked",
+            "agent_id": "guide_agent",
+            "status": "active",
+            "messages": [
+                {
+                    "id": "msg_1",
+                    "role": "user",
+                    "content": "核对入口边界",
+                    "file_ids": [],
+                }
+            ],
+        },
+        generalization={
+            **_valid_asset_draft_request()["generalization"],
+            "outputs": [],
+        },
+    )
+
+    validate(bundle, _load_schema("asset_draft_bundle.schema.json"))
+    assert bundle["validation"]["state"] == "needs_revision"
+    assert bundle["review"]["ready"] is False
+
+    invalid = deepcopy(bundle)
+    invalid["validation"]["issues"] = [
+        {
+            "code": "fake.warning",
+            "severity": "warning",
+            "path": "/generalization/inputs",
+            "message": "不能用 warning 冒充 blocking issue",
+        }
+    ]
+    with pytest.raises(ValidationError):
+        validate(invalid, _load_schema("asset_draft_bundle.schema.json"))

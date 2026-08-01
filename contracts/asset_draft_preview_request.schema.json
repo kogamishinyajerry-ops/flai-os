@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/asset_draft_preview_request.schema.json",
+  "title": "FLAi-OS Asset Draft Preview Request",
+  "description": "工程师对一个平台内 Work Case 的可复用抽象；语义缺口允许为空并由确定性校验报告，类型、边界和未知字段必须 fail-closed。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generalization"],
+  "properties": {
+    "schema_version": {"const": "asset_draft_preview_request.v1"},
+    "generalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "trigger",
+        "desired_outcome",
+        "inputs",
+        "outputs",
+        "steps",
+        "evidence_requirements",
+        "human_decision_points",
+        "limitations"
+      ],
+      "properties": {
+        "title": {"type": "string", "maxLength": 160},
+        "trigger": {"type": "string", "maxLength": 2000},
+        "desired_outcome": {"type": "string", "maxLength": 2000},
+        "inputs": {"$ref": "#/$defs/stringList"},
+        "outputs": {"$ref": "#/$defs/stringList"},
+        "steps": {"$ref": "#/$defs/stringList"},
+        "evidence_requirements": {"$ref": "#/$defs/stringList"},
+        "human_decision_points": {"$ref": "#/$defs/stringList"},
+        "limitations": {"$ref": "#/$defs/stringList"}
+      }
+    }
+  },
+  "$defs": {
+    "stringList": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000,
+        "pattern": "\\S"
+      }
+    }
+  }
+}

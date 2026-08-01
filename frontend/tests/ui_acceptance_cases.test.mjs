@@ -9,6 +9,7 @@ import {
 } from "../src/ui-lab/uiAcceptanceCases.js";
 import { installUiAcceptanceBoundary } from "../src/ui-lab/acceptanceBoundary.js";
 import { conversationInteractionPolicy } from "../src/utils/ndjsonStream.js";
+import { normalizeAssetDraftPreview } from "../src/utils/assetDrafts.js";
 
 const appSource = readFileSync(
   new URL("../src/App.vue", import.meta.url),
@@ -34,6 +35,10 @@ const shellContextSource = readFileSync(
   new URL("../src/components/ShellContextPanel.vue", import.meta.url),
   "utf8",
 );
+const assetBuilderSource = readFileSync(
+  new URL("../src/components/AssetBuilderDrawer.vue", import.meta.url),
+  "utf8",
+);
 
 const REQUIRED_CASES = [
   "landing-desktop",
@@ -42,9 +47,13 @@ const REQUIRED_CASES = [
   "persistence-unknown-desktop",
   "landing-mobile",
   "picker-mobile",
+  "asset-intake-desktop",
+  "asset-review-desktop",
+  "asset-review-mobile",
+  "asset-blocked-mobile",
 ];
 
-test("UI 验收台固定覆盖六个关键视图，未知 ID fail-closed", () => {
+test("UI 验收台固定覆盖十个关键视图，未知 ID fail-closed", () => {
   assert.deepEqual(
     UI_ACCEPTANCE_CASES.map((item) => item.id),
     REQUIRED_CASES,
@@ -58,6 +67,70 @@ test("UI 验收台固定覆盖六个关键视图，未知 ID fail-closed", () =>
     () => getUiAcceptanceCase("missing"),
     /未知 UI 验收场景：missing/,
   );
+});
+
+test("Asset Builder 四镜头覆盖起步、待审与 needs_revision 阻断", () => {
+  const intake = getUiAcceptanceCase("asset-intake-desktop").guide;
+  assert.equal(intake.assetBuilderOpen, true);
+  assert.equal(intake.assetBuilderStep, 1);
+  assert.ok(intake.conversationId);
+  assert.ok(intake.messages.some((message) => message.role === "user"));
+
+  for (const id of ["asset-review-desktop", "asset-review-mobile"]) {
+    const fixture = getUiAcceptanceCase(id).guide;
+    assert.equal(fixture.assetBuilderOpen, true);
+    assert.equal(fixture.assetBuilderStep, 3);
+    assert.equal(fixture.assetDraftPreview.schema_version, "asset_draft_bundle.v1");
+    assert.equal(fixture.assetDraftPreview.status, "draft");
+    assert.equal(fixture.assetDraftPreview.validation.state, "ready_for_human_review");
+    assert.equal(fixture.assetDraftPreview.review.state, "awaiting_human_review");
+    assert.equal(fixture.assetDraftPreview.review.decision_state, "not_recorded");
+    assert.equal(normalizeAssetDraftPreview(fixture.assetDraftPreview), fixture.assetDraftPreview);
+    assert.deepEqual(fixture.assetDraftPreview.effects, {
+      writes_database: false,
+      executes_work: false,
+      registers_asset: false,
+      promotes_asset: false,
+    });
+  }
+
+  const blocked = getUiAcceptanceCase("asset-blocked-mobile").guide;
+  assert.equal(blocked.assetBuilderOpen, true);
+  assert.equal(blocked.assetBuilderStep, 3);
+  assert.equal(blocked.assetDraftPreview.validation.state, "needs_revision");
+  assert.equal(blocked.assetDraftPreview.validation.blocking_count, 2);
+  assert.equal(blocked.assetDraftPreview.review.ready, false);
+  assert.equal(blocked.assetDraftPreview.review.state, "not_ready");
+  assert.equal(normalizeAssetDraftPreview(blocked.assetDraftPreview), blocked.assetDraftPreview);
+});
+
+test("Asset Builder 只提供待审 JSON 下载，不提供执行、注册、晋级或批准动作", () => {
+  assert.match(assetBuilderSource, /下载不等于注册/);
+  assert.match(assetBuilderSource, /下载待审 JSON/);
+  assert.match(assetBuilderSource, /本页不提供批准按钮/);
+  assert.match(assetBuilderSource, /:disabled="reviewReady !== true"/);
+  assert.match(
+    assetBuilderSource,
+    /if \(!preview\.value \|\| reviewReady\.value !== true\) return;/,
+  );
+  assert.match(assetBuilderSource, /生成时由平台解析并校验/);
+  assert.doesNotMatch(assetBuilderSource, /来源已解析/);
+  assert.match(
+    assetBuilderSource,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.asset-builder-drawer \.is-loading \{ animation: none !important; \}/,
+  );
+  assert.doesNotMatch(assetBuilderSource, /request\([^)]*\/register/);
+  assert.doesNotMatch(assetBuilderSource, /request\([^)]*\/promote/);
+});
+
+test("Asset Builder 保留同一会话的本地草稿，并在步骤切换与生成期间守住可访问边界", () => {
+  assert.match(assetBuilderSource, /#header="\{ titleId, titleClass \}"/);
+  assert.match(assetBuilderSource, /:aria-describedby="drawerDescriptionId"/);
+  assert.match(assetBuilderSource, /<h2 :id="titleId" :class="titleClass">/);
+  assert.match(assetBuilderSource, /<el-form[^>]*:disabled="generating"/);
+  assert.match(assetBuilderSource, /async function goToStep\(/);
+  assert.match(assetBuilderSource, /heading\?\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(assetBuilderSource, /loadedConversationId\.value === props\.conversationId/);
 });
 
 test("每个视图声明真实 viewport 与可逐项讨论的检查点", () => {

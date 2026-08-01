@@ -143,6 +143,9 @@
     </template>
 
     <footer class="context-footer">
+      <div v-if="!isPicker" class="context-action-slot">
+        <slot name="footer-action" />
+      </div>
       <p><el-icon aria-hidden="true"><Lock /></el-icon>选择只加入输入草稿，不会发送、建任务或签发。</p>
       <button type="button" class="ap-portal-link context-portal" :disabled="disabled" @click="$emit('open-portal')">
         查看完整治理与能力边界 <el-icon aria-hidden="true"><ArrowRight /></el-icon>
@@ -491,6 +494,7 @@ defineExpose({ focusInitial, reset });
   border-top: 1px solid var(--hairline-soft);
   background: var(--surface-raised);
 }
+.context-action-slot:empty { display: none; }
 .context-footer p {
   display: flex;
   align-items: flex-start;
