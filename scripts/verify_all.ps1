@@ -84,6 +84,7 @@ Invoke-Step -Name "② 全量 pytest -n auto（三个 testpaths）" -Action {
 }
 
 $E2EScripts = @(
+    "frontend/e2e/ui_lab_acceptance.py",
     "frontend/e2e/m2_acceptance.py",
     "frontend/e2e/m6_guide_acceptance.py",
     "frontend/e2e/m8_collab_chain_acceptance.py",

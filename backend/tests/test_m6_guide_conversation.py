@@ -17,19 +17,26 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import shutil
+import threading
+import time
 from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from conftest import TEST_DISPLAY_NAME
 
+from backend.app.api.conversations import PostMessageRequest, stream_message
 from backend.app.runtime.registry import AgentRegistry
+from backend.app.runtime import conversation as conversation_mod
+from backend.app.core.errors import ModelUpstreamError
 from backend.app.storage import repos
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -69,6 +76,55 @@ class _CannedStub:
     def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         self.calls.append({"profile": profile, "messages": messages, **kwargs})
         return {"content": self.reply, "token_usage": None, "model_name": "stub", "finish_reason": "stop"}
+
+
+class _StreamingStub(_CannedStub):
+    """按 pieces 真调用 on_delta 的可控网关；可在已发部分内容后诚实失败。"""
+
+    def __init__(self, reply: str, pieces: list[str], error: Exception | None = None) -> None:
+        super().__init__(reply)
+        self.pieces = pieces
+        self.error = error
+
+    def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"profile": profile, "messages": messages, **kwargs})
+        on_delta = kwargs.get("on_delta")
+        for piece in self.pieces:
+            if callable(on_delta):
+                on_delta(piece)
+        if self.error is not None:
+            raise self.error
+        return {
+            "content": self.reply,
+            "token_usage": None,
+            "model_name": "stub",
+            "finish_reason": "stop",
+        }
+
+
+class _UntilDisconnectedStreamingStub(_CannedStub):
+    """持续发 delta，直到 ASGI disconnect 使 callback 明确失败。"""
+
+    def __init__(self) -> None:
+        super().__init__("不应提交")
+        self.finished = threading.Event()
+
+    def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"profile": profile, "messages": messages, **kwargs})
+        on_delta = kwargs.get("on_delta")
+        try:
+            for _ in range(2_000):
+                if callable(on_delta):
+                    on_delta("片")
+                time.sleep(0.001)
+        finally:
+            self.finished.set()
+        return {
+            "content": self.reply,
+            "token_usage": None,
+            "model_name": "stub",
+            "finish_reason": "stop",
+        }
 
 
 # ── 计划块构造小工具（M8：<<PLAN>> orchestrate | refuse）──────────────────
@@ -804,3 +860,196 @@ def test_split_plan_preserves_tail_text(app_env) -> None:
     assert "块后重要提醒" in body["content"], "计划块之后的文本不得静默丢弃"
     assert "<<PLAN>>" not in body["content"] and "<<END>>" not in body["content"]
     assert body["recommendation"]["agents"][0]["agent_id"] == "fta_agent", "只认第一块"
+
+
+def test_visible_reply_stream_hides_fragmented_plan_marker() -> None:
+    """计划 sentinel 横跨上游 chunk 时也不得闪到用户眼前；普通正文立即透传。"""
+    wf = _load_wf()
+    visible: list[str] = []
+    stream = wf._VisibleReplyStream(visible.append)
+
+    stream.feed("先给你答")
+    stream.feed("复。<<PL")
+    stream.feed('AN>>{"decision":"orchestrate"}<<END>>')
+    stream.finish()
+
+    assert "".join(visible) == "先给你答复。"
+    assert "<<PLAN>>" not in "".join(visible)
+
+
+def test_stream_message_ndjson_yields_safe_deltas_then_atomic_done(app_env) -> None:
+    client, app = app_env
+    plan = _orchestrate([_agent("fta_agent", prefilled={"top_event": "X"})])
+    reply = _plan_reply("先给你一句可见回复。", plan)
+    _inject(
+        app,
+        _StreamingStub(
+            reply,
+            ["先给你一句", "可见回复。<<PL", f"AN>>\n{json.dumps(plan, ensure_ascii=False)}\n<<END>>"],
+        ),
+    )
+    conv_id = _open_conversation(client)
+
+    with client.stream(
+        "POST",
+        f"/api/conversations/{conv_id}/messages/stream",
+        json={"content": "做故障树"},
+    ) as resp:
+        assert resp.status_code == 200
+        events = [json.loads(line) for line in resp.iter_lines() if line]
+
+    assert events[0]["type"] == "start"
+    assert "".join(e["text"] for e in events if e["type"] == "delta") == "先给你一句可见回复。"
+    assert all("<<PLAN>>" not in json.dumps(e, ensure_ascii=False) for e in events)
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["message"]["content"] == "先给你一句可见回复。"
+    assert done["message"]["recommendation"]["agents"][0]["agent_id"] == "fta_agent"
+
+    persisted = client.get(f"/api/conversations/{conv_id}").json()["messages"]
+    assert [m["role"] for m in persisted] == ["user", "assistant"]
+
+
+def test_stream_message_partial_error_is_explicit_and_zero_persistence(app_env) -> None:
+    client, app = app_env
+    _inject(
+        app,
+        _StreamingStub(
+            "不会完整返回",
+            ["已收到一小段"],
+            ModelUpstreamError("上游在流式中途断开"),
+        ),
+    )
+    conv_id = _open_conversation(client)
+
+    with client.stream(
+        "POST",
+        f"/api/conversations/{conv_id}/messages/stream",
+        json={"content": "请分析"},
+    ) as resp:
+        events = [json.loads(line) for line in resp.iter_lines() if line]
+
+    assert [e["type"] for e in events] == ["start", "delta", "error"]
+    assert events[1]["text"] == "已收到一小段"
+    assert events[2]["status"] == 502
+    assert events[2]["persisted"] is False
+    assert client.get(f"/api/conversations/{conv_id}").json()["messages"] == []
+
+
+def test_stream_message_unclosed_plan_fails_closed_with_zero_persistence(app_env) -> None:
+    """出现 <<PLAN>> 却缺 <<END>> 时，控制片段不得进入 done 或数据库。"""
+    client, app = app_env
+    reply = '先给可见说明。<<PLAN>>\n{"decision":"orchestrate"'
+    _inject(
+        app,
+        _StreamingStub(
+            reply,
+            ["先给可见说明。<<PL", 'AN>>\n{"decision":"orchestrate"'],
+        ),
+    )
+    conv_id = _open_conversation(client)
+
+    with client.stream(
+        "POST",
+        f"/api/conversations/{conv_id}/messages/stream",
+        json={"content": "做分析"},
+    ) as resp:
+        events = [json.loads(line) for line in resp.iter_lines() if line]
+
+    assert [e["type"] for e in events] == ["start", "delta", "error"]
+    assert events[1]["text"] == "先给可见说明。"
+    assert events[-1]["persisted"] is False
+    assert client.get(f"/api/conversations/{conv_id}").json()["messages"] == []
+
+
+def test_stream_asgi_disconnect_cancels_round_before_persistence(app_env) -> None:
+    """真实 ASGI http.disconnect 必须及时关闭流，并让后台轮次在提交前退出。"""
+    client, app = app_env
+    stub = _UntilDisconnectedStreamingStub()
+    _inject(app, stub)
+    conv_id = _open_conversation(client)
+    path = f"/api/conversations/{conv_id}/messages/stream"
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.4"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "headers": [],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+        "root_path": "",
+        "app": app,
+    }
+    sent: list[dict[str, Any]] = []
+
+    async def exercise_disconnect() -> None:
+        disconnected = asyncio.Event()
+
+        async def receive() -> dict[str, Any]:
+            await disconnected.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict[str, Any]) -> None:
+            sent.append(message)
+            if (
+                message["type"] == "http.response.body"
+                and b'"type":"start"' in message.get("body", b"")
+            ):
+                disconnected.set()
+
+        response = stream_message(
+            conv_id,
+            PostMessageRequest(content="断连测试"),
+            Request(scope, receive),
+        )
+        await asyncio.wait_for(response(scope, receive, send), timeout=2)
+
+    asyncio.run(exercise_disconnect())
+    assert any(
+        m["type"] == "http.response.body"
+        and b'"type":"start"' in m.get("body", b"")
+        for m in sent
+    )
+    assert stub.finished.wait(timeout=3), "断连后后台模型消费必须及时结束"
+    assert client.get(f"/api/conversations/{conv_id}").json()["messages"] == []
+
+
+def test_stream_done_has_no_fallible_database_read_after_commit(app_env, monkeypatch) -> None:
+    """commit 后若再读会话可能误报 persisted:false；done 必须来自事务内快照。"""
+    client, app = app_env
+    _inject(app, _StreamingStub("完整回复", ["完整", "回复"]))
+    conv_id = _open_conversation(client)
+    original_get = conversation_mod.repos.get_conversation
+    outside_transaction_calls = 0
+
+    def reject_second_outside_read(conn, conversation_id):
+        nonlocal outside_transaction_calls
+        row = original_get(conn, conversation_id)
+        if not conn.in_transaction:
+            outside_transaction_calls += 1
+            if outside_transaction_calls > 1:
+                raise RuntimeError("commit 后禁止再次读取")
+        return row
+
+    monkeypatch.setattr(
+        conversation_mod.repos, "get_conversation", reject_second_outside_read
+    )
+    with client.stream(
+        "POST",
+        f"/api/conversations/{conv_id}/messages/stream",
+        json={"content": "请回答"},
+    ) as resp:
+        events = [json.loads(line) for line in resp.iter_lines() if line]
+
+    assert events[-1]["type"] == "done"
+    assert events[-1]["message"]["content"] == "完整回复"
+    assert outside_transaction_calls == 1
+
+    monkeypatch.setattr(conversation_mod.repos, "get_conversation", original_get)
+    assert [m["role"] for m in client.get(
+        f"/api/conversations/{conv_id}"
+    ).json()["messages"]] == ["user", "assistant"]

@@ -10,13 +10,15 @@
 
     <!-- 左侧栏（Claude 布局）：品牌 + 新对话 + 双入口导航（双 Surface）+ 最近对话历史。 -->
     <aside class="sidebar" :class="{ 'is-open': sidebarOpen }">
-      <div class="sb-brand" @click="newConversation">
-        <span class="brand-mark">F</span>
+      <!-- D-3 键盘可达：div@click 改真 button（Tab 可入、Enter/Space 原生触发）；
+           class 与内容结构原样，UA 差异在下方 .sb-brand 样式归零。 -->
+      <button type="button" class="sb-brand" @click="newConversation">
+        <FlaiBloom class="brand-mark" :size="30" />
         <span class="brand-text">
           <span class="brand-name">FLAi-OS</span>
           <span class="brand-sub">二所工程智能体运行底座</span>
         </span>
-      </div>
+      </button>
 
       <button class="sb-new" @click="newConversation">
         <el-icon :size="16" aria-hidden="true"><Plus /></el-icon>
@@ -24,36 +26,38 @@
       </button>
 
       <nav class="sidebar-nav">
-        <a
+        <!-- D-3：无 href 的 a@click 改 router-link（真实导航语义，Tab/Enter 原生可达）；
+             class 与 :class 绑定原样保留（m8/m11/craft 锚全走 class，不随标签变化）。 -->
+        <router-link
           v-for="item in NAV"
           :key="item.path"
+          :to="item.path"
           class="nav-link"
           :class="{ 'is-active': activeMenu === item.path }"
-          @click="$router.push(item.path)"
-        >{{ item.label }}</a>
+        >{{ item.label }}</router-link>
       </nav>
 
       <div class="sb-history">
         <div class="sb-section-label">最近对话</div>
         <div class="sb-convos">
-          <a
+          <router-link
             v-for="c in convos"
             :key="c.id"
+            :to="{ path: '/', query: { c: c.id } }"
             class="convo-item"
             :class="{ 'is-active': activeConvoId === c.id }"
             :title="convoTitle(c)"
-            @click="openConvo(c)"
           >
             <span class="convo-dot" :class="c.recommendation && c.recommendation.decision === 'refuse' ? 'refuse' : (c.recommendation ? 'plan' : 'talk')"></span>
             <span class="convo-title">{{ convoTitle(c) }}</span>
             <span v-if="c.updated_at || c.created_at" class="convo-time">{{ formatTime(c.updated_at || c.created_at) }}</span>
-          </a>
+          </router-link>
           <div v-if="!convos.length" class="convo-empty">还没有对话——从上方「新对话」开始</div>
         </div>
       </div>
 
       <!-- 「我的贡献」深链（批C task7）：独立入口，不并进登出按钮语义。 -->
-      <a class="sb-mine" :class="{ 'is-active': route.path === '/me' }" @click="$router.push('/me')">我的贡献</a>
+      <router-link to="/me" class="sb-mine" :class="{ 'is-active': route.path === '/me' }">我的贡献</router-link>
 
       <!-- 工作身份行：登录会话身份（服务端派生，前端只读）；点击退出登录。 -->
       <button class="sb-identity" :title="`以「${userName}」的身份登录——点击退出`" @click="changeIdentity">
@@ -107,17 +111,17 @@
 
   <!-- 身份门：本地工作身份（非认证，内网 SSO 递延）——无名字时全屏拦下，
        一次具名全站免问。 -->
-  <WelcomeGate v-if="sessionProbed && !identityReady" @done="onIdentityDone" />
+  <WelcomeGate v-if="!acceptanceMode && sessionProbed && !identityReady" @done="onIdentityDone" />
 
   <!-- ⌘K 快速切换面板（B3）：热键监听与数据/跳转逻辑全封在组件内，这里只挂载。 -->
-  <QuickSwitcher />
+  <QuickSwitcher v-if="!acceptanceMode" />
 
   <!-- 状态坞 + 状态中心（UI-PARADIGM Phase 1「状态来找人」）：轮询/数据/签发
        逻辑全封在组件与 stores/statusCenter 单例内，这里只挂载。
        v-if identityReady（Codex R1 审 P2）：登录门后不挂载——否则 inert 只禁
        交互、StatusDock 的 5s 轮询仍打 /api/tasks 每次 401 再排下轮，登出/过期
        标签页无限刷未授权流量+会话 DB 查。未登录即卸载=轮询彻底停。 -->
-  <template v-if="identityReady">
+  <template v-if="identityReady && !acceptanceMode">
     <StatusDock />
     <StatusCenter />
   </template>
@@ -125,7 +129,7 @@
   <!-- 仿真监控浮窗（实验性，默认关——未配置 ?simhub= 时零渲染）：
        配置/消息边界/收展逻辑全封组件内，这里只挂载；必须挂根级
        （.page-turn 的 transform 会劫持 fixed 定位基准，动效系统判例）。 -->
-  <SimMonitorFloat />
+  <SimMonitorFloat v-if="!acceptanceMode" />
 </template>
 
 <script setup>
@@ -135,6 +139,7 @@ import { listConversations } from "./api/conversations";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Menu, Plus, Search, Sunny, Moon } from "@element-plus/icons-vue";
 import { formatTime } from "./utils/format";
+import { conversationTitle, conversationTitlesVersion } from "./utils/conversationTitles";
 import { currentUser, fetchMe, logout } from "./stores/session";
 import { themeMode, resolvedTheme, setThemeMode } from "./stores/theme";
 import { openQuickSwitcher } from "./stores/quickSwitcher";
@@ -144,6 +149,18 @@ import WelcomeGate from "./components/WelcomeGate.vue";
 import StatusDock from "./components/StatusDock.vue";
 import StatusCenter from "./components/StatusCenter.vue";
 import SimMonitorFloat from "./components/SimMonitorFloat.vue";
+import FlaiBloom from "./components/artwork/FlaiBloom.vue";
+
+// 轻量 UI 验收台只在 Vite 开发态显式传 fixture 时启用。生产构建里
+// import.meta.env.DEV 恒 false；正式 App 既不会读取 fixture，也不会绕过身份门。
+const props = defineProps({
+  acceptanceFixture: {
+    type: Object,
+    default: null,
+  },
+});
+const acceptanceFixture = import.meta.env.DEV ? props.acceptanceFixture : null;
+const acceptanceMode = Boolean(acceptanceFixture);
 
 // 登录态（ADR-0019 D8）：identityReady 控门，身份来自服务端会话。
 // sessionProbed 防「已登录用户刷新时登录门闪现」——探测完成前不渲染门。
@@ -157,6 +174,7 @@ function onIdentityDone() {
   loadConvos();
 }
 async function changeIdentity() {
+  if (acceptanceMode) return;
   try {
     await ElMessageBox.confirm(`当前以「${userName.value}」登录。退出登录？`, "工作身份", {
       confirmButtonText: "退出登录",
@@ -179,6 +197,15 @@ async function changeIdentity() {
   }
 }
 onMounted(async () => {
+  if (acceptanceMode) {
+    currentUser.value = {
+      id: "ui-acceptance",
+      display_name: acceptanceFixture.displayName || "验收工程师",
+    };
+    identityReady.value = true;
+    sessionProbed.value = true;
+    return;
+  }
   identityReady.value = await fetchMe();
   sessionProbed.value = true;
 });
@@ -190,6 +217,7 @@ window.addEventListener("flai:unauthorized", resetToGate);
 // 会话失效则回门。**必须同时听 focus**：两窗口并排常显时 visibilitychange 不触发，
 // 只有 focus 能在切窗时纠偏（Codex R4 审 P1）。
 async function revalidateIdentity() {
+  if (acceptanceMode) return;
   if (identityReady.value !== true) return;
   const ok = await fetchMe();
   if (ok !== true) resetToGate();
@@ -243,6 +271,15 @@ function closeSidebar() { sidebarOpen.value = false; }
 
 const convos = ref([]);
 async function loadConvos() {
+  if (acceptanceMode) {
+    convos.value = (acceptanceFixture.conversations || []).map((item) => ({
+      ...item,
+      recommendation: item.recommendation
+        ? { ...item.recommendation }
+        : null,
+    }));
+    return;
+  }
   try {
     const list = await listConversations({ limit: 30 });
     convos.value = list;
@@ -251,13 +288,10 @@ async function loadConvos() {
   }
 }
 function convoTitle(c) {
-  const r = c.recommendation;
-  if (r && r.decision === "orchestrate" && r.goal) return r.goal;
-  if (r && r.decision === "refuse" && r.reason) return "（未接住）" + r.reason;
-  return `与 ${c.created_by || "你"} 的对话`;
-}
-function openConvo(c) {
-  router.push({ path: "/", query: { c: c.id } });
+  // E-4 人话化：标题逻辑收敛到 conversationTitles.conversationTitle（SSOT，
+  // 三层回退=列表投影 first_user_message → 本会话缓存 → 「与 X 的对话」）。
+  void conversationTitlesVersion.value; // 渲染依赖：缓存 bump 后重算标题
+  return conversationTitle(c);
 }
 function newConversation() {
   // 清掉 ?c 回到全新导引；若已在 /?c=x，query 变化会触发导引页重置。
@@ -606,6 +640,20 @@ onMounted(loadConvos);
 .cta-clay:disabled {
   cursor: not-allowed;
 }
+/* 签发二次确认钮 teal 化（B6a，E 系快赢）：确认「批准放行」=具名认证人签槽，
+ * 按信任色锁用 teal（--trust-signed）而非 clay。覆盖变量与 TaskDetail
+ * .approve-btn 同款 SSOT；MessageBox 挂 body，必须是全局类。
+ * 仅 approve 确认钮消费（驳回沿用既有 warning 形态，不占人签槽）。 */
+.sign-confirm-btn {
+  --el-button-bg-color: var(--trust-signed);
+  --el-button-border-color: var(--trust-signed);
+  --el-button-text-color: #fff;
+  --el-button-hover-bg-color: var(--trust-signed-deep);
+  --el-button-hover-border-color: var(--trust-signed-deep);
+  --el-button-hover-text-color: #fff;
+  --el-button-active-bg-color: var(--trust-signed-deep);
+  --el-button-active-border-color: var(--trust-signed-deep);
+}
 /* ── 全局键盘焦点语法（W0）：导航类可交互元素统一 clay 焦点环——修「暗色主题下
  * 浏览器默认蓝 ring 撞暖色板」的既有可达性缺口。只在 :focus-visible（键盘寻航）
  * 出现，鼠标点击不打扰；表单控件不在此列（EP 输入框/自绘 composer 已各有
@@ -684,6 +732,10 @@ button:focus-visible,
   .cta-clay:active:not(:disabled),
   .cta-clay:hover:not(:disabled),
   .nav-link:active { transform: none; }
+  /* B6b 补洞：cta-clay 的 filter/box-shadow 颜色过渡（hover 亮度）在 reduce
+     下此前漏网仍有 0.14s——整条 transition 归零（transform 静化已由上行
+     承接）。基态 .cta-clay 声明在本块之前，同 specificity 源序盖赢。 */
+  .cta-clay { transition: none; }
   /* 批次五 C4 补洞①：窄屏侧栏抽屉是纯 translateX 位移（前庭触发），reduce 下
      瞬时开合（状态本身由 is-open 类与背板承担，无需动画传达）。!important：
      基态 transition 声明在下方 max-width 块（源序更后、同 specificity），
@@ -738,19 +790,14 @@ body {
   gap: 10px;
   padding: 6px 8px 10px;
   cursor: pointer;
+  /* D-3：div→button 的 UA 归零（边框/底色/字体继承/左对齐），视觉与原 div 全等。 */
+  border: none;
+  background: none;
+  font-family: inherit;
+  text-align: left;
 }
 .brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--radius-md);
-  background: linear-gradient(160deg, var(--clay), var(--clay-deep));
-  color: #fff;
-  font-weight: 800;
-  font-size: var(--fs-h3);
-  box-shadow: 0 3px 10px rgba(var(--clay-rgb), 0.3);
+  flex: 0 0 auto;
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
 .brand-name { font-size: var(--fs-h3); font-weight: 700; color: var(--ink); letter-spacing: 0.2px; }
@@ -783,6 +830,8 @@ body {
   font-weight: 500;
   color: var(--ink-soft);
   cursor: pointer;
+  /* D-3：router-link 带 href 后 UA 默认 underline，压掉保持原视觉 */
+  text-decoration: none;
   transition: background var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
 }
 /* hover 语法收口（W0，三分口径）：中性行 hover 一律 --hover-tint；选中态
@@ -815,6 +864,8 @@ body {
   padding: 7px var(--space-3);
   border-radius: var(--radius-md);
   cursor: pointer;
+  /* D-3：router-link 带 href 后 UA 默认 underline，压掉保持原视觉 */
+  text-decoration: none;
   transition: background var(--motion-fast) var(--ease-out-soft);
 }
 .convo-item:hover { background: var(--hover-tint); }
@@ -852,6 +903,8 @@ body {
 .sb-mine {
   display: block; padding: 6px 10px; margin: 0 8px 4px; cursor: pointer;
   color: var(--ink-soft); font-size: var(--fs-sm); border-radius: var(--radius-sm);
+  /* D-3：router-link 带 href 后 UA 默认 underline，压掉保持原视觉 */
+  text-decoration: none;
   transition: background var(--motion-fast) var(--ease-out-soft), color var(--motion-fast) var(--ease-out-soft);
 }
 /* hover 走 W0 中性语法 --hover-tint；选中态刻意不染 select-tint-clay——
@@ -933,6 +986,9 @@ body {
   .sb-foot-btn {
     transition: none;
   }
+  /* B6b 补洞：nav-link 的 background/color 过渡（hover 换色）在 reduce 下
+     仍有 0.14s——归零。基态 .nav-link 声明在本块之前，源序盖赢。 */
+  .nav-link { transition: none; }
 }
 
 /* ── 主区 ── */

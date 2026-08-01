@@ -246,6 +246,13 @@ with sync_playwright() as p:
     expect(sc_item.first).to_be_visible(timeout=5000)
     sc_item.first.click()
     expect(page.locator(".peek-approve")).to_be_visible(timeout=8000)
+    quick_review = page.locator(".peek-review-card")
+    quick_approve_box = quick_review.get_by_role("button", name="批准放行").bounding_box()
+    quick_reject_box = quick_review.get_by_role("button", name="驳回").bounding_box()
+    check("⑥状态坞批准/驳回触控高度均≥44px",
+          quick_approve_box is not None and quick_reject_box is not None
+          and quick_approve_box["height"] >= 44 and quick_reject_box["height"] >= 44,
+          f"approve={quick_approve_box} reject={quick_reject_box}")
     # 签发人=登录身份行如实展示（不可代填）
     assert "验收工程师" in page.locator(".peek-review-card").inner_text()
     page.locator(".peek-approve").click()

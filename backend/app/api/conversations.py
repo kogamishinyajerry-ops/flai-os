@@ -11,10 +11,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+import json
+import threading
+from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from starlette.responses import StreamingResponse
 
 from . import classification_gate as cgate
 from ..core.errors import (
@@ -30,6 +34,7 @@ from ..core.errors import (
 from ..storage import repos
 
 router = APIRouter(prefix="/api", tags=["conversations"])
+_STREAM_END = object()
 
 
 class CreateConversationRequest(BaseModel):
@@ -133,6 +138,150 @@ def post_message(
         raise HTTPException(
             status_code=502, detail=f"导引本轮对话失败（可重试）：{exc}"
         ) from exc
+
+
+def _stream_error_event(
+    exc: Exception, *, persisted: bool = False
+) -> dict[str, Any]:
+    """把同步端点既有错误语义编码进已开始的 NDJSON 响应。"""
+    if isinstance(exc, (ConversationNotFoundError, FileNotFoundInStoreError)):
+        status, detail, retryable = 404, str(exc), False
+    elif isinstance(exc, ConversationConflictError):
+        status, detail, retryable = 409, str(exc), True
+    elif isinstance(exc, ConversationClosedError):
+        status, detail, retryable = 409, str(exc), False
+    elif isinstance(exc, ClearanceDeniedError):
+        status, detail, retryable = 400, str(exc), False
+    elif isinstance(exc, ModelConfigError):
+        status = 503
+        detail = (
+            f"模型网关未配置，导引不可用：{exc}。此为部署配置问题（非临时故障），"
+            "请联系管理员设置 FLAI_LLM_* 环境变量后再试。"
+        )
+        retryable = False
+    elif isinstance(exc, (ModelUpstreamError, ValueError)):
+        status = 502
+        detail = f"导引本轮对话失败（可重试）：{exc}"
+        retryable = True
+    else:
+        # 响应头已经发出，无法再切换为 HTTP 500；仍以显式事件 fail-closed，
+        # 且不把内部异常细节暴露给前端。
+        status, detail, retryable = 500, "导引本轮对话失败：服务内部错误", False
+    return {
+        "type": "error",
+        "status": status,
+        "detail": detail,
+        "retryable": retryable,
+        # 只有 service 尚未返回（因此确定事务未提交）时才允许 false。若服务已
+        # 成功返回而后续封装异常，必须如实标 true，不能诱导前端盲目重试。
+        "persisted": persisted,
+    }
+
+
+def _ndjson(event: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+
+
+@router.post("/conversations/{conversation_id}/messages/stream")
+def stream_message(
+    conversation_id: str, body: PostMessageRequest, request: Request
+) -> StreamingResponse:
+    """真实分块对话：start → delta* → done；失败则以 error 明示零持久化。
+
+    ConversationService / ModelGateway 仍是同步内核，因此用单个短生命周期线程把
+    上游 SSE callback 桥接到响应生成器；不引入任务队列，也不改变旧 /messages。
+    """
+    service = request.app.state.conversation_service
+
+    async def events() -> AsyncIterator[bytes]:
+        pending: asyncio.Queue[dict[str, Any] | object] = asyncio.Queue()
+        closed = threading.Event()
+        loop = asyncio.get_running_loop()
+
+        def publish(event: dict[str, Any] | object) -> None:
+            if closed.is_set():
+                return
+            try:
+                loop.call_soon_threadsafe(pending.put_nowait, event)
+            except RuntimeError:
+                # 事件循环已关闭等同客户端已离开；后台轮次会在 callback 或
+                # ConversationService 的提交前取消检查处退出。
+                closed.set()
+
+        def emit_delta(text: str) -> None:
+            if closed.is_set():
+                # 让模型调用与 ConversationService 在客户端离开后于落库前失败，
+                # 不产生“用户没收到、服务却保存成功”的假完成。
+                raise RuntimeError("流式客户端已断开")
+            if text:
+                publish({"type": "delta", "text": text})
+
+        def run_round() -> None:
+            committed = False
+            try:
+                result = service.post_message(
+                    conversation_id=conversation_id,
+                    content=body.content,
+                    file_ids=body.file_ids,
+                    on_delta=emit_delta,
+                    is_cancelled=closed.is_set,
+                )
+                # ConversationService 返回即代表 COMMIT 已完成，且返回值不再做
+                # 任何数据库读取。之后若封装 done 失败，error 不能谎报未持久化。
+                committed = True
+                if not closed.is_set():
+                    publish(
+                        {
+                            "type": "done",
+                            "message": result["message"],
+                            "conversation": result["conversation"],
+                        }
+                    )
+            except Exception as exc:
+                if not closed.is_set():
+                    publish(_stream_error_event(exc, persisted=committed))
+            finally:
+                publish(_STREAM_END)
+
+        worker = threading.Thread(
+            target=run_round,
+            name=f"conversation-stream-{conversation_id[:24]}",
+            daemon=True,
+        )
+        worker.start()
+        try:
+            yield _ndjson({"type": "start", "persisted": False})
+            while True:
+                # ASGI 2.4+ 的 StreamingResponse 只靠 send 抛 OSError 感知断连，
+                # 同步 queue.get 又会把生成器困在线程池里。这里用 async 轮询显式
+                # 检查 receive channel，使 http.disconnect 能在模型仍生成时及时
+                # 设置 closed，继而触发 callback / 提交前检查并保持零落库。
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(
+                        pending.get(), timeout=0.05
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                if event is _STREAM_END:
+                    break
+                if await request.is_disconnected():
+                    break
+                yield _ndjson(event)
+        finally:
+            closed.set()
+
+    return StreamingResponse(
+        events(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/conversations/{conversation_id}/conclude")

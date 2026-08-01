@@ -207,8 +207,8 @@
             <div class="peek-review-actions">
               <!-- teal=人签唯一色；成功迸发=burstSigned 唯一许可点之一。
                    产物预览未完成首次尝试前禁批准（先看后签）；驳回是安全方向不设门。 -->
-              <el-button ref="peekApproveEl" class="peek-approve" :loading="reviewing" :disabled="artifactsPending" @click="doReview('approve')">批准放行</el-button>
-              <el-button type="danger" plain :loading="reviewing" @click="doReview('reject')">驳回</el-button>
+              <el-button ref="peekApproveEl" class="peek-approve peek-review-action" :loading="reviewing" :disabled="artifactsPending" @click="doReview('approve')">批准放行</el-button>
+              <el-button class="peek-review-action" type="danger" plain :loading="reviewing" @click="doReview('reject')">驳回</el-button>
             </div>
           </div>
 
@@ -613,6 +613,9 @@ async function doReview(action) {
       confirmButtonText: `确认${label}`,
       cancelButtonText: "再看看",
       type: "warning",
+      // B6a：确认签发（approve）属人签槽，确认钮 teal（.sign-confirm-btn，
+      // 全局定义见 App.vue）；驳回不占人签槽，维持既有形态。
+      ...(action === "approve" ? { confirmButtonClass: "sign-confirm-btn" } : {}),
     });
   } catch {
     return; // 用户取消
@@ -1178,8 +1181,14 @@ onUnmounted(() => {
 }
 .peek-review-actions {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   margin-top: 4px;
+}
+.peek-review-action {
+  min-height: 44px;
+}
+.peek-review-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 /* teal=人签唯一合法通道色（信任色锁） */
 .peek-approve {

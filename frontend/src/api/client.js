@@ -8,14 +8,18 @@
  * - 网络层失败（后端没起）抛 ApiError(status=0)。
  */
 
+import { createNdjsonParser } from "../utils/ndjsonStream.js";
+
 export class ApiError extends Error {
-  constructor(status, detail, { timeout = false } = {}) {
+  constructor(status, detail, { timeout = false, retryable, persisted } = {}) {
     super(detail);
     this.status = status;
     this.detail = detail;
     // 超时分型（批次五 C1）：超时（后端挂起/繁忙）≠连接失败（后端没起），
     // 两者 status 均为 0，靠此标志区分——文案与恢复动作不同。
     this.timeout = timeout;
+    if (retryable !== undefined) this.retryable = retryable;
+    if (persisted !== undefined) this.persisted = persisted;
   }
 }
 
@@ -96,6 +100,119 @@ export async function request(path, { method = "GET", json, formData, timeoutMs 
     }
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * 用 fetch POST 消费服务端 NDJSON 事件流。
+ *
+ * 这层只处理真实网络分片：收到多少 delta 就向上交多少，不把整包 JSON
+ * 拆成逐字动画。总超时覆盖响应头与完整流体，避免连接建立后永久悬挂。
+ */
+// 后端不可达人话化（Phase B B1，仅流式路径）：proxy/网关裸返 500/502/503 时
+// detail 常为空或纯状态码（「HTTP 500」），对用户零信息量——改译人话；带真实
+// detail 原文的响应保持如实直出（「不二次翻译不粉饰」约定不变）。status 与
+// ApiError 分型语义不动，只换文案。
+function humanizeUnreachableDetail(status, detail) {
+  if (![0, 500, 502, 503].includes(status)) return detail;
+  const bare = !detail || /^HTTP\s*\d{3}$/.test(String(detail).trim());
+  return bare ? "后端服务不可达，请联系管理员" : detail;
+}
+
+export async function streamRequest(
+  path,
+  {
+    method = "POST",
+    json,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    onEvent = () => {},
+    // 可选外部中止信号（流式停止钮底座）：调用方 abort 时联动内部 controller，
+    // 与 timeoutMs 硬超时共用同一 abort 生命周期——超时语义不变。外部中止与
+    // 超时在本层同样落地为 AbortError（超时分型），是否用户主动停止由调用方
+    // 用自己的标记区分（见 GuidePage 停止钮），本层不新增失败分型。
+    signal,
+  } = {},
+) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromCaller = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", abortFromCaller, { once: true });
+  }
+  const init = {
+    method,
+    headers: { Accept: "application/x-ndjson" },
+    signal: controller.signal,
+  };
+  if (json !== undefined) {
+    init.headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(json);
+  }
+
+  const timeoutError = () =>
+    new ApiError(
+      0,
+      `流式请求超时（${Math.round(timeoutMs / 1000)} 秒）——保存状态未知，请刷新会话核对`,
+      { timeout: true },
+    );
+
+  try {
+    let resp;
+    try {
+      resp = await fetch(path, init);
+    } catch (err) {
+      if (err && err.name === "AbortError") throw timeoutError();
+      throw new ApiError(
+        0,
+        `流式连接失败（${err.message}）——保存状态未知，请刷新会话核对`,
+      );
+    }
+
+    if (!resp.ok) {
+      if (
+        resp.status === 401 &&
+        path !== "/api/auth/login" &&
+        path !== "/api/auth/me"
+      ) {
+        window.dispatchEvent(new CustomEvent("flai:unauthorized"));
+      }
+      throw new ApiError(
+        resp.status,
+        humanizeUnreachableDetail(resp.status, await parseDetail(resp)),
+      );
+    }
+    if (!resp.body || typeof resp.body.getReader !== "function") {
+      throw new ApiError(
+        0,
+        "后端未返回可读取的流式响应——保存状态未知，请刷新会话核对",
+      );
+    }
+
+    const parser = createNdjsonParser(onEvent);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        parser.push(decoder.decode(value, { stream: true }));
+      }
+      parser.push(decoder.decode());
+      parser.finish();
+    } catch (err) {
+      if (err && err.name === "AbortError") throw timeoutError();
+      if (err instanceof ApiError) throw err;
+      throw new ApiError(
+        0,
+        `${err.message || "流式连接中断"}——保存状态未知，请刷新会话核对`,
+      );
+    } finally {
+      reader.releaseLock();
+    }
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener("abort", abortFromCaller);
   }
 }
 

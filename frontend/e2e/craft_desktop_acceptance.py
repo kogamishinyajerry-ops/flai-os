@@ -499,8 +499,82 @@ with sync_playwright() as p:
     no_old = page.get_by_role("button", name="拒绝").count() == 0
     check("⑦动作=批准放行+驳回（无「拒绝」）", has_approve and has_reject and no_old)
 
+    # ── ⑦' 移动任务详情：显式返回 + 安全关键触控尺寸 ─────────────────────
+    page.set_viewport_size({"width": 375, "height": 812})
+    page.wait_for_timeout(200)
+    back_to_tasks = page.get_by_role("button", name="返回任务台")
+    approve_box = page.get_by_role("button", name="批准放行").bounding_box()
+    reject_box = page.get_by_role("button", name="驳回").bounding_box()
+    check("⑦'375px 任务详情有显式「返回任务台」",
+          back_to_tasks.count() == 1 and back_to_tasks.is_visible())
+    check("⑦'批准/驳回触控高度均≥44px",
+          approve_box is not None and reject_box is not None
+          and approve_box["height"] >= 44 and reject_box["height"] >= 44,
+          f"approve={approve_box} reject={reject_box}")
+    mobile_width = page.evaluate(
+        "() => ({ viewport: innerWidth, body: document.body.scrollWidth,"
+        " root: document.documentElement.scrollWidth })")
+    check("⑦'375px 任务详情无横向溢出",
+          mobile_width["body"] <= mobile_width["viewport"]
+          and mobile_width["root"] <= mobile_width["viewport"],
+          str(mobile_width))
+    back_to_tasks.click()
+    page.wait_for_url(BASE + "/tasks")
+    check("⑦'返回入口落到任务台列表", page.url.rstrip("/") == (BASE + "/tasks"))
+    page.set_viewport_size({"width": 1440, "height": 900})
+
     # ── ⑧ W5 对话轴 markdown（助手 ul>li / 用户纯文本）＋ ② CTA 真归位────
     page.goto(BASE + "/", wait_until="networkidle")
+    # 首屏密度：720p 常见办公屏中，输入框必须无需滚动即可直接操作；引导不再
+    # 把 composer 推到折叠线下。
+    page.set_viewport_size({"width": 1280, "height": 720})
+    page.wait_for_timeout(200)
+    guide_box = page.locator(".guide-hero").bounding_box()
+    empty_composer_box = page.locator(".composer").bounding_box()
+    check("⑧'720p 首屏引导紧凑且 Composer 完整可见",
+          guide_box is not None and guide_box["height"] <= 520
+          and empty_composer_box is not None
+          and empty_composer_box["y"] >= 0
+          and empty_composer_box["y"] + empty_composer_box["height"] <= 720,
+          f"guide={guide_box} composer={empty_composer_box}")
+
+    # ⑧' Composer Agent 选择器：窄屏必须留在视口内、列表内部滚动；
+    # 搜索后选择只填草稿并把焦点还给 Composer，不替人发送。
+    page.set_viewport_size({"width": 375, "height": 812})
+    page.get_by_role("button", name="浏览可用 Agent").click()
+    picker = page.get_by_role("dialog", name="选择 Agent")
+    picker_box = picker.bounding_box()
+    first_picker_row = picker.locator(".ap-item").first.bounding_box()
+    picker_scroll = picker.locator(".ap-scroll").evaluate(
+        "el => ({ client: el.clientHeight, scroll: el.scrollHeight,"
+        " overflow: getComputedStyle(el).overflowY })")
+    check("⑧'Agent 选择器≤390px、单行≤56px且内部滚动",
+          picker_box is not None
+          and picker_box["y"] >= 0
+          and picker_box["y"] + picker_box["height"] <= 812
+          and picker_box["height"] <= 390
+          and first_picker_row is not None
+          and first_picker_row["height"] <= 56
+          and picker_scroll["overflow"] == "auto"
+          and picker_scroll["scroll"] > picker_scroll["client"],
+          f"box={picker_box} row={first_picker_row} scroll={picker_scroll}")
+    check("⑧'Agent 快选每项只显示名称+一条安全优先说明",
+          picker.locator(".ap-sub").count() == 0
+          and picker.locator(".ap-limit").count() == 0
+          and picker.locator(".ap-detail").count() == picker.locator(".ap-item").count())
+    picker.get_by_role("searchbox", name="搜索可用 Agent").fill("性能盘")
+    check("⑧'Agent 搜索只保留匹配项",
+          picker.locator(".ap-item").count() == 1
+          and "性能盘批量计算 Agent" in picker.locator(".ap-item").inner_text())
+    picker.locator(".ap-item").click()
+    page.wait_for_timeout(100)
+    composer = page.locator(".composer textarea")
+    check("⑧'选择后收起、填入草稿并聚焦 Composer",
+          not picker.is_visible()
+          and composer.input_value() == "我想用「性能盘批量计算 Agent（模拟阶段）」做："
+          and page.evaluate(
+              "() => document.activeElement === document.querySelector('.composer textarea')"))
+    page.set_viewport_size({"width": 1440, "height": 900})
     page.locator(".composer textarea").fill("- 这行是用户输入不该变列表\n先做什么？")
     # ② CTA 探针（真实渲染元素，非合成节点）：send-btn 必须真接 .cta-clay 类，
     # 渐变/投影由全局 utility 供给（填字后按钮 enabled，disabled 态的 shadow:none
@@ -515,6 +589,25 @@ with sync_playwright() as p:
           f"{send_cls} / {send_sty}")
     page.get_by_role("button", name="发送").click()
     page.wait_for_selector(".ai-lead .md-ul li", timeout=8000)
+    density = page.evaluate(
+        """() => {
+          const ai = getComputedStyle(document.querySelector('.ai-lead'));
+          const user = getComputedStyle(document.querySelector('.user-text'));
+          const composer = document.querySelector('.composer-fixed').getBoundingClientRect();
+          return {
+            aiFont: parseFloat(ai.fontSize), aiLine: parseFloat(ai.lineHeight),
+            userFont: parseFloat(user.fontSize), userLine: parseFloat(user.lineHeight),
+            composerHeight: composer.height,
+          };
+        }"""
+    )
+    check("⑧会话字号/行距与固定 Composer 统一收紧",
+          14 <= density["aiFont"] <= 14.5
+          and density["aiLine"] <= 24
+          and density["userFont"] == 14
+          and density["userLine"] <= 23
+          and density["composerHeight"] <= 90,
+          str(density))
     check("⑧助手气泡列表渲染为 ul>li", page.locator(".ai-lead .md-ul li").count() == 2)
     check("⑧用户气泡保持纯文本（无 ul）",
           page.locator(".user-bubble ul").count() == 0

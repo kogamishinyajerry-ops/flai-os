@@ -231,7 +231,13 @@ class ConversationService:
         return rendered
 
     def post_message(
-        self, *, conversation_id: str, content: str, file_ids: list[str] | None = None
+        self,
+        *,
+        conversation_id: str,
+        content: str,
+        file_ids: list[str] | None = None,
+        on_delta: Callable[[str], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """推进一轮：读历史（不落库）→ 调导引 workflow → 单事务原子落库。
 
@@ -335,11 +341,19 @@ class ConversationService:
                     ),
                     "agent_registry": execution_registry,
                     "agent_config": agent,
+                    # interactive workflow 可选择消费；guide_agent 会把它继续接到
+                    # Model Gateway 的真实 SSE delta，并先过滤控制计划块。其他既有
+                    # workflow 忽略此键，最终仍只发 done 事件。
+                    "stream_delta": on_delta,
                 }
                 # 抛异常即冒泡（不吞）；此前尚未落任何消息。workflow 完整执行期
                 # 都在私有材化目录生命周期内，绝不回读可变 authoring 目录。
                 result = workflow.run(context)
 
+            if is_cancelled is not None and is_cancelled():
+                raise ConversationConflictError(
+                    "流式客户端已断开，本轮不落库"
+                )
             if not isinstance(result, dict):
                 raise ValueError("interactive workflow.run() 返回值必须是 dict")
             assistant_message = result.get("assistant_message")
@@ -377,12 +391,29 @@ class ConversationService:
                 )
                 # 会话级 recommendation 反映**最后一轮**结果（反方 P3-1：含推荐被
                 # 撤回的轮——无推荐即写回 None，不留陈旧草案）。
-                repos.set_conversation_recommendation(conn, conversation_id, recommendation)
+                updated_conversation = repos.set_conversation_recommendation(
+                    conn, conversation_id, recommendation
+                )
+                if is_cancelled is not None and is_cancelled():
+                    raise ConversationConflictError(
+                        "流式客户端已断开，本轮不落库"
+                    )
+                # done 所需会话快照必须在事务内取得。COMMIT 成功后不再执行可能
+                # 失败的数据库读取，否则会出现“消息已落库，却回 error.persisted=false”
+                # 的假失败。事务内快照包含本轮 recommendation 更新。
+                if updated_conversation is None:
+                    raise ConversationNotFoundError(
+                        f"会话在提交前异常消失，本轮不落库：{conversation_id}"
+                    )
+                if is_cancelled is not None and is_cancelled():
+                    raise ConversationConflictError(
+                        "流式客户端已断开，本轮不落库"
+                    )
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
 
-            return {"message": msg, "conversation": repos.get_conversation(conn, conversation_id)}
+            return {"message": msg, "conversation": updated_conversation}
         finally:
             conn.close()

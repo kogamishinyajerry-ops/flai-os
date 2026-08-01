@@ -21,6 +21,10 @@ export default defineConfig({
   ],
   server: {
     port: 8621,
+    // UI 验收 iframe 刻意不授予 allow-same-origin，浏览器会以 Origin:null
+    // 加载开发模块；只在 Vite 开发服务器放行该 opaque origin。生产构建不含
+    // ui-lab.html，也不会继承这条 CORS 配置。
+    cors: { origin: "null" },
     proxy: {
       "/api": {
         target: "http://127.0.0.1:8620",
