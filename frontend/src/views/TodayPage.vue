@@ -23,37 +23,23 @@
     <template v-else>
       <div v-if="feedError" class="today-error" role="alert">{{ feedErrorDisplay }}</div>
 
-      <div class="today-overview" aria-label="今日任务状态总览">
-        <div class="today-overview-item is-waiting">
+      <!-- 首行安静摘要（批次八 降噪：owner「精选必要信息披露」）：原 overview
+           三格与下方三个 section 头同屏重复同一组计数——section 头计数在语境里
+           （batch_b ① 同源断言锚在彼侧）保留为唯一承载，此处不再复述。只留唯一
+           行动召唤：有待签时一行「N 项待你签发」链接式直达签发版块；零待签整行
+           不渲染（零值不显示/稀疏即尊重），进行中/今日交付不再设零值占位格。 -->
+      <div v-if="waitingTasks.length" class="today-summary">
+        <button type="button" class="today-summary-link" @click="scrollToSign">
           <el-icon aria-hidden="true"><Stamp /></el-icon>
-          <span class="today-overview-copy">
-            <strong v-if="waitingTasks.length" class="num-token">{{ waitingTasks.length }}</strong>
-            <strong v-else class="today-overview-empty">当前无</strong>
-            <span>待签发</span>
-          </span>
-        </div>
-        <div class="today-overview-item">
-          <el-icon aria-hidden="true"><Timer /></el-icon>
-          <span class="today-overview-copy">
-            <strong v-if="workingTasks.length" class="num-token">{{ workingTasks.length }}</strong>
-            <strong v-else class="today-overview-empty">当前无</strong>
-            <span>进行中</span>
-          </span>
-        </div>
-        <div class="today-overview-item">
-          <el-icon aria-hidden="true"><Files /></el-icon>
-          <span class="today-overview-copy">
-            <strong v-if="deliveryTasks.length" class="num-token">{{ deliveryTasks.length }}</strong>
-            <strong v-else class="today-overview-empty">今天无</strong>
-            <span>今日交付</span>
-          </span>
-        </div>
+          <span><span class="num-token">{{ waitingTasks.length }}</span> 项待你签发</span>
+          <span class="today-summary-arrow" aria-hidden="true">↓</span>
+        </button>
       </div>
 
       <!-- 版块 1：待你签发（amber 置顶，行动召唤最高优先）。零值不显示（批次四
            Q2，cd-bg-tasks-panel 语法全站化）：N=0 时组头不渲染「· 0」——版块
            容器恒在（batch_b ① 钉五版块），只收计数后缀。 -->
-      <section class="today-section">
+      <section ref="signSection" class="today-section">
         <div class="today-section-head waiting">
           <el-icon aria-hidden="true"><Stamp /></el-icon>
           <span>待你签发<template v-if="waitingTasks.length"> · <span class="num-token">{{ waitingTasks.length }}</span></template></span>
@@ -459,11 +445,24 @@ function isWork(status) {
 
 function elapsedText(t) {
   const ms = taskElapsedMs(t, Date.now());
-  return ms === null ? "" : formatDuration(ms);
+  if (ms === null) return "";
+  const text = formatDuration(ms);
+  // 零值不显示（五律）：亚秒任务「运行 0 秒」是零值噪音——段不硬凑，与
+  // StatusCenter runElapsed 把「—」归空串同律；formatDuration(0)="0 秒"
+  // 本身有单测锁定，此处只在行级展示层收口。
+  return text === "0 秒" ? "" : text;
 }
 
 function openTask(id) {
   router.push(`/tasks/${id}`);
+}
+
+// 首行摘要「N 项待你签发 ↓」：平滑滚动直达签发版块；reduced-motion 用户瞬时
+// 跳转（与本文件 807+ 行的动效削减媒体查询同律，不另造动画）。
+const signSection = ref(null);
+function scrollToSign() {
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  signSection.value?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
 }
 
 onUnmounted(() => {
@@ -517,59 +516,33 @@ onUnmounted(() => {
   flex-direction: column;
   gap: var(--space-3);
 }
-.today-overview {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-2);
-  margin-bottom: var(--space-6);
+/* 首行安静摘要（批次八 降噪）：一行文字链取代原三格 overview——amber 与
+   签发版块组头同槽（待审语义唯一色），无卡无边，稀疏即尊重。 */
+.today-summary {
+  margin-bottom: var(--space-4);
 }
-.today-overview-item {
-  display: flex;
+.today-summary-link {
+  appearance: none;
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-  padding: var(--space-3);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-lg, 12px);
-  background: var(--paper-rail);
-  box-shadow: var(--shadow-card);
-}
-.today-overview-item > :deep(.el-icon) {
-  flex: none;
-  width: 42px;
-  height: 42px;
-  border: 1px solid var(--hairline-soft);
-  border-radius: 12px;
-  background: var(--surface-raised);
-  color: var(--ink-soft);
-  font-size: 23px;
-}
-.today-overview-item.is-waiting > :deep(.el-icon) {
-  color: var(--trust-pending);
-}
-.today-overview-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  font-size: 11px;
-  color: var(--ink-faint);
-}
-.today-overview-copy strong {
-  color: var(--ink);
-  font-size: 19px;
-  line-height: 1.1;
-}
-.today-overview-copy .today-overview-empty {
-  font-family: inherit;
-  font-size: 12px;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: var(--fs-sm);
   font-weight: 600;
-  color: var(--ink-soft);
+  color: var(--trust-pending);
+  cursor: pointer;
 }
-@media (max-width: 520px) {
-  .today-overview {
-    grid-template-columns: 1fr;
-  }
+.today-summary-link :deep(.el-icon) {
+  font-size: 15px;
+}
+.today-summary-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.today-summary-arrow {
+  font-weight: 400;
 }
 .today-section {
   margin-bottom: var(--space-6);
