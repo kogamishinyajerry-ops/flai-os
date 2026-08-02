@@ -28,6 +28,7 @@ from .api import asset_drafts as asset_drafts_api
 from .api import auth as auth_api
 from .api import conversations as conversations_api
 from .api import feedback as feedback_api
+from .api import feature_asset_map as feature_asset_map_api
 from .api import files as files_api
 from .api import governance as governance_api
 from .api import knowledge as knowledge_api
@@ -44,6 +45,7 @@ from .ontology import (
     AssetCandidateLedger,
     AssetDraftBuilder,
     CandidateMaterializer,
+    FeatureAssetMapCatalog,
     SkillReuseEvidenceLedger,
     SkillReuseMatcher,
 )
@@ -222,6 +224,11 @@ def create_app(
                 contracts_dir=contracts_dir,
             )
             asset_candidate_ledger.attach_materializer(candidate_materializer)
+            feature_asset_map_catalog = FeatureAssetMapCatalog(
+                agent_shell_catalog=app.state.agent_shell_catalog,
+                asset_candidate_ledger=asset_candidate_ledger,
+                contracts_dir=contracts_dir,
+            )
             skill_reuse_evidence = SkillReuseEvidenceLedger(candidate_materializer)
             candidate_materializer.attach_formation_evidence_provider(
                 skill_reuse_evidence
@@ -250,6 +257,7 @@ def create_app(
                 skill_reuse_matcher=skill_reuse_matcher,
             )
             app.state.asset_candidate_ledger = asset_candidate_ledger
+            app.state.feature_asset_map_catalog = feature_asset_map_catalog
             app.state.candidate_materializer = candidate_materializer
             app.state.candidate_skill_packages_dir = candidate_skill_packages_dir
             app.state.skill_reuse_evidence = skill_reuse_evidence
@@ -378,6 +386,7 @@ def create_app(
     app.include_router(auth_api.router)
     app.include_router(agent_shell_api.router)
     app.include_router(asset_drafts_api.router)
+    app.include_router(feature_asset_map_api.router)
     app.include_router(agents_api.router)
     app.include_router(tasks_api.router)
     app.include_router(files_api.router)

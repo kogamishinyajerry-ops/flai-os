@@ -121,3 +121,11 @@ Workflow。Agent Candidate 必须晚于精确的 Approved Workflow Revision，�
 
 具名责任人对某个精确草稿摘要作出的独立决定。Review Decision 与 Draft Bundle
 是不同对象；未来的批准不能改写原草稿，只能引用其精确摘要形成新记录。
+
+## Feature Asset Map Projection
+
+面向当前登录工程师的只读功能/资产聚合。平台功能只来自同一代
+`AgentShellCatalog` Registry 快照；个人资产只来自该工程师不可变任务 owner 所能
+冷读复核的最新 Asset Candidate 与隔离 Skill Package。任一归属、摘要、文件或来源
+异常都会停止整份投影，不能降级成“0 个资产”或残缺地图。它只在主会话内由工程师
+按需展开，不是 `/map` 页面，也不提供执行、注册、晋级、改选或参数编辑能力。

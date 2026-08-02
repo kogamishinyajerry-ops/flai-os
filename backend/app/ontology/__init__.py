@@ -19,6 +19,10 @@ from .candidate_materializer import (
     SkillPackageNotFoundError,
     SkillPackageUnavailableError,
 )
+from .feature_asset_map import (
+    FeatureAssetMapCatalog,
+    FeatureAssetMapUnavailableError,
+)
 from .skill_reuse import SkillReuseMatcher
 from .skill_reuse_evidence import (
     SkillReuseEvidenceLedger,
@@ -40,6 +44,8 @@ __all__ = [
     "SkillPackageConflictError",
     "SkillPackageNotFoundError",
     "SkillPackageUnavailableError",
+    "FeatureAssetMapCatalog",
+    "FeatureAssetMapUnavailableError",
     "SkillReuseMatcher",
     "SkillReuseEvidenceLedger",
     "SkillReuseInvalidError",

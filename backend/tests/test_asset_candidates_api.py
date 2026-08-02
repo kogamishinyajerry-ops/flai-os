@@ -13,7 +13,13 @@ from jsonschema import ValidationError, validate
 from backend.app.runtime.package_snapshot import SNAPSHOT_CONTRACT
 from backend.app.runtime.task_evidence import input_files_evidence
 from backend.app.storage import repos
-from backend.tests.conftest import TEST_DISPLAY_NAME, TEST_USERNAME
+from backend.tests.conftest import (
+    TEST_DISPLAY_NAME,
+    TEST_PASSWORD,
+    TEST_USERNAME,
+    login,
+    seed_user,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1506,3 +1512,204 @@ def test_candidate_contract_locks_effects_and_decision_request_authority(
     forged["reviewer"] = TEST_DISPLAY_NAME
     with pytest.raises(ValidationError):
         validate(forged, decision_schema)
+
+
+def test_feature_asset_map_is_owner_scoped_read_only_and_schema_valid(app_env) -> None:
+    client, app = app_env
+    candidate = _create_candidate(client, _seed_task(app)).json()
+    accepted = client.post(
+        f"/api/asset-candidates/{candidate['id']}/decision",
+        json=_decision(candidate),
+    )
+    assert accepted.status_code == 200
+    counts_before_read = _counts(app)
+
+    response = client.get("/api/feature-asset-map")
+
+    assert response.status_code == 200
+    body = response.json()
+    validate(body, _schema("feature_asset_map.schema.json"))
+    assert body["source"] == {
+        "kind": "owner_scoped_cold_projection",
+        "owner_username": TEST_USERNAME,
+        "owner_scoped": True,
+        "read_only": True,
+    }
+    assert body["summary"]["capability_count"] == len(
+        body["functionality"]["capabilities"]
+    )
+    assert body["summary"]["asset_candidate_count"] == 1
+    assert body["summary"]["accepted_candidate_count"] == 1
+    assert body["summary"]["skill_package_count"] == 1
+    assert body["summary"]["approved_skill_package_count"] == 0
+    assert body["assets"] == [
+        {
+            "candidate_id": accepted.json()["id"],
+            "candidate_digest": accepted.json()["candidate_digest"],
+            "revision": 1,
+            "state": "accepted",
+            "source": {
+                "task_id": accepted.json()["source"]["task_id"],
+                "conversation_id": accepted.json()["source"]["conversation_id"],
+                "agent_id": accepted.json()["source"]["agent_id"],
+                "finished_at": accepted.json()["source"]["finished_at"],
+            },
+            "task_pattern": {
+                "title": accepted.json()["bundle"]["task_pattern"]["title"],
+                **accepted.json()["asset_map"]["task_pattern"],
+            },
+            "skill": {
+                "name": accepted.json()["bundle"]["skill"]["name"],
+                "description": accepted.json()["bundle"]["skill"]["description"],
+                **accepted.json()["asset_map"]["skill"],
+            },
+            "skill_package": {
+                "id": accepted.json()["skill_package"]["id"],
+                "name": accepted.json()["skill_package"]["name"],
+                "version": accepted.json()["skill_package"]["version"],
+                "package_digest": accepted.json()["skill_package"]["package_digest"],
+                "state": "pending_review",
+                "reuse_eligible": False,
+            },
+            "workflow": accepted.json()["asset_map"]["workflow"],
+            "agent": accepted.json()["asset_map"]["agent"],
+            "updated_at": accepted.json()["updated_at"],
+        }
+    ]
+    assert body["effects"] == {
+        "writes_database": False,
+        "executes_work": False,
+        "registers_asset": False,
+        "promotes_asset": False,
+    }
+    missing_gate = deepcopy(body)
+    del missing_gate["assets"][0]["workflow"]["gate"]
+    with pytest.raises(ValidationError):
+        validate(missing_gate, _schema("feature_asset_map.schema.json"))
+
+    unknown_formation = deepcopy(body)
+    unknown_formation["assets"][0]["workflow"]["state"] = "formed"
+    with pytest.raises(ValidationError):
+        validate(unknown_formation, _schema("feature_asset_map.schema.json"))
+
+    forged_reuse = deepcopy(body)
+    forged_reuse["assets"][0]["skill_package"]["reuse_eligible"] = True
+    with pytest.raises(ValidationError):
+        validate(forged_reuse, _schema("feature_asset_map.schema.json"))
+
+    assert _counts(app) == counts_before_read
+    assert "SECRET_WORK_CASE" not in response.text
+    assert client.post("/api/feature-asset-map").status_code == 405
+
+    other_username = "other_engineer"
+    other_password = "Other-Engineer-Password-2026!"
+    seed_user(
+        app.state.db_path,
+        username=other_username,
+        display_name="另一位工程师",
+        password=other_password,
+    )
+    login(client, username=other_username, password=other_password)
+    other_map = client.get("/api/feature-asset-map")
+    assert other_map.status_code == 200
+    assert other_map.json()["source"]["owner_username"] == other_username
+    assert other_map.json()["summary"]["asset_candidate_count"] == 0
+    assert other_map.json()["assets"] == []
+    assert candidate["candidate_digest"] not in other_map.text
+
+    login(client, username=TEST_USERNAME, password=TEST_PASSWORD)
+    restored = client.get("/api/feature-asset-map")
+    assert restored.status_code == 200
+    assert restored.json()["assets"][0]["candidate_id"] == candidate["id"]
+
+
+def test_feature_asset_map_fails_closed_on_current_owner_attribution_drift(
+    app_env,
+) -> None:
+    client, app = app_env
+    candidate = _create_candidate(client, _seed_task(app)).json()
+    conn = app.state.conn_factory()
+    try:
+        conn.execute(
+            "UPDATE asset_candidates SET initiated_by_username = ? WHERE id = ?",
+            ("other_engineer", candidate["id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    counts_before_read = _counts(app)
+
+    response = client.get("/api/feature-asset-map")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "功能/资产地图暂不可用"}
+    assert candidate["candidate_digest"] not in response.text
+    assert TEST_USERNAME not in response.text
+    assert _counts(app) == counts_before_read
+
+
+def test_feature_asset_map_does_not_filter_source_task_owner_drift(app_env) -> None:
+    client, app = app_env
+    owned_task_id = _seed_task(app)
+    candidate = _create_candidate(client, owned_task_id).json()
+    other_task_id = _seed_task(
+        app,
+        owner_username="other_engineer",
+        task_name="另一责任人的任务",
+        user_message="另一责任人的独立工作段。",
+    )
+    conn = app.state.conn_factory()
+    try:
+        conn.execute(
+            "UPDATE asset_candidates SET source_task_id = ? WHERE id = ?",
+            (other_task_id, candidate["id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = client.get("/api/feature-asset-map")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "功能/资产地图暂不可用"}
+    assert candidate["candidate_digest"] not in response.text
+
+
+def test_feature_asset_map_pins_and_releases_one_read_snapshot(app_env) -> None:
+    _client, app = app_env
+    conn = app.state.conn_factory()
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        snapshot = app.state.feature_asset_map_catalog.snapshot(
+            conn,
+            username=TEST_USERNAME,
+        )
+        assert snapshot["source"]["read_only"] is True
+        assert any(statement == "BEGIN" for statement in statements)
+        assert statements[-1] == "ROLLBACK"
+        assert conn.in_transaction is False
+    finally:
+        conn.close()
+
+
+def test_feature_asset_map_rejects_asset_overflow_without_truncation(
+    app_env,
+    monkeypatch,
+) -> None:
+    client, _app = app_env
+
+    def oversized_owner_assets(_conn, _owner_username, limit):
+        assert limit == 101
+        return [f"task_overflow_{index}" for index in range(101)]
+
+    monkeypatch.setattr(
+        "backend.app.ontology.feature_asset_map.candidate_store."
+        "list_latest_task_ids_for_owner",
+        oversized_owner_assets,
+    )
+
+    response = client.get("/api/feature-asset-map")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "功能/资产地图暂不可用"}

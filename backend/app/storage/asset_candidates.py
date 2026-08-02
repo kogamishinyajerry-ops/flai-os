@@ -86,6 +86,41 @@ def get_latest_id_for_task(conn: sqlite3.Connection, task_id: str) -> str | None
     return str(row["id"]) if row is not None else None
 
 
+def list_latest_task_ids_for_owner(
+    conn: sqlite3.Connection,
+    owner_username: str,
+    limit: int,
+) -> list[str]:
+    """List owner-attributed tasks with a latest Candidate, without JSON decode.
+
+    Ownership comes from the immutable task row.  The caller must cold-verify
+    each Candidate so a drifted Candidate owner cannot be silently filtered
+    into a false empty projection.
+    """
+
+    rows = conn.execute(
+        """
+        SELECT candidate.source_task_id
+        FROM asset_candidates AS candidate
+        LEFT JOIN tasks AS task ON task.id = candidate.source_task_id
+        WHERE (
+            task.created_by_username = ?
+            OR candidate.initiated_by_username = ?
+        )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM asset_candidates AS newer
+            WHERE newer.source_task_id = candidate.source_task_id
+              AND newer.revision > candidate.revision
+          )
+        ORDER BY candidate.updated_at DESC, candidate.id ASC
+        LIMIT ?
+        """,
+        (owner_username, owner_username, limit),
+    ).fetchall()
+    return [str(row["source_task_id"]) for row in rows]
+
+
 def get_event(conn: sqlite3.Connection, event_id: str) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT * FROM asset_candidate_events WHERE event_id = ?", (event_id,)

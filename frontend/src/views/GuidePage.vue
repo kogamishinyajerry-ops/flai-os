@@ -436,6 +436,10 @@
         @retry="reconcileAssetCandidate"
       />
 
+      <!-- 平台功能与当前 owner 资产只在主会话原地按需披露；默认折叠，
+           首次展开才冷读，不新增 /map 页面或第二套资产工作台。 -->
+      <FeatureAssetMapDisclosure />
+
       <div v-if="sending && !hasStreamingAssistant" class="bubble-row assistant">
         <FlaiBloom class="ai-mark" state="generating" :size="26" />
         <div class="ai-thinking">
@@ -611,6 +615,7 @@ import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
 import { useAgentNames } from "../stores/agentNames";
 import EvidenceList from "../components/EvidenceList.vue";
 import AssetCandidateCallout from "../components/AssetCandidateCallout.vue";
+import FeatureAssetMapDisclosure from "../components/FeatureAssetMapDisclosure.vue";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";

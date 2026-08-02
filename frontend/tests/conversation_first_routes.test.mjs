@@ -13,6 +13,8 @@ const portalSource = readSource("../src/views/AgentPortal.vue");
 const taskDetailSource = readSource("../src/views/TaskDetail.vue");
 const statusCenterSource = readSource("../src/components/StatusCenter.vue");
 const retrySource = readSource("../src/utils/retryPrefill.js");
+const guideSource = readSource("../src/views/GuidePage.vue");
+const featureAssetMapSource = readSource("../src/components/FeatureAssetMapDisclosure.vue");
 
 test("工程师深链 /tasks/new 只回主对话，不再加载 TaskCreate", () => {
   assert.match(
@@ -20,6 +22,19 @@ test("工程师深链 /tasks/new 只回主对话，不再加载 TaskCreate", () 
     /path:\s*"\/tasks\/new"[\s\S]*?redirect:\s*\(\)\s*=>\s*\(\{\s*path:\s*"\/",\s*query:\s*\{\}\s*\}\)/,
   );
   assert.doesNotMatch(routerSource, /import\("\.\.\/views\/TaskCreate\.vue"\)/);
+});
+
+test("功能与资产地图只在主会话按需披露，不新增 /map 页面", () => {
+  assert.doesNotMatch(routerSource, /path:\s*["']\/map["']/);
+  assert.match(guideSource, /<FeatureAssetMapDisclosure\s*\/>/);
+  assert.match(featureAssetMapSource, /<details\s+@toggle="handleToggle">/);
+  assert.doesNotMatch(featureAssetMapSource, /<details[^>]*\sopen(?:\s|=|>)/);
+  assert.match(
+    featureAssetMapSource,
+    /event\.currentTarget\.open\s*&&\s*phase\.value\s*===\s*"idle"/,
+  );
+  assert.match(featureAssetMapSource, /await getFeatureAssetMap\(\)/);
+  assert.doesNotMatch(featureAssetMapSource, /<input|<textarea|<select/);
 });
 
 test("任务台、协作会话与能力门户不再暴露创建表单或手工 Agent 启动", () => {
