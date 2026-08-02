@@ -10,7 +10,11 @@ import {
 import { installUiAcceptanceBoundary } from "../src/ui-lab/acceptanceBoundary.js";
 import { conversationInteractionPolicy } from "../src/utils/ndjsonStream.js";
 import { normalizeAssetDraftPreview } from "../src/utils/assetDrafts.js";
-import { verifyAssetCandidateIntegrity } from "../src/utils/assetCandidates.js";
+import {
+  normalizeSkillPackageReviewContent,
+  normalizeSkillReuseRef,
+  verifyAssetCandidateIntegrity,
+} from "../src/utils/assetCandidates.js";
 
 const appSource = readFileSync(
   new URL("../src/App.vue", import.meta.url),
@@ -62,13 +66,17 @@ const REQUIRED_CASES = [
   "routing-mobile",
   "asset-candidate-desktop",
   "asset-candidate-accepted-desktop",
+  "asset-package-approved-desktop",
+  "asset-package-rejected-desktop",
+  "skill-reuse-desktop",
+  "skill-reuse-invalid-desktop",
   "asset-intake-desktop",
   "asset-review-desktop",
   "asset-review-mobile",
   "asset-blocked-mobile",
 ];
 
-test("UI 验收台固定覆盖十二个关键视图，未知 ID fail-closed", () => {
+test("UI 验收台固定覆盖十六个关键视图，未知 ID fail-closed", () => {
   assert.deepEqual(
     UI_ACCEPTANCE_CASES.map((item) => item.id),
     REQUIRED_CASES,
@@ -153,11 +161,95 @@ test("接受成功态绑定 authenticated session 决定，仍不形成 Workflow
   assert.equal(candidate.asset_map.skill.state, "approved_revision");
   assert.equal(candidate.asset_map.workflow.state, "not_formed");
   assert.equal(candidate.asset_map.agent.state, "not_formed");
+  assert.equal(candidate.skill_package.state, "pending_review");
+  assert.equal(candidate.skill_package.isolation.zone, "candidate_quarantine");
+  assert.equal(candidate.skill_package.isolation.registered, false);
+  assert.equal(candidate.skill_package.isolation.executable, false);
+  assert.equal(candidate.skill_package.reuse_eligible, false);
+  assert.equal(
+    candidate.skill_package.formation_evidence.required_independent_work_cases,
+    2,
+  );
+  assert.equal(
+    candidate.skill_package.formation_evidence.workflow_candidate.state,
+    "not_formed",
+  );
+  assert.equal(
+    candidate.skill_package.formation_evidence.agent_candidate.state,
+    "not_formed",
+  );
   assert.deepEqual(candidate.effects, pending.assetCandidate.effects);
   assert.match(assetCandidateSource, /这套方法已保留为资产候选/);
   assert.match(
     assetCandidateSource,
     /已接受为资产候选，尚未登记、发布或形成 Agent。/,
+  );
+});
+
+test("隔离包 pending、approved、rejected 三态与真实四文件审阅内容均有可信 fixture", async () => {
+  const pending = getUiAcceptanceCase("asset-candidate-accepted-desktop").guide;
+  assert.equal(pending.assetCandidate.skill_package.state, "pending_review");
+  assert.equal(
+    await normalizeSkillPackageReviewContent(pending.skillPackageReviewContent, {
+      expectedPackageId: pending.assetCandidate.skill_package.id,
+      expectedPackageDigest: pending.assetCandidate.skill_package.package_digest,
+      expectedFiles: pending.assetCandidate.skill_package.files,
+    }),
+    pending.skillPackageReviewContent,
+  );
+  assert.deepEqual(
+    pending.skillPackageReviewContent.files.map((file) => file.path),
+    [
+      "SKILL.md",
+      "references/provenance.json",
+      "references/skill-revision.json",
+      "references/task-pattern-revision.json",
+    ],
+  );
+
+  for (const [id, state, action, eligible] of [
+    ["asset-package-approved-desktop", "approved", "approve", true],
+    ["asset-package-rejected-desktop", "rejected", "reject", false],
+  ]) {
+    const fixture = getUiAcceptanceCase(id).guide;
+    const candidate = fixture.assetCandidate;
+    assert.equal(
+      await verifyAssetCandidateIntegrity(candidate, {
+        expectedTaskId: fixture.conversationTasks[0].id,
+      }),
+      candidate,
+    );
+    assert.equal(candidate.skill_package.state, state);
+    assert.equal(candidate.skill_package.review.action, action);
+    assert.equal(candidate.skill_package.reuse_eligible, eligible);
+    assert.equal(candidate.skill_package.isolation.registered, false);
+    assert.equal(candidate.skill_package.isolation.executable, false);
+    assert.equal(candidate.skill_package.formation_evidence.workflow_candidate.state, "not_formed");
+    assert.equal(candidate.skill_package.formation_evidence.agent_candidate.state, "not_formed");
+  }
+});
+
+test("自动复用与非法复用分别有主对话内联和 fail-closed 验收镜头", () => {
+  const reused = getUiAcceptanceCase("skill-reuse-desktop").guide;
+  const reusedPlan = reused.messages.find(
+    (message) => message.recommendation?.decision === "orchestrate",
+  ).recommendation;
+  assert.equal(
+    normalizeSkillReuseRef(reusedPlan.skill_reuse, {
+      expectedAgentIds: reusedPlan.agents.map((agent) => agent.agent_id),
+    }),
+    reusedPlan.skill_reuse,
+  );
+
+  const invalid = getUiAcceptanceCase("skill-reuse-invalid-desktop").guide;
+  const invalidPlan = invalid.messages.find(
+    (message) => message.recommendation?.decision === "orchestrate",
+  ).recommendation;
+  assert.throws(
+    () => normalizeSkillReuseRef(invalidPlan.skill_reuse, {
+      expectedAgentIds: invalidPlan.agents.map((agent) => agent.agent_id),
+    }),
+    TypeError,
   );
 });
 
@@ -454,6 +546,21 @@ test("组件级验收仅白名单返回草稿预览，其余 API 全部中止", 
     uiLabE2eSource,
     /request\.method == "POST"[\s\S]*asset-draft-preview[\s\S]*route\.fulfill\([\s\S]*?return[\s\S]*?route\.abort\(\)/,
   );
+});
+
+test("UI Lab 真实执行包级批准与拒绝 POST，并在 deciding 锁住所有抽屉动作", () => {
+  assert.match(uiLabE2eSource, /window\.__FLAI_PACKAGE_DECISION__/);
+  assert.match(uiLabE2eSource, /apiModule\.decideSkillPackage/);
+  assert.match(
+    uiLabE2eSource,
+    /skill_package_decision_request\.v1[\s\S]*action": "approve"[\s\S]*expected_package_digest/,
+  );
+  assert.match(
+    uiLabE2eSource,
+    /disabledFooter": 4[\s\S]*evidenceDisabled": True[\s\S]*contentDisabled": True[\s\S]*close": 0/,
+  );
+  assert.match(uiLabE2eSource, /candidate-state\.is-package-approved/);
+  assert.match(uiLabE2eSource, /candidate-state\.is-package-rejected/);
 });
 
 test("任一已存在出口无法替换时，验收边界 fail-closed", () => {

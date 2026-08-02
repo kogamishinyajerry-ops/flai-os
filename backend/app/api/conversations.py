@@ -38,6 +38,15 @@ router = APIRouter(prefix="/api", tags=["conversations"])
 _STREAM_END = object()
 
 
+def _authenticated_username(request: Request) -> str | None:
+    """Return middleware-authenticated username; keep direct route unit calls compatible."""
+    user = getattr(request.state, "user", None)
+    if not isinstance(user, dict):
+        return None
+    username = user.get("username")
+    return username if isinstance(username, str) and username else None
+
+
 class CreateConversationRequest(BaseModel):
     # ADR-0019 D5：created_by 已删——会话发起人=登录会话身份，服务端派生
     model_config = ConfigDict(extra="forbid")
@@ -79,7 +88,9 @@ def create_conversation(body: CreateConversationRequest, request: Request) -> di
     service = request.app.state.conversation_service
     try:
         return service.create(
-            agent_id=body.agent_id, created_by=request.state.user["display_name"]
+            agent_id=body.agent_id,
+            created_by=request.state.user["display_name"],
+            created_by_username=_authenticated_username(request),
         )
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -117,7 +128,10 @@ def post_message(
     service = request.app.state.conversation_service
     try:
         return service.post_message(
-            conversation_id=conversation_id, content=body.content, file_ids=body.file_ids
+            conversation_id=conversation_id,
+            content=body.content,
+            file_ids=body.file_ids,
+            actor_username=_authenticated_username(request),
         )
     except (ConversationNotFoundError, FileNotFoundInStoreError) as exc:
         # 会话不存在 / 引用了不存在的附件 id：404，且本轮零落库。
@@ -199,6 +213,7 @@ def stream_message(
     上游 SSE callback 桥接到响应生成器；不引入任务队列，也不改变旧 /messages。
     """
     service = request.app.state.conversation_service
+    actor_username = _authenticated_username(request)
 
     async def events() -> AsyncIterator[bytes]:
         pending: asyncio.Queue[dict[str, Any] | object] = asyncio.Queue()
@@ -232,6 +247,7 @@ def stream_message(
                     file_ids=body.file_ids,
                     on_delta=emit_delta,
                     is_cancelled=closed.is_set,
+                    actor_username=actor_username,
                 )
                 # ConversationService 返回即代表 COMMIT 已完成，且返回值不再做
                 # 任何数据库读取。之后若封装 done 失败，error 不能谎报未持久化。

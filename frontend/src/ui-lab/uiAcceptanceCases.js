@@ -400,6 +400,7 @@ const ASSET_CANDIDATE = {
     },
   },
   decision: null,
+  skill_package: null,
   effects: {
     writes_candidate_store: true,
     executes_work: false,
@@ -409,6 +410,140 @@ const ASSET_CANDIDATE = {
   },
   created_at: "2026-07-31T06:47:00Z",
   updated_at: "2026-07-31T06:47:00Z",
+};
+
+const ASSET_CANDIDATE_SKILL_PACKAGE = {
+  schema_version: "skill_package_revision.v1",
+  id: "skill_package_919191919191919191919191",
+  name: "cfd-inlet-boundary-review",
+  version: "0.1.0",
+  package_digest: `sha256:${"9".repeat(64)}`,
+  state: "pending_review",
+  source: {
+    candidate_id: ASSET_CANDIDATE.id,
+    candidate_digest: ASSET_CANDIDATE.candidate_digest,
+    bundle_digest: ASSET_CANDIDATE.bundle_digest,
+    skill_digest: ASSET_CANDIDATE.bundle.skill.content_digest,
+    acceptance_event_digest: `sha256:${"8".repeat(64)}`,
+    task_id: ASSET_CANDIDATE.source.task_id,
+    agent_id: ASSET_CANDIDATE.source.agent_id,
+    initiated_by_username: ASSET_CANDIDATE.source.initiated_by_username,
+  },
+  storage_relpath: `cfd-inlet-boundary-review/0.1.0/${"9".repeat(64)}`,
+  files: [
+    {
+      path: "SKILL.md",
+      size_bytes: 317,
+      sha256: "0f87242490b4732d2da814678ccf4884d34f31e3693f9ba89f7d7c3d93a6ce20",
+    },
+    {
+      path: "references/provenance.json",
+      size_bytes: 215,
+      sha256: "9cff91f410fe150746780c1e3430d38a2554af5342d25ef588f51041f02efa73",
+    },
+    {
+      path: "references/skill-revision.json",
+      size_bytes: 1117,
+      sha256: "1e18c59a7dc32c48a64a0cef0014bf53d5428c45d6976ccbe9909b859cf62b71",
+    },
+    {
+      path: "references/task-pattern-revision.json",
+      size_bytes: 1041,
+      sha256: "58f7576184aa59bc7283d1f6f7030f8d9cdb53dbbb0b7263ee197b20209fbec8",
+    },
+  ],
+  review: null,
+  isolation: {
+    zone: "candidate_quarantine",
+    registered: false,
+    executable: false,
+  },
+  reuse_eligible: false,
+  formation_evidence: {
+    schema_version: "composition_eligibility.v1",
+    independent_work_case_count: 0,
+    required_independent_work_cases: 2,
+    workflow_candidate: {
+      state: "not_formed",
+      eligible: false,
+      reason: "requires_independent_composition_evidence",
+    },
+    agent_candidate: {
+      state: "not_formed",
+      eligible: false,
+      reason: "requires_approved_workflow_revision",
+    },
+  },
+  created_at: "2026-07-31T06:49:00Z",
+  updated_at: "2026-07-31T06:49:00Z",
+};
+
+const ASSET_CANDIDATE_SKILL_PACKAGE_REVIEW_CONTENT = {
+  schema_version: "skill_package_review_content.v1",
+  package_id: ASSET_CANDIDATE_SKILL_PACKAGE.id,
+  package_digest: ASSET_CANDIDATE_SKILL_PACKAGE.package_digest,
+  files: [
+    {
+      path: "SKILL.md",
+      text: `---
+name: cfd-inlet-boundary-review
+description: 在稳态算例开算前核对入口边界并保留可签认依据。
+---
+
+# 入口边界复核
+
+1. 逐项核对入口总压、总温与工况标识。
+2. 标出缺失、冲突与必须由责任工程师裁决的边界。
+3. 为每项结论保留原始材料位置。
+`,
+    },
+    {
+      path: "references/provenance.json",
+      text: `${JSON.stringify({
+        schema_version: "candidate_skill_package_provenance.v1",
+        source_candidate_digest: ASSET_CANDIDATE.candidate_digest,
+        source_task_id: ASSET_CANDIDATE.source.task_id,
+      }, null, 2)}\n`,
+    },
+    {
+      path: "references/skill-revision.json",
+      text: `${JSON.stringify(ASSET_CANDIDATE.bundle.skill, null, 2)}\n`,
+    },
+    {
+      path: "references/task-pattern-revision.json",
+      text: `${JSON.stringify(ASSET_CANDIDATE.bundle.task_pattern, null, 2)}\n`,
+    },
+  ],
+};
+
+const ASSET_CANDIDATE_SKILL_PACKAGE_APPROVED = {
+  ...ASSET_CANDIDATE_SKILL_PACKAGE,
+  state: "approved",
+  review: {
+    action: "approve",
+    reviewed_by: "验收工程师",
+    reviewed_by_username: "user-ui-acceptance",
+    signer_source: "authenticated_session",
+    signer_session_bound: true,
+    created_at: "2026-07-31T06:52:00Z",
+  },
+  reuse_eligible: true,
+  updated_at: "2026-07-31T06:52:00Z",
+};
+
+const ASSET_CANDIDATE_SKILL_PACKAGE_REJECTED = {
+  ...ASSET_CANDIDATE_SKILL_PACKAGE,
+  state: "rejected",
+  review: {
+    action: "reject",
+    reviewed_by: "验收工程师",
+    reviewed_by_username: "user-ui-acceptance",
+    signer_source: "authenticated_session",
+    signer_session_bound: true,
+    created_at: "2026-07-31T06:52:00Z",
+  },
+  reuse_eligible: false,
+  updated_at: "2026-07-31T06:52:00Z",
 };
 
 const ASSET_CANDIDATE_ACCEPTED = {
@@ -433,7 +568,20 @@ const ASSET_CANDIDATE_ACCEPTED = {
     signer_session_bound: true,
     created_at: "2026-07-31T06:49:00Z",
   },
+  skill_package: ASSET_CANDIDATE_SKILL_PACKAGE,
   updated_at: "2026-07-31T06:49:00Z",
+};
+
+const ASSET_CANDIDATE_PACKAGE_APPROVED = {
+  ...ASSET_CANDIDATE_ACCEPTED,
+  skill_package: ASSET_CANDIDATE_SKILL_PACKAGE_APPROVED,
+  updated_at: "2026-07-31T06:52:00Z",
+};
+
+const ASSET_CANDIDATE_PACKAGE_REJECTED = {
+  ...ASSET_CANDIDATE_ACCEPTED,
+  skill_package: ASSET_CANDIDATE_SKILL_PACKAGE_REJECTED,
+  updated_at: "2026-07-31T06:52:00Z",
 };
 
 const ASSET_BLOCKED_GENERALIZATION = {
@@ -528,6 +676,66 @@ const ASSET_CANDIDATE_GUIDE = {
 const ASSET_CANDIDATE_ACCEPTED_GUIDE = {
   ...ASSET_CANDIDATE_GUIDE,
   assetCandidate: ASSET_CANDIDATE_ACCEPTED,
+  skillPackageReviewContent: ASSET_CANDIDATE_SKILL_PACKAGE_REVIEW_CONTENT,
+};
+
+const ASSET_PACKAGE_APPROVED_GUIDE = {
+  ...ASSET_CANDIDATE_GUIDE,
+  assetCandidate: ASSET_CANDIDATE_PACKAGE_APPROVED,
+  skillPackageReviewContent: ASSET_CANDIDATE_SKILL_PACKAGE_REVIEW_CONTENT,
+};
+
+const ASSET_PACKAGE_REJECTED_GUIDE = {
+  ...ASSET_CANDIDATE_GUIDE,
+  assetCandidate: ASSET_CANDIDATE_PACKAGE_REJECTED,
+  skillPackageReviewContent: ASSET_CANDIDATE_SKILL_PACKAGE_REVIEW_CONTENT,
+};
+
+const SKILL_REUSE_REF = {
+  schema_version: "skill_reuse_ref.v1",
+  package_id: ASSET_CANDIDATE_SKILL_PACKAGE_APPROVED.id,
+  package_version: ASSET_CANDIDATE_SKILL_PACKAGE_APPROVED.version,
+  package_digest: ASSET_CANDIDATE_SKILL_PACKAGE_APPROVED.package_digest,
+  candidate_digest: ASSET_CANDIDATE.candidate_digest,
+  skill_digest: ASSET_CANDIDATE.bundle.skill.content_digest,
+  skill_name: ASSET_CANDIDATE_SKILL_PACKAGE_APPROVED.name,
+  matched_agent_id: "cfd_input_check",
+  review_state: "approved",
+  match_policy_version: "skill_reuse_match.v1",
+  match_basis_digest: `sha256:${"7".repeat(64)}`,
+};
+
+const SKILL_REUSE_RECOMMENDATION = {
+  ...ROUTING_RECOMMENDATION,
+  skill_reuse: SKILL_REUSE_REF,
+};
+
+const SKILL_REUSE_INVALID_RECOMMENDATION = {
+  ...ROUTING_RECOMMENDATION,
+  skill_reuse: {
+    ...SKILL_REUSE_REF,
+    model: "manual-selector-must-never-be-trusted",
+  },
+};
+
+const SKILL_REUSE_GUIDE = {
+  ...ROUTING_GUIDE,
+  conversationId: "ui-skill-reuse",
+  messages: ROUTING_GUIDE.messages.map((message) => (
+    message.recommendation
+      ? { ...message, recommendation: SKILL_REUSE_RECOMMENDATION }
+      : { ...message }
+  )),
+};
+
+const SKILL_REUSE_INVALID_GUIDE = {
+  ...ROUTING_GUIDE,
+  conversationId: "ui-skill-reuse-invalid",
+  messages: ROUTING_GUIDE.messages.map((message) => (
+    message.recommendation
+      ? { ...message, recommendation: SKILL_REUSE_INVALID_RECOMMENDATION }
+      : { ...message }
+  )),
 };
 
 function acceptanceCase({
@@ -639,14 +847,62 @@ export const UI_ACCEPTANCE_CASES = [
   }),
   acceptanceCase({
     id: "asset-candidate-accepted-desktop",
-    label: "桌面 · 资产候选已接受",
-    summary: "具名工程师接受精确候选后，只展示只读记录与后续门控",
+    label: "桌面 · 隔离包待复核",
+    summary: "Candidate 接受后自动材化隔离包，真实四文件按需读取后才可批准",
     viewport: VIEWPORTS.desktop,
     guide: ASSET_CANDIDATE_ACCEPTED_GUIDE,
     reviewPoints: [
-      "成功态是否明确只保留为资产候选，而不是注册、发布或形成 Agent",
-      "已接受记录是否移除重复决定动作，只保留下载与回到对话",
+      "Candidate 接受与包级批准是否明确分成两道人工门",
+      "批准复用是否在真实四文件内容加载并核对前保持禁用",
       "Task Pattern 与 Skill 是否成为 approved revision，Workflow 与 Agent 是否仍未形成",
+    ],
+  }),
+  acceptanceCase({
+    id: "asset-package-approved-desktop",
+    label: "桌面 · 隔离包已批准",
+    summary: "精确包修订经人工批准后以 teal 中性签发态展示，不冒充执行成功",
+    viewport: VIEWPORTS.desktop,
+    guide: ASSET_PACKAGE_APPROVED_GUIDE,
+    reviewPoints: [
+      "批准是否使用人签 teal 而不是运行成功绿色",
+      "是否只说明相似任务可自动匹配，不声称已注册、发布或执行",
+      "Workflow 与 Agent Candidate 是否仍保持未形成",
+    ],
+  }),
+  acceptanceCase({
+    id: "asset-package-rejected-desktop",
+    label: "桌面 · 隔离包未批准",
+    summary: "包级拒绝回到中性记录态，不回落到 Candidate 接受的 teal 圆点",
+    viewport: VIEWPORTS.desktop,
+    guide: ASSET_PACKAGE_REJECTED_GUIDE,
+    reviewPoints: [
+      "拒绝包是否以中性空心标记展示，而不是人签 teal 或失败红",
+      "是否保留 Candidate、原任务与包级复核审计记录",
+      "是否不再提供批准或拒绝动作",
+    ],
+  }),
+  acceptanceCase({
+    id: "skill-reuse-desktop",
+    label: "桌面 · 已自动复用方法",
+    summary: "已审核 Skill 只在当前方案主对话内联说明，不增加资产面板",
+    viewport: VIEWPORTS.desktop,
+    guide: SKILL_REUSE_GUIDE,
+    reviewPoints: [
+      "复用来源是否只占用既有方案摘要和按需披露区",
+      "是否仍只有一个按方案开工主动作，没有 Skill 选择或复用按钮",
+      "复用精确摘要是否在开工与运行时继续由后端核对",
+    ],
+  }),
+  acceptanceCase({
+    id: "skill-reuse-invalid-desktop",
+    label: "桌面 · 复用证据待核",
+    summary: "非法 Skill 引用显式 amber 阻断，绝不静默按无复用方案开工",
+    viewport: VIEWPORTS.desktop,
+    guide: SKILL_REUSE_INVALID_GUIDE,
+    reviewPoints: [
+      "非法引用是否出现 amber 明示而不是消失",
+      "按方案开工是否被替换为继续对话重新编排",
+      "验收边界内是否保持零任务 POST",
     ],
   }),
   acceptanceCase({

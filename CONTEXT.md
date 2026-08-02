@@ -51,8 +51,54 @@ Bundle digest。
 ## Approved Revision
 
 具名工程师对某个精确 Candidate Revision 作出接受决定后的修订。Approved 只表示
-该修订可以进入后续材化或组合评估，不等于已生成 `SKILL.md`、已注册、可执行、已发布
-或已晋级。
+接受该修订会自动触发确定性 Materializer，生成隔离、版本化、`pending_review` 的
+`SKILL.md` 文件包；这仍不等于 Package 已批准、已注册、可执行、已发布或已晋级。
+
+## Skill Package Revision
+
+确定性 Materializer 从一个精确 Approved Revision 生成的不可变文件包，包含
+Matt 风格 `SKILL.md` 与摘要绑定的来源参考。它同时有语义版本与内容摘要，存放在
+专用隔离目录，不进入 Agent 源目录、Registry 或可执行导入路径。新包默认是
+`pending_review`；Candidate 的接受决定不能代替对该包精确摘要的独立人工审核。
+
+## Skill Reuse Match
+
+系统用当前 Work Case 的文本与附件线索，对当前工程师可见的已批准、逐字节
+验证通过的 Skill Package Revision 做确定性匹配。只有唯一高置信结果才能进入方案；
+并列、低置信、未审、已拒或字节漂移都表示未匹配。匹配是系统路由事实，不是
+LLM 可以自行声明的建议字段。
+
+## Skill Reuse Binding
+
+将一次真实任务执行与某个精确 Skill Package Revision 咬合的不可变证据，至少
+包含 Package id、版本、Package digest、来源 Candidate digest、匹配策略与匹配依据摘要。
+创建任务和运行时均必须重新验证包状态与字节，并把方法内容注入该次执行与追加
+审计事件。主对话中的“将复用某 Skill”标签本身不是 Reuse Binding。
+
+## Skill Reuse Application
+
+运行时对某个精确 Skill Reuse Binding 的实际使用证据。仅有匹配、绑定或把方法放入
+上下文不算 Application；模型型 Agent 必须存在一次携带同一 Application digest 的成功
+`chat` 或 `vision` 调用，确定性 Workflow 则必须返回运行时给出的逐字段精确 receipt。
+`model.profile=none` 的确定性 Workflow 还必须在不可变 Agent Package 中显式声明
+`workflow.skill_reuse_application: deterministic_receipt_v1`；未声明时自动复用在建任务前
+fail-closed。
+`embed`、空 Workflow、失败调用和 Workflow 自报审计事件均不能代替该证据。
+
+## Independent Work Case Evidence
+
+来自不同任务与不同来源工作段、且有独立实际执行和完成或签发摘要的 Reuse
+Application 证据。同一任务修订、重试、重放或同一原子工作段的批次成员不能通过重复
+记数伪造独立证据。至少两份 Independent Work Case Evidence 只是进入更高层组合评估的
+必要条件，不代表 Workflow 或 Agent 已经形成。内容稳定的 Work Case fingerprint 只用于
+保守去重上传 id、文件名、顺序等非语义变化，不证明两个工作在语义上独立。
+
+## Composition Eligibility
+
+由 Independent Work Case Evidence 得出的只读资格投影。Workflow Candidate 还必须出现稳定的
+多 Skill 组合、依赖、输入输出绑定或人工停止点；同一 Skill 被多次复用不能自动形成
+Workflow。Agent Candidate 必须晚于精确的 Approved Workflow Revision，并另行证明责任、
+工具、知识和权限边界的稳定性。Composition Eligibility 不写包、不注册、不晋级。
 
 ## Workflow Revision
 

@@ -1,15 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import {
   assetCandidateReconcileCreateReason,
   assetCandidateRequestIsCurrent,
   buildAssetCandidateDecisionRequest,
+  buildSkillPackageDecisionRequest,
   eligibleAssetCandidateTask,
   normalizeAssetCandidate,
+  normalizeSkillPackage,
+  normalizeSkillPackageReviewContent,
+  normalizeSkillReuseRef,
+  verifySkillPackageDecisionResponse,
   verifyAssetCandidateIntegrity,
 } from "../src/utils/assetCandidates.js";
+import {
+  decideSkillPackage,
+  getSkillPackageReviewContent,
+} from "../src/api/assetCandidates.js";
 import { getUiAcceptanceCase } from "../src/ui-lab/uiAcceptanceCases.js";
 
 
@@ -28,6 +38,84 @@ const apiSource = readFileSync(
 
 
 const digest = (char) => `sha256:${char.repeat(64)}`;
+
+const skillPackageReviewFiles = [
+  { path: "SKILL.md", text: "---\nname: entry-review-method\ndescription: Review an entry.\n---\n\n# Method\n" },
+  { path: "references/provenance.json", text: "{\"source\":\"accepted_candidate\"}\n" },
+  { path: "references/skill-revision.json", text: "{\"schema_version\":\"skill_draft.v1\"}\n" },
+  { path: "references/task-pattern-revision.json", text: "{\"schema_version\":\"task_pattern_draft.v1\"}\n" },
+];
+
+function reviewFileManifest() {
+  return skillPackageReviewFiles.map((file) => ({
+    path: file.path,
+    size_bytes: Buffer.byteLength(file.text, "utf8"),
+    sha256: createHash("sha256").update(file.text, "utf8").digest("hex"),
+  }));
+}
+
+function skillPackage(state = "pending_review") {
+  return {
+    schema_version: "skill_package_revision.v1",
+    id: `skill_package_${"2".repeat(24)}`,
+    name: "entry-review-method",
+    version: "0.1.0",
+    package_digest: digest("2"),
+    state,
+    source: {
+      candidate_id: `asset_candidate_${"a".repeat(24)}`,
+      candidate_digest: digest("a"),
+      bundle_digest: digest("b"),
+      skill_digest: digest("1"),
+      acceptance_event_digest: digest("8"),
+      task_id: "task_done",
+      agent_id: "hello_agent",
+      initiated_by_username: "test_engineer",
+    },
+    storage_relpath: `entry-review-method/0.1.0/${"2".repeat(64)}`,
+    files: reviewFileManifest(),
+    review: state === "pending_review" ? null : {
+      action: state === "approved" ? "approve" : "reject",
+      reviewed_by: "测试工程师",
+      reviewed_by_username: "test_engineer",
+      signer_source: "authenticated_session",
+      signer_session_bound: true,
+      created_at: "2026-08-02T00:02:00Z",
+    },
+    isolation: {
+      zone: "candidate_quarantine",
+      registered: false,
+      executable: false,
+    },
+    reuse_eligible: state === "approved",
+    formation_evidence: {
+      schema_version: "composition_eligibility.v1",
+      independent_work_case_count: 0,
+      required_independent_work_cases: 2,
+      workflow_candidate: {
+        state: "not_formed",
+        eligible: false,
+        reason: "requires_independent_composition_evidence",
+      },
+      agent_candidate: {
+        state: "not_formed",
+        eligible: false,
+        reason: "requires_approved_workflow_revision",
+      },
+    },
+    created_at: "2026-08-02T00:01:00Z",
+    updated_at: "2026-08-02T00:01:00Z",
+  };
+}
+
+function skillPackageReviewContent() {
+  return {
+    schema_version: "skill_package_review_content.v1",
+    package_id: `skill_package_${"2".repeat(24)}`,
+    package_digest: digest("2"),
+    files: skillPackageReviewFiles.map((file) => ({ ...file })),
+  };
+}
 
 function candidate(state = "awaiting_human_review") {
   const action = state === "accepted" ? "accept" : "reject";
@@ -164,6 +252,7 @@ function candidate(state = "awaiting_human_review") {
       signer_session_bound: true,
       created_at: "2026-08-02T00:01:00Z",
     },
+    skill_package: state === "accepted" ? skillPackage() : null,
     effects: {
       writes_candidate_store: true,
       executes_work: false,
@@ -387,6 +476,252 @@ test("人工决定请求只有动作与两层预期摘要，不接受客户端�
 });
 
 
+test("Candidate 必须携带与接受修订咬合的隔离 Skill Package 投影", () => {
+  assert.equal(normalizeAssetCandidate(candidate()).skill_package, null);
+  assert.equal(normalizeAssetCandidate(candidate("rejected")).skill_package, null);
+  assert.equal(
+    normalizeAssetCandidate(candidate("accepted")).skill_package.state,
+    "pending_review",
+  );
+
+  for (const mutate of [
+    (value) => { delete value.skill_package; },
+    (value) => { value.skill_package = null; },
+    (value) => { value.skill_package.source.candidate_digest = digest("9"); },
+    (value) => { value.skill_package.source.skill_digest = digest("9"); },
+    (value) => { value.skill_package.isolation.registered = true; },
+    (value) => { value.skill_package.isolation.executable = true; },
+    (value) => { value.skill_package.formation_evidence.workflow_candidate.eligible = true; },
+  ]) {
+    const invalid = candidate("accepted");
+    mutate(invalid);
+    assert.throws(() => normalizeAssetCandidate(invalid), TypeError);
+  }
+});
+
+
+test("包级人工复核只发送动作和预期包摘要", () => {
+  const pending = skillPackage();
+  assert.equal(normalizeSkillPackage(pending), pending);
+  assert.deepEqual(buildSkillPackageDecisionRequest(pending, "approve"), {
+    schema_version: "skill_package_decision_request.v1",
+    action: "approve",
+    expected_package_digest: digest("2"),
+  });
+  assert.deepEqual(buildSkillPackageDecisionRequest(pending, "reject"), {
+    schema_version: "skill_package_decision_request.v1",
+    action: "reject",
+    expected_package_digest: digest("2"),
+  });
+  assert.throws(() => buildSkillPackageDecisionRequest(pending, "accept"), TypeError);
+  assert.throws(
+    () => buildSkillPackageDecisionRequest(skillPackage("approved"), "reject"),
+    TypeError,
+  );
+});
+
+
+test("Skill Package 全层 additionalProperties=false，且允许达到数量门后继续不成 Workflow", () => {
+  const base = skillPackage();
+  for (const mutate of [
+    (value) => { value.model = "manual"; },
+    (value) => { value.source.extra = true; },
+    (value) => { value.files[0].url = "/unsafe"; },
+    (value) => { value.isolation.path = "/agents"; },
+    (value) => { value.formation_evidence.extra = true; },
+    (value) => { value.formation_evidence.workflow_candidate.extra = true; },
+    (value) => { value.formation_evidence.agent_candidate.extra = true; },
+  ]) {
+    const invalid = structuredClone(base);
+    mutate(invalid);
+    assert.throws(() => normalizeSkillPackage(invalid), /字段|不受支持/);
+  }
+
+  for (const state of ["approved", "rejected"]) {
+    const invalid = skillPackage(state);
+    invalid.review.extra = true;
+    assert.throws(() => normalizeSkillPackage(invalid), /字段|不受支持/);
+  }
+
+  const repeated = skillPackage("approved");
+  repeated.formation_evidence.independent_work_case_count = 2;
+  repeated.formation_evidence.workflow_candidate.reason =
+    "requires_stable_multi_skill_composition_evidence";
+  assert.equal(normalizeSkillPackage(repeated), repeated);
+  assert.equal(repeated.formation_evidence.workflow_candidate.state, "not_formed");
+});
+
+
+test("包级决定响应必须保持全部不可变投影并符合所点动作", () => {
+  const pending = skillPackage();
+  const approved = skillPackage("approved");
+  assert.equal(
+    verifySkillPackageDecisionResponse(pending, approved, "approve"),
+    approved,
+  );
+
+  for (const mutate of [
+    (value) => { value.name = "different-method"; },
+    (value) => { value.source.task_id = "different-task"; },
+    (value) => { value.files[0].sha256 = "7".repeat(64); },
+    (value) => { value.storage_relpath = "quarantine/other"; },
+    (value) => { value.isolation.zone = "agents"; },
+    (value) => { value.created_at = "2026-08-02T00:00:00Z"; },
+  ]) {
+    const drifted = skillPackage("approved");
+    mutate(drifted);
+    assert.throws(
+      () => verifySkillPackageDecisionResponse(pending, drifted, "approve"),
+      TypeError,
+    );
+  }
+  assert.throws(
+    () => verifySkillPackageDecisionResponse(pending, skillPackage("rejected"), "approve"),
+    /动作|状态/,
+  );
+});
+
+
+test("真实包审阅内容逐文件核验 UTF-8 字节数与 SHA-256，并咬合当前包", async () => {
+  const pending = skillPackage();
+  const content = skillPackageReviewContent();
+  assert.equal(
+    await normalizeSkillPackageReviewContent(content, {
+      expectedPackageId: pending.id,
+      expectedPackageDigest: pending.package_digest,
+      expectedFiles: pending.files,
+    }),
+    content,
+  );
+  for (const mutate of [
+    (value) => { value.extra = true; },
+    (value) => { value.package_id = `skill_package_${"9".repeat(24)}`; },
+    (value) => { value.package_digest = digest("9"); },
+    (value) => { value.files[0].html = "<script>"; },
+    (value) => { value.files.pop(); },
+    (value) => { value.files[0].path = "README.md"; },
+    (value) => { value.files[0].text += "tampered"; },
+  ]) {
+    const invalid = structuredClone(content);
+    mutate(invalid);
+    await assert.rejects(
+      normalizeSkillPackageReviewContent(invalid, {
+        expectedPackageId: pending.id,
+        expectedPackageDigest: pending.package_digest,
+        expectedFiles: pending.files,
+      }),
+      TypeError,
+    );
+  }
+  await assert.rejects(
+    normalizeSkillPackageReviewContent(content, {
+      expectedPackageId: pending.id,
+      expectedPackageDigest: pending.package_digest,
+      expectedFiles: pending.files.map((file, index) => (
+        index === 0 ? { ...file, size_bytes: file.size_bytes + 1 } : file
+      )),
+    }),
+    /字节数/,
+  );
+  await assert.rejects(
+    normalizeSkillPackageReviewContent(content, {
+      expectedPackageId: pending.id,
+      expectedPackageDigest: pending.package_digest,
+      expectedFiles: pending.files.map((file, index) => (
+        index === 0 ? { ...file, sha256: "0".repeat(64) } : file
+      )),
+    }),
+    /摘要/,
+  );
+
+  const originalFetch = globalThis.fetch;
+  let observed = null;
+  globalThis.fetch = async (path, init) => {
+    observed = { path, init };
+    return new Response(JSON.stringify(content), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  try {
+    assert.deepEqual(await getSkillPackageReviewContent(pending), content);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(
+    observed.path,
+    `/api/skill-packages/${encodeURIComponent(pending.id)}/review-content`,
+  );
+  assert.equal(observed.init?.method || "GET", "GET");
+});
+
+
+test("包级复核 API 只提交精确 CAS 请求并核对原 Package 修订", async () => {
+  const originalFetch = globalThis.fetch;
+  const pending = skillPackage();
+  const approved = skillPackage("approved");
+  let observed = null;
+  globalThis.fetch = async (path, init) => {
+    observed = { path, init };
+    return new Response(JSON.stringify(approved), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  try {
+    assert.deepEqual(await decideSkillPackage(pending, "approve"), approved);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(
+    observed.path,
+    `/api/skill-packages/${encodeURIComponent(pending.id)}/decision`,
+  );
+  assert.deepEqual(JSON.parse(observed.init.body), {
+    schema_version: "skill_package_decision_request.v1",
+    action: "approve",
+    expected_package_digest: pending.package_digest,
+  });
+});
+
+
+test("方案内复用引用只接受后端固定字段与当前执行单元", () => {
+  const reference = {
+    schema_version: "skill_reuse_ref.v1",
+    package_id: `skill_package_${"2".repeat(24)}`,
+    package_version: "0.1.0",
+    package_digest: digest("2"),
+    candidate_digest: digest("a"),
+    skill_digest: digest("1"),
+    skill_name: "entry-review-method",
+    matched_agent_id: "hello_agent",
+    review_state: "approved",
+    match_policy_version: "skill_reuse_match.v1",
+    match_basis_digest: digest("9"),
+  };
+  assert.equal(
+    normalizeSkillReuseRef(reference, { expectedAgentIds: ["hello_agent"] }),
+    reference,
+  );
+  for (const mutate of [
+    (value) => { value.review_state = "pending_review"; },
+    (value) => { value.match_policy_version = "llm_claimed"; },
+    (value) => { value.model = "user_selected"; },
+  ]) {
+    const invalid = structuredClone(reference);
+    mutate(invalid);
+    assert.throws(
+      () => normalizeSkillReuseRef(invalid, { expectedAgentIds: ["hello_agent"] }),
+      TypeError,
+    );
+  }
+  assert.throws(
+    () => normalizeSkillReuseRef(reference, { expectedAgentIds: ["other_agent"] }),
+    TypeError,
+  );
+});
+
+
 test("Guide 成功态仍只有主文字输入与附件入口，候选审核组件零字段", () => {
   assert.equal((guideSource.match(/<el-input/g) || []).length, 1);
   assert.equal((guideSource.match(/<el-upload/g) || []).length, 1);
@@ -398,11 +733,19 @@ test("Guide 成功态仍只有主文字输入与附件入口，候选审核组�
   assert.match(calloutSource, /本次不保留/);
   assert.match(calloutSource, /下载待审包/);
   assert.match(calloutSource, /下载候选记录/);
-  assert.match(calloutSource, /尚未登记、发布或形成 Agent/);
+  assert.match(calloutSource, /隔离包待复核/);
+  assert.match(calloutSource, /批准复用/);
+  assert.match(calloutSource, /本次不批准/);
+  assert.match(calloutSource, /相似新任务将自动复用/);
   assert.match(
     calloutSource,
-    /candidate\.state === 'awaiting_human_review' && phase === 'ready'/,
+    /candidate\.state === 'awaiting_human_review' && \(phase === 'ready' \|\| phase === 'deciding'\)/,
   );
+  assert.match(calloutSource, /packageReviewPhase !== 'ready'/);
+  assert.match(calloutSource, /load-package-content/);
+  assert.match(calloutSource, /aria-busy/);
+  assert.match(calloutSource, /candidate-evidence-toggle[\s\S]*:disabled="phase === 'deciding'"/);
+  assert.match(calloutSource, /function toggleEvidence\(\)[\s\S]*phase === "deciding"[\s\S]*return/);
   assert.match(
     calloutSource,
     /\.asset-candidate-callout\.is-awaiting_human_review \.candidate-mark \{ background: var\(--trust-pending\); \}/,
@@ -452,6 +795,7 @@ test("候选只长在主对话轴，并退役任务完成前的团队模板入�
   assert.doesNotMatch(guideSource, /把这套编排存为团队模板|saveTeamFromPlan|createTeam/);
   assert.match(apiSource, /\/api\/tasks\/\$\{encodeURIComponent\((?:normalizedTaskId|taskId)\)\}\/asset-candidate/);
   assert.match(apiSource, /\/api\/asset-candidates\/\$\{encodeURIComponent\(candidateId\)\}\/decision/);
+  assert.match(apiSource, /\/api\/skill-packages\/\$\{encodeURIComponent\(packageId\)\}\/decision/);
   assert.equal(
     (apiSource.match(/verifyAssetCandidateIntegrity\(/g) || []).length,
     4,

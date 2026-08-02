@@ -18,6 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 from . import classification_gate as cgate
 from ..core.errors import IllegalTransitionError, ReviewEvidenceUnavailableError
 from ..logging_setup import audit_event
+from ..ontology.skill_reuse_evidence import SkillReuseEvidenceLedger
+from ..runtime.skill_reuse_application import skill_reuse_application_mode
 from ..storage import repos
 
 router = APIRouter(prefix="/api", tags=["tasks"])
@@ -31,6 +33,12 @@ _INPUTS_MAX_BYTES = 256 * 1024
 # 「查原任务或全建」串行化；metadata_json 再钉请求指纹，阻止同 key 换载荷复用。
 _BATCH_OPERATION_NAMESPACE = uuid.UUID("af40d035-cba9-4db2-a370-e6c8c4e25164")
 _BATCH_OPERATION_META_KEY = "guide_batch_operation"
+
+_SKILL_REUSE_DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
+_SKILL_PACKAGE_SEMVER_PATTERN = (
+    r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
 
 
 class InputBinding(BaseModel):
@@ -152,6 +160,37 @@ class CreateTaskRequest(BaseModel):
         return v
 
 
+class SkillPackageRef(BaseModel):
+    """Guide 自动匹配后附带的受信 Skill Package 引用。
+
+    这是系统在主对话方案中隐式生成的执行钉，不是工程师表单字段。模型在 API
+    边界先拒绝宽松类型、未知字段和非规范标识；真正的审核态、归属、Agent 绑定
+    与包字节完整性仍须在批事务内由 ``skill_reuse_evidence`` 冷验证。
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["skill_reuse_ref.v1"]
+    package_id: str = Field(pattern=r"^skill_package_[0-9a-f]{24}$")
+    package_version: str = Field(pattern=_SKILL_PACKAGE_SEMVER_PATTERN, max_length=64)
+    package_digest: str = Field(pattern=_SKILL_REUSE_DIGEST_PATTERN)
+    candidate_digest: str = Field(pattern=_SKILL_REUSE_DIGEST_PATTERN)
+    skill_digest: str = Field(pattern=_SKILL_REUSE_DIGEST_PATTERN)
+    skill_name: str = Field(min_length=1, max_length=512)
+    matched_agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]{2,63}$")
+    review_state: Literal["approved"]
+    match_policy_version: Literal["skill_reuse_match.v1"]
+    match_basis_digest: str = Field(pattern=_SKILL_REUSE_DIGEST_PATTERN)
+
+    @field_validator("skill_name")
+    @classmethod
+    def skill_name_non_blank(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("skill_name 不得为空白")
+        return normalized
+
+
 class BatchTaskItem(BaseModel):
     """批量召集单项（批七 §3-B6）。字段口径与 CreateTaskRequest 同源（各 validator
     的理由注释见彼处，此处不复述）；**after=同批下标依赖**替代 depends_on——
@@ -168,6 +207,9 @@ class BatchTaskItem(BaseModel):
     # 失败任务回到主对话后的恢复血缘。它仍是系统元数据，不是工程师字段；
     # Guide 只把它写到恢复方案的根任务，下游成员沿 depends_on 接力。
     retry_of: str | None = Field(default=None, max_length=64)
+    # 主对话中的 Guide 自动匹配并隐式附带；不在工程师输入面板出现。只有经过事务内
+    # 二次冷验证的 approved 包才会写入 task metadata 并形成 insert-once binding。
+    skill_package_ref: SkillPackageRef | None = Field(default=None)
     # StrictInt（Codex R1 P2）：非严格 list[int] 会把 JSON 的 false/true 静默强转
     # 0/1、"3" 强转 3——伪造出提交者没写的依赖边；下标必须字面整数，其余 422。
     after: list[StrictInt] = Field(default_factory=list, max_length=32)
@@ -875,6 +917,9 @@ def create_tasks_batch(body: CreateTasksBatchRequest, request: Request) -> dict[
         return run_batch_creation(
             conn=conn,
             agent_registry=request.app.state.agent_registry,
+            skill_reuse_evidence=getattr(
+                request.app.state, "skill_reuse_evidence", None
+            ),
             items=list(body.items),
             conversation_id=body.conversation_id,
             created_by=request.state.user["display_name"],
@@ -888,6 +933,101 @@ def create_tasks_batch(body: CreateTasksBatchRequest, request: Request) -> dict[
         conn.close()
 
 
+def _skill_reuse_plan_errors(
+    *,
+    items: list[BatchTaskItem],
+    recommendation: Any,
+) -> list[dict[str, Any]]:
+    """Reconcile implicit reuse pins with the exact persisted Guide plan.
+
+    The request body is not an authority for a Skill reuse match.  A ref may
+    reach the package verifier only when the current persisted recommendation
+    is an orchestrate plan, carries the byte-for-byte same JSON ref, contains
+    the matched Agent exactly once, and binds that Agent to one batch item.
+    """
+
+    indexed_refs = [
+        (index, item, item.skill_package_ref.model_dump(mode="json"))
+        for index, item in enumerate(items)
+        if item.skill_package_ref is not None
+    ]
+    persisted_declares_reuse = (
+        isinstance(recommendation, dict) and "skill_reuse" in recommendation
+    )
+    if not indexed_refs and persisted_declares_reuse is False:
+        return []
+
+    shared_errors: list[str] = []
+    if not isinstance(recommendation, dict):
+        shared_errors.append("主对话当前没有可核验的 Skill 复用方案")
+        trusted_ref: Any = None
+        planned_agents: Any = None
+    else:
+        if recommendation.get("decision") != "orchestrate":
+            shared_errors.append("主对话当前方案不是 orchestrate")
+        trusted_ref = recommendation.get("skill_reuse")
+        if not isinstance(trusted_ref, dict):
+            shared_errors.append("主对话当前方案没有受信 Skill 复用引用")
+        planned_agents = recommendation.get("agents")
+
+    matched_agent_id = (
+        trusted_ref.get("matched_agent_id")
+        if isinstance(trusted_ref, dict)
+        else None
+    )
+    matched_plan_count = (
+        sum(
+            1
+            for planned in planned_agents
+            if isinstance(planned, dict)
+            and planned.get("agent_id") == matched_agent_id
+        )
+        if isinstance(planned_agents, list)
+        and isinstance(matched_agent_id, str)
+        else 0
+    )
+    if matched_plan_count != 1:
+        shared_errors.append("主对话方案必须且只能包含一个匹配 Agent")
+    if len(indexed_refs) != 1:
+        shared_errors.append("一次主对话方案只能绑定一个 Skill 复用任务")
+    matched_batch_indices = [
+        index
+        for index, item in enumerate(items)
+        if item.agent_id == matched_agent_id
+    ]
+    if len(matched_batch_indices) != 1:
+        shared_errors.append("开工批次必须且只能包含一个匹配 Agent 任务")
+
+    out: list[dict[str, Any]] = []
+    if not indexed_refs:
+        target_index = (
+            matched_batch_indices[0]
+            if len(matched_batch_indices) == 1
+            else 0
+        )
+        return [
+            {
+                "index": target_index,
+                "agent_id": items[target_index].agent_id,
+                "errors": [
+                    *shared_errors,
+                    "主对话已匹配 Skill，但开工请求遗漏受信复用引用",
+                ],
+            }
+        ]
+    for index, item, submitted_ref in indexed_refs:
+        errors = list(shared_errors)
+        if submitted_ref != trusted_ref:
+            errors.append("Skill 复用引用与主对话当前持久化方案不一致")
+        if item.agent_id != matched_agent_id:
+            errors.append("Skill 复用引用与主对话计划成员不一致")
+        if errors:
+            out.append(
+                {"index": index, "agent_id": item.agent_id, "errors": errors}
+            )
+    return out
+
+
 def run_batch_creation(
     *,
     conn: Any,
@@ -896,6 +1036,7 @@ def run_batch_creation(
     conversation_id: str | None,
     created_by: str,
     created_by_username: str,
+    skill_reuse_evidence: Any | None = None,
     pinned_versions: dict[str, str] | None = None,
     pinned_package_digests: dict[str, str] | None = None,
     operation_id: str | None = None,
@@ -1016,6 +1157,7 @@ def run_batch_creation(
                     "operation_id": operation_id,
                     "replayed": True,
                 }
+        conversation: dict[str, Any] | None = None
         if conversation_id is not None:
             conv = repos.get_conversation(conn, conversation_id)
             if conv is None:
@@ -1031,6 +1173,96 @@ def run_batch_creation(
                     status_code=409,
                     detail={"code": "conversation_not_active", "message": message},
                 )
+            conversation = conv
+
+        plan_reuse_errors = _skill_reuse_plan_errors(
+            items=items,
+            recommendation=(conversation or {}).get("recommendation"),
+        )
+        if plan_reuse_errors:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "skill_package_reuse_invalid",
+                    "message": "整批未创建（Skill Package 引用与主对话方案不一致）",
+                    "batch_errors": plan_reuse_errors,
+                },
+            )
+
+        # 自动复用引用只可来自主对话，并且必须在首条 task 写入前冷验证审核态、
+        # owner、Agent 绑定及包字节。先全 resolve、再全 build immutable binding；
+        # 任一项失败都以同一个 422 契约回滚整批，绝不让正常项先落成半批。
+        resolved_skill_reuse: list[dict[str, Any] | None] = [None] * len(items)
+        skill_reuse_bindings: list[dict[str, Any] | None] = [None] * len(items)
+        reuse_errors: list[dict[str, Any]] = []
+        for idx, item in enumerate(items):
+            package_ref = item.skill_package_ref
+            if package_ref is None:
+                continue
+            item_errors: list[str] = []
+            resolved: Any = None
+            if conversation_id is None:
+                item_errors.append("自动复用 Skill 只能绑定主对话任务")
+            elif skill_reuse_evidence is None:
+                item_errors.append("Skill Package 复用校验服务不可用")
+            else:
+                try:
+                    resolved = skill_reuse_evidence.resolve_for_task(
+                        conn,
+                        ref=package_ref.model_dump(mode="json"),
+                        username=created_by_username,
+                        agent_id=item.agent_id,
+                    )
+                    resolved = SkillReuseEvidenceLedger.validate_resolved_context(
+                        resolved,
+                        expected_ref=package_ref.model_dump(mode="json"),
+                        agent_id=item.agent_id,
+                        owner_username=created_by_username,
+                    )
+                    record = skill_reuse_evidence.build_binding(
+                        task_id=task_ids[idx],
+                        conversation_id=conversation_id,
+                        username=created_by_username,
+                        agent_id=item.agent_id,
+                        resolved=resolved,
+                    )
+                    if not isinstance(record, dict):
+                        raise TypeError("invalid Skill reuse binding")
+                    binding_digest = record.get("binding_digest")
+                    if (
+                        not isinstance(binding_digest, str)
+                        or len(binding_digest) != 71
+                        or not binding_digest.startswith("sha256:")
+                        or any(
+                            ch not in "0123456789abcdef"
+                            for ch in binding_digest.removeprefix("sha256:")
+                        )
+                    ):
+                        raise ValueError("invalid Skill reuse binding digest")
+                    resolved_skill_reuse[idx] = resolved
+                    skill_reuse_bindings[idx] = record
+                except Exception:  # noqa: BLE001 -- 外部完整性服务异常必须 fail-closed 聚合为整批 422
+                    item_errors.append(
+                        "Skill Package 未通过审核态、来源、字节完整性或 Agent 绑定复核"
+                    )
+            if item_errors:
+                reuse_errors.append(
+                    {
+                        "index": idx,
+                        "agent_id": item.agent_id,
+                        "errors": item_errors,
+                    }
+                )
+        if reuse_errors:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "skill_package_reuse_invalid",
+                    "message": "整批未创建（Skill Package 自动复用引用无效）",
+                    "batch_errors": reuse_errors,
+                },
+            )
+
         # 对所有引用 Agent 在首条任务写入前做第二次现势读取。上面的静态校验是
         # 友好错误收集，不是并发裁决；真正的 TOCTOU gate 必须紧贴写入且先全查
         # 后全写，任一漂移都整批回滚为零行。digest pin 路径每项只取一次
@@ -1127,6 +1359,35 @@ def run_batch_creation(
             )
         agents = live_agents
 
+        # “包已审核”不等于目标 Agent 能实际消费方法。模型型 Agent 由 runtime
+        # 在 chat/vision 边界注入并留同摘要调用证据；profile:none 只有其不可变
+        # 快照显式声明 deterministic_receipt_v1 才可进入自动复用。能力缺失必须
+        # 在首条 task 写入前整批拒绝，不能先建一个注定在 worker 中失败的任务。
+        reuse_capability_errors: list[dict[str, Any]] = []
+        for idx, item in enumerate(items):
+            if item.skill_package_ref is None:
+                continue
+            agent = agents[idx]
+            if skill_reuse_application_mode(agent) is None:
+                reuse_capability_errors.append(
+                    {
+                        "index": idx,
+                        "agent_id": item.agent_id,
+                        "errors": [
+                            "目标 Agent Package 未声明可验证的 Skill 应用能力"
+                        ],
+                    }
+                )
+        if reuse_capability_errors:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "skill_package_reuse_incompatible",
+                    "message": "整批未创建（目标 Agent 无法证明实际应用该 Skill）",
+                    "batch_errors": reuse_capability_errors,
+                },
+            )
+
         # ADR-0033：完整 pin 链不只证明「是同一个包」，还必须用这个刚取得的
         # 不可变包校验每项 inputs。先全验后全写，任一项非法整批 422/零落库；
         # 不通过 package_dir 回读 authoring source，也不再次获取 snapshot。
@@ -1202,6 +1463,14 @@ def run_batch_creation(
             metadata: dict[str, Any] = {
                 "package_snapshot_digest": cached_parts[1],
             }
+            reuse_binding = skill_reuse_bindings[idx]
+            resolved_reuse = resolved_skill_reuse[idx]
+            if reuse_binding is not None:
+                assert resolved_reuse is not None
+                metadata["skill_package_ref"] = dict(resolved_reuse["ref"])
+                metadata["skill_reuse_binding_digest"] = reuse_binding[
+                    "binding_digest"
+                ]
             if operation_id is not None:
                 metadata[_BATCH_OPERATION_META_KEY] = {
                     "operation_id": operation_id,
@@ -1226,6 +1495,9 @@ def run_batch_creation(
                 conversation_id=conversation_id,
                 retry_of=item.retry_of,
             )
+            if reuse_binding is not None:
+                assert skill_reuse_evidence is not None
+                skill_reuse_evidence.insert_binding(conn, reuse_binding)
         # 入队与创建事件并入同一事务（Codex R0 P1-1：两阶段窗口下，收尾任一
         # 写失败会让「行已存在但报错返回」——导引重试路径造重复任务；worker
         # 也可能在创建事件落库前领走 root）。行未 COMMIT 前对外不可见，故此处

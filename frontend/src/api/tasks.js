@@ -77,6 +77,33 @@ function sameStringList(actual, expected) {
   );
 }
 
+function sameSkillPackageRef(actual, expected) {
+  if (!actual || !expected || typeof actual !== "object" || typeof expected !== "object") {
+    return false;
+  }
+  const keys = [
+    "schema_version",
+    "package_id",
+    "package_version",
+    "package_digest",
+    "candidate_digest",
+    "skill_digest",
+    "skill_name",
+    "matched_agent_id",
+    "review_state",
+    "match_policy_version",
+    "match_basis_digest",
+  ];
+  const expectedKeys = [...keys].sort();
+  const actualKeys = Object.keys(actual).sort();
+  const requestedKeys = Object.keys(expected).sort();
+  return actualKeys.length === expectedKeys.length
+    && requestedKeys.length === expectedKeys.length
+    && actualKeys.every((key, index) => key === expectedKeys[index])
+    && requestedKeys.every((key, index) => key === expectedKeys[index])
+    && keys.every((key) => actual[key] === expected[key]);
+}
+
 // 2xx 只说明 HTTP 成功，不足以证明本次原子创建对应的整组任务。必须先核对
 // operation_id、任务全集、顺序、血缘、版本与包摘要，调用方随后才能写本地成功
 // 状态或消费 retry 上下文；任一缺失都属于 COMMIT 后状态不明。
@@ -160,6 +187,14 @@ export function validateBatchCreateResponse(
         throw invalidBatchCreateResponse(`第 ${index + 1} 项 Agent 包摘要不一致`);
       }
     }
+    const actualSkillPackageRef = task.metadata?.skill_package_ref;
+    if (
+      item.skillPackageRef
+        ? !sameSkillPackageRef(actualSkillPackageRef, item.skillPackageRef)
+        : actualSkillPackageRef != null
+    ) {
+      throw invalidBatchCreateResponse(`第 ${index + 1} 项 Skill Package 复用引用不一致`);
+    }
   }
   return response;
 }
@@ -178,6 +213,7 @@ export const createTasksBatch = async ({
     inputFileIds: it.inputFileIds || [],
     retryOf: it.retryOf || null,
     after: it.after || [],
+    ...(it.skillPackageRef ? { skillPackageRef: it.skillPackageRef } : {}),
   }));
   const response = await request("/api/tasks/batch", {
     method: "POST",
@@ -193,6 +229,9 @@ export const createTasksBatch = async ({
         input_file_ids: it.inputFileIds,
         retry_of: it.retryOf || null,
         after: it.after,
+        ...(it.skillPackageRef
+          ? { skill_package_ref: it.skillPackageRef }
+          : {}),
       })),
     },
   });

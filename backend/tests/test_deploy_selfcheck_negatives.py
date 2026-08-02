@@ -519,7 +519,27 @@ def test_live_eval_snapshot_axis_true_passes(monkeypatch) -> None:
     assert deploy_selfcheck.check_live_eval_snapshot_generation("http://x").ok is True
 
 
-# ---- 8d. check_live_promotion_attestation（GH #3 启动签发代际 + 结果）----
+# ---- 8d. ADR-0035 Skill reuse runtime 代际（只认 bool true）----
+
+
+def test_live_skill_reuse_axis_missing_or_false_fails(monkeypatch) -> None:
+    for payload in ({"status": "ok"}, {"skill_reuse_runtime_axis": False}):
+        _fake_http(monkeypatch, payload=payload)
+        assert deploy_selfcheck.check_live_skill_reuse_generation("http://x").ok is False
+
+
+def test_live_skill_reuse_axis_truthy_not_true_fails(monkeypatch) -> None:
+    for truthy in ("true", 1, "1"):
+        _fake_http(monkeypatch, payload={"skill_reuse_runtime_axis": truthy})
+        assert deploy_selfcheck.check_live_skill_reuse_generation("http://x").ok is False
+
+
+def test_live_skill_reuse_axis_true_passes(monkeypatch) -> None:
+    _fake_http(monkeypatch, payload={"skill_reuse_runtime_axis": True})
+    assert deploy_selfcheck.check_live_skill_reuse_generation("http://x").ok is True
+
+
+# ---- 8e. check_live_promotion_attestation（GH #3 启动签发代际 + 结果）----
 
 def test_live_promotion_attestation_missing_fails(monkeypatch) -> None:
     """旧 API 没有启动核对代际与结果，无法证明 L1 来自 promotion，必 FAIL。"""

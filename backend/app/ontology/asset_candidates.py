@@ -1,8 +1,10 @@
 """Completed engineering task -> governed, content-addressed Asset Candidate.
 
-This module owns the ADR-0034 admission gates and candidate state machine.  It
-does not materialize SKILL.md, write Agent packages, call a model, register an
-asset, execute work, or promote anything.
+This module owns the ADR-0034 admission gates and candidate state machine.  An
+accepted revision may delegate deterministic SKILL.md materialization to the
+ADR-0035 quarantine service inside the same transaction.  It still never
+writes Agent packages, calls a model, registers an asset, executes work, or
+promotes anything.
 """
 
 from __future__ import annotations
@@ -104,6 +106,18 @@ class AssetCandidateLedger:
                 "asset candidate response schema is not an object"
             )
         self._response_schema = schema
+        self._materializer: Any | None = None
+
+    def attach_materializer(self, materializer: Any) -> None:
+        """Attach the one ADR-0035 quarantine seam during app assembly."""
+
+        if materializer is None or not callable(
+            getattr(materializer, "materialize_accepted", None)
+        ):
+            raise AssetCandidateUnavailableError(
+                "candidate materializer is unavailable"
+            )
+        self._materializer = materializer
 
     def create_for_completed_task(
         self,
@@ -154,8 +168,9 @@ class AssetCandidateLedger:
                     and _canonical_json(existing.get("proposal_provenance"))
                     == canonical_provenance
                 ):
+                    public = self._with_skill_package(conn, existing_public)
                     conn.execute("COMMIT")
-                    return existing_public
+                    return public
 
                 previous_revision = existing.get("revision")
                 if (
@@ -274,7 +289,9 @@ class AssetCandidateLedger:
                 raise AssetCandidateUnavailableError(
                     "candidate insert could not be read back"
                 )
-            public = self._public_projection(conn, stored)
+            public = self._with_skill_package(
+                conn, self._public_projection(conn, stored)
+            )
             conn.execute("COMMIT")
             return public
         except Exception:
@@ -294,7 +311,9 @@ class AssetCandidateLedger:
             candidate = candidate_store.get_by_task(conn, task_id)
             if candidate is None:
                 raise AssetCandidateNotFoundError(f"任务尚无资产候选：{task_id}")
-            public = self._public_projection(conn, candidate)
+            public = self._with_skill_package(
+                conn, self._public_projection(conn, candidate)
+            )
             live_projection = self._verified_projection(conn, task)
             live_bundle = live_projection["bundle"]
             live_lineage = live_projection["lineage"]
@@ -449,7 +468,7 @@ class AssetCandidateLedger:
                     "signer_username": signer.username,
                     "signer_session_hash": signer.session_hash,
                     "message": (
-                        "工程师接受该精确资产候选修订；尚未材化、注册或发布"
+                        "工程师接受该精确资产候选修订并授权生成隔离待审 Skill Package；尚未包级批准、注册或发布"
                         if action == "accept"
                         else "工程师决定不保留该精确资产候选修订"
                     ),
@@ -476,6 +495,23 @@ class AssetCandidateLedger:
                     "decided candidate could not be read back"
                 )
             public = self._public_projection(conn, final)
+            if action == "accept":
+                if self._materializer is None:
+                    raise AssetCandidateUnavailableError(
+                        "candidate materializer is unavailable"
+                    )
+                accepted_event = _verified_terminal_event(conn, final)
+                try:
+                    self._materializer.materialize_accepted(
+                        conn,
+                        candidate_public=public,
+                        accepted_event=accepted_event,
+                    )
+                except Exception as exc:
+                    raise AssetCandidateUnavailableError(
+                        "accepted candidate could not be materialized safely"
+                    ) from exc
+            public = self._with_skill_package(conn, public)
             conn.execute("COMMIT")
             return public
         except Exception:
@@ -1311,7 +1347,7 @@ class AssetCandidateLedger:
         limitations.extend(
             [
                 "当前候选仅由一个已完成任务归纳，尚未形成 Workflow 或可部署 Agent",
-                "接受候选不等于生成 SKILL.md、注册、发布或晋级",
+                "接受候选只授权生成隔离待审 SKILL.md；不等于包级批准、注册、发布或晋级",
             ]
         )
         return {
@@ -1548,6 +1584,7 @@ class AssetCandidateLedger:
                 },
             },
             "decision": decision,
+            "skill_package": None,
             "effects": {
                 "writes_candidate_store": True,
                 "executes_work": False,
@@ -1558,13 +1595,61 @@ class AssetCandidateLedger:
             "created_at": candidate["created_at"],
             "updated_at": candidate["updated_at"],
         }
+        # ``accepted`` is an internal, transaction-local intermediate until
+        # the deterministic materializer has created and cold-verified its
+        # exact Skill Package.  The public contract intentionally forbids an
+        # accepted Candidate with ``skill_package=null``; validation therefore
+        # occurs only in ``_with_skill_package`` after that mandatory join.
+        if state != "accepted":
+            try:
+                validate(public, self._response_schema)
+            except ValidationError as exc:
+                raise AssetCandidateUnavailableError(
+                    "candidate response violates its public contract"
+                ) from exc
+        return public
+
+    def _with_skill_package(
+        self,
+        conn: sqlite3.Connection,
+        public: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Join the cold-verified package without recursing into materialization."""
+
+        enriched = dict(public)
+        package: dict[str, Any] | None = None
+        if public.get("state") == "accepted":
+            if self._materializer is None:
+                raise AssetCandidateUnavailableError(
+                    "accepted candidate has no materializer"
+                )
+            source = public.get("source")
+            if not isinstance(source, Mapping):
+                raise AssetCandidateUnavailableError(
+                    "accepted candidate owner projection is malformed"
+                )
+            try:
+                package = self._materializer.get_for_candidate_digest(
+                    conn,
+                    candidate_digest=public.get("candidate_digest"),
+                    username=source.get("initiated_by_username"),
+                )
+            except Exception as exc:
+                raise AssetCandidateUnavailableError(
+                    "accepted candidate Skill Package cannot be verified"
+                ) from exc
+            if package is None:
+                raise AssetCandidateUnavailableError(
+                    "accepted candidate has no isolated Skill Package"
+                )
+        enriched["skill_package"] = package
         try:
-            validate(public, self._response_schema)
+            validate(enriched, self._response_schema)
         except ValidationError as exc:
             raise AssetCandidateUnavailableError(
                 "candidate response violates its public contract"
             ) from exc
-        return public
+        return enriched
 
 
 def _conflict(code: str, message: str) -> None:

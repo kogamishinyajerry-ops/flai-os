@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/skill_package_decision_request.schema.json",
+  "title": "FLAi-OS Candidate Skill Package Decision Request",
+  "description": "人工只对精确 Package digest 作批准或拒绝决定；签发人和会话权威只能由服务端认证上下文提供。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "action", "expected_package_digest"],
+  "properties": {
+    "schema_version": {"const": "skill_package_decision_request.v1"},
+    "action": {"enum": ["approve", "reject"]},
+    "expected_package_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

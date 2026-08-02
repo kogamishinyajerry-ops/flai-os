@@ -5,7 +5,7 @@
 
 覆盖：
   ① 未知 case fail-closed；
-  ② 十二个固定镜头、精确 viewport 与桌面布局数值基线；
+  ② 十六个固定镜头、精确 viewport 与桌面布局数值基线；
   ③ opaque-origin iframe + 只读边界阻止网络和主题偏好写入；
   ④ 自动路由摘要默认收敛，Agent/模型/工具依据按需披露；
   ⑤ 流式快照使用真实 generating 标记，正文给固定 composer 留足空间；
@@ -17,7 +17,7 @@
 运行（仓根）：
   uv run --no-project --with playwright python frontend/e2e/ui_lab_acceptance.py
 
-截图落 docs/reviews/ui-lab-shots/，每次重跑覆盖十二个固定镜头与焦点过渡证据。
+截图落 docs/reviews/ui-lab-shots/，每次重跑覆盖固定镜头与焦点过渡证据。
 """
 from __future__ import annotations
 
@@ -48,6 +48,29 @@ def free_port() -> int:
     port = sock.getsockname()[1]
     sock.close()
     return port
+
+
+def cached_headless_shell() -> str | None:
+    """Best-effort local fallback when the Python/browser revisions drift."""
+
+    roots = [
+        Path.home() / "Library" / "Caches" / "ms-playwright",
+        Path.home() / ".cache" / "ms-playwright",
+    ]
+    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_app_data:
+        roots.append(Path(local_app_data) / "ms-playwright")
+    candidates: list[Path] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for name in ("chrome-headless-shell", "headless_shell"):
+            candidates.extend(
+                path
+                for path in root.rglob(name)
+                if path.is_file() and os.access(path, os.X_OK)
+            )
+    return str(sorted(set(candidates))[-1]) if candidates else None
 
 
 PORT = free_port()
@@ -141,7 +164,23 @@ try:
     SHOTS.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
+        browser_override = os.environ.get("FLAI_UI_LAB_BROWSER", "").strip()
+        if browser_override:
+            browser = playwright.chromium.launch(executable_path=browser_override)
+        else:
+            try:
+                browser = playwright.chromium.launch()
+            except PlaywrightError as error:
+                # 本地 Playwright Python 包与已缓存 Chromium 修订可能短暂错位；
+                # 先复用已安装 headless shell，再退到系统 Chrome。其他失败继续抛出。
+                if "Executable doesn't exist" not in str(error):
+                    raise
+                cached_browser = cached_headless_shell()
+                browser = (
+                    playwright.chromium.launch(executable_path=cached_browser)
+                    if cached_browser
+                    else playwright.chromium.launch(channel="chrome")
+                )
         context = browser.new_context(
             viewport={"width": 1600, "height": 1000},
             color_scheme="light",
@@ -186,8 +225,8 @@ try:
 
         page.goto(BASE + "/ui-lab.html", wait_until="networkidle")
         check(
-            "固定十二镜头与逐项检查点",
-            page.locator(".case-button").count() == 12
+            "固定十六镜头与逐项检查点",
+            page.locator(".case-button").count() == 16
             and page.locator(".review-strip li").count() >= 3,
         )
 
@@ -730,42 +769,42 @@ try:
         frame = select_case(
             page,
             "asset-candidate-accepted-desktop",
-            "桌面 · 资产候选已接受",
+            "桌面 · 隔离包待复核",
         )
         accepted_callout = frame.locator(".asset-candidate-callout")
         accepted_shell = accepted_callout.evaluate(
             """element => {
               const rootStyle = getComputedStyle(document.documentElement);
               const probe = document.createElement('span');
-              probe.style.background = rootStyle.getPropertyValue('--trust-signed');
+              probe.style.background = rootStyle.getPropertyValue('--trust-pending');
               document.body.append(probe);
-              const signed = getComputedStyle(probe).backgroundColor;
+              const pending = getComputedStyle(probe).backgroundColor;
               probe.remove();
               return {
                 calloutText: element.innerText,
                 callouts: document.querySelectorAll('.asset-candidate-callout').length,
-                viewRecordActions: [...element.querySelectorAll('button')]
-                  .filter(item => item.innerText.trim() === '查看记录').length,
+                reviewPackageActions: [...element.querySelectorAll('button')]
+                  .filter(item => item.innerText.trim() === '复核隔离包').length,
                 markColor: getComputedStyle(
                   element.querySelector('.candidate-mark')
                 ).backgroundColor,
-                signed,
+                pending,
               };
             }"""
         )
         check(
-            "接受成功态使用 teal 并如实显示已保留为资产候选",
+            "Candidate 接受后以 amber 聚焦隔离包复核，不冒充批准成功",
             accepted_shell["callouts"] == 1
-            and accepted_shell["viewRecordActions"] == 1
-            and "已保留为资产候选" in accepted_shell["calloutText"]
-            and accepted_shell["markColor"] == accepted_shell["signed"],
+            and accepted_shell["reviewPackageActions"] == 1
+            and "隔离包待复核" in accepted_shell["calloutText"]
+            and accepted_shell["markColor"] == accepted_shell["pending"],
             str(accepted_shell),
         )
         capture(frame, "asset-candidate-accepted-desktop.png")
 
         accepted_trigger = accepted_callout.get_by_role(
             "button",
-            name="查看记录",
+            name="复核隔离包",
             exact=True,
         )
         accepted_trigger.click()
@@ -778,6 +817,8 @@ try:
               probe.style.color = rootStyle.getPropertyValue('--trust-signed');
               document.body.append(probe);
               const signed = getComputedStyle(probe).color;
+              probe.style.color = rootStyle.getPropertyValue('--trust-pending');
+              const pending = getComputedStyle(probe).color;
               probe.remove();
               const actionLabels = [...element.querySelectorAll(
                 '.candidate-review-actions button'
@@ -787,38 +828,100 @@ try:
                 honesty: element.innerText.includes(
                   '已接受为资产候选，尚未登记、发布或形成 Agent。'
                 ),
+                packagePending: element.innerText.includes(
+                  '隔离包待复核'
+                ) && element.innerText.includes(
+                  '达到数量门也不会自动形成 Workflow 或 Agent Candidate。'
+                ),
                 forbiddenControls: element.querySelectorAll(
                   'input, textarea, select, form, [contenteditable="true"]'
                 ).length,
                 actionCount: actionLabels.length,
                 accept: count('接受这个候选'),
                 reject: count('本次不保留'),
+                approvePackage: count('批准复用'),
+                approveDisabled: [...element.querySelectorAll(
+                  '.candidate-review-actions button'
+                )].find(item => item.innerText.trim() === '批准复用')?.disabled === true,
+                rejectPackage: count('本次不批准'),
+                reviewBytes: [...element.querySelectorAll('button')]
+                  .filter(item => item.innerText.trim() === '读取并审阅真实包内容').length,
                 download: count('下载候选记录'),
                 back: count('回到对话'),
                 stateColor: getComputedStyle(
                   element.querySelector('.candidate-state')
                 ).color,
+                packageStateColor: getComputedStyle(
+                  element.querySelector('.candidate-state.is-package-pending_review')
+                ).color,
                 signed,
+                pending,
               };
             }"""
         )
         check(
-            "已接受抽屉使用 teal、只读且不再提供重复决定动作",
+            "已接受抽屉保持只读，并只把隔离包复核作为下一层按钮动作",
             accepted_review["stateColor"] == accepted_review["signed"]
+            and accepted_review["packageStateColor"] == accepted_review["pending"]
             and {
                 key: value
                 for key, value in accepted_review.items()
-                if key not in {"stateColor", "signed"}
+                if key not in {
+                    "stateColor",
+                    "packageStateColor",
+                    "signed",
+                    "pending",
+                }
             } == {
                 "honesty": True,
+                "packagePending": True,
                 "forbiddenControls": 0,
-                "actionCount": 2,
+                "actionCount": 4,
                 "accept": 0,
                 "reject": 0,
+                "approvePackage": 1,
+                "approveDisabled": True,
+                "rejectPackage": 1,
+                "reviewBytes": 1,
                 "download": 1,
                 "back": 1,
             },
             str(accepted_review),
+        )
+        accepted_drawer.get_by_role(
+            "button",
+            name="读取并审阅真实包内容",
+            exact=True,
+        ).click()
+        expect(accepted_drawer.locator(".candidate-package-file")).to_have_count(4)
+        expect(
+            accepted_drawer.get_by_role("button", name="批准复用", exact=True)
+        ).to_be_enabled()
+        loaded_package_review = accepted_drawer.evaluate(
+            """element => ({
+              filePaths: [...element.querySelectorAll('.candidate-package-file h4')]
+                .map(item => item.innerText.trim()),
+              skillText: element.querySelector('.candidate-package-file pre')?.innerText || '',
+              forbiddenControls: element.querySelectorAll(
+                'input, textarea, select, form, [contenteditable="true"]'
+              ).length,
+            })"""
+        )
+        check(
+            "待审包按需展示经核验的四份真实文本，随后才解锁批准",
+            loaded_package_review == {
+                "filePaths": [
+                    "SKILL.md",
+                    "references/provenance.json",
+                    "references/skill-revision.json",
+                    "references/task-pattern-revision.json",
+                ],
+                "skillText": loaded_package_review["skillText"],
+                "forbiddenControls": 0,
+            }
+            and "name: cfd-inlet-boundary-review"
+            in loaded_package_review["skillText"],
+            str(loaded_package_review),
         )
         capture(frame, "asset-candidate-accepted-review-desktop.png")
         accepted_drawer.get_by_role(
@@ -834,8 +937,177 @@ try:
             str(api_requests[accepted_api_before:]),
         )
 
-        # 决定按钮状态机：隔离挂载真实 AssetCandidateCallout。对账 loading、
-        # deciding 都只能看记录，只有 ready 才出现 accept/reject；组件全程零 API。
+        approved_api_before = len(api_requests)
+        frame = select_case(
+            page,
+            "asset-package-approved-desktop",
+            "桌面 · 隔离包已批准",
+        )
+        approved_callout = frame.locator(".asset-candidate-callout")
+        approved_shell = approved_callout.evaluate(
+            """element => {
+              const rootStyle = getComputedStyle(document.documentElement);
+              const probe = document.createElement('span');
+              probe.style.background = rootStyle.getPropertyValue('--trust-signed');
+              document.body.append(probe);
+              const signed = getComputedStyle(probe).backgroundColor;
+              probe.remove();
+              return {
+                text: element.innerText,
+                mark: getComputedStyle(element.querySelector('.candidate-mark')).backgroundColor,
+                signed,
+              };
+            }"""
+        )
+        approved_trigger = approved_callout.get_by_role(
+            "button", name="查看记录", exact=True
+        )
+        approved_trigger.click()
+        approved_drawer = frame.locator(".asset-candidate-review")
+        expect(approved_drawer).to_be_visible()
+        approved_review = approved_drawer.evaluate(
+            """element => ({
+              packageState: element.querySelector('.candidate-state.is-package-approved')?.innerText,
+              decisionActions: [...element.querySelectorAll('.candidate-review-actions button')]
+                .filter(item => ['批准复用', '本次不批准'].includes(item.innerText.trim())).length,
+              workflowNotFormed: element.innerText.includes('Workflow') &&
+                element.innerText.includes('尚未形成'),
+              agentNotFormed: element.innerText.includes('Agent') &&
+                element.innerText.includes('尚未形成'),
+            })"""
+        )
+        check(
+            "包级批准使用 teal 人签态且不生成 Workflow/Agent 或重复决定",
+            approved_shell["mark"] == approved_shell["signed"]
+            and "自动复用" in approved_shell["text"]
+            and approved_review == {
+                "packageState": "工程师已批准复用",
+                "decisionActions": 0,
+                "workflowNotFormed": True,
+                "agentNotFormed": True,
+            }
+            and len(api_requests) == approved_api_before,
+            f"shell={approved_shell} drawer={approved_review}",
+        )
+        approved_drawer.get_by_role("button", name="回到对话", exact=True).click()
+
+        rejected_api_before = len(api_requests)
+        frame = select_case(
+            page,
+            "asset-package-rejected-desktop",
+            "桌面 · 隔离包未批准",
+        )
+        rejected_callout = frame.locator(".asset-candidate-callout")
+        rejected_shell = rejected_callout.evaluate(
+            """element => {
+              const mark = getComputedStyle(element.querySelector('.candidate-mark'));
+              return {
+                text: element.innerText,
+                background: mark.backgroundColor,
+                boxShadow: mark.boxShadow,
+              };
+            }"""
+        )
+        rejected_trigger = rejected_callout.get_by_role(
+            "button", name="查看记录", exact=True
+        )
+        rejected_trigger.click()
+        rejected_drawer = frame.locator(".asset-candidate-review")
+        expect(rejected_drawer).to_be_visible()
+        rejected_review = rejected_drawer.evaluate(
+            """element => ({
+              packageState: element.querySelector('.candidate-state.is-package-rejected')?.innerText,
+              decisionActions: [...element.querySelectorAll('.candidate-review-actions button')]
+                .filter(item => ['批准复用', '本次不批准'].includes(item.innerText.trim())).length,
+              recordPreserved: element.innerText.includes('Candidate 与复核记录仍完整保留'),
+            })"""
+        )
+        check(
+            "包级拒绝回到中性空心标记，不回落 Candidate teal 或误画失败红",
+            rejected_shell["background"] == "rgba(0, 0, 0, 0)"
+            and rejected_shell["boxShadow"] != "none"
+            and "本次不进入自动复用" in rejected_shell["text"]
+            and rejected_review == {
+                "packageState": "本次未批准复用",
+                "decisionActions": 0,
+                "recordPreserved": True,
+            }
+            and len(api_requests) == rejected_api_before,
+            f"shell={rejected_shell} drawer={rejected_review}",
+        )
+        rejected_drawer.get_by_role("button", name="回到对话", exact=True).click()
+
+        reuse_api_before = len(api_requests)
+        frame = select_case(
+            page,
+            "skill-reuse-desktop",
+            "桌面 · 已自动复用方法",
+        )
+        reuse_dom = frame.locator(".plan-card").evaluate(
+            """element => ({
+              inlineCount: element.querySelectorAll('.skill-reuse-inline').length,
+              inlineText: element.querySelector('.skill-reuse-inline')?.innerText || '',
+              disclosureOpen: element.querySelector('.route-disclosure')?.open === true,
+              mainActions: [...element.querySelectorAll('.plan-foot button')]
+                .filter(item => item.innerText.trim() === '按方案开工').length,
+              forbiddenFields: element.querySelectorAll(
+                'input, textarea, select, form, [contenteditable="true"]'
+              ).length,
+              forbiddenPanels: element.querySelectorAll(
+                '.skill-reuse-card, .skill-reuse-panel, .skill-reuse-action'
+              ).length,
+            })"""
+        )
+        frame.locator(".route-disclosure summary").click()
+        reuse_detail = frame.locator(".skill-reuse-detail").inner_text()
+        check(
+            "已审核 Skill 只在既有方案对话内联与按需披露中复用",
+            reuse_dom == {
+                "inlineCount": 1,
+                "inlineText": "计划复用 · cfd-inlet-boundary-review",
+                "disclosureOpen": False,
+                "mainActions": 1,
+                "forbiddenFields": 0,
+                "forbiddenPanels": 0,
+            }
+            and "已通过包级人工复核" in reuse_detail
+            and len(api_requests) == reuse_api_before,
+            f"dom={reuse_dom} detail={reuse_detail}",
+        )
+
+        invalid_reuse_api_before = len(api_requests)
+        frame = select_case(
+            page,
+            "skill-reuse-invalid-desktop",
+            "桌面 · 复用证据待核",
+        )
+        invalid_reuse_dom = frame.locator(".plan-card").evaluate(
+            """element => ({
+              amber: element.querySelector('.route-summary-state.is-pending')?.innerText || '',
+              openActions: [...element.querySelectorAll('.plan-foot button')]
+                .filter(item => item.innerText.trim() === '按方案开工').length,
+              recoveryActions: [...element.querySelectorAll('.plan-foot button')]
+                .filter(item => item.innerText.includes('继续对话让系统重新编排')).length,
+              reuseInline: element.querySelectorAll('.skill-reuse-inline').length,
+            })"""
+        )
+        frame.get_by_role(
+            "button",
+            name="复用证据待核 · 继续对话让系统重新编排",
+            exact=True,
+        ).click()
+        check(
+            "非法复用证据显式 amber 阻断且点击只回主输入，保持零任务 POST",
+            "复用证据无法核验，本次禁止开工" in invalid_reuse_dom["amber"]
+            and invalid_reuse_dom["openActions"] == 0
+            and invalid_reuse_dom["recoveryActions"] == 1
+            and invalid_reuse_dom["reuseInline"] == 0
+            and len(api_requests) == invalid_reuse_api_before,
+            str(invalid_reuse_dom),
+        )
+
+        # 决定按钮状态机：隔离挂载真实 AssetCandidateCallout。ready 才可决定；
+        # deciding 保持按钮位置稳定但全禁用，并锁住所有关闭出口。组件全程零 API。
         candidate_component_page = context.new_page()
         candidate_component_api_requests: list[str] = []
         candidate_component_page.on(
@@ -903,14 +1175,19 @@ try:
         def candidate_component_actions() -> dict[str, int]:
             return component_candidate_drawer.evaluate(
                 """element => {
-                  const labels = [...element.querySelectorAll(
+                  const buttons = [...element.querySelectorAll(
                     '.candidate-review-actions button'
-                  )].map(item => item.innerText.trim());
+                  )];
+                  const labels = buttons.map(item => item.innerText.trim());
                   return {
                     accept: labels.filter(text => text === '接受这个候选').length,
                     reject: labels.filter(text => text === '本次不保留').length,
                     download: labels.filter(text => text === '下载待审包').length,
                     back: labels.filter(text => text === '回到对话').length,
+                    disabled: buttons.filter(item => item.disabled).length,
+                    busy: element.querySelector('.candidate-review-body')
+                      ?.getAttribute('aria-busy'),
+                    close: element.querySelectorAll('.el-drawer__close-btn').length,
                     forbidden: element.querySelectorAll(
                       'input, textarea, select, form, [contenteditable="true"]'
                     ).length,
@@ -934,12 +1211,15 @@ try:
         )
         deciding_actions = candidate_component_actions()
         check(
-            "候选只在 ready 提供决定，对账 loading 与 deciding 绝不提供决定",
+            "候选只在 ready 可决定，deciding 保持稳定位置并锁住关闭动作",
             loading_actions == {
                 "accept": 0,
                 "reject": 0,
                 "download": 1,
                 "back": 1,
+                "disabled": 0,
+                "busy": "false",
+                "close": 1,
                 "forbidden": 0,
             }
             and ready_actions == {
@@ -947,9 +1227,21 @@ try:
                 "reject": 1,
                 "download": 1,
                 "back": 1,
+                "disabled": 0,
+                "busy": "false",
+                "close": 1,
                 "forbidden": 0,
             }
-            and deciding_actions == loading_actions
+            and deciding_actions == {
+                "accept": 1,
+                "reject": 1,
+                "download": 1,
+                "back": 1,
+                "disabled": 4,
+                "busy": "true",
+                "close": 0,
+                "forbidden": 0,
+            }
             and candidate_component_api_requests == [],
             (
                 f"loading={loading_actions} ready={ready_actions} "
@@ -957,6 +1249,254 @@ try:
             ),
         )
         candidate_component_page.close()
+
+        # 包级决定真实链：挂载生产 Callout + 生产 API helper，用可控 fetch 保持
+        # POST 在途，先验 deciding 锁，再放行 approved/rejected 响应观察同一 DOM。
+        package_decision_page = context.new_page()
+        package_decision_page.route(
+            "**/src/ui-lab/main.js",
+            lambda route: route.fulfill(
+                content_type="application/javascript",
+                body="export {};",
+            ),
+        )
+        package_decision_page.goto(BASE + "/ui-lab.html", wait_until="networkidle")
+        package_decision_page.evaluate(
+            """async () => {
+              const [Vue, ElementPlus, zhCn, calloutModule, apiModule, utilsModule, casesModule] =
+                await Promise.all([
+                  import('/node_modules/.vite/deps/vue.js'),
+                  import('/node_modules/.vite/deps/element-plus.js'),
+                  import('/node_modules/.vite/deps/element-plus_es_locale_lang_zh-cn.js'),
+                  import('/src/components/AssetCandidateCallout.vue'),
+                  import('/src/api/assetCandidates.js'),
+                  import('/src/utils/assetCandidates.js'),
+                  import('/src/ui-lab/uiAcceptanceCases.js'),
+                ]);
+              const pendingGuide = casesModule.getUiAcceptanceCase(
+                'asset-candidate-accepted-desktop'
+              ).guide;
+              const approvedGuide = casesModule.getUiAcceptanceCase(
+                'asset-package-approved-desktop'
+              ).guide;
+              const rejectedGuide = casesModule.getUiAcceptanceCase(
+                'asset-package-rejected-desktop'
+              ).guide;
+              const verifiedContent = await utilsModule.normalizeSkillPackageReviewContent(
+                pendingGuide.skillPackageReviewContent,
+                {
+                  expectedPackageId: pendingGuide.assetCandidate.skill_package.id,
+                  expectedPackageDigest:
+                    pendingGuide.assetCandidate.skill_package.package_digest,
+                  expectedFiles: pendingGuide.assetCandidate.skill_package.files,
+                },
+              );
+              const state = Vue.reactive({
+                candidate: structuredClone(pendingGuide.assetCandidate),
+                phase: 'ready',
+                error: '',
+                reviewContent: verifiedContent,
+                reviewPhase: 'ready',
+              });
+              const requests = [];
+              let resolveDecision = null;
+              const pendingPackage = structuredClone(
+                pendingGuide.assetCandidate.skill_package
+              );
+              const responses = {
+                approve: structuredClone(
+                  approvedGuide.assetCandidate.skill_package
+                ),
+                reject: structuredClone(
+                  rejectedGuide.assetCandidate.skill_package
+                ),
+              };
+              globalThis.fetch = (path, init = {}) => {
+                const body = JSON.parse(init.body || '{}');
+                requests.push({ path, method: init.method || 'GET', body });
+                return new Promise(resolve => {
+                  resolveDecision = () => resolve(new Response(
+                    JSON.stringify(responses[body.action]),
+                    { status: 200, headers: { 'Content-Type': 'application/json' } },
+                  ));
+                });
+              };
+              async function decidePackage(action) {
+                state.phase = 'deciding';
+                state.error = '';
+                try {
+                  const decided = await apiModule.decideSkillPackage(
+                    state.candidate.skill_package,
+                    action,
+                  );
+                  state.candidate = { ...state.candidate, skill_package: decided };
+                  state.phase = 'ready';
+                } catch (error) {
+                  state.error = error?.message || 'decision failed';
+                  state.phase = 'reconcile_required';
+                }
+              }
+              window.__FLAI_PACKAGE_DECISION__ = {
+                state,
+                requests,
+                pendingPackage,
+                decidePackage,
+                resetPending: async () => {
+                  state.candidate = {
+                    ...state.candidate,
+                    skill_package: structuredClone(pendingPackage),
+                  };
+                  state.phase = 'ready';
+                  state.error = '';
+                  await Vue.nextTick();
+                },
+                resolve: () => resolveDecision?.(),
+                nextTick: Vue.nextTick,
+              };
+              const app = Vue.createApp({
+                setup() {
+                  return () => Vue.h(calloutModule.default, {
+                    candidate: state.candidate,
+                    phase: state.phase,
+                    error: state.error,
+                    packageReviewContent: state.reviewContent,
+                    packageReviewPhase: state.reviewPhase,
+                    packageReviewError: '',
+                    onDecidePackage: decidePackage,
+                  });
+                },
+              });
+              app.use(ElementPlus.default, { locale: zhCn.default });
+              app.mount('#app');
+              await Vue.nextTick();
+            }"""
+        )
+        package_decision_page.get_by_role(
+            "button", name="复核隔离包", exact=True
+        ).click()
+        package_drawer = package_decision_page.locator(".asset-candidate-review")
+        expect(package_drawer).to_be_visible()
+        expect(
+            package_drawer.get_by_role("button", name="批准复用", exact=True)
+        ).to_be_enabled()
+        package_drawer.get_by_role(
+            "button", name="批准复用", exact=True
+        ).click()
+        expect(package_drawer.locator(".candidate-review-body")).to_have_attribute(
+            "aria-busy", "true"
+        )
+        approve_pending = package_drawer.evaluate(
+            """element => {
+              const footer = [...element.querySelectorAll(
+                '.candidate-review-actions button'
+              )];
+              const evidence = element.querySelector('.candidate-evidence-toggle');
+              evidence?.click();
+              return {
+                footerLabels: footer.map(item => item.innerText.trim()),
+                disabledFooter: footer.filter(item => item.disabled).length,
+                evidenceDisabled: evidence?.disabled === true,
+                evidenceExpanded: evidence?.getAttribute('aria-expanded'),
+                contentDisabled:
+                  element.querySelector('.candidate-package-content-toggle')?.disabled === true,
+                close: element.querySelectorAll('.el-drawer__close-btn').length,
+              };
+            }"""
+        )
+        approve_request = package_decision_page.evaluate(
+            "() => window.__FLAI_PACKAGE_DECISION__.requests[0]"
+        )
+        check(
+            "包级批准发出精确 CAS POST，deciding 锁住底栏、证据、内容与关闭出口",
+            approve_request == {
+                "path": "/api/skill-packages/skill_package_919191919191919191919191/decision",
+                "method": "POST",
+                "body": {
+                    "schema_version": "skill_package_decision_request.v1",
+                    "action": "approve",
+                    "expected_package_digest": f"sha256:{'9' * 64}",
+                },
+            }
+            and approve_pending == {
+                "footerLabels": [
+                    "正在记录决定…",
+                    "本次不批准",
+                    "下载候选记录",
+                    "回到对话",
+                ],
+                "disabledFooter": 4,
+                "evidenceDisabled": True,
+                "evidenceExpanded": "false",
+                "contentDisabled": True,
+                "close": 0,
+            },
+            f"request={approve_request} deciding={approve_pending}",
+        )
+        package_decision_page.evaluate(
+            "() => window.__FLAI_PACKAGE_DECISION__.resolve()"
+        )
+        expect(
+            package_drawer.locator(".candidate-state.is-package-approved")
+        ).to_have_text("工程师已批准复用")
+        approved_transition = package_decision_page.locator(
+            ".asset-candidate-callout"
+        ).evaluate(
+            """element => {
+              const rootStyle = getComputedStyle(document.documentElement);
+              const probe = document.createElement('span');
+              probe.style.background = rootStyle.getPropertyValue('--trust-signed');
+              document.body.append(probe);
+              const signed = getComputedStyle(probe).backgroundColor;
+              probe.remove();
+              return {
+                mark: getComputedStyle(element.querySelector('.candidate-mark')).backgroundColor,
+                signed,
+                text: element.innerText,
+              };
+            }"""
+        )
+        check(
+            "mock approved 响应经不可变投影核对后，同一 DOM 转为 teal 人签态",
+            approved_transition["mark"] == approved_transition["signed"]
+            and "自动复用" in approved_transition["text"]
+            and package_drawer.get_by_role(
+                "button", name="批准复用", exact=True
+            ).count() == 0,
+            str(approved_transition),
+        )
+
+        package_decision_page.evaluate(
+            "() => window.__FLAI_PACKAGE_DECISION__.resetPending()"
+        )
+        expect(
+            package_drawer.get_by_role("button", name="本次不批准", exact=True)
+        ).to_be_enabled()
+        package_drawer.get_by_role(
+            "button", name="本次不批准", exact=True
+        ).click()
+        reject_request = package_decision_page.evaluate(
+            "() => window.__FLAI_PACKAGE_DECISION__.requests[1]"
+        )
+        check(
+            "包级拒绝同样只发精确 CAS POST",
+            reject_request == {
+                "path": "/api/skill-packages/skill_package_919191919191919191919191/decision",
+                "method": "POST",
+                "body": {
+                    "schema_version": "skill_package_decision_request.v1",
+                    "action": "reject",
+                    "expected_package_digest": f"sha256:{'9' * 64}",
+                },
+            },
+            str(reject_request),
+        )
+        package_decision_page.evaluate(
+            "() => window.__FLAI_PACKAGE_DECISION__.resolve()"
+        )
+        expect(
+            package_drawer.locator(".candidate-state.is-package-rejected")
+        ).to_have_text("本次未批准复用")
+        package_decision_page.close()
 
         frame = select_case(
             page,

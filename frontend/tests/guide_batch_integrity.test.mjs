@@ -55,6 +55,131 @@ test("batch API carries one stable operation id and the exact validated versions
   assert.deepEqual(body.pinned_package_digests, { hello_agent: "a".repeat(64) });
 });
 
+test("batch API only carries the matched Agent hidden Skill Package reference", async () => {
+  const originalFetch = globalThis.fetch;
+  let observed = null;
+  globalThis.fetch = async (path, init) => {
+    observed = { path, init };
+    return new Response(JSON.stringify({
+      operation_id: "guide_batch_skill_reuse_001",
+      replayed: false,
+      tasks: [
+        {
+          id: "task_1",
+          agent_id: "hello_agent",
+          agent_version: "0.1.0",
+          conversation_id: "conv_1",
+          retry_of: null,
+          depends_on: [],
+          metadata: {
+            package_snapshot_digest: "a".repeat(64),
+            skill_package_ref: skillPackageRef,
+          },
+        },
+        {
+          id: "task_2",
+          agent_id: "standards_qa_agent",
+          agent_version: "0.2.0",
+          conversation_id: "conv_1",
+          retry_of: null,
+          depends_on: [],
+          metadata: { package_snapshot_digest: "d".repeat(64) },
+        },
+      ],
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  const skillPackageRef = {
+    schema_version: "skill_reuse_ref.v1",
+    package_id: `skill_package_${"b".repeat(24)}`,
+    package_version: "0.1.0",
+    package_digest: `sha256:${"c".repeat(64)}`,
+    candidate_digest: `sha256:${"e".repeat(64)}`,
+    skill_digest: `sha256:${"f".repeat(64)}`,
+    skill_name: "entry-review-method",
+    matched_agent_id: "hello_agent",
+    review_state: "approved",
+    match_policy_version: "skill_reuse_match.v1",
+    match_basis_digest: `sha256:${"1".repeat(64)}`,
+  };
+  try {
+    await createTasksBatch({
+      conversationId: "conv_1",
+      operationId: "guide_batch_skill_reuse_001",
+      pinnedVersions: {
+        hello_agent: "0.1.0",
+        standards_qa_agent: "0.2.0",
+      },
+      pinnedPackageDigests: {
+        hello_agent: "a".repeat(64),
+        standards_qa_agent: "d".repeat(64),
+      },
+      items: [
+        { agentId: "hello_agent", inputs: { name: "x" }, skillPackageRef },
+        { agentId: "standards_qa_agent", inputs: { question: "x" } },
+      ],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const body = JSON.parse(observed.init.body);
+  assert.deepEqual(body.items[0].skill_package_ref, skillPackageRef);
+  assert.equal(Object.hasOwn(body.items[1], "skill_package_ref"), false);
+});
+
+test("Guide renders reuse only inside the existing plan card and binds it to one matching item", () => {
+  assert.match(
+    guideSource,
+    /class="route-summary"[\s\S]*class="skill-reuse-inline"[\s\S]*计划复用 · \{\{[^}]*skill_name[^}]*\}\}/,
+  );
+  assert.match(
+    guideSource,
+    /class="route-disclosure-body"[\s\S]*class="skill-reuse-detail"/,
+  );
+  assert.match(
+    guideSource,
+    /skillPackageRef:[\s\S]*matched_agent_id === a\.agent_id/,
+  );
+  assert.doesNotMatch(guideSource, /复用这个 Skill|选择 Skill|skill-reuse-(?:card|panel|action)/);
+
+  const planStart = guideSource.indexOf('class="plan-card"');
+  const planEnd = guideSource.indexOf("<!-- 垂类问答依据卡", planStart);
+  const planSource = guideSource.slice(planStart, planEnd);
+  assert.ok(planStart >= 0 && planEnd > planStart);
+  assert.equal((planSource.match(/按方案开工/g) || []).length, 1);
+  assert.doesNotMatch(planSource, /<input\b|<textarea\b|<select\b|<form\b|contenteditable=/);
+});
+
+test("server-side Skill reuse rejection stays amber and states zero task writes", () => {
+  assert.match(
+    guideSource,
+    /structuredDetail\?\.code === "skill_package_reuse_invalid"[\s\S]*ElMessage\.warning\([\s\S]*本次确定未创建任务/,
+  );
+});
+
+test("非法 Skill 复用引用显式 amber 阻断整批开工，不静默降级为无引用", () => {
+  assert.match(guideSource, /function skillReuseStateForPlan\(plan\)/);
+  assert.match(
+    guideSource,
+    /planHasInvalidSkillReuse\(m\.recommendation\)[\s\S]*复用证据无法核验，本次禁止开工/,
+  );
+  assert.match(
+    guideSource,
+    /function planOpenable\(plan\)[\s\S]*planHasInvalidSkillReuse\(plan\) === true[\s\S]*return false/,
+  );
+  assert.match(
+    guideSource,
+    /async function openPlan\(plan\)[\s\S]*planHasInvalidSkillReuse\(plan\)[\s\S]*本次未创建任务/,
+  );
+  assert.match(
+    guideSource,
+    /v-(?:else-)?if="planHasInvalidSkillReuse\(m\.recommendation\)"[\s\S]*继续对话让系统重新编排/,
+  );
+});
+
 test("2xx batch response must prove the full requested task set before success", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({

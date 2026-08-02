@@ -1,7 +1,74 @@
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const CANDIDATE_ID = /^asset_candidate_[0-9a-f]{24}$/;
+const SKILL_PACKAGE_ID = /^skill_package_[0-9a-f]{24}$/;
+const SKILL_PACKAGE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const PACKAGE_VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$/;
+const REUSE_PACKAGE_VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const RAW_DIGEST = /^[0-9a-f]{64}$/;
 const STATES = new Set(["awaiting_human_review", "accepted", "rejected"]);
+const PACKAGE_STATES = new Set(["pending_review", "approved", "rejected"]);
+const PACKAGE_FILES = new Set([
+  "SKILL.md",
+  "references/provenance.json",
+  "references/skill-revision.json",
+  "references/task-pattern-revision.json",
+]);
+const PACKAGE_KEYS = [
+  "created_at",
+  "files",
+  "formation_evidence",
+  "id",
+  "isolation",
+  "name",
+  "package_digest",
+  "reuse_eligible",
+  "review",
+  "schema_version",
+  "source",
+  "state",
+  "storage_relpath",
+  "updated_at",
+  "version",
+];
+const PACKAGE_SOURCE_KEYS = [
+  "acceptance_event_digest",
+  "agent_id",
+  "bundle_digest",
+  "candidate_digest",
+  "candidate_id",
+  "initiated_by_username",
+  "skill_digest",
+  "task_id",
+];
+const PACKAGE_FILE_KEYS = ["path", "sha256", "size_bytes"];
+const PACKAGE_REVIEW_KEYS = [
+  "action",
+  "created_at",
+  "reviewed_by",
+  "reviewed_by_username",
+  "signer_session_bound",
+  "signer_source",
+];
+const PACKAGE_ISOLATION_KEYS = ["executable", "registered", "zone"];
+const PACKAGE_FORMATION_KEYS = [
+  "agent_candidate",
+  "independent_work_case_count",
+  "required_independent_work_cases",
+  "schema_version",
+  "workflow_candidate",
+];
+const PACKAGE_GATED_CANDIDATE_KEYS = ["eligible", "reason", "state"];
+const PACKAGE_REVIEW_CONTENT_KEYS = [
+  "files",
+  "package_digest",
+  "package_id",
+  "schema_version",
+];
+const PACKAGE_REVIEW_CONTENT_FILE_KEYS = ["path", "text"];
+const WORKFLOW_GATE_REASONS = new Set([
+  "requires_independent_composition_evidence",
+  "requires_stable_multi_skill_composition_evidence",
+]);
 const INPUT_FILE_SOURCES = new Set([
   "work_segment_upload",
   "upstream_task_output",
@@ -21,6 +88,19 @@ function text(value, label) {
     throw new TypeError(`${label} 必须是非空文本`);
   }
   return value;
+}
+
+
+function exactKeys(value, expectedKeys, label) {
+  const target = object(value, label);
+  const actualKeys = Object.keys(target).sort();
+  if (
+    actualKeys.length !== expectedKeys.length
+    || actualKeys.some((key, index) => key !== expectedKeys[index])
+  ) {
+    throw new TypeError(`${label} 字段不受支持`);
+  }
+  return target;
 }
 
 
@@ -122,6 +202,361 @@ function fileReferences(value, { label, expectedKind, sourceTaskId }) {
 }
 
 
+export function normalizeSkillPackage(value) {
+  const packageRevision = exactKeys(value, PACKAGE_KEYS, "skill package");
+  if (packageRevision.schema_version !== "skill_package_revision.v1") {
+    throw new TypeError("Skill Package 版本不受支持");
+  }
+  if (
+    typeof packageRevision.id !== "string"
+    || !SKILL_PACKAGE_ID.test(packageRevision.id)
+  ) {
+    throw new TypeError("Skill Package ID 不合法");
+  }
+  const packageName = text(packageRevision.name, "skill package.name");
+  if (packageName.length > 64 || !SKILL_PACKAGE_NAME.test(packageName)) {
+    throw new TypeError("Skill Package 名称不合法");
+  }
+  if (
+    typeof packageRevision.version !== "string"
+    || !PACKAGE_VERSION.test(packageRevision.version)
+  ) {
+    throw new TypeError("Skill Package 候选版本不合法");
+  }
+  digest(packageRevision.package_digest, "skill package.package_digest");
+  if (!PACKAGE_STATES.has(packageRevision.state)) {
+    throw new TypeError("Skill Package 状态不受支持");
+  }
+
+  const source = exactKeys(
+    packageRevision.source,
+    PACKAGE_SOURCE_KEYS,
+    "skill package.source",
+  );
+  if (typeof source.candidate_id !== "string" || !CANDIDATE_ID.test(source.candidate_id)) {
+    throw new TypeError("Skill Package 来源 Candidate ID 不合法");
+  }
+  digest(source.candidate_digest, "skill package.source.candidate_digest");
+  digest(source.bundle_digest, "skill package.source.bundle_digest");
+  digest(source.skill_digest, "skill package.source.skill_digest");
+  digest(
+    source.acceptance_event_digest,
+    "skill package.source.acceptance_event_digest",
+  );
+  text(source.task_id, "skill package.source.task_id");
+  text(source.agent_id, "skill package.source.agent_id");
+  text(source.initiated_by_username, "skill package.source.initiated_by_username");
+
+  const storageRelpath = text(
+    packageRevision.storage_relpath,
+    "skill package.storage_relpath",
+  );
+  if (
+    storageRelpath.startsWith("/")
+    || storageRelpath.includes("\\")
+    || storageRelpath.split("/").some((part) => part === "" || part === "." || part === "..")
+  ) {
+    throw new TypeError("Skill Package 隔离路径不合法");
+  }
+  if (!Array.isArray(packageRevision.files) || packageRevision.files.length !== PACKAGE_FILES.size) {
+    throw new TypeError("Skill Package 文件清单不完整");
+  }
+  const seenPaths = new Set();
+  for (const item of packageRevision.files) {
+    const file = exactKeys(item, PACKAGE_FILE_KEYS, "skill package.files");
+    const path = text(file.path, "skill package.files.path");
+    if (!PACKAGE_FILES.has(path) || seenPaths.has(path)) {
+      throw new TypeError("Skill Package 文件清单含未知或重复路径");
+    }
+    seenPaths.add(path);
+    if (!Number.isInteger(file.size_bytes) || file.size_bytes < 0) {
+      throw new TypeError("Skill Package 文件大小不合法");
+    }
+    if (typeof file.sha256 !== "string" || !RAW_DIGEST.test(file.sha256)) {
+      throw new TypeError("Skill Package 文件摘要不合法");
+    }
+  }
+
+  if (packageRevision.state === "pending_review") {
+    if (packageRevision.review !== null) {
+      throw new TypeError("待审 Skill Package 不得已有人工决定");
+    }
+  } else {
+    const review = exactKeys(
+      packageRevision.review,
+      PACKAGE_REVIEW_KEYS,
+      "skill package.review",
+    );
+    const expectedAction = packageRevision.state === "approved" ? "approve" : "reject";
+    if (
+      review.action !== expectedAction
+      || review.signer_source !== "authenticated_session"
+      || review.signer_session_bound !== true
+      || text(review.reviewed_by_username, "skill package.review.reviewed_by_username")
+        !== source.initiated_by_username
+    ) {
+      throw new TypeError("Skill Package 终态没有有效的人签绑定");
+    }
+    text(review.reviewed_by, "skill package.review.reviewed_by");
+    text(review.created_at, "skill package.review.created_at");
+  }
+  const isolation = exactKeys(
+    packageRevision.isolation,
+    PACKAGE_ISOLATION_KEYS,
+    "skill package.isolation",
+  );
+  if (
+    isolation.zone !== "candidate_quarantine"
+    || isolation.registered !== false
+    || isolation.executable !== false
+  ) {
+    throw new TypeError("Skill Package 隔离边界不合法");
+  }
+  if (packageRevision.reuse_eligible !== (packageRevision.state === "approved")) {
+    throw new TypeError("Skill Package 复用资格与审核状态不一致");
+  }
+  text(packageRevision.created_at, "skill package.created_at");
+  text(packageRevision.updated_at, "skill package.updated_at");
+
+  const formation = exactKeys(
+    packageRevision.formation_evidence,
+    PACKAGE_FORMATION_KEYS,
+    "skill package.formation_evidence",
+  );
+  if (
+    formation.schema_version !== "composition_eligibility.v1"
+    || !Number.isInteger(formation.independent_work_case_count)
+    || formation.independent_work_case_count < 0
+    || formation.required_independent_work_cases !== 2
+  ) {
+    throw new TypeError("Skill Package 独立任务证据门不合法");
+  }
+  const workflowCandidate = exactKeys(
+    formation.workflow_candidate,
+    PACKAGE_GATED_CANDIDATE_KEYS,
+    "skill package.formation_evidence.workflow_candidate",
+  );
+  const agentCandidate = exactKeys(
+    formation.agent_candidate,
+    PACKAGE_GATED_CANDIDATE_KEYS,
+    "skill package.formation_evidence.agent_candidate",
+  );
+  if (
+    workflowCandidate.state !== "not_formed"
+    || workflowCandidate.eligible !== false
+    || !WORKFLOW_GATE_REASONS.has(workflowCandidate.reason)
+    || (
+      formation.independent_work_case_count < formation.required_independent_work_cases
+      && workflowCandidate.reason !== "requires_independent_composition_evidence"
+    )
+    || (
+      formation.independent_work_case_count >= formation.required_independent_work_cases
+      && workflowCandidate.reason !== "requires_stable_multi_skill_composition_evidence"
+    )
+    || agentCandidate.state !== "not_formed"
+    || agentCandidate.eligible !== false
+    || agentCandidate.reason !== "requires_approved_workflow_revision"
+  ) {
+    throw new TypeError("Skill Package 不得跨级形成 Workflow 或 Agent Candidate");
+  }
+  return packageRevision;
+}
+
+
+function skillPackageImmutableProjection(packageRevision) {
+  return canonicalValue({
+    schema_version: packageRevision.schema_version,
+    id: packageRevision.id,
+    name: packageRevision.name,
+    version: packageRevision.version,
+    package_digest: packageRevision.package_digest,
+    source: packageRevision.source,
+    files: packageRevision.files,
+    storage_relpath: packageRevision.storage_relpath,
+    isolation: packageRevision.isolation,
+    created_at: packageRevision.created_at,
+  });
+}
+
+
+export function verifySkillPackageDecisionResponse(beforeValue, afterValue, action) {
+  const before = normalizeSkillPackage(beforeValue);
+  const after = normalizeSkillPackage(afterValue);
+  if (before.state !== "pending_review") {
+    throw new TypeError("只有待审 Skill Package 可以核对决定响应");
+  }
+  const expectedState = action === "approve"
+    ? "approved"
+    : action === "reject"
+      ? "rejected"
+      : null;
+  if (
+    expectedState === null
+    || after.state !== expectedState
+    || after.review?.action !== action
+  ) {
+    throw new TypeError("包级决定响应状态与所点动作不一致");
+  }
+  if (
+    JSON.stringify(skillPackageImmutableProjection(before))
+    !== JSON.stringify(skillPackageImmutableProjection(after))
+  ) {
+    throw new TypeError("包级决定响应没有咬合原 Skill Package 全部不可变投影");
+  }
+  return after;
+}
+
+
+async function utf8ManifestEntry(textValue, path) {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle || typeof globalThis.TextEncoder !== "function") {
+    throw new TypeError("当前环境无法核验 Skill Package 文件摘要");
+  }
+  const bytes = new TextEncoder().encode(textValue);
+  const result = new Uint8Array(await subtle.digest("SHA-256", bytes));
+  return {
+    path,
+    size_bytes: bytes.byteLength,
+    sha256: Array.from(
+      result,
+      (byte) => byte.toString(16).padStart(2, "0"),
+    ).join(""),
+  };
+}
+
+
+export async function normalizeSkillPackageReviewContent(
+  value,
+  { expectedPackageId, expectedPackageDigest, expectedFiles } = {},
+) {
+  const content = exactKeys(
+    value,
+    PACKAGE_REVIEW_CONTENT_KEYS,
+    "skill package review content",
+  );
+  if (content.schema_version !== "skill_package_review_content.v1") {
+    throw new TypeError("Skill Package 审阅内容版本不受支持");
+  }
+  if (typeof content.package_id !== "string" || !SKILL_PACKAGE_ID.test(content.package_id)) {
+    throw new TypeError("Skill Package 审阅内容 ID 不合法");
+  }
+  digest(content.package_digest, "skill package review content.package_digest");
+  if (
+    expectedPackageId !== undefined
+    && content.package_id !== expectedPackageId
+  ) {
+    throw new TypeError("Skill Package 审阅内容没有绑定当前包 ID");
+  }
+  if (
+    expectedPackageDigest !== undefined
+    && content.package_digest !== expectedPackageDigest
+  ) {
+    throw new TypeError("Skill Package 审阅内容没有绑定当前包摘要");
+  }
+  if (!Array.isArray(content.files) || content.files.length !== PACKAGE_FILES.size) {
+    throw new TypeError("Skill Package 审阅内容文件清单不完整");
+  }
+  if (!Array.isArray(expectedFiles) || expectedFiles.length !== PACKAGE_FILES.size) {
+    throw new TypeError("Skill Package 审阅内容缺少当前包文件清单");
+  }
+  const expectedByPath = new Map();
+  for (const item of expectedFiles) {
+    const manifestFile = exactKeys(
+      item,
+      PACKAGE_FILE_KEYS,
+      "skill package review content.expected_files",
+    );
+    if (
+      !PACKAGE_FILES.has(manifestFile.path)
+      || expectedByPath.has(manifestFile.path)
+      || !Number.isInteger(manifestFile.size_bytes)
+      || manifestFile.size_bytes < 0
+      || typeof manifestFile.sha256 !== "string"
+      || !RAW_DIGEST.test(manifestFile.sha256)
+    ) {
+      throw new TypeError("Skill Package 当前文件清单不合法");
+    }
+    expectedByPath.set(manifestFile.path, manifestFile);
+  }
+  const seenPaths = new Set();
+  for (const item of content.files) {
+    const file = exactKeys(
+      item,
+      PACKAGE_REVIEW_CONTENT_FILE_KEYS,
+      "skill package review content.files",
+    );
+    if (!PACKAGE_FILES.has(file.path) || seenPaths.has(file.path)) {
+      throw new TypeError("Skill Package 审阅内容含未知或重复路径");
+    }
+    seenPaths.add(file.path);
+    if (typeof file.text !== "string" || file.text.length === 0) {
+      throw new TypeError("Skill Package 审阅文件内容必须是非空文本");
+    }
+    const expected = expectedByPath.get(file.path);
+    const actual = await utf8ManifestEntry(file.text, file.path);
+    if (actual.size_bytes !== expected.size_bytes) {
+      throw new TypeError(`Skill Package 审阅文件 ${file.path} 的 UTF-8 字节数不一致`);
+    }
+    if (actual.sha256 !== expected.sha256) {
+      throw new TypeError(`Skill Package 审阅文件 ${file.path} 的 SHA-256 摘要不一致`);
+    }
+  }
+  return content;
+}
+
+
+export function normalizeSkillReuseRef(value, { expectedAgentIds } = {}) {
+  const reference = object(value, "skill reuse ref");
+  const expectedKeys = [
+    "candidate_digest",
+    "match_basis_digest",
+    "match_policy_version",
+    "matched_agent_id",
+    "package_digest",
+    "package_id",
+    "package_version",
+    "review_state",
+    "schema_version",
+    "skill_digest",
+    "skill_name",
+  ];
+  const actualKeys = Object.keys(reference).sort();
+  if (
+    actualKeys.length !== expectedKeys.length
+    || actualKeys.some((key, index) => key !== expectedKeys[index])
+  ) {
+    throw new TypeError("Skill 复用引用字段不受支持");
+  }
+  if (
+    reference.schema_version !== "skill_reuse_ref.v1"
+    || typeof reference.package_id !== "string"
+    || !SKILL_PACKAGE_ID.test(reference.package_id)
+    || typeof reference.package_version !== "string"
+    || !REUSE_PACKAGE_VERSION.test(reference.package_version)
+    || reference.review_state !== "approved"
+    || reference.match_policy_version !== "skill_reuse_match.v1"
+  ) {
+    throw new TypeError("Skill 复用引用边界不合法");
+  }
+  digest(reference.package_digest, "skill reuse ref.package_digest");
+  digest(reference.candidate_digest, "skill reuse ref.candidate_digest");
+  digest(reference.skill_digest, "skill reuse ref.skill_digest");
+  digest(reference.match_basis_digest, "skill reuse ref.match_basis_digest");
+  text(reference.skill_name, "skill reuse ref.skill_name");
+  const matchedAgentId = text(
+    reference.matched_agent_id,
+    "skill reuse ref.matched_agent_id",
+  );
+  if (
+    expectedAgentIds !== undefined
+    && (!Array.isArray(expectedAgentIds) || !expectedAgentIds.includes(matchedAgentId))
+  ) {
+    throw new TypeError("Skill 复用引用没有绑定当前方案执行单元");
+  }
+  return reference;
+}
+
+
 export function eligibleAssetCandidateTask(tasks) {
   if (!Array.isArray(tasks) || tasks.length !== 1) return null;
   const task = tasks[0];
@@ -167,6 +602,9 @@ export function assetCandidateReconcileCreateReason(status, detail) {
 
 export function normalizeAssetCandidate(value, { expectedTaskId } = {}) {
   const candidate = object(value, "asset candidate");
+  if (!Object.hasOwn(candidate, "skill_package")) {
+    throw new TypeError("资产候选缺少 Skill Package 投影");
+  }
   if (candidate.schema_version !== "asset_candidate.v1") {
     throw new TypeError("资产候选版本不受支持");
   }
@@ -263,6 +701,25 @@ export function normalizeAssetCandidate(value, { expectedTaskId } = {}) {
       throw new TypeError(`${key} 不得由单个任务候选伪造`);
     }
     text(gated.gate, `asset_map.${key}.gate`);
+  }
+
+  if (candidate.state !== "accepted") {
+    if (candidate.skill_package !== null) {
+      throw new TypeError("未接受 Candidate 不得拥有 Skill Package");
+    }
+  } else {
+    const packageRevision = normalizeSkillPackage(candidate.skill_package);
+    if (
+      packageRevision.source.candidate_id !== candidate.id
+      || packageRevision.source.candidate_digest !== candidate.candidate_digest
+      || packageRevision.source.bundle_digest !== candidate.bundle_digest
+      || packageRevision.source.skill_digest !== skill.content_digest
+      || packageRevision.source.task_id !== sourceTaskId
+      || packageRevision.source.agent_id !== source.agent_id
+      || packageRevision.source.initiated_by_username !== initiatedByUsername
+    ) {
+      throw new TypeError("Skill Package 没有咬合已接受 Candidate 修订");
+    }
   }
 
   if (candidate.state === "awaiting_human_review") {
@@ -519,5 +976,21 @@ export function buildAssetCandidateDecisionRequest(candidateValue, action) {
     action,
     expected_candidate_digest: candidate.candidate_digest,
     expected_bundle_digest: candidate.bundle_digest,
+  };
+}
+
+
+export function buildSkillPackageDecisionRequest(packageValue, action) {
+  const packageRevision = normalizeSkillPackage(packageValue);
+  if (packageRevision.state !== "pending_review") {
+    throw new TypeError("只有待审 Skill Package 可以作决定");
+  }
+  if (action !== "approve" && action !== "reject") {
+    throw new TypeError("Skill Package 决定只接受 approve 或 reject");
+  }
+  return {
+    schema_version: "skill_package_decision_request.v1",
+    action,
+    expected_package_digest: packageRevision.package_digest,
   };
 }

@@ -1,3 +1,6 @@
+import { normalizeSkillReuseRef } from "./assetCandidates.js";
+
+
 const STORAGE_PREFIX = "flai-os:guide-batch:v1:";
 const MAX_SERIALIZED_LENGTH = 512_000;
 const OPERATION_ID_RE = /^guide_batch_[A-Za-z0-9_-]{8,100}$/;
@@ -30,11 +33,20 @@ function validItem(item, index) {
   ) return false;
   if (item.retryOf !== null && !isBoundedString(item.retryOf, 128)) return false;
   if (!Array.isArray(item.after)) return false;
-  return item.after.every(
+  if (!item.after.every(
     (dependencyIndex) => Number.isInteger(dependencyIndex)
       && dependencyIndex >= 0
       && dependencyIndex < index,
-  );
+  )) return false;
+  if (!Object.hasOwn(item, "skillPackageRef")) return true;
+  try {
+    normalizeSkillReuseRef(item.skillPackageRef, {
+      expectedAgentIds: [item.agentId],
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function validBatchCreationAttempt(attempt) {

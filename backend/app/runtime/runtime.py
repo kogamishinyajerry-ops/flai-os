@@ -19,6 +19,7 @@ import logging
 import re
 import sqlite3
 import uuid
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,7 +35,12 @@ from ..core.errors import (
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
 from .package_snapshot import AgentPackageSnapshot, SNAPSHOT_CONTRACT
-from .task_evidence import input_files_evidence
+from .skill_reuse_application import (
+    SkillReuseApplication,
+    SkillReuseApplicationError,
+    skill_reuse_application_mode,
+)
+from .task_evidence import input_files_evidence, work_case_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +83,9 @@ class _WorkflowEventLogger:
 
     def log(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
         payload = dict(payload or {})
+        if event_type in {"skill_reuse_bound", "skill_reuse_applied"}:
+            payload["claimed_workflow_event_type"] = event_type
+            event_type = "reserved_runtime_event_rejected"
         payload["workflow_event_type"] = event_type
         repos.append_event(
             self._conn,
@@ -179,11 +188,20 @@ class _ModelGatewayContext:
     error 级 model_call 后原样 re-raise，绝不吞异常。
     """
 
-    def __init__(self, model_gateway: Any, conn: sqlite3.Connection, task_id: str, agent_id: str) -> None:
+    def __init__(
+        self,
+        model_gateway: Any,
+        conn: sqlite3.Connection,
+        task_id: str,
+        agent_id: str,
+        *,
+        skill_application: SkillReuseApplication | None = None,
+    ) -> None:
         self._model_gateway = model_gateway
         self._conn = conn
         self._task_id = task_id
         self._agent_id = agent_id
+        self._skill_application = skill_application
 
     # 归因键由 wrapper 钉死，workflow 不得经 kwargs 透传/覆写（Codex R0 P1-5）：尤其
     # conversation_id——job 模型调用只归因 task，透传它会在 model_calls 造「同时带
@@ -205,22 +223,39 @@ class _ModelGatewayContext:
                 payload={"profile": profile, "kind": kind, "error": str(exc)[:500]},
             )
             raise
+        event_payload: dict[str, Any] = {"profile": profile, "kind": kind}
+        if self._skill_application is not None and kind in {"chat", "vision"}:
+            event_payload["skill_reuse_application_digest"] = (
+                self._skill_application.application_digest
+            )
         repos.append_event(
             self._conn, task_id=self._task_id, agent_id=self._agent_id,
             event_type="model_call", level="info",
             message=f"模型调用完成（{kind}，profile={profile}）",
-            payload={"profile": profile, "kind": kind},
+            payload=event_payload,
         )
         return result
 
     def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         safe = self._sanitize(kwargs)
-        return self._call(
+        routed_messages = (
+            self._skill_application.chat_messages(messages)
+            if self._skill_application is not None
+            else messages
+        )
+        result = self._call(
             "chat", profile,
             lambda: self._model_gateway.chat(
-                profile, messages, task_id=self._task_id, agent_id=self._agent_id, **safe
+                profile,
+                routed_messages,
+                task_id=self._task_id,
+                agent_id=self._agent_id,
+                **safe,
             ),
         )
+        if self._skill_application is not None:
+            self._skill_application.mark_successful_model_invocation("chat")
+        return result
 
     def embed(self, profile: str, text: str, **kwargs: Any) -> dict[str, Any]:
         safe = self._sanitize(kwargs)
@@ -233,12 +268,25 @@ class _ModelGatewayContext:
 
     def vision(self, profile: str, image_path: str, prompt: str, **kwargs: Any) -> dict[str, Any]:
         safe = self._sanitize(kwargs)
-        return self._call(
+        routed_prompt = (
+            self._skill_application.vision_prompt(prompt)
+            if self._skill_application is not None
+            else prompt
+        )
+        result = self._call(
             "vision", profile,
             lambda: self._model_gateway.vision(
-                profile, image_path, prompt, task_id=self._task_id, agent_id=self._agent_id, **safe
+                profile,
+                image_path,
+                routed_prompt,
+                task_id=self._task_id,
+                agent_id=self._agent_id,
+                **safe,
             ),
         )
+        if self._skill_application is not None:
+            self._skill_application.mark_successful_model_invocation("vision")
+        return result
 
 
 class _NoModelGatewayContext:
@@ -457,6 +505,7 @@ class AgentRuntime:
         knowledge_service: Any | None = None,
         uploads_dir: str | Path | None = None,
         scope_registry: Any | None = None,
+        skill_reuse_evidence: Any | None = None,
     ) -> None:
         self.agent_registry = agent_registry
         self.tool_registry = tool_registry
@@ -474,6 +523,9 @@ class AgentRuntime:
         # ADR-0021 知识轴派生用；None 时知识轴对 enabled Agent 一律 fail-closed
         # 判 sensitive（_knowledge_classification 的 registry 缺失分支）。
         self.scope_registry = scope_registry
+        # ADR-0035：可选的 Skill Package 复用证据服务。旧任务没有复用引用时
+        # 保持完全兼容；一旦任务钉了 skill_package_ref，服务缺失即 fail-closed。
+        self.skill_reuse_evidence = skill_reuse_evidence
 
     def execute(self, task_id: str) -> dict[str, Any]:
         """驱动任务 task_id（调用前须已处于 validating 态）走完生命周期，返回最终 task dict。"""
@@ -608,6 +660,107 @@ class AgentRuntime:
 
         pkg_dir = package_dir
 
+        # ADR-0035：Guide 的自动匹配只是建议期事实；真正执行前必须把任务级
+        # insert-once binding、已审核包记录和磁盘字节重新验一遍。此 gate 位于
+        # 输入 schema / 文件、workflow 加载、工具调用与产物写入之前。携带引用却
+        # 未装配服务、binding 漂移或包字节失真时诚实失败，绝不退化为静默未复用。
+        skill_reuse_binding_digest: str | None = None
+        skill_reuse_application_digest: str | None = None
+        skill_application: SkillReuseApplication | None = None
+        reuse_work_case_fingerprint: str | None = None
+        reused_skill: dict[str, Any] | None = None
+        skill_reuse_event_payload: dict[str, Any] | None = None
+        has_skill_reuse_ref = (
+            isinstance(metadata, Mapping) and "skill_package_ref" in metadata
+        )
+        if has_skill_reuse_ref is True:
+            try:
+                verifier = getattr(self.skill_reuse_evidence, "verify_runtime", None)
+                if not callable(verifier):
+                    raise RuntimeError("Runtime 未装配 Skill 复用证据服务")
+                verified_reuse = verifier(conn, task=task)
+                if not isinstance(verified_reuse, Mapping):
+                    raise RuntimeError("Skill 复用证据服务未返回已验证上下文")
+
+                package_ref = verified_reuse.get("package_ref")
+                binding_digest = verified_reuse.get("binding_digest")
+                skill_revision = verified_reuse.get("skill_revision")
+                skill_markdown = verified_reuse.get("skill_markdown")
+                package_id = (
+                    package_ref.get("package_id")
+                    if isinstance(package_ref, Mapping)
+                    else None
+                )
+                package_digest = (
+                    package_ref.get("package_digest")
+                    if isinstance(package_ref, Mapping)
+                    else None
+                )
+                verified_shape = (
+                    isinstance(package_ref, Mapping)
+                    and isinstance(binding_digest, str)
+                    and re.fullmatch(r"sha256:[0-9a-f]{64}", binding_digest)
+                    is not None
+                    and isinstance(package_id, str)
+                    and re.fullmatch(r"skill_package_[0-9a-f]{24}", package_id)
+                    is not None
+                    and isinstance(package_digest, str)
+                    and re.fullmatch(r"sha256:[0-9a-f]{64}", package_digest)
+                    is not None
+                    and isinstance(skill_revision, Mapping)
+                    and isinstance(skill_markdown, str)
+                    and skill_markdown != ""
+                )
+                if verified_shape is not True:
+                    raise RuntimeError("Skill 复用证据返回值缺失或非规范")
+
+                skill_reuse_binding_digest = binding_digest
+                application_mode = skill_reuse_application_mode(agent)
+                if application_mode is None:
+                    raise RuntimeError(
+                        "Agent Package 未声明可验证的 Skill 应用能力；"
+                        "profile:none 需声明 deterministic_receipt_v1"
+                    )
+                skill_application = SkillReuseApplication(
+                    package_ref=package_ref,
+                    binding_digest=binding_digest,
+                    skill_revision=skill_revision,
+                    skill_markdown=skill_markdown,
+                    application_mode=application_mode,
+                )
+                skill_reuse_application_digest = (
+                    skill_application.application_digest
+                )
+                reused_skill = {
+                    "package_ref": dict(package_ref),
+                    "skill_revision": dict(skill_revision),
+                    "skill_markdown": skill_markdown,
+                    "application_receipt": skill_application.receipt,
+                }
+                skill_reuse_event_payload = {
+                    "workflow_event_type": "skill_reuse_bound",
+                    "skill_package_id": package_id,
+                    "skill_package_digest": package_digest,
+                    "skill_reuse_binding_digest": binding_digest,
+                    "skill_method_digest": skill_application.method_digest,
+                    "skill_reuse_application_digest": (
+                        skill_application.application_digest
+                    ),
+                }
+            except Exception as exc:
+                msg = f"Skill Package 复用证据校验失败：{exc}"
+                repos.set_task_data_classification(conn, task_id, "internal")
+                repos.set_task_status(conn, task_id, "failed", error_message=msg)
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="task_failed",
+                    level="error",
+                    message=msg,
+                )
+                return {"status": "failed", "task": repos.get_task(conn, task_id)}
+
         # ADR-0025：执行期算一次任务级分级（文件∨知识∨工具三轴）并**落库为不可变列**。
         # 落在产出任何内容（产物/样本/tool_runs/事件正文/error_message）之前，故每条
         # 派生行都被已落库的分级覆盖。read 期一律读此列，绝不重派生——工具事后卸载/
@@ -633,20 +786,43 @@ class AgentRuntime:
                 "input_files_digest": execution_input_evidence["digest"],
             }
         )
+        validation_payload = {
+            "package_snapshot_contract": SNAPSHOT_CONTRACT,
+            "package_snapshot_digest": package_snapshot.digest,
+            # ADR-0034 provenance anchor: completed-task asset extraction must
+            # bind the exact file references present when execution validation
+            # began, not a mutable post-hoc task row.
+            "input_file_ids": execution_input_file_ids,
+            "input_files_digest": execution_input_evidence["digest"],
+            "task_inputs_digest": task_inputs_digest,
+            "execution_evidence_digest": execution_evidence_digest,
+        }
+        if skill_reuse_binding_digest is not None:
+            validation_payload["skill_reuse_binding_digest"] = (
+                skill_reuse_binding_digest
+            )
+        if skill_application is not None:
+            reuse_work_case_fingerprint = work_case_fingerprint(
+                task_inputs=task["inputs"],
+                input_file_evidence=execution_input_evidence,
+                agent_id=agent_id,
+                package_id=skill_application.package_id,
+                package_digest=skill_application.package_digest,
+            )
+            validation_payload["skill_reuse_application_digest"] = (
+                skill_application.application_digest
+            )
+            validation_payload["work_case_fingerprint"] = (
+                reuse_work_case_fingerprint
+            )
+            assert skill_reuse_event_payload is not None
+            skill_reuse_event_payload["work_case_fingerprint"] = (
+                reuse_work_case_fingerprint
+            )
         repos.append_event(
             conn, task_id=task_id, agent_id=agent_id, event_type="validation_started",
             level="info", message="开始校验输入",
-            payload={
-                "package_snapshot_contract": SNAPSHOT_CONTRACT,
-                "package_snapshot_digest": package_snapshot.digest,
-                # ADR-0034 provenance anchor: completed-task asset extraction must
-                # bind the exact file references present when execution validation
-                # began, not a mutable post-hoc task row.
-                "input_file_ids": execution_input_file_ids,
-                "input_files_digest": execution_input_evidence["digest"],
-                "task_inputs_digest": task_inputs_digest,
-                "execution_evidence_digest": execution_evidence_digest,
-            },
+            payload=validation_payload,
         )
         verified_files: list[tuple[dict[str, Any], BinaryIO]] = []
         try:
@@ -687,6 +863,21 @@ class AgentRuntime:
             self._record_failure_sample(conn, task, agent, msg, data_classification)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
+        if skill_reuse_event_payload is not None:
+            try:
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="agent_log",
+                    level="info",
+                    message="已验证并绑定复用 Skill Package",
+                    payload=skill_reuse_event_payload,
+                )
+            except BaseException:
+                self._close_verified_files(verified_files)
+                raise
+
         # 2) 进入 running，构建 context 并调用 workflow.run()
         output_dir = self.task_runs_dir / task_id / "output"
         try:
@@ -706,7 +897,10 @@ class AgentRuntime:
                 pkg_dir,
                 output_dir,
                 [row for row, _handle in verified_files],
+                skill_application=skill_application,
             )
+            if reused_skill is not None:
+                context["reused_skill"] = reused_skill
             workflow_module = _load_workflow_module(agent_id, pkg_dir / "workflow.py")
             result = workflow_module.run(context)
         except Exception as exc:
@@ -730,6 +924,42 @@ class AgentRuntime:
             )
             self._record_failure_sample(conn, task, agent, error_message, data_classification)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
+
+        if skill_application is not None:
+            try:
+                skill_application.require_applied(result)
+                if reuse_work_case_fingerprint is None:
+                    raise SkillReuseApplicationError(
+                        "Skill 复用应用缺少 Work Case 指纹"
+                    )
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="agent_log",
+                    level="info",
+                    message="已实证应用复用 Skill Package",
+                    payload=skill_application.event_payload(
+                        work_case_fingerprint=reuse_work_case_fingerprint
+                    ),
+                )
+            except Exception as exc:
+                error_message = f"Skill 复用方法未形成精确应用回执：{exc}"
+                repos.set_task_status(
+                    conn, task_id, "failed", error_message=error_message
+                )
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="task_failed",
+                    level="error",
+                    message=error_message,
+                )
+                self._record_failure_sample(
+                    conn, task, agent, error_message, data_classification
+                )
+                return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
         # 3) 成功：注册产物 + 样本沉淀（产物/样本继承任务级派生分级=文件∨知识∨工具
         # 三轴，ADR-0021 D3 + Codex R0-P1 + ADR-0024/0025）。复用执行期已算并落库的
@@ -776,6 +1006,8 @@ class AgentRuntime:
                 task_id,
                 agent_id=agent_id,
                 execution_evidence_digest=execution_evidence_digest,
+                skill_reuse_binding_digest=skill_reuse_binding_digest,
+                skill_reuse_application_digest=skill_reuse_application_digest,
             )
             return {"status": "waiting_review", "task": review_task}
 
@@ -786,6 +1018,8 @@ class AgentRuntime:
             task_id,
             agent_id=agent_id,
             execution_evidence_digest=execution_evidence_digest,
+            skill_reuse_binding_digest=skill_reuse_binding_digest,
+            skill_reuse_application_digest=skill_reuse_application_digest,
         )
         return {"status": "completed", "task": completed_task}
 
@@ -1144,6 +1378,8 @@ class AgentRuntime:
         pkg_dir: Path,
         output_dir: Path,
         files: list[dict[str, Any]],
+        *,
+        skill_application: SkillReuseApplication | None = None,
     ) -> dict[str, Any]:
         agent_id = task["agent_id"]
         allowed_tools = frozenset(agent.get("tools") or [])
@@ -1154,7 +1390,13 @@ class AgentRuntime:
         _gateway = (
             _NoModelGatewayContext(agent_id)
             if _profile in (None, "none")
-            else _ModelGatewayContext(self.model_gateway, conn, task["id"], agent_id)
+            else _ModelGatewayContext(
+                self.model_gateway,
+                conn,
+                task["id"],
+                agent_id,
+                skill_application=skill_application,
+            )
         )
         # #8/R2-1：eval 任务（origin='eval'）把材化快照的 fixture 根经任务级 context 注入
         # 「工具读外部活态」的工具（如 cfd_result_read），令其读**冻结**产物而非全局

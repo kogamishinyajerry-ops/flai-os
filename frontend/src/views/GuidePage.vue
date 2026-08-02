@@ -133,7 +133,12 @@
               <div class="route-summary">
                 <span>已自动编排 · {{ m.recommendation.agents.length }} 个执行单元</span>
                 <span
-                  v-if="planHasIncompleteOrchestration(m.recommendation)"
+                  v-if="planHasInvalidSkillReuse(m.recommendation)"
+                  class="route-summary-state is-pending plan-alert"
+                  aria-live="polite"
+                >复用证据无法核验，本次禁止开工；请继续对话让系统重新编排</span>
+                <span
+                  v-else-if="planHasIncompleteOrchestration(m.recommendation)"
                   class="route-summary-state is-pending plan-alert"
                   aria-live="polite"
                 >方案有执行单元未能纳入，请继续说明或让系统重新编排</span>
@@ -141,6 +146,10 @@
                 <span v-else-if="openableCount(m.recommendation) > 0" class="route-summary-state" aria-live="polite">信息已齐，等待你确认开工</span>
                 <span v-else-if="planHasTasks(m.recommendation)" class="route-summary-state" aria-live="polite">执行已接入，关键状态会在这里更新</span>
                 <span v-else class="route-summary-state is-pending" aria-live="polite">还需通过对话补充执行信息</span>
+                <span
+                  v-if="skillReuseForPlan(m.recommendation)"
+                  class="skill-reuse-inline"
+                >计划复用 · {{ skillReuseForPlan(m.recommendation).skill_name }}</span>
               </div>
 
               <details v-if="idx === latestPlanIdx" class="route-disclosure">
@@ -148,6 +157,14 @@
                   <span>查看路由依据与边界</span>
                 </summary>
                 <div class="route-disclosure-body">
+              <div v-if="skillReuseForPlan(m.recommendation)" class="skill-reuse-detail">
+                <span>复用方法来源</span>
+                <strong>{{ skillReuseForPlan(m.recommendation).skill_name }}</strong>
+                <small>
+                  隔离包 {{ skillReuseForPlan(m.recommendation).package_version }} ·
+                  已通过包级人工复核；系统将在开工与运行时再次核对精确摘要。
+                </small>
+              </div>
               <div v-if="m.recommendation.workflow" class="plan-section">
                 <div class="section-label">分工如何衔接</div>
                 <p class="plan-workflow">{{ m.recommendation.workflow }}</p>
@@ -341,6 +358,12 @@
                   @click="focusComposer"
                 >继续说明或重新编排</button>
                 <button
+                  v-else-if="planHasInvalidSkillReuse(m.recommendation)"
+                  type="button"
+                  class="open-plan-btn is-pending"
+                  @click="focusComposer"
+                >复用证据待核 · 继续对话让系统重新编排</button>
+                <button
                   v-else-if="batchCreationNeedsReconciliation"
                   class="open-plan-btn cta-clay"
                   :disabled="opening === conversationId"
@@ -404,7 +427,12 @@
         :candidate="assetCandidate"
         :phase="assetCandidatePhase"
         :error="assetCandidateError"
+        :package-review-content="skillPackageReviewContent"
+        :package-review-phase="skillPackageReviewPhase"
+        :package-review-error="skillPackageReviewError"
         @decide="decideCurrentAssetCandidate"
+        @decide-package="decideCurrentSkillPackage"
+        @load-package-content="loadCurrentSkillPackageReviewContent"
         @retry="reconcileAssetCandidate"
       />
 
@@ -560,6 +588,8 @@ import { unwrapDetail } from "../api/client";
 import {
   createTaskAssetCandidate,
   decideAssetCandidate,
+  decideSkillPackage,
+  getSkillPackageReviewContent,
   getTaskAssetCandidate,
 } from "../api/assetCandidates.js";
 import {
@@ -616,6 +646,8 @@ import {
   assetCandidateReconcileCreateReason,
   assetCandidateRequestIsCurrent,
   eligibleAssetCandidateTask,
+  normalizeSkillPackageReviewContent,
+  normalizeSkillReuseRef,
   verifyAssetCandidateIntegrity,
 } from "../utils/assetCandidates.js";
 
@@ -1776,6 +1808,7 @@ function ignoredPlanMaterials(plan) {
 // 方案若仍有附件归属歧义则 fail-closed，回到同一个 composer 继续对话澄清，
 // 绝不把工程师送去字段表或要求其手工分配 Agent。
 function planOpenable(plan) {
+  if (planHasInvalidSkillReuse(plan) === true) return false;
   if (planHasIncompleteOrchestration(plan) === true) return false;
   const carriedFiles = collectCarriedFiles();
   const attachmentRouting = planAttachmentRouting(
@@ -1831,6 +1864,32 @@ function planHasTasks(plan) {
   );
 }
 
+function skillReuseStateForPlan(plan) {
+  if (!plan || typeof plan !== "object" || !Object.hasOwn(plan, "skill_reuse")) {
+    return { state: "absent", reference: null };
+  }
+  if (!Array.isArray(plan.agents)) return { state: "invalid", reference: null };
+  try {
+    return {
+      state: "valid",
+      reference: normalizeSkillReuseRef(plan.skill_reuse, {
+        expectedAgentIds: plan.agents.map((agent) => agent?.agent_id),
+      }),
+    };
+  } catch {
+    return { state: "invalid", reference: null };
+  }
+}
+
+function skillReuseForPlan(plan) {
+  const result = skillReuseStateForPlan(plan);
+  return result.state === "valid" ? result.reference : null;
+}
+
+function planHasInvalidSkillReuse(plan) {
+  return skillReuseStateForPlan(plan).state === "invalid";
+}
+
 // 「照此方案开工」（批七 §3-B6 切 batch，owner 裁决本批切换）：一键把全部就绪
 // 且未召集的成员按方案顺序**原子召集**——单次 POST /api/tasks/batch，全有全无
 // （任一项非法整批 422 零写入，逐项错误清单如实透出，绝不半建）。这一键由人
@@ -1838,6 +1897,11 @@ function planHasTasks(plan) {
 // 重映射为批内下标 → 服务端映射真 depends_on。
 async function openPlan(plan) {
   if (opening.value === conversationId.value && opening.value !== null) return;
+  if (planHasInvalidSkillReuse(plan)) {
+    ElMessage.warning("Skill 复用证据无法核验，本次未创建任务；请继续对话让系统重新编排。");
+    focusComposer();
+    return;
+  }
   if (planHasIncompleteOrchestration(plan)) {
     ElMessage.warning("方案有执行单元未能纳入，请继续说明或让系统重新编排");
     focusComposer();
@@ -1876,6 +1940,7 @@ async function openPlan(plan) {
       return;
     }
     const { pinnedVersions, pinnedPackageDigests } = refreshedPins;
+    const reusedSkill = skillReuseForPlan(plan);
     const carriedFiles = collectCarriedFiles();
     const attachmentRouting = planAttachmentRouting(
       plan,
@@ -1895,6 +1960,10 @@ async function openPlan(plan) {
         inputFileIds: attachmentRouting.inputFileIdsByAgent[a.agent_id] || [],
         retryOf: retryLineageForPlanItem(approvedRetryOf, after),
         after,
+        skillPackageRef:
+          reusedSkill?.matched_agent_id === a.agent_id
+            ? reusedSkill
+            : undefined,
       };
     });
     const candidateAttempt = {
@@ -1996,6 +2065,12 @@ async function openPlan(plan) {
       conversationStatus.value = structuredDetail.conversation_status || "concluded";
       ElMessage.error(
         "该协作会话已结束，本次确定未创建任务——请返回历史查看，或新建对话重新发起。",
+      );
+      return;
+    }
+    if (structuredDetail?.code === "skill_package_reuse_invalid") {
+      ElMessage.warning(
+        "Skill 复用证据在开工前未通过复核，本次确定未创建任务；请继续对话让系统重新编排。",
       );
       return;
     }
@@ -2130,6 +2205,26 @@ const assetCandidatePhase = ref(acceptanceAssetCandidate ? "loading" : "idle");
 const assetCandidateError = ref("");
 const assetCandidateTaskId = ref(acceptanceAssetCandidate?.source?.task_id || null);
 let assetCandidateRequestSeq = 0;
+const acceptanceSkillPackageReviewContent =
+  acceptanceFixture?.skillPackageReviewContent || null;
+const skillPackageReviewContent = ref(null);
+const skillPackageReviewPhase = ref("idle");
+const skillPackageReviewError = ref("");
+let skillPackageReviewRequestSeq = 0;
+
+watch(
+  () => [
+    assetCandidate.value?.skill_package?.id || "",
+    assetCandidate.value?.skill_package?.package_digest || "",
+  ],
+  ([packageId, packageDigest], [previousId, previousDigest] = []) => {
+    if (packageId === previousId && packageDigest === previousDigest) return;
+    skillPackageReviewRequestSeq += 1;
+    skillPackageReviewContent.value = null;
+    skillPackageReviewPhase.value = "idle";
+    skillPackageReviewError.value = "";
+  },
+);
 
 async function verifyAcceptanceAssetCandidate() {
   if (!acceptanceMode || !acceptanceAssetCandidate) return;
@@ -2165,6 +2260,48 @@ function candidateErrorMessage(error) {
   }
   if (typeof detail === "string" && detail.trim()) return detail;
   return error?.message || "资产候选状态暂时无法核对";
+}
+
+async function loadCurrentSkillPackageReviewContent() {
+  const current = assetCandidate.value;
+  const packageRevision = current?.skill_package;
+  if (
+    !current
+    || current.state !== "accepted"
+    || !packageRevision
+    || assetCandidatePhase.value !== "ready"
+    || skillPackageReviewPhase.value === "loading"
+  ) return;
+  const requestContext = {
+    seq: ++skillPackageReviewRequestSeq,
+    packageId: packageRevision.id,
+    packageDigest: packageRevision.package_digest,
+  };
+  const reviewIsCurrent = () => (
+    requestContext.seq === skillPackageReviewRequestSeq
+    && assetCandidate.value?.skill_package?.id === requestContext.packageId
+    && assetCandidate.value?.skill_package?.package_digest === requestContext.packageDigest
+  );
+  skillPackageReviewContent.value = null;
+  skillPackageReviewPhase.value = "loading";
+  skillPackageReviewError.value = "";
+  try {
+    const content = acceptanceMode
+      ? await normalizeSkillPackageReviewContent(acceptanceSkillPackageReviewContent, {
+          expectedPackageId: packageRevision.id,
+          expectedPackageDigest: packageRevision.package_digest,
+          expectedFiles: packageRevision.files,
+        })
+      : await getSkillPackageReviewContent(packageRevision);
+    if (!reviewIsCurrent()) return;
+    skillPackageReviewContent.value = content;
+    skillPackageReviewPhase.value = "ready";
+  } catch (error) {
+    if (!reviewIsCurrent()) return;
+    skillPackageReviewContent.value = null;
+    skillPackageReviewPhase.value = "error";
+    skillPackageReviewError.value = candidateErrorMessage(error);
+  }
 }
 
 async function ensureAssetCandidateForTasks(tasks, { force = false } = {}) {
@@ -2280,7 +2417,7 @@ async function decideCurrentAssetCandidate(action) {
     })) return;
     assetCandidate.value = decided;
     assetCandidatePhase.value = "ready";
-    ElMessage.success(
+    ElMessage.info(
       action === "accept"
         ? "已接受为资产候选；尚未登记或发布"
         : "已记录本次不保留；原任务证据不受影响",
@@ -2293,6 +2430,65 @@ async function decideCurrentAssetCandidate(action) {
     })) return;
     // 409、断网或 5xx 都可能处于“服务端已提交、客户端未收到”窗口；不换摘要
     // 重放决定，锁到显式 GET 对账。
+    assetCandidatePhase.value = "reconcile_required";
+    assetCandidateError.value = candidateErrorMessage(error);
+  }
+}
+
+async function decideCurrentSkillPackage(action) {
+  const current = assetCandidate.value;
+  const packageRevision = current?.skill_package;
+  const currentTask = eligibleAssetCandidateTask(conversationTasks.value);
+  if (
+    !current
+    || current.state !== "accepted"
+    || packageRevision?.state !== "pending_review"
+    || assetCandidatePhase.value !== "ready"
+    || currentTask?.id !== current.source.task_id
+    || assetCandidateTaskId.value !== current.source.task_id
+    || current.source.conversation_id !== conversationId.value
+    || acceptanceMode
+  ) return;
+  if (
+    action === "approve"
+    && (
+      skillPackageReviewPhase.value !== "ready"
+      || skillPackageReviewContent.value?.package_id !== packageRevision.id
+      || skillPackageReviewContent.value?.package_digest !== packageRevision.package_digest
+    )
+  ) {
+    skillPackageReviewPhase.value = "error";
+    skillPackageReviewError.value = "必须先核验并审阅当前隔离包的真实字节，才能批准复用。";
+    ElMessage.warning("真实包内容尚未核验，本次未提交批准决定。");
+    return;
+  }
+  const packageDecisionContext = {
+    seq: ++assetCandidateRequestSeq,
+    taskId: current.source.task_id,
+    conversationId: conversationId.value,
+  };
+  assetCandidatePhase.value = "deciding";
+  assetCandidateError.value = "";
+  try {
+    const decidedPackage = await decideSkillPackage(packageRevision, action);
+    if (!assetCandidateRequestIsCurrent(packageDecisionContext, {
+      seq: assetCandidateRequestSeq,
+      taskId: eligibleAssetCandidateTask(conversationTasks.value)?.id || "",
+      conversationId: conversationId.value,
+    })) return;
+    assetCandidate.value = { ...current, skill_package: decidedPackage };
+    assetCandidatePhase.value = "ready";
+    ElMessage.info(
+      action === "approve"
+        ? "工程师已批准该精确隔离包；相似新任务可由系统自动匹配"
+        : "已记录本次不批准复用；Candidate 与原任务证据不受影响",
+    );
+  } catch (error) {
+    if (!assetCandidateRequestIsCurrent(packageDecisionContext, {
+      seq: assetCandidateRequestSeq,
+      taskId: eligibleAssetCandidateTask(conversationTasks.value)?.id || "",
+      conversationId: conversationId.value,
+    })) return;
     assetCandidatePhase.value = "reconcile_required";
     assetCandidateError.value = candidateErrorMessage(error);
   }
@@ -3112,6 +3308,7 @@ watch(
 }
 .route-summary {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
@@ -3130,6 +3327,11 @@ watch(
   text-align: right;
 }
 .route-summary-state.is-pending { color: var(--trust-pending); }
+.skill-reuse-inline {
+  flex: 1 0 100%;
+  color: var(--clay);
+  font-weight: 700;
+}
 .route-disclosure {
   margin: 0;
   border-top: 1px solid var(--hairline-soft);
@@ -3151,6 +3353,17 @@ watch(
 }
 .route-disclosure:not([open]) > .route-disclosure-body { display: none; }
 .route-disclosure-body { padding: var(--space-3) 0 var(--space-4); }
+.skill-reuse-detail {
+  display: grid;
+  gap: 3px;
+  margin: 0 0 var(--space-4);
+  padding: 10px 12px;
+  border-left: 2px solid var(--clay-softer);
+  color: var(--ink-soft);
+  font-size: var(--fs-xs);
+}
+.skill-reuse-detail strong { color: var(--ink); }
+.skill-reuse-detail small { color: var(--ink-faint); line-height: 1.55; }
 .plan-section { margin: 0 0 16px; }
 .roster-label { margin-top: 4px; }
 .plan-workflow {
@@ -3673,6 +3886,12 @@ watch(
   padding: 10px 18px;
 }
 .open-plan-btn:disabled { opacity: 0.6; cursor: default; }
+.open-plan-btn.is-pending {
+  border: 1px solid rgba(var(--trust-pending-rgb), 0.45);
+  background: rgba(var(--trust-pending-rgb), 0.08);
+  color: var(--trust-pending);
+  cursor: pointer;
+}
 /* 开工在场时工作台入口降次级：数据驱动 .is-secondary（模板显式绑定），
  * 替换原 :has() 条件级联——主次由状态决定而非 DOM 巧合。 */
 .workbench-btn.is-secondary {

@@ -13,6 +13,17 @@ from .asset_candidates import (
     AssetCandidateUnavailableError,
 )
 from .agent_shell import AgentShellCatalog, AgentShellProjectionError
+from .candidate_materializer import (
+    CandidateMaterializer,
+    SkillPackageConflictError,
+    SkillPackageNotFoundError,
+    SkillPackageUnavailableError,
+)
+from .skill_reuse import SkillReuseMatcher
+from .skill_reuse_evidence import (
+    SkillReuseEvidenceLedger,
+    SkillReuseInvalidError,
+)
 
 __all__ = [
     "AssetDraftBuilder",
@@ -25,4 +36,11 @@ __all__ = [
     "AssetCandidateUnavailableError",
     "AgentShellCatalog",
     "AgentShellProjectionError",
+    "CandidateMaterializer",
+    "SkillPackageConflictError",
+    "SkillPackageNotFoundError",
+    "SkillPackageUnavailableError",
+    "SkillReuseMatcher",
+    "SkillReuseEvidenceLedger",
+    "SkillReuseInvalidError",
 ]

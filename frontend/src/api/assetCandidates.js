@@ -1,6 +1,10 @@
 import { request } from "./client.js";
 import {
   buildAssetCandidateDecisionRequest,
+  buildSkillPackageDecisionRequest,
+  normalizeSkillPackage,
+  normalizeSkillPackageReviewContent,
+  verifySkillPackageDecisionResponse,
   verifyAssetCandidateIntegrity,
 } from "../utils/assetCandidates.js";
 
@@ -50,5 +54,32 @@ export async function decideAssetCandidate(candidateValue, action) {
   );
   return verifyAssetCandidateIntegrity(response, {
     expectedTaskId: candidate.source.task_id,
+  });
+}
+
+
+export async function decideSkillPackage(packageValue, action) {
+  const packageRevision = normalizeSkillPackage(packageValue);
+  const packageId = packageRevision.id;
+  const response = await request(
+    `/api/skill-packages/${encodeURIComponent(packageId)}/decision`,
+    {
+      method: "POST",
+      json: buildSkillPackageDecisionRequest(packageRevision, action),
+    },
+  );
+  return verifySkillPackageDecisionResponse(packageRevision, response, action);
+}
+
+
+export async function getSkillPackageReviewContent(packageValue) {
+  const packageRevision = normalizeSkillPackage(packageValue);
+  const response = await request(
+    `/api/skill-packages/${encodeURIComponent(packageRevision.id)}/review-content`,
+  );
+  return normalizeSkillPackageReviewContent(response, {
+    expectedPackageId: packageRevision.id,
+    expectedPackageDigest: packageRevision.package_digest,
+    expectedFiles: packageRevision.files,
   });
 }

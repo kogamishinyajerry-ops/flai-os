@@ -71,11 +71,50 @@ def get_by_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None
     return _decode_candidate(row) if row is not None else None
 
 
+def get_latest_id_for_task(conn: sqlite3.Connection, task_id: str) -> str | None:
+    """Read the latest revision identity without decoding candidate JSON."""
+
+    row = conn.execute(
+        """
+        SELECT id FROM asset_candidates
+        WHERE source_task_id = ?
+        ORDER BY revision DESC
+        LIMIT 1
+        """,
+        (task_id,),
+    ).fetchone()
+    return str(row["id"]) if row is not None else None
+
+
 def get_event(conn: sqlite3.Connection, event_id: str) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT * FROM asset_candidate_events WHERE event_id = ?", (event_id,)
     ).fetchone()
     return _decode_event(row) if row is not None else None
+
+
+def list_accepted_without_package_ids(conn: sqlite3.Connection) -> list[str]:
+    """Return deterministic ADR-0034 legacy rows needing ADR-0035 materialization."""
+
+    rows = conn.execute(
+        """
+        SELECT candidate.id
+        FROM asset_candidates AS candidate
+        LEFT JOIN skill_packages AS package
+          ON package.source_candidate_digest = candidate.candidate_digest
+        WHERE candidate.state = 'accepted'
+          AND candidate.decision_event_id IS NOT NULL
+          AND package.id IS NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM asset_candidates AS newer
+            WHERE newer.source_task_id = candidate.source_task_id
+              AND newer.revision > candidate.revision
+          )
+        ORDER BY candidate.created_at ASC, candidate.id ASC
+        """
+    ).fetchall()
+    return [str(row["id"]) for row in rows]
 
 
 def insert_candidate(conn: sqlite3.Connection, record: Mapping[str, Any]) -> None:

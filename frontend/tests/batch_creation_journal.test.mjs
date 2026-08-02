@@ -45,6 +45,20 @@ const validAttempt = () => ({
   submittedPlanSnapshot: { conversationId: "conv_journal_1", retryOf: null },
 });
 
+const skillPackageRef = () => ({
+  schema_version: "skill_reuse_ref.v1",
+  package_id: `skill_package_${"b".repeat(24)}`,
+  package_version: "0.1.0",
+  package_digest: `sha256:${"c".repeat(64)}`,
+  candidate_digest: `sha256:${"d".repeat(64)}`,
+  skill_digest: `sha256:${"e".repeat(64)}`,
+  skill_name: "entry-review-method",
+  matched_agent_id: "hello_agent",
+  review_state: "approved",
+  match_policy_version: "skill_reuse_match.v1",
+  match_basis_digest: `sha256:${"f".repeat(64)}`,
+});
+
 test("batch 开工在 POST 前可持久恢复同一 operation_id 与精确请求快照", () => {
   const storage = new MemoryStorage();
   const persisted = persistBatchCreationAttempt(validAttempt(), storage);
@@ -80,6 +94,43 @@ test("同一会话已有待核请求时禁止用新 operation_id 覆盖", () => 
   assert.equal(
     restoreBatchCreationAttempt("conv_journal_1", storage).attempt.operationId,
     first.operationId,
+  );
+});
+
+test("复用任务日志保留精确引用，残缺、越权或额外字段在恢复时直接判 corrupt", () => {
+  const reusable = validAttempt();
+  reusable.items[0].skillPackageRef = skillPackageRef();
+  const readyStorage = new MemoryStorage();
+  const persisted = persistBatchCreationAttempt(reusable, readyStorage);
+  assert.deepEqual(
+    restoreBatchCreationAttempt("conv_journal_1", readyStorage),
+    { state: "ready", attempt: persisted },
+  );
+
+  for (const mutate of [
+    (reference) => { delete reference.package_digest; },
+    (reference) => { reference.matched_agent_id = "other_agent"; },
+    (reference) => { reference.review_state = "pending_review"; },
+    (reference) => { reference.model = "user_selected"; },
+  ]) {
+    const storage = new MemoryStorage();
+    persistBatchCreationAttempt(reusable, storage);
+    const [key] = storage.values.keys();
+    const tampered = JSON.parse(storage.getItem(key));
+    mutate(tampered.items[0].skillPackageRef);
+    storage.setItem(key, JSON.stringify(tampered));
+    assert.deepEqual(restoreBatchCreationAttempt("conv_journal_1", storage), {
+      state: "corrupt",
+      attempt: null,
+    });
+  }
+
+  const invalidBeforePersist = validAttempt();
+  invalidBeforePersist.items[0].skillPackageRef = skillPackageRef();
+  delete invalidBeforePersist.items[0].skillPackageRef.match_basis_digest;
+  assert.throws(
+    () => persistBatchCreationAttempt(invalidBeforePersist, new MemoryStorage()),
+    /缺少可恢复的版本、摘要或任务快照/,
   );
 });
 

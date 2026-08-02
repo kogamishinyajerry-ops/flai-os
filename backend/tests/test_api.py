@@ -83,6 +83,7 @@ def test_health_exposes_generation_markers_is_true(client: TestClient) -> None:
     body = client.get("/api/health").json()
     assert body["created_by_username_axis"] is True
     assert body["classification_axis"] is True
+    assert body["skill_reuse_runtime_axis"] is True
 
 
 def test_list_agents_contains_hello_agent(client: TestClient) -> None:

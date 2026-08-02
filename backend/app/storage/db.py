@@ -173,6 +173,9 @@ CREATE TABLE IF NOT EXISTS conversations (
     agent_id TEXT NOT NULL,
     status TEXT NOT NULL,
     created_by TEXT NOT NULL,
+    -- 认证 username 是自动复用的 owner 证明；created_by 仍只是可读展示名。
+    -- 可空且无 DEFAULT：历史行绝不从展示名猜测或回填 owner。
+    created_by_username TEXT,
     recommendation_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -340,6 +343,70 @@ CREATE TABLE IF NOT EXISTS asset_candidate_events (
     payload_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL
 );
+
+-- 迁移 #16（ADR-0035）：Accepted Candidate 的隔离 Skill Package Revision。
+-- 包内容与来源 insert-once；source_candidate_digest 唯一保证一个精确 Candidate
+-- Revision 只能材化一个包。包审核通过追加事件并用 review_event_id CAS-on-NULL
+-- 推进，绝不与 agents / agent_versions / promotions 混表。
+CREATE TABLE IF NOT EXISTS skill_packages (
+    id TEXT PRIMARY KEY,
+    schema_version TEXT NOT NULL,
+    name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    package_digest TEXT NOT NULL UNIQUE,
+    state TEXT NOT NULL CHECK (state IN ('pending_review', 'approved', 'rejected')),
+    source_candidate_id TEXT NOT NULL REFERENCES asset_candidates(id),
+    source_candidate_digest TEXT NOT NULL UNIQUE,
+    source_bundle_digest TEXT NOT NULL,
+    source_skill_digest TEXT NOT NULL,
+    source_acceptance_event_digest TEXT NOT NULL,
+    source_task_id TEXT NOT NULL REFERENCES tasks(id),
+    source_agent_id TEXT NOT NULL,
+    owner_username TEXT NOT NULL,
+    storage_relpath TEXT NOT NULL UNIQUE,
+    file_manifest_json TEXT NOT NULL,
+    review_event_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS skill_package_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL UNIQUE,
+    package_id TEXT NOT NULL REFERENCES skill_packages(id),
+    package_digest TEXT NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN ('materialized', 'approved', 'rejected')),
+    from_state TEXT CHECK (from_state IS NULL OR from_state = 'pending_review'),
+    to_state TEXT NOT NULL CHECK (to_state IN ('pending_review', 'approved', 'rejected')),
+    actor_source TEXT NOT NULL CHECK (actor_source IN ('candidate_materializer', 'authenticated_session')),
+    signer_display_name TEXT,
+    signer_user_id INTEGER,
+    signer_username TEXT,
+    signer_session_hash TEXT,
+    message TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+-- Skill 复用引用只有在主对话方案经人工开工时才成为 task binding。该行
+-- insert-once；是否构成重复证据必须冷读 task_events 的 validation_started 与
+-- completed/review_approved 同摘要链，不能靠可变计数器或匹配标签冒充执行。
+CREATE TABLE IF NOT EXISTS skill_reuse_bindings (
+    id TEXT PRIMARY KEY,
+    schema_version TEXT NOT NULL,
+    task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id),
+    conversation_id TEXT NOT NULL REFERENCES conversations(id),
+    package_id TEXT NOT NULL REFERENCES skill_packages(id),
+    package_digest TEXT NOT NULL,
+    source_candidate_digest TEXT NOT NULL,
+    source_skill_digest TEXT NOT NULL,
+    matched_agent_id TEXT NOT NULL,
+    owner_username TEXT NOT NULL,
+    match_policy_version TEXT NOT NULL,
+    match_basis_digest TEXT NOT NULL,
+    binding_digest TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
 """
 
 _INDEX_DDL = (
@@ -364,6 +431,12 @@ _INDEX_DDL = (
     "ON asset_candidates(source_task_id)",
     "CREATE INDEX IF NOT EXISTS idx_asset_candidate_events_candidate "
     "ON asset_candidate_events(candidate_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_skill_packages_owner_state "
+    "ON skill_packages(owner_username, state, updated_at DESC, id)",
+    "CREATE INDEX IF NOT EXISTS idx_skill_package_events_package "
+    "ON skill_package_events(package_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_skill_reuse_bindings_package_owner "
+    "ON skill_reuse_bindings(package_id, owner_username, created_at, id)",
 )
 
 _FILE_OWNER_IMMUTABILITY_TRIGGER = """
@@ -372,6 +445,23 @@ BEFORE UPDATE OF owner_username ON files
 WHEN NEW.owner_username IS NOT OLD.owner_username
 BEGIN
     SELECT RAISE(ABORT, 'files.owner_username is immutable');
+END
+"""
+
+_CONVERSATION_OWNER_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_conversations_created_by_username_immutable
+BEFORE UPDATE OF created_by_username ON conversations
+WHEN NEW.created_by_username IS NOT OLD.created_by_username
+BEGIN
+    SELECT RAISE(ABORT, 'conversations.created_by_username is immutable');
+END
+"""
+
+_SKILL_REUSE_BINDING_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_skill_reuse_bindings_update_immutable
+BEFORE UPDATE ON skill_reuse_bindings
+BEGIN
+    SELECT RAISE(ABORT, 'skill_reuse_bindings rows are immutable');
 END
 """
 
@@ -432,6 +522,17 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute(
                     "ALTER TABLE conversation_messages ADD COLUMN file_ids TEXT NOT NULL DEFAULT '[]'"
                 )
+            # conversations.created_by_username：认证创建者的稳定 owner 证明。
+            # 无 DEFAULT、无历史回填；created_by 是展示名，绝不能反推 username。
+            # 列级 trigger 禁止 NULL→值、值→NULL 与值→另一值的事后改认领。
+            conversation_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(conversations)")
+            }
+            if "created_by_username" not in conversation_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN created_by_username TEXT"
+                )
+            conn.execute(_CONVERSATION_OWNER_IMMUTABILITY_TRIGGER)
             # 迁移 #3（ADR-0016/M8）：tasks.conversation_id——把导引协作会话产出的
             # N 个任务归到同一次会话下（协作工作台按会话分组）。可空：非会话产出的
             # 任务（门户直建）留 NULL。同在写锁内探测补列，口径同迁移 #1/#2。
@@ -463,6 +564,9 @@ def init_db(db_path: str | Path) -> None:
             if "owner_username" not in file_cols:
                 conn.execute("ALTER TABLE files ADD COLUMN owner_username TEXT")
             conn.execute(_FILE_OWNER_IMMUTABILITY_TRIGGER)
+            # ADR-0035：任务级 Skill binding 是 insert-once 执行证据。即使调用者
+            # 同时重算摘要，也不得原地改写来源、owner、Agent 或工作段依据。
+            conn.execute(_SKILL_REUSE_BINDING_IMMUTABILITY_TRIGGER)
             sample_cols = {row[1] for row in conn.execute("PRAGMA table_info(samples)")}
             if "classification" not in sample_cols:
                 conn.execute(

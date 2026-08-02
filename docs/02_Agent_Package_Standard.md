@@ -41,6 +41,7 @@ Agent Registry 只认这个目录形态；缺失 `agent.yaml` 或 schema 校验�
 | `workflow.entrypoint` | const | V0.1 固定 `workflow.py` |
 | `workflow.mode` | enum | `job`(异步任务) / `interactive` |
 | `workflow.requires_human_review` | bool | true→任务须经人工放行才能转 `completed`；**凡输出工程结论类判断，必须为 true**（对应宪法：LLM 不做最终工程结论） |
+| `workflow.skill_reuse_application` | const(可选) | 仅 `model.profile=none` 的确定性 Workflow 可声明 `deterministic_receipt_v1`；声明后必须消费运行时注入的已审方法，并在成功结果逐字段返回精确 Application receipt。未声明时禁止自动复用 |
 | `permissions.visibility/allowed_roles` | object | `admin_only`/`department_trial`/`all`；角色枚举 `admin`/`agent_developer`/`business_user` |
 | `logging.*` | bool ×5 | 是否落盘 inputs/outputs/tool_logs/model_calls/feedback |
 | `data_asset.collect_samples/sample_fields` | object | 是否沉淀 `samples.jsonl` 供后续黑盒建模 |

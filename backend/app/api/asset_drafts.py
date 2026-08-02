@@ -16,6 +16,9 @@ from ..ontology import (
     AssetDraftInputError,
     AssetDraftProjectionError,
     AssetDraftSourceError,
+    SkillPackageConflictError,
+    SkillPackageNotFoundError,
+    SkillPackageUnavailableError,
 )
 
 router = APIRouter(prefix="/api", tags=["asset-drafts"])
@@ -68,6 +71,14 @@ class AssetCandidateDecisionRequest(BaseModel):
     expected_bundle_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
+class SkillPackageDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["skill_package_decision_request.v1"]
+    action: Literal["approve", "reject"]
+    expected_package_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
 @router.post("/conversations/{conversation_id}/asset-draft-preview")
 def preview_asset_draft(
     conversation_id: str,
@@ -107,6 +118,17 @@ def _candidate_error(exc: Exception) -> HTTPException:
             detail={"code": exc.code, "message": exc.message},
         )
     return HTTPException(status_code=503, detail="资产候选来源或账本不可用")
+
+
+def _skill_package_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, SkillPackageNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, SkillPackageConflictError):
+        return HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": exc.message},
+        )
+    return HTTPException(status_code=503, detail="Skill Package 来源或证据不可用")
 
 
 @router.post("/tasks/{task_id}/asset-candidate")
@@ -173,5 +195,82 @@ def decide_asset_candidate(
         AssetCandidateUnavailableError,
     ) as exc:
         raise _candidate_error(exc) from exc
+    finally:
+        conn.close()
+
+
+@router.get("/skill-packages/{package_id}")
+def get_skill_package(package_id: str, request: Request) -> dict[str, Any]:
+    conn = request.app.state.conn_factory()
+    try:
+        return request.app.state.candidate_materializer.get(
+            conn,
+            package_id=package_id,
+            username=request.state.auth_session.username,
+        )
+    except (
+        SkillPackageNotFoundError,
+        SkillPackageConflictError,
+        SkillPackageUnavailableError,
+    ) as exc:
+        raise _skill_package_error(exc) from exc
+    finally:
+        conn.close()
+
+
+@router.get("/skill-packages/{package_id}/review-content")
+def get_skill_package_review_content(
+    package_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Disclose the exact, cold-verified package bytes only to its owner."""
+
+    conn = request.app.state.conn_factory()
+    try:
+        return request.app.state.candidate_materializer.get_review_content(
+            conn,
+            package_id=package_id,
+            username=request.state.auth_session.username,
+        )
+    except (
+        SkillPackageNotFoundError,
+        SkillPackageConflictError,
+        SkillPackageUnavailableError,
+    ) as exc:
+        raise _skill_package_error(exc) from exc
+    finally:
+        conn.close()
+
+
+@router.post("/skill-packages/{package_id}/decision")
+def decide_skill_package(
+    package_id: str,
+    body: SkillPackageDecisionRequest,
+    request: Request,
+) -> dict[str, Any]:
+    conn = request.app.state.conn_factory()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            result = request.app.state.candidate_materializer.decide(
+                conn,
+                package_id=package_id,
+                expected_package_digest=body.expected_package_digest,
+                action=body.action,
+                signer_context=SignerContext.from_authenticated_session(
+                    request.state.auth_session
+                ),
+            )
+            conn.execute("COMMIT")
+            return result
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    except (
+        SkillPackageNotFoundError,
+        SkillPackageConflictError,
+        SkillPackageUnavailableError,
+    ) as exc:
+        raise _skill_package_error(exc) from exc
     finally:
         conn.close()

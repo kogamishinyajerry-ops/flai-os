@@ -271,6 +271,15 @@ def test_create_conversation_rejects_client_creator_and_derives_session_identity
     honest = client.post("/api/conversations", json={"agent_id": "guide_agent"})
     assert honest.status_code == 200
     assert honest.json()["created_by"] == TEST_DISPLAY_NAME
+    assert "created_by_username" not in honest.json()
+
+    conversation_id = honest.json()["id"]
+    fetched = client.get(f"/api/conversations/{conversation_id}")
+    listed = client.get("/api/conversations")
+    assert fetched.status_code == 200
+    assert listed.status_code == 200
+    assert "created_by_username" not in fetched.json()
+    assert all("created_by_username" not in item for item in listed.json())
 
 
 # ── 会话链：追问（无计划）────────────────────────────────────────────────
@@ -567,8 +576,11 @@ def test_orchestrate_validated_and_prefilled(app_env) -> None:
     assert a0["prefilled_inputs"] == _fta_inputs("供电完全丧失")
     assert a0["stripped_fields"] == ["bogus"]
     assert reco["dropped_agents"] == [] and reco["capped"] is False
-    # 分析文本原样展示（不因计划块存在而丢）
-    assert "召集故障树分析 Agent" in resp.json()["message"]["content"]
+    # 计划前导文案由内核收束，模型不能在任务签发前自报已召集/已执行。
+    assistant = resp.json()["message"]["content"]
+    assert "召集故障树分析 Agent" not in assistant
+    assert "待你确认的协作方案" in assistant
+    assert "开工后的任务事件" in assistant
     assert "<<PLAN>>" not in resp.json()["message"]["content"], "计划块不外露给用户当正文"
 
     # 会话级 recommendation 已回填
@@ -1209,9 +1221,8 @@ def test_history_window_caps_messages_and_chars() -> None:
     assert w2[-1] is huge[-1]
 
 
-def test_split_plan_preserves_tail_text(app_env) -> None:
-    """审计 P3：计划块之后的 assistant 文本此前被静默丢弃——现原样保留；
-    第二个计划块整体丢弃（只认第一块，sentinel 不外露）。"""
+def test_split_plan_keeps_control_private_and_kernel_owns_visible_plan_status(app_env) -> None:
+    """只认第一计划块；块外模型文案也不能越过内核抢报计划状态。"""
     client, app = app_env
     plan = _orchestrate([_agent("fta_agent", prefilled=_fta_inputs())])
     reply = (
@@ -1222,8 +1233,9 @@ def test_split_plan_preserves_tail_text(app_env) -> None:
     conv_id = _open_conversation(client)
     resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "做故障树"})
     body = resp.json()["message"]
-    assert "块前说明" in body["content"]
-    assert "块后重要提醒" in body["content"], "计划块之后的文本不得静默丢弃"
+    assert "块前说明" not in body["content"]
+    assert "块后重要提醒" not in body["content"]
+    assert "待你确认的协作方案" in body["content"]
     assert "<<PLAN>>" not in body["content"] and "<<END>>" not in body["content"]
     assert body["recommendation"]["agents"][0]["agent_id"] == "fta_agent", "只认第一块"
 
@@ -1265,11 +1277,14 @@ def test_stream_message_ndjson_yields_safe_deltas_then_atomic_done(app_env) -> N
         events = [json.loads(line) for line in resp.iter_lines() if line]
 
     assert events[0]["type"] == "start"
-    assert "".join(e["text"] for e in events if e["type"] == "delta") == "先给你一句可见回复。"
+    streamed = "".join(e["text"] for e in events if e["type"] == "delta")
+    assert streamed == events[-1]["message"]["content"]
+    assert "待你确认的协作方案" in streamed
+    assert "先给你一句可见回复" not in streamed
     assert all("<<PLAN>>" not in json.dumps(e, ensure_ascii=False) for e in events)
     done = events[-1]
     assert done["type"] == "done"
-    assert done["message"]["content"] == "先给你一句可见回复。"
+    assert done["message"]["content"] == streamed
     assert done["message"]["recommendation"]["agents"][0]["agent_id"] == "fta_agent"
 
     persisted = client.get(f"/api/conversations/{conv_id}").json()["messages"]
@@ -1295,10 +1310,10 @@ def test_stream_message_partial_error_is_explicit_and_zero_persistence(app_env) 
     ) as resp:
         events = [json.loads(line) for line in resp.iter_lines() if line]
 
-    assert [e["type"] for e in events] == ["start", "delta", "error"]
-    assert events[1]["text"] == "已收到一小段"
-    assert events[2]["status"] == 502
-    assert events[2]["persisted"] is False
+    assert [e["type"] for e in events] == ["start", "error"]
+    assert "已收到一小段" not in json.dumps(events, ensure_ascii=False)
+    assert events[1]["status"] == 502
+    assert events[1]["persisted"] is False
     assert client.get(f"/api/conversations/{conv_id}").json()["messages"] == []
 
 
@@ -1322,8 +1337,8 @@ def test_stream_message_unclosed_plan_fails_closed_with_zero_persistence(app_env
     ) as resp:
         events = [json.loads(line) for line in resp.iter_lines() if line]
 
-    assert [e["type"] for e in events] == ["start", "delta", "error"]
-    assert events[1]["text"] == "先给可见说明。"
+    assert [e["type"] for e in events] == ["start", "error"]
+    assert "先给可见说明" not in json.dumps(events, ensure_ascii=False)
     assert events[-1]["persisted"] is False
     assert client.get(f"/api/conversations/{conv_id}").json()["messages"] == []
 

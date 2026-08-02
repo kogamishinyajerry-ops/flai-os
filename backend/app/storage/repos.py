@@ -349,12 +349,78 @@ def set_task_status(
     return get_task(conn, task_id)  # type: ignore[return-value]
 
 
+def _validate_skill_application_evidence(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    skill_reuse_binding_digest: str | None,
+    skill_reuse_application_digest: str | None,
+) -> None:
+    """Require one runtime-owned applied event before a reuse terminal edge."""
+
+    if (
+        skill_reuse_binding_digest is None
+        and skill_reuse_application_digest is None
+    ):
+        return
+    lowercase_hex = frozenset("0123456789abcdef")
+    if (
+        not isinstance(skill_reuse_binding_digest, str)
+        or len(skill_reuse_binding_digest) != 71
+        or not skill_reuse_binding_digest.startswith("sha256:")
+        or any(char not in lowercase_hex for char in skill_reuse_binding_digest[7:])
+        or not isinstance(skill_reuse_application_digest, str)
+        or len(skill_reuse_application_digest) != 71
+        or not skill_reuse_application_digest.startswith("sha256:")
+        or any(
+            char not in lowercase_hex for char in skill_reuse_application_digest[7:]
+        )
+    ):
+        raise ReviewEvidenceUnavailableError(
+            "Skill 复用终态要求成对的规范 binding/application 摘要"
+        )
+    rows = conn.execute(
+        "SELECT payload_json FROM task_events "
+        "WHERE task_id = ? AND event_type = 'agent_log' ORDER BY id ASC",
+        (task_id,),
+    ).fetchall()
+    applied_payloads: list[dict[str, Any]] = []
+    try:
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            if (
+                isinstance(payload, dict)
+                and payload.get("workflow_event_type") == "skill_reuse_applied"
+            ):
+                applied_payloads.append(payload)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ReviewEvidenceUnavailableError(
+            "Skill 复用应用事件 payload_json 损坏"
+        ) from exc
+    if len(applied_payloads) != 1:
+        raise ReviewEvidenceUnavailableError(
+            f"Skill 复用终态要求唯一 skill_reuse_applied，实际 {len(applied_payloads)} 条"
+        )
+    applied = applied_payloads[0]
+    if (
+        applied.get("skill_reuse_binding_digest")
+        != skill_reuse_binding_digest
+        or applied.get("skill_reuse_application_digest")
+        != skill_reuse_application_digest
+    ):
+        raise ReviewEvidenceUnavailableError(
+            "skill_reuse_applied 与终态 Skill 摘要不一致"
+        )
+
+
 def complete_task_with_event(
     conn: sqlite3.Connection,
     task_id: str,
     *,
     agent_id: str,
     execution_evidence_digest: str,
+    skill_reuse_binding_digest: str | None = None,
+    skill_reuse_application_digest: str | None = None,
 ) -> dict[str, Any]:
     """原子提交确定性任务的 analyzing→completed 与 task_completed 事件。"""
     conn.execute("BEGIN IMMEDIATE")
@@ -368,6 +434,12 @@ def complete_task_with_event(
                 f"实际 {task['status']} -> completed"
             )
         assert_transition(task["status"], "completed")
+        _validate_skill_application_evidence(
+            conn,
+            task_id,
+            skill_reuse_binding_digest=skill_reuse_binding_digest,
+            skill_reuse_application_digest=skill_reuse_application_digest,
+        )
 
         now = _now_iso()
         conn.execute(
@@ -375,6 +447,13 @@ def complete_task_with_event(
             "WHERE id = ?",
             (now, now, task_id),
         )
+        payload = {"execution_evidence_digest": execution_evidence_digest}
+        if skill_reuse_binding_digest is not None:
+            payload["skill_reuse_binding_digest"] = skill_reuse_binding_digest
+        if skill_reuse_application_digest is not None:
+            payload["skill_reuse_application_digest"] = (
+                skill_reuse_application_digest
+            )
         append_event(
             conn,
             task_id=task_id,
@@ -382,7 +461,7 @@ def complete_task_with_event(
             event_type="task_completed",
             level="info",
             message="任务完成",
-            payload={"execution_evidence_digest": execution_evidence_digest},
+            payload=payload,
         )
         conn.execute("COMMIT")
     except BaseException:
@@ -397,6 +476,8 @@ def request_task_review_with_event(
     *,
     agent_id: str,
     execution_evidence_digest: str,
+    skill_reuse_binding_digest: str | None = None,
+    skill_reuse_application_digest: str | None = None,
 ) -> dict[str, Any]:
     """原子提交 running→waiting_review 与绑定执行证据的 review_requested。"""
     conn.execute("BEGIN IMMEDIATE")
@@ -410,12 +491,25 @@ def request_task_review_with_event(
                 f"实际 {task['status']} -> waiting_review"
             )
         assert_transition(task["status"], "waiting_review")
+        _validate_skill_application_evidence(
+            conn,
+            task_id,
+            skill_reuse_binding_digest=skill_reuse_binding_digest,
+            skill_reuse_application_digest=skill_reuse_application_digest,
+        )
 
         now = _now_iso()
         conn.execute(
             "UPDATE tasks SET status = 'waiting_review', updated_at = ? WHERE id = ?",
             (now, task_id),
         )
+        payload = {"execution_evidence_digest": execution_evidence_digest}
+        if skill_reuse_binding_digest is not None:
+            payload["skill_reuse_binding_digest"] = skill_reuse_binding_digest
+        if skill_reuse_application_digest is not None:
+            payload["skill_reuse_application_digest"] = (
+                skill_reuse_application_digest
+            )
         append_event(
             conn,
             task_id=task_id,
@@ -423,7 +517,7 @@ def request_task_review_with_event(
             event_type="review_requested",
             level="info",
             message="任务需要人工审核放行",
-            payload={"execution_evidence_digest": execution_evidence_digest},
+            payload=payload,
         )
         conn.execute("COMMIT")
     except BaseException:
@@ -432,11 +526,11 @@ def request_task_review_with_event(
     return get_task(conn, task_id)  # type: ignore[return-value]
 
 
-def _review_execution_evidence_digest(
+def _review_execution_evidence(
     conn: sqlite3.Connection,
     task_id: str,
-) -> str:
-    """从唯一执行/审核请求事件重验人签所对应的执行证据摘要。"""
+) -> tuple[str, str | None, str | None]:
+    """重验人工签发对应的执行证据与可选 Skill binding/application。"""
 
     def _unique_payload(event_type: str) -> dict[str, Any]:
         rows = conn.execute(
@@ -516,7 +610,90 @@ def _review_execution_evidence_digest(
         raise ReviewEvidenceUnavailableError(
             "review_requested 与 validation_started 的 execution_evidence_digest 不一致"
         )
-    return digest
+
+    validation_has_reuse = "skill_reuse_binding_digest" in validation_payload
+    requested_has_reuse = "skill_reuse_binding_digest" in requested_payload
+    if validation_has_reuse is not requested_has_reuse:
+        raise ReviewEvidenceUnavailableError(
+            "review_requested 与 validation_started 的 Skill 复用证据单边缺失"
+        )
+    skill_reuse_binding_digest: str | None = None
+    skill_reuse_application_digest: str | None = None
+    if validation_has_reuse is True:
+        validation_reuse_digest = validation_payload.get(
+            "skill_reuse_binding_digest"
+        )
+        requested_reuse_digest = requested_payload.get(
+            "skill_reuse_binding_digest"
+        )
+        if (
+            not isinstance(validation_reuse_digest, str)
+            or len(validation_reuse_digest) != 71
+            or not validation_reuse_digest.startswith("sha256:")
+            or any(
+                char not in lowercase_hex for char in validation_reuse_digest[7:]
+            )
+            or requested_reuse_digest != validation_reuse_digest
+        ):
+            raise ReviewEvidenceUnavailableError(
+                "review_requested 与 validation_started 的 Skill 复用证据无效或不一致"
+            )
+        skill_reuse_binding_digest = validation_reuse_digest
+        validation_has_application = (
+            "skill_reuse_application_digest" in validation_payload
+        )
+        requested_has_application = (
+            "skill_reuse_application_digest" in requested_payload
+        )
+        if (
+            validation_has_application is not True
+            or requested_has_application is not True
+        ):
+            raise ReviewEvidenceUnavailableError(
+                "Skill 复用 binding 存在但应用证据缺失"
+            )
+        validation_application_digest = validation_payload.get(
+            "skill_reuse_application_digest"
+        )
+        requested_application_digest = requested_payload.get(
+            "skill_reuse_application_digest"
+        )
+        if (
+            not isinstance(validation_application_digest, str)
+            or len(validation_application_digest) != 71
+            or not validation_application_digest.startswith("sha256:")
+            or any(
+                char not in lowercase_hex
+                for char in validation_application_digest[7:]
+            )
+            or requested_application_digest != validation_application_digest
+        ):
+            raise ReviewEvidenceUnavailableError(
+                "review_requested 与 validation_started 的 Skill 应用证据无效或不一致"
+            )
+        skill_reuse_application_digest = validation_application_digest
+        _validate_skill_application_evidence(
+            conn,
+            task_id,
+            skill_reuse_binding_digest=skill_reuse_binding_digest,
+            skill_reuse_application_digest=skill_reuse_application_digest,
+        )
+    elif (
+        "skill_reuse_application_digest" in validation_payload
+        or "skill_reuse_application_digest" in requested_payload
+    ):
+        raise ReviewEvidenceUnavailableError(
+            "Skill 应用证据不能脱离复用 binding 单独存在"
+        )
+    return digest, skill_reuse_binding_digest, skill_reuse_application_digest
+
+
+def _review_execution_evidence_digest(
+    conn: sqlite3.Connection,
+    task_id: str,
+) -> str:
+    """兼容旧调用：只返回重验后的 execution_evidence_digest。"""
+    return _review_execution_evidence(conn, task_id)[0]
 
 
 def apply_human_review(
@@ -545,7 +722,7 @@ def apply_human_review(
     IllegalTransitionError（调用方按并发竞态转 409；含另一 review 已并发转出的场景）。
     """
     approve = action == "approve"
-    new_status = "completed" if approve else "failed"
+    new_status = "completed" if approve is True else "failed"
     conn.execute("BEGIN IMMEDIATE")
     try:
         task = get_task(conn, task_id)
@@ -555,15 +732,23 @@ def apply_human_review(
         # （并发二次 review 命中已转出任务时在此抛 IllegalTransitionError）。
         assert_transition(task["status"], new_status)
         execution_evidence_digest: str | None
+        skill_reuse_binding_digest: str | None
+        skill_reuse_application_digest: str | None
         execution_evidence_status = "verified"
         try:
-            execution_evidence_digest = _review_execution_evidence_digest(
+            (
+                execution_evidence_digest,
+                skill_reuse_binding_digest,
+                skill_reuse_application_digest,
+            ) = _review_execution_evidence(
                 conn, task_id
             )
         except ReviewEvidenceUnavailableError:
-            if approve:
+            if approve is True:
                 raise
             execution_evidence_digest = None
+            skill_reuse_binding_digest = None
+            skill_reuse_application_digest = None
             execution_evidence_status = "unverified"
         now = _now_iso()
         updates: dict[str, Any] = {
@@ -571,7 +756,7 @@ def apply_human_review(
             "updated_at": now,
             "finished_at": now,  # completed/failed 均 terminal
         }
-        if not approve:
+        if approve is False:
             updates["error_message"] = f"人工拒绝（reviewer={reviewer}）" + (
                 f"：{comment}" if comment else ""
             )
@@ -590,9 +775,15 @@ def apply_human_review(
         }
         if execution_evidence_digest is not None:
             payload["execution_evidence_digest"] = execution_evidence_digest
+        if approve is True and skill_reuse_binding_digest is not None:
+            payload["skill_reuse_binding_digest"] = skill_reuse_binding_digest
+        if approve is True and skill_reuse_application_digest is not None:
+            payload["skill_reuse_application_digest"] = (
+                skill_reuse_application_digest
+            )
         if reviewer_username is not None:
             payload["reviewer_username"] = reviewer_username
-        if approve:
+        if approve is True:
             append_event(
                 conn,
                 task_id=task_id,
@@ -1387,6 +1578,7 @@ _FIRST_USER_MESSAGE_PREVIEW_MAX = 120
 
 def _decode_conversation(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
+    d.pop("created_by_username", None)  # 内部 owner 证明，不进入公共会话投影
     _decode_json(d, "recommendation_json", "recommendation", default=None)
     return d
 
@@ -1405,16 +1597,27 @@ def create_conversation(
     conversation_id: str,
     agent_id: str,
     created_by: str,
+    created_by_username: str | None = None,
 ) -> dict[str, Any]:
     """建会话：初始态 active，无推荐（recommendation 留 NULL 待对话产出）。"""
     now = _now_iso()
     conn.execute(
         """
         INSERT INTO conversations
-            (id, agent_id, status, created_by, recommendation_json, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?)
+            (id, agent_id, status, created_by, created_by_username,
+             recommendation_json, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?)
         """,
-        (conversation_id, agent_id, "active", created_by, None, now, now),
+        (
+            conversation_id,
+            agent_id,
+            "active",
+            created_by,
+            created_by_username,
+            None,
+            now,
+            now,
+        ),
     )
     return get_conversation(conn, conversation_id)  # type: ignore[return-value]
 
@@ -1424,6 +1627,17 @@ def get_conversation(conn: sqlite3.Connection, conversation_id: str) -> dict[str
         "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
     ).fetchone()
     return _decode_conversation(row) if row is not None else None
+
+
+def get_conversation_owner_username(
+    conn: sqlite3.Connection, conversation_id: str
+) -> str | None:
+    """只读内部 owner 证明；公共会话投影刻意不暴露该身份键。"""
+    row = conn.execute(
+        "SELECT created_by_username FROM conversations WHERE id = ?",
+        (conversation_id,),
+    ).fetchone()
+    return row["created_by_username"] if row is not None else None
 
 
 def list_conversations(

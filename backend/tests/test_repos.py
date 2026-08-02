@@ -82,6 +82,118 @@ def test_init_db_creates_required_indexes(conn) -> None:
     assert expected <= names, f"缺索引：{expected - names}"
 
 
+# ── conversations.created_by_username（持久 owner 证明）───────────────
+
+
+def test_fresh_conversations_owner_username_is_nullable_without_default(conn) -> None:
+    columns = {
+        row["name"]: row for row in conn.execute("PRAGMA table_info(conversations)")
+    }
+
+    owner = columns["created_by_username"]
+    assert owner["notnull"] == 0
+    assert owner["dflt_value"] is None
+
+
+_LEGACY_CONVERSATIONS_DDL_WITHOUT_OWNER = """
+CREATE TABLE conversations (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    recommendation_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
+
+def test_conversation_owner_migration_keeps_legacy_rows_unproven(tmp_path) -> None:
+    db_path = tmp_path / "legacy-conversations.db"
+    legacy = db_mod.get_conn(db_path)
+    try:
+        legacy.execute(_LEGACY_CONVERSATIONS_DDL_WITHOUT_OWNER)
+        legacy.execute(
+            "INSERT INTO conversations "
+            "(id, agent_id, status, created_by, recommendation_json, created_at, updated_at) "
+            "VALUES ('conv_legacy', 'guide_agent', 'active', '测试工程师', NULL, "
+            "'2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+        )
+    finally:
+        legacy.close()
+
+    db_mod.init_db(db_path)
+    migrated = db_mod.get_conn(db_path)
+    try:
+        columns = {
+            row["name"]: row
+            for row in migrated.execute("PRAGMA table_info(conversations)")
+        }
+        assert columns["created_by_username"]["dflt_value"] is None
+        assert repos.get_conversation_owner_username(migrated, "conv_legacy") is None
+        public = repos.get_conversation(migrated, "conv_legacy")
+        assert public is not None
+        assert public["created_by"] == "测试工程师"
+        assert "created_by_username" not in public
+    finally:
+        migrated.close()
+
+    db_mod.init_db(db_path)
+
+
+def test_conversation_owner_is_internal_but_raw_lookup_is_available(conn) -> None:
+    created = repos.create_conversation(
+        conn,
+        conversation_id="conv_owner_projection",
+        agent_id="guide_agent",
+        created_by="测试工程师",
+        created_by_username="test_engineer",
+    )
+
+    assert "created_by_username" not in created
+    assert "created_by_username" not in repos.get_conversation(
+        conn, "conv_owner_projection"
+    )
+    assert "created_by_username" not in repos.list_conversations(conn)[0]
+    assert (
+        repos.get_conversation_owner_username(conn, "conv_owner_projection")
+        == "test_engineer"
+    )
+    assert repos.get_conversation_owner_username(conn, "conv_missing") is None
+
+
+@pytest.mark.parametrize(
+    ("initial_owner", "replacement_owner"),
+    [
+        (None, "test_engineer"),
+        ("test_engineer", None),
+        ("test_engineer", "another_engineer"),
+    ],
+    ids=["null-to-value", "value-to-null", "value-to-other-value"],
+)
+def test_conversation_owner_username_is_immutable_for_every_transition(
+    conn, initial_owner: str | None, replacement_owner: str | None
+) -> None:
+    conversation_id = f"conv_owner_immutable_{uuid.uuid4().hex}"
+    repos.create_conversation(
+        conn,
+        conversation_id=conversation_id,
+        agent_id="guide_agent",
+        created_by="测试工程师",
+        created_by_username=initial_owner,
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="created_by_username is immutable"):
+        conn.execute(
+            "UPDATE conversations SET created_by_username = ? WHERE id = ?",
+            (replacement_owner, conversation_id),
+        )
+
+    assert (
+        repos.get_conversation_owner_username(conn, conversation_id) == initial_owner
+    )
+
+
 # ── tasks ──────────────────────────────────────────────────────────────
 
 def test_create_task_defaults_to_created_status(conn) -> None:

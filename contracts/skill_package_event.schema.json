@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/skill_package_event.schema.json",
+  "title": "FLAi-OS Candidate Skill Package Event",
+  "description": "隔离 Skill Package 的追加式审计事件。机器只能记录材化，批准或拒绝只能来自服务端验证过的真人会话。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "package_id",
+    "package_digest",
+    "event_type",
+    "from_state",
+    "to_state",
+    "actor_source",
+    "signer_display_name",
+    "signer_user_id",
+    "signer_username",
+    "signer_session_hash",
+    "message",
+    "payload",
+    "created_at"
+  ],
+  "properties": {
+    "event_id": {"type": "string", "pattern": "^skill_package_event_[0-9a-f]{32}$"},
+    "package_id": {"type": "string", "pattern": "^skill_package_[0-9a-f]{24}$"},
+    "package_digest": {"$ref": "#/$defs/digest"},
+    "event_type": {"enum": ["materialized", "approved", "rejected"]},
+    "from_state": {
+      "type": ["string", "null"],
+      "enum": [null, "pending_review"]
+    },
+    "to_state": {"enum": ["pending_review", "approved", "rejected"]},
+    "actor_source": {"enum": ["candidate_materializer", "authenticated_session"]},
+    "signer_display_name": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "signer_user_id": {"type": ["integer", "null"], "minimum": 1},
+    "signer_username": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "signer_session_hash": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "message": {"type": "string", "minLength": 1, "maxLength": 500},
+    "payload": {"type": "object"},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "oneOf": [
+    {
+      "title": "Deterministic machine materialization",
+      "properties": {
+        "event_type": {"const": "materialized"},
+        "from_state": {"const": null},
+        "to_state": {"const": "pending_review"},
+        "actor_source": {"const": "candidate_materializer"},
+        "signer_display_name": {"const": null},
+        "signer_user_id": {"const": null},
+        "signer_username": {"const": null},
+        "signer_session_hash": {"const": null},
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source_candidate_digest", "source_acceptance_event_digest"],
+          "properties": {
+            "source_candidate_digest": {"$ref": "#/$defs/digest"},
+            "source_acceptance_event_digest": {"$ref": "#/$defs/digest"}
+          }
+        }
+      }
+    },
+    {
+      "title": "Package approved by an authenticated signer session",
+      "properties": {
+        "event_type": {"const": "approved"},
+        "from_state": {"const": "pending_review"},
+        "to_state": {"const": "approved"},
+        "actor_source": {"const": "authenticated_session"},
+        "signer_display_name": {"type": "string", "minLength": 1, "maxLength": 128},
+        "signer_user_id": {"type": "integer", "minimum": 1},
+        "signer_username": {"type": "string", "minLength": 1, "maxLength": 128},
+        "signer_session_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "payload": {"const": {}}
+      }
+    },
+    {
+      "title": "Package rejected by an authenticated signer session",
+      "properties": {
+        "event_type": {"const": "rejected"},
+        "from_state": {"const": "pending_review"},
+        "to_state": {"const": "rejected"},
+        "actor_source": {"const": "authenticated_session"},
+        "signer_display_name": {"type": "string", "minLength": 1, "maxLength": 128},
+        "signer_user_id": {"type": "integer", "minimum": 1},
+        "signer_username": {"type": "string", "minLength": 1, "maxLength": 128},
+        "signer_session_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "payload": {"const": {}}
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}
