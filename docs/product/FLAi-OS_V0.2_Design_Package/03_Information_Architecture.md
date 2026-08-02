@@ -1,0 +1,282 @@
+# 03｜信息架构
+
+> 文档性质：V0.2 设计包读模型，不是新的事实源，也不授权实现。
+>
+> 主要决策依据：[ADR-0052](../../adr/ADR-0052-workbench-first-and-role-specific-governance-surfaces.md)、[ADR-0059](../../adr/ADR-0059-co-building-map-and-evidence-derived-metrics.md)、[ADR-0060](../../adr/ADR-0060-demand-co-creation-loop.md)、[ADR-0061](../../adr/ADR-0061-demand-decision-rights-and-roadmap-signoff.md)、[ADR-0063](../../adr/ADR-0063-external-development-airgap-internal-workspace.md)、[ADR-0064](../../adr/ADR-0064-workspace-foreground-verifiable-delivery-and-dual-track-development.md)。
+>
+> 当前实现依据：[UI-PARADIGM](../../design/UI-PARADIGM.md)、[UI-SIMPLIFICATION-CONVERSATION-HOME](../../design/UI-SIMPLIFICATION-CONVERSATION-HOME.md)。
+
+## 1. 状态标签与阅读方法
+
+本文用以下标签区分事实、决策与设想。标签作用于紧随其后的设计项，不得省略或用模糊的“已支持”替代。
+
+| 标签 | 含义 |
+|---|---|
+| `IMPLEMENTED-VERIFIED` | 当前精确范围、版本与环境有可复跑机械证据，绑定命令、结果引用和日期；不等于生产就绪 |
+| `IMPLEMENTED-PARTIAL` | 已有可复用实现，但尚未满足 V0.2 的完整 Interface 或安全合同 |
+| `ACCEPTED-NOT-IMPLEMENTED` | 已由 ADR 接受，当前尚未实现 |
+| `DECLARED-NOT-VERIFIED` | 候选设计或外部声明，尚缺本项目证据 |
+| `OUT-OF-SCOPE` | 当前阶段明确不做 |
+
+本章描述的是用户如何找到工作、理解状态并进入证据，不另建任务、身份、指标或审计事实源。若本章与 ADR 冲突，以 ADR 为准；若目标态与当前实现不同，必须同时保留二者的状态标签。
+
+## 2. IA 目标心智模型：一个内网 FLAi Workspace、一份工作收件箱、角色化空间
+
+`ACCEPTED-NOT-IMPLEMENTED`
+
+组织级默认心智模型不是“先找系统、再找表格、再挑 Agent”，而是：
+
+> 我在内网 FLAi 工作空间看到该做什么、项目发生了什么，并用一句话推进工作；需要专业执行
+> 时进入同一上下文中的工程智能体工作台；状态、证据与结果主动回到我的工作收件箱。
+
+内网产品只建立一个顶层应用“FLAi 工作空间”。工程执行、项目讨论、知识、共建、治理与领导
+阅读是其中的角色化空间；它们投影联邦 owner 的事实，不是多套应用，也不是一张聊天/Wiki/
+项目总表。Mattermost、Wiki.js 或其他自托管产品只隐藏在 Adapter 后面。
+
+`FLAiWorkspace` 拥有体验主权：统一导航、会话中心、动态执行流、Artifact 工作台、工作收件箱
+和视觉语言由 Workspace 负责，第三方自托管 Surface 只提供可替换能力。用户不需要理解这些
+产品的边界，也不在多套导航、任务状态和视觉语言之间切换。底层 `VerifiableWorkDelivery`
+保持为隐性价值对象；普通用户不需要先学习交付包、策略、任务图或治理术语才能开始工作。
+
+| 空间／Surface | 默认受众 | 核心问题 | 入口形态 | 写入权限 |
+|---|---|---|---|---|
+| 工作收件箱 | 全体内网认证参与者 | “现在最值得我推进、处理或查看的是什么？” | FLAiWorkspace 默认页 | 只提交低门槛输入或 typed intent；不直接改权威状态 |
+| 项目讨论与知识 | 项目成员 | “团队刚刚讨论、决定和沉淀了什么？” | Workspace 内嵌或受控深链到自托管 Surface | 协作草稿与来源材料；正式事实走 owner receipt |
+| 工程智能体工作台 | 工程师、业务人员、试点用户 | “Agent 正在做什么，当前产物与依据是什么，我要签发什么？” | Workspace 内专业执行 Surface | 创建自治会话；在末端处理精确 Delivery Bundle |
+| 内部代码专业 Surface | 内网开发者、具名 reviewer | “内部导入/补丁是否可接受，CI 是否满足？” | 重新鉴权到内部 Code Forge | 内部 review/merge；不连接 GitHub.com |
+| FLAi 共建地图 | 全体内网认证参与者 | “平台真实具备什么，下一步做什么，我的需求去哪里了？” | Workspace 内只读空间 | 地图状态只读；自然语言需求形成不可变输入 |
+| 治理与运行中心 | 平台管理员、安全人员、Agent Owner、具名治理职责 | “哪些例外需要处置，能力为何受阻，资源与审计是否合规？” | Workspace 内按职责出现 | 只提交 typed intent；权威 owner 重验并返回 receipt |
+| 智能化指挥中心 | 领导、AI 负责人 | “经验证的能力、价值和风险是什么？” | Workspace 内后置只读空间 | 只读，不允许手填点绿、改任务或替代签发 |
+
+`OUT-OF-SCOPE` Phase 0A 不建设领导驾驶舱、个人生产力排行、战略甘特图或独立 Management Plane 应用。智能化指挥中心是后置证据投影，不是 FLAi-OS 产品总名。
+
+## 3. 全局对象层级
+
+`ACCEPTED-NOT-IMPLEMENTED`
+
+用户前台只暴露完成工作所需的稳定对象；模型网关、任务队列、MCP、策略求解器等实现名词进入治理详情，而不是普通用户一级入口。
+
+```text
+内网
+└── FLAiWorkspace（唯一顶层入口）
+    ├── 工作收件箱（默认）
+    │   ├── 一句话 Composer
+    │   ├── 我的待处理
+    │   ├── 项目实质变化
+    │   └── 最近产物、风险与回执
+    ├── 我的项目
+    │   ├── 责任事项 / 决策 / 风险 / 会议
+    │   ├── 项目讨论 / 文档 / 知识
+    │   ├── 内部代码与发布投影
+    │   └── Agent 运行与产物投影
+    ├── 工程智能体工作台（专业执行）
+    │   ├── 自治会话与执行时间线
+    │   ├── 产物与证据
+    │   └── Delivery Bundle
+    ├── 需求共创与 FLAi 共建地图
+    ├── 真相知识
+    ├── 能力与 FLAi Bench
+    ├── 治理与运行中心（角色受限）
+    ├── 安全与审计（角色受限）
+    └── 指标与智能化指挥中心（后置、只读）
+```
+
+对象层级的关键约束：
+
+1. 自治会话是普通用户的工作容器；用户不需要理解内部 Agent 数量。
+2. 产物和证据属于同一会话上下文，不能分别落入互不关联的“文件中心”和“日志中心”。
+3. Delivery Bundle 是会话末端的不可变交付对象，不是聊天消息或空白审批单。
+4. 共建地图节点引用能力发布、FLAi Bench、人工签发和运行证据，不复制或在聊天、Wiki、项目表中重写这些状态。
+5. 需求信号、路线图承诺、工程 Issue 是三层事实；用户看到连接关系，但不能在展示层直接互改状态。
+6. 所有投影显示 owner、source version/digest、classification、freshness 与
+   `source_evidence_ref`；治理变迁显示适用的 owner receipt，运行事实显示 witness，内部
+   Code Forge/Registry 只读事实显示 verified provider state。缺少该类事实的必需证据时显示
+   stale/unknown/suppressed，而不是强求每个只读事实都有治理 receipt。
+7. FLAiWorkspace 是唯一内网 landing、工作收件箱与编排入口，但内部代码专业 Surface、
+   FLAi 专业执行 Surface 与密封安全通道仍保留；Internal Forge/Registry、FLAi Control
+   Kernel、Knowledge Authority、Audit/WORM 与内网 Secret owner 各守事实。
+8. 外网 Feishu/GitHub/Codex/Kimi 只出现在“研发来源与离线发布 provenance”中，不进入普通
+   内网导航，也不提供实时深链。
+
+## 4. 默认工作收件箱与专业执行导航
+
+### 4.1 普通用户的最小导航
+
+`ACCEPTED-NOT-IMPLEMENTED`
+
+普通用户首先进入内网 FLAi 工作收件箱，首屏只承担“开始、处理、回看”，避免把组织治理分类
+和第三方系统 schema 搬到日常工作前台：
+
+1. **一句话 Composer**：根据上下文提出“发起任务、提交需求、导入会议材料、查知识、补证据”等候选意图；无法区分时只问一次最小澄清。
+2. **我的待处理**：只显示当前用户真实需要处理的 3–7 项，按影响和时限排序，不显示全量看板。
+3. **项目实质变化**：只显示 owner 事实的新变化、source gap 和风险，不以消息数量冒充进展。
+4. **最近工作**：会话、产物、决策和回告保持稳定引用；进入执行任务时打开工程智能体工作台。
+5. **共建与知识**：提供低门槛入口，但不取代工作收件箱。
+
+“Agent 与能力”不作为完成任务的必经一级页面。用户可在 Composer 附近只读看到平台根据目标、项目上下文、冻结 CapabilityReleasePackage 和策略推导的已批准能力，但 Phase 0A 不提供任务级 Agent、Skill、Workflow、模型、Tool、Schema 或权限调整。模型、工具、策略版本、队列和 Sandbox 只在提交后的渐进披露/证据检查器中展示；治理人员通过 InternalWorkspaceHub typed intent 发起版本化变更，owner receipt 生效后才更新投影。
+
+### 4.2 状态不依赖导航
+
+`IMPLEMENTED-PARTIAL`
+
+当前仓库已具备 StatusDock、StatusCenter、任务速览、深链任务页和对话内状态回流，落实了“状态来找人”的基本方向。V0.2 延续四级渐进披露：
+
+```text
+全局状态 pill
+  → 状态中心分组清单
+    → 会话／任务速览（产物、证据、例外）
+      → 完整深链页（审计、原始记录、受限详情）
+```
+
+V0.2 仍缺少统一的自治会话、Delivery Bundle、执行授权 receipt 和完整失败/未知合同，因此当前 `waiting_review` 及 `POST /review` 不能被宣称为目标态末端交付体验。
+
+### 4.3 角色入口采用能力显隐，不采用四套侧栏
+
+`ACCEPTED-NOT-IMPLEMENTED`
+
+治理、共建和领导视图通过同一内网 FLAiWorkspace 中的角色化入口出现：
+
+- 没有治理职责的用户看不到治理写操作；知道深链也不能越权。
+- 需求策展、领域评审、安全评审、路线图签发按职责和作用域出现，不笼统绑定全局管理员。
+- 领导视图只读取已验证聚合，不能绕过工作台直接改任务、路线图或评测状态。
+- 相同对象在不同 Surface 保持同一个稳定标识、版本和事件引用，避免“业务名”和“审计名”无法对上。
+
+## 5. 内嵌工程工作台的单会话信息结构
+
+`ACCEPTED-NOT-IMPLEMENTED`
+
+当用户从 FLAi 工作收件箱进入专业执行任务后，桌面端主视图采用“稳定左轨、连续中央叙事、
+按需右侧检查器”，吸收 WorkBuddy 的中文工作对象与 Claude/Codex 的执行透明度，但不复制品牌
+或像素布局，也不形成第二套项目管理导航。
+
+| 区域 | 默认内容 | 展开后内容 | 不允许出现 |
+|---|---|---|---|
+| 左轨 | 新任务、最近工作、共建地图入口 | 工作空间切换、搜索 | 模型网关、MCP、策略引擎等实现名词堆叠 |
+| 中央 Composer | 自然语言目标、附件、当前工作空间与范围摘要 | 本次能力、数据域、网络与限制说明 | Agent 规划后再让用户填责任人、工具参数或长表单 |
+| 中央时间线 | 计划摘要、排队、执行、验证、恢复、阻断与交付状态 | 脱敏工具记录、证据引用、并行分支 | 内部思维链、虚构百分比、循环动画冒充进度 |
+| 右侧检查器 | 当前产物、差异、关键证据、待确认例外 | 文件预览、精确来源、hash、验证详情 | secret 明文、无权限原始 JSON、草稿冒充正式资产 |
+| 末端交付 | Delivery Bundle 摘要、残余风险、待交付动作 | 精确版本、策略、差异、receipt | 中途逐命令审批、永久 Full Access、授权后直接显示成功 |
+
+右侧检查器是实时对象舞台，不是固定依据栏。它优先显示当前正在处理或生成的对象，其次是用户
+最可能检查的预览、差异、异常和待确认问题，再其次才是当前证据与历史依据；每次切换都应解释
+“为什么此刻显示它”。缺少可验证对象时显示缺口，不以漂亮占位或循环动效冒充进展。
+
+右侧检查器关闭时不丢会话上下文；打开产物不替换中央时间线。移动焦点、返回和深链必须可预测，`Esc` 层层退出，`⌘K` 可检索会话、任务、产物和有权访问的治理对象。
+
+## 6. FLAi 共建地图 IA
+
+`ACCEPTED-NOT-IMPLEMENTED`
+
+完整地图采用“战略目标 → 平台地基 → 黄金工作流 → 能力发布包 → 证据”纵向关系。普通用户首先看到：
+
+- 当前平台版本与适用范围；
+- 已验证、验证中、受阻、证据待补、计划中的能力节点；
+- 本周真实变化与下一步目标；
+- 每个节点来自哪些需求场景；
+- 自己提交或关注的需求当前状态；
+- 一句自然语言“告诉我们最费时间的工作”入口。
+
+需求提交只要求一段自然语言，可选关联当前会话、失败任务、文件或截图。认证身份、时间、来源和可用上下文由平台绑定。提交后进入需求池，不自动成为路线图承诺或工程 Issue。
+
+治理角色在同一节点上可进一步展开：来源需求、适用领域评审、安全门、路线图版本、工程 Issue、能力发布包、FLAi Bench 证据和用户验收。受限内容由策略投影为脱敏摘要或受限节点，不因“全员地图”而泄露。
+
+地图状态只能由证据派生。未知、无基线、样本不足和受阻必须成为可见状态；不能显示无冻结分母的“完成度 83%”，也不能把 Token、任务量或节时做个人排行榜。
+
+## 7. 治理与运行中心 IA
+
+`ACCEPTED-NOT-IMPLEMENTED`
+
+治理中心按“需要处置的例外”组织，而不是按数据库表或微模块堆菜单：
+
+| 治理工作区 | 首屏回答 | 主要证据深链 |
+|---|---|---|
+| 运行 | 哪些会话排队、超时、失联、资源受限或需要停止？ | 任务图、心跳、配额、Sandbox receipt |
+| 能力 | 哪些 Agent／Workflow 版本可用、试用、受阻或待退役？ | 能力发布包、版本差异、FLAi Bench |
+| 安全 | 哪些策略拒绝、越权尝试、外联、敏感数据或不可逆动作需要处理？ | 身份、策略版本、对象范围、完整审计事件 |
+| 需求治理 | 哪些候选待策展、领域评审、安全评审或路线图签发？ | 原始需求、合并关系、评审与签发记录 |
+| 审计 | 某次交付究竟由谁、基于什么、在何时执行了什么？ | 不可变事件、Bundle、授权和效果 receipt |
+
+普通执行过程中不会因治理中心存在而要求用户跳转处理技术性策略字段。策略允许则自治继续；策略禁止或无法安全暂存则会话聚合为受阻结果，治理人员在独立职责范围内处理根因。
+
+## 8. 智能化指挥中心 IA
+
+`ACCEPTED-NOT-IMPLEMENTED`
+
+该 Surface 只在 Phase 0A 形成足够真实事实后设计和开放。其信息顺序是：
+
+1. 当前已验证能力与明确限制；
+2. 使用覆盖、质量、安全、资源与组织价值的证据化指标；
+3. 战略目标到能力发布包的关系；
+4. 需要领导决策的少量风险例外与路线图取舍；
+5. 可追溯到共建地图、FLAi Bench 和运行事实的深链。
+
+它不展示个人 Token 排名、个人任务量、没有基线的节时数字，也不提供“手工改完成率”或“一键批准所有需求”。
+
+## 9. Module、Interface 与 Seam
+
+`ACCEPTED-NOT-IMPLEMENTED`
+
+IA 由少量深 Module 支撑，避免每个页面各自解释状态：
+
+| Module | Interface | Seam | Depth、Leverage 与 Locality |
+|---|---|---|---|
+| 角色化导航 Module | 输入认证主体、职责与作用域；返回可见 Surface 与动作 | 控制内核授权投影到应用外壳的位置 | 一个 Interface 统一导航显隐、深链守卫和动作资格；权限变化集中处理 |
+| 会话叙事 Module | 输入权威事件与观察状态；返回中文时间线条目和可展开证据引用 | 事件账本到工作台时间线的位置 | 把状态归并、脱敏、未知与错误语义藏在实现中，所有工作流复用 |
+| 产物与证据 Module | 输入会话、主体和产物引用；返回可预览内容、差异与证据 | 文件/证据仓储到右侧检查器的位置 | 预览、分级、hash、权限和错误呈现集中，避免页面直接读路径 |
+| Delivery Bundle Module | 输入精确 Bundle 引用与主体；返回摘要、差异、风险、合法末端动作 | 自治执行到人类最终权威的位置 | 授权匹配、漂移、过期和 receipt 复杂度留在实现内；前台只有少量明确动作 |
+| 共建投影 Module | 输入路线图版本、发布、评测、反馈和指标事实；返回只读地图 | 多事实源到全员共建视图的位置 | 状态派生与隐私聚合集中，展示层无手工点绿能力 |
+| InternalWorkspaceHub | `open/prepare/commit`；返回授权投影、ReviewChallengeV1、OwnerCommitReceiptV1 或 EffectUnknownV1 | 自托管协作/知识、内部身份、FLAi、Knowledge、Audit 与 InternalSecretProvider 的交界 | 一个内网入口隐藏多平台差异；事实 owner、classification、receipt 与对账规则集中 |
+| AirGapExchange | `sealRelease/admitRelease/sealSanitizedFeedback`；返回签名 Bundle、内部候选 receipt 或 fail-closed 失败 | 外网研发域、隔离交换域与内网运行域的唯一跨域 Seam | 内容寻址、quarantine、scan、ReleaseSet CAS、出站 allowlist 和 effect unknown 集中 |
+
+只有确有多个 Adapter 的地方才建立 Seam，例如同一产物预览 Interface 下的 DOCX、文本和受控工程文件 Adapter。不要为单一当前实现虚构扩展层；新工作流优先复用既有 Interface，保持 Locality。
+
+频道/线程、Wiki 页面、项目表与内嵌网页应用只是不同自托管 Adapter：项目表承载结构化协作
+草稿和高级视图，Wiki/DMS 承载叙事与知识来源，Chat 承载讨论、提醒和低影响动作，FLAi
+Workspace 承载复杂审阅。任何 Adapter 都不能直接写 FLAi/Knowledge/Audit owner 或把投影字段
+改成权威事实。
+
+## 10. 失败、未知与阻断的信息去向
+
+`ACCEPTED-NOT-IMPLEMENTED`
+
+异常不是单独“错误中心”里的死信，而要回到用户正在看的会话：
+
+- **失败**：真实执行或验证失败；显示失败阶段、已完成工作、未完成范围、可下载诊断和安全重试条件。
+- **未知**：平台无法观测、缺少依据或状态结构不可解析；明确写“无法确认”，不折算为 0、完成或无风险。
+- **受阻**：策略禁止、输入冲突、必要权威依据缺失或不可逆效果无法安全暂存；会话停止在安全位置，集中说明阻断项与可行下一步。
+- **降级**：功能仍能继续但证据覆盖缩小；必须说明降级范围，使用 amber 与文字/图标双编码。
+- **取消**：区分用户停止、策略终止和系统强杀；保留已经产生的证据，不伪装成失败或完成。
+
+状态坞只提醒需要当前用户处理的事项。治理性异常只通知有职责者；普通用户看到对本次工作的影响，不被迫理解底层告警风暴。
+
+## 11. IA 验收条件
+
+未来原型至少要机械验证：
+
+1. 新用户从内网 FLAi 工作收件箱只写目标和附加文件即可开始三条黄金 tracer，不经过任务创建长表单。
+2. 会话运行期间没有逐命令、逐工具、逐文件的泛化审批弹窗。
+3. 关闭右侧检查器、切换会话、刷新深链后，任务、状态和证据仍指向同一权威标识。
+4. 普通用户、需求策展人、安全评审人和领导看到的入口与动作符合各自职责；手工输入受限 URL 仍 fail-closed。
+5. 共建地图状态可追溯到发布、评测或签发证据；移除证据后不能继续显示已验证。
+6. `unknown`、`null`、`zero`、失败、受阻和取消在文字、图标及可访问名称上均不同。
+7. 当前 `waiting_review` 不被标为 V0.2 Delivery Bundle 已实现；目标交付需独立契约和验证。
+8. 中文文件名、长标题、中文标点和 200% 缩放下仍可完成 Composer、时间线、检查器和交付操作。
+9. 通讯、Wiki、项目投影与工作台中同一对象显示相同 owner/version/digest/freshness；人工修改投影字段不能改变来源事实。
+10. 高影响动作先形成精确 PreparedCommand/ReviewChallengeV1，提交时重新鉴权；无有效
+    OwnerCommitReceiptV1 不显示“已生效”，EffectUnknownV1 不得包装成成功。
+11. Workspace/通讯/Wiki 或主协作 SSO 不可用时新的正常治理动作暂停，但 kill/revoke/isolate/credential invalidation 不被阻断。
+12. 目标自托管 Surface 密级上限、来源 ACL 或对象 classification 无法确认时，正文被抑制，深链重新鉴权且不泄露受限对象存在性。
+13. 无 Feishu 配置、无 GitHub.com、无外网 DNS、无云模型时，内网导航、执行、知识、审计和恢复仍可用。
+14. 外网 Feishu/GitHub 状态只显示为来源 provenance，不能成为内部 approval、qualification、deployment 或 REAL witness。
+
+## 12. 非目标
+
+`OUT-OF-SCOPE`
+
+- 不在本章确定路由路径、数据库表、前端框架或视觉像素。
+- 不用 IA 文档绕过 ADR-0050 的末端授权语义。
+- 不把共建地图做成需求投票榜、项目管理后台或个人绩效系统。
+- 不把聊天、Wiki、项目表或任何第三方 Surface 做成 FLAi、Knowledge、Audit 或 Secret 的总数据库。
+- 不在内网导航中提供 Feishu/GitHub 实时入口，也不做双向自动同步。
+- 不以 WorkBuddy、Claude 或 Codex 的界面形状代替本项目的身份、安全与证据合同。
+- 不在 Phase 0A 建实时会议伴随、全自主 CFD、Office GUI 控制或跨域自动发布入口。

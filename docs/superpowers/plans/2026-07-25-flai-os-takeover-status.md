@@ -9,6 +9,18 @@
 > 该接受是项目 owner 的具名、摘要绑定裁决，不是密码学签名或组织生产签发；
 > 它不授权 Stage D、PoC、依赖引入、生产上线、推送或合并。
 >
+> 唯一开发基线裁决：
+> - `decision_ref = flai-os-unique-development-baseline-001@1`；
+> - `human_owner = JerryKogami` 已具名接受选项 C；
+> - 接受前 `document_sha256 =
+>   971fcc8884afbede27241721e287685e559f9d558897f3fcbd02f8f26d5b73fd`；
+> - 接受前 `patch_digest =
+>   c2c6a1f436cb890fcd3b74c817b775ce127af2b7e34a2c4de1cf8aaa63eb7193`；
+> - `origin/main@ec43768ff1ad2cb6bc3e571486bfda2d04c35780` 是裁决时点的唯一开发基线，
+>   后续工作以刷新后的 main tip 连续演进；
+> - 其他候选线一律为 `DONOR_ONLY / EVIDENCE_ONLY`，不得整线升格。
+> 该裁决不授权 Stage D、PoC、依赖引入、运行时代码移植、分支删除或生产上线。
+>
 > SHA 基线（三类，不可混写）：
 > - `verified_code_sha` = `859a1b42de1847c4a6f1dc9719d98abf0d3609f0`
 >   （最后一个含源代码变化的祖先提交；Codex 在 `8b5d9d9` checkout 上复核时，
@@ -26,9 +38,10 @@
 
 1. **回撤确认**：工作树对 safe-auto DAG 后 4 提交（`12723fb..567de2d`）的回撤是刻意的，
    设计会话予以确认；4 提交完整保留在 `codex/integrate-safe-auto-dag`（已推 origin），未丢失。
-2. **开发基线（候选意见）**：倾向以 V0.2 设计周期线（`codex/desktop-workspace-shell-research-v1`
-   链）为后续主线，围绕 Stage C 原型收口推进。**注意：当前并存多条候选线，owner 尚未裁决
-   唯一后续开发基线**（见 §3.0）；Stage D 实施切片仍需 owner 显式放行，未授权。
+2. **开发基线（历史候选意见，已被后续 owner 裁决取代）**：设计会话曾倾向以 V0.2
+   设计周期线（`codex/desktop-workspace-shell-research-v1` 链）为后续主线；owner
+   后续已接受选项 C，以刷新后的 `origin/main` 为唯一开发基线，V0.2 等候选线仅作为
+   `DONOR_ONLY / EVIDENCE_ONLY`（见 §3.0）。Stage D 实施切片仍未授权。
 3. **分支保护**：设计会话同意将本地关键分支推送 origin（执行情况见 §3，事实分级见 §3.4）。
 4. **方向冲突**：对 07-25 DeepResearch「组合式开源底座」建议开正式方向评审，
    评审材料为 `docs/research/2026-07-25-composable-stack-vs-kernel-direction-review.md`
@@ -75,30 +88,47 @@
   `SESSION_DECLARED_ENVIRONMENT_NOT_REPRODUCED`：其运行环境未能复现，
   不得与 Codex 实测结果混写或并列引用。
 
+### 2.2 唯一开发基线的当前全量门证据
+
+- Codex 在 tree 与 `origin/main@ec43768` 完全一致的干净隔离工作树执行
+  `env UV_OFFLINE=1 bash scripts/verify_all.sh`；
+- frontend build PASS；Python `1063 passed, 16 warnings`；Node `29 passed, 0 failed`；
+  仓库声明的 19 组浏览器 E2E 全部 PASS；最终 exit code `0`；
+- 首次运行因隔离工作树缺 `frontend/node_modules`，在 build 阶段以
+  `vite: command not found` / exit `127` 停止；核对 package 与 lock 摘要一致后仅复用
+  既有本地依赖重跑，未新增或升级依赖；
+- E2E 在隔离工作树重写的 78 个 `docs/reviews/` 截图已恢复至 HEAD；最终工作树 clean，
+  主工作树用户资产未受影响；
+- 该证据只证明当前 main 是可复算开发起点，不替任何 `DONOR_ONLY / EVIDENCE_ONLY`
+  分支补测试、实现或准入票据。
+
 ## 3. 分支处置地图（2026-07-25 会话记录版，事实分级见 §3.4）
 
-### 3.0 代码与候选线现状（不得宣称唯一「事实主线」）
+### 3.0 唯一开发基线与供体线现状
 
-如实记录三条并存的线，**owner 尚未裁决唯一后续开发基线**：
+owner 已接受 `flai-os-unique-development-baseline-001@1` 的选项 C：
 
-- `origin/main@7523edf2...`（07-18）：仍是 **GitHub 上的正式 `main` 代码真相**，
-  停更约 7 天；
-- `codex/desktop-workspace-shell-research-v1@007d9d6...`（+36）：**V0.2 设计候选线**
+- `origin/main@ec43768ff...`：是 **GitHub 代码真相与唯一开发基线**；每个新工作项
+  必须从当时刷新后的 main tip 创建，不能长期钉死在本次裁决 SHA；
+- `codex/desktop-workspace-shell-research-v1@007d9d6...`（相对裁决时 main 独有
+  36 个提交）：**V0.2 / Stage C 供体与证据线**
   （含设计包与 Stage C 原型；飞书 F0 评审包仍是
   `/private/tmp/flai-os-v02-foundation` 的未提交工作，不属于该 tip）；
-- `codex/v02-mainline-consolidation@8b5d9d9...`：**本轮整理论证候选线**
+- `codex/v02-mainline-consolidation@8b5d9d9...`：**代码硬化供体与证据线**
   （c9b03e4 认证 safe-auto 单 Agent 基线 + 打磨/验证门/V0.2 文档批 + 文档修正）。
 
-两个候选线均未经 owner 裁决为唯一后续开发基线；本文 §1.2 的「倾向」仅为设计会话候选意见。
+`codex/flai-v02-foundation`、`codex/agent-fact-projection-ui`、
+`codex/integrate-safe-auto-dag` 及其他保留线同样为 `DONOR_ONLY / EVIDENCE_ONLY`。
+所有供体资产必须另冻工作项、限定 allowlist 并独立验证；本裁决不授权任何移植。
 
 ### 3.1 主线与基线
 
 | 分支 | tip | 定位 |
 |---|---|---|
-| origin/main = main | `7523edf`（07-18） | GitHub 代码真相；旧主线，停更 7 天 |
-| codex/desktop-workspace-shell-research-v1 | `007d9d6`（+36） | V0.2 设计候选线（见 §3.0） |
-| codex/v02-mainline-consolidation | `8b5d9d9` | 本轮整理论证候选线（见 §3.0）；被测代码状态由祖先 `859a1b4` 锚定，其上只有文档提交 |
-| codex/agent-fact-projection-ui | `52c3856`（+28） | trusted-interaction→JerryAgent→agent facts 链，未合并 |
+| origin/main = main | `ec43768`（07-25） | GitHub 代码真相；唯一开发基线 |
+| codex/desktop-workspace-shell-research-v1 | `007d9d6` | `DONOR_ONLY / EVIDENCE_ONLY`：V0.2、Stage C、Workspace Shell |
+| codex/v02-mainline-consolidation | `8b5d9d9` | `DONOR_ONLY / EVIDENCE_ONLY`：代码硬化与验证门；历史被测代码由祖先 `859a1b4` 锚定 |
+| codex/agent-fact-projection-ui | `52c3856` | `DONOR_ONLY / EVIDENCE_ONLY`：trusted-interaction→JerryAgent→agent facts |
 
 ### 3.2 保留（有独立工作/取证价值）
 
@@ -241,4 +271,5 @@ M4 真实性能盘（已降格为内部样板/R6+ 候选）、离线发布包。
 *ACTIVE / OWNER-ACCEPTED SSOT · 2026-07-25 · `JerryKogami` 接受
 `flai-os-takeover-docs-kimi-001@2`，绑定接受前候选补丁摘要
 `sha256:504208932db4dea2a2dd92f1f4e13e352690467633431927189e03f544a3c4b9`。
-本记录不授权 Stage D、PoC、依赖引入或生产上线。*
+`flai-os-unique-development-baseline-001@1` 的选项 C 同样已具名接受并生效。
+本记录不授权 Stage D、PoC、依赖引入、运行时代码移植、分支删除或生产上线。*
