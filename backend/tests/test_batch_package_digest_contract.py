@@ -88,24 +88,22 @@ def test_snapshot_input_validation_respects_explicit_none_mode() -> None:
     )
 
 
-def test_public_batch_api_rejects_omitted_pin_envelope_with_zero_writes(app_env):
-    client, _app = app_env
+def test_public_batch_api_derives_pin_when_client_omits_pin_envelope(app_env):
+    client, app = app_env
     before = len(client.get("/api/tasks").json())
+    snapshot = app.state.agent_registry.package_snapshot("hello_agent")
+    assert snapshot is not None
 
     response = client.post(
         "/api/tasks/batch",
         json={"items": [{"agent_id": "hello_agent", "inputs": {"name": "x"}}]},
     )
 
-    assert response.status_code == 422, response.text
-    detail = response.json()["detail"]
-    assert detail["code"] == "batch_pin_contract_incomplete"
-    assert detail["missing_fields"] == [
-        "operation_id",
-        "pinned_versions",
-        "pinned_package_digests",
-    ]
-    assert len(client.get("/api/tasks").json()) == before
+    assert response.status_code == 200, response.text
+    task = response.json()["tasks"][0]
+    assert task["agent_version"] == snapshot.manifest["version"]
+    assert task["metadata"]["package_snapshot_digest"] == snapshot.digest
+    assert len(client.get("/api/tasks").json()) == before + 1
 
 
 def test_api_digest_pin_map_requires_full_agent_coverage_with_zero_writes(app_env):

@@ -204,9 +204,12 @@ def test_legacy_db_migration_backfills_internal(tmp_path: Path) -> None:
 
     conn = get_conn(db_path)
     try:
-        f = conn.execute("SELECT classification, uploaded_by FROM files WHERE id='f1'").fetchone()
+        f = conn.execute(
+            "SELECT classification, uploaded_by, owner_username FROM files WHERE id='f1'"
+        ).fetchone()
         assert f["classification"] == "internal", "存量文件必须回填 internal（如实标注）"
         assert f["uploaded_by"] is None, "存量行 uploaded_by 留 NULL（自报时代数据不冒充有追溯）"
+        assert f["owner_username"] is None, "存量行不得从 display_name 猜测稳定 owner"
         s = conn.execute("SELECT classification FROM samples WHERE task_id='t1'").fetchone()
         assert s["classification"] == "internal"
     finally:
@@ -232,6 +235,7 @@ def test_propagation_sensitive_input_taints_outputs_and_samples(
     )
     for row in outputs:
         assert row["uploaded_by"] is None, "runtime 产物非人工标注场景，uploaded_by 留 NULL"
+        assert row["owner_username"] is None, "runtime 产物由任务归属，不冒充人工上传 owner"
         download = governance_env.client.get(f"/api/files/{row['id']}/download")
         assert download.status_code == 403, "sensitive 产物下载必须被 D4 门拒绝"
 

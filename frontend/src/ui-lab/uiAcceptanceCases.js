@@ -235,16 +235,16 @@ const ASSET_DRAFT_PREVIEW = {
     schema_version: "task_pattern_draft.v1",
     status: "draft",
     derived_from_work_case_revision: "sha256:60ec7e1447ef98d410d7941a36d78f32391462be8d64ae5cd1b97956c12ea687",
-    suggested_id: "task_pattern_candidate_528a3dbbf28d",
-    content_digest: "sha256:528a3dbbf28d65ff2bb0f3fc069189cdccdb0fe84635fdb744cc5863f32a0cd5",
+    suggested_id: "task_pattern_candidate_b64b31dd0a24",
+    content_digest: "sha256:b64b31dd0a24299e75356d315cecea28f07c6aa30a41d8dca2424efff2f3a72c",
     ...ASSET_DRAFT_GENERALIZATION,
   },
   skill: {
     schema_version: "skill_draft.v1",
     status: "draft",
-    operationalizes_task_pattern_digest: "sha256:528a3dbbf28d65ff2bb0f3fc069189cdccdb0fe84635fdb744cc5863f32a0cd5",
-    suggested_id: "skill_candidate_8ea5d04c38ee",
-    content_digest: "sha256:8ea5d04c38ee98d275224f8904d591bfd9f50223668b5298287a69215798a61b",
+    operationalizes_task_pattern_digest: "sha256:b64b31dd0a24299e75356d315cecea28f07c6aa30a41d8dca2424efff2f3a72c",
+    suggested_id: "skill_candidate_2d871c0f1db0",
+    content_digest: "sha256:2d871c0f1db02afb35aa625dc1289587f06234756fb84f0a2cf6efeceb427dcf",
     name: ASSET_DRAFT_GENERALIZATION.title,
     description: `${ASSET_DRAFT_GENERALIZATION.desired_outcome}；适用于：${ASSET_DRAFT_GENERALIZATION.trigger}`,
     when_to_use: ASSET_DRAFT_GENERALIZATION.trigger,
@@ -281,7 +281,159 @@ const ASSET_DRAFT_PREVIEW = {
     registers_asset: false,
     promotes_asset: false,
   },
-  draft_digest: "sha256:ac82e6b78fd1dfbdb314837c63fcbd2ab482403708c91ce698f4c68d2082518d",
+  draft_digest: "sha256:0f3e34cf90fd54358c0bcd2b3beef53821443ceec2ecc87bddca7fb6d759b10f",
+};
+
+const ASSET_CANDIDATE = {
+  schema_version: "asset_candidate.v1",
+  id: "asset_candidate_b6f68526b3fdf4a3253f192c",
+  candidate_digest: "sha256:b6f68526b3fdf4a3253f192c6faaed19c272c1550e01de2ff72bf6c5e7f942be",
+  bundle_digest: ASSET_DRAFT_PREVIEW.draft_digest,
+  lineage_digest: "sha256:de966446007401a0f122b5c240fff89e4a0b48576ca69ba4dafb82bb169e0833",
+  revision: 1,
+  supersedes_candidate_digest: null,
+  state: "awaiting_human_review",
+  source: {
+    task_id: "task-ui-asset-candidate",
+    conversation_id: "ui-asset-work-case",
+    task_status: "completed",
+    agent_id: "cfd_input_check",
+    agent_version: "0.1.0",
+    agent_package_digest: "a".repeat(64),
+    initiated_by_username: "user-ui-acceptance",
+    finished_at: "2026-07-31T06:46:30Z",
+  },
+  bundle: ASSET_DRAFT_PREVIEW,
+  lineage: {
+    schema_version: "asset_candidate_lineage.v1",
+    task: {
+      task_id: "task-ui-asset-candidate",
+      agent_id: "cfd_input_check",
+      agent_version: "0.1.0",
+      agent_package_digest: "a".repeat(64),
+      initiated_by_username: "user-ui-acceptance",
+      origin: "user",
+      terminal_status: "completed",
+      finished_at: "2026-07-31T06:46:30Z",
+      data_classification: "internal",
+      inputs_digest: `sha256:${"e".repeat(64)}`,
+      task_snapshot_digest: `sha256:${"f".repeat(64)}`,
+    },
+    conversation: {
+      conversation_id: "ui-asset-work-case",
+      work_case_source_revision: ASSET_DRAFT_PREVIEW.work_case.source_revision,
+      segment_message_count: 2,
+      segment_user_message_count: 1,
+    },
+    input_files: [
+      {
+        file_id: "file-boundaries",
+        kind: "input",
+        sha256: "1".repeat(64),
+        size_bytes: 18240,
+        classification: "internal",
+        source_kind: "work_segment_upload",
+        producer_task_id: null,
+      },
+    ],
+    output_files: [
+      {
+        file_id: "file-boundary-review",
+        kind: "output",
+        sha256: "2".repeat(64),
+        size_bytes: 9376,
+        classification: "internal",
+        source_kind: "current_task_output",
+        producer_task_id: "task-ui-asset-candidate",
+      },
+    ],
+    execution_snapshot: {
+      event_id: "execution-ui-asset-candidate",
+      event_digest: `sha256:${"4".repeat(64)}`,
+      package_snapshot_contract: "agent_package_snapshot.v1",
+      package_snapshot_digest: "a".repeat(64),
+      input_file_ids_digest: "sha256:a9387721560c36af768dba5aaceb25057a54061d4fd842dc4d39dd351397c604",
+      input_files_digest: `sha256:${"6".repeat(64)}`,
+      task_inputs_digest: `sha256:${"e".repeat(64)}`,
+      execution_evidence_digest: "sha256:a4a226df97c700c88a75af9dc653dc8b916d7bf43ac7549b16eb1fade6d06148",
+    },
+    signoff: {
+      required: false,
+      kind: "deterministic_no_review",
+      event_id: "task-completed-ui-asset-candidate",
+      event_digest: `sha256:${"7".repeat(64)}`,
+      signer_username: null,
+      execution_evidence_digest: "sha256:a4a226df97c700c88a75af9dc653dc8b916d7bf43ac7549b16eb1fade6d06148",
+    },
+  },
+  proposal_provenance: {
+    schema_version: "generalization_proposal_provenance.v1",
+    kind: "deterministic_task_projection",
+    policy_version: "asset_candidate_policy.v1",
+    llm_used: false,
+    sources: [
+      "work_case_segment",
+      "completed_task",
+      "agent_package_snapshot",
+      "artifact_digests",
+      "signoff_evidence",
+    ],
+  },
+  asset_map: {
+    task_pattern: {
+      state: "candidate_revision",
+      digest: ASSET_DRAFT_PREVIEW.task_pattern.content_digest,
+    },
+    skill: {
+      state: "candidate_revision",
+      digest: ASSET_DRAFT_PREVIEW.skill.content_digest,
+    },
+    workflow: {
+      state: "not_formed",
+      digest: null,
+      gate: "需要组合一个或多个已接受 Skill，并明确顺序、依赖和停止条件",
+    },
+    agent: {
+      state: "not_formed",
+      digest: null,
+      gate: "需要通过 Workflow、Agent Package、评测与人工晋级门",
+    },
+  },
+  decision: null,
+  effects: {
+    writes_candidate_store: true,
+    executes_work: false,
+    writes_package_files: false,
+    registers_asset: false,
+    promotes_asset: false,
+  },
+  created_at: "2026-07-31T06:47:00Z",
+  updated_at: "2026-07-31T06:47:00Z",
+};
+
+const ASSET_CANDIDATE_ACCEPTED = {
+  ...ASSET_CANDIDATE,
+  state: "accepted",
+  asset_map: {
+    ...ASSET_CANDIDATE.asset_map,
+    task_pattern: {
+      ...ASSET_CANDIDATE.asset_map.task_pattern,
+      state: "approved_revision",
+    },
+    skill: {
+      ...ASSET_CANDIDATE.asset_map.skill,
+      state: "approved_revision",
+    },
+  },
+  decision: {
+    action: "accept",
+    decided_by: "验收工程师",
+    decided_by_username: "user-ui-acceptance",
+    signer_source: "authenticated_session",
+    signer_session_bound: true,
+    created_at: "2026-07-31T06:49:00Z",
+  },
+  updated_at: "2026-07-31T06:49:00Z",
 };
 
 const ASSET_BLOCKED_GENERALIZATION = {
@@ -356,6 +508,26 @@ const ASSET_WORK_GUIDE = {
       createdAt: "2026-07-31T06:42:18Z",
     },
   ],
+};
+
+const ASSET_CANDIDATE_GUIDE = {
+  ...ASSET_WORK_GUIDE,
+  conversationTasks: [
+    {
+      id: "task-ui-asset-candidate",
+      conversation_id: "ui-asset-work-case",
+      agent_id: "cfd_input_check",
+      status: "completed",
+      origin: "user",
+      finished_at: "2026-07-31T06:46:30Z",
+    },
+  ],
+  assetCandidate: ASSET_CANDIDATE,
+};
+
+const ASSET_CANDIDATE_ACCEPTED_GUIDE = {
+  ...ASSET_CANDIDATE_GUIDE,
+  assetCandidate: ASSET_CANDIDATE_ACCEPTED,
 };
 
 function acceptanceCase({
@@ -451,6 +623,30 @@ export const UI_ACCEPTANCE_CASES = [
       "展开路由依据后是否仍无横向溢出",
       "折叠控件与开工按钮是否守住 44px 触控目标",
       "composer 是否始终只有文字与附件入口",
+    ],
+  }),
+  acceptanceCase({
+    id: "asset-candidate-desktop",
+    label: "桌面 · 已完成任务资产候选",
+    summary: "completed 单任务在对话轴自动长出一张只读候选卡",
+    viewport: VIEWPORTS.desktop,
+    guide: ASSET_CANDIDATE_GUIDE,
+    reviewPoints: [
+      "完成任务是否只长出一张候选卡，不增加常驻字段面板",
+      "候选抽屉是否只读，工程师只需用按钮接受、不保留、下载或返回",
+      "Task Pattern 与 Skill 是否如实形成，Workflow 与 Agent 是否继续受门控",
+    ],
+  }),
+  acceptanceCase({
+    id: "asset-candidate-accepted-desktop",
+    label: "桌面 · 资产候选已接受",
+    summary: "具名工程师接受精确候选后，只展示只读记录与后续门控",
+    viewport: VIEWPORTS.desktop,
+    guide: ASSET_CANDIDATE_ACCEPTED_GUIDE,
+    reviewPoints: [
+      "成功态是否明确只保留为资产候选，而不是注册、发布或形成 Agent",
+      "已接受记录是否移除重复决定动作，只保留下载与回到对话",
+      "Task Pattern 与 Skill 是否成为 approved revision，Workflow 与 Agent 是否仍未形成",
     ],
   }),
   acceptanceCase({

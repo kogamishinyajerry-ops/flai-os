@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import importlib
 import hashlib
-import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +27,7 @@ import pytest
 import yaml
 
 from backend.app.config import AGENTS_DIR, CONTRACTS_DIR, TOOLS_DIR
+from backend.app.jobs.runner import JobRunner
 from backend.app.runtime.registry import AgentRegistry
 from backend.app.runtime.runtime import AgentRuntime
 from backend.app.storage import repos
@@ -608,10 +608,10 @@ def test_execute_requires_human_review(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_review_requested_event_failure_keeps_waiting_review(
+def test_review_requested_event_failure_rolls_back_and_runner_fails_task(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """展示性 review_requested 写失败时，已提交的人工审核态仍须安全返回。"""
+    """review_requested 写失败时不得留下 waiting_review 半态，runner 诚实失败。"""
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
     review_dir = agents_dir / "review_agent"
@@ -624,7 +624,21 @@ def test_review_requested_event_failure_keeps_waiting_review(
     yaml_path.write_text(yaml_text, encoding="utf-8")
 
     runtime, db_path = _make_runtime(agents_dir, tmp_path)
-    task_id = _create_and_queue_task(db_path, agent_id="review_agent", inputs={"name": "世界"})
+    task_id = "task_review_event_failure"
+    conn = get_conn(db_path)
+    try:
+        repos.create_task(
+            conn,
+            task_id=task_id,
+            agent_id="review_agent",
+            agent_version="0.1.0",
+            name="测试审核事件失败",
+            created_by="tester",
+            inputs={"name": "世界"},
+        )
+        repos.set_task_status(conn, task_id, "queued")
+    finally:
+        conn.close()
     real_append_event = repos.append_event
 
     def fail_review_requested(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -633,16 +647,13 @@ def test_review_requested_event_failure_keeps_waiting_review(
         return real_append_event(*args, **kwargs)
 
     monkeypatch.setattr(repos, "append_event", fail_review_requested)
-    result = runtime.execute(task_id)
-
-    assert result["status"] == "waiting_review"
-    assert result["task"]["status"] == "waiting_review"
+    assert JobRunner(runtime, lambda: get_conn(db_path)).run_once() is True
     conn = get_conn(db_path)
     try:
         task = repos.get_task(conn, task_id)
         event_types = [event["event_type"] for event in repos.list_events(conn, task_id)]
     finally:
         conn.close()
-    assert task["status"] == "waiting_review"
+    assert task["status"] == "failed"
     assert "review_requested" not in event_types
-    assert "task_failed" not in event_types
+    assert "task_failed" in event_types

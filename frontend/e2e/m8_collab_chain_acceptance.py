@@ -1,7 +1,7 @@
 """M8 P4 协作工作台全链验收：导引规划 → 工作台只读蓝图 → 回对话补充 → 任务归会话。
 
 这是 M8 编排官愿景的端到端闭环（真浏览器）：
-  ① 导引给出 orchestrate 协作方案（2 个 Agent）；
+  ① 导引给出 orchestrate 协作方案（2 个 Agent），验收脚本从创建响应捕获真实会话；
   ② 深链 /workbench/:sessionId 见目标 + 分工架构（蓝图）+
      roster（2 个 Agent，均「尚未召集」）+ 进度 0/2；
   ③ 成员卡零手工启动 CTA，全页只留一个「回到对话补充信息」；
@@ -63,8 +63,31 @@ class _StubGateway:
             "goal": "完成双通道供电的控制逻辑与故障树分析。",
             "workflow": "control_logic_agent 先出控制逻辑，fta_agent 再做故障树。",
             "agents": [
-                {"agent_id": "control_logic_agent", "role": "生成控制逻辑状态机", "rationale": "结构化生成", "prefilled_inputs": {}},
-                {"agent_id": "fta_agent", "role": "搭建并分析故障树", "rationale": "推理辅助", "prefilled_inputs": {"top_event": "供电完全丧失"}},
+                {
+                    "agent_id": "control_logic_agent",
+                    "role": "生成控制逻辑状态机",
+                    "rationale": "结构化生成",
+                    "prefilled_inputs": {
+                        "system_name": "双通道供电系统",
+                        "states": ["双路正常", "A路失效", "B路失效", "供电完全丧失"],
+                        "transitions": [
+                            {"from": "双路正常", "to": "A路失效", "condition": "发电机A失效"},
+                            {"from": "双路正常", "to": "B路失效", "condition": "发电机B失效"},
+                            {"from": "A路失效", "to": "供电完全丧失", "condition": "发电机B同时失效"},
+                            {"from": "B路失效", "to": "供电完全丧失", "condition": "发电机A同时失效"},
+                        ],
+                    },
+                },
+                {
+                    "agent_id": "fta_agent",
+                    "role": "搭建并分析故障树",
+                    "rationale": "推理辅助",
+                    "prefilled_inputs": {
+                        "top_event": "供电完全丧失",
+                        "system_description": "双通道供电系统（发电机A/B + 汇流条 + 转换开关）",
+                        "components": ["发电机A", "发电机B", "汇流条", "转换开关"],
+                    },
+                },
             ],
         }
         reply = f"这需要两个 Agent 接力协作。\n<<PLAN>>\n{json.dumps(plan, ensure_ascii=False)}\n<<END>>"
@@ -122,15 +145,37 @@ with sync_playwright() as p:
     # ① 导引 → orchestrate 方案
     page.goto(BASE + "/", wait_until="networkidle")
     page.locator(".composer textarea").fill("做双通道供电的控制逻辑和故障树")
-    page.get_by_role("button", name="发送").click()
+    with page.expect_response(
+        lambda response: response.request.method == "POST"
+        and response.url == BASE + "/api/conversations"
+    ) as conversation_response_info:
+        page.get_by_role("button", name="发送").click()
+    conversation_response = conversation_response_info.value
+    conversation_body = (
+        conversation_response.json()
+        if conversation_response.status in (200, 201)
+        else {}
+    )
+    session_id = conversation_body.get("id", "")
+    conversation_captured = (
+        conversation_response.status in (200, 201)
+        and isinstance(session_id, str)
+        and re.fullmatch(r"conv_[0-9a-f]{32}", session_id) is not None
+    )
+    check(
+        "①导引创建响应给出真实会话血缘",
+        conversation_captured,
+        f"status={conversation_response.status} body={conversation_response.text()[:200]}",
+    )
+    if conversation_captured is not True:
+        raise RuntimeError(
+            f"导引会话创建失败 {conversation_response.status}: "
+            f"{conversation_response.text()[:200]}"
+        )
+    page.wait_for_url(re.compile(rf"/\?c={re.escape(session_id)}$"), timeout=5000)
     expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
     check("①导引给出 orchestrate 协作方案", page.locator(".plan-card").count() == 1)
-
-    session_match = re.search(r"[?&]c=(conv_[0-9a-f]+)", page.url)
-    check("①'导引会话写入 URL，可作为工作台血缘", session_match is not None, page.url)
-    if session_match is None:
-        raise RuntimeError(f"导引会话 URL 缺少 c 参数：{page.url}")
-    session_id = session_match.group(1)
+    check("①导引 URL 精确绑定创建响应中的会话", page.url == f"{BASE}/?c={session_id}", page.url)
 
     # ② 工作台是历史/治理深链，不再从方案卡暴露第二套执行入口。
     page.goto(BASE + f"/workbench/{session_id}", wait_until="networkidle")
@@ -186,7 +231,11 @@ with sync_playwright() as p:
     )
     created_body = created.json() if created.status in (200, 201) else {}
     task_id = created_body.get("id", "")
-    created_ok = created.status in (200, 201) and task_id.startswith("task_")
+    created_ok = (
+        created.status in (200, 201)
+        and isinstance(task_id, str)
+        and re.fullmatch(r"task_[0-9a-f]{32}", task_id) is not None
+    )
     check("⑤前置：认证 API 创建会话归属任务成功", created_ok,
           f"status={created.status} body={created.text()[:200]}")
     if created_ok is not True:
@@ -251,7 +300,6 @@ with sync_playwright() as p:
     conclude_ok = (
         "已归档" in body
         and page.get_by_role("button", name="结束协作").count() == 0   # 归档后不再可结束
-        and page.get_by_role("button", name="去创建此任务").count() == 0
         and page.get_by_role("button", name="回到对话补充信息").count() == 0
         and "会话已归档" in body
         and "已召集 · 1 个任务" in body                                  # 已建任务仍在

@@ -166,6 +166,20 @@ def _create_piped_output_and_validating_task(
             depends_on=[upstream_task_id],
             input_binding={"from_tasks": [upstream_task_id]},
         )
+        repos.append_event(
+            conn,
+            task_id=task_id,
+            agent_id="hello_agent",
+            event_type="agent_log",
+            level="info",
+            message="dependency resolved fixture",
+            payload={
+                "workflow_event_type": "dependency_resolved",
+                "upstream_task_ids": [upstream_task_id],
+                "piped_file_ids": [file_id],
+                "piped_file_count": 1,
+            },
+        )
         repos.set_task_status(conn, task_id, "queued")
         repos.set_task_status(conn, task_id, "validating")
     finally:
@@ -270,6 +284,7 @@ def test_execute_rejects_piped_wrong_extension_before_workflow(
     try:
         assert repos.list_tool_runs(conn, task_id) == []
         assert [event["event_type"] for event in repos.list_events(conn, task_id)] == [
+            "agent_log",
             "validation_started",
             "validation_failed",
             "task_failed",

@@ -33,6 +33,7 @@ Task 9 补全③盖章动效）。
 """
 from __future__ import annotations
 
+import re
 import shutil
 import socket
 import sys
@@ -173,7 +174,10 @@ with sync_playwright() as p:
     )
     created_body = created.json() if created.status_code in (200, 201) else {}
     task_id = created_body.get("id", "")
-    created_ok = created.status_code in (200, 201) and task_id.startswith("task_")
+    created_ok = (
+        created.status_code in (200, 201)
+        and re.fullmatch(r"task_[0-9a-f]{32}", task_id) is not None
+    )
     check("前置：认证 API 创建待签任务成功", created_ok,
           f"status={created.status_code} body={created.text[:200]}")
     if created_ok is not True:

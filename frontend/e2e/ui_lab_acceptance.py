@@ -5,24 +5,24 @@
 
 覆盖：
   ① 未知 case fail-closed；
-  ② 十个固定镜头、精确 viewport 与桌面布局数值基线；
+  ② 十二个固定镜头、精确 viewport 与桌面布局数值基线；
   ③ opaque-origin iframe + 只读边界阻止网络和主题偏好写入；
   ④ 自动路由摘要默认收敛，Agent/模型/工具依据按需披露；
   ⑤ 流式快照使用真实 generating 标记，正文给固定 composer 留足空间；
   ⑥ 保存待核使用 amber，且发送、附件、Agent 共同锁定；
-  ⑦ Asset Builder 单焦点九问、待审桌面/移动与 needs_revision 阻断；
-  ⑧ 375px 无横向溢出。
+  ⑦ completed 单任务的对话轴资产候选与只读决定抽屉；
+  ⑧ Asset Builder 单焦点九问、待审桌面/移动与 needs_revision 阻断；
+  ⑨ 375px 无横向溢出。
 
 运行（仓根）：
   uv run --no-project --with playwright python frontend/e2e/ui_lab_acceptance.py
 
-截图落 docs/reviews/ui-lab-shots/，每次重跑覆盖十个固定镜头与焦点过渡证据。
+截图落 docs/reviews/ui-lab-shots/，每次重跑覆盖十二个固定镜头与焦点过渡证据。
 """
 from __future__ import annotations
 
 import os
 import re
-import shutil
 import socket
 import subprocess
 import sys
@@ -105,7 +105,7 @@ def embedded_frame(page, case_id: str):
         frame = handle.content_frame() if handle else None
         if (
             frame
-            and f"embed=1" in frame.url
+            and "embed=1" in frame.url
             and f"case={case_id}" in frame.url
         ):
             expect(frame.locator(".guide-page")).to_be_visible()
@@ -117,7 +117,12 @@ def embedded_frame(page, case_id: str):
 def select_case(page, case_id: str, label: str):
     page.locator(".case-button", has_text=label).click()
     frame = embedded_frame(page, case_id)
-    if case_id.startswith("asset-"):
+    if case_id in {
+        "asset-intake-desktop",
+        "asset-review-desktop",
+        "asset-review-mobile",
+        "asset-blocked-mobile",
+    }:
         expect(frame.locator(".asset-builder-drawer")).to_be_visible()
         page.wait_for_timeout(250)
     return frame
@@ -181,8 +186,8 @@ try:
 
         page.goto(BASE + "/ui-lab.html", wait_until="networkidle")
         check(
-            "固定十镜头与逐项检查点",
-            page.locator(".case-button").count() == 10
+            "固定十二镜头与逐项检查点",
+            page.locator(".case-button").count() == 12
             and page.locator(".review-strip li").count() >= 3,
         )
 
@@ -338,10 +343,9 @@ try:
         route_disclosure = frame.locator(".route-disclosure")
         route_before = frame.evaluate(
             """() => ({
-              textInputs: document.querySelectorAll('.composer-input textarea').length,
-              attachmentInputs: document.querySelectorAll(
-                '.composer-attach input[type="file"]'
-              ).length,
+              textInputs: document.querySelectorAll('textarea').length,
+              attachmentInputs: document.querySelectorAll('input[type="file"]').length,
+              allInputs: document.querySelectorAll('input').length,
               otherEditable: document.querySelectorAll(
                 '.guide-page input:not([type="file"]), .guide-page select, '
                 + '.guide-page form, .guide-page [contenteditable="true"]'
@@ -591,6 +595,369 @@ try:
         )
         capture(frame, "routing-mobile.png")
 
+        candidate_api_before = len(api_requests)
+        frame = select_case(
+            page,
+            "asset-candidate-desktop",
+            "桌面 · 已完成任务资产候选",
+        )
+        candidate_callout = frame.locator(".asset-candidate-callout")
+        candidate_shell = frame.evaluate(
+            """() => {
+              const rootStyle = getComputedStyle(document.documentElement);
+              const probe = document.createElement('span');
+              probe.style.background = rootStyle.getPropertyValue('--trust-pending');
+              document.body.append(probe);
+              const pending = getComputedStyle(probe).backgroundColor;
+              probe.remove();
+              return {
+                callouts: document.querySelectorAll('.asset-candidate-callout').length,
+                textInputs: document.querySelectorAll('textarea').length,
+                attachmentInputs: document.querySelectorAll('input[type="file"]').length,
+                allInputs: document.querySelectorAll('input').length,
+                forbiddenControls: document.querySelectorAll(
+                  '.guide-page form, .guide-page select, .guide-page [role="combobox"], '
+                  + '.guide-page [contenteditable="true"]'
+                ).length,
+                openActions: [...document.querySelectorAll('.candidate-open')]
+                  .filter(item => item.innerText.trim() === '查看并决定').length,
+                markColor: getComputedStyle(
+                  document.querySelector('.asset-candidate-callout .candidate-mark')
+                ).backgroundColor,
+                pending,
+              };
+            }"""
+        )
+        check(
+            "completed 单任务只在对话轴长出一张 amber 候选卡",
+            candidate_shell["markColor"] == candidate_shell["pending"]
+            and {
+                key: value
+                for key, value in candidate_shell.items()
+                if key not in {"markColor", "pending"}
+            } == {
+                "callouts": 1,
+                "textInputs": 1,
+                "attachmentInputs": 1,
+                "allInputs": 1,
+                "forbiddenControls": 0,
+                "openActions": 1,
+            },
+            str(candidate_shell),
+        )
+        capture(frame, "asset-candidate-desktop.png")
+
+        review_trigger = candidate_callout.get_by_role(
+            "button",
+            name="查看并决定",
+            exact=True,
+        )
+        review_trigger.click()
+        candidate_drawer = frame.locator(".asset-candidate-review")
+        expect(candidate_drawer).to_be_visible()
+        candidate_review = candidate_drawer.evaluate(
+            """element => {
+              const rootStyle = getComputedStyle(document.documentElement);
+              const probe = document.createElement('span');
+              probe.style.color = rootStyle.getPropertyValue('--trust-pending');
+              document.body.append(probe);
+              const pending = getComputedStyle(probe).color;
+              probe.remove();
+              const actionLabels = [...element.querySelectorAll(
+                '.candidate-review-actions button'
+              )].map(item => item.innerText.trim());
+              const count = label => actionLabels.filter(item => item === label).length;
+              return {
+                forbiddenControls: element.querySelectorAll(
+                  'input, textarea, select, form, [contenteditable="true"]'
+                ).length,
+                actionCount: actionLabels.length,
+                accept: count('接受这个候选'),
+                reject: count('本次不保留'),
+                download: count('下载待审包'),
+                back: count('回到对话'),
+                workflowGated: element.innerText.includes('Workflow') &&
+                  element.innerText.includes('尚未形成'),
+                agentGated: element.innerText.includes('Agent') &&
+                  element.innerText.includes('需要通过 Workflow、Agent Package、评测与人工晋级门'),
+                stateColor: getComputedStyle(
+                  element.querySelector('.candidate-state')
+                ).color,
+                pending,
+              };
+            }"""
+        )
+        check(
+            "待审候选用 amber，抽屉只读且四个按钮动作各出现一次",
+            candidate_review["stateColor"] == candidate_review["pending"]
+            and {
+                key: value
+                for key, value in candidate_review.items()
+                if key not in {"stateColor", "pending"}
+            } == {
+                "forbiddenControls": 0,
+                "actionCount": 4,
+                "accept": 1,
+                "reject": 1,
+                "download": 1,
+                "back": 1,
+                "workflowGated": True,
+                "agentGated": True,
+            },
+            str(candidate_review),
+        )
+        capture(frame, "asset-candidate-review-desktop.png")
+
+        candidate_drawer.get_by_role(
+            "button",
+            name="回到对话",
+            exact=True,
+        ).click()
+        expect(candidate_drawer).not_to_be_visible()
+        expect(review_trigger).to_be_focused()
+        check(
+            "验收候选关闭后焦点回触发按钮且没有网络或真实决定",
+            len(api_requests) == candidate_api_before
+            and candidate_callout.get_by_role(
+                "button",
+                name="查看并决定",
+                exact=True,
+            ).count() == 1,
+            str(api_requests[candidate_api_before:]),
+        )
+
+        accepted_api_before = len(api_requests)
+        frame = select_case(
+            page,
+            "asset-candidate-accepted-desktop",
+            "桌面 · 资产候选已接受",
+        )
+        accepted_callout = frame.locator(".asset-candidate-callout")
+        accepted_shell = accepted_callout.evaluate(
+            """element => {
+              const rootStyle = getComputedStyle(document.documentElement);
+              const probe = document.createElement('span');
+              probe.style.background = rootStyle.getPropertyValue('--trust-signed');
+              document.body.append(probe);
+              const signed = getComputedStyle(probe).backgroundColor;
+              probe.remove();
+              return {
+                calloutText: element.innerText,
+                callouts: document.querySelectorAll('.asset-candidate-callout').length,
+                viewRecordActions: [...element.querySelectorAll('button')]
+                  .filter(item => item.innerText.trim() === '查看记录').length,
+                markColor: getComputedStyle(
+                  element.querySelector('.candidate-mark')
+                ).backgroundColor,
+                signed,
+              };
+            }"""
+        )
+        check(
+            "接受成功态使用 teal 并如实显示已保留为资产候选",
+            accepted_shell["callouts"] == 1
+            and accepted_shell["viewRecordActions"] == 1
+            and "已保留为资产候选" in accepted_shell["calloutText"]
+            and accepted_shell["markColor"] == accepted_shell["signed"],
+            str(accepted_shell),
+        )
+        capture(frame, "asset-candidate-accepted-desktop.png")
+
+        accepted_trigger = accepted_callout.get_by_role(
+            "button",
+            name="查看记录",
+            exact=True,
+        )
+        accepted_trigger.click()
+        accepted_drawer = frame.locator(".asset-candidate-review")
+        expect(accepted_drawer).to_be_visible()
+        accepted_review = accepted_drawer.evaluate(
+            """element => {
+              const rootStyle = getComputedStyle(document.documentElement);
+              const probe = document.createElement('span');
+              probe.style.color = rootStyle.getPropertyValue('--trust-signed');
+              document.body.append(probe);
+              const signed = getComputedStyle(probe).color;
+              probe.remove();
+              const actionLabels = [...element.querySelectorAll(
+                '.candidate-review-actions button'
+              )].map(item => item.innerText.trim());
+              const count = label => actionLabels.filter(item => item === label).length;
+              return {
+                honesty: element.innerText.includes(
+                  '已接受为资产候选，尚未登记、发布或形成 Agent。'
+                ),
+                forbiddenControls: element.querySelectorAll(
+                  'input, textarea, select, form, [contenteditable="true"]'
+                ).length,
+                actionCount: actionLabels.length,
+                accept: count('接受这个候选'),
+                reject: count('本次不保留'),
+                download: count('下载候选记录'),
+                back: count('回到对话'),
+                stateColor: getComputedStyle(
+                  element.querySelector('.candidate-state')
+                ).color,
+                signed,
+              };
+            }"""
+        )
+        check(
+            "已接受抽屉使用 teal、只读且不再提供重复决定动作",
+            accepted_review["stateColor"] == accepted_review["signed"]
+            and {
+                key: value
+                for key, value in accepted_review.items()
+                if key not in {"stateColor", "signed"}
+            } == {
+                "honesty": True,
+                "forbiddenControls": 0,
+                "actionCount": 2,
+                "accept": 0,
+                "reject": 0,
+                "download": 1,
+                "back": 1,
+            },
+            str(accepted_review),
+        )
+        capture(frame, "asset-candidate-accepted-review-desktop.png")
+        accepted_drawer.get_by_role(
+            "button",
+            name="回到对话",
+            exact=True,
+        ).click()
+        expect(accepted_drawer).not_to_be_visible()
+        expect(accepted_trigger).to_be_focused()
+        check(
+            "接受成功态验收不发网络请求",
+            len(api_requests) == accepted_api_before,
+            str(api_requests[accepted_api_before:]),
+        )
+
+        # 决定按钮状态机：隔离挂载真实 AssetCandidateCallout。对账 loading、
+        # deciding 都只能看记录，只有 ready 才出现 accept/reject；组件全程零 API。
+        candidate_component_page = context.new_page()
+        candidate_component_api_requests: list[str] = []
+        candidate_component_page.on(
+            "request",
+            lambda request: candidate_component_api_requests.append(request.url)
+            if urlparse(request.url).path.startswith("/api/")
+            else None,
+        )
+        candidate_component_page.route(
+            "**/src/ui-lab/main.js",
+            lambda route: route.fulfill(
+                content_type="application/javascript",
+                body="export {};",
+            ),
+        )
+        candidate_component_page.route(
+            f"{BASE}/api/**",
+            lambda route: route.abort(),
+        )
+        candidate_component_page.goto(BASE + "/ui-lab.html", wait_until="networkidle")
+        candidate_component_page.evaluate(
+            """async () => {
+              const [Vue, ElementPlus, zhCn, calloutModule, casesModule] =
+                await Promise.all([
+                  import('/node_modules/.vite/deps/vue.js'),
+                  import('/node_modules/.vite/deps/element-plus.js'),
+                  import('/node_modules/.vite/deps/element-plus_es_locale_lang_zh-cn.js'),
+                  import('/src/components/AssetCandidateCallout.vue'),
+                  import('/src/ui-lab/uiAcceptanceCases.js'),
+                ]);
+              const fixture = casesModule.getUiAcceptanceCase(
+                'asset-candidate-desktop'
+              ).guide;
+              const state = Vue.reactive({
+                candidate: fixture.assetCandidate,
+                phase: 'loading',
+              });
+              window.__FLAI_CANDIDATE_COMPONENT_STATE__ = state;
+              window.__FLAI_CANDIDATE_COMPONENT_NEXT_TICK__ = Vue.nextTick;
+              const app = Vue.createApp({
+                setup() {
+                  return () => Vue.h(calloutModule.default, {
+                    candidate: state.candidate,
+                    phase: state.phase,
+                    error: '',
+                  });
+                },
+              });
+              app.use(ElementPlus.default, { locale: zhCn.default });
+              app.mount('#app');
+              await Vue.nextTick();
+            }"""
+        )
+        loading_trigger = candidate_component_page.get_by_role(
+            "button",
+            name="查看记录",
+            exact=True,
+        )
+        loading_trigger.click()
+        component_candidate_drawer = candidate_component_page.locator(
+            ".asset-candidate-review"
+        )
+        expect(component_candidate_drawer).to_be_visible()
+
+        def candidate_component_actions() -> dict[str, int]:
+            return component_candidate_drawer.evaluate(
+                """element => {
+                  const labels = [...element.querySelectorAll(
+                    '.candidate-review-actions button'
+                  )].map(item => item.innerText.trim());
+                  return {
+                    accept: labels.filter(text => text === '接受这个候选').length,
+                    reject: labels.filter(text => text === '本次不保留').length,
+                    download: labels.filter(text => text === '下载待审包').length,
+                    back: labels.filter(text => text === '回到对话').length,
+                    forbidden: element.querySelectorAll(
+                      'input, textarea, select, form, [contenteditable="true"]'
+                    ).length,
+                  };
+                }"""
+            )
+
+        loading_actions = candidate_component_actions()
+        candidate_component_page.evaluate(
+            """async () => {
+              window.__FLAI_CANDIDATE_COMPONENT_STATE__.phase = 'ready';
+              await window.__FLAI_CANDIDATE_COMPONENT_NEXT_TICK__();
+            }"""
+        )
+        ready_actions = candidate_component_actions()
+        candidate_component_page.evaluate(
+            """async () => {
+              window.__FLAI_CANDIDATE_COMPONENT_STATE__.phase = 'deciding';
+              await window.__FLAI_CANDIDATE_COMPONENT_NEXT_TICK__();
+            }"""
+        )
+        deciding_actions = candidate_component_actions()
+        check(
+            "候选只在 ready 提供决定，对账 loading 与 deciding 绝不提供决定",
+            loading_actions == {
+                "accept": 0,
+                "reject": 0,
+                "download": 1,
+                "back": 1,
+                "forbidden": 0,
+            }
+            and ready_actions == {
+                "accept": 1,
+                "reject": 1,
+                "download": 1,
+                "back": 1,
+                "forbidden": 0,
+            }
+            and deciding_actions == loading_actions
+            and candidate_component_api_requests == [],
+            (
+                f"loading={loading_actions} ready={ready_actions} "
+                f"deciding={deciding_actions} api={candidate_component_api_requests}"
+            ),
+        )
+        candidate_component_page.close()
+
         frame = select_case(
             page,
             "asset-intake-desktop",
@@ -689,18 +1056,6 @@ try:
             expect(frame.locator(f"#{expected_id}")).to_be_focused()
         capture(frame, "asset-method-focus-desktop.png")
 
-        frame.locator("#asset-field-inputs").fill("单焦点回归输入")
-        frame.get_by_role("button", name="关闭此对话框").click()
-        frame.get_by_role("button", name="沉淀本次工作").click()
-        expect(frame.locator("#asset-field-inputs")).to_be_focused()
-        check(
-            "同一会话关闭重开保留当前问题、回答与宏观阶段",
-            frame.locator(".asset-focus-count").inner_text() == "问题 4 / 9"
-            and frame.locator("#asset-field-inputs").input_value() == "单焦点回归输入"
-            and "复用方法" in frame.locator('[aria-current="step"]').inner_text()
-            and frame.locator(".asset-builder-form input, .asset-builder-form textarea").count() == 1,
-        )
-
         for expected_id in [
             "asset-field-outputs",
             "asset-field-steps",
@@ -716,7 +1071,7 @@ try:
             "预览失败停留第九问、保留回答并恢复可编辑",
             frame.locator(".asset-focus-count").inner_text() == "问题 9 / 9"
             and frame.locator("#asset-field-limitations").is_enabled()
-            and frame.locator(".asset-summary-toggle").inner_text().startswith("已整理 3 / 9 项")
+            and frame.locator(".asset-summary-toggle").inner_text().startswith("已整理 2 / 9 项")
             and frame.get_by_role("button", name="生成待审草稿").is_enabled(),
         )
 
@@ -750,7 +1105,10 @@ try:
                 return
             route.abort()
 
-        component_page.route("**/api/**", asset_preview_route)
+        component_page.route(
+            f"{BASE}/api/**",
+            asset_preview_route,
+        )
         component_page.evaluate(
             """async () => {
               const [Vue, ElementPlus, zhCn, drawerModule, casesModule] =

@@ -18,7 +18,12 @@ from typing import Any
 from jsonschema import ValidationError, validate
 
 from ..config import CONTRACTS_DIR
-from ..core.errors import TaskNotFoundError
+from ..core.canonical_digest import canonical_digest
+from ..core.errors import (
+    IllegalTransitionError,
+    ReviewEvidenceUnavailableError,
+    TaskNotFoundError,
+)
 from ..core.statemachine import assert_transition, is_terminal
 from ..governance.signer_provenance import (
     SignerContext,
@@ -344,6 +349,176 @@ def set_task_status(
     return get_task(conn, task_id)  # type: ignore[return-value]
 
 
+def complete_task_with_event(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    agent_id: str,
+    execution_evidence_digest: str,
+) -> dict[str, Any]:
+    """原子提交确定性任务的 analyzing→completed 与 task_completed 事件。"""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        task = get_task(conn, task_id)
+        if task is None:
+            raise TaskNotFoundError(f"任务不存在：{task_id}")
+        if task["status"] != "analyzing":
+            raise IllegalTransitionError(
+                "确定性自动完成只允许 analyzing -> completed；"
+                f"实际 {task['status']} -> completed"
+            )
+        assert_transition(task["status"], "completed")
+
+        now = _now_iso()
+        conn.execute(
+            "UPDATE tasks SET status = 'completed', updated_at = ?, finished_at = ? "
+            "WHERE id = ?",
+            (now, now, task_id),
+        )
+        append_event(
+            conn,
+            task_id=task_id,
+            agent_id=agent_id,
+            event_type="task_completed",
+            level="info",
+            message="任务完成",
+            payload={"execution_evidence_digest": execution_evidence_digest},
+        )
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id)  # type: ignore[return-value]
+
+
+def request_task_review_with_event(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    agent_id: str,
+    execution_evidence_digest: str,
+) -> dict[str, Any]:
+    """原子提交 running→waiting_review 与绑定执行证据的 review_requested。"""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        task = get_task(conn, task_id)
+        if task is None:
+            raise TaskNotFoundError(f"任务不存在：{task_id}")
+        if task["status"] != "running":
+            raise IllegalTransitionError(
+                "自动请求人工审核只允许 running -> waiting_review；"
+                f"实际 {task['status']} -> waiting_review"
+            )
+        assert_transition(task["status"], "waiting_review")
+
+        now = _now_iso()
+        conn.execute(
+            "UPDATE tasks SET status = 'waiting_review', updated_at = ? WHERE id = ?",
+            (now, task_id),
+        )
+        append_event(
+            conn,
+            task_id=task_id,
+            agent_id=agent_id,
+            event_type="review_requested",
+            level="info",
+            message="任务需要人工审核放行",
+            payload={"execution_evidence_digest": execution_evidence_digest},
+        )
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return get_task(conn, task_id)  # type: ignore[return-value]
+
+
+def _review_execution_evidence_digest(
+    conn: sqlite3.Connection,
+    task_id: str,
+) -> str:
+    """从唯一执行/审核请求事件重验人签所对应的执行证据摘要。"""
+
+    def _unique_payload(event_type: str) -> dict[str, Any]:
+        rows = conn.execute(
+            "SELECT payload_json FROM task_events "
+            "WHERE task_id = ? AND event_type = ? ORDER BY id ASC",
+            (task_id, event_type),
+        ).fetchall()
+        if len(rows) != 1:
+            raise ReviewEvidenceUnavailableError(
+                f"人工签发证据链要求唯一 {event_type} 事件，实际 {len(rows)} 条"
+            )
+        try:
+            payload = json.loads(rows[0]["payload_json"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ReviewEvidenceUnavailableError(
+                f"{event_type} 事件 payload_json 损坏"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ReviewEvidenceUnavailableError(
+                f"{event_type} 事件 payload 必须是对象"
+            )
+        return payload
+
+    validation_payload = _unique_payload("validation_started")
+    requested_payload = _unique_payload("review_requested")
+    digest = validation_payload.get("execution_evidence_digest")
+    if (
+        not isinstance(digest, str)
+        or not digest.startswith("sha256:")
+        or len(digest) != 71
+    ):
+        raise ReviewEvidenceUnavailableError(
+            "validation_started 缺少规范 execution_evidence_digest"
+        )
+    try:
+        int(digest.removeprefix("sha256:"), 16)
+    except ValueError as exc:
+        raise ReviewEvidenceUnavailableError(
+            "validation_started 的 execution_evidence_digest 非规范 sha256"
+        ) from exc
+
+    package_snapshot_digest = validation_payload.get("package_snapshot_digest")
+    task_inputs_digest = validation_payload.get("task_inputs_digest")
+    input_file_ids = validation_payload.get("input_file_ids")
+    input_files_digest = validation_payload.get("input_files_digest")
+    lowercase_hex = frozenset("0123456789abcdef")
+    if (
+        not isinstance(package_snapshot_digest, str)
+        or len(package_snapshot_digest) != 64
+        or any(char not in lowercase_hex for char in package_snapshot_digest)
+        or not isinstance(task_inputs_digest, str)
+        or len(task_inputs_digest) != 71
+        or not task_inputs_digest.startswith("sha256:")
+        or any(char not in lowercase_hex for char in task_inputs_digest[7:])
+        or not isinstance(input_file_ids, list)
+        or any(not isinstance(file_id, str) for file_id in input_file_ids)
+        or not isinstance(input_files_digest, str)
+        or len(input_files_digest) != 71
+        or not input_files_digest.startswith("sha256:")
+        or any(char not in lowercase_hex for char in input_files_digest[7:])
+    ):
+        raise ReviewEvidenceUnavailableError(
+            "validation_started 执行证据基础字段缺失或非规范"
+        )
+    evidence_basis = {
+        "package_snapshot_digest": package_snapshot_digest,
+        "task_inputs_digest": task_inputs_digest,
+        "input_file_ids": input_file_ids,
+        "input_files_digest": input_files_digest,
+    }
+    expected_digest = canonical_digest(evidence_basis)
+    if digest != expected_digest:
+        raise ReviewEvidenceUnavailableError(
+            "validation_started 执行证据摘要与字段不一致"
+        )
+    if requested_payload.get("execution_evidence_digest") != digest:
+        raise ReviewEvidenceUnavailableError(
+            "review_requested 与 validation_started 的 execution_evidence_digest 不一致"
+        )
+    return digest
+
+
 def apply_human_review(
     conn: sqlite3.Connection,
     task_id: str,
@@ -351,6 +526,7 @@ def apply_human_review(
     action: str,
     reviewer: str,
     comment: str | None,
+    reviewer_username: str | None = None,
 ) -> tuple[dict[str, Any], int]:
     """人工签发（approve/reject）的原子落库（Codex 增量2审 R4 P1）。
 
@@ -378,6 +554,17 @@ def apply_human_review(
         # waiting_review→completed/failed 是人签唯一合法出口；terminal→terminal 非法
         # （并发二次 review 命中已转出任务时在此抛 IllegalTransitionError）。
         assert_transition(task["status"], new_status)
+        execution_evidence_digest: str | None
+        execution_evidence_status = "verified"
+        try:
+            execution_evidence_digest = _review_execution_evidence_digest(
+                conn, task_id
+            )
+        except ReviewEvidenceUnavailableError:
+            if approve:
+                raise
+            execution_evidence_digest = None
+            execution_evidence_status = "unverified"
         now = _now_iso()
         updates: dict[str, Any] = {
             "status": new_status,
@@ -397,7 +584,14 @@ def apply_human_review(
         # primitive（其裸 UPDATE 不自开事务，参与本 BEGIN IMMEDIATE，故与迁移同事务原子）。
         sample_rows = set_sample_review_outcome(conn, task_id, accepted=approve)
         # signer 事件，与迁移同事务（「无事件=没发生」在人签路径落地）。
-        payload = {"reviewer": reviewer, "comment": comment}
+        payload = {
+            "reviewer": reviewer,
+            "comment": comment,
+        }
+        if execution_evidence_digest is not None:
+            payload["execution_evidence_digest"] = execution_evidence_digest
+        if reviewer_username is not None:
+            payload["reviewer_username"] = reviewer_username
         if approve:
             append_event(
                 conn,
@@ -410,6 +604,7 @@ def apply_human_review(
                 payload=payload,
             )
         else:
+            payload["execution_evidence_status"] = execution_evidence_status
             append_event(
                 conn,
                 task_id=task_id,
@@ -855,6 +1050,14 @@ def list_events(
 
 # ── files ──────────────────────────────────────────────────────────────
 
+def _is_canonical_owner_username(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value == value.strip()
+    )
+
+
 def create_file(
     conn: sqlite3.Connection,
     *,
@@ -867,19 +1070,30 @@ def create_file(
     sha256: str,
     classification: str,
     uploaded_by: str | None = None,
+    owner_username: str | None = None,
 ) -> dict[str, Any]:
     """classification 必填无默认值（ADR-0021 D1/设计审 F4）：调用点漏传=TypeError
-    当场炸，绝不静默吃 DDL DEFAULT 把派生 sensitive 洗白成 internal。"""
+    当场炸，绝不静默吃 DDL DEFAULT 把派生 sensitive 洗白成 internal。
+
+    ``owner_username`` 只承载直接上传时由认证会话给出的稳定 username；
+    ``uploaded_by`` 继续承载人类可读 display_name。runtime/eval 产物沿用省略
+    owner 的调用形态并如实落 NULL，不能借任务创建者猜测文件所有权。
+    """
+    if owner_username is not None:
+        if not _is_canonical_owner_username(owner_username):
+            raise ValueError("owner_username 必须是非空、无首尾空白的认证 username")
+        if kind != "input":
+            raise ValueError("仅直接上传的 input 文件可记录 owner_username")
     now = _now_iso()
     conn.execute(
         """
         INSERT INTO files
             (id, task_id, kind, filename, path, size_bytes, sha256, created_at,
-             classification, uploaded_by)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
+             classification, uploaded_by, owner_username)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
         """,
         (file_id, task_id, kind, filename, path, size_bytes, sha256, now,
-         classification, uploaded_by),
+         classification, uploaded_by, owner_username),
     )
     return get_file(conn, file_id)  # type: ignore[return-value]
 
@@ -887,6 +1101,26 @@ def create_file(
 def get_file(conn: sqlite3.Connection, file_id: str) -> dict[str, Any] | None:
     row = conn.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
     return dict(row) if row is not None else None
+
+
+def file_is_owned_by_username(
+    conn: sqlite3.Connection,
+    file_id: str,
+    owner_username: str,
+) -> bool:
+    """精确核验一个 ``file_id`` 是否是该 username 的直接上传件。
+
+    任意缺记录、旧行 NULL、空白 username、非 input 产物均返回 ``False``；调用方
+    可以据此 fail-closed，而不会把 ``uploaded_by`` display_name 当稳定身份兜底。
+    """
+    if not _is_canonical_owner_username(owner_username):
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM files "
+        "WHERE id = ? AND kind = 'input' AND owner_username = ?",
+        (file_id, owner_username),
+    ).fetchone()
+    return row is not None
 
 
 # IN 子句分批上限（Codex R1 审 P2）：SQLite 绑定变量默认上限 32766，超长

@@ -10,6 +10,7 @@ import {
 import { installUiAcceptanceBoundary } from "../src/ui-lab/acceptanceBoundary.js";
 import { conversationInteractionPolicy } from "../src/utils/ndjsonStream.js";
 import { normalizeAssetDraftPreview } from "../src/utils/assetDrafts.js";
+import { verifyAssetCandidateIntegrity } from "../src/utils/assetCandidates.js";
 
 const appSource = readFileSync(
   new URL("../src/App.vue", import.meta.url),
@@ -39,8 +40,16 @@ const assetBuilderSource = readFileSync(
   new URL("../src/components/AssetBuilderDrawer.vue", import.meta.url),
   "utf8",
 );
+const assetCandidateSource = readFileSync(
+  new URL("../src/components/AssetCandidateCallout.vue", import.meta.url),
+  "utf8",
+);
 const quickSwitcherSource = readFileSync(
   new URL("../src/components/QuickSwitcher.vue", import.meta.url),
+  "utf8",
+);
+const uiLabE2eSource = readFileSync(
+  new URL("../e2e/ui_lab_acceptance.py", import.meta.url),
   "utf8",
 );
 
@@ -51,13 +60,15 @@ const REQUIRED_CASES = [
   "persistence-unknown-desktop",
   "landing-mobile",
   "routing-mobile",
+  "asset-candidate-desktop",
+  "asset-candidate-accepted-desktop",
   "asset-intake-desktop",
   "asset-review-desktop",
   "asset-review-mobile",
   "asset-blocked-mobile",
 ];
 
-test("UI 验收台固定覆盖十个关键视图，未知 ID fail-closed", () => {
+test("UI 验收台固定覆盖十二个关键视图，未知 ID fail-closed", () => {
   assert.deepEqual(
     UI_ACCEPTANCE_CASES.map((item) => item.id),
     REQUIRED_CASES,
@@ -70,6 +81,83 @@ test("UI 验收台固定覆盖十个关键视图，未知 ID fail-closed", () =>
   assert.throws(
     () => getUiAcceptanceCase("missing"),
     /未知 UI 验收场景：missing/,
+  );
+});
+
+test("completed 单任务镜头只带一份待审资产候选，不伪造 Workflow 或 Agent", async () => {
+  const fixture = getUiAcceptanceCase("asset-candidate-desktop").guide;
+
+  assert.equal(fixture.conversationTasks.length, 1);
+  assert.deepEqual(
+    {
+      id: fixture.conversationTasks[0].id,
+      status: fixture.conversationTasks[0].status,
+      origin: fixture.conversationTasks[0].origin,
+    },
+    {
+      id: "task-ui-asset-candidate",
+      status: "completed",
+      origin: "user",
+    },
+  );
+  assert.equal(fixture.assetBuilderOpen, undefined);
+  assert.equal(
+    await verifyAssetCandidateIntegrity(fixture.assetCandidate, {
+      expectedTaskId: fixture.conversationTasks[0].id,
+    }),
+    fixture.assetCandidate,
+  );
+  assert.equal(fixture.assetCandidate.state, "awaiting_human_review");
+  assert.equal(fixture.assetCandidate.revision, 1);
+  assert.equal(fixture.assetCandidate.supersedes_candidate_digest, null);
+  assert.equal(fixture.assetCandidate.asset_map.workflow.state, "not_formed");
+  assert.equal(fixture.assetCandidate.asset_map.agent.state, "not_formed");
+  assert.equal(fixture.assetCandidate.effects.executes_work, false);
+  assert.equal(fixture.assetCandidate.effects.registers_asset, false);
+  assert.equal(fixture.assetCandidate.effects.promotes_asset, false);
+});
+
+test("接受成功态绑定 authenticated session 决定，仍不形成 Workflow 或 Agent", async () => {
+  const pending = getUiAcceptanceCase("asset-candidate-desktop").guide;
+  const fixture = getUiAcceptanceCase("asset-candidate-accepted-desktop").guide;
+  const candidate = fixture.assetCandidate;
+
+  assert.equal(fixture.conversationTasks.length, 1);
+  assert.equal(fixture.conversationTasks[0].id, candidate.source.task_id);
+  assert.equal(
+    await verifyAssetCandidateIntegrity(candidate, {
+      expectedTaskId: fixture.conversationTasks[0].id,
+    }),
+    candidate,
+  );
+  assert.equal(candidate.id, pending.assetCandidate.id);
+  assert.equal(candidate.candidate_digest, pending.assetCandidate.candidate_digest);
+  assert.equal(candidate.state, "accepted");
+  assert.equal(candidate.revision, 1);
+  assert.equal(candidate.supersedes_candidate_digest, null);
+  assert.deepEqual(
+    {
+      action: candidate.decision.action,
+      signer_source: candidate.decision.signer_source,
+      signer_session_bound: candidate.decision.signer_session_bound,
+    },
+    {
+      action: "accept",
+      signer_source: "authenticated_session",
+      signer_session_bound: true,
+    },
+  );
+  assert.equal(candidate.decision.decided_by, "验收工程师");
+  assert.equal(candidate.decision.decided_by_username, "user-ui-acceptance");
+  assert.equal(candidate.asset_map.task_pattern.state, "approved_revision");
+  assert.equal(candidate.asset_map.skill.state, "approved_revision");
+  assert.equal(candidate.asset_map.workflow.state, "not_formed");
+  assert.equal(candidate.asset_map.agent.state, "not_formed");
+  assert.deepEqual(candidate.effects, pending.assetCandidate.effects);
+  assert.match(assetCandidateSource, /这套方法已保留为资产候选/);
+  assert.match(
+    assetCandidateSource,
+    /已接受为资产候选，尚未登记、发布或形成 Agent。/,
   );
 });
 
@@ -228,6 +316,10 @@ test("Agent 壳只接受文字与附件，自动路由并把内部编排按需�
   assert.equal((guideSource.match(/开工与签发仍由你确认/g) || []).length, 1);
   assert.match(guideSource, /查看路由依据与边界/);
   assert.match(guideSource, /class="route-disclosure"/);
+  assert.match(
+    guideSource,
+    /\.route-disclosure:not\(\[open\]\) > \.route-disclosure-body \{ display: none; \}/,
+  );
   assert.doesNotMatch(guideSource, /class="route-summary" aria-live=/);
   assert.match(guideSource, /class="route-summary-state[^\"]*" aria-live="polite"/);
   assert.doesNotMatch(guideSource, /route-disclosure-count/);
@@ -351,6 +443,17 @@ test("验收入口统一阻止网络和存储副作用", () => {
   );
   assert.throws(() => runtime.indexedDB.open("flai"), /已阻止 indexedDB\.open/);
   assert.equal(installUiAcceptanceBoundary(runtime), boundary);
+});
+
+test("组件级验收仅白名单返回草稿预览，其余 API 全部中止", () => {
+  assert.match(
+    uiLabE2eSource,
+    /component_page\.route\(\s*f"\{BASE\}\/api\/\*\*",\s*asset_preview_route,/,
+  );
+  assert.match(
+    uiLabE2eSource,
+    /request\.method == "POST"[\s\S]*asset-draft-preview[\s\S]*route\.fulfill\([\s\S]*?return[\s\S]*?route\.abort\(\)/,
+  );
 });
 
 test("任一已存在出口无法替换时，验收边界 fail-closed", () => {

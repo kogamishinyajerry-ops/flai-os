@@ -246,7 +246,10 @@ async def upload_file(
             sha256=digest.hexdigest(),
             classification=classification,
             # 分级是自报值（ADR-0021 D2 信任根声明）——标注人记名，标错可追责。
-            uploaded_by=request.state.user["display_name"],
+            # display_name 仅供人读；所有权只取鉴权中间件产出的稳定会话上下文，
+            # 请求 multipart 即使夹带同名字段也没有伪造入口。
+            uploaded_by=request.state.auth_session.display_name,
+            owner_username=request.state.auth_session.username,
         )
     except Exception:
         # 审计 P3（孤儿 blob）：落盘成功但入库失败（如锁等待超时）——磁盘有文件、

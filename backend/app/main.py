@@ -39,7 +39,7 @@ from .auth.middleware import AuthGateMiddleware
 from .auth.service import LoginThrottle
 from .bootstrap import assemble
 from .logging_setup import configure_logging, reset_logging
-from .ontology import AgentShellCatalog, AssetDraftBuilder
+from .ontology import AgentShellCatalog, AssetCandidateLedger, AssetDraftBuilder
 from .runtime.conversation import ConversationService
 from .runtime.runtime import AgentRuntime
 from .storage import repos
@@ -183,7 +183,13 @@ def create_app(
                 asm.tool_registry,
                 asm.scope_registry,
             )
-            app.state.asset_draft_builder = AssetDraftBuilder()
+            asset_draft_builder = AssetDraftBuilder()
+            app.state.asset_draft_builder = asset_draft_builder
+            app.state.asset_candidate_ledger = AssetCandidateLedger(
+                builder=asset_draft_builder,
+                agent_registry=asm.agent_registry,
+                contracts_dir=contracts_dir,
+            )
             app.state.knowledge_service = asm.knowledge_service
             app.state.model_gateway = asm.model_gateway
             app.state.runtime = runtime

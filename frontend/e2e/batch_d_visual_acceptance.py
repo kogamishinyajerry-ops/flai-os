@@ -325,16 +325,16 @@ with sync_playwright() as p:
     )
     check("① token 地基已定义（--sans/--mono/--fs-title/--radius-lg 非空）", all(v for v in vals), str(vals))
 
-    # 历史创建页不再是视觉 Surface：任何旧深链丢弃手工 Agent query，回到
-    # 只有文字与附件的主对话入口。
+    # 历史创建页不再是视觉 Surface：任何旧深链丢弃手工 Agent query，最终
+    # URL 必须精确回到 `/`，页面只保留文字与附件的主对话入口。
     page.goto(BASE + "/tasks/new?agent_id=hello_agent", wait_until="networkidle")
     legacy_redirect_ok = (
-        page.url.rstrip("/") == BASE
+        page.url == BASE + "/"
         and page.locator(".composer textarea").count() == 1
         and page.locator('input[type="file"]').count() == 1
         and page.locator(".agent-preview").count() == 0
     )
-    check("③前置：/tasks/new 历史深链回主对话，零 TaskCreate 字段表", legacy_redirect_ok, page.url)
+    check("③前置：/tasks/new 历史深链最终 URL=/，零 TaskCreate 字段表", legacy_redirect_ok, page.url)
 
     # ── ③ 375px 无横向溢出 + 亮色桌面/375 截图（affected 三页）──
     for slug, path in AFFECTED:

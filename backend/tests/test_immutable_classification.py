@@ -17,10 +17,10 @@ from typing import Any
 import yaml
 from fastapi.testclient import TestClient
 
-from conftest import seed_and_login, seed_user, login
+from conftest import seed_and_login
 from backend.app.api import classification_gate as cgate
 from backend.app.main import create_app
-from backend.app.runtime.runtime import _task_data_classification, _tool_taint_classification
+from backend.app.runtime.runtime import _tool_taint_classification
 from backend.app.storage import repos
 from backend.app.storage.db import get_conn, init_db
 
@@ -533,6 +533,31 @@ def test_review_and_cancel_seal_sensitive_task_row(tmp_path: Path) -> None:
         try:
             _mktask(conn, "rv", classification="sensitive", status="waiting_review", err=None)
             _mktask(conn, "cx", classification="sensitive", status="queued", err="机密取消前文本")
+            execution_evidence_digest = (
+                "sha256:7b9e93d01e34197b15ed6fddaad515525f8745b78d5203966251f6a80ca6ed58"
+            )
+            for event_type, message in (
+                ("validation_started", "开始校验输入"),
+                ("review_requested", "任务需要人工审核放行"),
+            ):
+                payload = {"execution_evidence_digest": execution_evidence_digest}
+                if event_type == "validation_started":
+                    payload = {
+                        "package_snapshot_digest": "1" * 64,
+                        "task_inputs_digest": "sha256:" + "2" * 64,
+                        "input_file_ids": [],
+                        "input_files_digest": "sha256:" + "3" * 64,
+                        **payload,
+                    }
+                repos.append_event(
+                    conn,
+                    task_id="rv",
+                    agent_id="hello_agent",
+                    event_type=event_type,
+                    level="info",
+                    message=message,
+                    payload=payload,
+                )
         finally:
             conn.close()
         # review reject → 响应任务行 error_message 遮蔽（reject_reason 亦经门）

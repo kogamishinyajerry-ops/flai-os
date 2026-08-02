@@ -16,7 +16,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from . import classification_gate as cgate
-from ..core.errors import IllegalTransitionError
+from ..core.errors import IllegalTransitionError, ReviewEvidenceUnavailableError
 from ..logging_setup import audit_event
 from ..storage import repos
 
@@ -235,13 +235,11 @@ class CreateTasksBatchRequest(BaseModel):
 
     conversation_id: str | None = Field(default=None, max_length=100)
     items: list[BatchTaskItem] = Field(min_length=1, max_length=32)
-    # Guide 在展示「可开工」前读取并校验的是某个确切 Agent 版本的输入契约；
-    # 提交时把该版本逐 Agent 带回，服务端在任何写入前复核，闭合 schema→create
-    # 之间的热更新窗口。公共 batch API 必填且必须覆盖整批；内部调用可保留兼容。
+    # 兼容旧 Guide 的可选 stale-write 前置条件，绝不是持久化 pin 的来源。省略时
+    # 服务端自动从权威 Registry package_snapshot 派生；提供时仅在写前复核。
     pinned_versions: dict[str, str] | None = Field(default=None, max_length=32)
-    # 版本不足以区分同版本包内容漂移；Guide 同时钉 registry 不可变包摘要。
-    # 公共 batch API 必填且必须逐 Agent 覆盖，并与 pinned_versions 一起在首行
-    # 写入前对同一个 package_snapshot 复核。
+    # 同上：客户端摘要只可作为并发漂移预期，metadata.package_snapshot_digest
+    # 永远取服务端实际取得的不可变快照，绝不照抄请求值。
     pinned_package_digests: dict[str, str] | None = Field(default=None, max_length=32)
     # 客户端一次人工开工动作的稳定标识。后续用于 COMMIT 后响应丢失的幂等重放；
     # 当前先收紧为有界、安全字符，绝不把任意文本写入审计元数据。
@@ -322,6 +320,40 @@ def _get_package_snapshot_or_none(registry: Any, agent_id: str) -> Any | None:
         return None
 
 
+def _package_snapshot_parts(
+    snapshot: Any, agent_id: str
+) -> tuple[dict[str, Any], str] | None:
+    """Parse and validate the manifest/digest pair used as one creation-time pin."""
+    try:
+        manifest = getattr(snapshot, "manifest", None)
+        digest = getattr(snapshot, "digest", None)
+    except Exception:
+        return None
+    if not isinstance(manifest, dict) or manifest.get("id") != agent_id:
+        return None
+    version = manifest.get("version")
+    if not isinstance(version, str):
+        return None
+    version_parts = version.split(".")
+    if len(version_parts) != 3 or any(not part.isdigit() for part in version_parts):
+        return None
+    if not (
+        isinstance(digest, str)
+        and len(digest) == 64
+        and all(ch in "0123456789abcdef" for ch in digest)
+    ):
+        return None
+    return manifest, digest
+
+
+def _automatic_task_name(agent: dict[str, Any], agent_id: str) -> str:
+    """Derive an engineer-facing task title only from the captured package manifest."""
+    snapshot_display_name = agent.get("name")
+    if isinstance(snapshot_display_name, str) and snapshot_display_name.strip():
+        return snapshot_display_name.strip()
+    return agent_id
+
+
 def _require_complete_batch_pin_contract(
     *,
     items: list[BatchTaskItem],
@@ -330,11 +362,12 @@ def _require_complete_batch_pin_contract(
     pinned_package_digests: dict[str, str] | None,
     require_for_version_only: bool,
 ) -> None:
-    """Atomic Guide pin group; direct team version-only calls remain compatible."""
+    """Optional client expectations stay atomic; server-owned snapshot pins need none."""
+    if require_for_version_only is False:
+        return
     contract_requested = (
-        require_for_version_only is True
-        or operation_id is not None
-        or pinned_package_digests is not None
+        pinned_package_digests is not None
+        or pinned_versions is not None
     )
     if contract_requested is False:
         return
@@ -396,13 +429,16 @@ def _snapshot_input_validation_error(
     *,
     snapshot: Any,
     inputs: dict[str, Any],
+    snapshot_manifest: dict[str, Any] | None = None,
     input_file_ids: list[str] | None = None,
     conn: Any | None = None,
     defer_file_upload_to_resolver: bool = False,
 ) -> str | None:
     """Validate inputs from bytes in the exact package snapshot already gated."""
     file_ids = input_file_ids or []
-    agent = getattr(snapshot, "manifest", None)
+    agent = snapshot_manifest
+    if agent is None:
+        agent = getattr(snapshot, "manifest", None)
     if not isinstance(agent, dict):
         return "Agent 包快照缺少 manifest"
     input_contract = agent.get("input")
@@ -598,9 +634,27 @@ def _load_batch_operation_replay(
 @router.post("/tasks")
 def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
     agent_registry = request.app.state.agent_registry
-    agent = _get_agent_or_none(agent_registry, body.agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail=f"agent 不存在：{body.agent_id}")
+    package_snapshot = _get_package_snapshot_or_none(agent_registry, body.agent_id)
+    if package_snapshot is None:
+        if _get_agent_or_none(agent_registry, body.agent_id) is None:
+            raise HTTPException(status_code=404, detail=f"agent 不存在：{body.agent_id}")
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_package_snapshot_unavailable",
+                "message": f"Agent 不可变包快照不可用，任务未创建：{body.agent_id}",
+            },
+        )
+    package_snapshot_parts = _package_snapshot_parts(package_snapshot, body.agent_id)
+    if package_snapshot_parts is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_package_snapshot_invalid",
+                "message": f"Agent 不可变包快照结构无效，任务未创建：{body.agent_id}",
+            },
+        )
+    agent, package_snapshot_digest = package_snapshot_parts
     if agent.get("status") == "disabled":
         raise HTTPException(status_code=409, detail=f"agent 已下线，禁止调用：{body.agent_id}")
     if (agent.get("workflow", {}) or {}).get("mode") == "interactive":
@@ -714,12 +768,14 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             task_id=task_id,
             agent_id=body.agent_id,
             agent_version=agent.get("version"),
-            name=body.name,
+            # 工程师不负责填写任务名；直接创建入口省略 name 时，也只从本次
+            # 权威 package snapshot 自动派生，供任务列表与快速切换器稳定检索。
+            name=body.name or _automatic_task_name(agent, body.agent_id),
             created_by=created_by,
             created_by_username=created_by_username,
             inputs=body.inputs,
             input_file_ids=body.input_file_ids,
-            metadata={},
+            metadata={"package_snapshot_digest": package_snapshot_digest},
             depends_on=body.depends_on or None,
             # 持久化为普通 dict（repos.create_task json.dumps 落库）；None 保持 None。
             input_binding=body.input_binding.model_dump() if body.input_binding is not None else None,
@@ -849,14 +905,12 @@ def run_batch_creation(
     全收集（含 retry_of 仅允许指向 failed 任务；全有全无 422）→ BEGIN IMMEDIATE 单事务建行+入队+task_created/charter
     事件 → 提交后取回投影。调用方持 conn 生命周期。
 
-    pinned_versions（批八 Codex R0 P1）：调用方（teams summon / Guide）在对账 gate 时点
-    观察到的 {agent_id: version}。此处对**同一次 registry 读取的对象**做钉版本
-    校验并从同对象盖章 agent_version——registry 若在对账后热切换到不兼容新版，
-    本校验 422 拒发，闭合「新注册表版本被盖进任务→runtime 漂移复检恒过」的
-    TOCTOU 旁路。pinned_package_digests 进一步钉同版本包的完整内容摘要；提供时
-    写前从一次 package_snapshot 读取 manifest+digest+input schema，先验全批 inputs，
-    再把摘要写入 task.metadata。API 的 operation_id/两种 pin 必须原子成组；内部
-    teams 既有 version-only 调用继续兼容。operation_id 非空时，task id 由认证
+    服务端在首条写入前按 Agent 从权威 Registry 各取一次 package_snapshot，并只从
+    这个对象读取 manifest/version/digest/input schema/charter；因此即使客户端完全
+    不提供 pin，任务也会自动写 metadata.package_snapshot_digest。pinned_versions /
+    pinned_package_digests 仅是兼容旧 Guide/Team 的可选 stale-write 前置条件，绝不
+    作为持久化来源；公共 API 一旦提供其中之一仍须与 operation_id 原子成组。
+    operation_id 非空时，task id 由认证
     username + operation_id + 下标确定性派生，并用 metadata 请求指纹做幂等重放/
     冲突拒绝；不改持久化 schema。"""
     _require_complete_batch_pin_contract(
@@ -899,11 +953,12 @@ def run_batch_creation(
     else:
         task_ids = [f"task_{uuid.uuid4().hex}" for _ in items]
 
+    # 此阶段只做与 Agent manifest 无关的请求/仓储静态校验。status、mode、input
+    # contract、clearance 全部留到 BEGIN IMMEDIATE 内取得权威 package_snapshot 后，
+    # 避免 registry.get() 与 snapshot 跨代撕裂。
     errors: list[dict[str, Any]] = []
-    agents: list[dict[str, Any] | None] = []
     for idx, item in enumerate(items):
         item_errors: list[str] = []
-        agent = _get_agent_or_none(agent_registry, item.agent_id)
         if (pinned_versions is not None or pinned_package_digests is not None) and (
             pinned_versions is None or item.agent_id not in pinned_versions
         ):
@@ -917,41 +972,10 @@ def run_batch_creation(
             item_errors.append(
                 f"缺少创建时包摘要钉：{item.agent_id}——请重新核对方案后开工"
             )
-        if (
-            agent is not None
-            and pinned_versions is not None
-            and item.agent_id in pinned_versions
-            and (agent.get("version") or "") != pinned_versions[item.agent_id]
-        ):
-            item_errors.append(
-                f"agent 版本在对账后发生变化：{item.agent_id} "
-                f"{pinned_versions[item.agent_id]} → {agent.get('version') or ''}——请重新召集"
-            )
-        if agent is None:
-            item_errors.append(f"agent 不存在：{item.agent_id}")
-        elif agent.get("status") == "disabled":
-            item_errors.append(f"agent 已下线，禁止调用：{item.agent_id}")
-        elif (agent.get("workflow", {}) or {}).get("mode") == "interactive":
-            item_errors.append(
-                f"agent {item.agent_id} 是导引类（interactive）Agent，请走 /api/conversations 对话"
-            )
         for dep_idx in item.after:
             if not (0 <= dep_idx < idx):
                 item_errors.append(
                     f"after 下标 {dep_idx} 非法：只能引用本批更早条目（0..{idx - 1}）——按构造即 DAG"
-                )
-        pinned_file_contract_pending = False
-        for fid in item.input_file_ids:
-            rec = repos.get_file(conn, fid)
-            if pinned_package_digests is not None and (
-                rec is None or rec.get("kind") != "input"
-            ):
-                # 完整 pin 路径由同一 package snapshot 的输入合同统一给出稳定
-                # batch_inputs_invalid；这里不让密级 gate 的保守兜底抢先吞掉根因。
-                pinned_file_contract_pending = True
-            elif rec is not None and rec.get("kind") != "input":
-                item_errors.append(
-                    f"input_file_ids 只接受上传件（kind=input）：{fid} 的 kind={rec.get('kind')!r}"
                 )
         if item.retry_of is not None:
             retry_origin = repos.get_task(conn, item.retry_of)
@@ -962,16 +986,6 @@ def run_batch_creation(
                     f"retry_of 只能指向失败任务：{item.retry_of} 当前状态为"
                     f" {retry_origin.get('status')!r}"
                 )
-        if agent is not None and pinned_file_contract_pending is False:
-            # 批七 ADR-0030 密级 gate（batch 路径，与 create_task 同函数同判定式）。
-            _allowed, _material_level, _agent_max = cgate.agent_clearance_allows(
-                conn, agent, item.input_file_ids
-            )
-            if _allowed is False:
-                item_errors.append(
-                    f"该专家的密级准入上限为「{_agent_max}」，无法处理「{_material_level}」级材料（ADR-0030）"
-                )
-        agents.append(agent)
         if item_errors:
             errors.append({"index": idx, "agent_id": item.agent_id, "errors": item_errors})
     if errors:
@@ -1022,109 +1036,172 @@ def run_batch_creation(
         # 后全写，任一漂移都整批回滚为零行。digest pin 路径每项只取一次
         # package_snapshot，并从同一不可变对象读取 manifest+digest；后续盖章版本、
         # 摘要和 charter 都只消费这组对象，绝不再回读可变 authoring source。
-        package_snapshots: list[Any | None] = [None for _ in items]
-        if pinned_versions is not None or pinned_package_digests is not None:
-            live_agents: list[dict[str, Any] | None] = []
-            live_snapshots: list[Any | None] = []
-            drift_errors: list[dict[str, Any]] = []
-            for idx, item in enumerate(items):
-                if pinned_package_digests is not None:
-                    snapshot = _get_package_snapshot_or_none(
-                        agent_registry, item.agent_id
-                    )
-                    live_agent = snapshot.manifest if snapshot is not None else None
-                else:
-                    snapshot = None
-                    live_agent = _get_agent_or_none(agent_registry, item.agent_id)
-                live_agents.append(live_agent)
-                live_snapshots.append(snapshot)
-                item_drift_errors: list[str] = []
-                pinned_version = (pinned_versions or {}).get(item.agent_id)
-                current_version = (live_agent or {}).get("version") or ""
-                if (
-                    live_agent is None
-                    or pinned_version is None
-                    or current_version != pinned_version
-                ):
-                    item_drift_errors.append(
-                        f"agent 版本在方案核对后发生变化：{item.agent_id} "
-                        f"{pinned_version or '未钉版本'} → "
-                        f"{current_version or '不在注册表'}——请重新核对后开工"
-                    )
-                if pinned_package_digests is not None:
-                    pinned_digest = pinned_package_digests.get(item.agent_id)
-                    current_digest = snapshot.digest if snapshot is not None else ""
-                    if (
-                        snapshot is None
-                        or pinned_digest is None
-                        or current_digest != pinned_digest
-                    ):
-                        item_drift_errors.append(
-                            f"agent 包摘要在方案核对后发生变化：{item.agent_id} "
-                            f"{pinned_digest or '未钉摘要'} → "
-                            f"{current_digest or '不在注册表'}——请重新核对后开工"
-                        )
-                if item_drift_errors:
-                    drift_errors.append(
-                        {
-                            "index": idx,
-                            "agent_id": item.agent_id,
-                            "errors": item_drift_errors,
-                        }
-                    )
-            if drift_errors:
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "message": "整批未创建（Agent 版本或包内容已变化）——请重新核对方案",
-                        "batch_errors": drift_errors,
-                    },
+        package_snapshots: list[Any | None] = []
+        live_agents: list[dict[str, Any] | None] = []
+        snapshot_by_agent: dict[
+            str,
+            tuple[Any | None, tuple[dict[str, Any], str] | None],
+        ] = {}
+        drift_errors: list[dict[str, Any]] = []
+        for idx, item in enumerate(items):
+            if item.agent_id not in snapshot_by_agent:
+                captured_snapshot = _get_package_snapshot_or_none(
+                    agent_registry, item.agent_id
                 )
-            agents = live_agents
-            package_snapshots = live_snapshots
+                snapshot_by_agent[item.agent_id] = (
+                    captured_snapshot,
+                    _package_snapshot_parts(captured_snapshot, item.agent_id)
+                    if captured_snapshot is not None
+                    else None,
+                )
+            snapshot, snapshot_parts = snapshot_by_agent[item.agent_id]
+            snapshot_invalid = (
+                snapshot is not None
+                and snapshot_parts is None
+            )
+            live_agent = snapshot_parts[0] if snapshot_parts is not None else None
+            live_agents.append(live_agent)
+            package_snapshots.append(snapshot)
+            item_drift_errors: list[str] = []
+            pinned_version = (pinned_versions or {}).get(item.agent_id)
+            current_version = (live_agent or {}).get("version") or ""
+            current_digest = snapshot_parts[1] if snapshot_parts is not None else ""
+            if snapshot is None:
+                item_drift_errors.append(
+                    f"Agent 不可变包快照不可用：{item.agent_id}——请重新核对后开工"
+                )
+            elif snapshot_invalid:
+                item_drift_errors.append(
+                    f"Agent 不可变包快照结构或摘要无效：{item.agent_id}——请重新核对后开工"
+                )
+            if pinned_version is not None and current_version != pinned_version:
+                item_drift_errors.append(
+                    f"agent 版本在对账后发生变化：{item.agent_id} "
+                    f"{pinned_version} → "
+                    f"{current_version or '不在注册表'}——请重新核对后开工"
+                )
+            if live_agent is not None:
+                if live_agent.get("status") == "disabled":
+                    item_drift_errors.append(f"agent 已下线，禁止调用：{item.agent_id}")
+                if (live_agent.get("workflow", {}) or {}).get("mode") == "interactive":
+                    item_drift_errors.append(
+                        f"agent {item.agent_id} 是导引类（interactive）Agent，请走 /api/conversations 对话"
+                    )
+            pinned_digest = (pinned_package_digests or {}).get(item.agent_id)
+            if pinned_digest is not None and current_digest != pinned_digest:
+                item_drift_errors.append(
+                    f"agent 包摘要在方案核对后发生变化：{item.agent_id} "
+                    f"{pinned_digest} → "
+                    f"{current_digest or '不在注册表'}——请重新核对后开工"
+                )
+            if item_drift_errors:
+                drift_errors.append(
+                    {
+                        "index": idx,
+                        "agent_id": item.agent_id,
+                        "errors": item_drift_errors,
+                    }
+                )
+        if drift_errors:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "agent_package_snapshot_unavailable"
+                    if any(
+                        "不可变包快照不可用" in error
+                        for entry in drift_errors
+                        for error in entry["errors"]
+                    )
+                    else (
+                        "agent_package_snapshot_invalid"
+                        if any(
+                            "快照结构或摘要无效" in error
+                            for entry in drift_errors
+                            for error in entry["errors"]
+                        )
+                        else "agent_package_snapshot_drift"
+                    ),
+                    "message": "整批未创建（Agent 版本或包内容已变化）——请重新核对方案",
+                    "batch_errors": drift_errors,
+                },
+            )
+        agents = live_agents
 
         # ADR-0033：完整 pin 链不只证明「是同一个包」，还必须用这个刚取得的
         # 不可变包校验每项 inputs。先全验后全写，任一项非法整批 422/零落库；
         # 不通过 package_dir 回读 authoring source，也不再次获取 snapshot。
-        if pinned_package_digests is not None:
-            input_errors: list[dict[str, Any]] = []
-            for idx, item in enumerate(items):
-                snapshot = package_snapshots[idx]
-                agent = agents[idx]
-                if snapshot is None or agent is None:
-                    validation_error = "Agent 不可变包快照不可用"
-                else:
-                    validation_error = _snapshot_input_validation_error(
-                        snapshot=snapshot,
-                        inputs=item.inputs,
-                        input_file_ids=item.input_file_ids,
-                        conn=conn,
-                        defer_file_upload_to_resolver=len(item.after) > 0,
-                    )
-                if validation_error is not None:
-                    input_errors.append(
-                        {
-                            "index": idx,
-                            "agent_id": item.agent_id,
-                            "errors": [validation_error],
-                        }
-                    )
-            if len(input_errors) > 0:
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "code": "batch_inputs_invalid",
-                        "message": "整批未创建（输入不符合已钉死的 Agent 包契约）",
-                        "batch_errors": input_errors,
-                    },
+        input_errors: list[dict[str, Any]] = []
+        for idx, item in enumerate(items):
+            snapshot = package_snapshots[idx]
+            agent = agents[idx]
+            if snapshot is None or agent is None:
+                validation_error = "Agent 不可变包快照不可用"
+            else:
+                validation_error = _snapshot_input_validation_error(
+                    snapshot=snapshot,
+                    snapshot_manifest=agent,
+                    inputs=item.inputs,
+                    input_file_ids=item.input_file_ids,
+                    conn=conn,
+                    defer_file_upload_to_resolver=len(item.after) > 0,
                 )
+            if validation_error is not None:
+                input_errors.append(
+                    {
+                        "index": idx,
+                        "agent_id": item.agent_id,
+                        "errors": [validation_error],
+                    }
+                )
+        if len(input_errors) > 0:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "batch_inputs_invalid",
+                    "message": "整批未创建（输入不符合已钉死的 Agent 包契约）",
+                    "batch_errors": input_errors,
+                },
+            )
+        # 首阶段 registry.get() 仅用于友好聚合错误，不能承担安全裁决。密级准入
+        # 必须在首条写入前，用即将盖 agent_version/digest 的同一 package_snapshot
+        # manifest 重新判定；否则高权限旧投影→低权限新快照的窗口会放行敏感附件。
+        clearance_errors: list[dict[str, Any]] = []
+        for idx, item in enumerate(items):
+            agent = agents[idx]
+            assert agent is not None
+            allowed, material_level, agent_max = cgate.agent_clearance_allows(
+                conn, agent, item.input_file_ids
+            )
+            if allowed is False:
+                clearance_errors.append(
+                    {
+                        "index": idx,
+                        "agent_id": item.agent_id,
+                        "errors": [
+                            f"该专家的密级准入上限为「{agent_max}」，无法处理"
+                            f"「{material_level}」级材料（ADR-0030）"
+                        ],
+                    }
+                )
+        if len(clearance_errors) > 0:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "batch_clearance_denied",
+                    "message": "整批未创建（材料超过权威 Agent 包快照的密级准入上限）",
+                    "batch_errors": clearance_errors,
+                },
+            )
         for idx, item in enumerate(items):
             deps = [task_ids[d] for d in item.after]
-            metadata: dict[str, Any] = {}
-            if pinned_package_digests is not None:
-                snapshot = package_snapshots[idx]
-                assert snapshot is not None
-                metadata["package_snapshot_digest"] = snapshot.digest
+            snapshot = package_snapshots[idx]
+            assert snapshot is not None
+            _cached_snapshot, cached_parts = snapshot_by_agent[item.agent_id]
+            assert _cached_snapshot is snapshot
+            assert cached_parts is not None
+            metadata: dict[str, Any] = {
+                "package_snapshot_digest": cached_parts[1],
+            }
             if operation_id is not None:
                 metadata[_BATCH_OPERATION_META_KEY] = {
                     "operation_id": operation_id,
@@ -1137,7 +1214,8 @@ def run_batch_creation(
                 task_id=task_ids[idx],
                 agent_id=item.agent_id,
                 agent_version=(agents[idx] or {}).get("version"),
-                name=item.name,
+                name=item.name
+                or _automatic_task_name(agents[idx] or {}, item.agent_id),
                 created_by=created_by,
                 created_by_username=created_by_username,
                 inputs=item.inputs,
@@ -1310,13 +1388,19 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             )
 
         reviewer = request.state.user["display_name"]  # ADR-0019 D5：签发者=认证身份
+        reviewer_username = request.state.user["username"]
         try:
             # Codex 增量2审 R4 P1：状态迁移 + 样本标签回填 + signer 事件三者**同一事务
             # 原子落库**（此前三次分离提交，crash 窗口可留下 status=completed 却无
             # review_approved 事件的任务，resolver 见 status 即放行下游）。approve→completed
             # + review_approved / reject→failed + review_rejected；样本 approve→1/reject→0。
             task, _sample_rows = repos.apply_human_review(
-                conn, task_id, action=body.action, reviewer=reviewer, comment=body.comment
+                conn,
+                task_id,
+                action=body.action,
+                reviewer=reviewer,
+                reviewer_username=reviewer_username,
+                comment=body.comment,
             )
         except IllegalTransitionError as exc:
             # R1 复审 P2：两个 review 请求并发命中同一 waiting_review 任务时，
@@ -1325,6 +1409,17 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             raise HTTPException(
                 status_code=409,
                 detail=f"任务已被并发的人工审核动作转出 waiting_review，本次不生效：{exc}",
+            ) from exc
+        except ReviewEvidenceUnavailableError as exc:
+            # 严格 approve 必须绑定唯一、规范且一致的执行证据摘要。旧任务或
+            # 损坏事件链在仓储事务内已整体回滚；这里只把这个已知治理冲突稳定
+            # 映射为 409，绝不捕获普通 ValueError（未知程序错误仍应暴露）。
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "review_execution_evidence_invalid",
+                    "message": str(exc),
+                },
             ) from exc
 
         # 治理签发审计（M12-2c）：人工放行/拒绝是「人是唯一签发者」红线的落点，
@@ -1338,7 +1433,6 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
         # 不拦截**（硬性职责分离 403 是 owner 待定的角色轴策略，task #17）。
         created_by = task.get("created_by")
         created_by_username = task.get("created_by_username")
-        reviewer_username = request.state.user["username"]
         if created_by_username is not None:
             self_review = bool(reviewer_username == created_by_username)
             self_review_basis = "username"  # 精确身份，不撞名

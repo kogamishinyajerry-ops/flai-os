@@ -632,6 +632,129 @@ def test_create_file_and_get_file_roundtrip(conn) -> None:
     assert fetched == created
 
 
+def test_uploaded_file_projects_stable_owner_username_separately_from_display_name(
+    conn,
+) -> None:
+    file_id = f"file_{uuid.uuid4().hex[:8]}"
+
+    created = repos.create_file(
+        conn,
+        file_id=file_id,
+        kind="input",
+        filename="owned.csv",
+        path="/data/uploads/owned.csv",
+        size_bytes=12,
+        sha256="a" * 64,
+        classification="internal",
+        uploaded_by="同名工程师",
+        owner_username="bob",
+    )
+
+    assert created["owner_username"] == "bob"
+    assert created["uploaded_by"] == "同名工程师"
+    assert repos.get_file(conn, file_id)["owner_username"] == "bob"
+    assert repos.list_files_by_ids(conn, [file_id])[0]["owner_username"] == "bob"
+
+
+def test_uploaded_file_owner_check_is_exact_and_fails_closed(conn) -> None:
+    file_id = f"file_{uuid.uuid4().hex[:8]}"
+    repos.create_file(
+        conn,
+        file_id=file_id,
+        kind="input",
+        filename="bob.csv",
+        path="/data/uploads/bob.csv",
+        size_bytes=3,
+        sha256="b" * 64,
+        classification="internal",
+        uploaded_by="Bob",
+        owner_username="bob",
+    )
+
+    assert repos.file_is_owned_by_username(conn, file_id, "bob") is True
+    assert repos.file_is_owned_by_username(conn, file_id, "alice") is False
+    assert repos.file_is_owned_by_username(conn, file_id, "") is False
+    assert repos.file_is_owned_by_username(conn, "missing-file", "bob") is False
+
+
+def test_uploaded_file_owner_username_cannot_be_rewritten(conn) -> None:
+    file_id = f"file_{uuid.uuid4().hex[:8]}"
+    repos.create_file(
+        conn,
+        file_id=file_id,
+        kind="input",
+        filename="immutable.csv",
+        path="/data/uploads/immutable.csv",
+        size_bytes=5,
+        sha256="c" * 64,
+        classification="internal",
+        uploaded_by="Bob",
+        owner_username="bob",
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="owner_username is immutable"):
+        conn.execute(
+            "UPDATE files SET owner_username = ? WHERE id = ?",
+            ("alice", file_id),
+        )
+    assert repos.get_file(conn, file_id)["owner_username"] == "bob"
+
+
+def test_file_owner_migration_keeps_legacy_rows_unattributed(tmp_path) -> None:
+    db_path = tmp_path / "legacy-files.db"
+    legacy = db_mod.get_conn(db_path)
+    try:
+        legacy.execute(
+            """
+            CREATE TABLE files (
+                id TEXT PRIMARY KEY,
+                task_id TEXT,
+                kind TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                path TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                classification TEXT NOT NULL DEFAULT 'internal',
+                uploaded_by TEXT
+            )
+            """
+        )
+        legacy.execute(
+            "INSERT INTO files VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                "legacy-file",
+                None,
+                "input",
+                "legacy.txt",
+                "/legacy/legacy.txt",
+                1,
+                "d" * 64,
+                "2026-01-01T00:00:00+00:00",
+                "internal",
+                "历史工程师",
+            ),
+        )
+    finally:
+        legacy.close()
+
+    db_mod.init_db(db_path)
+    db_mod.init_db(db_path)
+
+    migrated = db_mod.get_conn(db_path)
+    try:
+        assert "owner_username" in {
+            row[1] for row in migrated.execute("PRAGMA table_info(files)")
+        }
+        assert repos.get_file(migrated, "legacy-file")["owner_username"] is None
+        assert (
+            repos.file_is_owned_by_username(migrated, "legacy-file", "历史工程师")
+            is False
+        )
+    finally:
+        migrated.close()
+
+
 def test_get_file_missing_returns_none(conn) -> None:
     assert repos.get_file(conn, "no_such_file") is None
 

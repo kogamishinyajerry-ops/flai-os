@@ -21,7 +21,12 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
-from .tasks import BatchTaskItem, run_batch_creation
+from .tasks import (
+    BatchTaskItem,
+    _get_package_snapshot_or_none,
+    _package_snapshot_parts,
+    run_batch_creation,
+)
 from ..storage import repos
 
 router = APIRouter(prefix="/api", tags=["teams"])
@@ -258,12 +263,20 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
         # 恒过」的 TOCTOU 旁路）。
         warnings: list[str] = []
         pinned_versions: dict[str, str] = {}
+        pinned_package_digests: dict[str, str] = {}
         for m in team["members"]:
-            agent = agent_registry.get(m["agent_id"])
+            snapshot = _get_package_snapshot_or_none(agent_registry, m["agent_id"])
             label = f"席位 {m['seq']}（{m['agent_id']}）"
-            if agent is None:
-                errors.append(f"{label}：agent 不在注册表（已下架或拒载隔离）")
+            if snapshot is None:
+                errors.append(
+                    f"{label}：agent 不在注册表或不可变包快照不可用（已下架或拒载隔离）"
+                )
                 continue
+            snapshot_parts = _package_snapshot_parts(snapshot, m["agent_id"])
+            if snapshot_parts is None:
+                errors.append(f"{label}：Agent 不可变包快照结构或摘要无效")
+                continue
+            agent, snapshot_digest = snapshot_parts
             if agent.get("status") == "disabled":
                 errors.append(f"{label}：agent 已下线")
                 continue
@@ -280,6 +293,7 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
                 else:
                     warnings.append(f"{label}：版本 {saved} → {current}（patch 变化，放行）")
             pinned_versions[m["agent_id"]] = current
+            pinned_package_digests[m["agent_id"]] = snapshot_digest
         if errors:
             raise HTTPException(
                 status_code=422,
@@ -334,6 +348,7 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
             created_by=request.state.user["display_name"],
             created_by_username=request.state.user["username"],
             pinned_versions=pinned_versions,
+            pinned_package_digests=pinned_package_digests,
         )
         result["team_id"] = team_id
         result["warnings"] = warnings

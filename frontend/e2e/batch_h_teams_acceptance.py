@@ -1,19 +1,20 @@
 """批八 teams 验收（AGENT-TEAM-B8 §四，O1-O7；O8 craft 由既有 craft 套件承接，
 O9 后端半由 test_b8_teams.py 承接）：
 
-  O1 存团队保真：UI 从 orchestrate 方案卡「存为团队模板」→ API 回读成员/seq/
-     after/版本快照；
+  O1 团队蓝本保真：Guide 始终不暴露「存为团队模板」；测试用认证
+     API 夹具从 orchestrate 方案生成蓝本，回读成员/seq/after/版本快照；
   O2 对账 fail-closed（G2 disable）：整单 422 + 席位清单 + 零任务写入 + 门户
      预览置灰；
   O2b G1（卸载）/G3（翻 interactive）/G5（席位不对齐）逐条专属证明；
-  O3 summon 成功链（UI 填参面板）：after→depends_on 真 task_id、上游 queued、
+  O3 主对话唯一「按方案开工」成功链：after→depends_on 真 task_id、上游 queued、
      下游滞留 created → resolver 接力 completed；
   O3b 乱序提交（API 逆 seq 序）→ 依赖边仍正确（seq 升序重排契约，auditor F3）；
   O4 版本漂移：0.x-minor 拒 + 清单指名；patch 放行 + warnings 列名；
   O5 密级不稀释：sensitive 材料席位 → 整单 422（batch gate 第四路复用实证）；
   O6 withheld 诚实（GuidePage 被动面）：sensitive JSON 产物 → 遮蔽标记在场 +
      零 /download 请求（网络计数）+ 无编造「依据 N 条」；
-  O7 存团队入口纪律：无方案不在场；会话归档后不在场。
+  O7 工程师入口纪律：无方案、有方案、归档后均没有手工存团队/
+     逐席填参/手工召集；门户只读展示蓝本。
 
 tamper witness（scripts/tamper_replay.sh b8-*）：
   - b8-gate-cut：summon 对账 G1-G4 收集后判定短路 → O2 红；
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import socket
 import sys
@@ -234,27 +236,49 @@ with sync_playwright() as p:
     # ── O7 前置：无方案会话不见入口 ─────────────────────────────────────────
     page.goto(BASE + "/")
     expect(page.locator(".guide-page")).to_be_visible(timeout=8000)
-    check("O7a 无方案时「存为团队模板」不在场", page.locator(".save-team-btn").count() == 0)
+    check(
+        "O7a 无方案时只有文字+附件 Composer，无手工存团队入口",
+        page.locator(".composer textarea").count() == 1
+        and page.locator('.composer input[type="file"]').count() == 1
+        and page.locator(".save-team-btn, .summon-dialog, .schema-form").count() == 0,
+    )
 
-    # ── O1：发消息得方案 → UI 存团队 → API 回读保真 ─────────────────────────
+    # ── O1：对话生方案 → 界面无手工存模板 → API 夹具回读保真 ────────────────────
     page.locator(".composer textarea, textarea").first.fill("给我组一套接力团队")
     page.keyboard.press("Enter")
-    expect(page.locator(".plan-card").last).to_be_visible(timeout=15000)
-    save_btn = page.locator(".save-team-btn")
-    expect(save_btn).to_be_visible(timeout=8000)
-    page.once("dialog", lambda d: d.accept("接力验收团队"))
-    save_btn.click()
-    time.sleep(1.5)
-    teams = API.get("/api/teams").json()
-    check("O1a 团队已保存", len(teams) == 1, json.dumps(teams, ensure_ascii=False)[:200])
-    team = teams[0] if teams else {"members": []}
-    m = team.get("members", [])
-    check("O1b 成员/seq/after 保真", len(m) == 2 and m[0]["seq"] == 0 and m[1]["after"] == [0],
-          json.dumps(m, ensure_ascii=False)[:200])
-    check("O1c 版本快照锁定", all(x.get("agent_version_at_save") == "0.1.0" for x in m))
-    page.screenshot(path=str(SHOTS / "1_plan_saved.png"))
+    plan_card = page.locator(".plan-card").last
+    expect(plan_card).to_be_visible(timeout=15000)
+    start_btn = plan_card.get_by_role("button", name="按方案开工", exact=True)
+    expect(start_btn).to_be_visible(timeout=8000)
+    check(
+        "O1a 有方案仍无手工存团队入口（唯一主 CTA=按方案开工）",
+        page.locator(".save-team-btn").count() == 0
+        and start_btn.count() == 1,
+    )
     conv_id = page.url.split("c=")[-1] if "c=" in page.url else ""
-    team_id = team.get("id", "")
+    saved = API.post(
+        "/api/teams",
+        json={"name": "接力验收团队", "conversation_id": conv_id},
+    )
+    check(
+        "O1b 认证 API 夹具已从对话方案生成团队蓝本",
+        saved.status_code == 200,
+        saved.text[:200],
+    )
+    saved_team = saved.json() if saved.status_code == 200 else {}
+    team_id = saved_team.get("id", "")
+    team_read = API.get(f"/api/teams/{team_id}") if team_id else None
+    team = team_read.json() if team_read is not None and team_read.status_code == 200 else {}
+    check(
+        "O1c 按 POST 返回 id 精确回读同一团队蓝本",
+        bool(team_id) and team.get("id") == team_id and team.get("name") == "接力验收团队",
+        json.dumps(team, ensure_ascii=False)[:200],
+    )
+    m = team.get("members", [])
+    check("O1d 成员/seq/after 保真", len(m) == 2 and m[0]["seq"] == 0 and m[1]["after"] == [0],
+          json.dumps(m, ensure_ascii=False)[:200])
+    check("O1e 版本快照锁定", all(x.get("agent_version_at_save") == "0.1.0" for x in m))
+    page.screenshot(path=str(SHOTS / "1_plan_blueprint_readonly.png"))
 
     # ── O2：G2 disable → 门户预览置灰 + API 整单 422 零写入 ────────────────
     original_status = (app.state.agent_registry.get("hello_agent") or {}).get("status")
@@ -271,12 +295,22 @@ with sync_playwright() as p:
         page.goto(BASE + "/portal")
         expect(page.locator(".teams-section")).to_be_visible(timeout=8000)
         try:
-            unready = page.locator(".team-unready")
+            team_card = page.locator(".team-card").filter(has_text="接力验收团队").first
+            expect(team_card).to_be_visible(timeout=4000)
+            unready = team_card.locator(".team-unready")
             expect(unready).to_be_visible(timeout=4000)
-            btn_disabled = page.locator(".team-actions .el-button").first.is_disabled()
-            check("O2d 门户预览置灰（下线提示+按钮禁用）", btn_disabled is True, unready.inner_text())
+            team_controls = team_card.locator(
+                "button, input, textarea, select, form, [contenteditable]"
+            ).count()
+            check(
+                "O2d 门户只读预览（下线提示+零手工召集/填参控件）",
+                "成员已下线" in unready.inner_text()
+                and team_controls == 0
+                and page.locator(".summon-dialog").count() == 0,
+                unready.inner_text(),
+            )
         except Exception as exc:  # 红而不崩（批七㊲教训：面缺失时达 FAILED 汇总）
-            check("O2d 门户预览置灰（下线提示+按钮禁用）", False, f"面缺失：{exc}")
+            check("O2d 门户只读预览（下线提示+零手工召集/填参控件）", False, f"面缺失：{exc}")
         page.screenshot(path=str(SHOTS / "2_disabled_preview.png"))
     finally:
         publish_agent_manifest(
@@ -324,7 +358,7 @@ with sync_playwright() as p:
     before = task_count()
     r = summon(team_id, [
         {"seq": 0, "inputs": {"name": "a"}, "input_file_ids": ["f_sens_b8"]},
-        {"seq": 1, "inputs": {"name": "b"}},
+        {"seq": 1, "inputs": {"problem_description": FAULT_PROBLEM}},
     ])
     check("O5a sensitive 材料→整单 422", r.status_code == 422 and "密级准入上限" in r.text, r.text[:200])
     check("O5b 零任务写入", task_count() == before)
@@ -352,49 +386,70 @@ with sync_playwright() as p:
         check("O3b 乱序提交依赖边仍正确", False, r.text[:200])
     publish_agent_manifest("hello_agent", lambda manifest: manifest.__setitem__("version", "0.1.0"))
 
-    # ── O3：UI 填参面板成功链（归属会话，供 O6 复用）────────────────────────
-    page.goto(BASE + "/portal")
-    expect(page.locator(".teams-section")).to_be_visible(timeout=8000)
-    page.locator(".team-actions .el-button").first.click()
-    dlg = page.locator(".summon-dialog")
-    expect(dlg).to_be_visible(timeout=8000)
-    seat_blocks = dlg.locator(".seat-block")
-    # R0 修后席位字段由 SchemaForm 渲染（控件化约束）：hello.name=text 输入；
-    # fault.problem_description maxLength 5000>500 → textarea。
-    expect(seat_blocks.nth(1).locator(".schema-form textarea").first).to_be_visible(timeout=8000)
-    check("O3a 面板逐席位渲染字段", seat_blocks.count() == 2 and dlg.locator(".schema-form .sf-item").count() >= 2,
-          f"seats={seat_blocks.count()} fields={dlg.locator('.schema-form .sf-item').count()}")
-    submit = dlg.locator(".el-dialog__footer .el-button--primary")
-    check("O3c 参数未齐禁提交（fail-closed）", submit.is_disabled() is True)
-    seat_blocks.nth(0).locator(".schema-form input").first.fill("UI上游")
-    check("O3c2 仅一席就绪仍禁提交", submit.is_disabled() is True)
-    seat_blocks.nth(1).locator(".schema-form textarea").first.fill(FAULT_PROBLEM)
-    expect(submit).to_be_enabled(timeout=4000)
-    submit.click()
-    page.wait_for_url("**/tasks", timeout=8000)
-    page.screenshot(path=str(SHOTS / "3_summoned.png"))
-    all_tasks = API.get("/api/tasks").json()
-    ui_up = next(t for t in all_tasks if (t.get("inputs") or {}).get("name") == "UI上游")
+    # ── O3：治理扰动后新对话的唯一主按钮开工（供 O6 复用）───────────────
+    # 旧方案的 Package Snapshot 因 O2/O4 故意发生过漂移，必须 fail-closed；
+    # 因此用新用户轮验证当前权威快照下的真实主路，绝不复活旧方案。
+    page.goto(BASE + "/")
+    expect(page.locator(".guide-page")).to_be_visible(timeout=8000)
+    page.locator(".composer textarea").fill("按当前能力继续这套接力任务")
+    page.keyboard.press("Enter")
+    plan_card = page.locator(".plan-card").last
+    expect(plan_card).to_be_visible(timeout=15000)
+    start_btn = plan_card.get_by_role("button", name="按方案开工", exact=True)
+    expect(start_btn).to_be_visible(timeout=8000)
+    run_conv_id = page.url.split("c=")[-1] if "c=" in page.url else ""
+    before_conv_tasks = API.get(f"/api/conversations/{run_conv_id}/tasks").json()
+    check(
+        "O3a 开工前会话零任务，方案卡零填参字段且只有唯一主 CTA",
+        before_conv_tasks == []
+        and plan_card.locator("input, textarea, select, form, [contenteditable]").count() == 0
+        and start_btn.count() == 1,
+        json.dumps(before_conv_tasks, ensure_ascii=False)[:200],
+    )
+    start_btn.click()
+    deadline = time.time() + 8
+    summoned_tasks: list[dict[str, Any]] = []
+    while time.time() < deadline:
+        summoned_tasks = API.get(f"/api/conversations/{run_conv_id}/tasks").json()
+        if len(summoned_tasks) == 2:
+            break
+        time.sleep(0.2)
+    page.screenshot(path=str(SHOTS / "3_started_from_primary_cta.png"))
+    ui_up = next(
+        (t for t in summoned_tasks if t.get("agent_id") == "hello_agent"),
+        None,
+    )
     # ui_down 带 default：tamper 面（b8-after-cut 砍依赖边）下匹配为空须红而不崩，
     # 套件必须到达 FAILED 汇总（干净咬合三条件之三）。
     ui_down = next(
-        (t for t in all_tasks
-         if t.get("agent_id") == "fault_history_agent" and (t.get("depends_on") or []) == [ui_up["id"]]),
+        (t for t in summoned_tasks
+         if ui_up is not None
+         and t.get("agent_id") == "fault_history_agent"
+         and (t.get("depends_on") or []) == [ui_up["id"]]),
         None,
     )
     runner_started.set()
-    if ui_down is None:
-        check("O3d UI 链依赖边正确", False, "下游依赖边缺失（未找到 depends_on 指向 UI上游 的任务）")
+    if ui_up is None or ui_down is None:
+        check("O3d 主 CTA 自动编排的两任务与依赖边正确", False, "未找到 hello→fault_history 真实任务链")
         check("O3e resolver 接力至下游 waiting_review（rhr 人签闸）", False, "前置缺失：ui_down 无依赖边")
     else:
-        check("O3d UI 链依赖边正确", ui_down["status"] == "created")
+        check(
+            "O3d 主 CTA 自动编排的两任务、输入与真实依赖边正确",
+            len(summoned_tasks) == 2
+            and (ui_up.get("inputs") or {}) == {"name": "上游"}
+            and (ui_down.get("inputs") or {}) == {"problem_description": FAULT_PROBLEM}
+            and ui_up.get("status") == "queued"
+            and ui_down.get("status") == "created"
+            and ui_down.get("depends_on") == [ui_up["id"]],
+            json.dumps(summoned_tasks, ensure_ascii=False)[:400],
+        )
         # fault_history rhr=True：接力执行后落 waiting_review（待人签）即为本链收官相
         done = wait_status(ui_down["id"], {"waiting_review", "completed", "failed", "cancelled"}, timeout_s=60.0)
         check("O3e resolver 接力至下游 waiting_review（rhr 人签闸）", done.get("status") == "waiting_review",
               json.dumps({"status": done.get("status"), "err": done.get("error_message")}, ensure_ascii=False)[:250])
 
     # ── O6：withheld 被动面（GuidePage）——零下载 + 遮蔽标记 + 无编造计数 ──
-    # 对 O3 的 UI 下游任务注入 sensitive JSON 产物（模拟受限依据产物）。
+    # 对 O3 主 CTA 自动编排的上游任务注入 sensitive JSON 产物。
     sens_path = WORK / "ev.json"
     sens_path.write_text(json.dumps({"findings": [{"claim": "机密", "evidence": []}]}), encoding="utf-8")
     conn = app.state.conn_factory()
@@ -417,11 +472,8 @@ with sync_playwright() as p:
         conn.close()
     downloads: list[str] = []
     page.on("request", lambda req: downloads.append(req.url) if "/download" in req.url else None)
-    # 会话归属：O3 的 UI summon 不带会话——withheld 断言走 GuidePage 需要会话任务。
-    # 改走任务详情？TaskDetail 产物区会主动拉取（用户意图面）。被动面选 Workbench
-    # 不可得（无会话）→ 直接断言 store 判据面：打开任务台（TaskConsole 被动列表，
-    # 不拉产物），再核 GuidePage 会话面（O1 会话的方案卡任务无 sensitive 产物，
-    # 零下载自然成立——真正的受限面走 API 语义断言 + TaskConsole 零下载）。
+    # 被动面选 TaskConsole 列表（不拉产物）；TaskDetail 的主动拉取是
+    # 用户意图面，不计入被动零下载口径。
     page.goto(BASE + "/tasks")
     expect(page.locator("body")).to_be_visible(timeout=8000)
     time.sleep(2.5)
@@ -432,7 +484,6 @@ with sync_playwright() as p:
           any(f["id"] == "f_ev_b8" and f["data_classification"] == "sensitive" for f in files_meta),
           json.dumps(files_meta, ensure_ascii=False)[:200])
     # TaskDetail 依据段遮蔽行（store 同源；产物区的主动拉取是用户意图面，不计入被动零下载）
-    pre = len([u for u in downloads if "f_ev_b8" in u])
     page.goto(BASE + f"/tasks/{ui_up['id']}")
     try:
         expect(page.locator(".evidence-withheld")).to_be_visible(timeout=8000)
@@ -440,15 +491,21 @@ with sync_playwright() as p:
     except Exception as exc:
         check("O6c 依据段遮蔽标记在场", False, str(exc)[:160])
     body_text = page.locator("body").inner_text()
-    check("O6d 无编造「依据 N 条」计数", "依据 1 条" not in body_text and "依据 0 条" not in body_text)
+    check("O6d 无编造「依据 N 条」计数", re.search(r"依据\s*\d+\s*条", body_text) is None)
     page.screenshot(path=str(SHOTS / "4_withheld.png"))
 
     # ── O7 归档后入口消失 ───────────────────────────────────────────────────
     if conv_id:
         API.post(f"/api/conversations/{conv_id}/conclude")
         page.goto(BASE + f"/?c={conv_id}")
-        expect(page.locator(".plan-card").last).to_be_visible(timeout=8000)
-        check("O7b 会话归档后入口不在场", page.locator(".save-team-btn").count() == 0)
+        archived_plan = page.locator(".plan-card").last
+        expect(archived_plan).to_be_visible(timeout=8000)
+        check(
+            "O7b 会话归档后无开工、手工存团队/召集或字段控件",
+            archived_plan.get_by_role("button", name="按方案开工", exact=True).count() == 0
+            and page.locator(".save-team-btn, .summon-dialog, .seat-block, .schema-form").count() == 0
+            and archived_plan.locator("input, textarea, select, form, [contenteditable]").count() == 0,
+        )
     else:
         check("O7b 会话归档后入口不在场", False, "conv_id 缺失")
 

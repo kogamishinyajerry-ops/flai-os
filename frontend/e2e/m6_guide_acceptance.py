@@ -74,7 +74,7 @@ class _StubGateway:
         self.delay_next_seconds = 0.0
         if delay > 0:
             time.sleep(delay)
-        plan = {
+        plan: dict[str, Any] = {
             "decision": "orchestrate",
             "analysis": "你要对双通道供电系统做故障树分析。",
             "goal": "对双通道供电系统完成故障树分析，定位供电完全丧失的根因。",
@@ -93,6 +93,16 @@ class _StubGateway:
                 }
             ],
         }
+        prompt_text = "\n".join(
+            str(message.get("content") or "")
+            for message in messages
+            if isinstance(message, dict)
+        )
+        if '"label": "附件1"' in prompt_text:
+            # 有当前工作段附件时，编排结果必须显式说明每份材料的用途；
+            # 没有可信 roster 时则不能复活上一个已切断工作段的附件。
+            plan["agents"][0]["attachments"] = ["附件1"]
+            plan["ignored_attachments"] = []
         reply = (
             "明白了，你要对双通道供电系统做故障树分析。系统已整理执行输入并自动路由。\n"
             f"<<PLAN>>\n{json.dumps(plan, ensure_ascii=False)}\n<<END>>"
@@ -259,6 +269,24 @@ with sync_playwright() as p:
     convs = API.get("/api/conversations?limit=5").json()
     conv_list = convs if isinstance(convs, list) else convs.get("items", [])
     conv_id = conv_list[0]["id"] if conv_list else None
+    conv_data = API.get(f"/api/conversations/{conv_id}").json() if conv_id else {}
+    recommendation = conv_data.get("recommendation") or {}
+    recommendation_agents = recommendation.get("agents") or []
+    user_messages = [m for m in conv_data.get("messages", []) if m.get("role") == "user"]
+    bound_file_ids = user_messages[-1].get("file_ids", []) if user_messages else []
+    bound_file_id = bound_file_ids[0] if len(bound_file_ids) == 1 else None
+    canonical_material_ok = (
+        bool(bound_file_id)
+        and len(recommendation_agents) == 1
+        and recommendation_agents[0].get("attachments")
+        == [{"file_id": bound_file_id, "filename": ATTACH_NAME}]
+        and recommendation.get("ignored_attachments") == []
+    )
+    check(
+        "④当前工作段附件已规范化绑定真实 file_id，且无忽略材料",
+        canonical_material_ok,
+        json.dumps(recommendation, ensure_ascii=False)[:360],
+    )
     check("④按钮渲染不等于自动开工：点击前任务数为 0", bool(conv_id) and len(API.get(f"/api/conversations/{conv_id}/tasks").json()) == 0)
 
     # ⑤ 人只确认开工；系统把已整理输入和唯一 Agent 的附件原地带入任务。
@@ -272,7 +300,7 @@ with sync_playwright() as p:
         and task.get("agent_id") == "fta_agent"
         and (detail.get("inputs") or {}).get("top_event") == "供电完全丧失"
         and "bogus" not in (detail.get("inputs") or {})
-        and len(detail.get("input_file_ids") or []) == 1
+        and detail.get("input_file_ids") == [bound_file_id]
         and "/tasks/new" not in page.url
         and f"c={conv_id}" in page.url
     )
@@ -288,7 +316,8 @@ with sync_playwright() as p:
     # ⑥a retry_of 新会话首发竞态：内部把新 conversation id 镜像到 URL 时，组合
     # watcher 只能消费这一拍，不能 loadConversation(空会话) 抹掉正在发送的乐观轮。
     # gateway 故意慢 1.5s，让 URL 已更新但 POST 尚未完成的 DOM 窗口稳定可观察。
-    race_page = page.context.new_page()
+    race_page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")
+    login_context(race_page.context, BASE)
     race_page.goto(BASE + f"/?retry_of={origin_task_id}", wait_until="networkidle")
     expect(race_page.locator(".composer-policy")).to_contain_text(
         "正在处理失败任务 · 审计血缘会自动保留", timeout=8000
@@ -353,6 +382,16 @@ with sync_playwright() as p:
     page.get_by_role("button", name="发送").click()
     retry_open = page.get_by_role("button", name="按方案开工")
     expect(retry_open).to_be_visible(timeout=8000)
+    retry_conv = API.get(f"/api/conversations/{conv_id}").json()
+    retry_recommendation = retry_conv.get("recommendation") or {}
+    retry_agents = retry_recommendation.get("agents") or []
+    check(
+        "⑥无新附件的重试方案不复活上一工作段材料",
+        len(retry_agents) == 1
+        and "attachments" not in retry_agents[0]
+        and "ignored_attachments" not in retry_recommendation,
+        json.dumps(retry_recommendation, ensure_ascii=False)[:320],
+    )
     retry_open.click()
     deadline = time.time() + 8
     retry_tasks: list[dict[str, Any]] = []
@@ -362,17 +401,21 @@ with sync_playwright() as p:
         if len(retry_tasks) == 2:
             break
         time.sleep(0.3)
+    # 任务行由服务端事务先可见，浏览器随后才消费一次性 retry query；必须等待
+    # 真实导航完成，不能用外部 API 已见任务来抢跑 UI 状态断言。
+    page.wait_for_url(re.compile(rf"/\?c={conv_id}$"), timeout=8000)
     retry_task = next((item for item in retry_tasks if item.get("id") != origin_task_id), {})
     retry_detail = API.get(f"/api/tasks/{retry_task['id']}").json() if retry_task else {}
     lineage_ok = (
         len(retry_tasks) == 2
         and retry_detail.get("retry_of") == origin_task_id
+        and retry_detail.get("input_file_ids") == []
         and f"c={conv_id}" in page.url
         and "retry_of=" not in page.url
         and "/tasks/new" not in page.url
     )
     check("⑥重新开工：系统自动写入 retry_of 血缘并消费一次性 query", lineage_ok,
-          json.dumps(retry_detail, ensure_ascii=False)[:300])
+          f"url={page.url} detail={json.dumps(retry_detail, ensure_ascii=False)[:300]}")
     page.screenshot(path=str(SHOTS / "3b_retry_lineage.png"), full_page=True)
 
     # ── ⑧ 登录门（ADR-0019 真鉴权重立）：未登录首访被全屏拦下，真实登录后进入 ──

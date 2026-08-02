@@ -74,6 +74,10 @@ class TaskNotFoundError(FlaiError):
     """按 id 查不到对应任务。"""
 
 
+class ReviewEvidenceUnavailableError(FlaiError):
+    """人工批准无法唯一验证 execution evidence；必须 fail-closed 且零状态写。"""
+
+
 class FileNotFoundInStoreError(FlaiError):
     """按 id 查不到对应的 File Store 记录。"""
 

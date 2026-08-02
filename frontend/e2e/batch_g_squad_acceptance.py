@@ -11,7 +11,7 @@
   O6 拒答态：refusals 非空成员 completed（非 failed）+ amber 行（非红）；
   O7 收束假绿禁令：待签发在场时 squad 行无「全部完成/收束」类总结 + amber 段在场；
      全终态且零待签才「协作已收束」；
-  O8 guide after 幻觉引用 → 整体剥离降级（stripped_fields 记名）+ dropped 审计可见；
+  O8 guide 含幻觉成员/非法引用 → 整案 fail-closed，只回自然语言澄清与唯一 Composer；
   O9 装载期 fail-closed：L3+job 无人签 / evidence required 无 findings → 拒载；
   O10 completed 状态词计算色=中性非绿；
   O11 prefers-reduced-motion：脉动灯静态降级（animation none）。
@@ -259,15 +259,25 @@ with sync_playwright() as p:
     # ══ 会话一：接力编队（O1/O2/O3/O7/O5/O10/O11）══════════════════════════
     conv1 = open_plan_conv(page, "跑一遍接力编队验收")
     expect(page.locator(".open-plan-btn")).to_be_visible(timeout=8000)
-    check("开工按钮如实计数 2 名就绪成员", "2 名就绪成员" in page.locator(".open-plan-btn").inner_text())
+    disclosure = page.locator(".route-disclosure").last
+    check(
+        "开工前只有一个主动作，成员细节默认折叠",
+        page.locator(".open-plan-btn").count() == 1
+        and page.locator(".open-plan-btn").inner_text().strip() == "按方案开工"
+        and disclosure.get_attribute("open") is None
+        and page.locator(".agent-card").first.is_visible() is False,
+    )
 
     # 回波计数器先于开工安装（O3）：捕获期监听 animationstart，只认 sa-relay-echo 元素
     page.evaluate(
         """() => {
           window.__echoCount = 0;
+          window.__echoProbePaused = false;
           document.addEventListener('animationstart', (e) => {
             const el = e.target;
-            if (el && el.classList && el.classList.contains('sa-relay-echo')) window.__echoCount += 1;
+            if (!window.__echoProbePaused && el && el.classList && el.classList.contains('sa-relay-echo')) {
+              window.__echoCount += 1;
+            }
           }, true);
         }"""
     )
@@ -295,6 +305,10 @@ with sync_playwright() as p:
         t_fault.get("status") == "created" and t_fault.get("depends_on") == [t_hello.get("id")],
         json.dumps({"status": t_fault.get("status"), "depends_on": t_fault.get("depends_on")}, ensure_ascii=False),
     )
+
+    # 成员级运行状态属于按需披露内容；测试主动展开后再检查，不把它改回常驻面板。
+    disclosure.locator("summary").click()
+    expect(page.locator(".agent-card").first).to_be_visible(timeout=3000)
 
     # O2：等待接力行=空心灯（is-hollow 无 is-pulsing）+ 无秒表 + 上游名旁白。
     # 红而不崩（批六 replay 教训）：tamper 断依赖时等待相整体缺失，探针必须
@@ -333,21 +347,14 @@ with sync_playwright() as p:
     )
     page.screenshot(path=str(SHOTS / "1_waiting_upstream.png"), full_page=True)
 
-    # O11 前置：reduced-motion 上下文提前就位（同会话只读观察）
-    reduced_ctx = browser.new_context(
-        viewport={"width": 1440, "height": 900}, color_scheme="light", reduced_motion="reduce"
-    )
-    login_context(reduced_ctx, BASE)
-    rpage = reduced_ctx.new_page()
-    rpage.goto(BASE + f"/?c={conv1}", wait_until="networkidle")
-
     # ══ 放行 worker：上游真跑 → resolver 真接力 ══
     runner_started.set()
 
     running_fault = wait_status(t_fault["id"], {"running", "validating", "parsing", "analyzing"}, timeout_s=30)
     check("O1d resolver 真把下游送进工作态", running_fault.get("status") in {"running", "validating", "parsing", "analyzing"}, str(running_fault.get("status")))
 
-    # O11：排序窗内（RANK_SLEEP_S）两上下文对照——正常页脉动、reduce 页 animation none
+    # O11：排序窗内（RANK_SLEEP_S）同一真实页面切换媒体偏好做对照——
+    # 正常态真脉动；reduce 后保留状态但 animation 必须归零。
     try:
         expect(page.locator(".status-lamp.is-pulsing").first).to_be_visible(timeout=6000)
         main_anim = page.locator(".status-lamp.is-pulsing").first.evaluate(
@@ -356,14 +363,22 @@ with sync_playwright() as p:
         check("O11a 正常上下文运行灯真有动画", main_anim not in ("none", ""), str(main_anim))
     except Exception as exc:  # 观察窗错过=诚实红，不静默
         check("O11a 正常上下文运行灯真有动画", False, f"观察窗错过：{exc}")
+    # 媒体偏好切回 no-preference 会让同一个 CSS animation 重新触发 animationstart；
+    # 这不是产品的状态/事件双通道重播，媒体探针窗口从 O3 计数器中隔离。
+    page.evaluate("() => { window.__echoProbePaused = true; }")
+    page.emulate_media(reduced_motion="reduce")
     try:
-        expect(rpage.locator(".status-lamp.is-pulsing").first).to_be_visible(timeout=6000)
-        r_anim = rpage.locator(".status-lamp.is-pulsing").first.evaluate(
+        expect(page.locator(".status-lamp.is-pulsing").first).to_be_visible(timeout=3000)
+        r_anim = page.locator(".status-lamp.is-pulsing").first.evaluate(
             "el => getComputedStyle(el).animationName"
         )
         check("O11b reduced-motion 运行灯 animation=none", r_anim in ("none", ""), str(r_anim))
     except Exception as exc:
         check("O11b reduced-motion 运行灯 animation=none", False, f"观察窗错过：{exc}")
+    finally:
+        page.emulate_media(reduced_motion="no-preference")
+        page.wait_for_timeout(250)
+        page.evaluate("() => { window.__echoProbePaused = false; }")
 
     # O1（事件层）：dependency_resolved 事件真实在场（resolver 留痕）
     events = API.get(f"/api/tasks/{t_fault['id']}/events?limit=200").json()
@@ -433,11 +448,11 @@ with sync_playwright() as p:
     )
     check("O10 completed 状态词计算色非绿", len(sw_colors) >= 1 and not any(is_greenish(c) for c in sw_colors), str(sw_colors))
     page.screenshot(path=str(SHOTS / "3_settled.png"), full_page=True)
-    reduced_ctx.close()
-
     # ══ 会话二：拒答态（O6）══════════════════════════════════════════════════
     conv2 = open_plan_conv(page, "跑一遍拒答验收")
     expect(page.locator(".open-plan-btn")).to_be_visible(timeout=8000)
+    page.locator(".route-disclosure").last.locator("summary").click()
+    expect(page.locator(".agent-card").first).to_be_visible(timeout=3000)
     page.locator(".open-plan-btn").click()
     deadline = time.time() + 8
     t_refuse: dict[str, Any] = {}
@@ -496,23 +511,35 @@ with sync_playwright() as p:
         f"status={r2.status_code} delta={after_cnt - before}",
     )
 
-    # ══ 会话三：O8 guide after 幻觉引用剥离 ══════════════════════════════════
-    conv3 = open_plan_conv(page, "跑一遍幻觉引用验收")
-    conv3_data = API.get(f"/api/conversations/{conv3}").json()
-    reco = None
-    for m in reversed(conv3_data.get("messages", [])):
-        if m.get("recommendation"):
-            reco = m["recommendation"]
-            break
-    agents_out = (reco or {}).get("agents", [])
-    fta_entry = next((a for a in agents_out if a.get("agent_id") == "fta_agent"), {})
-    check("O8a 幻觉成员进 dropped 审计", "ghost_agent_o8" in (reco or {}).get("dropped_agents", []), json.dumps((reco or {}).get("dropped_agents", []), ensure_ascii=False))
-    check(
-        "O8b 非法 after 整体剥离并 stripped_fields 记名",
-        fta_entry.get("after") == [] and "after" in (fta_entry.get("stripped_fields") or []),
-        json.dumps({"after": fta_entry.get("after"), "stripped": fta_entry.get("stripped_fields")}, ensure_ascii=False),
+    # ══ 会话三：O8 含幻觉成员/非法引用的整案 fail-closed ═════════════════════
+    page.goto(BASE + "/", wait_until="networkidle")
+    page.locator(".composer textarea").fill("跑一遍幻觉引用验收")
+    page.get_by_role("button", name="发送").click()
+    expect(page.locator(".ai-body").last).to_contain_text(
+        "每个必须保留的工作环节、预期结果和衔接关系", timeout=8000
     )
-    check("O8c 剔除告警对用户可见", page.locator(".plan-alert").count() >= 1)
+    conv3 = latest_conv_id()
+    conv3_data = API.get(f"/api/conversations/{conv3}").json()
+    messages = conv3_data.get("messages", [])
+    terminal = messages[-1] if messages else {}
+    check(
+        "O8a 非法编排不持久化 recommendation，也不创建残案任务",
+        terminal.get("role") == "assistant"
+        and terminal.get("recommendation") is None
+        and conv_tasks(conv3) == [],
+        json.dumps(terminal, ensure_ascii=False)[:300],
+    )
+    o8_body = page.locator("body").inner_text()
+    check(
+        "O8b 只回自然语言澄清与唯一 Composer，零成员卡/字段墙/内部 ghost 泄漏",
+        page.locator(".plan-card, .agent-card, .route-summary").count() == 0
+        and page.get_by_role("button", name="按方案开工").count() == 0
+        and page.locator(".composer textarea").count() == 1
+        and page.locator('.composer input[type="file"]').count() == 1
+        and "ghost_agent_o8" not in o8_body
+        and "/tasks/new" not in page.url,
+        o8_body[-360:],
+    )
 
     browser.close()
 

@@ -330,13 +330,6 @@
                 <span>系统已明确忽略，不会静默带入。</span>
               </p>
 
-              <button
-                v-if="conversationStatus === 'active' && idx === latestPlanIdx && !planHasIncompleteOrchestration(m.recommendation)"
-                type="button"
-                class="plan-escape save-team-btn"
-                :disabled="savingTeam"
-                @click="saveTeamFromPlan(m.recommendation)"
-              >{{ savingTeam ? "保存中…" : "把这套编排存为团队模板" }}</button>
                 </div>
               </details>
 
@@ -404,6 +397,16 @@
           </div>
         </template>
       </div>
+
+      <!-- 完成态才长出的单一资产候选锚点。它属于主对话轴，不进入成员卡、
+           不形成常驻侧栏；审核面只读且只有按钮。 -->
+      <AssetCandidateCallout
+        :candidate="assetCandidate"
+        :phase="assetCandidatePhase"
+        :error="assetCandidateError"
+        @decide="decideCurrentAssetCandidate"
+        @retry="reconcileAssetCandidate"
+      />
 
       <div v-if="sending && !hasStreamingAssistant" class="bubble-row assistant">
         <FlaiBloom class="ai-mark" state="generating" :size="26" />
@@ -553,8 +556,12 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { Paperclip } from "@element-plus/icons-vue";
 import { createConversation, postMessageStream, getConversation } from "../api/conversations";
-import { createTeam } from "../api/teams";
 import { unwrapDetail } from "../api/client";
+import {
+  createTaskAssetCandidate,
+  decideAssetCandidate,
+  getTaskAssetCandidate,
+} from "../api/assetCandidates.js";
 import {
   batchCreatePersistenceUnknown,
   createBatchOperationId,
@@ -573,6 +580,7 @@ import { agentStatusLabel, MATURITY, statusLabel, taskLampColor, TASK_WORK_STATE
 import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
 import { useAgentNames } from "../stores/agentNames";
 import EvidenceList from "../components/EvidenceList.vue";
+import AssetCandidateCallout from "../components/AssetCandidateCallout.vue";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";
@@ -594,7 +602,6 @@ import AssetBuilderDrawer from "../components/AssetBuilderDrawer.vue";
 import {
   agentExecutionReady,
   automaticTaskName,
-  automaticTeamName,
   conversationSnapshotMatches,
   currentWorkSegmentFiles,
   internalConversationRouteBindingMatches,
@@ -605,6 +612,12 @@ import {
   retryLineageForPlanItem,
   verifiedFailedRetryLineage,
 } from "../utils/conversationPlans.js";
+import {
+  assetCandidateReconcileCreateReason,
+  assetCandidateRequestIsCurrent,
+  eligibleAssetCandidateTask,
+  verifyAssetCandidateIntegrity,
+} from "../utils/assetCandidates.js";
 
 // UI 验收台通过独立 Vite 开发入口传入状态快照。正式应用永远忽略该 prop：
 // 它只控制可视状态，不模拟网络、不写会话、不产生“假流式”。
@@ -2106,8 +2119,184 @@ async function reconcileBatchCreation() {
 // 载，见该文件注释），故不能像 WorkbenchSession 那样在 setup 顶层一次性
 // acquire，需按当前目标（有无 orchestrate 方案 × 当前 conversationId）
 // watch-diff acquire/release，同 StatusCenter.vue 的 ensurePeekLoaded 姿势。
-const conversationTasks = ref([]);
+const conversationTasks = ref(acceptanceFixture?.conversationTasks || []);
 const conversationTasksLoaded = ref(acceptanceMode);
+
+// ADR-0034：单个 completed 用户任务自动形成一张候选；多任务会话留给未来
+// Workflow Revision，不在成员墙上批量长卡。acceptance fixture 只提供只读快照。
+const acceptanceAssetCandidate = acceptanceFixture?.assetCandidate || null;
+const assetCandidate = ref(null);
+const assetCandidatePhase = ref(acceptanceAssetCandidate ? "loading" : "idle");
+const assetCandidateError = ref("");
+const assetCandidateTaskId = ref(acceptanceAssetCandidate?.source?.task_id || null);
+let assetCandidateRequestSeq = 0;
+
+async function verifyAcceptanceAssetCandidate() {
+  if (!acceptanceMode || !acceptanceAssetCandidate) return;
+  const task = eligibleAssetCandidateTask(conversationTasks.value);
+  try {
+    const verified = await verifyAssetCandidateIntegrity(
+      acceptanceAssetCandidate,
+      { expectedTaskId: task?.id },
+    );
+    if (
+      task?.id !== verified.source.task_id
+      || verified.source.conversation_id !== conversationId.value
+    ) {
+      throw new TypeError("验收候选没有绑定当前任务与会话");
+    }
+    assetCandidate.value = verified;
+    assetCandidatePhase.value = "ready";
+  } catch (error) {
+    assetCandidate.value = null;
+    assetCandidatePhase.value = "unavailable";
+    assetCandidateError.value = candidateErrorMessage(error);
+  }
+}
+
+onMounted(() => {
+  void verifyAcceptanceAssetCandidate();
+});
+
+function candidateErrorMessage(error) {
+  const detail = unwrapDetail(error?.detail);
+  if (detail && typeof detail === "object" && typeof detail.message === "string") {
+    return detail.message;
+  }
+  if (typeof detail === "string" && detail.trim()) return detail;
+  return error?.message || "资产候选状态暂时无法核对";
+}
+
+async function ensureAssetCandidateForTasks(tasks, { force = false } = {}) {
+  const task = eligibleAssetCandidateTask(tasks);
+  if (!task) {
+    assetCandidateRequestSeq += 1;
+    assetCandidate.value = null;
+    assetCandidatePhase.value = "idle";
+    assetCandidateError.value = "";
+    assetCandidateTaskId.value = null;
+    return;
+  }
+  if (acceptanceMode) return;
+  if (
+    force !== true
+    && assetCandidateTaskId.value === task.id
+    && assetCandidatePhase.value !== "idle"
+  ) return;
+
+  const seq = ++assetCandidateRequestSeq;
+  assetCandidateTaskId.value = task.id;
+  assetCandidate.value = null;
+  assetCandidatePhase.value = "loading";
+  assetCandidateError.value = "";
+  try {
+    const formed = await createTaskAssetCandidate(task.id);
+    if (
+      seq !== assetCandidateRequestSeq
+      || eligibleAssetCandidateTask(conversationTasks.value)?.id !== task.id
+    ) return;
+    assetCandidate.value = formed;
+    assetCandidatePhase.value = "ready";
+  } catch (error) {
+    if (seq !== assetCandidateRequestSeq) return;
+    assetCandidatePhase.value = "unavailable";
+    assetCandidateError.value = candidateErrorMessage(error);
+  }
+}
+
+async function reconcileAssetCandidate() {
+  const task = eligibleAssetCandidateTask(conversationTasks.value);
+  if (!task || !conversationId.value || acceptanceMode) return;
+  const reconcileContext = {
+    seq: ++assetCandidateRequestSeq,
+    taskId: task.id,
+    conversationId: conversationId.value,
+  };
+  const reconcileIsCurrent = () => assetCandidateRequestIsCurrent(
+    reconcileContext,
+    {
+      seq: assetCandidateRequestSeq,
+      taskId: eligibleAssetCandidateTask(conversationTasks.value)?.id || "",
+      conversationId: conversationId.value,
+    },
+  );
+  assetCandidateTaskId.value = task.id;
+  assetCandidatePhase.value = "loading";
+  assetCandidateError.value = "";
+  try {
+    const current = await getTaskAssetCandidate(task.id);
+    if (!reconcileIsCurrent()) return;
+    assetCandidate.value = current;
+    assetCandidatePhase.value = "ready";
+  } catch (error) {
+    if (!reconcileIsCurrent()) return;
+    const createReason = assetCandidateReconcileCreateReason(
+      error?.status,
+      unwrapDetail(error?.detail),
+    );
+    if (createReason !== null) {
+      try {
+        const revised = await createTaskAssetCandidate(task.id);
+        if (!reconcileIsCurrent()) return;
+        assetCandidate.value = revised;
+        assetCandidatePhase.value = "ready";
+      } catch (createError) {
+        if (!reconcileIsCurrent()) return;
+        assetCandidatePhase.value = "reconcile_required";
+        assetCandidateError.value = candidateErrorMessage(createError);
+      }
+      return;
+    }
+    assetCandidatePhase.value = "reconcile_required";
+    assetCandidateError.value = candidateErrorMessage(error);
+  }
+}
+
+async function decideCurrentAssetCandidate(action) {
+  const current = assetCandidate.value;
+  const currentTask = eligibleAssetCandidateTask(conversationTasks.value);
+  if (
+    !current
+    || current.state !== "awaiting_human_review"
+    || assetCandidatePhase.value !== "ready"
+    || currentTask?.id !== current.source.task_id
+    || assetCandidateTaskId.value !== current.source.task_id
+    || current.source.conversation_id !== conversationId.value
+    || acceptanceMode
+  ) return;
+  const decisionContext = {
+    seq: ++assetCandidateRequestSeq,
+    taskId: current.source.task_id,
+    conversationId: conversationId.value,
+  };
+  assetCandidatePhase.value = "deciding";
+  assetCandidateError.value = "";
+  try {
+    const decided = await decideAssetCandidate(current, action);
+    if (!assetCandidateRequestIsCurrent(decisionContext, {
+      seq: assetCandidateRequestSeq,
+      taskId: eligibleAssetCandidateTask(conversationTasks.value)?.id || "",
+      conversationId: conversationId.value,
+    })) return;
+    assetCandidate.value = decided;
+    assetCandidatePhase.value = "ready";
+    ElMessage.success(
+      action === "accept"
+        ? "已接受为资产候选；尚未登记或发布"
+        : "已记录本次不保留；原任务证据不受影响",
+    );
+  } catch (error) {
+    if (!assetCandidateRequestIsCurrent(decisionContext, {
+      seq: assetCandidateRequestSeq,
+      taskId: eligibleAssetCandidateTask(conversationTasks.value)?.id || "",
+      conversationId: conversationId.value,
+    })) return;
+    // 409、断网或 5xx 都可能处于“服务端已提交、客户端未收到”窗口；不换摘要
+    // 重放决定，锁到显式 GET 对账。
+    assetCandidatePhase.value = "reconcile_required";
+    assetCandidateError.value = candidateErrorMessage(error);
+  }
+}
 
 // ── 批七编队投影状态（§1.3/§1.4）────────────────────────────────────────────
 const agentNames = useAgentNames(); // 名册+meta（domain/clearance/charter）懒加载单例
@@ -2253,40 +2442,13 @@ function evidenceOfTask(taskId) {
   return taskEvidenceOf(taskId);
 }
 
-// 批八：存为团队模板——只传会话 id，成员由服务端从方案快照抽取重验（ADR-0031）。
-// 名称从当前方案目标自动生成，避免在主对话之外再弹出第二个填空框。
-const savingTeam = ref(false);
-
-// 最新方案卡下标（Codex R0 P1 + R1 P2）：POST /api/teams 只读会话**当前**
-// recommendation 快照，且后端每个 assistant 轮都会整体替换它（含替换成空）。
-// 故判据=最后一条 assistant 轮：它是 orchestrate → 该卡渲入口；它是 refuse/
-// 无方案 → 全部历史卡都不渲（旧方案已被替换，存了也是 422/所见非所存）。
+// 最新可执行方案卡下标：后端每个 assistant 轮都会整体替换 recommendation
+// 快照（含替换成空）。最后一轮不是 orchestrate 时，历史方案动作全部退役，
+// 不能从过期计划启动任务；资产沉淀只发生在 completed 后的候选卡。
 const latestPlanIdx = computed(() => latestActionablePlanIndex(messages.value, {
   activeRetryOf: activeRetryOf.value,
   retryPlanArmed: retryPlanArmed.value,
 }));
-async function saveTeamFromPlan(plan) {
-  if (!conversationId.value || savingTeam.value) return;
-  const name = automaticTeamName(plan);
-  savingTeam.value = true;
-  try {
-    const team = await createTeam({ name, conversationId: conversationId.value });
-    ElMessage.success(`团队「${team.name}」已保存为治理资产——后续任务仍从主对话自动路由`);
-  } catch (err) {
-    // Codex R2 P2：object 型 detail 被 client 整体 stringify——解包后才拿得到
-    // team_errors 逐席位清单（同 summon 处理），否则 toast 渲生 JSON。
-    const detail = unwrapDetail(err.detail);
-    const msg =
-      (detail && detail.team_errors && detail.team_errors.join("；")) ||
-      (typeof detail === "string" ? detail : "") ||
-      (detail && detail.message) ||
-      err.message ||
-      "保存失败";
-    ElMessage.error(`团队未保存：${msg}`);
-  } finally {
-    savingTeam.value = false;
-  }
-}
 
 function evidenceWithheldOf(a) {
   const info = agentTaskInfo(a);
@@ -2350,6 +2512,7 @@ watch(
     syncLiveChannels();
     detectRelayFlips(tasks); // 批七 T4：waiting_upstream→活跃 状态沿 → 接力回波
     for (const t of tasks) ensureTaskEvidence(t); // 批七 T5/T6：终审面成员拉依据摘要
+    void ensureAssetCandidateForTasks(tasks);
     const anyWork = tasks.some((t) => TASK_WORK_STATES.has(t.status));
     // 等待接力行虽无秒表，但编队行/等待旁白仍要随快照活现——工作态判定不变
     if (anyWork === true) ensureLiveTicker();
@@ -2444,6 +2607,11 @@ function resetToFresh(clearError = true) {
   conversationStatus.value = null;
   reconciliationRequired.value = false;
   assetBuilderOpen.value = false;
+  assetCandidateRequestSeq += 1;
+  assetCandidate.value = null;
+  assetCandidatePhase.value = "idle";
+  assetCandidateError.value = "";
+  assetCandidateTaskId.value = null;
   attachmentSegmentBoundaryMs.value = 0;
   draft.value = "";
   pendingFiles.value = [];
@@ -2981,6 +3149,7 @@ watch(
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
+.route-disclosure:not([open]) > .route-disclosure-body { display: none; }
 .route-disclosure-body { padding: var(--space-3) 0 var(--space-4); }
 .plan-section { margin: 0 0 16px; }
 .roster-label { margin-top: 4px; }

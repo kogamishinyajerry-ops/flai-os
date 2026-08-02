@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -40,6 +39,12 @@ from ..core.errors import (
 from ..storage import repos
 from .attachments import render_attachment_blocks
 from .runtime import _load_workflow_module
+from .work_segments import (
+    created_strictly_after,
+    is_canonical_qa_delivery,
+    is_guide_refuse_delivery,
+    latest_valid_iso,
+)
 
 # 发给模型的历史窗口上限（条数 + 累计字符双限）：全量历史仍完整落库，只是
 # 超窗后模型只看最近一段——防止长会话 token 成本单调上涨直至超上下文
@@ -75,56 +80,6 @@ def _window(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         tail.append(m)
     tail.reverse()
     return tail
-
-
-def _created_strictly_after(created_at: Any, boundary: Any) -> bool:
-    """ISO 时间严格晚于工作段边界；脏/缺时间戳按不属于当前段 fail-closed。"""
-    if not isinstance(created_at, str) or not isinstance(boundary, str):
-        return False
-    try:
-        return datetime.fromisoformat(created_at) > datetime.fromisoformat(boundary)
-    except (TypeError, ValueError):
-        return False
-
-
-def _latest_valid_iso(values: list[Any]) -> str | None:
-    """取合法 ISO 时间中的最大值；坏值不参与工作段推进。"""
-    parsed: list[tuple[datetime, str]] = []
-    for value in values:
-        if not isinstance(value, str):
-            continue
-        try:
-            parsed.append((datetime.fromisoformat(value), value))
-        except ValueError:
-            continue
-    return max(parsed, key=lambda item: item[0])[1] if parsed else None
-
-
-def _is_guide_refuse_delivery(message: dict[str, Any]) -> bool:
-    """已持久化且通过 Guide workflow 校验的 refuse assistant 是工作段终点。"""
-    recommendation = message.get("recommendation")
-    return (
-        message.get("role") == "assistant"
-        and isinstance(recommendation, dict)
-        and recommendation.get("decision") == "refuse"
-    )
-
-
-def _is_canonical_qa_delivery(message: dict[str, Any]) -> bool:
-    """识别 policy/standards QA 已校验后落库的统一交付形状。"""
-    recommendation = message.get("recommendation")
-    if message.get("role") != "assistant" or not isinstance(recommendation, dict):
-        return False
-    findings = recommendation.get("findings")
-    refusals = recommendation.get("refusals")
-    return (
-        set(recommendation) == {"answer", "findings", "refusals"}
-        and isinstance(recommendation.get("answer"), str)
-        and recommendation["answer"] == message.get("content")
-        and isinstance(findings, list)
-        and isinstance(refusals, list)
-        and bool(findings or refusals)
-    )
 
 
 class _ConversationGatewayContext:
@@ -373,10 +328,10 @@ class ConversationService:
                 boundary_values.extend(
                     m.get("created_at")
                     for m in persisted
-                    if _is_guide_refuse_delivery(m)
-                    or _is_canonical_qa_delivery(m)
+                    if is_guide_refuse_delivery(m)
+                    or is_canonical_qa_delivery(m)
                 )
-            attachment_boundary = _latest_valid_iso(boundary_values)
+            attachment_boundary = latest_valid_iso(boundary_values)
             history = [
                 {
                     "role": m["role"],
@@ -385,7 +340,7 @@ class ConversationService:
                         (m.get("file_ids") or [])
                         if (
                             attachment_boundary is None
-                            or _created_strictly_after(
+                            or created_strictly_after(
                                 m.get("created_at"), attachment_boundary
                             )
                         )

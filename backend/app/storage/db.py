@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS task_events (
 
 -- classification（迁移 #6/ADR-0021）：internal|sensitive 数据分级轴。DDL DEFAULT
 -- 只服务存量回填（mock 期数据全 internal 是如实标注）；新写入走 repos 必填 kwarg。
--- uploaded_by 仅上传端点记登录身份；runtime 产物/eval 复制件非人工标注场景留 NULL。
+-- uploaded_by 仅保留上传时的人类可读 display_name；owner_username 是会话认证得出的
+-- 稳定唯一身份。runtime 产物/eval 复制件非直接人工上传场景，两列均留 NULL。
 CREATE TABLE IF NOT EXISTS files (
     id TEXT PRIMARY KEY,
     task_id TEXT,
@@ -99,7 +100,8 @@ CREATE TABLE IF NOT EXISTS files (
     sha256 TEXT NOT NULL,
     created_at TEXT NOT NULL,
     classification TEXT NOT NULL DEFAULT 'internal',
-    uploaded_by TEXT
+    uploaded_by TEXT,
+    owner_username TEXT
 );
 
 CREATE TABLE IF NOT EXISTS feedback (
@@ -293,6 +295,51 @@ CREATE TABLE IF NOT EXISTS team_members (
     after_json TEXT,
     PRIMARY KEY (team_id, seq)
 );
+
+-- 迁移 #15（ADR-0034）：真实已完成任务形成的资产候选治理包络。候选内容
+-- insert-once；state 只通过 asset_candidate_events + CAS-on-NULL 决定指针推进。
+-- Asset Candidate 不是 Registry 资产，不与 agents/agent_versions/promotions 混表。
+CREATE TABLE IF NOT EXISTS asset_candidates (
+    id TEXT PRIMARY KEY,
+    schema_version TEXT NOT NULL,
+    source_task_id TEXT NOT NULL REFERENCES tasks(id),
+    source_conversation_id TEXT NOT NULL REFERENCES conversations(id),
+    revision INTEGER NOT NULL,
+    supersedes_candidate_digest TEXT,
+    bundle_digest TEXT NOT NULL,
+    lineage_digest TEXT NOT NULL,
+    candidate_digest TEXT NOT NULL UNIQUE,
+    bundle_json TEXT NOT NULL,
+    lineage_json TEXT NOT NULL,
+    proposal_provenance_json TEXT NOT NULL,
+    state TEXT NOT NULL,
+    data_classification TEXT NOT NULL,
+    initiated_by_user_id INTEGER NOT NULL,
+    initiated_by_username TEXT NOT NULL,
+    decision_event_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(source_task_id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS asset_candidate_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL UNIQUE,
+    candidate_id TEXT NOT NULL REFERENCES asset_candidates(id),
+    candidate_digest TEXT NOT NULL,
+    bundle_digest TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    from_state TEXT,
+    to_state TEXT NOT NULL,
+    actor_source TEXT NOT NULL,
+    signer_display_name TEXT,
+    signer_user_id INTEGER,
+    signer_username TEXT,
+    signer_session_hash TEXT,
+    message TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
 """
 
 _INDEX_DDL = (
@@ -313,7 +360,20 @@ _INDEX_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_eval_runs_status_started ON eval_runs(status, started_at, id)",
     "CREATE INDEX IF NOT EXISTS idx_promotions_agent_id ON promotions(agent_id)",
     "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_asset_candidates_source_task "
+    "ON asset_candidates(source_task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_asset_candidate_events_candidate "
+    "ON asset_candidate_events(candidate_id, id)",
 )
+
+_FILE_OWNER_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_files_owner_username_immutable
+BEFORE UPDATE OF owner_username ON files
+WHEN NEW.owner_username IS NOT OLD.owner_username
+BEGIN
+    SELECT RAISE(ABORT, 'files.owner_username is immutable');
+END
+"""
 
 
 # P0-B2（Codex 命中即审 P1-1）：每进程已校验过的 DB 路径 memo，避免 get_conn 每次
@@ -397,6 +457,12 @@ def init_db(db_path: str | Path) -> None:
                 )
             if "uploaded_by" not in file_cols:
                 conn.execute("ALTER TABLE files ADD COLUMN uploaded_by TEXT")
+            # owner_username 是 authenticated username，不可从 display_name 推断。
+            # 存量行保持 NULL；新上传由 files API 从会话写入。列级 trigger 禁止后续
+            # 改写（含 NULL→值的事后补认领），避免已知 file_id 被换名冒领。
+            if "owner_username" not in file_cols:
+                conn.execute("ALTER TABLE files ADD COLUMN owner_username TEXT")
+            conn.execute(_FILE_OWNER_IMMUTABILITY_TRIGGER)
             sample_cols = {row[1] for row in conn.execute("PRAGMA table_info(samples)")}
             if "classification" not in sample_cols:
                 conn.execute(

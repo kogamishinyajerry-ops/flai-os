@@ -161,6 +161,31 @@ def _make_waiting_review_task(app, *, created_by: str) -> str:
         )
         for st in ("queued", "validating", "running", "waiting_review"):
             repos.set_task_status(conn, task_id, st)
+        execution_evidence_digest = (
+            "sha256:7b9e93d01e34197b15ed6fddaad515525f8745b78d5203966251f6a80ca6ed58"
+        )
+        for event_type, message in (
+            ("validation_started", "开始校验输入"),
+            ("review_requested", "任务需要人工审核放行"),
+        ):
+            payload = {"execution_evidence_digest": execution_evidence_digest}
+            if event_type == "validation_started":
+                payload = {
+                    "package_snapshot_digest": "1" * 64,
+                    "task_inputs_digest": "sha256:" + "2" * 64,
+                    "input_file_ids": [],
+                    "input_files_digest": "sha256:" + "3" * 64,
+                    **payload,
+                }
+            repos.append_event(
+                conn,
+                task_id=task_id,
+                agent_id="fta_agent",
+                event_type=event_type,
+                level="info",
+                message=message,
+                payload=payload,
+            )
     finally:
         conn.close()
     return task_id

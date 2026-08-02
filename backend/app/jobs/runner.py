@@ -268,6 +268,9 @@ def _resolve_one_candidate(
     """处理单个 created 依赖候选，返回是否推进（入队/级联取消）。任何异常交调用方
     quarantine 隔离（R1），故遇畸形持久数据可自然抛、绝不自吞。"""
     task_id = task["id"]
+    current_task = repos.get_task(conn, task_id)
+    if current_task is None:
+        raise KeyError(f"依赖候选任务不存在：{task_id}")
     upstream_ids = task.get("depends_on") or []
     upstreams = [repos.get_task(conn, uid) for uid in upstream_ids]
     failed = [
@@ -283,6 +286,29 @@ def _resolve_one_candidate(
                 "level": "warning",
                 "message": "依赖的上游任务失败或被取消，本任务级联取消（绝不在失败上游上执行）",
                 "payload": {"reason": "upstream_failed", "upstream_task_ids": failed},
+            },
+        ) is not None
+    cross_conversation = [
+        uid
+        for uid, upstream in zip(upstream_ids, upstreams)
+        if upstream is not None
+        and upstream.get("conversation_id") != current_task.get("conversation_id")
+    ]
+    if cross_conversation:
+        return repos.cancel_dependent_task(
+            conn,
+            task_id,
+            "上游任务不属于本会话，依赖边界拒绝："
+            f"{', '.join(cross_conversation)}",
+            event={
+                "agent_id": task.get("agent_id"),
+                "event_type": "task_cancelled",
+                "level": "warning",
+                "message": "依赖的上游任务跨 conversation，本任务级联取消（fail-closed）",
+                "payload": {
+                    "reason": "upstream_conversation_isolation",
+                    "upstream_task_ids": cross_conversation,
+                },
             },
         ) is not None
     # Codex 增量2审 R2 P1：上游跨 eval/user 执行方隔离轴（origin≠user）→ fail-closed 级联
@@ -371,6 +397,9 @@ def _resolve_one_candidate(
                 "workflow_event_type": "dependency_resolved",
                 "upstream_task_ids": upstream_ids,
                 "piped_file_count": len(piped),
+                # ADR-0034: bind the exact resolver output set so a later Asset
+                # Candidate can prove which upstream artifacts entered execution.
+                "piped_file_ids": list(piped),
             },
         },
     ) is not None

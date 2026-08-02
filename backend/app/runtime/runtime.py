@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import logging
 import re
 import sqlite3
@@ -23,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
+from ..core.canonical_digest import canonical_digest
 from ..core.errors import (
     FileIntegrityError,
     KnowledgeScopeDeniedError,
@@ -32,6 +34,7 @@ from ..core.errors import (
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
 from .package_snapshot import AgentPackageSnapshot, SNAPSHOT_CONTRACT
+from .task_evidence import input_files_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,10 @@ _EVENT_ENUM = frozenset(
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _canonical_digest(value: Any) -> str:
+    return canonical_digest(value)
 
 
 class _WorkflowEventLogger:
@@ -613,17 +620,38 @@ class AgentRuntime:
         )
 
         # 1) 输入校验
+        execution_input_file_ids = list(task.get("input_file_ids") or [])
+        execution_input_evidence = input_files_evidence(
+            conn, execution_input_file_ids
+        )
+        task_inputs_digest = _canonical_digest(task["inputs"])
+        execution_evidence_digest = _canonical_digest(
+            {
+                "package_snapshot_digest": package_snapshot.digest,
+                "task_inputs_digest": task_inputs_digest,
+                "input_file_ids": execution_input_file_ids,
+                "input_files_digest": execution_input_evidence["digest"],
+            }
+        )
         repos.append_event(
             conn, task_id=task_id, agent_id=agent_id, event_type="validation_started",
             level="info", message="开始校验输入",
             payload={
                 "package_snapshot_contract": SNAPSHOT_CONTRACT,
                 "package_snapshot_digest": package_snapshot.digest,
+                # ADR-0034 provenance anchor: completed-task asset extraction must
+                # bind the exact file references present when execution validation
+                # began, not a mutable post-hoc task row.
+                "input_file_ids": execution_input_file_ids,
+                "input_files_digest": execution_input_evidence["digest"],
+                "task_inputs_digest": task_inputs_digest,
+                "execution_evidence_digest": execution_evidence_digest,
             },
         )
         verified_files: list[tuple[dict[str, Any], BinaryIO]] = []
         try:
             self._validate_inputs(pkg_dir, agent, task["inputs"])
+            self._validate_dependency_resolution(conn, task)
             verified_files = self._open_input_files(conn, task, agent)
         except Exception as exc:
             repos.append_event(
@@ -743,28 +771,23 @@ class AgentRuntime:
         # agent.schema.json 的 required 耦合而非 gate 自证。
         requires_review = (agent.get("workflow") or {}).get("requires_human_review")
         if requires_review is not False:
-            repos.set_task_status(conn, task_id, "waiting_review")
-            try:
-                repos.append_event(
-                    conn, task_id=task_id, agent_id=agent_id, event_type="review_requested",
-                    level="info", message="任务需要人工审核放行",
-                )
-            except Exception:
-                logger.exception(
-                    "任务 %s 已安全落在 waiting_review；仅缺少展示性 review_requested 事件，"
-                    "继续正常返回等待人工放行",
-                    task_id,
-                )
-            return {"status": "waiting_review", "task": repos.get_task(conn, task_id)}
+            review_task = repos.request_task_review_with_event(
+                conn,
+                task_id,
+                agent_id=agent_id,
+                execution_evidence_digest=execution_evidence_digest,
+            )
+            return {"status": "waiting_review", "task": review_task}
 
         # docs/05 §2 强制规则：running 不得跳过 analyzing 直接进 completed。
         repos.set_task_status(conn, task_id, "analyzing")
-        repos.set_task_status(conn, task_id, "completed")
-        repos.append_event(
-            conn, task_id=task_id, agent_id=agent_id, event_type="task_completed",
-            level="info", message="任务完成",
+        completed_task = repos.complete_task_with_event(
+            conn,
+            task_id,
+            agent_id=agent_id,
+            execution_evidence_digest=execution_evidence_digest,
         )
-        return {"status": "completed", "task": repos.get_task(conn, task_id)}
+        return {"status": "completed", "task": completed_task}
 
     def _backfill_sim_run_ref(
         self, conn: sqlite3.Connection, task_id: str, agent_id: str, result: dict[str, Any]
@@ -832,8 +855,6 @@ class AgentRuntime:
             )
 
     def _validate_inputs(self, pkg_dir: Path, agent: dict[str, Any], inputs: dict[str, Any]) -> None:
-        import json
-
         from jsonschema import validate as jsonschema_validate
 
         schema_name = agent.get("input", {}).get("schema")
@@ -842,6 +863,78 @@ class AgentRuntime:
         schema_path = pkg_dir / schema_name
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         jsonschema_validate(inputs, schema)
+
+    def _validate_dependency_resolution(
+        self,
+        conn: sqlite3.Connection,
+        task: dict[str, Any],
+    ) -> None:
+        """依赖任务只消费 resolver 原子留下的唯一 provenance 见证。"""
+        upstream_ids = task.get("depends_on") or []
+        output_input_ids = [
+            file_id
+            for file_id in (task.get("input_file_ids") or [])
+            if (repos.get_file(conn, file_id) or {}).get("kind") == "output"
+        ]
+        if not upstream_ids and not output_input_ids:
+            return
+
+        cross_conversation: list[str] = []
+        for upstream_id in upstream_ids:
+            upstream = repos.get_task(conn, upstream_id)
+            if upstream is None:
+                raise FileIntegrityError(
+                    f"依赖会话边界校验失败：上游任务不存在：{upstream_id}"
+                )
+            if upstream.get("conversation_id") != task.get("conversation_id"):
+                cross_conversation.append(upstream_id)
+        if cross_conversation:
+            raise FileIntegrityError(
+                "依赖会话边界校验失败：上游任务跨 conversation："
+                f"{', '.join(cross_conversation)}"
+            )
+
+        rows = conn.execute(
+            "SELECT payload_json FROM task_events "
+            "WHERE task_id = ? AND event_type = 'agent_log' ORDER BY id ASC",
+            (task["id"],),
+        ).fetchall()
+        resolved_payloads: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise FileIntegrityError(
+                    "依赖解析见证损坏：agent_log payload_json 无法解析"
+                ) from exc
+            if (
+                isinstance(payload, dict)
+                and payload.get("workflow_event_type") == "dependency_resolved"
+            ):
+                resolved_payloads.append(payload)
+        if len(resolved_payloads) != 1:
+            raise FileIntegrityError(
+                "依赖解析见证不唯一：任务必须且只能有 1 条 dependency_resolved 事件，"
+                f"实际 {len(resolved_payloads)} 条"
+            )
+        resolved = resolved_payloads[0]
+        if resolved.get("upstream_task_ids") != upstream_ids:
+            raise FileIntegrityError(
+                "依赖解析见证与任务声明不一致：upstream_task_ids 未精确绑定 depends_on"
+            )
+        if resolved.get("piped_file_ids") != output_input_ids:
+            raise FileIntegrityError(
+                "依赖解析见证与实际输入不一致：piped_file_ids 未精确绑定 output-kind 输入"
+            )
+        piped_file_count = resolved.get("piped_file_count")
+        if (
+            not isinstance(piped_file_count, int)
+            or isinstance(piped_file_count, bool)
+            or piped_file_count != len(output_input_ids)
+        ):
+            raise FileIntegrityError(
+                "依赖解析见证与实际输入不一致：piped_file_count 未精确绑定 output-kind 输入数量"
+            )
 
     def _open_input_files(
         self,

@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import re
 import shutil
 import socket
 import sys
@@ -39,7 +40,7 @@ if not (DIST / "index.html").is_file():
     sys.exit("诚实失败：frontend/dist 未构建。先执行  cd frontend && npm run build")
 
 try:
-    from playwright.sync_api import expect, sync_playwright
+    from playwright.sync_api import sync_playwright
 except ImportError:
     sys.exit("诚实失败：playwright 未安装。见本文件头部运行命令。")
 
@@ -147,7 +148,10 @@ with sync_playwright() as p:
     created = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "M2验收"}})
     created_body = created.json() if created.status_code in (200, 201) else {}
     task_id = created_body.get("id", "")
-    created_ok = created.status_code in (200, 201) and task_id.startswith("task_")
+    created_ok = (
+        created.status_code in (200, 201)
+        and re.fullmatch(r"task_[0-9a-f]{32}", task_id) is not None
+    )
     check("③任务详情前置数据由认证 API 创建", created_ok,
           f"status={created.status_code} body={created.text[:200]}")
     if created_ok is not True:
@@ -206,7 +210,7 @@ with sync_playwright() as p:
     review_task_id = review_body.get("id", "")
     review_created_ok = (
         review_created.status_code in (200, 201)
-        and review_task_id.startswith("task_")
+        and re.fullmatch(r"task_[0-9a-f]{32}", review_task_id) is not None
     )
     check("附加:认证 API 创建待签任务成功", review_created_ok,
           f"status={review_created.status_code} body={review_created.text[:200]}")

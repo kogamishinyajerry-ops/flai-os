@@ -4,7 +4,7 @@
 披露语法=agent-ui-design disclosure-grammar「决策必露且收敛为一」）：方案卡是一份
 完整提案的唯一决策是「按方案开工」；成员行只展示系统整理状态，不提供 Agent
 选择、参数字段或成员级创建入口。验收面：
-  ① 一名 ready、一名未 ready 时，整份方案 fail-closed，只给「继续说明缺失信息」；
+  ① 任一成员输入未齐时，整份方案 fail-closed，只在唯一 Composer 自然追问；
   ② 工程师继续输入自然语言后，系统返回全员 ready 的完整方案；
   ③ 全方案 ready 后只有一个「按方案开工」主按钮，点击前任务数仍为 0；
   ④ 点击一次 → batch 原子创建全部 2 名成员，绝不只启动 ready 子集；
@@ -88,6 +88,7 @@ class _StubGateway:
                         if self.ready
                         else {"top_event": "供电完全丧失"}
                     ),
+                    "after": [0],
                 },
             ],
         }
@@ -149,48 +150,44 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")
     login_context(page.context, BASE)
 
-    # 首轮：一名 ready、一名未 ready。
+    # 首轮：一名 ready、一名未 ready。后端不得把半成品方案投影给工程师；
+    # 只在同一文字/附件入口自然追问缺失的工程信息。
     page.goto(BASE + "/", wait_until="networkidle")
     page.locator(".composer textarea").fill("跑一遍示例链验证内联召集")
     page.get_by_role("button", name="发送").click()
-    expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
+    expect(page.locator(".ai-body").last).to_contain_text("系统描述", timeout=8000)
     convs = API.get("/api/conversations?limit=5").json()
     conv_list = convs if isinstance(convs, list) else convs.get("items", [])
     conv_id = conv_list[0]["id"] if conv_list else None
     assert conv_id, "诚实失败：拿不到会话 id"
 
-    first_plan = page.locator(".plan-card").last
-    first_disclosure = first_plan.locator(".route-disclosure")
-    check("①首轮路由细节默认折叠",
-          first_disclosure.get_attribute("open") is None
-          and first_plan.locator(".agent-card").first.is_visible() is False)
-    first_disclosure.locator("summary").click()
-    hello_card = first_plan.locator(".agent-card").nth(0)
-    fta_card = first_plan.locator(".agent-card").nth(1)
-    expect(hello_card.locator(".agent-readytag")).to_contain_text("输入已自动整理", timeout=8000)
-    expect(fta_card.locator(".agent-readytag")).to_contain_text("等待对话补充", timeout=8000)
-    check("①成员行只展示自动整理状态，零成员级创建按钮/字段",
-          "输入已自动整理" in hello_card.locator(".agent-readytag").inner_text()
-          and "等待对话补充" in fta_card.locator(".agent-readytag").inner_text()
-          and first_plan.get_by_role("button", name="去创建此任务").count() == 0
-          and first_plan.locator("input, textarea, select").count() == 0)
-    continue_btn = first_plan.get_by_role("button", name="继续说明缺失信息")
-    expect(continue_btn).to_be_visible(timeout=3000)
-    check("①任一成员未 ready：整方案 fail-closed，任务数仍为 0",
-          first_plan.get_by_role("button", name="按方案开工").count() == 0
-          and first_plan.locator(".plan-foot .cta-clay").count() == 1
-          and conv_task_count(conv_id) == 0)
-    continue_btn.click()
-    expect(page.locator(".composer textarea")).to_be_focused(timeout=3000)
-    check("①缺失信息回到唯一文字输入补充",
-          page.evaluate("() => document.activeElement === document.querySelector('.composer textarea')"))
+    incomplete_body = page.locator(".ai-body").last.inner_text()
+    incomplete_conv = API.get(f"/api/conversations/{conv_id}").json()
+    incomplete_assistants = [
+        m for m in incomplete_conv.get("messages", []) if m.get("role") == "assistant"
+    ]
+    check(
+        "①任一成员未 ready：零半成品方案/成员卡/任务，只在唯一 Composer 追问",
+        page.locator(".plan-card, .agent-card, .route-summary").count() == 0
+        and page.get_by_role("button", name="按方案开工").count() == 0
+        and page.get_by_role("button", name="去创建此任务").count() == 0
+        and page.locator(".composer textarea").count() == 1
+        and page.locator('.composer input[type="file"]').count() == 1
+        and "系统描述" in incomplete_body
+        and "组件列表" in incomplete_body
+        and incomplete_conv.get("recommendation") is None
+        and bool(incomplete_assistants)
+        and incomplete_assistants[-1].get("recommendation") is None
+        and conv_task_count(conv_id) == 0,
+        incomplete_body[-360:],
+    )
     page.screenshot(path=str(SHOTS / "1_plan_waiting_for_dialogue.png"), full_page=True)
 
     # ② 工程师仍只输入自然语言；系统自动补全、重新路由出全员 ready 方案。
     stub.ready = True
     page.locator(".composer textarea").fill("补充：系统是双通道发电机，经汇流条和转换开关供电，组件包括发电机A、发电机B、汇流条和转换开关")
     page.get_by_role("button", name="发送").click()
-    expect(page.locator(".plan-card")).to_have_count(2, timeout=8000)
+    expect(page.locator(".plan-card")).to_have_count(1, timeout=8000)
     ready_plan = page.locator(".plan-card").last
     ready_disclosure = ready_plan.locator(".route-disclosure")
     open_btn = ready_plan.get_by_role("button", name="按方案开工")
@@ -200,12 +197,24 @@ with sync_playwright() as p:
           and ready_disclosure.get_attribute("open") is None)
     ready_disclosure.locator("summary").click()
     expect(ready_plan.locator(".agent-card").first).to_be_visible(timeout=3000)
+    ready_tags = ready_plan.locator(".agent-readytag").all_inner_texts()
+    ready_conv = API.get(f"/api/conversations/{conv_id}").json()
+    ready_assistants = [
+        m for m in ready_conv.get("messages", []) if m.get("role") == "assistant"
+    ]
+    ready_recommendation = ready_conv.get("recommendation") or {}
 
     # ③ 全方案 ready 才出现一个主按钮；渲染不等于开工。
     check("③全方案 ready：只有一个『按方案开工』主按钮",
           page.locator(".plan-foot .cta-clay").count() == 1
           and ready_plan.locator(".plan-foot .cta-clay").count() == 1
-          and ready_plan.get_by_role("button", name="去创建此任务").count() == 0)
+          and ready_plan.get_by_role("button", name="去创建此任务").count() == 0
+          and ready_plan.locator(".agent-card").count() == 2
+          and ready_tags == ["输入已自动整理 · 待开工", "输入已自动整理 · 待开工"]
+          and len(ready_assistants) == 2
+          and ready_assistants[-1].get("recommendation") is not None
+          and [a.get("agent_id") for a in ready_recommendation.get("agents", [])]
+          == ["hello_agent", "fta_agent"])
     check("③按钮渲染 ≠ 召集：会话任务数仍为 0", conv_task_count(conv_id) == 0)
     page.screenshot(path=str(SHOTS / "2_whole_plan_ready.png"), full_page=True)
 
@@ -226,13 +235,26 @@ with sync_playwright() as p:
           and all(sum(t.get("agent_id") == agent_id for t in tasks) == 1 for agent_id in by_agent),
           json.dumps(tasks, ensure_ascii=False)[:240])
     hello_task = by_agent.get("hello_agent", {})
+    fta_task = by_agent.get("fta_agent", {})
     check("④conversation_id 均归本会话",
           bool(tasks) and all(t.get("conversation_id") == conv_id for t in tasks))
     detail = API.get(f"/api/tasks/{hello_task['id']}").json() if hello_task else {}
+    fta_detail = API.get(f"/api/tasks/{fta_task['id']}").json() if fta_task else {}
     check(
         "④系统整理的 inputs 与方案一致",
-        (detail.get("inputs") or {}).get("name") == PREFILLED_NAME,
-        json.dumps(detail.get("inputs"), ensure_ascii=False),
+        detail.get("inputs") == {"name": PREFILLED_NAME}
+        and fta_detail.get("inputs") == {
+            "top_event": "供电完全丧失",
+            "system_description": "双通道发电机经汇流条与转换开关供电",
+            "components": ["发电机A", "发电机B", "汇流条", "转换开关"],
+        },
+        json.dumps({"hello": detail.get("inputs"), "fta": fta_detail.get("inputs")}, ensure_ascii=False),
+    )
+    check(
+        "④方案衔接关系由系统写入依赖血缘",
+        bool(hello_task)
+        and (fta_task.get("depends_on") or []) == [hello_task.get("id")],
+        json.dumps(fta_task, ensure_ascii=False)[:240],
     )
 
     # ⑤ 零跳页 + 督战状态原地亮起；当前完整方案的开工按钮消失。

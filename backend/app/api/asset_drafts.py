@@ -8,7 +8,11 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..core.errors import ConversationNotFoundError
+from ..governance.signer_provenance import SignerContext
 from ..ontology import (
+    AssetCandidateConflictError,
+    AssetCandidateNotFoundError,
+    AssetCandidateUnavailableError,
     AssetDraftInputError,
     AssetDraftProjectionError,
     AssetDraftSourceError,
@@ -55,6 +59,15 @@ class AssetDraftPreviewRequest(BaseModel):
     generalization: AssetGeneralizationRequest
 
 
+class AssetCandidateDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["asset_candidate_decision_request.v1"]
+    action: Literal["accept", "reject"]
+    expected_candidate_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    expected_bundle_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
 @router.post("/conversations/{conversation_id}/asset-draft-preview")
 def preview_asset_draft(
     conversation_id: str,
@@ -83,3 +96,82 @@ def preview_asset_draft(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except AssetDraftProjectionError as exc:
         raise HTTPException(status_code=503, detail="资产草稿投影不可用") from exc
+
+
+def _candidate_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, AssetCandidateNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, AssetCandidateConflictError):
+        return HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": exc.message},
+        )
+    return HTTPException(status_code=503, detail="资产候选来源或账本不可用")
+
+
+@router.post("/tasks/{task_id}/asset-candidate")
+def create_asset_candidate(task_id: str, request: Request) -> dict[str, Any]:
+    conn = request.app.state.conn_factory()
+    try:
+        session = request.state.auth_session
+        return request.app.state.asset_candidate_ledger.create_for_completed_task(
+            conn,
+            task_id=task_id,
+            initiated_by_user_id=session.user_id,
+            initiated_by_username=session.username,
+        )
+    except (
+        AssetCandidateNotFoundError,
+        AssetCandidateConflictError,
+        AssetCandidateUnavailableError,
+    ) as exc:
+        raise _candidate_error(exc) from exc
+    finally:
+        conn.close()
+
+
+@router.get("/tasks/{task_id}/asset-candidate")
+def get_asset_candidate(task_id: str, request: Request) -> dict[str, Any]:
+    conn = request.app.state.conn_factory()
+    try:
+        return request.app.state.asset_candidate_ledger.get_for_task(
+            conn,
+            task_id=task_id,
+            username=request.state.auth_session.username,
+        )
+    except (
+        AssetCandidateNotFoundError,
+        AssetCandidateConflictError,
+        AssetCandidateUnavailableError,
+    ) as exc:
+        raise _candidate_error(exc) from exc
+    finally:
+        conn.close()
+
+
+@router.post("/asset-candidates/{candidate_id}/decision")
+def decide_asset_candidate(
+    candidate_id: str,
+    body: AssetCandidateDecisionRequest,
+    request: Request,
+) -> dict[str, Any]:
+    conn = request.app.state.conn_factory()
+    try:
+        return request.app.state.asset_candidate_ledger.decide(
+            conn,
+            candidate_id=candidate_id,
+            action=body.action,
+            expected_candidate_digest=body.expected_candidate_digest,
+            expected_bundle_digest=body.expected_bundle_digest,
+            signer_context=SignerContext.from_authenticated_session(
+                request.state.auth_session
+            ),
+        )
+    except (
+        AssetCandidateNotFoundError,
+        AssetCandidateConflictError,
+        AssetCandidateUnavailableError,
+    ) as exc:
+        raise _candidate_error(exc) from exc
+    finally:
+        conn.close()

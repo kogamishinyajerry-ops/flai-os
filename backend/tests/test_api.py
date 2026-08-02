@@ -13,9 +13,14 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import TEST_DISPLAY_NAME, login, seed_and_login, seed_user
+from conftest import (
+    TEST_DISPLAY_NAME,
+    TEST_USERNAME,
+    login,
+    seed_and_login,
+    seed_user,
+)
 
-from backend.app import config
 from backend.app.jobs.runner import JobRunner
 from backend.app.main import create_app
 
@@ -536,9 +541,14 @@ def test_review_approve_e2e_full_chain(review_app_env) -> None:
     assert "review_requested" in event_types
     approved_events = [e for e in events if e["event_type"] == "review_approved"]
     assert len(approved_events) == 1
+    validation_event = next(e for e in events if e["event_type"] == "validation_started")
     assert approved_events[0]["payload"] == {
         "reviewer": TEST_DISPLAY_NAME,
+        "reviewer_username": TEST_USERNAME,
         "comment": "结果核对无误",
+        "execution_evidence_digest": validation_event["payload"][
+            "execution_evidence_digest"
+        ],
     }
 
 
@@ -581,6 +591,67 @@ def test_review_reject_e2e_full_chain(review_app_env) -> None:
     assert len(rejected_events) == 1
     assert rejected_events[0]["payload"]["reviewer"] == TEST_DISPLAY_NAME
     assert rejected_events[0]["level"] == "warning"
+
+
+def test_legacy_review_evidence_conflict_is_stable_and_reject_remains_available(
+    review_app_env,
+) -> None:
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+    conn = app.state.conn_factory()
+    try:
+        conn.execute(
+            "DELETE FROM task_events WHERE task_id = ? AND event_type = 'validation_started'",
+            (task_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    approve = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "approve", "comment": "legacy evidence missing"},
+    )
+    assert approve.status_code == 409, approve.text
+    assert approve.json()["detail"]["code"] == "review_execution_evidence_invalid"
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
+    events_after_approve = client.get(f"/api/tasks/{task_id}/events").json()
+    assert all(e["event_type"] != "review_approved" for e in events_after_approve)
+
+    reject = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "reject", "comment": "evidence unavailable"},
+    )
+    assert reject.status_code == 200, reject.text
+    assert reject.json()["status"] == "failed"
+    rejected_event = next(
+        e
+        for e in client.get(f"/api/tasks/{task_id}/events").json()
+        if e["event_type"] == "review_rejected"
+    )
+    assert rejected_event["payload"]["execution_evidence_status"] == "unverified"
+    assert "execution_evidence_digest" not in rejected_event["payload"]
+
+
+def test_review_unknown_value_error_is_not_misclassified_as_evidence_conflict(
+    review_app_env,
+    monkeypatch,
+) -> None:
+    from backend.app.storage import repos as repos_mod
+
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+
+    def _unexpected_failure(*_args, **_kwargs):
+        raise ValueError("unexpected programming failure")
+
+    monkeypatch.setattr(repos_mod, "apply_human_review", _unexpected_failure)
+    with pytest.raises(ValueError, match="unexpected programming failure"):
+        client.post(
+            f"/api/tasks/{task_id}/review",
+            json={"action": "approve"},
+        )
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
 
 
 def test_review_non_waiting_review_task_409(client: TestClient) -> None:
@@ -774,6 +845,30 @@ def me_two_user_env(tmp_path: Path):
             return task_ids
 
         yield alice_client, bob_client, seed
+
+
+def test_upload_owner_username_is_session_derived_and_client_cannot_spoof(
+    me_two_user_env,
+) -> None:
+    alice_client, bob_client, _seed = me_two_user_env
+
+    bob_upload = bob_client.post(
+        "/api/files/upload",
+        files={"file": ("bob.txt", b"owned by bob", "text/plain")},
+        data={"owner_username": "alice", "uploaded_by": "Alice"},
+    )
+    assert bob_upload.status_code == 200, bob_upload.text
+    bob_record = bob_upload.json()
+    assert bob_record["owner_username"] == "bob"
+    assert bob_record["uploaded_by"] == "Bob"
+
+    alice_upload = alice_client.post(
+        "/api/files/upload",
+        files={"file": ("alice.txt", b"owned by alice", "text/plain")},
+        data={"owner_username": "bob"},
+    )
+    assert alice_upload.status_code == 200, alice_upload.text
+    assert alice_upload.json()["owner_username"] == "alice"
 
 
 def test_me_contributions_precise_private_and_feedback_approx(me_two_user_env) -> None:

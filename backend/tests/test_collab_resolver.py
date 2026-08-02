@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from backend.app.core.errors import ReviewEvidenceUnavailableError
 from backend.app.jobs.runner import JobRunner, resolve_dependencies_once
 from backend.app.model_gateway.gateway import ModelGateway
 from backend.app.runtime.registry import AgentRegistry
@@ -82,12 +83,14 @@ def dbf(tmp_path):
 
 
 def _mk(conn, task_id, *, depends_on=None, inputs=None, input_file_ids=None,
-        agent_id="hello_agent", agent_version="0.1.0", input_binding=None):
+        agent_id="hello_agent", agent_version="0.1.0", input_binding=None,
+        conversation_id=None):
     return repos.create_task(
         conn, task_id=task_id, agent_id=agent_id, agent_version=agent_version,
         name=task_id, created_by="tester", inputs=inputs or {},
         input_file_ids=input_file_ids or [], metadata={},
         depends_on=depends_on, input_binding=input_binding,
+        conversation_id=conversation_id,
     )
 
 
@@ -105,6 +108,17 @@ def _attach_output(conn, task_id, *, classification="internal", name="out.txt"):
     task = repos.get_task(conn, task_id)
     repos.set_task_outputs(conn, task_id, (task["output_file_ids"] or []) + [fid])
     return fid
+
+
+def _canonical_test_digest(value):
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
 # ── 基本机制：上游全完成 → 管道 + 入队 ─────────────────────────────────────
@@ -348,6 +362,141 @@ def test_E2E_main_chain_a_then_b(runtime_env):
         conn.close()
 
 
+def test_validation_and_completion_share_execution_evidence_digest(runtime_env):
+    """执行摘要绑定包、inputs 与文件证据，并原样贯穿确定性完成事件。"""
+    cf = runtime_env["conn_factory"]
+    runner = JobRunner(runtime_env["runtime"], cf)
+    inputs = {"name": "执行证据"}
+    conn = cf()
+    try:
+        _mk(conn, "execution_evidence", inputs=inputs)
+        repos.set_task_status(conn, "execution_evidence", "queued")
+    finally:
+        conn.close()
+
+    assert runner.run_once() is True
+    conn = cf()
+    try:
+        events = repos.list_events(conn, "execution_evidence")
+        validation = next(
+            event for event in events if event["event_type"] == "validation_started"
+        )
+        completed = next(
+            event for event in events if event["event_type"] == "task_completed"
+        )
+        task_inputs_digest = _canonical_test_digest(inputs)
+        expected_evidence_digest = _canonical_test_digest(
+            {
+                "package_snapshot_digest": validation["payload"][
+                    "package_snapshot_digest"
+                ],
+                "task_inputs_digest": task_inputs_digest,
+                "input_file_ids": [],
+                "input_files_digest": validation["payload"]["input_files_digest"],
+            }
+        )
+        assert validation["payload"]["task_inputs_digest"] == task_inputs_digest
+        assert (
+            validation["payload"]["execution_evidence_digest"]
+            == expected_evidence_digest
+        )
+        assert (
+            completed["payload"]["execution_evidence_digest"]
+            == expected_evidence_digest
+        )
+    finally:
+        conn.close()
+
+
+def test_execution_evidence_normalizes_nfd_inputs_for_ontology(runtime_env):
+    """Runtime 与 Candidate 使用同一 NFC canonical 公式，NFD 输入仍可核验。"""
+    cf = runtime_env["conn_factory"]
+    runner = JobRunner(runtime_env["runtime"], cf)
+    nfd_inputs = {"name": "Cafe\u0301"}
+    conn = cf()
+    try:
+        _mk(conn, "execution_evidence_nfd", inputs=nfd_inputs)
+        repos.set_task_status(conn, "execution_evidence_nfd", "queued")
+    finally:
+        conn.close()
+
+    assert runner.run_once() is True
+    conn = cf()
+    try:
+        validation = next(
+            event
+            for event in repos.list_events(conn, "execution_evidence_nfd")
+            if event["event_type"] == "validation_started"
+        )
+        normalized_inputs_digest = _canonical_test_digest({"name": "Café"})
+        expected_evidence_digest = _canonical_test_digest(
+            {
+                "package_snapshot_digest": validation["payload"][
+                    "package_snapshot_digest"
+                ],
+                "task_inputs_digest": normalized_inputs_digest,
+                "input_file_ids": [],
+                "input_files_digest": validation["payload"]["input_files_digest"],
+            }
+        )
+        assert validation["payload"]["task_inputs_digest"] == normalized_inputs_digest
+        assert (
+            validation["payload"]["execution_evidence_digest"]
+            == expected_evidence_digest
+        )
+    finally:
+        conn.close()
+
+
+def test_review_request_and_approval_share_execution_evidence_digest(runtime_env):
+    """人工签发链只能复制本次唯一 validation_started 的执行证据摘要。"""
+    runtime = runtime_env["runtime"]
+    cf = runtime_env["conn_factory"]
+    manifest_path = runtime_env["agents_dir"] / "hello_agent" / "agent.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["workflow"]["requires_human_review"] = True
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    runtime.agent_registry.scan()
+    assert runtime.agent_registry.errors == []
+
+    conn = cf()
+    try:
+        _mk(conn, "review_evidence", inputs={"name": "待签发证据"})
+        repos.set_task_status(conn, "review_evidence", "queued")
+    finally:
+        conn.close()
+    assert JobRunner(runtime, cf).run_once() is True
+
+    conn = cf()
+    try:
+        assert repos.get_task(conn, "review_evidence")["status"] == "waiting_review"
+        repos.apply_human_review(
+            conn,
+            "review_evidence",
+            action="approve",
+            reviewer="工程师",
+            comment="证据核对通过",
+        )
+        events = repos.list_events(conn, "review_evidence")
+        validation = next(
+            event for event in events if event["event_type"] == "validation_started"
+        )
+        requested = next(
+            event for event in events if event["event_type"] == "review_requested"
+        )
+        approved = next(
+            event for event in events if event["event_type"] == "review_approved"
+        )
+        digest = validation["payload"]["execution_evidence_digest"]
+        assert requested["payload"]["execution_evidence_digest"] == digest
+        assert approved["payload"]["execution_evidence_digest"] == digest
+    finally:
+        conn.close()
+
+
 def test_E2E_failure_chain_a_fails_b_cancelled(runtime_env):
     """A failed → resolver 级联 cancel B，B 绝不执行。"""
     cf = runtime_env["conn_factory"]
@@ -471,6 +620,271 @@ def _real_output(runtime, conn, owner_task, *, name="out.txt", classification="i
     return fid
 
 
+def _append_dependency_resolved(conn, task_id, upstream_ids, piped_ids):
+    repos.append_event(
+        conn,
+        task_id=task_id,
+        agent_id="hello_agent",
+        event_type="agent_log",
+        level="info",
+        message="依赖满足",
+        payload={
+            "workflow_event_type": "dependency_resolved",
+            "upstream_task_ids": list(upstream_ids),
+            "piped_file_ids": list(piped_ids),
+            "piped_file_count": len(piped_ids),
+        },
+    )
+
+
+def _append_review_execution_evidence(conn, task_id):
+    evidence_basis = {
+        "package_snapshot_digest": "1" * 64,
+        "task_inputs_digest": "sha256:" + "2" * 64,
+        "input_file_ids": [],
+        "input_files_digest": "sha256:" + "3" * 64,
+    }
+    digest = _canonical_test_digest(evidence_basis)
+    task = repos.get_task(conn, task_id)
+    for event_type, message in (
+        ("validation_started", "开始校验输入"),
+        ("review_requested", "任务需要人工审核放行"),
+    ):
+        payload = {"execution_evidence_digest": digest}
+        if event_type == "validation_started":
+            payload = {**evidence_basis, **payload}
+        repos.append_event(
+            conn,
+            task_id=task_id,
+            agent_id=task["agent_id"],
+            event_type=event_type,
+            level="info",
+            message=message,
+            payload=payload,
+        )
+    return digest
+
+
+def test_dependency_consumer_missing_resolution_event_fails_before_workflow(
+    runtime_env, monkeypatch
+):
+    """legacy 任务即使直接塞入合法上游产物，也不得在缺 dependency_resolved 时执行。"""
+    import backend.app.runtime.runtime as runtime_module
+
+    cf = runtime_env["conn_factory"]
+    runtime = runtime_env["runtime"]
+    calls = {"workflow": 0}
+
+    def _unexpected_workflow_load(*_args, **_kwargs):
+        calls["workflow"] += 1
+        raise AssertionError("dependency provenance 失败后不得加载 workflow")
+
+    monkeypatch.setattr(runtime_module, "_load_workflow_module", _unexpected_workflow_load)
+    conn = cf()
+    try:
+        _mk(conn, "event_up", conversation_id="conversation-one")
+        fid = _real_output(runtime, conn, "event_up")
+        repos.set_task_outputs(conn, "event_up", [fid])
+        _drive(conn, "event_up", "completed_reviewed")
+        _mk(
+            conn,
+            "event_down",
+            depends_on=["event_up"],
+            inputs={"name": "x"},
+            input_file_ids=[fid],
+            conversation_id="conversation-one",
+        )
+        repos.set_task_status(conn, "event_down", "queued")
+    finally:
+        conn.close()
+
+    assert JobRunner(runtime, cf).run_once() is True
+    conn = cf()
+    try:
+        consumer = repos.get_task(conn, "event_down")
+        assert consumer["status"] == "failed"
+        assert "dependency_resolved" in (consumer.get("error_message") or "")
+        assert calls["workflow"] == 0
+    finally:
+        conn.close()
+
+
+def test_dependency_consumer_cross_conversation_fails_before_workflow(
+    runtime_env, monkeypatch
+):
+    """消费点必须独立复核会话归属，不能信任伪造或陈旧的 resolver 事件。"""
+    import backend.app.runtime.runtime as runtime_module
+
+    cf = runtime_env["conn_factory"]
+    runtime = runtime_env["runtime"]
+    calls = {"workflow": 0}
+
+    def _unexpected_workflow_load(*_args, **_kwargs):
+        calls["workflow"] += 1
+        raise AssertionError("跨会话依赖不得加载 workflow")
+
+    monkeypatch.setattr(runtime_module, "_load_workflow_module", _unexpected_workflow_load)
+    conn = cf()
+    try:
+        _mk(conn, "cross_runtime_up", conversation_id="conversation-other")
+        fid = _real_output(runtime, conn, "cross_runtime_up")
+        repos.set_task_outputs(conn, "cross_runtime_up", [fid])
+        _drive(conn, "cross_runtime_up", "completed_reviewed")
+        _mk(
+            conn,
+            "cross_runtime_down",
+            depends_on=["cross_runtime_up"],
+            inputs={"name": "x"},
+            input_file_ids=[fid],
+            conversation_id="conversation-current",
+        )
+        _append_dependency_resolved(
+            conn,
+            "cross_runtime_down",
+            ["cross_runtime_up"],
+            [fid],
+        )
+        repos.set_task_status(conn, "cross_runtime_down", "queued")
+    finally:
+        conn.close()
+
+    assert JobRunner(runtime, cf).run_once() is True
+    conn = cf()
+    try:
+        consumer = repos.get_task(conn, "cross_runtime_down")
+        assert consumer["status"] == "failed"
+        assert "conversation" in (consumer.get("error_message") or "")
+        assert calls["workflow"] == 0
+    finally:
+        conn.close()
+
+
+def test_dependency_consumer_missing_upstream_fails_before_workflow(
+    runtime_env, monkeypatch
+):
+    """上游行缺失时无法证明同会话，哪怕无管道文件也必须 fail-closed。"""
+    import backend.app.runtime.runtime as runtime_module
+
+    cf = runtime_env["conn_factory"]
+    runtime = runtime_env["runtime"]
+    calls = {"workflow": 0}
+
+    def _unexpected_workflow_load(*_args, **_kwargs):
+        calls["workflow"] += 1
+        raise AssertionError("上游缺失后不得加载 workflow")
+
+    monkeypatch.setattr(runtime_module, "_load_workflow_module", _unexpected_workflow_load)
+    conn = cf()
+    try:
+        _mk(
+            conn,
+            "missing_runtime_down",
+            depends_on=["missing_runtime_up"],
+            inputs={"name": "x"},
+            conversation_id="conversation-current",
+        )
+        _append_dependency_resolved(
+            conn,
+            "missing_runtime_down",
+            ["missing_runtime_up"],
+            [],
+        )
+        repos.set_task_status(conn, "missing_runtime_down", "queued")
+    finally:
+        conn.close()
+
+    assert JobRunner(runtime, cf).run_once() is True
+    conn = cf()
+    try:
+        consumer = repos.get_task(conn, "missing_runtime_down")
+        assert consumer["status"] == "failed"
+        assert "上游任务不存在" in (consumer.get("error_message") or "")
+        assert calls["workflow"] == 0
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["upstream_task_ids", "piped_file_ids", "piped_file_count", "duplicate_event"],
+)
+def test_dependency_resolution_event_must_match_actual_inputs_before_workflow(
+    runtime_env, monkeypatch, tamper
+):
+    """resolver 事件必须唯一，且逐字段精确绑定任务依赖和最终 output-kind 输入。"""
+    import backend.app.runtime.runtime as runtime_module
+
+    cf = runtime_env["conn_factory"]
+    runtime = runtime_env["runtime"]
+    calls = {"workflow": 0}
+
+    def _unexpected_workflow_load(*_args, **_kwargs):
+        calls["workflow"] += 1
+        raise AssertionError("依赖解析见证不一致后不得加载 workflow")
+
+    monkeypatch.setattr(runtime_module, "_load_workflow_module", _unexpected_workflow_load)
+    upstream_id = f"strict_up_{tamper}"
+    consumer_id = f"strict_down_{tamper}"
+    conn = cf()
+    try:
+        _mk(conn, upstream_id, conversation_id="conversation-strict")
+        fid = _real_output(runtime, conn, upstream_id)
+        repos.set_task_outputs(conn, upstream_id, [fid])
+        _drive(conn, upstream_id, "completed_reviewed")
+        _mk(
+            conn,
+            consumer_id,
+            depends_on=[upstream_id],
+            inputs={"name": "x"},
+            input_file_ids=[fid],
+            conversation_id="conversation-strict",
+        )
+        payload = {
+            "workflow_event_type": "dependency_resolved",
+            "upstream_task_ids": [upstream_id],
+            "piped_file_ids": [fid],
+            "piped_file_count": 1,
+        }
+        if tamper == "upstream_task_ids":
+            payload["upstream_task_ids"] = []
+        elif tamper == "piped_file_ids":
+            payload["piped_file_ids"] = []
+        elif tamper == "piped_file_count":
+            payload["piped_file_count"] = 0
+        repos.append_event(
+            conn,
+            task_id=consumer_id,
+            agent_id="hello_agent",
+            event_type="agent_log",
+            level="info",
+            message="依赖满足",
+            payload=payload,
+        )
+        if tamper == "duplicate_event":
+            repos.append_event(
+                conn,
+                task_id=consumer_id,
+                agent_id="hello_agent",
+                event_type="agent_log",
+                level="info",
+                message="重复的依赖满足事件",
+                payload=payload,
+            )
+        repos.set_task_status(conn, consumer_id, "queued")
+    finally:
+        conn.close()
+
+    assert JobRunner(runtime, cf).run_once() is True
+    conn = cf()
+    try:
+        consumer = repos.get_task(conn, consumer_id)
+        assert consumer["status"] == "failed"
+        assert "依赖解析见证" in (consumer.get("error_message") or "")
+        assert calls["workflow"] == 0
+    finally:
+        conn.close()
+
+
 def test_provenance_undeclared_output_rejected_at_consume(runtime_env):
     """P1-1 tamper（第一支）：直引非 depends_on 声明的他人 output（模拟旧 API/混版无
     kind guard 的绕过任务）→ 执行期消费点拒 → 任务 failed。拆 provenance 校验 → 绕过
@@ -486,6 +900,7 @@ def test_provenance_undeclared_output_rejected_at_consume(runtime_env):
         _drive(conn, "producer", "completed_reviewed")
         # 绕过任务：直塞 producer 的 output 入 input_file_ids，但 depends_on 为空
         _mk(conn, "bypass", inputs={"name": "x"}, input_file_ids=[fid])
+        _append_dependency_resolved(conn, "bypass", [], [fid])
         repos.set_task_status(conn, "bypass", "queued")
     finally:
         conn.close()
@@ -511,6 +926,7 @@ def test_provenance_uncompleted_upstream_output_rejected(runtime_env):
         _drive(conn, "pending", "waiting_review")  # 停在人签闸，未 completed
         # consumer 声明依赖 pending（provenance 第一支满足）但手动强推 queued 绕过 resolver
         _mk(conn, "consumer", depends_on=["pending"], inputs={"name": "x"}, input_file_ids=[fid])
+        _append_dependency_resolved(conn, "consumer", ["pending"], [fid])
         repos.set_task_status(conn, "consumer", "queued")
     finally:
         conn.close()
@@ -656,6 +1072,37 @@ def test_R2_eval_upstream_cancels_downstream_at_resolver(dbf):
         conn.close()
 
 
+def test_cross_conversation_upstream_cancels_downstream_at_resolver(dbf):
+    """创建期校验可被 legacy/直写绕过；resolver 必须把跨会话依赖级联取消。"""
+    conn = dbf()
+    try:
+        _mk(conn, "other_thread_up", conversation_id="conversation-other")
+        _attach_output(conn, "other_thread_up")
+        _drive(conn, "other_thread_up", "completed_reviewed")
+        _mk(
+            conn,
+            "current_thread_down",
+            depends_on=["other_thread_up"],
+            conversation_id="conversation-current",
+        )
+    finally:
+        conn.close()
+
+    assert resolve_dependencies_once(dbf) == 1
+    conn = dbf()
+    try:
+        down = repos.get_task(conn, "current_thread_down")
+        assert down["status"] == "cancelled"
+        assert any(
+            event["event_type"] == "task_cancelled"
+            and event["payload"].get("reason") == "upstream_conversation_isolation"
+            and event["payload"].get("upstream_task_ids") == ["other_thread_up"]
+            for event in repos.list_events(conn, "current_thread_down")
+        )
+    finally:
+        conn.close()
+
+
 # ── R2-2 消费点 manifest + binding（Codex 增量2审 R2）：双端各自独立强制 ──
 
 def test_R2_output_not_in_owner_manifest_rejected(runtime_env):
@@ -670,6 +1117,7 @@ def test_R2_output_not_in_owner_manifest_rejected(runtime_env):
         stray = _real_output(runtime, conn, "owner", name="stray.txt")  # 不 set_task_outputs
         _drive(conn, "owner", "completed_reviewed")
         _mk(conn, "consumer", depends_on=["owner"], inputs={"name": "x"}, input_file_ids=[stray])
+        _append_dependency_resolved(conn, "consumer", ["owner"], [stray])
         repos.set_task_status(conn, "consumer", "queued")
     finally:
         conn.close()
@@ -700,6 +1148,7 @@ def test_R2_binding_excluded_upstream_output_rejected_at_consume(runtime_env):
             name="c", created_by="t", inputs={"name": "x"}, input_file_ids=[fb], metadata={},
             depends_on=["up_a", "up_b"], input_binding={"from_tasks": ["up_a"]},
         )
+        _append_dependency_resolved(conn, "consumer", ["up_a", "up_b"], [fb])
         repos.set_task_status(conn, "consumer", "queued")
     finally:
         conn.close()
@@ -827,6 +1276,7 @@ def test_R4_apply_human_review_atomic_happy_path(dbf):
     try:
         _mk(conn, "t")
         _drive(conn, "t", "waiting_review")
+        _append_review_execution_evidence(conn, "t")
         task, sample_rows = repos.apply_human_review(
             conn, "t", action="approve", reviewer="张三", comment=None
         )
@@ -846,6 +1296,7 @@ def test_R4_review_event_failure_rolls_back_transition(dbf, monkeypatch):
     try:
         _mk(conn, "t")
         _drive(conn, "t", "waiting_review")
+        _append_review_execution_evidence(conn, "t")
 
         def _boom(*a, **k):
             raise RuntimeError("signer 事件写入炸")
@@ -859,6 +1310,164 @@ def test_R4_review_event_failure_rolls_back_transition(dbf, monkeypatch):
         assert t["status"] == "waiting_review"  # 回滚：绝未半推进到 completed
         assert not any(
             e["event_type"] == "review_approved" for e in repos.list_events(conn, "t")
+        )
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("tamper", "error_fragment"),
+    [
+        ("missing_validation", "唯一 validation_started"),
+        ("duplicate_validation", "唯一 validation_started"),
+        ("request_digest_mismatch", "execution_evidence_digest 不一致"),
+        ("forged_matching_digests", "执行证据摘要与字段不一致"),
+    ],
+)
+def test_human_review_execution_evidence_tamper_is_zero_write(
+    dbf, tamper, error_fragment
+):
+    """缺失、歧义或拼接的执行证据不得推进 waiting_review 或写 signer 事件。"""
+    conn = dbf()
+    try:
+        task_id = f"review_tamper_{tamper}"
+        _mk(conn, task_id)
+        _drive(conn, task_id, "waiting_review")
+        if tamper != "missing_validation":
+            digest = _append_review_execution_evidence(conn, task_id)
+            if tamper == "duplicate_validation":
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id="hello_agent",
+                    event_type="validation_started",
+                    level="info",
+                    message="重复执行校验事件",
+                    payload={"execution_evidence_digest": digest},
+                )
+            elif tamper == "request_digest_mismatch":
+                conn.execute(
+                    "UPDATE task_events SET payload_json = ? "
+                    "WHERE task_id = ? AND event_type = 'review_requested'",
+                    (
+                        json.dumps(
+                            {"execution_evidence_digest": "sha256:" + "c" * 64}
+                        ),
+                        task_id,
+                    ),
+                )
+            else:
+                events = repos.list_events(conn, task_id)
+                validation = next(
+                    event
+                    for event in events
+                    if event["event_type"] == "validation_started"
+                )
+                forged_digest = "sha256:" + "c" * 64
+                validation_payload = {
+                    **validation["payload"],
+                    "execution_evidence_digest": forged_digest,
+                }
+                conn.execute(
+                    "UPDATE task_events SET payload_json = ? "
+                    "WHERE task_id = ? AND event_type = 'validation_started'",
+                    (json.dumps(validation_payload), task_id),
+                )
+                conn.execute(
+                    "UPDATE task_events SET payload_json = ? "
+                    "WHERE task_id = ? AND event_type = 'review_requested'",
+                    (
+                        json.dumps(
+                            {"execution_evidence_digest": forged_digest}
+                        ),
+                        task_id,
+                    ),
+                )
+
+        with pytest.raises(ReviewEvidenceUnavailableError, match=error_fragment):
+            repos.apply_human_review(
+                conn,
+                task_id,
+                action="approve",
+                reviewer="工程师",
+                comment=None,
+            )
+        assert repos.get_task(conn, task_id)["status"] == "waiting_review"
+        assert not any(
+            event["event_type"] in {"review_approved", "review_rejected"}
+            for event in repos.list_events(conn, task_id)
+        )
+    finally:
+        conn.close()
+
+
+def test_legacy_review_without_evidence_can_only_reject_as_unverified(dbf):
+    """缺执行证据不可批准，但人仍可诚实驳回并明确标为 unverified。"""
+    conn = dbf()
+    try:
+        _mk(conn, "legacy_approve")
+        _drive(conn, "legacy_approve", "waiting_review")
+        with pytest.raises(
+            ReviewEvidenceUnavailableError, match="唯一 validation_started"
+        ):
+            repos.apply_human_review(
+                conn,
+                "legacy_approve",
+                action="approve",
+                reviewer="工程师",
+                comment=None,
+            )
+        assert repos.get_task(conn, "legacy_approve")["status"] == "waiting_review"
+
+        _mk(conn, "legacy_reject")
+        _drive(conn, "legacy_reject", "waiting_review")
+        task, _ = repos.apply_human_review(
+            conn,
+            "legacy_reject",
+            action="reject",
+            reviewer="工程师",
+            comment="证据链不可验证",
+        )
+        assert task["status"] == "failed"
+        rejected = next(
+            event
+            for event in repos.list_events(conn, "legacy_reject")
+            if event["event_type"] == "review_rejected"
+        )
+        assert rejected["payload"]["execution_evidence_status"] == "unverified"
+        assert "execution_evidence_digest" not in rejected["payload"]
+    finally:
+        conn.close()
+
+
+def test_deterministic_completion_event_failure_rolls_back_transition(
+    dbf, monkeypatch
+):
+    """task_completed 写入崩溃时，analyzing→completed 必须与事件一起回滚。"""
+    conn = dbf()
+    try:
+        _mk(conn, "deterministic_atomic")
+        for status in ("queued", "validating", "running", "analyzing"):
+            repos.set_task_status(conn, "deterministic_atomic", status)
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("task_completed insert crashed")
+
+        monkeypatch.setattr(repos, "append_event", _boom)
+        with pytest.raises(RuntimeError, match="insert crashed"):
+            repos.complete_task_with_event(
+                conn,
+                "deterministic_atomic",
+                agent_id="hello_agent",
+                execution_evidence_digest="sha256:" + "a" * 64,
+            )
+        monkeypatch.undo()
+
+        task = repos.get_task(conn, "deterministic_atomic")
+        assert task["status"] == "analyzing"
+        assert not any(
+            event["event_type"] == "task_completed"
+            for event in repos.list_events(conn, "deterministic_atomic")
         )
     finally:
         conn.close()
@@ -922,6 +1531,7 @@ def test_K1_signed_via_review_approved_releases(dbf):
         _mk(conn, "llm_up", agent_id="llm_up_agent")
         _attach_output(conn, "llm_up")
         _drive(conn, "llm_up", "waiting_review")  # LLM 型停人签闸
+        _append_review_execution_evidence(conn, "llm_up")
         repos.apply_human_review(conn, "llm_up", action="approve", reviewer="张三", comment=None)
         _mk(conn, "down", depends_on=["llm_up"])
     finally:
@@ -974,6 +1584,7 @@ def test_K1_consume_side_unsigned_output_rejected(runtime_env):
         # 消费者给**有效** inputs（name）——非空见证的命门：否则消费者会因缺输入 failed，
         # 与 K1 无关而假绿（tamper 关 K1 仍 failed）。给全输入 → 唯一 failed 因即 K1 消费点拒。
         _mk(conn, "consumer", depends_on=["llm_up"], inputs={"name": "x"}, input_file_ids=[fid])
+        _append_dependency_resolved(conn, "consumer", ["llm_up"], [fid])
         repos.set_task_status(conn, "consumer", "queued")
     finally:
         conn.close()
@@ -1008,6 +1619,7 @@ def test_K2_consume_side_eval_origin_output_rejected(runtime_env):
         _drive(conn, "eval_up", "completed_auto")
         # 有效 inputs（非空见证命门，同 K1 消费侧）→ 唯一 failed 因即 K2 origin 隔离
         _mk(conn, "user_consumer", depends_on=["eval_up"], inputs={"name": "x"}, input_file_ids=[fid])
+        _append_dependency_resolved(conn, "user_consumer", ["eval_up"], [fid])
         repos.set_task_status(conn, "user_consumer", "queued")
     finally:
         conn.close()
