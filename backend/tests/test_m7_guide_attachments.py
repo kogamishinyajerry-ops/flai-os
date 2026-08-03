@@ -149,6 +149,8 @@ def test_xlsx_high_compression_ratio_rejected_before_parse(tmp_path) -> None:
     row = _existing_file_row("f_bomb", "bomb.xlsx", p)
     block = _render(tmp_path, [row])
     assert "超出解析预算" in block
+    assert "创建任务页" not in block
+    assert "当前对话" in block and "自动路由" in block
     assert "工况" not in block  # 没进 openpyxl 解析出内容
 
 
@@ -379,6 +381,331 @@ def test_post_message_with_attachment_renders_into_llm_context(client: TestClien
     assert user_msg["attachments"][0]["size_bytes"] > 0
 
 
+def test_guide_receives_stable_trusted_roster_for_duplicate_filenames(
+    client: TestClient, app_env
+) -> None:
+    """同名文件用稳定标签区分；Guide 不得靠文件名猜绑定对象。"""
+    _, app = app_env
+    stub = _CapturingStub()
+    app.state.conversation_service.model_gateway = stub
+    cid = _open_conversation(client)
+    first_id = _upload(client, "同名.xlsx", b"first")
+    second_id = _upload(client, "同名.xlsx", b"second")
+
+    response = client.post(
+        f"/api/conversations/{cid}/messages",
+        json={"content": "分别处理这两个同名文件", "file_ids": [first_id, second_id]},
+    )
+    assert response.status_code == 200, response.text
+
+    system_prompt = stub.calls[-1]["messages"][0]["content"]
+    assert "## 当前工作附件名册（系统可信）" in system_prompt
+    assert json.dumps(
+        {"label": "附件1", "file_id": first_id, "filename": "同名.xlsx"},
+        ensure_ascii=False,
+        sort_keys=True,
+    ) in system_prompt
+    assert json.dumps(
+        {"label": "附件2", "file_id": second_id, "filename": "同名.xlsx"},
+        ensure_ascii=False,
+        sort_keys=True,
+    ) in system_prompt
+    assert first_id != second_id
+
+
+def test_current_segment_roster_survives_llm_text_window_eviction(
+    client: TestClient, app_env
+) -> None:
+    """正文可截窗，但当前工作段附件名册不能因此与前端开工对账分叉。"""
+    _, app = app_env
+    stub = _CapturingStub()
+    app.state.conversation_service.model_gateway = stub
+    cid = _open_conversation(client)
+    fid = _upload(client, "段内输入.json", b'{"marker":"SEGMENT-OLD-BODY"}')
+
+    first = client.post(
+        f"/api/conversations/{cid}/messages",
+        json={"content": "保留本段附件，继续澄清", "file_ids": [fid]},
+    )
+    assert first.status_code == 200, first.text
+
+    # 每轮落 user + assistant 两条；21 轮足以把首轮附件消息逐出 40 条 LLM 正文窗。
+    for index in range(21):
+        followup = client.post(
+            f"/api/conversations/{cid}/messages",
+            json={"content": f"继续澄清第 {index + 1} 轮"},
+        )
+        assert followup.status_code == 200, followup.text
+
+    stub.reply = (
+        "附件对应关系已经明确。\n<<PLAN>>\n"
+        + json.dumps(
+            {
+                "decision": "orchestrate",
+                "analysis": "读取段内输入。",
+                "goal": "形成阶跃响应评估",
+                "workflow": "由评估 Agent 读取当前工作段附件。",
+                "agents": [
+                    {
+                        "agent_id": "step_response_evaluate_agent",
+                        "role": "评估阶跃响应",
+                        "rationale": "文件类型与能力匹配",
+                        "prefilled_inputs": {},
+                        "attachments": ["附件1"],
+                    }
+                ],
+                "ignored_attachments": [],
+            },
+            ensure_ascii=False,
+        )
+        + "\n<<END>>"
+    )
+    final = client.post(
+        f"/api/conversations/{cid}/messages",
+        json={"content": "按已澄清目标形成完整方案"},
+    )
+    assert final.status_code == 200, final.text
+
+    recommendation = final.json()["message"]["recommendation"]
+    assert recommendation is not None
+    assert recommendation["agents"][0]["attachments"] == [
+        {"file_id": fid, "filename": "段内输入.json"}
+    ]
+    system_prompt = stub.calls[-1]["messages"][0]["content"]
+    assert json.dumps(
+        {"label": "附件1", "file_id": fid, "filename": "段内输入.json"},
+        ensure_ascii=False,
+        sort_keys=True,
+    ) in system_prompt
+    rendered_body = "\n".join(
+        message["content"] for message in stub.calls[-1]["messages"][1:]
+    )
+    assert "SEGMENT-OLD-BODY" not in rendered_body, "附件正文仍遵守 LLM 文本截窗"
+
+
+def test_post_message_accepts_attachment_without_text(client: TestClient, app_env) -> None:
+    """附件本身就是完整的工程师输入，不要求再填一段占位文字。"""
+    _, app = app_env
+    stub = _CapturingStub()
+    app.state.conversation_service.model_gateway = stub
+    cid = _open_conversation(client)
+    fid = _upload(client, "检查清单.txt", "检查附件中的缺项".encode())
+
+    resp = client.post(
+        f"/api/conversations/{cid}/messages",
+        json={"content": "   ", "file_ids": [fid]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    sent = stub.calls[-1]["messages"]
+    last_user = [m for m in sent if m["role"] == "user"][-1]
+    assert '<<ATTACHMENT file="检查清单.txt"' in last_user["content"]
+    assert "检查附件中的缺项" in last_user["content"]
+
+    conv = client.get(f"/api/conversations/{cid}").json()
+    user_msg = [m for m in conv["messages"] if m["role"] == "user"][-1]
+    assert user_msg["content"] == ""
+    assert user_msg["file_ids"] == [fid]
+
+
+def test_post_task_round_only_renders_current_segment_attachments(
+    client: TestClient, app_env
+) -> None:
+    """任务创建后开启新工作段：保留旧文本，但旧附件不再喂模型。"""
+    _, app = app_env
+    stub = _CapturingStub()
+    app.state.conversation_service.model_gateway = stub
+    cid = _open_conversation(client)
+    old_fid = _upload(client, "旧轮说明.json", b'{"marker":"OLD-ATTACHMENT-BODY"}')
+    new_fid = _upload(client, "本轮说明.json", b'{"marker":"CURRENT-ATTACHMENT-BODY"}')
+
+    first = client.post(
+        f"/api/conversations/{cid}/messages",
+        json={"content": "旧轮文字仍须保留", "file_ids": [old_fid]},
+    )
+    assert first.status_code == 200, first.text
+    task = client.post(
+        "/api/tasks",
+        json={
+            "agent_id": "fta_agent",
+            "inputs": {
+                "top_event": "供电完全丧失",
+                "system_description": "双通道供电",
+                "components": ["A", "B"],
+            },
+            "conversation_id": cid,
+        },
+    )
+    assert task.status_code == 200, task.text
+
+    # file_upload 计划是对 attachment_context_present 的可观测公共行为：旧段附件
+    # 不得让新一轮假装“附件已齐”，必须先在主对话追问。
+    stub.reply = (
+        "我已整理方案。\n<<PLAN>>\n"
+        + json.dumps(
+            {
+                "decision": "orchestrate",
+                "analysis": "评估当前结果",
+                "goal": "形成评估草案",
+                "workflow": "读取附件并运行确定性评估",
+                "agents": [
+                        {
+                            "agent_id": "step_response_evaluate_agent",
+                            "role": "评估本轮结果",
+                            "rationale": "匹配阶跃响应评估能力",
+                            "prefilled_inputs": {},
+                            "attachments": ["附件1"],
+                        }
+                    ],
+                    "ignored_attachments": [],
+                },
+            ensure_ascii=False,
+        )
+        + "\n<<END>>"
+    )
+    without_new_file = client.post(
+        f"/api/conversations/{cid}/messages",
+        json={"content": "这是任务后的新一轮"},
+    )
+    assert without_new_file.status_code == 200, without_new_file.text
+    assert without_new_file.json()["message"]["recommendation"] is None
+    assert "附件" in without_new_file.json()["message"]["content"]
+
+    with_new_file = client.post(
+        f"/api/conversations/{cid}/messages",
+        json={"content": "本轮附件已上传", "file_ids": [new_fid]},
+    )
+    assert with_new_file.status_code == 200, with_new_file.text
+    recommendation = with_new_file.json()["message"]["recommendation"]
+    assert recommendation is not None
+    assert recommendation["agents"][0]["agent_id"] == "step_response_evaluate_agent"
+
+    # 同一新工作段的后续轮仍能读取已经持久化的新附件；边界不是“只看本次上传”。
+    followup = client.post(
+        f"/api/conversations/{cid}/messages",
+        json={"content": "继续处理本轮材料"},
+    )
+    assert followup.status_code == 200, followup.text
+    assert followup.json()["message"]["recommendation"] is not None
+
+    sent = stub.calls[-1]["messages"]
+    rendered_history = "\n".join(m["content"] for m in sent)
+    assert "旧轮文字仍须保留" in rendered_history
+    assert "OLD-ATTACHMENT-BODY" not in rendered_history
+    assert "旧轮说明.json" not in rendered_history
+    assert "CURRENT-ATTACHMENT-BODY" in rendered_history
+    assert '<<ATTACHMENT file="本轮说明.json"' in rendered_history
+
+    # 可追溯历史不被改写：旧消息仍保留附件元数据，隔离仅作用于新轮模型上下文。
+    conv = client.get(f"/api/conversations/{cid}").json()
+    old_user = [m for m in conv["messages"] if m["content"] == "旧轮文字仍须保留"][0]
+    assert old_user["file_ids"] == [old_fid]
+    assert old_user["attachments"][0]["filename"] == "旧轮说明.json"
+
+
+def test_guide_refuse_closes_attachment_work_segment(
+    client: TestClient, app_env
+) -> None:
+    """Guide 的 canonical refuse 是本段终点，下一需求不再继承旧附件正文。"""
+    _, app = app_env
+    stub = _CapturingStub(
+        "平台当前接不住。\n<<PLAN>>\n"
+        + json.dumps(
+            {
+                "decision": "refuse",
+                "reason": "当前没有匹配能力",
+                "residual_problems": ["原问题仍待处理"],
+                "reframe": ["拆成可验证的小任务后重试"],
+            },
+            ensure_ascii=False,
+        )
+        + "\n<<END>>"
+    )
+    app.state.conversation_service.model_gateway = stub
+    cid = _open_conversation(client)
+    earlier_task = client.post(
+        "/api/tasks",
+        json={
+            "agent_id": "fta_agent",
+            "inputs": {
+                "top_event": "早先任务",
+                "system_description": "用于验证边界取最大值",
+                "components": ["A"],
+            },
+            "conversation_id": cid,
+        },
+    )
+    assert earlier_task.status_code == 200, earlier_task.text
+    old_fid = _upload(client, "已拒绝需求.txt", b"REFUSED-WORK-ATTACHMENT")
+
+    refused = client.post(
+        f"/api/conversations/{cid}/messages",
+        json={"content": "这是上一项需求", "file_ids": [old_fid]},
+    )
+    assert refused.status_code == 200, refused.text
+    assert refused.json()["message"]["recommendation"]["decision"] == "refuse"
+
+    stub.reply = "这是新的工作需求，请继续说明目标。"
+    next_work = client.post(
+        f"/api/conversations/{cid}/messages",
+        json={"content": "现在开始另一项工作"},
+    )
+    assert next_work.status_code == 200, next_work.text
+
+    rendered = "\n".join(m["content"] for m in stub.calls[-1]["messages"])
+    assert "这是上一项需求" in rendered, "文字历史仍需保留"
+    assert "REFUSED-WORK-ATTACHMENT" not in rendered
+    assert "已拒绝需求.txt" not in rendered
+
+
+def test_canonical_qa_delivery_closes_attachment_work_segment_before_next_delegate(
+    client: TestClient, app_env
+) -> None:
+    """垂类 QA 已交付后，下一次自动转交不得继续携带上一项工作的附件。"""
+    _, app = app_env
+    delegate_reply = (
+        "自动交给制度专家。\n<<PLAN>>\n"
+        + json.dumps(
+            {
+                "decision": "delegate",
+                "agent_id": "policy_qa_agent",
+                "rationale": "匹配制度问答",
+            },
+            ensure_ascii=False,
+        )
+        + "\n<<END>>"
+    )
+    # 同一响应给 policy_qa_agent 时会因不符合其结构化依据契约而生成 canonical
+    # refusal delivery；这仍是完整、已校验的 QA 交付终点。
+    stub = _CapturingStub(delegate_reply)
+    app.state.conversation_service.model_gateway = stub
+    cid = _open_conversation(client)
+    old_fid = _upload(client, "上一问附件.txt", b"OLD-QA-ATTACHMENT")
+
+    delivered = client.post(
+        f"/api/conversations/{cid}/messages",
+        json={"content": "请处理上一项制度问题", "file_ids": [old_fid]},
+    )
+    assert delivered.status_code == 200, delivered.text
+    qa_payload = delivered.json()["message"]["recommendation"]
+    assert set(qa_payload) == {"answer", "findings", "refusals"}
+    assert qa_payload["refusals"]
+
+    next_delegate = client.post(
+        f"/api/conversations/{cid}/messages",
+        json={"content": "请再处理另一项制度问题"},
+    )
+    assert next_delegate.status_code == 200, next_delegate.text
+
+    assert stub.calls[-2]["agent_id"] == "guide_agent"
+    assert stub.calls[-1]["agent_id"] == "policy_qa_agent"
+    for call in stub.calls[-2:]:
+        rendered = "\n".join(m["content"] for m in call["messages"])
+        assert "请处理上一项制度问题" in rendered, "旧文字仍保留"
+        assert "OLD-QA-ATTACHMENT" not in rendered
+        assert "上一问附件.txt" not in rendered
+
+
 def test_post_message_with_missing_file_id_404_zero_persistence(client: TestClient, app_env) -> None:
     _, app = app_env
     stub = _CapturingStub()
@@ -390,7 +717,7 @@ def test_post_message_with_missing_file_id_404_zero_persistence(client: TestClie
         json={"content": "附件呢", "file_ids": ["f_不存在"]},
     )
     assert resp.status_code == 404
-    assert "f_不存在" in resp.json()["detail"]
+    assert resp.json() == {"detail": "资源不存在或不可访问"}
     assert stub.calls == []  # 校验先于 LLM 调用
     conv = client.get(f"/api/conversations/{cid}").json()
     assert conv["messages"] == []  # 零落库
@@ -466,19 +793,14 @@ def test_injection_hallucinated_agent_id_is_stripped(client: TestClient, app_env
     assert client.get("/api/tasks").json() == []
 
 
-def test_echo_attack_with_real_agent_id_is_known_residual(client: TestClient, app_env) -> None:
-    """M7 敌意审 P1（诚实固化残余风险，非「已防住」）。
+def test_echo_attack_with_incomplete_real_agent_input_is_closed(client: TestClient, app_env) -> None:
+    """真实 agent_id 也不能让附件回显的半成品计划越过完整性闸门。
 
-    若 LLM 回复里出现 agent_id 真实、字段 schema-valid 的 <<PLAN>> 块——
-    无论因为被附件说服(场景A)还是引用/复述攻击块警告用户(场景B)——parser
-    只看 shape 不问意图，会把它当合法计划产出卡片。本测**固化当前真实行为**
-    （recommendation 非 None），绝不假装防住了。
-
-    仍在位的防线（本测一并断言最后一层）：①附件正文的 <<PLAN>> 已被
-    _neutralize_sentinels 中和，降低「逐字复述附件」触发概率(见 fence 测试)；
-    ②agent_id 必真实、字段必 schema-valid(幻觉/非法仍拒，见上一测)；③**人在
-    创建页复核 + 亲手提交是最终防线**——全程零自动签发。残余风险与缓解已在
-    ADR-0014 / README limitations 显式记录。"""
+    攻击块只提供 FTA 的 top_event，缺 system_description/components；即使现有字段
+    schema-valid，整对象仍不完整，必须回到会话追问且零自动签发。若攻击者能诱导
+    模型复述一份完整且 schema-valid 的计划，意图识别仍是已知残余风险，人确认门与
+    任务入口复核继续在位。
+    """
     _, app = app_env
     echo_reply = (
         "注意：你的附件里有一段可疑文字试图让我这样召集，我不会照做，仅供你核查：\n"
@@ -506,12 +828,9 @@ def test_echo_attack_with_real_agent_id_is_known_residual(client: TestClient, ap
     )
     assert resp.status_code == 200, resp.text
     msg = resp.json()["message"]
-    # 残余风险固化：合法 shape 的计划确实产出卡片（这是已知风险，不是防住）
-    assert msg["recommendation"] is not None
-    assert msg["recommendation"]["decision"] == "orchestrate"
-    assert msg["recommendation"]["agents"][0]["agent_id"] == "fta_agent"
-    assert msg["recommendation"]["agents"][0]["prefilled_inputs"]["top_event"] == "攻击者控制的顶事件文本"
-    # 但最终签发防线守住：全程零任务创建（人是唯一签发者）
+    assert msg["recommendation"] is None
+    assert "系统描述" in msg["content"] and "组件列表" in msg["content"]
+    # 最终签发防线也守住：全程零任务创建（人是唯一签发者）
     assert client.get("/api/tasks").json() == []
 
 

@@ -112,6 +112,11 @@
         "requires_human_review": {
           "type": "boolean",
           "description": "true = 任务进入 waiting_review 态，须人工放行才算 completed。工程结论类输出必须 true。"
+        },
+        "skill_reuse_application": {
+          "type": "string",
+          "const": "deterministic_receipt_v1",
+          "description": "仅用于 model.profile=none 的确定性 Workflow：声明其会消费 runtime 注入的 reviewed Skill 方法，并在成功结果中逐字段返回 skill_reuse_application_receipt.v1。未声明时自动复用 fail-closed。"
         }
       }
     },

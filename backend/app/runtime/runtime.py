@@ -14,15 +14,18 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import logging
 import re
 import sqlite3
 import uuid
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
+from ..core.canonical_digest import canonical_digest
 from ..core.errors import (
     FileIntegrityError,
     KnowledgeScopeDeniedError,
@@ -31,9 +34,23 @@ from ..core.errors import (
 )
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
+from ..storage.task_owner_lineage import MAX_TASK_OUTPUT_FILE_IDS
 from .package_snapshot import AgentPackageSnapshot, SNAPSHOT_CONTRACT
+from .skill_reuse_application import (
+    SkillReuseApplication,
+    SkillReuseApplicationError,
+    skill_reuse_application_mode,
+)
+from .task_evidence import input_files_evidence, work_case_fingerprint
 
 logger = logging.getLogger(__name__)
+
+_PACKAGE_SNAPSHOT_DIGEST_METADATA_KEY = "package_snapshot_digest"
+_SHA256_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+class _OutputFileLimitExceededError(RuntimeError):
+    """A workflow produced more files than owner authorization can project."""
 
 # event.schema.json 的 event_type 枚举（供折叠判断参考；本文件不据此做「豁免」——
 # ADR-0008 原文「workflow 自定义事件统一折叠为 agent_log」是无条件折叠，见
@@ -53,6 +70,10 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _canonical_digest(value: Any) -> str:
+    return canonical_digest(value)
+
+
 class _WorkflowEventLogger:
     """context["event_logger"]：workflow.py 唯一可见的事件出口。
 
@@ -67,6 +88,9 @@ class _WorkflowEventLogger:
 
     def log(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
         payload = dict(payload or {})
+        if event_type in {"skill_reuse_bound", "skill_reuse_applied"}:
+            payload["claimed_workflow_event_type"] = event_type
+            event_type = "reserved_runtime_event_rejected"
         payload["workflow_event_type"] = event_type
         repos.append_event(
             self._conn,
@@ -169,11 +193,20 @@ class _ModelGatewayContext:
     error 级 model_call 后原样 re-raise，绝不吞异常。
     """
 
-    def __init__(self, model_gateway: Any, conn: sqlite3.Connection, task_id: str, agent_id: str) -> None:
+    def __init__(
+        self,
+        model_gateway: Any,
+        conn: sqlite3.Connection,
+        task_id: str,
+        agent_id: str,
+        *,
+        skill_application: SkillReuseApplication | None = None,
+    ) -> None:
         self._model_gateway = model_gateway
         self._conn = conn
         self._task_id = task_id
         self._agent_id = agent_id
+        self._skill_application = skill_application
 
     # 归因键由 wrapper 钉死，workflow 不得经 kwargs 透传/覆写（Codex R0 P1-5）：尤其
     # conversation_id——job 模型调用只归因 task，透传它会在 model_calls 造「同时带
@@ -195,22 +228,39 @@ class _ModelGatewayContext:
                 payload={"profile": profile, "kind": kind, "error": str(exc)[:500]},
             )
             raise
+        event_payload: dict[str, Any] = {"profile": profile, "kind": kind}
+        if self._skill_application is not None and kind in {"chat", "vision"}:
+            event_payload["skill_reuse_application_digest"] = (
+                self._skill_application.application_digest
+            )
         repos.append_event(
             self._conn, task_id=self._task_id, agent_id=self._agent_id,
             event_type="model_call", level="info",
             message=f"模型调用完成（{kind}，profile={profile}）",
-            payload={"profile": profile, "kind": kind},
+            payload=event_payload,
         )
         return result
 
     def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         safe = self._sanitize(kwargs)
-        return self._call(
+        routed_messages = (
+            self._skill_application.chat_messages(messages)
+            if self._skill_application is not None
+            else messages
+        )
+        result = self._call(
             "chat", profile,
             lambda: self._model_gateway.chat(
-                profile, messages, task_id=self._task_id, agent_id=self._agent_id, **safe
+                profile,
+                routed_messages,
+                task_id=self._task_id,
+                agent_id=self._agent_id,
+                **safe,
             ),
         )
+        if self._skill_application is not None:
+            self._skill_application.mark_successful_model_invocation("chat")
+        return result
 
     def embed(self, profile: str, text: str, **kwargs: Any) -> dict[str, Any]:
         safe = self._sanitize(kwargs)
@@ -223,12 +273,25 @@ class _ModelGatewayContext:
 
     def vision(self, profile: str, image_path: str, prompt: str, **kwargs: Any) -> dict[str, Any]:
         safe = self._sanitize(kwargs)
-        return self._call(
+        routed_prompt = (
+            self._skill_application.vision_prompt(prompt)
+            if self._skill_application is not None
+            else prompt
+        )
+        result = self._call(
             "vision", profile,
             lambda: self._model_gateway.vision(
-                profile, image_path, prompt, task_id=self._task_id, agent_id=self._agent_id, **safe
+                profile,
+                image_path,
+                routed_prompt,
+                task_id=self._task_id,
+                agent_id=self._agent_id,
+                **safe,
             ),
         )
+        if self._skill_application is not None:
+            self._skill_application.mark_successful_model_invocation("vision")
+        return result
 
 
 class _NoModelGatewayContext:
@@ -447,6 +510,7 @@ class AgentRuntime:
         knowledge_service: Any | None = None,
         uploads_dir: str | Path | None = None,
         scope_registry: Any | None = None,
+        skill_reuse_evidence: Any | None = None,
     ) -> None:
         self.agent_registry = agent_registry
         self.tool_registry = tool_registry
@@ -464,12 +528,31 @@ class AgentRuntime:
         # ADR-0021 知识轴派生用；None 时知识轴对 enabled Agent 一律 fail-closed
         # 判 sensitive（_knowledge_classification 的 registry 缺失分支）。
         self.scope_registry = scope_registry
+        # ADR-0035：可选的 Skill Package 复用证据服务。旧任务没有复用引用时
+        # 保持完全兼容；一旦任务钉了 skill_package_ref，服务缺失即 fail-closed。
+        self.skill_reuse_evidence = skill_reuse_evidence
 
     def execute(self, task_id: str) -> dict[str, Any]:
         """驱动任务 task_id（调用前须已处于 validating 态）走完生命周期，返回最终 task dict。"""
         conn = self.conn_factory()
         try:
-            task = repos.get_task(conn, task_id)
+            # Defense in depth for non-JobRunner callers: re-read the complete
+            # persisted owner lineage in one authoritative DB snapshot before
+            # even looking up/materializing an Agent Package.  Rejection is
+            # already terminalized and audited by the repository seam.
+            task, owner_authorized = repos.authorize_task_for_execution(
+                conn,
+                task_id,
+            )
+            if task is None:
+                return self._execute(
+                    conn,
+                    task_id,
+                    package_snapshot=None,
+                    package_dir=None,
+                )
+            if owner_authorized is not True:
+                return {"status": "failed", "task": task}
             snapshot_getter = getattr(self.agent_registry, "package_snapshot", None)
             snapshot = (
                 snapshot_getter(task["agent_id"])
@@ -503,9 +586,16 @@ class AgentRuntime:
         package_snapshot: AgentPackageSnapshot | None,
         package_dir: Path | None,
     ) -> dict[str, Any]:
-        task = repos.get_task(conn, task_id)
+        # Package materialization deliberately happens after execute()'s first
+        # owner gate.  Reauthorize the latest persisted task here and continue
+        # only with the exact snapshot returned by that atomic gate; otherwise
+        # a legacy/local writer could swap input lineage in the intervening
+        # window and make runtime open another owner's file.
+        task, owner_authorized = repos.authorize_task_for_execution(conn, task_id)
         if task is None:
             return {"status": "failed", "error_message": f"任务不存在：{task_id}"}
+        if owner_authorized is not True:
+            return {"status": "failed", "task": task}
 
         agent_id = task["agent_id"]
         if package_snapshot is None or package_dir is None:
@@ -518,6 +608,44 @@ class AgentRuntime:
             )
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
         agent = package_snapshot.manifest
+
+        # Guide/batch 创建期把用户确认过的精确 Agent 包摘要钉在 metadata；只要
+        # 任务携带该钉，执行期就必须在任何输入校验、workflow 加载、工具调用或
+        # 产物写入前复核。agent_version 不足以识别「同版本换包」，而 Registry
+        # rescan 会发布新的不可变快照，所以必须比较本次实际执行快照的 digest。
+        # 未携带该字段的旧任务/单建任务保持兼容；携带但格式非法也按漂移失败，
+        # 避免空串、非规范摘要等值被当成未启用 gate。
+        metadata = task.get("metadata")
+        if (
+            isinstance(metadata, dict)
+            and _PACKAGE_SNAPSHOT_DIGEST_METADATA_KEY in metadata
+        ):
+            pinned_package_digest = metadata.get(
+                _PACKAGE_SNAPSHOT_DIGEST_METADATA_KEY
+            )
+            digest_matches = (
+                isinstance(pinned_package_digest, str)
+                and _SHA256_DIGEST_RE.fullmatch(pinned_package_digest) is not None
+                and pinned_package_digest == package_snapshot.digest
+            )
+            if digest_matches is not True:
+                msg = (
+                    "Agent 包快照摘要漂移或无效：任务锁定 "
+                    f"package_snapshot_digest={pinned_package_digest!r}，当前注册包摘要="
+                    f"{package_snapshot.digest!r}——拒绝执行同版本换包或未规范钉；"
+                    "请重新核对方案并创建任务"
+                )
+                repos.set_task_data_classification(conn, task_id, "internal")
+                repos.set_task_status(conn, task_id, "failed", error_message=msg)
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="task_failed",
+                    level="error",
+                    message=msg,
+                )
+                return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
         # Codex 命中即审 R2 P1（K1 签发见证的前提）：_execute 只使用本次一次取得的
         # Registry package snapshot，而 task.agent_version 是创建期锁定值（tasks.py 建时
@@ -560,6 +688,107 @@ class AgentRuntime:
 
         pkg_dir = package_dir
 
+        # ADR-0035：Guide 的自动匹配只是建议期事实；真正执行前必须把任务级
+        # insert-once binding、已审核包记录和磁盘字节重新验一遍。此 gate 位于
+        # 输入 schema / 文件、workflow 加载、工具调用与产物写入之前。携带引用却
+        # 未装配服务、binding 漂移或包字节失真时诚实失败，绝不退化为静默未复用。
+        skill_reuse_binding_digest: str | None = None
+        skill_reuse_application_digest: str | None = None
+        skill_application: SkillReuseApplication | None = None
+        reuse_work_case_fingerprint: str | None = None
+        reused_skill: dict[str, Any] | None = None
+        skill_reuse_event_payload: dict[str, Any] | None = None
+        has_skill_reuse_ref = (
+            isinstance(metadata, Mapping) and "skill_package_ref" in metadata
+        )
+        if has_skill_reuse_ref is True:
+            try:
+                verifier = getattr(self.skill_reuse_evidence, "verify_runtime", None)
+                if not callable(verifier):
+                    raise RuntimeError("Runtime 未装配 Skill 复用证据服务")
+                verified_reuse = verifier(conn, task=task)
+                if not isinstance(verified_reuse, Mapping):
+                    raise RuntimeError("Skill 复用证据服务未返回已验证上下文")
+
+                package_ref = verified_reuse.get("package_ref")
+                binding_digest = verified_reuse.get("binding_digest")
+                skill_revision = verified_reuse.get("skill_revision")
+                skill_markdown = verified_reuse.get("skill_markdown")
+                package_id = (
+                    package_ref.get("package_id")
+                    if isinstance(package_ref, Mapping)
+                    else None
+                )
+                package_digest = (
+                    package_ref.get("package_digest")
+                    if isinstance(package_ref, Mapping)
+                    else None
+                )
+                verified_shape = (
+                    isinstance(package_ref, Mapping)
+                    and isinstance(binding_digest, str)
+                    and re.fullmatch(r"sha256:[0-9a-f]{64}", binding_digest)
+                    is not None
+                    and isinstance(package_id, str)
+                    and re.fullmatch(r"skill_package_[0-9a-f]{24}", package_id)
+                    is not None
+                    and isinstance(package_digest, str)
+                    and re.fullmatch(r"sha256:[0-9a-f]{64}", package_digest)
+                    is not None
+                    and isinstance(skill_revision, Mapping)
+                    and isinstance(skill_markdown, str)
+                    and skill_markdown != ""
+                )
+                if verified_shape is not True:
+                    raise RuntimeError("Skill 复用证据返回值缺失或非规范")
+
+                skill_reuse_binding_digest = binding_digest
+                application_mode = skill_reuse_application_mode(agent)
+                if application_mode is None:
+                    raise RuntimeError(
+                        "Agent Package 未声明可验证的 Skill 应用能力；"
+                        "profile:none 需声明 deterministic_receipt_v1"
+                    )
+                skill_application = SkillReuseApplication(
+                    package_ref=package_ref,
+                    binding_digest=binding_digest,
+                    skill_revision=skill_revision,
+                    skill_markdown=skill_markdown,
+                    application_mode=application_mode,
+                )
+                skill_reuse_application_digest = (
+                    skill_application.application_digest
+                )
+                reused_skill = {
+                    "package_ref": dict(package_ref),
+                    "skill_revision": dict(skill_revision),
+                    "skill_markdown": skill_markdown,
+                    "application_receipt": skill_application.receipt,
+                }
+                skill_reuse_event_payload = {
+                    "workflow_event_type": "skill_reuse_bound",
+                    "skill_package_id": package_id,
+                    "skill_package_digest": package_digest,
+                    "skill_reuse_binding_digest": binding_digest,
+                    "skill_method_digest": skill_application.method_digest,
+                    "skill_reuse_application_digest": (
+                        skill_application.application_digest
+                    ),
+                }
+            except Exception as exc:
+                msg = f"Skill Package 复用证据校验失败：{exc}"
+                repos.set_task_data_classification(conn, task_id, "internal")
+                repos.set_task_status(conn, task_id, "failed", error_message=msg)
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="task_failed",
+                    level="error",
+                    message=msg,
+                )
+                return {"status": "failed", "task": repos.get_task(conn, task_id)}
+
         # ADR-0025：执行期算一次任务级分级（文件∨知识∨工具三轴）并**落库为不可变列**。
         # 落在产出任何内容（产物/样本/tool_runs/事件正文/error_message）之前，故每条
         # 派生行都被已落库的分级覆盖。read 期一律读此列，绝不重派生——工具事后卸载/
@@ -572,17 +801,61 @@ class AgentRuntime:
         )
 
         # 1) 输入校验
+        execution_input_file_ids = list(task.get("input_file_ids") or [])
+        execution_input_evidence = input_files_evidence(
+            conn, execution_input_file_ids
+        )
+        task_inputs_digest = _canonical_digest(task["inputs"])
+        execution_evidence_digest = _canonical_digest(
+            {
+                "package_snapshot_digest": package_snapshot.digest,
+                "task_inputs_digest": task_inputs_digest,
+                "input_file_ids": execution_input_file_ids,
+                "input_files_digest": execution_input_evidence["digest"],
+            }
+        )
+        validation_payload = {
+            "package_snapshot_contract": SNAPSHOT_CONTRACT,
+            "package_snapshot_digest": package_snapshot.digest,
+            # ADR-0034 provenance anchor: completed-task asset extraction must
+            # bind the exact file references present when execution validation
+            # began, not a mutable post-hoc task row.
+            "input_file_ids": execution_input_file_ids,
+            "input_files_digest": execution_input_evidence["digest"],
+            "task_inputs_digest": task_inputs_digest,
+            "execution_evidence_digest": execution_evidence_digest,
+        }
+        if skill_reuse_binding_digest is not None:
+            validation_payload["skill_reuse_binding_digest"] = (
+                skill_reuse_binding_digest
+            )
+        if skill_application is not None:
+            reuse_work_case_fingerprint = work_case_fingerprint(
+                task_inputs=task["inputs"],
+                input_file_evidence=execution_input_evidence,
+                agent_id=agent_id,
+                package_id=skill_application.package_id,
+                package_digest=skill_application.package_digest,
+            )
+            validation_payload["skill_reuse_application_digest"] = (
+                skill_application.application_digest
+            )
+            validation_payload["work_case_fingerprint"] = (
+                reuse_work_case_fingerprint
+            )
+            assert skill_reuse_event_payload is not None
+            skill_reuse_event_payload["work_case_fingerprint"] = (
+                reuse_work_case_fingerprint
+            )
         repos.append_event(
             conn, task_id=task_id, agent_id=agent_id, event_type="validation_started",
             level="info", message="开始校验输入",
-            payload={
-                "package_snapshot_contract": SNAPSHOT_CONTRACT,
-                "package_snapshot_digest": package_snapshot.digest,
-            },
+            payload=validation_payload,
         )
         verified_files: list[tuple[dict[str, Any], BinaryIO]] = []
         try:
             self._validate_inputs(pkg_dir, agent, task["inputs"])
+            self._validate_dependency_resolution(conn, task)
             verified_files = self._open_input_files(conn, task, agent)
         except Exception as exc:
             repos.append_event(
@@ -618,6 +891,21 @@ class AgentRuntime:
             self._record_failure_sample(conn, task, agent, msg, data_classification)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
+        if skill_reuse_event_payload is not None:
+            try:
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="agent_log",
+                    level="info",
+                    message="已验证并绑定复用 Skill Package",
+                    payload=skill_reuse_event_payload,
+                )
+            except BaseException:
+                self._close_verified_files(verified_files)
+                raise
+
         # 2) 进入 running，构建 context 并调用 workflow.run()
         output_dir = self.task_runs_dir / task_id / "output"
         try:
@@ -637,7 +925,10 @@ class AgentRuntime:
                 pkg_dir,
                 output_dir,
                 [row for row, _handle in verified_files],
+                skill_application=skill_application,
             )
+            if reused_skill is not None:
+                context["reused_skill"] = reused_skill
             workflow_module = _load_workflow_module(agent_id, pkg_dir / "workflow.py")
             result = workflow_module.run(context)
         except Exception as exc:
@@ -662,12 +953,77 @@ class AgentRuntime:
             self._record_failure_sample(conn, task, agent, error_message, data_classification)
             return {"status": "failed", "task": repos.get_task(conn, task_id)}
 
+        if skill_application is not None:
+            try:
+                skill_application.require_applied(result)
+                if reuse_work_case_fingerprint is None:
+                    raise SkillReuseApplicationError(
+                        "Skill 复用应用缺少 Work Case 指纹"
+                    )
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="agent_log",
+                    level="info",
+                    message="已实证应用复用 Skill Package",
+                    payload=skill_application.event_payload(
+                        work_case_fingerprint=reuse_work_case_fingerprint
+                    ),
+                )
+            except Exception as exc:
+                error_message = f"Skill 复用方法未形成精确应用回执：{exc}"
+                repos.set_task_status(
+                    conn, task_id, "failed", error_message=error_message
+                )
+                repos.append_event(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    event_type="task_failed",
+                    level="error",
+                    message=error_message,
+                )
+                self._record_failure_sample(
+                    conn, task, agent, error_message, data_classification
+                )
+                return {"status": "failed", "task": repos.get_task(conn, task_id)}
+
         # 3) 成功：注册产物 + 样本沉淀（产物/样本继承任务级派生分级=文件∨知识∨工具
         # 三轴，ADR-0021 D3 + Codex R0-P1 + ADR-0024/0025）。复用执行期已算并落库的
         # data_classification（不重算，保产物/样本与落库任务级分级一致）。
-        output_file_ids = self._register_outputs(
-            conn, task_id, output_dir, classification=data_classification
-        )
+        try:
+            output_file_ids = self._register_outputs(
+                conn, task_id, output_dir, classification=data_classification
+            )
+        except _OutputFileLimitExceededError as exc:
+            error_message = str(exc)
+            repos.set_task_status(
+                conn,
+                task_id,
+                "failed",
+                error_message=error_message,
+            )
+            repos.append_event(
+                conn,
+                task_id=task_id,
+                agent_id=agent_id,
+                event_type="task_failed",
+                level="error",
+                message=error_message,
+                payload={
+                    "output_registration": "rejected",
+                    "max_output_files": MAX_TASK_OUTPUT_FILE_IDS,
+                },
+            )
+            self._record_failure_sample(
+                conn,
+                task,
+                agent,
+                error_message,
+                data_classification,
+            )
+            return {"status": "failed", "task": repos.get_task(conn, task_id)}
         repos.set_task_outputs(conn, task_id, output_file_ids)
 
         # sim_run_ref 回填（P3.2 接缝，spec §4.3）：workflow 成功输出
@@ -702,28 +1058,27 @@ class AgentRuntime:
         # agent.schema.json 的 required 耦合而非 gate 自证。
         requires_review = (agent.get("workflow") or {}).get("requires_human_review")
         if requires_review is not False:
-            repos.set_task_status(conn, task_id, "waiting_review")
-            try:
-                repos.append_event(
-                    conn, task_id=task_id, agent_id=agent_id, event_type="review_requested",
-                    level="info", message="任务需要人工审核放行",
-                )
-            except Exception:
-                logger.exception(
-                    "任务 %s 已安全落在 waiting_review；仅缺少展示性 review_requested 事件，"
-                    "继续正常返回等待人工放行",
-                    task_id,
-                )
-            return {"status": "waiting_review", "task": repos.get_task(conn, task_id)}
+            review_task = repos.request_task_review_with_event(
+                conn,
+                task_id,
+                agent_id=agent_id,
+                execution_evidence_digest=execution_evidence_digest,
+                skill_reuse_binding_digest=skill_reuse_binding_digest,
+                skill_reuse_application_digest=skill_reuse_application_digest,
+            )
+            return {"status": "waiting_review", "task": review_task}
 
         # docs/05 §2 强制规则：running 不得跳过 analyzing 直接进 completed。
         repos.set_task_status(conn, task_id, "analyzing")
-        repos.set_task_status(conn, task_id, "completed")
-        repos.append_event(
-            conn, task_id=task_id, agent_id=agent_id, event_type="task_completed",
-            level="info", message="任务完成",
+        completed_task = repos.complete_task_with_event(
+            conn,
+            task_id,
+            agent_id=agent_id,
+            execution_evidence_digest=execution_evidence_digest,
+            skill_reuse_binding_digest=skill_reuse_binding_digest,
+            skill_reuse_application_digest=skill_reuse_application_digest,
         )
-        return {"status": "completed", "task": repos.get_task(conn, task_id)}
+        return {"status": "completed", "task": completed_task}
 
     def _backfill_sim_run_ref(
         self, conn: sqlite3.Connection, task_id: str, agent_id: str, result: dict[str, Any]
@@ -791,8 +1146,6 @@ class AgentRuntime:
             )
 
     def _validate_inputs(self, pkg_dir: Path, agent: dict[str, Any], inputs: dict[str, Any]) -> None:
-        import json
-
         from jsonschema import validate as jsonschema_validate
 
         schema_name = agent.get("input", {}).get("schema")
@@ -802,6 +1155,78 @@ class AgentRuntime:
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         jsonschema_validate(inputs, schema)
 
+    def _validate_dependency_resolution(
+        self,
+        conn: sqlite3.Connection,
+        task: dict[str, Any],
+    ) -> None:
+        """依赖任务只消费 resolver 原子留下的唯一 provenance 见证。"""
+        upstream_ids = task.get("depends_on") or []
+        output_input_ids = [
+            file_id
+            for file_id in (task.get("input_file_ids") or [])
+            if (repos.get_file(conn, file_id) or {}).get("kind") == "output"
+        ]
+        if not upstream_ids and not output_input_ids:
+            return
+
+        cross_conversation: list[str] = []
+        for upstream_id in upstream_ids:
+            upstream = repos.get_task(conn, upstream_id)
+            if upstream is None:
+                raise FileIntegrityError(
+                    f"依赖会话边界校验失败：上游任务不存在：{upstream_id}"
+                )
+            if upstream.get("conversation_id") != task.get("conversation_id"):
+                cross_conversation.append(upstream_id)
+        if cross_conversation:
+            raise FileIntegrityError(
+                "依赖会话边界校验失败：上游任务跨 conversation："
+                f"{', '.join(cross_conversation)}"
+            )
+
+        rows = conn.execute(
+            "SELECT payload_json FROM task_events "
+            "WHERE task_id = ? AND event_type = 'agent_log' ORDER BY id ASC",
+            (task["id"],),
+        ).fetchall()
+        resolved_payloads: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise FileIntegrityError(
+                    "依赖解析见证损坏：agent_log payload_json 无法解析"
+                ) from exc
+            if (
+                isinstance(payload, dict)
+                and payload.get("workflow_event_type") == "dependency_resolved"
+            ):
+                resolved_payloads.append(payload)
+        if len(resolved_payloads) != 1:
+            raise FileIntegrityError(
+                "依赖解析见证不唯一：任务必须且只能有 1 条 dependency_resolved 事件，"
+                f"实际 {len(resolved_payloads)} 条"
+            )
+        resolved = resolved_payloads[0]
+        if resolved.get("upstream_task_ids") != upstream_ids:
+            raise FileIntegrityError(
+                "依赖解析见证与任务声明不一致：upstream_task_ids 未精确绑定 depends_on"
+            )
+        if resolved.get("piped_file_ids") != output_input_ids:
+            raise FileIntegrityError(
+                "依赖解析见证与实际输入不一致：piped_file_ids 未精确绑定 output-kind 输入"
+            )
+        piped_file_count = resolved.get("piped_file_count")
+        if (
+            not isinstance(piped_file_count, int)
+            or isinstance(piped_file_count, bool)
+            or piped_file_count != len(output_input_ids)
+        ):
+            raise FileIntegrityError(
+                "依赖解析见证与实际输入不一致：piped_file_count 未精确绑定 output-kind 输入数量"
+            )
+
     def _open_input_files(
         self,
         conn: sqlite3.Connection,
@@ -810,6 +1235,53 @@ class AgentRuntime:
     ) -> list[tuple[dict[str, Any], BinaryIO]]:
         """按本次包快照校验输入并持有句柄；任一失败即整体拒绝执行。"""
         verified: list[tuple[dict[str, Any], BinaryIO]] = []
+        file_ids = task.get("input_file_ids", [])
+        input_contract = agent.get("input") or {}
+        input_type = input_contract.get("type")
+        allowed_extensions: tuple[str, ...] = ()
+
+        # 创建期只看直提交附件；resolver 会在依赖完成后改写最终 input_file_ids。
+        # 此处消费同一次 package_snapshot 取得的 manifest（调用方的 agent），在
+        # workflow/tool/output 前对最终集合重做数量/后缀契约。只约束 manifest 声明：
+        # kind/provenance/完整性仍由下方既有 gate 独立强制，故合法上游 output 可消费。
+        if input_type == "none" and len(file_ids) != 0:
+            raise FileIntegrityError(
+                "最终输入文件契约校验失败：input.type=none 必须有 0 个附件，"
+                f"实际 {len(file_ids)} 个"
+            )
+        if input_type == "file_upload":
+            if len(file_ids) != 1:
+                raise FileIntegrityError(
+                    "最终输入文件契约校验失败：input.type=file_upload 必须且只能有 "
+                    f"1 个附件，实际 {len(file_ids)} 个"
+                )
+            raw_extensions = input_contract.get("allowed_extensions")
+            if (
+                not isinstance(raw_extensions, list)
+                or len(raw_extensions) == 0
+                or len(raw_extensions) > 32
+            ):
+                raise FileIntegrityError(
+                    "最终输入文件契约校验失败：file_upload.allowed_extensions "
+                    "声明缺失或不合法"
+                )
+            normalized_extensions: list[str] = []
+            for raw_extension in raw_extensions:
+                if not isinstance(raw_extension, str):
+                    raise FileIntegrityError(
+                        "最终输入文件契约校验失败：file_upload.allowed_extensions "
+                        "声明不合法"
+                    )
+                extension = raw_extension.strip().lower()
+                if not extension.startswith(".") or not 2 <= len(extension) <= 16:
+                    raise FileIntegrityError(
+                        "最终输入文件契约校验失败：file_upload.allowed_extensions "
+                        "声明不合法"
+                    )
+                if extension not in normalized_extensions:
+                    normalized_extensions.append(extension)
+            allowed_extensions = tuple(normalized_extensions)
+
         # 批七 3-lens P1：消费点密级复核（ADR-0030）——创建时点 gate 只见直提交
         # 文件；带 depends_on 的下游任务创建时 input_file_ids=[]（材料级=public 恒
         # 过门），resolver 事后把上游产物（可能 sensitive）管道注入 input_file_ids。
@@ -822,7 +1294,7 @@ class AgentRuntime:
         from ..api import classification_gate as cgate
 
         _piped_ids = []
-        for _fid in task.get("input_file_ids", []):
+        for _fid in file_ids:
             _rec = repos.get_file(conn, _fid)
             if _rec is not None and _rec.get("kind") == "output":
                 _piped_ids.append(_fid)
@@ -836,12 +1308,21 @@ class AgentRuntime:
                     f"密级准入上限「{_agent_max}」——上游产物同受 ADR-0030 约束（消费点复核，fail-closed）"
                 )
         try:
-            for file_id in task.get("input_file_ids", []):
+            for file_id in file_ids:
                 record = repos.get_file(conn, file_id)
                 if record is None:
                     raise FileIntegrityError(
                         f"输入文件完整性校验失败：file_id={file_id}，File Store 无登记记录"
                     )
+                if input_type == "file_upload":
+                    filename = record.get("filename")
+                    if not isinstance(filename, str) or not filename.lower().endswith(
+                        allowed_extensions
+                    ):
+                        raise FileIntegrityError(
+                            "最终输入文件扩展名不符合已钉死的 Agent 包契约："
+                            f"{filename!r}，允许 {list(allowed_extensions)}"
+                        )
                 # 权威根按文件 kind 选（协作运行时 §3.3 管道跨信任边界）：上传输入
                 # 在 uploads_dir，上游产物（管道进来的 kind=output）在 task_runs_dir——
                 # 二者都是**装配注入**的权威根，根由 DB 的 kind 字段选、绝不从待验 path
@@ -954,6 +1435,8 @@ class AgentRuntime:
         pkg_dir: Path,
         output_dir: Path,
         files: list[dict[str, Any]],
+        *,
+        skill_application: SkillReuseApplication | None = None,
     ) -> dict[str, Any]:
         agent_id = task["agent_id"]
         allowed_tools = frozenset(agent.get("tools") or [])
@@ -964,7 +1447,13 @@ class AgentRuntime:
         _gateway = (
             _NoModelGatewayContext(agent_id)
             if _profile in (None, "none")
-            else _ModelGatewayContext(self.model_gateway, conn, task["id"], agent_id)
+            else _ModelGatewayContext(
+                self.model_gateway,
+                conn,
+                task["id"],
+                agent_id,
+                skill_application=skill_application,
+            )
         )
         # #8/R2-1：eval 任务（origin='eval'）把材化快照的 fixture 根经任务级 context 注入
         # 「工具读外部活态」的工具（如 cfd_result_read），令其读**冻结**产物而非全局
@@ -1005,9 +1494,20 @@ class AgentRuntime:
         file_ids: list[str] = []
         if not output_dir.is_dir():
             return file_ids
-        for path in sorted(output_dir.rglob("*")):
-            if not path.is_file():
-                continue
+        output_paths: list[Path] = []
+        for path in output_dir.rglob("*"):
+            if path.is_file():
+                output_paths.append(path)
+            if len(output_paths) > MAX_TASK_OUTPUT_FILE_IDS:
+                # Reject before the first file-row write.  Otherwise Runtime
+                # could complete a task whose persisted output list is larger
+                # than the owner-lineage read boundary and immediately becomes
+                # inaccessible through its own API.
+                raise _OutputFileLimitExceededError(
+                    "工作流产物文件超过可授权上限 "
+                    f"{MAX_TASK_OUTPUT_FILE_IDS}，已拒绝注册并将任务标记失败"
+                )
+        for path in sorted(output_paths):
             file_id = str(uuid.uuid4())
             repos.create_file(
                 conn,

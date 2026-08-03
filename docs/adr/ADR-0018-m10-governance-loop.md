@@ -97,6 +97,53 @@
 - 形态跟随现状（case_NNN.json 平铺文件），与 docs/07 §3 目录式组织的分叉如实记录，
   本批不重组目录。
 
+#### 2.1 sample 级认可（Issue #4）
+
+- `POST /api/samples/{sample_id}/acknowledge`，空 JSON body；请求模型
+  `extra="forbid"`，客户端携带 `actor/reviewer` 等身份字段一律 422。
+- actor 只取 `request.state.auth_session.username`。`samples` 增加
+  `acknowledged_by_username / acknowledged_at`；首次认可用 CAS-on-NULL 冻结，
+  重试返回同一 actor、时间和 case 文件，绝不覆盖首次人签。迁移前历史行两列
+  留 NULL，不从 `accepted_by_engineer`、显示名或可编辑 case provenance 反推身份；
+  DB 尚无 signer 而 live package 已有对应 case（无论是否自带 signer）时均按
+  冲突 409 保留现场待核，在线请求不得补写或改写历史 case。
+- 只接受 `completed + validation_status=success + classification=internal`，且源任务
+  `input_file_ids` 必须是**精确空列表**；`0/false/null/{}` 等畸形持久值不能靠
+  truthiness 冒充“无输入”。sample/task 的 agent/version 与 output file 双向关系也必须
+  完整可证。既有 `accepted_by_engineer=false` 是不可覆盖的人工拒绝，
+  返回 409。这样 sample 级 API 打开 `requires_human_review=false` 正常样本的固化
+  通道，但不能绕过 waiting_review、反例人工定 checks 或敏感内容出场门。
+- 一次认可幂等 ensure 恰好一个 `curation=draft` case，并把稳定 username/时间写入
+  provenance。**认可不会自动转 approved**：最低自动 checks 只证明终态/产物存在，
+  不能冒充 Eval 维护者已核定的回归金标准；否则三个弱样本即可凑覆盖，构成假绿。
+- `GET /api/agents/{id}/curated_cases_count` 保留兼容 `count`，并新增
+  `approved / draft / broken`。四个数直接复用 Eval Runner 与 Promotion 的
+  Registry `package_dir(agent_id)` 与 `load_eval_cases` 分类源（不按目录名猜 id）：
+  认可后 `draft + 1`，晋升有效的 `approved` 不变；
+  Eval 维护者补强 checks 并转 `approved` 后才进入正式评测与晋升覆盖。
+- live Agent Package 只允许 **L0** 写回；DB/Registry maturity 与 version 必须
+  同时一致，且 promotion operation/fault latch 必须为空。sample acknowledge 与
+  旧 `/eval-cases` 都在 `BEGIN IMMEDIATE` 下先查这组门，和 promotion 的持久
+  latch 以 SQLite 写锁 rendezvous；L1 或在途/故障晋升一律触盘前 409。
+- SQLite 与包文件无法组成单事务：在 `BEGIN IMMEDIATE` 内先执行未提交的 sample
+  SQL CAS；CAS 成功后把新 case 完整写入同目录 temp 并 fsync，再用 no-clobber
+  hard-link 原子发布，最后 COMMIT。既有 draft/approved 一律不由该在线端点改写。
+  DB/CAS 在发布前失败时不触盘；发布失败时回滚 DB。若发布成功后 COMMIT/进程
+  失败，则保留 case-only signer 并记 critical，后续调用 409 等待人工对账：
+  这里明确不做存在 check 后再 unlink/replace 的破坏性补偿，以免 TOCTOU 删除或
+  覆盖竞争写者。temp 清理是 best-effort；Windows 文件占用导致的隐藏 `.tmp`
+  残留不进入 `*.json` 分类源，也不能把已发布目标误报成失败。
+- live package 中任何现存 `*.json` 被共享 `load_eval_cases` 分类为 broken 时（含
+  非 UTF-8/非法 JSON、顶层非对象、非法 curation、approved `input_files` 畸形），
+  sample acknowledge 与旧 `/eval-cases` 均在触盘前 409，保留 broken 证据并等待
+  人工修复；不得跳过坏 case 后继续叠加第二份 sample provenance。
+- `accepted_by_engineer` 只把 SQLite 的精确 `0/1/NULL` 投影为 False/True/None；其他
+  持久值不得 truthiness 转真。首次与重放的 acknowledgement 时间必须是带时区 ISO
+  8601，畸形/naive 时间与不规范 actor 均按 provenance 冲突 fail-closed。
+- 审计首次调用为 `outcome=acknowledged`，幂等重试为
+  `outcome=idempotent_replay`；`actor` 是本次请求者，同时记录冻结的
+  `acknowledged_by_username` 与 sample/case/curation 定位字段。
+
 ### 3. L0→L1 晋升门（backend/app/governance/promotion.py）
 
 - `POST /api/agents/{agent_id}/promote`，body
@@ -151,7 +198,8 @@
   五门**——agent.yaml 是包内 SSOT 且平台 V0.1 无鉴权（真鉴权递延 owner），能改
   yaml 的人同样能改门代码本身，该域防线=git 审查与部署包只读，不冒充运行时
   可防；**固化通道当前仅覆盖 requires_human_review 型 agent**（审核回填是唯一
-  accepted 定标入口，sample 级认可 API 递延）；**digest 已绑定包核心文件
+  accepted 定标入口；Issue #4 已以 sample-id 认可 + draft ensure 打开
+  requires_review=false 正常样本通道，draft 仍不计晋升覆盖）；**digest 已绑定包核心文件
   （agent.yaml/prompt/workflow/双 schema）与 case 引用的输入文件实体；最终
   发布另以 `agent_package_snapshot.v1` 绑定完整 Agent Package 文件树**，tool/
   model/scope 等包外状态仍是 V0.2 槽位；**并发防线（晋升锁/eval single-
@@ -200,6 +248,15 @@
     `claim_next_queued` 选中**；**collect_samples=true agent 的 eval-origin 执行后
     samples 表行数不变**；**`list_tasks` 无 origin 参数默认不返回 eval 任务**；
   - 固化：幂等/未认可拒绝/**生成物 curation 字段必为 draft**；
+  - sample 级认可：**未登录 401 / 客户端 actor 伪造 422 / session username
+    CAS-on-NULL / case-only signer 不可信 / task reject 不可覆盖 / 重试只返回同一
+    case 且审计区分 replay**；L1 与 promotion latch 下 acknowledge/fix 均触盘前
+    409；既有 unsigned case 409 待人工迁移，竞争创建不得覆盖其他写者，发布后
+    COMMIT 失败保留 case-only 现场且不得破坏性补偿；公开
+    approved/draft/broken 计数与晋升共用分类源，**2 approved + 1 acknowledged
+    draft 仍必须拒绝晋升**（认可不能冒充策展转正）；现存共享-loader broken、
+    非空/畸形 input lineage、错配 agent/version/output 关系、非 0/1 acceptance 与
+    非 aware-ISO signer 时间均必须在写盘前拒绝；
   - 晋升五条准入 AND 门逐条负例（D4）+ 不可变发布门：**eval_cases 不足 3 或无失败路径 case 拒**/
     无证据拒/证据不绿拒/版本不匹配拒/**digest 不一致拒**/**changelog 缺失拒 +
     空文件拒**/**promotions 记录含"平台级提供"字面（条件4 不冒充 per-agent）**/

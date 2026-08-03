@@ -186,11 +186,12 @@ def _create_and_execute_user_task(
     env: GovernanceEnv,
     *,
     name: str = "用户任务",
+    agent_id: str = "governed_agent",
 ) -> tuple[str, dict[str, Any]]:
     created = env.client.post(
         "/api/tasks",
         json={
-            "agent_id": "governed_agent",
+            "agent_id": agent_id,
             "inputs": {"name": name},
         },
     )
@@ -225,6 +226,17 @@ def _sample_count(env: GovernanceEnv) -> int:
         conn.close()
 
 
+def _audit_records(env: GovernanceEnv) -> list[dict[str, Any]]:
+    path = Path(env.app.state.db_path).parent / "logs" / "audit.log"
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
 def _reviewed_sample(
     env: GovernanceEnv,
     *,
@@ -250,6 +262,53 @@ def _fix_sample(
         "/api/agents/governed_agent/eval-cases",
         json={"sample_id": sample_id},
     )
+
+
+def _acknowledge_sample(
+    env: GovernanceEnv,
+    sample_id: int,
+    payload: dict[str, Any] | None = None,
+):
+    return env.client.post(
+        f"/api/samples/{sample_id}/acknowledge",
+        json={} if payload is None else payload,
+    )
+
+
+def _seed_matching_case(
+    env: GovernanceEnv,
+    sample: dict[str, Any],
+    *,
+    curation: str = "draft",
+    acknowledged_by_username: str | None = None,
+    acknowledged_at: str | None = None,
+) -> Path:
+    """写一条与 sample 匹配的历史 case，供双域 provenance 负测使用。"""
+    cases_dir = env.agents_dir / sample["agent_id"] / "eval_cases"
+    cases_dir.mkdir(parents=True, exist_ok=True)
+    provenance: dict[str, Any] = {
+        "sample_id": sample["id"],
+        "task_id": sample["task_id"],
+        "agent_version": sample["agent_version"],
+        "fixed_by": "历史策展者",
+        "fixed_at": "2026-07-01T00:00:00+00:00",
+    }
+    if acknowledged_by_username is not None:
+        provenance["acknowledged_by_username"] = acknowledged_by_username
+        provenance["acknowledged_at"] = acknowledged_at
+    case = {
+        "case_id": "case_001",
+        "curation": curation,
+        "inputs": sample["input"],
+        "checks": [{"kind": "status_is", "value": "completed"}],
+        "provenance": provenance,
+    }
+    path = cases_dir / "case_001_from_sample.json"
+    path.write_text(
+        json.dumps(case, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def _promote(
@@ -561,6 +620,1019 @@ def test_task_list_origin_filters_keep_eval_out_of_default_view(
     assert {row["id"] for row in eval_rows} == eval_ids
     assert all(row["origin"] == "eval" for row in eval_rows) is True
     assert {row["id"] for row in all_rows} == eval_ids | {user_id}
+
+
+def test_sample_acknowledgement_from_session_creates_one_draft_and_updates_shared_counter(
+    governance_env: GovernanceEnv,
+) -> None:
+    """Issue #4：无需 task review 的完成样本可由认证人逐条认可。
+
+    认可必须把稳定 username 落到 sample/case provenance，并 ensure 恰好一个
+    curation=draft case；公开计数与 Eval/Promotion 共用 curation 两态口径。
+    draft 只进入候选计数，绝不冒充 approved 晋升覆盖。
+    """
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="无需整单审核的样本",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+    assert sample["accepted_by_engineer"] is None
+
+    before = governance_env.client.get(
+        "/api/agents/hello_agent/curated_cases_count"
+    )
+    assert before.status_code == 200
+    assert before.json()["count"] == 0
+
+    first = _acknowledge_sample(governance_env, sample["id"])
+
+    assert first.status_code == 200, first.text
+    acknowledged = first.json()
+    assert acknowledged["sample_id"] == sample["id"]
+    assert acknowledged["agent_id"] == "hello_agent"
+    assert acknowledged["curation"] == "draft"
+    assert acknowledged["acknowledged_by_username"] == TEST_USERNAME
+    assert acknowledged["acknowledged_by_username"] != TEST_DISPLAY_NAME
+
+    samples = governance_env.client.get(f"/api/tasks/{task_id}/samples")
+    assert samples.status_code == 200
+    projected = samples.json()[0]
+    assert projected["accepted_by_engineer"] is True
+    assert projected["acknowledged_by_username"] == TEST_USERNAME
+    assert projected["acknowledged_at"] == acknowledged["acknowledged_at"]
+
+    counter = governance_env.client.get(
+        "/api/agents/hello_agent/curated_cases_count"
+    )
+    assert counter.status_code == 200
+    assert counter.json() == {
+        "agent_id": "hello_agent",
+        "count": 1,
+        "approved": 0,
+        "draft": 1,
+        "broken": 0,
+    }
+
+    case_path = hello_cases / acknowledged["case_file"]
+    case = json.loads(case_path.read_text(encoding="utf-8"))
+    assert case["curation"] == "draft"
+    assert case["provenance"]["sample_id"] == sample["id"]
+    assert case["provenance"]["acknowledged_by_username"] == TEST_USERNAME
+    assert case["provenance"]["acknowledged_at"] == acknowledged["acknowledged_at"]
+
+    second = _acknowledge_sample(governance_env, sample["id"])
+    assert second.status_code == 200, second.text
+    assert second.json() == acknowledged
+    assert len(list(hello_cases.glob("case_*_from_sample.json"))) == 1
+    assert governance_env.client.get(
+        "/api/agents/hello_agent/curated_cases_count"
+    ).json()["draft"] == 1
+    audit = [
+        record
+        for record in _audit_records(governance_env)
+        if record.get("action") == "sample_acknowledgement"
+        and record.get("sample_id") == sample["id"]
+    ]
+    assert [record["outcome"] for record in audit] == [
+        "acknowledged",
+        "idempotent_replay",
+    ]
+    assert {record["actor"] for record in audit} == {TEST_USERNAME}
+    assert all(
+        record["acknowledged_by_username"] == TEST_USERNAME
+        and record["agent_id"] == "hello_agent"
+        and record["case_file"] == acknowledged["case_file"]
+        and record["curation"] == "draft"
+        for record in audit
+    ) is True
+    dropped = [
+        record
+        for record in _audit_records(governance_env)
+        if record.get("action") == "audit_field_dropped"
+    ]
+    assert not any(
+        {
+            "sample_id",
+            "case_file",
+            "curation",
+            "acknowledged_by_username",
+        }
+        & set(record.get("dropped_keys") or [])
+        for record in dropped
+    )
+
+
+def test_sample_acknowledgement_requires_auth_and_rejects_client_actor(
+    governance_env: GovernanceEnv,
+) -> None:
+    """未登录拒绝；登录者也不能从请求体伪造 actor。两次失败均不得留下半认可。"""
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="认证边界样本",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+
+    anonymous = TestClient(governance_env.app)
+    try:
+        unauthenticated = anonymous.post(
+            f"/api/samples/{sample['id']}/acknowledge",
+            json={},
+        )
+    finally:
+        anonymous.close()
+    assert unauthenticated.status_code == 401
+
+    forged = _acknowledge_sample(
+        governance_env,
+        sample["id"],
+        payload={"actor": "mallory"},
+    )
+    assert forged.status_code == 422
+
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["accepted_by_engineer"] is None
+    assert projected.get("acknowledged_by_username") is None
+    assert list(hello_cases.glob("case_*_from_sample.json")) == []
+
+
+def test_sample_acknowledgement_rejects_untrusted_case_only_signer(
+    governance_env: GovernanceEnv,
+) -> None:
+    """DB 尚未签发时，裸 case provenance 不能反向成为认证身份来源。"""
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="case-only 冒名",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+    case_path = _seed_matching_case(
+        governance_env,
+        sample,
+        acknowledged_by_username="mallory",
+        acknowledged_at="2026-07-01T01:02:03+00:00",
+    )
+    before = case_path.read_bytes()
+
+    response = _acknowledge_sample(governance_env, sample["id"])
+
+    assert response.status_code == 409
+    assert case_path.read_bytes() == before
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["accepted_by_engineer"] is None
+    assert projected["acknowledged_by_username"] is None
+    assert not any(
+        record.get("action") == "sample_acknowledgement"
+        and record.get("sample_id") == sample["id"]
+        for record in _audit_records(governance_env)
+    )
+
+
+@pytest.mark.parametrize("curation_state", ["draft", "approved"])
+def test_sample_acknowledgement_rejects_unsigned_existing_case_for_reconciliation(
+    governance_env: GovernanceEnv,
+    curation_state: str,
+) -> None:
+    """历史 unsigned case 不能被在线请求改写；须由人工迁移对账。"""
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name=f"历史 {curation_state} case 补签",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+    case_path = _seed_matching_case(
+        governance_env,
+        sample,
+        curation=curation_state,
+    )
+    before = case_path.read_bytes()
+
+    response = _acknowledge_sample(governance_env, sample["id"])
+
+    assert response.status_code == 409
+    assert case_path.read_bytes() == before
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["accepted_by_engineer"] is None
+    assert projected["acknowledged_by_username"] is None
+    assert projected["acknowledged_at"] is None
+
+
+def test_sample_acknowledgement_cannot_overwrite_task_rejection(
+    governance_env: GovernanceEnv,
+) -> None:
+    """既有人工 reject=false 是签发事实；sample ack 不得把它静默翻成 true。"""
+    _task_id, sample = _reviewed_sample(governance_env, action="reject")
+    assert sample["accepted_by_engineer"] is False
+    before = set(governance_env.governed_cases_dir.glob("*.json"))
+
+    response = _acknowledge_sample(governance_env, sample["id"])
+
+    assert response.status_code == 409
+    projected = _samples_for_task(governance_env, sample["task_id"])[0]
+    assert projected["accepted_by_engineer"] is False
+    assert projected.get("acknowledged_by_username") is None
+    assert set(governance_env.governed_cases_dir.glob("*.json")) == before
+
+
+def test_sample_acknowledgement_cannot_bypass_waiting_review(
+    governance_env: GovernanceEnv,
+) -> None:
+    """逐 sample API 不是 task 人工放行旁路：waiting_review 必须原样停住。"""
+    task_id, result = _create_and_execute_user_task(governance_env)
+    assert result["status"] == "waiting_review"
+    sample = _samples_for_task(governance_env, task_id)[0]
+    before = set(governance_env.governed_cases_dir.glob("*.json"))
+
+    response = _acknowledge_sample(governance_env, sample["id"])
+
+    assert response.status_code == 422
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["accepted_by_engineer"] is None
+    assert projected["acknowledged_by_username"] is None
+    assert set(governance_env.governed_cases_dir.glob("*.json")) == before
+
+
+def test_concurrent_sample_acknowledgements_freeze_exactly_one_username(
+    governance_env: GovernanceEnv,
+) -> None:
+    """两个同显示名账户并发认可：两请求幂等成功，但首次 username 永久胜出。"""
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="并发认可",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+
+    other_username = "other_ack_reviewer"
+    other_password = "other-ack-password"
+    seed_user(
+        governance_env.app.state.db_path,
+        username=other_username,
+        display_name=TEST_DISPLAY_NAME,
+        password=other_password,
+    )
+    first_client = TestClient(governance_env.app)
+    second_client = TestClient(governance_env.app)
+    login(first_client)
+    login(
+        second_client,
+        username=other_username,
+        password=other_password,
+    )
+    barrier = threading.Barrier(2)
+    responses: list[Any] = [None, None]
+
+    def acknowledge(index: int, client: TestClient) -> None:
+        barrier.wait(timeout=10)
+        responses[index] = client.post(
+            f"/api/samples/{sample['id']}/acknowledge",
+            json={},
+        )
+
+    threads = [
+        threading.Thread(target=acknowledge, args=(0, first_client)),
+        threading.Thread(target=acknowledge, args=(1, second_client)),
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+        assert all(thread.is_alive() is False for thread in threads)
+    finally:
+        first_client.close()
+        second_client.close()
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert responses[0].json() == responses[1].json()
+    actor = responses[0].json()["acknowledged_by_username"]
+    assert actor in {TEST_USERNAME, other_username}
+    assert actor != TEST_DISPLAY_NAME
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["acknowledged_by_username"] == actor
+    matching = list(hello_cases.glob("case_*_from_sample.json"))
+    assert len(matching) == 1
+    case = json.loads(matching[0].read_text(encoding="utf-8"))
+    assert case["provenance"]["acknowledged_by_username"] == actor
+    audit = [
+        record
+        for record in _audit_records(governance_env)
+        if record.get("action") == "sample_acknowledgement"
+        and record.get("sample_id") == sample["id"]
+    ]
+    acknowledged = [
+        record for record in audit if record["outcome"] == "acknowledged"
+    ]
+    replayed = [
+        record for record in audit if record["outcome"] == "idempotent_replay"
+    ]
+    assert len(acknowledged) == len(replayed) == 1
+    assert acknowledged[0]["actor"] == actor
+    assert replayed[0]["actor"] == (
+        other_username if actor == TEST_USERNAME else TEST_USERNAME
+    )
+    assert all(
+        record["acknowledged_by_username"] == actor
+        and record["case_file"] == responses[0].json()["case_file"]
+        for record in audit
+    ) is True
+
+
+def test_sample_acknowledgement_db_failure_before_publish_leaves_no_draft_and_retries(
+    governance_env: GovernanceEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DB CAS 先失败时不得触盘；恢复后同一请求可收敛成功。"""
+    from backend.app.governance import curation
+
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="补偿恢复",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+    real_acknowledge = repos.acknowledge_sample_once
+
+    def fail_db_write(*_args, **_kwargs):
+        raise RuntimeError("injected sample acknowledgement DB failure")
+
+    monkeypatch.setattr(repos, "acknowledge_sample_once", fail_db_write)
+    with pytest.raises(RuntimeError, match="injected"):
+        curation.acknowledge_sample(
+            conn_factory=governance_env.app.state.conn_factory,
+            agent_registry=governance_env.app.state.agent_registry,
+            sample_id=sample["id"],
+            actor_username=TEST_USERNAME,
+        )
+    after_failure = _samples_for_task(governance_env, task_id)[0]
+    assert after_failure["accepted_by_engineer"] is None
+    assert after_failure["acknowledged_by_username"] is None
+    assert list(hello_cases.glob("case_*_from_sample.json")) == []
+
+    monkeypatch.setattr(repos, "acknowledge_sample_once", real_acknowledge)
+    recovered = _acknowledge_sample(governance_env, sample["id"])
+    assert recovered.status_code == 200, recovered.text
+    assert len(list(hello_cases.glob("case_*_from_sample.json"))) == 1
+
+
+def test_sample_acknowledgement_create_race_never_deletes_competing_case(
+    governance_env: GovernanceEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """独占创建输掉竞争时，本调用没有文件所有权，补偿绝不能 unlink 对手。"""
+    from backend.app.governance import curation
+
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="跨进程创建竞争",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+    target = hello_cases / "case_001_from_sample.json"
+    competitor = b'{"competitor":"owns-this-file"}\n'
+    real_link = curation.os.link
+
+    def racing_link(source, destination, *args, **kwargs):
+        if Path(destination) == target:
+            target.write_bytes(competitor)
+            raise FileExistsError("competitor won after scan")
+        return real_link(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(curation.os, "link", racing_link)
+    with pytest.raises(FileExistsError, match="competitor won"):
+        curation.acknowledge_sample(
+            conn_factory=governance_env.app.state.conn_factory,
+            agent_registry=governance_env.app.state.agent_registry,
+            sample_id=sample["id"],
+            actor_username=TEST_USERNAME,
+        )
+
+    assert target.read_bytes() == competitor
+    assert list(hello_cases.glob(".*.tmp")) == []
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["accepted_by_engineer"] is None
+    assert projected["acknowledged_by_username"] is None
+
+
+def test_sample_acknowledgement_preserves_existing_broken_failure_evidence(
+    governance_env: GovernanceEnv,
+) -> None:
+    """包内已有坏 case 时认可 fail-closed，绝不能叠加新文件或删证据。"""
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    broken_path = hello_cases / "case_001_from_sample.json"
+    broken_bytes = b"{not-json\n"
+    broken_path.write_bytes(broken_bytes)
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="保留 broken blocker",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+
+    response = _acknowledge_sample(governance_env, sample["id"])
+
+    assert response.status_code == 409
+    assert broken_path.read_bytes() == broken_bytes
+    assert list(hello_cases.glob("case_*_from_sample.json")) == [broken_path]
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["accepted_by_engineer"] is None
+    assert projected["acknowledged_by_username"] is None
+    assert governance_env.client.get(
+        "/api/agents/hello_agent/curated_cases_count"
+    ).json() == {
+        "agent_id": "hello_agent",
+        "count": 1,
+        "approved": 0,
+        "draft": 0,
+        "broken": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    "broken_bytes",
+    [
+        b"[]\n",
+        json.dumps({"curation": "pending"}).encode("utf-8"),
+        json.dumps(
+            {"curation": "approved", "input_files": 0}
+        ).encode("utf-8"),
+        b"\xff\xfe\n",
+    ],
+    ids=["non-object", "invalid-curation", "invalid-input-files", "invalid-utf8"],
+)
+def test_sample_acknowledgement_uses_shared_broken_case_classifier_before_writes(
+    governance_env: GovernanceEnv,
+    broken_bytes: bytes,
+) -> None:
+    """Eval/Promotion 认定 broken 的任一现存 case 都必须在触盘前阻断认可。"""
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    broken_path = hello_cases / "case_001.json"
+    broken_path.write_bytes(broken_bytes)
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="共享 broken 分类器",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+
+    response = _acknowledge_sample(governance_env, sample["id"])
+
+    assert response.status_code == 409
+    assert {path.name: path.read_bytes() for path in hello_cases.glob("*.json")} == {
+        broken_path.name: broken_bytes,
+    }
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["accepted_by_engineer"] is None
+    assert projected["acknowledged_by_username"] is None
+
+
+@pytest.mark.parametrize(
+    "persisted_input_file_ids",
+    [0, False, {}, None, ["foreign-input"]],
+    ids=["zero", "false", "object", "null", "non-empty-list"],
+)
+def test_sample_acknowledgement_requires_exact_empty_task_input_file_list(
+    governance_env: GovernanceEnv,
+    persisted_input_file_ids: Any,
+) -> None:
+    """安全门不以 truthiness 把畸形 task input lineage 当成无附件。"""
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="严格空输入列表",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+    conn = governance_env.app.state.conn_factory()
+    try:
+        conn.execute(
+            "UPDATE tasks SET input_file_ids = ? WHERE id = ?",
+            (json.dumps(persisted_input_file_ids), task_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = _acknowledge_sample(governance_env, sample["id"])
+
+    assert response.status_code == 422
+    assert list(hello_cases.glob("*.json")) == []
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["accepted_by_engineer"] is None
+    assert projected["acknowledged_by_username"] is None
+
+
+@pytest.mark.parametrize(
+    ("accepted_value", "stored_time"),
+    [
+        (2, "2026-07-01T00:00:00+00:00"),
+        (-1, "2026-07-01T00:00:00+00:00"),
+        (1, "not-an-iso-time"),
+        (1, "2026-07-01T00:00:00"),
+    ],
+    ids=["truthy-two", "truthy-negative", "invalid-time", "naive-time"],
+)
+def test_sample_acknowledgement_replay_rejects_malformed_db_provenance(
+    governance_env: GovernanceEnv,
+    accepted_value: int,
+    stored_time: str,
+) -> None:
+    """重放只接受严格 DB 1 与带时区 ISO，不能把 truthiness 当成人签。"""
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="畸形认可 provenance",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+    _seed_matching_case(
+        governance_env,
+        sample,
+        acknowledged_by_username=TEST_USERNAME,
+        acknowledged_at=stored_time,
+    )
+    conn = governance_env.app.state.conn_factory()
+    try:
+        conn.execute(
+            """
+            UPDATE samples
+            SET accepted_by_engineer = ?,
+                acknowledged_by_username = ?,
+                acknowledged_at = ?
+            WHERE id = ?
+            """,
+            (accepted_value, TEST_USERNAME, stored_time, sample["id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = _acknowledge_sample(governance_env, sample["id"])
+
+    assert response.status_code == 409
+    matching = list(hello_cases.glob("case_*_from_sample.json"))
+    assert len(matching) == 1
+    conn = governance_env.app.state.conn_factory()
+    try:
+        row = conn.execute(
+            """
+            SELECT accepted_by_engineer, acknowledged_by_username, acknowledged_at
+            FROM samples WHERE id = ?
+            """,
+            (sample["id"],),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert tuple(row) == (accepted_value, TEST_USERNAME, stored_time)
+
+
+@pytest.mark.parametrize("malformed_sample_id", [True, 1.0])
+def test_sample_acknowledgement_rejects_non_integer_case_sample_id(
+    governance_env: GovernanceEnv,
+    malformed_sample_id: object,
+) -> None:
+    """bool/float provenance must never alias an integer sample identity."""
+
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="畸形 case sample id",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+    stored_time = "2026-07-01T00:00:00+00:00"
+    case_path = _seed_matching_case(
+        governance_env,
+        sample,
+        acknowledged_by_username=TEST_USERNAME,
+        acknowledged_at=stored_time,
+    )
+    case = json.loads(case_path.read_text(encoding="utf-8"))
+    case["provenance"]["sample_id"] = (
+        float(sample["id"])
+        if isinstance(malformed_sample_id, float)
+        else malformed_sample_id
+    )
+    original = json.dumps(case, ensure_ascii=False, indent=2) + "\n"
+    case_path.write_text(original, encoding="utf-8")
+    conn = governance_env.app.state.conn_factory()
+    try:
+        conn.execute(
+            """
+            UPDATE samples
+            SET accepted_by_engineer = 1,
+                acknowledged_by_username = ?,
+                acknowledged_at = ?
+            WHERE id = ?
+            """,
+            (TEST_USERNAME, stored_time, sample["id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = _acknowledge_sample(governance_env, sample["id"])
+
+    assert response.status_code == 409, response.text
+    assert case_path.read_text(encoding="utf-8") == original
+    assert list(hello_cases.glob("*.json")) == [case_path]
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["accepted_by_engineer"] is True
+    assert projected["acknowledged_by_username"] == TEST_USERNAME
+    assert projected["acknowledged_at"] == stored_time
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("agent_version", "tampered-version"),
+        ("output_file_ids", json.dumps(["missing-output"])),
+    ],
+    ids=["agent-version-drift", "missing-output-relation"],
+)
+def test_sample_acknowledgement_rejects_tampered_task_lineage(
+    governance_env: GovernanceEnv,
+    column: str,
+    value: str,
+) -> None:
+    """sample/task agent version 与 output 关系必须可完整回证。"""
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="污染 task lineage",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+    assert column in {"agent_version", "output_file_ids"}
+    conn = governance_env.app.state.conn_factory()
+    try:
+        conn.execute(f"UPDATE tasks SET {column} = ? WHERE id = ?", (value, task_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = _acknowledge_sample(governance_env, sample["id"])
+
+    assert response.status_code == 422
+    assert list(hello_cases.glob("*.json")) == []
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["acknowledged_by_username"] is None
+
+
+def test_sample_acknowledgement_temp_cleanup_failure_keeps_published_result(
+    governance_env: GovernanceEnv,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Windows sharing violation 不得把已发布 case 误报成失败。"""
+    from backend.app.governance import curation
+
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="临时文件清理失败",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+    real_unlink = curation.os.unlink
+    blocked_temps: list[Path] = []
+
+    def fail_temp_cleanup(path, *args, **kwargs):
+        candidate = Path(path)
+        if candidate.parent == hello_cases and candidate.suffix == ".tmp":
+            blocked_temps.append(candidate)
+            raise PermissionError("simulated Windows sharing violation")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(curation.os, "unlink", fail_temp_cleanup)
+    acknowledged = curation.acknowledge_sample(
+        conn_factory=governance_env.app.state.conn_factory,
+        agent_registry=governance_env.app.state.agent_registry,
+        sample_id=sample["id"],
+        actor_username=TEST_USERNAME,
+    )
+
+    assert acknowledged.created is True
+    assert acknowledged.record["acknowledged_by_username"] == TEST_USERNAME
+    targets = list(hello_cases.glob("case_*_from_sample.json"))
+    assert len(targets) == 1
+    case = json.loads(targets[0].read_text(encoding="utf-8"))
+    assert case["provenance"]["acknowledged_by_username"] == TEST_USERNAME
+    assert len(blocked_temps) == 1
+    assert blocked_temps[0].exists()
+    assert "case 临时文件清理失败" in caplog.text
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["accepted_by_engineer"] is True
+    assert projected["acknowledged_by_username"] == TEST_USERNAME
+
+
+def test_sample_acknowledgement_commit_failure_preserves_case_for_reconciliation(
+    governance_env: GovernanceEnv,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """发布后 COMMIT 失败时不做破坏性补偿，保留 case-only 待人工对账。"""
+    from backend.app.governance import curation
+
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="提交失败待核",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+    real_conn_factory = governance_env.app.state.conn_factory
+
+    class CommitFailingConnection:
+        def __init__(self, real: Any) -> None:
+            self._real = real
+
+        def execute(self, sql: str, *args: Any, **kwargs: Any):
+            if " ".join(sql.split()).upper() == "COMMIT":
+                raise sqlite3.OperationalError("injected COMMIT failure")
+            return self._real.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._real, name)
+
+    def failing_conn_factory() -> CommitFailingConnection:
+        return CommitFailingConnection(real_conn_factory())
+
+    with pytest.raises(sqlite3.OperationalError, match="injected COMMIT failure"):
+        curation.acknowledge_sample(
+            conn_factory=failing_conn_factory,
+            agent_registry=governance_env.app.state.agent_registry,
+            sample_id=sample["id"],
+            actor_username=TEST_USERNAME,
+        )
+
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["accepted_by_engineer"] is None
+    assert projected["acknowledged_by_username"] is None
+    targets = list(hello_cases.glob("case_*_from_sample.json"))
+    assert len(targets) == 1
+    preserved = targets[0].read_bytes()
+    case = json.loads(preserved)
+    assert case["curation"] == "draft"
+    assert case["provenance"]["acknowledged_by_username"] == TEST_USERNAME
+    assert "case 已发布但 DB 未提交" in caplog.text
+
+    retry = _acknowledge_sample(governance_env, sample["id"])
+    assert retry.status_code == 409
+    assert targets[0].read_bytes() == preserved
+
+
+def test_sample_acknowledgement_missing_registry_package_fails_before_touch(
+    governance_env: GovernanceEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Registry id 仍在但 source_dir 不可取时，返回治理冲突而不是裸 500。"""
+    hello_cases = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    for path in hello_cases.glob("*.json"):
+        path.unlink()
+    task_id, result = _create_and_execute_user_task(
+        governance_env,
+        name="package source missing",
+        agent_id="hello_agent",
+    )
+    assert result["status"] == "completed"
+    sample = _samples_for_task(governance_env, task_id)[0]
+    registry = governance_env.app.state.agent_registry
+    real_package_dir = registry.package_dir
+
+    def missing_package(agent_id: str):
+        if agent_id == "hello_agent":
+            return None
+        return real_package_dir(agent_id)
+
+    monkeypatch.setattr(registry, "package_dir", missing_package)
+    response = _acknowledge_sample(governance_env, sample["id"])
+
+    assert response.status_code == 409
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["accepted_by_engineer"] is None
+    assert projected["acknowledged_by_username"] is None
+    assert list(hello_cases.glob("*.json")) == []
+
+
+@pytest.mark.parametrize("writer", ["acknowledge", "fix"])
+def test_live_package_curation_is_rejected_after_l1_promotion(
+    governance_env: GovernanceEnv,
+    writer: str,
+) -> None:
+    """L1 包已绑定晋升快照后，任何 curation 写回都必须在触盘前拒绝。"""
+    task_id, sample = _reviewed_sample(governance_env, action="approve")
+    run = _run_eval(governance_env)
+    promoted = _promote(
+        governance_env,
+        run["id"],
+        confirmations={"exception_paths_handled": True},
+    )
+    assert promoted.status_code == 200, promoted.text
+    before_files = {
+        path.name: path.read_bytes()
+        for path in governance_env.governed_cases_dir.glob("*.json")
+    }
+    snapshot = governance_env.app.state.agent_registry.package_snapshot(
+        "governed_agent"
+    )
+    assert snapshot is not None
+    snapshot_digest = snapshot.digest
+    conn = governance_env.app.state.conn_factory()
+    try:
+        promotion_count = conn.execute(
+            "SELECT COUNT(*) FROM promotions WHERE agent_id = 'governed_agent'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    if writer == "acknowledge":
+        response = _acknowledge_sample(governance_env, sample["id"])
+    else:
+        response = _fix_sample(governance_env, sample["id"])
+
+    assert response.status_code == 409
+    assert {
+        path.name: path.read_bytes()
+        for path in governance_env.governed_cases_dir.glob("*.json")
+    } == before_files
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["acknowledged_by_username"] is None
+    assert (
+        governance_env.app.state.agent_registry.package_snapshot(
+            "governed_agent"
+        ).digest
+        == snapshot_digest
+    )
+    conn = governance_env.app.state.conn_factory()
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM promotions WHERE agent_id = 'governed_agent'"
+        ).fetchone()[0] == promotion_count
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("writer", ["acknowledge", "fix"])
+def test_live_package_curation_respects_promotion_operation_latch(
+    governance_env: GovernanceEnv,
+    writer: str,
+) -> None:
+    """promotion pending/fault latch 存在时，curation 只读它且原样 409。"""
+    if writer == "acknowledge":
+        task_id, result = _create_and_execute_user_task(
+            governance_env,
+            name="pending latch acknowledge",
+            agent_id="hello_agent",
+        )
+        assert result["status"] == "completed"
+        sample = _samples_for_task(governance_env, task_id)[0]
+        cases_dir = governance_env.agents_dir / "hello_agent" / "eval_cases"
+    else:
+        task_id, sample = _reviewed_sample(governance_env, action="approve")
+        cases_dir = governance_env.governed_cases_dir
+    before_files = {
+        path.name: path.read_bytes()
+        for path in cases_dir.glob("*.json")
+    }
+    pending_detail = json.dumps(
+        {
+            "axis": "promotion_attestation",
+            "ok": False,
+            "reason": "test-pending-operation",
+        },
+        sort_keys=True,
+    )
+    conn = governance_env.app.state.conn_factory()
+    try:
+        assert repos.record_promotion_attestation_fault(
+            conn,
+            detail=pending_detail,
+        ) is True
+    finally:
+        conn.close()
+
+    try:
+        if writer == "acknowledge":
+            response = _acknowledge_sample(governance_env, sample["id"])
+        else:
+            response = _fix_sample(governance_env, sample["id"])
+        conn = governance_env.app.state.conn_factory()
+        try:
+            latch = repos.get_promotion_attestation_fault(conn)
+        finally:
+            conn.close()
+        assert latch is not None
+        assert latch["detail"] == pending_detail
+    finally:
+        conn = governance_env.app.state.conn_factory()
+        try:
+            repos.clear_promotion_attestation_fault(
+                conn,
+                expected_detail=pending_detail,
+            )
+        finally:
+            conn.close()
+
+    assert response.status_code == 409
+    assert {
+        path.name: path.read_bytes()
+        for path in cases_dir.glob("*.json")
+    } == before_files
+    projected = _samples_for_task(governance_env, task_id)[0]
+    assert projected["acknowledged_by_username"] is None
+
+
+def test_acknowledged_draft_uses_shared_curation_source_without_faking_promotion_coverage(
+    governance_env: GovernanceEnv,
+) -> None:
+    """2 approved + 1 acknowledged draft 仍不足晋升；counter 与 gate 同源不同态。"""
+    cases = _base_cases()
+    cases.pop("case_003.json")
+    _write_eval_cases(governance_env, cases)
+    _task_id, sample = _reviewed_sample(governance_env, action="approve")
+
+    acknowledged = _acknowledge_sample(governance_env, sample["id"])
+    assert acknowledged.status_code == 200, acknowledged.text
+    counter = governance_env.client.get(
+        "/api/agents/governed_agent/curated_cases_count"
+    ).json()
+    assert counter == {
+        "agent_id": "governed_agent",
+        "count": 3,
+        "approved": 2,
+        "draft": 1,
+        "broken": 0,
+    }
+
+    run = _run_eval(governance_env)
+    assert (run["total"], run["passed"]) == (2, 2)
+    assert [item["case_file"] for item in run["draft_cases"]] == [
+        acknowledged.json()["case_file"]
+    ]
+
+    checks = _rejection_checks(
+        _promote(
+            governance_env,
+            run["id"],
+            confirmations={"exception_paths_handled": True},
+        )
+    )
+    assert checks["min_eval_coverage"]["ok"] is False
+    assert checks["eval_evidence"]["ok"] is True
 
 
 def test_approved_sample_is_fixed_as_real_draft_case(

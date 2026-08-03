@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import importlib
 import hashlib
-import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +27,7 @@ import pytest
 import yaml
 
 from backend.app.config import AGENTS_DIR, CONTRACTS_DIR, TOOLS_DIR
+from backend.app.jobs.runner import JobRunner
 from backend.app.runtime.registry import AgentRegistry
 from backend.app.runtime.runtime import AgentRuntime
 from backend.app.storage import repos
@@ -146,7 +146,8 @@ def _create_and_queue_task(db_path: Path, *, agent_id: str, inputs: dict[str, An
     try:
         task = repos.create_task(
             conn, task_id="task_1", agent_id=agent_id, agent_version="0.1.0",
-            name="测试任务", created_by="tester", inputs=inputs, input_file_ids=[], metadata={},
+            name="测试任务", created_by="tester", created_by_username="tester",
+            inputs=inputs, input_file_ids=[], metadata={},
         )
         repos.set_task_status(conn, task["id"], "queued")
         repos.set_task_status(conn, task["id"], "validating")
@@ -310,6 +311,57 @@ def test_execute_workflow_exception_does_not_crash(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_execute_rejects_more_than_512_outputs_without_registering_ghost_files(
+    tmp_path: Path,
+) -> None:
+    """Runtime must never create a completed task that owner auth cannot read."""
+
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    flood_dir = agents_dir / "output_flood_agent"
+    shutil.copytree(AGENTS_DIR / "hello_agent", flood_dir)
+
+    yaml_path = flood_dir / "agent.yaml"
+    yaml_text = yaml_path.read_text(encoding="utf-8").replace(
+        "id: hello_agent", "id: output_flood_agent"
+    )
+    yaml_path.write_text(yaml_text, encoding="utf-8")
+    (flood_dir / "workflow.py").write_text(
+        "from pathlib import Path\n\n"
+        "def run(context):\n"
+        "    output_dir = Path(context['output_dir'])\n"
+        "    output_dir.mkdir(parents=True, exist_ok=True)\n"
+        "    for index in range(513):\n"
+        "        (output_dir / f'part-{index:04d}.txt').write_text('x', encoding='utf-8')\n"
+        "    return {'status': 'success', 'outputs': []}\n",
+        encoding="utf-8",
+    )
+
+    runtime, db_path = _make_runtime(agents_dir, tmp_path)
+    task_id = _create_and_queue_task(
+        db_path,
+        agent_id="output_flood_agent",
+        inputs={"name": "bounded outputs"},
+    )
+
+    result = runtime.execute(task_id)
+
+    assert result["status"] == "failed"
+    assert "512" in result["task"]["error_message"]
+    assert result["task"]["output_file_ids"] == []
+    conn = get_conn(db_path)
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM files WHERE task_id = ? AND kind = 'output'",
+            (task_id,),
+        ).fetchone()[0] == 0
+        assert "task_completed" not in {
+            event["event_type"] for event in repos.list_events(conn, task_id)
+        }
+    finally:
+        conn.close()
+
+
 def test_tool_call_outside_agent_whitelist_denied_with_event(tmp_path: Path) -> None:
     """P1-A default-deny witness：mock_echo 已在 Tool Registry 注册，但 Agent 的
     agent.yaml.tools 白名单为空——调用必须被拒（ToolNotAllowedError→任务 failed）、
@@ -386,7 +438,8 @@ def _make_conn(tmp_path: Path):
 def _make_task(conn, task_id: str) -> None:
     repos.create_task(
         conn, task_id=task_id, agent_id="hello_agent", agent_version="0.1.0",
-        name="ctx 测试", created_by="tester", inputs={}, input_file_ids=[], metadata={},
+        name="ctx 测试", created_by="tester", created_by_username="tester",
+        inputs={}, input_file_ids=[], metadata={},
     )
 
 
@@ -485,7 +538,8 @@ def test_execute_missing_input_file_id_fails_closed(tmp_path: Path) -> None:
     try:
         task = repos.create_task(
             conn, task_id="task_missing_file", agent_id="hello_agent", agent_version="0.1.0",
-            name="缺文件引用测试", created_by="tester", inputs={"name": "世界"},
+            name="缺文件引用测试", created_by="tester",
+            created_by_username="tester", inputs={"name": "世界"},
             input_file_ids=["file_does_not_exist"], metadata={},
         )
         repos.set_task_status(conn, task["id"], "queued")
@@ -495,17 +549,19 @@ def test_execute_missing_input_file_id_fails_closed(tmp_path: Path) -> None:
 
     result = runtime.execute("task_missing_file")
     assert result["status"] == "failed"
-    assert "file_id=file_does_not_exist" in result["task"]["error_message"]
-    assert "完整性校验失败" in result["task"]["error_message"]
+    assert result["task"]["error_message"] == (
+        "worker_authorization_failed: task owner lineage is unavailable"
+    )
+    assert "file_does_not_exist" not in result["task"]["error_message"]
 
     conn = get_conn(db_path)
     try:
         events = repos.list_events(conn, "task_missing_file")
-        assert [event["event_type"] for event in events] == [
-            "validation_started",
-            "validation_failed",
-            "task_failed",
-        ]
+        assert [event["event_type"] for event in events] == ["task_failed"]
+        assert events[0]["payload"] == {
+            "authorization_gate": "task_owner_lineage_v1",
+            "reason": "invalid_owner_lineage",
+        }
         assert repos.list_tool_runs(conn, "task_missing_file") == []
     finally:
         conn.close()
@@ -534,6 +590,7 @@ def test_execute_tampered_input_file_fails_before_workflow(tmp_path: Path) -> No
             size_bytes=len(original),
             sha256=hashlib.sha256(original).hexdigest(),
             classification="internal",
+            owner_username="tester",
         )
         task = repos.create_task(
             conn,
@@ -542,6 +599,7 @@ def test_execute_tampered_input_file_fails_before_workflow(tmp_path: Path) -> No
             agent_version="0.1.0",
             name="篡改输入测试",
             created_by="tester",
+            created_by_username="tester",
             inputs={"name": "世界"},
             input_file_ids=[file_id],
             metadata={},
@@ -608,10 +666,10 @@ def test_execute_requires_human_review(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_review_requested_event_failure_keeps_waiting_review(
+def test_review_requested_event_failure_rolls_back_and_runner_fails_task(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """展示性 review_requested 写失败时，已提交的人工审核态仍须安全返回。"""
+    """review_requested 写失败时不得留下 waiting_review 半态，runner 诚实失败。"""
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
     review_dir = agents_dir / "review_agent"
@@ -624,7 +682,22 @@ def test_review_requested_event_failure_keeps_waiting_review(
     yaml_path.write_text(yaml_text, encoding="utf-8")
 
     runtime, db_path = _make_runtime(agents_dir, tmp_path)
-    task_id = _create_and_queue_task(db_path, agent_id="review_agent", inputs={"name": "世界"})
+    task_id = "task_review_event_failure"
+    conn = get_conn(db_path)
+    try:
+        repos.create_task(
+            conn,
+            task_id=task_id,
+            agent_id="review_agent",
+            agent_version="0.1.0",
+            name="测试审核事件失败",
+            created_by="tester",
+            created_by_username="tester",
+            inputs={"name": "世界"},
+        )
+        repos.set_task_status(conn, task_id, "queued")
+    finally:
+        conn.close()
     real_append_event = repos.append_event
 
     def fail_review_requested(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -633,16 +706,13 @@ def test_review_requested_event_failure_keeps_waiting_review(
         return real_append_event(*args, **kwargs)
 
     monkeypatch.setattr(repos, "append_event", fail_review_requested)
-    result = runtime.execute(task_id)
-
-    assert result["status"] == "waiting_review"
-    assert result["task"]["status"] == "waiting_review"
+    assert JobRunner(runtime, lambda: get_conn(db_path)).run_once() is True
     conn = get_conn(db_path)
     try:
         task = repos.get_task(conn, task_id)
         event_types = [event["event_type"] for event in repos.list_events(conn, task_id)]
     finally:
         conn.close()
-    assert task["status"] == "waiting_review"
+    assert task["status"] == "failed"
     assert "review_requested" not in event_types
-    assert "task_failed" not in event_types
+    assert "task_failed" in event_types

@@ -17,12 +17,12 @@ from typing import Any
 import yaml
 from fastapi.testclient import TestClient
 
-from conftest import seed_and_login, seed_user, login
 from backend.app.api import classification_gate as cgate
 from backend.app.main import create_app
-from backend.app.runtime.runtime import _task_data_classification, _tool_taint_classification
+from backend.app.runtime.runtime import _tool_taint_classification
 from backend.app.storage import repos
 from backend.app.storage.db import get_conn, init_db
+from conftest import TEST_USERNAME, seed_and_login
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -80,7 +80,8 @@ def test_monitor_agent_real_contract_derives_sensitive() -> None:
 def _mktask(conn, task_id: str, *, classification, status: str = "completed",
             err: str | None = None, agent_id: str = "hello_agent"):
     repos.create_task(conn, task_id=task_id, agent_id=agent_id, agent_version="0.1.0",
-                      name="t", created_by="u", inputs={})
+                      name="t", created_by="u", created_by_username=TEST_USERNAME,
+                      inputs={})
     conn.execute(
         "UPDATE tasks SET status=?, data_classification=?, error_message=? WHERE id=?",
         (status, classification, err, task_id),
@@ -366,7 +367,13 @@ def test_conversation_model_calls_seal_by_task() -> None:
             seed_and_login(client, db_path)
             conn = get_conn(db_path)
             try:
-                repos.create_conversation(conn, conversation_id="c1", agent_id="a", created_by="u")
+                repos.create_conversation(
+                    conn,
+                    conversation_id="c1",
+                    agent_id="a",
+                    created_by="u",
+                    created_by_username=TEST_USERNAME,
+                )
                 _mktask(conn, "st", classification="sensitive", status="failed", err="e")
                 _mktask(conn, "it", classification="internal", status="completed")
                 repos.record_model_call(conn, task_id="st", conversation_id="c1",
@@ -512,7 +519,13 @@ def test_conversation_tasks_endpoint_seals(tmp_path: Path) -> None:
         seed_and_login(client, db_path)
         conn = get_conn(db_path)
         try:
-            repos.create_conversation(conn, conversation_id="cv", agent_id="a", created_by="u")
+            repos.create_conversation(
+                conn,
+                conversation_id="cv",
+                agent_id="a",
+                created_by="u",
+                created_by_username=TEST_USERNAME,
+            )
             _mktask(conn, "cs", classification="sensitive", status="failed", err="机密错误文本")
             conn.execute("UPDATE tasks SET conversation_id='cv' WHERE id='cs'")
         finally:
@@ -533,6 +546,31 @@ def test_review_and_cancel_seal_sensitive_task_row(tmp_path: Path) -> None:
         try:
             _mktask(conn, "rv", classification="sensitive", status="waiting_review", err=None)
             _mktask(conn, "cx", classification="sensitive", status="queued", err="机密取消前文本")
+            execution_evidence_digest = (
+                "sha256:7b9e93d01e34197b15ed6fddaad515525f8745b78d5203966251f6a80ca6ed58"
+            )
+            for event_type, message in (
+                ("validation_started", "开始校验输入"),
+                ("review_requested", "任务需要人工审核放行"),
+            ):
+                payload = {"execution_evidence_digest": execution_evidence_digest}
+                if event_type == "validation_started":
+                    payload = {
+                        "package_snapshot_digest": "1" * 64,
+                        "task_inputs_digest": "sha256:" + "2" * 64,
+                        "input_file_ids": [],
+                        "input_files_digest": "sha256:" + "3" * 64,
+                        **payload,
+                    }
+                repos.append_event(
+                    conn,
+                    task_id="rv",
+                    agent_id="hello_agent",
+                    event_type=event_type,
+                    level="info",
+                    message=message,
+                    payload=payload,
+                )
         finally:
             conn.close()
         # review reject → 响应任务行 error_message 遮蔽（reject_reason 亦经门）
@@ -547,11 +585,17 @@ def test_review_and_cancel_seal_sensitive_task_row(tmp_path: Path) -> None:
 
 def test_backfill_child_upgrade_blocks_real_download(tmp_path: Path) -> None:
     """P1-1 端到端（Codex R1）：不只断言子行列变 sensitive，而是真打 GET /files/{id}/download
-    ——回填前 internal 不 403（文件缺→404），回填升子行后 sensitive → **真 403**。
+    ——回填前 owner 对合法 internal 产物真下载成功，回填升子行后 sensitive → **真 403**。
     tamper：删回填步骤 4 子行升级 → 子行留 internal → 下载不 403 → 断言 RED。"""
+    import hashlib
+
     app, db_path = _seal_endpoint_app(tmp_path)
     with TestClient(app) as client:
         seed_and_login(client, db_path)
+        payload = b"owner-scoped internal draft"
+        output_path = app.state.task_runs_dir / "md" / "output" / "draft.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(payload)
         conn = get_conn(db_path)
         try:
             _mktask(conn, "md", classification=None, status="completed")
@@ -559,12 +603,16 @@ def test_backfill_child_upgrade_blocks_real_download(tmp_path: Path) -> None:
                                   tool_version="0.1.1", mock=False, status="success", input_json={},
                                   started_at="2026-07-12T00:00:00+00:00")
             repos.create_file(conn, file_id="fd", task_id="md", kind="output",
-                              filename="draft.json", path="/nonexistent/draft.json",
-                              size_bytes=1, sha256="a", classification="internal")
+                              filename="draft.json", path=str(output_path),
+                              size_bytes=len(payload), sha256=hashlib.sha256(payload).hexdigest(),
+                              classification="internal")
+            repos.set_task_outputs(conn, "md", ["fd"])
         finally:
             conn.close()
-        # 回填前：internal → 过分级门（文件缺→非 403）
-        assert client.get("/api/files/fd/download").status_code != 403
+        # 回填前：owner 对物理路径与 task_id 一致的 internal 产物可真下载。
+        before = client.get("/api/files/fd/download")
+        assert before.status_code == 200, before.text
+        assert before.content == payload
         conn = get_conn(db_path)
         try:
             repos.backfill_task_data_classification(conn, ["monitor_adapter_recon"],

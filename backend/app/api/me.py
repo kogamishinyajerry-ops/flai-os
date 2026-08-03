@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Request
 
 from . import classification_gate as cgate  # 与 tasks.py 同款遮蔽 chokepoint（tasks.py:15 同）
-from ..storage import repos
+from . import object_authorization as oauth
 from ._since import parse_since_utc
 
 router = APIRouter(prefix="/api", tags=["me"])
@@ -68,11 +68,17 @@ def me_tasks(
     request: Request,
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[dict[str, Any]]:
-    username = request.state.user["username"]
     conn = request.app.state.conn_factory()
     try:
-        rows = repos.list_tasks(
-            conn, origin="user", created_by_username=username, limit=limit
+        rows = oauth.list_readable_tasks(
+            conn,
+            username=oauth.authenticated_username(request),
+            agent_id=None,
+            status=None,
+            conversation_id=None,
+            origin="user",
+            limit=limit,
+            offset=0,
         )
         # ADR-0025 单 chokepoint：sensitive 任务承载字段遮蔽，与 /api/tasks 同款。
         return [cgate.redact_task_row_if_sensitive(conn, t) for t in rows]

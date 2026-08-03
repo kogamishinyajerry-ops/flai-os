@@ -13,9 +13,14 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import TEST_DISPLAY_NAME, login, seed_and_login, seed_user
+from conftest import (
+    TEST_DISPLAY_NAME,
+    TEST_USERNAME,
+    login,
+    seed_and_login,
+    seed_user,
+)
 
-from backend.app import config
 from backend.app.jobs.runner import JobRunner
 from backend.app.main import create_app
 
@@ -78,6 +83,7 @@ def test_health_exposes_generation_markers_is_true(client: TestClient) -> None:
     body = client.get("/api/health").json()
     assert body["created_by_username_axis"] is True
     assert body["classification_axis"] is True
+    assert body["skill_reuse_runtime_axis"] is True
 
 
 def test_list_agents_contains_hello_agent(client: TestClient) -> None:
@@ -101,10 +107,11 @@ def test_get_agent_found(client: TestClient) -> None:
 
 
 def test_get_agent_exposes_input_schema(client: TestClient) -> None:
-    """详情端点透出 input_schema，供前端按契约动态渲染创建表单（P0-1）。
+    """详情端点透出 input_schema，供自动路由按契约核对输入（P0-1）。
 
     列表端点不带（省带宽）；详情端点必带，且为该 Agent 真实 input_schema.json
-    的解析结果（hello_agent required=[name]）。schema 缺失时为 None 而非 500。
+    的解析结果（hello_agent required=[name]）。schema 缺失时为 None 而非 500，
+    由对话继续追问而不是降级成工程师手填 JSON。
     """
     resp = client.get("/api/agents/hello_agent")
     body = resp.json()
@@ -118,6 +125,33 @@ def test_get_agent_exposes_input_schema(client: TestClient) -> None:
     listed = client.get("/api/agents").json()
     hello = next(a for a in listed if a["id"] == "hello_agent")
     assert "input_schema" not in hello
+
+
+def test_get_agent_exposes_file_contract_only_on_detail(client: TestClient) -> None:
+    """自动路由必须能在显示开工按钮前核对附件后缀，不能让工程师补表。"""
+    detail = client.get("/api/agents/performance_disk_agent")
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["input_mode"] == "file_upload"
+    assert body["input_allowed_extensions"] == [".xlsx"]
+
+    listed = client.get("/api/agents").json()
+    projected = next(a for a in listed if a["id"] == "performance_disk_agent")
+    assert "input_allowed_extensions" not in projected
+
+
+def test_file_contract_projection_is_bounded_and_fail_closed() -> None:
+    from backend.app.api.agents import _input_allowed_extensions
+
+    assert _input_allowed_extensions({}) == []
+    assert _input_allowed_extensions(
+        {"input": {"allowed_extensions": [" .XLSX ", ".xlsx", ".CSV"]}}
+    ) == [".xlsx", ".csv"]
+    assert _input_allowed_extensions({"input": {"allowed_extensions": "*.xlsx"}}) is None
+    assert _input_allowed_extensions({"input": {"allowed_extensions": ["xlsx"]}}) is None
+    assert _input_allowed_extensions(
+        {"input": {"allowed_extensions": [f".{i}" for i in range(33)]}}
+    ) is None
 
 
 # ── tasks: create -> queued + task_created 事件 ──────────────────────────
@@ -508,9 +542,14 @@ def test_review_approve_e2e_full_chain(review_app_env) -> None:
     assert "review_requested" in event_types
     approved_events = [e for e in events if e["event_type"] == "review_approved"]
     assert len(approved_events) == 1
+    validation_event = next(e for e in events if e["event_type"] == "validation_started")
     assert approved_events[0]["payload"] == {
         "reviewer": TEST_DISPLAY_NAME,
+        "reviewer_username": TEST_USERNAME,
         "comment": "结果核对无误",
+        "execution_evidence_digest": validation_event["payload"][
+            "execution_evidence_digest"
+        ],
     }
 
 
@@ -553,6 +592,67 @@ def test_review_reject_e2e_full_chain(review_app_env) -> None:
     assert len(rejected_events) == 1
     assert rejected_events[0]["payload"]["reviewer"] == TEST_DISPLAY_NAME
     assert rejected_events[0]["level"] == "warning"
+
+
+def test_legacy_review_evidence_conflict_is_stable_and_reject_remains_available(
+    review_app_env,
+) -> None:
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+    conn = app.state.conn_factory()
+    try:
+        conn.execute(
+            "DELETE FROM task_events WHERE task_id = ? AND event_type = 'validation_started'",
+            (task_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    approve = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "approve", "comment": "legacy evidence missing"},
+    )
+    assert approve.status_code == 409, approve.text
+    assert approve.json()["detail"]["code"] == "review_execution_evidence_invalid"
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
+    events_after_approve = client.get(f"/api/tasks/{task_id}/events").json()
+    assert all(e["event_type"] != "review_approved" for e in events_after_approve)
+
+    reject = client.post(
+        f"/api/tasks/{task_id}/review",
+        json={"action": "reject", "comment": "evidence unavailable"},
+    )
+    assert reject.status_code == 200, reject.text
+    assert reject.json()["status"] == "failed"
+    rejected_event = next(
+        e
+        for e in client.get(f"/api/tasks/{task_id}/events").json()
+        if e["event_type"] == "review_rejected"
+    )
+    assert rejected_event["payload"]["execution_evidence_status"] == "unverified"
+    assert "execution_evidence_digest" not in rejected_event["payload"]
+
+
+def test_review_unknown_value_error_is_not_misclassified_as_evidence_conflict(
+    review_app_env,
+    monkeypatch,
+) -> None:
+    from backend.app.storage import repos as repos_mod
+
+    client, app = review_app_env
+    task_id = _run_to_waiting_review(client, app)
+
+    def _unexpected_failure(*_args, **_kwargs):
+        raise ValueError("unexpected programming failure")
+
+    monkeypatch.setattr(repos_mod, "apply_human_review", _unexpected_failure)
+    with pytest.raises(ValueError, match="unexpected programming failure"):
+        client.post(
+            f"/api/tasks/{task_id}/review",
+            json={"action": "approve"},
+        )
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_review"
 
 
 def test_review_non_waiting_review_task_409(client: TestClient) -> None:
@@ -746,6 +846,30 @@ def me_two_user_env(tmp_path: Path):
             return task_ids
 
         yield alice_client, bob_client, seed
+
+
+def test_upload_owner_username_is_session_derived_and_client_cannot_spoof(
+    me_two_user_env,
+) -> None:
+    alice_client, bob_client, _seed = me_two_user_env
+
+    bob_upload = bob_client.post(
+        "/api/files/upload",
+        files={"file": ("bob.txt", b"owned by bob", "text/plain")},
+        data={"owner_username": "alice", "uploaded_by": "Alice"},
+    )
+    assert bob_upload.status_code == 200, bob_upload.text
+    bob_record = bob_upload.json()
+    assert bob_record["owner_username"] == "bob"
+    assert bob_record["uploaded_by"] == "Bob"
+
+    alice_upload = alice_client.post(
+        "/api/files/upload",
+        files={"file": ("alice.txt", b"owned by alice", "text/plain")},
+        data={"owner_username": "bob"},
+    )
+    assert alice_upload.status_code == 200, alice_upload.text
+    assert alice_upload.json()["owner_username"] == "alice"
 
 
 def test_me_contributions_precise_private_and_feedback_approx(me_two_user_env) -> None:
@@ -998,9 +1122,13 @@ def test_upload_exceeding_limit_returns_413_and_leaves_no_residue(
 
 
 @pytest.fixture()
-def governance_client_env(tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
-    """tmp agents 目录：hello_agent + review_agent（同 review_app_env 套路），
-    供 curated_cases_count 端点测试造固化 case 文件、验证按 agent 精确 scope。
+def governance_client_env(
+    tmp_path: Path,
+) -> Iterator[tuple[TestClient, Path, Path]]:
+    """tmp agents 目录：package_alias(manifest id=hello_agent) + review_agent。
+
+    目录名故意不等于 manifest id，钉死 counter 必须复用 Registry 的真实包路径，
+    不能自行拼 ``agents_dir / agent_id``。
     """
     import shutil
 
@@ -1010,8 +1138,9 @@ def governance_client_env(tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
     # golden-sample case 文件，会把断言撑大，须先清掉再由测试自己写入）。
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
-    shutil.copytree(REPO_ROOT / "agents" / "hello_agent", agents_dir / "hello_agent")
-    for p in (agents_dir / "hello_agent" / "eval_cases").glob("*.json"):
+    hello_dir = agents_dir / "package_alias"
+    shutil.copytree(REPO_ROOT / "agents" / "hello_agent", hello_dir)
+    for p in (hello_dir / "eval_cases").glob("*.json"):
         p.unlink()
     review_dir = agents_dir / "review_agent"
     shutil.copytree(REPO_ROOT / "agents" / "hello_agent", review_dir)
@@ -1033,19 +1162,33 @@ def governance_client_env(tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
     )
     with TestClient(app) as c:
         seed_and_login(c, db_path)
-        yield c, agents_dir
+        yield c, agents_dir, hello_dir
 
 
 def test_curated_cases_count_scoped_and_missing(governance_client_env) -> None:
-    client, agents_dir = governance_client_env
-    # 造 hello_agent 两个固化 case + 另一 agent 一个，验证按 agent 精确 scope
-    (agents_dir / "hello_agent" / "eval_cases").mkdir(parents=True, exist_ok=True)
-    (agents_dir / "hello_agent" / "eval_cases" / "case_001.json").write_text("{}", encoding="utf-8")
-    (agents_dir / "hello_agent" / "eval_cases" / "case_002.json").write_text("{}", encoding="utf-8")
+    client, agents_dir, hello_dir = governance_client_env
+    # 造 hello_agent 的 approved/draft/broken 各一 + 另一 agent 一个，验证按
+    # agent 精确 scope，且计数复用 Eval/Promotion 的 curation 分类口径。
+    (hello_dir / "eval_cases").mkdir(parents=True, exist_ok=True)
+    (hello_dir / "eval_cases" / "case_001.json").write_text("{}", encoding="utf-8")
+    (hello_dir / "eval_cases" / "case_002.json").write_text(
+        '{"curation":"draft"}',
+        encoding="utf-8",
+    )
+    (hello_dir / "eval_cases" / "case_003.json").write_text(
+        "{not-json",
+        encoding="utf-8",
+    )
 
     r = client.get("/api/agents/hello_agent/curated_cases_count")
     assert r.status_code == 200
-    assert r.json() == {"agent_id": "hello_agent", "count": 2}
+    assert r.json() == {
+        "agent_id": "hello_agent",
+        "count": 3,
+        "approved": 1,
+        "draft": 1,
+        "broken": 1,
+    }
 
     # 无 eval_cases 目录的 agent = 0（不抛）。registry 已在 fixture 内 TestClient
     # 启动时扫描完毕（agent 注册状态常驻内存），此刻才把磁盘上的 eval_cases/
@@ -1056,7 +1199,13 @@ def test_curated_cases_count_scoped_and_missing(governance_client_env) -> None:
     _shutil.rmtree(agents_dir / "review_agent" / "eval_cases")
     r2 = client.get("/api/agents/review_agent/curated_cases_count")
     assert r2.status_code == 200
-    assert r2.json()["count"] == 0
+    assert r2.json() == {
+        "agent_id": "review_agent",
+        "count": 0,
+        "approved": 0,
+        "draft": 0,
+        "broken": 0,
+    }
 
     # 不存在的 agent → 404
     assert client.get("/api/agents/no_such_agent/curated_cases_count").status_code == 404

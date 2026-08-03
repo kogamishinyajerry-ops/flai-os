@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS task_events (
 
 -- classification（迁移 #6/ADR-0021）：internal|sensitive 数据分级轴。DDL DEFAULT
 -- 只服务存量回填（mock 期数据全 internal 是如实标注）；新写入走 repos 必填 kwarg。
--- uploaded_by 仅上传端点记登录身份；runtime 产物/eval 复制件非人工标注场景留 NULL。
+-- uploaded_by 仅保留上传时的人类可读 display_name；owner_username 是会话认证得出的
+-- 稳定唯一身份。runtime 产物/eval 复制件非直接人工上传场景，两列均留 NULL。
 CREATE TABLE IF NOT EXISTS files (
     id TEXT PRIMARY KEY,
     task_id TEXT,
@@ -99,7 +100,8 @@ CREATE TABLE IF NOT EXISTS files (
     sha256 TEXT NOT NULL,
     created_at TEXT NOT NULL,
     classification TEXT NOT NULL DEFAULT 'internal',
-    uploaded_by TEXT
+    uploaded_by TEXT,
+    owner_username TEXT
 );
 
 CREATE TABLE IF NOT EXISTS feedback (
@@ -159,6 +161,10 @@ CREATE TABLE IF NOT EXISTS samples (
     raw_output_path TEXT,
     validation_status TEXT,
     accepted_by_engineer INTEGER,
+    -- Issue #4：sample 级认可的人签来源。仅新 acknowledge API 写入稳定
+    -- username；旧 task-review 批量标签与历史行均留 NULL，禁止从显示名反推。
+    acknowledged_by_username TEXT,
+    acknowledged_at TEXT,
     created_at TEXT NOT NULL,
     classification TEXT NOT NULL DEFAULT 'internal'
 );
@@ -171,6 +177,9 @@ CREATE TABLE IF NOT EXISTS conversations (
     agent_id TEXT NOT NULL,
     status TEXT NOT NULL,
     created_by TEXT NOT NULL,
+    -- 认证 username 是自动复用的 owner 证明；created_by 仍只是可读展示名。
+    -- 可空且无 DEFAULT：历史行绝不从展示名猜测或回填 owner。
+    created_by_username TEXT,
     recommendation_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -293,6 +302,115 @@ CREATE TABLE IF NOT EXISTS team_members (
     after_json TEXT,
     PRIMARY KEY (team_id, seq)
 );
+
+-- 迁移 #15（ADR-0034）：真实已完成任务形成的资产候选治理包络。候选内容
+-- insert-once；state 只通过 asset_candidate_events + CAS-on-NULL 决定指针推进。
+-- Asset Candidate 不是 Registry 资产，不与 agents/agent_versions/promotions 混表。
+CREATE TABLE IF NOT EXISTS asset_candidates (
+    id TEXT PRIMARY KEY,
+    schema_version TEXT NOT NULL,
+    source_task_id TEXT NOT NULL REFERENCES tasks(id),
+    source_conversation_id TEXT NOT NULL REFERENCES conversations(id),
+    revision INTEGER NOT NULL,
+    supersedes_candidate_digest TEXT,
+    bundle_digest TEXT NOT NULL,
+    lineage_digest TEXT NOT NULL,
+    candidate_digest TEXT NOT NULL UNIQUE,
+    bundle_json TEXT NOT NULL,
+    lineage_json TEXT NOT NULL,
+    proposal_provenance_json TEXT NOT NULL,
+    state TEXT NOT NULL,
+    data_classification TEXT NOT NULL,
+    initiated_by_user_id INTEGER NOT NULL,
+    initiated_by_username TEXT NOT NULL,
+    decision_event_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(source_task_id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS asset_candidate_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL UNIQUE,
+    candidate_id TEXT NOT NULL REFERENCES asset_candidates(id),
+    candidate_digest TEXT NOT NULL,
+    bundle_digest TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    from_state TEXT,
+    to_state TEXT NOT NULL,
+    actor_source TEXT NOT NULL,
+    signer_display_name TEXT,
+    signer_user_id INTEGER,
+    signer_username TEXT,
+    signer_session_hash TEXT,
+    message TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+-- 迁移 #16（ADR-0035）：Accepted Candidate 的隔离 Skill Package Revision。
+-- 包内容与来源 insert-once；source_candidate_digest 唯一保证一个精确 Candidate
+-- Revision 只能材化一个包。包审核通过追加事件并用 review_event_id CAS-on-NULL
+-- 推进，绝不与 agents / agent_versions / promotions 混表。
+CREATE TABLE IF NOT EXISTS skill_packages (
+    id TEXT PRIMARY KEY,
+    schema_version TEXT NOT NULL,
+    name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    package_digest TEXT NOT NULL UNIQUE,
+    state TEXT NOT NULL CHECK (state IN ('pending_review', 'approved', 'rejected')),
+    source_candidate_id TEXT NOT NULL REFERENCES asset_candidates(id),
+    source_candidate_digest TEXT NOT NULL UNIQUE,
+    source_bundle_digest TEXT NOT NULL,
+    source_skill_digest TEXT NOT NULL,
+    source_acceptance_event_digest TEXT NOT NULL,
+    source_task_id TEXT NOT NULL REFERENCES tasks(id),
+    source_agent_id TEXT NOT NULL,
+    owner_username TEXT NOT NULL,
+    storage_relpath TEXT NOT NULL UNIQUE,
+    file_manifest_json TEXT NOT NULL,
+    review_event_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS skill_package_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL UNIQUE,
+    package_id TEXT NOT NULL REFERENCES skill_packages(id),
+    package_digest TEXT NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN ('materialized', 'approved', 'rejected')),
+    from_state TEXT CHECK (from_state IS NULL OR from_state = 'pending_review'),
+    to_state TEXT NOT NULL CHECK (to_state IN ('pending_review', 'approved', 'rejected')),
+    actor_source TEXT NOT NULL CHECK (actor_source IN ('candidate_materializer', 'authenticated_session')),
+    signer_display_name TEXT,
+    signer_user_id INTEGER,
+    signer_username TEXT,
+    signer_session_hash TEXT,
+    message TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+-- Skill 复用引用只有在主对话方案经人工开工时才成为 task binding。该行
+-- insert-once；是否构成重复证据必须冷读 task_events 的 validation_started 与
+-- completed/review_approved 同摘要链，不能靠可变计数器或匹配标签冒充执行。
+CREATE TABLE IF NOT EXISTS skill_reuse_bindings (
+    id TEXT PRIMARY KEY,
+    schema_version TEXT NOT NULL,
+    task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id),
+    conversation_id TEXT NOT NULL REFERENCES conversations(id),
+    package_id TEXT NOT NULL REFERENCES skill_packages(id),
+    package_digest TEXT NOT NULL,
+    source_candidate_digest TEXT NOT NULL,
+    source_skill_digest TEXT NOT NULL,
+    matched_agent_id TEXT NOT NULL,
+    owner_username TEXT NOT NULL,
+    match_policy_version TEXT NOT NULL,
+    match_basis_digest TEXT NOT NULL,
+    binding_digest TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
 """
 
 _INDEX_DDL = (
@@ -313,7 +431,89 @@ _INDEX_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_eval_runs_status_started ON eval_runs(status, started_at, id)",
     "CREATE INDEX IF NOT EXISTS idx_promotions_agent_id ON promotions(agent_id)",
     "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_asset_candidates_source_task "
+    "ON asset_candidates(source_task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_asset_candidate_events_candidate "
+    "ON asset_candidate_events(candidate_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_skill_packages_owner_state "
+    "ON skill_packages(owner_username, state, updated_at DESC, id)",
+    "CREATE INDEX IF NOT EXISTS idx_skill_package_events_package "
+    "ON skill_package_events(package_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_skill_reuse_bindings_package_owner "
+    "ON skill_reuse_bindings(package_id, owner_username, created_at, id)",
 )
+
+_FILE_OWNER_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_files_owner_username_immutable
+BEFORE UPDATE OF owner_username ON files
+WHEN NEW.owner_username IS NOT OLD.owner_username
+BEGIN
+    SELECT RAISE(ABORT, 'files.owner_username is immutable');
+END
+"""
+
+_CONVERSATION_OWNER_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_conversations_created_by_username_immutable
+BEFORE UPDATE OF created_by_username ON conversations
+WHEN NEW.created_by_username IS NOT OLD.created_by_username
+BEGIN
+    SELECT RAISE(ABORT, 'conversations.created_by_username is immutable');
+END
+"""
+
+_TASK_OWNER_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_tasks_created_by_username_immutable
+BEFORE UPDATE OF created_by_username ON tasks
+WHEN NEW.created_by_username IS NOT OLD.created_by_username
+BEGIN
+    SELECT RAISE(ABORT, 'tasks.created_by_username is immutable');
+END
+"""
+
+_TASK_ORIGIN_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_tasks_origin_immutable
+BEFORE UPDATE OF origin ON tasks
+WHEN NEW.origin IS NOT OLD.origin
+BEGIN
+    SELECT RAISE(ABORT, 'tasks.origin is immutable');
+END
+"""
+
+_TEAM_OWNER_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_teams_owner_user_immutable
+BEFORE UPDATE OF owner_user ON teams
+WHEN NEW.owner_user IS NOT OLD.owner_user
+BEGIN
+    SELECT RAISE(ABORT, 'teams.owner_user is immutable');
+END
+"""
+
+_ASSET_CANDIDATE_INITIATOR_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_asset_candidates_initiator_immutable
+BEFORE UPDATE OF initiated_by_user_id, initiated_by_username ON asset_candidates
+WHEN NEW.initiated_by_user_id IS NOT OLD.initiated_by_user_id
+  OR NEW.initiated_by_username IS NOT OLD.initiated_by_username
+BEGIN
+    SELECT RAISE(ABORT, 'asset_candidates initiator is immutable');
+END
+"""
+
+_SKILL_PACKAGE_OWNER_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_skill_packages_owner_username_immutable
+BEFORE UPDATE OF owner_username ON skill_packages
+WHEN NEW.owner_username IS NOT OLD.owner_username
+BEGIN
+    SELECT RAISE(ABORT, 'skill_packages.owner_username is immutable');
+END
+"""
+
+_SKILL_REUSE_BINDING_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_skill_reuse_bindings_update_immutable
+BEFORE UPDATE ON skill_reuse_bindings
+BEGIN
+    SELECT RAISE(ABORT, 'skill_reuse_bindings rows are immutable');
+END
+"""
 
 
 # P0-B2（Codex 命中即审 P1-1）：每进程已校验过的 DB 路径 memo，避免 get_conn 每次
@@ -372,6 +572,17 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute(
                     "ALTER TABLE conversation_messages ADD COLUMN file_ids TEXT NOT NULL DEFAULT '[]'"
                 )
+            # conversations.created_by_username：认证创建者的稳定 owner 证明。
+            # 无 DEFAULT、无历史回填；created_by 是展示名，绝不能反推 username。
+            # 列级 trigger 禁止 NULL→值、值→NULL 与值→另一值的事后改认领。
+            conversation_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(conversations)")
+            }
+            if "created_by_username" not in conversation_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN created_by_username TEXT"
+                )
+            conn.execute(_CONVERSATION_OWNER_IMMUTABILITY_TRIGGER)
             # 迁移 #3（ADR-0016/M8）：tasks.conversation_id——把导引协作会话产出的
             # N 个任务归到同一次会话下（协作工作台按会话分组）。可空：非会话产出的
             # 任务（门户直建）留 NULL。同在写锁内探测补列，口径同迁移 #1/#2。
@@ -386,6 +597,7 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute(
                     "ALTER TABLE tasks ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"
                 )
+            conn.execute(_TASK_ORIGIN_IMMUTABILITY_TRIGGER)
             # 迁移 #6（ADR-0021/M11-B2）：files/samples 数据分级轴 + 上传者追溯。
             # 存量行 DEFAULT 'internal' 即如实回填（mock 期数据全部是演示产物，
             # 同迁移 #4 origin 的裁决口径）；uploaded_by 存量留 NULL（自报时代
@@ -397,6 +609,19 @@ def init_db(db_path: str | Path) -> None:
                 )
             if "uploaded_by" not in file_cols:
                 conn.execute("ALTER TABLE files ADD COLUMN uploaded_by TEXT")
+            # owner_username 是 authenticated username，不可从 display_name 推断。
+            # 存量行保持 NULL；新上传由 files API 从会话写入。列级 trigger 禁止后续
+            # 改写（含 NULL→值的事后补认领），避免已知 file_id 被换名冒领。
+            if "owner_username" not in file_cols:
+                conn.execute("ALTER TABLE files ADD COLUMN owner_username TEXT")
+            conn.execute(_FILE_OWNER_IMMUTABILITY_TRIGGER)
+            # Candidate 与隔离 Skill Package 的 owner/initiator 是只读授权和
+            # owner-scoped 地图的裁决轴；只允许 INSERT 时确立，状态机更新不得改认领。
+            conn.execute(_ASSET_CANDIDATE_INITIATOR_IMMUTABILITY_TRIGGER)
+            conn.execute(_SKILL_PACKAGE_OWNER_IMMUTABILITY_TRIGGER)
+            # ADR-0035：任务级 Skill binding 是 insert-once 执行证据。即使调用者
+            # 同时重算摘要，也不得原地改写来源、owner、Agent 或工作段依据。
+            conn.execute(_SKILL_REUSE_BINDING_IMMUTABILITY_TRIGGER)
             sample_cols = {row[1] for row in conn.execute("PRAGMA table_info(samples)")}
             if "classification" not in sample_cols:
                 conn.execute(
@@ -422,6 +647,8 @@ def init_db(db_path: str | Path) -> None:
             task_cols_v9 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
             if "created_by_username" not in task_cols_v9:
                 conn.execute("ALTER TABLE tasks ADD COLUMN created_by_username TEXT")
+            conn.execute(_TASK_OWNER_IMMUTABILITY_TRIGGER)
+            conn.execute(_TEAM_OWNER_IMMUTABILITY_TRIGGER)
             if "depends_on" not in task_cols_v9:
                 conn.execute("ALTER TABLE tasks ADD COLUMN depends_on TEXT")
             if "input_binding" not in task_cols_v9:
@@ -456,6 +683,18 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute("ALTER TABLE promotions ADD COLUMN signer_username TEXT")
             if "signer_session_hash" not in promotion_cols_v14:
                 conn.execute("ALTER TABLE promotions ADD COLUMN signer_session_hash TEXT")
+            # 迁移 #17（Issue #4）：sample 级认可的人签稳定轴。存量
+            # accepted_by_engineer 只证明旧标签结果，不能据此猜 username/时间；
+            # 两列均无 DEFAULT，历史行诚实保留 NULL。认可写入走 CAS-on-NULL。
+            sample_cols_v17 = {
+                row[1] for row in conn.execute("PRAGMA table_info(samples)")
+            }
+            if "acknowledged_by_username" not in sample_cols_v17:
+                conn.execute(
+                    "ALTER TABLE samples ADD COLUMN acknowledged_by_username TEXT"
+                )
+            if "acknowledged_at" not in sample_cols_v17:
+                conn.execute("ALTER TABLE samples ADD COLUMN acknowledged_at TEXT")
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:

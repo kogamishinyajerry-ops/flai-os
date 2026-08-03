@@ -7,8 +7,8 @@
   （app.state.conversation_service.model_gateway = stub）。
 - **LLM 边界（本里程碑核心）**：计划块经 workflow 确定性对账 Registry + 目标
   input_schema。M8 起计划有两裁决——orchestrate（召集一组 Agent，逐个校验）/
-  refuse（显式拒绝）。orchestrate 里幻觉/自身/重复 agent_id 逐个剥离，无合法 Agent
-  存活则整份作废（fail-closed）；预填非法字段逐字段剥离记名。
+  refuse（显式拒绝）。orchestrate 成员集合必须原子可执行：任一幻觉、不可用、重复
+  或超上限成员都会关闭整份方案并回到对话澄清，绝不静默删掉复核/接力环节。
 - 人是唯一签发者红线：导引全程不创建任何任务；预填草案由人在 tasks 端点亲手提交。
 - 诚实失败（事务性单轮，ADR-0013）：无内网 key（清空 FLAI_LLM_*）=永久配置错
   → 本轮 **503**（非「可重试」）；临时上游故障 → 502「可重试」；均**零消息落库**；
@@ -29,15 +29,15 @@ from typing import Any, Iterator
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from starlette.requests import Request
 
-from conftest import TEST_DISPLAY_NAME
-
 from backend.app.api.conversations import PostMessageRequest, stream_message
-from backend.app.runtime.registry import AgentRegistry
-from backend.app.runtime import conversation as conversation_mod
 from backend.app.core.errors import ModelUpstreamError
+from backend.app.runtime import conversation as conversation_mod
+from backend.app.runtime.registry import AgentRegistry
 from backend.app.storage import repos
+from conftest import TEST_DISPLAY_NAME, TEST_USERNAME
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -76,6 +76,30 @@ class _CannedStub:
     def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         self.calls.append({"profile": profile, "messages": messages, **kwargs})
         return {"content": self.reply, "token_usage": None, "model_name": "stub", "finish_reason": "stop"}
+
+
+class _SequenceStub:
+    """按顺序返回多轮模型结果，用于验证 Guide → 垂类专家的同轮自动转交。"""
+
+    def __init__(self, replies: list[str | Exception]) -> None:
+        self.replies = list(replies)
+        self.calls: list[dict[str, Any]] = []
+
+    def chat(
+        self, profile: str, messages: list[dict[str, Any]], **kwargs: Any
+    ) -> dict[str, Any]:
+        self.calls.append({"profile": profile, "messages": messages, **kwargs})
+        if not self.replies:
+            raise AssertionError("模型调用次数超过测试预期")
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return {
+            "content": reply,
+            "token_usage": None,
+            "model_name": "stub",
+            "finish_reason": "stop",
+        }
 
 
 class _StreamingStub(_CannedStub):
@@ -143,6 +167,24 @@ def _orchestrate(agents: list[dict[str, Any]], analysis: str = "最终分析", g
 
 def _refuse(reason: str = "平台没有对口能力", residual: list | None = None, reframe: list | None = None) -> dict[str, Any]:
     return {"decision": "refuse", "reason": reason, "residual_problems": residual or [], "reframe": reframe or []}
+
+
+def _fta_inputs(top_event: str = "X") -> dict[str, Any]:
+    """可直接通过 fta_agent 完整 input_schema 的计划输入。"""
+    return {
+        "top_event": top_event,
+        "system_description": "双通道供电系统",
+        "components": ["发电机A", "发电机B"],
+    }
+
+
+def _control_inputs() -> dict[str, Any]:
+    """可直接通过 control_logic_agent 完整 input_schema 的计划输入。"""
+    return {
+        "system_name": "起落架控制系统",
+        "states": ["收起", "放下"],
+        "transitions": [],
+    }
 
 
 def _load_wf():
@@ -228,6 +270,15 @@ def test_create_conversation_rejects_client_creator_and_derives_session_identity
     honest = client.post("/api/conversations", json={"agent_id": "guide_agent"})
     assert honest.status_code == 200
     assert honest.json()["created_by"] == TEST_DISPLAY_NAME
+    assert "created_by_username" not in honest.json()
+
+    conversation_id = honest.json()["id"]
+    fetched = client.get(f"/api/conversations/{conversation_id}")
+    listed = client.get("/api/conversations")
+    assert fetched.status_code == 200
+    assert listed.status_code == 200
+    assert "created_by_username" not in fetched.json()
+    assert all("created_by_username" not in item for item in listed.json())
 
 
 # ── 会话链：追问（无计划）────────────────────────────────────────────────
@@ -255,18 +306,251 @@ def test_post_message_clarifying_question_no_plan(app_env) -> None:
     assert roles == ["user", "assistant"]
 
 
+# ── 自动路由：对话型垂类专家在同一主对话接管回答 ────────────────────────
+
+
+@pytest.mark.parametrize("target_agent_id", ["policy_qa_agent", "standards_qa_agent"])
+def test_guide_automatically_hands_off_to_interactive_specialist(
+    app_env, target_agent_id: str
+) -> None:
+    client, app = app_env
+    delegated_answer = "当前合成目录没有足够依据，本轮不提供制度结论。"
+    specialist_payload = {
+        "answer": delegated_answer,
+        "findings": [],
+        "refusals": [
+            {
+                "question": "保密材料应该如何流转？",
+                "reason": "当前合成目录未收录足够依据。",
+                "suggestion": "请转正式制度库或保密职能窗口查询。",
+            }
+        ],
+    }
+    gateway = _SequenceStub(
+        [
+            _plan_reply(
+                "这属于制度问答，我会自动交给对应专家。",
+                {
+                    "decision": "delegate",
+                    "agent_id": target_agent_id,
+                    "rationale": "问题匹配已审定的垂类问答能力。",
+                },
+            ),
+            json.dumps(specialist_payload, ensure_ascii=False),
+        ]
+    )
+    _inject(app, gateway)
+    conv_id = _open_conversation(client)
+
+    response = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "保密材料应该如何流转？"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["message"]["content"] == delegated_answer
+    assert body["message"]["recommendation"] == specialist_payload
+    assert "decision" not in body["message"]["recommendation"]
+    assert body["conversation"]["agent_id"] == "guide_agent"
+    assert len(gateway.calls) == 2
+    assert gateway.calls[0]["agent_id"] == "guide_agent"
+    assert gateway.calls[1]["agent_id"] == target_agent_id
+    assert gateway.calls[0]["conversation_id"] == conv_id
+    assert gateway.calls[1]["conversation_id"] == conv_id
+    assert gateway.calls[1]["messages"][-1]["content"] == "保密材料应该如何流转？"
+
+    conn = app.state.conn_factory()
+    try:
+        assert repos.list_tasks(conn) == [], "对话型专家转交不得创建任务"
+    finally:
+        conn.close()
+
+
+def test_delegated_specialist_failure_keeps_conversation_transactional(app_env) -> None:
+    client, app = app_env
+    gateway = _SequenceStub(
+        [
+            _plan_reply(
+                "自动转交制度专家。",
+                {
+                    "decision": "delegate",
+                    "agent_id": "policy_qa_agent",
+                    "rationale": "制度问题匹配",
+                },
+            ),
+            ModelUpstreamError("目标专家上游暂时不可用"),
+        ]
+    )
+    _inject(app, gateway)
+    conv_id = _open_conversation(client)
+
+    response = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "请查询制度办理要求"},
+    )
+
+    assert response.status_code == 502
+    assert len(gateway.calls) == 2
+    assert gateway.calls[1]["agent_id"] == "policy_qa_agent"
+    conversation = client.get(f"/api/conversations/{conv_id}").json()
+    assert conversation["messages"] == []
+    assert conversation["recommendation"] is None
+
+
+def test_delegate_rechecks_target_attachment_clearance(app_env, tmp_path: Path) -> None:
+    """Guide 能看不代表目标专家能看；目标密级不足时第二次模型调用必须为零。"""
+    client, app = app_env
+    shadow_root = tmp_path / "handoff-clearance-shadow"
+    shadow_root.mkdir()
+    for package_id in ("guide_agent", "policy_qa_agent"):
+        snapshot = app.state.agent_registry.package_snapshot(package_id)
+        assert snapshot is not None
+        with snapshot.materialized(parent=tmp_path) as frozen_dir:
+            shutil.copytree(frozen_dir, shadow_root / package_id)
+
+    guide_yaml = shadow_root / "guide_agent" / "agent.yaml"
+    guide_manifest = yaml.safe_load(guide_yaml.read_text(encoding="utf-8"))
+    guide_manifest["clearance"] = {"max_data_classification": "sensitive"}
+    guide_yaml.write_text(
+        yaml.safe_dump(guide_manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    shadow = AgentRegistry(shadow_root, app.state.agent_registry.schema_path)
+    shadow.scan()
+    assert shadow.errors == []
+    app.state.agent_registry.adopt(shadow)
+
+    gateway = _SequenceStub(
+        [
+            _plan_reply(
+                "自动转交制度专家。",
+                {
+                    "decision": "delegate",
+                    "agent_id": "policy_qa_agent",
+                    "rationale": "制度问题匹配",
+                },
+            ),
+            AssertionError("目标密级闸门应在第二次模型调用前阻断"),
+        ]
+    )
+    _inject(app, gateway)
+    try:
+        upload = client.post(
+            "/api/files/upload",
+            files={"file": ("sensitive.txt", b"controlled", "text/plain")},
+            data={"classification": "sensitive"},
+        )
+        assert upload.status_code == 200, upload.text
+        conv_id = _open_conversation(client)
+        response = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "请判断这个制度材料", "file_ids": [upload.json()["id"]]},
+        )
+        assert response.status_code == 400, response.text
+        assert "不会绕过密级闸门" in response.json()["detail"]
+        assert len(gateway.calls) == 1
+        conversation = client.get(f"/api/conversations/{conv_id}").json()
+        assert conversation["messages"] == []
+        assert conversation["recommendation"] is None
+    finally:
+        app.state.agent_registry.scan()
+
+
+def test_delegate_only_accepts_real_interactive_candidate() -> None:
+    wf = _load_wf()
+    assert (
+        wf._INTERACTIVE_HANDOFF_IDS
+        == conversation_mod._GUIDE_INTERACTIVE_HANDOFF_IDS
+    ), "Guide 候选面与运行时安全闸门必须使用同一审定集合"
+    candidates = [
+        {"id": "policy_qa_agent", "mode": "interactive"},
+        {"id": "fta_agent", "mode": "job"},
+    ]
+
+    accepted = wf._validate_delegate(
+        {
+            "decision": "delegate",
+            "agent_id": "policy_qa_agent",
+            "rationale": "制度问题匹配",
+        },
+        candidates,
+    )
+    assert accepted is not None and accepted.agent_id == "policy_qa_agent"
+    assert wf._validate_delegate(
+        {"decision": "delegate", "agent_id": "fta_agent", "rationale": "错误模式"},
+        candidates,
+    ) is None
+    assert wf._validate_delegate(
+        {"decision": "delegate", "agent_id": "ghost", "rationale": "不存在"},
+        candidates,
+    ) is None
+    assert wf._validate_delegate(
+        {"decision": "delegate", "agent_id": "policy_qa_agent", "rationale": ""},
+        candidates,
+    ) is None
+
+
+def test_guide_does_not_offer_unapproved_interactive_agent() -> None:
+    """会话服务尚无 actor role 时，不得把未来的 admin-only Agent 暴露给工程师。"""
+    wf = _load_wf()
+
+    class _RegistryWithAdminOnlyInteractive:
+        def list(self):
+            return [
+                {
+                    "id": "guide_agent",
+                    "workflow": {"mode": "interactive"},
+                    "status": "draft",
+                },
+                {
+                    "id": "policy_qa_agent",
+                    "name": "制度政策问答 Agent",
+                    "workflow": {"mode": "interactive"},
+                    "status": "draft",
+                    "permissions": {"allowed_roles": ["admin"]},
+                    "input": {"type": "params"},
+                },
+                {
+                    "id": "standards_qa_agent",
+                    "name": "专业标准问答 Agent",
+                    "workflow": {"mode": "interactive"},
+                    "status": "draft",
+                    "permissions": {"allowed_roles": ["business_user"]},
+                    "input": {"type": "params"},
+                },
+                {
+                    "id": "admin_console_agent",
+                    "name": "管理员对话 Agent",
+                    "workflow": {"mode": "interactive"},
+                    "status": "released",
+                    "permissions": {"allowed_roles": ["admin"]},
+                    "input": {"type": "params"},
+                },
+            ]
+
+        def package_dir(self, _agent_id):
+            return None
+
+    candidate_ids = {
+        item["id"] for item in wf._candidates(_RegistryWithAdminOnlyInteractive())
+    }
+    assert "standards_qa_agent" in candidate_ids
+    assert "policy_qa_agent" not in candidate_ids
+    assert "admin_console_agent" not in candidate_ids
+
+
 # ── LLM 边界：orchestrate 合法召集 + 非法字段剥离 ────────────────────────
 
 
 def test_orchestrate_validated_and_prefilled(app_env) -> None:
     client, app = app_env
-    # 召集 fta_agent：top_event 合法(string 保留)；components 传成 string(违反 array→剥离)；
-    # bogus 未声明字段(剥离)。
+    # 召集 fta_agent：三个必需输入齐全；bogus 未声明字段会被剥离，但不妨碍整份
+    # 合法输入通过确定性完整性闸门。
     plan = _orchestrate([
         _agent("fta_agent", prefilled={
-            "top_event": "供电完全丧失",
-            "components": "发电机A",  # schema 要 array，类型不符 → 剥离
-            "bogus": "x",             # 未声明 → 剥离
+            **_fta_inputs("供电完全丧失"),
+            "bogus": "x",  # 未声明 → 剥离
         }, role="搭建故障树"),
     ])
     _inject(app, _CannedStub(_plan_reply("根据你的需求，召集故障树分析 Agent。", plan)))
@@ -288,11 +572,14 @@ def test_orchestrate_validated_and_prefilled(app_env) -> None:
     assert a0["status"] == "draft" and a0["maturity"] == "L0"  # 如实带出成熟度
     assert a0["role"] == "搭建故障树"
     # 只保留合法字段，非法字段剥离并如实记名
-    assert a0["prefilled_inputs"] == {"top_event": "供电完全丧失"}
-    assert a0["stripped_fields"] == ["bogus", "components"]
+    assert a0["prefilled_inputs"] == _fta_inputs("供电完全丧失")
+    assert a0["stripped_fields"] == ["bogus"]
     assert reco["dropped_agents"] == [] and reco["capped"] is False
-    # 分析文本原样展示（不因计划块存在而丢）
-    assert "召集故障树分析 Agent" in resp.json()["message"]["content"]
+    # 计划前导文案由内核收束，模型不能在任务签发前自报已召集/已执行。
+    assistant = resp.json()["message"]["content"]
+    assert "召集故障树分析 Agent" not in assistant
+    assert "待你确认的协作方案" in assistant
+    assert "开工后的任务事件" in assistant
     assert "<<PLAN>>" not in resp.json()["message"]["content"], "计划块不外露给用户当正文"
 
     # 会话级 recommendation 已回填
@@ -304,8 +591,8 @@ def test_multi_agent_orchestrate(app_env) -> None:
     """召集多个真实 Agent：全部保留、各带分工与预填。"""
     client, app = app_env
     plan = _orchestrate([
-        _agent("fta_agent", prefilled={"top_event": "X"}, role="做故障树"),
-        _agent("control_logic_agent", role="生成控制逻辑"),
+        _agent("fta_agent", prefilled=_fta_inputs(), role="做故障树"),
+        _agent("control_logic_agent", prefilled=_control_inputs(), role="生成控制逻辑"),
     ])
     _inject(app, _CannedStub(_plan_reply("这需要两个 Agent 接力。", plan)))
     conv_id = _open_conversation(client)
@@ -317,36 +604,35 @@ def test_multi_agent_orchestrate(app_env) -> None:
     assert reco["dropped_agents"] == []
 
 
-def test_orchestrate_partial_drop_keeps_valid(app_env) -> None:
-    """一真一假：真的保留、假的进 dropped_agents，不因个别幻觉整份作废。"""
+def test_orchestrate_unknown_review_member_closes_whole_plan(app_env) -> None:
+    """复核成员不存在时不能静默删 B 只执行 A；整份方案回主对话重编排。"""
     client, app = app_env
     plan = _orchestrate([
-        _agent("fta_agent", prefilled={"top_event": "X"}),
-        _agent("nonexistent_agent"),
-        _agent("guide_agent"),  # 自身也不可召集
+        _agent("fta_agent", prefilled=_fta_inputs(), role="完成主分析"),
+        _agent("nonexistent_agent", role="复核主分析结论"),
     ])
     _inject(app, _CannedStub(_plan_reply("方案如下。", plan)))
     conv_id = _open_conversation(client)
     resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "任务"})
-    reco = resp.json()["message"]["recommendation"]
-    assert [a["agent_id"] for a in reco["agents"]] == ["fta_agent"]
-    assert set(reco["dropped_agents"]) == {"nonexistent_agent", "guide_agent"}
+    message = resp.json()["message"]
+    assert message["recommendation"] is None
+    assert "工作环节" in message["content"]
+    assert "nonexistent_agent" not in message["content"]
 
 
-def test_orchestrate_duplicate_agent_deduped(app_env) -> None:
-    """同一 Agent 重复召集：只保留首个，重复计入 dropped。"""
+def test_orchestrate_non_equivalent_duplicate_review_member_closes_plan(app_env) -> None:
+    """同 id 但角色/输入不同不是冗余项；不能删掉复核成员后开放方案。"""
     client, app = app_env
     plan = _orchestrate([
-        _agent("fta_agent", prefilled={"top_event": "A"}),
-        _agent("fta_agent", prefilled={"top_event": "B"}),
+        _agent("fta_agent", prefilled=_fta_inputs("A"), role="完成主分析"),
+        _agent("fta_agent", prefilled=_fta_inputs("B"), role="独立复核结论"),
     ])
     _inject(app, _CannedStub(_plan_reply("方案。", plan)))
     conv_id = _open_conversation(client)
     resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "任务"})
-    reco = resp.json()["message"]["recommendation"]
-    assert len(reco["agents"]) == 1
-    assert reco["agents"][0]["prefilled_inputs"] == {"top_event": "A"}  # 保留首个
-    assert reco["dropped_agents"] == ["fta_agent"]
+    message = resp.json()["message"]
+    assert message["recommendation"] is None
+    assert "工作环节" in message["content"]
 
 
 def test_orchestrate_all_hallucinated_failclosed(app_env) -> None:
@@ -357,17 +643,18 @@ def test_orchestrate_all_hallucinated_failclosed(app_env) -> None:
     conv_id = _open_conversation(client)
     resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "帮我"})
     assert resp.status_code == 200
-    # 无合法 Agent → recommendation 作废，但对话文本仍在
+    # 无合法 Agent → recommendation 作废，并以自然语言回主对话重新澄清；模型的
+    # “已经召集”成功话术不能继续展示。
     assert resp.json()["message"]["recommendation"] is None
-    assert "我来召集" in resp.json()["message"]["content"]
+    assert "工作环节" in resp.json()["message"]["content"]
+    assert "我来召集" not in resp.json()["message"]["content"]
     assert client.get(f"/api/conversations/{conv_id}").json()["recommendation"] is None
 
 
-def test_orchestrate_caps_at_five_agents() -> None:
-    """纯函数级：超过 5 个合法 Agent 时截断并置 capped（真实仓只有 4 个候选，用假
-    候选集直测 _validate_orchestrate 的上限逻辑）。"""
+def test_orchestrate_sixth_agent_closes_whole_plan() -> None:
+    """第六个合法成员也可能是必需复核环节；不得截掉后开放前五个。"""
     wf = _load_wf()
-    candidates = [{"id": f"a{i}", "name": f"A{i}", "category": "tool_automation", "status": "draft", "maturity": "L0"} for i in range(6)]
+    candidates = [{"id": f"a{i}", "name": f"A{i}", "category": "tool_automation", "status": "draft", "maturity": "L0", "mode": "job", "input_type": "none"} for i in range(6)]
 
     class _NoSchemaRegistry:
         def package_dir(self, agent_id):
@@ -375,9 +662,61 @@ def test_orchestrate_caps_at_five_agents() -> None:
 
     proposed = _orchestrate([{"agent_id": f"a{i}", "role": "r", "rationale": "x", "prefilled_inputs": {}} for i in range(6)])
     result = wf._validate_orchestrate(proposed, _NoSchemaRegistry(), candidates)
-    assert result is not None
-    assert len(result["agents"]) == 5, "召集上限 5 个"
-    assert result["capped"] is True
+    assert isinstance(result, wf._ClarificationNeeded)
+    assert "工作环节" in result.gaps[0][1][0]
+    output_schema = json.loads(
+        (REPO_ROOT / "agents" / "guide_agent" / "output_schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    orchestrate = output_schema["oneOf"][0]["properties"]
+    assert orchestrate["agents"]["maxItems"] == 5
+    assert orchestrate["dropped_agents"]["maxItems"] == 0
+    assert orchestrate["capped"]["const"] is False
+
+
+def test_orchestrate_disabled_review_member_closes_whole_plan() -> None:
+    """Registry 已禁用的复核成员不在候选面；不能静默剔除后只执行主分析。"""
+    wf = _load_wf()
+
+    class _RegistryWithDisabledReview:
+        def list(self):
+            return [
+                {
+                    "id": "main_agent",
+                    "name": "主分析 Agent",
+                    "category": "reasoning_assist",
+                    "status": "draft",
+                    "maturity": "L0",
+                    "workflow": {"mode": "job"},
+                    "input": {"type": "none"},
+                },
+                {
+                    "id": "review_agent",
+                    "name": "复核 Agent",
+                    "category": "reasoning_assist",
+                    "status": "disabled",
+                    "maturity": "L0",
+                    "workflow": {"mode": "job"},
+                    "input": {"type": "none"},
+                },
+            ]
+
+        def package_dir(self, _agent_id):
+            return None
+
+    registry = _RegistryWithDisabledReview()
+    candidates = wf._candidates(registry)
+    proposed = _orchestrate(
+        [
+            _agent("main_agent", role="完成主分析"),
+            _agent("review_agent", role="独立复核结论"),
+        ]
+    )
+
+    result = wf._validate_orchestrate(proposed, registry, candidates)
+    assert isinstance(result, wf._ClarificationNeeded)
+    assert "工作环节" in result.gaps[0][1][0]
 
 
 # ── LLM 边界：refuse 显式拒绝 ────────────────────────────────────────────
@@ -408,13 +747,30 @@ def test_refuse_decision_rendered(app_env) -> None:
         conn.close()
 
 
-def test_refuse_coerces_nonstring_fields() -> None:
-    """refuse 的自由文本字段做类型强制：非串归空、列表过滤非串项（防脏 JSON）。"""
+def test_refuse_requires_reason_residual_and_reframe() -> None:
+    """空拒绝不得持久化成死胡同；完整拒绝仍过滤非字符串脏项。"""
     wf = _load_wf()
-    got = wf._validate_refuse({"decision": "refuse", "reason": 123, "residual_problems": ["ok", 5, None], "reframe": "notalist"})
-    assert got["reason"] == ""
-    assert got["residual_problems"] == ["ok"]
-    assert got["reframe"] == []
+    incomplete = wf._validate_refuse(
+        {
+            "decision": "refuse",
+            "reason": 123,
+            "residual_problems": ["ok", 5, None],
+            "reframe": "notalist",
+        }
+    )
+    assert isinstance(incomplete, wf._ClarificationNeeded)
+
+    got = wf._validate_refuse(
+        {
+            "decision": "refuse",
+            "reason": "平台暂无匹配能力",
+            "residual_problems": ["仍需人工处理", 5, None],
+            "reframe": ["拆成可核验子任务", None],
+        }
+    )
+    assert got["reason"] == "平台暂无匹配能力"
+    assert got["residual_problems"] == ["仍需人工处理"]
+    assert got["reframe"] == ["拆成可核验子任务"]
 
 
 def test_unknown_decision_failclosed(app_env) -> None:
@@ -431,7 +787,7 @@ def test_unknown_decision_failclosed(app_env) -> None:
 
 def test_guide_never_creates_task_and_human_signs(app_env) -> None:
     client, app = app_env
-    plan = _orchestrate([_agent("fta_agent", prefilled={"top_event": "供电完全丧失"})])
+    plan = _orchestrate([_agent("fta_agent", prefilled=_fta_inputs("供电完全丧失"))])
     _inject(app, _CannedStub(_plan_reply("召集故障树分析。", plan)))
     conv_id = _open_conversation(client)
 
@@ -447,10 +803,8 @@ def test_guide_never_creates_task_and_human_signs(app_env) -> None:
     finally:
         conn.close()
 
-    # ② 人拿预填草案去 tasks 端点亲手提交——草案对目标 Agent 是合法可用的输入起点
+    # ② 人确认开工后，完整草案可以直接送入 tasks 端点；Guide 本身仍无权创建任务。
     human_inputs = dict(a0["prefilled_inputs"])
-    human_inputs["system_description"] = "双通道供电系统"
-    human_inputs["components"] = ["发电机A", "发电机B"]
     created = client.post(
         "/api/tasks", json={"agent_id": a0["agent_id"], "inputs": human_inputs}
     )
@@ -515,7 +869,7 @@ def test_recommendation_cleared_on_followup_without_plan(app_env) -> None:
     conv_id = _open_conversation(client)
 
     # 第一轮：给计划 → 会话级 recommendation 落地
-    plan = _orchestrate([_agent("fta_agent", prefilled={"top_event": "X"})])
+    plan = _orchestrate([_agent("fta_agent", prefilled=_fta_inputs())])
     app.state.conversation_service.model_gateway = _CannedStub(_plan_reply("召集", plan))
     client.post(f"/api/conversations/{conv_id}/messages", json={"content": "做故障树"})
     assert client.get(f"/api/conversations/{conv_id}").json()["recommendation"]["decision"] == "orchestrate"
@@ -529,7 +883,21 @@ def test_recommendation_cleared_on_followup_without_plan(app_env) -> None:
 # ── 预填字段校验对 $ref schema 也 fail-closed 不 500（反方 P2）──────────────
 
 
-def test_clean_prefilled_inputs_handles_ref_schema(tmp_path) -> None:
+def _snapshot_registry_for_schema(schema: dict[str, Any]):
+    """Test seam matching the immutable registry API used by Guide routing."""
+
+    class _Snapshot:
+        manifest = {"input": {"schema": "input_schema.json"}}
+        files = (("input_schema.json", json.dumps(schema).encode("utf-8")),)
+
+    class _FakeRegistry:
+        def package_snapshot(self, agent_id):
+            return _Snapshot()
+
+    return _FakeRegistry()
+
+
+def test_clean_prefilled_inputs_handles_ref_schema() -> None:
     """目标 input_schema 用 $ref/$defs 时，逐字段校验必须能解析引用并正常剥离，
     绝不逃逸成 500（反方 P2：孤立子 schema 遇 $ref 抛非 ValidationError 引用错误）。"""
     wf = _load_wf()
@@ -539,14 +907,7 @@ def test_clean_prefilled_inputs_handles_ref_schema(tmp_path) -> None:
         "properties": {"code": {"$ref": "#/$defs/NonEmpty"}, "n": {"type": "integer"}},
         "$defs": {"NonEmpty": {"type": "string", "minLength": 1}},
     }
-    schema_path = tmp_path / "input_schema.json"
-    schema_path.write_text(json.dumps(schema), encoding="utf-8")
-
-    class _FakeRegistry:
-        def package_dir(self, agent_id):
-            return tmp_path
-
-    reg = _FakeRegistry()
+    reg = _snapshot_registry_for_schema(schema)
     kept, stripped = wf._clean_prefilled_inputs(reg, "target", {"code": "OK", "n": "notint", "code2": "x", "empty_code": ""})
     assert kept == {"code": "OK"}
     assert set(stripped) == {"n", "code2", "empty_code"}
@@ -555,7 +916,7 @@ def test_clean_prefilled_inputs_handles_ref_schema(tmp_path) -> None:
     assert kept2 == {} and stripped2 == ["code"]
 
 
-def test_clean_prefilled_inputs_strips_root_combinator_violation(tmp_path) -> None:
+def test_clean_prefilled_inputs_strips_root_combinator_violation() -> None:
     """异源 Codex R1-#1：input_schema 用**根层** allOf 施加更严/跨字段约束时，逐字段
     _field_valid 看不到根 allOf——单字段合法但违反根 allOf 的预填必须经整体复验剥离
     （fail-closed），而非漏进草案（否则完整 schema 校验会在人提交时才失败）。"""
@@ -566,13 +927,7 @@ def test_clean_prefilled_inputs_strips_root_combinator_violation(tmp_path) -> No
         "properties": {"x": {"type": "string"}},
         "allOf": [{"properties": {"x": {"maxLength": 3}}}],
     }
-    (tmp_path / "input_schema.json").write_text(json.dumps(schema), encoding="utf-8")
-
-    class _FakeRegistry:
-        def package_dir(self, agent_id):
-            return tmp_path
-
-    reg = _FakeRegistry()
+    reg = _snapshot_registry_for_schema(schema)
     # x="AAAA" 逐字段过 properties.x（是字符串），却违反根 allOf 的 maxLength=3 → 必剥离。
     kept, stripped = wf._clean_prefilled_inputs(reg, "target", {"x": "AAAA"})
     assert kept == {}, "违反根 allOf 的预填必须被剥离，不得漏进草案"
@@ -590,7 +945,10 @@ def test_plan_oversized_raw_failclosed() -> None:
     assert len(raw_huge) > wf._MAX_PLAN_BYTES
     assert wf._validate_plan(raw_huge, None, []) is None, "超字节顶的计划块必须整份作废"
     # 对照：同结构在字节顶内 → 正常产出（证明是字节顶在起作用；refuse 不碰 registry）。
-    raw_ok = json.dumps(_refuse(reason="就绪"), ensure_ascii=False)
+    raw_ok = json.dumps(
+        _refuse(reason="就绪", residual=["尚未解决"], reframe=["拆解后再试"]),
+        ensure_ascii=False,
+    )
     assert wf._validate_plan(raw_ok, None, [])["decision"] == "refuse"
 
 
@@ -646,7 +1004,7 @@ def test_plan_matches_output_schema(app_env) -> None:
     conv_id = _open_conversation(client)
 
     # orchestrate 结构过 schema
-    plan = _orchestrate([_agent("fta_agent", prefilled={"top_event": "X", "bad": 1})])
+    plan = _orchestrate([_agent("fta_agent", prefilled={**_fta_inputs(), "bad": 1})])
     app.state.conversation_service.model_gateway = _CannedStub(_plan_reply("召集", plan))
     reco = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "做故障树"}).json()["message"]["recommendation"]
     _validate(reco, out_schema)
@@ -829,6 +1187,25 @@ def test_post_message_content_cap_422(app_env) -> None:
     assert resp.status_code == 422
 
 
+def test_post_message_request_accepts_attachment_only_turn() -> None:
+    body = PostMessageRequest(content="", file_ids=["file_valid_123"])
+
+    assert body.content == ""
+    assert body.file_ids == ["file_valid_123"]
+
+
+def test_post_message_request_rejects_turn_without_text_or_attachments() -> None:
+    with pytest.raises(ValidationError):
+        PostMessageRequest(content="", file_ids=[])
+
+
+def test_post_message_request_preserves_text_normalization_and_limit() -> None:
+    assert PostMessageRequest(content="  需求描述  ").content == "需求描述"
+    assert len(PostMessageRequest(content="x" * 16000).content) == 16000
+    with pytest.raises(ValidationError):
+        PostMessageRequest(content="x" * 16001)
+
+
 def test_history_window_caps_messages_and_chars() -> None:
     from backend.app.runtime.conversation import _HISTORY_MAX_MESSAGES, _window
 
@@ -843,21 +1220,21 @@ def test_history_window_caps_messages_and_chars() -> None:
     assert w2[-1] is huge[-1]
 
 
-def test_split_plan_preserves_tail_text(app_env) -> None:
-    """审计 P3：计划块之后的 assistant 文本此前被静默丢弃——现原样保留；
-    第二个计划块整体丢弃（只认第一块，sentinel 不外露）。"""
+def test_split_plan_keeps_control_private_and_kernel_owns_visible_plan_status(app_env) -> None:
+    """只认第一计划块；块外模型文案也不能越过内核抢报计划状态。"""
     client, app = app_env
-    plan = _orchestrate([_agent("fta_agent", prefilled={"top_event": "X"})])
+    plan = _orchestrate([_agent("fta_agent", prefilled=_fta_inputs())])
     reply = (
         "块前说明。\n" + _plan_reply("", plan).strip()
-        + "\n块后重要提醒：请补全组件清单。\n<<PLAN>>\n{\"decision\":\"orchestrate\",\"agents\":[{\"agent_id\":\"hello_agent\"}]}\n<<END>>"
+        + "\n块后重要提醒：开工前请核对方案。\n<<PLAN>>\n{\"decision\":\"orchestrate\",\"agents\":[{\"agent_id\":\"hello_agent\"}]}\n<<END>>"
     )
     _inject(app, _CannedStub(reply))
     conv_id = _open_conversation(client)
     resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "做故障树"})
     body = resp.json()["message"]
-    assert "块前说明" in body["content"]
-    assert "块后重要提醒" in body["content"], "计划块之后的文本不得静默丢弃"
+    assert "块前说明" not in body["content"]
+    assert "块后重要提醒" not in body["content"]
+    assert "待你确认的协作方案" in body["content"]
     assert "<<PLAN>>" not in body["content"] and "<<END>>" not in body["content"]
     assert body["recommendation"]["agents"][0]["agent_id"] == "fta_agent", "只认第一块"
 
@@ -879,7 +1256,7 @@ def test_visible_reply_stream_hides_fragmented_plan_marker() -> None:
 
 def test_stream_message_ndjson_yields_safe_deltas_then_atomic_done(app_env) -> None:
     client, app = app_env
-    plan = _orchestrate([_agent("fta_agent", prefilled={"top_event": "X"})])
+    plan = _orchestrate([_agent("fta_agent", prefilled=_fta_inputs())])
     reply = _plan_reply("先给你一句可见回复。", plan)
     _inject(
         app,
@@ -899,11 +1276,14 @@ def test_stream_message_ndjson_yields_safe_deltas_then_atomic_done(app_env) -> N
         events = [json.loads(line) for line in resp.iter_lines() if line]
 
     assert events[0]["type"] == "start"
-    assert "".join(e["text"] for e in events if e["type"] == "delta") == "先给你一句可见回复。"
+    streamed = "".join(e["text"] for e in events if e["type"] == "delta")
+    assert streamed == events[-1]["message"]["content"]
+    assert "待你确认的协作方案" in streamed
+    assert "先给你一句可见回复" not in streamed
     assert all("<<PLAN>>" not in json.dumps(e, ensure_ascii=False) for e in events)
     done = events[-1]
     assert done["type"] == "done"
-    assert done["message"]["content"] == "先给你一句可见回复。"
+    assert done["message"]["content"] == streamed
     assert done["message"]["recommendation"]["agents"][0]["agent_id"] == "fta_agent"
 
     persisted = client.get(f"/api/conversations/{conv_id}").json()["messages"]
@@ -929,10 +1309,10 @@ def test_stream_message_partial_error_is_explicit_and_zero_persistence(app_env) 
     ) as resp:
         events = [json.loads(line) for line in resp.iter_lines() if line]
 
-    assert [e["type"] for e in events] == ["start", "delta", "error"]
-    assert events[1]["text"] == "已收到一小段"
-    assert events[2]["status"] == 502
-    assert events[2]["persisted"] is False
+    assert [e["type"] for e in events] == ["start", "error"]
+    assert "已收到一小段" not in json.dumps(events, ensure_ascii=False)
+    assert events[1]["status"] == 502
+    assert events[1]["persisted"] is False
     assert client.get(f"/api/conversations/{conv_id}").json()["messages"] == []
 
 
@@ -956,8 +1336,8 @@ def test_stream_message_unclosed_plan_fails_closed_with_zero_persistence(app_env
     ) as resp:
         events = [json.loads(line) for line in resp.iter_lines() if line]
 
-    assert [e["type"] for e in events] == ["start", "delta", "error"]
-    assert events[1]["text"] == "先给可见说明。"
+    assert [e["type"] for e in events] == ["start", "error"]
+    assert "先给可见说明" not in json.dumps(events, ensure_ascii=False)
     assert events[-1]["persisted"] is False
     assert client.get(f"/api/conversations/{conv_id}").json()["messages"] == []
 
@@ -983,6 +1363,7 @@ def test_stream_asgi_disconnect_cancels_round_before_persistence(app_env) -> Non
         "server": ("testserver", 80),
         "root_path": "",
         "app": app,
+        "state": {"user": {"username": TEST_USERNAME}},
     }
     sent: list[dict[str, Any]] = []
 
@@ -1026,17 +1407,20 @@ def test_stream_done_has_no_fallible_database_read_after_commit(app_env, monkeyp
     original_get = conversation_mod.repos.get_conversation
     outside_transaction_calls = 0
 
-    def reject_second_outside_read(conn, conversation_id):
+    def reject_postcommit_outside_read(conn, conversation_id):
         nonlocal outside_transaction_calls
         row = original_get(conn, conversation_id)
         if not conn.in_transaction:
             outside_transaction_calls += 1
-            if outside_transaction_calls > 1:
+            # Exact-owner authorization performs one read-only preflight before
+            # ConversationService's own initial read.  Any third outside-
+            # transaction read would again be a fallible post-commit read.
+            if outside_transaction_calls > 2:
                 raise RuntimeError("commit 后禁止再次读取")
         return row
 
     monkeypatch.setattr(
-        conversation_mod.repos, "get_conversation", reject_second_outside_read
+        conversation_mod.repos, "get_conversation", reject_postcommit_outside_read
     )
     with client.stream(
         "POST",
@@ -1047,7 +1431,7 @@ def test_stream_done_has_no_fallible_database_read_after_commit(app_env, monkeyp
 
     assert events[-1]["type"] == "done"
     assert events[-1]["message"]["content"] == "完整回复"
-    assert outside_transaction_calls == 1
+    assert outside_transaction_calls == 2
 
     monkeypatch.setattr(conversation_mod.repos, "get_conversation", original_get)
     assert [m["role"] for m in client.get(

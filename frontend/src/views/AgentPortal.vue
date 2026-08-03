@@ -4,8 +4,8 @@
          已挂在对应徽章的 :title（categoryTip/agentStatusTip/maturityTip，含
          L0「勿依赖其结论」诚实提示）——页头不再预讲一遍分类学。 -->
     <div class="page-header">
-      <h2>Agent 门户</h2>
-      <p class="page-sub">选择一个 Agent 创建任务</p>
+      <h2>Agent 能力与治理</h2>
+      <p class="page-sub">只读了解能力、边界与成熟度；实际任务由主对话自动路由</p>
     </div>
 
     <el-alert
@@ -16,10 +16,19 @@
       :closable="false"
       class="page-alert"
     />
+    <el-alert
+      v-else-if="agentShellError"
+      type="warning"
+      :title="agentShellError"
+      description="Agent 目录仍可浏览，但能力关系与引用状态不作展示。"
+      show-icon
+      :closable="false"
+      class="page-alert"
+    />
 
     <AgentCapabilityMap
-      v-if="!loading && !loadError && agents.length"
-      :agents="agents"
+      v-if="!loading && !loadError && agents.length && agentShellSnapshot"
+      :snapshot="agentShellSnapshot"
     />
 
     <!-- 首载骨架（A3）：只在「从未加载完成且无错误」时撑卡片栅格轮廓，轮询期间
@@ -114,116 +123,32 @@
 
             <div class="agent-actions">
               <button type="button" class="gov-entry" @click="openGovernance(agent)">治理</button>
-              <el-button
-                v-if="agent.mode === 'interactive'"
-                type="primary"
-                :disabled="agent.status === 'disabled'"
-                @click="startConversationFor(agent)"
-              >
-                开始对话
-              </el-button>
-              <el-button
-                v-else
-                type="primary"
-                :disabled="agent.status === 'disabled'"
-                @click="createTaskFor(agent)"
-              >
-                创建任务
-              </el-button>
+              <span class="agent-runtime-note">由系统按任务语义自动编排</span>
             </div>
           </div>
         </el-card>
       </el-col>
     </el-row>
 
-    <!-- 批八：专家团队区块（保存自导引方案的可复用蓝本）。零团队零占位；
-         成员缺位/下线由服务端投影 present/disabled 预先置灰（权威判定仍在
-         summon 对账 gate，422 清单如实渲染）。 -->
+    <!-- 专家团队是只读能力蓝本。零团队零占位；成员缺位/下线由服务端投影
+         present/disabled 如实显示，门户不提供逐席位填参或手工召集。 -->
     <div v-if="teams.length" class="teams-section">
       <div class="teams-header">
         <h3>专家团队</h3>
-        <span class="teams-sub">保存自导引方案——召集前自动对账成员在岗与版本</span>
+        <span class="teams-sub">只读蓝本——实际组合由主对话按目标自动编排</span>
       </div>
       <div class="team-cards fx-stagger">
         <div v-for="t in teams" :key="t.id" class="team-card">
           <div class="team-head">
             <span class="team-name">{{ t.name }}</span>
-            <span class="team-clearance" :title="'团队密级=成员上限最小值（仅展示口径；召集时仍按每位成员各自判定）'">密级 · {{ clearanceLabel(t.clearance_display) }}</span>
+            <span class="team-clearance" :title="'团队密级=成员上限最小值（仅展示口径；实际执行仍按每位成员各自判定）'">密级 · {{ clearanceLabel(t.clearance_display) }}</span>
           </div>
           <p v-if="t.goal_template" class="team-goal">{{ t.goal_template }}</p>
           <div class="team-chain">{{ teamChainText(t) }}</div>
           <p v-if="teamUnready(t)" class="team-unready">{{ teamUnready(t) }}</p>
-          <div class="team-actions">
-            <el-button
-              type="primary"
-              size="small"
-              :disabled="!!teamUnready(t)"
-              @click="openSummon(t)"
-            >召集此团队</el-button>
-          </div>
         </div>
       </div>
     </div>
-
-    <!-- summon 填参面板（Codex R0 P2×2 重构）：逐席位复用 SchemaForm/validateInputs
-         （枚举/整数/数组约束由控件与校验兜住，不再手搓字段）；file_upload 席位复用
-         TaskCreate 上传流（提交时才上传，提交前移除零服务端残留）；契约拉取失败或
-         结构过复杂 fail-closed 禁提交；对账失败清单中性渲染（策略拒绝非报警红）。 -->
-    <!-- 召集中封死全部关闭路径（Codex R1 P1）：上传 await 期间关掉对话框只是
-         隐藏，submitSummon 恢复后仍会发起召集——「取消了却背地里建了任务」。 -->
-    <el-dialog
-      v-model="summonOpen"
-      :title="summonTarget ? `召集 · ${summonTarget.name}` : ''"
-      width="min(640px, 92vw)"
-      class="summon-dialog"
-      :close-on-click-modal="!summoning"
-      :close-on-press-escape="!summoning"
-      :show-close="!summoning"
-    >
-      <div v-for="s in summonSeats" :key="s.seq" class="seat-block">
-        <div class="seat-head">
-          席位 {{ s.seq }} · {{ agentNameOf(s.agent_id) }}
-          <span v-if="s.role" class="seat-role">{{ s.role }}</span>
-          <span v-if="s.after.length" class="seat-after">等待席位 {{ s.after.join("、") }} 的产物</span>
-        </div>
-        <template v-if="s.schemaLoaded">
-          <p v-if="!seatSupported(s)" class="seat-note is-blocked">
-            该成员的输入契约本面板无法承接（拉取失败或结构过复杂）——请从导引方案逐个创建。
-          </p>
-          <template v-else>
-            <SchemaForm v-if="s.schema" :schema="s.schema" :model="s.values" :disabled="summoning" />
-            <div v-if="s.inputMode === 'file_upload'" class="seat-upload">
-              <el-upload :auto-upload="false" :show-file-list="false" multiple :on-change="(f) => seatFileSelect(s, f)">
-                <el-button size="small">选择材料文件</el-button>
-              </el-upload>
-              <div v-for="item in s.uploadItems" :key="item.uid" class="seat-upload-item">
-                <span class="seat-upload-name">{{ item.name }}</span>
-                <el-tag v-if="item.status === 'pending'" size="small">待上传</el-tag>
-                <el-tag v-else-if="item.status === 'uploading'" type="info" size="small">上传中…</el-tag>
-                <el-tag v-else-if="item.status === 'done'" type="success" size="small">已上传</el-tag>
-                <el-tag v-else type="danger" size="small">失败：{{ item.error }}</el-tag>
-                <el-button size="small" text :disabled="summoning" @click="removeSeatFile(s, item)">移除</el-button>
-              </div>
-              <p class="seat-note">材料在提交召集时才上传，提交前移除零服务端残留；该席位至少需要一份材料文件。</p>
-            </div>
-            <p v-if="s.inputMode !== 'file_upload' && !s.fieldCount" class="seat-note">该席位无需参数。</p>
-          </template>
-        </template>
-        <p v-else class="seat-note">正在读取输入契约…</p>
-      </div>
-      <div v-if="summonErrors.length" class="summon-errors">
-        <p class="summon-errors-title">召集未发起（整单拒发，未创建任何任务）：</p>
-        <p v-for="(e, i) in summonErrors" :key="i" class="summon-error-line">{{ e }}</p>
-      </div>
-      <template #footer>
-        <el-button :disabled="summoning" @click="summonOpen = false">取消</el-button>
-        <el-button
-          type="primary"
-          :disabled="summonReady !== true || summoning"
-          @click="submitSummon"
-        >{{ summoning ? "召集中…" : "亲手提交召集" }}</el-button>
-      </template>
-    </el-dialog>
 
     <el-dialog
       v-model="governanceOpen"
@@ -433,8 +358,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
-import { useRouter } from "vue-router";
+import { ref, computed, onMounted, nextTick } from "vue";
 import { ElMessage } from "element-plus";
 import {
   Aim,
@@ -450,17 +374,15 @@ import {
   UserFilled,
   Warning,
 } from "@element-plus/icons-vue";
-import { listAgents, getAgent } from "../api/agents";
-import { listTeams, summonTeam as summonTeamApi } from "../api/teams";
-import { request, unwrapDetail } from "../api/client";
+import { listAgents, getAgentShell } from "../api/agents";
+import { listTeams } from "../api/teams";
+import { request } from "../api/client";
 import { burstNeutral } from "../effects/burst.js";
+import { buildAgentShellOverview } from "../utils/agentShell.js";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import AgentCapabilityMap from "../components/AgentCapabilityMap.vue";
 import GovernanceJourney from "../components/GovernanceJourney.vue";
-import SchemaForm from "../components/SchemaForm.vue";
-import { parseSchema, blankInputs, collectInputs, validateInputs } from "../utils/schemaForm";
-import { uploadFile as apiUploadFile } from "../api/files";
 import {
   buildEvalTrend,
   buildMaturityLadder,
@@ -509,8 +431,9 @@ const CATEGORY_ICONS = {
 };
 const categoryIcon = (category) => CATEGORY_ICONS[category] || QuestionFilled;
 
-const router = useRouter();
 const agents = ref([]);
+const agentShellSnapshot = ref(null);
+const agentShellError = ref("");
 const loading = ref(true);
 const loadError = ref("");
 const governanceOpen = ref(false);
@@ -558,13 +481,29 @@ const evalTrend = computed(() => buildEvalTrend(governanceRuns.value));
 async function load() {
   loading.value = true;
   loadError.value = "";
-  try {
-    agents.value = await listAgents();
-  } catch (err) {
-    loadError.value = err.detail || err.message;
-  } finally {
-    loading.value = false;
+  agentShellError.value = "";
+  agentShellSnapshot.value = null;
+  const [agentsResult, shellResult] = await Promise.allSettled([
+    listAgents(),
+    getAgentShell(),
+  ]);
+  if (agentsResult.status === "fulfilled") {
+    agents.value = agentsResult.value;
+  } else {
+    const err = agentsResult.reason || {};
+    loadError.value = err.detail || err.message || "Agent 目录加载失败";
   }
+  if (shellResult.status === "fulfilled") {
+    if (buildAgentShellOverview(shellResult.value).available === true) {
+      agentShellSnapshot.value = shellResult.value;
+    } else {
+      agentShellError.value = "Agent 本体投影契约不兼容";
+    }
+  } else {
+    const err = shellResult.reason || {};
+    agentShellError.value = err.detail || err.message || "Agent 本体投影加载失败";
+  }
+  loading.value = false;
   // 批八：团队列表并行拉取——失败不污染 Agent 门户主面（区块诚实缺席）。
   try {
     teams.value = await listTeams();
@@ -573,14 +512,9 @@ async function load() {
   }
 }
 
-// ── 批八：专家团队区块 + summon 填参面板 ─────────────────────────────────
+// ── 专家团队只读蓝本 ─────────────────────────────────────────────────────
 
 const teams = ref([]);
-const summonOpen = ref(false);
-const summonTarget = ref(null);
-const summonSeats = ref([]);
-const summonErrors = ref([]);
-const summoning = ref(false);
 
 function agentNameOf(agentId) {
   const a = agents.value.find((x) => x.id === agentId);
@@ -602,173 +536,13 @@ function teamChainText(t) {
   return parts.join(linear ? " → " : " · ");
 }
 
-// 预览级不可召集提示（服务端投影 present/disabled；权威判定在 summon gate）。
+// 只读在岗状态：不在门户提供手工召集或逐席位填参。
 function teamUnready(t) {
   const gone = t.members.filter((m) => m.present !== true).map((m) => m.agent_id);
-  if (gone.length) return `成员已不在场：${gone.join("、")}——请从最新导引方案另存新团队`;
+  if (gone.length) return `成员已不在场：${gone.join("、")}——请回主对话说明目标，由系统重新编排`;
   const off = t.members.filter((m) => m.disabled === true).map((m) => m.agent_id);
   if (off.length) return `成员已下线：${off.join("、")}`;
   return "";
-}
-
-function openSummon(t) {
-  summonTarget.value = t;
-  summonErrors.value = [];
-  summonOpen.value = true;
-  summonSeats.value = t.members.map((m) => ({
-    seq: m.seq,
-    agent_id: m.agent_id,
-    role: m.role,
-    after: m.after || [],
-    schemaLoaded: false,
-    inputMode: null,
-    schema: null,
-    renderable: false,
-    fieldCount: 0,
-    values: {},
-    uploadItems: [],
-  }));
-  for (const seat of summonSeats.value) {
-    getAgent(seat.agent_id)
-      .then((detail) => {
-        // input_mode 缺失（agent 无 input 段）按 none=无输入席位。
-        seat.inputMode = (detail && detail.input_mode) || "none";
-        seat.schema = (detail && detail.input_schema) || null;
-        const parsed = parseSchema(seat.schema);
-        seat.renderable = parsed.renderable;
-        seat.fieldCount = parsed.fields.length;
-        seat.values = blankInputs(seat.schema, null);
-        seat.schemaLoaded = true;
-      })
-      .catch(() => {
-        // 契约拉不到 fail-closed：席位标记「不可承接」，禁提交。
-        seat.inputMode = "unknown";
-        seat.schemaLoaded = true;
-      });
-  }
-}
-
-// 席位可承接判据：params/file_upload/none 三型均可（Codex R0 P2：file 席位此前
-// 一刀切禁提交，含文件成员的合法团队永远召不动=死入口）；契约拉取失败（unknown）
-// 或 schema 结构超出 SchemaForm 覆盖面（renderable=false）→ fail-closed 不可承接。
-function seatSupported(s) {
-  if (!["params", "file_upload", "none"].includes(s.inputMode)) return false;
-  // params/file_upload 席位必须有可读 schema（Codex R2 P2）：全部 agent 包都
-  // 随包携带 input_schema.json，null=后端读取失败/损坏——放行会召出注定
-  // runtime 失败的任务，fail-closed 禁提交。
-  if ((s.inputMode === "params" || s.inputMode === "file_upload") && !s.schema) return false;
-  if (s.schema && s.renderable !== true) return false;
-  return true;
-}
-
-// 就绪判据（fail-closed）：全部席位契约已载且可承接、schema 约束校验全过
-// （validateInputs：必填/数字界/枚举控件化——Codex R0 P2）、file 席位至少一份材料。
-const summonReady = computed(() => {
-  const seats = summonSeats.value;
-  if (!seats.length) return false;
-  for (const s of seats) {
-    if (s.schemaLoaded !== true) return false;
-    if (!seatSupported(s)) return false;
-    if (s.schema && validateInputs(s.schema, s.values).length > 0) return false;
-    if (s.inputMode === "file_upload" && s.uploadItems.length === 0) return false;
-  }
-  return true;
-});
-
-let seatUploadSeq = 0;
-function seatFileSelect(seat, uploadItem) {
-  seat.uploadItems.push({
-    uid: uploadItem.uid ?? `su_${++seatUploadSeq}`,
-    name: uploadItem.name,
-    status: "pending",
-    raw: uploadItem.raw,
-    error: "",
-    id: null,
-  });
-}
-
-function removeSeatFile(seat, item) {
-  seat.uploadItems = seat.uploadItems.filter((i) => i.uid !== item.uid);
-}
-
-// 路由离开=取消语义（Codex R2 P1 verbatim：from onUnmounted invalidate）：上传
-// await 期间用浏览器返回离开门户，捕获引用不变、守卫恒过——卸载时显式收起
-// 对话框，使 await 后守卫如实中止，不在用户离开后背地里建任务再拽回 /tasks。
-onUnmounted(() => {
-  summonOpen.value = false;
-});
-
-async function submitSummon() {
-  if (summonReady.value !== true || summoning.value) return;
-  summonErrors.value = [];
-  summoning.value = true;
-  // 快照捕获（Codex R1 P1 纵深）：上传 await 期间用户若仍设法关闭/切换团队，
-  // 恢复后绝不以新 reactive 状态背地里发起——目标或席位引用变了即中止。
-  const target = summonTarget.value;
-  const seats = summonSeats.value;
-  try {
-    // 文件席位材料：提交时才上传（同 TaskCreate uploadPendingFiles 语义），任一
-    // 失败即中止整单——绝不带残缺材料发起召集。
-    for (const s of seats) {
-      for (const item of s.uploadItems) {
-        if (item.status === "done" && item.id) continue;
-        item.status = "uploading";
-        item.error = "";
-        try {
-          const rec = await apiUploadFile(item.raw);
-          item.id = rec.id;
-          item.status = "done";
-        } catch (e) {
-          item.status = "error";
-          item.error = (e && (e.detail || e.message)) || "上传失败";
-          throw new Error(`席位 ${s.seq} 材料「${item.name}」上传失败——未发起召集`);
-        }
-      }
-    }
-    if (summonOpen.value !== true || summonTarget.value !== target || summonSeats.value !== seats) {
-      return; // 上传期间被取消/切换——如实中止，不发起召集
-    }
-    const items = seats.map((s) => {
-      const it = { seq: s.seq, inputs: s.schema ? collectInputs(s.schema, s.values) : {} };
-      if (s.uploadItems.length) it.input_file_ids = s.uploadItems.map((i) => i.id);
-      return it;
-    });
-    const res = await summonTeamApi({ teamId: target.id, items });
-    for (const w of res.warnings || []) ElMessage.warning(w);
-    ElMessage.success(`已召集「${target.name}」全体 ${items.length} 名成员——进度在任务台跟进`);
-    summonOpen.value = false;
-    router.push({ path: "/tasks" });
-  } catch (err) {
-    // Codex R0 P2：api client 对 object 型 FastAPI detail 统一 JSON.stringify——
-    // 解回结构再取 summon_errors/batch_errors，否则对账清单永远渲成生 JSON。
-    const detail = unwrapDetail(err.detail);
-    const list =
-      (detail &&
-        typeof detail === "object" &&
-        (detail.summon_errors || (detail.batch_errors || []).flatMap((b) => b.errors))) ||
-      [];
-    summonErrors.value = list.length
-      ? list
-      : [
-          (typeof detail === "string" && detail) ||
-            (detail && detail.message) ||
-            err.message ||
-            "召集失败",
-        ];
-  } finally {
-    summoning.value = false;
-  }
-}
-
-function createTaskFor(agent) {
-  router.push({ path: "/tasks/new", query: { agent_id: agent.id } });
-}
-
-// interactive 型（导引）不是一次性任务——引到对话入口（M6/ADR-0012）。
-function startConversationFor(agent) {
-  // Codex R0 P1：携带所选交互 Agent id——否则 GuidePage 恒建 guide_agent，
-  // 新增垂类问答包（policy_qa/standards_qa）从可见入口永远够不着。
-  router.push({ path: "/", query: { agent: agent.id } });
 }
 
 function verdictLabel(verdict) {
@@ -911,7 +685,7 @@ async function runEvaluation() {
     const run = await pollEvalRunToTerminal(agentId, queued.id);
     if (governanceOpen.value && governanceAgent.value?.id === agentId) {
       await loadGovernance(agentId);
-      if (run.status === "completed") ElMessage.success("评测完成");
+      if (run.status === "completed") ElMessage.info("评测完成——结果按逐项证据显示");
       else if (run.status !== "aborted") ElMessage.warning(`评测收口为 ${run.status}`);
     }
   } catch (err) {
@@ -963,7 +737,11 @@ async function promoteToL1() {
         // confirmed_by=登录会话身份，服务端派生（ADR-0019 D5）——记名不可代填
       },
     });
-    ElMessage.success("已晋升 L1");
+    ElMessage({
+      message: "已由当前登录工程师签发晋升 L1",
+      type: "info",
+      customClass: "flai-message-signed",
+    });
     // 续体绑定：await 期间弹窗可能已切到别的 agent——只有还在看同一 agent 时才回写
     if (governanceOpen.value && governanceAgent.value?.id === agentId) {
       promotionConfirmed.value = false;
@@ -1203,6 +981,11 @@ onMounted(load);
   justify-content: space-between;
   gap: var(--space-3);
 }
+.agent-runtime-note {
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  text-align: right;
+}
 .gov-panel {
   color: var(--ink);
   min-height: 180px;
@@ -1406,7 +1189,7 @@ onMounted(load);
   .gov-promotion-card.promote-burst { animation: none; }
 }
 
-/* ── 批八：专家团队区块 + summon 面板（信任色零新增；对账失败=中性） ── */
+/* ── 专家团队只读蓝本 ── */
 .teams-section { margin-top: 28px; }
 .teams-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
 .teams-header h3 { margin: 0; font-size: 16px; }
@@ -1427,18 +1210,4 @@ onMounted(load);
 .team-goal { margin: 0; font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; }
 .team-chain { font-size: 12px; color: var(--ink-soft); }
 .team-unready { margin: 0; font-size: 12px; color: var(--ink-faint); }
-.team-actions { margin-top: 2px; }
-.seat-block { padding: 10px 0; border-bottom: 1px solid var(--hairline-soft); }
-.seat-block:last-of-type { border-bottom: none; }
-.seat-head { font-size: 13px; font-weight: 600; color: var(--ink); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-.seat-role { font-weight: 400; font-size: 12px; color: var(--ink-soft); }
-.seat-after { font-weight: 400; font-size: 11.5px; color: var(--ink-faint); }
-.seat-note { margin: 6px 0 0; font-size: 12px; color: var(--ink-faint); }
-.seat-note.is-blocked { color: var(--trust-pending); }
-.seat-upload { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
-.seat-upload-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
-.seat-upload-name { color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
-.summon-errors { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 8px; }
-.summon-errors-title { margin: 0 0 4px; font-size: 12.5px; font-weight: 600; color: var(--ink); }
-.summon-error-line { margin: 2px 0 0; font-size: 12.5px; color: var(--ink-soft); }
 </style>

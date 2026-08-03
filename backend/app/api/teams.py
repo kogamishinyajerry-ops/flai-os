@@ -21,7 +21,18 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
-from .tasks import BatchTaskItem, run_batch_creation
+from .object_authorization import (
+    authenticated_username,
+    raise_resource_not_found,
+    require_exact_owner,
+    require_owned_conversation_inputs,
+)
+from .tasks import (
+    BatchTaskItem,
+    _get_package_snapshot_or_none,
+    _package_snapshot_parts,
+    run_batch_creation,
+)
 from ..storage import repos
 
 router = APIRouter(prefix="/api", tags=["teams"])
@@ -88,12 +99,11 @@ def create_team(body: CreateTeamRequest, request: Request) -> dict[str, Any]:
     """从会话方案存团队蓝本。成员/顺序/after 全部取自该会话 recommendation
     （decision=orchestrate）快照并按后端规则重验（R5 纵深）：agent 在场、未禁用、
     非 interactive、after 仅引更早条目、≤5 席。任一不过 → 422 逐条清单零写入。"""
-    agent_registry = request.app.state.agent_registry
+    username = authenticated_username(request)
     conn = request.app.state.conn_factory()
     try:
-        conv = repos.get_conversation(conn, body.conversation_id)
-        if conv is None:
-            raise HTTPException(status_code=404, detail=f"会话不存在：{body.conversation_id}")
+        conv = require_owned_conversation_inputs(conn, body.conversation_id, username)
+        agent_registry = request.app.state.agent_registry
         rec = conv.get("recommendation") or {}
         plan_agents = rec.get("agents") or []
         if rec.get("decision") != "orchestrate" or not plan_agents:
@@ -146,7 +156,7 @@ def create_team(body: CreateTeamRequest, request: Request) -> dict[str, Any]:
                 conn,
                 team_id=team_id,
                 name=body.name,
-                owner_user=request.state.user["username"],
+                owner_user=username,
                 members=members,
                 goal_template=(rec.get("goal") or None),
                 created_from_conversation_id=body.conversation_id,
@@ -169,12 +179,18 @@ def list_teams(request: Request, limit: int = 100, offset: int = 0) -> list[dict
         raise HTTPException(status_code=422, detail="limit 取值 1..500")
     if offset < 0:
         raise HTTPException(status_code=422, detail="offset 不得为负")
+    username = authenticated_username(request)
     agent_registry = request.app.state.agent_registry
     conn = request.app.state.conn_factory()
     try:
         return [
             _team_projection(t, agent_registry)
-            for t in repos.list_teams(conn, limit=limit, offset=offset)
+            for t in repos.list_teams(
+                conn,
+                owner_user=username,
+                limit=limit,
+                offset=offset,
+            )
         ]
     finally:
         conn.close()
@@ -182,11 +198,13 @@ def list_teams(request: Request, limit: int = 100, offset: int = 0) -> list[dict
 
 @router.get("/teams/{team_id}")
 def get_team(team_id: str, request: Request) -> dict[str, Any]:
+    username = authenticated_username(request)
     conn = request.app.state.conn_factory()
     try:
         team = repos.get_team(conn, team_id)
         if team is None:
-            raise HTTPException(status_code=404, detail=f"团队不存在：{team_id}")
+            raise_resource_not_found()
+        require_exact_owner(team.get("owner_user"), username)
         return _team_projection(team, request.app.state.agent_registry)
     finally:
         conn.close()
@@ -227,12 +245,16 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
     """召集：对账 gate G1-G5 fail-closed（422 逐席位清单零写入）→ 按 seq 升序
     重排（**绝不信任客户端提交顺序**：after_json 存 seq 值、batch after 是数组
     位置下标，乱序直译会建错依赖边）→ 复用 run_batch_creation。"""
-    agent_registry = request.app.state.agent_registry
+    username = authenticated_username(request)
     conn = request.app.state.conn_factory()
     try:
         team = repos.get_team(conn, team_id)
         if team is None:
-            raise HTTPException(status_code=404, detail=f"团队不存在：{team_id}")
+            raise_resource_not_found()
+        require_exact_owner(team.get("owner_user"), username)
+        if body.conversation_id is not None:
+            require_owned_conversation_inputs(conn, body.conversation_id, username)
+        agent_registry = request.app.state.agent_registry
 
         # G5：席位对齐——不多、不少、不重。
         member_by_seq = {m["seq"]: m for m in team["members"]}
@@ -258,12 +280,20 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
         # 恒过」的 TOCTOU 旁路）。
         warnings: list[str] = []
         pinned_versions: dict[str, str] = {}
+        pinned_package_digests: dict[str, str] = {}
         for m in team["members"]:
-            agent = agent_registry.get(m["agent_id"])
+            snapshot = _get_package_snapshot_or_none(agent_registry, m["agent_id"])
             label = f"席位 {m['seq']}（{m['agent_id']}）"
-            if agent is None:
-                errors.append(f"{label}：agent 不在注册表（已下架或拒载隔离）")
+            if snapshot is None:
+                errors.append(
+                    f"{label}：agent 不在注册表或不可变包快照不可用（已下架或拒载隔离）"
+                )
                 continue
+            snapshot_parts = _package_snapshot_parts(snapshot, m["agent_id"])
+            if snapshot_parts is None:
+                errors.append(f"{label}：Agent 不可变包快照结构或摘要无效")
+                continue
+            agent, snapshot_digest = snapshot_parts
             if agent.get("status") == "disabled":
                 errors.append(f"{label}：agent 已下线")
                 continue
@@ -280,6 +310,7 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
                 else:
                     warnings.append(f"{label}：版本 {saved} → {current}（patch 变化，放行）")
             pinned_versions[m["agent_id"]] = current
+            pinned_package_digests[m["agent_id"]] = snapshot_digest
         if errors:
             raise HTTPException(
                 status_code=422,
@@ -332,8 +363,9 @@ def summon_team(team_id: str, body: SummonRequest, request: Request) -> dict[str
             items=batch_items,
             conversation_id=body.conversation_id,
             created_by=request.state.user["display_name"],
-            created_by_username=request.state.user["username"],
+            created_by_username=username,
             pinned_versions=pinned_versions,
+            pinned_package_digests=pinned_package_digests,
         )
         result["team_id"] = team_id
         result["warnings"] = warnings

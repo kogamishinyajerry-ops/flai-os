@@ -1,0 +1,314 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/agent_shell.schema.json",
+  "title": "FLAi-OS Agent Shell Catalog Snapshot",
+  "description": "Agent Registry 不可变代际的只读语义投影；仅用于能力导航与诚实展示，不授予权限、不代表可启动、不构成签发。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source", "summary", "facets", "agents", "diagnostics"],
+  "properties": {
+    "schema_version": {"const": "agent_shell.v1"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "read_only"],
+      "properties": {
+        "kind": {"const": "registry_snapshot"},
+        "read_only": {"const": true}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent_count",
+        "work_type_count",
+        "domain_count",
+        "unresolved_reference_count",
+        "defaulted_clearance_count",
+        "mock_tool_reference_count"
+      ],
+      "properties": {
+        "agent_count": {"type": "integer", "minimum": 0},
+        "work_type_count": {"type": "integer", "minimum": 0},
+        "domain_count": {"type": "integer", "minimum": 0},
+        "unresolved_reference_count": {"type": "integer", "minimum": 0},
+        "defaulted_clearance_count": {"type": "integer", "minimum": 0},
+        "mock_tool_reference_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "facets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["work_types", "domains", "launch_kinds"],
+      "properties": {
+        "work_types": {"type": "array", "items": {"$ref": "#/$defs/facet"}},
+        "domains": {"type": "array", "items": {"$ref": "#/$defs/facet"}},
+        "launch_kinds": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            {
+              "allOf": [
+                {"$ref": "#/$defs/facet"},
+                {"properties": {"id": {"const": "task"}}}
+              ]
+            },
+            {
+              "allOf": [
+                {"$ref": "#/$defs/facet"},
+                {"properties": {"id": {"const": "conversation"}}}
+              ]
+            },
+            {
+              "allOf": [
+                {"$ref": "#/$defs/facet"},
+                {"properties": {"id": {"const": "unknown"}}}
+              ]
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    "agents": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/agent"}
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/diagnostic"}
+    }
+  },
+  "$defs": {
+    "nullableString": {"type": ["string", "null"]},
+    "facet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "total_count",
+        "task_count",
+        "conversation_count",
+        "unknown_launch_count"
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "total_count": {"type": "integer", "minimum": 0},
+        "task_count": {"type": "integer", "minimum": 0},
+        "conversation_count": {"type": "integer", "minimum": 0},
+        "unknown_launch_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "schemaMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason", "filename", "property_count", "required_count"],
+      "properties": {
+        "state": {"enum": ["available", "unavailable"]},
+        "reason": {"$ref": "#/$defs/nullableString"},
+        "filename": {"$ref": "#/$defs/nullableString"},
+        "property_count": {"type": "integer", "minimum": 0},
+        "required_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "toolReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version", "state", "mock", "output_classification"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "name": {"$ref": "#/$defs/nullableString"},
+        "version": {"$ref": "#/$defs/nullableString"},
+        "state": {"enum": ["resolved", "unresolved"]},
+        "mock": {"type": ["boolean", "null"]},
+        "output_classification": {
+          "type": ["string", "null"],
+          "enum": ["internal", "sensitive", null]
+        }
+      }
+    },
+    "scopeReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "kind", "confidentiality", "state"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "name": {"$ref": "#/$defs/nullableString"},
+        "kind": {
+          "type": ["string", "null"],
+          "enum": ["document", "engineering_experience", "run_memory", null]
+        },
+        "confidentiality": {
+          "type": ["string", "null"],
+          "enum": ["public_internal", "department", "restricted", null]
+        },
+        "state": {"enum": ["resolved", "unresolved"]}
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "classification", "capability", "trust", "launch"],
+      "properties": {
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agent_id", "name", "version", "summary"],
+          "properties": {
+            "agent_id": {"type": "string", "minLength": 1},
+            "name": {"$ref": "#/$defs/nullableString"},
+            "version": {"$ref": "#/$defs/nullableString"},
+            "summary": {"$ref": "#/$defs/nullableString"}
+          }
+        },
+        "classification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["category", "domain", "specialty", "usefulness_level"],
+          "properties": {
+            "category": {
+              "type": ["string", "null"],
+              "enum": ["tool_automation", "knowledge_qa", "structured_gen", "reasoning_assist", null]
+            },
+            "domain": {
+              "type": ["string", "null"],
+              "enum": [
+                "policy_qa",
+                "standards_qa",
+                "fault_history",
+                "sys_calc",
+                "cfd_sim",
+                "test_data",
+                "design_opt",
+                "generic",
+                null
+              ]
+            },
+            "specialty": {"$ref": "#/$defs/nullableString"},
+            "usefulness_level": {
+              "type": ["string", "null"],
+              "enum": ["L1", "L2", "L3", null]
+            }
+          }
+        },
+        "capability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input", "output", "tools", "knowledge_scopes"],
+          "properties": {
+            "input": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "schema"],
+              "properties": {
+                "type": {
+                  "type": ["string", "null"],
+                  "enum": ["file_upload", "params", "none", null]
+                },
+                "schema": {"$ref": "#/$defs/schemaMetadata"}
+              }
+            },
+            "output": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["formats", "schema"],
+              "properties": {
+                "formats": {"type": "array", "items": {"type": "string"}},
+                "schema": {"$ref": "#/$defs/schemaMetadata"}
+              }
+            },
+            "tools": {"type": "array", "items": {"$ref": "#/$defs/toolReference"}},
+            "knowledge_scopes": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/scopeReference"}
+            }
+          }
+        },
+        "trust": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "maturity",
+            "limitations",
+            "visibility",
+            "allowed_roles",
+            "clearance",
+            "requires_human_review",
+            "evidence"
+          ],
+          "properties": {
+            "status": {
+              "type": ["string", "null"],
+              "enum": ["draft", "trial", "released", "disabled", null]
+            },
+            "maturity": {
+              "type": ["string", "null"],
+              "enum": ["L0", "L1", "L2", "L3", null]
+            },
+            "limitations": {"type": "array", "items": {"type": "string"}},
+            "visibility": {
+              "type": ["string", "null"],
+              "enum": ["admin_only", "department_trial", "all", null]
+            },
+            "allowed_roles": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"enum": ["admin", "agent_developer", "business_user"]}
+            },
+            "clearance": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["effective", "source"],
+              "properties": {
+                "effective": {"enum": ["public", "internal", "sensitive"]},
+                "source": {"enum": ["declared", "defaulted", "invalid_defaulted"]}
+              }
+            },
+            "requires_human_review": {"type": ["boolean", "null"]},
+            "evidence": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["required", "kinds"],
+              "properties": {
+                "required": {"type": ["boolean", "null"]},
+                "kinds": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "enum": [
+                      "regulation_clause",
+                      "standard_clause",
+                      "type_case",
+                      "fault_case",
+                      "knowledge_doc",
+                      "calculation"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "launch": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {"kind": {"enum": ["task", "conversation", "unknown"]}}
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_id", "field", "state"],
+      "properties": {
+        "agent_id": {"type": "string", "minLength": 1},
+        "field": {"type": "string", "minLength": 1},
+        "state": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

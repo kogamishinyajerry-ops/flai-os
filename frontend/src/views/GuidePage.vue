@@ -1,5 +1,6 @@
 <template>
   <div class="guide-page" :class="{ 'is-empty': !started && messages.length === 0 }">
+    <div class="guide-main">
     <!-- 起手 hero（未开始且无消息）：衬线问候 + 具名，随 composer 在视口垂直居中。 -->
     <div v-if="!started && messages.length === 0 && !restoring" class="guide-hero fx-rise">
       <!-- 减重批：hero 只剩问候+一句主标题（Claude 精髓=留白克制，信任靠交互
@@ -8,39 +9,9 @@
       <FlaiBloom class="hero-mark" :size="38" />
       <p class="hero-greeting">{{ greeting }}</p>
       <h1 class="hero-title">说说你要做的工程活儿</h1>
-      <!-- 四意图卡·一排紧凑条目（原 hero-examples/ex-chip 原地升级；压缩批由两排
-           卡片收成单行四枚「图标+短标签」，示例句退出视觉层只做点击预填）：
-           数据=四分类 AGENT_CATEGORY 一一配对，点击只填 draft + focusComposer，
-           绝不代发（同 setExample 语义）。 -->
-      <div class="hero-intents">
-        <div
-          v-for="item in INTENT_EXAMPLES"
-          :key="item.category"
-          class="intent-card"
-          role="button"
-          tabindex="0"
-          :aria-describedby="`intent-tip-${item.category}`"
-          @click="setExample(item.example)"
-          @keydown.enter.prevent="setExample(item.example)"
-          @keydown.space.prevent="setExample(item.example)"
-        >
-          <span class="intent-accent" :style="{ background: categoryColor(item.category) }"></span>
-          <span class="intent-visual" :style="{ color: categoryColor(item.category) }" aria-hidden="true">
-            <el-icon><component :is="item.icon" /></el-icon>
-          </span>
-          <!-- tip 三通道：title 给鼠标悬浮；.intent-tip 气泡给键盘 :focus-visible
-               （绝对定位不撑布局）；aria-describedby 给读屏。 -->
-          <div class="intent-body" :title="categoryTip(item.category)">
-            <div class="intent-title">{{ categoryLabel(item.category) }}</div>
-          </div>
-          <span :id="`intent-tip-${item.category}`" class="intent-tip" role="tooltip">
-            {{ categoryTip(item.category) }}
-          </span>
-        </div>
-      </div>
-      <!-- 首登三步引导（评审 N2）：只在起手空态出现；「去跑演示」只预填创建页、
-           「开始说」只聚焦输入框——全程零代发零代建（人是唯一发起者）。 -->
-      <OnboardingCard @demo="startDemoTask" @say="focusComposer" />
+      <p class="hero-routing-promise">
+        输入文字或上传附件，系统会在后台自动编排所需能力。
+      </p>
     </div>
 
     <el-alert
@@ -60,7 +31,10 @@
         <div v-if="m.role === 'user'" class="user-bubble">
           <div class="user-text">{{ m.content }}</div>
           <div v-if="m.attachments && m.attachments.length" class="user-files">
-            <span v-for="a in m.attachments" :key="a.id" class="file-chip">📎 {{ a.filename }}</span>
+            <span v-for="a in m.attachments" :key="a.id" class="file-chip">
+              <el-icon aria-hidden="true"><Paperclip /></el-icon>
+              {{ a.filename }}
+            </span>
           </div>
           <!-- 「保存待核」amber 小标记（B3）：与助手侧未知条同槽同语义
                （--trust-pending=仅未核/降级）——对账锁期间用户轮同样未确认，
@@ -149,19 +123,53 @@
               class="plan-card"
               :class="{ 'fx-rise': m.fresh }"
             >
-              <!-- 顶行只留 kicker：成员计数由 roster-label「召集的 Agent · N」
+              <!-- 顶行只留 kicker：成员计数由 roster-label「执行单元 · N」
                    一处承担（五律③一处一行——原 plan-count pill 与之同屏重复，降噪批撤）。 -->
               <div class="plan-topline">
                 <span class="plan-kicker">协作方案</span>
               </div>
               <h2 v-if="m.recommendation.goal" class="plan-goal-title">{{ m.recommendation.goal }}</h2>
               <p v-if="m.recommendation.analysis" class="plan-reason">{{ m.recommendation.analysis }}</p>
+              <div class="route-summary">
+                <span>已自动编排 · {{ m.recommendation.agents.length }} 个执行单元</span>
+                <span
+                  v-if="planHasInvalidSkillReuse(m.recommendation)"
+                  class="route-summary-state is-pending plan-alert"
+                  aria-live="polite"
+                >复用证据无法核验，本次禁止开工；请继续对话让系统重新编排</span>
+                <span
+                  v-else-if="planHasIncompleteOrchestration(m.recommendation)"
+                  class="route-summary-state is-pending plan-alert"
+                  aria-live="polite"
+                >方案有执行单元未能纳入，请继续说明或让系统重新编排</span>
+                <span v-else-if="batchCreationNeedsReconciliation" class="route-summary-state is-pending" aria-live="polite">创建状态待核，禁止重复开工</span>
+                <span v-else-if="openableCount(m.recommendation) > 0" class="route-summary-state" aria-live="polite">信息已齐，等待你确认开工</span>
+                <span v-else-if="planHasTasks(m.recommendation)" class="route-summary-state" aria-live="polite">执行已接入，关键状态会在这里更新</span>
+                <span v-else class="route-summary-state is-pending" aria-live="polite">还需通过对话补充执行信息</span>
+                <span
+                  v-if="skillReuseForPlan(m.recommendation)"
+                  class="skill-reuse-inline"
+                >计划复用 · {{ skillReuseForPlan(m.recommendation).skill_name }}</span>
+              </div>
+
+              <details v-if="idx === latestPlanIdx" class="route-disclosure">
+                <summary>
+                  <span>查看路由依据与边界</span>
+                </summary>
+                <div class="route-disclosure-body">
+              <div v-if="skillReuseForPlan(m.recommendation)" class="skill-reuse-detail">
+                <span>复用方法来源</span>
+                <strong>{{ skillReuseForPlan(m.recommendation).skill_name }}</strong>
+                <small>
+                  隔离包 {{ skillReuseForPlan(m.recommendation).package_version }} ·
+                  已通过包级人工复核；系统将在开工与运行时再次核对精确摘要。
+                </small>
+              </div>
               <div v-if="m.recommendation.workflow" class="plan-section">
                 <div class="section-label">分工如何衔接</div>
                 <p class="plan-workflow">{{ m.recommendation.workflow }}</p>
               </div>
-
-              <div class="section-label roster-label">召集的 Agent · {{ m.recommendation.agents.length }}</div>
+              <div class="section-label roster-label">执行单元 · {{ m.recommendation.agents.length }}</div>
               <!-- L1 编队总览行（批七 §1.4）：纯 computed 聚合成员任务快照，零动画
                    数字替换；a>0 行首 work-pulse-dot；待签发段 amber。收束态假绿
                    禁令（O7 tamper 探针）：非全终态或有待签发绝不出「完成」类总结。 -->
@@ -223,12 +231,24 @@
                       <span v-if="agentTaskInfo(a).latest.status === 'waiting_review'" class="status-peek is-review">审阅签发 →</span>
                       <span v-else class="status-peek">速览 →</span>
                     </div>
-                    <!-- 右槽②未召集：就绪徽 / 创建页 escape -->
+                    <!-- 右槽②未召集：只解释自动整理状态，不提供手工 Agent/参数入口。 -->
                     <div v-else-if="!summonedLocally(a)" class="agent-actions">
-                      <span v-if="agentBatchable(a, m.recommendation)" class="agent-readytag">✓ 参数已齐 · 待开工</span>
-                      <button v-else class="agent-cta" @click="createOneTask(a, m.recommendation)">去创建此任务</button>
+                      <span v-if="agentReadyForPlan(m.recommendation, a)" class="agent-readytag">输入已自动整理 · 待开工</span>
+                      <span v-else class="agent-readytag is-pending">等待对话补充</span>
                     </div>
                     <span v-else class="agent-readytag">已召集 · 接入中…</span>
+                  </div>
+
+                  <div
+                    v-if="planMaterialsForAgent(m.recommendation, a).length"
+                    class="plan-materials"
+                  >
+                    <span class="plan-materials-label">使用材料</span>
+                    <span
+                      v-for="file in planMaterialsForAgent(m.recommendation, a)"
+                      :key="file.id"
+                      class="plan-material-chip"
+                    >{{ file.name }}</span>
                   </div>
 
                   <!-- 次行：实时旁白（已召集）——运行中=事件驱动 shimmer；终态=过去式盖章 -->
@@ -287,19 +307,13 @@
                   <template v-if="!agentTaskInfo(a)">
                     <div class="sa-subline">
                       <span v-if="a.rationale" class="agent-rationale">{{ a.rationale }}</span>
-                      <span v-for="(v, k) in a.prefilled_inputs" :key="k" class="draft-field">
-                        <span class="df-key">{{ k }}</span>
-                        <span class="df-val">{{ formatDraftVal(v) }}</span>
-                      </span>
+                      <span v-if="inputCount(a) > 0" class="draft-field">已从对话整理 {{ inputCount(a) }} 项执行输入</span>
                     </div>
                     <p v-if="a.stripped_fields && a.stripped_fields.length" class="agent-stripped">
-                      已剔除不合法字段：{{ a.stripped_fields.join("、") }}（未匹配该 Agent 的输入契约）
+                      已剔除不合法字段：{{ a.stripped_fields.join("、") }}（未匹配该执行单元的输入契约）
                     </p>
-                    <!-- 提示按成员就绪分轴（CRS R0-P3）：参数齐但方案级不可开工（归档/附件）
-                         不能误导用户去修本已齐的参数 -->
-                    <div v-if="!summonedLocally(a) && !agentBatchable(a, m.recommendation)" class="sa-subline">
-                      <span v-if="agentReady(a) === true" class="agent-unready-hint">参数已齐——本方案暂不可一键开工（会话已归档或有附件），可去创建页亲手提交。</span>
-                      <span v-else class="agent-unready-hint">参数未齐——直接回复导引补全，或去创建页填好后亲手提交。</span>
+                    <div v-if="!summonedLocally(a) && agentReadyForPlan(m.recommendation, a) !== true" class="sa-subline">
+                      <span class="agent-unready-hint">系统还缺少执行所需信息——继续说明目标、材料或约束即可，不需要填写字段。</span>
                     </div>
                   </template>
 
@@ -321,44 +335,63 @@
               </div>
 
               <p
-                v-if="m.recommendation.dropped_agents && m.recommendation.dropped_agents.length"
-                class="plan-alert"
+                v-if="ignoredPlanMaterials(m.recommendation).length"
+                class="ignored-plan-materials"
               >
-                已剔除无法召集的 Agent：{{ m.recommendation.dropped_agents.join("、") }}（幻觉/已下线/不可召集/重复）
-              </p>
-              <p v-if="m.recommendation.capped" class="plan-alert">
-                召集 Agent 数已达上限（5 个），后续提议已截断。
+                <span>未进入本次执行：</span>
+                <span
+                  v-for="file in ignoredPlanMaterials(m.recommendation)"
+                  :key="file.id"
+                  class="plan-material-chip"
+                >{{ file.name }}</span>
+                <span>系统已明确忽略，不会静默带入。</span>
               </p>
 
-              <div class="plan-foot">
+                </div>
+              </details>
+
+              <div v-if="idx === latestPlanIdx" class="plan-foot">
                 <button
-                  v-if="openableCount(m.recommendation) > 0"
+                  v-if="planHasIncompleteOrchestration(m.recommendation)"
+                  type="button"
+                  class="open-plan-btn cta-clay"
+                  @click="focusComposer"
+                >继续说明或重新编排</button>
+                <button
+                  v-else-if="planHasInvalidSkillReuse(m.recommendation)"
+                  type="button"
+                  class="open-plan-btn is-pending"
+                  @click="focusComposer"
+                >复用证据待核 · 继续对话让系统重新编排</button>
+                <button
+                  v-else-if="batchCreationNeedsReconciliation"
+                  class="open-plan-btn cta-clay"
+                  :disabled="opening === conversationId"
+                  @click="reconcileBatchCreation"
+                >{{ opening === conversationId ? "正在核对…" : "创建状态待核 · 点击核对" }}</button>
+                <button
+                  v-else-if="openableCount(m.recommendation) > 0"
                   class="open-plan-btn cta-clay"
                   :disabled="opening === conversationId"
                   @click="openPlan(m.recommendation)"
-                >{{ opening === conversationId ? "召集中…" : `照此方案开工 · 召集 ${openableCount(m.recommendation)} 名就绪成员` }}</button>
-                <!-- 层级结构化（W5）：开工在场时工作台入口降次级——由数据显式绑定，
-                     不再依赖 :has() 条件级联（一屏一主动作的结构性落点）。主/次
-                     互斥换装：主态接全局 .cta-clay（SSOT），次态走 .is-secondary。 -->
-                <button class="workbench-btn" :class="openableCount(m.recommendation) > 0 ? 'is-secondary' : 'cta-clay'" @click="openWorkbench">进入协作工作台 →</button>
-                <button type="button" class="plan-escape" @click="focusComposer">想调整方案？直接告诉导引 ↓</button>
-                <!-- 批八 O7：存为团队模板——仅 orchestrate 且会话 active（假入口=
-                     假承诺）；成员由服务端从方案快照抽取重验，前端不传成员。
-                     仅最新方案卡（Codex R0 P1）：服务端读最新快照，历史卡渲此
-                     按钮=以旧卡之名存新名单。 -->
+                >{{ opening === conversationId ? "正在开工…" : "按方案开工" }}</button>
                 <button
-                  v-if="conversationStatus === 'active' && idx === latestPlanIdx"
+                  v-else-if="planHasTasks(m.recommendation)"
+                  class="workbench-btn cta-clay"
+                  @click="openWorkbench"
+                >进入协作工作台 →</button>
+                <button
+                  v-else-if="conversationStatus === 'active'"
                   type="button"
-                  class="plan-escape save-team-btn"
-                  :disabled="savingTeam"
-                  @click="saveTeamFromPlan"
-                >{{ savingTeam ? "保存中…" : "存为团队模板（下次一键召集同套专家）" }}</button>
+                  class="open-plan-btn cta-clay"
+                  @click="focusComposer"
+                >继续说明缺失信息</button>
                 <!-- 政策句压一行（批次四 Q3）：红线字面「亲手提交」「签发权」
                      逐字保留（m6 ③ 锚）；动词分轴（3-lens P3）——开工=提交、
                      放行=批准，不把两个动作混进一个动词；细则（参数未齐怎么办）
                      随需在导引对话里自然出现，不在每张卡常驻复述。 -->
                 <span class="plan-note">
-                  开工由你<strong>亲手提交</strong>，产物放行由你批准——签发权始终在你，导引不代召集、不代签。
+                  系统会在后台自动编排所需能力；开工由你确认，产物放行由你批准——签发权始终在你。
                 </span>
               </div>
             </div>
@@ -388,6 +421,25 @@
         </template>
       </div>
 
+      <!-- 完成态才长出的单一资产候选锚点。它属于主对话轴，不进入成员卡、
+           不形成常驻侧栏；审核面只读且只有按钮。 -->
+      <AssetCandidateCallout
+        :candidate="assetCandidate"
+        :phase="assetCandidatePhase"
+        :error="assetCandidateError"
+        :package-review-content="skillPackageReviewContent"
+        :package-review-phase="skillPackageReviewPhase"
+        :package-review-error="skillPackageReviewError"
+        @decide="decideCurrentAssetCandidate"
+        @decide-package="decideCurrentSkillPackage"
+        @load-package-content="loadCurrentSkillPackageReviewContent"
+        @retry="reconcileAssetCandidate"
+      />
+
+      <!-- 平台功能与当前 owner 资产只在主会话原地按需披露；默认折叠，
+           首次展开才冷读，不新增 /map 页面或第二套资产工作台。 -->
+      <FeatureAssetMapDisclosure />
+
       <div v-if="sending && !hasStreamingAssistant" class="bubble-row assistant">
         <FlaiBloom class="ai-mark" state="generating" :size="26" />
         <div class="ai-thinking">
@@ -408,6 +460,22 @@
     <!-- 悬浮质感 composer：会话开始后固定悬浮在视口底部（Claude 布局，始终可见） -->
     <div class="composer" :class="{ 'composer-fixed': started || messages.length }">
       <div class="composer-inner">
+      <!-- batch 对账是会话级状态，不属于某一张“最新方案”卡。A→B→A 恢复后
+           canonical 历史消息 fresh=false、没有可操作方案下标，仍须保留唯一可达的
+           同 operation_id 核对动作；composer 同时保持锁定。 -->
+      <div v-if="batchCreationNeedsReconciliation" class="batch-reconcile-bar">
+        <span>{{ batchCreationJournalCorrupt
+          ? "本地创建记录无法安全读取 · 已锁定以避免重复任务"
+          : "创建状态待核 · 本次开工已锁定，禁止换标识重复创建" }}</span>
+        <button
+          type="button"
+          class="open-plan-btn cta-clay"
+          :disabled="opening === conversationId"
+          @click="reconcileBatchCreation"
+        >{{ opening === conversationId
+          ? "正在核对…"
+          : batchCreationJournalCorrupt ? "查看处理提示" : "核对原开工请求" }}</button>
+      </div>
       <div v-if="pendingFiles.length" class="composer-files">
         <!-- 附件 chip 四件：图标+名称+大小+移除。逐文件上传相位如实呈现
              （uploadPhase 同源真实状态）：uploading=clay「上传中…」（工作/进行中
@@ -447,87 +515,9 @@
             :disabled="interactionPolicy.canAttach !== true"
           >
             <button class="icon-btn" :disabled="interactionPolicy.canAttach !== true" title="添加附件（≤5 个/条；文本类直读、xlsx 预览）" aria-label="添加附件">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.49"/></svg>
+              <el-icon :size="20" aria-hidden="true"><Paperclip /></el-icon>
             </button>
           </el-upload>
-          <!-- Agent 选择器（范式 2b：门户降级为 composer 内浏览）：点选只把
-               Agent 名填进草稿并聚焦——问导引怎么用它，绝不代发（人是唯一发起者）。 -->
-          <el-popover
-            v-model:visible="agentPickerOpen"
-            placement="top-start"
-            :width="320"
-            :popper-options="agentPickerPopperOptions"
-            trigger="click"
-            popper-class="agent-pick-pop"
-          >
-            <template #reference>
-              <button
-                ref="agentPickerTriggerEl"
-                class="icon-btn"
-                :disabled="interactionPolicy.canSelectAgent !== true"
-                title="浏览可用 Agent"
-                aria-label="浏览可用 Agent"
-                aria-haspopup="dialog"
-                :aria-expanded="agentPickerOpen"
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>
-              </button>
-            </template>
-            <!-- D-4 键盘语义：Esc 关闭并返还焦点给触发钮；↑↓ 在 .ap-item 间真焦点
-                 roving（原生 button，Enter/Space 由浏览器激活走既有 pickAgent）。 -->
-            <div class="agent-pick" role="dialog" aria-label="选择 Agent" @keydown="onAgentPickerKeydown">
-              <!-- 错误态只显示错误行（「· 0」会被误读成平台真没有 Agent——
-                   AgentPortal 同款语义区分）；真零态如实显示空态文案。 -->
-              <div v-if="pickAgentsError" class="ap-error">{{ pickAgentsError }}</div>
-              <template v-else>
-                <div class="ap-head">
-                  <div class="ap-title">
-                    可用 Agent · {{ agentPickerVisibleCount }}<template v-if="agentPickerQuery.trim()"> / {{ pickAgents.length }}</template>
-                  </div>
-                  <input
-                    ref="agentPickerSearchEl"
-                    v-model="agentPickerQuery"
-                    type="search"
-                    class="ap-search"
-                    :disabled="interactionPolicy.canSelectAgent !== true"
-                    placeholder="搜索 Agent"
-                    aria-label="搜索可用 Agent"
-                  />
-                </div>
-                <div class="ap-scroll">
-                  <button
-                    v-for="a in agentPickerItems"
-                    :key="a.id"
-                    type="button"
-                    class="ap-item"
-                    :disabled="interactionPolicy.canSelectAgent !== true"
-                    :aria-label="`选择 ${a.name}，${categoryLabel(a.category)}，${agentPickerDetail(a)}`"
-                    @click="pickAgent(a)"
-                  >
-                    <span class="ap-dot" :style="{ background: categoryColor(a.category) }"></span>
-                    <span class="ap-main">
-                      <span class="ap-name-row">
-                        <span class="ap-name" :title="a.name">{{ a.name }}</span>
-                        <span v-if="a.maturity" class="ap-maturity" :title="maturityTip(a.maturity)">{{ a.maturity }}</span>
-                      </span>
-                      <!-- 快速选择只保留一行安全优先信息：有边界先显边界，无边界才
-                           回退能力摘要；完整说明仍在门户，避免弹层变成第二个门户。 -->
-                      <span class="ap-detail" :title="agentPickerDetail(a)">{{ agentPickerDetail(a) }}</span>
-                    </span>
-                  </button>
-                  <div v-if="!agentPickerItems.length" class="ap-zero">
-                    {{ pickAgents.length ? "没有匹配的 Agent" : "暂无可用 Agent" }}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  class="ap-portal-link"
-                  :disabled="interactionPolicy.canSelectAgent !== true"
-                  @click="openAgentPortal"
-                >完整门户 →</button>
-              </template>
-            </div>
-          </el-popover>
           <el-input
             v-model="draft"
             type="textarea"
@@ -550,16 +540,14 @@
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
           </button>
-          <button v-else class="send-btn cta-clay" :disabled="interactionPolicy.canSend !== true || !draft.trim()" aria-label="发送" @click="send">
+          <button v-else class="send-btn cta-clay" :disabled="interactionPolicy.canSend !== true || (!draft.trim() && pendingFiles.length === 0)" aria-label="发送" @click="send">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
           </button>
         </div>
       </div>
-      <!-- 政策句压成一句（「导引不会替你创建」是 m6 e2e 锚，字面保留）；
-           快捷键仍 hover/聚焦才显。 -->
       <div class="composer-hint">
-        <span>导引不会替你创建或签发；这里产出的只是草案。</span>
-        <span class="keys"><kbd>Enter</kbd> 发送<span class="sep">·</span><kbd>⇧ Enter</kbd> 换行<span class="sep">·</span>📎 可带附件</span>
+        <span class="composer-policy">{{ retryContextChecking ? "正在核对失败任务…" : batchCreationNeedsReconciliation ? "创建状态待核 · 本次开工核对前已锁定" : activeRetryOf ? "正在处理失败任务 · 审计血缘会自动保留" : "系统会在后台准备方案 · 开工与签发仍由你确认" }}</span>
+        <span class="keys"><kbd>Enter</kbd> 发送<span class="sep">·</span><kbd>⇧ Enter</kbd> 换行<span class="sep">·</span>可带附件</span>
       </div>
       </div>
     </div>
@@ -578,6 +566,19 @@
       <span>回到底部</span>
       <span v-if="newContentCount > 0" class="btb-count">{{ newContentCount > 99 ? "99+" : newContentCount }}</span>
     </button>
+    </div>
+
+    <!-- 旧资产字段式抽屉仅保留给 UI 验收台回看，不再是工程师 Guide 壳的可达入口。
+         真实资产沉淀必须后续接入同一主对话：系统先自动归纳，缺口继续自然追问。 -->
+    <AssetBuilderDrawer
+      v-if="acceptanceMode && assetBuilderOpen"
+      v-model="assetBuilderOpen"
+      :conversation-id="conversationId"
+      :messages="messages"
+      :initial-step="assetBuilderInitialStep"
+      :initial-generalization="assetBuilderInitialGeneralization"
+      :initial-preview="assetBuilderInitialPreview"
+    />
   </div>
 </template>
 
@@ -585,17 +586,23 @@
 import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import {
-  Aim,
-  Connection,
-  Search,
-  Tools,
-} from "@element-plus/icons-vue";
+import { Paperclip } from "@element-plus/icons-vue";
 import { createConversation, postMessageStream, getConversation } from "../api/conversations";
-import { createTeam } from "../api/teams";
 import { unwrapDetail } from "../api/client";
-import { createTask, createTasksBatch } from "../api/tasks";
-import { listAgents, getAgent } from "../api/agents";
+import {
+  createTaskAssetCandidate,
+  decideAssetCandidate,
+  decideSkillPackage,
+  getSkillPackageReviewContent,
+  getTaskAssetCandidate,
+} from "../api/assetCandidates.js";
+import {
+  batchCreatePersistenceUnknown,
+  createBatchOperationId,
+  createTasksBatch,
+  getTask,
+} from "../api/tasks.js";
+import { getAgent } from "../api/agents";
 import { uploadFile as apiUploadFile } from "../api/files";
 import {
   ensureTaskEvidence,
@@ -603,14 +610,15 @@ import {
   taskEvidenceSummary,
   taskEvidenceWithheld,
 } from "../stores/taskEvidence";
-import { categoryColor, categoryLabel, categoryTip, maturityTip, agentStatusLabel, MATURITY, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime, formatFileSize } from "../utils/format";
+import { agentStatusLabel, MATURITY, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime, formatFileSize } from "../utils/format";
 import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
 import { useAgentNames } from "../stores/agentNames";
 import EvidenceList from "../components/EvidenceList.vue";
+import AssetCandidateCallout from "../components/AssetCandidateCallout.vue";
+import FeatureAssetMapDisclosure from "../components/FeatureAssetMapDisclosure.vue";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";
-import { agentPickerDetail, filterAgentPickerItems } from "../utils/agentPickerVisual";
 import {
   conversationInteractionPolicy,
   conversationStreamFailurePolicy,
@@ -618,10 +626,35 @@ import {
 } from "../utils/ndjsonStream.js";
 import { distanceFromBottom, shouldFollowScroll } from "../utils/scrollFollow.js";
 import { recordConversationFirstUserContent } from "../utils/conversationTitles.js";
+import {
+  clearBatchCreationAttempt,
+  persistBatchCreationAttempt,
+  restoreBatchCreationAttempt,
+} from "../utils/batchCreationJournal.js";
 import FlaiBloom from "../components/artwork/FlaiBloom.vue";
 import MarkdownLite from "../components/MarkdownLite.vue";
-import OnboardingCard from "../components/OnboardingCard.vue";
-import { displayName } from "../stores/session";
+import AssetBuilderDrawer from "../components/AssetBuilderDrawer.vue";
+import {
+  agentExecutionReady,
+  automaticTaskName,
+  conversationSnapshotMatches,
+  currentWorkSegmentFiles,
+  internalConversationRouteBindingMatches,
+  latestActionablePlanIndex,
+  normalizeRetryLineage,
+  planAttachmentRouting,
+  planHasIncompleteOrchestration,
+  retryLineageForPlanItem,
+  verifiedFailedRetryLineage,
+} from "../utils/conversationPlans.js";
+import {
+  assetCandidateReconcileCreateReason,
+  assetCandidateRequestIsCurrent,
+  eligibleAssetCandidateTask,
+  normalizeSkillPackageReviewContent,
+  normalizeSkillReuseRef,
+  verifyAssetCandidateIntegrity,
+} from "../utils/assetCandidates.js";
 
 // UI 验收台通过独立 Vite 开发入口传入状态快照。正式应用永远忽略该 prop：
 // 它只控制可视状态，不模拟网络、不写会话、不产生“假流式”。
@@ -635,6 +668,66 @@ const acceptanceFixture = import.meta.env.DEV ? props.acceptanceFixture : null;
 const acceptanceMode = Boolean(acceptanceFixture);
 
 const router = useRouter();
+const route = useRoute();
+const requestedRetryOf = computed(() => normalizeRetryLineage(route.query.retry_of));
+// URL 只表达恢复意图；必须读取服务端权威任务并确认 status 字面为 failed 后，
+// 才能展示/携带 retry_of。核对期间主输入 fail-closed，避免用户在假恢复语义下发送。
+const verifiedRetryOf = ref(null);
+const retryContextChecking = ref(
+  !acceptanceMode && requestedRetryOf.value !== null,
+);
+const activeRetryOf = computed(() => verifiedRetryOf.value);
+// 失败回流只允许新一轮对话生成的方案开工；历史方案即便仍是最后一条 assistant
+// 消息也不能复活成重跑按钮。该门只由本次 retry query 下的 canonical 回复开启。
+const retryPlanArmed = ref(false);
+let retryValidationSeq = 0;
+
+async function removeRetryQuery() {
+  if (!Object.hasOwn(route.query, "retry_of")) return true;
+  const query = { ...route.query };
+  delete query.retry_of;
+  try {
+    await router.replace({ path: "/", query });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function validateRetryContext(raw = route.query.retry_of) {
+  if (acceptanceMode) return;
+  const seq = ++retryValidationSeq;
+  retryPlanArmed.value = false;
+  verifiedRetryOf.value = null;
+  const candidate = normalizeRetryLineage(raw);
+  if (!candidate) {
+    retryContextChecking.value = false;
+    if (raw !== undefined) {
+      ElMessage.info("恢复入口无效——已按普通对话打开，不会写入重跑血缘");
+      await removeRetryQuery();
+    }
+    return;
+  }
+
+  retryContextChecking.value = true;
+  try {
+    const task = await getTask(candidate);
+    if (seq !== retryValidationSeq) return;
+    const verified = verifiedFailedRetryLineage(task, candidate);
+    if (verified) {
+      verifiedRetryOf.value = verified;
+      return;
+    }
+    ElMessage.info("该任务不是失败态——已按普通对话打开，不会伪造重跑血缘");
+    await removeRetryQuery();
+  } catch {
+    if (seq !== retryValidationSeq) return;
+    ElMessage.warning("未找到可恢复的失败任务——已按普通对话打开");
+    await removeRetryQuery();
+  } finally {
+    if (seq === retryValidationSeq) retryContextChecking.value = false;
+  }
+}
 
 // 附件控件双 Tab 停靠修复（B6c）：el-upload 外壳被 EP 硬编码 tabindex=0 +
 // role=button，与内层 icon-btn（aria-label「添加附件」，m6 锚不动）重复一站。
@@ -642,21 +735,15 @@ const router = useRouter();
 // 框的既有行为不受影响。updated 钩子覆盖 disabled 切换引发的外壳属性重渲染。
 // 不加 aria-hidden——外壳是 icon-btn 祖先，挂上会把真控件一并对 AT 藏掉。
 function neutralizeAttachShell(el) {
-  el.removeAttribute("tabindex");
-  el.removeAttribute("role");
+  const shell = el.matches(".el-upload") ? el : el.querySelector(".el-upload");
+  if (!shell) return;
+  shell.removeAttribute("tabindex");
+  shell.removeAttribute("role");
 }
 const vAttachShellA11y = { mounted: neutralizeAttachShell, updated: neutralizeAttachShell };
 
 const GUIDE_AGENT_ID = "guide_agent";
 const MAX_FILES_PER_MESSAGE = 5; // 与后端 PostMessageRequest / 运行时同值
-const agentPickerPopperOptions = {
-  modifiers: [
-    {
-      name: "preventOverflow",
-      options: { padding: 12 },
-    },
-  ],
-};
 
 const started = ref(acceptanceFixture?.started === true);
 const conversationId = ref(acceptanceFixture?.conversationId || "");
@@ -678,21 +765,84 @@ const reconciliationRequired = ref(
   acceptanceFixture?.reconciliationRequired === true
 );
 const reconciling = ref(false);
-const interactionPolicy = computed(() =>
-  conversationInteractionPolicy({
+// POST /tasks/batch 的响应若在 COMMIT 后丢失，不能把「没收到响应」画成「零任务」。
+// 按会话保留原 operation_id + 原载荷，只允许同 key 核对重放；当前会话在核对前
+// 连同 composer 一起锁住，避免生成第二份方案或换 key 重建。
+const batchCreationUnknownByConversation = reactive({});
+const batchCreationUnknown = computed(() => (
+  conversationId.value
+    ? batchCreationUnknownByConversation[conversationId.value] || null
+    : null
+));
+const batchCreationJournalCorrupt = computed(
+  () => batchCreationUnknown.value?.journalCorrupt === true,
+);
+const batchCreationNeedsReconciliation = computed(
+  () => batchCreationUnknown.value !== null,
+);
+
+function restoreBatchCreationForConversation(id) {
+  if (acceptanceMode || !id) return;
+  const restored = restoreBatchCreationAttempt(id);
+  if (restored.state === "ready") {
+    batchCreationUnknownByConversation[id] = restored.attempt;
+    return;
+  }
+  if (restored.state === "corrupt") {
+    // 不能删除或覆盖无法读取的原操作日志，否则下一次点击会换 operation_id，
+    // 在旧请求已 COMMIT 时制造重复任务。保守锁住当前会话并给出处理提示。
+    batchCreationUnknownByConversation[id] = {
+      conversationId: id,
+      operationId: null,
+      journalCorrupt: true,
+    };
+  }
+}
+
+function clearDurableBatchCreation(attempt) {
+  if (!attempt || attempt.journalCorrupt === true) return false;
+  const cleared = clearBatchCreationAttempt(
+    attempt.conversationId,
+    attempt.operationId,
+  );
+  if (
+    cleared === true
+    && batchCreationUnknownByConversation[attempt.conversationId]?.operationId ===
+      attempt.operationId
+  ) {
+    delete batchCreationUnknownByConversation[attempt.conversationId];
+  }
+  return cleared;
+}
+const interactionPolicy = computed(() => {
+  const policy = conversationInteractionPolicy({
     sending: sending.value,
     restoring: restoring.value,
     reconciliationRequired: reconciliationRequired.value,
-  })
+  });
+  if (
+    retryContextChecking.value !== true &&
+    batchCreationNeedsReconciliation.value !== true
+  ) return policy;
+  return { ...policy, canSend: false, canAttach: false };
+});
+// 旧字段式资产整理仅供 UI 验收台回看；真实 Guide 壳没有入口，也不会挂载。
+const assetBuilderOpen = ref(
+  acceptanceMode && acceptanceFixture?.assetBuilderOpen === true,
 );
+const assetBuilderInitialStep = acceptanceFixture?.assetBuilderStep || 1;
+const assetBuilderInitialGeneralization = acceptanceFixture?.assetDraftGeneralization || null;
+const assetBuilderInitialPreview = acceptanceFixture?.assetDraftPreview || null;
 const pageError = ref(acceptanceFixture?.pageError || "");
 const streamEl = ref(null);
-// composer placeholder 只保留动作词；意图卡已在同屏，不在输入框里重复解释。
-// 对账锁期间（B4）换成核对指引——锁定期输入被 interactionPolicy 禁用，
-// placeholder 如实说明解锁路径；非锁定期两个字面原样不动（e2e 锚核查：
-// m6 等套件未断言 composer placeholder 字面）。
+// 对账锁期间换成核对指引；正常态只提示工程师提供目标或补充信息，不要求
+// 选择 Agent、模型、工具、工作流，也不暴露参数字段。
 const composerPlaceholder = computed(() =>
-  reconciliationRequired.value
+  retryContextChecking.value
+    ? "正在核对失败任务…"
+    : batchCreationNeedsReconciliation.value
+    ? "创建状态待核——请先核对本次开工"
+    : reconciliationRequired.value
     ? "保存状态待核——请先刷新会话核对"
     : !started.value && messages.value.length === 0
       ? "描述工程需求…"
@@ -715,20 +865,6 @@ const greeting = computed(() => {
   if (h >= 18 && h < 23) return "晚上好。";
   return resolvedTheme.value === "dark" ? "夜航中？" : "夜深了，辛苦。"; // 23:00–次日 5:00
 });
-
-// 空状态四意图卡（Claude 起手 chips 升级版）：与 AGENT_CATEGORY 四分类一一配对，
-// 点一下把示例填进输入框并聚焦，用户再改再发（绝不代发）。
-// 图标统一来自 Element Plus 矢量库；分类色与信任色分轴，只用于能力类别识别。
-const INTENT_EXAMPLES = [
-  { category: "tool_automation", icon: Tools, example: "给这批性能盘 case 做批量核算，出汇总" },
-  { category: "knowledge_qa", icon: Search, example: "查一下供电系统适航规范的相关依据" },
-  { category: "structured_gen", icon: Connection, example: "做双通道供电系统的控制逻辑和故障树分析" },
-  { category: "reasoning_assist", icon: Aim, example: "帮我起草一份 XX 系统失效的 FTA 顶事件分析" },
-];
-function setExample(text) {
-  draft.value = text;
-  focusComposer();
-}
 
 function handleFileSelect(uploadFile) {
   if (interactionPolicy.value.canAttach !== true) return;
@@ -788,12 +924,6 @@ function inputCount(agent) {
   return Object.keys(agent.prefilled_inputs || {}).length;
 }
 
-// 预填值紧凑渲染：标量直显（值恒在可见 DOM 文本流——诚实地板 + m6 e2e 锚
-// top_event/供电完全丧失 不依赖点击）；对象/数组回退单行 JSON。
-function formatDraftVal(v) {
-  return v !== null && typeof v === "object" ? JSON.stringify(v) : String(v);
-}
-
 function focusComposer() {
   // 逃生行：只聚焦并滚到既有输入框，绝不读写 draft——调整方案仍由用户在
   // composer 里亲手打字表达，导引不代写。
@@ -801,74 +931,6 @@ function focusComposer() {
   if (!el) return;
   el.focus();
   el.scrollIntoView({ behavior: "smooth", block: "center" });
-}
-
-// ── Agent 选择器（范式 2b：门户降级为 composer 内浏览）──
-// 只列可被召集的执行型 Agent（过滤 disabled 与 interactive——导引自己不列
-// 自己）；点选只填草稿+聚焦，人自己描述需求再发送。
-const pickAgents = ref(
-  (acceptanceFixture?.agents || []).map((agent) => ({
-    ...agent,
-    limitations: Array.isArray(agent.limitations)
-      ? [...agent.limitations]
-      : [],
-  }))
-);
-const pickAgentsError = ref("");
-const agentPickerOpen = ref(acceptanceFixture?.agentPickerOpen === true);
-const agentPickerQuery = ref("");
-const agentPickerSearchEl = ref(null);
-const agentPickerTriggerEl = ref(null);
-const agentPickerItems = computed(() => filterAgentPickerItems(pickAgents.value, agentPickerQuery.value));
-const agentPickerVisibleCount = computed(() => agentPickerItems.value.length);
-onMounted(async () => {
-  if (acceptanceMode) return;
-  try {
-    const list = await listAgents();
-    pickAgents.value = (list || []).filter((a) => a.status !== "disabled" && a.mode !== "interactive");
-  } catch (err) {
-    pickAgentsError.value = err.detail || err.message || "Agent 列表加载失败";
-  }
-});
-function pickAgent(a) {
-  if (interactionPolicy.value.canSelectAgent !== true) return;
-  draft.value = `我想用「${a.name}」做：`;
-  agentPickerOpen.value = false;
-  nextTick(focusComposer);
-}
-function openAgentPortal() {
-  if (interactionPolicy.value.canSelectAgent !== true) return;
-  agentPickerOpen.value = false;
-  router.push("/portal");
-}
-watch(agentPickerOpen, (open) => {
-  if (open) nextTick(() => agentPickerSearchEl.value?.focus());
-  else agentPickerQuery.value = "";
-});
-// D-4 键盘语义（选改动小的真焦点方案，不引 aria-activedescendant）：
-// - Esc：关闭弹层并把焦点还给触发钮（dialog 关闭焦点返还的 WAI 约定）；
-// - ↑↓：在列表项间 roving——真 DOM 焦点在 .ap-item（原生 button）间循环，
-//   搜索框内 ↓ 落首项、↑ 落末项；Enter/Space 选中由浏览器原生激活 button，
-//   走既有 @click="pickAgent" 语义（点选只填草稿绝不代发），逻辑零分叉；
-// - 打开时焦点落搜索框由上方既有 watch 保持。
-function onAgentPickerKeydown(e) {
-  if (e.key === "Escape") {
-    e.preventDefault();
-    agentPickerOpen.value = false;
-    nextTick(() => agentPickerTriggerEl.value?.focus());
-    return;
-  }
-  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-  // popper teleport 到 body，按 class 取当前实例；政策门全禁时列表为空，直接返回。
-  const items = Array.from(document.querySelectorAll(".agent-pick .ap-item:not(:disabled)"));
-  if (!items.length) return;
-  e.preventDefault();
-  const idx = items.indexOf(document.activeElement);
-  const next =
-    e.key === "ArrowDown"
-      ? idx < 0 ? 0 : (idx + 1) % items.length
-      : idx < 0 ? items.length - 1 : (idx - 1 + items.length) % items.length;
-  items[next].focus();
 }
 
 function adoptReframe(text) {
@@ -902,24 +964,6 @@ onUnmounted(() => { if (sendTimer) clearInterval(sendTimer); });
 const thinkingSeconds = computed(() =>
   sendStartedAt.value ? Math.max(0, Math.round((sendNow.value - sendStartedAt.value) / 1000)) : 0
 );
-
-// ── 演示任务预填（评审 N2）──────────────────────────────────────────────
-// 与导引草案同一 sessionStorage 契约（TaskCreate 按 from=demo 读取并给演示
-// 语境横幅）；inputs 示例值=登录显示名——是用户自己的名字不是编造工程数据，
-// 且创建页人可改可核后亲手提交（预填 ≠ 代建）。
-function startDemoTask() {
-  sessionStorage.setItem(
-    "flai_prefill",
-    JSON.stringify({
-      agent_id: "hello_agent",
-      inputs: { name: displayName() || "同事" },
-      files: [],
-      conversation_id: null,
-      conclude_after: false,
-    })
-  );
-  router.push({ path: "/tasks/new", query: { agent_id: "hello_agent", from: "demo" } });
-}
 
 // ── 复制需求摘要（评审 N6）──────────────────────────────────────────────
 // 内网 http 非 secure context，navigator.clipboard 大概率不可用——必须带
@@ -973,7 +1017,7 @@ async function copyRefusedNeed(idx) {
   }
   lines.push("（来自 FLAi-OS 导引对话——请平台负责人按家底口径评估排期）");
   const ok = await copyText(lines.join("\n"));
-  if (ok === true) ElMessage.success("需求摘要已复制——发给平台负责人登记，别让它溜走");
+  if (ok === true) ElMessage.info("需求摘要已复制——发给平台负责人登记，别让它溜走");
   else ElMessage.error("复制失败——请手动选取文字复制");
 }
 
@@ -1092,11 +1136,19 @@ function stopStreaming() {
 async function send() {
   if (interactionPolicy.value.canSend !== true) return;
   const content = draft.value.trim();
-  if (!content) return;
+  if (!content && pendingFiles.value.length === 0) return;
   if (acceptanceMode) {
     ElMessage.info("这是只读 UI 状态快照；真实发送请回到正式对话页面");
     return;
   }
+  // 一轮发送开始就钉死恢复来源。GuidePage 在 query 变化时不重挂，模型在飞期间
+  // 地址栏可能切到另一失败任务；后续整轮只能沿用这个快照，绝不读取“返回时”的 URL。
+  const submittedRetryOf = activeRetryOf.value;
+  const retryContextMatchesSubmitted = () => (
+    activeRetryOf.value === submittedRetryOf
+    && requestedRetryOf.value === submittedRetryOf
+  );
+  let submittedConversationId = conversationId.value;
   pageError.value = "";
 
   // 上一轮若在收到部分 delta 后中断，页面会保留一组明确标成「未保存」的
@@ -1113,6 +1165,13 @@ async function send() {
     transient: true,
   });
   messages.value.push(optimisticUser);
+  const cancelUnsentForConversationSwitch = () => {
+    const optimisticIndex = messages.value.indexOf(optimisticUser);
+    if (optimisticIndex >= 0) messages.value.splice(optimisticIndex, 1);
+    draft.value = content;
+    pageError.value = "";
+    ElMessage.info("会话或失败恢复入口已切换——本轮尚未发送，原话已退回主输入");
+  };
   draft.value = "";
   // 用户亲手发送=明确回到最新内容的意图：复位跟随守卫再滚底——上一轮若处于
   // 上滚脱离态，新一轮仍从贴底跟随开始。
@@ -1129,16 +1188,68 @@ async function send() {
     // 上传收尾后重锚思考计时：thinkingSeconds 只讲模型等待的真话，不把
     // 上传耗时算进「导引思考中 Ns」（Codex R0 审 P2 的分阶段诚实口径）。
     sendStartedAt.value = Date.now();
-    if (!conversationId.value) {
-      // Codex R0 P1：Agent 门户「开始对话」携 ?agent=<id> 直达该垂类交互包
-      //（policy_qa/standards_qa）；无参默认导引。id 合法性由后端建会接口
-      // 判定（不存在/非 interactive → 如实报错，不静默回退导引）。
-      const conv = await createConversation({ agentId: targetAgentId.value });
+    const routeConversationBeforePost = typeof route.query.c === "string" ? route.query.c : "";
+    if (retryContextMatchesSubmitted() !== true) {
+      cancelUnsentForConversationSwitch();
+      return;
+    }
+    if (submittedConversationId) {
+      if (
+        conversationId.value !== submittedConversationId ||
+        (routeConversationBeforePost && routeConversationBeforePost !== submittedConversationId)
+      ) {
+        cancelUnsentForConversationSwitch();
+        return;
+      }
+    } else {
+      // 空白新会话在上传/建会等待期间若已切到历史会话，不得把原轮次偷渡过去。
+      if (conversationId.value || routeConversationBeforePost) {
+        cancelUnsentForConversationSwitch();
+        return;
+      }
+      // 工程师壳始终由 guide_agent 接住自然语言或附件；所需能力由导引在会话内
+      // 自动编排，不读取 URL 里的手工执行单元选择。
+      const conv = await createConversation({ agentId: GUIDE_AGENT_ID });
+      const routeConversationAfterCreate = typeof route.query.c === "string" ? route.query.c : "";
+      if (
+        conversationId.value
+        || routeConversationAfterCreate
+        || retryContextMatchesSubmitted() !== true
+      ) {
+        cancelUnsentForConversationSwitch();
+        return;
+      }
       conversationId.value = conv.id;
+      submittedConversationId = conv.id;
       conversationStatus.value = conv.status || "active";
       started.value = true;
       // URL 反映当前会话（可刷新/分享/回退），并让左栏历史即时收录这条新会话。
-      router.replace({ path: "/", query: { c: conv.id } });
+      // 先挂一次性内部绑定，再触发 replace。watcher 会精确消费这一拍而不把它
+      // 当成外部切会话；仅仅 await replace 不能阻止 watcher 在导航确认前重读空会话。
+      const internalBinding = armInternalRouteBinding(conv.id, submittedRetryOf);
+      try {
+        await router.replace({
+          path: "/",
+          query: {
+            c: conv.id,
+            ...(submittedRetryOf ? { retry_of: submittedRetryOf } : {}),
+          },
+        });
+      } catch (error) {
+        clearInternalRouteBinding(internalBinding);
+        throw error;
+      }
+    }
+    const routeConversationBeforeMessage = typeof route.query.c === "string"
+      ? route.query.c
+      : "";
+    if (
+      retryContextMatchesSubmitted() !== true
+      || conversationId.value !== submittedConversationId
+      || (routeConversationBeforeMessage && routeConversationBeforeMessage !== submittedConversationId)
+    ) {
+      cancelUnsentForConversationSwitch();
+      return;
     }
     messageRequestStarted = true;
     // 流式停止钮把手：请求级 AbortController 透传到 fetch 层，停止即真实断连
@@ -1146,12 +1257,18 @@ async function send() {
     streamAbort.value = new AbortController();
     stopRequested.value = false;
     const res = await postMessageStream(
-      conversationId.value,
+      submittedConversationId,
       content,
       fileIds,
       {
         signal: streamAbort.value.signal,
         onDelta(text) {
+          const routeConversationId = typeof route.query.c === "string" ? route.query.c : "";
+          if (
+            conversationId.value !== submittedConversationId ||
+            (routeConversationId && routeConversationId !== submittedConversationId) ||
+            retryContextMatchesSubmitted() !== true
+          ) return;
           if (!provisionalAssistant) {
             provisionalAssistant = reactive({
               role: "assistant",
@@ -1171,9 +1288,24 @@ async function send() {
       },
     );
 
+    const routeConversationId = typeof route.query.c === "string" ? route.query.c : "";
+    if (
+      conversationId.value !== submittedConversationId ||
+      (routeConversationId && routeConversationId !== submittedConversationId) ||
+      retryContextMatchesSubmitted() !== true
+    ) {
+      // 服务端已把这一轮原子保存到原会话；当前页面已切走，不能把旧回复混进新会话。
+      pokeConversation(submittedConversationId);
+      ElMessage.info("原会话的回复已保存——当前会话未混入旧回复，可从历史记录打开查看");
+      return;
+    }
+
     // canonical done 已抵达：这一轮才算后端原子落库成功。用权威 message
     // 整体替换临时增量（含 recommendation / created_at），消除分片差异。
     optimisticUser.transient = false;
+    // post-message 的 canonical assistant 与同事务 user 共用同一保存轮次；当前接口
+    // 只回 assistant 时间戳，作为工作段排序代理。缺失时保留 null，边界存在则排除。
+    optimisticUser.createdAt = res.message.created_at || null;
     if (optimisticAttachments.length) {
       optimisticUser.attachments = pendingFiles.value.map((f) => ({
         id: f.fileId,
@@ -1186,10 +1318,26 @@ async function send() {
       content: res.message.content,
       recommendation: res.message.recommendation || null,
       fresh: true,
+      // 恢复来源绑定到产生该方案的 canonical 轮次；导航丢失 query 时，这条
+      // 方案不会降级成普通开工并静默丢掉 retry_of。
+      retryOf: submittedRetryOf,
       createdAt: res.message.created_at || null,
       streaming: false,
       transient: false,
     };
+    const retryContextStillCurrent = (
+      activeRetryOf.value === submittedRetryOf &&
+      requestedRetryOf.value === submittedRetryOf
+    );
+    if (
+      submittedRetryOf &&
+      retryContextStillCurrent &&
+      canonicalAssistant.recommendation?.decision === "orchestrate"
+    ) {
+      retryPlanArmed.value = true;
+    } else if (submittedRetryOf && retryContextStillCurrent !== true) {
+      ElMessage.info("恢复入口已变化——本轮回复已保存，但旧方案不会开放开工；请重新发送确认");
+    }
     const provisionalIndex = provisionalAssistant
       ? messages.value.indexOf(provisionalAssistant)
       : -1;
@@ -1263,7 +1411,6 @@ async function send() {
       } else if (failure.retainUnconfirmedTurn) {
         // 超时、读流断开、提前 EOF、畸形 done 都可能发生在服务端 COMMIT 之后。
         // 保留本地未确认轮次且不自动还稿，明确要求刷新会话核对后再继续。
-        agentPickerOpen.value = false;
         if (!provisionalAssistant) {
           provisionalAssistant = reactive({
             role: "assistant",
@@ -1302,27 +1449,16 @@ async function send() {
   }
 }
 
+// batch 成功到 live feed 刷新的数秒窗口，由本地权威响应先划出工作段；feed
+// 一旦到位会以全部真实任务 created_at 继续对账。新会话/切会话时归零。
+const attachmentSegmentBoundaryMs = ref(0);
+
 function collectCarriedFiles() {
-  // 会话里发送成功的附件（真实 fileId）去重收集——随草案带入创建页。
-  // transient / 保存待核轮次不进入创建草案；只有 canonical done 后换成真实
-  // fileId 的成功气泡才可携带，避免本地 uid 冒充服务端文件 id。
-  const carried = [];
-  const seen = new Set();
-  for (const m of messages.value) {
-    if (
-      m.role !== "user" ||
-      !m.attachments ||
-      m.transient === true ||
-      m.persistenceUnknown === true
-    ) continue;
-    for (const a of m.attachments) {
-      if (a.id && !seen.has(a.id)) {
-        seen.add(a.id);
-        carried.push({ id: a.id, name: a.filename });
-      }
-    }
-  }
-  return carried;
+  return currentWorkSegmentFiles(
+    messages.value,
+    conversationTasks.value,
+    attachmentSegmentBoundaryMs.value,
+  );
 }
 
 function openWorkbench() {
@@ -1334,11 +1470,10 @@ function openWorkbench() {
 }
 
 // ── 原地召集（对话轴内联确认，范式 2a 单入口）─────────────────────────
-// 宪法边界：导引绝不代召集——「原地召集」「确认召集」两次点击都由人亲手完成，
-// 走与创建页完全相同的 POST /api/tasks（服务端 jsonschema 校验 fail-closed）。
-// 只在①多 Agent 方案（单 Agent 保留创建页 conclude_after 归档语义）②预填非空
-// ③会话无携带附件（附件必须经创建页人工过目）时提供；参数不全由 422 如实
-// 透出，引导走「去创建此任务」补全，绝不客户端猜校验。
+// 宪法边界：导引绝不代召集——自动路由只生成可解释方案，真正开工仍由人点击。
+// 单/多 Agent 统一走原子的 POST /api/tasks/batch（服务端 fail-closed）。只在
+// ①整份方案就绪 ②附件可被唯一、安全地路由时提供；信息不全回到同一 composer
+// 补充，绝不要求工程师填写参数表或手工挑选执行者。
 const opening = ref(null); // 「照此方案开工」进行中的会话 id（按会话作用域，CRS R1-P2：
 // 全局布尔会在切会话后把新会话的开工按钮一并禁死；API client 无超时，卡住的旧请求
 // 可无限期封锁新会话的唯一开工入口）
@@ -1350,66 +1485,96 @@ const locallySummoned = reactive({});
 // 只读会话不提供内联召集（否则创建必 409）。未知（null）= fail-closed 不提供。
 const conversationStatus = ref(acceptanceFixture?.conversationStatus || null);
 // Agent 输入契约缓存（Codex R0-P1）：POST /api/tasks 不做即时 schema 校验（校验在
-// worker 运行期），故「预填就绪」必须由前端按 input_schema.required 逐键判定后才
-// 提供内联路径——schema 拉不到 / 未知一律 fail-closed 回创建页路径。
-const agentSchemaCache = reactive({}); // agent_id -> { loaded: true, schema: object|null }
+// worker 运行期），故「自动整理就绪」必须由前端按 input_schema.required 或附件
+// 后缀契约逐项判定后才提供开工按钮——契约拉不到 / 未知一律 fail-closed，并留在
+// 当前对话继续追问，绝不回退到字段表。
+const agentSchemaCache = reactive({
+  ...(acceptanceFixture?.agentSchemas || {}),
+}); // agent_id -> { loaded: true, version, packageDigest, schema, inputMode, allowedExtensions }
+const agentSchemaLoadSeq = new Map();
 
-
-function fieldMatchesSchema(propSchema, v) {
-  // 轻量原语校验（string/number/integer/boolean/enum）：导引出案时已按当时 schema
-  // 逐字段校验，这里补的是「会话恢复后 Agent 契约已升级」的漂移窗（Codex R1-P2）。
-  // 只做原语级判定，object/array 等复杂类型放行交服务端/worker 权威校验。
-  if (!propSchema || typeof propSchema !== "object") return false; // 键已不在当前契约里
-  if (Array.isArray(propSchema.enum)) return propSchema.enum.includes(v);
-  const t = propSchema.type;
-  if (t === "string") return typeof v === "string";
-  if (t === "number") return typeof v === "number" && Number.isFinite(v);
-  if (t === "integer") return typeof v === "number" && Number.isInteger(v);
-  if (t === "boolean") return typeof v === "boolean";
-  return true;
-}
-
-function prefillSatisfiesSchema(schema, prefilled) {
-  // 就绪判据（纯函数，fail-closed）：schema 存在、required 明确、每个必填键在预填里
-  // 非空白、且每个预填键都通过当前契约的原语校验。这只是「提供内联入口」的门槛，
-  // 不替代服务端/worker 的权威校验。
-  if (!schema || typeof schema !== "object") return false;
-  const required = Array.isArray(schema.required) ? schema.required : null;
-  if (required === null) return false;
-  const props = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
-  const filled = prefilled || {};
-  const requiredOk = required.every((k) => {
-    const v = filled[k];
-    return v !== undefined && v !== null && String(v).trim() !== "";
-  });
-  const typesOk = Object.keys(filled).every((k) => fieldMatchesSchema(props[k], filled[k]));
-  return requiredOk === true && typesOk === true;
+async function refreshAgentSchema(agentId, { force = false } = {}) {
+  if (!force && agentId in agentSchemaCache) return agentSchemaCache[agentId];
+  const seq = (agentSchemaLoadSeq.get(agentId) || 0) + 1;
+  agentSchemaLoadSeq.set(agentId, seq);
+  agentSchemaCache[agentId] = {
+    loaded: false,
+    version: null,
+    packageDigest: null,
+    schema: null,
+    inputMode: null,
+    allowedExtensions: null,
+  };
+  try {
+    const detail = await getAgent(agentId);
+    // 旧预取响应不得覆盖一次更晚的人点击强制刷新；否则 cache 又会退回旧 schema。
+    if (agentSchemaLoadSeq.get(agentId) !== seq) return agentSchemaCache[agentId] || null;
+    agentSchemaCache[agentId] = {
+      loaded: true,
+      version: typeof detail?.version === "string" ? detail.version : null,
+      packageDigest: typeof detail?.package_snapshot_digest === "string"
+        ? detail.package_snapshot_digest
+        : null,
+      schema: (detail && detail.input_schema) || null,
+      inputMode: (detail && detail.input_mode) || null,
+      allowedExtensions: Array.isArray(detail?.input_allowed_extensions)
+        ? detail.input_allowed_extensions
+        : null,
+    };
+  } catch {
+    if (agentSchemaLoadSeq.get(agentId) !== seq) return agentSchemaCache[agentId] || null;
+    agentSchemaCache[agentId] = {
+      loaded: true,
+      version: null,
+      packageDigest: null,
+      schema: null,
+      inputMode: null,
+      allowedExtensions: null,
+    };
+  }
+  return agentSchemaCache[agentId];
 }
 
 function ensureAgentSchemasForMessages() {
   // 方案卡出现（新回复或历史恢复）即预取成员 Agent 的输入契约；失败记 null=不就绪。
+  // cache 条目携版本；真正开工仍强制刷新，绝不让 agent_id 永久绑定旧 schema。
   for (const m of messages.value) {
     const plan = m && m.recommendation;
     if (!plan || plan.decision !== "orchestrate" || !Array.isArray(plan.agents)) continue;
     for (const a of plan.agents) {
       const id = a.agent_id;
       if (!id || id in agentSchemaCache) continue;
-      agentSchemaCache[id] = { loaded: false, schema: null };
-      getAgent(id)
-        .then((detail) => {
-          agentSchemaCache[id] = {
-            loaded: true,
-            schema: (detail && detail.input_schema) || null,
-            // 输入模式：只有纯参数型（params）可走内联；file_upload 的 required
-            // 可为空数组，若不看模式会空洞通过后必失败「无输入文件」（Codex R1-P1）。
-            inputMode: (detail && detail.input_mode) || null,
-          };
-        })
-        .catch(() => {
-          agentSchemaCache[id] = { loaded: true, schema: null, inputMode: null };
-        });
+      void refreshAgentSchema(id);
     }
   }
+}
+
+async function refreshAgentSchemasForPlan(plan) {
+  const ids = [...new Set(
+    (Array.isArray(plan?.agents) ? plan.agents : [])
+      .map((agent) => agent?.agent_id)
+      .filter(Boolean),
+  )];
+  const entries = await Promise.all(
+    ids.map((agentId) => refreshAgentSchema(agentId, { force: true })),
+  );
+  const pinnedVersions = {};
+  const pinnedPackageDigests = {};
+  for (let index = 0; index < ids.length; index += 1) {
+    const entry = entries[index];
+    if (
+      entry?.loaded !== true ||
+      typeof entry.version !== "string" ||
+      !entry.version ||
+      typeof entry.packageDigest !== "string" ||
+      !/^[a-f0-9]{64}$/.test(entry.packageDigest)
+    ) {
+      return null;
+    }
+    pinnedVersions[ids[index]] = entry.version;
+    pinnedPackageDigests[ids[index]] = entry.packageDigest;
+  }
+  return ids.length > 0 ? { pinnedVersions, pinnedPackageDigests } : null;
 }
 
 // ── 实时子 agent 行引擎（owner 定向「像 codex 子 agent」）────────────────────
@@ -1600,42 +1765,134 @@ function stagelineText(t) {
   return "";
 }
 
-// 成员级就绪（fail-closed）：params 型 + 预填非空 + 过当前契约（required 齐 + 原语校验）。
-// Codex R0-R2 三轮收敛的全部门保留：file_upload/none/未知模式、空预填、契约漂移都不就绪。
-function agentReady(agent) {
-  const cached = agentSchemaCache[agent.agent_id];
-  return (
-    !!cached && cached.loaded === true &&
-    cached.inputMode === "params" &&
-    Object.keys(agent.prefilled_inputs || {}).length > 0 &&
-    prefillSatisfiesSchema(cached.schema, agent.prefilled_inputs || {})
+// 成员级就绪（fail-closed）：按 Agent 声明的输入模式确定性判定。
+// params 校验当前 schema；file_upload 校验真实已保存附件与后缀契约；none 只接受
+// 空输入。未知模式或契约漂移一律留在对话追问，不生成字段表。
+function agentReady(agent, files = collectCarriedFiles()) {
+  const contract = agentSchemaCache[agent.agent_id];
+  if (
+    contract?.loaded !== true ||
+    typeof contract.version !== "string" ||
+    !contract.version ||
+    typeof contract.packageDigest !== "string" ||
+    !/^[a-f0-9]{64}$/.test(contract.packageDigest)
+  ) return false;
+  return agentExecutionReady(
+    contract,
+    agent.prefilled_inputs || {},
+    files,
   );
 }
 
-// 方案级可开工门：会话可写 + 多 Agent 方案 + 无携带/未发送附件（附件必经创建页过目）。
+function attachmentRoutingForPlan(plan) {
+  return planAttachmentRouting(plan, agentSchemaCache, collectCarriedFiles());
+}
+
+function agentReadyForPlan(plan, agent) {
+  const routing = attachmentRoutingForPlan(plan);
+  if (routing.ready !== true) return false;
+  const assignedIds = new Set(routing.inputFileIdsByAgent[agent.agent_id] || []);
+  const assignedFiles = collectCarriedFiles().filter((file) => assignedIds.has(file.id));
+  return agentReady(agent, assignedFiles);
+}
+
+function planMaterialsForAgent(plan, agent) {
+  const routing = attachmentRoutingForPlan(plan);
+  if (routing.ready !== true || routing.canonical !== true) return [];
+  return routing.attachmentsByAgent[agent.agent_id] || [];
+}
+
+function ignoredPlanMaterials(plan) {
+  const routing = attachmentRoutingForPlan(plan);
+  if (routing.ready !== true || routing.canonical !== true) return [];
+  return routing.ignoredAttachments;
+}
+
+// 方案级可开工门：会话可写、至少一个 Agent、整份方案的结构化输入全部就绪。
+// 附件由系统路由：单 Agent 方案可安全地把本轮附件交给唯一执行者；多 Agent
+// 方案若仍有附件归属歧义则 fail-closed，回到同一个 composer 继续对话澄清，
+// 绝不把工程师送去字段表或要求其手工分配 Agent。
 function planOpenable(plan) {
+  if (planHasInvalidSkillReuse(plan) === true) return false;
+  if (planHasIncompleteOrchestration(plan) === true) return false;
+  const carriedFiles = collectCarriedFiles();
+  const attachmentRouting = planAttachmentRouting(
+    plan,
+    agentSchemaCache,
+    carriedFiles,
+  );
   return (
     !!conversationId.value &&
     conversationStatus.value === "active" &&
-    plan && Array.isArray(plan.agents) && plan.agents.length > 1 &&
-    collectCarriedFiles().length === 0 &&
-    pendingFiles.value.length === 0
+    batchCreationNeedsReconciliation.value !== true &&
+    // 先拿到本会话任务快照再判断附件工作段，避免历史任务尚未加载时短暂误开放。
+    (acceptanceMode || conversationTasksLoaded.value === true) &&
+    sending.value !== true &&
+    plan && Array.isArray(plan.agents) && plan.agents.length >= 1 &&
+    plan.agents.every((agent) => {
+      const assignedIds = new Set(attachmentRouting.inputFileIdsByAgent[agent.agent_id] || []);
+      const assignedFiles = carriedFiles.filter((file) => assignedIds.has(file.id));
+      return agentReady(agent, assignedFiles) === true;
+    }) &&
+    pendingFiles.value.length === 0 &&
+    attachmentRouting.ready === true
   );
-}
-
-function agentBatchable(agent, plan) {
-  return planOpenable(plan) === true && agentReady(agent) === true;
 }
 
 function summonedLocally(agent) {
   return locallySummoned[`${conversationId.value}:${agent.agent_id}`] === true;
 }
 
+function retryAlreadyStarted() {
+  if (!activeRetryOf.value) return false;
+  return conversationTasks.value.some(
+    (task) => task.retry_of === activeRetryOf.value,
+  );
+}
+
 function openableCount(plan) {
   if (planOpenable(plan) !== true) return 0;
-  return plan.agents.filter(
-    (a) => agentReady(a) === true && !agentTaskInfo(a) && !summonedLocally(a)
-  ).length;
+  const untouched = activeRetryOf.value
+    ? retryPlanArmed.value === true &&
+      retryAlreadyStarted() !== true &&
+      plan.agents.every((agent) => !summonedLocally(agent))
+    : plan.agents.every((agent) => !agentTaskInfo(agent) && !summonedLocally(agent));
+  return untouched ? plan.agents.length : 0;
+}
+
+function planHasTasks(plan) {
+  if (activeRetryOf.value && retryPlanArmed.value === true) {
+    return retryAlreadyStarted() || plan.agents.some((agent) => summonedLocally(agent));
+  }
+  return Array.isArray(plan?.agents) && plan.agents.some(
+    (agent) => !!agentTaskInfo(agent) || summonedLocally(agent)
+  );
+}
+
+function skillReuseStateForPlan(plan) {
+  if (!plan || typeof plan !== "object" || !Object.hasOwn(plan, "skill_reuse")) {
+    return { state: "absent", reference: null };
+  }
+  if (!Array.isArray(plan.agents)) return { state: "invalid", reference: null };
+  try {
+    return {
+      state: "valid",
+      reference: normalizeSkillReuseRef(plan.skill_reuse, {
+        expectedAgentIds: plan.agents.map((agent) => agent?.agent_id),
+      }),
+    };
+  } catch {
+    return { state: "invalid", reference: null };
+  }
+}
+
+function skillReuseForPlan(plan) {
+  const result = skillReuseStateForPlan(plan);
+  return result.state === "valid" ? result.reference : null;
+}
+
+function planHasInvalidSkillReuse(plan) {
+  return skillReuseStateForPlan(plan).state === "invalid";
 }
 
 // 「照此方案开工」（批七 §3-B6 切 batch，owner 裁决本批切换）：一键把全部就绪
@@ -1645,56 +1902,183 @@ function openableCount(plan) {
 // 重映射为批内下标 → 服务端映射真 depends_on。
 async function openPlan(plan) {
   if (opening.value === conversationId.value && opening.value !== null) return;
+  if (planHasInvalidSkillReuse(plan)) {
+    ElMessage.warning("Skill 复用证据无法核验，本次未创建任务；请继续对话让系统重新编排。");
+    focusComposer();
+    return;
+  }
+  if (planHasIncompleteOrchestration(plan)) {
+    ElMessage.warning("方案有执行单元未能纳入，请继续说明或让系统重新编排");
+    focusComposer();
+    return;
+  }
   if (planOpenable(plan) !== true) {
-    ElMessage.error("条件已变化（会话归档 / 新增附件），请刷新方案或走「去创建此任务」。");
+    ElMessage.error("方案信息尚未全部就绪——请在下方继续说明或发送待处理附件。");
     return;
   }
   // 会话 id 提前钉死（CRS R0-P1 语义保留）：原子端点下不存在「中途切会话」的
   // 半建窗口，但请求发出前仍须复核未切换，绝不把旧方案的任务写进别的会话。
   const approvedConvId = conversationId.value;
-  // targets 保持方案顺序；after（方案下标）→ 批内下标重映射。引用成员不在本批
-  // （已召集/未就绪被跳过）→ 剥离该引用降级并行——跨批依赖 batch 契约表达不了，
-  // 猜测补链比诚实降级更坏（与 guide 后端剥离语义同一口径）。
-  const targets = [];
-  const planIdxToBatchIdx = new Map();
-  plan.agents.forEach((a, pi) => {
-    if (agentReady(a) === true && !agentTaskInfo(a) && !summonedLocally(a)) {
-      planIdxToBatchIdx.set(pi, targets.length);
-      targets.push({ a, pi });
-    }
-  });
-  if (targets.length === 0) return;
+  const approvedRetryOf = activeRetryOf.value;
+  const submittedPlanSnapshot = {
+    conversationId: approvedConvId,
+    retryOf: approvedRetryOf,
+  };
+  // 整份方案一次原子创建；绝不只启动 ready 子集，也不静默剥离依赖。
+  const targets = plan.agents.map((agent) => ({ a: agent }));
+  if (
+    approvedRetryOf === null &&
+    targets.some(({ a }) => agentTaskInfo(a) || summonedLocally(a))
+  ) return;
   opening.value = approvedConvId;
+  let batchAttempt = null;
   try {
-    if (conversationId.value !== approvedConvId) {
-      ElMessage.error("会话已切换，本次召集未执行（未创建任何任务）。");
+    const refreshedPins = await refreshAgentSchemasForPlan(plan);
+    if (!conversationSnapshotMatches(submittedPlanSnapshot, {
+      conversationId: conversationId.value,
+      routeConversationId: typeof route.query.c === "string" ? route.query.c : "",
+      retryOf: activeRetryOf.value,
+      requestedRetryOf: requestedRetryOf.value,
+    })) return;
+    if (refreshedPins === null || planOpenable(plan) !== true) {
+      ElMessage.error("执行单元输入契约已更新或暂时无法核对——本次未创建任务，请继续补充信息。");
       return;
     }
-    // 跨轮引用剥离必须计数披露（3-lens P2）：guide 后端的剥离有 stripped_fields
-    // 上屏记名，这里的客户端降级不能是纯静默——诚实记名标准前后端一致。
-    let crossRoundDrops = 0;
-    const items = targets.map(({ a, pi }) => {
-      const myIdx = planIdxToBatchIdx.get(pi);
-      const after = [];
-      for (const ref of Array.isArray(a.after) ? a.after : []) {
-        const mapped = planIdxToBatchIdx.get(ref);
-        if (mapped !== undefined && mapped < myIdx) after.push(mapped);
-        else crossRoundDrops += 1;
-      }
-      return { agentId: a.agent_id, inputs: a.prefilled_inputs || {}, after };
+    const { pinnedVersions, pinnedPackageDigests } = refreshedPins;
+    const reusedSkill = skillReuseForPlan(plan);
+    const carriedFiles = collectCarriedFiles();
+    const attachmentRouting = planAttachmentRouting(
+      plan,
+      agentSchemaCache,
+      carriedFiles,
+    );
+    if (attachmentRouting.ready !== true) {
+      ElMessage.error("附件归属尚不能唯一确定——请在下方继续说明由哪个环节使用。");
+      return;
+    }
+    const items = targets.map(({ a }, index) => {
+      const after = Array.isArray(a.after) ? a.after : [];
+      return {
+        agentId: a.agent_id,
+        name: automaticTaskName(plan, a, index),
+        inputs: a.prefilled_inputs || {},
+        inputFileIds: attachmentRouting.inputFileIdsByAgent[a.agent_id] || [],
+        retryOf: retryLineageForPlanItem(approvedRetryOf, after),
+        after,
+        skillPackageRef:
+          reusedSkill?.matched_agent_id === a.agent_id
+            ? reusedSkill
+            : undefined,
+      };
     });
-    await createTasksBatch({ conversationId: approvedConvId, items });
-    for (const { a } of targets) locallySummoned[`${approvedConvId}:${a.agent_id}`] = true;
-    ensureConversationTasksFeed(); // 督战 chip 保鲜：召集即接上会话任务订阅
-    if (crossRoundDrops > 0) {
-      ElMessage.warning(
-        `已召集 ${targets.length} 名成员；${crossRoundDrops} 条依赖指向已召集/未就绪成员，` +
-        "本批无法表达已改为并行——需要严格接力请一次性召集全部成员"
+    const candidateAttempt = {
+      schemaVersion: 1,
+      conversationId: approvedConvId,
+      retryOf: approvedRetryOf,
+      items,
+      pinnedVersions,
+      pinnedPackageDigests,
+      operationId: createBatchOperationId(),
+      submittedPlanSnapshot,
+    };
+    let durableAttempt;
+    try {
+      // 必须在 POST 前把同一 operation_id 与精确请求快照写入会话级日志。
+      // 写入失败即不发请求；绝不能先请求、等网络异常后才尝试记 key。
+      durableAttempt = persistBatchCreationAttempt(candidateAttempt);
+    } catch (journalError) {
+      ElMessage.error(
+        `无法安全保存本次开工标识，本次未发起任务：${journalError.message || "本地操作日志不可用"}`,
       );
-    } else {
-      ElMessage.success(`已按方案召集 ${targets.length} 名成员——进度与签发都会来这里找你`);
+      return;
+    }
+    batchAttempt = { ...durableAttempt, targets };
+    batchCreationUnknownByConversation[approvedConvId] = batchAttempt;
+    const createdBatch = await createTasksBatch({
+      conversationId: batchAttempt.conversationId,
+      items: batchAttempt.items,
+      pinnedVersions: batchAttempt.pinnedVersions,
+      pinnedPackageDigests: batchAttempt.pinnedPackageDigests,
+      operationId: batchAttempt.operationId,
+    });
+    const creationJournalCleared = clearDurableBatchCreation(batchAttempt);
+    if (!conversationSnapshotMatches(submittedPlanSnapshot, {
+      conversationId: conversationId.value,
+      routeConversationId: typeof route.query.c === "string" ? route.query.c : "",
+      retryOf: activeRetryOf.value,
+      requestedRetryOf: requestedRetryOf.value,
+    })) {
+      // A 的任务已经由服务端原子创建，但用户已切到 B；只提醒 A 的订阅刷新，
+      // 绝不把附件边界、retry 动作门或成功提示写进当前 B 会话。
+      pokeConversation(approvedConvId);
+      return;
+    }
+    const createdTimes = (createdBatch?.tasks || [])
+      .map((task) => Date.parse(task?.created_at))
+      .filter((value) => Number.isFinite(value));
+    attachmentSegmentBoundaryMs.value = createdTimes.length > 0
+      ? Math.max(...createdTimes)
+      : Date.now();
+    for (const { a } of targets) locallySummoned[`${approvedConvId}:${a.agent_id}`] = true;
+    // retry_of 是一次性系统上下文。服务端整批成功后才消费；失败时保留 query，
+    // 工程师可以在同一对话继续说明后重试，不会丢审计血缘。
+    const consumedRetryOf = approvedRetryOf;
+    let retryUrlCleaned = true;
+    if (consumedRetryOf) {
+      // POST 已提交后立即关闭本地动作门，再单独清地址栏。即使导航失败，也绝不
+      // 进入下面的“零任务落库”错误分支或让同一方案二次开工。
+      retryPlanArmed.value = false;
+      if (activeRetryOf.value === consumedRetryOf) verifiedRetryOf.value = null;
+      if (requestedRetryOf.value === consumedRetryOf) {
+        retryUrlCleaned = await removeRetryQuery();
+      }
+    }
+    ensureConversationTasksFeed(); // 督战 chip 保鲜：召集即接上会话任务订阅
+    ElMessage.info(`已按方案召集 ${targets.length} 名成员——进度与签发都会来这里找你`);
+    if (creationJournalCleared !== true) {
+      ElMessage.warning("任务已创建，但本地开工记录尚未安全清除；本会话继续锁定以避免重复创建");
+    }
+    if (retryUrlCleaned !== true) {
+      ElMessage.warning("任务已创建，但地址栏恢复标记未清理；本页已关闭重复开工入口");
     }
   } catch (err) {
+    if (batchAttempt && batchCreatePersistenceUnknown(err) === true) {
+      if (conversationSnapshotMatches(submittedPlanSnapshot, {
+        conversationId: conversationId.value,
+        routeConversationId: typeof route.query.c === "string" ? route.query.c : "",
+        retryOf: activeRetryOf.value,
+        requestedRetryOf: requestedRetryOf.value,
+      })) {
+        ElMessage.warning(
+          "创建状态待核——无法确认任务是否已写入；本方案已锁定，请用同一操作标识核对，禁止重复开工。",
+        );
+      }
+      return;
+    }
+    const structuredDetail = unwrapDetail(err?.detail);
+    // 走到这里的 4xx/422 已由 batchCreatePersistenceUnknown 判定为权威零写入。
+    // 必须按提交时钉死的会话与 operation_id 先清日志，再看用户是否仍停留在
+    // 原会话；否则 A 请求期间切到 B 会被下面的视图守卫提前 return，永久锁住 A。
+    clearDurableBatchCreation(batchAttempt);
+    if (!conversationSnapshotMatches(submittedPlanSnapshot, {
+      conversationId: conversationId.value,
+      routeConversationId: typeof route.query.c === "string" ? route.query.c : "",
+      retryOf: activeRetryOf.value,
+      requestedRetryOf: requestedRetryOf.value,
+    })) return;
+    if (structuredDetail?.code === "conversation_not_active") {
+      conversationStatus.value = structuredDetail.conversation_status || "concluded";
+      ElMessage.error(
+        "该协作会话已结束，本次确定未创建任务——请返回历史查看，或新建对话重新发起。",
+      );
+      return;
+    }
+    if (structuredDetail?.code === "skill_package_reuse_invalid") {
+      ElMessage.warning(
+        "Skill 复用证据在开工前未通过复核，本次确定未创建任务；请继续对话让系统重新编排。",
+      );
+      return;
+    }
     // 全有全无：整批 422 零写入。逐项错误清单必须清晰可读（R5 走查）——
     // 玫红仅真失败；client 对非字符串 detail 会 JSON.stringify，这里解回结构。
     let batchErrors = null;
@@ -1721,32 +2105,89 @@ async function openPlan(plan) {
   }
 }
 
-function createOneTask(agent, plan) {
-  // 人确认接缝：把某个被召集 Agent 的预填草案交给创建任务页，由人补全后亲手
-  // 提交（导引绝不代签）。走 sessionStorage 而非 URL，避免工程数据进查询串。
-  // M7：会话附件随草案带走，创建页以「已上传」状态入列，人可移除。
-  // 单 Agent 计划：确认后应归档会话（保留 M6「一次会话=一个任务」语义）。但归档必须
-  // **后于任务创建成功**——异源 Codex R2-#3：会话 concluded 后 API 真只读拒新任务，若
-  // 沿用旧的「先 fire-and-forget 归档、再跳创建页」，创建时会话已 concluded → 创建被 409
-  // 打回。故这里不再先归档，只在草案里带 conclude_after 标记，由创建页在提交成功后归档。
-  const isSingleAgent =
-    plan && Array.isArray(plan.agents) && plan.agents.length === 1 && !!conversationId.value;
-  sessionStorage.setItem(
-    "flai_prefill",
-    JSON.stringify({
-      agent_id: agent.agent_id,
-      inputs: agent.prefilled_inputs || {},
-      files: collectCarriedFiles(),
-      // M8：带上会话 id——创建的任务归到本次导引协作会话下（协作工作台按会话聚合）。
-      conversation_id: conversationId.value || null,
-      // 单 Agent：创建页提交成功后再归档本会话（多 Agent 由工作台「结束协作」显式归档）。
-      conclude_after: isSingleAgent,
-    })
-  );
-  // back=chat（范式 2a 对话轴闭环）：从导引来的创建，提交成功后回流本会话——
-  // 任务卡在对话流里原地亮起，不再把人甩到详情页（跳页=范式失败标志）。
-  // WorkbenchSession 的召集不带此参数，保持跳详情（m8_collab_chain e2e 契约不动）。
-  router.push({ path: "/tasks/new", query: { agent_id: agent.agent_id, from: "guide", back: "chat" } });
+async function reconcileBatchCreation() {
+  const attempt = batchCreationUnknown.value;
+  if (!attempt || opening.value === attempt.conversationId) return;
+  if (attempt.journalCorrupt === true) {
+    ElMessage.error(
+      "本地开工记录无法安全读取。为避免重复任务，本会话保持锁定；请先从任务列表核对并联系管理员处理。",
+    );
+    return;
+  }
+  opening.value = attempt.conversationId;
+  try {
+    const createdBatch = await createTasksBatch({
+      conversationId: attempt.conversationId,
+      items: attempt.items,
+      pinnedVersions: attempt.pinnedVersions,
+      pinnedPackageDigests: attempt.pinnedPackageDigests,
+      operationId: attempt.operationId,
+    });
+    const creationJournalCleared = clearDurableBatchCreation(attempt);
+    if (!conversationSnapshotMatches(attempt.submittedPlanSnapshot, {
+      conversationId: conversationId.value,
+      routeConversationId: typeof route.query.c === "string" ? route.query.c : "",
+      retryOf: activeRetryOf.value,
+      requestedRetryOf: requestedRetryOf.value,
+    })) {
+      pokeConversation(attempt.conversationId);
+      return;
+    }
+    const createdTimes = (createdBatch?.tasks || [])
+      .map((task) => Date.parse(task?.created_at))
+      .filter((value) => Number.isFinite(value));
+    attachmentSegmentBoundaryMs.value = createdTimes.length > 0
+      ? Math.max(...createdTimes)
+      : Date.now();
+    for (const item of attempt.items) {
+      locallySummoned[`${attempt.conversationId}:${item.agentId}`] = true;
+    }
+    let retryUrlCleaned = true;
+    if (attempt.retryOf) {
+      retryPlanArmed.value = false;
+      if (activeRetryOf.value === attempt.retryOf) verifiedRetryOf.value = null;
+      if (requestedRetryOf.value === attempt.retryOf) retryUrlCleaned = await removeRetryQuery();
+    }
+    ensureConversationTasksFeed();
+    ElMessage.info(
+      `已核对：原开工请求已创建 ${attempt.items.length} 个任务，没有重复创建`,
+    );
+    if (creationJournalCleared !== true) {
+      ElMessage.warning("任务已核对成功，但本地开工记录尚未安全清除；本会话继续锁定");
+    }
+    if (retryUrlCleaned !== true) {
+      ElMessage.warning("任务已创建，但地址栏恢复标记未清理；本页已关闭重复开工入口");
+    }
+  } catch (err) {
+    const structuredDetail = unwrapDetail(err?.detail);
+    const stillViewingAttempt = conversationSnapshotMatches(attempt.submittedPlanSnapshot, {
+      conversationId: conversationId.value,
+      routeConversationId: typeof route.query.c === "string" ? route.query.c : "",
+      retryOf: activeRetryOf.value,
+      requestedRetryOf: requestedRetryOf.value,
+    });
+    if (
+      batchCreatePersistenceUnknown(err) === true ||
+      [401, 403].includes(err?.status)
+    ) {
+      if (stillViewingAttempt) {
+        ElMessage.warning("创建状态仍待核——原操作标识已保留，禁止换 key 重复开工。");
+      }
+      return;
+    }
+    clearDurableBatchCreation(attempt);
+    if (!stillViewingAttempt) return;
+    if (structuredDetail?.code === "conversation_not_active") {
+      conversationStatus.value = structuredDetail.conversation_status || "concluded";
+      ElMessage.error(
+        "已核对：会话已结束，原开工请求确定未创建任务——请返回历史查看，或新建对话重新发起。",
+      );
+      return;
+    }
+    ElMessage.error(`核对确认本次未创建任务：${err.detail || err.message || "请重新生成方案"}`);
+  } finally {
+    if (opening.value === attempt.conversationId) opening.value = null;
+  }
 }
 
 // ── B1 对话轴督战（UI-PARADIGM.md 祈使句①）──────────────────────────────
@@ -1758,7 +2199,305 @@ function createOneTask(agent, plan) {
 // 载，见该文件注释），故不能像 WorkbenchSession 那样在 setup 顶层一次性
 // acquire，需按当前目标（有无 orchestrate 方案 × 当前 conversationId）
 // watch-diff acquire/release，同 StatusCenter.vue 的 ensurePeekLoaded 姿势。
-const conversationTasks = ref([]);
+const conversationTasks = ref(acceptanceFixture?.conversationTasks || []);
+const conversationTasksLoaded = ref(acceptanceMode);
+
+// ADR-0034：单个 completed 用户任务自动形成一张候选；多任务会话留给未来
+// Workflow Revision，不在成员墙上批量长卡。acceptance fixture 只提供只读快照。
+const acceptanceAssetCandidate = acceptanceFixture?.assetCandidate || null;
+const assetCandidate = ref(null);
+const assetCandidatePhase = ref(acceptanceAssetCandidate ? "loading" : "idle");
+const assetCandidateError = ref("");
+const assetCandidateTaskId = ref(acceptanceAssetCandidate?.source?.task_id || null);
+let assetCandidateRequestSeq = 0;
+const acceptanceSkillPackageReviewContent =
+  acceptanceFixture?.skillPackageReviewContent || null;
+const skillPackageReviewContent = ref(null);
+const skillPackageReviewPhase = ref("idle");
+const skillPackageReviewError = ref("");
+let skillPackageReviewRequestSeq = 0;
+
+watch(
+  () => [
+    assetCandidate.value?.skill_package?.id || "",
+    assetCandidate.value?.skill_package?.package_digest || "",
+  ],
+  ([packageId, packageDigest], [previousId, previousDigest] = []) => {
+    if (packageId === previousId && packageDigest === previousDigest) return;
+    skillPackageReviewRequestSeq += 1;
+    skillPackageReviewContent.value = null;
+    skillPackageReviewPhase.value = "idle";
+    skillPackageReviewError.value = "";
+  },
+);
+
+async function verifyAcceptanceAssetCandidate() {
+  if (!acceptanceMode || !acceptanceAssetCandidate) return;
+  const task = eligibleAssetCandidateTask(conversationTasks.value);
+  try {
+    const verified = await verifyAssetCandidateIntegrity(
+      acceptanceAssetCandidate,
+      { expectedTaskId: task?.id },
+    );
+    if (
+      task?.id !== verified.source.task_id
+      || verified.source.conversation_id !== conversationId.value
+    ) {
+      throw new TypeError("验收候选没有绑定当前任务与会话");
+    }
+    assetCandidate.value = verified;
+    assetCandidatePhase.value = "ready";
+  } catch (error) {
+    assetCandidate.value = null;
+    assetCandidatePhase.value = "unavailable";
+    assetCandidateError.value = candidateErrorMessage(error);
+  }
+}
+
+onMounted(() => {
+  void verifyAcceptanceAssetCandidate();
+});
+
+function candidateErrorMessage(error) {
+  const detail = unwrapDetail(error?.detail);
+  if (detail && typeof detail === "object" && typeof detail.message === "string") {
+    return detail.message;
+  }
+  if (typeof detail === "string" && detail.trim()) return detail;
+  return error?.message || "资产候选状态暂时无法核对";
+}
+
+async function loadCurrentSkillPackageReviewContent() {
+  const current = assetCandidate.value;
+  const packageRevision = current?.skill_package;
+  if (
+    !current
+    || current.state !== "accepted"
+    || !packageRevision
+    || assetCandidatePhase.value !== "ready"
+    || skillPackageReviewPhase.value === "loading"
+  ) return;
+  const requestContext = {
+    seq: ++skillPackageReviewRequestSeq,
+    packageId: packageRevision.id,
+    packageDigest: packageRevision.package_digest,
+  };
+  const reviewIsCurrent = () => (
+    requestContext.seq === skillPackageReviewRequestSeq
+    && assetCandidate.value?.skill_package?.id === requestContext.packageId
+    && assetCandidate.value?.skill_package?.package_digest === requestContext.packageDigest
+  );
+  skillPackageReviewContent.value = null;
+  skillPackageReviewPhase.value = "loading";
+  skillPackageReviewError.value = "";
+  try {
+    const content = acceptanceMode
+      ? await normalizeSkillPackageReviewContent(acceptanceSkillPackageReviewContent, {
+          expectedPackageId: packageRevision.id,
+          expectedPackageDigest: packageRevision.package_digest,
+          expectedFiles: packageRevision.files,
+        })
+      : await getSkillPackageReviewContent(packageRevision);
+    if (!reviewIsCurrent()) return;
+    skillPackageReviewContent.value = content;
+    skillPackageReviewPhase.value = "ready";
+  } catch (error) {
+    if (!reviewIsCurrent()) return;
+    skillPackageReviewContent.value = null;
+    skillPackageReviewPhase.value = "error";
+    skillPackageReviewError.value = candidateErrorMessage(error);
+  }
+}
+
+async function ensureAssetCandidateForTasks(tasks, { force = false } = {}) {
+  const task = eligibleAssetCandidateTask(tasks);
+  if (!task) {
+    assetCandidateRequestSeq += 1;
+    assetCandidate.value = null;
+    assetCandidatePhase.value = "idle";
+    assetCandidateError.value = "";
+    assetCandidateTaskId.value = null;
+    return;
+  }
+  if (acceptanceMode) return;
+  if (
+    force !== true
+    && assetCandidateTaskId.value === task.id
+    && assetCandidatePhase.value !== "idle"
+  ) return;
+
+  const seq = ++assetCandidateRequestSeq;
+  assetCandidateTaskId.value = task.id;
+  assetCandidate.value = null;
+  assetCandidatePhase.value = "loading";
+  assetCandidateError.value = "";
+  try {
+    const formed = await createTaskAssetCandidate(task.id);
+    if (
+      seq !== assetCandidateRequestSeq
+      || eligibleAssetCandidateTask(conversationTasks.value)?.id !== task.id
+    ) return;
+    assetCandidate.value = formed;
+    assetCandidatePhase.value = "ready";
+  } catch (error) {
+    if (seq !== assetCandidateRequestSeq) return;
+    assetCandidatePhase.value = "unavailable";
+    assetCandidateError.value = candidateErrorMessage(error);
+  }
+}
+
+async function reconcileAssetCandidate() {
+  const task = eligibleAssetCandidateTask(conversationTasks.value);
+  if (!task || !conversationId.value || acceptanceMode) return;
+  const reconcileContext = {
+    seq: ++assetCandidateRequestSeq,
+    taskId: task.id,
+    conversationId: conversationId.value,
+  };
+  const reconcileIsCurrent = () => assetCandidateRequestIsCurrent(
+    reconcileContext,
+    {
+      seq: assetCandidateRequestSeq,
+      taskId: eligibleAssetCandidateTask(conversationTasks.value)?.id || "",
+      conversationId: conversationId.value,
+    },
+  );
+  assetCandidateTaskId.value = task.id;
+  assetCandidatePhase.value = "loading";
+  assetCandidateError.value = "";
+  try {
+    const current = await getTaskAssetCandidate(task.id);
+    if (!reconcileIsCurrent()) return;
+    assetCandidate.value = current;
+    assetCandidatePhase.value = "ready";
+  } catch (error) {
+    if (!reconcileIsCurrent()) return;
+    const createReason = assetCandidateReconcileCreateReason(
+      error?.status,
+      unwrapDetail(error?.detail),
+    );
+    if (createReason !== null) {
+      try {
+        const revised = await createTaskAssetCandidate(task.id);
+        if (!reconcileIsCurrent()) return;
+        assetCandidate.value = revised;
+        assetCandidatePhase.value = "ready";
+      } catch (createError) {
+        if (!reconcileIsCurrent()) return;
+        assetCandidatePhase.value = "reconcile_required";
+        assetCandidateError.value = candidateErrorMessage(createError);
+      }
+      return;
+    }
+    assetCandidatePhase.value = "reconcile_required";
+    assetCandidateError.value = candidateErrorMessage(error);
+  }
+}
+
+async function decideCurrentAssetCandidate(action) {
+  const current = assetCandidate.value;
+  const currentTask = eligibleAssetCandidateTask(conversationTasks.value);
+  if (
+    !current
+    || current.state !== "awaiting_human_review"
+    || assetCandidatePhase.value !== "ready"
+    || currentTask?.id !== current.source.task_id
+    || assetCandidateTaskId.value !== current.source.task_id
+    || current.source.conversation_id !== conversationId.value
+    || acceptanceMode
+  ) return;
+  const decisionContext = {
+    seq: ++assetCandidateRequestSeq,
+    taskId: current.source.task_id,
+    conversationId: conversationId.value,
+  };
+  assetCandidatePhase.value = "deciding";
+  assetCandidateError.value = "";
+  try {
+    const decided = await decideAssetCandidate(current, action);
+    if (!assetCandidateRequestIsCurrent(decisionContext, {
+      seq: assetCandidateRequestSeq,
+      taskId: eligibleAssetCandidateTask(conversationTasks.value)?.id || "",
+      conversationId: conversationId.value,
+    })) return;
+    assetCandidate.value = decided;
+    assetCandidatePhase.value = "ready";
+    ElMessage.info(
+      action === "accept"
+        ? "已接受为资产候选；尚未登记或发布"
+        : "已记录本次不保留；原任务证据不受影响",
+    );
+  } catch (error) {
+    if (!assetCandidateRequestIsCurrent(decisionContext, {
+      seq: assetCandidateRequestSeq,
+      taskId: eligibleAssetCandidateTask(conversationTasks.value)?.id || "",
+      conversationId: conversationId.value,
+    })) return;
+    // 409、断网或 5xx 都可能处于“服务端已提交、客户端未收到”窗口；不换摘要
+    // 重放决定，锁到显式 GET 对账。
+    assetCandidatePhase.value = "reconcile_required";
+    assetCandidateError.value = candidateErrorMessage(error);
+  }
+}
+
+async function decideCurrentSkillPackage(action) {
+  const current = assetCandidate.value;
+  const packageRevision = current?.skill_package;
+  const currentTask = eligibleAssetCandidateTask(conversationTasks.value);
+  if (
+    !current
+    || current.state !== "accepted"
+    || packageRevision?.state !== "pending_review"
+    || assetCandidatePhase.value !== "ready"
+    || currentTask?.id !== current.source.task_id
+    || assetCandidateTaskId.value !== current.source.task_id
+    || current.source.conversation_id !== conversationId.value
+    || acceptanceMode
+  ) return;
+  if (
+    action === "approve"
+    && (
+      skillPackageReviewPhase.value !== "ready"
+      || skillPackageReviewContent.value?.package_id !== packageRevision.id
+      || skillPackageReviewContent.value?.package_digest !== packageRevision.package_digest
+    )
+  ) {
+    skillPackageReviewPhase.value = "error";
+    skillPackageReviewError.value = "必须先核验并审阅当前隔离包的真实字节，才能批准复用。";
+    ElMessage.warning("真实包内容尚未核验，本次未提交批准决定。");
+    return;
+  }
+  const packageDecisionContext = {
+    seq: ++assetCandidateRequestSeq,
+    taskId: current.source.task_id,
+    conversationId: conversationId.value,
+  };
+  assetCandidatePhase.value = "deciding";
+  assetCandidateError.value = "";
+  try {
+    const decidedPackage = await decideSkillPackage(packageRevision, action);
+    if (!assetCandidateRequestIsCurrent(packageDecisionContext, {
+      seq: assetCandidateRequestSeq,
+      taskId: eligibleAssetCandidateTask(conversationTasks.value)?.id || "",
+      conversationId: conversationId.value,
+    })) return;
+    assetCandidate.value = { ...current, skill_package: decidedPackage };
+    assetCandidatePhase.value = "ready";
+    ElMessage.info(
+      action === "approve"
+        ? "工程师已批准该精确隔离包；相似新任务可由系统自动匹配"
+        : "已记录本次不批准复用；Candidate 与原任务证据不受影响",
+    );
+  } catch (error) {
+    if (!assetCandidateRequestIsCurrent(packageDecisionContext, {
+      seq: assetCandidateRequestSeq,
+      taskId: eligibleAssetCandidateTask(conversationTasks.value)?.id || "",
+      conversationId: conversationId.value,
+    })) return;
+    assetCandidatePhase.value = "reconcile_required";
+    assetCandidateError.value = candidateErrorMessage(error);
+  }
+}
 
 // ── 批七编队投影状态（§1.3/§1.4）────────────────────────────────────────────
 const agentNames = useAgentNames(); // 名册+meta（domain/clearance/charter）懒加载单例
@@ -1855,7 +2594,7 @@ function stagelineFor(a) {
 }
 
 // domain/密级 pill（注册表投影；domain 徽走中性描边不占彩色预算——信任色五槽
-// 已锁满，domain 不再引入新色轴；categoryColor 继续留在治理弹窗）。
+// 已锁满，domain 不再引入新色轴）。
 const DOMAIN_LABEL = {
   policy_qa: "制度",
   standards_qa: "标准",
@@ -1904,48 +2643,13 @@ function evidenceOfTask(taskId) {
   return taskEvidenceOf(taskId);
 }
 
-// 批八：存为团队模板——只传会话 id，成员由服务端从方案快照抽取重验（ADR-0031）。
-// 命名走浏览器原生输入（轻量；空名/取消即不保存），成败 toast 如实。
-const savingTeam = ref(false);
-
-// 最新方案卡下标（Codex R0 P1 + R1 P2）：POST /api/teams 只读会话**当前**
-// recommendation 快照，且后端每个 assistant 轮都会整体替换它（含替换成空）。
-// 故判据=最后一条 assistant 轮：它是 orchestrate → 该卡渲入口；它是 refuse/
-// 无方案 → 全部历史卡都不渲（旧方案已被替换，存了也是 422/所见非所存）。
-const latestPlanIdx = computed(() => {
-  const list = messages.value;
-  for (let i = list.length - 1; i >= 0; i--) {
-    const m = list[i];
-    if (m && m.role === "assistant") {
-      const r = m.recommendation;
-      return r && r.decision === "orchestrate" ? i : -1;
-    }
-  }
-  return -1;
-});
-async function saveTeamFromPlan() {
-  if (!conversationId.value || savingTeam.value) return;
-  const name = (window.prompt("给这套专家团队起个名字（下次可一键召集）：") || "").trim();
-  if (!name) return;
-  savingTeam.value = true;
-  try {
-    const team = await createTeam({ name, conversationId: conversationId.value });
-    ElMessage.success(`团队「${team.name}」已保存——在 Agent 门户的「专家团队」区随时召集`);
-  } catch (err) {
-    // Codex R2 P2：object 型 detail 被 client 整体 stringify——解包后才拿得到
-    // team_errors 逐席位清单（同 summon 处理），否则 toast 渲生 JSON。
-    const detail = unwrapDetail(err.detail);
-    const msg =
-      (detail && detail.team_errors && detail.team_errors.join("；")) ||
-      (typeof detail === "string" ? detail : "") ||
-      (detail && detail.message) ||
-      err.message ||
-      "保存失败";
-    ElMessage.error(`团队未保存：${msg}`);
-  } finally {
-    savingTeam.value = false;
-  }
-}
+// 最新可执行方案卡下标：后端每个 assistant 轮都会整体替换 recommendation
+// 快照（含替换成空）。最后一轮不是 orchestrate 时，历史方案动作全部退役，
+// 不能从过期计划启动任务；资产沉淀只发生在 completed 后的候选卡。
+const latestPlanIdx = computed(() => latestActionablePlanIndex(messages.value, {
+  activeRetryOf: activeRetryOf.value,
+  retryPlanArmed: retryPlanArmed.value,
+}));
 
 function evidenceWithheldOf(a) {
   const info = agentTaskInfo(a);
@@ -2009,6 +2713,7 @@ watch(
     syncLiveChannels();
     detectRelayFlips(tasks); // 批七 T4：waiting_upstream→活跃 状态沿 → 接力回波
     for (const t of tasks) ensureTaskEvidence(t); // 批七 T5/T6：终审面成员拉依据摘要
+    void ensureAssetCandidateForTasks(tasks);
     const anyWork = tasks.some((t) => TASK_WORK_STATES.has(t.status));
     // 等待接力行虽无秒表，但编队行/等待旁白仍要随快照活现——工作态判定不变
     if (anyWork === true) ensureLiveTicker();
@@ -2022,6 +2727,7 @@ onUnmounted(() => {
 });
 let convTasksHandle = null;
 let convTasksStop = null;
+let convTasksLoadedStop = null;
 let convTasksHandleFor = null; // 当前持有订阅所属的 conversationId（null=未订阅）
 let feedDisposed = false; // 组件已卸载：拒绝 await 续体的迟到 acquire（Codex R2-P1）
 
@@ -2048,12 +2754,17 @@ function releaseConversationTasksFeed() {
     convTasksStop();
     convTasksStop = null;
   }
+  if (convTasksLoadedStop) {
+    convTasksLoadedStop();
+    convTasksLoadedStop = null;
+  }
   if (convTasksHandle) {
     convTasksHandle.release();
     convTasksHandle = null;
   }
   convTasksHandleFor = null;
   conversationTasks.value = [];
+  conversationTasksLoaded.value = acceptanceMode;
 }
 
 // 只在真出现 orchestrate 方案时订阅（幂等：目标未变则不重新 acquire；目标
@@ -2079,10 +2790,16 @@ function ensureConversationTasksFeed() {
     },
     { immediate: true }
   );
+  convTasksLoadedStop = watch(
+    convTasksHandle.state.loaded,
+    (loaded) => {
+      if (convTasksHandleFor === id) conversationTasksLoaded.value = loaded === true;
+    },
+    { immediate: true },
+  );
 }
 
 // ── 会话恢复（左栏历史点击 / 刷新 /?c=<id>）──
-const route = useRoute();
 
 function resetToFresh(clearError = true) {
   messages.value = [];
@@ -2090,20 +2807,19 @@ function resetToFresh(clearError = true) {
   conversationId.value = "";
   conversationStatus.value = null;
   reconciliationRequired.value = false;
-  agentPickerOpen.value = false;
+  assetBuilderOpen.value = false;
+  assetCandidateRequestSeq += 1;
+  assetCandidate.value = null;
+  assetCandidatePhase.value = "idle";
+  assetCandidateError.value = "";
+  assetCandidateTaskId.value = null;
+  attachmentSegmentBoundaryMs.value = 0;
   draft.value = "";
   pendingFiles.value = [];
   releaseConversationTasksFeed();
   resetScrollFollow(); // 新会话/切换会话：滚动跟随守卫一并复位
   if (clearError) pageError.value = "";
 }
-
-// 门户直达的目标交互 Agent（Codex R0 P1）：?agent=<id> 只影响**新建**会话；
-// 恢复历史会话（?c）时 agent 已绑定在会话记录里，本参数不参与。
-const targetAgentId = computed(() => {
-  const a = route.query.agent;
-  return typeof a === "string" && a ? a : GUIDE_AGENT_ID;
-});
 
 // 垂类问答 recommendation 判据：无 decision 键（refuse/orchestrate 是导引专属）
 // 且真带 findings/refusals 数组、至少一边非空——双空已被包 schema 拒收。
@@ -2118,15 +2834,26 @@ function qaRecommendation(rec) {
 // 恢复在途标记：?c 深链（含 2a 回流）落地时 getConversation 在途的窗口里，
 // 不渲染可交互的空态 hero（「假起手」）、send 早退——否则此刻发消息会因
 // conversationId 尚空而意外新建会话（双镜头 P2 实审咬出的竞态）。
-async function loadConversation(id, { preserveOnFailure = false } = {}) {
+async function loadConversation(id, { preserveOnFailure = false, isCurrent = () => true } = {}) {
   if (!preserveOnFailure) resetToFresh();
   restoring.value = true;
   try {
     const conv = await getConversation(id);
+    if (isCurrent() !== true) return false;
+    // 失败恢复若来自已归档会话，不能让工程师落到一个后端必定 409 的旧输入框。
+    // 自动换成新对话，同时保留 retry_of；工程师仍只需输入文字或上传附件。
+    if (activeRetryOf.value && conv.status !== "active") {
+      const retryOf = activeRetryOf.value;
+      resetToFresh();
+      await router.replace({ path: "/", query: { retry_of: retryOf } });
+      ElMessage.info("原对话已归档——已为这次失败恢复打开新对话，审计血缘仍会保留");
+      return true;
+    }
     // 对账模式在请求成功前保留「保存状态待核」轮次和核对按钮；只有拿到
     // 服务端权威会话后才清掉本地快照与 reconciliationRequired 锁。
     if (preserveOnFailure) resetToFresh();
     conversationId.value = conv.id;
+    restoreBatchCreationForConversation(conv.id);
     recordConversationFirstUserContent(conv.id, conv.messages); // E-4 侧栏标题数据面：拉过全量的会话才供得起首条用户消息
     conversationStatus.value = conv.status || null; // 只读会话如实带出（Codex R0-P2）
     started.value = true;
@@ -2136,16 +2863,29 @@ async function loadConversation(id, { preserveOnFailure = false } = {}) {
       recommendation: m.recommendation || null,
       attachments: m.attachments && m.attachments.length ? m.attachments : undefined,
       createdAt: m.created_at || null,
+      // 历史方案只读展示。要开工，工程师在同一主输入补一句即可获得基于当前
+      // Registry/schema 的 fresh 方案，避免旧计划或丢失 retry 血缘被复活。
+      fresh: false,
+      retryOf: null,
     }));
     await scrollToBottom();
+    if (isCurrent() !== true) return false;
     ensureConversationTasksFeed(); // 恢复的历史会话若已带 orchestrate 方案，立即接上订阅
     ensureAgentSchemasForMessages(); // 历史方案卡同样预取输入契约（内联就绪判据）
     return true;
   } catch (err) {
+    if (isCurrent() !== true) return false;
+    if (activeRetryOf.value) {
+      const retryOf = activeRetryOf.value;
+      resetToFresh();
+      await router.replace({ path: "/", query: { retry_of: retryOf } });
+      ElMessage.warning("原对话不可用——已打开新对话，失败任务血缘仍会保留");
+      return true;
+    }
     pageError.value = err.detail || err.message || "会话加载失败";
     return false;
   } finally {
-    restoring.value = false;
+    if (isCurrent() === true) restoring.value = false;
   }
 }
 
@@ -2198,27 +2938,87 @@ async function reconcileConversation() {
   }
 }
 
-onMounted(() => {
+// c 与 retry_of 是同一份导航意图：先核对失败任务权威状态，再决定能否加载/使用
+// 指向的会话。一个 watcher + 单调序号消除原先两个 watcher 同拍竞跑；迟到的 A
+// 读取也由 isCurrent 门挡在写入 B 的 messages/status 之前。
+let routeNavigationSeq = 0;
+let internalRouteBindingEpoch = 0;
+let internalRouteBinding = null;
+
+function armInternalRouteBinding(conversationIdToBind, retryOfToBind) {
+  internalRouteBinding = {
+    conversationId: conversationIdToBind,
+    retryOf: retryOfToBind,
+    epoch: ++internalRouteBindingEpoch,
+  };
+  return internalRouteBinding;
+}
+
+function clearInternalRouteBinding(binding) {
+  if (internalRouteBinding?.epoch === binding?.epoch) internalRouteBinding = null;
+}
+
+function consumeInternalRouteBinding(rawConversationId, rawRetryOf) {
+  const binding = internalRouteBinding;
+  if (!binding) return false;
+  // 任一下一拍路由都消费 token：精确匹配代表内部镜像；不匹配代表真实外部导航，
+  // token 立即作废，不能留到以后误吞一次同地址回访。
+  internalRouteBinding = null;
+  return internalConversationRouteBindingMatches(binding, rawConversationId, rawRetryOf);
+}
+
+async function syncRouteContext(rawConversationId, rawRetryOf) {
   if (acceptanceMode) return;
-  const c = route.query.c;
-  if (typeof c === "string" && c) loadConversation(c);
+  if (consumeInternalRouteBinding(rawConversationId, rawRetryOf)) {
+    // 内部 URL 镜像仍是一笔新的路由权威。它不重读刚创建的空会话，但必须
+    // 作废此前外部 B 导航已经发出的 getTask/loadConversation；否则 B 的迟到
+    // 响应会覆盖本次已钉死的 A 恢复语义。binding 只可能由已验证快照 arm。
+    routeNavigationSeq += 1;
+    retryValidationSeq += 1;
+    retryPlanArmed.value = false;
+    verifiedRetryOf.value = normalizeRetryLineage(rawRetryOf);
+    retryContextChecking.value = false;
+    return;
+  }
+  const navigationSeq = ++routeNavigationSeq;
+  await validateRetryContext(rawRetryOf);
+  if (navigationSeq !== routeNavigationSeq) return;
+
+  const conversationRouteId = typeof rawConversationId === "string"
+    ? rawConversationId.trim()
+    : "";
+  if (conversationRouteId) {
+    // retry 新增/切换时即便 c 未变也必须重读：只有先确认 retry authority 后，
+    // loadConversation 才能把 concluded 会话安全地换成新的可写对话。
+    if (conversationRouteId !== conversationId.value || activeRetryOf.value !== null) {
+      await loadConversation(conversationRouteId, {
+        isCurrent: () => navigationSeq === routeNavigationSeq,
+      });
+    }
+    return;
+  }
+  if (started.value || messages.value.length) resetToFresh();
+  // 取消一个在途的历史会话读取时，它的 finally 会因 epoch 失效而不清标记；
+  // 当前无 c 的导航事务负责把恢复锁归零。
+  restoring.value = false;
+}
+
+onMounted(() => {
+  void syncRouteContext(route.query.c, route.query.retry_of);
 });
 onUnmounted(() => {
+  routeNavigationSeq += 1;
+  internalRouteBinding = null;
   feedDisposed = true; // 先封门再释放：卸载后任何 await 续体不得再 acquire
   releaseConversationTasksFeed();
 });
 
-// 左栏切换会话 / 点「新对话」→ 据 ?c 变化恢复或重置（跳过刚创建的本会话，避免回灌）。
+// 左栏切会话、失败回流与 query 清理都作为同一个路由快照串行处理。
 watch(
-  () => route.query.c,
-  (c) => {
-    if (acceptanceMode) return;
-    if (typeof c === "string" && c) {
-      if (c !== conversationId.value) loadConversation(c);
-    } else if (started.value || messages.value.length) {
-      resetToFresh();
-    }
-  }
+  () => [route.query.c, route.query.retry_of],
+  ([c, retryOf]) => {
+    void syncRouteContext(c, retryOf);
+  },
 );
 </script>
 
@@ -2228,15 +3028,18 @@ watch(
   margin: 0 auto;
   padding-bottom: 132px; /* 让会话内容避开紧凑后的固定 composer（含诚实地板句） */
 }
+.guide-main { min-width: 0; }
 /* 空状态：hero + composer 作为一组在可用视口内居中。 */
 .guide-page.is-empty {
   padding-bottom: 0;
+  min-height: calc(100vh - 56px);
+}
+.guide-page.is-empty .guide-main {
   min-height: calc(100vh - 56px);
   display: flex;
   flex-direction: column;
   justify-content: center;
 }
-
 /* ── 起手 hero ── */
 .guide-hero {
   text-align: center;
@@ -2265,104 +3068,12 @@ watch(
   margin: 0;
   letter-spacing: 0.2px;
 }
-/* 四意图卡·一排紧凑条目（压缩批，原两排卡片原地升级）：≥600px 单行四枚，
-   窄屏 2×2 更紧凑仍守住 40px 触控目标；条目只留图标+短标签。 */
-.hero-intents {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-2);
-  margin-top: 12px;
-  text-align: left;
-}
-@media (min-width: 600px) {
-  .hero-intents {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-.intent-card {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  box-sizing: border-box;
-  height: 40px;
-  background: var(--surface-raised);
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  padding: 4px 10px;
-  cursor: pointer;
-  box-shadow: var(--shadow-card);
-  transition: transform var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
-}
-.intent-card:hover,
-.intent-card:focus-visible {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-card-hover);
-}
-.intent-card:focus-visible {
-  outline: 2px solid var(--clay-softer);
-  outline-offset: 1px;
-}
-/* 键盘可达 tip：只随 :focus-visible 浮现（鼠标走 title 悬浮），绝对定位小气泡
-   不参与布局、不撑卡高；反转墨色底保证亮/暗两档对比。触屏无 hover/focus 保持
-   语义，tip 仍由 aria-describedby 供读屏。宽度随紧凑条目新几何校准：气泡以
-   条目中心对齐，窄屏贴边条目不让气泡溢出视口。 */
-.intent-tip {
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 6px);
-  transform: translateX(-50%);
-  width: max-content;
-  max-width: min(240px, calc(100vw - 32px));
-  padding: 4px 9px;
-  border-radius: var(--radius-md);
-  background: var(--ink);
-  color: var(--paper-surface);
-  font-size: 11px;
-  line-height: 1.4;
-  white-space: normal;
-  text-align: center;
-  box-shadow: var(--shadow-card-hover);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity var(--motion-fast) var(--ease-out-soft);
-  z-index: 5;
-}
-.intent-card:focus-visible .intent-tip {
-  opacity: 1;
-  visibility: visible;
-}
-.intent-accent {
-  flex: 0 0 auto;
-  align-self: stretch;
-  width: 3px;
-  border-radius: 3px;
-}
-.intent-visual {
-  flex: 0 0 22px;
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--hairline-soft);
-  border-radius: 7px;
-  background: var(--paper-rail);
-}
-.intent-visual :deep(.el-icon) {
-  font-size: 14px;
-}
-.intent-body { flex: 1 1 auto; min-width: 0; }
-.intent-title {
-  font-size: 12.5px;
-  font-weight: 700;
-  color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-@media (prefers-reduced-motion: reduce) {
-  .intent-card { transition: none; }
+.hero-routing-promise {
+  max-width: 520px;
+  margin: var(--space-3) auto 0;
+  color: var(--ink-soft);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
 }
 
 .page-alert {
@@ -2600,6 +3311,64 @@ watch(
   color: var(--ink-soft);
   margin: 0 0 16px;
 }
+.route-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+  padding: 10px 12px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-md);
+  background: var(--paper-rail);
+  color: var(--ink);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
+.route-summary-state {
+  color: var(--ink-soft);
+  font-weight: 500;
+  text-align: right;
+}
+.route-summary-state.is-pending { color: var(--trust-pending); }
+.skill-reuse-inline {
+  flex: 1 0 100%;
+  color: var(--clay);
+  font-weight: 700;
+}
+.route-disclosure {
+  margin: 0;
+  border-top: 1px solid var(--hairline-soft);
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.route-disclosure > summary {
+  min-height: 44px;
+  display: list-item;
+  padding: 12px 2px;
+  color: var(--ink-soft);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  cursor: pointer;
+}
+.route-disclosure > summary:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.route-disclosure:not([open]) > .route-disclosure-body { display: none; }
+.route-disclosure-body { padding: var(--space-3) 0 var(--space-4); }
+.skill-reuse-detail {
+  display: grid;
+  gap: 3px;
+  margin: 0 0 var(--space-4);
+  padding: 10px 12px;
+  border-left: 2px solid var(--clay-softer);
+  color: var(--ink-soft);
+  font-size: var(--fs-xs);
+}
+.skill-reuse-detail strong { color: var(--ink); }
+.skill-reuse-detail small { color: var(--ink-faint); line-height: 1.55; }
 .plan-section { margin: 0 0 16px; }
 .roster-label { margin-top: 4px; }
 .plan-workflow {
@@ -2751,6 +3520,36 @@ watch(
   box-shadow: none;
   background: var(--hover-tint);
 }
+.plan-materials,
+.ignored-plan-materials {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--ink-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+.plan-materials { margin: 7px 0 0 17px; }
+.ignored-plan-materials {
+  margin: 10px 14px 2px;
+  padding-top: 9px;
+  border-top: 1px dashed var(--hairline-soft);
+}
+.plan-materials-label { font-weight: 600; color: var(--ink-soft); }
+.plan-material-chip {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 7px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--paper-rail);
+  color: var(--ink-soft);
+}
 .sa-head {
   display: flex;
   align-items: center;
@@ -2762,7 +3561,6 @@ watch(
 .sa-spacer { flex: 1 1 auto; min-width: 8px; }
 .sa-head .agent-status { margin: 0; flex: 0 0 auto; }
 .sa-head .agent-actions { margin: 0; flex: 0 0 auto; }
-.sa-head .agent-cta { padding: 5px 11px; font-size: 12.5px; }
 /* 窄屏（嵌套 padding 后仅剩 ~170-220px）：状态槽整体落到第二行（Codex R2-P2），
    身份行（灯+名+分工）保住可读性——不换行时名字会被压成空省略号或控件溢出卡外。 */
 @media (max-width: 640px) {
@@ -3050,9 +3848,7 @@ watch(
   color: var(--ink);
   margin: 0 0 6px;
 }
-/* 预填草案：紧凑「键 值」chip 取代 monospace JSON 大块——值恒完整可见
-   （诚实地板：不截断，让人看清按此会创建什么），视觉重量大幅下降。
-   （.agent-draft/.draft-label/.draft-fields 旧容器类已删——模板零消费，W5） */
+/* 自动整理摘要只报告已抽取项数；字段和值不作为工程师的常驻输入面板。 */
 .draft-field {
   display: inline-flex;
   align-items: baseline;
@@ -3064,15 +3860,6 @@ watch(
   font-size: 12px;
   min-width: 0;
 }
-.df-key {
-  flex: 0 0 auto;
-  color: var(--ink-faint);
-  font-weight: 600;
-}
-.df-val {
-  color: var(--ink);
-  word-break: break-word;
-}
 .agent-stripped {
   margin: 2px 0 10px;
   font-size: 11.5px;
@@ -3080,36 +3867,6 @@ watch(
   color: var(--ink-soft);
 }
 .agent-actions { display: flex; }
-.agent-cta {
-  display: inline-flex;
-  align-items: center;
-  font-size: 13px;
-  font-weight: 600;
-  /* clay 预算（批次五 C3）：未就绪成员的召集钮逐行重复，常驻降为中性描边；
-     hover 满血 clay 不变（主动作暗示保留在交互时刻）。描边用 ink-faint 而非
-     hairline（3-lens 可用性 P2）：这是行内唯一推进 CTA，hairline 在纸面上
-     近乎无边缘对比，会与周围说明性灰字同权重——降 clay 不等于降可发现性。 */
-  color: var(--ink-soft);
-  background: transparent;
-  border: 1px solid var(--ink-faint);
-  border-radius: 10px;
-  padding: 8px 14px;
-  cursor: pointer;
-  transition: all var(--motion-fast) var(--ease-out-soft);
-}
-.agent-cta::after {
-  content: "→";
-  margin-left: 7px;
-  transition: transform var(--motion-fast) var(--ease-out-soft);
-}
-.agent-cta:hover {
-  background: var(--clay);
-  color: #fff;
-  border-color: var(--clay);
-  box-shadow: 0 4px 12px rgba(var(--clay-rgb), 0.22);
-}
-.agent-cta:hover::after { transform: translateX(2px); }
-
 /* 决策收敛后的成员行（disclosure grammar：正常态不说话，异常态才有标签） */
 .agent-actions { gap: 10px; align-items: center; flex-wrap: wrap; }
 .agent-readytag {
@@ -3117,6 +3874,7 @@ watch(
   font-weight: 600;
   color: var(--ink-soft);
 }
+.agent-readytag.is-pending { color: var(--trust-pending); }
 .agent-unready-hint {
   font-size: 11.5px;
   line-height: 1.5;
@@ -3133,6 +3891,12 @@ watch(
   padding: 10px 18px;
 }
 .open-plan-btn:disabled { opacity: 0.6; cursor: default; }
+.open-plan-btn.is-pending {
+  border: 1px solid rgba(var(--trust-pending-rgb), 0.45);
+  background: rgba(var(--trust-pending-rgb), 0.08);
+  color: var(--trust-pending);
+  cursor: pointer;
+}
 /* 开工在场时工作台入口降次级：数据驱动 .is-secondary（模板显式绑定），
  * 替换原 :has() 条件级联——主次由状态决定而非 DOM 巧合。 */
 .workbench-btn.is-secondary {
@@ -3152,6 +3916,12 @@ watch(
   font-size: 11.5px;
   line-height: 1.5;
   color: var(--ink-soft);
+}
+.route-summary-state.plan-alert {
+  margin-top: 0;
+  font-size: inherit;
+  line-height: inherit;
+  color: var(--trust-pending);
 }
 
 .plan-foot {
@@ -3275,6 +4045,25 @@ watch(
   margin: 0 auto;
 }
 .composer.composer-fixed .composer-inner { pointer-events: auto; }
+.batch-reconcile-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+  padding: 9px 10px 9px 14px;
+  border: 1px solid rgba(var(--trust-pending-rgb), 0.45);
+  border-radius: 14px;
+  background: rgba(var(--trust-pending-rgb), 0.08);
+  color: var(--trust-pending);
+  font-size: 12px;
+  font-weight: 600;
+}
+.batch-reconcile-bar .open-plan-btn {
+  min-height: 36px;
+  padding: 8px 14px;
+  white-space: nowrap;
+}
 .composer-files {
   display: flex;
   flex-wrap: wrap;
@@ -3341,7 +4130,14 @@ watch(
   display: grid;
   place-items: center;
 }
-.send-btn:disabled { opacity: 0.4; box-shadow: none; }
+.send-btn.cta-clay:disabled {
+  opacity: 1;
+  background: var(--paper-rail);
+  border: 1px solid var(--hairline);
+  color: var(--ink-faint);
+  box-shadow: none;
+  cursor: not-allowed;
+}
 /* 停止钮（流式在飞时替换发送钮）：中性墨实心方块——主动停止是中性控制，
  * 不用红、不占 clay；结构尺寸与 .send-btn 一致，换形不抖动。 */
 .stop-btn {
@@ -3446,7 +4242,12 @@ kbd {
 @media (max-width: 640px) {
   .ai-body { max-width: calc(100% - 36px); }
   .plan-goal-title { font-size: 21px; }
+  .route-summary { align-items: flex-start; flex-direction: column; }
+  .route-summary-state { text-align: left; }
+  .open-plan-btn,
+  .workbench-btn { min-height: 44px; }
   .composer.composer-fixed { padding: 7px 12px 9px; }
+  .batch-reconcile-bar { align-items: stretch; flex-direction: column; }
   .composer-hint .keys { display: none; }
   .icon-btn,
   .send-btn {
@@ -3457,152 +4258,6 @@ kbd {
 </style>
 
 <style>
-/* Agent 选择器 popover（EP popper 渲染在 body，需全局作用域）。 */
-.agent-pick-pop {
-  max-width: calc(100vw - 24px) !important;
-  max-height: min(390px, calc(100vh - 24px));
-  padding: 0 !important;
-  overflow: hidden;
-}
-/* 移动端贴边对称（审计 P2：375px 下 PopperJS 按触发钮 top-start 对齐，
-   实测左 43/右 12 不对称）。宽度随视口 calc(100vw - 24px) 后，preventOverflow
-   （padding:12）把弹层钳到 left=12，左右各 12px。桌面档宽度仍由 :width="320"
-   决定，不碰。 */
-@media (max-width: 640px) {
-  .agent-pick-pop {
-    width: calc(100vw - 24px) !important;
-  }
-}
-.agent-pick {
-  display: flex;
-  flex-direction: column;
-  max-height: min(390px, calc(100vh - 24px));
-}
-.agent-pick .ap-head {
-  flex: none;
-  padding: 9px 10px 8px;
-  border-bottom: 1px solid var(--hairline-soft);
-}
-.agent-pick .ap-title {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  color: var(--ink-faint);
-  margin-bottom: 6px;
-}
-.agent-pick .ap-search {
-  width: 100%;
-  min-height: 34px;
-  box-sizing: border-box;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-md);
-  background: var(--paper-surface);
-  color: var(--ink);
-  font: inherit;
-  font-size: 13px;
-  padding: 0 10px;
-  outline: none;
-}
-.agent-pick .ap-search:focus-visible {
-  border-color: var(--focus-ring-clay);
-  box-shadow: 0 0 0 2px rgba(var(--clay-rgb), 0.12);
-}
-.agent-pick .ap-search:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.agent-pick .ap-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 4px 0;
-}
-.agent-pick .ap-error { color: var(--trust-fail); font-size: 12px; padding: 8px 10px; }
-.agent-pick .ap-maturity {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--ink-mid);
-  border: 1px solid var(--border-soft, var(--hairline));
-  border-radius: 4px;
-  padding: 0 4px;
-  margin-left: 4px;
-}
-.agent-pick .ap-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 10px;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--motion-fast) var(--ease-out-soft);
-}
-/* 行态语法收口（W0 两态）：hover/键盘焦点=中性 hover-tint；:active 按压瞬间=
-   select-tint-clay（clay=选中槽位，点选即填草稿的瞬时确认，popover 无常驻选中态）。
-   :focus-visible 的 clay 描边环由全局 [role=button] 语法供给，此处只补底色。 */
-.agent-pick .ap-item:hover,
-.agent-pick .ap-item:focus-visible { background: var(--hover-tint); }
-.agent-pick .ap-item:active { background: var(--select-tint-clay); }
-.agent-pick .ap-item:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.agent-pick .ap-item:disabled:hover,
-.agent-pick .ap-item:disabled:focus-visible,
-.agent-pick .ap-item:disabled:active {
-  background: transparent;
-}
-@media (prefers-reduced-motion: reduce) {
-  .agent-pick .ap-item { transition: none; }
-}
-.agent-pick .ap-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
-.agent-pick .ap-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.agent-pick .ap-name-row {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-}
-.agent-pick .ap-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink);
-}
-.agent-pick .ap-detail {
-  font-size: 11px;
-  color: var(--ink-faint);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.25;
-}
-.agent-pick .ap-portal-link {
-  flex: none;
-  width: 100%;
-  min-height: 36px;
-  padding: 7px 10px;
-  border: none;
-  border-top: 1px solid var(--hairline-soft);
-  background: var(--paper-surface);
-  text-align: left;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--clay);
-  cursor: pointer;
-}
-.agent-pick .ap-portal-link:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
 /* 垂类问答依据卡（Codex R0 P1 接线）：中性纸面，依据行交给 EvidenceList
    （全链无绿）；拒答块灰字如实，不作警示红——拒答是承诺兑现非故障。 */
 .qa-evidence-card { display: flex; flex-direction: column; gap: 14px; }
@@ -3611,5 +4266,4 @@ kbd {
 .qa-refusal-reason { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink); }
 .qa-refusal-suggestion { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-soft); }
 
-.agent-pick .ap-zero { font-size: 12px; color: var(--ink-faint); padding: 4px 10px 8px; }
 </style>

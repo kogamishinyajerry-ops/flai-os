@@ -1,21 +1,55 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "导引 Agent 计划（编排官裁决）",
-  "description": "导引在对话中给出的结构化计划——两种裁决：orchestrate（召集一组合适 Agent 协作，每个 Agent 含分工与预填草案）或 refuse（无合适 Agent，显式拒绝并给出重述建议）。所有 Agent 字段均由 workflow 对账 Registry + 目标 input_schema 后确定性生成，非 LLM 自由文本直出；导引绝不据此自动创建/召集/签发任务，签发权在人。传输/存储沿用 conversations.recommendation_json 列（形状自 M8 起为本 schema）。",
+  "description": "导引持久化的结构化计划有两种：orchestrate（召集一组合适 job Agent 协作，每个 Agent 含分工与完整执行输入）或 refuse（无合适 Agent，显式拒绝并给出重述建议）。内部 delegate 裁决会在同一轮由运行时自动转交已审定的 interactive 专家，并以目标专家自己的 recommendation 替换，因此不属于本 schema。orchestrate 只有在成员集合与每个 Agent 的必需输入全部通过 workflow 对 Registry + 目标 input_schema 的完整确定性校验后才会产生；任一成员无效、重复、超过五个或缺少信息时 recommendation 为空并回到同一对话自然追问，绝不删除复核/接力成员后开放残缺方案。新式附件绑定计划会把模型使用的稳定标签确定性解析成 file_id + filename，并保证每个当前工作段附件恰好绑定一次或忽略一次；为兼容升级前计划，attachments / ignored_attachments 保持可选且只会成对出现。所有 Agent 字段均由 workflow 对账后生成，非 LLM 自由文本直出；导引绝不据此自动创建/召集/签发任务，开工确认与最终签发权在人。传输/存储沿用 conversations.recommendation_json 列。",
+  "definitions": {
+    "canonicalAttachment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_id", "filename"],
+      "properties": {
+        "file_id": { "type": "string", "minLength": 1, "description": "File Store 中由运行时可信名册解析出的文件 id，绝不采信模型直出。" },
+        "filename": { "type": "string", "minLength": 1, "description": "File Store 中的原始文件名；文件名可重复，身份以 file_id 为准。" }
+      }
+    }
+  },
   "oneOf": [
     {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "required": ["ignored_attachments"] },
+          "then": {
+            "properties": {
+              "agents": {
+                "items": { "required": ["attachments"] }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "agents": {
+                "contains": { "required": ["attachments"] }
+              }
+            }
+          },
+          "then": { "required": ["ignored_attachments"] }
+        }
+      ],
       "required": ["decision", "analysis", "goal", "workflow", "agents", "dropped_agents", "capped"],
       "properties": {
         "decision": { "const": "orchestrate", "description": "裁决：平台有合适 Agent，召集协作。" },
-        "analysis": { "type": "string", "description": "导引对任务的最终分析（LLM 提供，供人核对）。" },
-        "goal": { "type": "string", "description": "待用户确认的目标陈述——人确认后才在下游逐个签发任务。" },
-        "workflow": { "type": "string", "description": "协作方式/分工如何衔接（LLM 提供，供人核对）。" },
+        "analysis": { "type": "string", "minLength": 1, "description": "导引对任务的最终分析（LLM 提供，供人核对；空串不得成为可开工方案）。" },
+        "goal": { "type": "string", "minLength": 1, "description": "待用户确认的目标陈述——人确认完整方案后才允许进入执行；空串 fail-closed。" },
+        "workflow": { "type": "string", "minLength": 1, "description": "协作方式/分工如何衔接（LLM 提供，供人核对；空串不得成为可开工方案）。" },
         "agents": {
           "type": "array",
-          "description": "召集的 Agent（每个都已确定性对账：Registry 真实、非 disabled/interactive/自身；预填逐字段过 input_schema）。至少 1 个，至多 5 个（超出截断，见 capped）。",
+          "description": "召集的 Agent（每个都已确定性对账：Registry 真实、非 disabled/interactive/自身；必需执行输入完整通过 input_schema）。至少 1 个，至多 5 个；出现第六个或任何不可用/重复成员时整份方案关闭，不做部分截断。",
           "minItems": 1,
+          "maxItems": 5,
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -26,16 +60,18 @@
               "category": { "type": "string", "description": "目标 Agent 类型（取自 Registry）。" },
               "status": { "type": "string", "description": "目标 Agent 状态（draft/trial/released）。" },
               "maturity": { "type": "string", "description": "目标 Agent 成熟度（L0-L3）。" },
-              "role": { "type": "string", "description": "该 Agent 在本次协作中的分工（LLM 提供）。" },
-              "rationale": { "type": "string", "description": "召集它的理由（LLM 提供，仅参考）。" },
-              "prefilled_inputs": { "type": "object", "description": "预填任务输入草案——只含目标 input_schema 声明且逐字段校验通过的字段，可能不完整，用户需补全后提交。" },
+              "role": { "type": "string", "minLength": 1, "description": "该 Agent 在本次协作中的分工（LLM 提供；必须非空）。" },
+              "rationale": { "type": "string", "minLength": 1, "description": "召集它的理由（LLM 提供，仅参考；必须非空）。" },
+              "prefilled_inputs": { "type": "object", "description": "系统从对话与附件整理出的执行输入——只含目标 input_schema 声明的字段，且整对象已通过完整 schema 校验；工程师无需另填字段表单。" },
               "stripped_fields": { "type": "array", "items": { "type": "string" }, "description": "LLM 提议但被剥离的字段名（未声明或违反字段 schema）；after 引用非法被整体剥离时含 \"after\"，如实记名。" },
-              "after": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "产物依赖：本成员依赖的更早成员在最终 agents 列表中的下标（已按剪除重映射、去重升序；按构造只指向更早条目=DAG）。空数组=无依赖可并行。引用非法（幻觉/被剪/前向/自身/非整数）→ 整体剥离为 [] 并在 stripped_fields 记 \"after\"，绝不半保留。" }
+              "after": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "产物依赖：本成员依赖的更早成员在最终 agents 列表中的下标（已按剪除重映射、去重升序；按构造只指向更早条目=DAG）。空数组=无依赖可并行。引用非法（幻觉/被剪/前向/自身/非整数）→ 整体剥离为 [] 并在 stripped_fields 记 \"after\"，绝不半保留。" },
+              "attachments": { "type": "array", "items": { "$ref": "#/definitions/canonicalAttachment" }, "description": "新式绑定计划中分配给本成员的当前工作段附件。模型只提议稳定 label；此处对象由 workflow 基于可信名册解析。none 输入必须为空，file_upload 必须恰好一项并命中 manifest 后缀白名单。旧式兼容计划可不含此字段。" }
             }
           }
         },
-        "dropped_agents": { "type": "array", "items": { "type": "string" }, "description": "LLM 提议但被剥离的 agent_id（幻觉/disabled/interactive/自身/重复），如实记名不隐藏。" },
-        "capped": { "type": "boolean", "description": "是否因超过召集上限（5 个）而截断。" }
+        "ignored_attachments": { "type": "array", "items": { "$ref": "#/definitions/canonicalAttachment" }, "description": "新式绑定计划中明确不参与本次工作的当前工作段附件；与所有成员 attachments 合并后必须恰好覆盖名册且无重复。旧式兼容计划可不含此字段。" },
+        "dropped_agents": { "type": "array", "maxItems": 0, "items": { "type": "string" }, "description": "开放方案恒为空；模型提议含任何不可用/重复成员时 workflow 会关闭整份 recommendation。保留该键用于稳定传输 shape。" },
+        "capped": { "type": "boolean", "const": false, "description": "开放方案恒为 false；超过 5 个成员时整份 recommendation 关闭，绝不截断后继续。" }
       }
     },
     {
@@ -44,9 +80,9 @@
       "required": ["decision", "reason", "residual_problems", "reframe"],
       "properties": {
         "decision": { "const": "refuse", "description": "裁决：平台没有合适 Agent（甚至不值得为此建专用 Agent），显式拒绝。" },
-        "reason": { "type": "string", "description": "为何不适合（LLM 提供）。" },
-        "residual_problems": { "type": "array", "items": { "type": "string" }, "description": "即便拒绝后，用户手上仍未解决的问题（LLM 提供，供人另寻出路）。" },
-        "reframe": { "type": "array", "items": { "type": "string" }, "description": "如何重述/拆解需求才可能被平台接住（LLM 提供的建设性建议）。" }
+        "reason": { "type": "string", "minLength": 1, "description": "为何不适合（LLM 提供；必须非空）。" },
+        "residual_problems": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "description": "即便拒绝后，用户手上仍未解决的问题（至少一项，供人另寻出路）。" },
+        "reframe": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "description": "如何重述/拆解需求才可能被平台接住（至少一项建设性建议）。" }
       }
     }
   ]

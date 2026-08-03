@@ -72,6 +72,58 @@ def test_logging_setup_is_stdlib_only_and_writes(tmp_path):
         reset_logging()
 
 
+def test_sample_acknowledgement_audit_fields_are_allowlisted_without_secret_spill(
+    tmp_path,
+) -> None:
+    """sample/case/curation/signer 可对账；误传 token 仍只能记键名。"""
+    log_dir = tmp_path / "logs"
+    configure_logging(log_dir, process_tag="unit")
+    try:
+        audit_event(
+            "sample_acknowledgement",
+            actor="requester",
+            outcome="idempotent_replay",
+            agent_id="hello_agent",
+            sample_id=17,
+            case_file="case_004_from_sample.json",
+            curation="draft",
+            acknowledged_by_username="first_signer",
+            token="must-not-leak",
+        )
+        path = log_dir / "audit.log"
+        records = [
+            json.loads(line)
+            for line in path.read_text("utf-8").splitlines()
+            if line.strip()
+        ]
+        event = [
+            record
+            for record in records
+            if record.get("action") == "sample_acknowledgement"
+        ]
+        assert len(event) == 1
+        assert {key: value for key, value in event[0].items() if key != "ts"} == {
+            "action": "sample_acknowledgement",
+            "outcome": "idempotent_replay",
+            "actor": "requester",
+            "agent_id": "hello_agent",
+            "sample_id": 17,
+            "case_file": "case_004_from_sample.json",
+            "curation": "draft",
+            "acknowledged_by_username": "first_signer",
+        }
+        dropped = [
+            record
+            for record in records
+            if record.get("action") == "audit_field_dropped"
+        ]
+        assert len(dropped) == 1
+        assert dropped[0]["dropped_keys"] == ["token"]
+        assert "must-not-leak" not in path.read_text("utf-8")
+    finally:
+        reset_logging()
+
+
 def test_audit_event_is_injection_safe(tmp_path):
     """P1-3：actor 含 CR/LF/空格/`=` 不能伪造额外审计行（日志注入）。JSON Lines
     把换行转义在字符串内，单条记录恒单行；伪造内容不产生第二条可解析的假记录。"""
@@ -157,10 +209,36 @@ def _make_waiting_review_task(app, *, created_by: str) -> str:
     try:
         repos.create_task(
             conn, task_id=task_id, agent_id="fta_agent", agent_version="0.1.0",
-            name="audit-signoff-test", created_by=created_by, inputs={},
+            name="audit-signoff-test", created_by=created_by,
+            created_by_username=TEST_USERNAME, inputs={},
         )
         for st in ("queued", "validating", "running", "waiting_review"):
             repos.set_task_status(conn, task_id, st)
+        execution_evidence_digest = (
+            "sha256:7b9e93d01e34197b15ed6fddaad515525f8745b78d5203966251f6a80ca6ed58"
+        )
+        for event_type, message in (
+            ("validation_started", "开始校验输入"),
+            ("review_requested", "任务需要人工审核放行"),
+        ):
+            payload = {"execution_evidence_digest": execution_evidence_digest}
+            if event_type == "validation_started":
+                payload = {
+                    "package_snapshot_digest": "1" * 64,
+                    "task_inputs_digest": "sha256:" + "2" * 64,
+                    "input_file_ids": [],
+                    "input_files_digest": "sha256:" + "3" * 64,
+                    **payload,
+                }
+            repos.append_event(
+                conn,
+                task_id=task_id,
+                agent_id="fta_agent",
+                event_type=event_type,
+                level="info",
+                message=message,
+                payload=payload,
+            )
     finally:
         conn.close()
     return task_id
@@ -183,8 +261,10 @@ def test_task_approval_is_audited_as_signoff(app_env):
     assert r["self_review"] is True  # is True，不认 truthy
 
 
-def test_task_rejection_by_non_creator_audited_not_self_review(app_env):
-    """拒绝亦落审计；创建者≠签发者显示名 → self_review=False。
+def test_task_rejection_by_owner_is_audited_as_self_review(app_env):
+    """V1 owner_signoff 拒绝亦落审计；稳定 username 证明 owner 自签。
+
+    即使 legacy display_name 与当前展示名不一致，也不得推翻稳定 owner 轴。
     reject comment 是用户自由文本，非白名单字段 → 绝不入 audit.log（防注入/secret 回流）。"""
     client, app = app_env
     task_id = _make_waiting_review_task(app, created_by="另一位工程师")
@@ -197,7 +277,8 @@ def test_task_rejection_by_non_creator_audited_not_self_review(app_env):
     assert len(hit) == 1
     r = hit[0]
     assert r["outcome"] == "rejected"
-    assert r["self_review"] is False
+    assert r["self_review"] is True
+    assert r["self_review_basis"] == "username"
     assert r["created_by"] == "另一位工程师"
     audit_text = (Path(app.state.db_path).parent / "logs" / "audit.log").read_text("utf-8")
     assert "不合格-secret-xyz" not in audit_text, "自由文本 comment 绝不入审计轴"

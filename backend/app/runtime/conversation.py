@@ -23,7 +23,11 @@
 
 from __future__ import annotations
 
+import copy
+import json
+import re
 import sqlite3
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -39,6 +43,13 @@ from ..core.errors import (
 from ..storage import repos
 from .attachments import render_attachment_blocks
 from .runtime import _load_workflow_module
+from .skill_reuse_application import skill_reuse_application_mode
+from .work_segments import (
+    created_strictly_after,
+    is_canonical_qa_delivery,
+    is_guide_refuse_delivery,
+    latest_valid_iso,
+)
 
 # 发给模型的历史窗口上限（条数 + 累计字符双限）：全量历史仍完整落库，只是
 # 超窗后模型只看最近一段——防止长会话 token 成本单调上涨直至超上下文
@@ -50,6 +61,100 @@ _HISTORY_MAX_CHARS = 60_000
 # （与截窗同哲学：诚实降级）。单消息附件数上限（防御纵深，API 层同限）。
 _ATTACHMENT_BUDGET_CHARS = 24_000
 _MAX_FILES_PER_MESSAGE = 5
+_ROUND_PERSISTED_MESSAGES = 2
+# 这是送进 Guide system message 的方法上下文，不是冷存储包本身。各 32 KiB
+# 足以承载可执行步骤，同时让最坏 JSON 转义后也受 workflow 的 256 KiB 总顶约束。
+_MAX_REVIEWED_SKILL_REVISION_BYTES = 32_000
+_MAX_REVIEWED_SKILL_MARKDOWN_BYTES = 32_000
+_MAX_REUSE_REF_BYTES = 16_000
+_MAX_DEFERRED_GUIDE_STREAM_BYTES = 256_000
+_SKILL_REUSE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_SKILL_PACKAGE_ID_RE = re.compile(r"^skill_package_[0-9a-f]{24}$")
+_SKILL_PACKAGE_SEMVER_RE = re.compile(
+    r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
+_AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
+_SKILL_REUSE_REF_KEYS = frozenset(
+    {
+        "schema_version",
+        "package_id",
+        "package_version",
+        "package_digest",
+        "candidate_digest",
+        "skill_digest",
+        "skill_name",
+        "matched_agent_id",
+        "review_state",
+        "match_policy_version",
+        "match_basis_digest",
+    }
+)
+
+
+def _require_round_lineage_budget(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    *,
+    additional_file_ids: int,
+) -> tuple[int, list[str]]:
+    """Reserve the hard lineage budget before model work and again at commit."""
+
+    try:
+        return repos.get_bounded_conversation_attachment_lineage(
+            conn,
+            conversation_id,
+            max_messages=(
+                repos.CONVERSATION_LINEAGE_MAX_MESSAGES
+                - _ROUND_PERSISTED_MESSAGES
+            ),
+            max_file_ids=(
+                repos.CONVERSATION_LINEAGE_MAX_FILE_IDS - additional_file_ids
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ConversationConflictError(
+            "会话历史已达到安全上限，本轮未执行且未落库"
+        ) from exc
+
+
+def _verify_committed_lineage_budget(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+) -> None:
+    """Verify the post-append state before COMMIT; any drift rolls back."""
+
+    try:
+        repos.get_bounded_conversation_attachment_lineage(
+            conn,
+            conversation_id,
+            max_messages=repos.CONVERSATION_LINEAGE_MAX_MESSAGES,
+            max_file_ids=repos.CONVERSATION_LINEAGE_MAX_FILE_IDS,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ConversationConflictError(
+            "会话历史安全上限校验失败，本轮已回滚"
+        ) from exc
+_UNTRUSTED_REUSE_CLAIM_RE = re.compile(
+    r"复用|沿用"
+    r"|(?:按(?:照)?|依据|依照|使用|采用|套用).{0,20}"
+    r"(?:已|此前|之前|先前|上次|刚才).{0,12}"
+    r"(?:审核(?:通过)?|审定|核准|批准|核对|验证).{0,12}"
+    r"(?:方法|流程|技能|Skill|Workflow)"
+    r"|\breus(?:e|ed|ing)\b"
+    r"|\b(?:apply|applied|applying|use|used|using|follow|followed|following|"
+    r"adopt|adopted|adopting)\b.{0,48}"
+    r"\b(?:previously|previous|prior|already)?\s*"
+    r"(?:vetted|reviewed|approved|validated)\b.{0,24}"
+    r"\b(?:skill|method|workflow|procedure|approach)\b",
+    flags=re.IGNORECASE,
+)
+# 当前会话服务没有 actor role 入参，不能安全泛化到任意 interactive Agent。
+# 先仅允许这两个面向 business_user 的已审定问答包；未来在角色化授权进入
+# ConversationService 后，再由权限投影替代此 allowlist。
+_GUIDE_INTERACTIVE_HANDOFF_IDS = frozenset(
+    {"policy_qa_agent", "standards_qa_agent"}
+)
 
 
 def is_interactive(agent: dict[str, Any]) -> bool:
@@ -107,6 +212,53 @@ class _ConversationGatewayContext:
         return self._model_gateway.vision(profile, image_path, prompt, **self._ids(kwargs))
 
 
+class _DeferredGuideVisibleStream:
+    """Hold every Guide-visible delta until kernel truth has been reconciled.
+
+    The model stream is not a trustworthy source for whether a reviewed Skill
+    was matched, planned, bound, or applied.  We therefore retain a bounded
+    private copy only as evidence that the upstream really streamed, then emit
+    the final kernel-owned assistant text after plan validation and trusted-ref
+    attachment.  A failed round discards the buffer and exposes no partial
+    model claim.  Cancellation is still checked on every upstream chunk so the
+    existing disconnect-before-persistence guarantee remains intact.
+    """
+
+    def __init__(self, is_cancelled: Callable[[], bool] | None) -> None:
+        self._is_cancelled = is_cancelled
+        self._chunks: list[str] = []
+        self._size_bytes = 0
+
+    @property
+    def received(self) -> bool:
+        return bool(self._chunks)
+
+    def feed(self, chunk: str) -> None:
+        if self._is_cancelled is not None and self._is_cancelled():
+            raise ConversationConflictError("流式客户端已断开，本轮不落库")
+        if not isinstance(chunk, str):
+            raise ValueError("Guide 可见回复流只接受文本 chunk")
+        if not chunk:
+            return
+        try:
+            size_bytes = len(chunk.encode("utf-8"))
+        except UnicodeError as exc:
+            raise ValueError("Guide 可见回复流包含非法 Unicode") from exc
+        if self._size_bytes + size_bytes > _MAX_DEFERRED_GUIDE_STREAM_BYTES:
+            raise ValueError("Guide 可见回复流超过内核缓冲上限，本轮不落库")
+        self._chunks.append(chunk)
+        self._size_bytes += size_bytes
+
+    def flush_final(
+        self, final_text: str, emit: Callable[[str], None] | None
+    ) -> None:
+        if self.received is False or callable(emit) is False:
+            return
+        emit(final_text)
+        self._chunks.clear()
+        self._size_bytes = 0
+
+
 class ConversationService:
     def __init__(
         self,
@@ -115,15 +267,23 @@ class ConversationService:
         conn_factory: Callable[[], sqlite3.Connection],
         *,
         uploads_dir: str | Path,
+        skill_reuse_matcher: Any | None = None,
     ) -> None:
         self.agent_registry = agent_registry
         self.model_gateway = model_gateway
         self.conn_factory = conn_factory
         self.uploads_dir = Path(uploads_dir)
+        self.skill_reuse_matcher = skill_reuse_matcher
 
     # ── 会话生命周期 ─────────────────────────────────────────────────────
 
-    def create(self, *, agent_id: str, created_by: str) -> dict[str, Any]:
+    def create(
+        self,
+        *,
+        agent_id: str,
+        created_by: str,
+        created_by_username: str | None = None,
+    ) -> dict[str, Any]:
         """建会话：Agent 必须存在且为 interactive 型，否则如实拒绝。"""
         agent = self.agent_registry.get(agent_id)
         if agent is None:
@@ -135,9 +295,19 @@ class ConversationService:
         conn = self.conn_factory()
         try:
             conversation_id = f"conv_{uuid.uuid4().hex}"
-            return repos.create_conversation(
-                conn, conversation_id=conversation_id, agent_id=agent_id, created_by=created_by
+            owner_username: str | None = None
+            if isinstance(created_by_username, str):
+                normalized = created_by_username.strip()
+                if normalized and len(normalized) <= 128:
+                    owner_username = normalized
+            created = repos.create_conversation(
+                conn,
+                conversation_id=conversation_id,
+                agent_id=agent_id,
+                created_by=created_by,
+                created_by_username=owner_username,
             )
+            return created
         finally:
             conn.close()
 
@@ -238,6 +408,7 @@ class ConversationService:
         file_ids: list[str] | None = None,
         on_delta: Callable[[str], None] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
+        actor_username: str | None = None,
     ) -> dict[str, Any]:
         """推进一轮：读历史（不落库）→ 调导引 workflow → 单事务原子落库。
 
@@ -271,6 +442,16 @@ class ConversationService:
                         f"附件不存在（请先经 /api/files/upload 上传）：{missing}"
                     )
 
+            # Reserve the exact persisted delta before Registry/model work.
+            # The final transaction repeats this check under BEGIN IMMEDIATE;
+            # together with the existing optimistic message-count guard, only
+            # one concurrent round can consume the remaining budget.
+            budget_message_count, _ = _require_round_lineage_budget(
+                conn,
+                conversation_id,
+                additional_file_ids=len(file_ids),
+            )
+
             agent_id = conv["agent_id"]
             snapshot_view_factory = getattr(
                 self.agent_registry, "snapshot_view", None
@@ -303,25 +484,96 @@ class ConversationService:
             # 成功后才进事务落库。baseline 计数供提交前乐观并发检查。
             persisted = repos.list_messages(conn, conversation_id)
             baseline_count = len(persisted)
+            if baseline_count != budget_message_count:
+                raise ConversationConflictError(
+                    "会话历史在预算预检期间发生变化，本轮未执行"
+                )
+            # 任务签发或 Guide 的 canonical 终点代表上一段工程工作已经闭合。此后
+            # 新一轮仍看到完整文字历史，但附件正文/密级/转交 gate 只消费最近终点
+            # 之后的持久化附件；本轮尚未落库的 file_ids 始终属于当前段。
+            latest_tasks = repos.list_tasks(
+                conn, conversation_id=conversation_id, limit=1
+            )
+            baseline_work_segment = _work_segment_boundary_marker(
+                latest_tasks=latest_tasks,
+                messages=persisted,
+                agent_id=agent_id,
+            )
+            boundary_values = [
+                latest_tasks[0].get("created_at") if latest_tasks else None
+            ]
+            if agent_id == "guide_agent":
+                boundary_values.extend(
+                    m.get("created_at")
+                    for m in persisted
+                    if is_guide_refuse_delivery(m)
+                    or is_canonical_qa_delivery(m)
+                )
+            attachment_boundary = latest_valid_iso(boundary_values)
+            # Skill 自动复用只匹配当前工程工作段：上一任务签发、Guide 拒绝或
+            # canonical QA 交付以前的 user 文本都不再参与。完整历史仍照常喂给
+            # Guide 维持对话连贯性；这里单独收窄的是资产匹配证据面。
+            reuse_segment_messages = [
+                {"role": "user", "content": m["content"]}
+                for m in persisted
+                if m.get("role") == "user"
+                and (
+                    attachment_boundary is None
+                    or created_strictly_after(
+                        m.get("created_at"), attachment_boundary
+                    )
+                )
+            ]
+            reuse_segment_messages.append({"role": "user", "content": content})
             history = [
-                {"role": m["role"], "content": m["content"], "file_ids": m.get("file_ids") or []}
+                {
+                    "role": m["role"],
+                    "content": m["content"],
+                    "file_ids": (
+                        (m.get("file_ids") or [])
+                        if (
+                            attachment_boundary is None
+                            or created_strictly_after(
+                                m.get("created_at"), attachment_boundary
+                            )
+                        )
+                        else []
+                    ),
+                }
                 for m in persisted
             ]
             history.append({"role": "user", "content": content, "file_ids": file_ids})
-            history = _window(history)
             # 批七 Codex R2 P1（verbatim）：交互附件同受 ADR-0030 密级 gate——此前
             # 仅任务路径强制，internal 上限的交互 Agent（policy_qa/standards_qa）可被
-            # 喂 sensitive 附件直进模型上下文。渲染前对**在窗全部附件**（本轮新提交
-            # + 历史在窗）复核 Agent 密级上限；已被清理的缺位文件只渲占位行、无内容
-            # 可越级，不参与判定（与 runtime 消费点复核同口径：只判在册记录，缺位
+            # 喂 sensitive 附件直进模型上下文。渲染前对**完整当前工作段的附件**
+            # （本轮新提交 + 边界后历史）复核 Agent 密级上限；正文虽会在下方截窗，
+            # 名册/绑定/开工对账与密级 gate 不能随消息窗口丢失。已被清理的缺位文件
+            # 只渲占位行，不含可越级内容，也不参与判定（与 runtime 消费点复核同
+            # 口径：只判在册记录，缺位
             # 交由渲染器「读取失败」路径诚实兜底）。局部 import 避免 api↔runtime
             # 模块环（runtime.py 消费点同款）。
             from ..api import classification_gate as cgate
 
-            _window_ids = [fid for m in history for fid in (m.get("file_ids") or [])]
-            if _window_ids:
-                _present = {r["id"] for r in repos.list_files_by_ids(conn, _window_ids)}
-                _present_ids = [fid for fid in _window_ids if fid in _present]
+            _segment_ids = [fid for m in history for fid in (m.get("file_ids") or [])]
+            _present_ids: list[str] = []
+            attachment_roster: list[dict[str, str]] = []
+            if _segment_ids:
+                present_rows = repos.list_files_by_ids(conn, _segment_ids)
+                present_by_id = {row["id"]: row for row in present_rows}
+                # 同一 file_id 跨消息再次引用只算一份；首次出现顺序决定稳定标签。
+                _present_ids = list(
+                    dict.fromkeys(
+                        fid for fid in _segment_ids if fid in present_by_id
+                    )
+                )
+                attachment_roster = [
+                    {
+                        "label": f"附件{index}",
+                        "file_id": fid,
+                        "filename": str(present_by_id[fid]["filename"]),
+                    }
+                    for index, fid in enumerate(_present_ids, start=1)
+                ]
                 _allowed, _material_level, _agent_max = cgate.agent_clearance_allows(
                     conn, agent, _present_ids
                 )
@@ -330,10 +582,139 @@ class ConversationService:
                         f"该专家的密级准入上限为「{_agent_max}」，无法处理「{_material_level}」"
                         "级附件——请改派密级上限足够的 Agent 或移除受控附件（ADR-0030）"
                     )
+
+            # 匹配器只对 Guide、已认证 username 与当前工作段开放。包存储不可用、
+            # 数据畸形或匹配器自身失败都不得拖垮主对话，更不得制造复用声明。
+            # filename 只取上方 File Store 实查所得 roster；用户文本不能伪造附件名。
+            trusted_skill_reuse: dict[str, Any] | None = None
+            proven_owner_username = repos.get_conversation_owner_username(
+                conn, conversation_id
+            )
+            if (
+                agent_id == "guide_agent"
+                and isinstance(actor_username, str)
+                and actor_username
+                and actor_username == proven_owner_username
+                and self.skill_reuse_matcher is not None
+            ):
+                try:
+                    raw_match = self.skill_reuse_matcher.match(
+                        conn,
+                        username=actor_username,
+                        segment_messages=reuse_segment_messages,
+                        attachment_filenames=[
+                            item["filename"] for item in attachment_roster
+                        ],
+                    )
+                    trusted_skill_reuse = _normalize_skill_reuse_match(raw_match)
+                    if trusted_skill_reuse is not None:
+                        # 不把“内容已审核”误当成“目标 Agent 能消费方法”。自动
+                        # 复用必须先通过当前不可变 Agent Package 的应用能力门；
+                        # profile:none 未声明 exact receipt 协议时连计划都不附 ref，
+                        # 避免工程师确认后才收到一个注定失败的任务。
+                        matched_agent_id = trusted_skill_reuse["ref"][
+                            "matched_agent_id"
+                        ]
+                        snapshot_getter = getattr(
+                            self.agent_registry, "package_snapshot", None
+                        )
+                        snapshot = (
+                            snapshot_getter(matched_agent_id)
+                            if callable(snapshot_getter)
+                            else None
+                        )
+                        manifest = getattr(snapshot, "manifest", None)
+                        if skill_reuse_application_mode(manifest) is None:
+                            trusted_skill_reuse = None
+                except Exception:
+                    trusted_skill_reuse = None
+            # 只有给模型的对话正文受消息/字符窗限制；上面的 current-segment roster
+            # 保持完整，避免附件在多轮澄清后从 Guide 消失、却仍被前端开工闸门看见。
+            history = _window(history)
             history = self._render_history_attachments(conn, history)
+            # Guide 的模型 delta 可能在计划校验、目标 Agent 对账和可信 Skill ref
+            # 附着之前自报“已复用”。整条 Guide 可见流（含自动转交前的 Guide lead）
+            # 先进入私有有界缓冲；只有本轮最终语义由内核收束后才可对外冲刷。
+            deferred_guide_stream = (
+                _DeferredGuideVisibleStream(is_cancelled)
+                if agent_id == "guide_agent" and callable(on_delta)
+                else None
+            )
+            workflow_delta = (
+                deferred_guide_stream.feed
+                if deferred_guide_stream is not None
+                else on_delta
+            )
 
             with execution_registry, package_snapshot.materialized() as pkg_dir:
                 workflow = _load_workflow_module(agent_id, pkg_dir / "workflow.py")
+
+                def delegate_interactive(target_agent_id: str) -> dict[str, Any]:
+                    """在同一不可变 Registry 代际内把当前轮交给垂类对话专家。
+
+                    Guide 的 ``delegate`` 只是模型提议；这里重新校验真实包、运行
+                    模式、下线状态与附件密级，再以目标 Agent 身份调用模型。整个
+                    转交仍属于当前 conversation，既不创建任务，也不改变会话壳的
+                    agent_id，因而工程师无需看见或选择内部路由。
+                    """
+                    target_snapshot = execution_registry.package_snapshot(target_agent_id)
+                    if target_snapshot is None:
+                        raise ConversationNotFoundError(
+                            f"自动转交目标 agent 已不可用：{target_agent_id}"
+                        )
+                    target_agent = target_snapshot.manifest
+                    allowed_roles = (
+                        (target_agent.get("permissions") or {}).get("allowed_roles")
+                        or []
+                    )
+                    if (
+                        target_agent_id not in _GUIDE_INTERACTIVE_HANDOFF_IDS
+                        or not isinstance(allowed_roles, list)
+                        or "business_user" not in allowed_roles
+                        or target_agent_id == agent_id
+                        or target_agent.get("status") == "disabled"
+                        or is_interactive(target_agent) is False
+                    ):
+                        raise ConversationClosedError(
+                            f"自动转交目标 agent 不可用于垂类对话：{target_agent_id}"
+                        )
+
+                    if _present_ids:
+                        allowed, material_level, agent_max = cgate.agent_clearance_allows(
+                            conn, target_agent, _present_ids
+                        )
+                        if allowed is False:
+                            raise ClearanceDeniedError(
+                                f"自动路由专家的密级准入上限为「{agent_max}」，无法处理"
+                                f"「{material_level}」级附件——系统不会绕过密级闸门"
+                            )
+
+                    target_pkg_dir = execution_registry.package_dir(target_agent_id)
+                    if target_pkg_dir is None:
+                        raise ConversationNotFoundError(
+                            f"自动转交目标 agent 缺少不可变包快照：{target_agent_id}"
+                        )
+                    target_workflow = _load_workflow_module(
+                        target_agent_id, target_pkg_dir / "workflow.py"
+                    )
+                    target_context = {
+                        "messages": history,
+                        "model_gateway": _ConversationGatewayContext(
+                            self.model_gateway, conversation_id, target_agent_id
+                        ),
+                        "agent_registry": execution_registry,
+                        "agent_config": target_agent,
+                        # 自动转交仍处于 Guide 主对话的同一可信边界内：目标回复
+                        # 也不得绕过最终 reconciliation 直接进入用户可见流。
+                        "stream_delta": workflow_delta,
+                    }
+                    delegated_result = target_workflow.run(target_context)
+                    if not isinstance(delegated_result, dict):
+                        raise ValueError(
+                            "自动转交的 interactive workflow.run() 返回值必须是 dict"
+                        )
+                    return delegated_result
+
                 context = {
                     "messages": history,
                     "model_gateway": _ConversationGatewayContext(
@@ -341,11 +722,28 @@ class ConversationService:
                     ),
                     "agent_registry": execution_registry,
                     "agent_config": agent,
+                    # 仅以在窗且仍在 File Store 的真实 id 派生；Guide 不从用户文本
+                    # 猜测附件存在性。目标专家收到的附件正文仍来自上面的受控渲染。
+                    "attachment_context_present": bool(_present_ids),
+                    # Guide 只能按此系统可信名册里的稳定标签提议绑定；filename 可重复，
+                    # label/file_id 仍唯一可区分。workflow 不从附件正文或用户文本猜 id。
+                    "attachment_roster": attachment_roster,
                     # interactive workflow 可选择消费；guide_agent 会把它继续接到
                     # Model Gateway 的真实 SSE delta，并先过滤控制计划块。其他既有
                     # workflow 忽略此键，最终仍只发 done 事件。
-                    "stream_delta": on_delta,
+                    "stream_delta": workflow_delta,
                 }
+                if agent_id == "guide_agent":
+                    # 自动转交是统一入口的专用能力，不向其它 Agent 包暴露任意
+                    # interactive 调用器。目标仍须同时通过 Guide 候选对账与这里的
+                    # 运行时安全复核。
+                    context["delegate_interactive"] = delegate_interactive
+                    if trusted_skill_reuse is not None:
+                        # 只给 Guide 方法内容，不暴露 package/ref 身份字段。ref 保留在
+                        # ConversationService 的可信侧，模型无法读到、回写或修改。
+                        context["reviewed_skill_method"] = copy.deepcopy(
+                            trusted_skill_reuse["method"]
+                        )
                 # 抛异常即冒泡（不吞）；此前尚未落任何消息。workflow 完整执行期
                 # 都在私有材化目录生命周期内，绝不回读可变 authoring 目录。
                 result = workflow.run(context)
@@ -360,6 +758,44 @@ class ConversationService:
             if not isinstance(assistant_message, str) or not assistant_message.strip():
                 raise ValueError("interactive workflow 未返回非空 assistant_message")
             recommendation = result.get("recommendation")  # 可能为 None
+            trusted_reuse_attached = False
+            if agent_id == "guide_agent" and isinstance(recommendation, dict):
+                # Guide 的任何 model-authored ``skill_reuse`` 一律先剥离。只有下面
+                # “唯一命中已确定性校验成员”的可信 matcher ref 才能重新附着。
+                recommendation = {
+                    key: value
+                    for key, value in recommendation.items()
+                    if key != "skill_reuse"
+                }
+                if trusted_skill_reuse is not None:
+                    matched_agent_id = trusted_skill_reuse["ref"].get(
+                        "matched_agent_id"
+                    )
+                    planned_agents = recommendation.get("agents")
+                    matched_count = (
+                        sum(
+                            1
+                            for planned in planned_agents
+                            if isinstance(planned, dict)
+                            and planned.get("agent_id") == matched_agent_id
+                        )
+                        if isinstance(planned_agents, list)
+                        else 0
+                    )
+                    if (
+                        recommendation.get("decision") == "orchestrate"
+                        and matched_count == 1
+                    ):
+                        recommendation["skill_reuse"] = copy.deepcopy(
+                            trusted_skill_reuse["ref"]
+                        )
+                        trusted_reuse_attached = True
+            if agent_id == "guide_agent":
+                assistant_message = _kernel_owned_guide_message(
+                    assistant_message,
+                    recommendation,
+                    trusted_reuse_attached=trusted_reuse_attached,
+                )
 
             # 成功：单事务原子落库（user + assistant + 会话级推荐快照），提交前
             # 复查「仍 active 且历史未被并发轮改动」——检查失败整轮回滚，绝不把
@@ -375,6 +811,27 @@ class ConversationService:
                     raise ConversationConflictError(
                         "会话在本轮生成期间被并发消息修改，本轮不落库——请基于最新历史重试"
                     )
+                _require_round_lineage_budget(
+                    conn,
+                    conversation_id,
+                    additional_file_ids=len(file_ids),
+                )
+                fresh_messages = (
+                    repos.list_messages(conn, conversation_id)
+                    if agent_id == "guide_agent"
+                    else []
+                )
+                fresh_latest_tasks = repos.list_tasks(
+                    conn, conversation_id=conversation_id, limit=1
+                )
+                if _work_segment_boundary_marker(
+                    latest_tasks=fresh_latest_tasks,
+                    messages=fresh_messages,
+                    agent_id=agent_id,
+                ) != baseline_work_segment:
+                    raise ConversationConflictError(
+                        "会话在本轮生成期间工程工作段边界已变化，本轮不落库——请基于最新工作段重试"
+                    )
                 repos.append_message(
                     conn,
                     conversation_id=conversation_id,
@@ -389,6 +846,7 @@ class ConversationService:
                     content=assistant_message,
                     recommendation=recommendation,
                 )
+                _verify_committed_lineage_budget(conn, conversation_id)
                 # 会话级 recommendation 反映**最后一轮**结果（反方 P3-1：含推荐被
                 # 撤回的轮——无推荐即写回 None，不留陈旧草案）。
                 updated_conversation = repos.set_conversation_recommendation(
@@ -414,6 +872,190 @@ class ConversationService:
                 conn.execute("ROLLBACK")
                 raise
 
+            if deferred_guide_stream is not None:
+                # 必须等原子消息提交成功后才对外发送最终文本。否则工作段或并发
+                # 校验在 COMMIT 前失败时，用户仍会先看到一段并未持久成立的方案。
+                # 上游没有实际 delta（如非流 stub）时保持既有 start→done 形状。
+                deferred_guide_stream.flush_final(assistant_message, on_delta)
+
             return {"message": msg, "conversation": updated_conversation}
         finally:
             conn.close()
+
+
+def _normalize_skill_reuse_match(raw_match: Any) -> dict[str, Any] | None:
+    """Defensively bound and detach the matcher's trusted method/ref envelope."""
+    if not isinstance(raw_match, dict) or set(raw_match) != {"ref", "method"}:
+        return None
+    raw_ref = raw_match.get("ref")
+    raw_method = raw_match.get("method")
+    if (
+        not isinstance(raw_ref, dict)
+        or set(raw_ref) != _SKILL_REUSE_REF_KEYS
+        or not isinstance(raw_method, dict)
+        or set(raw_method) != {"skill_revision", "skill_markdown"}
+    ):
+        return None
+    skill_revision = raw_method.get("skill_revision")
+    skill_markdown = raw_method.get("skill_markdown")
+    if not isinstance(skill_revision, dict) or not isinstance(skill_markdown, str):
+        return None
+    normalized_ref: dict[str, str] = {}
+    for key in _SKILL_REUSE_REF_KEYS:
+        value = raw_ref.get(key)
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or unicodedata.normalize("NFC", value) != value
+        ):
+            return None
+        normalized_ref[key] = value
+    if (
+        normalized_ref["schema_version"] != "skill_reuse_ref.v1"
+        or normalized_ref["review_state"] != "approved"
+        or normalized_ref["match_policy_version"] != "skill_reuse_match.v1"
+        or _SKILL_PACKAGE_ID_RE.fullmatch(normalized_ref["package_id"]) is None
+        or _SKILL_PACKAGE_SEMVER_RE.fullmatch(normalized_ref["package_version"])
+        is None
+        or _AGENT_ID_RE.fullmatch(normalized_ref["matched_agent_id"]) is None
+        or len(normalized_ref["skill_name"]) > 512
+    ):
+        return None
+    for digest_key in (
+        "package_digest",
+        "candidate_digest",
+        "skill_digest",
+        "match_basis_digest",
+    ):
+        if _SKILL_REUSE_DIGEST_RE.fullmatch(normalized_ref[digest_key]) is None:
+            return None
+    if (
+        skill_revision.get("schema_version") != "skill_draft.v1"
+        or skill_revision.get("status") != "draft"
+        or skill_revision.get("name") != normalized_ref["skill_name"]
+        or skill_revision.get("content_digest") != normalized_ref["skill_digest"]
+        or not skill_markdown.strip()
+        or unicodedata.normalize("NFC", skill_markdown) != skill_markdown
+    ):
+        return None
+    try:
+        ref_bytes = json.dumps(
+            raw_ref,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        revision_bytes = json.dumps(
+            skill_revision,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        markdown_bytes = skill_markdown.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError, RecursionError):
+        return None
+    if (
+        len(ref_bytes) > _MAX_REUSE_REF_BYTES
+        or len(revision_bytes) > _MAX_REVIEWED_SKILL_REVISION_BYTES
+        or len(markdown_bytes) > _MAX_REVIEWED_SKILL_MARKDOWN_BYTES
+        or _is_nfc_json(skill_revision) is False
+    ):
+        return None
+    return {
+        "ref": copy.deepcopy(normalized_ref),
+        "method": {
+            "skill_revision": copy.deepcopy(skill_revision),
+            "skill_markdown": skill_markdown,
+        },
+    }
+
+
+def _work_segment_boundary_marker(
+    *,
+    latest_tasks: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+    agent_id: str,
+) -> tuple[tuple[Any, Any] | None, tuple[str, ...]]:
+    """Capture the facts whose change starts a new engineering work segment."""
+
+    latest_task = latest_tasks[0] if latest_tasks else None
+    task_marker = (
+        (latest_task.get("id"), latest_task.get("created_at"))
+        if isinstance(latest_task, dict)
+        else None
+    )
+    guide_boundaries = (
+        tuple(
+            str(message.get("created_at"))
+            for message in messages
+            if is_guide_refuse_delivery(message)
+            or is_canonical_qa_delivery(message)
+        )
+        if agent_id == "guide_agent"
+        else ()
+    )
+    return task_marker, guide_boundaries
+
+
+def _kernel_owned_guide_message(
+    assistant_message: str,
+    recommendation: Any,
+    *,
+    trusted_reuse_attached: bool,
+) -> str:
+    """Own pre-task status language at the kernel boundary, never in the LLM.
+
+    A validated plan is still only a proposal.  Its arbitrary model-authored
+    lead is replaced wholesale so even a trusted matcher result cannot be
+    narrated as already bound/applied.  Non-plan replies remain conversational,
+    but broad positive reuse paraphrases are replaced with a neutral status
+    sentence regardless of whether a matcher found a candidate.
+    """
+
+    if isinstance(recommendation, dict):
+        decision = recommendation.get("decision")
+        if decision == "orchestrate":
+            if trusted_reuse_attached is True:
+                return (
+                    "已形成一份待你确认的协作方案，并匹配到一项已审核的 Skill。"
+                    "当前只是计划复用；是否实际应用，以你确认开工后的任务事件为准。"
+                )
+            return (
+                "已形成一份待你确认的协作方案。方法匹配与实际应用状态，"
+                "以方案卡和你确认开工后的任务事件为准。"
+            )
+        if decision == "refuse":
+            return (
+                "当前没有形成可开工的协作方案。"
+                "请根据下方原因与建议补充或调整任务信息。"
+            )
+    return _neutralize_untrusted_reuse_claim(assistant_message)
+
+
+def _neutralize_untrusted_reuse_claim(assistant_message: str) -> str:
+    """Remove model-authored positive reuse claims without trusting match state."""
+
+    if _UNTRUSTED_REUSE_CLAIM_RE.search(assistant_message) is None:
+        return assistant_message
+    return (
+        "我会根据当前任务信息继续组织；方法是否匹配或应用，"
+        "只以系统方案卡和开工后的任务事件为准。"
+    )
+
+
+def _is_nfc_json(value: Any) -> bool:
+    if isinstance(value, str):
+        return unicodedata.normalize("NFC", value) == value
+    if isinstance(value, list):
+        return all(_is_nfc_json(item) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str)
+            and unicodedata.normalize("NFC", key) == key
+            and _is_nfc_json(item)
+            for key, item in value.items()
+        )
+    return value is None or isinstance(value, (bool, int, float))

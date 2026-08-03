@@ -22,14 +22,18 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config
+from .api import agent_shell as agent_shell_api
 from .api import agents as agents_api
+from .api import asset_drafts as asset_drafts_api
 from .api import auth as auth_api
 from .api import conversations as conversations_api
+from .api import feature_asset_map as feature_asset_map_api
 from .api import feedback as feedback_api
 from .api import files as files_api
 from .api import governance as governance_api
 from .api import knowledge as knowledge_api
 from .api import me as me_api
+from .api import object_authorization as object_authorization_api
 from .api import stats as stats_api
 from .api import tasks as tasks_api
 from .api import teams as teams_api
@@ -37,6 +41,15 @@ from .auth.middleware import AuthGateMiddleware
 from .auth.service import LoginThrottle
 from .bootstrap import assemble
 from .logging_setup import configure_logging, reset_logging
+from .ontology import (
+    AgentShellCatalog,
+    AssetCandidateLedger,
+    AssetDraftBuilder,
+    CandidateMaterializer,
+    FeatureAssetMapCatalog,
+    SkillReuseEvidenceLedger,
+    SkillReuseMatcher,
+)
 from .runtime.conversation import ConversationService
 from .runtime.runtime import AgentRuntime
 from .storage import repos
@@ -73,11 +86,21 @@ def _worker_freshness(conn: sqlite3.Connection) -> dict[str, object]:
     try:
         beat_time = datetime.fromisoformat(str(hb.get("last_beat_at")))
     except (ValueError, TypeError):
-        return {"present": True, "fresh": False, "age_s": None,
-                "generation": generation, "reason": "timestamp_malformed"}
+        return {
+            "present": True,
+            "fresh": False,
+            "age_s": None,
+            "generation": generation,
+            "reason": "timestamp_malformed",
+        }
     if beat_time.tzinfo is None:
-        return {"present": True, "fresh": False, "age_s": None,
-                "generation": generation, "reason": "naive_timestamp"}
+        return {
+            "present": True,
+            "fresh": False,
+            "age_s": None,
+            "generation": generation,
+            "reason": "naive_timestamp",
+        }
     age = (datetime.now(timezone.utc) - beat_time).total_seconds()
     fresh = -5.0 <= age <= float(_WORKER_STALE_S)
     result: dict[str, object] = {
@@ -131,13 +154,24 @@ def create_app(
 ) -> FastAPI:
     agents_dir = Path(agents_dir) if agents_dir is not None else config.AGENTS_DIR
     tools_dir = Path(tools_dir) if tools_dir is not None else config.TOOLS_DIR
-    contracts_dir = Path(contracts_dir) if contracts_dir is not None else config.CONTRACTS_DIR
-    knowledge_dir = Path(knowledge_dir) if knowledge_dir is not None else config.KNOWLEDGE_DIR
-    db_path = Path(db_path) if db_path is not None else config.DB_PATH
+    contracts_dir = (
+        Path(contracts_dir) if contracts_dir is not None else config.CONTRACTS_DIR
+    )
+    knowledge_dir = (
+        Path(knowledge_dir) if knowledge_dir is not None else config.KNOWLEDGE_DIR
+    )
+    # Freeze the configured database location at app construction.  Keeping a
+    # relative Path in the closure would silently retarget conn_factory after
+    # any later process cwd change.
+    db_path = (Path(db_path) if db_path is not None else config.DB_PATH).resolve()
     uploads_dir = Path(uploads_dir) if uploads_dir is not None else config.UPLOADS_DIR
-    task_runs_dir = Path(task_runs_dir) if task_runs_dir is not None else config.TASK_RUNS_DIR
+    task_runs_dir = (
+        Path(task_runs_dir) if task_runs_dir is not None else config.TASK_RUNS_DIR
+    )
     frontend_dist_dir = (
-        Path(frontend_dist_dir) if frontend_dist_dir is not None else config.FRONTEND_DIST_DIR
+        Path(frontend_dist_dir)
+        if frontend_dist_dir is not None
+        else config.FRONTEND_DIST_DIR
     )
 
     def conn_factory() -> sqlite3.Connection:
@@ -145,7 +179,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        config.assert_local_db_path(db_path)  # P0-B2：DB 必须本地固定盘，否则 fail-closed 拒启
+        config.assert_local_db_path(
+            db_path
+        )  # P0-B2：DB 必须本地固定盘，否则 fail-closed 拒启
         for d in (db_path.parent, uploads_dir, task_runs_dir):
             d.mkdir(parents=True, exist_ok=True)
         # 进程日志 + 审计留痕（ADR-0023）：log_dir 派生 db_path.parent/logs——
@@ -163,18 +199,73 @@ def create_app(
                 knowledge_dir=knowledge_dir,
                 conn_factory=conn_factory,
             )
-            runtime = AgentRuntime(
-                asm.agent_registry, asm.tool_registry, asm.model_gateway, conn_factory,
-                task_runs_dir, knowledge_service=asm.knowledge_service, uploads_dir=uploads_dir,
-                scope_registry=asm.scope_registry,  # ADR-0021 知识轴派生分级用
-            )
-            conversation_service = ConversationService(
-                asm.agent_registry, asm.model_gateway, conn_factory, uploads_dir=uploads_dir,
-            )
-
             app.state.agent_registry = asm.agent_registry
             app.state.tool_registry = asm.tool_registry
             app.state.scope_registry = asm.scope_registry
+            app.state.agent_shell_catalog = AgentShellCatalog(
+                asm.agent_registry,
+                asm.tool_registry,
+                asm.scope_registry,
+            )
+            asset_draft_builder = AssetDraftBuilder()
+            app.state.asset_draft_builder = asset_draft_builder
+            asset_candidate_ledger = AssetCandidateLedger(
+                builder=asset_draft_builder,
+                agent_registry=asm.agent_registry,
+                contracts_dir=contracts_dir,
+            )
+            # ``FLAI_DB_PATH`` is documented as a relative deployment setting.
+            # The quarantine boundary itself must nevertheless be absolute so
+            # symlink/containment checks cannot depend on a later cwd change.
+            candidate_skill_packages_dir = db_path.parent / "candidate_skill_packages"
+            candidate_materializer = CandidateMaterializer(
+                candidate_skill_packages_dir,
+                asset_candidate_ledger,
+                forbidden_roots=(agents_dir.resolve(),),
+                contracts_dir=contracts_dir,
+            )
+            asset_candidate_ledger.attach_materializer(candidate_materializer)
+            feature_asset_map_catalog = FeatureAssetMapCatalog(
+                agent_shell_catalog=app.state.agent_shell_catalog,
+                asset_candidate_ledger=asset_candidate_ledger,
+                asset_candidate_authorizer=(
+                    object_authorization_api.require_owned_asset_candidate_package_inputs
+                ),
+                contracts_dir=contracts_dir,
+            )
+            skill_reuse_evidence = SkillReuseEvidenceLedger(candidate_materializer)
+            candidate_materializer.attach_formation_evidence_provider(
+                skill_reuse_evidence
+            )
+            # ADR-0035 startup migration: legacy ADR-0034 accepted candidates
+            # are materialized deterministically one transaction at a time.
+            # The discovery-only empty path does not create quarantine dirs.
+            candidate_materializer.backfill_legacy_accepted(conn_factory)
+            skill_reuse_matcher = SkillReuseMatcher(candidate_materializer)
+            runtime = AgentRuntime(
+                asm.agent_registry,
+                asm.tool_registry,
+                asm.model_gateway,
+                conn_factory,
+                task_runs_dir,
+                knowledge_service=asm.knowledge_service,
+                uploads_dir=uploads_dir,
+                scope_registry=asm.scope_registry,
+                skill_reuse_evidence=skill_reuse_evidence,
+            )
+            conversation_service = ConversationService(
+                asm.agent_registry,
+                asm.model_gateway,
+                conn_factory,
+                uploads_dir=uploads_dir,
+                skill_reuse_matcher=skill_reuse_matcher,
+            )
+            app.state.asset_candidate_ledger = asset_candidate_ledger
+            app.state.feature_asset_map_catalog = feature_asset_map_catalog
+            app.state.candidate_materializer = candidate_materializer
+            app.state.candidate_skill_packages_dir = candidate_skill_packages_dir
+            app.state.skill_reuse_evidence = skill_reuse_evidence
+            app.state.skill_reuse_matcher = skill_reuse_matcher
             app.state.knowledge_service = asm.knowledge_service
             app.state.model_gateway = asm.model_gateway
             app.state.runtime = runtime
@@ -252,6 +343,10 @@ def create_app(
             # operator 据此知 API 未重启；否则旧 API 入队无 handle 的 run、worker 回退活磁盘，
             # 不可变保证静默失效。仍是布尔位，不含数据。
             "eval_snapshot_axis": True,
+            # ADR-0035 runtime/binding 代际：严格布尔位见证活 API 已具备已审
+            # Skill Package 的匹配、任务绑定与运行时冷验链；部署探针据此拒绝
+            # “DB 已迁移但旧 API 仍在运行”的假绿。
+            "skill_reuse_runtime_axis": True,
             # GH #3 启动签发代际：axis 证明活进程含核对代码；ok/count 证明本次
             # 装配是否隔离过无 promotion 的 L1。HTTP 仍作为 liveness 返回 200，
             # deploy_selfcheck 另以 is True 严格判 ok。
@@ -262,9 +357,7 @@ def create_app(
             "promotion_signer_provenance_generation": (
                 config.PROMOTION_SIGNER_PROVENANCE_GENERATION
             ),
-            "promotion_attestation_ok": (
-                promotion_attestation_rejected_count == 0
-            ),
+            "promotion_attestation_ok": (promotion_attestation_rejected_count == 0),
             "promotion_attestation_rejected_count": (
                 promotion_attestation_rejected_count
             ),
@@ -295,6 +388,9 @@ def create_app(
         )
 
     app.include_router(auth_api.router)
+    app.include_router(agent_shell_api.router)
+    app.include_router(asset_drafts_api.router)
+    app.include_router(feature_asset_map_api.router)
     app.include_router(agents_api.router)
     app.include_router(tasks_api.router)
     app.include_router(files_api.router)

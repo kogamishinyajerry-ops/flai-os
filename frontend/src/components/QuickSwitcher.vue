@@ -1,7 +1,15 @@
 <template>
   <Transition name="qs-fade">
     <div v-if="quickSwitcher.open" class="qs-overlay" @click="close">
-      <div class="qs-panel" role="dialog" aria-modal="true" aria-label="快速切换" @click.stop>
+      <div
+        ref="panelRef"
+        class="qs-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="快速切换"
+        tabindex="-1"
+        @click.stop
+      >
         <div class="qs-search">
           <el-icon :size="18" aria-hidden="true"><Search /></el-icon>
           <input
@@ -9,7 +17,14 @@
             v-model="query"
             class="qs-input"
             type="text"
-            placeholder="搜索会话、任务、Agent…"
+            placeholder="搜索会话、任务…"
+            aria-label="搜索会话或任务"
+            role="combobox"
+            aria-controls="quick-switcher-results"
+            aria-haspopup="listbox"
+            aria-autocomplete="list"
+            aria-expanded="true"
+            :aria-activedescendant="activeOptionId"
             autocomplete="off"
             spellcheck="false"
           />
@@ -20,43 +35,75 @@
                重拉（关闭即整体卸载），不是同页静默轮询，不需要 A3 的 everLoaded
                防闪烁——直接绑 loading 即可。骨架根是 aria-hidden，必须保留
                视觉隐藏的「加载中…」status 文本给读屏（Codex R0 P2）。 -->
-          <div v-if="loading" class="qs-loading" role="status">
-            <span class="qs-loading-sr">加载中…</span>
-            <SkeletonBlock v-for="i in 4" :key="i" height="46px" />
+          <!-- 诚实降级条（批次五 C2）：后端搜索源失败≠没有结果——必须让用户
+               知道下面的清单可能不完整；真失败=trust-fail 红槽，role=alert 播报。 -->
+          <!-- 分级口径（Codex R0 审 P2）：单源失败≠服务不可用；会话与任务
+               两个来源都失败才说「全部」。空态文案同一分级（见下）。 -->
+          <div v-if="!loading && fetchDegraded" class="qs-degraded" role="alert">
+            {{ fetchFailedCount === 2 ? "后端搜索请求全部失败——以下显示可能不完整" : "部分结果不可用（后端搜索请求失败）——以下显示可能不完整" }}
           </div>
-          <template v-else>
-            <!-- 诚实降级条（批次五 C2）：后端搜索源失败≠没有结果——必须让用户
-                 知道下面的清单可能不完整；真失败=trust-fail 红槽，role=alert 播报。 -->
-            <!-- 分级口径（Codex R0 审 P2）：单源失败≠服务不可用——1-2 源失败说
-                 「部分」，3/3 全失败才说「全部」；空态文案同一分级（见下）。 -->
-            <div v-if="fetchDegraded" class="qs-degraded" role="alert">
-              {{ fetchFailedCount === 3 ? "后端搜索请求全部失败——以下显示可能不完整" : "部分结果不可用（后端搜索请求失败）——以下显示可能不完整" }}
+          <span v-if="loading" class="qs-loading-sr" role="status">加载中…</span>
+          <div
+            id="quick-switcher-results"
+            class="qs-listbox"
+            role="listbox"
+            aria-label="搜索结果"
+            :aria-busy="loading"
+          >
+            <div
+              v-if="loading"
+              class="qs-loading"
+              role="option"
+              aria-disabled="true"
+              aria-selected="false"
+              aria-label="加载中"
+            >
+              <SkeletonBlock v-for="i in 4" :key="i" height="46px" />
             </div>
-            <template v-for="group in renderGroups" :key="group.key">
-              <div v-if="group.items.length" class="qs-group">
-                <div class="qs-group-label">{{ group.label }}</div>
+            <template v-else>
+              <template v-for="group in renderGroups" :key="group.key">
                 <div
-                  v-for="entry in group.items"
-                  :key="group.key + '-' + entry.item.id"
-                  class="qs-item"
-                  :class="{ 'is-selected': entry.globalIndex === selectedIndex }"
-                  @click="activate(group.key, entry.item)"
-                  @mouseenter="selectedIndex = entry.globalIndex"
+                  v-if="group.items.length"
+                  class="qs-group"
+                  role="group"
+                  :aria-labelledby="`quick-switcher-group-${group.key}`"
                 >
-                  <span class="qs-item-main">
-                    <span class="qs-item-title">{{ itemTitle(group.key, entry.item) }}</span>
-                    <span class="qs-item-sub">{{ itemSub(group.key, entry.item) }}</span>
-                  </span>
-                  <span
-                    v-if="group.key === 'task'"
-                    class="qs-item-status"
-                    :style="{ color: taskLampColor(entry.item.status) }"
-                  >{{ statusLabel(entry.item.status) }}</span>
+                  <div :id="`quick-switcher-group-${group.key}`" class="qs-group-label">{{ group.label }}</div>
+                  <div
+                    v-for="entry in group.items"
+                    :key="group.key + '-' + entry.item.id"
+                    :id="`quick-switcher-option-${entry.globalIndex}`"
+                    class="qs-item"
+                    :class="{ 'is-selected': entry.globalIndex === selectedIndex }"
+                    role="option"
+                    :aria-selected="entry.globalIndex === selectedIndex"
+                    :tabindex="entry.globalIndex === selectedIndex ? 0 : -1"
+                    @click="activate(group.key, entry.item)"
+                    @mouseenter="selectedIndex = entry.globalIndex"
+                    @focus="selectedIndex = entry.globalIndex"
+                    @keydown.enter.stop.prevent="activate(group.key, entry.item)"
+                  >
+                    <span class="qs-item-main">
+                      <span class="qs-item-title">{{ itemTitle(group.key, entry.item) }}</span>
+                      <span class="qs-item-sub">{{ itemSub(group.key, entry.item) }}</span>
+                    </span>
+                    <span
+                      v-if="group.key === 'task'"
+                      class="qs-item-status"
+                      :style="{ color: taskLampColor(entry.item.status) }"
+                    >{{ statusLabel(entry.item.status) }}</span>
+                  </div>
                 </div>
-              </div>
+              </template>
+              <div
+                v-if="!flatItems.length"
+                class="qs-empty"
+                role="option"
+                aria-disabled="true"
+                aria-selected="false"
+              >{{ fetchFailedCount === 2 ? "搜索服务不可用（后端请求失败）——请稍后重试" : (fetchDegraded ? "没有匹配结果（部分来源不可用，结果可能不完整）" : "没有匹配结果") }}</div>
             </template>
-            <div v-if="!flatItems.length" class="qs-empty">{{ fetchFailedCount === 3 ? "搜索服务不可用（后端请求失败）——请稍后重试" : (fetchDegraded ? "没有匹配结果（部分来源不可用，结果可能不完整）" : "没有匹配结果") }}</div>
-          </template>
+          </div>
         </div>
 
         <div class="qs-footer">↑↓ 选择 · ↵ 打开 · esc 关闭</div>
@@ -66,15 +113,14 @@
 </template>
 
 <script setup>
-// ⌘K 快速切换面板（Claude Desktop 检索态移植）：全局热键唤出，并行拉会话/任务/Agent
-// 三源做客户端 substring 过滤，键盘上下+回车直达。App.vue 只挂载本组件，热键监听
+// ⌘K 快速切换面板（Claude Desktop 检索态移植）：全局热键唤出，并行拉会话/任务。
+// 两源做客户端 substring 过滤，键盘上下+回车直达。App.vue 只挂载本组件，热键监听
 // 与数据/跳转逻辑全封在这里，不外溢到 App.vue。
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { Search } from "@element-plus/icons-vue";
 import { listConversations } from "../api/conversations";
 import { listTasks } from "../api/tasks";
-import { listAgents } from "../api/agents";
 import { statusLabel, taskLampColor, taskDisplayName, formatClockCompact } from "../utils/format";
 import { conversationTitle, conversationTitlesVersion } from "../utils/conversationTitles";
 import { useTodayKey } from "../composables/useTodayKey";
@@ -91,11 +137,11 @@ const query = ref("");
 const loading = ref(false);
 const selectedIndex = ref(0);
 const inputRef = ref(null);
+const panelRef = ref(null);
 const resultsRef = ref(null);
 
 const conversations = ref([]);
 const tasks = ref([]);
-const agents = ref([]);
 
 // 会话标题：与 App.vue 左栏 convoTitle 同一 SSOT（conversationTitles.conversationTitle，
 // 三层回退=列表投影 → 缓存 → 「与 X 的对话」，含未接住会话前缀）。
@@ -104,35 +150,17 @@ function convoTitle(c) {
   return conversationTitle(c);
 }
 
-// 任务标题人话化（批次四 Q1）：⌘K 面板已并行拉了 agents 三源之一，直接用它
-// 建 id→name 映射喂 taskDisplayName SSOT——零新增网络调用；agents 未返回/失败
-// 时映射为空，SSOT 自回退 id 切片。
-const agentNameById = computed(() => {
-  const m = {};
-  for (const a of agents.value) {
-    if (a && a.id && a.name) m[a.id] = a.name;
-  }
-  return m;
-});
-
 function itemTitle(type, item) {
   if (type === "conversation") return convoTitle(item);
-  if (type === "task") return taskDisplayName(item, agentNameById.value);
-  return item.name; // agent
+  return taskDisplayName(item);
 }
 function itemSub(type, item) {
   if (type === "conversation") return `${item.created_by || "你"} · ${item.id.slice(0, 8)}`;
-  // 任务副行带紧凑时钟（3-lens 可用性镜头 P2）：同 Agent 多个缺名任务标题
-  // 相同，时钟是 ⌘K 结果行的消歧锚。
-  if (type === "task") {
-    return [item.agent_id, formatClockCompact(item.created_at, todayKey.value)]
-      .filter((p) => p && p !== "—")
-      .join(" · ");
-  }
-  return item.id; // agent
+  // 内部 Agent id 不作为工程师的选择或识别负担；任务只展示紧凑时间锚点。
+  return formatClockCompact(item.created_at, todayKey.value);
 }
 
-// 客户端 substring 过滤：名称/goal/agent_id/id 前 8 位，任一命中即算匹配。
+// 客户端 substring 过滤：工程师看得见的标题/id 前 8 位任一命中即算匹配。
 function matches(fields) {
   const q = query.value.trim().toLowerCase();
   if (!q) return true;
@@ -144,20 +172,16 @@ const filteredConversations = computed(() =>
 );
 const filteredTasks = computed(() =>
   // 眼见即可搜（Codex R0 P2）：结果行标题已是 taskDisplayName 人话称呼，
-  // 匹配域必须含同一 SSOT 产出——否则用户照着看到的注册表显示名打字反而搜不到。
-  tasks.value.filter((t) => matches([taskDisplayName(t, agentNameById.value), t.agent_id, t.id.slice(0, 8)])).slice(0, 6)
-);
-const filteredAgents = computed(() =>
-  agents.value.filter((a) => matches([a.name, a.id, a.id.slice(0, 8)])).slice(0, 6)
+  // 匹配域必须含同一 SSOT 产出——否则用户照着看到的任务名称打字反而搜不到。
+  tasks.value.filter((t) => matches([taskDisplayName(t), t.id.slice(0, 8)])).slice(0, 6)
 );
 
 const groups = computed(() => [
   { key: "conversation", label: "会话", items: filteredConversations.value },
   { key: "task", label: "任务", items: filteredTasks.value },
-  { key: "agent", label: "Agent", items: filteredAgents.value },
 ]);
 
-// 附上跨组连续的全局下标，供键盘 ↑↓ 在三组间无缝移动。
+// 附上跨组连续的全局下标，供键盘 ↑↓ 在两组间无缝移动。
 const renderGroups = computed(() => {
   let idx = 0;
   return groups.value.map((g) => {
@@ -166,10 +190,21 @@ const renderGroups = computed(() => {
   });
 });
 const flatItems = computed(() => groups.value.flatMap((g) => g.items.map((item) => ({ type: g.key, item }))));
+const activeOptionId = computed(() => {
+  if (loading.value) return undefined;
+  return flatItems.value[selectedIndex.value] ? `quick-switcher-option-${selectedIndex.value}` : undefined;
+});
 
 watch(query, () => {
   selectedIndex.value = 0;
 });
+watch(
+  () => flatItems.value.length,
+  (length) => {
+    if (!length) selectedIndex.value = 0;
+    else if (selectedIndex.value >= length) selectedIndex.value = length - 1;
+  }
+);
 
 // 键盘 ↑↓ 跨组连续移动时，把选中项滚入可视区（长列表/末组不被面板裁切）；
 // nextTick 等 is-selected 类先落到新 DOM 节点上再查询。
@@ -181,12 +216,12 @@ watch(selectedIndex, () => {
 
 // 拉取代数守卫（Codex R0 P2，与父页「轮询整包作废」同律）：面板快开快关再开
 // 会并发两轮 fetchAll，慢的旧响应后到会覆盖新数据——只认最新一代的回写。
-// 诚实降级（批次五 C2）：三源任一失败必须亮「结果可能不完整」——旧实现
+// 诚实降级（批次五 C2）：两源任一失败必须亮「结果可能不完整」——旧实现
 // .catch(()=>[]) 把后端故障伪装成「没有匹配结果」，故障与真无结果在 UI 上
 // 不可区分（诚实地板violation）。失败源计数落 fetchDegraded，空态文案随之切换。
 let fetchSeq = 0;
 const fetchDegraded = ref(false);
-const fetchFailedCount = ref(0); // 分级口径（Codex R0 审 P2）：3=全失败，1-2=部分
+const fetchFailedCount = ref(0); // 分级口径（Codex R0 审 P2）：2=全失败，1=部分
 async function fetchAll() {
   const seq = ++fetchSeq;
   loading.value = true;
@@ -197,15 +232,13 @@ async function fetchAll() {
       return null;
     });
   try {
-    const [convs, tks, ags] = await Promise.all([
+    const [convs, tks] = await Promise.all([
       grab(listConversations()),
       grab(listTasks({ limit: 50 })),
-      grab(listAgents()),
     ]);
     if (seq !== fetchSeq) return;
     conversations.value = convs || [];
     tasks.value = tks || [];
-    agents.value = ags || [];
     fetchDegraded.value = failed > 0;
     fetchFailedCount.value = failed;
   } finally {
@@ -260,16 +293,51 @@ function activate(type, item) {
   // 新页面而不是被 close watcher 拽回侧栏搜索钮；回还只属于 Escape/点遮罩
   // 这类「放弃关闭」（⑭C6″ 实证咬合）。
   focusReturnEl = null;
-  if (type === "conversation") router.push(`/workbench/${item.id}`);
+  // 会话结果回到唯一的文字/附件主输入；工作台只保留为任务协作详情深链，
+  // 不能成为工程师打开会话后的第二套交互入口。
+  if (type === "conversation") router.push({ path: "/", query: { c: item.id } });
   else if (type === "task") router.push(`/tasks/${item.id}`);
-  else if (type === "agent") router.push("/portal");
   close();
 }
 
 function moveSelection(delta) {
   const len = flatItems.value.length;
   if (!len) return;
+  const keepOptionFocus = document.activeElement?.classList?.contains("qs-item") === true;
   selectedIndex.value = (selectedIndex.value + delta + len) % len;
+  if (keepOptionFocus) {
+    nextTick(() => {
+      resultsRef.value?.querySelector(".qs-item.is-selected")?.focus({ preventScroll: true });
+    });
+  }
+}
+
+// 模态焦点圈：输入框和当前结果是仅有的 Tab 停靠点。结果为空/加载中时，Tab
+// 留在输入框；若异常焦点落到弹窗外，下一次 Tab 也会被拉回弹窗，而不是泄漏到页面。
+function trapFocus(e) {
+  const panel = panelRef.value;
+  if (!panel) return;
+  const focusable = Array.from(
+    panel.querySelectorAll('input:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')
+  ).filter((el) => el.getAttribute("aria-hidden") !== "true");
+  if (!focusable.length) {
+    e.preventDefault();
+    panel.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = document.activeElement;
+  if (!panel.contains(active) || !focusable.includes(active)) {
+    e.preventDefault();
+    (e.shiftKey ? last : first).focus();
+  } else if (e.shiftKey && active === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault();
+    first.focus();
+  }
 }
 
 // 全局热键：(⌘/Ctrl)+K 开关面板；面板打开时 Esc 关闭、↑↓ 选中、Enter 跳转。
@@ -284,7 +352,9 @@ function onWindowKeydown(e) {
     return;
   }
   if (!quickSwitcher.open) return;
-  if (e.key === "Escape") {
+  if (e.key === "Tab") {
+    trapFocus(e);
+  } else if (e.key === "Escape") {
     e.preventDefault();
     close();
   } else if (e.key === "ArrowDown") {
@@ -383,6 +453,10 @@ onUnmounted(() => window.removeEventListener("keydown", onWindowKeydown));
 .qs-item.is-selected {
   background: var(--select-tint-clay);
   border-left-color: var(--clay);
+}
+.qs-item:focus-visible {
+  outline: 2px solid var(--clay);
+  outline-offset: -2px;
 }
 .qs-item-main {
   display: flex;

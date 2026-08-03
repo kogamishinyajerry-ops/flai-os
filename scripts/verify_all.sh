@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键执行前端构建、后端全量测试与五组浏览器验收；任一步失败立即汇总退出。
+# 一键执行前端构建、后端全量测试与浏览器验收；任一步失败立即汇总退出。
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -73,6 +73,7 @@ test_frontend_core() {
 run_step "①b 前端纯函数核 node --test" test_frontend_core
 
 E2E_SCRIPTS=(
+  "frontend/e2e/v1_vertical_release_acceptance.py"
   "frontend/e2e/ui_lab_acceptance.py"
   "frontend/e2e/m2_acceptance.py"
   "frontend/e2e/m6_guide_acceptance.py"
@@ -95,10 +96,12 @@ E2E_SCRIPTS=(
   "frontend/e2e/batch_h_teams_acceptance.py"
 )
 
+# Playwright Python 包与浏览器缓存必须同代；固定版本避免每次 `uv run`
+# 漂到尚未安装的 Chromium build，造成与产品代码无关的假红。
 for script in "${E2E_SCRIPTS[@]}"; do
   run_step "③ E2E ${script}" \
     uv run --no-project \
-      --with playwright --with uvicorn --with pytest --with pytest-xdist \
+      --with playwright==1.61.0 --with uvicorn --with pytest --with pytest-xdist \
       --with jsonschema --with pyyaml --with fastapi --with httpx \
       --with python-multipart --with "pydantic>2" --with jieba --with openpyxl \
       python "${script}"

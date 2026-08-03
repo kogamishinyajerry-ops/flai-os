@@ -146,12 +146,16 @@ onUnmounted(() => {
 <style scoped>
 .status-dock {
   position: fixed;
-  top: 16px;
-  right: 20px;
+  top: 10px;
+  right: 14px;
   z-index: var(--z-dock); /* 低于 ⌘K 面板(--z-switcher)，高于页面内容 */
   display: flex;
   align-items: center;
   gap: 8px;
+  box-sizing: border-box;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 6px;
   cursor: pointer;
   user-select: none;
   /* 焦点环形态（壳层焦点审计）：容器是 pill 条，全局 :focus-visible 环
@@ -227,7 +231,7 @@ onUnmounted(() => {
 .dock-monitor:hover { color: var(--ink); border-color: var(--ink-faint); transform: translateY(-1px); }
 @media (max-width: 860px) {
   /* 窄屏与汉堡钮同高不同侧；pill 收起只留核心钮，避免挤占标题区 */
-  .status-dock { top: 12px; right: 12px; }
+  .status-dock { top: 6px; right: 6px; }
   .dock-pill { display: none; }
   .dock-monitor .dock-monitor-tx { display: none; }  /* 窄屏只留图标 */
 }

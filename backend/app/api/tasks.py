@@ -5,16 +5,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from jsonschema import validate as jsonschema_validate
+from jsonschema.exceptions import SchemaError, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from . import classification_gate as cgate
-from ..core.errors import IllegalTransitionError
+from . import object_authorization as oauth
+from ..core.errors import IllegalTransitionError, ReviewEvidenceUnavailableError
 from ..logging_setup import audit_event
+from ..ontology.skill_reuse_evidence import SkillReuseEvidenceLedger
+from ..runtime.skill_reuse_application import skill_reuse_application_mode
 from ..storage import repos
 
 router = APIRouter(prefix="/api", tags=["tasks"])
@@ -22,6 +28,18 @@ router = APIRouter(prefix="/api", tags=["tasks"])
 # 审计 P2（DoS 面）：inputs 此前无大小上限——超大 JSON 会被原样落库并进入
 # runtime/事件链路放大。256KB 对 params 型输入绰绰有余；大数据走文件上传通道。
 _INPUTS_MAX_BYTES = 256 * 1024
+
+# Guide batch operation 的 task id 使用稳定 UUIDv5：同一认证用户、同一 operation_id、
+# 同一批下标永远映射同一主键。这样无需新增表/列，也能让 BEGIN IMMEDIATE 内的
+# 「查原任务或全建」串行化；metadata_json 再钉请求指纹，阻止同 key 换载荷复用。
+_BATCH_OPERATION_NAMESPACE = uuid.UUID("af40d035-cba9-4db2-a370-e6c8c4e25164")
+_BATCH_OPERATION_META_KEY = "guide_batch_operation"
+
+_SKILL_REUSE_DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
+_SKILL_PACKAGE_SEMVER_PATTERN = (
+    r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
 
 
 class InputBinding(BaseModel):
@@ -73,8 +91,8 @@ class CreateTaskRequest(BaseModel):
     depends_on: list[str] = Field(default_factory=list, max_length=32)
     input_binding: InputBinding | None = Field(default=None)
     # 迁移 #12（评审 N4b）：血缘注记——本任务是对哪个既有任务的「复制为新任务」
-    # 重跑。纯元数据：不入队逻辑、不管道产物、不改审计语义；创建期只校验目标
-    # 存在（防悬空血缘），供详情页渲染恢复链（failed 死端 → 最短恢复路径）。
+    # 重跑。纯元数据：不入队逻辑、不管道产物、不改审计语义；创建期校验目标
+    # 真实存在且状态严格为 failed（防悬空/伪恢复血缘），供详情页渲染恢复链。
     retry_of: str | None = Field(default=None, max_length=64)
 
     @field_validator("inputs")
@@ -143,11 +161,43 @@ class CreateTaskRequest(BaseModel):
         return v
 
 
+class SkillPackageRef(BaseModel):
+    """Guide 自动匹配后附带的受信 Skill Package 引用。
+
+    这是系统在主对话方案中隐式生成的执行钉，不是工程师表单字段。模型在 API
+    边界先拒绝宽松类型、未知字段和非规范标识；真正的审核态、归属、Agent 绑定
+    与包字节完整性仍须在批事务内由 ``skill_reuse_evidence`` 冷验证。
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["skill_reuse_ref.v1"]
+    package_id: str = Field(pattern=r"^skill_package_[0-9a-f]{24}$")
+    package_version: str = Field(pattern=_SKILL_PACKAGE_SEMVER_PATTERN, max_length=64)
+    package_digest: str = Field(pattern=_SKILL_REUSE_DIGEST_PATTERN)
+    candidate_digest: str = Field(pattern=_SKILL_REUSE_DIGEST_PATTERN)
+    skill_digest: str = Field(pattern=_SKILL_REUSE_DIGEST_PATTERN)
+    skill_name: str = Field(min_length=1, max_length=512)
+    matched_agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]{2,63}$")
+    review_state: Literal["approved"]
+    match_policy_version: Literal["skill_reuse_match.v1"]
+    match_basis_digest: str = Field(pattern=_SKILL_REUSE_DIGEST_PATTERN)
+
+    @field_validator("skill_name")
+    @classmethod
+    def skill_name_non_blank(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("skill_name 不得为空白")
+        return normalized
+
+
 class BatchTaskItem(BaseModel):
     """批量召集单项（批七 §3-B6）。字段口径与 CreateTaskRequest 同源（各 validator
-    的理由注释见彼处，此处不复述）；差异仅一处：**after=同批下标依赖**替代
-    depends_on——批内成员的 task_id 生成于提交时，无法预先引用，故以下标声明、
-    创建时映射为真 depends_on。只允许引用更早条目 ⟹ 按构造即 DAG，零环检测。"""
+    的理由注释见彼处，此处不复述）；**after=同批下标依赖**替代 depends_on——
+    批内成员的 task_id 生成于提交时，无法预先引用，故以下标声明、创建时映射为
+    真 depends_on。只允许引用更早条目 ⟹ 按构造即 DAG，零环检测。retry_of 是
+    可选的系统恢复血缘，与单建请求同口径。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -155,6 +205,12 @@ class BatchTaskItem(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     inputs: dict[str, Any] = Field(default_factory=dict)
     input_file_ids: list[str] = Field(default_factory=list, max_length=64)
+    # 失败任务回到主对话后的恢复血缘。它仍是系统元数据，不是工程师字段；
+    # Guide 只把它写到恢复方案的根任务，下游成员沿 depends_on 接力。
+    retry_of: str | None = Field(default=None, max_length=64)
+    # 主对话中的 Guide 自动匹配并隐式附带；不在工程师输入面板出现。只有经过事务内
+    # 二次冷验证的 approved 包才会写入 task metadata 并形成 insert-once binding。
+    skill_package_ref: SkillPackageRef | None = Field(default=None)
     # StrictInt（Codex R1 P2）：非严格 list[int] 会把 JSON 的 false/true 静默强转
     # 0/1、"3" 强转 3——伪造出提交者没写的依赖边；下标必须字面整数，其余 422。
     after: list[StrictInt] = Field(default_factory=list, max_length=32)
@@ -193,6 +249,15 @@ class BatchTaskItem(BaseModel):
             seen.add(fid)
         return v
 
+    @field_validator("retry_of")
+    @classmethod
+    def retry_of_sane(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if not v.strip() or len(v) > 64:
+            raise ValueError(f"非法 retry_of task_id：{v!r}")
+        return v
+
     @field_validator("after")
     @classmethod
     def after_sane_and_unique(cls, v: list[int]) -> list[int]:
@@ -213,6 +278,49 @@ class CreateTasksBatchRequest(BaseModel):
 
     conversation_id: str | None = Field(default=None, max_length=100)
     items: list[BatchTaskItem] = Field(min_length=1, max_length=32)
+    # 兼容旧 Guide 的可选 stale-write 前置条件，绝不是持久化 pin 的来源。省略时
+    # 服务端自动从权威 Registry package_snapshot 派生；提供时仅在写前复核。
+    pinned_versions: dict[str, str] | None = Field(default=None, max_length=32)
+    # 同上：客户端摘要只可作为并发漂移预期，metadata.package_snapshot_digest
+    # 永远取服务端实际取得的不可变快照，绝不照抄请求值。
+    pinned_package_digests: dict[str, str] | None = Field(default=None, max_length=32)
+    # 客户端一次人工开工动作的稳定标识。后续用于 COMMIT 后响应丢失的幂等重放；
+    # 当前先收紧为有界、安全字符，绝不把任意文本写入审计元数据。
+    operation_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+
+    @field_validator("pinned_versions")
+    @classmethod
+    def pinned_versions_sane(
+        cls, value: dict[str, str] | None
+    ) -> dict[str, str] | None:
+        if value is None:
+            return None
+        for agent_id, version in value.items():
+            if not agent_id.strip() or len(agent_id) > 128:
+                raise ValueError(f"非法 pinned_versions agent_id：{agent_id!r}")
+            parts = version.split(".")
+            if len(parts) != 3 or any(not part.isdigit() for part in parts):
+                raise ValueError(f"非法 Agent 版本：{agent_id}={version!r}")
+        return value
+
+    @field_validator("pinned_package_digests")
+    @classmethod
+    def pinned_package_digests_sane(
+        cls, value: dict[str, str] | None
+    ) -> dict[str, str] | None:
+        if value is None:
+            return None
+        for agent_id, digest in value.items():
+            if not agent_id.strip() or len(agent_id) > 128:
+                raise ValueError(f"非法 pinned_package_digests agent_id：{agent_id!r}")
+            if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+                raise ValueError(f"非法 Agent 包摘要：{agent_id}={digest!r}")
+        return value
 
 
 class ReviewTaskRequest(BaseModel):
@@ -245,12 +353,415 @@ def _get_agent_or_none(registry: Any, agent_id: str) -> dict[str, Any] | None:
     return agent
 
 
+def _get_package_snapshot_or_none(registry: Any, agent_id: str) -> Any | None:
+    getter = getattr(registry, "package_snapshot", None)
+    if not callable(getter):
+        return None
+    try:
+        return getter(agent_id)
+    except KeyError:
+        return None
+
+
+def _package_snapshot_parts(
+    snapshot: Any, agent_id: str
+) -> tuple[dict[str, Any], str] | None:
+    """Parse and validate the manifest/digest pair used as one creation-time pin."""
+    try:
+        manifest = getattr(snapshot, "manifest", None)
+        digest = getattr(snapshot, "digest", None)
+    except Exception:
+        return None
+    if not isinstance(manifest, dict) or manifest.get("id") != agent_id:
+        return None
+    version = manifest.get("version")
+    if not isinstance(version, str):
+        return None
+    version_parts = version.split(".")
+    if len(version_parts) != 3 or any(not part.isdigit() for part in version_parts):
+        return None
+    if not (
+        isinstance(digest, str)
+        and len(digest) == 64
+        and all(ch in "0123456789abcdef" for ch in digest)
+    ):
+        return None
+    return manifest, digest
+
+
+def _require_owned_direct_input_file(
+    conn: Any,
+    file_id: str,
+    username: str,
+) -> dict[str, Any]:
+    """Authorize the file first, then preserve the owned wrong-kind 422 contract."""
+    record = oauth.require_owned_file(conn, file_id, username)
+    if record.get("kind") != "input":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"input_file_ids 只接受上传件（kind=input）：{file_id} 的 kind="
+                f"{record.get('kind')!r}——上游产物须经依赖 resolver 管道注入，不得直引"
+            ),
+        )
+    return record
+
+
+def _prospective_task_authorization_record(
+    *,
+    task_id: str,
+    created_by_username: str,
+    conversation_id: str | None,
+    input_file_ids: list[str],
+    depends_on: list[str],
+    input_binding: dict[str, Any] | None,
+    retry_of: str | None,
+) -> dict[str, Any]:
+    """Build the virtual row consumed by the shared persisted-lineage walker."""
+    return {
+        "id": task_id,
+        "origin": "user",
+        "created_by_username": created_by_username,
+        "conversation_id": conversation_id,
+        "input_file_ids": list(input_file_ids),
+        "output_file_ids": [],
+        "depends_on": list(depends_on),
+        "input_binding": input_binding,
+        "retry_of": retry_of,
+    }
+
+
+def _automatic_task_name(agent: dict[str, Any], agent_id: str) -> str:
+    """Derive an engineer-facing task title only from the captured package manifest."""
+    snapshot_display_name = agent.get("name")
+    if isinstance(snapshot_display_name, str) and snapshot_display_name.strip():
+        return snapshot_display_name.strip()
+    return agent_id
+
+
+def _require_complete_batch_pin_contract(
+    *,
+    items: list[BatchTaskItem],
+    operation_id: str | None,
+    pinned_versions: dict[str, str] | None,
+    pinned_package_digests: dict[str, str] | None,
+    require_for_version_only: bool,
+) -> None:
+    """Optional client expectations stay atomic; server-owned snapshot pins need none."""
+    if require_for_version_only is False:
+        return
+    contract_requested = (
+        pinned_package_digests is not None
+        or pinned_versions is not None
+    )
+    if contract_requested is False:
+        return
+
+    missing_fields: list[str] = []
+    if operation_id is None:
+        missing_fields.append("operation_id")
+    if pinned_versions is None:
+        missing_fields.append("pinned_versions")
+    if pinned_package_digests is None:
+        missing_fields.append("pinned_package_digests")
+
+    coverage_errors: list[dict[str, Any]] = []
+    expected_agent_ids = {item.agent_id for item in items}
+    for index, item in enumerate(items):
+        item_errors: list[str] = []
+        if pinned_versions is not None and item.agent_id not in pinned_versions:
+            item_errors.append(f"缺少创建时版本钉：{item.agent_id}")
+        if (
+            pinned_package_digests is not None
+            and item.agent_id not in pinned_package_digests
+        ):
+            item_errors.append(f"缺少创建时包摘要钉：{item.agent_id}")
+        if len(item_errors) > 0:
+            coverage_errors.append(
+                {"index": index, "agent_id": item.agent_id, "errors": item_errors}
+            )
+
+    unexpected_agents = {
+        "pinned_versions": sorted(
+            set((pinned_versions or {}).keys()) - expected_agent_ids
+        ),
+        "pinned_package_digests": sorted(
+            set((pinned_package_digests or {}).keys()) - expected_agent_ids
+        ),
+    }
+
+    if (
+        len(missing_fields) > 0
+        or len(coverage_errors) > 0
+        or any(len(agent_ids) > 0 for agent_ids in unexpected_agents.values())
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "batch_pin_contract_incomplete",
+                "message": (
+                    "批量开工的 operation_id、pinned_versions 与 "
+                    "pinned_package_digests 必须原子成组且覆盖全部 Agent"
+                ),
+                "missing_fields": missing_fields,
+                "batch_errors": coverage_errors,
+                "unexpected_agents": unexpected_agents,
+            },
+        )
+
+
+def _snapshot_input_validation_error(
+    *,
+    snapshot: Any,
+    inputs: dict[str, Any],
+    snapshot_manifest: dict[str, Any] | None = None,
+    input_file_ids: list[str] | None = None,
+    conn: Any | None = None,
+    defer_file_upload_to_resolver: bool = False,
+) -> str | None:
+    """Validate inputs from bytes in the exact package snapshot already gated."""
+    file_ids = input_file_ids or []
+    agent = snapshot_manifest
+    if agent is None:
+        agent = getattr(snapshot, "manifest", None)
+    if not isinstance(agent, dict):
+        return "Agent 包快照缺少 manifest"
+    input_contract = agent.get("input")
+    if not isinstance(input_contract, dict):
+        return "Agent 包缺少 input 契约"
+    input_type = input_contract.get("type")
+    if input_type == "none":
+        if len(inputs) > 0:
+            return "input.type=none 的 Agent 不接受 inputs 字段"
+        if len(file_ids) > 0:
+            return "input.type=none 的 Agent 不接受附件"
+        return None
+    if input_type not in {"params", "file_upload"}:
+        return f"Agent 包 input.type 无法识别：{input_type!r}"
+    if input_type == "file_upload" and (
+        len(file_ids) > 1
+        or (len(file_ids) == 0 and defer_file_upload_to_resolver is False)
+    ):
+        return "input.type=file_upload 的 Agent 必须且只能接收恰好 1 个附件"
+    file_records: list[dict[str, Any]] = []
+    if len(file_ids) > 0:
+        if conn is None:
+            return "附件仓储不可用，无法核验输入文件"
+        for file_id in file_ids:
+            file_record = repos.get_file(conn, file_id)
+            if file_record is None:
+                return f"附件不存在：{file_id}"
+            if file_record.get("kind") != "input":
+                return (
+                    f"附件必须是上传件（kind=input）：{file_id} 的 kind="
+                    f"{file_record.get('kind')!r}"
+                )
+            file_records.append(file_record)
+    if input_type == "file_upload":
+        raw_allowed_extensions = input_contract.get("allowed_extensions")
+        if (
+            not isinstance(raw_allowed_extensions, list)
+            or len(raw_allowed_extensions) == 0
+            or len(raw_allowed_extensions) > 32
+        ):
+            return "Agent 包 file_upload.allowed_extensions 声明缺失或不合法"
+        allowed_extensions: list[str] = []
+        for raw_extension in raw_allowed_extensions:
+            if not isinstance(raw_extension, str):
+                return "Agent 包 file_upload.allowed_extensions 声明不合法"
+            extension = raw_extension.strip().lower()
+            if not extension.startswith(".") or not 2 <= len(extension) <= 16:
+                return "Agent 包 file_upload.allowed_extensions 声明不合法"
+            if extension not in allowed_extensions:
+                allowed_extensions.append(extension)
+        if len(file_records) == 1:
+            file_record = file_records[0]
+            filename = file_record.get("filename")
+            if not isinstance(filename, str) or not any(
+                filename.lower().endswith(extension) for extension in allowed_extensions
+            ):
+                return (
+                    f"附件扩展名不符合已钉死的 Agent 包契约：{filename!r}，"
+                    f"允许 {allowed_extensions}"
+                )
+    schema_name = input_contract.get("schema")
+    if not isinstance(schema_name, str) or schema_name.strip() == "":
+        return "Agent 包缺少 input schema 声明"
+
+    schema_payload: bytes | None = None
+    for relative_path, payload in snapshot.files:
+        if relative_path == schema_name:
+            schema_payload = payload
+            break
+    if schema_payload is None:
+        return f"Agent 包快照缺少输入契约文件：{schema_name}"
+
+    try:
+        schema = json.loads(schema_payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return f"Agent 包输入契约不是合法 UTF-8 JSON：{schema_name}"
+    if not isinstance(schema, dict):
+        return f"Agent 包输入契约必须是 JSON object：{schema_name}"
+
+    try:
+        jsonschema_validate(instance=inputs, schema=schema)
+    except ValidationError as exc:
+        location = ".".join(str(part) for part in exc.absolute_path)
+        if location == "":
+            location = "$"
+        return f"inputs 不符合 {schema_name}（{location}）：{exc.message}"
+    except SchemaError:
+        return f"Agent 包输入契约不是合法 JSON Schema：{schema_name}"
+    return None
+
+
+def _batch_request_fingerprint(
+    *,
+    items: list[BatchTaskItem],
+    conversation_id: str | None,
+    pinned_versions: dict[str, str] | None,
+    pinned_package_digests: dict[str, str] | None,
+) -> str:
+    """对一次 batch 的语义载荷做稳定摘要；operation_id 本身是索引，不入摘要。"""
+    canonical = {
+        "conversation_id": conversation_id,
+        "items": [item.model_dump(mode="json") for item in items],
+        "pinned_versions": dict(sorted((pinned_versions or {}).items())),
+    }
+    # 保持未提供 digest pin 的旧 operation 指纹逐字兼容；显式提供时摘要成为
+    # 语义载荷的一部分，同 key 不得换包重放。
+    if pinned_package_digests is not None:
+        canonical["pinned_package_digests"] = dict(
+            sorted(pinned_package_digests.items())
+        )
+    encoded = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _batch_operation_task_ids(
+    *, created_by_username: str, operation_id: str, count: int
+) -> list[str]:
+    return [
+        "task_"
+        + uuid.uuid5(
+            _BATCH_OPERATION_NAMESPACE,
+            json.dumps(
+                [created_by_username, operation_id, index],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        ).hex
+        for index in range(count)
+    ]
+
+
+def _load_batch_operation_replay(
+    *,
+    conn: Any,
+    task_ids: list[str],
+    operation_id: str,
+    fingerprint: str,
+    conversation_id: str | None,
+    created_by_username: str,
+) -> list[dict[str, Any]] | None:
+    """返回完整、同载荷的既有 batch；不存在返回 None，残缺/换载荷一律 409。
+
+    task_ids 是认证用户名 + operation_id + 下标的确定性主键，因此无需扫描 JSON，
+    也不需要新增唯一索引。写事务内二次调用时，BEGIN IMMEDIATE 保证并发重放只会
+    有一个创建者；其余调用读取并返回同一组权威任务。
+    """
+    try:
+        tasks = [repos.get_task(conn, task_id) for task_id in task_ids]
+    except (TypeError, ValueError):
+        # Corrupt persisted JSON is an inaccessible relationship graph, not an
+        # internal error or a replay/fingerprint oracle.
+        oauth.raise_resource_not_found()
+    present = [task for task in tasks if task is not None]
+    if not present:
+        return None
+    # Authenticate every present deterministic row before exposing whether the
+    # operation set is complete.  Otherwise a poisoned/foreign partial set can
+    # turn the 409 conflict shape into an existence oracle.
+    authorized_by_id = {
+        task_id: oauth.require_owned_task(
+            conn,
+            task_id,
+            created_by_username,
+        )
+        for task_id, task in zip(task_ids, tasks, strict=True)
+        if task is not None
+    }
+    if len(present) != len(task_ids):
+        message = (
+            f"创建操作 {operation_id} 的任务记录不完整——状态待人工核对，"
+            "禁止自动补建或换 key 重试"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "batch_operation_conflict", "message": message},
+        )
+
+    # A deterministic operation id proves only which rows to inspect; it is
+    # not an authorization capability.  Revalidate every complete replay row's
+    # recursive owner lineage before fingerprint/conflict diagnostics or any
+    # task projection is returned.
+    authorized_tasks = [authorized_by_id[task_id] for task_id in task_ids]
+
+    expected_count = len(task_ids)
+    for index, task in enumerate(authorized_tasks):
+        operation = (task.get("metadata") or {}).get(_BATCH_OPERATION_META_KEY)
+        valid = (
+            task.get("created_by_username") == created_by_username
+            and task.get("conversation_id") == conversation_id
+            and isinstance(operation, dict)
+            and operation.get("operation_id") == operation_id
+            and operation.get("fingerprint") == fingerprint
+            and type(operation.get("index")) is int
+            and operation.get("index") == index
+            and type(operation.get("count")) is int
+            and operation.get("count") == expected_count
+        )
+        if valid is not True:
+            message = (
+                f"创建操作 {operation_id} 已被不同载荷使用或记录不一致——"
+                "禁止覆盖；请先核对原任务"
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "batch_operation_conflict", "message": message},
+            )
+    return authorized_tasks
+
+
 @router.post("/tasks")
 def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
     agent_registry = request.app.state.agent_registry
-    agent = _get_agent_or_none(agent_registry, body.agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail=f"agent 不存在：{body.agent_id}")
+    package_snapshot = _get_package_snapshot_or_none(agent_registry, body.agent_id)
+    if package_snapshot is None:
+        if _get_agent_or_none(agent_registry, body.agent_id) is None:
+            raise HTTPException(status_code=404, detail=f"agent 不存在：{body.agent_id}")
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_package_snapshot_unavailable",
+                "message": f"Agent 不可变包快照不可用，任务未创建：{body.agent_id}",
+            },
+        )
+    package_snapshot_parts = _package_snapshot_parts(package_snapshot, body.agent_id)
+    if package_snapshot_parts is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_package_snapshot_invalid",
+                "message": f"Agent 不可变包快照结构无效，任务未创建：{body.agent_id}",
+            },
+        )
+    agent, package_snapshot_digest = package_snapshot_parts
     if agent.get("status") == "disabled":
         raise HTTPException(status_code=409, detail=f"agent 已下线，禁止调用：{body.agent_id}")
     if (agent.get("workflow", {}) or {}).get("mode") == "interactive":
@@ -266,19 +777,24 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
         task_id = f"task_{uuid.uuid4().hex}"
         # ADR-0019 D5：发起人=登录会话身份（中间件已验证注入），非请求体自报。
         # created_by 存 display_name（展示用，可撞名）；created_by_username（迁移 #9）
-        # 存不可变唯一 username——批C 个人贡献归因按 username 绝不撞名，职责分离
-        # （禁自审）也以此为准（现仅落库，策略待 owner 定角色轴）。
+        # 存不可变唯一 username——批C 个人贡献归因按 username 绝不撞名，也是
+        # V1 owner_signoff 的授权轴。creator 自签允许且留痕；不声称角色委托/职责分离。
         created_by = request.state.user["display_name"]
-        created_by_username = request.state.user["username"]
+        created_by_username = oauth.authenticated_username(request)
+        # Resource references are capabilities, not mere foreign keys.  Resolve
+        # their exact owner before any task/event write; missing, legacy NULL,
+        # and cross-owner rows all use the same generalized 404.
+        if body.conversation_id is not None:
+            oauth.require_owned_conversation_inputs(
+                conn, body.conversation_id, created_by_username
+            )
         # 协作运行时 §3.4/§3.5：depends_on 只能引用**已存在**任务（→图按构造即 DAG，
         # 无法建回边指向未来任务，无需运行时环检测）；缺失即 404 fail-closed。
         # input_binding 引用的上游必在 depends_on 内（越权引用拒，T6）。
         for dep_id in body.depends_on:
-            upstream = repos.get_task(conn, dep_id)
-            if upstream is None:
-                raise HTTPException(
-                    status_code=404, detail=f"依赖的上游任务不存在：{dep_id}"
-                )
+            upstream = oauth.require_readable_task(
+                conn, dep_id, created_by_username
+            )
             # Codex 增量2审 R1 P1：依赖必须同 conversation 作用域（设计明列「不做跨
             # conversation 依赖」）。conversation_id 是分组归属、机密由 classification/taint
             # 独立管，但声明的排除须 fail-closed 强制——否则 C2 任务 depends_on C1 任务时
@@ -309,19 +825,12 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
         # 直接提交的 input_file_ids 只允许上传件（allowlist：kind=input）。上游产物
         # （kind=output）唯一合法入口是 review-gated resolver 的管道注入
         # （enqueue_dependent_task 合并写 input_file_ids）——绝不许绕过 depends_on/人签闸
-        # 直引他人 output，否则 _open_input_files 的 task_runs_dir 放宽会沦为直读任意
+        # 直引任意 output，否则 _open_input_files 的 task_runs_dir 放宽会沦为直读任务
         # 任务产物的旁路。allowlist 而非 denylist：未来新增 kind 默认拒（fail-closed）。
-        # 缺失文件（get_file=None）留执行期 _open_input_files 兜底，不在创建期拒。
+        # 记录缺失、legacy owner NULL、跨 owner 在创建期统一泛化 404；owner 自己的
+        # 非 input 文件保留 422 wrong-kind 诊断，且全部发生在任何任务写入前。
         for fid in body.input_file_ids:
-            rec = repos.get_file(conn, fid)
-            if rec is not None and rec.get("kind") != "input":
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        f"input_file_ids 只接受上传件（kind=input）：{fid} 的 kind="
-                        f"{rec.get('kind')!r}——上游产物须经依赖 resolver 管道注入，不得直引"
-                    ),
-                )
+            _require_owned_direct_input_file(conn, fid, created_by_username)
         # 批七 ADR-0030：创建时点密级准入 gate——Agent 密级上限不足以接这批材料
         # 即 400 拒建（中性文案：策略拒绝非报警红）。单建路径；TaskCreate 手建同走
         # 本函数即覆盖；batch 路径在 create_tasks_batch 同函数判定。
@@ -343,45 +852,62 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                     status_code=422,
                     detail=f"input_binding 引用了 depends_on 之外的任务（越权）：{stray}",
                 )
-        # retry_of（迁移 #12）：血缘目标必须真实存在——悬空血缘会让详情页的恢复链
-        # 指向虚空（404 fail-closed，不静默落 NULL 冒充「非重跑」）。纯元数据不做
-        # 更多约束：不复位原任务、不搬产物，复制的 inputs 走本请求体正常校验。
+        # retry_of（迁移 #12 / ADR-0033）：血缘目标必须真实存在且状态严格为
+        # failed。不存在/不可见泛化 404；自己的非失败任务 422，且两者都发生在建行之前，保证零任务
+        # 落库。纯元数据不复位原任务、不搬产物，复制 inputs 仍走本请求体正常校验。
         if body.retry_of is not None:
-            retry_origin = repos.get_task(conn, body.retry_of)
-            if retry_origin is None:
+            retry_origin = oauth.require_owned_task(
+                conn, body.retry_of, created_by_username
+            )
+            if retry_origin.get("status") != "failed":
                 raise HTTPException(
-                    status_code=404, detail=f"retry_of 指向的任务不存在：{body.retry_of}"
+                    status_code=422,
+                    detail=(
+                        f"retry_of 只能指向失败任务：{body.retry_of} 当前状态为"
+                        f" {retry_origin.get('status')!r}"
+                    ),
                 )
         create_kwargs = dict(
             task_id=task_id,
             agent_id=body.agent_id,
             agent_version=agent.get("version"),
-            name=body.name,
+            # 工程师不负责填写任务名；直接创建入口省略 name 时，也只从本次
+            # 权威 package snapshot 自动派生，供任务列表与快速切换器稳定检索。
+            name=body.name or _automatic_task_name(agent, body.agent_id),
             created_by=created_by,
             created_by_username=created_by_username,
             inputs=body.inputs,
             input_file_ids=body.input_file_ids,
-            metadata={},
+            metadata={"package_snapshot_digest": package_snapshot_digest},
             depends_on=body.depends_on or None,
             # 持久化为普通 dict（repos.create_task json.dumps 落库）；None 保持 None。
             input_binding=body.input_binding.model_dump() if body.input_binding is not None else None,
             conversation_id=body.conversation_id,
             retry_of=body.retry_of,
         )
-        if body.conversation_id is not None:
-            # 归属某导引会话：会话须真实存在（防悬空引用）**且仍 active**——归档后真只读
-            # （异源 Codex R2-#3：「结束协作」= 真结束，不再接受新成员任务）。**复查状态与
-            # INSERT 必须原子**（Codex R1 复审 #3：check-then-insert 非原子时，并发 conclude
-            # 可抢在二者之间提交、仍把任务挂进已归档会话）→ BEGIN IMMEDIATE 写锁内复查真实
-            # 状态再 INSERT，与 conclude 的 BEGIN IMMEDIATE 串行化。set_task_status 自带
-            # BEGIN IMMEDIATE，故本事务只包「复查 + create_task」，提交后再迁 queued。
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                conv = repos.get_conversation(conn, body.conversation_id)
-                if conv is None:
-                    raise HTTPException(
-                        status_code=404, detail=f"归属的导引会话不存在：{body.conversation_id}"
-                    )
+        prospective_task = _prospective_task_authorization_record(
+            task_id=task_id,
+            created_by_username=created_by_username,
+            conversation_id=body.conversation_id,
+            input_file_ids=body.input_file_ids,
+            depends_on=body.depends_on,
+            input_binding=(
+                body.input_binding.model_dump()
+                if body.input_binding is not None
+                else None
+            ),
+            retry_of=body.retry_of,
+        )
+        # Every create, with or without a conversation, takes the same write
+        # lock for a final prospective-root traversal immediately before the
+        # insert.  The new root therefore counts toward depth/node budgets, and
+        # any concurrent trusted-store drift is serialized with the write.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if body.conversation_id is not None:
+                conv = oauth.require_owned_conversation_inputs(
+                    conn, body.conversation_id, created_by_username
+                )
                 if conv["status"] != "active":
                     raise HTTPException(
                         status_code=409,
@@ -390,13 +916,16 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                             f"（结束协作=真只读）：{body.conversation_id}"
                         ),
                     )
-                repos.create_task(conn, **create_kwargs)
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
-        else:
+            oauth.require_prospective_user_task_lineage(
+                conn,
+                [prospective_task],
+                created_by_username,
+            )
             repos.create_task(conn, **create_kwargs)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
         # 协作运行时 §3.5 条件短路（F4 命门修复）：depends_on 非空的任务**不自动入队**，
         # 滞留 created 由 resolver 在全部上游 completed 后管道产物入 input 并入队——否则
         # 带依赖任务会在此被 P2-4 无条件推进到 queued，resolver 永远看不到 created 态、
@@ -461,13 +990,115 @@ def create_tasks_batch(body: CreateTasksBatchRequest, request: Request) -> dict[
         return run_batch_creation(
             conn=conn,
             agent_registry=request.app.state.agent_registry,
+            skill_reuse_evidence=getattr(
+                request.app.state, "skill_reuse_evidence", None
+            ),
             items=list(body.items),
             conversation_id=body.conversation_id,
             created_by=request.state.user["display_name"],
-            created_by_username=request.state.user["username"],
+            created_by_username=oauth.authenticated_username(request),
+            pinned_versions=body.pinned_versions,
+            pinned_package_digests=body.pinned_package_digests,
+            operation_id=body.operation_id,
+            require_complete_pin_group_for_versions=True,
         )
     finally:
         conn.close()
+
+
+def _skill_reuse_plan_errors(
+    *,
+    items: list[BatchTaskItem],
+    recommendation: Any,
+) -> list[dict[str, Any]]:
+    """Reconcile implicit reuse pins with the exact persisted Guide plan.
+
+    The request body is not an authority for a Skill reuse match.  A ref may
+    reach the package verifier only when the current persisted recommendation
+    is an orchestrate plan, carries the byte-for-byte same JSON ref, contains
+    the matched Agent exactly once, and binds that Agent to one batch item.
+    """
+
+    indexed_refs = [
+        (index, item, item.skill_package_ref.model_dump(mode="json"))
+        for index, item in enumerate(items)
+        if item.skill_package_ref is not None
+    ]
+    persisted_declares_reuse = (
+        isinstance(recommendation, dict) and "skill_reuse" in recommendation
+    )
+    if not indexed_refs and persisted_declares_reuse is False:
+        return []
+
+    shared_errors: list[str] = []
+    if not isinstance(recommendation, dict):
+        shared_errors.append("主对话当前没有可核验的 Skill 复用方案")
+        trusted_ref: Any = None
+        planned_agents: Any = None
+    else:
+        if recommendation.get("decision") != "orchestrate":
+            shared_errors.append("主对话当前方案不是 orchestrate")
+        trusted_ref = recommendation.get("skill_reuse")
+        if not isinstance(trusted_ref, dict):
+            shared_errors.append("主对话当前方案没有受信 Skill 复用引用")
+        planned_agents = recommendation.get("agents")
+
+    matched_agent_id = (
+        trusted_ref.get("matched_agent_id")
+        if isinstance(trusted_ref, dict)
+        else None
+    )
+    matched_plan_count = (
+        sum(
+            1
+            for planned in planned_agents
+            if isinstance(planned, dict)
+            and planned.get("agent_id") == matched_agent_id
+        )
+        if isinstance(planned_agents, list)
+        and isinstance(matched_agent_id, str)
+        else 0
+    )
+    if matched_plan_count != 1:
+        shared_errors.append("主对话方案必须且只能包含一个匹配 Agent")
+    if len(indexed_refs) != 1:
+        shared_errors.append("一次主对话方案只能绑定一个 Skill 复用任务")
+    matched_batch_indices = [
+        index
+        for index, item in enumerate(items)
+        if item.agent_id == matched_agent_id
+    ]
+    if len(matched_batch_indices) != 1:
+        shared_errors.append("开工批次必须且只能包含一个匹配 Agent 任务")
+
+    out: list[dict[str, Any]] = []
+    if not indexed_refs:
+        target_index = (
+            matched_batch_indices[0]
+            if len(matched_batch_indices) == 1
+            else 0
+        )
+        return [
+            {
+                "index": target_index,
+                "agent_id": items[target_index].agent_id,
+                "errors": [
+                    *shared_errors,
+                    "主对话已匹配 Skill，但开工请求遗漏受信复用引用",
+                ],
+            }
+        ]
+    for index, item, submitted_ref in indexed_refs:
+        errors = list(shared_errors)
+        if submitted_ref != trusted_ref:
+            errors.append("Skill 复用引用与主对话当前持久化方案不一致")
+        if item.agent_id != matched_agent_id:
+            errors.append("Skill 复用引用与主对话计划成员不一致")
+        if errors:
+            out.append(
+                {"index": index, "agent_id": item.agent_id, "errors": errors}
+            )
+    return out
 
 
 def run_batch_creation(
@@ -478,61 +1109,119 @@ def run_batch_creation(
     conversation_id: str | None,
     created_by: str,
     created_by_username: str,
+    skill_reuse_evidence: Any | None = None,
     pinned_versions: dict[str, str] | None = None,
+    pinned_package_digests: dict[str, str] | None = None,
+    operation_id: str | None = None,
+    require_complete_pin_group_for_versions: bool = False,
 ) -> dict[str, Any]:
-    """批量创建内核（批七 batch 端点原实现整体提取，语义零改动）：逐项静态校验
-    全收集（全有全无 422）→ BEGIN IMMEDIATE 单事务建行+入队+task_created/charter
+    """批量创建内核（批七 batch 端点原实现整体提取）：先做 exact-owner 对象授权
+    （缺失/不可见泛化 404），再逐项静态校验全收集（自己的 retry_of 仅允许指向
+    failed；其余全有全无 422）→ BEGIN IMMEDIATE 单事务建行+入队+task_created/charter
     事件 → 提交后取回投影。调用方持 conn 生命周期。
 
-    pinned_versions（批八 Codex R0 P1）：调用方（teams summon）在对账 gate 时点
-    观察到的 {agent_id: version}。此处对**同一次 registry 读取的对象**做钉版本
-    校验并从同对象盖章 agent_version——registry 若在对账后热切换到不兼容新版，
-    本校验 422 拒发，闭合「新注册表版本被盖进任务→runtime 漂移复检恒过」的
-    TOCTOU 旁路。None=不校验（batch 直建端点无对账语义，行为不变）。"""
+    服务端在首条写入前按 Agent 从权威 Registry 各取一次 package_snapshot，并只从
+    这个对象读取 manifest/version/digest/input schema/charter；因此即使客户端完全
+    不提供 pin，任务也会自动写 metadata.package_snapshot_digest。pinned_versions /
+    pinned_package_digests 仅是兼容旧 Guide/Team 的可选 stale-write 前置条件，绝不
+    作为持久化来源；公共 API 一旦提供其中之一仍须与 operation_id 原子成组。
+    operation_id 非空时，task id 由认证
+    username + operation_id + 下标确定性派生，并用 metadata 请求指纹做幂等重放/
+    冲突拒绝；不改持久化 schema。"""
+    _require_complete_batch_pin_contract(
+        items=items,
+        operation_id=operation_id,
+        pinned_versions=pinned_versions,
+        pinned_package_digests=pinned_package_digests,
+        require_for_version_only=require_complete_pin_group_for_versions,
+    )
+
+    # Authorize every caller-supplied object reference before idempotency replay,
+    # Registry checks, validation aggregation, or writes.  A replay/conflict or
+    # schema response must never become an existence oracle for another owner's
+    # conversation, upload, or retry source.
+    if conversation_id is not None:
+        oauth.require_owned_conversation_inputs(
+            conn, conversation_id, created_by_username
+        )
+    for item in items:
+        for file_id in item.input_file_ids:
+            _require_owned_direct_input_file(
+                conn, file_id, created_by_username
+            )
+        if item.retry_of is not None:
+            oauth.require_owned_task(
+                conn, item.retry_of, created_by_username
+            )
+
+    operation_fingerprint: str | None = None
+    if operation_id is not None:
+        operation_fingerprint = _batch_request_fingerprint(
+            items=items,
+            conversation_id=conversation_id,
+            pinned_versions=pinned_versions,
+            pinned_package_digests=pinned_package_digests,
+        )
+        task_ids = _batch_operation_task_ids(
+            created_by_username=created_by_username,
+            operation_id=operation_id,
+            count=len(items),
+        )
+        # COMMIT 后响应丢失的常见重放不应再受现势 Registry 漂移影响：先按
+        # 确定性主键核对既有权威任务。同一检查会在写锁内再做一次封并发窗口。
+        replay = _load_batch_operation_replay(
+            conn=conn,
+            task_ids=task_ids,
+            operation_id=operation_id,
+            fingerprint=operation_fingerprint,
+            conversation_id=conversation_id,
+            created_by_username=created_by_username,
+        )
+        if replay is not None:
+            return {
+                "tasks": [
+                    cgate.redact_task_row_if_sensitive(conn, task)
+                    for task in replay
+                ],
+                "operation_id": operation_id,
+                "replayed": True,
+            }
+    else:
+        task_ids = [f"task_{uuid.uuid4().hex}" for _ in items]
+
+    # 此阶段只做与 Agent manifest 无关的请求/仓储静态校验。status、mode、input
+    # contract、clearance 全部留到 BEGIN IMMEDIATE 内取得权威 package_snapshot 后，
+    # 避免 registry.get() 与 snapshot 跨代撕裂。
     errors: list[dict[str, Any]] = []
-    agents: list[dict[str, Any] | None] = []
     for idx, item in enumerate(items):
         item_errors: list[str] = []
-        agent = _get_agent_or_none(agent_registry, item.agent_id)
-        if (
-            agent is not None
-            and pinned_versions is not None
-            and item.agent_id in pinned_versions
-            and (agent.get("version") or "") != pinned_versions[item.agent_id]
+        if (pinned_versions is not None or pinned_package_digests is not None) and (
+            pinned_versions is None or item.agent_id not in pinned_versions
         ):
             item_errors.append(
-                f"agent 版本在对账后发生变化：{item.agent_id} "
-                f"{pinned_versions[item.agent_id]} → {agent.get('version') or ''}——请重新召集"
+                f"缺少创建时版本钉：{item.agent_id}——请重新核对方案后开工"
             )
-        if agent is None:
-            item_errors.append(f"agent 不存在：{item.agent_id}")
-        elif agent.get("status") == "disabled":
-            item_errors.append(f"agent 已下线，禁止调用：{item.agent_id}")
-        elif (agent.get("workflow", {}) or {}).get("mode") == "interactive":
+        if (
+            pinned_package_digests is not None
+            and item.agent_id not in pinned_package_digests
+        ):
             item_errors.append(
-                f"agent {item.agent_id} 是导引类（interactive）Agent，请走 /api/conversations 对话"
+                f"缺少创建时包摘要钉：{item.agent_id}——请重新核对方案后开工"
             )
         for dep_idx in item.after:
             if not (0 <= dep_idx < idx):
                 item_errors.append(
                     f"after 下标 {dep_idx} 非法：只能引用本批更早条目（0..{idx - 1}）——按构造即 DAG"
                 )
-        for fid in item.input_file_ids:
-            rec = repos.get_file(conn, fid)
-            if rec is not None and rec.get("kind") != "input":
-                item_errors.append(
-                    f"input_file_ids 只接受上传件（kind=input）：{fid} 的 kind={rec.get('kind')!r}"
-                )
-        if agent is not None:
-            # 批七 ADR-0030 密级 gate（batch 路径，与 create_task 同函数同判定式）。
-            _allowed, _material_level, _agent_max = cgate.agent_clearance_allows(
-                conn, agent, item.input_file_ids
+        if item.retry_of is not None:
+            retry_origin = oauth.require_owned_task(
+                conn, item.retry_of, created_by_username
             )
-            if _allowed is False:
+            if retry_origin.get("status") != "failed":
                 item_errors.append(
-                    f"该专家的密级准入上限为「{_agent_max}」，无法处理「{_material_level}」级材料（ADR-0030）"
+                    f"retry_of 只能指向失败任务：{item.retry_of} 当前状态为"
+                    f" {retry_origin.get('status')!r}"
                 )
-        agents.append(agent)
         if item_errors:
             errors.append({"index": idx, "agent_id": item.agent_id, "errors": item_errors})
     if errors:
@@ -544,41 +1233,392 @@ def run_batch_creation(
             },
         )
 
-    task_ids = [f"task_{uuid.uuid4().hex}" for _ in items]
     conn.execute("BEGIN IMMEDIATE")
     try:
+        if operation_id is not None:
+            assert operation_fingerprint is not None
+            replay = _load_batch_operation_replay(
+                conn=conn,
+                task_ids=task_ids,
+                operation_id=operation_id,
+                fingerprint=operation_fingerprint,
+                conversation_id=conversation_id,
+                created_by_username=created_by_username,
+            )
+            if replay is not None:
+                conn.execute("COMMIT")
+                return {
+                    "tasks": [
+                        cgate.redact_task_row_if_sensitive(conn, task)
+                        for task in replay
+                    ],
+                    "operation_id": operation_id,
+                    "replayed": True,
+                }
+        conversation: dict[str, Any] | None = None
         if conversation_id is not None:
-            conv = repos.get_conversation(conn, conversation_id)
-            if conv is None:
-                raise HTTPException(
-                    status_code=404, detail=f"归属的导引会话不存在：{conversation_id}"
-                )
+            conv = oauth.require_owned_conversation_inputs(
+                conn, conversation_id, created_by_username
+            )
             if conv["status"] != "active":
+                message = (
+                    f"归属的导引会话已 {conv['status']}，不再接受新任务"
+                    f"（结束协作=真只读）：{conversation_id}"
+                )
                 raise HTTPException(
                     status_code=409,
-                    detail=(
-                        f"归属的导引会话已 {conv['status']}，不再接受新任务"
-                        f"（结束协作=真只读）：{conversation_id}"
-                    ),
+                    detail={"code": "conversation_not_active", "message": message},
                 )
+            conversation = conv
+
+        plan_reuse_errors = _skill_reuse_plan_errors(
+            items=items,
+            recommendation=(conversation or {}).get("recommendation"),
+        )
+        if plan_reuse_errors:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "skill_package_reuse_invalid",
+                    "message": "整批未创建（Skill Package 引用与主对话方案不一致）",
+                    "batch_errors": plan_reuse_errors,
+                },
+            )
+
+        # 自动复用引用只可来自主对话，并且必须在首条 task 写入前冷验证审核态、
+        # owner、Agent 绑定及包字节。先全 resolve、再全 build immutable binding；
+        # 任一项失败都以同一个 422 契约回滚整批，绝不让正常项先落成半批。
+        resolved_skill_reuse: list[dict[str, Any] | None] = [None] * len(items)
+        skill_reuse_bindings: list[dict[str, Any] | None] = [None] * len(items)
+        reuse_errors: list[dict[str, Any]] = []
+        for idx, item in enumerate(items):
+            package_ref = item.skill_package_ref
+            if package_ref is None:
+                continue
+            item_errors: list[str] = []
+            resolved: Any = None
+            if conversation_id is None:
+                item_errors.append("自动复用 Skill 只能绑定主对话任务")
+            elif skill_reuse_evidence is None:
+                item_errors.append("Skill Package 复用校验服务不可用")
+            else:
+                try:
+                    resolved = skill_reuse_evidence.resolve_for_task(
+                        conn,
+                        ref=package_ref.model_dump(mode="json"),
+                        username=created_by_username,
+                        agent_id=item.agent_id,
+                    )
+                    resolved = SkillReuseEvidenceLedger.validate_resolved_context(
+                        resolved,
+                        expected_ref=package_ref.model_dump(mode="json"),
+                        agent_id=item.agent_id,
+                        owner_username=created_by_username,
+                    )
+                    record = skill_reuse_evidence.build_binding(
+                        task_id=task_ids[idx],
+                        conversation_id=conversation_id,
+                        username=created_by_username,
+                        agent_id=item.agent_id,
+                        resolved=resolved,
+                    )
+                    if not isinstance(record, dict):
+                        raise TypeError("invalid Skill reuse binding")
+                    binding_digest = record.get("binding_digest")
+                    if (
+                        not isinstance(binding_digest, str)
+                        or len(binding_digest) != 71
+                        or not binding_digest.startswith("sha256:")
+                        or any(
+                            ch not in "0123456789abcdef"
+                            for ch in binding_digest.removeprefix("sha256:")
+                        )
+                    ):
+                        raise ValueError("invalid Skill reuse binding digest")
+                    resolved_skill_reuse[idx] = resolved
+                    skill_reuse_bindings[idx] = record
+                except Exception:  # noqa: BLE001 -- 外部完整性服务异常必须 fail-closed 聚合为整批 422
+                    item_errors.append(
+                        "Skill Package 未通过审核态、来源、字节完整性或 Agent 绑定复核"
+                    )
+            if item_errors:
+                reuse_errors.append(
+                    {
+                        "index": idx,
+                        "agent_id": item.agent_id,
+                        "errors": item_errors,
+                    }
+                )
+        if reuse_errors:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "skill_package_reuse_invalid",
+                    "message": "整批未创建（Skill Package 自动复用引用无效）",
+                    "batch_errors": reuse_errors,
+                },
+            )
+
+        # 对所有引用 Agent 在首条任务写入前做第二次现势读取。上面的静态校验是
+        # 友好错误收集，不是并发裁决；真正的 TOCTOU gate 必须紧贴写入且先全查
+        # 后全写，任一漂移都整批回滚为零行。digest pin 路径每项只取一次
+        # package_snapshot，并从同一不可变对象读取 manifest+digest；后续盖章版本、
+        # 摘要和 charter 都只消费这组对象，绝不再回读可变 authoring source。
+        package_snapshots: list[Any | None] = []
+        live_agents: list[dict[str, Any] | None] = []
+        snapshot_by_agent: dict[
+            str,
+            tuple[Any | None, tuple[dict[str, Any], str] | None],
+        ] = {}
+        drift_errors: list[dict[str, Any]] = []
+        for idx, item in enumerate(items):
+            if item.agent_id not in snapshot_by_agent:
+                captured_snapshot = _get_package_snapshot_or_none(
+                    agent_registry, item.agent_id
+                )
+                snapshot_by_agent[item.agent_id] = (
+                    captured_snapshot,
+                    _package_snapshot_parts(captured_snapshot, item.agent_id)
+                    if captured_snapshot is not None
+                    else None,
+                )
+            snapshot, snapshot_parts = snapshot_by_agent[item.agent_id]
+            snapshot_invalid = (
+                snapshot is not None
+                and snapshot_parts is None
+            )
+            live_agent = snapshot_parts[0] if snapshot_parts is not None else None
+            live_agents.append(live_agent)
+            package_snapshots.append(snapshot)
+            item_drift_errors: list[str] = []
+            pinned_version = (pinned_versions or {}).get(item.agent_id)
+            current_version = (live_agent or {}).get("version") or ""
+            current_digest = snapshot_parts[1] if snapshot_parts is not None else ""
+            if snapshot is None:
+                item_drift_errors.append(
+                    f"Agent 不可变包快照不可用：{item.agent_id}——请重新核对后开工"
+                )
+            elif snapshot_invalid:
+                item_drift_errors.append(
+                    f"Agent 不可变包快照结构或摘要无效：{item.agent_id}——请重新核对后开工"
+                )
+            if pinned_version is not None and current_version != pinned_version:
+                item_drift_errors.append(
+                    f"agent 版本在对账后发生变化：{item.agent_id} "
+                    f"{pinned_version} → "
+                    f"{current_version or '不在注册表'}——请重新核对后开工"
+                )
+            if live_agent is not None:
+                if live_agent.get("status") == "disabled":
+                    item_drift_errors.append(f"agent 已下线，禁止调用：{item.agent_id}")
+                if (live_agent.get("workflow", {}) or {}).get("mode") == "interactive":
+                    item_drift_errors.append(
+                        f"agent {item.agent_id} 是导引类（interactive）Agent，请走 /api/conversations 对话"
+                    )
+            pinned_digest = (pinned_package_digests or {}).get(item.agent_id)
+            if pinned_digest is not None and current_digest != pinned_digest:
+                item_drift_errors.append(
+                    f"agent 包摘要在方案核对后发生变化：{item.agent_id} "
+                    f"{pinned_digest} → "
+                    f"{current_digest or '不在注册表'}——请重新核对后开工"
+                )
+            if item_drift_errors:
+                drift_errors.append(
+                    {
+                        "index": idx,
+                        "agent_id": item.agent_id,
+                        "errors": item_drift_errors,
+                    }
+                )
+        if drift_errors:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "agent_package_snapshot_unavailable"
+                    if any(
+                        "不可变包快照不可用" in error
+                        for entry in drift_errors
+                        for error in entry["errors"]
+                    )
+                    else (
+                        "agent_package_snapshot_invalid"
+                        if any(
+                            "快照结构或摘要无效" in error
+                            for entry in drift_errors
+                            for error in entry["errors"]
+                        )
+                        else "agent_package_snapshot_drift"
+                    ),
+                    "message": "整批未创建（Agent 版本或包内容已变化）——请重新核对方案",
+                    "batch_errors": drift_errors,
+                },
+            )
+        agents = live_agents
+
+        # “包已审核”不等于目标 Agent 能实际消费方法。模型型 Agent 由 runtime
+        # 在 chat/vision 边界注入并留同摘要调用证据；profile:none 只有其不可变
+        # 快照显式声明 deterministic_receipt_v1 才可进入自动复用。能力缺失必须
+        # 在首条 task 写入前整批拒绝，不能先建一个注定在 worker 中失败的任务。
+        reuse_capability_errors: list[dict[str, Any]] = []
+        for idx, item in enumerate(items):
+            if item.skill_package_ref is None:
+                continue
+            agent = agents[idx]
+            if skill_reuse_application_mode(agent) is None:
+                reuse_capability_errors.append(
+                    {
+                        "index": idx,
+                        "agent_id": item.agent_id,
+                        "errors": [
+                            "目标 Agent Package 未声明可验证的 Skill 应用能力"
+                        ],
+                    }
+                )
+        if reuse_capability_errors:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "skill_package_reuse_incompatible",
+                    "message": "整批未创建（目标 Agent 无法证明实际应用该 Skill）",
+                    "batch_errors": reuse_capability_errors,
+                },
+            )
+
+        # ADR-0033：完整 pin 链不只证明「是同一个包」，还必须用这个刚取得的
+        # 不可变包校验每项 inputs。先全验后全写，任一项非法整批 422/零落库；
+        # 不通过 package_dir 回读 authoring source，也不再次获取 snapshot。
+        input_errors: list[dict[str, Any]] = []
+        for idx, item in enumerate(items):
+            snapshot = package_snapshots[idx]
+            agent = agents[idx]
+            if snapshot is None or agent is None:
+                validation_error = "Agent 不可变包快照不可用"
+            else:
+                validation_error = _snapshot_input_validation_error(
+                    snapshot=snapshot,
+                    snapshot_manifest=agent,
+                    inputs=item.inputs,
+                    input_file_ids=item.input_file_ids,
+                    conn=conn,
+                    defer_file_upload_to_resolver=len(item.after) > 0,
+                )
+            if validation_error is not None:
+                input_errors.append(
+                    {
+                        "index": idx,
+                        "agent_id": item.agent_id,
+                        "errors": [validation_error],
+                    }
+                )
+        if len(input_errors) > 0:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "batch_inputs_invalid",
+                    "message": "整批未创建（输入不符合已钉死的 Agent 包契约）",
+                    "batch_errors": input_errors,
+                },
+            )
+        # 首阶段 registry.get() 仅用于友好聚合错误，不能承担安全裁决。密级准入
+        # 必须在首条写入前，用即将盖 agent_version/digest 的同一 package_snapshot
+        # manifest 重新判定；否则高权限旧投影→低权限新快照的窗口会放行敏感附件。
+        clearance_errors: list[dict[str, Any]] = []
+        for idx, item in enumerate(items):
+            agent = agents[idx]
+            assert agent is not None
+            allowed, material_level, agent_max = cgate.agent_clearance_allows(
+                conn, agent, item.input_file_ids
+            )
+            if allowed is False:
+                clearance_errors.append(
+                    {
+                        "index": idx,
+                        "agent_id": item.agent_id,
+                        "errors": [
+                            f"该专家的密级准入上限为「{agent_max}」，无法处理"
+                            f"「{material_level}」级材料（ADR-0030）"
+                        ],
+                    }
+                )
+        if len(clearance_errors) > 0:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "batch_clearance_denied",
+                    "message": "整批未创建（材料超过权威 Agent 包快照的密级准入上限）",
+                    "batch_errors": clearance_errors,
+                },
+            )
+
+        # Validate the complete graph exactly as it will exist after this batch,
+        # while the same write lock is held and before the first task/binding/
+        # event insert.  ``after`` edges must resolve to the deterministic IDs
+        # allocated above so the shared bounded traversal counts every virtual
+        # batch node plus persisted retry/output-input ancestry.  One shared
+        # state also enforces the aggregate node/file/conversation budgets.
+        prospective_tasks = [
+            _prospective_task_authorization_record(
+                task_id=task_ids[idx],
+                created_by_username=created_by_username,
+                conversation_id=conversation_id,
+                input_file_ids=item.input_file_ids,
+                depends_on=[task_ids[dep_idx] for dep_idx in item.after],
+                input_binding=None,
+                retry_of=item.retry_of,
+            )
+            for idx, item in enumerate(items)
+        ]
+        oauth.require_prospective_user_task_lineage(
+            conn,
+            prospective_tasks,
+            created_by_username,
+        )
+
         for idx, item in enumerate(items):
             deps = [task_ids[d] for d in item.after]
+            snapshot = package_snapshots[idx]
+            assert snapshot is not None
+            _cached_snapshot, cached_parts = snapshot_by_agent[item.agent_id]
+            assert _cached_snapshot is snapshot
+            assert cached_parts is not None
+            metadata: dict[str, Any] = {
+                "package_snapshot_digest": cached_parts[1],
+            }
+            reuse_binding = skill_reuse_bindings[idx]
+            resolved_reuse = resolved_skill_reuse[idx]
+            if reuse_binding is not None:
+                assert resolved_reuse is not None
+                metadata["skill_package_ref"] = dict(resolved_reuse["ref"])
+                metadata["skill_reuse_binding_digest"] = reuse_binding[
+                    "binding_digest"
+                ]
+            if operation_id is not None:
+                metadata[_BATCH_OPERATION_META_KEY] = {
+                    "operation_id": operation_id,
+                    "fingerprint": operation_fingerprint,
+                    "index": idx,
+                    "count": len(items),
+                }
             repos.create_task(
                 conn,
                 task_id=task_ids[idx],
                 agent_id=item.agent_id,
                 agent_version=(agents[idx] or {}).get("version"),
-                name=item.name,
+                name=item.name
+                or _automatic_task_name(agents[idx] or {}, item.agent_id),
                 created_by=created_by,
                 created_by_username=created_by_username,
                 inputs=item.inputs,
                 input_file_ids=item.input_file_ids,
-                metadata={},
+                metadata=metadata,
                 depends_on=deps or None,
                 input_binding=None,
                 conversation_id=conversation_id,
-                retry_of=None,
+                retry_of=item.retry_of,
             )
+            if reuse_binding is not None:
+                assert skill_reuse_evidence is not None
+                skill_reuse_evidence.insert_binding(conn, reuse_binding)
         # 入队与创建事件并入同一事务（Codex R0 P1-1：两阶段窗口下，收尾任一
         # 写失败会让「行已存在但报错返回」——导引重试路径造重复任务；worker
         # 也可能在创建事件落库前领走 root）。行未 COMMIT 前对外不可见，故此处
@@ -632,7 +1672,11 @@ def run_batch_creation(
         conn.execute("ROLLBACK")
         raise
     out_tasks = [repos.get_task(conn, task_ids[idx]) for idx in range(len(items))]
-    return {"tasks": out_tasks}
+    result: dict[str, Any] = {"tasks": out_tasks}
+    if operation_id is not None:
+        result["operation_id"] = operation_id
+        result["replayed"] = False
+    return result
 
 
 @router.get("/tasks")
@@ -651,10 +1695,15 @@ def list_tasks(
 ) -> list[dict[str, Any]]:
     conn = request.app.state.conn_factory()
     try:
-        rows = repos.list_tasks(
-            conn, agent_id=agent_id, status=status, conversation_id=conversation_id,
-            origin=None if origin == "all" else origin,
-            limit=limit, offset=offset,
+        rows = oauth.list_readable_tasks(
+            conn,
+            username=oauth.authenticated_username(request),
+            agent_id=agent_id,
+            status=status,
+            conversation_id=conversation_id,
+            origin=origin,
+            limit=limit,
+            offset=offset,
         )
         # ADR-0025 单 chokepoint：sensitive 任务的 error_message（承载工具内容）遮蔽。
         return [cgate.redact_task_row_if_sensitive(conn, t) for t in rows]
@@ -666,9 +1715,9 @@ def list_tasks(
 def get_task(task_id: str, request: Request) -> dict[str, Any]:
     conn = request.app.state.conn_factory()
     try:
-        task = repos.get_task(conn, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+        task = oauth.require_readable_task(
+            conn, task_id, oauth.authenticated_username(request)
+        )
         # ADR-0025：sensitive→遮蔽 error_message（工具内容）；task.inputs 是用户自报
         # 输入不在门内（ADR-0024 D5 边界：封「工具产出」不封「用户提交」）。
         return cgate.redact_task_row_if_sensitive(conn, task)
@@ -680,9 +1729,9 @@ def get_task(task_id: str, request: Request) -> dict[str, Any]:
 def cancel_task(task_id: str, request: Request) -> dict[str, Any]:
     conn = request.app.state.conn_factory()
     try:
-        task = repos.get_task(conn, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+        task = oauth.require_owned_task(
+            conn, task_id, oauth.authenticated_username(request)
+        )
         current = task["status"]
 
         if current in ("created", "queued"):
@@ -727,9 +1776,9 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
     """
     conn = request.app.state.conn_factory()
     try:
-        task = repos.get_task(conn, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+        task = oauth.require_owned_task(
+            conn, task_id, oauth.authenticated_username(request)
+        )
         if task["status"] != "waiting_review":
             raise HTTPException(
                 status_code=409,
@@ -737,13 +1786,19 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
             )
 
         reviewer = request.state.user["display_name"]  # ADR-0019 D5：签发者=认证身份
+        reviewer_username = request.state.user["username"]
         try:
             # Codex 增量2审 R4 P1：状态迁移 + 样本标签回填 + signer 事件三者**同一事务
             # 原子落库**（此前三次分离提交，crash 窗口可留下 status=completed 却无
             # review_approved 事件的任务，resolver 见 status 即放行下游）。approve→completed
             # + review_approved / reject→failed + review_rejected；样本 approve→1/reject→0。
             task, _sample_rows = repos.apply_human_review(
-                conn, task_id, action=body.action, reviewer=reviewer, comment=body.comment
+                conn,
+                task_id,
+                action=body.action,
+                reviewer=reviewer,
+                reviewer_username=reviewer_username,
+                comment=body.comment,
             )
         except IllegalTransitionError as exc:
             # R1 复审 P2：两个 review 请求并发命中同一 waiting_review 任务时，
@@ -753,19 +1808,30 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
                 status_code=409,
                 detail=f"任务已被并发的人工审核动作转出 waiting_review，本次不生效：{exc}",
             ) from exc
+        except ReviewEvidenceUnavailableError as exc:
+            # 严格 approve 必须绑定唯一、规范且一致的执行证据摘要。旧任务或
+            # 损坏事件链在仓储事务内已整体回滚；这里只把这个已知治理冲突稳定
+            # 映射为 409，绝不捕获普通 ValueError（未知程序错误仍应暴露）。
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "review_execution_evidence_invalid",
+                    "message": str(exc),
+                },
+            ) from exc
 
         # 治理签发审计（M12-2c）：人工放行/拒绝是「人是唯一签发者」红线的落点，
         # 是平台最安全承重的动作——此前只落 task_event（应用数据），无篡改抗性的
         # audit.log 轨。此处补审计轴：actor=签发者唯一 username（P2-4 唯一身份纪律），
         # 记录被签发任务、创建者、及自审标记。audit.log 独立于 DB（不同持久化域，无法
         # 互相原子），故置于原子 DB 提交**之后**——只为已提交的签发决策落审计。
-        # 自审判定（迁移 #9 后升级）：created_by_username 存在（新任务）时按唯一
-        # username 精确比对——绝不因显示名撞名误判；legacy 行（该列 NULL）回退
-        # display_name 近似比对，并标 self_review_basis 说明证据等级。仍**只标记
-        # 不拦截**（硬性职责分离 403 是 owner 待定的角色轴策略，task #17）。
+        # V1 owner_signoff 契约：任务 exact owner 是允许且唯一支持的签发者；creator
+        # 自签不拦截，但必须如实记录 self_review。created_by_username 存在（新任务）
+        # 时按唯一 username 精确比对，绝不因显示名撞名误判；legacy 行（该列 NULL）
+        # 回退 display_name 近似比对并标 self_review_basis 证据等级。细粒度 reviewer
+        # 角色、委托和职责分离不在 V1 声称范围，不能从本端点行为推断其已具备。
         created_by = task.get("created_by")
         created_by_username = task.get("created_by_username")
-        reviewer_username = request.state.user["username"]
         if created_by_username is not None:
             self_review = bool(reviewer_username == created_by_username)
             self_review_basis = "username"  # 精确身份，不撞名
@@ -794,11 +1860,14 @@ def set_sim_run_ref(task_id: str, body: SetSimRunRefRequest, request: Request) -
     中间件覆盖（非 allowlist）。任务不存在→404。"""
     conn = request.app.state.conn_factory()
     try:
+        oauth.require_owned_task(
+            conn, task_id, oauth.authenticated_username(request)
+        )
         # 注：设 run 关联是 metadata 标注、非任务状态迁移——「无事件=没发生」约束的是
         # 状态变化；metadata.sim_run_ref.set_at 本身即记录，不为此扩冻结的事件枚举。
         task = repos.set_task_sim_run_ref(conn, task_id, module=body.module, run_id=body.run_id)
         if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+            oauth.raise_resource_not_found()
         # ADR-0025：失败任务的 error_message 经此响应回；sensitive→遮蔽（Codex R1-A 三漏端点之一）。
         return cgate.redact_task_row_if_sensitive(conn, task)
     finally:
@@ -814,9 +1883,9 @@ def list_events(
 ) -> list[dict[str, Any]]:
     conn = request.app.state.conn_factory()
     try:
-        task = repos.get_task(conn, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+        task = oauth.require_readable_task(
+            conn, task_id, oauth.authenticated_username(request)
+        )
         events = repos.list_events(conn, task_id, limit=limit, offset=offset)
         # ADR-0025：tool_started 事件 payload 带工具 input、tool_failed message 带外部
         # grounding_failures（event.schema:74 本就要求敏感 payload 脱敏）——sensitive→
@@ -833,11 +1902,14 @@ def list_events(
 # 「输出可追溯到工具版本/模型版本」的数据存而不可达。三端点均为只读投影。
 
 
-def _get_task_or_404(conn: Any, task_id: str) -> dict[str, Any]:
-    task = repos.get_task(conn, task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
-    return task
+def _get_readable_task_or_404(
+    conn: Any,
+    task_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    return oauth.require_readable_task(
+        conn, task_id, oauth.authenticated_username(request)
+    )
 
 
 @router.get("/tasks/{task_id}/tool_runs")
@@ -845,7 +1917,7 @@ def list_task_tool_runs(task_id: str, request: Request) -> list[dict[str, Any]]:
     """任务的工具调用留痕（含 tool_version/mock 标记/原始输入输出路径）。"""
     conn = request.app.state.conn_factory()
     try:
-        task = _get_task_or_404(conn, task_id)
+        task = _get_readable_task_or_404(conn, task_id, request)
         rows = repos.list_tool_runs(conn, task_id)
         # ADR-0025：sensitive→遮蔽 input/output/raw_path + error_message（Codex R1-A：
         # 工具错误文本承载外部 grounding_failures），只留元数据。
@@ -869,7 +1941,7 @@ def get_task_tool_runs_summary(task_id: str, request: Request) -> dict[str, Any]
     同构，不开新的内容出场面。"""
     conn = request.app.state.conn_factory()
     try:
-        _get_task_or_404(conn, task_id)
+        _get_readable_task_or_404(conn, task_id, request)
         # 单次 GROUP BY 一致快照（Codex R2-P2）：全局计数由分组行求和派生，
         # 不再第二次扫描——total/mock_count 与 by_tool 永远同一时刻的账。
         by_tool_rows = conn.execute(
@@ -896,7 +1968,7 @@ def list_task_model_calls(task_id: str, request: Request) -> list[dict[str, Any]
     """任务的模型调用留痕（含 model_profile/model_name/token 用量，成败全量）。"""
     conn = request.app.state.conn_factory()
     try:
-        task = _get_task_or_404(conn, task_id)
+        task = _get_readable_task_or_404(conn, task_id, request)
         rows = repos.list_model_calls(conn, task_id)
         # ADR-0025：sensitive→遮蔽 request/response_summary + error_message；保留
         # token 计数/model_name 等元数据（非内容）。
@@ -913,7 +1985,7 @@ def list_task_samples(task_id: str, request: Request) -> list[dict[str, Any]]:
     为人工审核结论回填，NULL=待定）。"""
     conn = request.app.state.conn_factory()
     try:
-        task = _get_task_or_404(conn, task_id)
+        task = _get_readable_task_or_404(conn, task_id, request)
         rows = repos.list_samples(conn, task_id)
         # ADR-0025：sensitive→遮蔽 input/output/raw_path；保留 validation_status/
         # accepted_by_engineer/classification 等元数据。
@@ -934,8 +2006,23 @@ def list_task_output_files(task_id: str, request: Request) -> list[dict[str, Any
     仍走 /files/{id}/download 原有分级门（该端点自身的审计语义不受影响）。"""
     conn = request.app.state.conn_factory()
     try:
-        task = _get_task_or_404(conn, task_id)
-        rows = repos.list_files_by_ids(conn, task.get("output_file_ids") or [])
+        username = oauth.authenticated_username(request)
+        task = oauth.require_readable_task(conn, task_id, username)
+        output_file_ids = task.get("output_file_ids") or []
+        rows = repos.list_files_by_ids(conn, output_file_ids)
+        valid_projection = (
+            len(rows) == len(output_file_ids)
+            and all(
+                row.get("id") == output_file_ids[index]
+                and row.get("kind") == "output"
+                and row.get("task_id") == task_id
+                for index, row in enumerate(rows)
+            )
+        )
+        if valid_projection is not True:
+            oauth.raise_resource_not_found()
+        for row in rows:
+            oauth.require_readable_file(conn, row["id"], username)
         return [
             {
                 "id": r["id"],
@@ -984,7 +2071,7 @@ def get_task_delivery_summary(task_id: str, request: Request) -> dict[str, Any]:
     """
     conn = request.app.state.conn_factory()
     try:
-        task = _get_task_or_404(conn, task_id)
+        task = _get_readable_task_or_404(conn, task_id, request)
 
         mc_rows = conn.execute(
             "SELECT status, token_usage_json FROM model_calls WHERE task_id = ?",

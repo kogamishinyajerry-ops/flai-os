@@ -77,6 +77,20 @@ ASGI 中间件挂 `create_app()` 内、覆盖全部路由：
 前端各 api 客户端停发。晋升门五条中的「confirmed_by 记名」从此指向
 认证身份而非自报文本。
 
+Issue #4 的 sample 级认可使用更稳定的唯一身份轴：空请求体的
+`POST /api/samples/{id}/acknowledge` 从 `request.state.auth_session.username`
+派生 actor，客户端提交 actor/reviewer 一律 422。`samples` 的
+`acknowledged_by_username / acknowledged_at` 仅首次 CAS-on-NULL 写入；
+历史 `accepted_by_engineer` 行不回填、不按显示名猜身份，明确 reject=false
+也不可由新认可覆盖。DB 是 signer SSOT：DB 为空、case-only signer 非空时
+409 待核；DB 为空而已有 unsigned case 也同样 409，在线端点不承担历史 case
+迁移，绝不把可编辑 JSON 反向升级为认证来源或原地补签。DB 已冻结 signer 时
+重试必须与 case 精确一致。首次认可先做未提交 DB CAS，再原子发布 draft，最后
+COMMIT；发布后提交失败保留 case-only 待人工对账，不做可能误伤竞争写者的
+删除/覆盖补偿。审计把本次 requester 与冻结 signer 分开，并以
+`acknowledged / idempotent_replay` 区分首签和重放。该动作只 ensure
+`curation=draft` 候选，不自动把人签身份偷换成 Eval checks 已策展通过。
+
 promotion 另设不可混用的来源轴（迁移 #14）：
 
 - `signer_source TEXT NOT NULL DEFAULT 'legacy_unverified'`
@@ -189,3 +203,7 @@ attestation，必须重新评测并经认证 UI 或服务器 CLI 重新晋升。
     CLI 混入 auth 字段均 fail-closed；已提交认证签发在 logout 后仍可重启核验。
 14. 旧 API 即使仍自报 GH #3 三个绿色字段，只要缺失或错报精确 signer
     provenance 代际，部署自检仍 FAIL。
+15. sample 级认可未登录 401、伪造 actor 422；真实登录后 DB/case provenance
+    均为精确 session username，case-only 冒名 fail-closed，重复调用
+    actor/时间/case 不变且审计标记 replay，旧 reject 不可覆盖；unsigned 历史
+    case 409 待迁移，发布后 COMMIT 失败保留待核现场且不做破坏性补偿。

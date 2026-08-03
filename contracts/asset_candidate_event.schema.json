@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/asset_candidate_event.schema.json",
+  "title": "FLAi-OS Asset Candidate Event",
+  "description": "资产候选的追加式审计事件。接受或拒绝事件必须由服务端验证过的真人会话产生。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "candidate_id",
+    "candidate_digest",
+    "bundle_digest",
+    "event_type",
+    "from_state",
+    "to_state",
+    "actor_source",
+    "signer_display_name",
+    "signer_user_id",
+    "signer_username",
+    "signer_session_hash",
+    "message",
+    "payload",
+    "created_at"
+  ],
+  "properties": {
+    "event_id": {"type": "string", "pattern": "^asset_candidate_event_[0-9a-f]{32}$"},
+    "candidate_id": {"type": "string", "pattern": "^asset_candidate_[0-9a-f]{24}$"},
+    "candidate_digest": {"$ref": "#/$defs/digest"},
+    "bundle_digest": {"$ref": "#/$defs/digest"},
+    "event_type": {"enum": ["candidate_created", "candidate_accepted", "candidate_rejected", "candidate_superseded"]},
+    "from_state": {
+      "type": ["string", "null"],
+      "enum": [null, "awaiting_human_review"]
+    },
+    "to_state": {"enum": ["awaiting_human_review", "accepted", "rejected", "superseded"]},
+    "actor_source": {"enum": ["authenticated_task_owner", "authenticated_session"]},
+    "signer_display_name": {"type": ["string", "null"], "minLength": 1},
+    "signer_user_id": {"type": ["integer", "null"], "minimum": 1},
+    "signer_username": {"type": ["string", "null"], "minLength": 1},
+    "signer_session_hash": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "message": {"type": "string", "minLength": 1, "maxLength": 500},
+    "payload": {"type": "object", "additionalProperties": false},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "oneOf": [
+    {
+      "title": "Candidate created by the authenticated task owner",
+      "properties": {
+        "event_type": {"const": "candidate_created"},
+        "from_state": {"const": null},
+        "to_state": {"const": "awaiting_human_review"},
+        "actor_source": {"const": "authenticated_task_owner"},
+        "signer_display_name": {"const": null},
+        "signer_user_id": {"const": null},
+        "signer_username": {"const": null},
+        "signer_session_hash": {"const": null}
+      }
+    },
+    {
+      "title": "Candidate accepted by an authenticated signer session",
+      "properties": {
+        "event_type": {"const": "candidate_accepted"},
+        "from_state": {"const": "awaiting_human_review"},
+        "to_state": {"const": "accepted"},
+        "actor_source": {"const": "authenticated_session"},
+        "signer_display_name": {"type": "string", "minLength": 1},
+        "signer_user_id": {"type": "integer", "minimum": 1},
+        "signer_username": {"type": "string", "minLength": 1},
+        "signer_session_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    {
+      "title": "Candidate rejected by an authenticated signer session",
+      "properties": {
+        "event_type": {"const": "candidate_rejected"},
+        "from_state": {"const": "awaiting_human_review"},
+        "to_state": {"const": "rejected"},
+        "actor_source": {"const": "authenticated_session"},
+        "signer_display_name": {"type": "string", "minLength": 1},
+        "signer_user_id": {"type": "integer", "minimum": 1},
+        "signer_username": {"type": "string", "minLength": 1},
+        "signer_session_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    {
+      "title": "Undecided candidate retired by its authenticated task owner",
+      "properties": {
+        "event_type": {"const": "candidate_superseded"},
+        "from_state": {"const": "awaiting_human_review"},
+        "to_state": {"const": "superseded"},
+        "actor_source": {"const": "authenticated_task_owner"},
+        "signer_display_name": {"const": null},
+        "signer_user_id": {"const": null},
+        "signer_username": {"const": null},
+        "signer_session_hash": {"const": null}
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

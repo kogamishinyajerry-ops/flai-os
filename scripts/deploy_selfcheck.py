@@ -75,6 +75,10 @@ REQUIRED_TABLES = frozenset({
     # T2/#5（Codex R0 审 P1 schema 见证）：不可变评测快照表——库未迁出此表=旧代际，
     # enqueue 冻结快照将报错。与 health.eval_snapshot_axis（活进程见证）互补。
     "eval_snapshots",
+    # ADR-0034/0035：候选材化与真实复用证据账本。缺任一表都代表 API/worker
+    # 可能运行在旧库代际，必须在启动自检阶段显式失败，不能等到人工接受后才 500。
+    "asset_candidates", "asset_candidate_events",
+    "skill_packages", "skill_package_events", "skill_reuse_bindings",
 })
 
 _HTTP_TIMEOUT = 10
@@ -371,6 +375,27 @@ def check_live_eval_snapshot_generation(base_url: str) -> Check:
     )
 
 
+def check_live_skill_reuse_generation(base_url: str) -> Check:
+    """ADR-0035 活 API/Runtime 代际：必须自报 Skill reuse 冷校验轴。"""
+    url = f"{base_url}/api/health"
+    try:
+        _, body = _http_get(url)
+        payload = json.loads(body)
+    except Exception as exc:
+        return Check("运行进程 Skill 复用代际", False, f"{url} 不可达或非 JSON：{exc}")
+    if payload.get("skill_reuse_runtime_axis") is True:
+        return Check(
+            "运行进程 Skill 复用代际",
+            True,
+            "活进程自报 skill_reuse_runtime_axis=true",
+        )
+    return Check(
+        "运行进程 Skill 复用代际",
+        False,
+        "health 无 skill_reuse_runtime_axis=true——运行中的 API/Runtime 未证明会冷验并注入 Skill 复用绑定，fail-closed",
+    )
+
+
 def check_live_promotion_attestation(base_url: str) -> Check:
     """GH #3 的活进程 L1 签发核对见证；代际与本次结果均只认布尔真。"""
 
@@ -501,6 +526,7 @@ def main() -> int:
     checks.append(check_live_classification_generation(base_url))
     checks.append(check_live_created_by_username_generation(base_url))
     checks.append(check_live_eval_snapshot_generation(base_url))
+    checks.append(check_live_skill_reuse_generation(base_url))
     checks.append(check_live_promotion_attestation(base_url))
     checks.append(check_db_identity(base_url, db_path))
     checks.append(check_auth_generation(base_url))

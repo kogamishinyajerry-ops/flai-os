@@ -19,13 +19,18 @@ import yaml
 from backend.app.jobs.runner import JobRunner
 from backend.app.runtime.registry import AgentRegistry
 from backend.app.storage import repos
+from backend.tests.conftest import TEST_USERNAME
 
 
 def _mk_conv_with_plan(app, agents_plan: list[dict[str, Any]], conv_id: str = "conv_b8") -> str:
     conn = app.state.conn_factory()
     try:
         repos.create_conversation(
-            conn, conversation_id=conv_id, agent_id="guide_agent", created_by="tester"
+            conn,
+            conversation_id=conv_id,
+            agent_id="guide_agent",
+            created_by="tester",
+            created_by_username=TEST_USERNAME,
         )
         repos.set_conversation_recommendation(
             conn, conv_id, {"decision": "orchestrate", "goal": "验收目标", "agents": agents_plan}
@@ -108,7 +113,11 @@ def test_create_team_requires_orchestrate_plan(app_env):
     conn = app.state.conn_factory()
     try:
         repos.create_conversation(
-            conn, conversation_id="conv_plain", agent_id="guide_agent", created_by="tester"
+            conn,
+            conversation_id="conv_plain",
+            agent_id="guide_agent",
+            created_by="tester",
+            created_by_username=TEST_USERNAME,
         )
     finally:
         conn.close()
@@ -247,8 +256,11 @@ def test_summon_reverse_order_items_builds_correct_deps(app_env):
 # ── 执行期 disabled 兜底（auditor F1 真修，O9 后端半）──────────────────────
 
 def test_execute_disabled_agent_fails_honestly_O9(app_env, tmp_path: Path):
-    """任务入队后 agent 被禁用（版本不变）→ 执行期诚实 failed 不硬跑——修前
-    _execute 只查未注册+版本漂移，禁用成员任务照跑（B7 继承缺口）。"""
+    """任务入队后 agent 被禁用（包内容随之变化）→ 执行期诚实 failed 不硬跑。
+
+    创建任务现已钉不可变包摘要，因此摘要漂移 gate 会先于 disabled gate 拒绝；
+    两者都必须保持 fail-closed，绝不能继续执行旧任务。
+    """
     client, app = app_env
     r = client.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "x"}})
     assert r.status_code == 200, r.text
@@ -263,7 +275,7 @@ def test_execute_disabled_agent_fails_honestly_O9(app_env, tmp_path: Path):
         finally:
             conn.close()
         assert task["status"] == "failed"
-        assert "已下线" in (task.get("error_message") or "")
+        assert "摘要漂移" in (task.get("error_message") or "")
     finally:
         app.state.agent_registry.scan()
 

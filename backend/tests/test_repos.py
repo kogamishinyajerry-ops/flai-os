@@ -41,6 +41,8 @@ def _new_task(conn, **overrides):
         metadata={},
     )
     fields.update(overrides)
+    if fields.get("origin", "user") == "user" and "created_by_username" not in overrides:
+        fields["created_by_username"] = "tester"
     return repos.create_task(conn, **fields)
 
 
@@ -80,6 +82,118 @@ def test_init_db_creates_required_indexes(conn) -> None:
         "idx_tasks_status_created_at",
     }
     assert expected <= names, f"缺索引：{expected - names}"
+
+
+# ── conversations.created_by_username（持久 owner 证明）───────────────
+
+
+def test_fresh_conversations_owner_username_is_nullable_without_default(conn) -> None:
+    columns = {
+        row["name"]: row for row in conn.execute("PRAGMA table_info(conversations)")
+    }
+
+    owner = columns["created_by_username"]
+    assert owner["notnull"] == 0
+    assert owner["dflt_value"] is None
+
+
+_LEGACY_CONVERSATIONS_DDL_WITHOUT_OWNER = """
+CREATE TABLE conversations (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    recommendation_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
+
+def test_conversation_owner_migration_keeps_legacy_rows_unproven(tmp_path) -> None:
+    db_path = tmp_path / "legacy-conversations.db"
+    legacy = db_mod.get_conn(db_path)
+    try:
+        legacy.execute(_LEGACY_CONVERSATIONS_DDL_WITHOUT_OWNER)
+        legacy.execute(
+            "INSERT INTO conversations "
+            "(id, agent_id, status, created_by, recommendation_json, created_at, updated_at) "
+            "VALUES ('conv_legacy', 'guide_agent', 'active', '测试工程师', NULL, "
+            "'2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+        )
+    finally:
+        legacy.close()
+
+    db_mod.init_db(db_path)
+    migrated = db_mod.get_conn(db_path)
+    try:
+        columns = {
+            row["name"]: row
+            for row in migrated.execute("PRAGMA table_info(conversations)")
+        }
+        assert columns["created_by_username"]["dflt_value"] is None
+        assert repos.get_conversation_owner_username(migrated, "conv_legacy") is None
+        public = repos.get_conversation(migrated, "conv_legacy")
+        assert public is not None
+        assert public["created_by"] == "测试工程师"
+        assert "created_by_username" not in public
+    finally:
+        migrated.close()
+
+    db_mod.init_db(db_path)
+
+
+def test_conversation_owner_is_internal_but_raw_lookup_is_available(conn) -> None:
+    created = repos.create_conversation(
+        conn,
+        conversation_id="conv_owner_projection",
+        agent_id="guide_agent",
+        created_by="测试工程师",
+        created_by_username="test_engineer",
+    )
+
+    assert "created_by_username" not in created
+    assert "created_by_username" not in repos.get_conversation(
+        conn, "conv_owner_projection"
+    )
+    assert "created_by_username" not in repos.list_conversations(conn)[0]
+    assert (
+        repos.get_conversation_owner_username(conn, "conv_owner_projection")
+        == "test_engineer"
+    )
+    assert repos.get_conversation_owner_username(conn, "conv_missing") is None
+
+
+@pytest.mark.parametrize(
+    ("initial_owner", "replacement_owner"),
+    [
+        (None, "test_engineer"),
+        ("test_engineer", None),
+        ("test_engineer", "another_engineer"),
+    ],
+    ids=["null-to-value", "value-to-null", "value-to-other-value"],
+)
+def test_conversation_owner_username_is_immutable_for_every_transition(
+    conn, initial_owner: str | None, replacement_owner: str | None
+) -> None:
+    conversation_id = f"conv_owner_immutable_{uuid.uuid4().hex}"
+    repos.create_conversation(
+        conn,
+        conversation_id=conversation_id,
+        agent_id="guide_agent",
+        created_by="测试工程师",
+        created_by_username=initial_owner,
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="created_by_username is immutable"):
+        conn.execute(
+            "UPDATE conversations SET created_by_username = ? WHERE id = ?",
+            (replacement_owner, conversation_id),
+        )
+
+    assert (
+        repos.get_conversation_owner_username(conn, conversation_id) == initial_owner
+    )
 
 
 # ── tasks ──────────────────────────────────────────────────────────────
@@ -333,6 +447,68 @@ def test_migration_14_survives_rival_alter_mid_flight(
         "signer_username",
         "signer_session_hash",
     } <= columns
+
+
+# ── 迁移 #17：sample 级认可稳定 actor（Issue #4）──────────────────────
+
+
+_LEGACY_SAMPLES_DDL_PRE_15 = """
+CREATE TABLE samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    agent_version TEXT NOT NULL,
+    tool_id TEXT,
+    tool_version TEXT,
+    case_id TEXT,
+    input_json TEXT NOT NULL,
+    output_json TEXT,
+    raw_input_path TEXT,
+    raw_output_path TEXT,
+    validation_status TEXT,
+    accepted_by_engineer INTEGER,
+    created_at TEXT NOT NULL,
+    classification TEXT NOT NULL DEFAULT 'internal'
+)
+"""
+
+
+def test_migration_17_preserves_legacy_sample_without_actor_inference(
+    tmp_path,
+) -> None:
+    """旧 accepted=true 只证明旧动作结果，不能事后猜成某个 username 的签发。"""
+    db_path = tmp_path / "legacy-samples.db"
+    legacy = db_mod.get_conn(db_path)
+    try:
+        legacy.execute(_LEGACY_SAMPLES_DDL_PRE_15)
+        legacy.execute(
+            "INSERT INTO samples"
+            " (task_id, agent_id, agent_version, input_json, output_json,"
+            " validation_status, accepted_by_engineer, created_at, classification)"
+            " VALUES ('task-old', 'hello_agent', '0.1.0', '{}', '{}',"
+            " 'success', 1, '2026-01-01T00:00:00+00:00', 'internal')"
+        )
+        legacy.commit()
+        cols_before = {
+            row[1] for row in legacy.execute("PRAGMA table_info(samples)")
+        }
+        assert "acknowledged_by_username" not in cols_before
+        assert "acknowledged_at" not in cols_before
+    finally:
+        legacy.close()
+
+    db_mod.init_db(db_path)
+    migrated = db_mod.get_conn(db_path)
+    try:
+        sample = repos.get_sample(migrated, 1)
+        assert sample is not None
+        assert sample["accepted_by_engineer"] is True
+        assert sample["acknowledged_by_username"] is None
+        assert sample["acknowledged_at"] is None
+    finally:
+        migrated.close()
+
+    db_mod.init_db(db_path)
 
 
 def test_record_promotion_rejects_fabricated_authenticated_signer(conn) -> None:
@@ -632,6 +808,129 @@ def test_create_file_and_get_file_roundtrip(conn) -> None:
     assert fetched == created
 
 
+def test_uploaded_file_projects_stable_owner_username_separately_from_display_name(
+    conn,
+) -> None:
+    file_id = f"file_{uuid.uuid4().hex[:8]}"
+
+    created = repos.create_file(
+        conn,
+        file_id=file_id,
+        kind="input",
+        filename="owned.csv",
+        path="/data/uploads/owned.csv",
+        size_bytes=12,
+        sha256="a" * 64,
+        classification="internal",
+        uploaded_by="同名工程师",
+        owner_username="bob",
+    )
+
+    assert created["owner_username"] == "bob"
+    assert created["uploaded_by"] == "同名工程师"
+    assert repos.get_file(conn, file_id)["owner_username"] == "bob"
+    assert repos.list_files_by_ids(conn, [file_id])[0]["owner_username"] == "bob"
+
+
+def test_uploaded_file_owner_check_is_exact_and_fails_closed(conn) -> None:
+    file_id = f"file_{uuid.uuid4().hex[:8]}"
+    repos.create_file(
+        conn,
+        file_id=file_id,
+        kind="input",
+        filename="bob.csv",
+        path="/data/uploads/bob.csv",
+        size_bytes=3,
+        sha256="b" * 64,
+        classification="internal",
+        uploaded_by="Bob",
+        owner_username="bob",
+    )
+
+    assert repos.file_is_owned_by_username(conn, file_id, "bob") is True
+    assert repos.file_is_owned_by_username(conn, file_id, "alice") is False
+    assert repos.file_is_owned_by_username(conn, file_id, "") is False
+    assert repos.file_is_owned_by_username(conn, "missing-file", "bob") is False
+
+
+def test_uploaded_file_owner_username_cannot_be_rewritten(conn) -> None:
+    file_id = f"file_{uuid.uuid4().hex[:8]}"
+    repos.create_file(
+        conn,
+        file_id=file_id,
+        kind="input",
+        filename="immutable.csv",
+        path="/data/uploads/immutable.csv",
+        size_bytes=5,
+        sha256="c" * 64,
+        classification="internal",
+        uploaded_by="Bob",
+        owner_username="bob",
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="owner_username is immutable"):
+        conn.execute(
+            "UPDATE files SET owner_username = ? WHERE id = ?",
+            ("alice", file_id),
+        )
+    assert repos.get_file(conn, file_id)["owner_username"] == "bob"
+
+
+def test_file_owner_migration_keeps_legacy_rows_unattributed(tmp_path) -> None:
+    db_path = tmp_path / "legacy-files.db"
+    legacy = db_mod.get_conn(db_path)
+    try:
+        legacy.execute(
+            """
+            CREATE TABLE files (
+                id TEXT PRIMARY KEY,
+                task_id TEXT,
+                kind TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                path TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                classification TEXT NOT NULL DEFAULT 'internal',
+                uploaded_by TEXT
+            )
+            """
+        )
+        legacy.execute(
+            "INSERT INTO files VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                "legacy-file",
+                None,
+                "input",
+                "legacy.txt",
+                "/legacy/legacy.txt",
+                1,
+                "d" * 64,
+                "2026-01-01T00:00:00+00:00",
+                "internal",
+                "历史工程师",
+            ),
+        )
+    finally:
+        legacy.close()
+
+    db_mod.init_db(db_path)
+    db_mod.init_db(db_path)
+
+    migrated = db_mod.get_conn(db_path)
+    try:
+        assert "owner_username" in {
+            row[1] for row in migrated.execute("PRAGMA table_info(files)")
+        }
+        assert repos.get_file(migrated, "legacy-file")["owner_username"] is None
+        assert (
+            repos.file_is_owned_by_username(migrated, "legacy-file", "历史工程师")
+            is False
+        )
+    finally:
+        migrated.close()
+
+
 def test_get_file_missing_returns_none(conn) -> None:
     assert repos.get_file(conn, "no_such_file") is None
 
@@ -682,6 +981,137 @@ def test_record_and_list_sample(conn) -> None:
     assert len(samples) == 1
 
 
+@pytest.mark.parametrize("malformed", [1, 0, "true", []])
+def test_record_sample_rejects_truthy_or_falsey_non_boolean_acceptance(
+    conn,
+    malformed: object,
+) -> None:
+    task = _new_task(conn)
+
+    with pytest.raises(TypeError, match="True/False/None"):
+        repos.record_sample(
+            conn,
+            task_id=task["id"],
+            agent_id="hello_agent",
+            agent_version="0.1.0",
+            input_json={},
+            accepted_by_engineer=malformed,  # type: ignore[arg-type]
+            classification="internal",
+        )
+
+    assert repos.list_samples(conn, task["id"]) == []
+
+
+def test_acknowledge_sample_once_reports_exactly_one_cas_winner(conn) -> None:
+    """两个无外层锁写者都幂等成功，但 created=True 只能来自 SQL CAS 胜者。"""
+    import threading
+
+    task = _new_task(conn)
+    sample = repos.record_sample(
+        conn,
+        task_id=task["id"],
+        agent_id="hello_agent",
+        agent_version="0.1.0",
+        input_json={"name": "并发"},
+        output_json={"greeting": "你好"},
+        validation_status="success",
+        classification="internal",
+    )
+    db_path = conn.execute("PRAGMA database_list").fetchone()["file"]
+    barrier = threading.Barrier(2)
+    outcomes: list[object | None] = [None, None]
+
+    def acknowledge(index: int) -> None:
+        thread_conn = db_mod.get_conn(db_path)
+        try:
+            barrier.wait(timeout=5)
+            outcomes[index] = repos.acknowledge_sample_once(
+                thread_conn,
+                sample["id"],
+                actor_username=f"reviewer_{index}",
+                acknowledged_at=f"2026-07-27T00:00:0{index}+00:00",
+            )
+        except (sqlite3.Error, ValueError) as exc:
+            outcomes[index] = exc
+        finally:
+            thread_conn.close()
+
+    threads = [threading.Thread(target=acknowledge, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert all(thread.is_alive() is False for thread in threads)
+
+    assert not any(
+        isinstance(outcome, Exception) for outcome in outcomes
+    ), outcomes
+    records = [outcome[0] for outcome in outcomes]  # type: ignore[index]
+    created = [outcome[1] for outcome in outcomes]  # type: ignore[index]
+    assert sorted(created) == [False, True]
+    assert records[0] == records[1]
+    assert records[0]["acknowledged_by_username"] in {"reviewer_0", "reviewer_1"}
+    assert records[0]["accepted_by_engineer"] is True
+
+
+@pytest.mark.parametrize(
+    "acknowledged_at",
+    ["not-an-iso-time", "2026-07-27T00:00:00", " 2026-07-27T00:00:00+00:00"],
+)
+def test_acknowledge_sample_once_rejects_non_aware_iso_timestamp(
+    conn,
+    acknowledged_at: str,
+) -> None:
+    task = _new_task(conn)
+    sample = repos.record_sample(
+        conn,
+        task_id=task["id"],
+        agent_id="hello_agent",
+        agent_version="0.1.0",
+        input_json={},
+        classification="internal",
+    )
+
+    with pytest.raises(ValueError, match="带时区"):
+        repos.acknowledge_sample_once(
+            conn,
+            sample["id"],
+            actor_username="reviewer",
+            acknowledged_at=acknowledged_at,
+        )
+
+    projected = repos.get_sample(conn, sample["id"])
+    assert projected is not None
+    assert projected["accepted_by_engineer"] is None
+    assert projected["acknowledged_by_username"] is None
+
+
+@pytest.mark.parametrize("accepted_value", [2, -1])
+def test_sample_decode_never_truthiness_coerces_malformed_acceptance(
+    conn,
+    accepted_value: int,
+) -> None:
+    task = _new_task(conn)
+    sample = repos.record_sample(
+        conn,
+        task_id=task["id"],
+        agent_id="hello_agent",
+        agent_version="0.1.0",
+        input_json={},
+        classification="internal",
+    )
+    conn.execute(
+        "UPDATE samples SET accepted_by_engineer = ? WHERE id = ?",
+        (accepted_value, sample["id"]),
+    )
+
+    projected = repos.get_sample(conn, sample["id"])
+
+    assert projected is not None
+    assert projected["accepted_by_engineer"] == accepted_value
+    assert projected["accepted_by_engineer"] is not True
+
+
 def test_list_tasks_filters_by_created_by_username(conn):
     # 三条：alice 两条（含一条 eval origin）、bob 一条、无归因一条（None）
     from backend.app.storage import repos
@@ -705,3 +1135,84 @@ def test_list_tasks_filters_by_created_by_username(conn):
 
     # None 参数=不过滤，四条全回
     assert len(repos.list_tasks(conn, created_by_username=None)) == 4
+
+
+def test_list_tasks_applies_read_visibility_before_pagination(conn) -> None:
+    alice = _new_task(
+        conn,
+        task_id="task-visible-alice",
+        created_by="Alice",
+        created_by_username="alice",
+    )
+    shared_eval = _new_task(
+        conn,
+        task_id="task-visible-eval",
+        created_by="Eval Runner",
+        created_by_username=None,
+        origin="eval",
+    )
+    bob = _new_task(
+        conn,
+        task_id="task-visible-bob",
+        created_by="Bob",
+        created_by_username="bob",
+    )
+    for created_at, task_id in (
+        ("2026-08-03T00:00:01+00:00", alice["id"]),
+        ("2026-08-03T00:00:02+00:00", shared_eval["id"]),
+        ("2026-08-03T00:00:03+00:00", bob["id"]),
+    ):
+        conn.execute(
+            "UPDATE tasks SET created_at = ? WHERE id = ?",
+            (created_at, task_id),
+        )
+    conn.commit()
+
+    first = repos.list_tasks(
+        conn,
+        visible_to_username="alice",
+        origin=None,
+        limit=1,
+        offset=0,
+    )
+    second = repos.list_tasks(
+        conn,
+        visible_to_username="alice",
+        origin=None,
+        limit=1,
+        offset=1,
+    )
+    third = repos.list_tasks(
+        conn,
+        visible_to_username="alice",
+        origin=None,
+        limit=1,
+        offset=2,
+    )
+    assert [task["id"] for task in first] == [shared_eval["id"]]
+    assert [task["id"] for task in second] == [alice["id"]]
+    assert third == []
+
+    assert {
+        task["id"]
+        for task in repos.list_tasks(
+            conn,
+            visible_to_username="alice",
+            origin="eval",
+        )
+    } == {shared_eval["id"]}
+    assert {
+        task["id"]
+        for task in repos.list_tasks(
+            conn,
+            visible_to_username="alice",
+            origin="user",
+        )
+    } == {alice["id"]}
+
+    with pytest.raises(ValueError, match="不得同时使用"):
+        repos.list_tasks(
+            conn,
+            created_by_username="alice",
+            visible_to_username="alice",
+        )

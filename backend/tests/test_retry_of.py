@@ -2,9 +2,10 @@
 
 钥匙对（正反都测，oracle 对称性）：
 1. 不带 retry_of 创建 → 投影 retry_of=null 且过 task.schema.json（额外列不破契约）；
-2. 带合法 retry_of → 持久化 + 投影回读 + 过契约；
+2. 带合法 retry_of（来源状态严格为 failed）→ 持久化 + 投影回读 + 过契约；
 3. retry_of 指向不存在任务 → 404 且**零任务落库**（先查后建，不留半截血缘）；
-4. 空白/超长 → 422（与 conversation_id 同口径的入参卫生）。
+4. retry_of 指向 queued 等非失败任务 → 422 且**零任务落库**；
+5. 空白/超长 → 422（与 conversation_id 同口径的入参卫生）。
 """
 
 from __future__ import annotations
@@ -35,6 +36,20 @@ def _task_count(app) -> int:
         conn.close()
 
 
+def _mark_task_failed(app, task_id: str) -> None:
+    """测试准备：直接把既有任务置为失败，隔离 retry_of 的准入语义。"""
+    conn = get_conn(app.state.db_path)
+    try:
+        updated = conn.execute(
+            "UPDATE tasks SET status = 'failed' WHERE id = ?",
+            (task_id,),
+        ).rowcount
+        conn.commit()
+        assert updated == 1
+    finally:
+        conn.close()
+
+
 def test_retry_of_absent_defaults_null_and_schema_valid(app_env) -> None:
     client, _app = app_env
     resp = _create_hello(client)
@@ -45,8 +60,9 @@ def test_retry_of_absent_defaults_null_and_schema_valid(app_env) -> None:
 
 
 def test_retry_of_valid_persists_and_projects(app_env) -> None:
-    client, _app = app_env
+    client, app = app_env
     origin_id = _create_hello(client).json()["id"]
+    _mark_task_failed(app, origin_id)
     resp = _create_hello(client, retry_of=origin_id)
     assert resp.status_code == 200, resp.text
     task = client.get(f"/api/tasks/{resp.json()['id']}").json()
@@ -57,12 +73,25 @@ def test_retry_of_valid_persists_and_projects(app_env) -> None:
     assert task["id"] != origin_id
 
 
+def test_retry_of_queued_origin_rejected_422_and_no_task_created(app_env) -> None:
+    client, app = app_env
+    origin_id = _create_hello(client).json()["id"]
+    before = _task_count(app)
+
+    resp = _create_hello(client, retry_of=origin_id)
+
+    assert resp.status_code == 422, resp.text
+    assert "只能指向失败任务" in resp.json()["detail"]
+    assert origin_id in resp.json()["detail"]
+    assert _task_count(app) == before
+
+
 def test_retry_of_nonexistent_404_and_no_task_created(app_env) -> None:
     client, app = app_env
     before = _task_count(app)
     resp = _create_hello(client, retry_of="t_ghost_never_exists")
     assert resp.status_code == 404, resp.text
-    assert "t_ghost_never_exists" in resp.json()["detail"]
+    assert resp.json() == {"detail": "资源不存在或不可访问"}
     # 先查后建：404 时绝不留下半截任务（否则悬空血缘会污染后续审计口径）。
     assert _task_count(app) == before
 

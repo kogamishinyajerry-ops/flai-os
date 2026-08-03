@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/candidate_skill_package.schema.json",
+  "title": "FLAi-OS Candidate Skill Package Revision",
+  "description": "由精确 Accepted Candidate 确定性材化的隔离、版本化 Skill Package。approved 仅允许受控匹配与任务级复用，不代表注册、发布、晋级或扩大 Agent 权限。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "version",
+    "package_digest",
+    "state",
+    "source",
+    "files",
+    "storage_relpath",
+    "review",
+    "reuse_eligible",
+    "isolation",
+    "formation_evidence",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "skill_package_revision.v1"},
+    "id": {"type": "string", "pattern": "^skill_package_[0-9a-f]{24}$"},
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "package_digest": {"$ref": "#/$defs/digest"},
+    "state": {"enum": ["pending_review", "approved", "rejected"]},
+    "source": {"$ref": "#/$defs/source"},
+    "files": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        {"$ref": "#/$defs/skillMarkdownFile"},
+        {"$ref": "#/$defs/provenanceFile"},
+        {"$ref": "#/$defs/skillRevisionFile"},
+        {"$ref": "#/$defs/taskPatternRevisionFile"}
+      ],
+      "items": false
+    },
+    "storage_relpath": {
+      "type": "string",
+      "pattern": "^quarantine/skill_package_[0-9a-f]{24}$"
+    },
+    "review": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/review"}
+      ]
+    },
+    "reuse_eligible": {"type": "boolean"},
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["zone", "registered", "executable"],
+      "properties": {
+        "zone": {"const": "candidate_quarantine"},
+        "registered": {"const": false},
+        "executable": {"const": false}
+      }
+    },
+    "formation_evidence": {"$ref": "#/$defs/formationEvidence"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "oneOf": [
+    {
+      "title": "Freshly materialized package awaiting a separate human review",
+      "properties": {
+        "state": {"const": "pending_review"},
+        "review": {"const": null},
+        "reuse_eligible": {"const": false}
+      }
+    },
+    {
+      "title": "Exact package revision approved by an authenticated signer",
+      "properties": {
+        "state": {"const": "approved"},
+        "review": {
+          "allOf": [
+            {"$ref": "#/$defs/review"},
+            {"properties": {"action": {"const": "approve"}}}
+          ]
+        },
+        "reuse_eligible": {"const": true}
+      }
+    },
+    {
+      "title": "Exact package revision rejected by an authenticated signer",
+      "properties": {
+        "state": {"const": "rejected"},
+        "review": {
+          "allOf": [
+            {"$ref": "#/$defs/review"},
+            {"properties": {"action": {"const": "reject"}}}
+          ]
+        },
+        "reuse_eligible": {"const": false}
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "rawDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "candidate_digest",
+        "bundle_digest",
+        "skill_digest",
+        "acceptance_event_digest",
+        "task_id",
+        "agent_id",
+        "initiated_by_username"
+      ],
+      "properties": {
+        "candidate_id": {"type": "string", "pattern": "^asset_candidate_[0-9a-f]{24}$"},
+        "candidate_digest": {"$ref": "#/$defs/digest"},
+        "bundle_digest": {"$ref": "#/$defs/digest"},
+        "skill_digest": {"$ref": "#/$defs/digest"},
+        "acceptance_event_digest": {"$ref": "#/$defs/digest"},
+        "task_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "agent_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"},
+        "initiated_by_username": {"type": "string", "minLength": 1, "maxLength": 128}
+      }
+    },
+    "fileManifestEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size_bytes"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$"
+        },
+        "sha256": {"$ref": "#/$defs/rawDigest"},
+        "size_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "skillMarkdownFile": {
+      "allOf": [
+        {"$ref": "#/$defs/fileManifestEntry"},
+        {"properties": {"path": {"const": "SKILL.md"}}}
+      ]
+    },
+    "provenanceFile": {
+      "allOf": [
+        {"$ref": "#/$defs/fileManifestEntry"},
+        {"properties": {"path": {"const": "references/provenance.json"}}}
+      ]
+    },
+    "skillRevisionFile": {
+      "allOf": [
+        {"$ref": "#/$defs/fileManifestEntry"},
+        {"properties": {"path": {"const": "references/skill-revision.json"}}}
+      ]
+    },
+    "taskPatternRevisionFile": {
+      "allOf": [
+        {"$ref": "#/$defs/fileManifestEntry"},
+        {"properties": {"path": {"const": "references/task-pattern-revision.json"}}}
+      ]
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "reviewed_by",
+        "reviewed_by_username",
+        "signer_source",
+        "signer_session_bound",
+        "created_at"
+      ],
+      "properties": {
+        "action": {"enum": ["approve", "reject"]},
+        "reviewed_by": {"type": "string", "minLength": 1, "maxLength": 128},
+        "reviewed_by_username": {"type": "string", "minLength": 1, "maxLength": 128},
+        "signer_source": {"const": "authenticated_session"},
+        "signer_session_bound": {"const": true},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "gatedCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "eligible", "reason"],
+      "properties": {
+        "state": {"const": "not_formed"},
+        "eligible": {"const": false},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 160}
+      }
+    },
+    "formationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "independent_work_case_count",
+        "required_independent_work_cases",
+        "workflow_candidate",
+        "agent_candidate"
+      ],
+      "properties": {
+        "schema_version": {"const": "composition_eligibility.v1"},
+        "independent_work_case_count": {"type": "integer", "minimum": 0},
+        "required_independent_work_cases": {"const": 2},
+        "workflow_candidate": {
+          "allOf": [
+            {"$ref": "#/$defs/gatedCandidate"},
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "requires_independent_composition_evidence",
+                    "requires_stable_multi_skill_composition_evidence"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "agent_candidate": {
+          "allOf": [
+            {"$ref": "#/$defs/gatedCandidate"},
+            {"properties": {"reason": {"const": "requires_approved_workflow_revision"}}}
+          ]
+        }
+      }
+    }
+  }
+}

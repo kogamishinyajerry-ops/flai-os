@@ -41,9 +41,9 @@
      紧凑时钟（同日 HH:MM/跨日 MM-DD HH:MM，locale 全量串绝迹）+ /me 任务行
      孪生面同 SSOT（useTodayKey 响应式日界）。
   ⑪ 批次四 Q1-Q5 新人极简（契约=UI-DESKTOP-CRAFT.md 批次四）：
-     Q1 行级主文本人话称呼——缺名任务显 Agent 注册表显示名（裸 task_ 前缀
-     绝迹），名册拉取失败诚实回退 id 切片（route-abort /api/agents 实证，
-     绝不编名字）；Q2 零值不显示全站化——今日页组头零计数豁口/团队总量
+     Q1 行级主文本人话称呼——创建请求省略 name 时，服务端从创建时的 Agent
+     Package 快照自动持久化显示名（裸 task_ 前缀绝迹）；名册临时失败也不抹掉
+     已持久化名称（route-abort /api/agents 实证）；Q2 零值不显示全站化——今日页组头零计数豁口/团队总量
      零值格语义对表/我的页四格与反馈同律；Q3 方法论脚注一处一行（状态中心
      口径短句/today-subhead-note 退役）；Q4 门户图例句撤下（释义走徽章
      title，L0「勿依赖」诚实提示保留）+类型/成熟度/id·版本合并次级 meta
@@ -52,7 +52,7 @@
   ⑪R Codex R0 治理审修复批（R1）：折叠态工具行 mock 徽不等展开（真实性
      投影随工具终结事件预载）+投影拉取失败亮「真实性未核」（unknown≠非 mock，
      route-abort /api/tasks/*/tool_runs/summary 实证）；⌘K 按显示名子串检索到
-     未命名任务行（搜索域=眼见标题 SSOT）；晋升 API 失败「今日最活跃」独立
+     服务端自动命名的任务行（搜索域=眼见标题 SSOT）；晋升 API 失败「今日最活跃」独立
      存活（3-lens 回归 P2 定格）；⑫ /me 混合零值活体对表（待签清零后 waiting
      格隐、>0 格照常——零值分支活体证据，非 tamper 孤证）。
   ⑪R2 Codex R1 复审修复批（R2）：数据面换 summary.by_tool 有界投影（绝不为
@@ -61,7 +61,7 @@
      数字镜像（_is_num：bool≠数、负数≠零）+ ⑬ route-fulfill 混合响应
      （5/0/true/-2）直接咬三态 DOM。
   ⑭ 批次五 C1-C6（craft 通用工艺规则对表，契约=§十四）：C1 后端挂起→20s
-     硬超时分型（悬挂 handler 真实计时）+重试钮真恢复；C2 ⌘K 三源失败诚实
+     硬超时分型（悬挂 handler 真实计时）+重试钮真恢复；C2 ⌘K 两源失败诚实
      降级（故障≠无结果）；C3 clay census oracle（/today /me 非豁免常驻 ≤2，
      own-属性归因）；C4 reduced-motion 补洞（emulate_media 于 goto 前直测
      真实元素：窄屏侧栏+el-drawer 归零）；C5 ring 试点机制断言（透明边框+
@@ -77,7 +77,7 @@
   ⑭″ Codex R0 治理审修复批：⑭C6″ 收紧为白名单断言（焦点=body 默认落点，
      roving-focus 属 router 级全局设计反采纳入 retro）；⑭C6‴ SC「查看全部
      任务」导航出口同律（closeForNavigation 统一出口）；⑭b′ 降级分级口径
-     （单源失败=「部分」，3/3 全失败才=「服务不可用」）；⑭C2′ repoll 改条件
+     （单源失败=「部分」，2/2 全失败才=「服务不可用」）；⑭C2′ repoll 改条件
      轮询（250ms×48 上限 12s，抗 CI 抖动）；check() 判定全部 `(...) is True`
      显式形态（含 census/reduce/溢出/worklog 五处收紧）。
 
@@ -97,6 +97,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import socket
 import sys
@@ -116,7 +117,7 @@ if not (DIST / "index.html").is_file():
     sys.exit("诚实失败：frontend/dist 未构建。先执行  cd frontend && npm run build")
 
 try:
-    from playwright.sync_api import expect, sync_playwright
+    from playwright.sync_api import sync_playwright
 except ImportError:
     sys.exit("诚实失败：playwright 未安装。见本文件头部运行命令。")
 
@@ -124,6 +125,7 @@ import httpx
 import uvicorn
 
 from backend.app.main import create_app
+from backend.app.storage import repos
 
 WORK = Path(tempfile.mkdtemp(prefix="flai_craft_"))
 
@@ -206,6 +208,26 @@ def flip_completed_with_artifact_and_events(task_id: str) -> None:
     # payload/message）」——真实 runner 对 internal 任务必落此戳（runtime.py
     # set_task_data_classification），夹具不落就是讲了个不自洽的故事，门会
     # 正确地咬（本批实测咬过一次：签发行/工具 chip payload 全被遮蔽）。
+    # Owner-lineage 会在读任务前核对每个 output_file_id 的权威来源行。
+    # 因此夹具必须登记真实 output 关系；刻意不写物理字节，以继续验证
+    # 「任务可读，但产物完整性失败如实显示」，而不用断裂血缘绕过授权门。
+    output_path = WORK / "task_runs" / task_id / "output" / "probe.txt"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = app.state.conn_factory()
+    try:
+        repos.create_file(
+            conn,
+            file_id="file_probe_0001",
+            task_id=task_id,
+            kind="output",
+            filename="probe.txt",
+            path=str(output_path),
+            size_bytes=1,
+            sha256="0" * 64,
+            classification="internal",
+        )
+    finally:
+        conn.close()
     _db(
         "UPDATE tasks SET status='completed', output_file_ids=?, started_at=?, finished_at=?,"
         " data_classification='internal' WHERE id=?",
@@ -538,42 +560,38 @@ with sync_playwright() as p:
           and empty_composer_box["y"] + empty_composer_box["height"] <= 720,
           f"guide={guide_box} composer={empty_composer_box}")
 
-    # ⑧' Composer Agent 选择器：窄屏必须留在视口内、列表内部滚动；
-    # 搜索后选择只填草稿并把焦点还给 Composer，不替人发送。
+    # ⑧' 工程师壳层硬规则：窄屏仍只有文字与附件两个原始输入；其余能力由
+    # 系统在后台编排，不出现 picker、参数字段或常驻上下文墙。
     page.set_viewport_size({"width": 375, "height": 812})
-    page.get_by_role("button", name="浏览可用 Agent").click()
-    picker = page.get_by_role("dialog", name="选择 Agent")
-    picker_box = picker.bounding_box()
-    first_picker_row = picker.locator(".ap-item").first.bounding_box()
-    picker_scroll = picker.locator(".ap-scroll").evaluate(
-        "el => ({ client: el.clientHeight, scroll: el.scrollHeight,"
-        " overflow: getComputedStyle(el).overflowY })")
-    check("⑧'Agent 选择器≤390px、单行≤56px且内部滚动",
-          picker_box is not None
-          and picker_box["y"] >= 0
-          and picker_box["y"] + picker_box["height"] <= 812
-          and picker_box["height"] <= 390
-          and first_picker_row is not None
-          and first_picker_row["height"] <= 56
-          and picker_scroll["overflow"] == "auto"
-          and picker_scroll["scroll"] > picker_scroll["client"],
-          f"box={picker_box} row={first_picker_row} scroll={picker_scroll}")
-    check("⑧'Agent 快选每项只显示名称+一条安全优先说明",
-          picker.locator(".ap-sub").count() == 0
-          and picker.locator(".ap-limit").count() == 0
-          and picker.locator(".ap-detail").count() == picker.locator(".ap-item").count())
-    picker.get_by_role("searchbox", name="搜索可用 Agent").fill("性能盘")
-    check("⑧'Agent 搜索只保留匹配项",
-          picker.locator(".ap-item").count() == 1
-          and "性能盘批量计算 Agent" in picker.locator(".ap-item").inner_text())
-    picker.locator(".ap-item").click()
-    page.wait_for_timeout(100)
     composer = page.locator(".composer textarea")
-    check("⑧'选择后收起、填入草稿并聚焦 Composer",
-          not picker.is_visible()
-          and composer.input_value() == "我想用「性能盘批量计算 Agent（模拟阶段）」做："
+    composer.click()
+    attach_box = page.locator(".composer .icon-btn").first.bounding_box()
+    send_box = page.locator(".composer .send-btn").bounding_box()
+    mobile_shell_width = page.evaluate(
+        "() => ({ viewport: innerWidth, body: document.body.scrollWidth,"
+        " root: document.documentElement.scrollWidth })"
+    )
+    check("⑧'375px 壳层只有一个文字输入和一个附件入口",
+          page.locator(".guide-page textarea").count() == 1
+          and page.locator('.guide-page input[type="file"]').count() == 1
+          and page.locator(
+              '.guide-page input:not([type="file"]), .guide-page select, '
+              '.guide-page form, .guide-page [contenteditable="true"]'
+          ).count() == 0)
+    check("⑧'零手工编排：无执行单元 picker、意图卡、常驻上下文栏",
+          page.get_by_role("button", name="浏览可用 Agent").count() == 0
+          and page.locator(".agent-pick, .intent-card, .guide-context-rail").count() == 0
+          and "系统会在后台自动编排所需能力" in page.locator("body").inner_text())
+    check("⑧'移动端附件与发送按钮触控高度均≥44px",
+          attach_box is not None and send_box is not None
+          and attach_box["height"] >= 44 and send_box["height"] >= 44,
+          f"attach={attach_box} send={send_box}")
+    check("⑧'375px 单一 Composer 无横向溢出且保持焦点",
+          mobile_shell_width["body"] <= mobile_shell_width["viewport"]
+          and mobile_shell_width["root"] <= mobile_shell_width["viewport"]
           and page.evaluate(
-              "() => document.activeElement === document.querySelector('.composer textarea')"))
+              "() => document.activeElement === document.querySelector('.composer textarea')"),
+          str(mobile_shell_width))
     page.set_viewport_size({"width": 1440, "height": 900})
     page.locator(".composer textarea").fill("- 这行是用户输入不该变列表\n先做什么？")
     # ② CTA 探针（真实渲染元素，非合成节点）：send-btn 必须真接 .cta-clay 类，
@@ -692,17 +710,32 @@ with sync_playwright() as p:
     ctx.unroute(f"**/api/tasks/{task_d}")
 
     # ── ⑨f F5+F6+F3 于 task E（5 件真实 .md 产物·真工具 run mock=0）─────────
-    file_ids = []
-    for i in range(5):
-        up = API.post(
-            "/api/files/upload",
-            files={"file": (f"report_{i}.md", f"# 报告 {i}\n\n第 {i} 份。\n".encode(), "text/markdown")},
-        )
-        assert up.status_code < 300, up.text
-        file_ids.append(up.json()["file_id"] if "file_id" in up.json() else up.json()["id"])
     resp_e = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "工艺批探针E"}})
     assert resp_e.status_code < 300, resp_e.text
     task_e = resp_e.json()["id"]
+    file_ids = []
+    conn = app.state.conn_factory()
+    try:
+        for i in range(5):
+            payload = f"# 报告 {i}\n\n第 {i} 份。\n".encode()
+            file_id = f"file_craft_e_{i}"
+            output_path = WORK / "task_runs" / task_e / "output" / f"report_{i}.md"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(payload)
+            repos.create_file(
+                conn,
+                file_id=file_id,
+                task_id=task_e,
+                kind="output",
+                filename=f"report_{i}.md",
+                path=str(output_path),
+                size_bytes=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+                classification="internal",
+            )
+            file_ids.append(file_id)
+    finally:
+        conn.close()
     # 同 flip 夹具口径：有 tool_runs 派生行必须配 internal 分级戳，否则分级门
     # fail-closed 遮蔽 events/产物元数据（门正确，夹具要自洽）。
     _db("UPDATE tasks SET status='completed', output_file_ids=?, started_at=?, finished_at=?,"
@@ -909,8 +942,8 @@ with sync_playwright() as p:
     check("⑪Q3 /me 诚实缺口条压缩后红线语义在场（人是唯一签发者）",
           page.locator(".me-honest-gap").count() == 1 and "人是唯一签发者" in me_body)
 
-    # ── ⑪b Q1 行级主文本人话称呼（夹具任务全部未命名——主名必须是注册表
-    #    显示名，裸 task_ 前缀绝迹；名册路径实证靠 ⑪c 的失败对照）──────────
+    # ── ⑪b Q1 行级主文本人话称呼（创建请求均省略 name；服务端必须从创建时
+    #    Agent Package 快照自动命名，裸 task_ 前缀绝迹）──────────────────
     page.locator(".status-dock").click()
     page.wait_for_selector(".sc-item-name", timeout=8000)
     sc_names = page.locator(".sc-item-name").all_inner_texts()
@@ -924,23 +957,24 @@ with sync_playwright() as p:
     page.locator(".sc-close").click()
     page.wait_for_timeout(300)
 
-    # ── ⑪c Q1 名册缺位诚实回退（route-abort /api/agents → 整页重载重建模块
-    #    缓存 → 行主名必须回退 id 切片，绝不编名字）─────────────────────────
+    # ── ⑪c Q1 名册缺位仍保持创建时权威名称：任务自身已持久化 snapshot 派生
+    #    name，/api/agents 临时失败不得把眼见标题降级成 id 或运行时编名字。─────
     ctx.route("**/api/agents*", lambda route: route.abort())
     page.goto(BASE + "/today", wait_until="networkidle")
     page.wait_for_selector(".today-card-name", timeout=8000)
     fallback_names = page.locator(".today-card-name").all_inner_texts()
-    check("⑪Q1 名册拉取失败→行主名诚实回退 id 切片（绝不编名字）",
-          len(fallback_names) > 0 and all(_re.match(r"^task_[0-9a-f]+$", n.strip()) for n in fallback_names),
+    check("⑪Q1 名册拉取失败→创建时快照名称仍稳定（不降级 id、不运行时编名）",
+          len(fallback_names) > 0
+          and all(not n.strip().startswith("task_") for n in fallback_names)
+          and any("Hello Agent" in n for n in fallback_names),
           str(fallback_names[:5]))
     ctx.unroute("**/api/agents*")
 
-    # ── ⑪d Q1 名册恢复后今日页行主名人话（与 ⑪c 同页对照，证明差异只来自
-    #    名册可用性）＋ Q2 有数据时组头计数照常渲染──────────────────────────
+    # ── ⑪d Q1 名册恢复后今日页行主名仍同构＋ Q2 有数据时组头计数照常渲染──
     page.goto(BASE + "/today", wait_until="networkidle")
     page.wait_for_selector(".today-card-name", timeout=8000)
     today_names = page.locator(".today-card-name").all_inner_texts()
-    check("⑪Q1 今日页行主名=Agent 显示名（名册恢复对照）",
+    check("⑪Q1 今日页行主名=创建时快照名称（名册恢复后同构）",
           len(today_names) > 0 and all(not n.strip().startswith("task_") for n in today_names)
           and any("Hello Agent" in n for n in today_names), str(today_names[:5]))
     waiting_head = page.locator(".today-section-head.waiting").inner_text()
@@ -1055,13 +1089,13 @@ with sync_playwright() as p:
 
     # ── ⑪g Q1 ⌘K 眼见即可搜（Codex R0 P2）：结果行标题=注册表显示名，匹配域
     #    必须含同一 SSOT 产出——用只存在于显示名的子串检索（agent_id/goal/id
-    #    均不含「平台闭环」），命中未命名任务行才算修复─────────────────────
+    #    均不含「平台闭环」），命中服务端自动命名的任务行才算修复───────────
     page.goto(BASE + "/today", wait_until="networkidle")
     page.keyboard.press("ControlOrMeta+k")
     page.wait_for_selector(".qs-input", timeout=8000)
     page.locator(".qs-input").fill("平台闭环")
-    # 只认任务行命中（.qs-item-status 是任务行独有元素）：agent 行本就按
-    # a.name 可搜，若只断言任意行命中，未修复也会假绿。
+    # 只认任务行命中（.qs-item-status 是任务行独有元素）；QuickSwitcher 不再
+    # 暴露 Agent 选择源，避免用户在工作入口先做路由配置。
     task_row_title = ".qs-item:has(.qs-item-status) .qs-item-title"
     try:
         page.wait_for_selector(task_row_title, timeout=8000)
@@ -1069,7 +1103,7 @@ with sync_playwright() as p:
     except Exception:
         qs_task_titles = []
     qs_task_hit = any("Hello Agent" in t for t in qs_task_titles)
-    check("⑪Q1 ⌘K 按显示名子串可检索到未命名任务行（搜索域=眼见标题 SSOT，非 agent 行陪跑）",
+    check("⑪Q1 ⌘K 按显示名子串可检索到自动命名任务行（搜索域=眼见标题 SSOT）",
           qs_task_hit is True, f"task_titles={qs_task_titles[:6]}")
     page.keyboard.press("Escape")
     page.wait_for_timeout(200)
@@ -1184,27 +1218,27 @@ with sync_playwright() as p:
         retry_ok = False
     check("⑭C2 重试钮真恢复（unroute 后一击即清错误行）", retry_ok is True)
 
-    # ── ⑭b C2 ⌘K 诚实降级（三源全断→降级条在场+空态文案切换：故障≠无结果）──
-    for pat in ("**/api/conversations*", "**/api/tasks*", "**/api/agents*"):
+    # ── ⑭b C2 ⌘K 诚实降级（会话+任务两源全断→降级条在场+空态文案切换）──
+    for pat in ("**/api/conversations*", "**/api/tasks*"):
         ctx.route(pat, lambda route: route.abort())
     page.keyboard.press("ControlOrMeta+k")
     try:
         page.wait_for_selector(".qs-degraded", timeout=8000)
-        # 分级口径（Codex R0 P2）：3/3 全失败说「全部失败」不再说「部分」。
+        # 分级口径：2/2 全失败说「全部失败」不再说「部分」。
         degraded_ok = "后端搜索请求全部失败" in page.locator(".qs-degraded").inner_text()
         qs_empty_txt = page.locator(".qs-empty").inner_text() if page.locator(".qs-empty").count() else ""
         empty_swap_ok = ("搜索服务不可用" in qs_empty_txt) and ("没有匹配结果" not in qs_empty_txt)
     except Exception:
         degraded_ok, empty_swap_ok = False, False
-    check("⑭C2 ⌘K 三源失败→诚实降级条+空态文案切换（后端故障绝不伪装成无结果）",
+    check("⑭C2 ⌘K 两源失败→诚实降级条+空态文案切换（后端故障绝不伪装成无结果）",
           degraded_ok is True and empty_swap_ok is True)
     page.keyboard.press("Escape")
-    for pat in ("**/api/conversations*", "**/api/tasks*", "**/api/agents*"):
+    for pat in ("**/api/conversations*", "**/api/tasks*"):
         ctx.unroute(pat)
     page.wait_for_timeout(400)
 
     # ── ⑭b′ C2 分级口径（Codex R0 P2）：单源失败+其余源真无匹配→「部分来源
-    #    不可用」，绝不夸大成「搜索服务不可用」（1-2 源=部分，3/3 才=全部）──
+    #    不可用」，绝不夸大成「搜索服务不可用」（1/2=部分，2/2=全部）──
     ctx.route("**/api/conversations*", lambda route: route.abort())
     page.keyboard.press("ControlOrMeta+k")
     try:
@@ -1225,7 +1259,7 @@ with sync_playwright() as p:
 
     # ── ⑭c C3 clay census oracle（内容区常驻可见的非豁免 clay ≤2/屏——
     #    anti-ai-slop accent 预算的信任色锁适配；own-属性归因防继承连坐）──────
-    CENSUS_JS = """
+    CENSUS_JS = r"""
     () => {
       // 运行时解析 --clay（3-lens 诚实 P2：硬编码字面量会随将来调色静默过期
       // →census 失咬）。探针 span 与被测元素同 context 同主题，等值比较天然
@@ -1413,8 +1447,10 @@ with sync_playwright() as p:
     page.goto(BASE + "/today", wait_until="networkidle")
     page.locator(".sb-foot-btn:not(.sb-theme)").click()
     page.wait_for_selector(".qs-input", timeout=8000)
-    page.locator(".qs-input").fill("Hello")
-    page.wait_for_selector(".qs-item", timeout=8000)
+    # 此处只验证导航后的焦点落点：以稳定任务 id 前缀命中，避免
+    # 重复依赖上方 Q1 的自动命名契约而形成级联假红。
+    page.locator(".qs-input").fill(task_a[:8])
+    page.wait_for_selector(task_row_title, timeout=8000)
     page.keyboard.press("Enter")
     page.wait_for_timeout(700)  # 导航 + 关闭 watcher 竞态窗口全落地
     # 白名单断言（Codex R0 P2：仅排除旧按钮会让「焦点被任何别处偷走」也过）。

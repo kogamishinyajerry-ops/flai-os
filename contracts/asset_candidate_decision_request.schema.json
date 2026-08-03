@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/asset_candidate_decision_request.schema.json",
+  "title": "FLAi-OS Asset Candidate Decision Request",
+  "description": "人工只对精确候选与草稿摘要作接受或拒绝决定。身份与权威字段只由认证会话提供。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "action",
+    "expected_candidate_digest",
+    "expected_bundle_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "asset_candidate_decision_request.v1"},
+    "action": {"enum": ["accept", "reject"]},
+    "expected_candidate_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "expected_bundle_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

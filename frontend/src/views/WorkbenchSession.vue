@@ -185,17 +185,24 @@
                 <span class="member-state pending">尚未召集</span>
               </div>
               <p v-if="a.role" class="member-role"><strong>分工：</strong>{{ a.role }}</p>
-              <!-- 未召集：会话进行中才可从蓝图召集（人签发；导引不代召集）；
-                   会话已归档则只读，不再召集（结束协作 = 真的结束）。 -->
+              <!-- 未进入执行的席位只显示状态，不在成员卡上暴露创建表单或手工
+                   Agent 启动。缺失信息统一回原对话，以文字/附件自然补充。 -->
               <div v-if="conversation.status === 'active'" class="member-action">
-                <el-button size="small" type="primary" plain @click="summon(a)">去创建此任务</el-button>
-                <span class="member-hint">用导引预填的草案创建任务，由你补全并亲手提交。</span>
+                <span class="member-hint">等待系统从主对话获得足够信息后自动编排。</span>
               </div>
               <div v-else class="member-action">
                 <span class="member-hint">会话已归档，未召集——如需继续，请从智能导引开启新协作。</span>
               </div>
             </div>
           </div>
+        </div>
+
+        <div
+          v-if="conversation.status === 'active' && groupedMembers.unsummoned.length"
+          class="clarify-return"
+        >
+          <span>还有协作环节需要更多上下文。请直接描述情况或上传附件，系统会重新编排。</span>
+          <el-button type="primary" plain @click="returnToConversation">回到对话补充信息</el-button>
         </div>
       </template>
 
@@ -219,7 +226,7 @@
       </div>
 
       <p class="sess-foot">
-        签发权在你——协作里每个任务都由你在创建页补全并亲手提交，导引只做分流与预填，不代签、不代召集。
+        系统负责自动路由与编排；你负责确认开工、关键工程决策与最终签发。
       </p>
     </template>
   </div>
@@ -513,26 +520,15 @@ async function concludeSession() {
   }
   try {
     await concludeConversation(sessionId);
-    ElMessage.success("协作已归档");
+    ElMessage.info("协作已归档");
     pokeConversation(sessionId); // 带外补拉：不等下一 tick，归档结果立即回显
   } catch (err) {
     ElMessage.error(err.detail || err.message || "结束协作失败");
   }
 }
 
-function summon(agent) {
-  // 从蓝图召集：把该 Agent 的预填草案交创建页（带会话 id，回到本会话分组），
-  // 人补全后亲手提交。走 sessionStorage 与导引同一接缝，导引不代签、不代召集。
-  sessionStorage.setItem(
-    "flai_prefill",
-    JSON.stringify({
-      agent_id: agent.agent_id,
-      inputs: agent.prefilled_inputs || {},
-      files: [],
-      conversation_id: sessionId,
-    })
-  );
-  router.push({ path: "/tasks/new", query: { agent_id: agent.agent_id, from: "guide" } });
+function returnToConversation() {
+  router.push({ path: "/", query: { c: sessionId } });
 }
 
 onMounted(() => {
@@ -836,6 +832,20 @@ onUnmounted(() => {
   gap: 10px;
   flex-wrap: wrap;
 }
+.clarify-return {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 4px 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--paper-rail);
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
 .member-hint {
   font-size: 12px;
   color: var(--ink-faint);
@@ -960,5 +970,6 @@ onUnmounted(() => {
 }
 @media (max-width: 640px) {
   .sess-hero { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .clarify-return { align-items: stretch; flex-direction: column; }
 }
 </style>

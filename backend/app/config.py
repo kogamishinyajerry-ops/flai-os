@@ -76,11 +76,14 @@ DEFAULT_EVAL_QUOTA = max(1, int(os.environ.get("FLAI_EVAL_QUOTA", "2")))
 # 软拒载而非打崩整次 Registry scan；两项均属 worker 可见行为，再 bump 逼重启。
 # ADR-0019：startup promotion attestation 新增严格 signer provenance；旧 worker
 # 仍会接受 legacy/畸形来源为 L1 证明，故 bump 逼独立 worker 同步升级。
+# ADR-0035：worker runtime 新增必需的 Skill reuse binding 冷校验、方法注入与
+# terminal evidence。旧 worker 会忽略 metadata 中的复用引用却仍把任务跑成完成，
+# 造成“界面称复用、实际未复用”的假绿，因此必须再次 bump。
 PROMOTION_SIGNER_PROVENANCE_GENERATION = "promotion-signer-v1"
 WORKER_GENERATION = (
     "collab-resolver+t2-eval-snapshot+b3-llm-timeout+b8-disabled-gate"
     "+gh3-promotion-attestation+gh3-package-snapshot+gh3-snapshot-diagnostics"
-    "+adr19-signer-provenance"
+    "+adr19-signer-provenance+adr35-skill-reuse-runtime"
 )
 
 # ADR-0022：监控接入生成器承重核（sim-live-hub `tools/adapter_gen.py`）所在仓根。

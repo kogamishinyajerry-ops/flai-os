@@ -44,7 +44,8 @@ def _queue_task(db_path: Path, inputs: dict[str, Any]) -> str:
     try:
         task = repos.create_task(
             conn, task_id="task_cfd_1", agent_id="cfd_solve_agent", agent_version="0.1.0",
-            name="CFD 求解", created_by="tester", inputs=inputs, input_file_ids=[], metadata={},
+            name="CFD 求解", created_by="tester", created_by_username="tester",
+            inputs=inputs, input_file_ids=[], metadata={},
         )
         repos.set_task_status(conn, task["id"], "queued")
         repos.set_task_status(conn, task["id"], "validating")

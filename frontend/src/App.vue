@@ -43,7 +43,7 @@
           <router-link
             v-for="c in convos"
             :key="c.id"
-            :to="{ path: '/', query: { c: c.id } }"
+            :to="conversationRoute(c)"
             class="convo-item"
             :class="{ 'is-active': activeConvoId === c.id }"
             :title="convoTitle(c)"
@@ -66,7 +66,7 @@
 
       <!-- 侧栏脚部（美化批）：⌘K 可见入口（可点性+快捷键教学）+ 主题三段切换。 -->
       <div class="sb-foot">
-        <button class="sb-foot-btn" title="搜索任务 / 会话 / Agent（⌘K）" @click="openQuickSwitcher">
+        <button class="sb-foot-btn" title="搜索任务 / 会话（⌘K）" @click="openQuickSwitcher">
           <el-icon :size="14" aria-hidden="true"><Search /></el-icon>
           搜索
           <kbd class="sb-kbd">⌘K</kbd>
@@ -263,6 +263,14 @@ const activeMenu = computed(() => (route.path === "/" || route.path === "/today"
 
 // 当前恢复中的会话 id（导引页 /?c=<id>），用于左栏高亮。
 const activeConvoId = computed(() => (typeof route.query.c === "string" ? route.query.c : ""));
+function conversationRoute(conversation) {
+  const query = { c: conversation.id };
+  const retryOf = typeof route.query.retry_of === "string" ? route.query.retry_of.trim() : "";
+  // 点当前恢复会话的高亮项不能把系统审计血缘从 URL 静默擦掉；切换到其它
+  // 会话则正常退出这次恢复上下文，且 Guide 的 fresh 轮次门仍会阻止旧方案复活。
+  if (retryOf && activeConvoId.value === conversation.id) query.retry_of = retryOf;
+  return { path: "/", query };
+}
 
 // 窄屏抽屉开合（P2-7）；宽屏 CSS 让侧栏常驻，此状态不生效。
 const sidebarOpen = ref(false);
@@ -654,6 +662,18 @@ onMounted(loadConvos);
   --el-button-active-bg-color: var(--trust-signed-deep);
   --el-button-active-border-color: var(--trust-signed-deep);
 }
+/* Toast 同样服从五槽信任色锁：Element Plus 的 success 是绿色，容易把“动作完成”
+ * 或“人已签发”误读成 REAL。普通动作统一用中性 info；只有认证会话绑定的人签动作
+ * 显式挂本类并落 teal。拒绝/驳回仍走 error 红槽。 */
+.flai-message-signed {
+  --el-message-bg-color: rgba(var(--trust-signed-rgb), 0.09);
+  --el-message-border-color: rgba(var(--trust-signed-rgb), 0.32);
+  --el-message-text-color: var(--trust-signed);
+}
+.flai-message-signed .el-message__content,
+.flai-message-signed .el-message__icon {
+  color: var(--trust-signed);
+}
 /* ── 全局键盘焦点语法（W0）：导航类可交互元素统一 clay 焦点环——修「暗色主题下
  * 浏览器默认蓝 ring 撞暖色板」的既有可达性缺口。只在 :focus-visible（键盘寻航）
  * 出现，鼠标点击不打扰；表单控件不在此列（EP 输入框/自绘 composer 已各有
@@ -1035,22 +1055,32 @@ body {
 
   .sb-hamburger {
     position: fixed;
-    top: 12px;
-    left: 12px;
+    top: 10px;
+    left: 10px;
     z-index: var(--z-hamburger);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink-soft);
+    cursor: pointer;
+  }
+  .sb-hamburger::before {
+    content: "";
+    position: absolute;
+    inset: 2px;
     border: 1px solid var(--hairline);
     border-radius: var(--radius-md);
     background: var(--surface-raised);
-    color: var(--ink-soft);
-    cursor: pointer;
     box-shadow: var(--shadow-card);
+    pointer-events: none;
   }
-  .sb-hamburger:hover { color: var(--clay); border-color: var(--clay-softer); }
+  .sb-hamburger:hover { color: var(--clay); }
+  .sb-hamburger:hover::before { border-color: var(--clay-softer); }
 
   .sidebar-open .sb-backdrop {
     display: block;

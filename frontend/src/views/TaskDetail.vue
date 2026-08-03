@@ -114,12 +114,11 @@
         class="section"
       />
 
-      <!-- N4a 失败不是死胡同：一键把原输入带回创建页（血缘 retry_of 随行），
-           预填仍需人工核对亲手提交——绝不自动重跑。仅 failed（cancelled=
-           人为中止≠需要重试）。 -->
+      <!-- 失败不是死胡同，但也不把工程师送进参数表。回到原对话，用文字或附件
+           说明失败现象，由系统重新编排；绝不自动重跑。 -->
       <div v-if="task.status === 'failed'" class="retry-row">
-        <el-button plain @click="retryAsNew">复制为新任务</el-button>
-        <span class="retry-hint">带原输入进创建页，核对修正后重新提交——平台不会自动重跑。</span>
+        <el-button plain @click="retryAsNew">回到对话说明问题</el-button>
+        <span class="retry-hint">直接补充文字或附件，系统结合原会话重新编排——平台不会自动重跑。</span>
       </div>
 
       <!-- 产物在主叙事列（签发前把要签的东西摆在眼前，放在「动作」之前——先看
@@ -771,7 +770,7 @@ const isTaskWorking = computed(() => TASK_WORK_STATES.has(task.value?.status));
 // N9 敏感整窗框：执行期落库的不可变分级（ADR-0025），sensitive 才亮框——
 // internal/null 零渲染，绝不把「未分级」冒充「已判非敏感」。
 const isSensitive = computed(() => task.value?.data_classification === "sensitive");
-// N4a 复制为新任务：仅 failed 提供（cancelled=人为中止≠需要重试）。
+// 失败任务回到原对话补充信息；cancelled=人为中止，不提供重试动作。
 function retryAsNew() {
   if (task.value) router.push(buildRetryRoute(task.value));
 }
@@ -934,7 +933,7 @@ async function handleCancel() {
   }
   try {
     await cancelTask(taskId);
-    ElMessage.success("任务已取消");
+    ElMessage.info("任务已取消");
     await pokeTask(taskId); // 带外补拉：不等下一 tick，动作结果立即回显
   } catch (err) {
     ElMessage.error(err.detail || err.message);
@@ -962,7 +961,15 @@ async function handleReview(action) {
     if (action === "approve") {
       burstSigned(approveBtnEl.value?.ref);
     }
-    ElMessage.success(`已${label}`);
+    if (action === "approve") {
+      ElMessage({
+        message: `已${label}`,
+        type: "info",
+        customClass: "flai-message-signed",
+      });
+    } else {
+      ElMessage.error(`已${label}`);
+    }
     await pokeTask(taskId); // 带外补拉：不等下一 tick，动作结果立即回显
   } catch (err) {
     ElMessage.error(err.detail || err.message);
@@ -984,7 +991,7 @@ async function handleSubmitFeedback() {
       category: feedbackForm.category,
       message: feedbackForm.message || null,
     });
-    ElMessage.success("反馈已提交");
+    ElMessage.info("反馈已提交");
     feedbackForm.message = "";
     await loadFeedback();
   } catch (err) {
@@ -1420,7 +1427,7 @@ onUnmounted(() => {
   flex: none;
   font-size: 10px;
 }
-/* N4a 复制为新任务：失败告警下的下一步行——按钮+一句后果说明。 */
+/* 失败告警下的下一步行——回到原对话补充信息，不进入字段表单。 */
 .retry-row {
   display: flex;
   align-items: center;

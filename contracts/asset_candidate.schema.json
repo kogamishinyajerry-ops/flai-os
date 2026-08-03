@@ -1,0 +1,571 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/asset_candidate.schema.json",
+  "title": "FLAi-OS Asset Candidate",
+  "description": "精确资产草稿包与已完成工程任务证据的内容寻址治理包络。接受候选只授权生成隔离待审 Skill Package，不等于包级批准、注册、发布或晋级。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "revision",
+    "supersedes_candidate_digest",
+    "candidate_digest",
+    "bundle_digest",
+    "lineage_digest",
+    "state",
+    "source",
+    "bundle",
+    "lineage",
+    "proposal_provenance",
+    "asset_map",
+    "decision",
+    "skill_package",
+    "effects",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "asset_candidate.v1"},
+    "id": {"type": "string", "pattern": "^asset_candidate_[0-9a-f]{24}$"},
+    "revision": {"type": "integer", "minimum": 1},
+    "supersedes_candidate_digest": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/digest"}
+      ]
+    },
+    "candidate_digest": {"$ref": "#/$defs/digest"},
+    "bundle_digest": {"$ref": "#/$defs/digest"},
+    "lineage_digest": {"$ref": "#/$defs/digest"},
+    "state": {"enum": ["awaiting_human_review", "accepted", "rejected"]},
+    "source": {"$ref": "#/$defs/source"},
+    "bundle": {
+      "type": "object",
+      "required": ["schema_version", "draft_digest", "review", "effects"],
+      "properties": {
+        "schema_version": {"const": "asset_draft_bundle.v1"},
+        "draft_digest": {"$ref": "#/$defs/digest"},
+        "review": {
+          "type": "object",
+          "required": ["decision_state"],
+          "properties": {"decision_state": {"const": "not_recorded"}}
+        },
+        "effects": {
+          "type": "object",
+          "required": ["writes_database", "executes_work", "registers_asset", "promotes_asset"],
+          "properties": {
+            "writes_database": {"const": false},
+            "executes_work": {"const": false},
+            "registers_asset": {"const": false},
+            "promotes_asset": {"const": false}
+          }
+        }
+      }
+    },
+    "lineage": {"$ref": "#/$defs/lineage"},
+    "proposal_provenance": {"$ref": "#/$defs/proposalProvenance"},
+    "asset_map": {"$ref": "#/$defs/assetMap"},
+    "decision": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/decision"}
+      ]
+    },
+    "skill_package": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/skillPackage"}
+      ]
+    },
+    "effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "writes_candidate_store",
+        "executes_work",
+        "writes_package_files",
+        "registers_asset",
+        "promotes_asset"
+      ],
+      "properties": {
+        "writes_candidate_store": {"const": true},
+        "executes_work": {"const": false},
+        "writes_package_files": {"const": false},
+        "registers_asset": {"const": false},
+        "promotes_asset": {"const": false}
+      }
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"state": {"const": "accepted"}},
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {"skill_package": {"$ref": "#/$defs/skillPackage"}}
+      },
+      "else": {
+        "properties": {"skill_package": {"const": null}}
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "rawDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "initiated_by_username",
+        "conversation_id",
+        "task_status",
+        "agent_id",
+        "agent_version",
+        "agent_package_digest",
+        "finished_at"
+      ],
+      "properties": {
+        "task_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "initiated_by_username": {"type": "string", "minLength": 1, "maxLength": 128},
+        "conversation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "task_status": {"const": "completed"},
+        "agent_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"},
+        "agent_version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$"},
+        "agent_package_digest": {"$ref": "#/$defs/rawDigest"},
+        "finished_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "fileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_id", "kind", "sha256", "size_bytes", "classification", "source_kind", "producer_task_id"],
+      "properties": {
+        "file_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "kind": {"enum": ["input", "output"]},
+        "sha256": {"$ref": "#/$defs/rawDigest"},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "classification": {"const": "internal"},
+        "source_kind": {
+          "enum": ["work_segment_upload", "upstream_task_output", "current_task_output"]
+        },
+        "producer_task_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128}
+      }
+    },
+    "taskLineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "initiated_by_username",
+        "agent_id",
+        "agent_version",
+        "agent_package_digest",
+        "origin",
+        "terminal_status",
+        "finished_at",
+        "data_classification",
+        "inputs_digest",
+        "task_snapshot_digest"
+      ],
+      "properties": {
+        "task_id": {"type": "string", "minLength": 1},
+        "initiated_by_username": {"type": "string", "minLength": 1, "maxLength": 128},
+        "agent_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"},
+        "agent_version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$"},
+        "agent_package_digest": {"$ref": "#/$defs/rawDigest"},
+        "origin": {"const": "user"},
+        "terminal_status": {"const": "completed"},
+        "finished_at": {"type": "string", "format": "date-time"},
+        "data_classification": {"const": "internal"},
+        "inputs_digest": {"$ref": "#/$defs/digest"},
+        "task_snapshot_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "conversationLineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversation_id", "work_case_source_revision", "segment_message_count", "segment_user_message_count"],
+      "properties": {
+        "conversation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "work_case_source_revision": {"$ref": "#/$defs/digest"},
+        "segment_message_count": {"type": "integer", "minimum": 1},
+        "segment_user_message_count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "signoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "kind", "event_id", "event_digest", "signer_username", "execution_evidence_digest"],
+      "properties": {
+        "required": {"type": "boolean"},
+        "kind": {"enum": ["human_review_approved", "deterministic_no_review"]},
+        "event_id": {"type": ["string", "null"], "minLength": 1},
+        "event_digest": {
+          "anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+        },
+        "signer_username": {"type": ["string", "null"], "minLength": 1},
+        "execution_evidence_digest": {"$ref": "#/$defs/digest"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "required": {"const": true},
+            "kind": {"const": "human_review_approved"},
+            "event_id": {"type": "string", "minLength": 1},
+            "event_digest": {"$ref": "#/$defs/digest"},
+            "signer_username": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "properties": {
+            "required": {"const": false},
+            "kind": {"const": "deterministic_no_review"},
+            "event_id": {"type": "string", "minLength": 1},
+            "event_digest": {"$ref": "#/$defs/digest"},
+            "signer_username": {"const": null}
+          }
+        }
+      ]
+    },
+    "executionSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_digest",
+        "package_snapshot_contract",
+        "package_snapshot_digest",
+        "input_file_ids_digest",
+        "input_files_digest",
+        "task_inputs_digest",
+        "execution_evidence_digest"
+      ],
+      "properties": {
+        "event_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "event_digest": {"$ref": "#/$defs/digest"},
+        "package_snapshot_contract": {"type": "string", "minLength": 1, "maxLength": 128},
+        "package_snapshot_digest": {"$ref": "#/$defs/rawDigest"},
+        "input_file_ids_digest": {"$ref": "#/$defs/digest"},
+        "input_files_digest": {"$ref": "#/$defs/digest"},
+        "task_inputs_digest": {"$ref": "#/$defs/digest"},
+        "execution_evidence_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "task", "conversation", "input_files", "output_files", "execution_snapshot", "signoff"],
+      "properties": {
+        "schema_version": {"const": "asset_candidate_lineage.v1"},
+        "task": {"$ref": "#/$defs/taskLineage"},
+        "conversation": {"$ref": "#/$defs/conversationLineage"},
+        "input_files": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/fileReference"}},
+        "output_files": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/fileReference"}},
+        "execution_snapshot": {"$ref": "#/$defs/executionSnapshot"},
+        "signoff": {"$ref": "#/$defs/signoff"}
+      }
+    },
+    "proposalProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "kind", "policy_version", "llm_used", "sources"],
+      "properties": {
+        "schema_version": {"const": "generalization_proposal_provenance.v1"},
+        "kind": {"const": "deterministic_task_projection"},
+        "policy_version": {"const": "asset_candidate_policy.v1"},
+        "llm_used": {"const": false},
+        "sources": {
+          "type": "array",
+          "const": ["work_case_segment", "completed_task", "agent_package_snapshot", "artifact_digests", "signoff_evidence"]
+        }
+      }
+    },
+    "formedAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "digest"],
+      "properties": {
+        "state": {"enum": ["candidate_revision", "approved_revision", "rejected_revision"]},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "gatedAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "digest", "gate"],
+      "properties": {
+        "state": {"const": "not_formed"},
+        "digest": {"type": "null"},
+        "gate": {"type": "string", "minLength": 1, "maxLength": 300}
+      }
+    },
+    "assetMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_pattern", "skill", "workflow", "agent"],
+      "properties": {
+        "task_pattern": {"$ref": "#/$defs/formedAsset"},
+        "skill": {"$ref": "#/$defs/formedAsset"},
+        "workflow": {"$ref": "#/$defs/gatedAsset"},
+        "agent": {"$ref": "#/$defs/gatedAsset"}
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "decided_by",
+        "decided_by_username",
+        "signer_source",
+        "signer_session_bound",
+        "created_at"
+      ],
+      "properties": {
+        "action": {"enum": ["accept", "reject"]},
+        "decided_by": {"type": "string", "minLength": 1},
+        "decided_by_username": {"type": "string", "minLength": 1},
+        "signer_source": {"const": "authenticated_session"},
+        "signer_session_bound": {"const": true},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "skillPackageSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "candidate_digest",
+        "bundle_digest",
+        "skill_digest",
+        "acceptance_event_digest",
+        "task_id",
+        "agent_id",
+        "initiated_by_username"
+      ],
+      "properties": {
+        "candidate_id": {"type": "string", "pattern": "^asset_candidate_[0-9a-f]{24}$"},
+        "candidate_digest": {"$ref": "#/$defs/digest"},
+        "bundle_digest": {"$ref": "#/$defs/digest"},
+        "skill_digest": {"$ref": "#/$defs/digest"},
+        "acceptance_event_digest": {"$ref": "#/$defs/digest"},
+        "task_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "agent_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"},
+        "initiated_by_username": {"type": "string", "minLength": 1, "maxLength": 128}
+      }
+    },
+    "skillPackageFileEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size_bytes"],
+      "properties": {
+        "path": {"type": "string"},
+        "sha256": {"$ref": "#/$defs/rawDigest"},
+        "size_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "skillPackageSkillMarkdownFile": {
+      "allOf": [
+        {"$ref": "#/$defs/skillPackageFileEntry"},
+        {"properties": {"path": {"const": "SKILL.md"}}}
+      ]
+    },
+    "skillPackageProvenanceFile": {
+      "allOf": [
+        {"$ref": "#/$defs/skillPackageFileEntry"},
+        {"properties": {"path": {"const": "references/provenance.json"}}}
+      ]
+    },
+    "skillPackageSkillRevisionFile": {
+      "allOf": [
+        {"$ref": "#/$defs/skillPackageFileEntry"},
+        {"properties": {"path": {"const": "references/skill-revision.json"}}}
+      ]
+    },
+    "skillPackageTaskPatternRevisionFile": {
+      "allOf": [
+        {"$ref": "#/$defs/skillPackageFileEntry"},
+        {"properties": {"path": {"const": "references/task-pattern-revision.json"}}}
+      ]
+    },
+    "skillPackageReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "reviewed_by",
+        "reviewed_by_username",
+        "signer_source",
+        "signer_session_bound",
+        "created_at"
+      ],
+      "properties": {
+        "action": {"enum": ["approve", "reject"]},
+        "reviewed_by": {"type": "string", "minLength": 1, "maxLength": 128},
+        "reviewed_by_username": {"type": "string", "minLength": 1, "maxLength": 128},
+        "signer_source": {"const": "authenticated_session"},
+        "signer_session_bound": {"const": true},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "skillPackageGatedCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "eligible", "reason"],
+      "properties": {
+        "state": {"const": "not_formed"},
+        "eligible": {"const": false},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 160}
+      }
+    },
+    "skillPackageFormationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "independent_work_case_count",
+        "required_independent_work_cases",
+        "workflow_candidate",
+        "agent_candidate"
+      ],
+      "properties": {
+        "schema_version": {"const": "composition_eligibility.v1"},
+        "independent_work_case_count": {"type": "integer", "minimum": 0},
+        "required_independent_work_cases": {"const": 2},
+        "workflow_candidate": {
+          "allOf": [
+            {"$ref": "#/$defs/skillPackageGatedCandidate"},
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "requires_independent_composition_evidence",
+                    "requires_stable_multi_skill_composition_evidence"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "agent_candidate": {
+          "allOf": [
+            {"$ref": "#/$defs/skillPackageGatedCandidate"},
+            {"properties": {"reason": {"const": "requires_approved_workflow_revision"}}}
+          ]
+        }
+      }
+    },
+    "skillPackage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "id",
+        "name",
+        "version",
+        "package_digest",
+        "state",
+        "source",
+        "files",
+        "storage_relpath",
+        "review",
+        "reuse_eligible",
+        "isolation",
+        "formation_evidence",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "schema_version": {"const": "skill_package_revision.v1"},
+        "id": {"type": "string", "pattern": "^skill_package_[0-9a-f]{24}$"},
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+        },
+        "package_digest": {"$ref": "#/$defs/digest"},
+        "state": {"enum": ["pending_review", "approved", "rejected"]},
+        "source": {"$ref": "#/$defs/skillPackageSource"},
+        "files": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "prefixItems": [
+            {"$ref": "#/$defs/skillPackageSkillMarkdownFile"},
+            {"$ref": "#/$defs/skillPackageProvenanceFile"},
+            {"$ref": "#/$defs/skillPackageSkillRevisionFile"},
+            {"$ref": "#/$defs/skillPackageTaskPatternRevisionFile"}
+          ],
+          "items": false
+        },
+        "storage_relpath": {
+          "type": "string",
+          "pattern": "^quarantine/skill_package_[0-9a-f]{24}$"
+        },
+        "review": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/skillPackageReview"}
+          ]
+        },
+        "reuse_eligible": {"type": "boolean"},
+        "isolation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["zone", "registered", "executable"],
+          "properties": {
+            "zone": {"const": "candidate_quarantine"},
+            "registered": {"const": false},
+            "executable": {"const": false}
+          }
+        },
+        "formation_evidence": {"$ref": "#/$defs/skillPackageFormationEvidence"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "state": {"const": "pending_review"},
+            "review": {"const": null},
+            "reuse_eligible": {"const": false}
+          }
+        },
+        {
+          "properties": {
+            "state": {"const": "approved"},
+            "review": {
+              "allOf": [
+                {"$ref": "#/$defs/skillPackageReview"},
+                {"properties": {"action": {"const": "approve"}}}
+              ]
+            },
+            "reuse_eligible": {"const": true}
+          }
+        },
+        {
+          "properties": {
+            "state": {"const": "rejected"},
+            "review": {
+              "allOf": [
+                {"$ref": "#/$defs/skillPackageReview"},
+                {"properties": {"action": {"const": "reject"}}}
+              ]
+            },
+            "reuse_eligible": {"const": false}
+          }
+        }
+      ]
+    }
+  }
+}

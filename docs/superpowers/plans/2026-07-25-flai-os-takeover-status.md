@@ -1,6 +1,14 @@
-# FLAi-OS 接手状态与下一步行动（2026-07-25）
+# FLAi-OS 历史接手状态（2026-07-25）
 
-> 状态：**ACTIVE / OWNER-ACCEPTED SSOT**。
+> 当前状态：**HISTORICAL / SUPERSEDED 2026-08-03**。
+> 本文在 2026-07-25 曾是 `ACTIVE / OWNER-ACCEPTED SSOT`，现只保留当时的分支、SHA、
+> 验证与裁决记录供取证。文中 `origin/main@7523edf`、V0.2 候选线、
+> `production = NO-GO` 等都是当日快照，不得当成当前 GitHub/产品状态。
+> 当前 V1 源码口径以 [`docs/releases/V1-SOURCE-READINESS.md`](../../releases/V1-SOURCE-READINESS.md)
+> 为准；当前 Git 事实必须现场重新读取，不得从本文推断。
+>
+> 以下为历史原记录：
+>
 > `human_owner = JerryKogami` 已在当前 Codex 任务中具名接受
 > `flai-os-takeover-docs-kimi-001@2`，并绑定接受前候选补丁摘要
 > `sha256:504208932db4dea2a2dd92f1f4e13e352690467633431927189e03f544a3c4b9`。
@@ -238,7 +246,8 @@ M4 真实性能盘（已降格为内部样板/R6+ 候选）、离线发布包。
 
 ---
 
-*ACTIVE / OWNER-ACCEPTED SSOT · 2026-07-25 · `JerryKogami` 接受
+*HISTORICAL / SUPERSEDED 2026-08-03 · 原 ACTIVE / OWNER-ACCEPTED SSOT ·
+2026-07-25 · `JerryKogami` 接受
 `flai-os-takeover-docs-kimi-001@2`，绑定接受前候选补丁摘要
 `sha256:504208932db4dea2a2dd92f1f4e13e352690467633431927189e03f544a3c4b9`。
-本记录不授权 Stage D、PoC、依赖引入或生产上线。*
+本记录不授权 Stage D、PoC、依赖引入或生产上线，亦不是当前状态事实源。*

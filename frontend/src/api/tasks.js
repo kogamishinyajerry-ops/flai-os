@@ -1,4 +1,4 @@
-import { request } from "./client";
+import { request, unwrapDetail } from "./client.js";
 
 // created_by 服务端从登录会话派生（ADR-0019 D5），前端不再发送任何身份文本。
 export const createTask = ({ agentId, name, inputs, inputFileIds, conversationId, retryOf }) =>
@@ -17,21 +17,232 @@ export const createTask = ({ agentId, name, inputs, inputFileIds, conversationId
   });
 
 // 批七 §3-B6：编队一键开工走原子 batch——全有全无（任一项非法整批 422 零写入，
-// detail.batch_errors 逐项透出），after=同批更早下标 → 服务端映射真 depends_on。
-export const createTasksBatch = ({ conversationId, items }) =>
-  request("/api/tasks/batch", {
+// detail.batch_errors 逐项透出），after=同批更早下标 → 服务端映射真 depends_on；
+// retryOf 是失败回流时由系统附加的审计血缘，不暴露给工程师填写。
+export const createBatchOperationId = (cryptoApi = globalThis.crypto) => {
+  const randomUUID = cryptoApi?.randomUUID;
+  if (typeof randomUUID === "function") {
+    return `guide_batch_${randomUUID.call(cryptoApi)}`;
+  }
+  const getRandomValues = cryptoApi?.getRandomValues;
+  if (typeof getRandomValues !== "function") {
+    throw new Error("当前浏览器无法生成安全的创建操作标识——本次未发起任务");
+  }
+  // randomUUID 在部分内网 HTTP（非 secure context）不可用，但 Web Crypto 的
+  // getRandomValues 仍可提供 128 bit CSPRNG。保留 UUID v4 形状以满足现有有界
+  // 字符契约；绝不退回 Math.random 或时间戳。
+  const bytes = new Uint8Array(16);
+  getRandomValues.call(cryptoApi, bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
+  const uuid = [
+    hex.slice(0, 4).join(""),
+    hex.slice(4, 6).join(""),
+    hex.slice(6, 8).join(""),
+    hex.slice(8, 10).join(""),
+    hex.slice(10, 16).join(""),
+  ].join("-");
+  return `guide_batch_${uuid}`;
+};
+
+// network/timeout/5xx，以及 2xx 后响应 JSON 损坏，都可能发生在服务端 COMMIT
+// 之后。只有明确的 4xx 才能沿 batch 全有全无契约断言零写入；其余必须进入
+// 「创建状态待核」并用同一 operation_id 重放核对，绝不换 key 自动再建。
+export const batchCreatePersistenceUnknown = (error) => {
+  if (error?.persistenceUnknown === true) return true;
+  const status = error?.status;
+  if (typeof status !== "number") return true;
+  if (status === 409) return batchCreateErrorCode(error) === "batch_operation_conflict";
+  return status === 0 || status >= 500;
+};
+
+export const batchCreateErrorCode = (error) => {
+  const detail = unwrapDetail(error?.detail);
+  return detail && typeof detail === "object" && typeof detail.code === "string"
+    ? detail.code
+    : null;
+};
+
+function invalidBatchCreateResponse(reason) {
+  const error = new Error(`批量创建响应无法权威核对：${reason}`);
+  error.code = "batch_response_invalid";
+  error.persistenceUnknown = true;
+  return error;
+}
+
+function sameStringList(actual, expected) {
+  return actual.length === expected.length && actual.every(
+    (value, index) => value === expected[index],
+  );
+}
+
+function sameSkillPackageRef(actual, expected) {
+  if (!actual || !expected || typeof actual !== "object" || typeof expected !== "object") {
+    return false;
+  }
+  const keys = [
+    "schema_version",
+    "package_id",
+    "package_version",
+    "package_digest",
+    "candidate_digest",
+    "skill_digest",
+    "skill_name",
+    "matched_agent_id",
+    "review_state",
+    "match_policy_version",
+    "match_basis_digest",
+  ];
+  const expectedKeys = [...keys].sort();
+  const actualKeys = Object.keys(actual).sort();
+  const requestedKeys = Object.keys(expected).sort();
+  return actualKeys.length === expectedKeys.length
+    && requestedKeys.length === expectedKeys.length
+    && actualKeys.every((key, index) => key === expectedKeys[index])
+    && requestedKeys.every((key, index) => key === expectedKeys[index])
+    && keys.every((key) => actual[key] === expected[key]);
+}
+
+// 2xx 只说明 HTTP 成功，不足以证明本次原子创建对应的整组任务。必须先核对
+// operation_id、任务全集、顺序、血缘、版本与包摘要，调用方随后才能写本地成功
+// 状态或消费 retry 上下文；任一缺失都属于 COMMIT 后状态不明。
+export function validateBatchCreateResponse(
+  response,
+  {
+    conversationId,
+    items,
+    pinnedVersions,
+    pinnedPackageDigests,
+    operationId,
+  },
+) {
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    throw invalidBatchCreateResponse("响应不是对象");
+  }
+  const expectedOperationId = operationId || null;
+  if ((response.operation_id ?? null) !== expectedOperationId) {
+    throw invalidBatchCreateResponse("operation_id 与请求不一致");
+  }
+  if (!Array.isArray(response.tasks)) {
+    throw invalidBatchCreateResponse("tasks 不是数组");
+  }
+  if (response.tasks.length !== items.length) {
+    throw invalidBatchCreateResponse(
+      `响应任务数量 ${response.tasks.length} 与请求 ${items.length} 不一致`,
+    );
+  }
+
+  const ids = [];
+  const seenIds = new Set();
+  for (const task of response.tasks) {
+    if (!task || typeof task !== "object" || Array.isArray(task)) {
+      throw invalidBatchCreateResponse("任务投影不是对象");
+    }
+    if (typeof task.id !== "string" || !task.id.trim() || seenIds.has(task.id)) {
+      throw invalidBatchCreateResponse("任务 id 缺失或重复");
+    }
+    seenIds.add(task.id);
+    ids.push(task.id);
+  }
+
+  const expectedConversationId = conversationId || null;
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const task = response.tasks[index];
+    if (task.agent_id !== item.agentId) {
+      throw invalidBatchCreateResponse(`第 ${index + 1} 项 Agent 或顺序不一致`);
+    }
+    if ((task.conversation_id ?? null) !== expectedConversationId) {
+      throw invalidBatchCreateResponse(`第 ${index + 1} 项 conversation_id 不一致`);
+    }
+    const expectedRetryOf = item.retryOf || null;
+    if ((task.retry_of ?? null) !== expectedRetryOf) {
+      throw invalidBatchCreateResponse(`第 ${index + 1} 项 retry_of 不一致`);
+    }
+    if (task.depends_on != null && !Array.isArray(task.depends_on)) {
+      throw invalidBatchCreateResponse(`第 ${index + 1} 项 depends_on 不是数组`);
+    }
+    const after = item.after || [];
+    if (!after.every((dependencyIndex) => (
+      Number.isInteger(dependencyIndex) && dependencyIndex >= 0 && dependencyIndex < index
+    ))) {
+      throw invalidBatchCreateResponse(`第 ${index + 1} 项请求依赖下标非法`);
+    }
+    const expectedDependsOn = after.map((dependencyIndex) => ids[dependencyIndex]);
+    const actualDependsOn = task.depends_on || [];
+    if (!sameStringList(actualDependsOn, expectedDependsOn)) {
+      throw invalidBatchCreateResponse(`第 ${index + 1} 项 depends_on 不一致`);
+    }
+    if (
+      pinnedVersions &&
+      Object.hasOwn(pinnedVersions, item.agentId) &&
+      task.agent_version !== pinnedVersions[item.agentId]
+    ) {
+      throw invalidBatchCreateResponse(`第 ${index + 1} 项 Agent 版本不一致`);
+    }
+    if (pinnedPackageDigests && Object.hasOwn(pinnedPackageDigests, item.agentId)) {
+      const actualDigest = task.metadata?.package_snapshot_digest;
+      if (actualDigest !== pinnedPackageDigests[item.agentId]) {
+        throw invalidBatchCreateResponse(`第 ${index + 1} 项 Agent 包摘要不一致`);
+      }
+    }
+    const actualSkillPackageRef = task.metadata?.skill_package_ref;
+    if (
+      item.skillPackageRef
+        ? !sameSkillPackageRef(actualSkillPackageRef, item.skillPackageRef)
+        : actualSkillPackageRef != null
+    ) {
+      throw invalidBatchCreateResponse(`第 ${index + 1} 项 Skill Package 复用引用不一致`);
+    }
+  }
+  return response;
+}
+
+export const createTasksBatch = async ({
+  conversationId,
+  items,
+  pinnedVersions,
+  pinnedPackageDigests,
+  operationId,
+}) => {
+  const normalizedItems = (items || []).map((it) => ({
+    agentId: it.agentId,
+    name: it.name || null,
+    inputs: it.inputs || {},
+    inputFileIds: it.inputFileIds || [],
+    retryOf: it.retryOf || null,
+    after: it.after || [],
+    ...(it.skillPackageRef ? { skillPackageRef: it.skillPackageRef } : {}),
+  }));
+  const response = await request("/api/tasks/batch", {
     method: "POST",
     json: {
       conversation_id: conversationId || null,
-      items: (items || []).map((it) => ({
+      pinned_versions: pinnedVersions || null,
+      pinned_package_digests: pinnedPackageDigests || null,
+      operation_id: operationId || null,
+      items: normalizedItems.map((it) => ({
         agent_id: it.agentId,
-        name: it.name || null,
-        inputs: it.inputs || {},
-        input_file_ids: it.inputFileIds || [],
-        after: it.after || [],
+        name: it.name,
+        inputs: it.inputs,
+        input_file_ids: it.inputFileIds,
+        retry_of: it.retryOf || null,
+        after: it.after,
+        ...(it.skillPackageRef
+          ? { skill_package_ref: it.skillPackageRef }
+          : {}),
       })),
     },
   });
+  return validateBatchCreateResponse(response, {
+    conversationId,
+    items: normalizedItems,
+    pinnedVersions,
+    pinnedPackageDigests,
+    operationId,
+  });
+};
 
 export const listTasks = ({ status, agentId, limit, offset } = {}) => {
   const params = new URLSearchParams();

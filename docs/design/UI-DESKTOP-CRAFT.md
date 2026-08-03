@@ -349,8 +349,9 @@ desktop-restudy 17 卡 + UI-PARADIGM 的 ChatGPT.app/Claude Desktop 拉片血统
 红线继承批次一 §三、二 §七、三 §十全部条款。本批反采纳：
 - **不换皮**——Claude Desktop 三明治深框/ChatGPT 近单色是它们的品牌身份；
   FLAi-OS 暖白+clay 家族轴已裁决，复刻的是语法不是皮肤。
-- **不翻双 Surface 案**——「对话｜任务台」双 Surface 为 owner 现行裁决
-  （UI-SIMPLIFICATION 两文 N13 状态注），本批绝不重启「删任务台导航」。
+- **不翻当前一级导航**——真实 App 与浏览器验收以「对话｜今日」为 SSOT；
+  `/tasks`、`/portal`、`/workbench` 保持深链。本批只在对话主线增加同设计语言的
+  任务上下文轨道，不新增“本体”一级入口，也不把任务台重新抬回导航。
 - **零值收敛 ≠ 事实隐藏**——0 本身不是待核事实；非零治理事实（未经真实
   核验/mock 标注/已剔除字段/dropped 名）一个不收、一个不折。
 - **不重写 TaskDetail 整页**（简化设计 §九 YAGNI 维持）——Q5 只收 mono 行。

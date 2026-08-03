@@ -17,6 +17,7 @@ from ..core.errors import FileIntegrityError
 from ..logging_setup import audit_event
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
+from . import object_authorization as oauth
 
 router = APIRouter(prefix="/api", tags=["files"])
 
@@ -184,6 +185,13 @@ async def upload_file(
     task_id: str | None = Form(default=None),
     classification: str = Form(default="internal"),
 ) -> dict[str, Any]:
+    username = oauth.authenticated_username(request)
+    if task_id is not None:
+        conn = request.app.state.conn_factory()
+        try:
+            oauth.require_owned_task(conn, task_id, username)
+        finally:
+            conn.close()
     # 分级合法性校验先于任何磁盘 I/O（ADR-0021 D2/设计审 F7）：非法值拒收
     # 不落盘不入库——错误方向是「拒收」而非「静默降级 internal 洗白入库」。
     if classification not in _CLASSIFICATIONS:
@@ -246,7 +254,10 @@ async def upload_file(
             sha256=digest.hexdigest(),
             classification=classification,
             # 分级是自报值（ADR-0021 D2 信任根声明）——标注人记名，标错可追责。
-            uploaded_by=request.state.user["display_name"],
+            # display_name 仅供人读；所有权只取鉴权中间件产出的稳定会话上下文，
+            # 请求 multipart 即使夹带同名字段也没有伪造入口。
+            uploaded_by=request.state.auth_session.display_name,
+            owner_username=request.state.auth_session.username,
         )
     except Exception:
         # 审计 P3（孤儿 blob）：落盘成功但入库失败（如锁等待超时）——磁盘有文件、
@@ -265,11 +276,35 @@ async def upload_file(
 def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
     conn = request.app.state.conn_factory()
     try:
-        record = repos.get_file(conn, file_id)
+        record = oauth.require_readable_file(
+            conn, file_id, oauth.authenticated_username(request)
+        )
     finally:
         conn.close()
-    if record is None:
-        raise HTTPException(status_code=404, detail=f"文件不存在：{file_id}")
+
+    # Output ownership is proven by its bidirectional file<->task relation, so
+    # the physical path must agree with that same authoritative task id before
+    # classification or integrity details are exposed.  A legacy/poisoned row
+    # that points at another task directory is an unprovable resource, not an
+    # owner-visible checksum conflict, and therefore keeps the generic 404.
+    output_root: Path | None = None
+    if record["kind"] == "output":
+        task_id = record.get("task_id")
+        try:
+            task_runs_root = Path(request.app.state.task_runs_dir).resolve(strict=False)
+            relative_path = (
+                Path(record["path"]).resolve(strict=False).relative_to(task_runs_root)
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            oauth.raise_resource_not_found()
+        if (
+            not isinstance(task_id, str)
+            or len(relative_path.parts) < 3
+            or relative_path.parts[0] != task_id
+            or relative_path.parts[1] != "output"
+        ):
+            oauth.raise_resource_not_found()
+        output_root = task_runs_root / task_id / "output"
 
     # 分级下载门（ADR-0021 D4）：internal-allowlist——sensitive 与任何未知/坏值
     # 一律 403。V0.1 无角色轴，「谁可下载 sensitive」无裁决依据，诚实答案就是
@@ -299,7 +334,9 @@ def download_file(file_id: str, request: Request) -> _VerifiedFileResponse:
     if record["kind"] == "input":
         allowed_root = request.app.state.uploads_dir
     elif record["kind"] == "output":
-        allowed_root = request.app.state.task_runs_dir
+        if output_root is None:
+            oauth.raise_resource_not_found()
+        allowed_root = output_root
     else:
         raise HTTPException(
             status_code=409,

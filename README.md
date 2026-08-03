@@ -1,6 +1,12 @@
-# FLAi-OS Kernel V0.1
+# FLAi-OS V1
 
-二所工程智能体运行底座。当前 **本地可交付里程碑 M0-M3/M5/M6/M7/M8 + CFD 集成 + 协作运行时 forge（声明式任务依赖+确定性 artifact→input 管道）+ 封板双判据（判据①结构完成、判据②生长完成）均已收口**（审查存档见 `docs/reviews/` 与 `docs/superpowers/specs/`），唯一悬置 M4（真实性能盘 Tool Adapter，需内网环境）。**V0.1 已封板（SEALED 2026-07-14，双判据齐：判据①结构完成 2 类范式零内核 diff + 判据②生长完成双 A）**，下一相=内网导入（M4）。封板状态与诚实边界见下方专节。
+二所工程智能体运行底座。当前仓库版本为 **1.0.0 源码候选**：本分支只在
+required checks 全绿并经 PR 合并后，才能记为 V1 源码就绪。当前不代表已合并、已打 tag、
+已发布或已完成 Windows/目标机适配。当前口径与可机械复核的边界见
+[`docs/releases/V1-SOURCE-READINESS.md`](docs/releases/V1-SOURCE-READINESS.md)。
+
+`v0.1.0-sealed`（2026-07-14）是保留的历史基线；下方 V0.1 封板与限制清单只是
+当时快照，不再是当前源码事实源。
 
 ## 是什么 / 不是什么
 
@@ -19,37 +25,53 @@
 
 完整十条见 `docs/00_FLAi-OS_Constitution.md`。
 
+## V1 源码范围
+
+- 主会话是唯一工程师入口：自然语言/附件输入，系统自动路由 Agent、模型、工具与
+  Workflow；信息不足时在同一会话追问，不退回 Agent 选择器或字段表单。
+- 任务由 SQLite 任务表与轮询 Job Runner 执行，模型和工具只能经 Model Gateway /
+  Tool Registry；LLM 不进确定性判决链，开工、关键判断与结果签发仍由人显式确认。
+- user task/conversation/input/output/team/asset-draft 默认 exact-owner；legacy NULL、
+  跨 owner 与不存在统一泛化 404，且先授权后检查状态/摘要；列表在 SQL 分页前
+  过滤。eval task 只作 tenant-wide 只读治理证据，mutation 仍过 owner gate。
+- V1 是 owner_signoff：受信 human signer cohort 中的 creator 可显式自签并留审计；
+  不声称已有 reviewer delegation、细粒度 RBAC 或职责分离。全局 governance API 仍是
+  认证 signer-cohort 边界。完整决策见 `docs/adr/ADR-0037-v1-owner-object-authorization.md`。
+- 已签工作证据可形成 owner-scoped Asset Candidate，经人审后确定性生成隔离的
+  Skill Package，包审批与任务复用各有独立 fail-closed 门。
+- 功能/资产地图是 owner-scoped、fail-closed、只读聚合，仅在主会话内首次展开时
+  冷读；不新增 `/map` 页面，不执行、注册或晋级任何资产。
+- 复用证据只能投影组合资格；V1 不宣称已由该链生成 Workflow 或成熟 Agent
+  Package。现有 Registry 内的 L0/draft Agent 如实显示，不冒充已成熟资产。
+
 ## 架构一图
 
 ```text
-                   工程师 / 部门 AI 应用负责人
-                              |
-                              v
-                    Web UI 工程智能体门户
-                              |
-                              v
-                        FastAPI Backend
-                              |
-        +---------------------+----------------------+
-        |                     |                      |
-        v                     v                      v
-  Agent Registry         Task Center           Admin Console
-        |                     |                      |
-        v                     v                      v
-  Agent Runtime       Job Runner / Event Log   Version / Permission
-        |
-  +-----+---------+----------+----------+----------+
-  |               |          |          |          |
-  v               v          v          v          v
-Model Gateway   RAG       Memory      Tool       File Service
-                Service   Service     Registry
-  |                         |          |
-  v                         v          v
-GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
-                                      Python Adapter / MCP Adapter
-                                                   |
-                                                   v
-                              性能盘 / Excel / Python脚本 / 后续专业工具
+             已认证工程师（主会话：自然语言 + 附件）
+                                |
+                                v
+                     Conversation-first Web UI
+                                |
+                                v
+                  FastAPI + Authenticated Session
+                                |
+          +---------------------+----------------------+
+          |                     |                      |
+          v                     v                      v
+ ConversationService    Task Center / Event Log   Governance APIs
+ 自动路由+自然追问         SQLite + Job Runner        人审 / 签发
+          |                     |                      |
+          +-----------+---------+-----------+----------+
+                      |                     |
+                      v                     v
+       Agent Registry / Runtime      证据与资产账本
+       Model Gateway / Tool          Candidate -> 隔离 Skill Package
+       Knowledge / File Service      -> 审批 -> 受控复用
+                      |                     |
+                      +----------+----------+
+                                 v
+               owner-scoped 只读功能/资产地图
+                   （主会话按需披露，无 /map）
 ```
 
 ## 目录导航
@@ -66,7 +88,7 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 | `data/` | uploads/outputs/task_runs/knowledge(检索 scope)/vector_store/memory_store/samples |
 | `scripts/` | dev/init/release 脚本，`.sh`（本机）+ `.ps1`（内网 Windows）成对 |
 
-## 里程碑
+## 历史 V0.1 里程碑（非当前状态板）
 
 | 里程碑 | 目标 | 状态 |
 |---|---|---|
@@ -83,7 +105,7 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 | CFD 集成（增补） | CFD solve→evaluate 多 Agent 工作流接入（st_oracle 判据，ADR-0026） | **完成** |
 | 协作运行时 forge（增补） | 声明式任务依赖（tasks.depends_on/input_binding）+ 确定性 artifact→input 管道（resolver 纯确定性零 LLM，K1/K2 签发见证闸，上游须人签 completed 才放行下游）；十态不变量零改动 | **完成**（异源多轮审收敛，`docs/superpowers/specs/2026-07-13-collab-runtime-forge-design.md`） |
 
-## 封板状态：**已封板 V0.1（SEALED 2026-07-14）**
+## 历史封板记录：**V0.1（SEALED 2026-07-14）**
 
 冻结 V0.1 内核转内网导入的门槛=**两个可证伪判据**均满足。**两判据结构上均已满足 + loop-auditor 封板前里程碑终检达 APPROVE-SEAL 条件（裁决 FLAG 无 BLOCK，机制与证据独立复核扎实，3 文档级 FLAG 已处置）→ owner 终裁封板**。V0.1 内核冻结，下一相=内网导入（M4 真实性能盘 Tool Adapter + 角色轴内网后锻）。tag：`v0.1.0-sealed`。
 
@@ -96,7 +118,11 @@ GLM 5.x / 小模型 / 多模态   Obsidian / Codebase Memory / Run Memory
 
 **封板宣称边界**：双判据证明**结构层（内核可扩展性）+ 生长层（合成需求可长出合规 Agent）**，**不外推内网环境层**——M4 真实性能盘 Tool Adapter、角色轴、真实模型/鉴权/限流形态均待内网后锻验（公网≠内网）。封板=冻结当前已验证的结构+生长能力，非宣称内网即可生产运行。
 
-## V0.1 已知限制（诚实清单，非缺陷否认）
+## 历史 V0.1 限制清单（仅对应 `v0.1.0-sealed`）
+
+> 本节保留 2026-07-14 封板时的原口径供取证，其中“零前端单测”、“file_id 无归属
+> 校验”、“全局无鉴权”等现在时陈述已被后续源码取代，不得引用为 V1 现状。
+> V1 边界以本 README 顶部和 `docs/releases/V1-SOURCE-READINESS.md` 为准。
 
 1. **任务 inputs 已是 schema 驱动结构化表单**（P0-1，2026-07-10）：创建任务页按
    `input_schema.json` 自动渲染字段（string/integer/boolean/enum/array 及
@@ -237,7 +263,7 @@ bash scripts/dev_start_worker.sh
 
 内网 Windows 部署用同目录下同名 `.ps1`（头注 DECLARED-NOT-VERIFIED，本机未测，行为与 `.sh` 保持一致）。
 
-### 环境变量一览（全部 FLAI_* 前缀，V0.1 不自动加载 .env——须在启动前 export 或写入进程环境）
+### 环境变量一览（全部 FLAI_* 前缀，不自动加载 .env——须在启动前 export 或写入进程环境）
 
 | 变量 | 默认值 | 用途 | M4 内网必填？ |
 | --- | --- | --- | --- |
@@ -249,8 +275,7 @@ bash scripts/dev_start_worker.sh
 | `FLAI_LLM_MODEL_REASONING` | 空 | reasoning profile 模型名 | 必填 |
 | `FLAI_LLM_MODEL_FAST` | 空 | fast profile 模型名（当前生产 Agent 仅用 reasoning/none，接入 fast profile 时才必填） | 按需 |
 
-跑测试（串行基准命令；加 `--with pytest-xdist ... -n auto` 可并行——2026-07-11
-本机实测 514 例全量：串行 ~25s → `-n auto` ~7s）：
+跑测试（串行开发命令；最终收口以下方 `verify_all.sh` 为准）：
 
 ```bash
 uv run --no-project --with pytest --with jsonschema --with pyyaml \
@@ -258,8 +283,8 @@ uv run --no-project --with pytest --with jsonschema --with pyyaml \
   --with openpyxl --with jieba python -m pytest -q
 ```
 
-一键全量验证（前端构建 + 全量 pytest：tests/ + tools_impl/ + backend/tests 共三个
-testpaths(-n auto) + 5 套浏览器 e2e，任一步失败即止并打印汇总）：
+一键全量验证（前端构建+分包预算、三个 testpaths 的并行 pytest、前端 Node
+契约测试和 `scripts/verify_all.sh` 清单内的全部浏览器 e2e；任一步失败即止）：
 
 ```bash
 bash scripts/verify_all.sh
@@ -285,6 +310,7 @@ python3 scripts/user_admin.py list   # 核对；停用/改密见脚本头注
 
 ## 参考
 
+- V1 源码就绪口径：`docs/releases/V1-SOURCE-READINESS.md`
 - 执行依据：`FLAi-OS_Fable5_执行任务书.md`（外部文档，不入本仓）
 - 系统宪法：`docs/00_FLAi-OS_Constitution.md`
 - 架构决策：`docs/adr/`

@@ -169,7 +169,7 @@ async function handleSubmit() {
       category: feedbackForm.category,
       message: feedbackForm.message || null,
     });
-    ElMessage.success("反馈已提交");
+    ElMessage.info("反馈已提交");
     feedbackForm.message = "";
     await loadFeedback();
   } catch (err) {

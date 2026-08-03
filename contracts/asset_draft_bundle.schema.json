@@ -1,0 +1,284 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flai-os.local/contracts/asset_draft_bundle.schema.json",
+  "title": "FLAi-OS Asset Draft Bundle",
+  "description": "一个可交给工程师审核的内容寻址草稿包。结构校验就绪不表示已审核、已注册、可执行或可晋级。",
+  "type": "object",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "validation": {
+            "properties": {"state": {"const": "ready_for_human_review"}},
+            "required": ["state"]
+          }
+        },
+        "required": ["validation"]
+      },
+      "then": {
+        "properties": {
+          "validation": {
+            "properties": {
+              "blocking_count": {"const": 0},
+              "issues": {
+                "items": {
+                  "properties": {"severity": {"const": "warning"}},
+                  "required": ["severity"]
+                }
+              }
+            }
+          },
+          "review": {
+            "properties": {
+              "ready": {"const": true},
+              "state": {"const": "awaiting_human_review"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "validation": {
+            "properties": {"state": {"const": "needs_revision"}},
+            "required": ["state"]
+          }
+        },
+        "required": ["validation"]
+      },
+      "then": {
+        "properties": {
+          "validation": {
+            "properties": {
+              "blocking_count": {"type": "integer", "minimum": 1},
+              "issues": {
+                "contains": {
+                  "properties": {"severity": {"const": "blocking"}},
+                  "required": ["severity"]
+                },
+                "minContains": 1
+              }
+            }
+          },
+          "review": {
+            "properties": {
+              "ready": {"const": false},
+              "state": {"const": "not_ready"}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "required": [
+    "schema_version",
+    "builder_version",
+    "status",
+    "work_case",
+    "task_pattern",
+    "skill",
+    "validation",
+    "review",
+    "generation",
+    "effects",
+    "draft_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "asset_draft_bundle.v1"},
+    "builder_version": {"const": "asset_draft_builder.v1"},
+    "status": {"const": "draft"},
+    "work_case": {"$ref": "#/$defs/workCase"},
+    "task_pattern": {"$ref": "#/$defs/taskPattern"},
+    "skill": {"$ref": "#/$defs/skill"},
+    "validation": {"$ref": "#/$defs/validation"},
+    "review": {"$ref": "#/$defs/review"},
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "llm_used"],
+      "properties": {
+        "kind": {"const": "deterministic_projection"},
+        "llm_used": {"const": false}
+      }
+    },
+    "effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "writes_database",
+        "executes_work",
+        "registers_asset",
+        "promotes_asset"
+      ],
+      "properties": {
+        "writes_database": {"const": false},
+        "executes_work": {"const": false},
+        "registers_asset": {"const": false},
+        "promotes_asset": {"const": false}
+      }
+    },
+    "draft_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "stringList": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "minLength": 1, "maxLength": 1000}
+    },
+    "workCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_kind",
+        "source_id",
+        "source_state",
+        "conversation_status",
+        "message_count",
+        "user_message_count",
+        "attachment_reference_count",
+        "source_revision"
+      ],
+      "properties": {
+        "source_kind": {"const": "conversation"},
+        "source_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "source_state": {"const": "platform_resolved"},
+        "conversation_status": {"enum": ["active", "concluded", "abandoned"]},
+        "message_count": {"type": "integer", "minimum": 1},
+        "user_message_count": {"type": "integer", "minimum": 1},
+        "attachment_reference_count": {"type": "integer", "minimum": 0},
+        "source_revision": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "taskPattern": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "status",
+        "derived_from_work_case_revision",
+        "title",
+        "trigger",
+        "desired_outcome",
+        "inputs",
+        "outputs",
+        "steps",
+        "evidence_requirements",
+        "human_decision_points",
+        "limitations",
+        "suggested_id",
+        "content_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "task_pattern_draft.v1"},
+        "status": {"const": "draft"},
+        "derived_from_work_case_revision": {"$ref": "#/$defs/digest"},
+        "title": {"type": "string", "maxLength": 160},
+        "trigger": {"type": "string", "maxLength": 2000},
+        "desired_outcome": {"type": "string", "maxLength": 2000},
+        "inputs": {"$ref": "#/$defs/stringList"},
+        "outputs": {"$ref": "#/$defs/stringList"},
+        "steps": {"$ref": "#/$defs/stringList"},
+        "evidence_requirements": {"$ref": "#/$defs/stringList"},
+        "human_decision_points": {"$ref": "#/$defs/stringList"},
+        "limitations": {"$ref": "#/$defs/stringList"},
+        "suggested_id": {
+          "type": "string",
+          "pattern": "^task_pattern_candidate_[0-9a-f]{12}$"
+        },
+        "content_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "status",
+        "operationalizes_task_pattern_digest",
+        "name",
+        "description",
+        "when_to_use",
+        "when_not_to_use",
+        "inputs",
+        "outputs",
+        "instructions",
+        "verification",
+        "human_boundaries",
+        "suggested_id",
+        "content_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "skill_draft.v1"},
+        "status": {"const": "draft"},
+        "operationalizes_task_pattern_digest": {"$ref": "#/$defs/digest"},
+        "name": {"type": "string", "maxLength": 160},
+        "description": {"type": "string", "maxLength": 4200},
+        "when_to_use": {"type": "string", "maxLength": 2000},
+        "when_not_to_use": {"$ref": "#/$defs/stringList"},
+        "inputs": {"$ref": "#/$defs/stringList"},
+        "outputs": {"$ref": "#/$defs/stringList"},
+        "instructions": {"$ref": "#/$defs/stringList"},
+        "verification": {"$ref": "#/$defs/stringList"},
+        "human_boundaries": {"$ref": "#/$defs/stringList"},
+        "suggested_id": {
+          "type": "string",
+          "pattern": "^skill_candidate_[0-9a-f]{12}$"
+        },
+        "content_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "path", "message"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1, "maxLength": 160},
+        "severity": {"enum": ["blocking", "warning"]},
+        "path": {"type": "string", "pattern": "^/"},
+        "message": {"type": "string", "minLength": 1, "maxLength": 1000}
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "policy_version",
+        "state",
+        "blocking_count",
+        "warning_count",
+        "issues"
+      ],
+      "properties": {
+        "schema_version": {"const": "asset_draft_validation.v1"},
+        "policy_version": {"const": "core.v1"},
+        "state": {"enum": ["needs_revision", "ready_for_human_review"]},
+        "blocking_count": {"type": "integer", "minimum": 0},
+        "warning_count": {"type": "integer", "minimum": 0},
+        "issues": {"type": "array", "items": {"$ref": "#/$defs/issue"}}
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "ready", "state", "decision_state", "requirements"],
+      "properties": {
+        "required": {"const": true},
+        "ready": {"type": "boolean"},
+        "state": {"enum": ["not_ready", "awaiting_human_review"]},
+        "decision_state": {"const": "not_recorded"},
+        "requirements": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

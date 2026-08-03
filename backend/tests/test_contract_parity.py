@@ -27,6 +27,7 @@ from jsonschema import validate
 
 from backend.app.jobs.runner import JobRunner
 from backend.app.storage import repos
+from conftest import TEST_USERNAME
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACTS_DIR = REPO_ROOT / "contracts"
@@ -38,6 +39,8 @@ def _load_schema(name: str) -> dict[str, Any]:
 
 TASK_SCHEMA = _load_schema("task.schema.json")
 EVENT_SCHEMA = _load_schema("event.schema.json")
+AGENT_SHELL_SCHEMA = _load_schema("agent_shell.schema.json")
+ASSET_DRAFT_BUNDLE_SCHEMA = _load_schema("asset_draft_bundle.schema.json")
 
 
 @pytest.fixture()
@@ -53,6 +56,57 @@ def test_create_task_response_matches_task_schema(client: TestClient) -> None:
     )
     assert resp.status_code == 200
     validate(resp.json(), TASK_SCHEMA)
+
+
+def test_agent_shell_response_matches_catalog_schema(client: TestClient) -> None:
+    resp = client.get("/api/agent-shell")
+    assert resp.status_code == 200
+    validate(resp.json(), AGENT_SHELL_SCHEMA)
+
+
+def test_asset_draft_preview_response_matches_bundle_schema(
+    client: TestClient, app_env
+) -> None:
+    _, app = app_env
+    conversation_id = "conv_asset_parity"
+    conn = app.state.conn_factory()
+    try:
+        repos.create_conversation(
+            conn,
+            conversation_id=conversation_id,
+            agent_id="guide_agent",
+            created_by="测试工程师",
+            created_by_username=TEST_USERNAME,
+        )
+        repos.append_message(
+            conn,
+            conversation_id=conversation_id,
+            role="user",
+            content="把入口边界核对方法沉淀为资产",
+        )
+    finally:
+        conn.close()
+
+    response = client.post(
+        f"/api/conversations/{conversation_id}/asset-draft-preview",
+        json={
+            "schema_version": "asset_draft_preview_request.v1",
+            "generalization": {
+                "title": "入口边界复核",
+                "trigger": "收到待计算的稳态算例",
+                "desired_outcome": "形成可签认的复核清单",
+                "inputs": ["边界条件表"],
+                "outputs": ["复核清单"],
+                "steps": ["核对输入", "标出缺口"],
+                "evidence_requirements": ["保留原始位置"],
+                "human_decision_points": ["冲突值由工程师确认"],
+                "limitations": ["不适用于瞬态工况"],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    validate(response.json(), ASSET_DRAFT_BUNDLE_SCHEMA)
 
 
 def test_get_task_response_matches_task_schema(client: TestClient) -> None:
@@ -111,6 +165,31 @@ def test_review_response_matches_task_schema(
     try:
         for status in ("validating", "running", "waiting_review"):
             repos.set_task_status(conn, task_id, status)
+        execution_evidence_digest = (
+            "sha256:7b9e93d01e34197b15ed6fddaad515525f8745b78d5203966251f6a80ca6ed58"
+        )
+        for event_type, message in (
+            ("validation_started", "开始校验输入"),
+            ("review_requested", "任务需要人工审核放行"),
+        ):
+            payload = {"execution_evidence_digest": execution_evidence_digest}
+            if event_type == "validation_started":
+                payload = {
+                    "package_snapshot_digest": "1" * 64,
+                    "task_inputs_digest": "sha256:" + "2" * 64,
+                    "input_file_ids": [],
+                    "input_files_digest": "sha256:" + "3" * 64,
+                    **payload,
+                }
+            repos.append_event(
+                conn,
+                task_id=task_id,
+                agent_id="hello_agent",
+                event_type=event_type,
+                level="info",
+                message=message,
+                payload=payload,
+            )
     finally:
         conn.close()
 
