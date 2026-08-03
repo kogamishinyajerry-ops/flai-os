@@ -124,5 +124,4 @@ def test_list_projection_preview_respects_created_by_filter(
     theirs = client.get(
         "/api/conversations", params={"created_by": TEST_DISPLAY_NAME}
     ).json()
-    row = [r for r in theirs if r["id"] == conv_id][0]
-    assert row["first_user_message"] == "甲的私密需求草稿"
+    assert theirs == [], "display_name 过滤不能越过当前 username 的 owner 边界"

@@ -101,6 +101,13 @@ def _create_validating_reuse_task(
 ) -> str:
     conn = get_conn(db_path)
     try:
+        repos.create_conversation(
+            conn,
+            conversation_id="conversation_reuse_runtime",
+            agent_id="hello_agent",
+            created_by="工程师",
+            created_by_username="engineer",
+        )
         repos.create_task(
             conn,
             task_id=task_id,
@@ -567,6 +574,7 @@ def _create_waiting_review_task(
         agent_version="0.1.0",
         name="复用人签证据测试",
         created_by="工程师",
+        created_by_username="engineer",
         inputs={"name": "复用人签"},
         input_file_ids=[],
         metadata={},

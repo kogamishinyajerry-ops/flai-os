@@ -13,6 +13,7 @@ from jsonschema import ValidationError, validate
 from backend.app.runtime.package_snapshot import SNAPSHOT_CONTRACT
 from backend.app.runtime.task_evidence import input_files_evidence
 from backend.app.storage import repos
+from backend.app.storage.db import init_db
 from backend.tests.conftest import (
     TEST_DISPLAY_NAME,
     TEST_PASSWORD,
@@ -20,7 +21,6 @@ from backend.tests.conftest import (
     login,
     seed_user,
 )
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACTS_DIR = REPO_ROOT / "contracts"
@@ -95,6 +95,7 @@ def _seed_task(
                 conversation_id=conversation_id,
                 agent_id="guide_agent",
                 created_by=TEST_DISPLAY_NAME,
+                created_by_username=owner_username,
             )
         if conversation_id is not None and with_user_message:
             repos.append_message(
@@ -322,8 +323,16 @@ def test_candidate_admission_gates_fail_closed_without_writes(
 
     response = _create_candidate(client, task_id)
 
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == expected_code
+    if expected_code in {
+        "task_origin_not_user",
+        "task_owner_mismatch",
+        "task_owner_unverifiable",
+    }:
+        assert response.status_code == 404
+        assert response.json() == {"detail": "资源不存在或不可访问"}
+    else:
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == expected_code
     assert _counts(app) == before
 
 
@@ -454,10 +463,8 @@ def test_direct_work_segment_upload_must_belong_to_task_owner(
 
     response = _create_candidate(client, task_id)
 
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == (
-        "work_segment_attachment_owner_mismatch"
-    )
+    assert response.status_code == 404
+    assert response.json() == {"detail": "资源不存在或不可访问"}
     assert _counts(app) == (0, 0)
 
 
@@ -632,8 +639,14 @@ def test_reused_operation_id_without_verified_batch_identity_remains_boundary(
 
     response = _create_candidate(client, current_task)
 
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "work_segment_attachment_mismatch"
+    if prior_owner != TEST_USERNAME:
+        assert response.status_code == 404
+        assert response.json() == {"detail": "资源不存在或不可访问"}
+    else:
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == (
+            "work_segment_attachment_mismatch"
+        )
     assert _counts(app) == (0, 0)
 
 
@@ -1342,6 +1355,13 @@ def test_cold_read_rejects_owner_or_terminal_signer_drift(app_env, tamper: str) 
     conn = app.state.conn_factory()
     try:
         if tamper == "stored-owner":
+            # Emulate a database poisoned before the insert-once owner trigger
+            # existed, then reinstall the current schema guard before the API
+            # read.  Direct tampering on a current database is covered by the
+            # dedicated immutability tests and must be rejected at SQLite.
+            conn.execute(
+                "DROP TRIGGER trg_asset_candidates_initiator_immutable"
+            )
             conn.execute(
                 """
                 UPDATE asset_candidates SET initiated_by_username = ?
@@ -1364,9 +1384,15 @@ def test_cold_read_rejects_owner_or_terminal_signer_drift(app_env, tamper: str) 
             )
     finally:
         conn.close()
+    if tamper == "stored-owner":
+        init_db(app.state.db_path)
 
     restored = client.get(f"/api/tasks/{task_id}/asset-candidate")
-    assert restored.status_code == 503
+    if tamper == "stored-owner":
+        assert restored.status_code == 404
+        assert restored.json() == {"detail": "资源不存在或不可访问"}
+    else:
+        assert restored.status_code == 503
 
 
 def test_human_review_lineage_uses_stable_database_username(app_env) -> None:
@@ -1630,6 +1656,9 @@ def test_feature_asset_map_fails_closed_on_current_owner_attribution_drift(
     candidate = _create_candidate(client, _seed_task(app)).json()
     conn = app.state.conn_factory()
     try:
+        # Legacy-corruption seam: current databases reject this UPDATE before
+        # the API layer, so temporarily remove and then reinstall the trigger.
+        conn.execute("DROP TRIGGER trg_asset_candidates_initiator_immutable")
         conn.execute(
             "UPDATE asset_candidates SET initiated_by_username = ? WHERE id = ?",
             ("other_engineer", candidate["id"]),
@@ -1637,6 +1666,7 @@ def test_feature_asset_map_fails_closed_on_current_owner_attribution_drift(
         conn.commit()
     finally:
         conn.close()
+    init_db(app.state.db_path)
     counts_before_read = _counts(app)
 
     response = client.get("/api/feature-asset-map")
@@ -1691,6 +1721,45 @@ def test_feature_asset_map_pins_and_releases_one_read_snapshot(app_env) -> None:
         assert conn.in_transaction is False
     finally:
         conn.close()
+
+
+@pytest.mark.parametrize("failure_stage", ["connect", "close"])
+def test_feature_asset_map_connection_lifecycle_fails_as_generic_503(
+    app_env,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    client, app = app_env
+    real_factory = app.state.conn_factory
+
+    if failure_stage == "connect":
+        def failing_factory():
+            raise RuntimeError("private connection detail")
+
+        monkeypatch.setattr(app.state, "conn_factory", failing_factory)
+    else:
+        class CloseFailure:
+            def __init__(self, conn) -> None:
+                self._conn = conn
+
+            def __getattr__(self, name: str):
+                return getattr(self._conn, name)
+
+            def close(self) -> None:
+                self._conn.close()
+                raise RuntimeError("private close detail")
+
+        monkeypatch.setattr(
+            app.state,
+            "conn_factory",
+            lambda: CloseFailure(real_factory()),
+        )
+
+    response = client.get("/api/feature-asset-map")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "功能/资产地图暂不可用"}
+    assert "private" not in response.text
 
 
 def test_feature_asset_map_rejects_asset_overflow_without_truncation(

@@ -31,10 +31,27 @@ from ..governance.signer_provenance import (
     resolve_signer,
     stored_signer_attests,
 )
+from .task_owner_lineage import (
+    CONVERSATION_LINEAGE_MAX_FILE_IDS,
+    CONVERSATION_LINEAGE_MAX_MESSAGES,
+    TaskOwnerLineageViolation,
+    require_worker_task_owner_lineage,
+)
 
 _EVENT_SCHEMA_PATH = CONTRACTS_DIR / "event.schema.json"
 _event_schema_cache: dict[str, Any] | None = None
 
+WORKER_AUTHORIZATION_FAILURE_ERROR = (
+    "worker_authorization_failed: task owner lineage is unavailable"
+)
+WORKER_AUTHORIZATION_FAILURE_MESSAGE = "任务运行前授权校验失败，已拒绝执行"
+WORKER_AUTHORIZATION_FAILURE_PAYLOAD = {
+    "authorization_gate": "task_owner_lineage_v1",
+    "reason": "invalid_owner_lineage",
+}
+_TASK_EXECUTION_STATES = frozenset(
+    {"validating", "running", "parsing", "analyzing"}
+)
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -273,6 +290,7 @@ def list_tasks(
     conversation_id: str | None = None,
     origin: str | None = None,
     created_by_username: str | None = None,
+    visible_to_username: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -284,7 +302,17 @@ def list_tasks(
     不混入 eval 跑批任务（可显式查询，诚实可追溯，但不进默认工作流视图）。
     created_by_username（批C）：仓储层 None=不过滤中立；API 的 /me 端点按登录会话
     username 精确归因「我发起的任务」，NULL 存量行不被任何 username 误计。
+
+    visible_to_username：公共 API 的任务读取策略下推。origin='eval' 时返回租户级
+    评测证据；origin=None 时返回「全部 eval + 该 username 的 user 任务」；其余
+    origin 仅返回该 username 精确拥有的行。可见性谓词在 ORDER/LIMIT/OFFSET 前
+    执行，避免其他用户的行污染当前用户的分页窗口。不得与中立仓储过滤参数
+    created_by_username 同时使用。
     """
+    if created_by_username is not None and visible_to_username is not None:
+        raise ValueError(
+            "created_by_username 与 visible_to_username 不得同时使用"
+        )
     clauses: list[str] = []
     params: list[Any] = []
     if agent_id is not None:
@@ -296,12 +324,27 @@ def list_tasks(
     if conversation_id is not None:
         clauses.append("conversation_id = ?")
         params.append(conversation_id)
-    if origin is not None:
-        clauses.append("origin = ?")
-        params.append(origin)
-    if created_by_username is not None:
-        clauses.append("created_by_username = ?")
-        params.append(created_by_username)
+    if visible_to_username is not None:
+        if origin == "eval":
+            clauses.append("origin = 'eval'")
+        elif origin is None:
+            clauses.append(
+                "(origin = 'eval' OR "
+                "(origin = 'user' AND created_by_username = ?))"
+            )
+            params.append(visible_to_username)
+        else:
+            clauses.append("origin = ?")
+            params.append(origin)
+            clauses.append("created_by_username = ?")
+            params.append(visible_to_username)
+    else:
+        if origin is not None:
+            clauses.append("origin = ?")
+            params.append(origin)
+        if created_by_username is not None:
+            clauses.append("created_by_username = ?")
+            params.append(created_by_username)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     params.extend([limit, offset])
     rows = conn.execute(
@@ -833,6 +876,22 @@ def get_agent_version_manifest(
     return manifest if isinstance(manifest, dict) else None
 
 
+def get_agent_version_and_maturity(
+    conn: sqlite3.Connection,
+    agent_id: str,
+) -> dict[str, Any] | None:
+    """Return the current DB projection used by governance write gates.
+
+    Keeping this read in the repository layer prevents governance orchestration
+    from growing a second, ad-hoc SQL access path.
+    """
+    row = conn.execute(
+        "SELECT version, maturity FROM agents WHERE id = ?",
+        (agent_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
 def has_review_approved_event(conn: sqlite3.Connection, task_id: str) -> bool:
     """该任务是否有持久 review_approved 事件=人工签发见证（apply_human_review 是唯一写入
     方，见其实现）。K1 签发维 provenance 用：`status=='completed'` 只证时序、不证人签。"""
@@ -1013,11 +1072,10 @@ def fail_task_from_execution(
     状态读取、执行态白名单判断与更新全部位于同一个 BEGIN IMMEDIATE 事务内，
     防止检查后到更新前任务已被并发推进到 waiting_review 的 TOCTOU 旁路。
     """
-    execution_states = frozenset({"validating", "running", "parsing", "analyzing"})
     conn.execute("BEGIN IMMEDIATE")
     try:
         task = get_task(conn, task_id)
-        if task is None or task["status"] not in execution_states:
+        if task is None or task["status"] not in _TASK_EXECUTION_STATES:
             conn.execute("COMMIT")
             return None
 
@@ -1039,6 +1097,118 @@ def fail_task_from_execution(
         conn.execute("ROLLBACK")
         raise
     return get_task(conn, task_id)
+
+
+def _authorization_task_projection(
+    conn: sqlite3.Connection,
+    task_id: str,
+) -> dict[str, Any] | None:
+    """Load a minimal task projection even when legacy JSON columns are corrupt."""
+
+    row = conn.execute(
+        "SELECT id, agent_id, status, origin, created_by_username "
+        "FROM tasks WHERE id = ?",
+        (task_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _quarantine_owner_lineage_in_transaction(
+    conn: sqlite3.Connection,
+    task: dict[str, Any],
+) -> dict[str, Any]:
+    """Terminalize one claimed/executing poison without exposing lineage detail."""
+
+    task_id = task["id"]
+    current_status = task.get("status")
+    if current_status not in _TASK_EXECUTION_STATES:
+        return task
+    assert_transition(current_status, "failed")
+    failed_at = _now_iso()
+    conn.execute(
+        "UPDATE tasks SET status = 'failed', updated_at = ?, finished_at = ?, "
+        "error_message = ? WHERE id = ?",
+        (
+            failed_at,
+            failed_at,
+            WORKER_AUTHORIZATION_FAILURE_ERROR,
+            task_id,
+        ),
+    )
+    append_event(
+        conn,
+        task_id=task_id,
+        agent_id=task.get("agent_id"),
+        event_type="task_failed",
+        level="error",
+        message=WORKER_AUTHORIZATION_FAILURE_MESSAGE,
+        payload=dict(WORKER_AUTHORIZATION_FAILURE_PAYLOAD),
+    )
+    try:
+        failed = get_task(conn, task_id)
+    except (TypeError, ValueError):
+        failed = None
+    if failed is not None:
+        return failed
+    return {
+        **task,
+        "status": "failed",
+        "updated_at": failed_at,
+        "finished_at": failed_at,
+        "error_message": WORKER_AUTHORIZATION_FAILURE_ERROR,
+    }
+
+
+def _authorize_task_for_execution_in_transaction(
+    conn: sqlite3.Connection,
+    task_id: str,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Validate user lineage in the caller's authoritative write snapshot."""
+
+    malformed = False
+    try:
+        task = get_task(conn, task_id)
+    except (TypeError, ValueError):
+        task = _authorization_task_projection(conn, task_id)
+        malformed = True
+    if task is None:
+        return None, True
+    if task.get("origin") == "eval":
+        return task, True
+
+    try:
+        if malformed:
+            raise TaskOwnerLineageViolation(
+                "task owner lineage is unavailable"
+            )
+        require_worker_task_owner_lineage(conn, task)
+    except TaskOwnerLineageViolation:
+        return _quarantine_owner_lineage_in_transaction(conn, task), False
+    return task, True
+
+
+def authorize_task_for_execution(
+    conn: sqlite3.Connection,
+    task_id: str,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Revalidate owner lineage before any runtime package/file side effect.
+
+    The full read and any deterministic quarantine share one ``BEGIN IMMEDIATE``
+    transaction.  Eval tasks retain their separate tenant-governance execution
+    policy; only user tasks are exact-owner resources.
+    """
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        task, authorized = _authorize_task_for_execution_in_transaction(
+            conn,
+            task_id,
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return task, authorized
 
 
 def claim_next_queued(conn: sqlite3.Connection) -> dict[str, Any] | None:
@@ -1081,11 +1251,20 @@ def claim_next_queued(conn: sqlite3.Connection) -> dict[str, Any] | None:
             "UPDATE tasks SET status = 'validating', updated_at = ? WHERE id = ? AND status = 'queued'",
             (now, task_id),
         )
+        # Claim 与 owner-lineage 裁决同处一个 BEGIN IMMEDIATE 权威快照：无论
+        # HTTP 创建门是否曾被 legacy/直写绕过，poisoned 行都只能从 queued
+        # 原子落到 failed，绝不能在两个事务之间被 runtime 打开输入字节。
+        claimed_task, _ = _authorize_task_for_execution_in_transaction(
+            conn,
+            task_id,
+        )
+        if claimed_task is None:
+            raise TaskNotFoundError(f"任务不存在：{task_id}")
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
         raise
-    return get_task(conn, task_id)
+    return claimed_task
 
 
 def claim_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
@@ -1489,13 +1668,38 @@ def list_model_calls_for_conversation(
 
 # ── samples ────────────────────────────────────────────────────────────
 
+
+class SampleAcknowledgementConflictError(ValueError):
+    """sample 已有不可覆盖的拒绝或不一致认可证据。"""
+
+
 def _decode_sample(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     _decode_json(d, "input_json", "input", default=None)
     _decode_json(d, "output_json", "output", default=None)
-    if d.get("accepted_by_engineer") is not None:
-        d["accepted_by_engineer"] = bool(d["accepted_by_engineer"])
+    accepted = d.get("accepted_by_engineer")
+    if type(accepted) is int and accepted == 0:
+        d["accepted_by_engineer"] = False
+    elif type(accepted) is int and accepted == 1:
+        d["accepted_by_engineer"] = True
+    # Preserve malformed SQLite values instead of truthiness-coercing them into
+    # an approval.  Every governance gate uses ``is True``/``is False`` and will
+    # therefore fail closed for 2, -1, text, or any other corrupted value.
     return d
+
+
+def _is_aware_iso_timestamp(value: object) -> bool:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+    ):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+        return parsed.tzinfo is not None and parsed.utcoffset() is not None
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 def record_sample(
@@ -1518,7 +1722,14 @@ def record_sample(
 ) -> dict[str, Any]:
     """classification 必填无默认值（ADR-0021 D1/设计审 F4），口径同 create_file。"""
     created_at = created_at or _now_iso()
-    accepted_int = None if accepted_by_engineer is None else int(bool(accepted_by_engineer))
+    if accepted_by_engineer is None:
+        accepted_int = None
+    elif accepted_by_engineer is True:
+        accepted_int = 1
+    elif accepted_by_engineer is False:
+        accepted_int = 0
+    else:
+        raise TypeError("accepted_by_engineer 只接受 True/False/None")
     cur = conn.execute(
         """
         INSERT INTO samples
@@ -1549,6 +1760,80 @@ def list_samples(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]
         "SELECT * FROM samples WHERE task_id = ? ORDER BY id ASC", (task_id,)
     ).fetchall()
     return [_decode_sample(r) for r in rows]
+
+
+def acknowledge_sample_once(
+    conn: sqlite3.Connection,
+    sample_id: int,
+    *,
+    actor_username: str,
+    acknowledged_at: str,
+) -> tuple[dict[str, Any] | None, bool]:
+    """CAS-on-NULL 记录 sample 级认可；调用方负责外层事务。
+
+    - 首次：accepted NULL/1 → 1，并一次性冻结 username + acknowledged_at；
+    - 重试：返回首次记录，绝不覆盖 actor/时间，created=False；
+    - 已明确 reject（accepted=0）或半截 provenance：fail-closed。
+
+    返回 ``(record, created)``；created 只取 SQL UPDATE.rowcount，不按 username
+    或文件存在性猜测。这里不自行 BEGIN/COMMIT，curation orchestration 会把
+    DB CAS 与 draft case ensure 放在同一串行临界区；发布后异常保留待核现场，
+    不做可能误伤并发写者的文件删除/覆盖补偿。
+    """
+    if (
+        not isinstance(actor_username, str)
+        or not actor_username
+        or actor_username != actor_username.strip()
+    ):
+        raise ValueError("sample 认可 actor_username 必须是非空字符串")
+    if not _is_aware_iso_timestamp(acknowledged_at):
+        raise ValueError("sample 认可 acknowledged_at 必须是带时区的 ISO 8601 时间戳")
+
+    cur = conn.execute(
+        """
+        UPDATE samples
+        SET accepted_by_engineer = 1,
+            acknowledged_by_username = ?,
+            acknowledged_at = ?
+        WHERE id = ?
+          AND acknowledged_by_username IS NULL
+          AND acknowledged_at IS NULL
+          AND (accepted_by_engineer IS NULL OR accepted_by_engineer = 1)
+        """,
+        (actor_username, acknowledged_at, sample_id),
+    )
+    if cur.rowcount == 1:
+        created = get_sample(conn, sample_id)
+        if created is None:
+            raise SampleAcknowledgementConflictError(
+                f"样本 {sample_id} 认可 CAS 后记录消失，fail-closed"
+            )
+        return created, True
+
+    sample = get_sample(conn, sample_id)
+    if sample is None:
+        return None, False
+    if sample.get("accepted_by_engineer") is False:
+        raise SampleAcknowledgementConflictError(
+            f"样本 {sample_id} 已被人工拒绝，sample 级认可不得覆盖"
+        )
+    stored_actor = sample.get("acknowledged_by_username")
+    stored_at = sample.get("acknowledged_at")
+    if (stored_actor is None) != (stored_at is None):
+        raise SampleAcknowledgementConflictError(
+            f"样本 {sample_id} 的认可 provenance 不完整，fail-closed"
+        )
+    if (
+        not isinstance(stored_actor, str)
+        or not stored_actor
+        or stored_actor != stored_actor.strip()
+        or not _is_aware_iso_timestamp(stored_at)
+        or sample.get("accepted_by_engineer") is not True
+    ):
+        raise SampleAcknowledgementConflictError(
+            f"样本 {sample_id} 认可 CAS 失败且既有 provenance 非法，fail-closed"
+        )
+    return sample, False
 
 
 def set_sample_review_outcome(
@@ -1644,14 +1929,93 @@ def list_conversations(
     conn: sqlite3.Connection,
     *,
     created_by: str | None = None,
+    created_by_username: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
     clauses: list[str] = []
     params: list[Any] = []
     if created_by is not None:
-        clauses.append("created_by = ?")
+        clauses.append("c.created_by = ?")
         params.append(created_by)
+    if created_by_username is not None:
+        clauses.append("c.created_by_username = ?")
+        clauses.append(
+            f"""
+            (
+                SELECT COUNT(*)
+                FROM conversation_messages AS bounded_message
+                WHERE bounded_message.conversation_id = c.id
+            ) <= {CONVERSATION_LINEAGE_MAX_MESSAGES}
+            """
+        )
+        clauses.append(
+            f"""
+            (
+                SELECT COALESCE(
+                    SUM(
+                        json_array_length(
+                            CASE
+                                WHEN json_valid(bounded_attachment.file_ids) = 1
+                                  AND json_type(
+                                      CASE
+                                          WHEN json_valid(bounded_attachment.file_ids) = 1
+                                          THEN bounded_attachment.file_ids
+                                          ELSE 'null'
+                                      END
+                                  ) = 'array'
+                                THEN bounded_attachment.file_ids
+                                ELSE '[]'
+                            END
+                        )
+                    ),
+                    0
+                )
+                FROM conversation_messages AS bounded_attachment
+                WHERE bounded_attachment.conversation_id = c.id
+            ) <= {CONVERSATION_LINEAGE_MAX_FILE_IDS}
+            """
+        )
+        clauses.append(
+            """
+            NOT EXISTS (
+                SELECT 1
+                FROM conversation_messages AS lineage_message
+                WHERE lineage_message.conversation_id = c.id
+                  AND (
+                    json_valid(lineage_message.file_ids) != 1
+                    OR json_type(
+                        CASE
+                            WHEN json_valid(lineage_message.file_ids) = 1
+                            THEN lineage_message.file_ids
+                            ELSE 'null'
+                        END
+                    ) IS NOT 'array'
+                    OR EXISTS (
+                        SELECT 1
+                        FROM json_each(
+                            CASE
+                                WHEN json_valid(lineage_message.file_ids) = 1
+                                THEN lineage_message.file_ids
+                                ELSE '[]'
+                            END
+                        ) AS attachment
+                        LEFT JOIN files AS input_file
+                          ON input_file.id = attachment.value
+                        WHERE attachment.type != 'text'
+                           OR length(attachment.value) = 0
+                           OR attachment.value != trim(attachment.value)
+                           OR length(attachment.value) > 64
+                           OR input_file.id IS NULL
+                           OR input_file.kind != 'input'
+                           OR input_file.owner_username IS NULL
+                           OR input_file.owner_username != ?
+                    )
+                  )
+            )
+            """
+        )
+        params.extend([created_by_username, created_by_username])
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     params.extend([limit, offset])
     # first_user_message（additive 投影）：首条 role=user 消息的服务端截断预览，
@@ -1715,6 +2079,41 @@ def list_messages(conn: sqlite3.Connection, conversation_id: str) -> list[dict[s
         (conversation_id,),
     ).fetchall()
     return [_decode_message(r) for r in rows]
+
+
+def get_bounded_conversation_attachment_lineage(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    *,
+    max_messages: int,
+    max_file_ids: int,
+) -> tuple[int, list[str]]:
+    """Return a bounded projection of historical conversation attachments.
+
+    Authorization must inspect every historical attachment without materializing
+    unbounded message content.  The extra row is an overflow witness; malformed
+    JSON, non-list projections, and either budget overflow raise a validation
+    error so the API authorization seam can collapse them to its generic 404.
+    """
+    if max_messages < 0 or max_file_ids < 0:
+        raise ValueError("lineage budgets must be non-negative")
+    rows = conn.execute(
+        "SELECT file_ids FROM conversation_messages "
+        "WHERE conversation_id = ? ORDER BY id ASC LIMIT ?",
+        (conversation_id, max_messages + 1),
+    ).fetchall()
+    if len(rows) > max_messages:
+        raise ValueError("conversation message lineage exceeds budget")
+
+    file_ids: list[str] = []
+    for row in rows:
+        decoded = json.loads(row["file_ids"])
+        if not isinstance(decoded, list):
+            raise TypeError("conversation attachment lineage must be a list")
+        if len(file_ids) + len(decoded) > max_file_ids:
+            raise ValueError("conversation attachment lineage exceeds budget")
+        file_ids.extend(decoded)
+    return len(rows), file_ids
 
 
 def count_messages(conn: sqlite3.Connection, conversation_id: str) -> int:

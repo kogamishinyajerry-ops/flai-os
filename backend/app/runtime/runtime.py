@@ -34,6 +34,7 @@ from ..core.errors import (
 )
 from ..storage import repos
 from ..storage.file_integrity import open_verified_file
+from ..storage.task_owner_lineage import MAX_TASK_OUTPUT_FILE_IDS
 from .package_snapshot import AgentPackageSnapshot, SNAPSHOT_CONTRACT
 from .skill_reuse_application import (
     SkillReuseApplication,
@@ -46,6 +47,10 @@ logger = logging.getLogger(__name__)
 
 _PACKAGE_SNAPSHOT_DIGEST_METADATA_KEY = "package_snapshot_digest"
 _SHA256_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+class _OutputFileLimitExceededError(RuntimeError):
+    """A workflow produced more files than owner authorization can project."""
 
 # event.schema.json 的 event_type 枚举（供折叠判断参考；本文件不据此做「豁免」——
 # ADR-0008 原文「workflow 自定义事件统一折叠为 agent_log」是无条件折叠，见
@@ -531,7 +536,23 @@ class AgentRuntime:
         """驱动任务 task_id（调用前须已处于 validating 态）走完生命周期，返回最终 task dict。"""
         conn = self.conn_factory()
         try:
-            task = repos.get_task(conn, task_id)
+            # Defense in depth for non-JobRunner callers: re-read the complete
+            # persisted owner lineage in one authoritative DB snapshot before
+            # even looking up/materializing an Agent Package.  Rejection is
+            # already terminalized and audited by the repository seam.
+            task, owner_authorized = repos.authorize_task_for_execution(
+                conn,
+                task_id,
+            )
+            if task is None:
+                return self._execute(
+                    conn,
+                    task_id,
+                    package_snapshot=None,
+                    package_dir=None,
+                )
+            if owner_authorized is not True:
+                return {"status": "failed", "task": task}
             snapshot_getter = getattr(self.agent_registry, "package_snapshot", None)
             snapshot = (
                 snapshot_getter(task["agent_id"])
@@ -565,9 +586,16 @@ class AgentRuntime:
         package_snapshot: AgentPackageSnapshot | None,
         package_dir: Path | None,
     ) -> dict[str, Any]:
-        task = repos.get_task(conn, task_id)
+        # Package materialization deliberately happens after execute()'s first
+        # owner gate.  Reauthorize the latest persisted task here and continue
+        # only with the exact snapshot returned by that atomic gate; otherwise
+        # a legacy/local writer could swap input lineage in the intervening
+        # window and make runtime open another owner's file.
+        task, owner_authorized = repos.authorize_task_for_execution(conn, task_id)
         if task is None:
             return {"status": "failed", "error_message": f"任务不存在：{task_id}"}
+        if owner_authorized is not True:
+            return {"status": "failed", "task": task}
 
         agent_id = task["agent_id"]
         if package_snapshot is None or package_dir is None:
@@ -964,9 +992,38 @@ class AgentRuntime:
         # 3) 成功：注册产物 + 样本沉淀（产物/样本继承任务级派生分级=文件∨知识∨工具
         # 三轴，ADR-0021 D3 + Codex R0-P1 + ADR-0024/0025）。复用执行期已算并落库的
         # data_classification（不重算，保产物/样本与落库任务级分级一致）。
-        output_file_ids = self._register_outputs(
-            conn, task_id, output_dir, classification=data_classification
-        )
+        try:
+            output_file_ids = self._register_outputs(
+                conn, task_id, output_dir, classification=data_classification
+            )
+        except _OutputFileLimitExceededError as exc:
+            error_message = str(exc)
+            repos.set_task_status(
+                conn,
+                task_id,
+                "failed",
+                error_message=error_message,
+            )
+            repos.append_event(
+                conn,
+                task_id=task_id,
+                agent_id=agent_id,
+                event_type="task_failed",
+                level="error",
+                message=error_message,
+                payload={
+                    "output_registration": "rejected",
+                    "max_output_files": MAX_TASK_OUTPUT_FILE_IDS,
+                },
+            )
+            self._record_failure_sample(
+                conn,
+                task,
+                agent,
+                error_message,
+                data_classification,
+            )
+            return {"status": "failed", "task": repos.get_task(conn, task_id)}
         repos.set_task_outputs(conn, task_id, output_file_ids)
 
         # sim_run_ref 回填（P3.2 接缝，spec §4.3）：workflow 成功输出
@@ -1437,9 +1494,20 @@ class AgentRuntime:
         file_ids: list[str] = []
         if not output_dir.is_dir():
             return file_ids
-        for path in sorted(output_dir.rglob("*")):
-            if not path.is_file():
-                continue
+        output_paths: list[Path] = []
+        for path in output_dir.rglob("*"):
+            if path.is_file():
+                output_paths.append(path)
+            if len(output_paths) > MAX_TASK_OUTPUT_FILE_IDS:
+                # Reject before the first file-row write.  Otherwise Runtime
+                # could complete a task whose persisted output list is larger
+                # than the owner-lineage read boundary and immediately becomes
+                # inaccessible through its own API.
+                raise _OutputFileLimitExceededError(
+                    "工作流产物文件超过可授权上限 "
+                    f"{MAX_TASK_OUTPUT_FILE_IDS}，已拒绝注册并将任务标记失败"
+                )
+        for path in sorted(output_paths):
             file_id = str(uuid.uuid4())
             repos.create_file(
                 conn,

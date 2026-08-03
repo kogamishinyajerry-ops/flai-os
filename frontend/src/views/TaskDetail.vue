@@ -933,7 +933,7 @@ async function handleCancel() {
   }
   try {
     await cancelTask(taskId);
-    ElMessage.success("任务已取消");
+    ElMessage.info("任务已取消");
     await pokeTask(taskId); // 带外补拉：不等下一 tick，动作结果立即回显
   } catch (err) {
     ElMessage.error(err.detail || err.message);
@@ -961,7 +961,15 @@ async function handleReview(action) {
     if (action === "approve") {
       burstSigned(approveBtnEl.value?.ref);
     }
-    ElMessage.success(`已${label}`);
+    if (action === "approve") {
+      ElMessage({
+        message: `已${label}`,
+        type: "info",
+        customClass: "flai-message-signed",
+      });
+    } else {
+      ElMessage.error(`已${label}`);
+    }
     await pokeTask(taskId); // 带外补拉：不等下一 tick，动作结果立即回显
   } catch (err) {
     ElMessage.error(err.detail || err.message);
@@ -983,7 +991,7 @@ async function handleSubmitFeedback() {
       category: feedbackForm.category,
       message: feedbackForm.message || null,
     });
-    ElMessage.success("反馈已提交");
+    ElMessage.info("反馈已提交");
     feedbackForm.message = "";
     await loadFeedback();
   } catch (err) {

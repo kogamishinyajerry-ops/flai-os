@@ -255,7 +255,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 
 
 const props = defineProps({
@@ -277,11 +277,19 @@ const reviewOpen = ref(false);
 const evidenceOpen = ref(false);
 const packageContentOpen = ref(false);
 const reviewTrigger = ref(null);
+const viewportWidth = ref(typeof window === "undefined" ? 641 : window.innerWidth);
 const drawerSize = computed(() => (
-  typeof window !== "undefined" && window.innerWidth <= 640
+  viewportWidth.value <= 640
     ? "100%"
     : "min(560px, 92vw)"
 ));
+
+function syncViewportWidth() {
+  viewportWidth.value = window.innerWidth;
+}
+
+onMounted(() => window.addEventListener("resize", syncViewportWidth, { passive: true }));
+onUnmounted(() => window.removeEventListener("resize", syncViewportWidth));
 const visualState = computed(() => (
   props.candidate?.skill_package?.state === "pending_review"
     ? "package_pending"
@@ -593,6 +601,8 @@ function restoreFocus() {
   .asset-candidate-callout { margin-left: 0; align-items: flex-start; flex-wrap: wrap; }
   .candidate-summary { white-space: normal; }
   .candidate-open { margin-left: 20px; min-height: 44px; }
+  .candidate-package-content-toggle,
+  .candidate-evidence-toggle { min-height: 44px; }
   .candidate-review-actions { display: grid; grid-template-columns: 1fr; }
   .candidate-action { min-height: 44px; width: 100%; }
 }

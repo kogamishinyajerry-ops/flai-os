@@ -33,7 +33,15 @@ test("功能与资产地图只在主会话按需披露，不新增 /map 页面",
     featureAssetMapSource,
     /event\.currentTarget\.open\s*&&\s*phase\.value\s*===\s*"idle"/,
   );
-  assert.match(featureAssetMapSource, /await getFeatureAssetMap\(\)/);
+  assert.match(
+    featureAssetMapSource,
+    /inject\(\s*"flaiFeatureAssetMapLoader",\s*getFeatureAssetMap,?\s*\)/,
+  );
+  assert.match(featureAssetMapSource, /await featureAssetMapLoader\(\)/);
+  assert.match(
+    featureAssetMapSource,
+    /class="map-refresh"[\s\S]*?@click="loadMap"[\s\S]*?重新读取/,
+  );
   assert.doesNotMatch(featureAssetMapSource, /<input|<textarea|<select/);
 });
 

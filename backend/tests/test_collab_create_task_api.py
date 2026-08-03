@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from conftest import TEST_USERNAME
+
 
 def _mk(client, name, **extra):
     body = {"agent_id": "hello_agent", "name": name, "inputs": {"name": name}}
@@ -96,6 +98,7 @@ def test_output_file_cannot_be_directly_referenced_as_input(app_env):
             conn, file_id=fid, task_id=up["id"], kind="output", filename="secret.csv",
             path=f"/tmp/{fid}", size_bytes=1, sha256="a" * 64, classification="sensitive",
         )
+        repos.set_task_outputs(conn, up["id"], [fid])
     finally:
         conn.close()
     r = _mk(client, "thief", input_file_ids=[fid])
@@ -113,6 +116,7 @@ def test_uploaded_input_file_can_be_referenced(app_env):
         repos.create_file(
             conn, file_id=fid, task_id=None, kind="input", filename="upload.csv",
             path=f"/tmp/{fid}", size_bytes=1, sha256="b" * 64, classification="internal",
+            owner_username=TEST_USERNAME,
         )
     finally:
         conn.close()
@@ -130,12 +134,18 @@ def test_R1_cross_conversation_dependency_rejected(app_env):
     c1, c2 = f"conv_{uuid.uuid4().hex}", f"conv_{uuid.uuid4().hex}"
     conn = app.state.conn_factory()
     try:
-        repos.create_conversation(conn, conversation_id=c1, agent_id="guide_agent", created_by="t")
-        repos.create_conversation(conn, conversation_id=c2, agent_id="guide_agent", created_by="t")
+        repos.create_conversation(
+            conn, conversation_id=c1, agent_id="guide_agent", created_by="t",
+            created_by_username=TEST_USERNAME,
+        )
+        repos.create_conversation(
+            conn, conversation_id=c2, agent_id="guide_agent", created_by="t",
+            created_by_username=TEST_USERNAME,
+        )
         repos.create_task(
             conn, task_id="t1_in_c1", agent_id="hello_agent", agent_version="0.1.0",
             name="t1", created_by="t", inputs={"name": "x"}, input_file_ids=[], metadata={},
-            conversation_id=c1,
+            conversation_id=c1, created_by_username=TEST_USERNAME,
         )
     finally:
         conn.close()
@@ -169,6 +179,7 @@ def test_R2_eval_origin_upstream_rejected(app_env):
             conn, task_id=f"eval_{uuid.uuid4().hex}", agent_id="hello_agent",
             agent_version="0.1.0", name="eval", created_by="t", inputs={"name": "x"},
             input_file_ids=[], metadata={}, origin="eval",
+            created_by_username=TEST_USERNAME,
         )
         eval_id = conn.execute("SELECT id FROM tasks WHERE origin='eval'").fetchone()[0]
     finally:

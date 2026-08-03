@@ -20,6 +20,8 @@ from ..ontology import (
     SkillPackageNotFoundError,
     SkillPackageUnavailableError,
 )
+from ..storage import asset_candidates as candidate_store
+from . import object_authorization as oauth
 
 router = APIRouter(prefix="/api", tags=["asset-drafts"])
 
@@ -85,6 +87,15 @@ def preview_asset_draft(
     body: AssetDraftPreviewRequest,
     request: Request,
 ) -> dict[str, Any]:
+    conn = request.app.state.conn_factory()
+    try:
+        oauth.require_owned_conversation_inputs(
+            conn,
+            conversation_id,
+            oauth.authenticated_username(request),
+        )
+    finally:
+        conn.close()
     try:
         conversation = request.app.state.conversation_service.get(conversation_id)
     except ConversationNotFoundError as exc:
@@ -131,10 +142,32 @@ def _skill_package_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=503, detail="Skill Package 来源或证据不可用")
 
 
+def _authorize_task_candidate_request(
+    conn: Any,
+    *,
+    task_id: str,
+    request: Request,
+) -> str:
+    """Authorize task lineage and any existing Candidate before ledger decode."""
+
+    username = oauth.authenticated_username(request)
+    candidate_id = candidate_store.get_latest_id_for_task(conn, task_id)
+    if candidate_id is None:
+        oauth.require_owned_task_conversation_inputs(conn, task_id, username)
+        return username
+    context = oauth.require_owned_asset_candidate_inputs(
+        conn, candidate_id, username
+    )
+    if context.get("source_task_id") != task_id:
+        oauth.raise_resource_not_found()
+    return username
+
+
 @router.post("/tasks/{task_id}/asset-candidate")
 def create_asset_candidate(task_id: str, request: Request) -> dict[str, Any]:
     conn = request.app.state.conn_factory()
     try:
+        _authorize_task_candidate_request(conn, task_id=task_id, request=request)
         session = request.state.auth_session
         return request.app.state.asset_candidate_ledger.create_for_completed_task(
             conn,
@@ -156,6 +189,7 @@ def create_asset_candidate(task_id: str, request: Request) -> dict[str, Any]:
 def get_asset_candidate(task_id: str, request: Request) -> dict[str, Any]:
     conn = request.app.state.conn_factory()
     try:
+        _authorize_task_candidate_request(conn, task_id=task_id, request=request)
         return request.app.state.asset_candidate_ledger.get_for_task(
             conn,
             task_id=task_id,
@@ -179,6 +213,11 @@ def decide_asset_candidate(
 ) -> dict[str, Any]:
     conn = request.app.state.conn_factory()
     try:
+        oauth.require_owned_asset_candidate_inputs(
+            conn,
+            candidate_id,
+            oauth.authenticated_username(request),
+        )
         return request.app.state.asset_candidate_ledger.decide(
             conn,
             candidate_id=candidate_id,
@@ -203,11 +242,24 @@ def decide_asset_candidate(
 def get_skill_package(package_id: str, request: Request) -> dict[str, Any]:
     conn = request.app.state.conn_factory()
     try:
-        return request.app.state.candidate_materializer.get(
-            conn,
-            package_id=package_id,
-            username=request.state.auth_session.username,
-        )
+        conn.execute("BEGIN")
+        try:
+            username = oauth.authenticated_username(request)
+            oauth.require_owned_skill_package_inputs(
+                conn,
+                package_id,
+                username,
+            )
+            result = request.app.state.candidate_materializer.get(
+                conn,
+                package_id=package_id,
+                username=username,
+            )
+            conn.execute("COMMIT")
+            return result
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     except (
         SkillPackageNotFoundError,
         SkillPackageConflictError,
@@ -227,11 +279,24 @@ def get_skill_package_review_content(
 
     conn = request.app.state.conn_factory()
     try:
-        return request.app.state.candidate_materializer.get_review_content(
-            conn,
-            package_id=package_id,
-            username=request.state.auth_session.username,
-        )
+        conn.execute("BEGIN")
+        try:
+            username = oauth.authenticated_username(request)
+            oauth.require_owned_skill_package_inputs(
+                conn,
+                package_id,
+                username,
+            )
+            result = request.app.state.candidate_materializer.get_review_content(
+                conn,
+                package_id=package_id,
+                username=username,
+            )
+            conn.execute("COMMIT")
+            return result
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     except (
         SkillPackageNotFoundError,
         SkillPackageConflictError,
@@ -252,6 +317,11 @@ def decide_skill_package(
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            oauth.require_owned_skill_package_inputs(
+                conn,
+                package_id,
+                oauth.authenticated_username(request),
+            )
             result = request.app.state.candidate_materializer.decide(
                 conn,
                 package_id=package_id,

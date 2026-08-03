@@ -27,6 +27,7 @@ from jsonschema import validate
 
 from backend.app.jobs.runner import JobRunner
 from backend.app.storage import repos
+from conftest import TEST_USERNAME
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACTS_DIR = REPO_ROOT / "contracts"
@@ -75,6 +76,7 @@ def test_asset_draft_preview_response_matches_bundle_schema(
             conversation_id=conversation_id,
             agent_id="guide_agent",
             created_by="测试工程师",
+            created_by_username=TEST_USERNAME,
         )
         repos.append_message(
             conn,

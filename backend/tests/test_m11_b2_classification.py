@@ -255,14 +255,20 @@ def test_missing_input_record_derives_sensitive(governance_env: GovernanceEnv) -
         conn.close()
     assert derived == "sensitive", "记录缺失=出处不可考，必须宁严勿洗白"
 
-    # 真跑链路：不存在的 file_id → 输入完整性校验失败 → failed，失败样本仍 sensitive
-    task_id, result = _create_and_run_task(
-        governance_env, inputs={"name": "缺失"}, input_file_ids=["ghost-id"]
+    # 公共 API 在 owner seam 更早拒绝：缺失与跨 owner 都是同一泛化 404，
+    # 不再创建一个注定失败的任务或样本；内部派生函数仍保持 sensitive 兜底。
+    before = governance_env.client.get("/api/tasks").json()
+    created = governance_env.client.post(
+        "/api/tasks",
+        json={
+            "agent_id": "governed_agent",
+            "inputs": {"name": "缺失"},
+            "input_file_ids": ["ghost-id"],
+        },
     )
-    assert result["status"] == "failed"
-    samples = _samples_for_task(governance_env, task_id)
-    assert len(samples) == 1
-    assert samples[0]["classification"] == "sensitive"
+    assert created.status_code == 404
+    assert created.json() == {"detail": "资源不存在或不可访问"}
+    assert governance_env.client.get("/api/tasks").json() == before
 
 
 # ── 验收 #7：传播分支②（坏值输入 → 派生 sensitive）───────────────────────

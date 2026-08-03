@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -6,6 +7,11 @@ import {
   candidatePresentation,
   packagePresentation,
 } from "../src/utils/featureAssetMap.js";
+
+const FEATURE_ASSET_MAP_COMPONENT = readFileSync(
+  new URL("../src/components/FeatureAssetMapDisclosure.vue", import.meta.url),
+  "utf8",
+);
 
 const VALID_MAP = {
   schema_version: "feature_asset_map.v1",
@@ -198,4 +204,22 @@ test("资产状态显示锁定人审与未形成语义", () => {
     label: "尚未形成",
     className: "is-unformed",
   });
+});
+
+test("Candidate 与 Skill Package 拒绝态保持中性，不占真失败红槽", () => {
+  assert.deepEqual(candidatePresentation("rejected"), {
+    label: "Candidate 已驳回",
+    shortLabel: "已驳回",
+    className: "is-rejected",
+  });
+  assert.deepEqual(packagePresentation("rejected"), {
+    label: "已驳回",
+    className: "is-rejected",
+  });
+
+  const rejectedRule =
+    FEATURE_ASSET_MAP_COMPONENT.match(/\.is-rejected\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(rejectedRule, /color:\s*var\(--ink-soft\)/);
+  assert.match(rejectedRule, /background:\s*var\(--hover-tint\)/);
+  assert.doesNotMatch(rejectedRule, /trust-fail/);
 });

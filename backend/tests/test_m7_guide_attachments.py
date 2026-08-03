@@ -717,7 +717,7 @@ def test_post_message_with_missing_file_id_404_zero_persistence(client: TestClie
         json={"content": "附件呢", "file_ids": ["f_不存在"]},
     )
     assert resp.status_code == 404
-    assert "f_不存在" in resp.json()["detail"]
+    assert resp.json() == {"detail": "资源不存在或不可访问"}
     assert stub.calls == []  # 校验先于 LLM 调用
     conv = client.get(f"/api/conversations/{cid}").json()
     assert conv["messages"] == []  # 零落库

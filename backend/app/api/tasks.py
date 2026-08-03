@@ -16,6 +16,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from . import classification_gate as cgate
+from . import object_authorization as oauth
 from ..core.errors import IllegalTransitionError, ReviewEvidenceUnavailableError
 from ..logging_setup import audit_event
 from ..ontology.skill_reuse_evidence import SkillReuseEvidenceLedger
@@ -388,6 +389,48 @@ def _package_snapshot_parts(
     return manifest, digest
 
 
+def _require_owned_direct_input_file(
+    conn: Any,
+    file_id: str,
+    username: str,
+) -> dict[str, Any]:
+    """Authorize the file first, then preserve the owned wrong-kind 422 contract."""
+    record = oauth.require_owned_file(conn, file_id, username)
+    if record.get("kind") != "input":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"input_file_ids 只接受上传件（kind=input）：{file_id} 的 kind="
+                f"{record.get('kind')!r}——上游产物须经依赖 resolver 管道注入，不得直引"
+            ),
+        )
+    return record
+
+
+def _prospective_task_authorization_record(
+    *,
+    task_id: str,
+    created_by_username: str,
+    conversation_id: str | None,
+    input_file_ids: list[str],
+    depends_on: list[str],
+    input_binding: dict[str, Any] | None,
+    retry_of: str | None,
+) -> dict[str, Any]:
+    """Build the virtual row consumed by the shared persisted-lineage walker."""
+    return {
+        "id": task_id,
+        "origin": "user",
+        "created_by_username": created_by_username,
+        "conversation_id": conversation_id,
+        "input_file_ids": list(input_file_ids),
+        "output_file_ids": [],
+        "depends_on": list(depends_on),
+        "input_binding": input_binding,
+        "retry_of": retry_of,
+    }
+
+
 def _automatic_task_name(agent: dict[str, Any], agent_id: str) -> str:
     """Derive an engineer-facing task title only from the captured package manifest."""
     snapshot_display_name = agent.get("name")
@@ -632,10 +675,27 @@ def _load_batch_operation_replay(
     也不需要新增唯一索引。写事务内二次调用时，BEGIN IMMEDIATE 保证并发重放只会
     有一个创建者；其余调用读取并返回同一组权威任务。
     """
-    tasks = [repos.get_task(conn, task_id) for task_id in task_ids]
+    try:
+        tasks = [repos.get_task(conn, task_id) for task_id in task_ids]
+    except (TypeError, ValueError):
+        # Corrupt persisted JSON is an inaccessible relationship graph, not an
+        # internal error or a replay/fingerprint oracle.
+        oauth.raise_resource_not_found()
     present = [task for task in tasks if task is not None]
     if not present:
         return None
+    # Authenticate every present deterministic row before exposing whether the
+    # operation set is complete.  Otherwise a poisoned/foreign partial set can
+    # turn the 409 conflict shape into an existence oracle.
+    authorized_by_id = {
+        task_id: oauth.require_owned_task(
+            conn,
+            task_id,
+            created_by_username,
+        )
+        for task_id, task in zip(task_ids, tasks, strict=True)
+        if task is not None
+    }
     if len(present) != len(task_ids):
         message = (
             f"创建操作 {operation_id} 的任务记录不完整——状态待人工核对，"
@@ -646,9 +706,14 @@ def _load_batch_operation_replay(
             detail={"code": "batch_operation_conflict", "message": message},
         )
 
+    # A deterministic operation id proves only which rows to inspect; it is
+    # not an authorization capability.  Revalidate every complete replay row's
+    # recursive owner lineage before fingerprint/conflict diagnostics or any
+    # task projection is returned.
+    authorized_tasks = [authorized_by_id[task_id] for task_id in task_ids]
+
     expected_count = len(task_ids)
-    for index, task in enumerate(tasks):
-        assert task is not None
+    for index, task in enumerate(authorized_tasks):
         operation = (task.get("metadata") or {}).get(_BATCH_OPERATION_META_KEY)
         valid = (
             task.get("created_by_username") == created_by_username
@@ -670,7 +735,7 @@ def _load_batch_operation_replay(
                 status_code=409,
                 detail={"code": "batch_operation_conflict", "message": message},
             )
-    return [task for task in tasks if task is not None]
+    return authorized_tasks
 
 
 @router.post("/tasks")
@@ -712,19 +777,24 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
         task_id = f"task_{uuid.uuid4().hex}"
         # ADR-0019 D5：发起人=登录会话身份（中间件已验证注入），非请求体自报。
         # created_by 存 display_name（展示用，可撞名）；created_by_username（迁移 #9）
-        # 存不可变唯一 username——批C 个人贡献归因按 username 绝不撞名，职责分离
-        # （禁自审）也以此为准（现仅落库，策略待 owner 定角色轴）。
+        # 存不可变唯一 username——批C 个人贡献归因按 username 绝不撞名，也是
+        # V1 owner_signoff 的授权轴。creator 自签允许且留痕；不声称角色委托/职责分离。
         created_by = request.state.user["display_name"]
-        created_by_username = request.state.user["username"]
+        created_by_username = oauth.authenticated_username(request)
+        # Resource references are capabilities, not mere foreign keys.  Resolve
+        # their exact owner before any task/event write; missing, legacy NULL,
+        # and cross-owner rows all use the same generalized 404.
+        if body.conversation_id is not None:
+            oauth.require_owned_conversation_inputs(
+                conn, body.conversation_id, created_by_username
+            )
         # 协作运行时 §3.4/§3.5：depends_on 只能引用**已存在**任务（→图按构造即 DAG，
         # 无法建回边指向未来任务，无需运行时环检测）；缺失即 404 fail-closed。
         # input_binding 引用的上游必在 depends_on 内（越权引用拒，T6）。
         for dep_id in body.depends_on:
-            upstream = repos.get_task(conn, dep_id)
-            if upstream is None:
-                raise HTTPException(
-                    status_code=404, detail=f"依赖的上游任务不存在：{dep_id}"
-                )
+            upstream = oauth.require_readable_task(
+                conn, dep_id, created_by_username
+            )
             # Codex 增量2审 R1 P1：依赖必须同 conversation 作用域（设计明列「不做跨
             # conversation 依赖」）。conversation_id 是分组归属、机密由 classification/taint
             # 独立管，但声明的排除须 fail-closed 强制——否则 C2 任务 depends_on C1 任务时
@@ -755,19 +825,12 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
         # 直接提交的 input_file_ids 只允许上传件（allowlist：kind=input）。上游产物
         # （kind=output）唯一合法入口是 review-gated resolver 的管道注入
         # （enqueue_dependent_task 合并写 input_file_ids）——绝不许绕过 depends_on/人签闸
-        # 直引他人 output，否则 _open_input_files 的 task_runs_dir 放宽会沦为直读任意
+        # 直引任意 output，否则 _open_input_files 的 task_runs_dir 放宽会沦为直读任务
         # 任务产物的旁路。allowlist 而非 denylist：未来新增 kind 默认拒（fail-closed）。
-        # 缺失文件（get_file=None）留执行期 _open_input_files 兜底，不在创建期拒。
+        # 记录缺失、legacy owner NULL、跨 owner 在创建期统一泛化 404；owner 自己的
+        # 非 input 文件保留 422 wrong-kind 诊断，且全部发生在任何任务写入前。
         for fid in body.input_file_ids:
-            rec = repos.get_file(conn, fid)
-            if rec is not None and rec.get("kind") != "input":
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        f"input_file_ids 只接受上传件（kind=input）：{fid} 的 kind="
-                        f"{rec.get('kind')!r}——上游产物须经依赖 resolver 管道注入，不得直引"
-                    ),
-                )
+            _require_owned_direct_input_file(conn, fid, created_by_username)
         # 批七 ADR-0030：创建时点密级准入 gate——Agent 密级上限不足以接这批材料
         # 即 400 拒建（中性文案：策略拒绝非报警红）。单建路径；TaskCreate 手建同走
         # 本函数即覆盖；batch 路径在 create_tasks_batch 同函数判定。
@@ -790,14 +853,12 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                     detail=f"input_binding 引用了 depends_on 之外的任务（越权）：{stray}",
                 )
         # retry_of（迁移 #12 / ADR-0033）：血缘目标必须真实存在且状态严格为
-        # failed。不存在 404；存在但非失败 422，且两者都发生在建行之前，保证零任务
+        # failed。不存在/不可见泛化 404；自己的非失败任务 422，且两者都发生在建行之前，保证零任务
         # 落库。纯元数据不复位原任务、不搬产物，复制 inputs 仍走本请求体正常校验。
         if body.retry_of is not None:
-            retry_origin = repos.get_task(conn, body.retry_of)
-            if retry_origin is None:
-                raise HTTPException(
-                    status_code=404, detail=f"retry_of 指向的任务不存在：{body.retry_of}"
-                )
+            retry_origin = oauth.require_owned_task(
+                conn, body.retry_of, created_by_username
+            )
             if retry_origin.get("status") != "failed":
                 raise HTTPException(
                     status_code=422,
@@ -824,20 +885,29 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
             conversation_id=body.conversation_id,
             retry_of=body.retry_of,
         )
-        if body.conversation_id is not None:
-            # 归属某导引会话：会话须真实存在（防悬空引用）**且仍 active**——归档后真只读
-            # （异源 Codex R2-#3：「结束协作」= 真结束，不再接受新成员任务）。**复查状态与
-            # INSERT 必须原子**（Codex R1 复审 #3：check-then-insert 非原子时，并发 conclude
-            # 可抢在二者之间提交、仍把任务挂进已归档会话）→ BEGIN IMMEDIATE 写锁内复查真实
-            # 状态再 INSERT，与 conclude 的 BEGIN IMMEDIATE 串行化。set_task_status 自带
-            # BEGIN IMMEDIATE，故本事务只包「复查 + create_task」，提交后再迁 queued。
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                conv = repos.get_conversation(conn, body.conversation_id)
-                if conv is None:
-                    raise HTTPException(
-                        status_code=404, detail=f"归属的导引会话不存在：{body.conversation_id}"
-                    )
+        prospective_task = _prospective_task_authorization_record(
+            task_id=task_id,
+            created_by_username=created_by_username,
+            conversation_id=body.conversation_id,
+            input_file_ids=body.input_file_ids,
+            depends_on=body.depends_on,
+            input_binding=(
+                body.input_binding.model_dump()
+                if body.input_binding is not None
+                else None
+            ),
+            retry_of=body.retry_of,
+        )
+        # Every create, with or without a conversation, takes the same write
+        # lock for a final prospective-root traversal immediately before the
+        # insert.  The new root therefore counts toward depth/node budgets, and
+        # any concurrent trusted-store drift is serialized with the write.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if body.conversation_id is not None:
+                conv = oauth.require_owned_conversation_inputs(
+                    conn, body.conversation_id, created_by_username
+                )
                 if conv["status"] != "active":
                     raise HTTPException(
                         status_code=409,
@@ -846,13 +916,16 @@ def create_task(body: CreateTaskRequest, request: Request) -> dict[str, Any]:
                             f"（结束协作=真只读）：{body.conversation_id}"
                         ),
                     )
-                repos.create_task(conn, **create_kwargs)
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
-        else:
+            oauth.require_prospective_user_task_lineage(
+                conn,
+                [prospective_task],
+                created_by_username,
+            )
             repos.create_task(conn, **create_kwargs)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
         # 协作运行时 §3.5 条件短路（F4 命门修复）：depends_on 非空的任务**不自动入队**，
         # 滞留 created 由 resolver 在全部上游 completed 后管道产物入 input 并入队——否则
         # 带依赖任务会在此被 P2-4 无条件推进到 queued，resolver 永远看不到 created 态、
@@ -923,7 +996,7 @@ def create_tasks_batch(body: CreateTasksBatchRequest, request: Request) -> dict[
             items=list(body.items),
             conversation_id=body.conversation_id,
             created_by=request.state.user["display_name"],
-            created_by_username=request.state.user["username"],
+            created_by_username=oauth.authenticated_username(request),
             pinned_versions=body.pinned_versions,
             pinned_package_digests=body.pinned_package_digests,
             operation_id=body.operation_id,
@@ -1042,8 +1115,9 @@ def run_batch_creation(
     operation_id: str | None = None,
     require_complete_pin_group_for_versions: bool = False,
 ) -> dict[str, Any]:
-    """批量创建内核（批七 batch 端点原实现整体提取，语义零改动）：逐项静态校验
-    全收集（含 retry_of 仅允许指向 failed 任务；全有全无 422）→ BEGIN IMMEDIATE 单事务建行+入队+task_created/charter
+    """批量创建内核（批七 batch 端点原实现整体提取）：先做 exact-owner 对象授权
+    （缺失/不可见泛化 404），再逐项静态校验全收集（自己的 retry_of 仅允许指向
+    failed；其余全有全无 422）→ BEGIN IMMEDIATE 单事务建行+入队+task_created/charter
     事件 → 提交后取回投影。调用方持 conn 生命周期。
 
     服务端在首条写入前按 Agent 从权威 Registry 各取一次 package_snapshot，并只从
@@ -1061,6 +1135,24 @@ def run_batch_creation(
         pinned_package_digests=pinned_package_digests,
         require_for_version_only=require_complete_pin_group_for_versions,
     )
+
+    # Authorize every caller-supplied object reference before idempotency replay,
+    # Registry checks, validation aggregation, or writes.  A replay/conflict or
+    # schema response must never become an existence oracle for another owner's
+    # conversation, upload, or retry source.
+    if conversation_id is not None:
+        oauth.require_owned_conversation_inputs(
+            conn, conversation_id, created_by_username
+        )
+    for item in items:
+        for file_id in item.input_file_ids:
+            _require_owned_direct_input_file(
+                conn, file_id, created_by_username
+            )
+        if item.retry_of is not None:
+            oauth.require_owned_task(
+                conn, item.retry_of, created_by_username
+            )
 
     operation_fingerprint: str | None = None
     if operation_id is not None:
@@ -1087,7 +1179,10 @@ def run_batch_creation(
         )
         if replay is not None:
             return {
-                "tasks": replay,
+                "tasks": [
+                    cgate.redact_task_row_if_sensitive(conn, task)
+                    for task in replay
+                ],
                 "operation_id": operation_id,
                 "replayed": True,
             }
@@ -1119,10 +1214,10 @@ def run_batch_creation(
                     f"after 下标 {dep_idx} 非法：只能引用本批更早条目（0..{idx - 1}）——按构造即 DAG"
                 )
         if item.retry_of is not None:
-            retry_origin = repos.get_task(conn, item.retry_of)
-            if retry_origin is None:
-                item_errors.append(f"retry_of 指向的任务不存在：{item.retry_of}")
-            elif retry_origin.get("status") != "failed":
+            retry_origin = oauth.require_owned_task(
+                conn, item.retry_of, created_by_username
+            )
+            if retry_origin.get("status") != "failed":
                 item_errors.append(
                     f"retry_of 只能指向失败任务：{item.retry_of} 当前状态为"
                     f" {retry_origin.get('status')!r}"
@@ -1153,17 +1248,18 @@ def run_batch_creation(
             if replay is not None:
                 conn.execute("COMMIT")
                 return {
-                    "tasks": replay,
+                    "tasks": [
+                        cgate.redact_task_row_if_sensitive(conn, task)
+                        for task in replay
+                    ],
                     "operation_id": operation_id,
                     "replayed": True,
                 }
         conversation: dict[str, Any] | None = None
         if conversation_id is not None:
-            conv = repos.get_conversation(conn, conversation_id)
-            if conv is None:
-                raise HTTPException(
-                    status_code=404, detail=f"归属的导引会话不存在：{conversation_id}"
-                )
+            conv = oauth.require_owned_conversation_inputs(
+                conn, conversation_id, created_by_username
+            )
             if conv["status"] != "active":
                 message = (
                     f"归属的导引会话已 {conv['status']}，不再接受新任务"
@@ -1453,6 +1549,31 @@ def run_batch_creation(
                     "batch_errors": clearance_errors,
                 },
             )
+
+        # Validate the complete graph exactly as it will exist after this batch,
+        # while the same write lock is held and before the first task/binding/
+        # event insert.  ``after`` edges must resolve to the deterministic IDs
+        # allocated above so the shared bounded traversal counts every virtual
+        # batch node plus persisted retry/output-input ancestry.  One shared
+        # state also enforces the aggregate node/file/conversation budgets.
+        prospective_tasks = [
+            _prospective_task_authorization_record(
+                task_id=task_ids[idx],
+                created_by_username=created_by_username,
+                conversation_id=conversation_id,
+                input_file_ids=item.input_file_ids,
+                depends_on=[task_ids[dep_idx] for dep_idx in item.after],
+                input_binding=None,
+                retry_of=item.retry_of,
+            )
+            for idx, item in enumerate(items)
+        ]
+        oauth.require_prospective_user_task_lineage(
+            conn,
+            prospective_tasks,
+            created_by_username,
+        )
+
         for idx, item in enumerate(items):
             deps = [task_ids[d] for d in item.after]
             snapshot = package_snapshots[idx]
@@ -1574,10 +1695,15 @@ def list_tasks(
 ) -> list[dict[str, Any]]:
     conn = request.app.state.conn_factory()
     try:
-        rows = repos.list_tasks(
-            conn, agent_id=agent_id, status=status, conversation_id=conversation_id,
-            origin=None if origin == "all" else origin,
-            limit=limit, offset=offset,
+        rows = oauth.list_readable_tasks(
+            conn,
+            username=oauth.authenticated_username(request),
+            agent_id=agent_id,
+            status=status,
+            conversation_id=conversation_id,
+            origin=origin,
+            limit=limit,
+            offset=offset,
         )
         # ADR-0025 单 chokepoint：sensitive 任务的 error_message（承载工具内容）遮蔽。
         return [cgate.redact_task_row_if_sensitive(conn, t) for t in rows]
@@ -1589,9 +1715,9 @@ def list_tasks(
 def get_task(task_id: str, request: Request) -> dict[str, Any]:
     conn = request.app.state.conn_factory()
     try:
-        task = repos.get_task(conn, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+        task = oauth.require_readable_task(
+            conn, task_id, oauth.authenticated_username(request)
+        )
         # ADR-0025：sensitive→遮蔽 error_message（工具内容）；task.inputs 是用户自报
         # 输入不在门内（ADR-0024 D5 边界：封「工具产出」不封「用户提交」）。
         return cgate.redact_task_row_if_sensitive(conn, task)
@@ -1603,9 +1729,9 @@ def get_task(task_id: str, request: Request) -> dict[str, Any]:
 def cancel_task(task_id: str, request: Request) -> dict[str, Any]:
     conn = request.app.state.conn_factory()
     try:
-        task = repos.get_task(conn, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+        task = oauth.require_owned_task(
+            conn, task_id, oauth.authenticated_username(request)
+        )
         current = task["status"]
 
         if current in ("created", "queued"):
@@ -1650,9 +1776,9 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
     """
     conn = request.app.state.conn_factory()
     try:
-        task = repos.get_task(conn, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+        task = oauth.require_owned_task(
+            conn, task_id, oauth.authenticated_username(request)
+        )
         if task["status"] != "waiting_review":
             raise HTTPException(
                 status_code=409,
@@ -1699,10 +1825,11 @@ def review_task(task_id: str, body: ReviewTaskRequest, request: Request) -> dict
         # audit.log 轨。此处补审计轴：actor=签发者唯一 username（P2-4 唯一身份纪律），
         # 记录被签发任务、创建者、及自审标记。audit.log 独立于 DB（不同持久化域，无法
         # 互相原子），故置于原子 DB 提交**之后**——只为已提交的签发决策落审计。
-        # 自审判定（迁移 #9 后升级）：created_by_username 存在（新任务）时按唯一
-        # username 精确比对——绝不因显示名撞名误判；legacy 行（该列 NULL）回退
-        # display_name 近似比对，并标 self_review_basis 说明证据等级。仍**只标记
-        # 不拦截**（硬性职责分离 403 是 owner 待定的角色轴策略，task #17）。
+        # V1 owner_signoff 契约：任务 exact owner 是允许且唯一支持的签发者；creator
+        # 自签不拦截，但必须如实记录 self_review。created_by_username 存在（新任务）
+        # 时按唯一 username 精确比对，绝不因显示名撞名误判；legacy 行（该列 NULL）
+        # 回退 display_name 近似比对并标 self_review_basis 证据等级。细粒度 reviewer
+        # 角色、委托和职责分离不在 V1 声称范围，不能从本端点行为推断其已具备。
         created_by = task.get("created_by")
         created_by_username = task.get("created_by_username")
         if created_by_username is not None:
@@ -1733,11 +1860,14 @@ def set_sim_run_ref(task_id: str, body: SetSimRunRefRequest, request: Request) -
     中间件覆盖（非 allowlist）。任务不存在→404。"""
     conn = request.app.state.conn_factory()
     try:
+        oauth.require_owned_task(
+            conn, task_id, oauth.authenticated_username(request)
+        )
         # 注：设 run 关联是 metadata 标注、非任务状态迁移——「无事件=没发生」约束的是
         # 状态变化；metadata.sim_run_ref.set_at 本身即记录，不为此扩冻结的事件枚举。
         task = repos.set_task_sim_run_ref(conn, task_id, module=body.module, run_id=body.run_id)
         if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+            oauth.raise_resource_not_found()
         # ADR-0025：失败任务的 error_message 经此响应回；sensitive→遮蔽（Codex R1-A 三漏端点之一）。
         return cgate.redact_task_row_if_sensitive(conn, task)
     finally:
@@ -1753,9 +1883,9 @@ def list_events(
 ) -> list[dict[str, Any]]:
     conn = request.app.state.conn_factory()
     try:
-        task = repos.get_task(conn, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+        task = oauth.require_readable_task(
+            conn, task_id, oauth.authenticated_username(request)
+        )
         events = repos.list_events(conn, task_id, limit=limit, offset=offset)
         # ADR-0025：tool_started 事件 payload 带工具 input、tool_failed message 带外部
         # grounding_failures（event.schema:74 本就要求敏感 payload 脱敏）——sensitive→
@@ -1772,11 +1902,14 @@ def list_events(
 # 「输出可追溯到工具版本/模型版本」的数据存而不可达。三端点均为只读投影。
 
 
-def _get_task_or_404(conn: Any, task_id: str) -> dict[str, Any]:
-    task = repos.get_task(conn, task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
-    return task
+def _get_readable_task_or_404(
+    conn: Any,
+    task_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    return oauth.require_readable_task(
+        conn, task_id, oauth.authenticated_username(request)
+    )
 
 
 @router.get("/tasks/{task_id}/tool_runs")
@@ -1784,7 +1917,7 @@ def list_task_tool_runs(task_id: str, request: Request) -> list[dict[str, Any]]:
     """任务的工具调用留痕（含 tool_version/mock 标记/原始输入输出路径）。"""
     conn = request.app.state.conn_factory()
     try:
-        task = _get_task_or_404(conn, task_id)
+        task = _get_readable_task_or_404(conn, task_id, request)
         rows = repos.list_tool_runs(conn, task_id)
         # ADR-0025：sensitive→遮蔽 input/output/raw_path + error_message（Codex R1-A：
         # 工具错误文本承载外部 grounding_failures），只留元数据。
@@ -1808,7 +1941,7 @@ def get_task_tool_runs_summary(task_id: str, request: Request) -> dict[str, Any]
     同构，不开新的内容出场面。"""
     conn = request.app.state.conn_factory()
     try:
-        _get_task_or_404(conn, task_id)
+        _get_readable_task_or_404(conn, task_id, request)
         # 单次 GROUP BY 一致快照（Codex R2-P2）：全局计数由分组行求和派生，
         # 不再第二次扫描——total/mock_count 与 by_tool 永远同一时刻的账。
         by_tool_rows = conn.execute(
@@ -1835,7 +1968,7 @@ def list_task_model_calls(task_id: str, request: Request) -> list[dict[str, Any]
     """任务的模型调用留痕（含 model_profile/model_name/token 用量，成败全量）。"""
     conn = request.app.state.conn_factory()
     try:
-        task = _get_task_or_404(conn, task_id)
+        task = _get_readable_task_or_404(conn, task_id, request)
         rows = repos.list_model_calls(conn, task_id)
         # ADR-0025：sensitive→遮蔽 request/response_summary + error_message；保留
         # token 计数/model_name 等元数据（非内容）。
@@ -1852,7 +1985,7 @@ def list_task_samples(task_id: str, request: Request) -> list[dict[str, Any]]:
     为人工审核结论回填，NULL=待定）。"""
     conn = request.app.state.conn_factory()
     try:
-        task = _get_task_or_404(conn, task_id)
+        task = _get_readable_task_or_404(conn, task_id, request)
         rows = repos.list_samples(conn, task_id)
         # ADR-0025：sensitive→遮蔽 input/output/raw_path；保留 validation_status/
         # accepted_by_engineer/classification 等元数据。
@@ -1873,8 +2006,23 @@ def list_task_output_files(task_id: str, request: Request) -> list[dict[str, Any
     仍走 /files/{id}/download 原有分级门（该端点自身的审计语义不受影响）。"""
     conn = request.app.state.conn_factory()
     try:
-        task = _get_task_or_404(conn, task_id)
-        rows = repos.list_files_by_ids(conn, task.get("output_file_ids") or [])
+        username = oauth.authenticated_username(request)
+        task = oauth.require_readable_task(conn, task_id, username)
+        output_file_ids = task.get("output_file_ids") or []
+        rows = repos.list_files_by_ids(conn, output_file_ids)
+        valid_projection = (
+            len(rows) == len(output_file_ids)
+            and all(
+                row.get("id") == output_file_ids[index]
+                and row.get("kind") == "output"
+                and row.get("task_id") == task_id
+                for index, row in enumerate(rows)
+            )
+        )
+        if valid_projection is not True:
+            oauth.raise_resource_not_found()
+        for row in rows:
+            oauth.require_readable_file(conn, row["id"], username)
         return [
             {
                 "id": r["id"],
@@ -1923,7 +2071,7 @@ def get_task_delivery_summary(task_id: str, request: Request) -> dict[str, Any]:
     """
     conn = request.app.state.conn_factory()
     try:
-        task = _get_task_or_404(conn, task_id)
+        task = _get_readable_task_or_404(conn, task_id, request)
 
         mc_rows = conn.execute(
             "SELECT status, token_usage_json FROM model_calls WHERE task_id = ?",

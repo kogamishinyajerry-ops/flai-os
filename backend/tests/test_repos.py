@@ -41,6 +41,8 @@ def _new_task(conn, **overrides):
         metadata={},
     )
     fields.update(overrides)
+    if fields.get("origin", "user") == "user" and "created_by_username" not in overrides:
+        fields["created_by_username"] = "tester"
     return repos.create_task(conn, **fields)
 
 
@@ -445,6 +447,68 @@ def test_migration_14_survives_rival_alter_mid_flight(
         "signer_username",
         "signer_session_hash",
     } <= columns
+
+
+# ── 迁移 #17：sample 级认可稳定 actor（Issue #4）──────────────────────
+
+
+_LEGACY_SAMPLES_DDL_PRE_15 = """
+CREATE TABLE samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    agent_version TEXT NOT NULL,
+    tool_id TEXT,
+    tool_version TEXT,
+    case_id TEXT,
+    input_json TEXT NOT NULL,
+    output_json TEXT,
+    raw_input_path TEXT,
+    raw_output_path TEXT,
+    validation_status TEXT,
+    accepted_by_engineer INTEGER,
+    created_at TEXT NOT NULL,
+    classification TEXT NOT NULL DEFAULT 'internal'
+)
+"""
+
+
+def test_migration_17_preserves_legacy_sample_without_actor_inference(
+    tmp_path,
+) -> None:
+    """旧 accepted=true 只证明旧动作结果，不能事后猜成某个 username 的签发。"""
+    db_path = tmp_path / "legacy-samples.db"
+    legacy = db_mod.get_conn(db_path)
+    try:
+        legacy.execute(_LEGACY_SAMPLES_DDL_PRE_15)
+        legacy.execute(
+            "INSERT INTO samples"
+            " (task_id, agent_id, agent_version, input_json, output_json,"
+            " validation_status, accepted_by_engineer, created_at, classification)"
+            " VALUES ('task-old', 'hello_agent', '0.1.0', '{}', '{}',"
+            " 'success', 1, '2026-01-01T00:00:00+00:00', 'internal')"
+        )
+        legacy.commit()
+        cols_before = {
+            row[1] for row in legacy.execute("PRAGMA table_info(samples)")
+        }
+        assert "acknowledged_by_username" not in cols_before
+        assert "acknowledged_at" not in cols_before
+    finally:
+        legacy.close()
+
+    db_mod.init_db(db_path)
+    migrated = db_mod.get_conn(db_path)
+    try:
+        sample = repos.get_sample(migrated, 1)
+        assert sample is not None
+        assert sample["accepted_by_engineer"] is True
+        assert sample["acknowledged_by_username"] is None
+        assert sample["acknowledged_at"] is None
+    finally:
+        migrated.close()
+
+    db_mod.init_db(db_path)
 
 
 def test_record_promotion_rejects_fabricated_authenticated_signer(conn) -> None:
@@ -917,6 +981,137 @@ def test_record_and_list_sample(conn) -> None:
     assert len(samples) == 1
 
 
+@pytest.mark.parametrize("malformed", [1, 0, "true", []])
+def test_record_sample_rejects_truthy_or_falsey_non_boolean_acceptance(
+    conn,
+    malformed: object,
+) -> None:
+    task = _new_task(conn)
+
+    with pytest.raises(TypeError, match="True/False/None"):
+        repos.record_sample(
+            conn,
+            task_id=task["id"],
+            agent_id="hello_agent",
+            agent_version="0.1.0",
+            input_json={},
+            accepted_by_engineer=malformed,  # type: ignore[arg-type]
+            classification="internal",
+        )
+
+    assert repos.list_samples(conn, task["id"]) == []
+
+
+def test_acknowledge_sample_once_reports_exactly_one_cas_winner(conn) -> None:
+    """两个无外层锁写者都幂等成功，但 created=True 只能来自 SQL CAS 胜者。"""
+    import threading
+
+    task = _new_task(conn)
+    sample = repos.record_sample(
+        conn,
+        task_id=task["id"],
+        agent_id="hello_agent",
+        agent_version="0.1.0",
+        input_json={"name": "并发"},
+        output_json={"greeting": "你好"},
+        validation_status="success",
+        classification="internal",
+    )
+    db_path = conn.execute("PRAGMA database_list").fetchone()["file"]
+    barrier = threading.Barrier(2)
+    outcomes: list[object | None] = [None, None]
+
+    def acknowledge(index: int) -> None:
+        thread_conn = db_mod.get_conn(db_path)
+        try:
+            barrier.wait(timeout=5)
+            outcomes[index] = repos.acknowledge_sample_once(
+                thread_conn,
+                sample["id"],
+                actor_username=f"reviewer_{index}",
+                acknowledged_at=f"2026-07-27T00:00:0{index}+00:00",
+            )
+        except (sqlite3.Error, ValueError) as exc:
+            outcomes[index] = exc
+        finally:
+            thread_conn.close()
+
+    threads = [threading.Thread(target=acknowledge, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert all(thread.is_alive() is False for thread in threads)
+
+    assert not any(
+        isinstance(outcome, Exception) for outcome in outcomes
+    ), outcomes
+    records = [outcome[0] for outcome in outcomes]  # type: ignore[index]
+    created = [outcome[1] for outcome in outcomes]  # type: ignore[index]
+    assert sorted(created) == [False, True]
+    assert records[0] == records[1]
+    assert records[0]["acknowledged_by_username"] in {"reviewer_0", "reviewer_1"}
+    assert records[0]["accepted_by_engineer"] is True
+
+
+@pytest.mark.parametrize(
+    "acknowledged_at",
+    ["not-an-iso-time", "2026-07-27T00:00:00", " 2026-07-27T00:00:00+00:00"],
+)
+def test_acknowledge_sample_once_rejects_non_aware_iso_timestamp(
+    conn,
+    acknowledged_at: str,
+) -> None:
+    task = _new_task(conn)
+    sample = repos.record_sample(
+        conn,
+        task_id=task["id"],
+        agent_id="hello_agent",
+        agent_version="0.1.0",
+        input_json={},
+        classification="internal",
+    )
+
+    with pytest.raises(ValueError, match="带时区"):
+        repos.acknowledge_sample_once(
+            conn,
+            sample["id"],
+            actor_username="reviewer",
+            acknowledged_at=acknowledged_at,
+        )
+
+    projected = repos.get_sample(conn, sample["id"])
+    assert projected is not None
+    assert projected["accepted_by_engineer"] is None
+    assert projected["acknowledged_by_username"] is None
+
+
+@pytest.mark.parametrize("accepted_value", [2, -1])
+def test_sample_decode_never_truthiness_coerces_malformed_acceptance(
+    conn,
+    accepted_value: int,
+) -> None:
+    task = _new_task(conn)
+    sample = repos.record_sample(
+        conn,
+        task_id=task["id"],
+        agent_id="hello_agent",
+        agent_version="0.1.0",
+        input_json={},
+        classification="internal",
+    )
+    conn.execute(
+        "UPDATE samples SET accepted_by_engineer = ? WHERE id = ?",
+        (accepted_value, sample["id"]),
+    )
+
+    projected = repos.get_sample(conn, sample["id"])
+
+    assert projected is not None
+    assert projected["accepted_by_engineer"] == accepted_value
+    assert projected["accepted_by_engineer"] is not True
+
+
 def test_list_tasks_filters_by_created_by_username(conn):
     # 三条：alice 两条（含一条 eval origin）、bob 一条、无归因一条（None）
     from backend.app.storage import repos
@@ -940,3 +1135,84 @@ def test_list_tasks_filters_by_created_by_username(conn):
 
     # None 参数=不过滤，四条全回
     assert len(repos.list_tasks(conn, created_by_username=None)) == 4
+
+
+def test_list_tasks_applies_read_visibility_before_pagination(conn) -> None:
+    alice = _new_task(
+        conn,
+        task_id="task-visible-alice",
+        created_by="Alice",
+        created_by_username="alice",
+    )
+    shared_eval = _new_task(
+        conn,
+        task_id="task-visible-eval",
+        created_by="Eval Runner",
+        created_by_username=None,
+        origin="eval",
+    )
+    bob = _new_task(
+        conn,
+        task_id="task-visible-bob",
+        created_by="Bob",
+        created_by_username="bob",
+    )
+    for created_at, task_id in (
+        ("2026-08-03T00:00:01+00:00", alice["id"]),
+        ("2026-08-03T00:00:02+00:00", shared_eval["id"]),
+        ("2026-08-03T00:00:03+00:00", bob["id"]),
+    ):
+        conn.execute(
+            "UPDATE tasks SET created_at = ? WHERE id = ?",
+            (created_at, task_id),
+        )
+    conn.commit()
+
+    first = repos.list_tasks(
+        conn,
+        visible_to_username="alice",
+        origin=None,
+        limit=1,
+        offset=0,
+    )
+    second = repos.list_tasks(
+        conn,
+        visible_to_username="alice",
+        origin=None,
+        limit=1,
+        offset=1,
+    )
+    third = repos.list_tasks(
+        conn,
+        visible_to_username="alice",
+        origin=None,
+        limit=1,
+        offset=2,
+    )
+    assert [task["id"] for task in first] == [shared_eval["id"]]
+    assert [task["id"] for task in second] == [alice["id"]]
+    assert third == []
+
+    assert {
+        task["id"]
+        for task in repos.list_tasks(
+            conn,
+            visible_to_username="alice",
+            origin="eval",
+        )
+    } == {shared_eval["id"]}
+    assert {
+        task["id"]
+        for task in repos.list_tasks(
+            conn,
+            visible_to_username="alice",
+            origin="user",
+        )
+    } == {alice["id"]}
+
+    with pytest.raises(ValueError, match="不得同时使用"):
+        repos.list_tasks(
+            conn,
+            created_by_username="alice",
+            visible_to_username="alice",
+        )

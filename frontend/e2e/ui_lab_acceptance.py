@@ -5,14 +5,15 @@
 
 覆盖：
   ① 未知 case fail-closed；
-  ② 十六个固定镜头、精确 viewport 与桌面布局数值基线；
+  ② 二十个固定镜头、精确 viewport 与桌面布局数值基线；
   ③ opaque-origin iframe + 只读边界阻止网络和主题偏好写入；
   ④ 自动路由摘要默认收敛，Agent/模型/工具依据按需披露；
   ⑤ 流式快照使用真实 generating 标记，正文给固定 composer 留足空间；
   ⑥ 保存待核使用 amber，且发送、附件、Agent 共同锁定；
   ⑦ completed 单任务的对话轴资产候选与只读决定抽屉；
   ⑧ Asset Builder 单焦点九问、待审桌面/移动与 needs_revision 阻断；
-  ⑨ 375px 无横向溢出。
+  ⑨ 功能/资产地图默认收起、ready 重读、503 整体停披露；
+  ⑩ 375px 无横向溢出。
 
 运行（仓根）：
   uv run --no-project --with playwright python frontend/e2e/ui_lab_acceptance.py
@@ -159,6 +160,14 @@ def capture(frame, name: str) -> None:
     )
 
 
+def capture_element(locator, name: str) -> None:
+    locator.screenshot(
+        path=SHOTS / name,
+        animations="disabled",
+        caret="hide",
+    )
+
+
 try:
     wait_for_server()
     SHOTS.mkdir(parents=True, exist_ok=True)
@@ -225,8 +234,8 @@ try:
 
         page.goto(BASE + "/ui-lab.html", wait_until="networkidle")
         check(
-            "固定十六镜头与逐项检查点",
-            page.locator(".case-button").count() == 16
+            "固定二十镜头与逐项检查点",
+            page.locator(".case-button").count() == 20
             and page.locator(".review-strip li").count() >= 3,
         )
 
@@ -633,6 +642,168 @@ try:
             str(mobile_route_expanded),
         )
         capture(frame, "routing-mobile.png")
+
+        map_api_before = len(api_requests)
+        frame = select_case(
+            page,
+            "feature-asset-map-closed-desktop",
+            "桌面 · 功能与资产地图默认收起",
+        )
+        map_details = frame.locator(".feature-asset-map details")
+        map_closed = map_details.evaluate(
+            """element => ({
+              open: element.open,
+              cards: element.querySelectorAll('.capability-card, .asset-card').length,
+              refreshActions: [...element.querySelectorAll('button')]
+                .filter(item => item.innerText.trim() === '重新读取').length,
+              summary: element.querySelector('summary').innerText,
+            })"""
+        )
+        check(
+            "功能与资产地图默认收起且未提前读取",
+            map_closed == {
+                "open": False,
+                "cards": 0,
+                "refreshActions": 0,
+                "summary": map_closed["summary"],
+            }
+            and "只读披露" in map_closed["summary"]
+            and len(api_requests) == map_api_before,
+            str(map_closed),
+        )
+        capture(frame, "feature-asset-map-closed-desktop.png")
+
+        frame = select_case(
+            page,
+            "feature-asset-map-ready-desktop",
+            "桌面 · 功能与资产地图已展开",
+        )
+        map_details = frame.locator(".feature-asset-map details")
+        map_details.locator("summary").click()
+        expect(map_details.locator(".map-metrics")).to_be_visible()
+        map_ready = map_details.evaluate(
+            """element => ({
+              open: element.open,
+              metrics: [...element.querySelectorAll('.map-metrics b')]
+                .map(item => item.innerText.trim()),
+              capabilities: element.querySelectorAll('.capability-card').length,
+              assets: element.querySelectorAll('.asset-card').length,
+              signedSteps: element.querySelectorAll('.asset-card .is-signed').length,
+              unformedSteps: element.querySelectorAll('.asset-card .is-unformed').length,
+              boundary: element.querySelector('.map-boundary')?.innerText || '',
+              buttons: [...element.querySelectorAll('button')]
+                .map(item => item.innerText.trim()),
+              forbiddenControls: element.querySelectorAll(
+                'input, textarea, select, form, [contenteditable="true"]'
+              ).length,
+            })"""
+        )
+        check(
+            "展开地图只显示 owner 冷读快照、真实人审与未形成阶梯",
+            map_ready == {
+                "open": True,
+                "metrics": ["2", "1", "1", "1"],
+                "capabilities": 2,
+                "assets": 1,
+                "signedSteps": 3,
+                "unformedSteps": 2,
+                "boundary": map_ready["boundary"],
+                "buttons": ["重新读取"],
+                "forbiddenControls": 0,
+            }
+            and "当前读取快照" in map_ready["boundary"]
+            and "仅当前账号" in map_ready["boundary"]
+            and "不执行 · 不注册 · 不晋级" in map_ready["boundary"]
+            and len(api_requests) == map_api_before,
+            str(map_ready),
+        )
+        map_details.get_by_role("button", name="重新读取", exact=True).click()
+        expect(map_details.locator(".asset-card")).to_have_count(2)
+        refreshed_metrics = map_details.locator(".map-metrics b").all_inner_texts()
+        check(
+            "ready 快照可在同页重新读取新增 Candidate 且不触发真实网络",
+            refreshed_metrics == ["2", "2", "1", "1"]
+            and map_details.locator(".asset-card .is-pending").count() >= 1
+            and len(api_requests) == map_api_before,
+            str(refreshed_metrics),
+        )
+        capture_element(map_details, "feature-asset-map-ready-desktop.png")
+
+        frame = select_case(
+            page,
+            "feature-asset-map-error-desktop",
+            "桌面 · 功能与资产地图停披露",
+        )
+        map_details = frame.locator(".feature-asset-map details")
+        map_details.locator("summary").click()
+        expect(map_details.locator(".map-state.is-error")).to_be_visible()
+        map_error = map_details.evaluate(
+            """element => ({
+              alert: element.querySelector('[role="alert"]')?.innerText || '',
+              metrics: element.querySelectorAll('.map-metrics').length,
+              cards: element.querySelectorAll('.capability-card, .asset-card').length,
+              buttons: [...element.querySelectorAll('button')]
+                .map(item => item.innerText.trim()),
+              forbiddenControls: element.querySelectorAll(
+                'input, textarea, select, form, [contenteditable="true"]'
+              ).length,
+            })"""
+        )
+        check(
+            "来源 503 时地图整体停披露且只保留重新读取",
+            "地图暂不可用" in map_error["alert"]
+            and "来源完整性核验失败（503）" in map_error["alert"]
+            and "未展示任何残缺数据" in map_error["alert"]
+            and map_error["metrics"] == 0
+            and map_error["cards"] == 0
+            and map_error["buttons"] == ["重新读取"]
+            and map_error["forbiddenControls"] == 0
+            and len(api_requests) == map_api_before,
+            str(map_error),
+        )
+        capture_element(map_details, "feature-asset-map-error-desktop.png")
+
+        frame = select_case(
+            page,
+            "feature-asset-map-ready-mobile",
+            "移动端 · 功能与资产地图已展开",
+        )
+        map_details = frame.locator(".feature-asset-map details")
+        map_details.locator("summary").click()
+        expect(map_details.locator(".map-metrics")).to_be_visible()
+        map_mobile = map_details.evaluate(
+            """element => {
+              const refresh = element.querySelector('.map-refresh');
+              const capability = element.querySelector('.capability-card');
+              return {
+                viewport: { width: innerWidth, height: innerHeight },
+                documentFits:
+                  document.documentElement.scrollWidth <=
+                  document.documentElement.clientWidth,
+                detailsWidth: element.getBoundingClientRect().width,
+                refreshTouch: refresh.getBoundingClientRect().height,
+                capabilityWidth: capability.getBoundingClientRect().width,
+                bodyWidth: element.querySelector('.map-body').getBoundingClientRect().width,
+                metrics: element.querySelectorAll('.map-metrics > div').length,
+                forbiddenControls: element.querySelectorAll(
+                  'input, textarea, select, form, [contenteditable="true"]'
+                ).length,
+              };
+            }"""
+        )
+        check(
+            "375px 地图单列可扫读、触控目标合格且无横向溢出",
+            map_mobile["viewport"] == {"width": 375, "height": 812}
+            and map_mobile["documentFits"] is True
+            and map_mobile["detailsWidth"] <= 375
+            and map_mobile["refreshTouch"] >= 44
+            and abs(map_mobile["capabilityWidth"] - (map_mobile["bodyWidth"] - 22)) <= 1
+            and map_mobile["metrics"] == 4
+            and map_mobile["forbiddenControls"] == 0
+            and len(api_requests) == map_api_before,
+            str(map_mobile),
+        )
+        capture_element(map_details, "feature-asset-map-ready-mobile.png")
 
         candidate_api_before = len(api_requests)
         frame = select_case(

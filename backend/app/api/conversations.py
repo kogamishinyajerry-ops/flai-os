@@ -21,7 +21,6 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import StreamingResponse
 
-from . import classification_gate as cgate
 from ..core.errors import (
     ClearanceDeniedError,
     ConversationClosedError,
@@ -33,18 +32,51 @@ from ..core.errors import (
     NotInteractiveAgentError,
 )
 from ..storage import repos
+from . import classification_gate as cgate
+from . import object_authorization as oauth
 
 router = APIRouter(prefix="/api", tags=["conversations"])
 _STREAM_END = object()
 
 
-def _authenticated_username(request: Request) -> str | None:
-    """Return middleware-authenticated username; keep direct route unit calls compatible."""
-    user = getattr(request.state, "user", None)
-    if not isinstance(user, dict):
-        return None
-    username = user.get("username")
-    return username if isinstance(username, str) and username else None
+def _authenticated_username(request: Request) -> str:
+    """Return the verified session principal or fail closed at the resource seam."""
+    return oauth.authenticated_username(request)
+
+
+def _authorize_conversation_request(
+    request: Request,
+    conversation_id: str,
+    *,
+    direct_input_file_ids: list[str] | None = None,
+    reserve_round: bool = False,
+) -> str:
+    """Authorize the conversation and direct attachments before any side effect."""
+    username = _authenticated_username(request)
+    input_file_ids = list(dict.fromkeys(direct_input_file_ids or []))
+    conn = request.app.state.conn_factory()
+    try:
+        if reserve_round:
+            # One successful round persists exactly one user and one assistant
+            # message.  Reserve both plus the canonical persisted attachment
+            # delta so the API preflight matches ConversationService exactly;
+            # a 200/done can never exceed the readable lineage budget.
+            oauth.require_owned_conversation_append_inputs(
+                conn,
+                conversation_id,
+                username,
+                additional_messages=2,
+                additional_file_ids=len(input_file_ids),
+            )
+        else:
+            oauth.require_owned_conversation_inputs(
+                conn, conversation_id, username
+            )
+        for file_id in input_file_ids:
+            oauth.require_owned_input_file(conn, file_id, username)
+    finally:
+        conn.close()
+    return username
 
 
 class CreateConversationRequest(BaseModel):
@@ -105,15 +137,23 @@ def list_conversations(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[dict[str, Any]]:
+    username = _authenticated_username(request)
     conn = request.app.state.conn_factory()
     try:
-        return repos.list_conversations(conn, created_by=created_by, limit=limit, offset=offset)
+        return repos.list_conversations(
+            conn,
+            created_by=created_by,
+            created_by_username=username,
+            limit=limit,
+            offset=offset,
+        )
     finally:
         conn.close()
 
 
 @router.get("/conversations/{conversation_id}")
 def get_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
+    _authorize_conversation_request(request, conversation_id)
     service = request.app.state.conversation_service
     try:
         return service.get(conversation_id)
@@ -125,13 +165,19 @@ def get_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
 def post_message(
     conversation_id: str, body: PostMessageRequest, request: Request
 ) -> dict[str, Any]:
+    actor_username = _authorize_conversation_request(
+        request,
+        conversation_id,
+        direct_input_file_ids=body.file_ids,
+        reserve_round=True,
+    )
     service = request.app.state.conversation_service
     try:
         return service.post_message(
             conversation_id=conversation_id,
             content=body.content,
             file_ids=body.file_ids,
-            actor_username=_authenticated_username(request),
+            actor_username=actor_username,
         )
     except (ConversationNotFoundError, FileNotFoundInStoreError) as exc:
         # 会话不存在 / 引用了不存在的附件 id：404，且本轮零落库。
@@ -212,8 +258,13 @@ def stream_message(
     ConversationService / ModelGateway 仍是同步内核，因此用单个短生命周期线程把
     上游 SSE callback 桥接到响应生成器；不引入任务队列，也不改变旧 /messages。
     """
+    actor_username = _authorize_conversation_request(
+        request,
+        conversation_id,
+        direct_input_file_ids=body.file_ids,
+        reserve_round=True,
+    )
     service = request.app.state.conversation_service
-    actor_username = _authenticated_username(request)
 
     async def events() -> AsyncIterator[bytes]:
         pending: asyncio.Queue[dict[str, Any] | object] = asyncio.Queue()
@@ -309,6 +360,7 @@ def stream_message(
 def conclude_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
     """结束会话（active → concluded）。「确认草案去创建任务」时前端调用本端点
     归档会话（ADR-0013：补上 V0.1 会话不落终态的债）。"""
+    _authorize_conversation_request(request, conversation_id)
     service = request.app.state.conversation_service
     try:
         return service.conclude(conversation_id)
@@ -321,13 +373,22 @@ def conclude_conversation(conversation_id: str, request: Request) -> dict[str, A
 @router.get("/conversations/{conversation_id}/model_calls")
 def list_conversation_model_calls(conversation_id: str, request: Request) -> list[dict[str, Any]]:
     """会话的模型调用留痕（ADR-0013：导引路径的 Q5 可追溯，成败全量）。"""
+    username = _authenticated_username(request)
     conn = request.app.state.conn_factory()
     try:
-        if repos.get_conversation(conn, conversation_id) is None:
-            raise HTTPException(status_code=404, detail=f"会话不存在：{conversation_id}")
+        oauth.require_owned_conversation_inputs(
+            conn, conversation_id, username
+        )
         # ADR-0025 单 chokepoint（R1-A 补漏）：会话聚合 model_calls 跨成员任务，
         # sensitive 任务的 summary/error 承载工具产出——逐行按归属任务分级遮蔽。
         rows = repos.list_model_calls_for_conversation(conn, conversation_id)
+        for row in rows:
+            task_id = row.get("task_id")
+            if task_id is None:
+                continue
+            if not isinstance(task_id, str) or not task_id:
+                oauth.raise_resource_not_found()
+            oauth.require_owned_task(conn, task_id, username)
         return cgate.redact_model_calls_by_task(conn, rows)
     finally:
         conn.close()
@@ -339,10 +400,12 @@ def list_conversation_tasks(conversation_id: str, request: Request) -> list[dict
     任务，各任务记 conversation_id 归到此会话下；协作工作台据此聚合展示进度与产物。
     仅读——每个任务仍由人在创建页亲手签发（人是唯一签发者，本端点不创建任何任务）。
     """
+    username = _authenticated_username(request)
     conn = request.app.state.conn_factory()
     try:
-        if repos.get_conversation(conn, conversation_id) is None:
-            raise HTTPException(status_code=404, detail=f"会话不存在：{conversation_id}")
+        oauth.require_owned_conversation_inputs(
+            conn, conversation_id, username
+        )
         # 会话成员是「完整分组视图」而非「最近流」——分页取尽，绝不静默截断
         # （异源 Codex M8-P3：硬编码 limit=500 会让 >500 成员的会话丢最旧任务，
         # 「完整成员视图」名不副实）。成员任务受人工逐个签发约束，实际远少于一页，
@@ -356,6 +419,11 @@ def list_conversation_tasks(conversation_id: str, request: Request) -> list[dict
             if len(page) < _PAGE:
                 break
             offset += _PAGE
+        for task in tasks:
+            task_id = task.get("id")
+            if not isinstance(task_id, str) or not task_id:
+                oauth.raise_resource_not_found()
+            oauth.require_owned_task(conn, task_id, username)
         # ADR-0025 单 chokepoint（Codex R1-A 漏堵端点之一）：sensitive 任务的
         # error_message 承载工具内容——逐行过门遮蔽。
         return [cgate.redact_task_row_if_sensitive(conn, t) for t in tasks]

@@ -40,6 +40,9 @@ _AUDIT_ALLOWED_FIELDS = frozenset({
     # GH #3 启动 promotion attestation：只记受控包身份与治理轴，不含
     # prompt、输入或凭据。
     "agent_id", "agent_version", "maturity",
+    # GH #4 sample 级认可：对象键、受控文件 basename/curation 枚举与冻结
+    # username（与固定 actor 同类），不含 sample/input/output/cookie/token 内容。
+    "sample_id", "case_file", "curation", "acknowledged_by_username",
 })
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"

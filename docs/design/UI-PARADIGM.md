@@ -6,6 +6,12 @@
 > /team conversation-spine 已验证哲学落成 FLAi-OS 的 IA 宪法。
 > 与 MOTION-SYSTEM.md（动效层）、信任色锁、诚实地板并列为前端三宪法。
 
+> **2026-08-03 当前裁决：** ADR-0033 在工程师交互面取代下文 Phase 2a–2d 中
+> 的 Agent 选择器、字段式任务创建和桌面常驻“任务上下文轨道”。当前正式
+> Surface 是一个主会话+一个主输入，平台自动路由；路由依据与功能/资产地图
+> 只在同一会话内只读按需披露。**不新增 `/map` 页面，不用披露区变相恢复
+> Agent/模型/工具/Workflow 改选或参数编辑。** 下文冲突叙述只是演进史。
+
 ## 七条祈使句（违反=废）
 
 1. **对话是主轴**：一切工程活从导引对话发起；对话线程即督战台——召集的成员
@@ -108,7 +114,7 @@ Owner 判定 Phase 1 装饰层不改变骨架认知，拍板重构方向：**双
   端点；「重跑」语义（新任务复制 inputs vs 原任务复位）牵动审计链完整性，
   必须先立后端契约再做前端，不在纯前端范式批内拍板。
 
-## Phase 2d（本批）——本体驱动的 Agent Shell
+## Phase 2d（历史已交付，工程师交互已被 ADR-0033 取代）——本体驱动的 Agent Shell
 
 - **唯一语义源**：`AgentShellCatalog.snapshot()` 从 Agent / Tool / Knowledge
   Registry 的当前快照生成只读、版本化 `agent_shell.v1` 投影。前端不再分别
@@ -124,6 +130,17 @@ Owner 判定 Phase 1 装饰层不改变骨架认知，拍板重构方向：**双
 - **未知不归零**：未知启动方式为 `unknown`，悬空引用为 `unresolved`，密级
   缺省按 ADR-0030 显式 `internal/defaulted`；任何 malformed 投影都显示不可用，
   不伪装成“0 个 Agent”。
+
+### Phase 2d 现行兼容解释
+
+- `AgentShellCatalog.snapshot()` 仍是路由解释与功能投影的唯一语义源；被取代的是
+  “让工程师从常驻轨道/选择器手动挑 Agent”的交互，不是底层本体契约。
+- Guide 只能在主会话中自动路由并以人话摘要呈现方案；必要内部上下文只读
+  展开，不自动发送、建任务或签发。
+- `FeatureAssetMapDisclosure` 是主会话内默认收起的 owner-scoped 只读投影；
+  首次展开才冷读，合同不完整或来源损坏时整体不可用，不新增 `/map`。
+- `/tasks/new` 只保留兼容重定向；`TaskCreate` 和旧 Agent picker 源码如仍存在，只是
+  不可达的审计/兼容遗留，不得重新接回导航或主会话。
 
 ## 红线继承
 

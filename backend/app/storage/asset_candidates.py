@@ -10,7 +10,6 @@ from jsonschema import validate
 
 from ..config import CONTRACTS_DIR
 
-
 _EVENT_SCHEMA_PATH = CONTRACTS_DIR / "asset_candidate_event.schema.json"
 _event_schema_cache: dict[str, Any] | None = None
 
@@ -56,6 +55,25 @@ def get_by_id(conn: sqlite3.Connection, candidate_id: str) -> dict[str, Any] | N
         "SELECT * FROM asset_candidates WHERE id = ?", (candidate_id,)
     ).fetchone()
     return _decode_candidate(row) if row is not None else None
+
+
+def get_owner_context_by_id(
+    conn: sqlite3.Connection, candidate_id: str
+) -> dict[str, Any] | None:
+    """Read only immutable ownership lineage, without decoding candidate JSON."""
+
+    row = conn.execute(
+        """
+        SELECT source_task_id,
+               source_conversation_id,
+               initiated_by_username,
+               candidate_digest
+        FROM asset_candidates
+        WHERE id = ?
+        """,
+        (candidate_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def get_by_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:

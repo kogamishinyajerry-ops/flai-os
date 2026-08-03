@@ -91,7 +91,7 @@ def test_retry_of_nonexistent_404_and_no_task_created(app_env) -> None:
     before = _task_count(app)
     resp = _create_hello(client, retry_of="t_ghost_never_exists")
     assert resp.status_code == 404, resp.text
-    assert "t_ghost_never_exists" in resp.json()["detail"]
+    assert resp.json() == {"detail": "资源不存在或不可访问"}
     # 先查后建：404 时绝不留下半截任务（否则悬空血缘会污染后续审计口径）。
     assert _task_count(app) == before
 

@@ -685,7 +685,7 @@ async function runEvaluation() {
     const run = await pollEvalRunToTerminal(agentId, queued.id);
     if (governanceOpen.value && governanceAgent.value?.id === agentId) {
       await loadGovernance(agentId);
-      if (run.status === "completed") ElMessage.success("评测完成");
+      if (run.status === "completed") ElMessage.info("评测完成——结果按逐项证据显示");
       else if (run.status !== "aborted") ElMessage.warning(`评测收口为 ${run.status}`);
     }
   } catch (err) {
@@ -737,7 +737,11 @@ async function promoteToL1() {
         // confirmed_by=登录会话身份，服务端派生（ADR-0019 D5）——记名不可代填
       },
     });
-    ElMessage.success("已晋升 L1");
+    ElMessage({
+      message: "已由当前登录工程师签发晋升 L1",
+      type: "info",
+      customClass: "flai-message-signed",
+    });
     // 续体绑定：await 期间弹窗可能已切到别的 agent——只有还在看同一 agent 时才回写
     if (governanceOpen.value && governanceAgent.value?.id === agentId) {
       promotionConfirmed.value = false;

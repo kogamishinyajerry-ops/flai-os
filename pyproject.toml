@@ -1,7 +1,7 @@
 [project]
 name = "flai-os"
-version = "0.1.0"
-description = "FLAi-OS Kernel V0.1 — 二所工程智能体运行底座"
+version = "1.0.0"
+description = "FLAi-OS V1 — 二所工程智能体运行底座"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary" }

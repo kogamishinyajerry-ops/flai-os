@@ -165,7 +165,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(("PASS" if ok is True else "FAIL"), name, ("| " + detail if detail and ok is not True else ""))
 
 
-from _auth import login_context, login_httpx, seed_user  # noqa: E402
+from _auth import E2E_USERNAME, login_context, login_httpx, seed_user  # noqa: E402
 
 seed_user(WORK / "flai_os.db", "王工")
 API = login_httpx(BASE)
@@ -346,12 +346,16 @@ with sync_playwright() as p:
     publish_agent_manifest("hello_agent", lambda manifest: manifest.__setitem__("version", "0.1.0"))
 
     # ── O5：密级不稀释（batch gate 第四路复用）──────────────────────────────
+    secret_path = WORK / "uploads" / "secret.txt"
+    secret_path.parent.mkdir(parents=True, exist_ok=True)
+    secret_path.write_bytes(b"secret")
     conn = app.state.conn_factory()
     try:
         repos.create_file(
             conn, file_id="f_sens_b8", task_id=None, kind="input",
-            filename="secret.txt", path=str(WORK / "secret.txt"), size_bytes=6,
+            filename="secret.txt", path=str(secret_path), size_bytes=6,
             sha256=hashlib.sha256(b"secret").hexdigest(), classification="sensitive",
+            owner_username=E2E_USERNAME,
         )
     finally:
         conn.close()
@@ -450,7 +454,8 @@ with sync_playwright() as p:
 
     # ── O6：withheld 被动面（GuidePage）——零下载 + 遮蔽标记 + 无编造计数 ──
     # 对 O3 主 CTA 自动编排的上游任务注入 sensitive JSON 产物。
-    sens_path = WORK / "ev.json"
+    sens_path = WORK / "task_runs" / ui_up["id"] / "output" / "ev.json"
+    sens_path.parent.mkdir(parents=True, exist_ok=True)
     sens_path.write_text(json.dumps({"findings": [{"claim": "机密", "evidence": []}]}), encoding="utf-8")
     conn = app.state.conn_factory()
     try:

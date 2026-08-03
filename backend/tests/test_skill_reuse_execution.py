@@ -598,6 +598,38 @@ def test_unverifiable_retry_lineage_is_skipped(app_env, lineage_fault: str) -> N
         ),
     )
     conversation_id, reuse_ref = _matched_ref(client, app, suffix=lineage_fault)
+    if lineage_fault == "cross_owner":
+        conn = app.state.conn_factory()
+        try:
+            before_tasks = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        finally:
+            conn.close()
+        response = client.post(
+            "/api/tasks/batch",
+            json={
+                "conversation_id": conversation_id,
+                "items": [
+                    {
+                        "agent_id": "hello_agent",
+                        "name": "自动复用 Skill 的任务",
+                        "inputs": {"name": "cross_owner 血缘执行"},
+                        "input_file_ids": [],
+                        "skill_package_ref": reuse_ref,
+                        "retry_of": root,
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 404
+        assert response.json() == {"detail": "资源不存在或不可访问"}
+        conn = app.state.conn_factory()
+        try:
+            assert conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == before_tasks
+        finally:
+            conn.close()
+        assert _formation(client, package["id"])["independent_work_case_count"] == 0
+        return
+
     task = _create_reused_task(
         client,
         conversation_id=conversation_id,

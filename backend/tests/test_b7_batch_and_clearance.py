@@ -14,6 +14,7 @@ from typing import Any
 
 from backend.app.config import REPO_ROOT
 from backend.app.storage import repos
+from conftest import TEST_USERNAME
 
 
 def _mk_item(name: str, **extra) -> dict[str, Any]:
@@ -59,6 +60,7 @@ def _seed_input_file(app, file_id: str, classification: str) -> str:
             size_bytes=10,
             sha256="0" * 64,
             classification=classification,
+            owner_username=TEST_USERNAME,
         )
         return rec["id"]
     finally:
@@ -233,10 +235,8 @@ def test_batch_dangling_retry_lineage_rejects_whole_batch(app_env):
         ),
     )
 
-    assert response.status_code == 422, response.text
-    errors = response.json()["detail"]["batch_errors"]
-    assert errors[0]["index"] == 0
-    assert "retry_of" in "；".join(errors[0]["errors"])
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": "资源不存在或不可访问"}
     assert len(client.get("/api/tasks").json()) == before
 
 
@@ -349,14 +349,14 @@ def test_clearance_gate_blocks_in_batch_path(app_env):
 
 
 def test_clearance_missing_file_record_fails_closed(app_env):
-    """输入文件记录缺失 → 材料级 sensitive（出处不可考宁严勿洗白）→ 缺省上限拒。"""
+    """输入文件记录缺失 → 在 owner seam 泛化 404，任务零落库。"""
     client, _ = app_env
     r = client.post("/api/tasks", json={
         "agent_id": "hello_agent", "inputs": {"name": "x"},
         "input_file_ids": ["file_never_uploaded"],
     })
-    assert r.status_code == 400
-    assert "sensitive" in r.json()["detail"]
+    assert r.status_code == 404
+    assert r.json() == {"detail": "资源不存在或不可访问"}
 
 
 # ── guide after 剥离降级（O8 族）────────────────────────────────────────────

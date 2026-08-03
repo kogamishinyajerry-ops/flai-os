@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import TEST_DISPLAY_NAME
+from conftest import TEST_DISPLAY_NAME, TEST_USERNAME
 
 from backend.app.storage import db as db_mod
 from backend.app.storage import repos
@@ -164,7 +164,7 @@ def test_create_task_api_nonexistent_conversation_404(app_env) -> None:
         },
     )
     assert resp.status_code == 404
-    assert "会话不存在" in resp.json()["detail"]
+    assert resp.json() == {"detail": "资源不存在或不可访问"}
     assert client.get("/api/tasks").json() == [], "悬空引用必须零副作用（任务不建）"
 
 
@@ -194,10 +194,11 @@ def test_conversation_tasks_view_paginates_beyond_500(app_env) -> None:
     conn = app.state.conn_factory()
     try:
         for i in range(501):
-            repos.create_task(
-                conn, task_id=f"task_big_{i:04d}", agent_id="fta_agent", agent_version="0.1.0",
-                name=f"t{i}", created_by="王工", conversation_id=conv_id,
-            )
+                repos.create_task(
+                    conn, task_id=f"task_big_{i:04d}", agent_id="fta_agent", agent_version="0.1.0",
+                    name=f"t{i}", created_by="王工",
+                    created_by_username=TEST_USERNAME, conversation_id=conv_id,
+                )
     finally:
         conn.close()
     members = client.get(f"/api/conversations/{conv_id}/tasks").json()

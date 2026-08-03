@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from backend.app.storage import repos
+from backend.tests.conftest import TEST_USERNAME
 
 
 class _SplitReadRegistry:
@@ -278,6 +279,7 @@ def _save_single_member_team(client: Any, app: Any) -> dict[str, Any]:
             conversation_id="conv_team_snapshot_pin",
             agent_id="guide_agent",
             created_by="tester",
+            created_by_username=TEST_USERNAME,
         )
         repos.set_conversation_recommendation(
             conn,
@@ -377,6 +379,7 @@ def test_batch_rechecks_clearance_from_the_same_snapshot_it_persists(app_env) ->
             size_bytes=10,
             sha256="0" * 64,
             classification="sensitive",
+            owner_username=TEST_USERNAME,
         )
     finally:
         conn.close()

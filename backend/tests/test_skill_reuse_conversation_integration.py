@@ -8,17 +8,16 @@ import pytest
 
 from backend.app.runtime.conversation import ConversationConflictError
 from backend.app.storage import repos
-
 from backend.tests.test_m6_guide_conversation import (
-    _CannedStub,
-    _SequenceStub,
-    _StreamingStub,
     _agent,
+    _CannedStub,
+    _fta_inputs,
     _open_conversation,
     _orchestrate,
     _plan_reply,
     _refuse,
-    _fta_inputs,
+    _SequenceStub,
+    _StreamingStub,
 )
 
 
@@ -259,7 +258,7 @@ def test_recreated_service_uses_persisted_owner_proof_for_skill_match(app_env) -
     )
 
 
-def test_legacy_conversation_without_username_proof_disables_skill_reuse(
+def test_legacy_conversation_without_username_proof_fails_closed_before_reuse(
     app_env,
 ) -> None:
     client, app = app_env
@@ -285,10 +284,15 @@ def test_legacy_conversation_without_username_proof_disables_skill_reuse(
         json={"content": "请完成起落架控制逻辑核对。"},
     )
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": "资源不存在或不可访问"}
     assert matcher.calls == []
-    assert "已审核可复用 Skill 方法" not in gateway.calls[0]["messages"][0]["content"]
-    assert "skill_reuse" not in response.json()["message"]["recommendation"]
+    assert gateway.calls == []
+    conn = service.conn_factory()
+    try:
+        assert repos.list_messages(conn, conversation_id) == []
+    finally:
+        conn.close()
 
 
 class _TaskBoundaryInterloper(_CannedStub):
