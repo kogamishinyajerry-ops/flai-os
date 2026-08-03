@@ -5,9 +5,9 @@
 
 ## 基线
 
-- 仓库:`kogamishinyajerry-ops/flai-os`,**最新基线 = `origin/main` @ `7122330`**。
-- 请从 `main` 切新分支;`kimi-k3/ui-depth-polish-eac5896` 已全量合并(PR #15/#16/#17),使命完成。
-- 项目规则:`../flai-os/AGENTS.md`(原始项目);设计 SSOT:`docs/design/UI-PARADIGM.md`、`docs/design/UI-DESKTOP-CRAFT.md`;决策史:`docs/adr/`(30 篇)。
+- 仓库:`kogamishinyajerry-ops/flai-os`。本文撰写时 K3 基线为 `origin/main` @ `7122330`;**此后 codex 已合入 PR #18(CI 必需检查)/ #19(V1 源码就绪门禁,`5bf7be1`),请以 `git fetch && git rev-parse origin/main` 动态解析的最新 tip 为准**,不要按 `7122330` 复现验证。
+- 请从最新 `main` 切新分支;`kimi-k3/ui-depth-polish-eac5896` 已全量合并(PR #15/#16/#17),使命完成。
+- 项目规则:仓内权威源为 `docs/00_FLAi-OS_Constitution.md`(宪法)与 `docs/adr/`(决策史,36 篇,最新 ADR-0037);原始项目另有 `../flai-os/AGENTS.md`,但那是**兄弟仓本地文件、不在本仓**, clone 本仓后不可直接打开。设计 SSOT:`docs/design/UI-PARADIGM.md`、`docs/design/UI-DESKTOP-CRAFT.md`。
 
 ## main 新增能力(本轮三个 PR)
 
@@ -36,7 +36,7 @@
 
 1. **真实 LLM 链路内网复验**——全部流式证据为 stub 网关驱动(链路真、内容假);`probe_llm_gateway.py` 连通性 + 真实网关走一遍 m6/m9。
 2. **「今日页与任务台合并」owner 裁决项**——对话轴已全能(签发/产物/状态/恢复全内联),任务台已退深链无一级导航;合并=今日页三分组与任务台左栏语义去重。
-3. **会话列表按登录用户隔离**(breaking):`list_conversations` 当前不按登录用户过滤,同域互见;`first_user_message` 投影未扩大该面,但真正的按人隔离需立项。
+3. **会话按登录用户隔离**(breaking,安全敏感):`list_conversations` 当前不按登录用户过滤,同域互见;`first_user_message` 投影未扩大该面,但真正的按人隔离需立项。**注意:只过滤列表不构成隔离**——codex 评审指出 `GET /conversations/{id}`、消息发送与流式、conclude、model-call 列表、任务列表均仅凭会话 ID 即可读写,不比对 `created_by` 与 `request.state.user`;任何持有可能猜到他人会话 ID 的已认证用户仍可越权。立项范围必须是**所有会话端点统一做 owner 校验**(可复用 `object_authorization` 的既有模式),而非仅改列表。
 4. WorkLog 头「已处理 0 秒」零值段(craft ⑩G3 有锚,需原子同批)。
 5. `IntentGlyph.vue` 零消费、`empty-log.png` 无 full 消费面——退役裁决。
 6. `package_release.sh` 离线打包待 M4 落锤(预案 `docs/M11-OFFLINE-PACKAGE-PLAN.md`);Windows `.ps1` 未实机验证(仅 macOS AST 语法检查)。
