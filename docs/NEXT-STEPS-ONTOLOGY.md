@@ -18,7 +18,7 @@
 - 十态状态机文档/代码逐行镜像(`backend/app/core/statemachine.py:13-44`,`waiting_review` 出边仅 `{completed, failed}` 且注释明示"禁止任何自动化路径");
 - 术语表 SSOT 缺口属实(`docs/` 无 Glossary 文件,ADR 最新为 0037)。
 
-一条论断存疑:报告称"16/16 Agent 包内 eval_cases 全覆盖",但当前 main 的 `agents/` 仅 14 个目录。计数口径或快照时点有差,引用该结论前先数清楚。
+- 报告"16/16 Agent 包内 eval_cases 全覆盖"经本仓 main 实测确认:`agents/` 16 个包目录、16 个含 `eval_cases`,与报告一致(早期一版草稿误数为 14,那是数了兄弟仓 `../flai-os`,已更正)。
 
 ## 2. codex PR #18/#19 与报告 P0 的关系:零重叠
 
@@ -80,13 +80,12 @@ codex 在 K3 轮次之后合入:
 1. **先读 ADR-0033 再碰 UI。** codex 的对话优先工作台(`f7b1f2f` + 821 行 `conversation_shell_contract.test.mjs`)与 K3 轮次的 UI 壳层存在域重叠。任何 UI 侧下一步必须先对齐 ADR-0033,避免按过期假设施工。
 2. **切片 1–3 与 UI/后端运行时零耦合**,可在 GPT 5.6 sol 接手后与任何 UI 工作并行,冲突面仅在 `contracts/`、`docs/`、`evals/`。
 3. **CI 已是必需门禁**(PR #18):所有切片提交前本地 `UV_OFFLINE=1 bash scripts/verify_all.sh` 必须 EXIT=0,否则 PR 无法合并。
-4. **评测分级纪律(E0–E3)**:实施 P0-5 时按报告建议把 eval case 头部加 `classification: e0/e1/e2/e3` 标签,E3 在外网显式 `SKIPPED-classified`,不静默当通过——与平台诚实标记风格一致。
+4. **评测分级纪律(E0–E3)**:实施 P0-5 时给 eval case 头部加 `classification: e0/e1/e2/e3` 标签——**但只打标签不产生任何行为**:`load_eval_cases` 当前忽略未知字段,`backend/app/governance/eval_runner.py` 的执行循环只跳过交互类 Agent 或无 checks 的用例,E3 用例在外网仍会被执行。该切片必须同时在 runner 内实现显式的环境/分级门禁(E3 在外网输出 `SKIPPED-classified`,绝不静默当通过),并配回归测试钉死该输出。
 5. 报告基于"未部署内网 + 评测集涉密"前提;凡涉及真实语料、真实工具、真实组织授权的项(报告的 B/C 类),本轮只做 fail-closed 槽位与接入契约,不写依赖真实数据的实现。
 
-## 5. 开工前需先澄清的两件事
+## 5. 开工前需先澄清的一件事
 
-1. **Agent 包计数**:报告"16/16"与当前 14 个 `agents/` 目录不符——确认是快照差还是口径差,再决定是否引用报告的覆盖结论。
-2. **报告原文归属**:评测报告原文目前在本机 `~/Downloads`(qwenwork 渲染版),未入库。建议将其关键结论以本文件为准入库,原文不入库(含外部渲染痕迹);如需保留原文,另议存放位置。
+1. **报告原文归属**:评测报告原文目前在本机 `~/Downloads`(qwenwork 渲染版),未入库。建议将其关键结论以本文件为准入库,原文不入库(含外部渲染痕迹);如需保留原文,另议存放位置。
 
 ## 6. 关联文件
 
