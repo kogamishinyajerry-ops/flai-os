@@ -2,12 +2,12 @@
 
 自包含：脚本自起后端（tmp 目录，绝不碰真实 data/）+ Job Runner + 真 chromium。
 除 frontend/dist 构建产物外无外部前置。复用 batch_a_livefeed_acceptance.py
-的登录/跨会话 approver/保活样板（同一份 _auth.py）。
+的登录/同 owner 跨会话 approver/保活样板（同一份 _auth.py）。
 
 覆盖（spec §五）：
   ①/today 渲染五版块（待你签发/进行中/今日交付/Agent 动态/团队总量）；待签发
     计数与全局 StatusDock 角标数同源相等（同页同一份 tasks channel 真值）。
-  ②跨会话 approver 批准（httpx，不共享本机浏览器 cookie）→ /today 页面全程
+  ②同 owner 跨会话 approver 批准（httpx，不共享本机浏览器 cookie）→ /today 页面全程
     不动 → 12s 内该任务出现在「今日交付」且其卡播放 .seal-animate（本会话
     亲历「活跃→终态」迁移才播，判据同 TaskDetail T9）。
   ③团队总量条四格数字 === httpx 直查 /api/stats/overview（同 since，since
@@ -102,9 +102,6 @@ else:
 from _auth import login_context, login_httpx, seed_user  # noqa: E402（须在后端就绪后种账户）
 
 seed_user(WORK / "flai_os.db", "本机查看者")
-# 第二个账户=「跨会话签发工程师」，与本机浏览器登录身份彻底不同（不同
-# username/cookie jar），而非同一账户借第二个 httpx.Client 重登。
-seed_user(WORK / "flai_os.db", "跨会话签发工程师", username="e2e_approver", password="e2e-approver-pass")
 creator = login_httpx(BASE)
 
 runner = JobRunner(app.state.runtime, app.state.conn_factory, poll_interval=0.2)
@@ -197,9 +194,10 @@ with sync_playwright() as p:
         "d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.toISOString(); }"
     )
 
-    # ── 断言②：跨会话 approver 批准（不共享本机浏览器 cookie）→ /today 全程
-    #    不动 → 12s 内出现在「今日交付」且播放 .seal-animate（亲历）──
-    approver = login_httpx(BASE, username="e2e_approver", password="e2e-approver-pass")
+    # ── 断言②：同 owner 跨会话 approver（不共享本机浏览器 cookie）→
+    #    /today 全程不动 → 12s 内出现在「今日交付」且播放
+    #    .seal-animate（亲历）。V1 owner_signoff 不允许跨 owner 决策。──
+    approver = login_httpx(BASE)
     resp = approver.post(f"/api/tasks/{task_id}/review", json={"action": "approve", "comment": "批B今日工作台验收放行"})
     check("跨会话 API 批准放行请求成功", resp.status_code == 200, f"status={resp.status_code} body={resp.text[:200]}")
 
@@ -219,8 +217,8 @@ with sync_playwright() as p:
     # 批准已在断言②确认落地（后端此刻已是终态，httpx 读到的值不会再变）；
     # 页面侧的 fetchStats() 由 onTransition 补拉纪律异步触发，存在一次网络
     # 往返延迟，故轮询等待页面数字收敛到 API 值，而非单次读取就下判断。
-    # /api/stats/overview 需鉴权——复用已登录的 approver client（同 e2e_approver
-    # 会话，任意已登录身份皆可读该只读聚合端点，不影响「同 since 同源」判据）。
+    # /api/stats/overview 需鉴权——复用已登录的同 owner approver client；
+    # 不影响「同 since 同源」判据。
     overview = approver.get("/api/stats/overview", params={"since": since_iso}, timeout=10)
     check("httpx 直查 /api/stats/overview 成功", overview.status_code == 200, f"status={overview.status_code}")
     body_json = overview.json() if overview.status_code == 200 else {}

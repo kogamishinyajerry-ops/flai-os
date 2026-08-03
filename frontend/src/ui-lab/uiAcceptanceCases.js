@@ -190,6 +190,174 @@ const PERSISTENCE_UNKNOWN_GUIDE = {
   ],
 };
 
+const FEATURE_ASSET_MAP_SNAPSHOT = {
+  schema_version: "feature_asset_map.v1",
+  source: {
+    kind: "owner_scoped_cold_projection",
+    owner_username: "user-ui-acceptance",
+    owner_scoped: true,
+    read_only: true,
+  },
+  summary: {
+    capability_count: 2,
+    asset_candidate_count: 1,
+    accepted_candidate_count: 1,
+    skill_package_count: 1,
+    approved_skill_package_count: 1,
+    unresolved_reference_count: 0,
+  },
+  functionality: {
+    work_types: [
+      { id: "analysis", total_count: 1 },
+      { id: "knowledge", total_count: 1 },
+    ],
+    domains: [
+      { id: "cfd", total_count: 1 },
+      { id: "standards", total_count: 1 },
+    ],
+    capabilities: [
+      {
+        agent_id: "cfd_input_check",
+        name: "CFD 参数核对 Agent",
+        summary: "核对输入、边界与求解设置，保留人工裁决点。",
+        category: "analysis",
+        domain: "cfd",
+        specialty: "steady-state",
+        launch_kind: "task",
+        status: "active",
+        maturity: "L1",
+        requires_human_review: true,
+        tool_count: 1,
+        knowledge_scope_count: 1,
+        unresolved_reference_count: 0,
+        mock_tool_count: 0,
+      },
+      {
+        agent_id: "standard_answer",
+        name: "标准条款问答 Agent",
+        summary: "依据已审定知识范围回答标准条款问题。",
+        category: "knowledge",
+        domain: "standards",
+        specialty: null,
+        launch_kind: "conversation",
+        status: "active",
+        maturity: "L1",
+        requires_human_review: true,
+        tool_count: 0,
+        knowledge_scope_count: 1,
+        unresolved_reference_count: 0,
+        mock_tool_count: 0,
+      },
+    ],
+  },
+  assets: [
+    {
+      candidate_id: "asset_candidate_b6f68526b3fdf4a3253f192c",
+      candidate_digest: `sha256:${"1".repeat(64)}`,
+      revision: 1,
+      state: "accepted",
+      source: {
+        task_id: "task-ui-asset-candidate",
+        conversation_id: "ui-asset-work-case",
+        agent_id: "cfd_input_check",
+        finished_at: "2026-07-31T06:46:30Z",
+      },
+      task_pattern: {
+        title: "稳态算例入口边界复核",
+        state: "approved_revision",
+        digest: `sha256:${"2".repeat(64)}`,
+      },
+      skill: {
+        name: "入口边界复核方法",
+        description: "逐项核对入口总压、总温并保留可签认依据。",
+        state: "approved_revision",
+        digest: `sha256:${"3".repeat(64)}`,
+      },
+      skill_package: {
+        id: "skill_package_919191919191919191919191",
+        name: "cfd-inlet-boundary-review",
+        version: "0.1.0",
+        package_digest: `sha256:${"4".repeat(64)}`,
+        state: "approved",
+        reuse_eligible: true,
+      },
+      workflow: {
+        state: "not_formed",
+        digest: null,
+        gate: "需要组合证据",
+      },
+      agent: {
+        state: "not_formed",
+        digest: null,
+        gate: "需要 Workflow 与晋级门",
+      },
+      updated_at: "2026-07-31T06:52:00Z",
+    },
+  ],
+  effects: {
+    writes_database: false,
+    executes_work: false,
+    registers_asset: false,
+    promotes_asset: false,
+  },
+};
+
+const FEATURE_ASSET_MAP_READY = {
+  kind: "snapshot",
+  snapshot: FEATURE_ASSET_MAP_SNAPSHOT,
+  refresh_snapshot: {
+    ...FEATURE_ASSET_MAP_SNAPSHOT,
+    summary: {
+      ...FEATURE_ASSET_MAP_SNAPSHOT.summary,
+      asset_candidate_count: 2,
+    },
+    assets: [
+      ...FEATURE_ASSET_MAP_SNAPSHOT.assets,
+      {
+        candidate_id: "asset_candidate_565656565656565656565656",
+        candidate_digest: `sha256:${"5".repeat(64)}`,
+        revision: 1,
+        state: "awaiting_human_review",
+        source: {
+          task_id: "task-ui-new-asset-candidate",
+          conversation_id: "ui-auto-routing",
+          agent_id: "standard_answer",
+          finished_at: "2026-07-31T07:01:00Z",
+        },
+        task_pattern: {
+          title: "标准条款依据核对",
+          state: "candidate_revision",
+          digest: `sha256:${"6".repeat(64)}`,
+        },
+        skill: {
+          name: "条款依据核对方法",
+          description: "逐条绑定知识范围与原始条款位置，等待工程师审核。",
+          state: "candidate_revision",
+          digest: `sha256:${"7".repeat(64)}`,
+        },
+        skill_package: null,
+        workflow: {
+          state: "not_formed",
+          digest: null,
+          gate: "需要接受 Candidate 后再形成隔离包",
+        },
+        agent: {
+          state: "not_formed",
+          digest: null,
+          gate: "需要 Workflow 与晋级门",
+        },
+        updated_at: "2026-07-31T07:02:00Z",
+      },
+    ],
+  },
+};
+
+const FEATURE_ASSET_MAP_UNAVAILABLE = {
+  kind: "error",
+  status: 503,
+  detail: "来源完整性核验失败（503）",
+};
+
 const ASSET_DRAFT_GENERALIZATION = {
   title: "稳态算例入口边界复核",
   trigger: "收到一批待计算的稳态算例，需要在开算前核对入口边界",
@@ -745,8 +913,9 @@ function acceptanceCase({
   viewport,
   guide,
   reviewPoints,
+  featureAssetMap = null,
 }) {
-  return {
+  const item = {
     id,
     label,
     summary,
@@ -755,6 +924,8 @@ function acceptanceCase({
     app: APP_FIXTURE,
     guide,
   };
+  if (featureAssetMap) item.featureAssetMap = featureAssetMap;
+  return item;
 }
 
 export const UI_ACCEPTANCE_CASES = [
@@ -831,6 +1002,58 @@ export const UI_ACCEPTANCE_CASES = [
       "展开路由依据后是否仍无横向溢出",
       "折叠控件与开工按钮是否守住 44px 触控目标",
       "composer 是否始终只有文字与附件入口",
+    ],
+  }),
+  acceptanceCase({
+    id: "feature-asset-map-closed-desktop",
+    label: "桌面 · 功能与资产地图默认收起",
+    summary: "地图留在主会话，未展开前不读取、不展示资产",
+    viewport: VIEWPORTS.desktop,
+    guide: ROUTING_GUIDE,
+    featureAssetMap: FEATURE_ASSET_MAP_READY,
+    reviewPoints: [
+      "地图是否默认收起且不分叉到新页面",
+      "摘要是否只说明按需披露，不提前冒充完整地图",
+      "主对话、单一 composer 与开工动作是否保持原位",
+    ],
+  }),
+  acceptanceCase({
+    id: "feature-asset-map-ready-desktop",
+    label: "桌面 · 功能与资产地图已展开",
+    summary: "owner-scoped 冷读快照与真实资产形成阶梯",
+    viewport: VIEWPORTS.desktop,
+    guide: ROUTING_GUIDE,
+    featureAssetMap: FEATURE_ASSET_MAP_READY,
+    reviewPoints: [
+      "展开后是否只显示当前账号的冷读快照",
+      "Candidate、包级人审、Workflow 与 Agent 是否使用各自真实语义",
+      "是否可原地重新读取而没有执行、注册或晋级动作",
+    ],
+  }),
+  acceptanceCase({
+    id: "feature-asset-map-error-desktop",
+    label: "桌面 · 功能与资产地图停披露",
+    summary: "来源完整性 503 时整体停披露，不降级为空地图",
+    viewport: VIEWPORTS.desktop,
+    guide: ROUTING_GUIDE,
+    featureAssetMap: FEATURE_ASSET_MAP_UNAVAILABLE,
+    reviewPoints: [
+      "503 是否明确显示地图暂不可用",
+      "失败时是否完全隐藏指标、能力卡和资产卡",
+      "是否只提供重新读取而不提供旁路数据或操作",
+    ],
+  }),
+  acceptanceCase({
+    id: "feature-asset-map-ready-mobile",
+    label: "移动端 · 功能与资产地图已展开",
+    summary: "375px 下的 owner 快照、形成阶梯与重新读取",
+    viewport: VIEWPORTS.mobile,
+    guide: ROUTING_GUIDE,
+    featureAssetMap: FEATURE_ASSET_MAP_READY,
+    reviewPoints: [
+      "375px 下是否无横向溢出",
+      "能力卡、资产阶梯与边界标签是否保持可扫读",
+      "重新读取是否保持 44px 触控目标",
     ],
   }),
   acceptanceCase({

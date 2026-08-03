@@ -370,10 +370,8 @@ def test_file_upload_batch_requires_existing_input_file_with_zero_writes(app_env
         },
     )
 
-    assert response.status_code == 422, response.text
-    detail = response.json()["detail"]
-    assert detail["code"] == "batch_inputs_invalid"
-    assert "附件不存在" in response.text
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": "资源不存在或不可访问"}
     assert len(client.get("/api/tasks").json()) == before
 
 
@@ -382,16 +380,30 @@ def test_file_upload_batch_rejects_non_input_file_kind_with_zero_writes(app_env)
     version, digest = _agent_pins(app, "performance_disk_agent")
     conn = app.state.conn_factory()
     try:
+        repos.create_task(
+            conn,
+            task_id="task_owned_output_source",
+            agent_id="hello_agent",
+            agent_version="0.1.0",
+            name="owned output source",
+            created_by="测试工程师",
+            created_by_username="test_engineer",
+        )
         output_file = repos.create_file(
             conn,
             file_id="output_disguised_as_upload",
-            task_id=None,
+            task_id="task_owned_output_source",
             kind="output",
             filename="cases.xlsx",
             path="/nonexistent/cases.xlsx",
             size_bytes=1,
             sha256="0" * 64,
             classification="internal",
+        )
+        repos.set_task_outputs(
+            conn,
+            "task_owned_output_source",
+            [output_file["id"]],
         )
     finally:
         conn.close()
@@ -414,8 +426,6 @@ def test_file_upload_batch_rejects_non_input_file_kind_with_zero_writes(app_env)
     )
 
     assert response.status_code == 422, response.text
-    detail = response.json()["detail"]
-    assert detail["code"] == "batch_inputs_invalid"
     assert "kind=input" in response.text
     assert len(client.get("/api/tasks").json()) == before
 
@@ -571,6 +581,7 @@ def test_run_batch_concluded_conversation_has_distinct_code_and_zero_writes(app_
             conversation_id="conv_digest_concluded",
             agent_id="guide_agent",
             created_by="测试工程师",
+            created_by_username="test_engineer",
         )
         repos.set_conversation_status(conn, "conv_digest_concluded", "concluded")
         before = _task_count(conn)

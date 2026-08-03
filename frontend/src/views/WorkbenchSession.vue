@@ -520,7 +520,7 @@ async function concludeSession() {
   }
   try {
     await concludeConversation(sessionId);
-    ElMessage.success("协作已归档");
+    ElMessage.info("协作已归档");
     pokeConversation(sessionId); // 带外补拉：不等下一 tick，归档结果立即回显
   } catch (err) {
     ElMessage.error(err.detail || err.message || "结束协作失败");

@@ -1122,9 +1122,13 @@ def test_upload_exceeding_limit_returns_413_and_leaves_no_residue(
 
 
 @pytest.fixture()
-def governance_client_env(tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
-    """tmp agents 目录：hello_agent + review_agent（同 review_app_env 套路），
-    供 curated_cases_count 端点测试造固化 case 文件、验证按 agent 精确 scope。
+def governance_client_env(
+    tmp_path: Path,
+) -> Iterator[tuple[TestClient, Path, Path]]:
+    """tmp agents 目录：package_alias(manifest id=hello_agent) + review_agent。
+
+    目录名故意不等于 manifest id，钉死 counter 必须复用 Registry 的真实包路径，
+    不能自行拼 ``agents_dir / agent_id``。
     """
     import shutil
 
@@ -1134,8 +1138,9 @@ def governance_client_env(tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
     # golden-sample case 文件，会把断言撑大，须先清掉再由测试自己写入）。
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
-    shutil.copytree(REPO_ROOT / "agents" / "hello_agent", agents_dir / "hello_agent")
-    for p in (agents_dir / "hello_agent" / "eval_cases").glob("*.json"):
+    hello_dir = agents_dir / "package_alias"
+    shutil.copytree(REPO_ROOT / "agents" / "hello_agent", hello_dir)
+    for p in (hello_dir / "eval_cases").glob("*.json"):
         p.unlink()
     review_dir = agents_dir / "review_agent"
     shutil.copytree(REPO_ROOT / "agents" / "hello_agent", review_dir)
@@ -1157,19 +1162,33 @@ def governance_client_env(tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
     )
     with TestClient(app) as c:
         seed_and_login(c, db_path)
-        yield c, agents_dir
+        yield c, agents_dir, hello_dir
 
 
 def test_curated_cases_count_scoped_and_missing(governance_client_env) -> None:
-    client, agents_dir = governance_client_env
-    # 造 hello_agent 两个固化 case + 另一 agent 一个，验证按 agent 精确 scope
-    (agents_dir / "hello_agent" / "eval_cases").mkdir(parents=True, exist_ok=True)
-    (agents_dir / "hello_agent" / "eval_cases" / "case_001.json").write_text("{}", encoding="utf-8")
-    (agents_dir / "hello_agent" / "eval_cases" / "case_002.json").write_text("{}", encoding="utf-8")
+    client, agents_dir, hello_dir = governance_client_env
+    # 造 hello_agent 的 approved/draft/broken 各一 + 另一 agent 一个，验证按
+    # agent 精确 scope，且计数复用 Eval/Promotion 的 curation 分类口径。
+    (hello_dir / "eval_cases").mkdir(parents=True, exist_ok=True)
+    (hello_dir / "eval_cases" / "case_001.json").write_text("{}", encoding="utf-8")
+    (hello_dir / "eval_cases" / "case_002.json").write_text(
+        '{"curation":"draft"}',
+        encoding="utf-8",
+    )
+    (hello_dir / "eval_cases" / "case_003.json").write_text(
+        "{not-json",
+        encoding="utf-8",
+    )
 
     r = client.get("/api/agents/hello_agent/curated_cases_count")
     assert r.status_code == 200
-    assert r.json() == {"agent_id": "hello_agent", "count": 2}
+    assert r.json() == {
+        "agent_id": "hello_agent",
+        "count": 3,
+        "approved": 1,
+        "draft": 1,
+        "broken": 1,
+    }
 
     # 无 eval_cases 目录的 agent = 0（不抛）。registry 已在 fixture 内 TestClient
     # 启动时扫描完毕（agent 注册状态常驻内存），此刻才把磁盘上的 eval_cases/
@@ -1180,7 +1199,13 @@ def test_curated_cases_count_scoped_and_missing(governance_client_env) -> None:
     _shutil.rmtree(agents_dir / "review_agent" / "eval_cases")
     r2 = client.get("/api/agents/review_agent/curated_cases_count")
     assert r2.status_code == 200
-    assert r2.json()["count"] == 0
+    assert r2.json() == {
+        "agent_id": "review_agent",
+        "count": 0,
+        "approved": 0,
+        "draft": 0,
+        "broken": 0,
+    }
 
     # 不存在的 agent → 404
     assert client.get("/api/agents/no_such_agent/curated_cases_count").status_code == 404

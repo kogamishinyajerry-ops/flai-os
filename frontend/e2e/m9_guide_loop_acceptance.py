@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import socket
 import sys
@@ -48,6 +49,8 @@ import httpx
 import uvicorn
 
 from backend.app.main import create_app
+from backend.app.storage import repos
+from backend.app.storage.db import get_conn
 
 WORK = Path(tempfile.mkdtemp(prefix="flai_m9_loop_"))
 
@@ -111,7 +114,7 @@ for _ in range(50):
     try:
         if httpx.get(BASE + "/api/health", timeout=1).status_code == 200:
             break
-    except Exception:
+    except httpx.HTTPError:
         time.sleep(0.1)
 else:
     sys.exit("诚实失败：后端 5s 内未就绪")
@@ -130,20 +133,40 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 def flip_task_completed_with_artifact(task_id: str) -> None:
     """夹具（temp DB 直写）：把 queued 任务翻成 completed+产物——只为前端渲染
     路径提供 fixture（锚点行/速览的响应性），不冒充业务状态机行为（真实完成
-    链路由 m2 的 worker 路径验收）。"""
-    import sqlite3
+    链路由 m2 的 worker 路径验收）。产物记录与 task.output_file_ids 必须双向一致；
+    否则 owner-scoped 读取会按产品契约 fail-closed，而不是给 UI 假产物。"""
+    file_id = "file_probe_0001"
+    artifact_bytes = b'{"status":"fixture-only"}\n'
+    artifact_path = WORK / "task_runs" / task_id / "artifact.json"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_bytes(artifact_bytes)
 
-    conn = sqlite3.connect(WORK / "flai_os.db")
-    conn.execute(
-        "UPDATE tasks SET status='completed', output_file_ids=?, started_at=?, finished_at=? WHERE id=?",
-        (json.dumps(["file_probe_0001"]), "2026-07-11T02:00:00+00:00", "2026-07-11T02:01:35+00:00", task_id),
-    )
-    conn.commit()
-    conn.close()
+    conn = get_conn(WORK / "flai_os.db")
+    try:
+        repos.create_file(
+            conn,
+            file_id=file_id,
+            task_id=task_id,
+            kind="output",
+            filename="artifact.json",
+            path=str(artifact_path),
+            size_bytes=len(artifact_bytes),
+            sha256=hashlib.sha256(artifact_bytes).hexdigest(),
+            classification="internal",
+        )
+        updated = conn.execute(
+            "UPDATE tasks SET status='completed', output_file_ids=?, started_at=?, finished_at=? WHERE id=?",
+            (json.dumps([file_id]), "2026-07-11T02:00:00+00:00", "2026-07-11T02:01:35+00:00", task_id),
+        ).rowcount
+        if updated != 1:
+            raise RuntimeError("M9 fixture task 不存在，不能伪造完成态")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 
-from _auth import login_context, login_httpx, seed_user  # noqa: E402
+from _auth import login_context, login_httpx, seed_user
 
 seed_user(WORK / "flai_os.db", "王工")
 API = login_httpx(BASE)  # 直连 API 的已登录客户端（ADR-0019）

@@ -12,7 +12,7 @@ Task 9 补全③盖章动效）。
     TaskConsole/StatusCenter 各自轮询会 ≥12，此断言在旧实现上必然超限失败）。
   ②TaskDetail 跨会话人工放行免手动刷新：本机浏览器开着 waiting_review 任务
     的详情页（channel 已按 liveFeedCore.nextInterval 降频到 8s）；另一个
-    httpx 会话（模拟另一位工程师，不共享浏览器 cookie）直接 POST
+    同 owner httpx 会话（不共享浏览器 cookie）直接 POST
     /api/tasks/<id>/review 批准放行；页面全程不点任何按钮（不点「刷新」，
     不点批准），12 秒内应自行出现终态盖章文案「已完成」——验证的是
     TaskDetail 已并轨 task:<id> channel 而非自建轮询（旧实现 waiting_review
@@ -109,9 +109,6 @@ else:
 from _auth import login_context, login_httpx, seed_user  # noqa: E402（须在后端就绪后种账户）
 
 seed_user(WORK / "flai_os.db", "本机查看者")
-# 第二个账户=「另一位工程师」，跨会话放行的动作方——与本机浏览器登录身份彻底
-# 不同（不同 username/cookie jar），而非同一账户借第二个 httpx.Client 重登。
-seed_user(WORK / "flai_os.db", "跨会话签发工程师", username="e2e_approver", password="e2e-approver-pass")
 creator = login_httpx(BASE)
 
 runner = JobRunner(app.state.runtime, app.state.conn_factory, poll_interval=0.2)
@@ -194,9 +191,10 @@ with sync_playwright() as p:
           "等待人工审核" in body, body[:400])
     page.screenshot(path=str(SHOTS / "1_waiting_review.png"), full_page=True)
 
-    # ── 断言②：另一个 httpx 会话（不共享本机浏览器 cookie，模拟另一位工程师）
-    #    直接 API 批准放行；本机页面全程零点击——不点「刷新」，不点「批准放行」──
-    approver = login_httpx(BASE, username="e2e_approver", password="e2e-approver-pass")
+    # ── 断言②：另一个同 owner httpx 会话（不共享本机浏览器 cookie）
+    #    直接 API 批准放行；本机页面全程零点击——不点「刷新」，不点「批准放行」。
+    #    V1 owner_signoff 必须保持 exact owner；跨 owner 决策应由 API fail-closed。──
+    approver = login_httpx(BASE)
     resp = approver.post(f"/api/tasks/{task_id}/review", json={"action": "approve", "comment": "跨会话放行验收"})
     check("跨会话 API 批准放行请求成功", resp.status_code == 200, f"status={resp.status_code} body={resp.text[:200]}")
 

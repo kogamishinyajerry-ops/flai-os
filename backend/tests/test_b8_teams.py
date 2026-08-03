@@ -19,13 +19,18 @@ import yaml
 from backend.app.jobs.runner import JobRunner
 from backend.app.runtime.registry import AgentRegistry
 from backend.app.storage import repos
+from backend.tests.conftest import TEST_USERNAME
 
 
 def _mk_conv_with_plan(app, agents_plan: list[dict[str, Any]], conv_id: str = "conv_b8") -> str:
     conn = app.state.conn_factory()
     try:
         repos.create_conversation(
-            conn, conversation_id=conv_id, agent_id="guide_agent", created_by="tester"
+            conn,
+            conversation_id=conv_id,
+            agent_id="guide_agent",
+            created_by="tester",
+            created_by_username=TEST_USERNAME,
         )
         repos.set_conversation_recommendation(
             conn, conv_id, {"decision": "orchestrate", "goal": "验收目标", "agents": agents_plan}
@@ -108,7 +113,11 @@ def test_create_team_requires_orchestrate_plan(app_env):
     conn = app.state.conn_factory()
     try:
         repos.create_conversation(
-            conn, conversation_id="conv_plain", agent_id="guide_agent", created_by="tester"
+            conn,
+            conversation_id="conv_plain",
+            agent_id="guide_agent",
+            created_by="tester",
+            created_by_username=TEST_USERNAME,
         )
     finally:
         conn.close()

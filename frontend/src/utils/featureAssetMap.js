@@ -26,13 +26,13 @@ const CANDIDATE_PRESENTATIONS = Object.freeze({
   rejected: Object.freeze({
     label: "Candidate 已驳回",
     shortLabel: "已驳回",
-    className: "is-failed",
+    className: "is-rejected",
   }),
 });
 const PACKAGE_PRESENTATIONS = Object.freeze({
   pending_review: Object.freeze({ label: "待独立人审", className: "is-pending" }),
   approved: Object.freeze({ label: "包级人审通过", className: "is-signed" }),
-  rejected: Object.freeze({ label: "已驳回", className: "is-failed" }),
+  rejected: Object.freeze({ label: "已驳回", className: "is-rejected" }),
   not_formed: Object.freeze({ label: "尚未形成", className: "is-unformed" }),
 });
 

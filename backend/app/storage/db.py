@@ -161,6 +161,10 @@ CREATE TABLE IF NOT EXISTS samples (
     raw_output_path TEXT,
     validation_status TEXT,
     accepted_by_engineer INTEGER,
+    -- Issue #4：sample 级认可的人签来源。仅新 acknowledge API 写入稳定
+    -- username；旧 task-review 批量标签与历史行均留 NULL，禁止从显示名反推。
+    acknowledged_by_username TEXT,
+    acknowledged_at TEXT,
     created_at TEXT NOT NULL,
     classification TEXT NOT NULL DEFAULT 'internal'
 );
@@ -457,6 +461,52 @@ BEGIN
 END
 """
 
+_TASK_OWNER_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_tasks_created_by_username_immutable
+BEFORE UPDATE OF created_by_username ON tasks
+WHEN NEW.created_by_username IS NOT OLD.created_by_username
+BEGIN
+    SELECT RAISE(ABORT, 'tasks.created_by_username is immutable');
+END
+"""
+
+_TASK_ORIGIN_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_tasks_origin_immutable
+BEFORE UPDATE OF origin ON tasks
+WHEN NEW.origin IS NOT OLD.origin
+BEGIN
+    SELECT RAISE(ABORT, 'tasks.origin is immutable');
+END
+"""
+
+_TEAM_OWNER_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_teams_owner_user_immutable
+BEFORE UPDATE OF owner_user ON teams
+WHEN NEW.owner_user IS NOT OLD.owner_user
+BEGIN
+    SELECT RAISE(ABORT, 'teams.owner_user is immutable');
+END
+"""
+
+_ASSET_CANDIDATE_INITIATOR_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_asset_candidates_initiator_immutable
+BEFORE UPDATE OF initiated_by_user_id, initiated_by_username ON asset_candidates
+WHEN NEW.initiated_by_user_id IS NOT OLD.initiated_by_user_id
+  OR NEW.initiated_by_username IS NOT OLD.initiated_by_username
+BEGIN
+    SELECT RAISE(ABORT, 'asset_candidates initiator is immutable');
+END
+"""
+
+_SKILL_PACKAGE_OWNER_IMMUTABILITY_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_skill_packages_owner_username_immutable
+BEFORE UPDATE OF owner_username ON skill_packages
+WHEN NEW.owner_username IS NOT OLD.owner_username
+BEGIN
+    SELECT RAISE(ABORT, 'skill_packages.owner_username is immutable');
+END
+"""
+
 _SKILL_REUSE_BINDING_IMMUTABILITY_TRIGGER = """
 CREATE TRIGGER IF NOT EXISTS trg_skill_reuse_bindings_update_immutable
 BEFORE UPDATE ON skill_reuse_bindings
@@ -547,6 +597,7 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute(
                     "ALTER TABLE tasks ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"
                 )
+            conn.execute(_TASK_ORIGIN_IMMUTABILITY_TRIGGER)
             # 迁移 #6（ADR-0021/M11-B2）：files/samples 数据分级轴 + 上传者追溯。
             # 存量行 DEFAULT 'internal' 即如实回填（mock 期数据全部是演示产物，
             # 同迁移 #4 origin 的裁决口径）；uploaded_by 存量留 NULL（自报时代
@@ -564,6 +615,10 @@ def init_db(db_path: str | Path) -> None:
             if "owner_username" not in file_cols:
                 conn.execute("ALTER TABLE files ADD COLUMN owner_username TEXT")
             conn.execute(_FILE_OWNER_IMMUTABILITY_TRIGGER)
+            # Candidate 与隔离 Skill Package 的 owner/initiator 是只读授权和
+            # owner-scoped 地图的裁决轴；只允许 INSERT 时确立，状态机更新不得改认领。
+            conn.execute(_ASSET_CANDIDATE_INITIATOR_IMMUTABILITY_TRIGGER)
+            conn.execute(_SKILL_PACKAGE_OWNER_IMMUTABILITY_TRIGGER)
             # ADR-0035：任务级 Skill binding 是 insert-once 执行证据。即使调用者
             # 同时重算摘要，也不得原地改写来源、owner、Agent 或工作段依据。
             conn.execute(_SKILL_REUSE_BINDING_IMMUTABILITY_TRIGGER)
@@ -592,6 +647,8 @@ def init_db(db_path: str | Path) -> None:
             task_cols_v9 = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
             if "created_by_username" not in task_cols_v9:
                 conn.execute("ALTER TABLE tasks ADD COLUMN created_by_username TEXT")
+            conn.execute(_TASK_OWNER_IMMUTABILITY_TRIGGER)
+            conn.execute(_TEAM_OWNER_IMMUTABILITY_TRIGGER)
             if "depends_on" not in task_cols_v9:
                 conn.execute("ALTER TABLE tasks ADD COLUMN depends_on TEXT")
             if "input_binding" not in task_cols_v9:
@@ -626,6 +683,18 @@ def init_db(db_path: str | Path) -> None:
                 conn.execute("ALTER TABLE promotions ADD COLUMN signer_username TEXT")
             if "signer_session_hash" not in promotion_cols_v14:
                 conn.execute("ALTER TABLE promotions ADD COLUMN signer_session_hash TEXT")
+            # 迁移 #17（Issue #4）：sample 级认可的人签稳定轴。存量
+            # accepted_by_engineer 只证明旧标签结果，不能据此猜 username/时间；
+            # 两列均无 DEFAULT，历史行诚实保留 NULL。认可写入走 CAS-on-NULL。
+            sample_cols_v17 = {
+                row[1] for row in conn.execute("PRAGMA table_info(samples)")
+            }
+            if "acknowledged_by_username" not in sample_cols_v17:
+                conn.execute(
+                    "ALTER TABLE samples ADD COLUMN acknowledged_by_username TEXT"
+                )
+            if "acknowledged_at" not in sample_cols_v17:
+                conn.execute("ALTER TABLE samples ADD COLUMN acknowledged_at TEXT")
             # 索引必须在存量列迁移完成后创建，否则旧库尚无 conversation_id 时
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:

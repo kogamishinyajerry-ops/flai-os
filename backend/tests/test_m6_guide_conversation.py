@@ -32,13 +32,12 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from starlette.requests import Request
 
-from conftest import TEST_DISPLAY_NAME
-
 from backend.app.api.conversations import PostMessageRequest, stream_message
-from backend.app.runtime.registry import AgentRegistry
-from backend.app.runtime import conversation as conversation_mod
 from backend.app.core.errors import ModelUpstreamError
+from backend.app.runtime import conversation as conversation_mod
+from backend.app.runtime.registry import AgentRegistry
 from backend.app.storage import repos
+from conftest import TEST_DISPLAY_NAME, TEST_USERNAME
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -1364,6 +1363,7 @@ def test_stream_asgi_disconnect_cancels_round_before_persistence(app_env) -> Non
         "server": ("testserver", 80),
         "root_path": "",
         "app": app,
+        "state": {"user": {"username": TEST_USERNAME}},
     }
     sent: list[dict[str, Any]] = []
 
@@ -1407,17 +1407,20 @@ def test_stream_done_has_no_fallible_database_read_after_commit(app_env, monkeyp
     original_get = conversation_mod.repos.get_conversation
     outside_transaction_calls = 0
 
-    def reject_second_outside_read(conn, conversation_id):
+    def reject_postcommit_outside_read(conn, conversation_id):
         nonlocal outside_transaction_calls
         row = original_get(conn, conversation_id)
         if not conn.in_transaction:
             outside_transaction_calls += 1
-            if outside_transaction_calls > 1:
+            # Exact-owner authorization performs one read-only preflight before
+            # ConversationService's own initial read.  Any third outside-
+            # transaction read would again be a fallible post-commit read.
+            if outside_transaction_calls > 2:
                 raise RuntimeError("commit 后禁止再次读取")
         return row
 
     monkeypatch.setattr(
-        conversation_mod.repos, "get_conversation", reject_second_outside_read
+        conversation_mod.repos, "get_conversation", reject_postcommit_outside_read
     )
     with client.stream(
         "POST",
@@ -1428,7 +1431,7 @@ def test_stream_done_has_no_fallible_database_read_after_commit(app_env, monkeyp
 
     assert events[-1]["type"] == "done"
     assert events[-1]["message"]["content"] == "完整回复"
-    assert outside_transaction_calls == 1
+    assert outside_transaction_calls == 2
 
     monkeypatch.setattr(conversation_mod.repos, "get_conversation", original_get)
     assert [m["role"] for m in client.get(

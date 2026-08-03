@@ -14,9 +14,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict
 
+from . import object_authorization as oauth
 from ..storage import repos
 
 router = APIRouter(prefix="/api", tags=["feedback"])
@@ -39,9 +40,9 @@ class CreateFeedbackRequest(BaseModel):
 def create_feedback(body: CreateFeedbackRequest, request: Request) -> dict[str, Any]:
     conn = request.app.state.conn_factory()
     try:
-        task = repos.get_task(conn, body.task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{body.task_id}")
+        task = oauth.require_owned_task(
+            conn, body.task_id, oauth.authenticated_username(request)
+        )
 
         created_by = request.state.user["display_name"]  # ADR-0019 D5：认证身份
         record = repos.create_feedback(
@@ -81,9 +82,9 @@ def create_feedback(body: CreateFeedbackRequest, request: Request) -> dict[str, 
 def list_task_feedback(task_id: str, request: Request) -> list[dict[str, Any]]:
     conn = request.app.state.conn_factory()
     try:
-        task = repos.get_task(conn, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
+        oauth.require_readable_task(
+            conn, task_id, oauth.authenticated_username(request)
+        )
         return repos.list_feedback(conn, task_id)
     finally:
         conn.close()

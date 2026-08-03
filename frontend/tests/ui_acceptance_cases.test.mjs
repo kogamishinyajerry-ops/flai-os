@@ -15,6 +15,7 @@ import {
   normalizeSkillReuseRef,
   verifyAssetCandidateIntegrity,
 } from "../src/utils/assetCandidates.js";
+import { buildFeatureAssetMapView } from "../src/utils/featureAssetMap.js";
 
 const appSource = readFileSync(
   new URL("../src/App.vue", import.meta.url),
@@ -64,6 +65,10 @@ const REQUIRED_CASES = [
   "persistence-unknown-desktop",
   "landing-mobile",
   "routing-mobile",
+  "feature-asset-map-closed-desktop",
+  "feature-asset-map-ready-desktop",
+  "feature-asset-map-error-desktop",
+  "feature-asset-map-ready-mobile",
   "asset-candidate-desktop",
   "asset-candidate-accepted-desktop",
   "asset-package-approved-desktop",
@@ -76,7 +81,7 @@ const REQUIRED_CASES = [
   "asset-blocked-mobile",
 ];
 
-test("UI 验收台固定覆盖十六个关键视图，未知 ID fail-closed", () => {
+test("UI 验收台固定覆盖二十个关键视图，未知 ID fail-closed", () => {
   assert.deepEqual(
     UI_ACCEPTANCE_CASES.map((item) => item.id),
     REQUIRED_CASES,
@@ -90,6 +95,37 @@ test("UI 验收台固定覆盖十六个关键视图，未知 ID fail-closed", ()
     () => getUiAcceptanceCase("missing"),
     /未知 UI 验收场景：missing/,
   );
+});
+
+test("功能与资产地图固定覆盖默认收起、展开成功、503 整体停披露与 375px", () => {
+  const closed = getUiAcceptanceCase("feature-asset-map-closed-desktop");
+  const ready = getUiAcceptanceCase("feature-asset-map-ready-desktop");
+  const unavailable = getUiAcceptanceCase("feature-asset-map-error-desktop");
+  const mobile = getUiAcceptanceCase("feature-asset-map-ready-mobile");
+
+  for (const acceptanceCase of [closed, ready, mobile]) {
+    assert.equal(acceptanceCase.featureAssetMap.kind, "snapshot");
+    const view = buildFeatureAssetMapView(
+      acceptanceCase.featureAssetMap.snapshot,
+    );
+    assert.equal(view.available, true);
+    assert.equal(view.summary.capabilityCount, 2);
+    assert.equal(view.summary.assetCandidateCount, 1);
+    assert.equal(view.summary.approvedSkillPackageCount, 1);
+    const refreshed = buildFeatureAssetMapView(
+      acceptanceCase.featureAssetMap.refresh_snapshot,
+    );
+    assert.equal(refreshed.available, true);
+    assert.equal(refreshed.summary.assetCandidateCount, 2);
+    assert.equal(refreshed.summary.acceptedCandidateCount, 1);
+    assert.equal(refreshed.assets[1].state, "awaiting_human_review");
+    assert.equal(refreshed.assets[1].packageState, null);
+  }
+  assert.equal(unavailable.featureAssetMap.kind, "error");
+  assert.equal(unavailable.featureAssetMap.status, 503);
+  assert.match(unavailable.featureAssetMap.detail, /来源完整性核验失败/);
+  assert.equal(mobile.viewport.width, 375);
+  assert.equal(mobile.viewport.height, 812);
 });
 
 test("completed 单任务镜头只带一份待审资产候选，不伪造 Workflow 或 Agent", async () => {

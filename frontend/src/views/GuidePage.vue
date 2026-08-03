@@ -1017,7 +1017,7 @@ async function copyRefusedNeed(idx) {
   }
   lines.push("（来自 FLAi-OS 导引对话——请平台负责人按家底口径评估排期）");
   const ok = await copyText(lines.join("\n"));
-  if (ok === true) ElMessage.success("需求摘要已复制——发给平台负责人登记，别让它溜走");
+  if (ok === true) ElMessage.info("需求摘要已复制——发给平台负责人登记，别让它溜走");
   else ElMessage.error("复制失败——请手动选取文字复制");
 }
 
@@ -2034,7 +2034,7 @@ async function openPlan(plan) {
       }
     }
     ensureConversationTasksFeed(); // 督战 chip 保鲜：召集即接上会话任务订阅
-    ElMessage.success(`已按方案召集 ${targets.length} 名成员——进度与签发都会来这里找你`);
+    ElMessage.info(`已按方案召集 ${targets.length} 名成员——进度与签发都会来这里找你`);
     if (creationJournalCleared !== true) {
       ElMessage.warning("任务已创建，但本地开工记录尚未安全清除；本会话继续锁定以避免重复创建");
     }
@@ -2149,7 +2149,7 @@ async function reconcileBatchCreation() {
       if (requestedRetryOf.value === attempt.retryOf) retryUrlCleaned = await removeRetryQuery();
     }
     ensureConversationTasksFeed();
-    ElMessage.success(
+    ElMessage.info(
       `已核对：原开工请求已创建 ${attempt.items.length} 个任务，没有重复创建`,
     );
     if (creationJournalCleared !== true) {

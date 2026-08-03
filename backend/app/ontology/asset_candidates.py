@@ -27,8 +27,6 @@ from ..governance.signer_provenance import (
     resolve_signer,
     stored_signer_attests,
 )
-from ..storage import asset_candidates as candidate_store
-from ..storage import repos
 from ..runtime.package_snapshot import SNAPSHOT_CONTRACT
 from ..runtime.task_evidence import input_files_evidence
 from ..runtime.work_segments import (
@@ -38,13 +36,14 @@ from ..runtime.work_segments import (
     is_guide_refuse_delivery,
     latest_valid_iso,
 )
+from ..storage import asset_candidates as candidate_store
+from ..storage import repos
 from .asset_builder import (
     AssetDraftBuilder,
     AssetDraftInputError,
     AssetDraftProjectionError,
     AssetDraftSourceError,
 )
-
 
 SCHEMA_VERSION = "asset_candidate.v1"
 LINEAGE_SCHEMA_VERSION = "asset_candidate_lineage.v1"
@@ -376,6 +375,28 @@ class AssetCandidateLedger:
 
         conn.execute("BEGIN IMMEDIATE")
         try:
+            owner_context = candidate_store.get_owner_context_by_id(
+                conn, candidate_id
+            )
+            if owner_context is None:
+                raise AssetCandidateNotFoundError(
+                    f"资产候选不存在：{candidate_id}"
+                )
+            signer = resolve_signer(conn, signer_context)
+            if signer is None or signer.source != AUTHENTICATED_SESSION:
+                _conflict(
+                    "signer_session_unverifiable",
+                    "提交时认证会话已失效，人工决定未写入",
+                )
+            if signer.username != owner_context.get("initiated_by_username"):
+                _conflict(
+                    "task_owner_mismatch",
+                    "只有该任务的发起工程师可以决定其资产候选",
+                )
+            task = self._task_for_owner(
+                conn, owner_context["source_task_id"], signer.username
+            )
+
             candidate = candidate_store.get_by_id(conn, candidate_id)
             if candidate is None:
                 raise AssetCandidateNotFoundError(f"资产候选不存在：{candidate_id}")
@@ -396,21 +417,6 @@ class AssetCandidateLedger:
                     "该候选已经作出人工决定，不能重复或改写",
                 )
 
-            signer = resolve_signer(conn, signer_context)
-            if signer is None or signer.source != AUTHENTICATED_SESSION:
-                _conflict(
-                    "signer_session_unverifiable",
-                    "提交时认证会话已失效，人工决定未写入",
-                )
-            if signer.username != candidate.get("initiated_by_username"):
-                _conflict(
-                    "task_owner_mismatch",
-                    "只有该任务的发起工程师可以决定其资产候选",
-                )
-
-            task = self._task_for_owner(
-                conn, candidate["source_task_id"], signer.username
-            )
             live_projection = self._verified_projection(conn, task)
             live_bundle = live_projection["bundle"]
             live_lineage = live_projection["lineage"]
@@ -635,17 +641,6 @@ class AssetCandidateLedger:
             ) from exc
         if task is None:
             raise AssetCandidateNotFoundError(f"任务不存在：{task_id}")
-        if task.get("status") != "completed":
-            _conflict(
-                "task_not_completed", "只有权威状态为 completed 的任务才能形成候选"
-            )
-        if task.get("origin") != "user":
-            _conflict("task_origin_not_user", "评测或未知来源任务不能沉淀为工程资产")
-        if task.get("data_classification") != "internal":
-            _conflict(
-                "classification_not_eligible",
-                "首版资产候选只接收已明确标为 internal 的任务",
-            )
         owner = task.get("created_by_username")
         if owner is None:
             _conflict(
@@ -656,6 +651,17 @@ class AssetCandidateLedger:
             _conflict(
                 "task_owner_mismatch",
                 "只有任务发起工程师可以形成或查看其资产候选",
+            )
+        if task.get("status") != "completed":
+            _conflict(
+                "task_not_completed", "只有权威状态为 completed 的任务才能形成候选"
+            )
+        if task.get("origin") != "user":
+            _conflict("task_origin_not_user", "评测或未知来源任务不能沉淀为工程资产")
+        if task.get("data_classification") != "internal":
+            _conflict(
+                "classification_not_eligible",
+                "首版资产候选只接收已明确标为 internal 的任务",
             )
         return task
 

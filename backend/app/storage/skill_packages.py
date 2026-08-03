@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from jsonschema import validate
 
 from ..config import CONTRACTS_DIR
-
 
 _EVENT_SCHEMA_PATH = CONTRACTS_DIR / "skill_package_event.schema.json"
 _event_schema_cache: dict[str, Any] | None = None
@@ -41,7 +41,7 @@ def _decode_event(row: sqlite3.Row) -> dict[str, Any]:
     raw_payload = value.pop("payload_json")
     payload = json.loads(raw_payload)
     if not isinstance(payload, dict):
-        raise ValueError("skill package event payload must be an object")
+        raise TypeError("skill package event payload must be an object")
     value["payload"] = payload
     return value
 
@@ -63,6 +63,27 @@ def get_owner_by_id(conn: sqlite3.Connection, package_id: str) -> str | None:
         return None
     owner = row["owner_username"]
     return owner if isinstance(owner, str) else None
+
+
+def get_owner_context_by_id(
+    conn: sqlite3.Connection,
+    package_id: str,
+) -> dict[str, Any] | None:
+    """Read immutable package ownership/source lineage without manifest decode."""
+
+    row = conn.execute(
+        """
+        SELECT id,
+               owner_username,
+               source_candidate_id,
+               source_candidate_digest,
+               source_task_id
+        FROM skill_packages
+        WHERE id = ?
+        """,
+        (package_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def get_by_candidate_digest(
@@ -95,6 +116,27 @@ def get_owner_by_candidate_digest(
     return owner if isinstance(owner, str) else None
 
 
+def get_owner_context_by_candidate_digest(
+    conn: sqlite3.Connection,
+    candidate_digest: str,
+) -> dict[str, Any] | None:
+    """Read immutable package ownership/source lineage without manifest decode."""
+
+    row = conn.execute(
+        """
+        SELECT id,
+               owner_username,
+               source_candidate_id,
+               source_candidate_digest,
+               source_task_id
+        FROM skill_packages
+        WHERE source_candidate_digest = ?
+        """,
+        (candidate_digest,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
 def list_approved_for_owner(
     conn: sqlite3.Connection,
     owner_username: str,
@@ -121,6 +163,25 @@ def list_approved_ids_for_owner(
         """
         SELECT id FROM skill_packages
         WHERE owner_username = ? AND state = 'approved'
+        ORDER BY updated_at DESC, id ASC
+        LIMIT ?
+        """,
+        (owner_username, limit),
+    ).fetchall()
+    return [str(row["id"]) for row in rows]
+
+
+def list_ids_for_owner(
+    conn: sqlite3.Connection,
+    owner_username: str,
+    limit: int,
+) -> list[str]:
+    """List all owner package identities without decoding untrusted manifests."""
+
+    rows = conn.execute(
+        """
+        SELECT id FROM skill_packages
+        WHERE owner_username = ?
         ORDER BY updated_at DESC, id ASC
         LIMIT ?
         """,

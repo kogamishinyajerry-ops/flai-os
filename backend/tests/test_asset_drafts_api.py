@@ -5,6 +5,7 @@ from typing import Any
 
 from backend.app.ontology.asset_builder import AssetDraftProjectionError
 from backend.app.storage import repos
+from conftest import TEST_USERNAME
 
 
 def _request() -> dict:
@@ -33,6 +34,7 @@ def _create_conversation(app, *, with_user_message: bool = True) -> str:
             conversation_id=conversation_id,
             agent_id="guide_agent",
             created_by="测试工程师",
+            created_by_username=TEST_USERNAME,
         )
         if with_user_message:
             repos.append_message(
@@ -165,6 +167,18 @@ def test_unknown_fields_and_projection_failures_fail_closed(app_env) -> None:
 
 def test_malformed_persisted_source_is_a_generic_503(app_env) -> None:
     client, app = app_env
+    conversation_id = "conv_corrupt"
+    conn = app.state.conn_factory()
+    try:
+        repos.create_conversation(
+            conn,
+            conversation_id=conversation_id,
+            agent_id="guide_agent",
+            created_by="测试工程师",
+            created_by_username=TEST_USERNAME,
+        )
+    finally:
+        conn.close()
 
     class BrokenConversationService:
         def get(self, _conversation_id: str) -> dict[str, Any]:
@@ -172,7 +186,7 @@ def test_malformed_persisted_source_is_a_generic_503(app_env) -> None:
 
     app.state.conversation_service = BrokenConversationService()
     response = client.post(
-        "/api/conversations/conv_corrupt/asset-draft-preview",
+        f"/api/conversations/{conversation_id}/asset-draft-preview",
         json=_request(),
     )
 

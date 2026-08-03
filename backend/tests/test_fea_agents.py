@@ -212,10 +212,12 @@ def test_chain_solve_signoff_then_evaluate(env):
     conn = cf()
     try:
         repos.create_task(conn, task_id="solve1", agent_id="fea_solve_agent", agent_version="0.1.0",
-                          name="梁求解", created_by="工程师张三", inputs=_CANTILEVER, origin="user")
+                          name="梁求解", created_by="工程师张三", created_by_username="zhangsan",
+                          inputs=_CANTILEVER, origin="user")
         repos.set_task_status(conn, "solve1", "queued")
         repos.create_task(conn, task_id="eval1", agent_id="fea_evaluate_agent", agent_version="0.1.0",
-                          name="梁评估", created_by="工程师张三", inputs={"tolerance_pct": 2.0},
+                          name="梁评估", created_by="工程师张三", created_by_username="zhangsan",
+                          inputs={"tolerance_pct": 2.0},
                           depends_on=["solve1"], input_binding={"from_tasks": ["solve1"]}, origin="user")
     finally:
         conn.close()

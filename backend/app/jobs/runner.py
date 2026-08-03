@@ -549,6 +549,12 @@ class JobRunner:
         if task is None:
             return False
 
+        # claim_next_queued 在同一 claim 事务内把 owner-lineage poison 原子
+        # quarantine 为 failed 并留审计。该次轮询确实处理了一条任务，但绝不
+        # 进入 runtime（package materialize / file / model / tool / output 均在后面）。
+        if task.get("status") != "validating":
+            return True
+
         task_id = task["id"]
         try:
             self._runtime.execute(task_id)

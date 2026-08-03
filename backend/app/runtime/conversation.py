@@ -61,6 +61,7 @@ _HISTORY_MAX_CHARS = 60_000
 # （与截窗同哲学：诚实降级）。单消息附件数上限（防御纵深，API 层同限）。
 _ATTACHMENT_BUDGET_CHARS = 24_000
 _MAX_FILES_PER_MESSAGE = 5
+_ROUND_PERSISTED_MESSAGES = 2
 # 这是送进 Guide system message 的方法上下文，不是冷存储包本身。各 32 KiB
 # 足以承载可执行步骤，同时让最坏 JSON 转义后也受 workflow 的 256 KiB 总顶约束。
 _MAX_REVIEWED_SKILL_REVISION_BYTES = 32_000
@@ -89,6 +90,51 @@ _SKILL_REUSE_REF_KEYS = frozenset(
         "match_basis_digest",
     }
 )
+
+
+def _require_round_lineage_budget(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    *,
+    additional_file_ids: int,
+) -> tuple[int, list[str]]:
+    """Reserve the hard lineage budget before model work and again at commit."""
+
+    try:
+        return repos.get_bounded_conversation_attachment_lineage(
+            conn,
+            conversation_id,
+            max_messages=(
+                repos.CONVERSATION_LINEAGE_MAX_MESSAGES
+                - _ROUND_PERSISTED_MESSAGES
+            ),
+            max_file_ids=(
+                repos.CONVERSATION_LINEAGE_MAX_FILE_IDS - additional_file_ids
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ConversationConflictError(
+            "会话历史已达到安全上限，本轮未执行且未落库"
+        ) from exc
+
+
+def _verify_committed_lineage_budget(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+) -> None:
+    """Verify the post-append state before COMMIT; any drift rolls back."""
+
+    try:
+        repos.get_bounded_conversation_attachment_lineage(
+            conn,
+            conversation_id,
+            max_messages=repos.CONVERSATION_LINEAGE_MAX_MESSAGES,
+            max_file_ids=repos.CONVERSATION_LINEAGE_MAX_FILE_IDS,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ConversationConflictError(
+            "会话历史安全上限校验失败，本轮已回滚"
+        ) from exc
 _UNTRUSTED_REUSE_CLAIM_RE = re.compile(
     r"复用|沿用"
     r"|(?:按(?:照)?|依据|依照|使用|采用|套用).{0,20}"
@@ -396,6 +442,16 @@ class ConversationService:
                         f"附件不存在（请先经 /api/files/upload 上传）：{missing}"
                     )
 
+            # Reserve the exact persisted delta before Registry/model work.
+            # The final transaction repeats this check under BEGIN IMMEDIATE;
+            # together with the existing optimistic message-count guard, only
+            # one concurrent round can consume the remaining budget.
+            budget_message_count, _ = _require_round_lineage_budget(
+                conn,
+                conversation_id,
+                additional_file_ids=len(file_ids),
+            )
+
             agent_id = conv["agent_id"]
             snapshot_view_factory = getattr(
                 self.agent_registry, "snapshot_view", None
@@ -428,6 +484,10 @@ class ConversationService:
             # 成功后才进事务落库。baseline 计数供提交前乐观并发检查。
             persisted = repos.list_messages(conn, conversation_id)
             baseline_count = len(persisted)
+            if baseline_count != budget_message_count:
+                raise ConversationConflictError(
+                    "会话历史在预算预检期间发生变化，本轮未执行"
+                )
             # 任务签发或 Guide 的 canonical 终点代表上一段工程工作已经闭合。此后
             # 新一轮仍看到完整文字历史，但附件正文/密级/转交 gate 只消费最近终点
             # 之后的持久化附件；本轮尚未落库的 file_ids 始终属于当前段。
@@ -751,6 +811,11 @@ class ConversationService:
                     raise ConversationConflictError(
                         "会话在本轮生成期间被并发消息修改，本轮不落库——请基于最新历史重试"
                     )
+                _require_round_lineage_budget(
+                    conn,
+                    conversation_id,
+                    additional_file_ids=len(file_ids),
+                )
                 fresh_messages = (
                     repos.list_messages(conn, conversation_id)
                     if agent_id == "guide_agent"
@@ -781,6 +846,7 @@ class ConversationService:
                     content=assistant_message,
                     recommendation=recommendation,
                 )
+                _verify_committed_lineage_budget(conn, conversation_id)
                 # 会话级 recommendation 反映**最后一轮**结果（反方 P3-1：含推荐被
                 # 撤回的轮——无推荐即写回 None，不留陈旧草案）。
                 updated_conversation = repos.set_conversation_recommendation(

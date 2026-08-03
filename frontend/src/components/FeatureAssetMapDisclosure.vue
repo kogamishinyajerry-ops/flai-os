@@ -27,10 +27,16 @@
         </div>
 
         <template v-else-if="phase === 'ready'">
-          <div class="map-boundary">
-            <span>只读</span>
-            <span>仅当前账号</span>
-            <span>不执行 · 不注册 · 不晋级</span>
+          <div class="map-ready-bar">
+            <div class="map-boundary">
+              <span>当前读取快照</span>
+              <span>只读</span>
+              <span>仅当前账号</span>
+              <span>不执行 · 不注册 · 不晋级</span>
+            </div>
+            <button type="button" class="map-refresh" @click="loadMap">
+              重新读取
+            </button>
           </div>
 
           <div class="map-metrics" aria-label="地图摘要">
@@ -136,7 +142,7 @@
 </template>
 
 <script setup>
-import { ref } from "vue";
+import { inject, ref } from "vue";
 
 import { getFeatureAssetMap } from "../api/featureAssetMap.js";
 import {
@@ -145,6 +151,10 @@ import {
 } from "../utils/featureAssetMap.js";
 
 
+const featureAssetMapLoader = inject(
+  "flaiFeatureAssetMapLoader",
+  getFeatureAssetMap,
+);
 const phase = ref("idle");
 const view = ref(null);
 const errorMessage = ref("");
@@ -154,7 +164,7 @@ async function loadMap() {
   phase.value = "loading";
   errorMessage.value = "";
   try {
-    view.value = await getFeatureAssetMap();
+    view.value = await featureAssetMapLoader();
     phase.value = "ready";
   } catch (error) {
     view.value = null;
@@ -245,8 +255,12 @@ function launchLabel(kind) {
 .map-retry { min-height: 44px; padding: 0 14px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface-raised); color: var(--ink); cursor: pointer; }
 .map-retry:focus-visible { outline: 2px solid var(--clay); outline-offset: 2px; }
 
-.map-boundary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.map-ready-bar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.map-boundary { display: flex; flex-wrap: wrap; gap: 6px; }
 .map-boundary span { padding: 4px 8px; border: 1px solid var(--hairline); border-radius: 999px; color: var(--ink-soft); background: var(--surface-raised); font-size: var(--fs-2xs); }
+.map-refresh { flex: 0 0 auto; min-height: 32px; padding: 0 11px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface-raised); color: var(--ink-soft); font-size: var(--fs-2xs); cursor: pointer; }
+.map-refresh:hover { border-color: var(--clay-softer); color: var(--clay); }
+.map-refresh:focus-visible { outline: 2px solid var(--clay); outline-offset: 2px; }
 
 .map-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .map-metrics > div { display: grid; gap: 2px; padding: 10px; border: 1px solid var(--hairline-soft); border-radius: 10px; background: var(--surface-raised); }
@@ -274,6 +288,7 @@ function launchLabel(kind) {
 .is-signed { color: var(--trust-signed); background: rgba(var(--trust-signed-rgb), .09); }
 .is-pending { color: var(--trust-pending); background: rgba(var(--trust-pending-rgb), .09); }
 .is-failed { color: var(--trust-fail); background: color-mix(in srgb, var(--trust-fail) 9%, transparent); }
+.is-rejected { color: var(--ink-soft); background: var(--hover-tint); }
 .is-unformed { color: var(--ink-soft); background: var(--hover-tint); }
 .asset-kind { color: var(--clay); font-size: var(--fs-2xs); }
 .asset-kind + h4 { margin-top: 3px; }
@@ -289,6 +304,8 @@ function launchLabel(kind) {
   .map-section-heading { align-items: flex-start; flex-direction: column; }
   .map-state.is-error { align-items: stretch; flex-direction: column; }
   .map-retry { width: 100%; }
+  .map-ready-bar { align-items: stretch; flex-direction: column; }
+  .map-refresh { min-height: 44px; width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

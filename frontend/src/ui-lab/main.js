@@ -36,6 +36,7 @@ async function mountEmbedded(acceptanceCase) {
     { default: App },
     { default: GuidePage },
     { themeMode },
+    { buildFeatureAssetMapView },
   ] = await Promise.all([
     import("vue"),
     import("element-plus"),
@@ -44,6 +45,7 @@ async function mountEmbedded(acceptanceCase) {
     import("../App.vue"),
     import("../views/GuidePage.vue"),
     import("../stores/theme"),
+    import("../utils/featureAssetMap.js"),
   ]);
 
   const requestedTheme = params.get("theme");
@@ -68,6 +70,36 @@ async function mountEmbedded(acceptanceCase) {
   const app = createApp(App, {
     acceptanceFixture: acceptanceCase.app,
   });
+  const mapFixture = acceptanceCase.featureAssetMap;
+  if (mapFixture?.kind === "snapshot") {
+    const mapViews = [mapFixture.snapshot, mapFixture.refresh_snapshot]
+      .filter(Boolean)
+      .map((snapshot) => buildFeatureAssetMapView(snapshot));
+    if (
+      mapViews.length === 0
+      || mapViews.some((view) => view.available !== true)
+    ) {
+      throw new RangeError("功能与资产地图验收快照不完整");
+    }
+    let readCount = 0;
+    app.provide(
+      "flaiFeatureAssetMapLoader",
+      async () => {
+        const index = Math.min(readCount, mapViews.length - 1);
+        readCount += 1;
+        return structuredClone(mapViews[index]);
+      },
+    );
+  } else if (mapFixture?.kind === "error") {
+    app.provide("flaiFeatureAssetMapLoader", async () => {
+      const error = new Error(mapFixture.detail);
+      error.status = mapFixture.status;
+      error.detail = mapFixture.detail;
+      throw error;
+    });
+  } else if (mapFixture) {
+    throw new RangeError("功能与资产地图验收 fixture 类型无效");
+  }
   provideGlobalConfig({ locale: zhCn }, app, true);
   app.use(router).mount("#app");
 }

@@ -4,7 +4,8 @@
 晋升会真改 agent.yaml、固化会真写 case 文件，全部发生在 tmp 包副本上）
 + 自跑 Job Runner + 真 chromium 走 UI。
 
-覆盖（12 断言）：
+覆盖：
+  ⓪Issue #4 sample 级认可：actor 只取会话 username，draft 同源计数且幂等
   ①治理面板可开（gov-entry→gov-dialog，尚未跑过评测）
   ②跑评测→全绿摘要 3/3（真实 runtime 全链，同步等待）
   ③fail-closed UI 见证：不勾人工确认直接晋升→逐条拒绝原因可见
@@ -61,6 +62,9 @@ WORK = Path(tempfile.mkdtemp(prefix="flai_m10_acceptance_"))
 AGENTS_DIR = WORK / "agents"
 AGENTS_DIR.mkdir()
 shutil.copytree(REPO / "agents" / "hello_agent", AGENTS_DIR / "hello_agent")
+HELLO_CASES = AGENTS_DIR / "hello_agent" / "eval_cases"
+for f in HELLO_CASES.glob("*.json"):
+    f.unlink()
 GOV_DIR = AGENTS_DIR / "governed_agent"
 shutil.copytree(REPO / "agents" / "hello_agent", GOV_DIR)
 _yaml = GOV_DIR / "agent.yaml"
@@ -143,10 +147,83 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 
-from _auth import login_context, login_httpx, seed_user  # noqa: E402
+from _auth import E2E_USERNAME, login_context, login_httpx, seed_user  # noqa: E402
 
 seed_user(WORK / "flai_os.db", "验收工程师")
 API = login_httpx(BASE)
+
+# ── ⓪ Issue #4：requires_review=false 的完成样本按 sample id 认可 ──
+created = API.post(
+    "/api/tasks",
+    json={"agent_id": "hello_agent", "inputs": {"name": "逐样本认可"}},
+)
+created.raise_for_status()
+ack_task_id = created.json()["id"]
+deadline = time.time() + 30
+ack_task = {}
+while time.time() < deadline:
+    response = API.get(f"/api/tasks/{ack_task_id}")
+    response.raise_for_status()
+    ack_task = response.json()
+    if ack_task.get("status") in ("completed", "failed", "cancelled"):
+        break
+    time.sleep(0.2)
+ack_samples = API.get(f"/api/tasks/{ack_task_id}/samples").json()
+check(
+    "⓪完成任务沉淀一条待认可 sample",
+    ack_task.get("status") == "completed"
+    and len(ack_samples) == 1
+    and ack_samples[0].get("accepted_by_engineer") is None,
+    f"task={ack_task.get('status')} samples={ack_samples}",
+)
+ack_sample_id = ack_samples[0]["id"] if ack_samples else -1
+anonymous = httpx.post(
+    f"{BASE}/api/samples/{ack_sample_id}/acknowledge",
+    json={},
+    timeout=5,
+)
+forged = API.post(
+    f"/api/samples/{ack_sample_id}/acknowledge",
+    json={"actor": "mallory"},
+)
+first_ack = API.post(f"/api/samples/{ack_sample_id}/acknowledge", json={})
+replayed_ack = API.post(f"/api/samples/{ack_sample_id}/acknowledge", json={})
+ack_body = first_ack.json() if first_ack.status_code == 200 else {}
+check(
+    "⓪人签边界与幂等资源",
+    anonymous.status_code == 401
+    and forged.status_code == 422
+    and first_ack.status_code == 200
+    and replayed_ack.status_code == 200
+    and replayed_ack.json() == ack_body
+    and ack_body.get("acknowledged_by_username") == E2E_USERNAME,
+    (
+        f"anonymous={anonymous.status_code} forged={forged.status_code} "
+        f"first={first_ack.status_code} replay={replayed_ack.status_code}"
+    ),
+)
+counter = API.get("/api/agents/hello_agent/curated_cases_count")
+fixed_hello = sorted(HELLO_CASES.glob("case_*_from_sample.json"))
+fixed_hello_doc = (
+    json.loads(fixed_hello[0].read_text(encoding="utf-8"))
+    if len(fixed_hello) == 1
+    else {}
+)
+check(
+    "⓪同源 curation 计数只增加 draft",
+    counter.status_code == 200
+    and counter.json()
+    == {
+        "agent_id": "hello_agent",
+        "count": 1,
+        "approved": 0,
+        "draft": 1,
+        "broken": 0,
+    }
+    and len(fixed_hello) == 1
+    and fixed_hello_doc.get("curation") == "draft",
+    f"counter={counter.text} files={[path.name for path in fixed_hello]}",
+)
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
@@ -162,8 +239,99 @@ with sync_playwright() as p:
     dialog_text = page.locator(".gov-dialog").inner_text()
     check("①治理面板可开且显示空历史", "尚未跑过评测" in dialog_text, dialog_text[:200])
     page.screenshot(path=str(SHOTS / "1_gov_dialog.png"), full_page=True)
+    page.keyboard.press("Escape")
 
-    # ── ② 跑评测 → 全绿 3/3（同步执行，等 loading 结束）──
+    # ── ⑥ L0 用户任务 → waiting_review → 状态坞批准放行 ──
+    created = API.post(
+        "/api/tasks",
+        json={"agent_id": "governed_agent", "inputs": {"name": "治理链样本"}},
+    )
+    created_body = created.json() if created.status_code in (200, 201) else {}
+    task_id = created_body.get("id", "")
+    created_ok = (
+        created.status_code in (200, 201)
+        and re.fullmatch(r"task_[0-9a-f]{32}", task_id) is not None
+    )
+    check(
+        "⑥前置：认证 API 创建治理样本任务成功",
+        created_ok,
+        f"status={created.status_code} body={created.text[:200]}",
+    )
+    if created_ok is not True:
+        raise RuntimeError(
+            f"M10 前置任务创建失败 {created.status_code}: {created.text[:200]}"
+        )
+    page.goto(BASE + f"/tasks/{task_id}", wait_until="networkidle")
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if "等待人工审核" in page.locator("body").inner_text():
+            break
+        time.sleep(1)
+    page.locator(".status-dock").click()
+    sc_item = page.locator(".sc-item", has_text="governed_agent")
+    expect(sc_item.first).to_be_visible(timeout=5000)
+    sc_item.first.click()
+    expect(page.locator(".peek-approve")).to_be_visible(timeout=8000)
+    quick_review = page.locator(".peek-review-card")
+    quick_approve_box = quick_review.get_by_role("button", name="批准放行").bounding_box()
+    quick_reject_box = quick_review.get_by_role("button", name="驳回").bounding_box()
+    check(
+        "⑥状态坞批准/驳回触控高度均≥44px",
+        quick_approve_box is not None
+        and quick_reject_box is not None
+        and quick_approve_box["height"] >= 44
+        and quick_reject_box["height"] >= 44,
+        f"approve={quick_approve_box} reject={quick_reject_box}",
+    )
+    assert "验收工程师" in quick_review.inner_text()
+    page.locator(".peek-approve").click()
+    page.get_by_role("button", name="确认批准放行").click()
+    deadline = time.time() + 15
+    approved = False
+    while time.time() < deadline:
+        shell_text = (
+            page.locator(".sc-shell").inner_text()
+            if page.locator(".sc-shell").count()
+            else ""
+        )
+        if "已完成" in shell_text or page.locator(".sc-fix-row").count() > 0:
+            approved = True
+            break
+        time.sleep(0.5)
+    check("⑥状态坞批准放行成功", approved, shell_text[:300])
+
+    # ── ⑦ live package 仍为 L0 时固化；输出只能是 draft ──
+    expect(page.locator(".sc-fix-row")).to_be_visible(timeout=8000)
+    page.locator(".sc-fix-sample-btn").click()
+    deadline = time.time() + 15
+    fix_text = ""
+    while time.time() < deadline:
+        if page.locator(".sc-fix-result").count() > 0:
+            fix_text = page.locator(".sc-fix-result").inner_text()
+            if "case_" in fix_text:
+                break
+        time.sleep(0.5)
+    check("⑦L0 固化成功且 case_file 回显", "case_" in fix_text, fix_text[:200])
+    fixed = sorted(GOV_CASES.glob("case_*_from_sample.json"))
+    fixed_doc = (
+        json.loads(fixed[0].read_text(encoding="utf-8"))
+        if len(fixed) == 1
+        else {}
+    )
+    check(
+        "⑦'固化 case 落盘且 curation=draft、provenance 对账",
+        len(fixed) == 1
+        and fixed_doc.get("curation") == "draft"
+        and (fixed_doc.get("provenance") or {}).get("task_id") == task_id,
+        f"files={[path.name for path in fixed]}",
+    )
+    page.screenshot(path=str(SHOTS / "5_fix_sample.png"), full_page=True)
+    page.keyboard.press("Escape")
+
+    # ── ② 带 draft 跑评测 → 全绿仍 3/3（draft 不进入 approved 覆盖）──
+    page.goto(BASE + "/portal", wait_until="networkidle")
+    page.locator(".agent-card", has_text="governed_agent").locator(".gov-entry").click()
+    expect(page.locator(".gov-dialog")).to_be_visible(timeout=5000)
     page.locator(".gov-run-btn").click()
     deadline = time.time() + 60
     summary = ""
@@ -174,6 +342,11 @@ with sync_playwright() as p:
                 break
         time.sleep(1)
     check("②跑评测→全绿摘要 3/3", "3/3" in summary, summary[:200])
+    check(
+        "⑧draft 不计数且待策展可见",
+        "待策展" in page.locator(".gov-dialog").inner_text(),
+        page.locator(".gov-dialog").inner_text()[:400],
+    )
     page.screenshot(path=str(SHOTS / "2_eval_green.png"), full_page=True)
 
     # ── ③ fail-closed UI 见证：不勾确认直接晋升 → 逐条拒绝可见 ──
@@ -227,97 +400,32 @@ with sync_playwright() as p:
     page.screenshot(path=str(SHOTS / "4_promoted.png"), full_page=True)
     page.keyboard.press("Escape")
 
-    # ── ⑥ 用户任务 → waiting_review → 状态坞批准放行。门户继续保留治理动作，
-    #    但不再承担工程师任务填参；认证 API 只负责准备本治理验收的样本任务。──
-    created = API.post(
-        "/api/tasks",
-        json={"agent_id": "governed_agent", "inputs": {"name": "治理链样本"}},
+    # ── ⑧ 晋升后 live package 不可再写，既有 draft 字节保持不变 ──
+    fixed_before_l1_retry = {
+        path.name: path.read_bytes()
+        for path in GOV_CASES.glob("*.json")
+    }
+    l1_fix = API.post(
+        "/api/agents/governed_agent/eval-cases",
+        json={
+            "sample_id": (fixed_doc.get("provenance") or {}).get(
+                "sample_id",
+                -1,
+            )
+        },
     )
-    created_body = created.json() if created.status_code in (200, 201) else {}
-    task_id = created_body.get("id", "")
-    created_ok = (
-        created.status_code in (200, 201)
-        and re.fullmatch(r"task_[0-9a-f]{32}", task_id) is not None
+    l1_detail = l1_fix.json().get("detail", "")
+    check(
+        "⑧L1 后固化触盘前拒绝且 live package 字节不变",
+        l1_fix.status_code == 409
+        and ("不可写" in l1_detail or "L0" in l1_detail)
+        and {
+            path.name: path.read_bytes()
+            for path in GOV_CASES.glob("*.json")
+        }
+        == fixed_before_l1_retry,
+        f"status={l1_fix.status_code} detail={l1_detail}",
     )
-    check("⑥前置：认证 API 创建治理样本任务成功", created_ok,
-          f"status={created.status_code} body={created.text[:200]}")
-    if created_ok is not True:
-        raise RuntimeError(f"M10 前置任务创建失败 {created.status_code}: {created.text[:200]}")
-    page.goto(BASE + f"/tasks/{task_id}", wait_until="networkidle")
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        if "等待人工审核" in page.locator("body").inner_text():
-            break
-        time.sleep(1)
-    page.locator(".status-dock").click()
-    # 批次四 Q1 后 sc-item 主名缺名时回退 Agent 显示名（不再是裸任务 id）；
-    # 本定位串命中的是 .sc-item-sub 里恒显的裸 agent_id，行为不受主名影响。
-    sc_item = page.locator(".sc-item", has_text="governed_agent")
-    expect(sc_item.first).to_be_visible(timeout=5000)
-    sc_item.first.click()
-    expect(page.locator(".peek-approve")).to_be_visible(timeout=8000)
-    quick_review = page.locator(".peek-review-card")
-    quick_approve_box = quick_review.get_by_role("button", name="批准放行").bounding_box()
-    quick_reject_box = quick_review.get_by_role("button", name="驳回").bounding_box()
-    check("⑥状态坞批准/驳回触控高度均≥44px",
-          quick_approve_box is not None and quick_reject_box is not None
-          and quick_approve_box["height"] >= 44 and quick_reject_box["height"] >= 44,
-          f"approve={quick_approve_box} reject={quick_reject_box}")
-    # 签发人=登录身份行如实展示（不可代填）
-    assert "验收工程师" in page.locator(".peek-review-card").inner_text()
-    page.locator(".peek-approve").click()
-    # StatusCenter 与 TaskDetail 同款二次确认，按钮文案=「确认批准放行」
-    page.get_by_role("button", name="确认批准放行").click()
-    deadline = time.time() + 15
-    approved = False
-    while time.time() < deadline:
-        shell_text = page.locator(".sc-shell").inner_text() if page.locator(".sc-shell").count() else ""
-        if "已完成" in shell_text or page.locator(".sc-fix-row").count() > 0:
-            approved = True
-            break
-        time.sleep(0.5)
-    check("⑥状态坞批准放行成功", approved,
-          (page.locator(".sc-shell").inner_text()[:300]) if page.locator(".sc-shell").count() else "sc-shell 不在")
-
-    # ── ⑦ 固化入口 → 固化 → case_file 回显 ──
-    expect(page.locator(".sc-fix-row")).to_be_visible(timeout=8000)
-    page.locator(".sc-fix-sample-btn").click()
-    deadline = time.time() + 15
-    fix_text = ""
-    while time.time() < deadline:
-        if page.locator(".sc-fix-result").count() > 0:
-            fix_text = page.locator(".sc-fix-result").inner_text()
-            if "case_" in fix_text:
-                break
-        time.sleep(0.5)
-    check("⑦固化成功且 case_file 回显", "case_" in fix_text, fix_text[:200])
-    page.screenshot(path=str(SHOTS / "5_fix_sample.png"), full_page=True)
-
-    # ⑦' 磁盘铁证：draft case 落盘
-    fixed = sorted(GOV_CASES.glob("case_*_from_sample.json"))
-    fixed_ok = len(fixed) == 1
-    curation_ok = False
-    if fixed_ok:
-        fixed_doc = json.loads(fixed[0].read_text(encoding="utf-8"))
-        curation_ok = fixed_doc.get("curation") == "draft" and fixed_doc.get("provenance", {}).get("task_id") == task_id
-    check("⑦'固化 case 落盘且 curation=draft、provenance 对账", fixed_ok and curation_ok,
-          f"files={[f.name for f in fixed]}")
-    page.keyboard.press("Escape")
-
-    # ── ⑧ 固化后再跑评测：draft 不计数仍 3/3，待策展一节可见 ──
-    page.goto(BASE + "/portal", wait_until="networkidle")
-    page.locator(".agent-card", has_text="governed_agent").locator(".gov-entry").click()
-    expect(page.locator(".gov-dialog")).to_be_visible(timeout=5000)
-    page.locator(".gov-run-btn").click()
-    deadline = time.time() + 60
-    ok8 = False
-    while time.time() < deadline:
-        text = page.locator(".gov-dialog").inner_text()
-        if "3/3" in text and "待策展" in text:
-            ok8 = True
-            break
-        time.sleep(1)
-    check("⑧draft 不计数仍 3/3 且待策展可见", ok8, page.locator(".gov-dialog").inner_text()[:400])
     page.screenshot(path=str(SHOTS / "6_draft_not_counted.png"), full_page=True)
     page.keyboard.press("Escape")
 

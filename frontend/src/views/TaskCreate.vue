@@ -657,7 +657,7 @@ async function handleSubmit() {
     if (submissionDraft.concludeAfter && submissionDraft.conversationId) {
       concludeConversation(submissionDraft.conversationId).catch(() => {});
     }
-    ElMessage.success("任务已创建");
+    ElMessage.info("任务已创建");
     await playSubmitRise();
     // 上传/创建 await 期间若用户已打开另一份创建草案或离开本页，尊重后来的
     // 导航意图：旧任务照实创建，但不再用旧请求的自动跳转覆盖新位置。

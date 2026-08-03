@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from backend.app.core.errors import ReviewEvidenceUnavailableError
+from backend.app.core.errors import FileIntegrityError, ReviewEvidenceUnavailableError
 from backend.app.jobs.runner import JobRunner, resolve_dependencies_once
 from backend.app.model_gateway.gateway import ModelGateway
 from backend.app.runtime.registry import AgentRegistry
@@ -33,6 +33,7 @@ from backend.app.storage.db import get_conn, init_db
 from backend.app.tools.registry import ToolRegistry
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+TEST_OWNER_USERNAME = "collab-fixture-owner"
 
 _PATHS = {
     "waiting_review": ["queued", "validating", "running", "waiting_review"],
@@ -84,10 +85,19 @@ def dbf(tmp_path):
 
 def _mk(conn, task_id, *, depends_on=None, inputs=None, input_file_ids=None,
         agent_id="hello_agent", agent_version="0.1.0", input_binding=None,
-        conversation_id=None):
+        conversation_id=None, owner_username=TEST_OWNER_USERNAME):
+    if conversation_id is not None and repos.get_conversation(conn, conversation_id) is None:
+        repos.create_conversation(
+            conn,
+            conversation_id=conversation_id,
+            agent_id="guide_agent",
+            created_by="tester",
+            created_by_username=owner_username,
+        )
     return repos.create_task(
         conn, task_id=task_id, agent_id=agent_id, agent_version=agent_version,
-        name=task_id, created_by="tester", inputs=inputs or {},
+        name=task_id, created_by="tester", created_by_username=owner_username,
+        inputs=inputs or {},
         input_file_ids=input_file_ids or [], metadata={},
         depends_on=depends_on, input_binding=input_binding,
         conversation_id=conversation_id,
@@ -556,6 +566,7 @@ def test_E2E_taint_chain_sensitive_upstream_derives_downstream(runtime_env):
             conn, file_id=in_fid, task_id=None, kind="input", filename="input.txt",
             path=str(in_path), size_bytes=len(payload),
             sha256=hashlib.sha256(payload).hexdigest(), classification="sensitive",
+            owner_username=TEST_OWNER_USERNAME,
         )
         _mk(conn, "taint_a", inputs={"name": "上游"}, input_file_ids=[in_fid])
         repos.set_task_status(conn, "taint_a", "queued")
@@ -798,8 +809,12 @@ def test_dependency_consumer_missing_upstream_fails_before_workflow(
     try:
         consumer = repos.get_task(conn, "missing_runtime_down")
         assert consumer["status"] == "failed"
-        assert "上游任务不存在" in (consumer.get("error_message") or "")
+        assert consumer["error_message"] == (
+            "worker_authorization_failed: task owner lineage is unavailable"
+        )
         assert calls["workflow"] == 0
+        with pytest.raises(FileIntegrityError, match="上游任务不存在"):
+            runtime._validate_dependency_resolution(conn, consumer)
     finally:
         conn.close()
 
@@ -953,7 +968,9 @@ def test_input_binding_filters_piped_upstreams(dbf):
         _drive(conn, "bind_b", "completed_reviewed")
         repos.create_task(
             conn, task_id="bind_down", agent_id="hello_agent", agent_version="0.1.0",
-            name="bind_down", created_by="tester", inputs={}, input_file_ids=[], metadata={},
+            name="bind_down", created_by="tester",
+            created_by_username=TEST_OWNER_USERNAME,
+            inputs={}, input_file_ids=[], metadata={},
             depends_on=["bind_a", "bind_b"], input_binding={"from_tasks": ["bind_a"]},
         )
     finally:
@@ -983,6 +1000,7 @@ def test_R1_invalid_piped_output_id_cancels_downstream(dbf):
         repos.create_file(  # kind=input 却被塞进 up 的 output_file_ids
             conn, file_id=bad_fid, task_id=None, kind="input", filename="wrong.txt",
             path=f"/tmp/{bad_fid}", size_bytes=1, sha256="a" * 64, classification="internal",
+            owner_username=TEST_OWNER_USERNAME,
         )
         repos.set_task_outputs(conn, "up", [bad_fid])
         _drive(conn, "up", "completed_reviewed")
@@ -1145,7 +1163,8 @@ def test_R2_binding_excluded_upstream_output_rejected_at_consume(runtime_env):
         _drive(conn, "up_b", "completed_reviewed")
         repos.create_task(
             conn, task_id="consumer", agent_id="hello_agent", agent_version="0.1.0",
-            name="c", created_by="t", inputs={"name": "x"}, input_file_ids=[fb], metadata={},
+            name="c", created_by="t", created_by_username=TEST_OWNER_USERNAME,
+            inputs={"name": "x"}, input_file_ids=[fb], metadata={},
             depends_on=["up_a", "up_b"], input_binding={"from_tasks": ["up_a"]},
         )
         _append_dependency_resolved(conn, "consumer", ["up_a", "up_b"], [fb])
@@ -1627,8 +1646,14 @@ def test_K2_consume_side_eval_origin_output_rejected(runtime_env):
     conn = cf()
     try:
         c = repos.get_task(conn, "user_consumer")
-        assert c["status"] == "failed"  # K2 origin 隔离拒
-        assert "隔离轴" in (c.get("error_message") or "")  # 且失败因确是 K2（非缺输入/K1）
+        assert c["status"] == "failed"  # owner-lineage 总闸先拒绝跨 origin 血缘
+        assert c["error_message"] == (
+            "worker_authorization_failed: task owner lineage is unavailable"
+        )
+        agent = runtime.agent_registry.get(c["agent_id"])
+        assert agent is not None
+        with pytest.raises(FileIntegrityError, match="隔离轴"):
+            runtime._open_input_files(conn, c, agent)
     finally:
         conn.close()
 
@@ -1670,7 +1695,9 @@ def test_R1_poison_scalar_depends_on_quarantined(dbf):
     try:
         repos.create_task(
             conn, task_id="poison_scalar", agent_id="hello_agent", agent_version="0.1.0",
-            name="poison_scalar", created_by="t", inputs={}, input_file_ids=[], metadata={},
+            name="poison_scalar", created_by="t",
+            created_by_username=TEST_OWNER_USERNAME,
+            inputs={}, input_file_ids=[], metadata={},
             depends_on=5,  # 非 list 标量（直写模拟 legacy）
         )
     finally:
@@ -1750,7 +1777,9 @@ def test_finalconfirm_open_set_poison_shapes_quarantined(dbf):
         # 毒丸②：depends_on 元素是 dict（非 str）→ get_task 绑定抛 sqlite3.ProgrammingError
         repos.create_task(
             conn, task_id="poison_prog", agent_id="hello_agent", agent_version="0.1.0",
-            name="poison_prog", created_by="t", inputs={}, input_file_ids=[], metadata={},
+            name="poison_prog", created_by="t",
+            created_by_username=TEST_OWNER_USERNAME,
+            inputs={}, input_file_ids=[], metadata={},
             depends_on=[{}],
         )
         _mk(conn, "zvalid", depends_on=["up"])  # 合法候选（id 序在毒丸后），验不被饿死

@@ -573,7 +573,7 @@ async function loadAcceptedSamples(taskId) {
 }
 
 function sampleFixErrorText(err) {
-  if (err.status === 409) return "已固化";
+  if (err.status === 409) return err.detail || err.message || "固化冲突";
   if (err.status === 422) return err.detail || err.message || "前置条件未满足";
   return err.detail || err.message || "固化失败";
 }
@@ -630,7 +630,15 @@ async function doReview(action) {
     });
     markTaskSeen(taskId); // 亲手签发=已看过：其后完成不得对签发者亮未读
     reviewComment.value = ""; commentOpen.value = false; // 签发落定即清、意见框收回，绝不残留到下一个任务
-    ElMessage.success(action === "approve" ? "已批准放行" : "已驳回");
+    if (action === "approve") {
+      ElMessage({
+        message: "已由当前登录工程师批准放行",
+        type: "info",
+        customClass: "flai-message-signed",
+      });
+    } else {
+      ElMessage.error("已驳回");
+    }
     if (action === "approve") loadAcceptedSamples(taskId); // 静默旁路：失败不影响签发主流程
     // 续体绑定：await 期间抽屉可能已关/任务已切——只有还在看同一任务时才迸发+刷新
     if (statusCenter.open && statusCenter.taskId === taskId) {

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Mapping
 
 from jsonschema import validate
 
 from ..storage import asset_candidates as candidate_store
-
+from ..storage import skill_packages as package_store
 
 SCHEMA_VERSION = "feature_asset_map.v1"
 _MAX_ASSETS = 100
@@ -34,10 +35,18 @@ class FeatureAssetMapCatalog:
         *,
         agent_shell_catalog: Any,
         asset_candidate_ledger: Any,
+        asset_candidate_authorizer: Callable[
+            [sqlite3.Connection, str, str], Mapping[str, Any]
+        ],
         contracts_dir: Path,
     ) -> None:
         self._agent_shell_catalog = agent_shell_catalog
         self._asset_candidate_ledger = asset_candidate_ledger
+        if not callable(asset_candidate_authorizer):
+            raise FeatureAssetMapUnavailableError(
+                "feature asset map owner authorizer is unavailable"
+            )
+        self._asset_candidate_authorizer = asset_candidate_authorizer
         try:
             schema = json.loads(
                 (contracts_dir / "feature_asset_map.schema.json").read_text(
@@ -73,6 +82,47 @@ class FeatureAssetMapCatalog:
             functionality = _project_functionality(shell)
             conn.execute("BEGIN")
             started_read_snapshot = True
+            package_ids = package_store.list_ids_for_owner(
+                conn,
+                owner,
+                _MAX_ASSETS + 1,
+            )
+            if len(package_ids) > _MAX_ASSETS:
+                raise FeatureAssetMapUnavailableError(
+                    "owner package population exceeds bounded projection"
+                )
+            for package_id in package_ids:
+                package_context = package_store.get_owner_context_by_id(
+                    conn,
+                    package_id,
+                )
+                if not isinstance(package_context, Mapping):
+                    raise FeatureAssetMapUnavailableError(
+                        "owner package context is unavailable"
+                    )
+                candidate_id = package_context.get("source_candidate_id")
+                if not isinstance(candidate_id, str) or not candidate_id:
+                    raise FeatureAssetMapUnavailableError(
+                        "owner package candidate identity is unavailable"
+                    )
+                candidate_context = self._asset_candidate_authorizer(
+                    conn,
+                    candidate_id,
+                    owner,
+                )
+                if (
+                    not isinstance(candidate_context, Mapping)
+                    or package_context.get("id") != package_id
+                    or package_context.get("owner_username") != owner
+                    or package_context.get("source_candidate_id") != candidate_id
+                    or package_context.get("source_candidate_digest")
+                    != candidate_context.get("candidate_digest")
+                    or package_context.get("source_task_id")
+                    != candidate_context.get("source_task_id")
+                ):
+                    raise FeatureAssetMapUnavailableError(
+                        "owner package lineage is inconsistent"
+                    )
             task_ids = candidate_store.list_latest_task_ids_for_owner(
                 conn,
                 owner,
@@ -82,16 +132,40 @@ class FeatureAssetMapCatalog:
                 raise FeatureAssetMapUnavailableError(
                     "owner asset population exceeds bounded projection"
                 )
-            assets = [
-                _project_asset(
-                    self._asset_candidate_ledger.get_for_task(
-                        conn,
-                        task_id=task_id,
-                        username=owner,
-                    )
+            assets: list[dict[str, Any]] = []
+            for task_id in task_ids:
+                candidate_id = candidate_store.get_latest_id_for_task(
+                    conn, task_id
                 )
-                for task_id in task_ids
-            ]
+                if not isinstance(candidate_id, str) or not candidate_id:
+                    raise FeatureAssetMapUnavailableError(
+                        "owner asset candidate identity is unavailable"
+                    )
+                owner_context = self._asset_candidate_authorizer(
+                    conn,
+                    candidate_id,
+                    owner,
+                )
+                if (
+                    not isinstance(owner_context, Mapping)
+                    or owner_context.get("source_task_id") != task_id
+                ):
+                    raise FeatureAssetMapUnavailableError(
+                        "owner asset candidate lineage is inconsistent"
+                    )
+                candidate = self._asset_candidate_ledger.get_for_task(
+                    conn,
+                    task_id=task_id,
+                    username=owner,
+                )
+                if (
+                    not isinstance(candidate, Mapping)
+                    or candidate.get("id") != candidate_id
+                ):
+                    raise FeatureAssetMapUnavailableError(
+                        "owner asset candidate projection drifted"
+                    )
+                assets.append(_project_asset(candidate))
             accepted_count = sum(1 for item in assets if item["state"] == "accepted")
             packages = [
                 item["skill_package"]

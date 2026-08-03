@@ -97,6 +97,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import socket
 import sys
@@ -124,6 +125,7 @@ import httpx
 import uvicorn
 
 from backend.app.main import create_app
+from backend.app.storage import repos
 
 WORK = Path(tempfile.mkdtemp(prefix="flai_craft_"))
 
@@ -206,6 +208,26 @@ def flip_completed_with_artifact_and_events(task_id: str) -> None:
     # payload/message）」——真实 runner 对 internal 任务必落此戳（runtime.py
     # set_task_data_classification），夹具不落就是讲了个不自洽的故事，门会
     # 正确地咬（本批实测咬过一次：签发行/工具 chip payload 全被遮蔽）。
+    # Owner-lineage 会在读任务前核对每个 output_file_id 的权威来源行。
+    # 因此夹具必须登记真实 output 关系；刻意不写物理字节，以继续验证
+    # 「任务可读，但产物完整性失败如实显示」，而不用断裂血缘绕过授权门。
+    output_path = WORK / "task_runs" / task_id / "output" / "probe.txt"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = app.state.conn_factory()
+    try:
+        repos.create_file(
+            conn,
+            file_id="file_probe_0001",
+            task_id=task_id,
+            kind="output",
+            filename="probe.txt",
+            path=str(output_path),
+            size_bytes=1,
+            sha256="0" * 64,
+            classification="internal",
+        )
+    finally:
+        conn.close()
     _db(
         "UPDATE tasks SET status='completed', output_file_ids=?, started_at=?, finished_at=?,"
         " data_classification='internal' WHERE id=?",
@@ -688,17 +710,32 @@ with sync_playwright() as p:
     ctx.unroute(f"**/api/tasks/{task_d}")
 
     # ── ⑨f F5+F6+F3 于 task E（5 件真实 .md 产物·真工具 run mock=0）─────────
-    file_ids = []
-    for i in range(5):
-        up = API.post(
-            "/api/files/upload",
-            files={"file": (f"report_{i}.md", f"# 报告 {i}\n\n第 {i} 份。\n".encode(), "text/markdown")},
-        )
-        assert up.status_code < 300, up.text
-        file_ids.append(up.json()["file_id"] if "file_id" in up.json() else up.json()["id"])
     resp_e = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "工艺批探针E"}})
     assert resp_e.status_code < 300, resp_e.text
     task_e = resp_e.json()["id"]
+    file_ids = []
+    conn = app.state.conn_factory()
+    try:
+        for i in range(5):
+            payload = f"# 报告 {i}\n\n第 {i} 份。\n".encode()
+            file_id = f"file_craft_e_{i}"
+            output_path = WORK / "task_runs" / task_e / "output" / f"report_{i}.md"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(payload)
+            repos.create_file(
+                conn,
+                file_id=file_id,
+                task_id=task_e,
+                kind="output",
+                filename=f"report_{i}.md",
+                path=str(output_path),
+                size_bytes=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+                classification="internal",
+            )
+            file_ids.append(file_id)
+    finally:
+        conn.close()
     # 同 flip 夹具口径：有 tool_runs 派生行必须配 internal 分级戳，否则分级门
     # fail-closed 遮蔽 events/产物元数据（门正确，夹具要自洽）。
     _db("UPDATE tasks SET status='completed', output_file_ids=?, started_at=?, finished_at=?,"

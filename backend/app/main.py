@@ -27,12 +27,13 @@ from .api import agents as agents_api
 from .api import asset_drafts as asset_drafts_api
 from .api import auth as auth_api
 from .api import conversations as conversations_api
-from .api import feedback as feedback_api
 from .api import feature_asset_map as feature_asset_map_api
+from .api import feedback as feedback_api
 from .api import files as files_api
 from .api import governance as governance_api
 from .api import knowledge as knowledge_api
 from .api import me as me_api
+from .api import object_authorization as object_authorization_api
 from .api import stats as stats_api
 from .api import tasks as tasks_api
 from .api import teams as teams_api
@@ -227,6 +228,9 @@ def create_app(
             feature_asset_map_catalog = FeatureAssetMapCatalog(
                 agent_shell_catalog=app.state.agent_shell_catalog,
                 asset_candidate_ledger=asset_candidate_ledger,
+                asset_candidate_authorizer=(
+                    object_authorization_api.require_owned_asset_candidate_package_inputs
+                ),
                 contracts_dir=contracts_dir,
             )
             skill_reuse_evidence = SkillReuseEvidenceLedger(candidate_materializer)
