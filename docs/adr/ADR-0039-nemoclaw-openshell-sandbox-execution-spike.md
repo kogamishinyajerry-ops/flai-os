@@ -25,7 +25,12 @@ FLAi-OS 的工具执行面在进程内运行,无容器隔离、无出网(egress)
 - 宿主机直查 Ollama `/api/generate` 同样正常;
 - 推理面架构:沙箱只能看到 `inference.local`,流量天然不出宿主;Ollama 被 `OLLAMA_HOST=127.0.0.1:11434` 锁在回环,NemoClaw 再加一层 :11435 代理。
 
-结论:**首次部署后的运行期可以全离线**。但首次部署必须联网(沙箱镜像 2.19GB + 模型 6.59GB + Node/OpenShell/Ollama 安装包),内网落地需要离线预置管线(建议并入 M11 离线打包立项)。模型对 tool-call 的兼容性:NemoClaw onboarding 会验证结构化 tool call 并拒绝不达标模型,该门必须保留进 FLAi-OS。
+结论(按 codex 评审修正,严格区分已证与未证):
+
+- **已证:推理链路全宿主回环,无外网依赖。** 断网窗口内沙箱 agent 经 `inference.local` → 网关 → auth proxy → 回环 Ollama 正常作答;该路径每一跳都是 loopback/私网,不含任何外部依赖;
+- **未证:断网窗口内沙箱无残余外网路径。** 实验设计有缺陷——iptables 规则为保 lima DNS 放行了 `198.18.0.0/15`,而验证二证实沙箱出网走的正是 lima 的 198.18.x NAT 路径;宿主机裸 curl 失败只证明宿主机协议栈被断,**不证明沙箱隔离**。原生复测时必须补一笔:断网窗口内从沙箱内部发起越网 curl,应失败且有据可查;
+
+**首次部署后的推理运行期可以全离线**(以"已证"为限)。但首次部署必须联网(沙箱镜像 2.19GB + 模型 6.59GB + Node/OpenShell/Ollama 安装包),内网落地需要离线预置管线(建议并入 M11 离线打包立项)。模型对 tool-call 的兼容性:NemoClaw onboarding 会验证结构化 tool call 并拒绝不达标模型,该门必须保留进 FLAi-OS。
 
 ## 验证二:sandbox / egress 最小配置面 —— **语义真实,执行为假(本环境),必须复测**
 
@@ -62,7 +67,7 @@ FLAi-OS 的工具执行面在进程内运行,无容器隔离、无出网(egress)
 
 另两条环境事实:
 
-- **Landlock 不可用**:该 kernel 6.8 未暴露 `/sys/kernel/security/landlock`,沙箱文件系统约束静默降级为 DAC-only。内网目标机必须逐台核验(≥5.13 且开启 LSM),否则"系统路径只读"只剩 POSIX 权限;
+- **Landlock 疑似不可用(观察,非定论)**:该 kernel 6.8 未暴露 `/sys/kernel/security/landlock`。注意(按 codex 评审修正):**该路径缺失不是有效判据**——Landlock 的支持性探针是 userspace ABI 调用 `landlock_create_ruleset(..., LANDLOCK_CREATE_RULESET_VERSION)`,其返回值/错误码才能区分"ABI 可用"与"内核禁用/不支持"。内网目标机的逐台核验必须用 ABI 探针而非路径检查,否则会把 Landlock 可用机器误判为 DAC-only;
 - lima 默认把 macOS `/Users` 挂进 VM——"VM 隔离"≠与宿主文件系统隔离,凭证类操作需注意。
 
 **alpha 状态再确认**:官方自述 early preview(2026-03 起),版本间 breaking,明示勿用于生产。本次 spike 的 8 坑中 #2–#5 均为产品侧缺陷,与 alpha 定位相符;"Linux+Docker P0 Tested"标签在 docker-group 标准配置与 VM 承载 Docker 两类常见形态下均有未覆盖缺陷。
@@ -84,3 +89,61 @@ FLAi-OS 的工具执行面在进程内运行,无容器隔离、无出网(egress)
 - Landlock 内核依赖逐台核验;
 - 内网 x86_64 与 arm64 差异未测(NIM 镜像部分无 arm64 manifest,官方自认);
 - 向 NVIDIA 反馈清单(若继续推进):lsof 缺失误报(#3)、systemd user 服务 docker 组(#4)、VM 承载 Docker 的 bind 拓扑(#5,附 issue #5513)、本 spike 的 egress 执法绕过现象(待原生复测确认后上报)。
+
+## 附录 A:复现 runbook(按 codex 评审补齐)
+
+**不可变标识(全量,未截断)**
+
+- NemoClaw v0.0.97(lkg 安装器,2026-08-03)/ OpenShell 0.0.85 / Ollama 0.32.5 / Docker 29.5.2 / kernel 6.8.0-117-generic(Ubuntu 24.04.4 aarch64,colima 0.9 default 实例 4C/8G/80G)
+- 模型:`qwen3.5:9b`,6,594,474,711 字节,digest `6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7`
+- 沙箱镜像:`nemoclaw-sandbox-local` sha256:`c96940ab0a147c04127267a2abb3488fcf44d21663c8c3e04c84b1fa9be5acc0`(2.19GB);`ghcr.io/nvidia/nemoclaw/sandbox-base` sha256:`a2c7da00bbf60a564f68e1138c50d01a557525b565a810c9eab3294705f337ce`(1.82GB)
+- 策略:v3,hash sha256 `81f6922a090f69d107d0cea964dfb48cc90f6ea641a2c6f99d8aa1c73f2ae11a`,Status=Effective,仅激活 `local-inference` preset
+
+**安装命令(VM 内,逐一执行)**
+
+```bash
+sudo apt-get install -y zstd binutils curl git ca-certificates jq lsof socat iptables
+export NEMOCLAW_NON_INTERACTIVE=1 NEMOCLAW_YES=1 NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE=1 \
+       NEMOCLAW_AGENT=openclaw NEMOCLAW_PROVIDER=ollama NEMOCLAW_MODEL=qwen3.5:9b \
+       NEMOCLAW_SANDBOX_NAME=spike-claw NEMOCLAW_POLICY_TIER=restricted \
+       NEMOCLAW_WEB_SEARCH_PROVIDER=none NEMOCLAW_IGNORE_RUNTIME_RESOURCES=1 \
+       NO_PROXY=localhost,127.0.0.1,inference.local,::1
+curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash   # 失败后用 nemoclaw onboard --resume 断点续跑
+```
+
+**环境修复(按踩坑顺序,# 对应验证三表格)**
+
+```bash
+# #1 容器 DNS(stub-resolv.conf 悬空)
+sudo rm /etc/resolv.conf && printf 'nameserver 192.168.5.3\nnameserver 8.8.8.8\n' | sudo tee /etc/resolv.conf
+# #4 systemd --user 服务无 docker 附加组
+printf '[Socket]\nSocketGroup=lima\n' | sudo tee /etc/systemd/system/docker.socket.d/10-group.conf
+sudo systemctl daemon-reload && sudo systemctl restart docker.socket docker
+# #5 网关 loopback bind,容器跨桥不可达(DNAT 方案;socat 方案会被所有权守卫拒绝)
+sudo sysctl -w net.ipv4.conf.all.route_localnet=1
+sudo sysctl -w net.ipv4.conf.<openshell-docker 网桥 iface>.route_localnet=1
+sudo iptables -t nat -A PREROUTING -d 172.18.0.1 -p tcp --dport 8080 -j DNAT --to-destination 127.0.0.1:8080
+```
+
+**验证命令**
+
+```bash
+# 推理基线(沙箱内;NODE_EXTRA_CA_CERTS 指向 OpenShell CA bundle 是必需的,见验证三坑表之外的 TLS 发现)
+docker exec -u sandbox -e HOME=/sandbox -e NODE_EXTRA_CA_CERTS=/etc/openshell-tls/ca-bundle.pem \
+  <sandbox 容器> openclaw agent --agent main --local --session-id t1 -m "<prompt>"
+# 断网(注意:本 runbook 的 198.18/15 放行正是 codex 指出的设计缺陷,复测时应改为不放行并补沙箱内越网 curl)
+sudo iptables -A OUTPUT -o lo -j ACCEPT
+sudo iptables -A OUTPUT -d 127.0.0.0/8 -j ACCEPT
+sudo iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT
+sudo iptables -A OUTPUT -d 172.16.0.0/12 -j ACCEPT
+sudo iptables -A OUTPUT -d 192.168.0.0/16 -j ACCEPT
+sudo iptables -A OUTPUT -d 198.18.0.0/15 -j ACCEPT   # ← 缺陷所在,复测删除
+sudo iptables -A OUTPUT -d 169.254.0.0/16 -j ACCEPT
+sudo iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+sudo iptables -A OUTPUT -j DROP
+# egress 金丝雀(沙箱内,Restricted 下应被拒且有 OCSF DENIED 记录;本 spike 实测返回 200 且无记录)
+docker exec -u sandbox -e HOME=/sandbox <sandbox 容器> \
+  curl -s --noproxy "*" --max-time 8 -o /dev/null -w "%{http_code}\n" https://registry.npmjs.org/
+```
+
+**遗留证据**:spike VM 已销毁;Mac 侧 `/tmp/nemoclaw-spike/` 留有各轮 install/onboard 日志(未脱敏入库,重启即失)。另有一项本文未展开的发现:onboarding 期间沙箱 `NODE_EXTRA_CA_CERTS` 默认指向不存在的 `corporate-ca.pem`,导致 agent fetch 报 `SELF_SIGNED_CERT_IN_CHAIN`,需显式指向 `/etc/openshell-tls/ca-bundle.pem`——疑似镜像烘焙 CA 与网关重建后证书不一致,原生复测时应观察是否复现。
