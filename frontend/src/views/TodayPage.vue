@@ -229,6 +229,7 @@ import { acquireChannel, onTransition } from "../stores/liveFeed";
 import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import { getStatsOverview, listGlobalPromotions } from "../api/stats";
 import { statusLabel, taskLampColor, taskElapsedMs, formatDuration, formatRelativeTime, formatClockCompact, taskDisplayName, TASK_WORK_STATES, MATURITY } from "../utils/format";
+import { isWaitingReview, isWorking, isDeliveredToday } from "../utils/taskGroups";
 import { useAgentNames } from "../stores/agentNames";
 import { useTodayKey } from "../composables/useTodayKey";
 import EmptyState from "../components/EmptyState.vue";
@@ -249,10 +250,9 @@ const feedErrorDisplay = computed(() =>
 
 const maturityLabel = (m) => MATURITY[m]?.label ?? m;
 
-const waitingTasks = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review"));
-const workingTasks = computed(() =>
-  feedTasks.value.filter((t) => ["created", "queued", "running", "validating"].includes(t.status))
-);
+// 三谓词走 taskGroups.js SSOT（#30 今日页/任务台合并，口径单一出处）。
+const waitingTasks = computed(() => feedTasks.value.filter(isWaitingReview));
+const workingTasks = computed(() => feedTasks.value.filter(isWorking));
 
 // 本地日切 SSOT（B7 P2 修复）：版块 3「今日交付」与版块 4b「今日最活跃」要求
 // 同一「今天」定义——今天 0 点起，本地时区，非 UTC。返回本地零点 epoch ms，
@@ -267,9 +267,7 @@ function localDayStartMs() {
 // 映射源，与 liveFeedCore/TaskDetail 同款）且 finished_at 落在本地今日。
 const deliveryTasks = computed(() => {
   const todayStartMs = localDayStartMs();
-  return feedTasks.value.filter(
-    (t) => TERMINAL_STATUSES.includes(t.status) && t.finished_at && Date.parse(t.finished_at) >= todayStartMs
-  );
+  return feedTasks.value.filter((t) => isDeliveredToday(t, todayStartMs));
 });
 
 // 渲染上界（B7 P1 修复）：DeliveryCard 每卡自带只读请求，deliveryTasks 无界时
