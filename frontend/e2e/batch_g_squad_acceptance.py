@@ -306,6 +306,36 @@ with sync_playwright() as p:
         json.dumps({"status": t_fault.get("status"), "depends_on": t_fault.get("depends_on")}, ensure_ascii=False),
     )
 
+    # ══ S1（批 0 切片 1，P0-1 状态来找人）：编队总览行在可见面 ═══════════════
+    # 开工后不展开披露，编队行必须在场（UI-PARADIGM #2）；此刻上游 queued
+    # （工作态）→ 可见面脉动点+工作相段词。roster 明细仍属按需披露（下方展开）。
+    face = page.locator(".sa-squad-line.sa-squad-face")
+    try:
+        expect(face).to_be_visible(timeout=8000)
+        closed = page.locator(".route-disclosure").last.get_attribute("open") is None
+        # 快照到账有窗口；queued/waiting_upstream 不属工作态（无脉动点）——
+        # 只等相段词上屏，证明活状态在可见面到账（脉动由 O2 灯族覆盖）。
+        deadline = time.time() + 8
+        face_text = face.inner_text()
+        while time.time() < deadline and not any(
+            w in face_text for w in ("运行中", "已入队", "等待接力", "待你签发")
+        ):
+            page.wait_for_timeout(400)
+            face_text = face.inner_text()
+        check("S1a 开工后编队行在可见面（披露仍默认收起）", closed is True, face_text)
+        check(
+            "S1b 可见面编队行相段词到账（运行中/已入队/等待接力/待你签发其一）",
+            any(w in face_text for w in ("运行中", "已入队", "等待接力", "待你签发")),
+            face_text,
+        )
+        check("S1c 无待签成员可见面不长 CTA（绝不凑）",
+              face.locator(".squad-review-cta").count() == 0)
+    except Exception:
+        for probe in ("S1a 开工后编队行在可见面（披露仍默认收起）",
+                      "S1b 可见面编队行相段词到账（运行中/已入队/等待接力/待你签发其一）",
+                      "S1c 无待签成员可见面不长 CTA（绝不凑）"):
+            check(probe, False, "可见面编队行缺失")
+
     # 成员级运行状态属于按需披露内容；测试主动展开后再检查，不把它改回常驻面板。
     disclosure.locator("summary").click()
     expect(page.locator(".agent-card").first).to_be_visible(timeout=3000)
@@ -428,6 +458,19 @@ with sync_playwright() as p:
     check("O7c 待签相含「待你签发」", "待你签发" in squad_text2, squad_text2)
     check("O7d 待签相 amber 段在场", page.locator(".sa-squad-line .squad-seg.tone-amber").count() >= 1)
     check("O7e 待签相仍无收束措辞", "收束" not in squad_text2 and "全部完成" not in squad_text2, squad_text2)
+    # S1（批 0 切片 1）：待签相可见面长 amber CTA，点击直开速览——不展开披露闭环。
+    cta = page.locator(".squad-review-cta")
+    try:
+        expect(cta).to_be_visible(timeout=8000)
+        check("S1d 待签相可见面 amber CTA 上屏", True, cta.inner_text())
+        cta.click()
+        page.wait_for_selector(".el-drawer", timeout=8000)
+        check("S1e CTA 点击直开速览（状态中心抽屉）", True)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(400)
+    except Exception:
+        check("S1d 待签相可见面 amber CTA 上屏", False, "可见面 CTA 缺失")
+        check("S1e CTA 点击直开速览（状态中心抽屉）", False, "未验证")
     page.screenshot(path=str(SHOTS / "2_waiting_review_evidence.png"), full_page=True)
 
     # 人签放行 → O10 completed 中性非绿 + O7 终相收束

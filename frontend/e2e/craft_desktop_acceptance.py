@@ -863,6 +863,21 @@ with sync_playwright() as p:
     check("⑩G2 完成态零事件头行无「条事件」段（零值豁口）",
           g2b.startswith("已处理") and "条事件" not in g2b, g2b)
 
+    # ── ⑰S1 时长段零值豁口（批 0 切片 1，HANDOFF-K3 #4 owner 裁）───────────
+    # 零时长完成态（started_at==finished_at）：头行绝不显示「0 秒」——
+    # 0 不是信息，时长段整段不出现；状态词「已处理」保留（非编造）。
+    resp_h = API.post("/api/tasks", json={"agent_id": "hello_agent", "inputs": {"name": "工艺批探针S1"}})
+    assert resp_h.status_code < 300, resp_h.text
+    task_h = resp_h.json()["id"]
+    _db("UPDATE tasks SET status='completed', started_at=?, finished_at=? WHERE id=?",
+        ("2026-07-15T07:00:00+00:00", "2026-07-15T07:00:00+00:00", task_h))
+    _db("DELETE FROM task_events WHERE task_id=?", (task_h,))
+    page.goto(BASE + f"/tasks/{task_h}", wait_until="networkidle")
+    page.wait_for_selector(".worklog-head-text", timeout=8000)
+    s1h = page.locator(".worklog-head-text").inner_text()
+    check("⑰S1 零时长完成态头行无「0 秒」（时长段零值豁口）",
+          s1h.startswith("已处理") and "0 秒" not in s1h, s1h)
+
     # ── ⑩c G3+G4 状态中心收件箱行级活面───────────────────────────────────────
     page.locator(".status-dock").click()
     page.wait_for_selector(".sc-group-label.working", timeout=8000)

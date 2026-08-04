@@ -186,14 +186,20 @@ const headText = computed(() => {
   // 工作态/完成态同一规——绝不显示「0 条事件」。
   const n = (props.events || []).length;
   const eventsPart = n > 0 ? ` · ${n} 条事件` : "";
+  // 批 0 切片 1（HANDOFF-K3 #4 owner 裁）：时长段零值豁口——<1s 时「已 X」
+  // 整段不出现（0 不是信息），工作态/完成态同一规；≥1s 段自然长出，活跳不变。
+  const durZero = elapsedMs.value !== null && elapsedMs.value < 1000;
   if (isWorking.value) {
     // started_at 缺失（如 validating 早期）时不硬凑"已 —"，退化为纯进行态文案。
-    return elapsedMs.value === null ? "正在处理…" : `正在处理 · 已 ${formatDuration(elapsedMs.value)}${eventsPart}`;
+    if (elapsedMs.value === null) return "正在处理…";
+    const durPart = durZero ? "" : ` · 已 ${formatDuration(elapsedMs.value)}`;
+    return `正在处理${durPart}${eventsPart}`;
   }
   if (elapsedMs.value === null) {
     return "尚未开始";
   }
-  return `已处理 ${formatDuration(elapsedMs.value)}${eventsPart}`;
+  const durPart = durZero ? "" : ` ${formatDuration(elapsedMs.value)}`;
+  return `已处理${durPart}${eventsPart}`;
 });
 
 // 授权链口播：SSOT=utils/format deriveSignoff（null/redacted/完整 三态），
