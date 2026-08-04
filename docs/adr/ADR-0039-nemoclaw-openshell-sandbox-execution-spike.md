@@ -32,7 +32,7 @@ FLAi-OS 的工具执行面在进程内运行,无容器隔离、无出网(egress)
 
 **首次部署后的推理运行期可以全离线**(以"已证"为限)。但首次部署必须联网(沙箱镜像 2.19GB + 模型 6.59GB + Node/OpenShell/Ollama 安装包),内网落地需要离线预置管线(建议并入 M11 离线打包立项)。模型对 tool-call 的兼容性:NemoClaw onboarding 会验证结构化 tool call 并拒绝不达标模型,该门必须保留进 FLAi-OS。
 
-## 验证二:sandbox / egress 最小配置面 —— **语义真实,执行为假(本环境),必须复测**
+## 验证二:sandbox / egress 最小配置面 —— **语义真实;执行为 proxy-only(两套环境实证,详见附录 B)**
 
 **正面证据(设计语义为真)**:
 
@@ -176,4 +176,24 @@ docker exec -u sandbox -e HOME=/sandbox <sandbox 容器> \
 - 新坑 #9(官方 install.sh 资产名 404 / vz NAT 大文件断流)、#10(7.7GB 无 swap → 模型加载 oom-kill;探针把快速失败当永久不可用直接 abort,不重试)——见验证三坑表;
 - 排障副产物:auth proxy(0.0.0.0:11435,Bearer token,timingSafeEqual 按字节比较防长度侧信道、401 无健康检查豁免,issue #3338)与所有权守卫的源码阅读再次确认其安全语义实现得相当认真——**该批评的是执法覆盖面,不是实现态度**。
 
-**遗留证据**:canary VM(tart)销毁前状态可经附录 A runbook + 本附录命令复现;Mac 侧 `/tmp/nemoclaw-spike/` 留有两轮日志(重启即失)。
+**第二轮复现命令**(tart VM 内;provisioning 同附录 A,差异:无需 DNS 修复、预装 lsof、docker.socket 组改 `admin`、ollama 手动装 + 8GB swap):
+
+```bash
+# 定位沙箱容器
+SB=$(docker ps --format "{{.Names}}" | grep "^openshell-canary-claw")
+# 金丝雀 A:绕过代理直连(Restricted 下期望:拒绝;两轮实测均为 200 真实内容=未执法)
+docker exec -u sandbox -e HOME=/sandbox $SB curl -s --noproxy "*" --max-time 10 \
+  -o /dev/null -w "npm=%{http_code}\n" https://registry.npmjs.org/
+# 金丝雀 B:裸 IP 直连(期望:拒绝;实测 301=泄露)
+docker exec $SB curl -s --noproxy "*" --max-time 8 -o /dev/null -w "raw_ip=%{http_code}\n" https://1.1.1.1/
+# 金丝雀 C:经代理(期望且实测:连接失败=被拦)
+docker exec -u sandbox -e HOME=/sandbox $SB bash -lc 'curl -s --max-time 10 -o /dev/null -w "via_proxy=%{http_code}\n" https://registry.npmjs.org/'
+# 审计核对(期望:DENIED 记录覆盖 A/B;实测:仅 C 有两条 DENIED,A/B 零记录)
+docker logs $SB 2>&1 | grep DENIED
+# netfilter 核对(实测:nat/filter 全空,假 IP 无绑定,唯一监听 10.200.0.1:3128)
+docker exec $SB bash -c "iptables -t nat -L -n; ip addr | grep inet; ss -ltnp"
+# 证书核对(实测 issuer 为真实公共 CA,非 OpenShell MITM CA)
+docker exec -u sandbox $SB bash -lc 'curl -sv --noproxy "*" --max-time 10 https://example.com/ 2>&1 | grep issuer'
+```
+
+**遗留证据**:canary VM(tart)已销毁;复现依赖附录 A 与上述命令;Mac 侧 `/tmp/nemoclaw-spike/` 留有两轮日志(重启即失)。
