@@ -1334,6 +1334,9 @@ async function send() {
     ) {
       // 服务端已把这一轮原子保存到原会话；当前页面已切走，不能把旧回复混进新会话。
       pokeConversation(submittedConversationId);
+      // 该轮已在原会话落库，同样补记标题缓存层（活跃会话标题即时脱离兜底）。
+      // 注意此处页面已切走，messages.value 属新会话——只能用本轮提交的 optimisticUser。
+      recordConversationFirstUserContent(submittedConversationId, [optimisticUser]);
       ElMessage.info("原会话的回复已保存——当前会话未混入旧回复，可从历史记录打开查看");
       return;
     }
@@ -1341,6 +1344,8 @@ async function send() {
     // canonical done 已抵达：这一轮才算后端原子落库成功。用权威 message
     // 整体替换临时增量（含 recommendation / created_at），消除分片差异。
     optimisticUser.transient = false;
+    // 发送落库即补记标题缓存层（#28）：活跃会话标题即时脱离「与 X 的对话」兜底。
+    recordConversationFirstUserContent(submittedConversationId, messages.value);
     // post-message 的 canonical assistant 与同事务 user 共用同一保存轮次；当前接口
     // 只回 assistant 时间戳，作为工作段排序代理。缺失时保留 null，边界存在则排除。
     optimisticUser.createdAt = res.message.created_at || null;
