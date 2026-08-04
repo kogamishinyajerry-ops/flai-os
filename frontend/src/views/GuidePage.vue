@@ -218,14 +218,20 @@
                                 'sa-relay-echo': agentTaskInfo(a) && relayEchoIds.has(agentTaskInfo(a).latest.id) }"
                       :style="{ background: memberLampBg(a) }"
                     ></span>
-                    <span class="agent-name" :title="agentTaxonomyTip(a)">{{ a.agent_name }}</span>
-                    <!-- 分类学进披露（降噪批，五律④）：domain/密级/成熟度/发布状态
-                         收进 agent-name 的 title 悬浮，不上成员行主视觉；唯敏感密级
-                         是信任信号（amber=受控/未核槽），常驻行内不折。 -->
                     <span
-                      v-if="clearanceOf(a) === 'sensitive'"
-                      class="sa-clearance-pill is-sensitive"
-                    >{{ clearanceLabelOf(a) }}</span>
+                      class="agent-name"
+                      :title="agentTaxonomyTip(a)"
+                      :tabindex="clearanceOf(a) === 'sensitive' ? 0 : undefined"
+                      :aria-label="clearanceOf(a) === 'sensitive' ? agentTaxonomyTip(a) : undefined"
+                    >{{ a.agent_name }}</span>
+                    <!-- 分类学进披露（降噪批，五律④）：domain/密级/成熟度/发布状态
+                         收进 agent-name 的 title 悬浮，不上成员行主视觉。
+                         退役批（#29，owner 2026-08-04 裁）：敏感密级 pill 亦收进 title
+                         （agentTaxonomyTip 已含「密级 敏感」）——敏感提示走悬浮披露，
+                         不再行头常驻；amber 槽位语义不变（待签/未核等既有面）。
+                         codex PR#34 P2（a11y）：title 挂在非聚焦元素上键盘不可达——
+                         敏感行 agent-name 补 tabindex=0 + aria-label（焦点环见 CSS），
+                         非敏感行不增 tab 停点。 -->
                     <span v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</span>
                     <span class="sa-spacer"></span>
 
@@ -3580,6 +3586,12 @@ watch(
   min-width: 0;
 }
 .sa-head .agent-name { flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* codex PR#34 P2：敏感行 agent-name 可聚焦后的焦点环（W0 全局语法同款）。 */
+.sa-head .agent-name[tabindex="0"]:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
 .sa-head .agent-role { margin: 0; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sa-spacer { flex: 1 1 auto; min-width: 8px; }
 .sa-head .agent-status { margin: 0; flex: 0 0 auto; }
@@ -3684,24 +3696,6 @@ watch(
   animation: flai-work-pulse var(--pulse-duration) ease-in-out 2;
 }
 .sa-stageline.is-waiting-upstream { color: var(--ink-soft); }
-
-/* 敏感密级 pill（降噪批后唯一常驻的分类学标记）：amber=受控/未核语义槽，
-   是信任信号不是行话——domain/非敏感密级/成熟度/发布状态已收进 agent-name
-   title（五律④），不再上成员行主视觉。 */
-.sa-clearance-pill {
-  flex: none;
-  font-size: 11px;
-  line-height: 1;
-  padding: 3px 7px;
-  border-radius: 6px;
-  border: 1px solid var(--hairline);
-  color: var(--ink-soft);
-  white-space: nowrap;
-}
-.sa-clearance-pill.is-sensitive {
-  border-color: color-mix(in srgb, var(--trust-pending) 55%, transparent);
-  color: var(--trust-pending);
-}
 
 /* T5 依据摘要 chip：含未核整 chip amber 底纹；点击展开 EvidenceList */
 .sa-evidence-chip {
