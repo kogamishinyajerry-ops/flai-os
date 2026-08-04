@@ -25,7 +25,21 @@
 
     <!-- 会话流 -->
     <div v-if="messages.length || sending" ref="streamEl" class="thread">
-      <div v-for="(m, idx) in messages" :key="idx" :class="['bubble-row', m.role]">
+      <template v-for="(m, idx) in messages" :key="idx">
+        <!-- 切片 3（#31 方案 B，owner 比选定）：工作段头——首段不抬头；中段默认
+             折为「N 轮往来」一行（display 语义保留 DOM，#25 红线）；当前段与展开
+             的中段=发丝线分隔+段头小字。段界=ADR-0033 三终点同源谓词（workSegments）。 -->
+        <div v-if="segStartOf(idx) && segStartOf(idx).ordinal > 0" class="seg-head">
+          <button
+            v-if="isMiddleOrdinal(segStartOf(idx).ordinal) && !unfoldedSegments.has(segStartOf(idx).ordinal)"
+            type="button"
+            class="seg-fold"
+            :aria-expanded="false"
+            @click="toggleSegment(segStartOf(idx).ordinal)"
+          >▸ {{ segmentUserCount(segStartOf(idx).ordinal) }} 轮往来 · 工作段 {{ segStartOf(idx).ordinal + 1 }}（{{ segmentClock(idx) }}）</button>
+          <div v-else class="seg-divider"><span>工作段 {{ segStartOf(idx).ordinal + 1 }} · {{ segmentClock(idx) }}</span></div>
+        </div>
+      <div :class="['bubble-row', m.role, { 'seg-folded': isFoldedMsg(idx) }]">
 
         <!-- 用户消息：靠右暖气泡 -->
         <div v-if="m.role === 'user'" class="user-bubble">
@@ -40,7 +54,7 @@
                （--trust-pending=仅未核/降级）——对账锁期间用户轮同样未确认，
                核对后随权威会话重渲染消失。 -->
           <span v-if="m.persistenceUnknown" class="user-unknown-chip">保存待核</span>
-          <div v-if="m.createdAt" class="bubble-time">{{ formatTime(m.createdAt) }}</div>
+          <div v-if="m.createdAt" class="bubble-time" :class="{ 'is-boundary': !!segStartOf(idx) }">{{ formatTime(m.createdAt) }}</div>
         </div>
 
         <!-- 助手消息：小 mark + 流动排版，plan-card 内联渲染 -->
@@ -51,7 +65,7 @@
             :size="26"
           />
           <div class="ai-body">
-            <div class="ai-name">FLAi<span v-if="m.createdAt" class="bubble-time">{{ formatTime(m.createdAt) }}</span></div>
+            <div class="ai-name">FLAi<span v-if="m.createdAt" class="bubble-time" :class="{ 'is-boundary': !!segStartOf(idx) }">{{ formatTime(m.createdAt) }}</span></div>
             <!-- 助手正文走 MarkdownLite（W5）：列表/标题/引用成块渲染——桌面级
                  富文本；纯插值零 v-html，XSS 面不变。用户气泡仍纯文本忠实显示。 -->
             <MarkdownLite v-if="m.content" :text="m.content" class="ai-lead" />
@@ -436,6 +450,7 @@
           </div>
         </template>
       </div>
+      </template>
 
       <!-- 完成态才长出的单一资产候选锚点。它属于主对话轴，不进入成员卡、
            不形成常驻侧栏；审核面只读且只有按钮。 -->
@@ -662,6 +677,7 @@ import {
   planHasIncompleteOrchestration,
   retryLineageForPlanItem,
   verifiedFailedRetryLineage,
+  workSegments,
 } from "../utils/conversationPlans.js";
 import {
   assetCandidateReconcileCreateReason,
@@ -2218,6 +2234,58 @@ async function reconcileBatchCreation() {
 const conversationTasks = ref(acceptanceFixture?.conversationTasks || []);
 const conversationTasksLoaded = ref(acceptanceMode);
 
+// ── 切片 3（#31 方案 B）：工作段分隔/折叠数据面 ────────────────────────────
+// 段界与附件路由同源（workSegments ⇄ currentWorkSegmentFiles 共用三终点谓词），
+// 视觉分段与附件归属永不漂移。首段/当前段豁免折叠（#25 红线：首条 .user-bubble、
+// 最新 .plan-card/.ai-body 永不折）；中段默认折，display 语义保留 DOM。
+const unfoldedSegments = ref(new Set());
+const workSegmentList = computed(() =>
+  workSegments(messages.value, conversationTasks.value, attachmentSegmentBoundaryMs.value));
+const segmentOrdinalByMsg = computed(() => {
+  const arr = new Array(messages.value.length).fill(0);
+  for (const seg of workSegmentList.value) {
+    for (let i = seg.start; i <= seg.end; i += 1) arr[i] = seg.ordinal;
+  }
+  return arr;
+});
+const currentSegmentOrdinal = computed(() => {
+  const list = workSegmentList.value;
+  return list.length > 0 ? list[list.length - 1].ordinal : 0;
+});
+function segStartOf(idx) {
+  const ordinal = segmentOrdinalByMsg.value[idx];
+  const seg = workSegmentList.value[ordinal];
+  return seg && seg.start === idx ? seg : null;
+}
+function isMiddleOrdinal(ordinal) {
+  return ordinal > 0 && ordinal < currentSegmentOrdinal.value;
+}
+function isFoldedMsg(idx) {
+  const ordinal = segmentOrdinalByMsg.value[idx];
+  return isMiddleOrdinal(ordinal) && !unfoldedSegments.value.has(ordinal);
+}
+function toggleSegment(ordinal) {
+  const set = unfoldedSegments.value;
+  if (set.has(ordinal)) set.delete(ordinal);
+  else set.add(ordinal);
+}
+function segmentUserCount(ordinal) {
+  const seg = workSegmentList.value[ordinal];
+  if (!seg) return 0;
+  let n = 0;
+  for (let i = seg.start; i <= seg.end; i += 1) {
+    if (messages.value[i] && messages.value[i].role === "user") n += 1;
+  }
+  return n;
+}
+function segmentClock(idx) {
+  const iso = messages.value[idx] ? messages.value[idx].createdAt : null;
+  const ms = typeof iso === "string" ? Date.parse(iso) : NaN;
+  if (!Number.isFinite(ms)) return "—";
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 // ADR-0034：单个 completed 用户任务自动形成一张候选；多任务会话留给未来
 // Workflow Revision，不在成员墙上批量长卡。acceptance fixture 只提供只读快照。
 const acceptanceAssetCandidate = acceptanceFixture?.assetCandidate || null;
@@ -2837,6 +2905,7 @@ function resetToFresh(clearError = true) {
   assetCandidateError.value = "";
   assetCandidateTaskId.value = null;
   attachmentSegmentBoundaryMs.value = 0;
+  unfoldedSegments.value.clear(); // 切片 3：折叠态不跨会话存活（换会话走本事务）
   draft.value = "";
   pendingFiles.value = [];
   releaseConversationTasksFeed();
@@ -3147,6 +3216,39 @@ watch(
 }
 .bubble-row:hover .bubble-time,
 .bubble-row:focus-within .bubble-time { opacity: 1; }
+/* 切片 3（#31）：段界时间戳常显（扫读锚），其余保持 hover-only 降噪。 */
+.bubble-time.is-boundary { opacity: 1; }
+/* 切片 3（#31 方案 B）：工作段头——发丝线+段头小字（灰字语法同 G1）；
+   中段折叠按钮=纯一行灰字（cd-collapsed-blocks 语法），无盒无图标。 */
+.seg-head { align-self: stretch; margin: 10px 0 -6px; }
+.seg-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 600;
+}
+.seg-divider::before,
+.seg-divider::after { content: ""; flex: 1; border-top: 1px solid var(--hairline-soft); }
+.seg-divider span { font-variant-numeric: tabular-nums; }
+.seg-fold {
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.seg-fold:hover { color: var(--ink); }
+.seg-fold:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+/* 折叠=display 语义保留 DOM（#25 红线：count 类断言存活；无动画，reduce 无涉）。 */
+.bubble-row.seg-folded { display: none; }
 .user-bubble .bubble-time {
   display: block;
   margin-top: 6px;

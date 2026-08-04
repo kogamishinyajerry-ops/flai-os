@@ -58,6 +58,28 @@ function timestampMs(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// 切片 3（#31 方案 B）：ADR-0033 三终点单消息判定——Guide 明确拒绝 / canonical
+// 制度标准问答交付。附件路由（currentWorkSegmentFiles）与 UI 段分隔（workSegments）
+// 共用同一谓词，绝不各自再造第二份口径。
+function terminalKindOf(message) {
+  if (
+    !message ||
+    message.role !== "assistant" ||
+    message.transient === true ||
+    message.persistenceUnknown === true ||
+    !plainObject(message.recommendation)
+  ) return null;
+  const recommendation = message.recommendation;
+  if (recommendation.decision === "refuse") return "refuse";
+  const findings = Array.isArray(recommendation.findings) ? recommendation.findings : null;
+  const refusals = Array.isArray(recommendation.refusals) ? recommendation.refusals : null;
+  const isQaDelivery = (
+    !Object.hasOwn(recommendation, "decision") &&
+    ((findings && findings.length > 0) || (refusals && refusals.length > 0))
+  );
+  return isQaDelivery ? "qa" : null;
+}
+
 // 一次会话可以连续承载多项工作。任务创建时点是上一工作段已经由工程师明确
 // “开工”的权威边界：只有边界之后、服务端已保存的用户附件才属于下一份方案。
 // 没有任何任务边界时保留整段 canonical 历史，支持用户先发材料、再逐轮补充。
@@ -76,22 +98,7 @@ export function currentWorkSegmentFiles(messages, tasks, localBoundaryMs = 0) {
   let terminalMessageIndex = -1;
   const messageList = Array.isArray(messages) ? messages : [];
   for (let index = 0; index < messageList.length; index += 1) {
-    const message = messageList[index];
-    if (
-      message?.role !== "assistant" ||
-      message.transient === true ||
-      message.persistenceUnknown === true ||
-      !plainObject(message.recommendation)
-    ) continue;
-    const recommendation = message.recommendation;
-    const isRefusal = recommendation.decision === "refuse";
-    const findings = Array.isArray(recommendation.findings) ? recommendation.findings : null;
-    const refusals = Array.isArray(recommendation.refusals) ? recommendation.refusals : null;
-    const isQaDelivery = (
-      !Object.hasOwn(recommendation, "decision") &&
-      ((findings && findings.length > 0) || (refusals && refusals.length > 0))
-    );
-    if (isRefusal || isQaDelivery) terminalMessageIndex = index;
+    if (terminalKindOf(messageList[index])) terminalMessageIndex = index;
   }
   const carried = [];
   const seen = new Set();
@@ -119,6 +126,44 @@ export function currentWorkSegmentFiles(messages, tasks, localBoundaryMs = 0) {
     }
   }
   return carried;
+}
+
+// 切片 3（#31 方案 B）：UI 工作段分隔描述符。与附件路由同源三终点（terminalKindOf），
+// 任务创建戳投影规则同 currentWorkSegmentFiles（createdAt 严格大于边界戳才开新段；
+// 缺时序消息对该边界保守跳过，绝不凭未知时序切段）。
+// 返回 [{ start, end, ordinal }]（end 含，升序，覆盖 [0, messages.length-1]）。
+// first=ordinal 0、current=末段、middle=其余——折叠/分隔的可见面决策由调用方做。
+export function workSegments(messages, tasks, localBoundaryMs = 0) {
+  const list = Array.isArray(messages) ? messages : [];
+  if (list.length === 0) return [];
+  const starts = new Set();
+  for (let index = 0; index < list.length; index += 1) {
+    if (terminalKindOf(list[index]) && index + 1 < list.length) starts.add(index + 1);
+  }
+  const stamps = (Array.isArray(tasks) ? tasks : [])
+    .map((task) => timestampMs(task?.created_at)).filter((value) => value !== null);
+  const local = Number.isFinite(localBoundaryMs) && localBoundaryMs > 0 ? localBoundaryMs : 0;
+  if (local > 0) stamps.push(local);
+  for (const stamp of stamps) {
+    for (let index = 0; index < list.length; index += 1) {
+      const messageMs = timestampMs(list[index]?.createdAt);
+      if (messageMs !== null && messageMs > stamp) {
+        if (index > 0) starts.add(index);
+        break;
+      }
+    }
+  }
+  const ordered = [...starts].filter((s) => s > 0).sort((a, b) => a - b);
+  const segments = [];
+  let cursor = 0;
+  let ordinal = 0;
+  for (const start of ordered) {
+    segments.push({ start: cursor, end: start - 1, ordinal });
+    ordinal += 1;
+    cursor = start;
+  }
+  segments.push({ start: cursor, end: list.length - 1, ordinal });
+  return segments;
 }
 
 function matchesDeclaredType(type, value) {
