@@ -33,10 +33,12 @@
 import { computed } from "vue";
 import imgData from "../assets/illustrations/empty-data.png";
 import imgAction from "../assets/illustrations/empty-action.png";
-import imgLog from "../assets/illustrations/empty-log.png";
+// 退役批（wayfinder #29，#26 实证）：empty-log.png 退役——full/thumb 消费面均 0
+// （唯一调用方 WorkLog 恒 tier="line" 纯文字分支）。variant="log" 语义保留，
+// full 分支回退 imgData 但不可达；不新造插画。
 
 const props = defineProps({
-  // data=无数据目录类 / action=待你操作引导类 / log=日志事件类（更小更安静）
+  // data=无数据目录类 / action=待你操作引导类 / log=日志事件类（line 态专用，无专属插画）
   variant: { type: String, default: "data" },
   description: { type: String, default: "暂无数据" },
   imageSize: { type: Number, default: 0 },
@@ -44,8 +46,8 @@ const props = defineProps({
   tier: { type: String, default: "full" },
 });
 
-const IMG = { data: imgData, action: imgAction, log: imgLog };
-const DEFAULT_SIZE = { data: 96, action: 104, log: 72 };
+const IMG = { data: imgData, action: imgAction };
+const DEFAULT_SIZE = { data: 96, action: 104 };
 
 const img = computed(() => IMG[props.variant] || imgData);
 const size = computed(() => props.imageSize || DEFAULT_SIZE[props.variant] || 96);

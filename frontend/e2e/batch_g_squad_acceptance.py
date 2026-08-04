@@ -339,10 +339,16 @@ with sync_playwright() as p:
         )
         check("S1c 无待签成员可见面不长 CTA（绝不凑）",
               face.locator(".squad-review-cta").count() == 0)
+        # S1g（codex PR#34 a11y 修复无回归面）：tabindex/aria-label 仅敏感行生长；
+        # 现 roster 全 internal（仓内无 sensitive Agent，敏感路径 dormant，PR 留痕），
+        # 故钉「非敏感行零焦点停点」——修复不得给普通成员行加 tab 噪点。
+        check("S1g 非敏感成员行无焦点停点（tabindex/aria-label 零生长）",
+              page.locator(".agent-name[tabindex], .agent-name[aria-label]").count() == 0)
     except Exception:
         for probe in ("S1a 开工后编队行在可见面（披露仍默认收起）",
                       "S1b 可见面编队行相段词到账（运行中/已入队/等待接力/待你签发其一）",
-                      "S1c 无待签成员可见面不长 CTA（绝不凑）"):
+                      "S1c 无待签成员可见面不长 CTA（绝不凑）",
+                      "S1g 非敏感成员行无焦点停点（tabindex/aria-label 零生长）"):
             check(probe, False, "可见面编队行缺失")
 
     # 成员级运行状态属于按需披露内容；测试主动展开后再检查，不把它改回常驻面板。
