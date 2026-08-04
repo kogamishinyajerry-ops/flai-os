@@ -63,6 +63,13 @@
         <span class="num-token" :class="{ 'verify-fail-count': batchSummary.failed > 0 }">{{ batchSummary.failed }}</span>
       </span>
     </div>
+
+    <!-- #36 诚实标记：guide 通识免责声明从「每答复述地板句」松弛为只在批准/
+         授权面常驻（本卡即签发前最后一眼）——松弛的是频率，不是诚实纪律。
+         中性墨（ink-faint），绝不占用信任色锁五槽。 -->
+    <div class="verify-row verify-honesty">
+      通识解释仅供参考；工程结论以确定性工具与人签为准
+    </div>
   </div>
 </template>
 
@@ -201,5 +208,10 @@ const signoff = computed(() => deriveSignoff(props.events));
 /* 失败计数染红仅当 >0（红=仅真失败；0 不染——零值不制造情绪） */
 .verify-fail-count {
   color: var(--trust-fail);
+}
+/* #36 诚实标记：授权面常驻免责声明，中性墨（ink-faint），不消费信任色锁 */
+.verify-honesty {
+  color: var(--ink-faint);
+  font-size: 11.5px;
 }
 </style>
