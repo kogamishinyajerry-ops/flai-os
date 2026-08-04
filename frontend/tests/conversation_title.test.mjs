@@ -85,3 +85,27 @@ test("conversationTitle: recommendation 裁决优先于投影（orchestrate/refu
     "（未接住）超出能力边界",
   );
 });
+
+test("conversationTitle: 发送落库后补记缓存 → 无投影会话即时脱离兜底（#28）", () => {
+  // 模拟 send() canonical done 后的补记：列表投影尚未刷新（无 first_user_message），
+  // 内存缓存层已就位，标题用已提交用户消息（18 字截断口径），不停在兜底文案。
+  const sent = "帮我评估一下这个机翼方案在跨声速段的颤振边界是否满足要求";
+  recordConversationFirstUserContent("p11", [
+    { role: "user", content: sent },
+  ]);
+  assert.equal(
+    conversationTitle({ id: "p11", created_by: "甲" }),
+    `${sent.slice(0, 18)}…`,
+  );
+});
+
+test("conversationTitle: 空内容/纯附件轮不补记，仍诚实落兜底（#28）", () => {
+  // 空 content（纯附件发送）不写入缓存层；无投影时标题保持兜底。
+  recordConversationFirstUserContent("p12", [
+    { role: "user", content: "   ", attachments: [{ id: "f1" }] },
+  ]);
+  assert.equal(
+    conversationTitle({ id: "p12", created_by: "乙" }),
+    "与 乙 的对话",
+  );
+});
