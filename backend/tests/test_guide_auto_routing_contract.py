@@ -1207,3 +1207,45 @@ def test_file_upload_agent_without_attachment_stays_in_conversation(
     )
     assert with_attachment["recommendation"] is not None
     assert with_attachment["recommendation"]["decision"] == "orchestrate"
+
+
+class _TextGateway:
+    """#33：纯叙事直答（无计划块）的模型替身。"""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def chat(self, profile: str, messages: list[Any], **kwargs: Any) -> dict[Any, Any]:
+        return {"content": self.text}
+
+
+def test_general_knowledge_posture_anchors_in_prompt() -> None:
+    """#33 第四姿态源码锚：四选一/通识姿态/地板句/反过度拒绝/边界红线，撤任一处必红。"""
+    prompt = (REPO_ROOT / "agents" / "guide_agent" / "prompt.md").read_text(
+        encoding="utf-8"
+    )
+    assert "四选一" in prompt
+    assert "**通识/概念解释**" in prompt
+    assert "非本型号工程结论" in prompt
+    assert "过度拒绝" in prompt
+    assert "合格性判定" in prompt
+
+
+def test_general_knowledge_direct_answer_stays_conversational(tmp_path: Path) -> None:
+    """#33：无计划块的通识直答原样走叙事通道（recommendation None），内核不加工程叙事。"""
+    workflow = _load_workflow()
+    gateway = _TextGateway(
+        "故障树分析（FTA）是自顶向下的演绎法；FMEA 是自底向上的单点失效枚举。\n\n"
+        "以上为通识参考解释，非本型号工程结论；工程判断以确定性工具与人签为准。"
+    )
+    result = workflow.run(
+        {
+            "messages": [{"role": "user", "content": "FTA 和 FMEA 有什么区别？"}],
+            "model_gateway": gateway,
+            "agent_registry": _Registry(tmp_path / "no_specialist"),
+            "agent_config": {"model": {"profile": "reasoning"}},
+        }
+    )
+    assert result["recommendation"] is None
+    assert "非本型号工程结论" in result["assistant_message"]
+    assert "演绎法" in result["assistant_message"]
