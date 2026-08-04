@@ -218,12 +218,20 @@
                                 'sa-relay-echo': agentTaskInfo(a) && relayEchoIds.has(agentTaskInfo(a).latest.id) }"
                       :style="{ background: memberLampBg(a) }"
                     ></span>
-                    <span class="agent-name" :title="agentTaxonomyTip(a)">{{ a.agent_name }}</span>
+                    <span
+                      class="agent-name"
+                      :title="agentTaxonomyTip(a)"
+                      :tabindex="clearanceOf(a) === 'sensitive' ? 0 : undefined"
+                      :aria-label="clearanceOf(a) === 'sensitive' ? agentTaxonomyTip(a) : undefined"
+                    >{{ a.agent_name }}</span>
                     <!-- 分类学进披露（降噪批，五律④）：domain/密级/成熟度/发布状态
                          收进 agent-name 的 title 悬浮，不上成员行主视觉。
                          退役批（#29，owner 2026-08-04 裁）：敏感密级 pill 亦收进 title
                          （agentTaxonomyTip 已含「密级 敏感」）——敏感提示走悬浮披露，
-                         不再行头常驻；amber 槽位语义不变（待签/未核等既有面）。 -->
+                         不再行头常驻；amber 槽位语义不变（待签/未核等既有面）。
+                         codex PR#34 P2（a11y）：title 挂在非聚焦元素上键盘不可达——
+                         敏感行 agent-name 补 tabindex=0 + aria-label（焦点环见 CSS），
+                         非敏感行不增 tab 停点。 -->
                     <span v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</span>
                     <span class="sa-spacer"></span>
 
@@ -3578,6 +3586,12 @@ watch(
   min-width: 0;
 }
 .sa-head .agent-name { flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* codex PR#34 P2：敏感行 agent-name 可聚焦后的焦点环（W0 全局语法同款）。 */
+.sa-head .agent-name[tabindex="0"]:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
 .sa-head .agent-role { margin: 0; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sa-spacer { flex: 1 1 auto; min-width: 8px; }
 .sa-head .agent-status { margin: 0; flex: 0 0 auto; }
