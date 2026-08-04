@@ -113,6 +113,15 @@ class _ConvStub:
                      "prefilled_inputs": {"problem_description": REFUSE_PROBLEM, "model_type": "海岚-9"}},
                 ],
             }
+        elif "超出已审定" in last:
+            # 切片 3 S3：guide 级 refuse 裁决（ADR-0033 三终点之一），
+            # 供造第二工作段边界；_validate_refuse 三必填字段齐备。
+            plan = {
+                "decision": "refuse",
+                "reason": "超出平台已审定能力，如实拒绝。",
+                "residual_problems": ["该需求仍待解决"],
+                "reframe": ["收敛到已审定工程域后重述"],
+            }
         else:  # 幻觉 after 引用（O8）
             plan = {
                 "decision": "orchestrate",
@@ -330,10 +339,16 @@ with sync_playwright() as p:
         )
         check("S1c 无待签成员可见面不长 CTA（绝不凑）",
               face.locator(".squad-review-cta").count() == 0)
+        # S1g（codex PR#34 a11y 修复无回归面）：tabindex/aria-label 仅敏感行生长；
+        # 现 roster 全 internal（仓内无 sensitive Agent，敏感路径 dormant，PR 留痕），
+        # 故钉「非敏感行零焦点停点」——修复不得给普通成员行加 tab 噪点。
+        check("S1g 非敏感成员行无焦点停点（tabindex/aria-label 零生长）",
+              page.locator(".agent-name[tabindex], .agent-name[aria-label]").count() == 0)
     except Exception:
         for probe in ("S1a 开工后编队行在可见面（披露仍默认收起）",
                       "S1b 可见面编队行相段词到账（运行中/已入队/等待接力/待你签发其一）",
-                      "S1c 无待签成员可见面不长 CTA（绝不凑）"):
+                      "S1c 无待签成员可见面不长 CTA（绝不凑）",
+                      "S1g 非敏感成员行无焦点停点（tabindex/aria-label 零生长）"):
             check(probe, False, "可见面编队行缺失")
 
     # 成员级运行状态属于按需披露内容；测试主动展开后再检查，不把它改回常驻面板。
@@ -517,6 +532,50 @@ with sync_playwright() as p:
               f"faces={faces.count()} in_last={in_last.count()}")
     except Exception:
         check("S1f 多方案卡可见面编队行只挂最新卡（count==1 且在末卡内）", False, "第二张方案卡未出现")
+
+    # ══ S3（切片 3 方案 B）：工作段分隔+中段折叠+时间戳降噪 ════════════════
+    # 边界 1=首次开工的任务创建戳；边界 2=拒答终点（同 agent 二次开工被
+    # planHasTasks 拦是产品语义，不硬造）；再补一轮无方案消息开当前段 → 三段齐。
+    try:
+        before_ai = page.locator(".ai-body").count()
+        page.locator(".composer-input textarea").fill("这件事超出已审定范围，请如实处理。")
+        page.locator('button.send-btn[aria-label="发送"]').click()
+        page.wait_for_function(
+            f"document.querySelectorAll('.ai-body').length > {before_ai}", timeout=30000
+        )
+        before_ai = page.locator(".ai-body").count()
+        page.locator(".composer-input textarea").fill("一句话总结今天的讨论。")
+        page.locator('button.send-btn[aria-label="发送"]').click()
+        page.wait_for_function(
+            f"document.querySelectorAll('.ai-body').length > {before_ai}", timeout=30000
+        )
+        page.wait_for_timeout(800)
+        fold = page.locator(".seg-fold")
+        mid_bubble = page.locator(".bubble-row.user", has_text="再来一轮接力编队")
+        check("S3a 中段默认折（fold 行含轮往来；中段泡在 DOM 不可见）",
+              fold.count() == 1 and "轮往来" in fold.inner_text()
+              and mid_bubble.count() == 1 and mid_bubble.is_visible() is False,
+              fold.inner_text() if fold.count() else "(无 fold 行)")
+        fold.click()
+        page.wait_for_timeout(400)
+        check("S3b 展开后中段可见+分隔线在场（单向展开）",
+              mid_bubble.is_visible() is True
+              and page.locator(".seg-divider").count() >= 2)
+        u1_time = page.locator(".bubble-row.user").first.locator(".bubble-time")
+        a1_time = page.locator(".bubble-row.assistant").first.locator(".bubble-time")
+        op_u1 = u1_time.evaluate("el => getComputedStyle(el).opacity") if u1_time.count() else "none"
+        op_a1 = a1_time.evaluate("el => getComputedStyle(el).opacity") if a1_time.count() else "none"
+        check("S3c 段界时间戳常显、非段界 hover-only",
+              op_u1 == "1" and op_a1 == "0", f"u1={op_u1} a1={op_a1}")
+        check("S3d 首段与当前段豁免折叠",
+              page.locator(".bubble-row.user").first.is_visible() is True
+              and page.locator(".ai-body").last.is_visible() is True)
+    except Exception:
+        for probe in ("S3a 中段默认折（fold 行含轮往来；中段泡在 DOM 不可见）",
+                      "S3b 展开后中段可见+分隔线在场（单向展开）",
+                      "S3c 段界时间戳常显、非段界 hover-only",
+                      "S3d 首段与当前段豁免折叠"):
+            check(probe, False, "三段结构未成立")
 
     # ══ 会话二：拒答态（O6）══════════════════════════════════════════════════
     conv2 = open_plan_conv(page, "跑一遍拒答验收")
