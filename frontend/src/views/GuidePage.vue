@@ -154,8 +154,14 @@
 
               <!-- 批 0 切片 1（P0-1 状态来找人）：编队总览行提可见面——开工后成员
                    活状态不展开披露即在场；waiting_review 长出可见面 amber CTA 直开
-                   速览。路由依据/roster 明细仍在下方按需披露（ADR-0033 只读披露不变）。 -->
-              <div v-if="squadSegs(m.recommendation)" class="sa-squad-line sa-squad-face">
+                   速览。路由依据/roster 明细仍在下方按需披露（ADR-0033 只读披露不变）。
+                   Codex PR#24：守卫与 details/plan-foot 同源——只挂最新方案卡，
+                   历史卡不渲染当前活状态（squadTasksOf 按 agent 全会话聚合，
+                   挂历史卡会把重试的活状态/签发 CTA 挂错方案）。 -->
+              <div
+                v-if="idx === latestPlanIdx && squadSegs(m.recommendation)"
+                class="sa-squad-line sa-squad-face"
+              >
                 <span v-if="squadHasWork(m.recommendation)" class="work-pulse-dot"></span>
                 <template v-for="(seg, si) in squadSegs(m.recommendation)" :key="si">
                   <span v-if="si > 0" class="squad-sep">·</span>
