@@ -19,7 +19,7 @@
 
 - 命令(必须在 `/private/tmp` 隔离副本,**e2e 会写 `docs/reviews`**,禁止在产品树直跑):
   `rsync -a --exclude='.git' <repo>/ <copy>/ && cd <copy> && UV_OFFLINE=1 bash scripts/verify_all.sh`
-- 当前基线(EXIT=0):Pytest **1201 passed, 2 skipped**;Node **126/126**;E2E **20/20 套**;Craft **120/120**;Batch-G **42/42**;Batch-H **26/26**;bundle 预算:主入口 JS gzip ≈132KB、同步 CSS ≈20KB、动态入口 8、最大路由闭包 AgentPortal ≈204KB。
+- 当前基线(EXIT=0,2026-08-04 批 0 实测 @ `d5a52aa`+切片 1;main 在动,以你实测为准):Pytest **1785 passed, 2 skipped**;Node **231/231**;E2E **21/21 套**;Craft **121/121**;Batch-G **46/46**;Batch-H **26/26**;bundle 预算:主入口 JS gzip ≈132KB(135,106B)、同步 CSS ≈20KB、动态入口 7、最大路由闭包 GuidePage ≈202KB。
 - 体验审计档案(本机 `/tmp`,重启即失):`/tmp/ui-audit-lab/REPORT.md`、`/tmp/flai-audit-ux/REPORT.md`(12 维评分)、`/tmp/flai-audit-chain/`(流式链路证据:HAR/截图/observations)。审计 P1 已全部关闭;商业级验收清单 9/10,余=真实 LLM 内网复验。
 
 ## 红线(违反=废)

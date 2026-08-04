@@ -144,12 +144,35 @@
                 >方案有执行单元未能纳入，请继续说明或让系统重新编排</span>
                 <span v-else-if="batchCreationNeedsReconciliation" class="route-summary-state is-pending" aria-live="polite">创建状态待核，禁止重复开工</span>
                 <span v-else-if="openableCount(m.recommendation) > 0" class="route-summary-state" aria-live="polite">信息已齐，等待你确认开工</span>
-                <span v-else-if="planHasTasks(m.recommendation)" class="route-summary-state" aria-live="polite">执行已接入，关键状态会在这里更新</span>
+                <span v-else-if="planHasTasks(m.recommendation)" class="route-summary-state" aria-live="polite">执行已接入</span>
                 <span v-else class="route-summary-state is-pending" aria-live="polite">还需通过对话补充执行信息</span>
                 <span
                   v-if="skillReuseForPlan(m.recommendation)"
                   class="skill-reuse-inline"
                 >计划复用 · {{ skillReuseForPlan(m.recommendation).skill_name }}</span>
+              </div>
+
+              <!-- 批 0 切片 1（P0-1 状态来找人）：编队总览行提可见面——开工后成员
+                   活状态不展开披露即在场；waiting_review 长出可见面 amber CTA 直开
+                   速览。路由依据/roster 明细仍在下方按需披露（ADR-0033 只读披露不变）。
+                   Codex PR#24：守卫与 details/plan-foot 同源——只挂最新方案卡，
+                   历史卡不渲染当前活状态（squadTasksOf 按 agent 全会话聚合，
+                   挂历史卡会把重试的活状态/签发 CTA 挂错方案）。 -->
+              <div
+                v-if="idx === latestPlanIdx && squadSegs(m.recommendation)"
+                class="sa-squad-line sa-squad-face"
+              >
+                <span v-if="squadHasWork(m.recommendation)" class="work-pulse-dot"></span>
+                <template v-for="(seg, si) in squadSegs(m.recommendation)" :key="si">
+                  <span v-if="si > 0" class="squad-sep">·</span>
+                  <span class="squad-seg" :class="`tone-${seg.tone}`">{{ seg.text }}</span>
+                </template>
+                <button
+                  v-if="squadReviewTarget(m.recommendation)"
+                  type="button"
+                  class="squad-review-cta"
+                  @click.stop="openTaskPeek(squadReviewTarget(m.recommendation).id)"
+                >审阅签发 →</button>
               </div>
 
               <details v-if="idx === latestPlanIdx" class="route-disclosure">
@@ -170,16 +193,9 @@
                 <p class="plan-workflow">{{ m.recommendation.workflow }}</p>
               </div>
               <div class="section-label roster-label">执行单元 · {{ m.recommendation.agents.length }}</div>
-              <!-- L1 编队总览行（批七 §1.4）：纯 computed 聚合成员任务快照，零动画
-                   数字替换；a>0 行首 work-pulse-dot；待签发段 amber。收束态假绿
-                   禁令（O7 tamper 探针）：非全终态或有待签发绝不出「完成」类总结。 -->
-              <div v-if="squadSegs(m.recommendation)" class="sa-squad-line">
-                <span v-if="squadHasWork(m.recommendation)" class="work-pulse-dot"></span>
-                <template v-for="(seg, si) in squadSegs(m.recommendation)" :key="si">
-                  <span v-if="si > 0" class="squad-sep">·</span>
-                  <span class="squad-seg" :class="`tone-${seg.tone}`">{{ seg.text }}</span>
-                </template>
-              </div>
+              <!-- L1 编队总览行已于批 0 切片 1 提至披露外可见面（sa-squad-face，
+                   状态来找人）；此处仅保留 roster 明细。收束态假绿禁令（O7 tamper
+                   探针）随编队行同在可见面生效。 -->
               <!-- codex 式子 agent 行（owner 定向：紧凑+实时感，不要大静卡）：
                    一行一名成员——状态灯 + 名字 + 分工 + 右槽实时状态词/耗时秒表；
                    次行=实时进度旁白（运行中 shimmer 扫光，事件驱动）或未召集时的
@@ -2702,6 +2718,13 @@ function squadHasWork(plan) {
   return tasks.some((t) => TASK_WORK_STATES.has(t.status));
 }
 
+// 批 0 切片 1（P0-1）：可见面「审阅签发 →」CTA 的数据面——编队中首个待签成员
+// 任务；无待签返回 null（CTA 不渲染）。amber=待签槽（信任色锁），不占其他槽。
+function squadReviewTarget(plan) {
+  const tasks = squadTasksOf(plan);
+  return tasks.find((t) => t.status === "waiting_review") || null;
+}
+
 // 会话任务快照每次落地 → 对账 task channel 持有集；有任一工作态成员任务 →
 // 秒表开，全部终态 → 秒表停（不空转）。必须声明在 conversationTasks 之后：
 // watch source 创建时即求值，TDZ 抛错会被 Vue callWithErrorHandling 吞成
@@ -3630,6 +3653,25 @@ watch(
 .squad-seg.tone-clay { color: var(--clay); font-weight: 600; }
 .squad-seg.tone-amber { color: var(--trust-pending); font-weight: 600; }
 .squad-seg.tone-rose { color: var(--trust-fail); font-weight: 600; }
+/* 批 0 切片 1（P0-1）：可见面编队行——段词语法与披露内同源（共享 tone 令牌），
+ * 不新增色槽；amber CTA 仅真实待签成员在场时渲染。 */
+.sa-squad-face { margin: 10px 0 0; }
+.squad-review-cta {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  color: var(--trust-pending);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  cursor: pointer;
+}
+.squad-review-cta:hover { color: var(--ink); }
+.squad-review-cta:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
 
 /* 等待接力=空心灯（T1）：1px ink 描边圆，绝无 is-pulsing（O2 探针断言互斥） */
 .status-lamp.is-hollow {
@@ -3932,6 +3974,13 @@ watch(
   margin-top: 18px;
   padding-top: 16px;
   border-top: 1px solid var(--hairline-soft);
+}
+/* 批 0 切片 1（P2-1）：披露收起时其底边与 foot 顶边叠成双发丝线死空间——
+   收起态收掉 foot 顶线；展开态 roster 与 CTA 之间仍要分隔，保持原样。 */
+.route-disclosure:not([open]) + .plan-foot {
+  margin-top: 10px;
+  padding-top: 0;
+  border-top: 0;
 }
 /* 主态渐变/投影/hover 走全局 .cta-clay（模板按主/次互斥换装）——本类只留结构。 */
 .workbench-btn {

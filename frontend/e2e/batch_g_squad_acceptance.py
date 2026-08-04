@@ -306,6 +306,36 @@ with sync_playwright() as p:
         json.dumps({"status": t_fault.get("status"), "depends_on": t_fault.get("depends_on")}, ensure_ascii=False),
     )
 
+    # ══ S1（批 0 切片 1，P0-1 状态来找人）：编队总览行在可见面 ═══════════════
+    # 开工后不展开披露，编队行必须在场（UI-PARADIGM #2）；此刻上游 queued
+    # （工作态）→ 可见面脉动点+工作相段词。roster 明细仍属按需披露（下方展开）。
+    face = page.locator(".sa-squad-line.sa-squad-face")
+    try:
+        expect(face).to_be_visible(timeout=8000)
+        closed = page.locator(".route-disclosure").last.get_attribute("open") is None
+        # 快照到账有窗口；queued/waiting_upstream 不属工作态（无脉动点）——
+        # 只等相段词上屏，证明活状态在可见面到账（脉动由 O2 灯族覆盖）。
+        deadline = time.time() + 8
+        face_text = face.inner_text()
+        while time.time() < deadline and not any(
+            w in face_text for w in ("运行中", "已入队", "等待接力", "待你签发")
+        ):
+            page.wait_for_timeout(400)
+            face_text = face.inner_text()
+        check("S1a 开工后编队行在可见面（披露仍默认收起）", closed is True, face_text)
+        check(
+            "S1b 可见面编队行相段词到账（运行中/已入队/等待接力/待你签发其一）",
+            any(w in face_text for w in ("运行中", "已入队", "等待接力", "待你签发")),
+            face_text,
+        )
+        check("S1c 无待签成员可见面不长 CTA（绝不凑）",
+              face.locator(".squad-review-cta").count() == 0)
+    except Exception:
+        for probe in ("S1a 开工后编队行在可见面（披露仍默认收起）",
+                      "S1b 可见面编队行相段词到账（运行中/已入队/等待接力/待你签发其一）",
+                      "S1c 无待签成员可见面不长 CTA（绝不凑）"):
+            check(probe, False, "可见面编队行缺失")
+
     # 成员级运行状态属于按需披露内容；测试主动展开后再检查，不把它改回常驻面板。
     disclosure.locator("summary").click()
     expect(page.locator(".agent-card").first).to_be_visible(timeout=3000)
@@ -428,6 +458,28 @@ with sync_playwright() as p:
     check("O7c 待签相含「待你签发」", "待你签发" in squad_text2, squad_text2)
     check("O7d 待签相 amber 段在场", page.locator(".sa-squad-line .squad-seg.tone-amber").count() >= 1)
     check("O7e 待签相仍无收束措辞", "收束" not in squad_text2 and "全部完成" not in squad_text2, squad_text2)
+    # S1（批 0 切片 1）：待签相可见面长 amber CTA，点击直开速览——不展开披露闭环。
+    cta = page.locator(".squad-review-cta")
+    try:
+        expect(cta).to_be_visible(timeout=8000)
+        check("S1d 待签相可见面 amber CTA 上屏", True, cta.inner_text())
+        cta.click()
+        page.wait_for_selector(".el-drawer", timeout=8000)
+        check("S1e CTA 点击直开速览（状态中心抽屉）", True)
+        # Esc 层层退出（UI-PARADIGM #7）：速览→中心→关闭。onEsc 挂在 sc-shell
+        # （焦点须在内——键盘用户原态），先 focus 再两击必净空，否则抽屉
+        # overlay 拦截后续 composer 点击。焦点在抽屉外 Esc 不生效记 retro。
+        page.locator(".sc-shell").focus()
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
+        page.keyboard.press("Escape")
+        # 活体实证：el-drawer 关闭后节点留 DOM 隐藏（count 恒 1），detached 永假——等 hidden。
+        page.wait_for_selector(".el-drawer", state="hidden", timeout=8000)
+        check("S1e′ Esc 层层退出两击净空（速览→中心→关闭）", True)
+    except Exception:
+        check("S1d 待签相可见面 amber CTA 上屏", False, "可见面 CTA 缺失")
+        check("S1e CTA 点击直开速览（状态中心抽屉）", False, "未验证")
+        check("S1e′ Esc 层层退出两击净空（速览→中心→关闭）", False, "未验证")
     page.screenshot(path=str(SHOTS / "2_waiting_review_evidence.png"), full_page=True)
 
     # 人签放行 → O10 completed 中性非绿 + O7 终相收束
@@ -448,6 +500,24 @@ with sync_playwright() as p:
     )
     check("O10 completed 状态词计算色非绿", len(sw_colors) >= 1 and not any(is_greenish(c) for c in sw_colors), str(sw_colors))
     page.screenshot(path=str(SHOTS / "3_settled.png"), full_page=True)
+
+    # S1f（Codex PR#24 回归针）：同会话第二张方案卡出现后，可见面编队行只挂
+    # 最新卡——历史卡不渲染当前活状态/签发 CTA（审批不挂错方案）。
+    # 注意：stub 对不含「接力/拒答」的消息回 O8 幻觉编队（非法不渲染卡），
+    # 故第二轮需求必须命中「接力」分支拿合法方案。
+    page.locator(".composer-input textarea").fill("再来一轮接力编队。")
+    page.locator('button.send-btn[aria-label="发送"]').click()
+    try:
+        expect(page.locator(".plan-card").nth(1)).to_be_visible(timeout=10000)
+        page.wait_for_timeout(1200)
+        faces = page.locator(".sa-squad-line.sa-squad-face")
+        in_last = page.locator(".plan-card").last.locator(".sa-squad-line.sa-squad-face")
+        check("S1f 多方案卡可见面编队行只挂最新卡（count==1 且在末卡内）",
+              faces.count() == 1 and in_last.count() == 1,
+              f"faces={faces.count()} in_last={in_last.count()}")
+    except Exception:
+        check("S1f 多方案卡可见面编队行只挂最新卡（count==1 且在末卡内）", False, "第二张方案卡未出现")
+
     # ══ 会话二：拒答态（O6）══════════════════════════════════════════════════
     conv2 = open_plan_conv(page, "跑一遍拒答验收")
     expect(page.locator(".open-plan-btn")).to_be_visible(timeout=8000)
