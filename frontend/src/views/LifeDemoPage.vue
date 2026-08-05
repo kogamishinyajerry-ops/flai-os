@@ -35,15 +35,24 @@
           <p class="life-demo__opening-hint">{{ openingHint }}</p>
         </div>
 
-        <!-- 消息流(简化版:只显示文字,不渲染 recommendation/draft 卡片) -->
-        <div v-for="(m, idx) in messages" :key="idx" :class="['life-demo__bubble', m.role]">
-          <div class="life-demo__bubble-role">{{ m.role === "user" ? "我" : "主持人" }}</div>
-          <div class="life-demo__bubble-text">{{ m.content }}</div>
-        </div>
+        <!-- 消息流：文字气泡；助手回复若带待审候选，气泡下方渲染草稿卡片 -->
+        <template v-for="(m, idx) in messages" :key="idx">
+          <div :class="['life-demo__bubble', m.role]">
+            <div class="life-demo__bubble-role">{{ m.role === "user" ? "我" : "主持人" }}</div>
+            <div class="life-demo__bubble-text">{{ m.content }}</div>
+          </div>
+          <LifeDraftCard
+            v-if="m.role === 'assistant' && m.draft"
+            :draft="m.draft"
+            :conversation-id="conversation.id"
+            @revise="focusComposer"
+          />
+        </template>
 
         <!-- 输入框 -->
         <div class="life-demo__composer">
           <textarea
+            ref="composerEl"
             v-model="draft"
             class="life-demo__textarea"
             :placeholder="composerPlaceholder"
@@ -70,7 +79,9 @@
 import { computed, ref, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import LifeScenarioPicker from "../components/LifeScenarioPicker.vue";
+import LifeDraftCard from "../components/LifeDraftCard.vue";
 import { createConversation, postMessage } from "../api/conversations";
+import { isLifeDraftShape } from "../utils/lifeDraft.js";
 
 // demo 场景元信息(与 LifeScenarioPicker.vue 的 scenarios 对齐)
 const SCENARIOS = {
@@ -105,6 +116,7 @@ const messages = ref([]);
 const draft = ref("");
 const sending = ref(false);
 const sendError = ref("");
+const composerEl = ref(null);
 
 const currentScenario = computed(() =>
   scenarioId.value ? SCENARIOS[scenarioId.value] : null
@@ -149,12 +161,23 @@ async function send() {
   try {
     const res = await postMessage(conversation.value.id, text, []);
     const reply = res?.message?.content || "(主持人无回复)";
-    messages.value.push({ role: "assistant", content: reply });
+    // generalization_draft 是本轮 workflow 投影的待审候选（不落库，只在响应里）。
+    // fail-closed：形状不合规一律按无草稿处理，绝不渲染半份候选。
+    const rawDraft = res?.generalization_draft;
+    messages.value.push({
+      role: "assistant",
+      content: reply,
+      draft: isLifeDraftShape(rawDraft) ? rawDraft : null,
+    });
   } catch (err) {
     sendError.value = err.detail || String(err.message || err);
   } finally {
     sending.value = false;
   }
+}
+
+function focusComposer() {
+  composerEl.value?.focus();
 }
 
 onMounted(() => {

@@ -758,6 +758,13 @@ class ConversationService:
             if not isinstance(assistant_message, str) or not assistant_message.strip():
                 raise ValueError("interactive workflow 未返回非空 assistant_message")
             recommendation = result.get("recommendation")  # 可能为 None
+            # generalization_draft：interactive workflow（如 life_guide_agent）可选
+            # 返回的 9 字段待审候选。ConversationService 只做响应级透传，绝不落库、
+            # 不进账本——候选不入库，审核与签发权始终在工程师手里（人审唯一签发）。
+            # 结构不是 dict 一律按 None 处理，绝不把未知结构透传给前端（fail-closed）。
+            generalization_draft = result.get("generalization_draft")
+            if not isinstance(generalization_draft, dict):
+                generalization_draft = None
             trusted_reuse_attached = False
             if agent_id == "guide_agent" and isinstance(recommendation, dict):
                 # Guide 的任何 model-authored ``skill_reuse`` 一律先剥离。只有下面
@@ -878,7 +885,12 @@ class ConversationService:
                 # 上游没有实际 delta（如非流 stub）时保持既有 start→done 形状。
                 deferred_guide_stream.flush_final(assistant_message, on_delta)
 
-            return {"message": msg, "conversation": updated_conversation}
+            return {
+                "message": msg,
+                "conversation": updated_conversation,
+                # 响应级透传（不落库）：前端凭此渲染待审候选草稿卡片。
+                "generalization_draft": generalization_draft,
+            }
         finally:
             conn.close()
 
