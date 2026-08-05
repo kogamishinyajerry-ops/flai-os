@@ -9,7 +9,7 @@
   ③ W2 空态纪律（今日页，空库冷开）：插画空态恰 1 张（待签发=行动召唤保插画），
      纯数据空态 4 处全为 .empty-line 轻量态，5 段文案逐字不变；
   ④ W6 登录门仪式感（未登录 context）：≥900px 品牌氛围面（aria-hidden 装饰）
-     +标语可见；<900px 氛围面隐去回落单卡；诚实地板「签发永远由你亲手完成」
+     +标语可见；<900px 氛围面隐去回落单卡；诚实地板「最终放行由你亲手确认」
      逐字在场——两种宽度都在；
   ⑤ W3 任务详情 rail：宽容器双栏（260px rail 含来源+元信息卡；300px 档在
      ≥1120 超宽容器）、窄容器单栏（container query 断言 .td-grid 计算列数）；
@@ -292,9 +292,9 @@ with sync_playwright() as p:
     brand = gpage.locator(".welcome-gate__brand")
     check("④宽屏品牌氛围面可见且纯装饰（aria-hidden）",
           brand.count() == 1 and brand.get_attribute("aria-hidden") == "true" and brand.is_visible())
-    check("④标语在场", gpage.locator(".welcome-gate__tagline").inner_text().strip() == "机器提议，人签发。")
+    check("④标语在场", gpage.locator(".welcome-gate__tagline").inner_text().strip() == "平台提议，你拍板。")
     body = gpage.locator("body").inner_text()
-    check("④诚实地板逐字（宽）", "登录后开始工作——签发永远由你亲手完成。" in body)
+    check("④诚实地板逐字（宽）", "登录后开始工作——最终放行由你亲手确认。" in body)
     check("④登录卡原样（用户名/密码/进入）",
           gpage.locator(".welcome-gate__content input").count() == 2
           and gpage.locator(".welcome-gate__button").count() == 1)
@@ -304,7 +304,7 @@ with sync_playwright() as p:
     check("④<900px 氛围面隐去（单卡回落）",
           gpage.locator(".welcome-gate__brand").is_hidden()
           and gpage.locator(".welcome-gate__content").is_visible())
-    check("④诚实地板逐字（窄）", "签发永远由你亲手完成" in gpage.locator("body").inner_text())
+    check("④诚实地板逐字（窄）", "最终放行由你亲手确认" in gpage.locator("body").inner_text())
     gpage.screenshot(path=str(SHOTS / "gate_single_narrow.png"))
     gate_ctx.close()
 
@@ -315,7 +315,7 @@ with sync_playwright() as p:
     page = ctx.new_page()
 
     # ── ③ W2 今日页空态纪律（空库冷开，先于建任务）。批次四 Q2 后的冷态语法：
-    #      组头零计数不渲染「· 0」；Agent 动态双空态合并为一行；团队总量零值格
+    #      组头零计数不渲染「· 0」；助手动态双空态合并为一行；团队总量零值格
     #      不渲染（期望值按 /api/stats/overview 真值分支——curated 计数来自仓内
     #      固化文件，冷库不必为 0，硬编码会撒谎）──────────────────────────
     page.goto(BASE + "/today", wait_until="networkidle")
@@ -331,13 +331,13 @@ with sync_playwright() as p:
     stat_fields = ["tasks_completed", "reviews_approved", "curated_cases_total", "promotions"]
     # 严格镜像前端 visibleStats：仅「数字 0」不渲染——非数字是「—」格（≠全零）。
     stats_all_zero = all(_is_num(cold_stats.get(f)) and cold_stats.get(f) == 0 for f in stat_fields)
-    # 轻量行期望：进行中 1 + 今日交付 1 + Agent 动态合并 1 + （团队全 0 时再 +1）
+    # 轻量行期望：进行中 1 + 今日交付 1 + 助手动态合并 1 + （团队全 0 时再 +1）
     expected_lines = 3 + (1 if stats_all_zero else 0)
     lines = page.locator(".today .empty-line")
-    check(f"③纯数据空态恰 {expected_lines} 行（Agent 动态双空态已合并为一行）",
+    check(f"③纯数据空态恰 {expected_lines} 行（助手动态双空态已合并为一行）",
           lines.count() == expected_lines, f"count={lines.count()} stats_all_zero={stats_all_zero}")
     body = page.locator("body").inner_text()
-    texts = ["没有等你签发的任务", "当前没有进行中的任务", "今天还没有交付的任务", "今天还没有 Agent 动态"]
+    texts = ["没有等你签发的任务", "当前没有进行中的任务", "今天还没有交付的任务", "今天还没有助手动态"]
     check("③空态文案 4 段逐字不变（双空态合并文案）", all(t in body for t in texts),
           "缺:" + ",".join(t for t in texts if t not in body))
     # Q2 零计数豁口：冷态三个组头绝不出现「· 0」。
@@ -362,7 +362,7 @@ with sync_playwright() as p:
     check("③团队总量三态对表（数字≠0 逐字 / 数字 0 不渲染 / 非数字「—」）", tiles_ok is True, str(tiles_detail))
     # Q3 方法论口径同屏唯一：页脚一行保留，版块内不再复述「近 100 条」note。
     check("③窗口口径只在页脚一行（today-subhead-note 退役）",
-          page.locator(".today-subhead-note").count() == 0 and "基于最近 100 条任务窗口" in body)
+          page.locator(".today-subhead-note").count() == 0 and "统计口径：最近 100 条任务" in body)
     line_color = lines.first.evaluate("el => getComputedStyle(el).color")
     check("③line 空态走 ink-soft（4.5:1 可读阈，非 faint）",
           line_color == resolved_color(page, "var(--ink-soft)"), line_color)
@@ -578,10 +578,10 @@ with sync_playwright() as p:
               '.guide-page input:not([type="file"]), .guide-page select, '
               '.guide-page form, .guide-page [contenteditable="true"]'
           ).count() == 0)
-    check("⑧'零手工编排：无执行单元 picker、意图卡、常驻上下文栏",
+    check("⑧'零手工编排：无成员 picker、意图卡、常驻上下文栏",
           page.get_by_role("button", name="浏览可用 Agent").count() == 0
           and page.locator(".agent-pick, .intent-card, .guide-context-rail").count() == 0
-          and "系统会在后台自动编排所需能力" in page.locator("body").inner_text())
+          and "系统会在后台安排所需能力" in page.locator("body").inner_text())
     check("⑧'移动端附件与发送按钮触控高度均≥44px",
           attach_box is not None and send_box is not None
           and attach_box["height"] >= 44 and send_box["height"] >= 44,

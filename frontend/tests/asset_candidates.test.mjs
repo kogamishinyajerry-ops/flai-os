@@ -685,7 +685,7 @@ test("包级复核 API 只提交精确 CAS 请求并核对原 Package 修订", a
 });
 
 
-test("方案内复用引用只接受后端固定字段与当前执行单元", () => {
+test("方案内复用引用只接受后端固定字段与当前成员", () => {
   const reference = {
     schema_version: "skill_reuse_ref.v1",
     package_id: `skill_package_${"2".repeat(24)}`,

@@ -181,8 +181,8 @@ with sync_playwright() as p:
     # 2b 契约重立：「智能导引」原命中侧栏导航项，双 Surface 后导航收敛为
     # 「对话/任务台」——改锚 hero 主标题（导引页身份的稳定语义锚）。
     shell_ok = (
-        "说说你要做的工程活儿" in body
-        and "系统会在后台自动编排所需能力" in body
+        "说说你要做的事" in body
+        and "系统会在后台安排所需能力" in body
         and page.locator(".guide-page textarea").count() == 1
         and page.locator('.guide-page input[type="file"]').count() == 1
         and page.locator(
@@ -227,7 +227,7 @@ with sync_playwright() as p:
     disclosure = page.locator(".route-disclosure")
     check(
         "③自动路由摘要常驻、路由细节默认折叠",
-        "已自动编排" in page.locator(".route-summary").inner_text()
+        "已自动安排" in page.locator(".route-summary").inner_text()
         and disclosure.get_attribute("open") is None
         and page.locator(".agent-card").first.is_visible() is False,
     )
@@ -258,10 +258,10 @@ with sync_playwright() as p:
     page.screenshot(path=str(SHOTS / "2_recommendation.png"), full_page=True)
 
     # ④ 全方案 ready 才给一个主按钮；成员行不提供手工 Agent/参数入口。
-    open_btn = page.get_by_role("button", name="按方案开工")
+    open_btn = page.get_by_role("button", name="按方案开始")
     expect(open_btn).to_be_visible(timeout=8000)
     check(
-        "④全方案就绪：只有一个『按方案开工』主按钮，零字段表单/成员级创建钮",
+        "④全方案就绪：只有一个『按方案开始』主按钮，零字段表单/成员级创建钮",
         page.locator(".plan-foot .cta-clay").count() == 1
         and page.get_by_role("button", name="去创建此任务").count() == 0
         and page.locator(".plan-card input, .plan-card textarea, .plan-card select").count() == 0,
@@ -289,7 +289,7 @@ with sync_playwright() as p:
     )
     check("④按钮渲染不等于自动开工：点击前任务数为 0", bool(conv_id) and len(API.get(f"/api/conversations/{conv_id}/tasks").json()) == 0)
 
-    # ⑤ 人只确认开工；系统把已整理输入和唯一 Agent 的附件原地带入任务。
+    # ⑤ 人只确认开始；系统把已整理输入和唯一 Agent 的附件原地带入任务。
     open_btn.click()
     expect(page.locator(".agent-status")).to_be_visible(timeout=8000)
     tasks = API.get(f"/api/conversations/{conv_id}/tasks").json() if conv_id else []
@@ -304,7 +304,7 @@ with sync_playwright() as p:
         and "/tasks/new" not in page.url
         and f"c={conv_id}" in page.url
     )
-    check("⑤确认开工后原地建任务：合法输入+附件自动带入，零 /tasks/new 字段墙", inline_ok,
+    check("⑤确认开始后原地建任务：合法输入+附件自动带入，零 /tasks/new 字段墙", inline_ok,
           json.dumps(detail, ensure_ascii=False)[:300])
     page.screenshot(path=str(SHOTS / "3_inline_started.png"), full_page=True)
 
@@ -374,13 +374,13 @@ with sync_playwright() as p:
         page.locator(".composer textarea").count() == 1
         and page.locator('.composer input[type="file"]').count() == 1
         and "正在处理失败任务 · 审计血缘会自动保留" in page.locator(".composer").inner_text()
-        and page.get_by_role("button", name="按方案开工").count() == 0
+        and page.get_by_role("button", name="按方案开始").count() == 0
     )
     check("⑥失败回流：只回文字/附件主输入，历史方案不可直接复活", retry_shell_ok, page.url)
 
     page.locator(".composer textarea").fill("第一次执行失败，请保留原目标重新处理")
     page.get_by_role("button", name="发送").click()
-    retry_open = page.get_by_role("button", name="按方案开工")
+    retry_open = page.get_by_role("button", name="按方案开始")
     expect(retry_open).to_be_visible(timeout=8000)
     retry_conv = API.get(f"/api/conversations/{conv_id}").json()
     retry_recommendation = retry_conv.get("recommendation") or {}
@@ -467,7 +467,7 @@ with sync_playwright() as p:
     login_context(hon.context, BASE)
     hon.goto(BASE + "/", wait_until="networkidle")
     shell_body = hon.locator("body").inner_text()
-    check("⑨壳层零手工编排：无执行单元 picker/参数表单",
+    check("⑨壳层零手工编排：无成员 picker/参数表单",
           hon.get_by_role("button", name="浏览可用 Agent").count() == 0
           and hon.locator(".agent-pick, .guide-context-rail, .intent-card").count() == 0
           and hon.locator(".guide-page textarea").count() == 1
@@ -476,7 +476,7 @@ with sync_playwright() as p:
               '.guide-page input:not([type="file"]), .guide-page select, '
               '.guide-page form, .guide-page [contenteditable="true"]'
           ).count() == 0
-          and "系统会在后台自动编排所需能力" in shell_body,
+          and "系统会在后台安排所需能力" in shell_body,
           shell_body[:260])
     hon.close()
 

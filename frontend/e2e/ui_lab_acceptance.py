@@ -330,7 +330,7 @@ try:
                 faintInk,
                 promise: document.querySelector('.hero-routing-promise')?.innerText || '',
                 humanBoundaryCount: (
-                  document.body.innerText.match(/开工与签发仍由你确认/g) || []
+                  document.body.innerText.match(/开始与放行由你确认/g) || []
                 ).length,
               };
             }"""
@@ -353,7 +353,7 @@ try:
             and landing_signature["sendSurface"] == landing_signature["neutralSurface"]
             and landing_signature["sendInk"] == landing_signature["faintInk"]
             and landing_signature["humanBoundaryCount"] == 1
-            and "系统会在后台自动编排所需能力" in landing_signature["promise"],
+            and "系统会在后台安排所需能力" in landing_signature["promise"],
             str(landing_signature),
         )
         capture(frame, "landing-desktop.png")
@@ -422,7 +422,7 @@ try:
             and route_before["routeRowsVisible"] is False
             and route_before["summaryLiveRegions"] == 0
             and route_before["stateLiveRegions"] == 1
-            and route_before["primaryActions"] == ["按方案开工"],
+            and route_before["primaryActions"] == ["按方案开始"],
             str(route_before),
         )
         route_disclosure.locator("summary").click()
@@ -447,7 +447,7 @@ try:
                 "rows": 2,
                 "reasonVisible": True,
                 "summaryText": "查看路由依据与边界",
-                "rosterText": "执行单元 · 2",
+                "rosterText": "成员 · 2",
                 "materialChips": ["稳态算例输入表.xlsx", "旧版背景说明.pdf"],
                 "ignoredNarrated": True,
                 "noFormControls": True,
@@ -1220,7 +1220,7 @@ try:
               inlineText: element.querySelector('.skill-reuse-inline')?.innerText || '',
               disclosureOpen: element.querySelector('.route-disclosure')?.open === true,
               mainActions: [...element.querySelectorAll('.plan-foot button')]
-                .filter(item => item.innerText.trim() === '按方案开工').length,
+                .filter(item => item.innerText.trim() === '按方案开始').length,
               forbiddenFields: element.querySelectorAll(
                 'input, textarea, select, form, [contenteditable="true"]'
               ).length,
@@ -1256,20 +1256,20 @@ try:
             """element => ({
               amber: element.querySelector('.route-summary-state.is-pending')?.innerText || '',
               openActions: [...element.querySelectorAll('.plan-foot button')]
-                .filter(item => item.innerText.trim() === '按方案开工').length,
+                .filter(item => item.innerText.trim() === '按方案开始').length,
               recoveryActions: [...element.querySelectorAll('.plan-foot button')]
-                .filter(item => item.innerText.includes('继续对话让系统重新编排')).length,
+                .filter(item => item.innerText.includes('继续对话让系统重新安排')).length,
               reuseInline: element.querySelectorAll('.skill-reuse-inline').length,
             })"""
         )
         frame.get_by_role(
             "button",
-            name="复用证据待核 · 继续对话让系统重新编排",
+            name="复用证据待核 · 继续对话让系统重新安排",
             exact=True,
         ).click()
         check(
             "非法复用证据显式 amber 阻断且点击只回主输入，保持零任务 POST",
-            "复用证据无法核验，本次禁止开工" in invalid_reuse_dom["amber"]
+            "复用证据无法核验，本次禁止开始" in invalid_reuse_dom["amber"]
             and invalid_reuse_dom["openActions"] == 0
             and invalid_reuse_dom["recoveryActions"] == 1
             and invalid_reuse_dom["reuseInline"] == 0

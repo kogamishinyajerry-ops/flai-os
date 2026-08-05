@@ -137,8 +137,8 @@ const visibleMeStats = computed(() => {
 const TEAM_STAT_DEFS = [
   { key: "tasks_completed", label: "本周完成" },
   { key: "reviews_approved", label: "本周签发" },
-  { key: "curated_cases_total", label: "累计固化" },
-  { key: "promotions", label: "本周晋升" },
+  { key: "curated_cases_total", label: "累计沉淀案例" },
+  { key: "promotions", label: "本周升级" },
 ];
 const visibleTeamStats = computed(() => {
   const t = team.value;

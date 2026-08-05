@@ -58,7 +58,7 @@
           <div class="sc-group-label working">运行中 · <span class="num-token">{{ workingTasks.length }}</span></div>
           <div class="sc-list">
             <div v-for="t in workingTasks" :key="t.id" class="sc-item" role="button" tabindex="0" @click="openTaskPeek(t.id)" @keydown.enter.prevent="openTaskPeek(t.id)" @keydown.space.prevent="openTaskPeek(t.id)">
-              <!-- Codex R0 P2：等待接力行灯=空心不脉动（clay 脉动=真在干活唯一
+              <!-- Codex R0 P2：等待交接行灯=空心不脉动（clay 脉动=真在干活唯一
                    语义；阻塞 created 冒充活跃工作=灯语假绿）。 -->
               <span
                 class="sc-lamp"
@@ -69,7 +69,7 @@
                 <span class="sc-item-name">{{ taskDisplayName(t, agentNames.map) }}</span>
                 <!-- 活跳时长（批次三 G3，cd-bg-tasks-panel Running 卡「时长实时」）：
                      started_at 缺失（queued/validating 早期）=段不出现，不硬凑。 -->
-                <span class="sc-item-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }}<template v-if="memberPhase(t) === 'waiting_upstream'"> <span class="sc-relay-note">(等待接力)</span></template><template v-if="runElapsed(t)"> · 已 {{ runElapsed(t) }}</template></span>
+                <span class="sc-item-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }}<template v-if="memberPhase(t) === 'waiting_upstream'"> <span class="sc-relay-note">(等待交接)</span></template><template v-if="runElapsed(t)"> · 已 {{ runElapsed(t) }}</template></span>
               </span>
               <span class="sc-item-cta">速览 →</span>
             </div>
@@ -146,13 +146,19 @@
             </div>
           </div>
 
-          <el-alert v-if="peekTask.error_message" type="error" :title="peekTask.error_message" show-icon :closable="false" class="peek-block" />
+          <!-- P1-2 异常路径分层：人话摘要前置，原始 error_message 逐字进折叠。 -->
+          <el-alert v-if="peekTask.error_message" type="error" title="任务执行失败——失败原因已如实保留，展开查看技术细节。" show-icon :closable="false" class="peek-block">
+            <details class="error-disclosure">
+              <summary>查看技术细节</summary>
+              <pre class="error-disclosure__body">{{ peekTask.error_message }}</pre>
+            </details>
+          </el-alert>
 
           <!-- 速览里的失败任务同样回到原对话补充自然语言/附件；与 TaskDetail
                同源导航，绝不进入字段表或自动重跑。 -->
           <div v-if="peekTask.status === 'failed'" class="peek-block peek-retry">
             <button type="button" class="peek-retry-btn" @click="retryFromPeek">回到对话说明问题</button>
-            <span class="peek-retry-hint">补充文字或附件，由系统结合原会话重新编排。</span>
+            <span class="peek-retry-hint">补充文字或附件，由系统结合原会话重新安排。</span>
           </div>
 
           <!-- 产物先于动作（信任核心 P0-2：先看要签的东西，再决定放行）。
@@ -347,7 +353,7 @@ function runElapsed(t) {
 const inboxTasks = ref([]);
 const inboxError = ref("");
 const waitingTasks = computed(() => inboxTasks.value.filter((t) => t.status === "waiting_review"));
-// 批七 §3-15：等待接力任务（created+depends_on 派生态）并入运行中组可见——
+// 批七 §3-15：等待交接任务（created+depends_on 派生态）并入运行中组可见——
 // 行尾灰注标注，不脉动不计时（memberPhase 同口径，任务 status 是唯一真值）。
 const workingTasks = computed(() =>
   inboxTasks.value.filter(
@@ -870,7 +876,7 @@ onUnmounted(() => {
   height: 8px;
   border-radius: 50%;
 }
-/* 等待接力=空心静灯（与 WorkbenchSession .rg-lamp-hollow 同语法）：
+/* 等待交接=空心静灯（与 WorkbenchSession .rg-lamp-hollow 同语法）：
    未开工不是异常也不是工作，绝不脉动。 */
 .sc-lamp.is-hollow {
   background: transparent;
@@ -901,8 +907,19 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* 批七 §3-15：等待接力灰注（中性——未开工不是异常） */
+/* 批七 §3-15：等待交接灰注（中性——未开工不是异常） */
 .sc-relay-note { color: var(--ink-faint); }
+/* P1-2 异常路径分层（统一契约：details.error-disclosure，全票同一 class 名） */
+.error-disclosure { margin-top: 6px; font-size: 12.5px; }
+.error-disclosure summary { cursor: pointer; }
+.error-disclosure__body {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
 .sc-item-cta {
   flex: none;
   font-size: 12px;

@@ -5,14 +5,14 @@
     <div class="welcome-gate__brand fx-rise" aria-hidden="true">
       <div class="welcome-gate__brand-inner">
         <img class="welcome-gate__brand-art" :src="badgeArt" alt="" />
-        <p class="welcome-gate__tagline">机器提议，人签发。</p>
+        <p class="welcome-gate__tagline">平台提议，你拍板。</p>
         <p class="welcome-gate__tagline-sub">二所工程智能体运行底座——任务在这里拆解、执行、留痕。</p>
       </div>
     </div>
     <main class="welcome-gate__content fx-rise">
       <img class="welcome-gate__art" :src="badgeArt" alt="" />
       <h1 id="welcome-gate-title" class="welcome-gate__title">欢迎来到 FLAi-OS</h1>
-      <p class="welcome-gate__note">登录后开始工作——签发永远由你亲手完成。</p>
+      <p class="welcome-gate__note">登录后开始工作——最终放行由你亲手确认。</p>
 
       <el-input
         v-model="username"

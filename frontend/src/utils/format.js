@@ -106,7 +106,7 @@ export const formatTime = (iso) => {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString("zh-CN", { hour12: false });
 };
 
-// 相对时间 SSOT（批B /today Agent 动态）：近期事件用人话距离，7 天以上回落
+// 相对时间 SSOT（批B /today 助手动态）：近期事件用人话距离，7 天以上回落
 // formatTime 绝对时间；非法/未来时间戳诚实降级为 formatTime，不编「刚刚」。
 export const formatRelativeTime = (iso, nowMs = Date.now()) => {
   if (!iso) return "—";

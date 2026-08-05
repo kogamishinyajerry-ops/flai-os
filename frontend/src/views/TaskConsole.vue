@@ -85,10 +85,10 @@
           </span>
           <span v-if="unseen(t)" class="cl-unseen-dot" title="完成后你还没看过"></span>
         </div>
-        <div v-if="feedLoaded && !feedTasks.length" class="cl-zero">还没有任务——先在主对话里说明目标，系统会自动编排。</div>
+        <div v-if="feedLoaded && !feedTasks.length" class="cl-zero">还没有任务——先在主对话里说明目标，系统会自动安排。</div>
       </template>
 
-      <div class="cl-foot-note">清单来自最近任务窗口（100 条）真实轮询——窗口外不虚报。</div>
+      <div class="cl-foot-note">清单来自最近 100 条任务真实轮询——窗口外不虚报。</div>
     </aside>
 
     <section class="console-main">

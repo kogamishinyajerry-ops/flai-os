@@ -272,7 +272,7 @@ with sync_playwright() as p:
     check(
         "开工前只有一个主动作，成员细节默认折叠",
         page.locator(".open-plan-btn").count() == 1
-        and page.locator(".open-plan-btn").inner_text().strip() == "按方案开工"
+        and page.locator(".open-plan-btn").inner_text().strip() == "按方案开始"
         and disclosure.get_attribute("open") is None
         and page.locator(".agent-card").first.is_visible() is False,
     )
@@ -327,14 +327,14 @@ with sync_playwright() as p:
         deadline = time.time() + 8
         face_text = face.inner_text()
         while time.time() < deadline and not any(
-            w in face_text for w in ("运行中", "已入队", "等待接力", "待你签发")
+            w in face_text for w in ("运行中", "已入队", "等待交接", "待你签发")
         ):
             page.wait_for_timeout(400)
             face_text = face.inner_text()
         check("S1a 开工后编队行在可见面（披露仍默认收起）", closed is True, face_text)
         check(
-            "S1b 可见面编队行相段词到账（运行中/已入队/等待接力/待你签发其一）",
-            any(w in face_text for w in ("运行中", "已入队", "等待接力", "待你签发")),
+            "S1b 可见面编队行相段词到账（运行中/已入队/等待交接/待你签发其一）",
+            any(w in face_text for w in ("运行中", "已入队", "等待交接", "待你签发")),
             face_text,
         )
         check("S1c 无待签成员可见面不长 CTA（绝不凑）",
@@ -346,7 +346,7 @@ with sync_playwright() as p:
               page.locator(".agent-name[tabindex], .agent-name[aria-label]").count() == 0)
     except Exception:
         for probe in ("S1a 开工后编队行在可见面（披露仍默认收起）",
-                      "S1b 可见面编队行相段词到账（运行中/已入队/等待接力/待你签发其一）",
+                      "S1b 可见面编队行相段词到账（运行中/已入队/等待交接/待你签发其一）",
                       "S1c 无待签成员可见面不长 CTA（绝不凑）",
                       "S1g 非敏感成员行无焦点停点（tabindex/aria-label 零生长）"):
             check(probe, False, "可见面编队行缺失")
@@ -355,7 +355,7 @@ with sync_playwright() as p:
     disclosure.locator("summary").click()
     expect(page.locator(".agent-card").first).to_be_visible(timeout=3000)
 
-    # O2：等待接力行=空心灯（is-hollow 无 is-pulsing）+ 无秒表 + 上游名旁白。
+    # O2：等待交接行=空心灯（is-hollow 无 is-pulsing）+ 无秒表 + 上游名旁白。
     # 红而不崩（批六 replay 教训）：tamper 断依赖时等待相整体缺失，探针必须
     # 逐条红、套件到达 FAILED 汇总，才算干净咬合（crash-type fail 不算）。
     hollow = page.locator(".status-lamp.is-hollow")
@@ -368,23 +368,23 @@ with sync_playwright() as p:
         check("O2a 空心灯在场且无 is-pulsing", hollow.evaluate("el => !el.classList.contains('is-pulsing')") is True)
         fault_card = page.locator(".agent-card", has=page.locator(".status-lamp.is-hollow"))
         check("O2b 等待行无秒表 DOM", fault_card.locator(".sa-elapsed").count() == 0)
-        check("O2c 状态词=等待接力", "等待接力" in fault_card.locator(".status-word").inner_text())
+        check("O2c 状态词=等待交接", "等待交接" in fault_card.locator(".status-word").inner_text())
         stage = fault_card.locator(".sa-stageline")
         check(
-            "O2d 旁白含上游人话名与自动接力承诺",
-            "等待〈" in stage.inner_text() and "就绪后自动接力" in stage.inner_text(),
+            "O2d 旁白含上游人话名与自动交接承诺",
+            "等待〈" in stage.inner_text() and "就绪后自动交接" in stage.inner_text(),
             stage.inner_text(),
         )
     else:
         for probe in ("O2a 空心灯在场且无 is-pulsing", "O2b 等待行无秒表 DOM",
-                      "O2c 状态词=等待接力", "O2d 旁白含上游人话名与自动接力承诺"):
+                      "O2c 状态词=等待交接", "O2d 旁白含上游人话名与自动交接承诺"):
             check(probe, False, "等待相缺失（空心灯未出现）")
 
     # O7（前置相）：squad 行在场、含等待段、无收束/全部完成类总结
     squad = page.locator(".sa-squad-line")
     expect(squad).to_be_visible(timeout=8000)
     squad_text = squad.inner_text()
-    check("O7a 编队行含「等待接力」段", "等待接力" in squad_text, squad_text)
+    check("O7a 编队行含「等待交接」段", "等待交接" in squad_text, squad_text)
     check(
         "O7b 非全终态绝无收束/全部完成措辞",
         ("收束" not in squad_text) and ("全部完成" not in squad_text),
@@ -497,9 +497,9 @@ with sync_playwright() as p:
         check("S1e′ Esc 层层退出两击净空（速览→中心→关闭）", False, "未验证")
     page.screenshot(path=str(SHOTS / "2_waiting_review_evidence.png"), full_page=True)
 
-    # 人签放行 → O10 completed 中性非绿 + O7 终相收束
+    # 批准放行 → O10 completed 中性非绿 + O7 终相收束
     resp = API.post(f"/api/tasks/{t_fault['id']}/review", json={"action": "approve", "comment": "e2e 放行"})
-    check("人签放行 API 生效", resp.status_code == 200, f"status={resp.status_code}")
+    check("批准放行 API 生效", resp.status_code == 200, f"status={resp.status_code}")
     done = wait_status(t_fault["id"], {"completed"}, timeout_s=15)
     check("放行后任务 completed", done.get("status") == "completed", str(done.get("status")))
     deadline = time.time() + 12
@@ -662,7 +662,7 @@ with sync_playwright() as p:
     check(
         "O8b 只回自然语言澄清与唯一 Composer，零成员卡/字段墙/内部 ghost 泄漏",
         page.locator(".plan-card, .agent-card, .route-summary").count() == 0
-        and page.get_by_role("button", name="按方案开工").count() == 0
+        and page.get_by_role("button", name="按方案开始").count() == 0
         and page.locator(".composer textarea").count() == 1
         and page.locator('.composer input[type="file"]').count() == 1
         and "ghost_agent_o8" not in o8_body
