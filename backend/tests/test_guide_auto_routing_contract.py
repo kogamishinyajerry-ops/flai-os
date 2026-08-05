@@ -1252,3 +1252,14 @@ def test_general_knowledge_direct_answer_stays_conversational(tmp_path: Path) ->
     )
     assert result["recommendation"] is None
     assert "演绎法" in result["assistant_message"]
+
+
+def test_opus5_clause_anchors_in_prompt() -> None:
+    """#42 Opus 5 可搬条款源码锚：默认接总纲/重构即信号/累积判定，撤任一处必红。
+    锚串逐字取自 #41 评审裁决原文；prompt.md 由并行施工落这些原句，锚定其字面措辞。"""
+    prompt = (REPO_ROOT / "agents" / "guide_agent" / "prompt.md").read_text(
+        encoding="utf-8"
+    )
+    assert "默认接" in prompt
+    assert "重新解释本身就是信号" in prompt
+    assert "累积输出" in prompt
