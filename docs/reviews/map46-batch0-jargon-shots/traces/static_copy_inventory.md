@@ -8,7 +8,7 @@
 
 - 默认路由：登录门过后落 `/` = GuidePage，`meta.title: "对话"`（frontend/src/router/index.js:11）。侧栏主导航仅 `对话`/`今日`（App.vue:254-257）。侧栏品牌行 `二所工程智能体运行底座`（App.vue:19）【行话】。
 - WelcomeGate.vue（登录门）：`机器提议，人签发。`（:8）【行话：签发未解释即上首屏】；`二所工程智能体运行底座——任务在这里拆解、执行、留痕。`（:9）【行话】；`欢迎来到 FLAi-OS`（:14）【通用】；`登录后开始工作——签发永远由你亲手完成。`（:15）【行话】；placeholder `用户名`/`密码`、按钮 `登录`【通用】；`没有账户？请联系平台管理员开通（不提供自助注册）。`（:42）【通用】；登录错误直透后端 detail（:69）→ `用户名或密码错误`（backend/app/api/auth.py:63）等【通用】。
-- OnboardingCard.vue：组件存在但**全仓零引用**（grep 无 import/使用）——死代码，新用户实际看不到三步引导。其文案备查：`第一次用？3 步上手`（:6）、`跑演示任务`/`演示 →`（:12-13）、`说真实需求`/`输入 ↓`（:17-18）、`人工签发结果`（:22）【行话：签发】、`⌘K 搜任务、会话和 Agent`（:25）。
+- OnboardingCard.vue：组件存在但**零生产引用**（grep 无 import/使用）——未接线组件（当前不可达），新用户实际看不到三步引导。其文案备查：`第一次用？3 步上手`（:6）、`跑演示任务`/`演示 →`（:12-13）、`说真实需求`/`输入 ↓`（:17-18）、`人工签发结果`（:22）【行话：签发】、`⌘K 搜任务、会话和 Agent`（:25）。
 - EmptyState.vue：props 默认 `暂无数据`（:43）【通用】。调用处传入文案：
   - `没有等你签发的任务`（TodayPage.vue:77）【行话：签发】
   - `当前没有进行中的任务`（TodayPage.vue:107）【通用】
@@ -111,7 +111,7 @@
 - 模型网关：`模型网关未配置，导引不可用：{exc}。此为部署配置问题（非临时故障），请联系管理员设置 FLAI_LLM_* 环境变量后再试。`（conversations.py:198-199）【环境变量名直出】；`导引本轮对话失败（可重试）：{exc}`（:204）【上游错误直通】
 - 开工门槛：`Agent 不可变包快照不可用，任务未创建`（tasks.py:752）【不可变包快照】；`整批未创建（全有全无）——逐项修正后重试`（:1231）；`agent 版本在对账后发生变化：X v1 → v2——请重新核对后开工`（:1407-1409）【对账】；`创建操作 {operation_id} 已被不同载荷使用或记录不一致——禁止覆盖；请先核对原任务`（:730-733）【operation_id】
 - 取消/签发：`任务处于 {status}，不在 waiting_review，无法人工放行/拒绝`（:1785）【英文枚举直出】
-- 权限 404 塌缩：`资源不存在或不可访问`（object_authorization.py:22，防存在性 oracle，统一塌缩）【通用】
+- 权限 404 塌缩：`资源不存在或不可访问`（object_authorization.py:22 常量，:29 抛出，防存在性 oracle，统一塌缩）【通用】
 - 文件：`文件分级 X 未开放下载：角色授权体系未建立前非 internal 数据一律 fail-closed 拒绝（ADR-0021）`（files.py:326-329）【fail-closed 英文+ADR 编号】；`文件超出上传限额（FLAI_MAX_UPLOAD_MB，当前=N 字节）`（:232）
 - 知识回源：`该知识范围为受限密级，原文回源在角色轴落地前一律不放行`（knowledge.py:63）【角色轴】；`scope X 当前语料中不存在 chunk Y…`（:91-93）【scope/chunk】
 - worker 上浮：`worker_interrupted：上次 worker 进程中断，任务未完成即失败；真实工具可能已产生外部副作用，请人工核查后重建任务`（runner.py:52-53）；级联取消 `依赖的上游 completed 但产物未过人工签发闸（K1 签发维 provenance），级联取消（fail-closed 未签判决绝不越界）`（:348）【provenance/fail-closed】
@@ -166,4 +166,4 @@
 - 后端直出技术词到 toast/alert：waiting_review、decision=orchestrate、fail-closed、provenance、ADR 编号、FLAI_LLM_*/FLAI_MAX_UPLOAD_MB、chunk_id/scope、operation_id/换 key、不可变包快照、resolver 管道。
 - 已人话化的面：主叙事动作口语（`说说你要做的工程活儿`/`这个需求，平台暂时接不住`）；usefulness 轴 L1-L3 人话；事件类型全翻译，snake_case 不裸显；拒答措辞去技术化；术语进披露纪律（图例句撤下、释义挂 title、成员分类学收 title）。
 - 「Agent」一词全量直出（384 处）未翻译，是当前最重的平台原生词；任务行主名已用 taskDisplayName 人话遮盖，副行仍裸 id。
-- OnboardingCard.vue 零引用=死代码，新用户实际没有 onboarding 面。
+- OnboardingCard.vue 零生产引用=未接线组件（当前不可达），新用户实际没有 onboarding 面。
