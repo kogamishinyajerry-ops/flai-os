@@ -19,7 +19,8 @@
 
 **总貌**：`backend/app/governance/` 五模块齐备（eval_runner 1027 行 / eval_worker 208 /
 promotion 1131 / curation 649 / signer_provenance 163），HTTP 面在
-`backend/app/api/governance.py`（8 端点）。#1 票四大块的对账结论——**三块已闭环（票已关），
+`backend/app/api/governance.py`（10 端点：评测入队/列表/单条/快照句柄、样本固化、
+sample 认可、晋升、晋升记录×2、curation 计数）。#1 票四大块的对账结论——**三块已闭环（票已关），
 T3 代码已落地但票未关，T5 未做**：
 
 | #1 子项 | 票 | 状态 | 实现锚点 |
@@ -53,12 +54,17 @@ T3 代码已落地但票未关，T5 未做**：
 - **结论：T3 五条验收标准在 main 上逐条有实现与测试。票 #3 仍 OPEN 属留痕缺口**
   （票未关、无关闭验收记录），非代码缺口。处置建议见 §四。
 
-**晋升五门**（`promotion.py:549-641`，全部 `is True` 才放行，422 携逐条判定）：
-①transition_supported（仅 L0→L1）②min_eval_coverage（approved≥3 且含失败路径 case、
-broken=0）③eval_evidence（14 条件：run 归属/版本/全绿/digest 咬合/case_results 与快照
-approved 集一一对应/快照 handle 绑定不可变内容/身份一致/时间线）④changelog_nonempty
-⑤feedback_channel（如实标注「平台级提供，不冒充 per-agent 验证」）+
-manual_confirmation（`exception_paths_handled is True` 且 signer 复核通过）。
+**晋升门**（`_PROMOTION_GATE_CHECKS` 七项，`promotion.py:58-67`；全部 `is True` 才放行，
+422 携逐条判定）。运行时先判六项：①transition_supported（仅 L0→L1）
+②min_eval_coverage（approved≥3 且含失败路径 case、broken=0）③eval_evidence
+（14 条件：run 归属/版本/全绿/digest 咬合/case_results 与快照 approved 集一一对应/
+快照 handle 绑定不可变内容/身份一致/时间线）④changelog_nonempty ⑤feedback_channel
+（如实标注「平台级提供，不冒充 per-agent 验证」）⑥manual_confirmation
+（`exception_paths_handled is True` 且 signer 复核通过）。六项全过后进入快照发布，
+写入第七项 **package_snapshot**（promotion.py:992-1002：最终门禁、审计记录、Registry
+与 Runtime 绑定同一完整包快照的 contract/digest/file_count，同步刷新复核
+coverage/evidence/changelog）；启动 attestation 复核历史记录时要求七项齐全且
+逐项 ok is True（`_promotion_record_attests`，promotion.py:296-383）。
 通过后 agent.yaml 行级手术（newline 保真）+ changelog 追加 + 补偿式回滚
 （promotion.py:769-795，绝不留「yaml 已 L1 但无审计记录」半提交）。
 
@@ -214,7 +220,7 @@ clay=正在发生（唯一活性色）· amber=未核/待你签发 · teal=人�
 | ③ 开工确认 | 点「按方案开工」 | **人门 1**：开工确认按钮本身（ADR-0033 三道人门之一）；代际钉扎/幂等 operation_id 后台 | 前置（按钮）+ 后台 | ADR-0033「代际钉扎、原子创建与恢复」节 |
 | ④ 执行中 | 等任务跑 | 编队行状态词/秒表（clay 工作态）；成员 amber「审阅签发 →」在成员进 waiting_review 时出现；附件密级判定后台 | 前置（状态）+ 后台（密级） | `GuidePage.vue:253-269`；`classification_gate.py` |
 | ⑤ 进 waiting_review | 任务待人签 | **状态来找人最强触发**：StatusDock amber pill「✍ 待你签发 N」+ 浏览器 title 徽章「(N 待签)」+ 翻转回声 toast；inbox 待签组置顶；今日页「待你签发」版块 | **前置**（不请自来） | `StatusDock.vue:5-7,46,87-107`；`titleBadge.js:11`；`StatusCenter.vue:34-54`；`TodayPage.vue:42-78` |
-| ⑥ 签发面（peek 速览） | 点 pill/inbox/今日页进 peek | 内联签发卡（背书句/签发人记名/授权链/二次确认 teal/先看后签禁门）；产物截断披露；敏感声明；TaskJourney「含 N 次 mock」；**缺 VerificationCard——地板句与核验三面不在此面**（见空白 W1） | 前置（进 peek 即见） | `StatusCenter.vue:199-213`；缺卡见 `:100-233` |
+| ⑥ 签发面（peek 速览） | 点 dock→inbox 待签行、或 GuidePage「审阅签发 →」进 peek（dock toast/今日页待签卡走完整页⑦） | 内联签发卡（背书句/签发人记名/授权链/二次确认 teal/先看后签禁门）；产物截断披露；敏感声明；TaskJourney「含 N 次 mock」；**缺 VerificationCard——地板句与核验三面不在此面**（见空白 W1） | 前置（进 peek 即见） | `StatusCenter.vue:199-213`；缺卡见 `:100-233`；入口分路 `StatusDock.vue:87-105`、`TodayPage.vue:454-456` |
 | ⑦ 签发面（完整页） | /tasks/:id | 固定顺序：产物段（「放行前请先审阅」）→ **VerificationCard 核验三面+诚实地板句** → 依据段（findings 计数/零依据警示/密级遮蔽）→ 签发卡（同 peek 要素）→ 知识引用链 | 前置（页面本体） | `TaskDetail.vue:124-253`；`VerificationCard.vue:70-72` |
 | ⑧ 批准/驳回后 | 确认签发 | teal 人签 toast（两口径见 W4）+ burstSigned 迸发；signoffText「✓ 由 X 批准放行」；completed 灯恒中性；驳回=review_rejected→failed 红 | 前置 | `format.js:238-239`；`format.js:12-18,33-39` |
 | ⑨ 敏感材料命中 | 上传敏感附件/任务涉敏 | 创建时点 clearance 门（中性拒绝文案）；密级 title（hover）；peek/TaskDetail 敏感声明「◆ 敏感数据任务…」；依据〔按密级隐藏〕遮蔽行；敏感行键盘停点 | 后台（门）+ 按需（title）+ 前置（声明/遮蔽行） | ADR-0030 §3；`StatusCenter.vue:116-120`；`TaskDetail.vue:30-33`；`taskEvidence.js:39-41` |
@@ -226,11 +232,15 @@ clay=正在发生（唯一活性色）· amber=未核/待你签发 · teal=人�
 
 ### 浮现空白与不一致观察（触发面设计的直接输入）
 
-- **W1（最重）：peek 签发路径缺 VerificationCard 与地板句。** StatusCenter peek 是完整
-  人签路径（背书句/授权链/二次确认齐备），但模板无 VerificationCard
-  （`StatusCenter.vue:100-233`）——从 dock pill、inbox、今日页、「审阅签发 →」进入的
-  签发**全部走 peek**，这条主路径上看不到 #36 归位的诚实地板句，也看不到工具 mock
-  计数/签发口播三态。「诚实标记归位批准/授权面」在最高频签发面上有洞。
+- **W1（最重）：StatusCenter peek 签发路径缺 VerificationCard 与地板句。** peek 内联签发卡
+  是完整人签路径（背书句/授权链/二次确认齐备），但模板无 VerificationCard
+  （`StatusCenter.vue:100-233`）。走 peek 的入口=StatusCenter inbox 待签行与
+  GuidePage「审阅签发 →」CTA；**其余签发入口走完整页（有 VerificationCard）**——
+  dock 本体点击开 inbox（`StatusDock.vue:4-5`）、dock 回声 toast 与今日页待签卡
+  直进 `/tasks/:id`（`StatusDock.vue:87-105`、`TodayPage.vue:454-456`）。
+  即：#36 归位的诚实地板句与核验三面（工具 mock 计数/签发口播三态）在 peek 这条
+  签发面上缺席，「诚实标记归位批准/授权面」未覆盖全部签发入口。（无使用频次埋点，
+  「peek 与完整页哪条更高频」不作断言。）
 - **W2：依据面对话路径默认不可见。** T5 chip/拒答拍/withheld 标记全收在 route-disclosure
   折叠 details 内；用户不点「查看路由依据与边界」则全程零依据信号——这正是「隐藏」的
   现状极端形态：隐藏=不可见，需要触发规则让它在工程语境上浮（§三 R-C）。
@@ -349,7 +359,7 @@ clay=正在发生（唯一活性色）· amber=未核/待你签发 · teal=人�
 1. **#3 票处置**：代码已实现并有测试，票仍 OPEN——关闭 or 补验收留痕？（本票不代办）
 2. **W1（peek 缺 VerificationCard/地板句）**：是否立小批施工票把 VerificationCard
    （或等价诚实块）复用进 StatusCenter peek 签发面？属「诚实标记归位批准/授权面」的
-   补齐，建议优先。
+   入口补齐（完整页已有，peek 缺），建议优先。
 3. **触发-浮现规则定稿**：§三候选集（R-A…R-G）哪些成立、R-C 的信号边界
    （只用确定性信号？）、R-E 的密级可见面提示做不做——全部留 owner 裁。
 4. **W5（VerificationCard 渲染窗含 failed）**：地板句在失败报告面的去留
