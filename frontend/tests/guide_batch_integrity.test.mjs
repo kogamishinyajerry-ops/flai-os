@@ -149,7 +149,7 @@ test("Guide renders reuse only inside the existing plan card and binds it to one
   const planEnd = guideSource.indexOf("<!-- 垂类问答依据卡", planStart);
   const planSource = guideSource.slice(planStart, planEnd);
   assert.ok(planStart >= 0 && planEnd > planStart);
-  assert.equal((planSource.match(/按方案开工/g) || []).length, 1);
+  assert.equal((planSource.match(/按方案开始/g) || []).length, 1);
   assert.doesNotMatch(planSource, /<input\b|<textarea\b|<select\b|<form\b|contenteditable=/);
 });
 
@@ -164,7 +164,7 @@ test("非法 Skill 复用引用显式 amber 阻断整批开工，不静默降级
   assert.match(guideSource, /function skillReuseStateForPlan\(plan\)/);
   assert.match(
     guideSource,
-    /planHasInvalidSkillReuse\(m\.recommendation\)[\s\S]*复用证据无法核验，本次禁止开工/,
+    /planHasInvalidSkillReuse\(m\.recommendation\)[\s\S]*复用证据无法核验，本次禁止开始/,
   );
   assert.match(
     guideSource,
@@ -176,7 +176,7 @@ test("非法 Skill 复用引用显式 amber 阻断整批开工，不静默降级
   );
   assert.match(
     guideSource,
-    /v-(?:else-)?if="planHasInvalidSkillReuse\(m\.recommendation\)"[\s\S]*继续对话让系统重新编排/,
+    /v-(?:else-)?if="planHasInvalidSkillReuse\(m\.recommendation\)"[\s\S]*继续对话让系统重新安排/,
   );
 });
 

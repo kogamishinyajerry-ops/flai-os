@@ -67,16 +67,16 @@ def seg_assertions(page, tag: str) -> None:
         f"heads={heads.count()} fold={fold.count()} divider={divider.count()}",
     )
     check(
-        f"{tag} A1 中段默认折：「▸ 3 轮往来 · 工作段 2」",
+        f"{tag} A1 中段默认折：「▸ 3 轮往来 · 第 2 段」",
         fold.count() == 1
         and "3 轮往来" in fold_text
-        and "工作段 2" in fold_text
+        and "第 2 段" in fold_text
         and fold_text.strip().startswith("▸"),
         fold_text,
     )
     check(
-        f"{tag} A1 当前段分隔线（工作段 3）",
-        divider.count() == 1 and "工作段 3" in div_text,
+        f"{tag} A1 当前段分隔线（第 3 段）",
+        divider.count() == 1 and "第 3 段" in div_text,
         div_text,
     )
     folded = page.locator(".bubble-row.seg-folded")

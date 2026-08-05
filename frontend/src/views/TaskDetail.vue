@@ -84,11 +84,11 @@
             重跑自 <span class="num-token">{{ task.retry_of }}</span>
           </router-link>
         </template>
-        <!-- 批七 §1.6 接力血缘行：depends_on 忠实投影（上游名经任务/名册解析，
+        <!-- 批七 §1.6 交接血缘行：depends_on 忠实投影（上游名经任务/名册解析，
              解析失败回退 id 切片诚实不编）；与 retry_of 同区同语法。 -->
         <template v-if="relayLineage.length">
           <span class="ctx-dot">·</span>
-          <span class="ctx-relay">接力自：<router-link
+          <span class="ctx-relay">交接自：<router-link
             v-for="(l, li) in relayLineage"
             :key="l.id"
             class="ctx-retry-link"
@@ -105,20 +105,27 @@
         :model-calls-error="modelCallsError"
       />
 
+      <!-- P1-2 异常路径分层：人话摘要前置（el-alert title），原始 error_message
+           逐字保留进可展开折叠，只分层不删信息。 -->
       <el-alert
         v-if="task.error_message"
         type="error"
-        :title="task.error_message"
+        title="任务执行失败——失败原因已如实保留，展开查看技术细节。"
         show-icon
         :closable="false"
         class="section"
-      />
+      >
+        <details class="error-disclosure">
+          <summary>查看技术细节</summary>
+          <pre class="error-disclosure__body">{{ task.error_message }}</pre>
+        </details>
+      </el-alert>
 
       <!-- 失败不是死胡同，但也不把工程师送进参数表。回到原对话，用文字或附件
-           说明失败现象，由系统重新编排；绝不自动重跑。 -->
+           说明失败现象，由系统重新安排；绝不自动重跑。 -->
       <div v-if="task.status === 'failed'" class="retry-row">
         <el-button plain @click="retryAsNew">回到对话说明问题</el-button>
-        <span class="retry-hint">直接补充文字或附件，系统结合原会话重新编排——平台不会自动重跑。</span>
+        <span class="retry-hint">直接补充文字或附件，系统结合原会话重新安排——平台不会自动重跑。</span>
       </div>
 
       <!-- 产物在主叙事列（签发前把要签的东西摆在眼前，放在「动作」之前——先看
@@ -540,7 +547,7 @@ const approveBtnEl = ref(null);
 const sealAnimate = ref(false);
 let offTransition = null;
 
-// ── 批七 §1.6：依据段 + 接力血缘 ─────────────────────────────────────────
+// ── 批七 §1.6：依据段 + 交接血缘 ─────────────────────────────────────────
 const agentNamesStore = useAgentNames();
 
 // findings/refusals 从已拉取的 JSON 产物解析（§2.2 输出契约惯例）；无匹配
@@ -589,7 +596,7 @@ const evidenceRequiredMissing = computed(() => {
   return evidenceFindings.value.length === 0;
 });
 
-// 接力血缘（depends_on 已在 GET 投影）：上游任务名逐个轻量解析（≤32，常态
+// 交接血缘（depends_on 已在 GET 投影）：上游任务名逐个轻量解析（≤32，常态
 // 1-2 个）；拉取失败回退 id 切片（绝不编名字）。
 const relayLineage = ref([]);
 watch(
@@ -1447,8 +1454,20 @@ onUnmounted(() => {
 .ctx-retry-link:hover {
   color: var(--clay);
 }
-/* 批七 §1.6：接力血缘 + 依据段 */
+/* 批七 §1.6：交接血缘 + 依据段 */
 .ctx-relay { color: var(--ink-faint); }
+/* P1-2 异常路径分层（统一契约：details.error-disclosure，全票同一 class 名）：
+   摘要行照常，原始技术细节收进可展开折叠，pre 保留原文换行。 */
+.error-disclosure { margin-top: 6px; font-size: 12.5px; }
+.error-disclosure summary { cursor: pointer; }
+.error-disclosure__body {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
 /* 批八 withheld：中性虚线弱化（遮蔽是策略非异常，不占 amber/红） */
 .evidence-withheld {
   display: inline-block;

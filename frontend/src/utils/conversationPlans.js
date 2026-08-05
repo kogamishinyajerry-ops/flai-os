@@ -487,7 +487,7 @@ export function automaticTaskName(plan, agent, index) {
   if ((plan?.agents || []).length <= 1) return goal.slice(0, 200);
   const unit = normalizedLabel(
     agent?.role || agent?.agent_name,
-    `执行单元 ${Number(index) + 1}`,
+    `成员 ${Number(index) + 1}`,
   );
   return `${goal} · ${unit}`.slice(0, 200);
 }

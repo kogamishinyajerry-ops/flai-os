@@ -2,7 +2,7 @@
 
 把「工程师零填表、执行零跳页」纳入回归网：
   ① 导引把自然语言自动路由成完整的两 Agent 方案，细节默认折叠；
-  ② 全方案 ready 后只出现一个「按方案开工」主按钮，点击前任务数仍为 0；
+  ② 全方案 ready 后只出现一个「按方案开始」主按钮，点击前任务数仍为 0；
   ③ 人确认一次后，系统通过 batch 全有全无地原地创建两项任务，并保留依赖；
   ④ URL 始终为 /?c=conv_xxx，督战状态在原对话轴亮起，无 /tasks/new 字段墙；
   ⑤ 夹具把首项任务翻成 completed+产物 → 轮询窗口内「N 件产物」锚点行长出
@@ -187,8 +187,8 @@ with sync_playwright() as p:
     plan_card = page.locator(".plan-card")
     disclosure = plan_card.locator(".route-disclosure")
     check("①对话流出方案卡+拿到会话 id", bool(conv_id))
-    check("①自动路由摘要常驻、2 个执行单元细节默认折叠",
-          "已自动编排 · 2 个执行单元" in plan_card.locator(".route-summary").inner_text()
+    check("①自动路由摘要常驻、2 位成员细节默认折叠",
+          "已自动安排 · 2 位成员" in plan_card.locator(".route-summary").inner_text()
           and disclosure.get_attribute("open") is None
           and plan_card.locator(".agent-card").first.is_visible() is False)
     check("①壳层零手工编排/字段表",
@@ -200,10 +200,10 @@ with sync_playwright() as p:
     page.screenshot(path=str(SHOTS / "1_plan_card.png"), full_page=True)
 
     # ② 全方案 ready 才只给一个主按钮；渲染不等于开工。
-    open_btn = plan_card.get_by_role("button", name="按方案开工")
+    open_btn = plan_card.get_by_role("button", name="按方案开始")
     expect(open_btn).to_be_visible(timeout=8000)
     before_tasks = API.get(f"/api/conversations/{conv_id}/tasks").json()
-    check("②全方案 ready：只有一个『按方案开工』主按钮",
+    check("②全方案 ready：只有一个『按方案开始』主按钮",
           plan_card.locator(".plan-foot .cta-clay").count() == 1)
     check("②按钮渲染不等于开工：点击前任务数=0", len(before_tasks) == 0)
 

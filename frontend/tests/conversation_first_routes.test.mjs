@@ -58,7 +58,7 @@ test("任务台、协作会话与能力门户不再暴露创建表单或手工 A
   assert.doesNotMatch(portalSource, /<SchemaForm|创建任务|开始对话|召集此团队/);
 });
 
-test("失败任务重试回到原对话交代问题，由系统重新编排", () => {
+test("失败任务重试回到原对话交代问题，由系统重新安排", () => {
   assert.deepEqual(
     buildRetryRoute({ id: "task_1", conversation_id: "conv_1" }),
     { path: "/", query: { c: "conv_1", retry_of: "task_1" } },

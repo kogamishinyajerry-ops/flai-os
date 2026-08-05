@@ -133,7 +133,7 @@ const ROUTING_GUIDE = {
     },
     {
       role: "assistant",
-      content: "我已经整理好协作方案。执行前请核对目标，其余能力由系统在后台编排。",
+      content: "我已经整理好协作方案。执行前请核对目标，其余能力由系统在后台安排。",
       recommendation: ROUTING_RECOMMENDATION,
       createdAt: "2026-07-31T06:28:12Z",
       fresh: true,
@@ -932,27 +932,27 @@ export const UI_ACCEPTANCE_CASES = [
   acceptanceCase({
     id: "landing-desktop",
     label: "桌面 · 起手页",
-    summary: "单一文字/附件入口与后台编排承诺",
+    summary: "单一文字/附件入口与后台安排承诺",
     viewport: VIEWPORTS.desktop,
     guide: LANDING_GUIDE,
     reviewPoints: [
       "首屏是否在 900px 高度内保持足够内容容量",
       "首屏是否只有一个主任务和一个主输入",
-      "文字与附件入口是否清晰且没有执行单元或字段选择",
-      "后台编排与人工确认边界是否一句说清",
+      "文字与附件入口是否清晰且没有成员或字段选择",
+      "后台安排与人工确认边界是否一句说清",
     ],
   }),
   acceptanceCase({
     id: "routing-desktop",
     label: "桌面 · 自动路由待确认",
-    summary: "编排摘要常驻，执行单元与输入依据按需披露",
+    summary: "安排摘要常驻，成员与输入依据按需披露",
     viewport: VIEWPORTS.desktop,
     guide: ROUTING_GUIDE,
     reviewPoints: [
-      "默认是否只展示目标、解释摘要与一个开工动作",
+      "默认是否只展示目标、解释摘要与一个开始动作",
       "执行能力是否没有手工选择入口",
       "路由依据与边界是否默认折叠且可键盘展开",
-      "单执行单元与多执行单元是否走同一原地确认链",
+      "单成员与多成员是否走同一原地确认链",
     ],
   }),
   acceptanceCase({
@@ -994,13 +994,13 @@ export const UI_ACCEPTANCE_CASES = [
   acceptanceCase({
     id: "routing-mobile",
     label: "移动端 · 自动路由待确认",
-    summary: "375px 下的折叠编排依据与单一治理动作",
+    summary: "375px 下的折叠安排依据与单一治理动作",
     viewport: VIEWPORTS.mobile,
     guide: ROUTING_GUIDE,
     reviewPoints: [
       "默认折叠态是否只保留目标、摘要与主动作",
       "展开路由依据后是否仍无横向溢出",
-      "折叠控件与开工按钮是否守住 44px 触控目标",
+      "折叠控件与开始按钮是否守住 44px 触控目标",
       "composer 是否始终只有文字与附件入口",
     ],
   }),
@@ -1014,7 +1014,7 @@ export const UI_ACCEPTANCE_CASES = [
     reviewPoints: [
       "地图是否默认收起且不分叉到新页面",
       "摘要是否只说明按需披露，不提前冒充完整地图",
-      "主对话、单一 composer 与开工动作是否保持原位",
+      "主对话、单一 composer 与开始动作是否保持原位",
     ],
   }),
   acceptanceCase({
@@ -1112,19 +1112,19 @@ export const UI_ACCEPTANCE_CASES = [
     guide: SKILL_REUSE_GUIDE,
     reviewPoints: [
       "复用来源是否只占用既有方案摘要和按需披露区",
-      "是否仍只有一个按方案开工主动作，没有 Skill 选择或复用按钮",
-      "复用精确摘要是否在开工与运行时继续由后端核对",
+      "是否仍只有一个按方案开始主动作，没有 Skill 选择或复用按钮",
+      "复用精确摘要是否在开始与运行时继续由后端核对",
     ],
   }),
   acceptanceCase({
     id: "skill-reuse-invalid-desktop",
     label: "桌面 · 复用证据待核",
-    summary: "非法 Skill 引用显式 amber 阻断，绝不静默按无复用方案开工",
+    summary: "非法 Skill 引用显式 amber 阻断，绝不静默按无复用方案开始",
     viewport: VIEWPORTS.desktop,
     guide: SKILL_REUSE_INVALID_GUIDE,
     reviewPoints: [
       "非法引用是否出现 amber 明示而不是消失",
-      "按方案开工是否被替换为继续对话重新编排",
+      "按方案开始是否被替换为继续对话重新安排",
       "验收边界内是否保持零任务 POST",
     ],
   }),

@@ -247,7 +247,7 @@ with sync_playwright() as playwright:
     login_context(context, BASE)
     page = context.new_page()
 
-    # Slice 1：真实登录 → 主会话附件/自动路由 → 人确认开工 → JobRunner 待签。
+    # Slice 1：真实登录 → 主会话附件/自动路由 → 人确认开始 → JobRunner 待签。
     page.goto(BASE + "/", wait_until="networkidle")
     check(
         "①真实登录进入生产主会话（非 UI Lab）",
@@ -280,16 +280,16 @@ with sync_playwright() as playwright:
         first_user_messages[-1].get("content") if first_user_messages else None
     )
     check(
-        "②附件进入真实会话且系统自动路由为单一 FTA 执行单元",
+        "②附件进入真实会话且系统自动路由为单一 FTA 成员",
         first_conversation_response.status_code == 200
         and f"c={conversation_id}" in page.url
         and attachment.name in page.locator(".bubble-row.user").last.inner_text()
         and first_user_content == REQUEST_TEXT
         and bool(bound_file_id)
-        and "已自动编排 · 1 个执行单元" in plan_card.locator(".route-summary").inner_text(),
+        and "已自动安排 · 1 位成员" in plan_card.locator(".route-summary").inner_text(),
         page.url,
     )
-    start_button = plan_card.get_by_role("button", name="按方案开工", exact=True)
+    start_button = plan_card.get_by_role("button", name="按方案开始", exact=True)
     expect(start_button).to_be_visible(timeout=8_000)
     check(
         "③开工前任务为零且唯一主动作由人触发",

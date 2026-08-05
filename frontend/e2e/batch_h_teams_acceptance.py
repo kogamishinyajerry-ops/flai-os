@@ -6,7 +6,7 @@ O9 后端半由 test_b8_teams.py 承接）：
   O2 对账 fail-closed（G2 disable）：整单 422 + 席位清单 + 零任务写入 + 门户
      预览置灰；
   O2b G1（卸载）/G3（翻 interactive）/G5（席位不对齐）逐条专属证明；
-  O3 主对话唯一「按方案开工」成功链：after→depends_on 真 task_id、上游 queued、
+  O3 主对话唯一「按方案开始」成功链：after→depends_on 真 task_id、上游 queued、
      下游滞留 created → resolver 接力 completed；
   O3b 乱序提交（API 逆 seq 序）→ 依赖边仍正确（seq 升序重排契约，auditor F3）；
   O4 版本漂移：0.x-minor 拒 + 清单指名；patch 放行 + warnings 列名；
@@ -248,10 +248,10 @@ with sync_playwright() as p:
     page.keyboard.press("Enter")
     plan_card = page.locator(".plan-card").last
     expect(plan_card).to_be_visible(timeout=15000)
-    start_btn = plan_card.get_by_role("button", name="按方案开工", exact=True)
+    start_btn = plan_card.get_by_role("button", name="按方案开始", exact=True)
     expect(start_btn).to_be_visible(timeout=8000)
     check(
-        "O1a 有方案仍无手工存团队入口（唯一主 CTA=按方案开工）",
+        "O1a 有方案仍无手工存团队入口（唯一主 CTA=按方案开始）",
         page.locator(".save-team-btn").count() == 0
         and start_btn.count() == 1,
     )
@@ -399,7 +399,7 @@ with sync_playwright() as p:
     page.keyboard.press("Enter")
     plan_card = page.locator(".plan-card").last
     expect(plan_card).to_be_visible(timeout=15000)
-    start_btn = plan_card.get_by_role("button", name="按方案开工", exact=True)
+    start_btn = plan_card.get_by_role("button", name="按方案开始", exact=True)
     expect(start_btn).to_be_visible(timeout=8000)
     run_conv_id = page.url.split("c=")[-1] if "c=" in page.url else ""
     before_conv_tasks = API.get(f"/api/conversations/{run_conv_id}/tasks").json()
@@ -507,7 +507,7 @@ with sync_playwright() as p:
         expect(archived_plan).to_be_visible(timeout=8000)
         check(
             "O7b 会话归档后无开工、手工存团队/召集或字段控件",
-            archived_plan.get_by_role("button", name="按方案开工", exact=True).count() == 0
+            archived_plan.get_by_role("button", name="按方案开始", exact=True).count() == 0
             and page.locator(".save-team-btn, .summon-dialog, .seat-block, .schema-form").count() == 0
             and archived_plan.locator("input, textarea, select, form, [contenteditable]").count() == 0,
         )

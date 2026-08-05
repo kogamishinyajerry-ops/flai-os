@@ -55,7 +55,7 @@
         </div>
         <div class="sess-progress">
           <div class="prog-num">{{ summonedCount }} / {{ rosterAgents.length }}</div>
-          <div class="prog-label">已召集 Agent</div>
+          <div class="prog-label">已就位 Agent</div>
           <!-- 批七 §1.5：hero 进度句换 squad.js 分组计数句（O7 收束假绿禁令同源）。 -->
           <div v-if="heroSquadLine" class="prog-sub">{{ heroSquadLine }}</div>
           <div v-else class="prog-sub">尚无成员任务</div>
@@ -80,10 +80,10 @@
           <p v-if="plan.analysis" class="bp-line">{{ plan.analysis }}</p>
           <p v-if="plan.workflow" class="bp-line"><span class="bp-tag">协作方式</span>{{ plan.workflow }}</p>
           <!-- 批七 §1.5：依赖拓扑一句话（depends_on 拓扑序，不画 DAG 图/泳道）。 -->
-          <p v-if="relayOrderLine" class="bp-line"><span class="bp-tag">接力顺序</span>{{ relayOrderLine }}</p>
+          <p v-if="relayOrderLine" class="bp-line"><span class="bp-tag">交接顺序</span>{{ relayOrderLine }}</p>
         </div>
 
-        <!-- 批七 §1.5 三组 roster：①正在进行=展开卡占面积 ②等待接力=单行收纳
+        <!-- 批七 §1.5 三组 roster：①正在进行=展开卡占面积 ②等待交接=单行收纳
              （空心灯+灰字）③已完成=折叠单行（过去式+用时+依据缩略+未读环）；
              未召集成员保留既有卡与召集动作（第四段，蓝图召集语义不变）。 -->
         <div v-if="groupedMembers.active.length" class="rg-head">
@@ -99,14 +99,14 @@
                 <span class="member-pill" :style="{ '--member-cat': categoryColor(a.category), background: categoryColor(a.category) + '18' }">
                   {{ categoryLabel(a.category) }}
                 </span>
-                <span class="member-state summoned">已召集 · <span class="num-token">{{ tasksFor(a).length }}</span> 个任务</span>
+                <span class="member-state summoned">已就位 · <span class="num-token">{{ tasksFor(a).length }}</span> 个任务</span>
               </div>
               <p v-if="a.role" class="member-role"><strong>分工：</strong>{{ a.role }}</p>
 
               <!-- 成员任务（到席灯 + 状态 + 详情链接；waiting_review 醒目提示放行）；
                    chip-lastword（B2）：该任务的「最近动态」=最后一条事件的 message 原文
-                   （可能是机械上报文案，不承诺第一人称叙事；仅前 5 个已召集成员取，
-                   见 lastWordTargets）。批七：等待接力条目状态词换人话、灯空心不脉动。 -->
+                   （可能是机械上报文案，不承诺第一人称叙事；仅前 5 个已就位成员取，
+                   见 lastWordTargets）。批七：等待交接条目状态词换人话、灯空心不脉动。 -->
               <div class="task-chips">
                 <div v-for="t in tasksFor(a)" :key="t.id" class="chip-group">
                   <div
@@ -117,7 +117,7 @@
                     @keydown.enter.self.prevent="goTask(t)"
                     @keydown.space.self.prevent="goTask(t)"
                   >
-                    <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status), 'is-hollow': chipStatusWord(t) === '等待接力' }" :style="{ background: chipStatusWord(t) === '等待接力' ? 'transparent' : taskLampColor(t.status) }"></span>
+                    <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status), 'is-hollow': chipStatusWord(t) === '等待交接' }" :style="{ background: chipStatusWord(t) === '等待交接' ? 'transparent' : taskLampColor(t.status) }"></span>
                     <span class="chip-name">{{ taskDisplayName(t, agentNames.map) }}</span>
                     <!-- chip 时钟（3-lens 可用性镜头 P2）：同 Agent 分组内多个缺名
                          任务主名必然相同，时钟是 chip 级唯一消歧锚。 -->
@@ -137,7 +137,7 @@
         </div>
 
         <div v-if="groupedMembers.waiting.length" class="rg-head">
-          <span class="rg-title">等待接力 · <span class="num-token">{{ groupedMembers.waiting.length }}</span></span>
+          <span class="rg-title">等待交接 · <span class="num-token">{{ groupedMembers.waiting.length }}</span></span>
         </div>
         <div
           v-for="a in groupedMembers.waiting"
@@ -182,16 +182,16 @@
                 <span class="member-pill" :style="{ '--member-cat': categoryColor(a.category), background: categoryColor(a.category) + '18' }">
                   {{ categoryLabel(a.category) }}
                 </span>
-                <span class="member-state pending">尚未召集</span>
+                <span class="member-state pending">尚未就位</span>
               </div>
               <p v-if="a.role" class="member-role"><strong>分工：</strong>{{ a.role }}</p>
               <!-- 未进入执行的席位只显示状态，不在成员卡上暴露创建表单或手工
                    Agent 启动。缺失信息统一回原对话，以文字/附件自然补充。 -->
               <div v-if="conversation.status === 'active'" class="member-action">
-                <span class="member-hint">等待系统从主对话获得足够信息后自动编排。</span>
+                <span class="member-hint">等待系统从主对话获得足够信息后自动安排。</span>
               </div>
               <div v-else class="member-action">
-                <span class="member-hint">会话已归档，未召集——如需继续，请从智能导引开启新协作。</span>
+                <span class="member-hint">会话已归档，未就位——如需继续，请从智能导引开启新协作。</span>
               </div>
             </div>
           </div>
@@ -201,7 +201,7 @@
           v-if="conversation.status === 'active' && groupedMembers.unsummoned.length"
           class="clarify-return"
         >
-          <span>还有协作环节需要更多上下文。请直接描述情况或上传附件，系统会重新编排。</span>
+          <span>还有协作环节需要更多上下文。请直接描述情况或上传附件，系统会重新安排。</span>
           <el-button type="primary" plain @click="returnToConversation">回到对话补充信息</el-button>
         </div>
       </template>
@@ -215,7 +215,7 @@
         <div class="block-label">其它归属本会话的任务</div>
         <div class="task-chips">
           <div v-for="t in otherTasks" :key="t.id" :class="['task-chip', { review: t.status === 'waiting_review' }]" role="button" tabindex="0" @click="goTask(t)" @keydown.enter.self.prevent="goTask(t)" @keydown.space.self.prevent="goTask(t)">
-            <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status), 'is-hollow': chipStatusWord(t) === '等待接力' }" :style="{ background: chipStatusWord(t) === '等待接力' ? 'transparent' : taskLampColor(t.status) }"></span>
+            <span class="chip-lamp" :class="{ 'is-pulsing': isWorkState(t.status), 'is-hollow': chipStatusWord(t) === '等待交接' }" :style="{ background: chipStatusWord(t) === '等待交接' ? 'transparent' : taskLampColor(t.status) }"></span>
             <span class="chip-name">{{ taskDisplayName(t, agentNames.map) }}</span>
             <span class="chip-time">{{ sessClock(t.created_at) }}</span>
             <span class="chip-status" :style="{ color: chipStatusColor(t) }">{{ chipStatusWord(t) }}</span>
@@ -281,7 +281,7 @@ function tasksFor(agent) {
 const summonedCount = computed(() => rosterAgents.value.filter((a) => tasksFor(a).length > 0).length);
 const completedCount = computed(() => memberTasks.value.filter((t) => t.status === "completed").length);
 const otherTasks = computed(() => memberTasks.value.filter((t) => !rosterAgentIds.value.has(t.agent_id)));
-// 待签发常驻 pill：waiting_review 任务数（文案刻意避开"尚未召集"/"待人工放行"既有词，不占用锚点断言位）。
+// 待签发常驻 pill：waiting_review 任务数（文案刻意避开"尚未就位"/"待人工放行"既有词，不占用锚点断言位）。
 const waitingReviewCount = computed(() => memberTasks.value.filter((t) => t.status === "waiting_review").length);
 
 // ── 批七 §1.5 三组 roster + hero 分组计数句 ─────────────────────────────────
@@ -302,8 +302,8 @@ function focusTaskFor(a) {
 // 成员按**全部任务**的相分组（Codex R0 P1：会话允许同一 Agent 多任务，只看
 // 最新一条会让「新任务已完成、旧依赖任务还悬着」的成员被折进已完成，把在办
 // 工作藏起来）：①正在进行=任一任务未收官且非纯等待（含排队/待签发——人还有
-// 事要跟）②等待接力=未收官的全是 waiting_upstream 派生态 ③已完成=**全部**
-// 任务真终态（含失败/取消如实过去式）④未召集（既有卡与召集动作原样保留）。
+// 事要跟）②等待交接=未收官的全是 waiting_upstream 派生态 ③已完成=**全部**
+// 任务真终态（含失败/取消如实过去式）④未就位（既有卡与召集动作原样保留）。
 const groupedMembers = computed(() => {
   const active = [];
   const waiting = [];
@@ -346,7 +346,7 @@ function durTextOf(t) {
   return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`;
 }
 
-// 等待接力单行灰字：上游名解析；上游真失败 → 中性暂停句（非红）。
+// 等待交接单行灰字：上游名解析；上游真失败 → 中性暂停句（非红）。
 // 代表任务=focusTaskFor（悬着的那条，而非可能已收官的最新条）。
 function waitingLineFor(a) {
   const t = focusTaskFor(a);
@@ -354,10 +354,10 @@ function waitingLineFor(a) {
   const byId = new Map(memberTasks.value.map((x) => [x.id, x]));
   const ups = (t.depends_on || []).map((d) => byId.get(d)).filter(Boolean);
   if (ups.some((u) => u.status === "failed" || u.status === "cancelled")) {
-    return "前序失败，接力已暂停 · 详情→";
+    return "前序失败，交接已暂停 · 详情→";
   }
   const names = ups.map((u) => agentNames.map[u.agent_id] || u.agent_id.slice(0, 12));
-  return `等待〈${names.length ? names.join("、") : "上游成员"}〉的产物 · 就绪后自动接力`;
+  return `等待〈${names.length ? names.join("、") : "上游成员"}〉的产物 · 就绪后自动交接`;
 }
 
 // 已完成折叠单行：过去式+用时（时态即状态；失败玫红词只给真失败）。
@@ -401,10 +401,10 @@ function doneEvidenceText(a) {
   return { text: withheld ? `${base}·另有密级隐藏项` : base, unverified: s.unverified };
 }
 
-// task-chips 状态词映射（§1.5）：等待接力条目——该态 chip-lamp 不脉动（created
+// task-chips 状态词映射（§1.5）：等待交接条目——该态 chip-lamp 不脉动（created
 // 本就非工作态）且状态词换人话。
 function chipStatusWord(t) {
-  return memberPhase(t) === "waiting_upstream" ? "等待接力" : statusLabel(t.status);
+  return memberPhase(t) === "waiting_upstream" ? "等待交接" : statusLabel(t.status);
 }
 
 function chipStatusColor(t) {
@@ -438,7 +438,7 @@ function chipActionLabel(status) {
 // 渲染——绝不编造展示内容）。
 const taskLastWord = ref({});
 
-// 上限 5 个已召集成员的任务（按 roster 顺序截断，控住常驻订阅数——常态
+// 上限 5 个已就位成员的任务（按 roster 顺序截断，控住常驻订阅数——常态
 // 1 任务/成员，≤5 条 task channel），超出部分不订阅、不显示动态行（静态
 // 占位=零渲染，不伪造陈旧数据）。
 function lastWordTargets() {
@@ -721,7 +721,7 @@ onUnmounted(() => {
 }
 .rg-line.rg-done { cursor: pointer; }
 .rg-line.rg-done:hover { border-color: var(--hairline); }
-/* 空心灯（等待接力）：1px ink 描边圆，绝无脉动 */
+/* 空心灯（等待交接）：1px ink 描边圆，绝无脉动 */
 .rg-lamp-hollow {
   flex: none;
   width: 8px;
@@ -758,7 +758,7 @@ onUnmounted(() => {
   color: var(--trust-pending);
   border-color: color-mix(in srgb, var(--trust-pending) 45%, transparent);
 }
-/* chip 空心灯（等待接力条目）：不脉动由模板保证（created 非工作态） */
+/* chip 空心灯（等待交接条目）：不脉动由模板保证（created 非工作态） */
 .chip-lamp.is-hollow { box-shadow: inset 0 0 0 1px var(--ink-soft); }
 .member {
   display: flex;
@@ -814,7 +814,7 @@ onUnmounted(() => {
   margin-left: auto;
 }
 .member-state.summoned {
-  /* clay 预算（批次五 C3）：「已召集」是信息态非强调——工作态由 chip 灯承担。 */
+  /* clay 预算（批次五 C3）：「已就位」是信息态非强调——工作态由 chip 灯承担。 */
   color: var(--ink-mid);
 }
 .member-state.pending {

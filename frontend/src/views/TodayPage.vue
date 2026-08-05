@@ -1,6 +1,6 @@
 <template>
   <!-- 今日工作台（批B §一）：开工即看——待签发置顶、进行中一眼可见，
-       版块 3/4/5（今日交付/Agent 动态/团队总量）占位待批B后续任务接入。
+       版块 3/4/5（今日交付/助手动态/团队总量）占位待批B后续任务接入。
        全部数据来自 liveFeed 'tasks' channel（与 StatusCenter/StatusDock 同一份真值，
        全站只此一条该 channel 轮询）。 -->
   <div class="today">
@@ -123,14 +123,14 @@
         <EmptyState v-else variant="data" tier="line" description="今天还没有交付的任务" />
       </section>
 
-      <!-- 版块 4：Agent 动态（4a 本周最近晋升 ≤5 条 + 4b 今日最活跃 Agent top3）。
-           4a 用「本周」框定（与版块5「本周晋升」同一 since 口径），故对
+      <!-- 版块 4：助手动态（4a 本周最近升级 ≤5 条 + 4b 今日最活跃 Agent top3）。
+           4a 用「本周」框定（与版块5「本周升级」同一 since 口径），故对
            listGlobalPromotions 的结果做本地 weekStartMs 过滤而非直接取前 5——
-           否则「本周暂无晋升」空态文案可能在有更早晋升时误判有数据。 -->
+           否则「本周暂无升级」空态文案可能在有更早晋升时误判有数据。 -->
       <section class="today-section">
         <div class="today-section-head">
           <el-icon aria-hidden="true"><TrendCharts /></el-icon>
-          <span>Agent 动态</span>
+          <span>助手动态</span>
         </div>
         <!-- 晋升/统计只在挂载+零点拉取、无轮询——「自动重试中」在此是假声明，
              诚实的「何为」=行内手动重试（批次五 C2）。 -->
@@ -145,7 +145,7 @@
           v-else-if="!recentPromotions.length && !topActiveAgents.length"
           variant="data"
           tier="line"
-          description="今天还没有 Agent 动态"
+          description="今天还没有助手动态"
         />
         <template v-else>
           <div v-if="recentPromotions.length" class="today-list">
@@ -153,13 +153,13 @@
               <el-icon class="today-promo-icon" aria-hidden="true"><Promotion /></el-icon>
               <span class="today-promo-copy">
                 <span class="today-promo-main">
-                  {{ p.agent_id }} 晋升 {{ maturityLabel(p.from_maturity) }} → {{ maturityLabel(p.to_maturity) }}
+                  {{ p.agent_id }} 升级 {{ maturityLabel(p.from_maturity) }} → {{ maturityLabel(p.to_maturity) }}
                 </span>
                 <span class="today-promo-sub">{{ formatRelativeTime(p.created_at) }} · 签发人 {{ p.confirmed_by }}</span>
               </span>
             </div>
           </div>
-          <EmptyState v-else variant="data" tier="line" description="本周暂无晋升" />
+          <EmptyState v-else variant="data" tier="line" description="本周暂无升级" />
         </template>
 
         <!-- 今日最活跃：数据源是本地 tasks channel，与晋升 API 无关——晋升出错
@@ -203,7 +203,7 @@
       </section>
     </template>
 
-    <div class="today-foot-note">基于最近 100 条任务窗口</div>
+    <div class="today-foot-note">统计口径：最近 100 条任务</div>
   </div>
 </template>
 
@@ -322,9 +322,9 @@ const todayClock = (iso) => formatClockCompact(iso, todayKey.value);
 // curated_cases_total/promotions），此处只做展示映射不再造口径。
 const STAT_DEFS = [
   { key: "tasks_completed", label: "本周完成", icon: Finished },
-  { key: "reviews_approved", label: "本周人签放行", icon: Stamp },
-  { key: "curated_cases_total", label: "累计固化 case", tip: "按仓内固化文件计", icon: Collection },
-  { key: "promotions", label: "本周晋升", icon: TrendCharts },
+  { key: "reviews_approved", label: "本周批准放行", icon: Stamp },
+  { key: "curated_cases_total", label: "累计沉淀案例", tip: "按仓内固化文件计", icon: Collection },
+  { key: "promotions", label: "本周升级", icon: TrendCharts },
 ];
 const visibleStats = computed(() => {
   const s = stats.value;
@@ -334,7 +334,7 @@ const visibleStats = computed(() => {
   return STAT_DEFS.map((d) => ({ ...d, value: s[d.key] })).filter((d) => !(typeof d.value === "number" && d.value === 0));
 });
 
-// 4a 空态文案「本周暂无晋升」要求本地按 weekStartMs 过滤（listGlobalPromotions
+// 4a 空态文案「本周暂无升级」要求本地按 weekStartMs 过滤（listGlobalPromotions
 // 本身是全局最近 N 条，无 since 参数）——直接掐前 5 条在晋升稀疏时会把「本周
 // 之前」的旧晋升误显示成「本周有」，或反过来把「本周确实有」误判成空。
 // Date 对象比较而非字符串比较：created_at 是后端归一化的 '+00:00' 后缀，与
@@ -384,7 +384,7 @@ async function fetchPromotions() {
     promotions.value = await listGlobalPromotions(20);
     promotionsError.value = "";
   } catch (err) {
-    promotionsError.value = err.detail || err.message || "晋升列表不可用";
+    promotionsError.value = err.detail || err.message || "升级列表不可用";
   }
 }
 
@@ -673,7 +673,7 @@ onUnmounted(() => {
   font-size: 13px;
   font-weight: 600;
   color: var(--ink);
-  /* 溢出边界（批次五 C5）：超长晋升标题截断，与同页 today-card-name 同律。 */
+  /* 溢出边界（批次五 C5）：超长升级标题截断，与同页 today-card-name 同律。 */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

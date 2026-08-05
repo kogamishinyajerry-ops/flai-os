@@ -148,7 +148,7 @@ with sync_playwright() as p:
     body = page.locator("body").inner_text()
     row = page.locator(".cl-item", has_text="工作台验收样例任务").first
     lamp_visible = row.locator(".cl-lamp").is_visible()
-    foot_ok = "最近任务窗口" in body  # 诚实脚注：窗口外不虚报
+    foot_ok = "最近 100 条任务真实轮询" in body  # 诚实脚注：窗口外不虚报
     check("②/workbench→/tasks 重定向 + 任务台列表 + 到席灯 + 诚实脚注",
           row.is_visible() and lamp_visible and foot_ok,
           f"row={row.is_visible()} lamp={lamp_visible} foot={foot_ok}")

@@ -7,9 +7,9 @@
   - 账户 tester/Tester#2026（登录走 JSON 编码 POST /api/auth/login；form 编码 422）。
 
 段语义（workSegments，conversationPlans.js:136）：
-  边界 1 = 轮 4「计划」方案卡点「按方案开工」的任务创建戳 → 工作段 2 起；
-  边界 2 = 轮 7「超出已审定」guide 级 refuse 终点 → 工作段 3（当前段）起。
-  中段（工作段 2，轮 5–7 共 3 轮往来）默认折；首段无段头；当前段分隔线。
+  边界 1 = 轮 4「计划」方案卡点「按方案开始」的任务创建戳 → 第 2 段 起；
+  边界 2 = 轮 7「超出已审定」guide 级 refuse 终点 → 第 3 段（当前段）起。
+  中段（第 2 段，轮 5–7 共 3 轮往来）默认折；首段无段头；当前段分隔线。
 
 A1 三段结构+中段默认折      A4 豁免红线（首泡/最新 AI/当前段不折）
 A2 折叠保 DOM 红线          A5 单向展开（展开→切走切回复位）
@@ -54,11 +54,11 @@ ROUNDS = [
     "目标是定位供电完全丧失的根因。",                # 轮3 kind2
     "计划：对双通道供电系统做故障树分析。",          # 轮4 → 方案卡（边界 1 由开工造）
     "补充：转换开关在热浸时也抖动过。",              # 轮5 kind0 ┐
-    "先按既有输入推进，附件后补。",                  # 轮6 kind1 │ 工作段 2（中段）
+    "先按既有输入推进，附件后补。",                  # 轮6 kind1 │ 第 2 段（中段）
     "这件事超出已审定范围，请如实处理。",            # 轮7 refuse=边界 2 ┘
     "根因定位后，处置建议由谁确认口径？",            # 轮8 ┐
     "转换开关抖动的记录我稍后整理成文档。",          # 轮9 │
-    "汇流条的历史检修数据需要补充进来。",            # 轮10 │ 工作段 3（当前段）
+    "汇流条的历史检修数据需要补充进来。",            # 轮10 │ 第 3 段（当前段）
     "发电机 A 与 B 的切换逻辑想再核对一遍。",        # 轮11 │
     "今天先到这里，后续材料齐了我再发起分析。",      # 轮12 ┘
 ]
@@ -127,7 +127,7 @@ def main() -> int:
             if i == 4:
                 page.locator(".plan-card").last.wait_for(state="visible", timeout=10000)
                 # 方案卡唯一主动作：按角色+名字点（绝不用 .open-plan-btn.first）。
-                page.get_by_role("button", name="按方案开工").click()
+                page.get_by_role("button", name="按方案开始").click()
                 # 边界 1=任务创建戳：无 worker，任务滞留 queued/created，轮询到账即可。
                 deadline = time.time() + 10
                 tasks: list[dict] = []
@@ -163,14 +163,14 @@ def main() -> int:
             f"heads={heads.count()} fold={fold.count()} divider={divider.count()}",
         )
         check(
-            "A1 中段默认折：文案「▸ 3 轮往来 · 工作段 2（HH:MM）」",
+            "A1 中段默认折：文案「▸ 3 轮往来 · 第 2 段（HH:MM）」",
             fold.count() == 1
             and "3 轮往来" in fold_text
-            and "工作段 2" in fold_text
+            and "第 2 段" in fold_text
             and fold_text.strip().startswith("▸"),
             fold_text,
         )
-        check("A1 当前段分隔线在场（工作段 3）", divider.count() == 1 and "工作段 3" in div_text, div_text)
+        check("A1 当前段分隔线在场（第 3 段）", divider.count() == 1 and "第 3 段" in div_text, div_text)
         page.screenshot(path=str(SHOTS / "seg_overview_light_1440.png"), full_page=True)
 
         # ══ A2 折叠保 DOM 红线 ═════════════════════════════════════════════

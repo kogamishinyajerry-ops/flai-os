@@ -1,12 +1,12 @@
-"""对话轴「按方案开工」验收（真浏览器）：自动路由→整方案开工，决策面零填空。
+"""对话轴「按方案开始」验收（真浏览器）：自动路由→整方案开工，决策面零填空。
 
 范式 2a 二刀（owner 2026-07-15 定向「像 Claude Desktop/Codex：去掉一切选择/填空面」，
 披露语法=agent-ui-design disclosure-grammar「决策必露且收敛为一」）：方案卡是一份
-完整提案的唯一决策是「按方案开工」；成员行只展示系统整理状态，不提供 Agent
+完整提案的唯一决策是「按方案开始」；成员行只展示系统整理状态，不提供 Agent
 选择、参数字段或成员级创建入口。验收面：
   ① 任一成员输入未齐时，整份方案 fail-closed，只在唯一 Composer 自然追问；
   ② 工程师继续输入自然语言后，系统返回全员 ready 的完整方案；
-  ③ 全方案 ready 后只有一个「按方案开工」主按钮，点击前任务数仍为 0；
+  ③ 全方案 ready 后只有一个「按方案开始」主按钮，点击前任务数仍为 0；
   ④ 点击一次 → batch 原子创建全部 2 名成员，绝不只启动 ready 子集；
   ⑤ 零跳页：URL 仍 /?c=<conv>，督战状态原地亮起；
   ⑥ 会话归档（concluded）后重开：开工按钮整体消失（只读会话不可召集）。
@@ -169,7 +169,7 @@ with sync_playwright() as p:
     check(
         "①任一成员未 ready：零半成品方案/成员卡/任务，只在唯一 Composer 追问",
         page.locator(".plan-card, .agent-card, .route-summary").count() == 0
-        and page.get_by_role("button", name="按方案开工").count() == 0
+        and page.get_by_role("button", name="按方案开始").count() == 0
         and page.get_by_role("button", name="去创建此任务").count() == 0
         and page.locator(".composer textarea").count() == 1
         and page.locator('.composer input[type="file"]').count() == 1
@@ -190,10 +190,10 @@ with sync_playwright() as p:
     expect(page.locator(".plan-card")).to_have_count(1, timeout=8000)
     ready_plan = page.locator(".plan-card").last
     ready_disclosure = ready_plan.locator(".route-disclosure")
-    open_btn = ready_plan.get_by_role("button", name="按方案开工")
+    open_btn = ready_plan.get_by_role("button", name="按方案开始")
     expect(open_btn).to_be_visible(timeout=8000)
     check("②新方案仍先展示自动路由摘要，细节默认折叠",
-          "信息已齐，等待你确认开工" in ready_plan.locator(".route-summary").inner_text()
+          "信息已齐，等待你确认开始" in ready_plan.locator(".route-summary").inner_text()
           and ready_disclosure.get_attribute("open") is None)
     ready_disclosure.locator("summary").click()
     expect(ready_plan.locator(".agent-card").first).to_be_visible(timeout=3000)
@@ -205,12 +205,12 @@ with sync_playwright() as p:
     ready_recommendation = ready_conv.get("recommendation") or {}
 
     # ③ 全方案 ready 才出现一个主按钮；渲染不等于开工。
-    check("③全方案 ready：只有一个『按方案开工』主按钮",
+    check("③全方案 ready：只有一个『按方案开始』主按钮",
           page.locator(".plan-foot .cta-clay").count() == 1
           and ready_plan.locator(".plan-foot .cta-clay").count() == 1
           and ready_plan.get_by_role("button", name="去创建此任务").count() == 0
           and ready_plan.locator(".agent-card").count() == 2
-          and ready_tags == ["输入已自动整理 · 待开工", "输入已自动整理 · 待开工"]
+          and ready_tags == ["输入已自动整理 · 待开始", "输入已自动整理 · 待开始"]
           and len(ready_assistants) == 2
           and ready_assistants[-1].get("recommendation") is not None
           and [a.get("agent_id") for a in ready_recommendation.get("agents", [])]
@@ -262,9 +262,9 @@ with sync_playwright() as p:
           f"c={conv_id}" in page.url and "/tasks/new" not in page.url, page.url)
     expect(ready_plan.locator(".agent-status").first).to_be_visible(timeout=8000)
     check("⑤2 名成员督战状态原地亮起", ready_plan.locator(".agent-status").count() == 2)
-    expect(ready_plan.get_by_role("button", name="按方案开工")).to_have_count(0, timeout=8000)
+    expect(ready_plan.get_by_role("button", name="按方案开始")).to_have_count(0, timeout=8000)
     check("⑤开工后不再提供重复开工入口",
-          ready_plan.get_by_role("button", name="按方案开工").count() == 0)
+          ready_plan.get_by_role("button", name="按方案开始").count() == 0)
     page.screenshot(path=str(SHOTS / "3_summoned_live_chip.png"), full_page=True)
 
     # ⑥ 用一条“全员 ready 但尚未开工”的新会话验证 concluded gate；若复用上方
@@ -273,7 +273,7 @@ with sync_playwright() as p:
     page.locator(".composer textarea").fill("新建一份全员输入已齐、但先不执行的方案")
     page.get_by_role("button", name="发送").click()
     expect(page.locator(".plan-card")).to_be_visible(timeout=8000)
-    expect(page.get_by_role("button", name="按方案开工")).to_be_visible(timeout=8000)
+    expect(page.get_by_role("button", name="按方案开始")).to_be_visible(timeout=8000)
     readonly_conv_id = (
         page.url.split("?c=", 1)[1].split("&", 1)[0]
         if "?c=" in page.url
@@ -288,8 +288,8 @@ with sync_playwright() as p:
     page.wait_for_selector(".plan-card", timeout=8000)
     page.wait_for_timeout(800)  # schema 预取窗口——就绪也不该显示（status 门优先）
     check(
-        "⑥concluded 会话不提供『按方案开工』（只读）",
-        page.get_by_role("button", name="按方案开工").count() == 0,
+        "⑥concluded 会话不提供『按方案开始』（只读）",
+        page.get_by_role("button", name="按方案开始").count() == 0,
     )
     page.screenshot(path=str(SHOTS / "4_concluded_readonly.png"), full_page=True)
 
