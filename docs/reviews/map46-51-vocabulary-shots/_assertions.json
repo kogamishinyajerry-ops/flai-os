@@ -1,0 +1,82 @@
+[
+  {
+    "shot": "w1",
+    "ok": true,
+    "detail": "全部关键词在页"
+  },
+  {
+    "shot": "w2",
+    "ok": true,
+    "detail": "全部关键词在页"
+  },
+  {
+    "shot": "w2.placeholder",
+    "ok": true,
+    "detail": "placeholder='描述你的需求…'"
+  },
+  {
+    "shot": "w2.hero_examples",
+    "ok": true,
+    "detail": "hero 示例按钮数=3"
+  },
+  {
+    "shot": "w2b",
+    "ok": true,
+    "detail": "草稿='用大白话讲讲什么是故障树' user气泡数=0 hero仍在=True（填入未代发）"
+  },
+  {
+    "shot": "w3",
+    "ok": true,
+    "detail": "全部关键词在页"
+  },
+  {
+    "shot": "w3.members",
+    "ok": true,
+    "detail": "成员数=1"
+  },
+  {
+    "shot": "w4",
+    "ok": true,
+    "detail": "全部关键词在页"
+  },
+  {
+    "shot": "w8.setup",
+    "ok": true,
+    "detail": "refuse 卡数=2（构造中段）"
+  },
+  {
+    "shot": "w8",
+    "ok": true,
+    "detail": "段头='▸ 1 轮往来 · 第 2 段（22:14）'"
+  },
+  {
+    "shot": "w7",
+    "ok": true,
+    "detail": "全部关键词在页"
+  },
+  {
+    "shot": "w7.collapse_state",
+    "ok": true,
+    "detail": "折叠态pre可见=False 展开后可见=True"
+  },
+  {
+    "shot": "w7b.detail",
+    "ok": true,
+    "detail": "pre逐字='导引本轮对话失败（可重试）：stub 注入的上游失败（报错关键词）'"
+  },
+  {
+    "shot": "w5",
+    "ok": false,
+    "detail": "缺: ['本周升级']"
+  },
+  {
+    "shot": "w6",
+    "ok": true,
+    "detail": "全部关键词在页"
+  },
+  {
+    "shot": "w6.rows",
+    "ok": true,
+    "detail": "历史任务行入镜情况见截图（粗匹配节点数=4）"
+  }
+]
