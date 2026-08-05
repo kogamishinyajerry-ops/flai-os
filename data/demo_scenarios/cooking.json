@@ -1,0 +1,89 @@
+{
+  "scenario_id": "cooking",
+  "scenario_name": "周末做红烧肉",
+  "description": "本体论教学 L1 demo 第一个场景:单 Skill 完整闭环。工程师讲一段做饭经历,主持人引导识别 Work Case,投影红烧肉方子的 Asset Candidate。",
+  "complexity": 1,
+  "ontology_focus": [
+    "Work Case 五要素(时间/地点/人物/动作/产物/完成证据)",
+    "limitations(不适用边界)",
+    "human_decision_points(尝咸淡)"
+  ],
+  "seed_conversation": [
+    {
+      "role": "user",
+      "content": "上周六下午我做了红烧肉,糖焦了重来一次,最后女儿说好吃。想用这段经历走一遍本体论 demo。"
+    },
+    {
+      "role": "assistant_expected_topic",
+      "topic": "追问糖焦细节和成功证据",
+      "hint": "主持人应追问:① 糖焦具体是哪一步,当时在干什么;② 成功证据除了女儿说好吃,还有没有别的(肉能咬动/咸淡合适)。"
+    },
+    {
+      "role": "user",
+      "content": "糖色炒到小泡转大泡的时候我走神去看女儿写作业,回来糖焦了,锅底一圈黑。第二次盯住了,琥珀色下肉。成功证据是女儿吃了三大块说好吃,我自己也尝了咸淡合适,肉能咬动。"
+    },
+    {
+      "role": "assistant_expected_topic",
+      "topic": "追问食材和步骤细节",
+      "hint": "主持人应追问:① 用了多少肉、哪些调料;② 大致步骤分几步。"
+    },
+    {
+      "role": "user",
+      "content": "带皮五花肉 600 克。冰糖 30 克、生抽老抽料酒、葱姜八角香叶。步骤就是:切块焯水、炒糖色、翻炒上色加调料、加香料炖 50 分钟、尝咸淡补咸、大火收汁。炖的时候我 17:30 加的香料,18:10 收汁。"
+    },
+    {
+      "role": "assistant_expected_topic",
+      "topic": "投影草稿",
+      "hint": "对话素材已足够投影草稿。主持人应输出 <<DRAFT>> 块,9 字段齐全,limitations 包含'不适用高压锅/其他肉类/忌糖人群',human_decision_points 包含'尝咸淡必停'。"
+    }
+  ],
+  "expected_generalization": {
+    "title": "家常红烧肉(带皮五花肉版)",
+    "trigger": "家里想吃红烧肉 + 有 2 小时 + 有炒锅和炖锅",
+    "desired_outcome": "一盘 4-6 人份、能咬动、咸淡合适、上色均匀的红烧肉",
+    "inputs": [
+      "带皮五花肉 500-700g",
+      "冰糖",
+      "生抽",
+      "老抽",
+      "料酒",
+      "葱姜",
+      "八角",
+      "香叶"
+    ],
+    "outputs": ["一盘红烧肉"],
+    "steps": [
+      "切块焯水 3 分钟温水冲",
+      "炒糖色:冰糖 30g 小火,小泡转大泡琥珀色立刻下肉(窗口约 10 秒,走神会焦)",
+      "翻炒上色加生抽 2 勺老抽半勺料酒 1 勺,加热水没过肉",
+      "加葱姜八角香叶小火炖 50 分钟",
+      "尝咸淡按口味补咸",
+      "大火收汁出锅"
+    ],
+    "evidence_requirements": [
+      "糖色炒到琥珀色(视觉)",
+      "炖足 50 分钟(时间)",
+      "尝咸淡通过(人工签发)"
+    ],
+    "human_decision_points": [
+      "尝咸淡必须人工:每家酱油咸度不同,每人口味不同,系统不能替你决定"
+    ],
+    "limitations": [
+      "不适用高压锅(时间不同)",
+      "不适用其他肉类(牛腩/排骨处理不同)",
+      "不适用忌糖人群"
+    ]
+  },
+  "teaching_notes": {
+    "key_metaphors_in_play": [
+      "老张审报告:候选投影完要提示'审核权在你手里'",
+      "妈妈方子 v3:改一个字段 digest 就变,旧版不撕掉"
+    ],
+    "common_pitfalls": [
+      "主持人不能替工程师说'这个方子定稿了'",
+      "limitations 至少 1 条,human_decision_points 至少 1 条(CONTEXT.md 硬要求)",
+      "steps 至少 2 条(asset_builder.py:320 的 blocking 规则)"
+    ],
+    "bridge_to_fde": "尝咸淡必停 = 性能盘分析时'最终结论由副总师签字'的同一个东西——系统可以算、可以提醒、可以建议,但签发权不在系统。"
+  }
+}

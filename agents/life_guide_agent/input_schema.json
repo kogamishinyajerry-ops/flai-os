@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "生活场景建模主持人单轮用户消息",
+  "description": "interactive 型 Agent 输入:一轮工程师消息(讲一段生活经历,或回答主持人追问)。会话经 /api/conversations/{id}/messages 逐轮推进。至少有 content 或 file_ids 一种。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["content"],
+  "properties": {
+    "content": {
+      "type": "string",
+      "description": "用户本轮说的话(描述一段生活经历,或回答主持人追问);仅上传附件时可为空字符串。"
+    }
+  }
+}

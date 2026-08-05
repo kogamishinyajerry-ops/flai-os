@@ -1,0 +1,50 @@
+id: life_guide_agent
+name: "生活场景建模主持人（本体论教学 demo）"
+version: 0.1.0
+status: draft
+maturity: L0
+category: reasoning_assist
+summary: "本体论建模教学 demo 的对话入口：工程师讲一段生活经历（做饭/旅行/装修），主持人在同一对话引导识别 Work Case、投影 Generalization、产出待审 Asset Candidate；不替人签发，不绕过 ADR-0033 字段表单禁令。"
+description: >
+  L1 生活场景 demo 的唯一对工程师入口（ADR-0033 合规）。
+  做的事：在对话里引导工程师把一段真实生活经历讲清楚，然后主持人把这段经历
+  确定性地投影成一个 Asset Draft Bundle（含 digest），交给工程师按钮级审核。
+  主持人不执行工作、不签发、不注册、不晋级——它只是把对话投影成候选，
+  签发权永远在工程师手里（CONTEXT.md 人审唯一签发铁律）。
+  产出走 AssetDraftBuilder.preview()（backend/app/ontology/asset_builder.py:60），
+  Skill Package 进 quarantine 隔离区，不进 agents/ Registry，不进 reuse_eligible 全局池
+  （避免污染生产复用池，见 fork-2 审查报告 R3）。
+owner:
+  department: 二所
+  maintainer: yandongjie
+  business_reviewer: yandongjie
+model:
+  profile: fast
+knowledge:
+  enabled: false
+  scopes: []
+tools: []
+input:
+  type: params
+  schema: input_schema.json
+output:
+  formats: []
+  schema: output_schema.json
+workflow:
+  entrypoint: workflow.py
+  mode: interactive
+  requires_human_review: false
+permissions:
+  visibility: admin_only
+  allowed_roles:
+    - admin
+    - agent_developer
+data_asset:
+  collect_samples: false
+limitations:
+  - "这是教学 demo,不是生产 Agent:产出的 Skill Package 在 quarantine 隔离区,不进 agents/ Registry,不进 reuse_eligible 全局复用池。demo 结束后可清空。"
+  - "只处理生活场景(做饭/旅行/训练/装修等),不处理工程任务——工程任务走 guide_agent。"
+  - "主持人不签发、不注册、不晋级:它只能投影候选,工程师按钮级审核是唯一签发通道(CONTEXT.md Asset Candidate 铁律)。"
+  - "缺信息就在原对话追问,不让工程师填字段表单/编辑 JSON/选择分类(ADR-0033)。"
+  - "真实多轮对话依赖模型服务:未配置时主持人诚实失败,不伪造对话。"
+  - "demo 不证明本体论对 FDE 有用,只证明本体论建模闭环可跑+工程师能看懂。L3 才证明 FDE 价值。"
