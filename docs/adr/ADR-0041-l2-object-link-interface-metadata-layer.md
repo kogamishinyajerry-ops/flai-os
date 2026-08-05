@@ -1,6 +1,6 @@
 # ADR-0041：L2 Object/Link/Interface 元数据层（设计章程）
 
-- 状态：Proposed（2026-08-05，待 owner 审）
+- 状态：Accepted（2026-08-05）
 - 关联：ADR-0031（Agent Shell 只读本体投影；对 RDF/图数据库的拒绝）· ADR-0032（受治理的资产草稿预览）· ADR-0034（任务证据绑定的资产候选账本）· ADR-0035（隔离 Skill Package 材化与受控复用）· `docs/design/ONTOLOGY-MODELING-MULTI-AGENT.md` §2.2
 - 编号说明：多 agent 设计文档把本层写作"ADR-0036"，该编号已被 owner-scoped feature-asset map 占用；L2 元数据层取本编号 0041。
 
@@ -67,5 +67,5 @@ L3 领域本体（engine_model / fault_mode / airworthiness_clause 等 Object Ty
 
 章程定稿后，L2 有了明确编号与边界，实施切片可以逐片立项、逐片审查，跨候选关系从
 "查不出"变成"按具名投影可查"，并为 L3 领域本体铺路。代价是平台要维护三份新契约
-与一个投影模块，其演进同样受契约版本纪律约束。在 owner 接受本章程之前，任何 L2
-实现代码都不应开工。
+与一个投影模块，其演进同样受契约版本纪律约束。本章程已由 owner 接受（2026-08-05）；
+章程生效不等于整层开工——每个实施切片仍须单独审查、单独放行。
