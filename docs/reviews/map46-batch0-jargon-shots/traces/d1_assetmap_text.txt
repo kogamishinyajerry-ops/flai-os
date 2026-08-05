@@ -1,0 +1,177 @@
+⌘
+FLAi-OS 功能与资产地图
+按需查看平台能力与你的受治理资产
+16 项能力 · 0 份资产
+当前读取快照
+只读
+仅当前账号
+不执行 · 不注册 · 不晋级
+重新读取
+16
+Registry 能力
+0
+我的 Candidate
+0
+隔离 Skill 包
+0
+包级人审通过
+平台功能
+从 Agent Registry 冷读，不推断可用性
+CFD 结果评估 Agent（Strouhal/Cd 确定性判据 + 叙事草案）
+Registry 声明
+
+读一次真实 CFD 求解（圆柱绕流 Re=100）的力系数与残差，确定性算出 Strouhal 数与平均阻力系数并对照 Williamson 参考，出带水印的评估草案交工程师签发——数字全来自确定性计算，LLM 只叙事，任务强制人工放行。
+
+reasoning_assist
+领域未声明
+任务执行
+draft · L0
+需人工复核
+CFD 求解发起 Agent（真实 OpenFOAM，fire-and-register）
+Registry 声明
+
+在容器里发起一次真实 OpenFOAM 求解（圆柱绕流 Re=100，fire-and-register 秒级返回），登记 run_id 与 sim_run_ref 让工作台监控浮窗实时看残差/Cl/Cd——求解在后台真跑约 200 秒，收敛后由人建评估任务承接。
+
+tool_automation
+领域未声明
+任务执行
+draft · L0
+控制逻辑结构生成 Agent
+Registry 声明
+
+把结构化控制需求（状态列表+转移规则）确定性展开为规范化控制逻辑描述（状态机 JSON + 人读转移表），并自动排查无法到达的状态。全程确定性计算，不调用大模型、不依赖外部工具（结果可复现）。
+
+structured_gen
+领域未声明
+任务执行
+draft · L0
+历史故障检索 Agent
+Registry 声明
+
+从包内合成故障记录中检索相似历史案例，由推理模型仅做相关性排序与摘要，并给出跨型号参考；所有处置建议强制人工签发。
+
+knowledge_qa
+fault_history
+任务执行
+draft · L0
+需人工复核
+FEA 梁频率评估 Agent（闭式解析解确定性判据）
+Registry 声明
+
+读一次 fea_solve_agent 的求解产物（经 depends_on/input_binding 管道注入），从其回存 params 现算 Euler-Bernoulli 梁一阶固有频率的闭式解析解，与 FEM 结果比对容差，出确定性收敛判定草案，零 LLM，任务强制人工放行。
+
+structured_gen
+领域未声明
+任务执行
+draft · L0
+需人工复核
+FEA 梁固有频率求解 Agent（纯 Python 有限元）
+Registry 声明
+
+把等截面 Euler-Bernoulli 梁（悬臂/简支）用纯 Python 有限元（三次 Hermite 梁单元 + 一致质量阵）确定性求解一阶固有频率 ω₁，零 LLM、零工具、零第三方依赖（无 numpy），停 waiting_review 待工程师签发。
+
+structured_gen
+领域未声明
+任务执行
+draft · L0
+需人工复核
+故障树分析辅助 Agent（FTA 草案生成）
+Registry 声明
+
+根据顶事件与系统描述，由平台调用推理模型生成故障树分析草案（中间/基本事件候选+割集建议），供工程师审阅——草案非结论，任务强制人工放行。
+
+reasoning_assist
+领域未声明
+任务执行
+draft · L0
+需人工复核
+导引 Agent（需求接待与协作编排）
+Registry 声明
+
+会话优先的统一入口：工程师只输入文字或上传附件，系统自动路由 Agent、模型、工具与 Workflow；缺信息就在原对话追问，整份方案就绪后由人在对话轴点击开工。Guide 不执行工程任务，也不替人作判断或签发。
+
+reasoning_assist
+领域未声明
+会话回答
+draft · L0
+Hello Agent（平台闭环验证示例）
+Registry 声明
+
+示例 Agent（不调用大模型）：读取姓名、调用示例工具、写出问候语，用于验证平台端到端闭环，无业务含义。
+
+tool_automation
+领域未声明
+任务执行
+draft · L0
+1 个 mock 工具引用
+知识问答 Agent（语料检索归纳草案生成）
+Registry 声明
+
+批量问题在预先锁定的知识范围内做关键词检索，命中语料交推理模型生成带出处引用的归纳草案，零命中不作答——草案非结论，任务强制人工放行。
+
+knowledge_qa
+领域未声明
+任务执行
+draft · L0
+需人工复核
+监控接入生成器 Agent（adapter 草案）
+Registry 声明
+
+「产生工作流的工作流」：给一个新求解器/新工作流的真实历史 run 目录，起草它接入实时可视化监控所需的全部件（module.json 骨架 + parser 桩 + 三档接地证据 + 诚实清单）——只起草不生效，注册与 tamper 实证是人的动作，任务强制人工放行。
+
+structured_gen
+领域未声明
+任务执行
+draft · L0
+需人工复核
+性能盘批量计算 Agent（模拟阶段）
+Registry 声明
+
+上传算例表(.xlsx)→逐算例调用性能计算→写汇总表/样本/报告。当前为模拟阶段：计算用占位公式（纯属虚构），输出无任何工程意义。
+
+tool_automation
+领域未声明
+任务执行
+draft · L0
+1 个 mock 工具引用
+制度政策问答 Agent
+Registry 声明
+
+面向所内质量、保密、人事与流程制度提供带制度文号和办理路径线索的问答；未收录内容明确拒答，不猜测条款。
+
+knowledge_qa
+policy_qa
+会话回答
+draft · L0
+专业标准问答 Agent
+Registry 声明
+
+面向专业规范与标准条款提供条款号溯源线索；能匹配合成机型实例时给出条款与实例双依据，冲突只并列不裁决。
+
+knowledge_qa
+standards_qa
+会话回答
+draft · L0
+阶跃响应超调评估 Agent（闭式解析解确定性判据）
+Registry 声明
+
+读一次 step_response_solve_agent 的仿真产物（经 depends_on/input_binding 管道注入），从其回存 params 现算标准二阶系统超调量的闭式解析解 Mp=e^(−ζπ/√(1−ζ²))，与仿真结果比对容差，出确定性收敛判定草案，零 LLM，任务强制人工放行。
+
+structured_gen
+领域未声明
+任务执行
+draft · L0
+需人工复核
+二阶系统阶跃响应求解 Agent（纯 Python 梯形积分）
+Registry 声明
+
+把标准二阶欠阻尼系统（ζ, ωn）的单位阶跃响应用纯 Python 梯形（双线性/Tustin）定步长积分确定性仿真，提取超调量 Mp，零 LLM、零工具、零第三方依赖（无 numpy/scipy），停 waiting_review 待工程师签发。
+
+structured_gen
+领域未声明
+任务执行
+draft · L0
+需人工复核
+我的资产
+从完成任务到更高层资产的真实形成状态
+当前账号还没有可冷读核验的资产 Candidate。完成任务不会自动等于资产；只有证据闭合后才会在这里出现。
