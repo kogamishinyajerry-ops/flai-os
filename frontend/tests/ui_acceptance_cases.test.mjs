@@ -519,6 +519,24 @@ test("P1-2 错误分层：三处错误面统一 details.error-disclosure 折叠�
   );
 });
 
+test("P1-2 互审回归锚：pageError title 只收人话，原始 detail 逐字进 pageErrorDetail", () => {
+  // 负向锚：任何分支都不得把原始后端 detail 直赋 el-alert title（本 finding 源头）。
+  assert.doesNotMatch(guideSource, /pageError\.value = err\.detail/);
+  assert.doesNotMatch(guideSource, /pageError\.value = detail;/);
+  // 正向锚：三处修复后人话标题逐字在场。
+  assert.match(guideSource, /pageError\.value = "发送失败——本轮未保存，原话已退回输入框"/);
+  assert.match(guideSource, /pageError\.value = "会话加载失败"/);
+  assert.match(guideSource, /pageError\.value = "会话核对失败"/);
+  // 配对锚：原始 detail 只进折叠层。
+  assert.match(guideSource, /pageErrorDetail\.value = detail;/);
+  assert.match(guideSource, /pageErrorDetail\.value = err\.detail \|\| err\.message \|\| "";/);
+});
+
+test("词表双口径：默认面迁移新词，route-disclosure 内工程词保留", () => {
+  assert.match(guideSource, /roster-label">成员 ·/);
+  assert.match(guideSource, /未匹配该执行单元的输入契约/);
+});
+
 test("refuse 卡 kicker 用暂时接不住，重述引导直呼 FLAi", () => {
   assert.match(guideSource, /<div class="plan-kicker refuse">暂时接不住<\/div>/);
   assert.match(guideSource, /这个需求，平台暂时接不住/);

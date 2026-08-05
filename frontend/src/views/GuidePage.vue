@@ -1433,8 +1433,8 @@ async function send() {
       const optimisticIndex = messages.value.indexOf(optimisticUser);
       if (optimisticIndex >= 0) messages.value.splice(optimisticIndex, 1);
       draft.value = content;
-      pageError.value = detail;
-      pageErrorDetail.value = "";
+      pageError.value = "发送失败——本轮未保存，原话已退回输入框";
+      pageErrorDetail.value = detail;
     } else if (stopRequested.value) {
       // 用户主动停止（先于失败策略拦截）：中止是用户主动行为，后端断连零落库
       // 路径在案，可如实断言本轮未保存——中性提示而非失败红，也绝不进
@@ -3023,8 +3023,8 @@ async function loadConversation(id, { preserveOnFailure = false, isCurrent = () 
       ElMessage.warning("原对话不可用——已打开新对话，失败任务血缘仍会保留");
       return true;
     }
-    pageError.value = err.detail || err.message || "会话加载失败";
-    pageErrorDetail.value = "";
+    pageError.value = "会话加载失败";
+    pageErrorDetail.value = err.detail || err.message || "";
     return false;
   } finally {
     if (isCurrent() === true) restoring.value = false;
@@ -3076,8 +3076,8 @@ async function reconcileConversation() {
     // loadConversation 当前会把读取错误转成 false；此 catch 仍为未来改动保底：
     // 任意未预期异常都不能误解锁，也不能吞掉对账失败原因。
     reconciliationRequired.value = true;
-    pageError.value = err.detail || err.message || "会话核对失败";
-    pageErrorDetail.value = "";
+    pageError.value = "会话核对失败";
+    pageErrorDetail.value = err.detail || err.message || "";
   } finally {
     reconciling.value = false;
   }
