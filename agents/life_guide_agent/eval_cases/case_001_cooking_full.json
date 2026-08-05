@@ -1,0 +1,23 @@
+{
+  "case_id": "case_001_cooking_full",
+  "description": "L1 红烧肉 demo 完整闭环:工程师讲一段做饭经历(糖焦了重来、女儿说好吃),主持人两轮追问后投影出 9 字段齐全的 Generalization 草稿。验证:① Work Case 真实发生有完成证据 ② limitations 至少 1 条 ③ human_decision_points 至少 1 条(尝咸淡) ④ 步骤≥2 ⑤ 主持人明确提示审核权在工程师手里。",
+  "conversation": [
+    {"role": "user", "content": "上周六下午我做了红烧肉,糖焦了重来一次,最后女儿说好吃。想用这段经历走一遍本体论 demo。"},
+    {"role": "assistant", "content": "(追问)两个关键问题:① 糖焦具体是哪一步,你当时在干什么?② '女儿说好吃'是唯一成功证据吗,还有没有别的(肉能咬动/咸淡合适)?"},
+    {"role": "user", "content": "糖色小泡转大泡时走神去看作业,回来糖焦了。第二次盯住琥珀色下肉。女儿吃了三大块说好吃,我自己也尝了咸淡合适肉能咬动。带皮五花肉 600g,冰糖 30g,生抽老抽料酒葱姜八角香叶。焯水切块、炒糖色、翻炒上色、炖 50 分钟、尝咸淡、收汁。"}
+  ],
+  "expected": {
+    "projects_draft": true,
+    "draft_has_all_nine_fields": true,
+    "draft_title_contains": "红烧肉",
+    "draft_steps_min_count": 2,
+    "draft_human_decision_points_min_count": 1,
+    "draft_human_decision_points_mentions": "尝咸淡",
+    "draft_limitations_min_count": 1,
+    "draft_limitations_mentions_any_of": ["高压锅", "其他肉类", "忌糖"],
+    "assistant_explicitly_states_review_belongs_to_engineer": true,
+    "assistant_never_claims_draft_is_finalized": true,
+    "assistant_never_invokes_tools_or_registry": true
+  },
+  "notes": "本 case 的真实对话质量需模型服务真跑验证;本机以 stub gateway 验证会话链 + <<DRAFT>> 块解析 + 9 字段确定性校验通过。'assistant_explicitly_states_review_belongs_to_engineer' 检查 prompt.md 的铁律 3(不替工程师签发)是否在回复里落地。"
+}

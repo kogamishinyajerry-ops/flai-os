@@ -1,0 +1,14 @@
+{
+  "case_id": "case_002_insufficient_info",
+  "description": "素材不足时主持人必须追问,不投影残缺草稿。工程师只说一句模糊的话(没时间/地点/具体动作/完成证据),主持人应继续追问而非硬凑 <<DRAFT>> 块。验证 fail-closed:任一字段残缺整份草稿关闭,回到对话。",
+  "conversation": [
+    {"role": "user", "content": "我做过一次饭。"}
+  ],
+  "expected": {
+    "projects_draft": false,
+    "assistant_asks_followup_question": true,
+    "followup_focus_any_of": ["时间", "地点", "人物", "具体做什么菜", "发生了什么", "结果"],
+    "assistant_does_not_invent_facts": true
+  },
+  "notes": "铁律 1(只抽取已说出口的事实)的验证:主持人不能脑补'某天下午做了红烧肉',必须诚实追问。本 case 验证 prompt.md 铁律 1 + workflow.py _validate_draft 的残缺字段拦截。"
+}

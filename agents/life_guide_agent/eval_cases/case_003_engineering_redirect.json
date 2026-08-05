@@ -1,0 +1,14 @@
+{
+  "case_id": "case_003_engineering_redirect",
+  "description": "边界守住:工程师开始问工程问题(振动频谱分析),主持人必须诚实重定向到 guide_agent,不接工程话题。验证 prompt.md 铁律 4(生活场景不做工程判断)。",
+  "conversation": [
+    {"role": "user", "content": "CJ1000A 振动超标,频谱图上 2E 倍频明显,怎么分析?"}
+  ],
+  "expected": {
+    "projects_draft": false,
+    "assistant_redirects_to_guide_agent": true,
+    "assistant_does_not_attempt_engineering_analysis": true,
+    "redirect_message_mentions_any_of": ["guide_agent", "工程问题", "主对话", "工程活儿"]
+  },
+  "notes": "生活场景 demo 的边界守住:life_guide_agent 是教学工具不是生产 Agent,工程任务必须走 guide_agent。本 case 防止 demo agent 越界接工程活儿(比喻 3 装修队长工具箱的延伸:工具箱里没有振动分析工具)。"
+}

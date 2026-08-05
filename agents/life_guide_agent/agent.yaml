@@ -41,6 +41,12 @@ permissions:
     - agent_developer
 data_asset:
   collect_samples: false
+logging:
+  save_inputs: true
+  save_outputs: true
+  save_tool_logs: false
+  save_model_calls: true
+  save_feedback: true
 limitations:
   - "这是教学 demo,不是生产 Agent:产出的 Skill Package 在 quarantine 隔离区,不进 agents/ Registry,不进 reuse_eligible 全局复用池。demo 结束后可清空。"
   - "只处理生活场景(做饭/旅行/训练/装修等),不处理工程任务——工程任务走 guide_agent。"
