@@ -1,93 +1,140 @@
-"""红烧肉 demo 闭环验证脚本:用 cooking.json 的 expected_generalization
-调 AssetDraftBuilder.preview(),验证能投影出带 digest 的完整 bundle。
+"""生活场景 demo 种子闭环验证脚本:对 data/demo_scenarios/ 下的每个场景种子,
+用其 expected_generalization 调 AssetDraftBuilder.preview(),验证能投影出带
+digest 的完整 bundle,且四铁律声明(不写库/不执行/不注册/不晋级、确定性投影)
+全部满足。
 
 跑法:
 cd /Users/Zhuanz/projects/aircraft-comac/flai-os-life-demo
-python3 /tmp/verify_cooking_demo.py
+python3 scripts/verify_cooking_demo.py            # 验证全部场景
+python3 scripts/verify_cooking_demo.py cooking    # 只验证指定场景
+
+conversation 由种子 seed_conversation 里的 user 轮确定性构造(助手轮是教学
+提示不是真实消息,不进 Work Case 血缘)。
 """
 import json
+import re
 import sys
 from pathlib import Path
 
-# 把 worktree 根目录加到 sys.path,让 backend.app.ontology 可 import
-WORKTREE = Path("/Users/Zhuanz/projects/aircraft-comac/flai-os-life-demo")
+# 把仓库根目录加到 sys.path,让 backend.app.ontology 可 import
+WORKTREE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WORKTREE))
 
 from backend.app.ontology.asset_builder import AssetDraftBuilder
 
-# 加载种子
-with open(WORKTREE / "data/demo_scenarios/cooking.json", encoding="utf-8") as f:
-    seed = json.load(f)
+SCENARIO_DIR = WORKTREE / "data" / "demo_scenarios"
+_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
-generalization = seed["expected_generalization"]
+_EFFECT_KEYS = ("writes_database", "executes_work", "registers_asset", "promotes_asset")
 
-# 构造最小 conversation(模拟 life_guide_agent 对话结束后的状态)
-conversation = {
-    "id": "conv_demo_cooking_001",
-    "agent_id": "life_guide_agent",
-    "status": "concluded",
-    "messages": [
-        {"id": "m1", "role": "user", "content": "上周六下午我做了红烧肉,糖焦了重来一次,最后女儿说好吃。", "file_ids": []},
-        {"id": "m2", "role": "assistant", "content": "两个关键问题:糖焦具体哪一步?成功证据?", "file_ids": []},
-        {"id": "m3", "role": "user", "content": "糖色小泡转大泡时走神去看作业,回来糖焦了。第二次盯住琥珀色下肉。女儿吃了三大块说好吃,咸淡合适肉能咬动。", "file_ids": []},
-        {"id": "m4", "role": "assistant", "content": "食材和步骤?", "file_ids": []},
-        {"id": "m5", "role": "user", "content": "带皮五花肉 600g,冰糖 30g,生抽老抽料酒葱姜八角香叶。焯水切块、炒糖色、翻炒上色、炖 50 分钟、尝咸淡、收汁。", "file_ids": []},
-    ],
-}
 
-builder = AssetDraftBuilder()
-bundle = builder.preview(conversation=conversation, generalization=generalization)
+def build_conversation(seed: dict) -> dict:
+    """从种子的 seed_conversation 提取 user 轮,构造最小 conversation。"""
+    messages = []
+    for idx, turn in enumerate(seed["seed_conversation"], start=1):
+        if turn.get("role") != "user":
+            continue  # assistant_expected_topic 是教学提示,不是真实消息
+        messages.append(
+            {
+                "id": f"m{idx}",
+                "role": "user",
+                "content": turn["content"],
+                "file_ids": [],
+            }
+        )
+    return {
+        "id": f"conv_demo_{seed['scenario_id']}_001",
+        "agent_id": "life_guide_agent",
+        "status": "concluded",
+        "messages": messages,
+    }
 
-print("=== 闭环验证成功 ===")
-print()
-print("schema_version:", bundle["schema_version"])
-print("status:", bundle["status"])
-print("draft_digest:", bundle["draft_digest"])
-print()
-print("=== work_case ===")
-wc = bundle["work_case"]
-print("  source_kind:", wc["source_kind"])
-print("  source_id:", wc["source_id"])
-print("  message_count:", wc["message_count"])
-print("  user_message_count:", wc["user_message_count"])
-print("  source_revision:", wc["source_revision"])
-print()
-print("=== task_pattern ===")
-tp = bundle["task_pattern"]
-print("  suggested_id:", tp["suggested_id"])
-print("  title:", tp["title"])
-print("  content_digest:", tp["content_digest"])
-print()
-print("=== skill ===")
-sk = bundle["skill"]
-print("  suggested_id:", sk["suggested_id"])
-print("  name:", sk["name"])
-print("  content_digest:", sk["content_digest"])
-print()
-print("=== validation ===")
-v = bundle["validation"]
-print("  state:", v["state"])
-print("  blocking_count:", v["blocking_count"])
-print("  warning_count:", v["warning_count"])
-print()
-print("=== review ===")
-r = bundle["review"]
-print("  required:", r["required"])
-print("  ready:", r["ready"])
-print("  state:", r["state"])
-print()
-print("=== effects(铁律自检)===")
-e = bundle["effects"]
-print("  writes_database:", e["writes_database"], "(必须 False)")
-print("  executes_work:", e["executes_work"], "(必须 False)")
-print("  registers_asset:", e["registers_asset"], "(必须 False)")
-print("  promotes_asset:", e["promotes_asset"], "(必须 False)")
-print()
-print("=== generation ===")
-print("  kind:", bundle["generation"]["kind"])
-print("  llm_used:", bundle["generation"]["llm_used"], "(必须 False:确定性投影,不是 LLM)")
-print()
-print("=== 桥接 FDE 提示(给教学用)===")
-print("  ", seed["teaching_notes"]["bridge_to_fde"])
-print()
-print("全部通过 = 本体论建模闭环可跑,红烧肉 demo 可以用于 FDE workshop。")
+
+def verify_scenario(seed_path: Path) -> dict:
+    with open(seed_path, encoding="utf-8") as f:
+        seed = json.load(f)
+
+    conversation = build_conversation(seed)
+    assert conversation["messages"], f"{seed_path.name}: 种子里没有 user 轮,无法形成 Work Case"
+
+    builder = AssetDraftBuilder()
+    bundle = builder.preview(
+        conversation=conversation, generalization=seed["expected_generalization"]
+    )
+
+    # ── 结构断言 ────────────────────────────────────────────────
+    assert bundle["schema_version"] == "asset_draft_bundle.v1"
+    assert bundle["status"] == "draft"
+    assert _DIGEST_RE.match(bundle["draft_digest"]), "draft_digest 不是合法 sha256"
+    assert bundle["work_case"]["user_message_count"] >= 1
+
+    # ── 校验门:必须达到可交人审状态 ─────────────────────────────
+    v = bundle["validation"]
+    assert v["state"] == "ready_for_human_review", f"validation.state={v['state']}"
+    assert v["blocking_count"] == 0, f"存在 blocking: {v['issues']}"
+    assert bundle["review"]["required"] is True
+
+    # ── 铁律自检:副作用四项必须全 False,投影必须确定性 ───────────
+    e = bundle["effects"]
+    for key in _EFFECT_KEYS:
+        assert e[key] is False, f"effects.{key} 必须为 False(铁律:人审唯一签发)"
+    g = bundle["generation"]
+    assert g["kind"] == "deterministic_projection" and g["llm_used"] is False
+
+    return {"seed": seed, "bundle": bundle}
+
+
+def main() -> int:
+    only = sys.argv[1] if len(sys.argv) > 1 else None
+    paths = sorted(SCENARIO_DIR.glob("*.json"))
+    if only:
+        paths = [p for p in paths if p.stem == only]
+    if not paths:
+        print(f"没有找到场景种子(参数: {only!r})", file=sys.stderr)
+        return 1
+
+    for path in paths:
+        result = verify_scenario(path)
+        seed, bundle = result["seed"], result["bundle"]
+        print(f"=== {seed['scenario_id']}({seed['scenario_name']})闭环验证成功 ===")
+        print()
+        print("draft_digest:", bundle["draft_digest"])
+        wc = bundle["work_case"]
+        print(
+            "work_case: user_message_count=%d message_count=%d"
+            % (wc["user_message_count"], wc["message_count"])
+        )
+        print("task_pattern.suggested_id:", bundle["task_pattern"]["suggested_id"])
+        print("skill.suggested_id:", bundle["skill"]["suggested_id"])
+        v = bundle["validation"]
+        print(
+            "validation: %s(blocking=%d warning=%d)"
+            % (v["state"], v["blocking_count"], v["warning_count"])
+        )
+        e = bundle["effects"]
+        print(
+            "effects(铁律自检): writes_database=%s executes_work=%s registers_asset=%s promotes_asset=%s"
+            % (
+                e["writes_database"],
+                e["executes_work"],
+                e["registers_asset"],
+                e["promotes_asset"],
+            )
+        )
+        print(
+            "generation: %s llm_used=%s"
+            % (bundle["generation"]["kind"], bundle["generation"]["llm_used"])
+        )
+        print()
+        print("桥接 FDE 提示(给教学用):")
+        print("  ", seed["teaching_notes"]["bridge_to_fde"])
+        print()
+
+    print(
+        "全部通过 = %d 个场景的本体论建模闭环可跑,可用于 FDE workshop。" % len(paths)
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
