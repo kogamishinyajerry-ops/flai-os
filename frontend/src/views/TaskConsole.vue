@@ -42,11 +42,11 @@
           </div>
         </template>
 
-        <!-- 全部任务（最近窗口）：状态徽章随 5s 轮询原地切换。
+        <!-- 进行中：工作态四态（isWorking SSOT，与今日页同判据）。
              零值不显示（批次四 Q2）：N=0 时不渲染「· 0」。 -->
-        <div class="cl-group-label">最近任务<template v-if="otherTasks.length"> · {{ otherTasks.length }}</template></div>
+        <div class="cl-group-label">进行中<template v-if="workingTasks.length"> · {{ workingTasks.length }}</template></div>
         <div
-          v-for="t in otherTasks"
+          v-for="t in workingTasks"
           :key="t.id"
           class="cl-item"
           :class="{ 'is-active': t.id === selectedId }"
@@ -63,10 +63,32 @@
           </span>
           <span v-if="unseen(t)" class="cl-unseen-dot" title="完成后你还没看过"></span>
         </div>
-        <div v-if="feedLoaded && !feedTasks.length" class="cl-zero">还没有任务——先在主对话里说明目标，系统会自动编排。</div>
+
+        <!-- 已落定（#30 今日页/任务台合并）：窗口内全部终态，不限今日——任务台
+             是最近 100 条窗口的治理总览，不用今日口径砍历史（今日口径在今日页）。 -->
+        <div class="cl-group-label">已落定<template v-if="settledTasks.length"> · {{ settledTasks.length }}</template></div>
+        <div
+          v-for="t in settledTasks"
+          :key="t.id"
+          class="cl-item"
+          :class="{ 'is-active': t.id === selectedId }"
+          role="button"
+          tabindex="0"
+          @click="select(t)"
+          @keydown.enter.prevent="select(t)"
+          @keydown.space.prevent="select(t)"
+        >
+          <span class="cl-lamp" :class="{ 'is-pulsing': isWork(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
+          <span class="cl-main">
+            <span class="cl-name" :class="{ 'is-unread': unseen(t) }">{{ taskDisplayName(t, agentNames.map) }}</span>
+            <span class="cl-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }} · {{ consoleClock(t.finished_at || t.created_at) }}</span>
+          </span>
+          <span v-if="unseen(t)" class="cl-unseen-dot" title="完成后你还没看过"></span>
+        </div>
+        <div v-if="feedLoaded && !feedTasks.length" class="cl-zero">还没有任务——先在主对话里说明目标，系统会自动安排。</div>
       </template>
 
-      <div class="cl-foot-note">清单来自最近任务窗口（100 条）真实轮询——窗口外不虚报。</div>
+      <div class="cl-foot-note">清单来自最近 100 条任务真实轮询——窗口外不虚报。</div>
     </aside>
 
     <section class="console-main">
@@ -97,6 +119,7 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { statusLabel, taskLampColor, taskDisplayName, formatClockCompact, TASK_WORK_STATES } from "../utils/format";
+import { isWaitingReview, isWorking } from "../utils/taskGroups";
 import { useAgentNames } from "../stores/agentNames";
 import { useTodayKey } from "../composables/useTodayKey";
 import { ensureTaskBaseline, markTaskSeen, taskHasUnseen } from "../utils/lastSeen";
@@ -117,8 +140,13 @@ const consoleClock = (iso) => formatClockCompact(iso, todayKey.value);
 
 const selectedId = computed(() => (typeof route.params.taskId === "string" ? route.params.taskId : ""));
 
-const waitingTasks = computed(() => feedTasks.value.filter((t) => t.status === "waiting_review"));
-const otherTasks = computed(() => feedTasks.value.filter((t) => t.status !== "waiting_review"));
+// 三组分组（#30 今日页/任务台合并）：待你签发/进行中谓词走 taskGroups.js SSOT；
+// 已落定=「非待签且非进行中」余项——后端任务状态全集（created/queued/running/
+// validating/waiting_review/completed/failed/cancelled）下恰为全部终态，且任何
+// 未来新状态都不会从清单静默消失（承旧 otherTasks 不漏行语义）。
+const waitingTasks = computed(() => feedTasks.value.filter(isWaitingReview));
+const workingTasks = computed(() => feedTasks.value.filter(isWorking));
+const settledTasks = computed(() => feedTasks.value.filter((t) => !isWaitingReview(t) && !isWorking(t)));
 
 function isWork(status) {
   return TASK_WORK_STATES.has(status);

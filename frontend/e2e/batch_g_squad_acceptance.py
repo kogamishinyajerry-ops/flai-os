@@ -113,6 +113,15 @@ class _ConvStub:
                      "prefilled_inputs": {"problem_description": REFUSE_PROBLEM, "model_type": "海岚-9"}},
                 ],
             }
+        elif "超出已审定" in last:
+            # 切片 3 S3：guide 级 refuse 裁决（ADR-0033 三终点之一），
+            # 供造第二工作段边界；_validate_refuse 三必填字段齐备。
+            plan = {
+                "decision": "refuse",
+                "reason": "超出平台已审定能力，如实拒绝。",
+                "residual_problems": ["该需求仍待解决"],
+                "reframe": ["收敛到已审定工程域后重述"],
+            }
         else:  # 幻觉 after 引用（O8）
             plan = {
                 "decision": "orchestrate",
@@ -263,7 +272,7 @@ with sync_playwright() as p:
     check(
         "开工前只有一个主动作，成员细节默认折叠",
         page.locator(".open-plan-btn").count() == 1
-        and page.locator(".open-plan-btn").inner_text().strip() == "按方案开工"
+        and page.locator(".open-plan-btn").inner_text().strip() == "按方案开始"
         and disclosure.get_attribute("open") is None
         and page.locator(".agent-card").first.is_visible() is False,
     )
@@ -306,11 +315,47 @@ with sync_playwright() as p:
         json.dumps({"status": t_fault.get("status"), "depends_on": t_fault.get("depends_on")}, ensure_ascii=False),
     )
 
+    # ══ S1（批 0 切片 1，P0-1 状态来找人）：编队总览行在可见面 ═══════════════
+    # 开工后不展开披露，编队行必须在场（UI-PARADIGM #2）；此刻上游 queued
+    # （工作态）→ 可见面脉动点+工作相段词。roster 明细仍属按需披露（下方展开）。
+    face = page.locator(".sa-squad-line.sa-squad-face")
+    try:
+        expect(face).to_be_visible(timeout=8000)
+        closed = page.locator(".route-disclosure").last.get_attribute("open") is None
+        # 快照到账有窗口；queued/waiting_upstream 不属工作态（无脉动点）——
+        # 只等相段词上屏，证明活状态在可见面到账（脉动由 O2 灯族覆盖）。
+        deadline = time.time() + 8
+        face_text = face.inner_text()
+        while time.time() < deadline and not any(
+            w in face_text for w in ("运行中", "已入队", "等待交接", "待你签发")
+        ):
+            page.wait_for_timeout(400)
+            face_text = face.inner_text()
+        check("S1a 开工后编队行在可见面（披露仍默认收起）", closed is True, face_text)
+        check(
+            "S1b 可见面编队行相段词到账（运行中/已入队/等待交接/待你签发其一）",
+            any(w in face_text for w in ("运行中", "已入队", "等待交接", "待你签发")),
+            face_text,
+        )
+        check("S1c 无待签成员可见面不长 CTA（绝不凑）",
+              face.locator(".squad-review-cta").count() == 0)
+        # S1g（codex PR#34 a11y 修复无回归面）：tabindex/aria-label 仅敏感行生长；
+        # 现 roster 全 internal（仓内无 sensitive Agent，敏感路径 dormant，PR 留痕），
+        # 故钉「非敏感行零焦点停点」——修复不得给普通成员行加 tab 噪点。
+        check("S1g 非敏感成员行无焦点停点（tabindex/aria-label 零生长）",
+              page.locator(".agent-name[tabindex], .agent-name[aria-label]").count() == 0)
+    except Exception:
+        for probe in ("S1a 开工后编队行在可见面（披露仍默认收起）",
+                      "S1b 可见面编队行相段词到账（运行中/已入队/等待交接/待你签发其一）",
+                      "S1c 无待签成员可见面不长 CTA（绝不凑）",
+                      "S1g 非敏感成员行无焦点停点（tabindex/aria-label 零生长）"):
+            check(probe, False, "可见面编队行缺失")
+
     # 成员级运行状态属于按需披露内容；测试主动展开后再检查，不把它改回常驻面板。
     disclosure.locator("summary").click()
     expect(page.locator(".agent-card").first).to_be_visible(timeout=3000)
 
-    # O2：等待接力行=空心灯（is-hollow 无 is-pulsing）+ 无秒表 + 上游名旁白。
+    # O2：等待交接行=空心灯（is-hollow 无 is-pulsing）+ 无秒表 + 上游名旁白。
     # 红而不崩（批六 replay 教训）：tamper 断依赖时等待相整体缺失，探针必须
     # 逐条红、套件到达 FAILED 汇总，才算干净咬合（crash-type fail 不算）。
     hollow = page.locator(".status-lamp.is-hollow")
@@ -323,23 +368,23 @@ with sync_playwright() as p:
         check("O2a 空心灯在场且无 is-pulsing", hollow.evaluate("el => !el.classList.contains('is-pulsing')") is True)
         fault_card = page.locator(".agent-card", has=page.locator(".status-lamp.is-hollow"))
         check("O2b 等待行无秒表 DOM", fault_card.locator(".sa-elapsed").count() == 0)
-        check("O2c 状态词=等待接力", "等待接力" in fault_card.locator(".status-word").inner_text())
+        check("O2c 状态词=等待交接", "等待交接" in fault_card.locator(".status-word").inner_text())
         stage = fault_card.locator(".sa-stageline")
         check(
-            "O2d 旁白含上游人话名与自动接力承诺",
-            "等待〈" in stage.inner_text() and "就绪后自动接力" in stage.inner_text(),
+            "O2d 旁白含上游人话名与自动交接承诺",
+            "等待〈" in stage.inner_text() and "就绪后自动交接" in stage.inner_text(),
             stage.inner_text(),
         )
     else:
         for probe in ("O2a 空心灯在场且无 is-pulsing", "O2b 等待行无秒表 DOM",
-                      "O2c 状态词=等待接力", "O2d 旁白含上游人话名与自动接力承诺"):
+                      "O2c 状态词=等待交接", "O2d 旁白含上游人话名与自动交接承诺"):
             check(probe, False, "等待相缺失（空心灯未出现）")
 
     # O7（前置相）：squad 行在场、含等待段、无收束/全部完成类总结
     squad = page.locator(".sa-squad-line")
     expect(squad).to_be_visible(timeout=8000)
     squad_text = squad.inner_text()
-    check("O7a 编队行含「等待接力」段", "等待接力" in squad_text, squad_text)
+    check("O7a 编队行含「等待交接」段", "等待交接" in squad_text, squad_text)
     check(
         "O7b 非全终态绝无收束/全部完成措辞",
         ("收束" not in squad_text) and ("全部完成" not in squad_text),
@@ -428,11 +473,33 @@ with sync_playwright() as p:
     check("O7c 待签相含「待你签发」", "待你签发" in squad_text2, squad_text2)
     check("O7d 待签相 amber 段在场", page.locator(".sa-squad-line .squad-seg.tone-amber").count() >= 1)
     check("O7e 待签相仍无收束措辞", "收束" not in squad_text2 and "全部完成" not in squad_text2, squad_text2)
+    # S1（批 0 切片 1）：待签相可见面长 amber CTA，点击直开速览——不展开披露闭环。
+    cta = page.locator(".squad-review-cta")
+    try:
+        expect(cta).to_be_visible(timeout=8000)
+        check("S1d 待签相可见面 amber CTA 上屏", True, cta.inner_text())
+        cta.click()
+        page.wait_for_selector(".el-drawer", timeout=8000)
+        check("S1e CTA 点击直开速览（状态中心抽屉）", True)
+        # Esc 层层退出（UI-PARADIGM #7）：速览→中心→关闭。onEsc 挂在 sc-shell
+        # （焦点须在内——键盘用户原态），先 focus 再两击必净空，否则抽屉
+        # overlay 拦截后续 composer 点击。焦点在抽屉外 Esc 不生效记 retro。
+        page.locator(".sc-shell").focus()
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
+        page.keyboard.press("Escape")
+        # 活体实证：el-drawer 关闭后节点留 DOM 隐藏（count 恒 1），detached 永假——等 hidden。
+        page.wait_for_selector(".el-drawer", state="hidden", timeout=8000)
+        check("S1e′ Esc 层层退出两击净空（速览→中心→关闭）", True)
+    except Exception:
+        check("S1d 待签相可见面 amber CTA 上屏", False, "可见面 CTA 缺失")
+        check("S1e CTA 点击直开速览（状态中心抽屉）", False, "未验证")
+        check("S1e′ Esc 层层退出两击净空（速览→中心→关闭）", False, "未验证")
     page.screenshot(path=str(SHOTS / "2_waiting_review_evidence.png"), full_page=True)
 
-    # 人签放行 → O10 completed 中性非绿 + O7 终相收束
+    # 批准放行 → O10 completed 中性非绿 + O7 终相收束
     resp = API.post(f"/api/tasks/{t_fault['id']}/review", json={"action": "approve", "comment": "e2e 放行"})
-    check("人签放行 API 生效", resp.status_code == 200, f"status={resp.status_code}")
+    check("批准放行 API 生效", resp.status_code == 200, f"status={resp.status_code}")
     done = wait_status(t_fault["id"], {"completed"}, timeout_s=15)
     check("放行后任务 completed", done.get("status") == "completed", str(done.get("status")))
     deadline = time.time() + 12
@@ -448,6 +515,68 @@ with sync_playwright() as p:
     )
     check("O10 completed 状态词计算色非绿", len(sw_colors) >= 1 and not any(is_greenish(c) for c in sw_colors), str(sw_colors))
     page.screenshot(path=str(SHOTS / "3_settled.png"), full_page=True)
+
+    # S1f（Codex PR#24 回归针）：同会话第二张方案卡出现后，可见面编队行只挂
+    # 最新卡——历史卡不渲染当前活状态/签发 CTA（审批不挂错方案）。
+    # 注意：stub 对不含「接力/拒答」的消息回 O8 幻觉编队（非法不渲染卡），
+    # 故第二轮需求必须命中「接力」分支拿合法方案。
+    page.locator(".composer-input textarea").fill("再来一轮接力编队。")
+    page.locator('button.send-btn[aria-label="发送"]').click()
+    try:
+        expect(page.locator(".plan-card").nth(1)).to_be_visible(timeout=10000)
+        page.wait_for_timeout(1200)
+        faces = page.locator(".sa-squad-line.sa-squad-face")
+        in_last = page.locator(".plan-card").last.locator(".sa-squad-line.sa-squad-face")
+        check("S1f 多方案卡可见面编队行只挂最新卡（count==1 且在末卡内）",
+              faces.count() == 1 and in_last.count() == 1,
+              f"faces={faces.count()} in_last={in_last.count()}")
+    except Exception:
+        check("S1f 多方案卡可见面编队行只挂最新卡（count==1 且在末卡内）", False, "第二张方案卡未出现")
+
+    # ══ S3（切片 3 方案 B）：工作段分隔+中段折叠+时间戳降噪 ════════════════
+    # 边界 1=首次开工的任务创建戳；边界 2=拒答终点（同 agent 二次开工被
+    # planHasTasks 拦是产品语义，不硬造）；再补一轮无方案消息开当前段 → 三段齐。
+    try:
+        before_ai = page.locator(".ai-body").count()
+        page.locator(".composer-input textarea").fill("这件事超出已审定范围，请如实处理。")
+        page.locator('button.send-btn[aria-label="发送"]').click()
+        page.wait_for_function(
+            f"document.querySelectorAll('.ai-body').length > {before_ai}", timeout=30000
+        )
+        before_ai = page.locator(".ai-body").count()
+        page.locator(".composer-input textarea").fill("一句话总结今天的讨论。")
+        page.locator('button.send-btn[aria-label="发送"]').click()
+        page.wait_for_function(
+            f"document.querySelectorAll('.ai-body').length > {before_ai}", timeout=30000
+        )
+        page.wait_for_timeout(800)
+        fold = page.locator(".seg-fold")
+        mid_bubble = page.locator(".bubble-row.user", has_text="再来一轮接力编队")
+        check("S3a 中段默认折（fold 行含轮往来；中段泡在 DOM 不可见）",
+              fold.count() == 1 and "轮往来" in fold.inner_text()
+              and mid_bubble.count() == 1 and mid_bubble.is_visible() is False,
+              fold.inner_text() if fold.count() else "(无 fold 行)")
+        fold.click()
+        page.wait_for_timeout(400)
+        check("S3b 展开后中段可见+分隔线在场（单向展开）",
+              mid_bubble.is_visible() is True
+              and page.locator(".seg-divider").count() >= 2)
+        u1_time = page.locator(".bubble-row.user").first.locator(".bubble-time")
+        a1_time = page.locator(".bubble-row.assistant").first.locator(".bubble-time")
+        op_u1 = u1_time.evaluate("el => getComputedStyle(el).opacity") if u1_time.count() else "none"
+        op_a1 = a1_time.evaluate("el => getComputedStyle(el).opacity") if a1_time.count() else "none"
+        check("S3c 段界时间戳常显、非段界 hover-only",
+              op_u1 == "1" and op_a1 == "0", f"u1={op_u1} a1={op_a1}")
+        check("S3d 首段与当前段豁免折叠",
+              page.locator(".bubble-row.user").first.is_visible() is True
+              and page.locator(".ai-body").last.is_visible() is True)
+    except Exception:
+        for probe in ("S3a 中段默认折（fold 行含轮往来；中段泡在 DOM 不可见）",
+                      "S3b 展开后中段可见+分隔线在场（单向展开）",
+                      "S3c 段界时间戳常显、非段界 hover-only",
+                      "S3d 首段与当前段豁免折叠"):
+            check(probe, False, "三段结构未成立")
+
     # ══ 会话二：拒答态（O6）══════════════════════════════════════════════════
     conv2 = open_plan_conv(page, "跑一遍拒答验收")
     expect(page.locator(".open-plan-btn")).to_be_visible(timeout=8000)
@@ -533,7 +662,7 @@ with sync_playwright() as p:
     check(
         "O8b 只回自然语言澄清与唯一 Composer，零成员卡/字段墙/内部 ghost 泄漏",
         page.locator(".plan-card, .agent-card, .route-summary").count() == 0
-        and page.get_by_role("button", name="按方案开工").count() == 0
+        and page.get_by_role("button", name="按方案开始").count() == 0
         and page.locator(".composer textarea").count() == 1
         and page.locator('.composer input[type="file"]').count() == 1
         and "ghost_agent_o8" not in o8_body

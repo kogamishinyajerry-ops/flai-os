@@ -1,0 +1,43 @@
+今日
+待你签发
+
+没有等你签发的任务
+
+进行中
+当前没有进行中的任务
+今日交付 · 4
+已完成 · 工作 25 秒 · 13:20
+FEA 梁固有频率求解 Agent（纯 Python 有限元）
+fea_solve_agent · 0.1.0 · 测试工程师 · 用时 25 秒
+fea_solution.md
+fea_solution.json
+无模型调用
+已完成 · 工作 1 分 06 秒 · 13:19
+FEA 梁固有频率求解 Agent（纯 Python 有限元）
+fea_solve_agent · 0.1.0 · 测试工程师 · 用时 1 分 06 秒
+fea_solution.md
+fea_solution.json
+无模型调用
+已完成 · 工作 7 分 52 秒 · 13:15
+FEA 梁固有频率求解 Agent（纯 Python 有限元）
+fea_solve_agent · 0.1.0 · 测试工程师 · 用时 7 分 52 秒
+fea_solution.md
+fea_solution.json
+无模型调用
+执行失败 · 进行了 0 秒 · 13:07
+对双通道供电系统完成故障树分析，定位供电完全丧失的根因。
+fta_agent · 0.1.0 · 测试工程师 · 用时 0 秒
+1 次调用 · token 用量：未知
+Agent 动态
+本周暂无晋升
+今日最活跃 Agent
+fea_solve_agent · 3
+fta_agent · 1
+团队总量
+3
+本周完成
+3
+本周人签放行
+42
+累计固化 case
+基于最近 100 条任务窗口

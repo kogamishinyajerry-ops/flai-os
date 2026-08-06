@@ -3,7 +3,7 @@
 这是 M8 编排官愿景的端到端闭环（真浏览器）：
   ① 导引给出 orchestrate 协作方案（2 个 Agent），验收脚本从创建响应捕获真实会话；
   ② 深链 /workbench/:sessionId 见目标 + 分工架构（蓝图）+
-     roster（2 个 Agent，均「尚未召集」）+ 进度 0/2；
+     roster（2 个 Agent，均「尚未就位」）+ 进度 0/2；
   ③ 成员卡零手工启动 CTA，全页只留一个「回到对话补充信息」；
   ④ 点击后回 /?c=<session>，只用文字/附件继续说明；
   ⑤ 认证 API 仅准备工作台夹具任务，再回会话验证任务归属与进度 1/2；
@@ -187,7 +187,7 @@ with sync_playwright() as p:
         and "完成双通道供电的控制逻辑与故障树分析" in body  # goal
         and "分工架构" in body                              # blueprint
         and page.locator(".member").count() == 2            # roster 2 个 Agent
-        and body.count("尚未召集") == 2                     # 都还没召集
+        and body.count("尚未就位") == 2                     # 都还没就位
         and "0 / 2" in body                                 # 进度
     )
     check("②工作台会话：目标+分工架构+roster(2)+进度0/2", sess_ok,
@@ -244,15 +244,15 @@ with sync_playwright() as p:
     page.wait_for_selector(".member", timeout=5000)
     body = page.locator("body").inner_text()
     summoned_ok = (
-        "已召集 · 1 个任务" in body
-        and "尚未召集" in body           # control_logic 仍未召集
+        "已就位 · 1 个任务" in body
+        and "尚未就位" in body           # control_logic 仍未就位
         and "1 / 2" in body              # 进度推进
         and page.locator(".task-chip").count() >= 1
     )
-    check("⑤回会话：fta 已召集(1 任务)+进度 1/2+任务归本会话", summoned_ok,
+    check("⑤回会话：fta 已就位(1 任务)+进度 1/2+任务归本会话", summoned_ok,
           f"chips={page.locator('.task-chip').count()} body={body[-500:]}")
 
-    # ⑤b 批次五 C3 clay 预算：蓝图徽章/逐 chip 动作字/eyebrow/「已召集」常驻降灰
+    # ⑤b 批次五 C3 clay 预算：蓝图徽章/逐 chip 动作字/eyebrow/「已就位」常驻降灰
     #    ——工作台 clay 只留 chip 工作灯与进度大数字（computed 色直断，回染必咬）。
     # ⑤b 前置夹具（Codex R0 P2 暴露的真覆盖空洞）：人签流程下召集产物恒为
     # waiting_review→走 chip-review（amber 状态语义）分支，chip-action 从不渲染，
@@ -280,7 +280,7 @@ with sync_playwright() as p:
     kick_c = page.locator(".sess-goal-kicker").first.evaluate("el => getComputedStyle(el).color")
     sum_c = page.locator(".member-state.summoned").first.evaluate("el => getComputedStyle(el).color")
     clay_budget_ok = all(c != clay_rgb for c in (bp_c, act_c, kick_c, sum_c))
-    check("⑤b clay 预算：bp-tag/chip-action/kicker/已召集 全非 clay（降灰承载信息）",
+    check("⑤b clay 预算：bp-tag/chip-action/kicker/已就位 全非 clay（降灰承载信息）",
           clay_budget_ok is True, f"clay={clay_rgb} bp={bp_c} act={act_c} kick={kick_c} sum={sum_c}")
     # 夹具窗口收口：探针断言完即翻回召集原生态 waiting_review（同样等订阅
     # 回读，不 reload），⑥ 起流程与夹具零耦合。
@@ -302,7 +302,7 @@ with sync_playwright() as p:
         and page.get_by_role("button", name="结束协作").count() == 0   # 归档后不再可结束
         and page.get_by_role("button", name="回到对话补充信息").count() == 0
         and "会话已归档" in body
-        and "已召集 · 1 个任务" in body                                  # 已建任务仍在
+        and "已就位 · 1 个任务" in body                                  # 已建任务仍在
     )
     check("⑥结束协作→归档只读（澄清入口消失，成员任务不受影响）", conclude_ok,
           f"conclude_btn={page.get_by_role('button', name='结束协作').count()} clarify={page.get_by_role('button', name='回到对话补充信息').count()} body={body[-400:]}")

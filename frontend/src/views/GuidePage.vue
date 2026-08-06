@@ -8,10 +8,17 @@
            WelcomeGate 身份门一次收齐，此处不再询问。 -->
       <FlaiBloom class="hero-mark" :size="38" />
       <p class="hero-greeting">{{ greeting }}</p>
-      <h1 class="hero-title">说说你要做的工程活儿</h1>
+      <h1 class="hero-title">说说你要做的事</h1>
       <p class="hero-routing-promise">
-        输入文字或上传附件，系统会在后台自动编排所需能力。
+        输入文字或上传附件，系统会在后台安排所需能力。
       </p>
+      <!-- 示例提示条（#51 形态 A，owner 裁）：点一条只把该句填进草稿并聚焦
+           输入框，发送仍由人亲手——与 adoptReframe 同纪律，绝不代发。 -->
+      <div class="hero-examples">
+        <button type="button" class="hero-example" @click="applyHeroExample('用大白话讲讲什么是故障树')">用大白话讲讲什么是故障树</button>
+        <button type="button" class="hero-example" @click="applyHeroExample('帮我起草一份项目周汇报')">帮我起草一份项目周汇报</button>
+        <button type="button" class="hero-example" @click="applyHeroExample('帮我看看这段代码有没有问题')">帮我看看这段代码有没有问题</button>
+      </div>
     </div>
 
     <el-alert
@@ -21,11 +28,31 @@
       show-icon
       :closable="false"
       class="page-alert"
-    />
+    >
+      <!-- P1-2 异常路径分层：人话标题照常，原始后端 detail 逐字收进折叠。 -->
+      <details v-if="pageErrorDetail" class="error-disclosure">
+        <summary>查看技术细节</summary>
+        <pre class="error-disclosure__body">{{ pageErrorDetail }}</pre>
+      </details>
+    </el-alert>
 
     <!-- 会话流 -->
     <div v-if="messages.length || sending" ref="streamEl" class="thread">
-      <div v-for="(m, idx) in messages" :key="idx" :class="['bubble-row', m.role]">
+      <template v-for="(m, idx) in messages" :key="idx">
+        <!-- 切片 3（#31 方案 B，owner 比选定）：工作段头——首段不抬头；中段默认
+             折为「N 轮往来」一行（display 语义保留 DOM，#25 红线）；当前段与展开
+             的中段=发丝线分隔+段头小字。段界=ADR-0033 三终点同源谓词（workSegments）。 -->
+        <div v-if="segStartOf(idx) && segStartOf(idx).ordinal > 0" class="seg-head">
+          <button
+            v-if="isMiddleOrdinal(segStartOf(idx).ordinal) && !unfoldedSegments.has(segStartOf(idx).ordinal)"
+            type="button"
+            class="seg-fold"
+            :aria-expanded="false"
+            @click="toggleSegment(segStartOf(idx).ordinal)"
+          >▸ {{ segmentUserCount(segStartOf(idx).ordinal) }} 轮往来 · 第 {{ segStartOf(idx).ordinal + 1 }} 段（{{ segmentClock(idx) }}）</button>
+          <div v-else class="seg-divider"><span>第 {{ segStartOf(idx).ordinal + 1 }} 段 · {{ segmentClock(idx) }}</span></div>
+        </div>
+      <div :class="['bubble-row', m.role, { 'seg-folded': isFoldedMsg(idx) }]">
 
         <!-- 用户消息：靠右暖气泡 -->
         <div v-if="m.role === 'user'" class="user-bubble">
@@ -40,7 +67,7 @@
                （--trust-pending=仅未核/降级）——对账锁期间用户轮同样未确认，
                核对后随权威会话重渲染消失。 -->
           <span v-if="m.persistenceUnknown" class="user-unknown-chip">保存待核</span>
-          <div v-if="m.createdAt" class="bubble-time">{{ formatTime(m.createdAt) }}</div>
+          <div v-if="m.createdAt" class="bubble-time" :class="{ 'is-boundary': !!segStartOf(idx) }">{{ formatTime(m.createdAt) }}</div>
         </div>
 
         <!-- 助手消息：小 mark + 流动排版，plan-card 内联渲染 -->
@@ -51,7 +78,7 @@
             :size="26"
           />
           <div class="ai-body">
-            <div class="ai-name">FLAi<span v-if="m.createdAt" class="bubble-time">{{ formatTime(m.createdAt) }}</span></div>
+            <div class="ai-name">FLAi<span v-if="m.createdAt" class="bubble-time" :class="{ 'is-boundary': !!segStartOf(idx) }">{{ formatTime(m.createdAt) }}</span></div>
             <!-- 助手正文走 MarkdownLite（W5）：列表/标题/引用成块渲染——桌面级
                  富文本；纯插值零 v-html，XSS 面不变。用户气泡仍纯文本忠实显示。 -->
             <MarkdownLite v-if="m.content" :text="m.content" class="ai-lead" />
@@ -61,7 +88,11 @@
               :class="{ 'is-unknown': m.persistenceUnknown, 'is-stopped': m.streamStopped }"
             >
               <strong>{{ m.streamErrorTitle || "流式中断 · 保存状态待核" }}</strong>
-              <span v-if="m.streamErrorDetail"> — {{ m.streamErrorDetail }}</span>
+              <!-- P1-2 异常路径分层：标题/动作行人话照常，原始后端 detail 逐字进折叠。 -->
+              <details v-if="m.streamErrorDetail" class="error-disclosure">
+                <summary>查看技术细节</summary>
+                <pre class="error-disclosure__body">{{ m.streamErrorDetail }}</pre>
+              </details>
               <span v-if="m.streamErrorAction" class="stream-interrupted-action">
                 {{ m.streamErrorAction }}
               </span>
@@ -74,9 +105,9 @@
               >{{ reconciling ? "核对中…" : "刷新会话核对" }}</button>
             </p>
 
-            <!-- 导引计划（M8 编排官）：refuse=显式拒绝 -->
+            <!-- 导引计划（M8 编排官）：refuse=暂时接不住 -->
             <div v-if="m.recommendation && m.recommendation.decision === 'refuse'" class="plan-card refuse" :class="{ 'fx-rise': m.fresh }">
-              <div class="plan-kicker refuse">显式拒绝</div>
+              <div class="plan-kicker refuse">暂时接不住</div>
               <h3 class="plan-goal-title small">这个需求，平台暂时接不住</h3>
               <p v-if="m.recommendation.reason" class="plan-reason">{{ m.recommendation.reason }}</p>
               <div
@@ -106,14 +137,14 @@
                     <span class="reframe-adopt">采纳 →</span>
                   </div>
                 </div>
-                <p class="reframe-escape">或者直接在下方输入框，告诉导引你想怎么调整。</p>
+                <p class="reframe-escape">或者直接在下方输入框，告诉 FLAi 你想怎么调整。</p>
               </div>
               <!-- 需求登记引导（评审 N6）：拒接 ≠ 需求消失。反馈通道是任务级的、挂不上
                    无任务的需求，先给「复制摘要 → 找平台负责人登记」最短闭环；接件评估
                    Agent（feat/requirement-intake-agent）合入后升级为一键登记进待办队列。 -->
               <div class="refuse-keep">
                 <button type="button" class="refuse-copy" @click="copyRefusedNeed(idx)">复制需求摘要</button>
-                <span class="refuse-keep-note">接不住 ≠ 不重要——复制摘要发给平台负责人登记，平台会按家底口径统一评估排期。</span>
+                <span class="refuse-keep-note">接不住 ≠ 不重要——复制摘要发给平台负责人登记，平台会统一评估排期。</span>
               </div>
             </div>
 
@@ -123,7 +154,7 @@
               class="plan-card"
               :class="{ 'fx-rise': m.fresh }"
             >
-              <!-- 顶行只留 kicker：成员计数由 roster-label「执行单元 · N」
+              <!-- 顶行只留 kicker：成员计数由 roster-label「成员 · N」
                    一处承担（五律③一处一行——原 plan-count pill 与之同屏重复，降噪批撤）。 -->
               <div class="plan-topline">
                 <span class="plan-kicker">协作方案</span>
@@ -131,25 +162,48 @@
               <h2 v-if="m.recommendation.goal" class="plan-goal-title">{{ m.recommendation.goal }}</h2>
               <p v-if="m.recommendation.analysis" class="plan-reason">{{ m.recommendation.analysis }}</p>
               <div class="route-summary">
-                <span>已自动编排 · {{ m.recommendation.agents.length }} 个执行单元</span>
+                <span>已自动安排 · {{ m.recommendation.agents.length }} 位成员</span>
                 <span
                   v-if="planHasInvalidSkillReuse(m.recommendation)"
                   class="route-summary-state is-pending plan-alert"
                   aria-live="polite"
-                >复用证据无法核验，本次禁止开工；请继续对话让系统重新编排</span>
+                >复用证据无法核验，本次禁止开始；请继续对话让系统重新安排</span>
                 <span
                   v-else-if="planHasIncompleteOrchestration(m.recommendation)"
                   class="route-summary-state is-pending plan-alert"
                   aria-live="polite"
-                >方案有执行单元未能纳入，请继续说明或让系统重新编排</span>
+                >方案有成员未能纳入，请继续说明或让系统重新安排</span>
                 <span v-else-if="batchCreationNeedsReconciliation" class="route-summary-state is-pending" aria-live="polite">创建状态待核，禁止重复开工</span>
-                <span v-else-if="openableCount(m.recommendation) > 0" class="route-summary-state" aria-live="polite">信息已齐，等待你确认开工</span>
-                <span v-else-if="planHasTasks(m.recommendation)" class="route-summary-state" aria-live="polite">执行已接入，关键状态会在这里更新</span>
+                <span v-else-if="openableCount(m.recommendation) > 0" class="route-summary-state" aria-live="polite">信息已齐，等待你确认开始</span>
+                <span v-else-if="planHasTasks(m.recommendation)" class="route-summary-state" aria-live="polite">执行已接入</span>
                 <span v-else class="route-summary-state is-pending" aria-live="polite">还需通过对话补充执行信息</span>
                 <span
                   v-if="skillReuseForPlan(m.recommendation)"
                   class="skill-reuse-inline"
                 >计划复用 · {{ skillReuseForPlan(m.recommendation).skill_name }}</span>
+              </div>
+
+              <!-- 批 0 切片 1（P0-1 状态来找人）：编队总览行提可见面——开工后成员
+                   活状态不展开披露即在场；waiting_review 长出可见面 amber CTA 直开
+                   速览。路由依据/roster 明细仍在下方按需披露（ADR-0033 只读披露不变）。
+                   Codex PR#24：守卫与 details/plan-foot 同源——只挂最新方案卡，
+                   历史卡不渲染当前活状态（squadTasksOf 按 agent 全会话聚合，
+                   挂历史卡会把重试的活状态/签发 CTA 挂错方案）。 -->
+              <div
+                v-if="idx === latestPlanIdx && squadSegs(m.recommendation)"
+                class="sa-squad-line sa-squad-face"
+              >
+                <span v-if="squadHasWork(m.recommendation)" class="work-pulse-dot"></span>
+                <template v-for="(seg, si) in squadSegs(m.recommendation)" :key="si">
+                  <span v-if="si > 0" class="squad-sep">·</span>
+                  <span class="squad-seg" :class="`tone-${seg.tone}`">{{ seg.text }}</span>
+                </template>
+                <button
+                  v-if="squadReviewTarget(m.recommendation)"
+                  type="button"
+                  class="squad-review-cta"
+                  @click.stop="openTaskPeek(squadReviewTarget(m.recommendation).id)"
+                >审阅签发 →</button>
               </div>
 
               <details v-if="idx === latestPlanIdx" class="route-disclosure">
@@ -169,17 +223,10 @@
                 <div class="section-label">分工如何衔接</div>
                 <p class="plan-workflow">{{ m.recommendation.workflow }}</p>
               </div>
-              <div class="section-label roster-label">执行单元 · {{ m.recommendation.agents.length }}</div>
-              <!-- L1 编队总览行（批七 §1.4）：纯 computed 聚合成员任务快照，零动画
-                   数字替换；a>0 行首 work-pulse-dot；待签发段 amber。收束态假绿
-                   禁令（O7 tamper 探针）：非全终态或有待签发绝不出「完成」类总结。 -->
-              <div v-if="squadSegs(m.recommendation)" class="sa-squad-line">
-                <span v-if="squadHasWork(m.recommendation)" class="work-pulse-dot"></span>
-                <template v-for="(seg, si) in squadSegs(m.recommendation)" :key="si">
-                  <span v-if="si > 0" class="squad-sep">·</span>
-                  <span class="squad-seg" :class="`tone-${seg.tone}`">{{ seg.text }}</span>
-                </template>
-              </div>
+              <div class="section-label roster-label">成员 · {{ m.recommendation.agents.length }}</div>
+              <!-- L1 编队总览行已于批 0 切片 1 提至披露外可见面（sa-squad-face，
+                   状态来找人）；此处仅保留 roster 明细。收束态假绿禁令（O7 tamper
+                   探针）随编队行同在可见面生效。 -->
               <!-- codex 式子 agent 行（owner 定向：紧凑+实时感，不要大静卡）：
                    一行一名成员——状态灯 + 名字 + 分工 + 右槽实时状态词/耗时秒表；
                    次行=实时进度旁白（运行中 shimmer 扫光，事件驱动）或未召集时的
@@ -192,7 +239,7 @@
                   :class="{ 'fx-rise': m.fresh, 'is-live': !!agentTaskInfo(a) }"
                 >
                   <div class="sa-head">
-                    <!-- 六态灯（批七 T1/T4）：等待接力=空心灯（1px ink 描边，绝无
+                    <!-- 六态灯（批七 T1/T4）：等待交接=空心灯（1px ink 描边，绝无
                          is-pulsing，O2 探针）；接力翻转瞬间播 2 轮 sa-relay-echo 自停。
                          灯的翻转只认 status（memberPhase 派生），事件只做旁白。 -->
                     <span
@@ -202,14 +249,20 @@
                                 'sa-relay-echo': agentTaskInfo(a) && relayEchoIds.has(agentTaskInfo(a).latest.id) }"
                       :style="{ background: memberLampBg(a) }"
                     ></span>
-                    <span class="agent-name" :title="agentTaxonomyTip(a)">{{ a.agent_name }}</span>
-                    <!-- 分类学进披露（降噪批，五律④）：domain/密级/成熟度/发布状态
-                         收进 agent-name 的 title 悬浮，不上成员行主视觉；唯敏感密级
-                         是信任信号（amber=受控/未核槽），常驻行内不折。 -->
                     <span
-                      v-if="clearanceOf(a) === 'sensitive'"
-                      class="sa-clearance-pill is-sensitive"
-                    >{{ clearanceLabelOf(a) }}</span>
+                      class="agent-name"
+                      :title="agentTaxonomyTip(a)"
+                      :tabindex="clearanceOf(a) === 'sensitive' ? 0 : undefined"
+                      :aria-label="clearanceOf(a) === 'sensitive' ? agentTaxonomyTip(a) : undefined"
+                    >{{ a.agent_name }}</span>
+                    <!-- 分类学进披露（降噪批，五律④）：domain/密级/成熟度/发布状态
+                         收进 agent-name 的 title 悬浮，不上成员行主视觉。
+                         退役批（#29，owner 2026-08-04 裁）：敏感密级 pill 亦收进 title
+                         （agentTaxonomyTip 已含「密级 敏感」）——敏感提示走悬浮披露，
+                         不再行头常驻；amber 槽位语义不变（待签/未核等既有面）。
+                         codex PR#34 P2（a11y）：title 挂在非聚焦元素上键盘不可达——
+                         敏感行 agent-name 补 tabindex=0 + aria-label（焦点环见 CSS），
+                         非敏感行不增 tab 停点。 -->
                     <span v-if="a.role" class="agent-role"><span class="role-tag">分工</span>{{ a.role }}</span>
                     <span class="sa-spacer"></span>
 
@@ -233,10 +286,10 @@
                     </div>
                     <!-- 右槽②未召集：只解释自动整理状态，不提供手工 Agent/参数入口。 -->
                     <div v-else-if="!summonedLocally(a)" class="agent-actions">
-                      <span v-if="agentReadyForPlan(m.recommendation, a)" class="agent-readytag">输入已自动整理 · 待开工</span>
+                      <span v-if="agentReadyForPlan(m.recommendation, a)" class="agent-readytag">输入已自动整理 · 待开始</span>
                       <span v-else class="agent-readytag is-pending">等待对话补充</span>
                     </div>
-                    <span v-else class="agent-readytag">已召集 · 接入中…</span>
+                    <span v-else class="agent-readytag">已就位 · 接入中…</span>
                   </div>
 
                   <div
@@ -356,13 +409,13 @@
                   type="button"
                   class="open-plan-btn cta-clay"
                   @click="focusComposer"
-                >继续说明或重新编排</button>
+                >继续说明或重新安排</button>
                 <button
                   v-else-if="planHasInvalidSkillReuse(m.recommendation)"
                   type="button"
                   class="open-plan-btn is-pending"
                   @click="focusComposer"
-                >复用证据待核 · 继续对话让系统重新编排</button>
+                >复用证据待核 · 继续对话让系统重新安排</button>
                 <button
                   v-else-if="batchCreationNeedsReconciliation"
                   class="open-plan-btn cta-clay"
@@ -374,7 +427,7 @@
                   class="open-plan-btn cta-clay"
                   :disabled="opening === conversationId"
                   @click="openPlan(m.recommendation)"
-                >{{ opening === conversationId ? "正在开工…" : "按方案开工" }}</button>
+                >{{ opening === conversationId ? "正在开始…" : "按方案开始" }}</button>
                 <button
                   v-else-if="planHasTasks(m.recommendation)"
                   class="workbench-btn cta-clay"
@@ -420,6 +473,7 @@
           </div>
         </template>
       </div>
+      </template>
 
       <!-- 完成态才长出的单一资产候选锚点。它属于主对话轴，不进入成员卡、
            不形成常驻侧栏；审核面只读且只有按钮。 -->
@@ -546,7 +600,7 @@
         </div>
       </div>
       <div class="composer-hint">
-        <span class="composer-policy">{{ retryContextChecking ? "正在核对失败任务…" : batchCreationNeedsReconciliation ? "创建状态待核 · 本次开工核对前已锁定" : activeRetryOf ? "正在处理失败任务 · 审计血缘会自动保留" : "系统会在后台准备方案 · 开工与签发仍由你确认" }}</span>
+        <span class="composer-policy">{{ retryContextChecking ? "正在核对失败任务…" : batchCreationNeedsReconciliation ? "创建状态待核 · 本次开工核对前已锁定" : activeRetryOf ? "正在处理失败任务 · 审计血缘会自动保留" : "系统会在后台准备方案 · 开始与放行由你确认" }}</span>
         <span class="keys"><kbd>Enter</kbd> 发送<span class="sep">·</span><kbd>⇧ Enter</kbd> 换行<span class="sep">·</span>可带附件</span>
       </div>
       </div>
@@ -646,6 +700,7 @@ import {
   planHasIncompleteOrchestration,
   retryLineageForPlanItem,
   verifiedFailedRetryLineage,
+  workSegments,
 } from "../utils/conversationPlans.js";
 import {
   assetCandidateReconcileCreateReason,
@@ -834,6 +889,9 @@ const assetBuilderInitialStep = acceptanceFixture?.assetBuilderStep || 1;
 const assetBuilderInitialGeneralization = acceptanceFixture?.assetDraftGeneralization || null;
 const assetBuilderInitialPreview = acceptanceFixture?.assetDraftPreview || null;
 const pageError = ref(acceptanceFixture?.pageError || "");
+// P1-2 异常路径分层：pageError 只留人话标题，原始后端 detail 逐字收进
+// alert 内 error-disclosure 折叠；无 detail 可折时保持空串不渲。
+const pageErrorDetail = ref("");
 const streamEl = ref(null);
 // 对账锁期间换成核对指引；正常态只提示工程师提供目标或补充信息，不要求
 // 选择 Agent、模型、工具、工作流，也不暴露参数字段。
@@ -845,7 +903,7 @@ const composerPlaceholder = computed(() =>
     : reconciliationRequired.value
     ? "保存状态待核——请先刷新会话核对"
     : !started.value && messages.value.length === 0
-      ? "描述工程需求…"
+      ? "描述你的需求…"
       : "继续说下去…"
 );
 // 待发送附件（M7）：选中只入列（raw 留本地），发送时才上传——同 TaskCreate 的
@@ -941,6 +999,13 @@ function adoptReframe(text) {
   focusComposer();
 }
 
+function applyHeroExample(text) {
+  if (interactionPolicy.value.canSend !== true) return;
+  // hero 示例提示条（#51）：与 adoptReframe 同纪律——只填草稿并聚焦，绝不代发。
+  draft.value = text;
+  focusComposer();
+}
+
 // ── 导引轮次真耗时（评审 N3）────────────────────────────────────────────
 // 独立 1s 计时器（不共用实时行的 nowTick——那条由工作态任务门控启停，语义
 // 不同不硬并）；sending 结束即停表清零，零常驻空转。
@@ -1015,7 +1080,7 @@ async function copyRefusedNeed(idx) {
     lines.push("导引建议的重述方向：");
     for (const r of rec.reframe) lines.push(`- ${r}`);
   }
-  lines.push("（来自 FLAi-OS 导引对话——请平台负责人按家底口径评估排期）");
+  lines.push("（来自 FLAi-OS 导引对话——请平台负责人评估排期）");
   const ok = await copyText(lines.join("\n"));
   if (ok === true) ElMessage.info("需求摘要已复制——发给平台负责人登记，别让它溜走");
   else ElMessage.error("复制失败——请手动选取文字复制");
@@ -1150,6 +1215,7 @@ async function send() {
   );
   let submittedConversationId = conversationId.value;
   pageError.value = "";
+  pageErrorDetail.value = "";
 
   // 上一轮若在收到部分 delta 后中断，页面会保留一组明确标成「未保存」的
   // 临时消息帮助用户判断。下一次发送前清掉它，避免重试堆出重复幽灵轮次。
@@ -1170,6 +1236,7 @@ async function send() {
     if (optimisticIndex >= 0) messages.value.splice(optimisticIndex, 1);
     draft.value = content;
     pageError.value = "";
+    pageErrorDetail.value = "";
     ElMessage.info("会话或失败恢复入口已切换——本轮尚未发送，原话已退回主输入");
   };
   draft.value = "";
@@ -1296,6 +1363,9 @@ async function send() {
     ) {
       // 服务端已把这一轮原子保存到原会话；当前页面已切走，不能把旧回复混进新会话。
       pokeConversation(submittedConversationId);
+      // 该轮已在原会话落库，同样补记标题缓存层（活跃会话标题即时脱离兜底）。
+      // 注意此处页面已切走，messages.value 属新会话——只能用本轮提交的 optimisticUser。
+      recordConversationFirstUserContent(submittedConversationId, [optimisticUser]);
       ElMessage.info("原会话的回复已保存——当前会话未混入旧回复，可从历史记录打开查看");
       return;
     }
@@ -1303,6 +1373,8 @@ async function send() {
     // canonical done 已抵达：这一轮才算后端原子落库成功。用权威 message
     // 整体替换临时增量（含 recommendation / created_at），消除分片差异。
     optimisticUser.transient = false;
+    // 发送落库即补记标题缓存层（#28）：活跃会话标题即时脱离「与 X 的对话」兜底。
+    recordConversationFirstUserContent(submittedConversationId, messages.value);
     // post-message 的 canonical assistant 与同事务 user 共用同一保存轮次；当前接口
     // 只回 assistant 时间戳，作为工作段排序代理。缺失时保留 null，边界存在则排除。
     optimisticUser.createdAt = res.message.created_at || null;
@@ -1336,7 +1408,7 @@ async function send() {
     ) {
       retryPlanArmed.value = true;
     } else if (submittedRetryOf && retryContextStillCurrent !== true) {
-      ElMessage.info("恢复入口已变化——本轮回复已保存，但旧方案不会开放开工；请重新发送确认");
+      ElMessage.info("恢复入口已变化——本轮回复已保存，但旧方案不会开放开始；请重新发送确认");
     }
     const provisionalIndex = provisionalAssistant
       ? messages.value.indexOf(provisionalAssistant)
@@ -1361,7 +1433,8 @@ async function send() {
       const optimisticIndex = messages.value.indexOf(optimisticUser);
       if (optimisticIndex >= 0) messages.value.splice(optimisticIndex, 1);
       draft.value = content;
-      pageError.value = detail;
+      pageError.value = "发送失败——本轮未保存，原话已退回输入框";
+      pageErrorDetail.value = detail;
     } else if (stopRequested.value) {
       // 用户主动停止（先于失败策略拦截）：中止是用户主动行为，后端断连零落库
       // 路径在案，可如实断言本轮未保存——中性提示而非失败红，也绝不进
@@ -1375,6 +1448,7 @@ async function send() {
         provisionalAssistant.streamErrorTitle = STREAM_STOPPED_TITLE;
         draft.value = content;
         pageError.value = "";
+        pageErrorDetail.value = "";
         void scrollToBottom();
       } else {
         // 首 token 前停止：与零落库同语义回滚乐观气泡、原话还稿。
@@ -1386,6 +1460,7 @@ async function send() {
         }
         draft.value = content;
         pageError.value = "";
+        pageErrorDetail.value = "";
         ElMessage.info("已停止生成——本轮未保存，原话已退回输入框");
       }
     } else {
@@ -1401,12 +1476,14 @@ async function send() {
           provisionalAssistant.streamErrorDetail = detail;
           draft.value = content;
           pageError.value = "";
+          pageErrorDetail.value = "";
           void scrollToBottom();
         } else {
           const optimisticIndex = messages.value.indexOf(optimisticUser);
           if (optimisticIndex >= 0) messages.value.splice(optimisticIndex, 1);
           draft.value = content;
-          pageError.value = `${failure.title} — ${detail}`;
+          pageError.value = failure.title;
+          pageErrorDetail.value = detail;
         }
       } else if (failure.retainUnconfirmedTurn) {
         // 超时、读流断开、提前 EOF、畸形 done 都可能发生在服务端 COMMIT 之后。
@@ -1434,6 +1511,7 @@ async function send() {
           ? ""
           : "请刷新会话核对后再继续。";
         pageError.value = "";
+        pageErrorDetail.value = "";
         void scrollToBottom();
       }
     }
@@ -1609,7 +1687,7 @@ const EVENT_VERB = {
 // workflow 折叠事件译文（runtime._WorkflowEventLogger 把业务事件折成 agent_log，
 // 原始类型在 payload.workflow_event_type）：只译仓内已知类型，未知回退通用工作语。
 const WORKFLOW_EVENT_VERB = {
-  dependency_resolved: "前序产物已就绪，接力开始",
+  dependency_resolved: "前序产物已就绪，交接开始",
   summary_generated: "汇总已生成",
 };
 
@@ -1903,12 +1981,12 @@ function planHasInvalidSkillReuse(plan) {
 async function openPlan(plan) {
   if (opening.value === conversationId.value && opening.value !== null) return;
   if (planHasInvalidSkillReuse(plan)) {
-    ElMessage.warning("Skill 复用证据无法核验，本次未创建任务；请继续对话让系统重新编排。");
+    ElMessage.warning("Skill 复用证据无法核验，本次未创建任务；请继续对话让系统重新安排。");
     focusComposer();
     return;
   }
   if (planHasIncompleteOrchestration(plan)) {
-    ElMessage.warning("方案有执行单元未能纳入，请继续说明或让系统重新编排");
+    ElMessage.warning("方案有成员未能纳入，请继续说明或让系统重新安排");
     focusComposer();
     return;
   }
@@ -1941,7 +2019,7 @@ async function openPlan(plan) {
       requestedRetryOf: requestedRetryOf.value,
     })) return;
     if (refreshedPins === null || planOpenable(plan) !== true) {
-      ElMessage.error("执行单元输入契约已更新或暂时无法核对——本次未创建任务，请继续补充信息。");
+      ElMessage.error("成员输入契约已更新或暂时无法核对——本次未创建任务，请继续补充信息。");
       return;
     }
     const { pinnedVersions, pinnedPackageDigests } = refreshedPins;
@@ -2034,7 +2112,7 @@ async function openPlan(plan) {
       }
     }
     ensureConversationTasksFeed(); // 督战 chip 保鲜：召集即接上会话任务订阅
-    ElMessage.info(`已按方案召集 ${targets.length} 名成员——进度与签发都会来这里找你`);
+    ElMessage.info(`已按方案就位 ${targets.length} 位成员——进度与签发都会来这里找你`);
     if (creationJournalCleared !== true) {
       ElMessage.warning("任务已创建，但本地开工记录尚未安全清除；本会话继续锁定以避免重复创建");
     }
@@ -2075,7 +2153,7 @@ async function openPlan(plan) {
     }
     if (structuredDetail?.code === "skill_package_reuse_invalid") {
       ElMessage.warning(
-        "Skill 复用证据在开工前未通过复核，本次确定未创建任务；请继续对话让系统重新编排。",
+        "Skill 复用证据在开始前未通过复核，本次确定未创建任务；请继续对话让系统重新安排。",
       );
       return;
     }
@@ -2096,9 +2174,9 @@ async function openPlan(plan) {
         const who = t ? t.a.agent_name : `第 ${(e.index ?? 0) + 1} 项`;
         return `${who}：${(e.errors || []).join("；")}`;
       });
-      ElMessage.error(`召集未执行（全有全无，未创建任何任务）——${lines.join("；")}`);
+      ElMessage.error(`就位未执行（全有全无，未创建任何任务）——${lines.join("；")}`);
     } else {
-      ElMessage.error(`召集失败（未创建任何任务）：${err.detail || err.message || "请稍后重试"}`);
+      ElMessage.error(`就位失败（未创建任何任务）：${err.detail || err.message || "请稍后重试"}`);
     }
   } finally {
     if (opening.value === approvedConvId) opening.value = null; // 只清本会话的忙态
@@ -2201,6 +2279,58 @@ async function reconcileBatchCreation() {
 // watch-diff acquire/release，同 StatusCenter.vue 的 ensurePeekLoaded 姿势。
 const conversationTasks = ref(acceptanceFixture?.conversationTasks || []);
 const conversationTasksLoaded = ref(acceptanceMode);
+
+// ── 切片 3（#31 方案 B）：工作段分隔/折叠数据面 ────────────────────────────
+// 段界与附件路由同源（workSegments ⇄ currentWorkSegmentFiles 共用三终点谓词），
+// 视觉分段与附件归属永不漂移。首段/当前段豁免折叠（#25 红线：首条 .user-bubble、
+// 最新 .plan-card/.ai-body 永不折）；中段默认折，display 语义保留 DOM。
+const unfoldedSegments = ref(new Set());
+const workSegmentList = computed(() =>
+  workSegments(messages.value, conversationTasks.value, attachmentSegmentBoundaryMs.value));
+const segmentOrdinalByMsg = computed(() => {
+  const arr = new Array(messages.value.length).fill(0);
+  for (const seg of workSegmentList.value) {
+    for (let i = seg.start; i <= seg.end; i += 1) arr[i] = seg.ordinal;
+  }
+  return arr;
+});
+const currentSegmentOrdinal = computed(() => {
+  const list = workSegmentList.value;
+  return list.length > 0 ? list[list.length - 1].ordinal : 0;
+});
+function segStartOf(idx) {
+  const ordinal = segmentOrdinalByMsg.value[idx];
+  const seg = workSegmentList.value[ordinal];
+  return seg && seg.start === idx ? seg : null;
+}
+function isMiddleOrdinal(ordinal) {
+  return ordinal > 0 && ordinal < currentSegmentOrdinal.value;
+}
+function isFoldedMsg(idx) {
+  const ordinal = segmentOrdinalByMsg.value[idx];
+  return isMiddleOrdinal(ordinal) && !unfoldedSegments.value.has(ordinal);
+}
+function toggleSegment(ordinal) {
+  const set = unfoldedSegments.value;
+  if (set.has(ordinal)) set.delete(ordinal);
+  else set.add(ordinal);
+}
+function segmentUserCount(ordinal) {
+  const seg = workSegmentList.value[ordinal];
+  if (!seg) return 0;
+  let n = 0;
+  for (let i = seg.start; i <= seg.end; i += 1) {
+    if (messages.value[i] && messages.value[i].role === "user") n += 1;
+  }
+  return n;
+}
+function segmentClock(idx) {
+  const iso = messages.value[idx] ? messages.value[idx].createdAt : null;
+  const ms = typeof iso === "string" ? Date.parse(iso) : NaN;
+  if (!Number.isFinite(ms)) return "—";
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
 
 // ADR-0034：单个 completed 用户任务自动形成一张候选；多任务会话留给未来
 // Workflow Revision，不在成员墙上批量长卡。acceptance fixture 只提供只读快照。
@@ -2557,7 +2687,7 @@ function memberLampBg(a) {
 function memberStatusWord(a) {
   const info = agentTaskInfo(a);
   if (!info) return "";
-  return memberPhase(info.latest) === "waiting_upstream" ? "等待接力" : statusLabel(info.latest.status);
+  return memberPhase(info.latest) === "waiting_upstream" ? "等待交接" : statusLabel(info.latest.status);
 }
 
 function memberStatusColor(a) {
@@ -2568,16 +2698,16 @@ function memberStatusColor(a) {
     : taskLampColor(info.latest.status);
 }
 
-// 等待接力旁白（T1/T4 文案表）：上游名经 agentNames 解析人话名；上游真失败
+// 等待交接旁白（T1/T4 文案表）：上游名经 agentNames 解析人话名；上游真失败
 // → 中性灰兜底句（非红——下游没失败，只是接不上力）。
 function upstreamNarration(t) {
   const byId = new Map(conversationTasks.value.map((x) => [x.id, x]));
   const ups = (t.depends_on || []).map((d) => byId.get(d)).filter(Boolean);
   const anyFailed = ups.some((u) => u.status === "failed" || u.status === "cancelled");
-  if (anyFailed) return "前序失败，接力已暂停 · 详情→";
+  if (anyFailed) return "前序失败，交接已暂停 · 详情→";
   const names = ups.map((u) => agentNames.map[u.agent_id] || u.agent_id.slice(0, 12));
   const label = names.length ? names.join("、") : "上游成员";
-  return `等待〈${label}〉的产物 · 就绪后自动接力`;
+  return `等待〈${label}〉的产物 · 就绪后自动交接`;
 }
 
 // T2 首行口播：charter 开场句已由后端在创建期落成持久化事件（agent_log +
@@ -2702,6 +2832,13 @@ function squadHasWork(plan) {
   return tasks.some((t) => TASK_WORK_STATES.has(t.status));
 }
 
+// 批 0 切片 1（P0-1）：可见面「审阅签发 →」CTA 的数据面——编队中首个待签成员
+// 任务；无待签返回 null（CTA 不渲染）。amber=待签槽（信任色锁），不占其他槽。
+function squadReviewTarget(plan) {
+  const tasks = squadTasksOf(plan);
+  return tasks.find((t) => t.status === "waiting_review") || null;
+}
+
 // 会话任务快照每次落地 → 对账 task channel 持有集；有任一工作态成员任务 →
 // 秒表开，全部终态 → 秒表停（不空转）。必须声明在 conversationTasks 之后：
 // watch source 创建时即求值，TDZ 抛错会被 Vue callWithErrorHandling 吞成
@@ -2715,7 +2852,7 @@ watch(
     for (const t of tasks) ensureTaskEvidence(t); // 批七 T5/T6：终审面成员拉依据摘要
     void ensureAssetCandidateForTasks(tasks);
     const anyWork = tasks.some((t) => TASK_WORK_STATES.has(t.status));
-    // 等待接力行虽无秒表，但编队行/等待旁白仍要随快照活现——工作态判定不变
+    // 等待交接行虽无秒表，但编队行/等待旁白仍要随快照活现——工作态判定不变
     if (anyWork === true) ensureLiveTicker();
     else stopLiveTicker();
   },
@@ -2814,11 +2951,15 @@ function resetToFresh(clearError = true) {
   assetCandidateError.value = "";
   assetCandidateTaskId.value = null;
   attachmentSegmentBoundaryMs.value = 0;
+  unfoldedSegments.value.clear(); // 切片 3：折叠态不跨会话存活（换会话走本事务）
   draft.value = "";
   pendingFiles.value = [];
   releaseConversationTasksFeed();
   resetScrollFollow(); // 新会话/切换会话：滚动跟随守卫一并复位
-  if (clearError) pageError.value = "";
+  if (clearError) {
+    pageError.value = "";
+    pageErrorDetail.value = "";
+  }
 }
 
 // 垂类问答 recommendation 判据：无 decision 键（refuse/orchestrate 是导引专属）
@@ -2882,7 +3023,8 @@ async function loadConversation(id, { preserveOnFailure = false, isCurrent = () 
       ElMessage.warning("原对话不可用——已打开新对话，失败任务血缘仍会保留");
       return true;
     }
-    pageError.value = err.detail || err.message || "会话加载失败";
+    pageError.value = "会话加载失败";
+    pageErrorDetail.value = err.detail || err.message || "";
     return false;
   } finally {
     if (isCurrent() === true) restoring.value = false;
@@ -2898,11 +3040,13 @@ async function reconcileConversation() {
   const id = conversationId.value;
   if (!id) {
     pageError.value = "无法核对：当前会话标识缺失，请从左侧历史重新打开会话";
+    pageErrorDetail.value = "";
     return;
   }
 
   reconciling.value = true;
   pageError.value = "";
+  pageErrorDetail.value = "";
   const requiredBeforeRefresh = reconciliationRequired.value;
   // 对账前快照滞留的未确认用户原文（B2）：核对成功后若服务端权威会话确认
   // 该轮未落库，把原文还回输入草稿（现状原文随本地快照被清、草稿为空）。
@@ -2932,7 +3076,8 @@ async function reconcileConversation() {
     // loadConversation 当前会把读取错误转成 false；此 catch 仍为未来改动保底：
     // 任意未预期异常都不能误解锁，也不能吞掉对账失败原因。
     reconciliationRequired.value = true;
-    pageError.value = err.detail || err.message || "会话核对失败";
+    pageError.value = "会话核对失败";
+    pageErrorDetail.value = err.detail || err.message || "";
   } finally {
     reconciling.value = false;
   }
@@ -3075,6 +3220,31 @@ watch(
   font-size: var(--fs-sm);
   line-height: 1.7;
 }
+/* 示例提示条（#51 形态 A）：中性墨描边 chip 横排，不占信任色五槽；hover
+ * 语法同 refuse-copy（墨色+描边各深一档），flex-wrap 居中天然而应窄屏。 */
+.hero-examples {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 560px;
+  margin: var(--space-3) auto 0;
+}
+.hero-example {
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  color: var(--ink-soft);
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 6px 13px;
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft);
+}
+.hero-example:hover,
+.hero-example:focus-visible {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
 
 .page-alert {
   margin-bottom: 14px;
@@ -3124,6 +3294,39 @@ watch(
 }
 .bubble-row:hover .bubble-time,
 .bubble-row:focus-within .bubble-time { opacity: 1; }
+/* 切片 3（#31）：段界时间戳常显（扫读锚），其余保持 hover-only 降噪。 */
+.bubble-time.is-boundary { opacity: 1; }
+/* 切片 3（#31 方案 B）：工作段头——发丝线+段头小字（灰字语法同 G1）；
+   中段折叠按钮=纯一行灰字（cd-collapsed-blocks 语法），无盒无图标。 */
+.seg-head { align-self: stretch; margin: 10px 0 -6px; }
+.seg-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 600;
+}
+.seg-divider::before,
+.seg-divider::after { content: ""; flex: 1; border-top: 1px solid var(--hairline-soft); }
+.seg-divider span { font-variant-numeric: tabular-nums; }
+.seg-fold {
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.seg-fold:hover { color: var(--ink); }
+.seg-fold:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+/* 折叠=display 语义保留 DOM（#25 红线：count 类断言存活；无动画，reduce 无涉）。 */
+.bubble-row.seg-folded { display: none; }
 .user-bubble .bubble-time {
   display: block;
   margin-top: 6px;
@@ -3244,6 +3447,33 @@ watch(
   display: block;
   margin-top: 3px;
   color: var(--ink-soft);
+}
+/* P1-2 异常路径分层（全票统一契约）：摘要看齐标题照常显示，原始后端
+ * detail 逐字收进折叠——page-alert 与 stream-interrupted 共用此形态。 */
+.error-disclosure {
+  margin-top: 4px;
+  font-size: 12px;
+}
+.error-disclosure summary {
+  display: inline-block;
+  color: var(--ink-faint);
+  cursor: pointer;
+  user-select: none;
+}
+.error-disclosure summary:hover {
+  color: var(--ink-soft);
+}
+.error-disclosure__body {
+  margin: 6px 0 0;
+  padding: 7px 9px;
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline-soft);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .stream-reconcile-btn {
   display: inline-flex;
@@ -3557,6 +3787,12 @@ watch(
   min-width: 0;
 }
 .sa-head .agent-name { flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* codex PR#34 P2：敏感行 agent-name 可聚焦后的焦点环（W0 全局语法同款）。 */
+.sa-head .agent-name[tabindex="0"]:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
 .sa-head .agent-role { margin: 0; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sa-spacer { flex: 1 1 auto; min-width: 8px; }
 .sa-head .agent-status { margin: 0; flex: 0 0 auto; }
@@ -3630,8 +3866,27 @@ watch(
 .squad-seg.tone-clay { color: var(--clay); font-weight: 600; }
 .squad-seg.tone-amber { color: var(--trust-pending); font-weight: 600; }
 .squad-seg.tone-rose { color: var(--trust-fail); font-weight: 600; }
+/* 批 0 切片 1（P0-1）：可见面编队行——段词语法与披露内同源（共享 tone 令牌），
+ * 不新增色槽；amber CTA 仅真实待签成员在场时渲染。 */
+.sa-squad-face { margin: 10px 0 0; }
+.squad-review-cta {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  color: var(--trust-pending);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  cursor: pointer;
+}
+.squad-review-cta:hover { color: var(--ink); }
+.squad-review-cta:focus-visible {
+  outline: 2px solid var(--focus-ring-clay);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
 
-/* 等待接力=空心灯（T1）：1px ink 描边圆，绝无 is-pulsing（O2 探针断言互斥） */
+/* 等待交接=空心灯（T1）：1px ink 描边圆，绝无 is-pulsing（O2 探针断言互斥） */
 .status-lamp.is-hollow {
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--ink-soft);
@@ -3642,24 +3897,6 @@ watch(
   animation: flai-work-pulse var(--pulse-duration) ease-in-out 2;
 }
 .sa-stageline.is-waiting-upstream { color: var(--ink-soft); }
-
-/* 敏感密级 pill（降噪批后唯一常驻的分类学标记）：amber=受控/未核语义槽，
-   是信任信号不是行话——domain/非敏感密级/成熟度/发布状态已收进 agent-name
-   title（五律④），不再上成员行主视觉。 */
-.sa-clearance-pill {
-  flex: none;
-  font-size: 11px;
-  line-height: 1;
-  padding: 3px 7px;
-  border-radius: 6px;
-  border: 1px solid var(--hairline);
-  color: var(--ink-soft);
-  white-space: nowrap;
-}
-.sa-clearance-pill.is-sensitive {
-  border-color: color-mix(in srgb, var(--trust-pending) 55%, transparent);
-  color: var(--trust-pending);
-}
 
 /* T5 依据摘要 chip：含未核整 chip amber 底纹；点击展开 EvidenceList */
 .sa-evidence-chip {
@@ -3932,6 +4169,13 @@ watch(
   margin-top: 18px;
   padding-top: 16px;
   border-top: 1px solid var(--hairline-soft);
+}
+/* 批 0 切片 1（P2-1）：披露收起时其底边与 foot 顶边叠成双发丝线死空间——
+   收起态收掉 foot 顶线；展开态 roster 与 CTA 之间仍要分隔，保持原样。 */
+.route-disclosure:not([open]) + .plan-foot {
+  margin-top: 10px;
+  padding-top: 0;
+  border-top: 0;
 }
 /* 主态渐变/投影/hover 走全局 .cta-clay（模板按主/次互斥换装）——本类只留结构。 */
 .workbench-btn {

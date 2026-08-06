@@ -1,7 +1,7 @@
 """M8 P2 导引编排官验收走查（refuse + 多 Agent 自动路由的真浏览器渲染）。
 
 M6 e2e 已覆盖单 Agent orchestrate 卡片；本脚本补 M8 编排官的两个新分支：
-  ① refuse：平台接不住 → 显式拒绝卡片（理由 + 残留问题 + 重述建议），不产生
+  ① refuse：平台接不住 → 暂时接不住卡片（理由 + 残留问题 + 重述建议），不产生
      任何开工入口；
   ② 不完整多 Agent orchestrate：含幻觉成员、缺输入或缺衔接关系时整份方案
      fail-closed，不先展示半成品成员卡；系统只在同一个文字/附件 Composer 中自然
@@ -122,7 +122,7 @@ with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="light")  # pin 亮色：theme.js 默认跟随系统，颜色断言不许随 CI 环境漂移
 
-    # ── ① refuse：平台接不住 → 显式拒绝卡片 ──
+    # ── ① refuse：平台接不住 → 暂时接不住卡片 ──
     stub.plan = {
         "decision": "refuse",
         "reason": "这是一次性的行政统计，不是工程智能体该接的活儿。",
@@ -191,7 +191,7 @@ with sync_playwright() as p:
     ]
     fail_closed_ok = (
         page.locator(".plan-card, .route-summary, .agent-card").count() == 0
-        and page.get_by_role("button", name="按方案开工").count() == 0
+        and page.get_by_role("button", name="按方案开始").count() == 0
         and page.get_by_role("button", name="去创建此任务").count() == 0
         and page.locator(".composer textarea").count() == 1
         and page.locator('.composer input[type="file"]').count() == 1

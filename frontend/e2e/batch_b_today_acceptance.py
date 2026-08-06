@@ -5,7 +5,7 @@
 的登录/同 owner 跨会话 approver/保活样板（同一份 _auth.py）。
 
 覆盖（spec §五）：
-  ①/today 渲染五版块（待你签发/进行中/今日交付/Agent 动态/团队总量）；待签发
+  ①/today 渲染五版块（待你签发/进行中/今日交付/助手动态/团队总量）；待签发
     计数与全局 StatusDock 角标数同源相等（同页同一份 tasks channel 真值）。
   ②同 owner 跨会话 approver 批准（httpx，不共享本机浏览器 cookie）→ /today 页面全程
     不动 → 12s 内该任务出现在「今日交付」且其卡播放 .seal-animate（本会话
@@ -171,7 +171,7 @@ with sync_playwright() as p:
     page.goto(BASE + "/today", wait_until="networkidle")
     poke_wait(page, lambda: page.locator(".today-section").count() == 5, 10)
     section_count = page.locator(".today-section").count()
-    check("①/today 渲染五版块（待你签发/进行中/今日交付/Agent 动态/团队总量）",
+    check("①/today 渲染五版块（待你签发/进行中/今日交付/助手动态/团队总量）",
           section_count == 5, f"count={section_count}")
 
     def _counts_match():

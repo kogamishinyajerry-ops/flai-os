@@ -25,6 +25,14 @@ const guideSource = readFileSync(
   new URL("../src/views/GuidePage.vue", import.meta.url),
   "utf8",
 );
+const taskDetailSource = readFileSync(
+  new URL("../src/views/TaskDetail.vue", import.meta.url),
+  "utf8",
+);
+const statusCenterSource = readFileSync(
+  new URL("../src/components/StatusCenter.vue", import.meta.url),
+  "utf8",
+);
 const conversationPlansSource = readFileSync(
   new URL("../src/utils/conversationPlans.js", import.meta.url),
   "utf8",
@@ -439,9 +447,9 @@ test("自动路由镜头只暴露方案与人工治理动作，不暴露手工�
 test("Agent 壳只接受文字与附件，自动路由并把内部编排按需披露", () => {
   assert.equal((guideSource.match(/<el-input/g) || []).length, 1);
   assert.equal((guideSource.match(/<el-upload/g) || []).length, 1);
-  assert.match(guideSource, /系统会在后台自动编排所需能力/);
-  assert.match(guideSource, /开工与签发仍由你确认/);
-  assert.equal((guideSource.match(/开工与签发仍由你确认/g) || []).length, 1);
+  assert.match(guideSource, /系统会在后台安排所需能力/);
+  assert.match(guideSource, /开始与放行由你确认/);
+  assert.equal((guideSource.match(/开始与放行由你确认/g) || []).length, 1);
   assert.match(guideSource, /查看路由依据与边界/);
   assert.match(guideSource, /class="route-disclosure"/);
   assert.match(
@@ -451,7 +459,7 @@ test("Agent 壳只接受文字与附件，自动路由并把内部编排按需�
   assert.doesNotMatch(guideSource, /class="route-summary" aria-live=/);
   assert.match(guideSource, /class="route-summary-state[^\"]*" aria-live="polite"/);
   assert.doesNotMatch(guideSource, /route-disclosure-count/);
-  assert.match(guideSource, /class="section-label roster-label">执行单元 ·/);
+  assert.match(guideSource, /class="section-label roster-label">成员 ·/);
   assert.doesNotMatch(guideSource, />召集的 Agent/);
   assert.doesNotMatch(guideSource, /Agent、模型与工具/);
   assert.doesNotMatch(guideSource, /浏览可用 Agent/);
@@ -480,6 +488,59 @@ test("Agent 壳只接受文字与附件，自动路由并把内部编排按需�
     /\.send-btn\.cta-clay:disabled\s*\{[\s\S]*?background:\s*var\(--paper-rail\)[\s\S]*?color:\s*var\(--ink-faint\)/,
     "空输入发送按钮必须回到中性 surface/ink，不继续占用 clay 工作色",
   );
+});
+
+test("起手 hero 示例提示条只填草稿不代发，三句示例逐字在场", () => {
+  assert.equal((guideSource.match(/class="hero-example"/g) || []).length, 3);
+  assert.match(guideSource, /用大白话讲讲什么是故障树/);
+  assert.match(guideSource, /帮我起草一份项目周汇报/);
+  assert.match(guideSource, /帮我看看这段代码有没有问题/);
+  assert.match(guideSource, /function applyHeroExample\(text\)/);
+  assert.match(
+    guideSource,
+    /function applyHeroExample\(text\) \{\n[\s\S]*?draft\.value = text;\n  focusComposer\(\);\n\}/,
+    "hero 示例只能填草稿并聚焦输入框，发送仍由人亲手，绝不代发",
+  );
+});
+
+test("P1-2 错误分层：三处错误面统一 details.error-disclosure 折叠技术细节", () => {
+  for (const source of [guideSource, taskDetailSource, statusCenterSource]) {
+    assert.match(source, /<details[^>]*class="error-disclosure"/);
+    assert.match(source, /<summary>查看技术细节<\/summary>/);
+    assert.match(source, /class="error-disclosure__body"/);
+  }
+  assert.match(
+    taskDetailSource,
+    /title="任务执行失败——失败原因已如实保留，展开查看技术细节。"/,
+  );
+  assert.match(
+    statusCenterSource,
+    /title="任务执行失败——失败原因已如实保留，展开查看技术细节。"/,
+  );
+});
+
+test("P1-2 互审回归锚：pageError title 只收人话，原始 detail 逐字进 pageErrorDetail", () => {
+  // 负向锚：任何分支都不得把原始后端 detail 直赋 el-alert title（本 finding 源头）。
+  assert.doesNotMatch(guideSource, /pageError\.value = err\.detail/);
+  assert.doesNotMatch(guideSource, /pageError\.value = detail;/);
+  // 正向锚：三处修复后人话标题逐字在场。
+  assert.match(guideSource, /pageError\.value = "发送失败——本轮未保存，原话已退回输入框"/);
+  assert.match(guideSource, /pageError\.value = "会话加载失败"/);
+  assert.match(guideSource, /pageError\.value = "会话核对失败"/);
+  // 配对锚：原始 detail 只进折叠层。
+  assert.match(guideSource, /pageErrorDetail\.value = detail;/);
+  assert.match(guideSource, /pageErrorDetail\.value = err\.detail \|\| err\.message \|\| "";/);
+});
+
+test("词表双口径：默认面迁移新词，route-disclosure 内工程词保留", () => {
+  assert.match(guideSource, /roster-label">成员 ·/);
+  assert.match(guideSource, /未匹配该执行单元的输入契约/);
+});
+
+test("refuse 卡 kicker 用暂时接不住，重述引导直呼 FLAi", () => {
+  assert.match(guideSource, /<div class="plan-kicker refuse">暂时接不住<\/div>/);
+  assert.match(guideSource, /这个需求，平台暂时接不住/);
+  assert.match(guideSource, /告诉 FLAi 你想怎么调整/);
 });
 
 test("全局快速切换只检索工程任务与会话，不把 Agent 暴露成工程师选项", () => {

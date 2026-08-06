@@ -148,11 +148,20 @@ with sync_playwright() as p:
     body = page.locator("body").inner_text()
     row = page.locator(".cl-item", has_text="工作台验收样例任务").first
     lamp_visible = row.locator(".cl-lamp").is_visible()
-    foot_ok = "最近任务窗口" in body  # 诚实脚注：窗口外不虚报
+    foot_ok = "最近 100 条任务真实轮询" in body  # 诚实脚注：窗口外不虚报
     check("②/workbench→/tasks 重定向 + 任务台列表 + 到席灯 + 诚实脚注",
           row.is_visible() and lamp_visible and foot_ok,
           f"row={row.is_visible()} lamp={lamp_visible} foot={foot_ok}")
     page.screenshot(path=str(SHOTS / "2_console.png"), full_page=True)
+
+    # ②-组头（#30 今日页/任务台合并）：左栏=待你签发(amber置顶)/进行中/已落定 三组。
+    # 种子任务此刻处于进行中或已落定（hello_agent 跑得比浏览器就位快，两态都合法）
+    # → 组头恰为「进行中/已落定」两组且计数后缀恰挂在任务所在组（零计数不渲染
+    # 「· 0」）；无待签任务时 amber 组整组不渲染（承旧隐藏语义，非删组）。
+    group_labels = [t.strip() for t in page.locator(".cl-group-label").all_inner_texts()]
+    groups_ok = group_labels in (["进行中 · 1", "已落定"], ["进行中", "已落定 · 1"])
+    check("②左栏三组组头（进行中/已落定，计数随任务所在组；无待签则 amber 组不渲染）",
+          groups_ok, f"labels={group_labels}")
 
     # 深链页 /tasks 不占主导航高亮（Phase 3：任务台是深链、非一级 Surface，
     # 对话是唯一一级入口——在深链视图里没有某个一级 Surface 处于 active）。
@@ -171,6 +180,12 @@ with sync_playwright() as p:
     row = page.locator(".cl-item", has_text="工作台验收样例任务").first
     expect(row.locator(".cl-lamp")).to_have_css("background-color", "rgb(107, 98, 89)", timeout=8000)
     check("②''completed 到席灯=中性墨非绿（信任色锁真咬合）", True)
+
+    # ②''-组迁移（#30）：种子任务转终态后应从「进行中」落入「已落定 · 1」，
+    # 进行中组零计数不渲染「· 0」。
+    group_labels2 = [t.strip() for t in page.locator(".cl-group-label").all_inner_texts()]
+    check("②''任务转终态后移入「已落定」组（窗口内全部终态，不限今日）",
+          group_labels2 == ["进行中", "已落定 · 1"], f"labels={group_labels2}")
 
     # ── ②''' 完成未读点（2c）：baseline 之后新完成且没打开过 → clay 点；点开即灭 ──
     # baseline 已在首次进任务台时锚定（上方 goto /workbench），此后创建的任务

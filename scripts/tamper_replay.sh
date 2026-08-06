@@ -12,6 +12,9 @@
 #           dialog-reduce-cut portal-dup-enqueue
 #           b7-after-cut b7-hollow-pulse b7-fake-settle b7-gate-cut（批七编队投影）
 #           b8-gate-cut b8-after-cut b8-order-cut b8-withheld-cut（批八 teams 实体）
+#           s1-face-cut s1-zero-cut（批 0 切片 1：编队行可见面/时长零值豁口）
+#           s1-a11y-cut（PR#34 a11y：非敏感行零焦点停点无回归面）
+#           s3-seg-cut s3-fold-cut（切片 3：段头渲染/中段默认折叠）
 # 约 5-6 分钟/处（build+整套 craft e2e）；portal-dup-enqueue 跑 m10 套件较快；
 # b7-* 跑 batch_g 套件（~3 分钟/处）。
 #
@@ -108,6 +111,10 @@ suite_of() {
     portal-dup-enqueue) echo "$M10" ;;
     b7-*) echo "$BATCHG" ;;
     b8-*) echo "$BATCHH" ;;
+    s1-face-cut) echo "$BATCHG" ;;
+    s1-a11y-cut) echo "$BATCHG" ;;
+    s3-seg-cut) echo "$BATCHG" ;;
+    s3-fold-cut) echo "$BATCHG" ;;
     *) echo "$CRAFT" ;;
   esac
 }
@@ -132,6 +139,12 @@ expect_of() {
     b8-after-cut)       echo 'FAIL O3b 乱序提交依赖边仍正确' ;;
     b8-order-cut)       echo 'FAIL O4b patch 漂移放行' ;;
     b8-withheld-cut)    echo 'FAIL O6c 依据段遮蔽标记在场' ;;
+    # 批 0 切片 1：长前缀锚死（S1a 与 S1b/S1c 不互为前缀；⑰S1 独立编号无串号面）。
+    s1-face-cut)        echo 'FAIL S1a' ;;
+    s1-zero-cut)        echo 'FAIL ⑰S1' ;;
+    s1-a11y-cut)        echo 'FAIL S1g' ;;
+    s3-seg-cut)         echo 'FAIL S3a' ;;
+    s3-fold-cut)        echo 'FAIL S3a' ;;
     *) echo "" ;;
   esac
 }
@@ -263,10 +276,47 @@ assert s.count(t)==1
 open(p,"w").write(s.replace(t,"      entry.withheld = false;"))
 PY
       ;;
+    # ── 批 0 切片 1（P0-1/时长零值豁口）──
+    # face-cut：可见面编队行类名改死 → S1 探针整组红（状态回退进隐藏面）。
+    s1-face-cut) cat <<'PY'
+p="frontend/src/views/GuidePage.vue"; s=open(p).read()
+t='class="sa-squad-line sa-squad-face"'; assert s.count(t)==1
+open(p,"w").write(s.replace(t,'class="sa-squad-line sa-squad-face-cut-x"'))
+PY
+      ;;
+    # zero-cut：时长零值豁口恒假 → 「0 秒」回屏，⑰S1 必咬。
+    s1-zero-cut) cat <<'PY'
+p="frontend/src/components/WorkLog.vue"; s=open(p).read()
+t="const durZero = elapsedMs.value !== null && elapsedMs.value < 1000;"; assert s.count(t)==1
+open(p,"w").write(s.replace(t,"const durZero = false;"))
+PY
+      ;;
+    # ── 切片 3 ──
+    # seg-cut：段头整体不渲染 → fold 行消失，S3a 必咬。
+    s3-seg-cut) cat <<'PY'
+p="frontend/src/views/GuidePage.vue"; s=open(p).read()
+t='<div v-if="segStartOf(idx) && segStartOf(idx).ordinal > 0" class="seg-head">'; assert s.count(t)==1
+open(p,"w").write(s.replace(t,'<div v-if="false" class="seg-head">'))
+PY
+      ;;
+    # fold-cut：中段默认折叠恒假 → 中段泡常显，S3a 必咬。
+    s3-fold-cut) cat <<'PY'
+p="frontend/src/views/GuidePage.vue"; s=open(p).read()
+t="return isMiddleOrdinal(ordinal) && !unfoldedSegments.value.has(ordinal);"; assert s.count(t)==1
+open(p,"w").write(s.replace(t,"return false;"))
+PY
+      ;;
+    # a11y-cut：敏感条件 tabindex 改无条件 → 非敏感行也长焦点停点，S1g 必咬。
+    s1-a11y-cut) cat <<'PY'
+p="frontend/src/views/GuidePage.vue"; s=open(p).read()
+t=':tabindex="clearanceOf(a) === \'sensitive\' ? 0 : undefined"'; assert s.count(t)==1
+open(p,"w").write(s.replace(t,':tabindex="0"'))
+PY
+      ;;
   esac
 }
 
-ALL="census-redye timeout-cut degrade-cut reduce-sidebar roving-cut fitts-shrink dialog-reduce-cut portal-dup-enqueue b7-after-cut b7-hollow-pulse b7-fake-settle b7-gate-cut b8-gate-cut b8-after-cut b8-order-cut b8-withheld-cut"
+ALL="census-redye timeout-cut degrade-cut reduce-sidebar roving-cut fitts-shrink dialog-reduce-cut portal-dup-enqueue b7-after-cut b7-hollow-pulse b7-fake-settle b7-gate-cut b8-gate-cut b8-after-cut b8-order-cut b8-withheld-cut s1-face-cut s1-zero-cut s1-a11y-cut s3-seg-cut s3-fold-cut"
 NAMES="${*:-$ALL}"
 
 # 先验名合法性 + 汇总用到的套件，各跑一次 clean baseline（全绿才准开咬）。

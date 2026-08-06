@@ -458,11 +458,11 @@ test("Guide 对不完整编排只给同一 composer 恢复动作，开工门与 
   );
   assert.match(
     guideSource,
-    /v-if="planHasIncompleteOrchestration\(m\.recommendation\)"[\s\S]*?@click="focusComposer"[\s\S]*?>继续说明或重新编排<\/button>/,
+    /v-if="planHasIncompleteOrchestration\(m\.recommendation\)"[\s\S]*?@click="focusComposer"[\s\S]*?>继续说明或重新安排<\/button>/,
   );
   assert.match(
     guideSource,
-    /方案有执行单元未能纳入，请继续说明或让系统重新编排/,
+    /方案有成员未能纳入，请继续说明或让系统重新安排/,
   );
   const footStart = guideSource.indexOf('<div v-if="idx === latestPlanIdx" class="plan-foot">');
   const footEnd = guideSource.indexOf("</div>", footStart);
@@ -493,7 +493,7 @@ test("Guide 对不完整编排只给同一 composer 恢复动作，开工门与 
   assert.doesNotMatch(
     guideSource,
     /dropped_agents\.join/,
-    "不得把内部执行单元标识作为恢复字段墙暴露给工程师",
+    "不得把内部成员标识作为恢复字段墙暴露给工程师",
   );
 });
 

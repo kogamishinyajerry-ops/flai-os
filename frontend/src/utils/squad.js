@@ -2,7 +2,7 @@
 // hero 句共用一份口径。一切计数都是任务快照的忠实投影——不虚构进度、不预测。
 //
 // waiting_upstream 是**纯前端派生态**（§1.1）：status=created 且 depends_on 非空
-// =「等待接力」。任务 status 是唯一真值；事件（dependency_resolved）只做旁白，
+// =「等待交接」。任务 status 是唯一真值；事件（dependency_resolved）只做旁白，
 // 灯与分组的翻转只认 status。
 import { TASK_WORK_STATES, taskElapsedMs } from "./format";
 
@@ -63,7 +63,7 @@ export function squadSegments(counts, tasks, now) {
   const segs = [{ text: `${counts.experts ?? counts.total} 位专家协作`, tone: "neutral" }];
   if (counts.running > 0) segs.push({ text: `${counts.running} 运行中`, tone: "clay" });
   if (counts.queued > 0) segs.push({ text: `${counts.queued} 已入队`, tone: "neutral" });
-  if (counts.waitingUpstream > 0) segs.push({ text: `${counts.waitingUpstream} 等待接力`, tone: "neutral" });
+  if (counts.waitingUpstream > 0) segs.push({ text: `${counts.waitingUpstream} 等待交接`, tone: "neutral" });
   if (counts.waitingReview > 0) segs.push({ text: `${counts.waitingReview} 待你签发`, tone: "amber" });
   if (counts.completed > 0) segs.push({ text: `${counts.completed} 已完成`, tone: "neutral" });
   if (counts.failed > 0) segs.push({ text: `${counts.failed} 失败`, tone: "rose" });
@@ -82,7 +82,7 @@ function formatDur(ms) {
   return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`;
 }
 
-// 接力顺序一句话（§1.5）：depends_on 拓扑序（Kahn），同层保持任务原序；
+// 交接顺序一句话（§1.5）：depends_on 拓扑序（Kahn），同层保持任务原序；
 // 环理论上不存在（batch 按构造 DAG），防御性兜底：残余项按原序附尾，绝不死循环。
 export function relayOrderText(tasks, nameOf) {
   const withDeps = tasks.filter((t) => (t.depends_on || []).length > 0);
