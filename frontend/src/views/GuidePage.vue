@@ -183,6 +183,20 @@
                 >计划复用 · {{ skillReuseForPlan(m.recommendation).skill_name }}</span>
               </div>
 
+              <!-- map#46 #56（R-B/R-C）方案卡级依据行：聚合计数提可见面，
+                   不再只在 route-disclosure 披露内逐成员出现。句式与 per-member
+                   chip 逐字同句，amber 同 has-unverified 口径，复用既有 chip
+                   样式类不加新色；不受 latestPlanIdx 门控（历史方案卡也渲），
+                   聚合零占位不渲。静态展示行——逐成员点击展开仍在披露区。 -->
+              <div
+                v-if="planEvidenceLine(m.recommendation)"
+                class="plan-evidence-line sa-evidence-chip"
+                :class="{
+                  'has-unverified': planEvidenceLine(m.recommendation).hasUnverified,
+                  'is-withheld': planEvidenceLine(m.recommendation).withheldOnly,
+                }"
+              >{{ planEvidenceLine(m.recommendation).text }}</div>
+
               <!-- 批 0 切片 1（P0-1 状态来找人）：编队总览行提可见面——开工后成员
                    活状态不展开披露即在场；waiting_review 长出可见面 amber CTA 直开
                    速览。路由依据/roster 明细仍在下方按需披露（ADR-0033 只读披露不变）。
@@ -664,6 +678,7 @@ import {
   taskEvidenceSummary,
   taskEvidenceWithheld,
 } from "../stores/taskEvidence";
+import { mergeEvidenceSummaries } from "../utils/evidenceTrace.js";
 import { agentStatusLabel, MATURITY, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime, formatFileSize } from "../utils/format";
 import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
 import { useAgentNames } from "../stores/agentNames";
@@ -2792,6 +2807,41 @@ function evidenceSummaryOf(a) {
   return taskEvidenceSummary(info.latest.id);
 }
 
+// map#46 #56（R-B/R-C 触发-浮现面）：方案卡可见面「依据行」——成员任务依据
+// 聚合从 route-disclosure 披露内提升为可见面一行计数。信号源全是确定性事实
+// （任务存在性 + 产物 findings + 密级遮蔽标记），零 LLM 自报语境；聚合 null
+// （零占位）不渲行。三态句式与 roster 内 per-member chip 逐字同句：
+//   正常计数句 / 「依据结构待核」/「依据清单〔按密级隐藏〕」；
+// 既有内容又有遮蔽项时沿用 W7 措辞后缀「·另有密级隐藏项」。
+// hasUnverified=amber 底纹口径同 per-member chip（invalid 或含未核）。
+function planEvidenceLine(plan) {
+  if (!plan || !Array.isArray(plan.agents)) return null;
+  const merged = mergeEvidenceSummaries(
+    plan.agents.map((a) => {
+      const info = agentTaskInfo(a);
+      return {
+        summary: info ? taskEvidenceSummary(info.latest.id) : null,
+        withheld: info !== null && taskEvidenceWithheld(info.latest.id) === true,
+      };
+    }),
+  );
+  if (!merged) return null;
+  if (merged.invalid) {
+    return {
+      text: merged.withheld ? "依据结构待核·另有密级隐藏项" : "依据结构待核",
+      hasUnverified: true,
+      withheldOnly: false,
+    };
+  }
+  if (merged.total === null) {
+    return { text: "依据清单〔按密级隐藏〕", hasUnverified: false, withheldOnly: true };
+  }
+  let text = `依据 ${merged.total} 条（${merged.verified} 已核验 · ${merged.unverified} 未核）`;
+  if (merged.level) text += ` · 置信度 ${merged.level}（模型自评）`;
+  if (merged.withheld) text += "·另有密级隐藏项";
+  return { text, hasUnverified: merged.unverified > 0, withheldOnly: false };
+}
+
 function refusalsOf(a) {
   const info = agentTaskInfo(a);
   if (!info) return [];
@@ -3923,6 +3973,16 @@ watch(
   border-color: color-mix(in srgb, var(--trust-pending) 45%, transparent);
   background: color-mix(in srgb, var(--trust-pending) 8%, transparent);
   color: var(--trust-pending);
+}
+/* map#46 #56 方案卡级依据行：静态展示（不可点，逐成员展开仍在披露区），
+   左缩进归零对齐方案卡正文；配色全部继承 sa-evidence-chip 既有类，不加新色。 */
+.sa-evidence-chip.plan-evidence-line {
+  margin-left: 0;
+  cursor: default;
+}
+.sa-evidence-chip.plan-evidence-line:hover { border-color: var(--hairline); }
+.sa-evidence-chip.plan-evidence-line.has-unverified:hover {
+  border-color: color-mix(in srgb, var(--trust-pending) 45%, transparent);
 }
 /* 去盒化（批次五 C3）：去底色+描边，只留顶部发丝线与上方 chip 分隔。 */
 .sa-evidence-expand {

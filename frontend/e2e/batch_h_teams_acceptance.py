@@ -13,6 +13,8 @@ O9 后端半由 test_b8_teams.py 承接）：
   O5 密级不稀释：sensitive 材料席位 → 整单 422（batch gate 第四路复用实证）；
   O6 withheld 诚实（GuidePage 被动面）：sensitive JSON 产物 → 遮蔽标记在场 +
      零 /download 请求（网络计数）+ 无编造「依据 N 条」；
+  O6e 方案卡可见面依据行（map#46 #56）：聚合计数+W7 遮蔽后缀逐字真值断言
+     （N/已核验/置信度由 API 真值推导），且行只在披露区之外的方案卡正文；
   O7 工程师入口纪律：无方案、有方案、归档后均没有手工存团队/
      逐席填参/手工召集；门户只读展示蓝本。
 
@@ -498,6 +500,56 @@ with sync_playwright() as p:
     body_text = page.locator("body").inner_text()
     check("O6d 无编造「依据 N 条」计数", re.search(r"依据\s*\d+\s*条", body_text) is None)
     page.screenshot(path=str(SHOTS / "4_withheld.png"))
+
+    # ── O6e（map#46 #56 依据行）：方案卡可见面聚合一行的真值断言 ─────────
+    # 确定性来源（本场景收官相已固定）：ui_up(completed)=internal 产物无 findings
+    # + 注入 sensitive JSON → 仅遮蔽；ui_down(waiting_review)=fault_history.json
+    # 含证据行 → 计数。聚合行=计数句+W7 遮蔽后缀，N/已核验/置信度全部由 API
+    # 真值推导（下载 internal JSON 数行），绝不硬编码；行须在 route-disclosure
+    # 披露区之外的可见面（.plan-evidence-line 只在方案卡正文渲染）。
+    if ui_down is None:
+        check("O6e 方案卡可见面依据行（聚合计数+遮蔽后缀，amber 未核）", False, "前置缺失：ui_down 无任务")
+    else:
+        down_files = API.get(f"/api/tasks/{ui_down['id']}/output_files").json()
+        down_json = next(
+            (f for f in down_files
+             if str(f.get("filename", "")).lower().endswith(".json")
+             and f.get("data_classification") == "internal"),
+            None,
+        )
+        if down_json is None:
+            check("O6e 方案卡可见面依据行（聚合计数+遮蔽后缀，amber 未核）", False,
+                  "下游 internal JSON 产物缺失")
+        else:
+            payload = API.get(f"/api/files/{down_json['id']}/download").json()
+            findings = payload.get("findings") or []
+            rows = [r for f_ in findings for r in (f_.get("evidence") or [])]
+            total = len(rows)
+            verified = sum(1 for r in rows if r.get("resolved") is True)
+            rank = {"low": 0, "medium": 1, "high": 2}
+            labels = {"low": "低", "medium": "中", "high": "高"}
+            known = [f_.get("confidence", {}).get("level") for f_ in findings]
+            known = [lv for lv in known if lv in rank]
+            expected_text = f"依据 {total} 条（{verified} 已核验 · {total - verified} 未核）"
+            if known:
+                worst = min(known, key=lambda lv: rank[lv])
+                expected_text += f" · 置信度 {labels[worst]}（模型自评）"
+            expected_text += "·另有密级隐藏项"
+            page.goto(BASE + f"/?c={run_conv_id}")
+            rollup_card = page.locator(".plan-card").last
+            expect(rollup_card).to_be_visible(timeout=8000)
+            line = rollup_card.locator(".plan-evidence-line")
+            try:
+                expect(line).to_have_text(expected_text, timeout=10000)
+                check(
+                    "O6e 方案卡可见面依据行（聚合计数+遮蔽后缀，amber 未核）",
+                    "has-unverified" in (line.get_attribute("class") or "")
+                    and rollup_card.locator("details.route-disclosure .plan-evidence-line").count() == 0,
+                    line.get_attribute("class") or "",
+                )
+            except Exception as exc:
+                check("O6e 方案卡可见面依据行（聚合计数+遮蔽后缀，amber 未核）", False, str(exc)[:200])
+            page.screenshot(path=str(SHOTS / "5_plan_evidence_rollup.png"))
 
     # ── O7 归档后入口消失 ───────────────────────────────────────────────────
     if conv_id:

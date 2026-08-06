@@ -47,6 +47,53 @@ export function summarizeEvidenceFindings(findings) {
   };
 }
 
+// map#46 #56（R-B/R-C 依据行）：方案卡级聚合——把成员任务各自的
+// summarizeEvidenceFindings 结果与 withheld 标记合成一行计数。纯函数零 IO。
+// 语义全取保守向（诚实地板）：
+//   - invalid 任一命中即整体 invalid（结构待核降级，计数只来自结构合法的成员）；
+//   - 置信度取最低档（与 summarizeEvidenceFindings 多 finding 同口径）；
+//   - 零占位：无任何成员数据且无遮蔽项时返回 null，消费面不渲行。
+// 入参 entries: [{ summary, withheld }]，summary 为 summarizeEvidenceFindings
+// 的返回（null=该成员无可读依据），withheld 为 taskEvidenceWithheld 的布尔。
+export function mergeEvidenceSummaries(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const withheld = list.some((entry) => entry?.withheld === true);
+  const summaries = list
+    .map((entry) => entry?.summary ?? null)
+    .filter((s) => s !== null);
+  if (summaries.length === 0) {
+    return withheld
+      ? { invalid: false, total: null, verified: null, unverified: null, level: "", withheld: true }
+      : null;
+  }
+  const rank = { 低: 0, 中: 1, 高: 2 };
+  let total = 0;
+  let verified = 0;
+  let unverified = 0;
+  let worst = null;
+  for (const s of summaries) {
+    if (s.invalid === true) continue; // 结构不合法的成员不贡献计数
+    total += s.total;
+    verified += s.verified;
+    unverified += s.unverified;
+    if (
+      typeof s.level === "string"
+      && s.level in rank
+      && (worst === null || rank[s.level] < rank[worst])
+    ) {
+      worst = s.level;
+    }
+  }
+  return {
+    invalid: summaries.some((s) => s.invalid === true),
+    total,
+    verified,
+    unverified,
+    level: worst ?? "",
+    withheld,
+  };
+}
+
 function flattenEvidence(findings) {
   if (!Array.isArray(findings)) return { valid: false, rows: [] };
   const rows = [];
