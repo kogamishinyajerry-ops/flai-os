@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "生活场景建模主持人单轮输出",
+  "description": "主持人每轮输出:对话回复(必填)+ 当对话素材足够时附 generalization_draft 草稿投影(可选)。generalization_draft 由确定性 AssetDraftBuilder.preview() 算出 digest;无草稿时该字段为 null。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["assistant_message"],
+  "properties": {
+    "assistant_message": {
+      "type": "string",
+      "description": "主持人对用户说的话(追问、引导、或展示草稿摘要)。"
+    },
+    "generalization_draft": {
+      "type": ["object", "null"],
+      "description": "当对话已能投影出 Generalization 时,这里是 9 字段结构(title/trigger/desired_outcome/inputs/outputs/steps/evidence_requirements/human_decision_points/limitations);否则为 null,表示仍需在对话里补料。",
+      "properties": {
+        "title": {"type": "string"},
+        "trigger": {"type": "string"},
+        "desired_outcome": {"type": "string"},
+        "inputs": {"type": "array", "items": {"type": "string"}},
+        "outputs": {"type": "array", "items": {"type": "string"}},
+        "steps": {"type": "array", "items": {"type": "string"}},
+        "evidence_requirements": {"type": "array", "items": {"type": "string"}},
+        "human_decision_points": {"type": "array", "items": {"type": "string"}},
+        "limitations": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": [
+        "title", "trigger", "desired_outcome", "inputs", "outputs",
+        "steps", "evidence_requirements", "human_decision_points", "limitations"
+      ]
+    }
+  }
+}

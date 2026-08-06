@@ -23,6 +23,9 @@ const routes = [
   { path: "/tasks", name: "task-console", component: () => import("../views/TaskConsole.vue"), meta: { title: "任务台", pageKey: "console" } },
   { path: "/tasks/:taskId", name: "task-detail", component: () => import("../views/TaskConsole.vue"), meta: { title: "任务详情", pageKey: "console" } },
   { path: "/feedback", name: "feedback", component: () => import("../views/FeedbackPage.vue"), meta: { title: "反馈" } },
+  // 本体论教学 demo(L1):独立于工程任务主线,不进主对话。
+  // admin_only 的 life_guide_agent 走 quarantine 隔离区,不污染生产 Registry。
+  { path: "/demo", name: "life-demo", component: () => import("../views/LifeDemoPage.vue"), meta: { title: "本体论 demo" } },
 ];
 
 // 重挂判据（B6-2）：与 App.vue 的 page-turn :key 同式（pageKey||path）——
