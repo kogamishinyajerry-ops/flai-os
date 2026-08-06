@@ -1,0 +1,62 @@
+[
+  {
+    "shot": "w1",
+    "ok": true,
+    "detail": "方案卡可见面依据行在场且可见（.plan-evidence-line.sa-evidence-chip，位于 route-summary「已自动安排 · 2 位成员 / 执行已接入」之后）"
+  },
+  {
+    "shot": "w1.text_truth",
+    "ok": true,
+    "detail": "DOM 逐字='依据 2 条（0 已核验 · 2 未核） · 置信度 低（模型自评）·另有密级隐藏项'，与 API 真值推导逐字一致（ui_down fault_history.json findings 证据行 total=2/verified=0/confidence 最低档=low→低；ui_up 注入 sensitive evidence_report.json → ·另有密级隐藏项 后缀）"
+  },
+  {
+    "shot": "w1.amber",
+    "ok": true,
+    "detail": "class 含 has-unverified（amber 底纹，未核 2 条>0 口径命中）"
+  },
+  {
+    "shot": "w1.scope",
+    "ok": true,
+    "detail": "行在 .plan-card 作用域内且 closest('details.route-disclosure')=null（行在披露区之外）；开工后该卡 latestPlanIdx 退役、details.route-disclosure 不渲染（v-if 口径），故无折叠态可截——in_disclosure=false 为实质证明，disclosure_present=false 已在 .txt 如实留痕"
+  },
+  {
+    "shot": "w1.api_truth",
+    "ok": true,
+    "detail": "API 对账：ui_up(task_c76e636d5d4559b78a0f084d2ea5e2b4)=completed、ui_down(task_3863b5aa4c5a58b688f4299b5c6d5ed4)=waiting_review、depends_on 依赖边正确；output_files 元数据含 sensitive evidence_report.json（f_ev_56）"
+  },
+  {
+    "shot": "w1.revalidation",
+    "ok": true,
+    "detail": "分支 verify_all 首轮 batch_g O5 红 4 条：根因=O5 锚 locator '.sa-evidence-chip' 与新增可见面聚合行（同类名）双中触发 strict 违例，非产品渲染缺陷；处置=e2e 锚作用域收进 details.route-disclosure（产品渲染逻辑零变动），复跑 batch_g 53/53、batch_h 27/27（含新增 O6e）全绿——w1 取真维持，pending 标记按留痕纪律由此条收口"
+  },
+  {
+    "shot": "w2",
+    "ok": true,
+    "detail": "waiting_review 任务开 peek 即见 .verify-card（核验三面：工具=无工具调用记录 / 签发=待人工签发）"
+  },
+  {
+    "shot": "w2.floor_line",
+    "ok": true,
+    "detail": "地板句逐字='通识解释仅供参考；工程结论以确定性工具与人签为准'（DOM 取，非手打），同屏完整可见"
+  },
+  {
+    "shot": "w2.dom_order",
+    "ok": true,
+    "detail": "compareDocumentPosition 证明 .verify-card 在 .peek-review-card 之前（产物区之后、签发卡之前），截图两卡同屏"
+  },
+  {
+    "shot": "w2.artifacts",
+    "ok": true,
+    "detail": "产物区 2 件（fault_history.md 展开预览 + fault_history.json 折叠）零 404——task_runs 根配平后票面预告的 peek 预览 404 已知项未复现"
+  },
+  {
+    "shot": "w3",
+    "ok": true,
+    "detail": "通识直答轮（「帮我解释一下什么是蒙特卡洛方法」，零 stub 关键词）末条 assistant 气泡 .plan-evidence-line=0、.sa-evidence-chip=0、.plan-card=0；全页可见依据行=0"
+  },
+  {
+    "shot": "w3.stub_note",
+    "ok": true,
+    "detail": "气泡尾部「诚实提示：stub 网关占位回复，链路真、内容假。」在场——票面既定预期，非 bug"
+  }
+]
