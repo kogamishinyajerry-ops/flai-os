@@ -46,9 +46,11 @@
   .compare .cell { text-align: center; font-size: 10.5px; color: var(--ink-faint); }
   .note { font-size: 11.5px; color: var(--ink-faint); line-height: 1.7; max-width: 720px; }
   .note b { color: var(--ink-soft); }
+  /* 静态兜底双通道：JS reduced() 停转 + CSS !important 硬停（互审 F2） */
   @media (prefers-reduced-motion: reduce) {
     .gear-btn, .trail { transition: none; }
     .trail { opacity: 0 !important; }
+    .mark-rotor { transform: none !important; }
   }
 </style>
 </head>
@@ -109,7 +111,7 @@
   <p class="note"><b>辨识度强化</b>：三案中最强——高速档「叶片拖尾」是独占视觉记忆点，30px 小尺寸同样可读；
   <b>体积账</b>：在乙的基础上 +2 组滞后叶片（≈0.2 KB）；<b>实现面</b>：尾迹=同组叶片的实 DOM 旋转拷贝（&lt;use&gt; 克隆不吃页内 CSS 类，生产模板须直写两组），
   opacity 随档位类切换（transform/opacity 纪律内），reduced-motion 下 opacity:0 !important 兜底；
-  <b>风险</b>：残影在高转速下叠加视觉模糊，需 owner 目检确认「炫」与「稳」的平衡（慢速/静止档与乙完全一致）。</p>
+  <b>风险</b>：残影在高转速下叠加视觉模糊，需 owner 目检确认「炫」与「稳」的平衡（慢速/静止档与乙完全一致）。 换档 ramp=瞬时 rAF（&lt;0.5s 自清理）；常驻旋转=WAAPI 合成层动画，非主线程 rAF。</p>
 
 <script>
 const BLADE = "M148.0 128.0L153.9 130.7L159.4 134.7L164.3 139.8L168.4 146.0L171.6 153.2L173.6 161.2L174.4 169.8L173.9 178.9L171.8 188.4L168.3 197.9L163.3 207.2L156.7 216.3L148.6 224.7L139.0 232.4L128.0 239.0C113.4 239.0 142.6 186.0 128.0 186.0L133.6 181.5L138.3 176.6L142.1 171.5L145.1 166.4L147.2 161.3L148.6 156.3L149.2 151.6L149.3 147.2L148.9 143.2L148.2 139.6L147.1 136.5L145.9 133.8L144.7 131.6L143.7 129.6L143.0 128.0Z";
