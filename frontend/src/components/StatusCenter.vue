@@ -202,6 +202,17 @@
             </template>
           </div>
 
+          <!-- R-D+W1（map46 #56）：一切签发入口（含 peek）同页必须有
+               VerificationCard 或等价诚实块——补件方式=整卡组件复用，不是新规则。
+               与完整页 TaskDetail 同一件「签发前最后一眼」（产物之后、签发卡之前）。
+               batchSummary 传 null：批量结果行按组件既有契约整行不渲染，诚实合规，
+               peek 不新造任何派生数据。mock 披露同屏三处（TaskJourney 步骤 /
+               WorkLog pill / 本卡工具行）语义声明=数据同源（同一条 task:<id>
+               channel 事件 + tool_runs/summary 落库投影），本卡是签发前的汇总位。
+               组件自带 completed/failed/waiting_review 渲染窗（根 v-if），peek 的
+               工作态语境天然不渲染——零污染，也不留幽灵 margin。 -->
+          <VerificationCard class="peek-block" :task="peekTask" :events="peekEvents" :batch-summary="null" />
+
           <!-- 内联签发卡（祈使句④）：同一 review API，人具名，fail-closed 全承袭 -->
           <div v-if="isPeekWaiting" class="peek-block peek-review-card">
             <div class="peek-label">签发</div>
@@ -275,6 +286,8 @@ import MarkdownLite from "./MarkdownLite.vue";
 import InboxZero from "./artwork/InboxZero.vue";
 import CompletionSeal from "./CompletionSeal.vue";
 import TaskJourney from "./TaskJourney.vue";
+// R-D+W1（map46 #56）：peek 签发入口同页复用核验卡，与 TaskDetail 同一组件。
+import VerificationCard from "./VerificationCard.vue";
 
 const router = useRouter();
 

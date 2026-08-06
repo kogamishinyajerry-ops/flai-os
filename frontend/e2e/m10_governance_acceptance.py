@@ -284,6 +284,30 @@ with sync_playwright() as p:
         f"approve={quick_approve_box} reject={quick_reject_box}",
     )
     assert "验收工程师" in quick_review.inner_text()
+    # ── R-D+W1（map46 #56）：peek 签发入口同页 VerificationCard（整卡复用）──
+    # 选择器严格 scope 进 .sc-shell：底层详情页（/tasks/<id>）同样渲染
+    # .verify-card，全局定位会双命中（strict 违例/重影假证）；抽屉 destroy-on-close
+    # 保证关闭后零 DOM，但在场期间必须作用域区分。
+    sc_shell = page.locator(".sc-shell")
+    peek_vcard = sc_shell.locator(".verify-card")
+    expect(peek_vcard).to_be_visible(timeout=8000)
+    check(
+        "⑥R-D+W1 peek 同页核验卡在场（抽屉作用域内唯一，防详情页重影）",
+        peek_vcard.count() == 1,
+        f"drawer_scoped_count={peek_vcard.count()}",
+    )
+    peek_vcard_text = peek_vcard.inner_text()
+    check(
+        "⑥R-D+W1 诚实地板句逐字在场（通识解释仅供参考…以确定性工具与人签为准）",
+        "通识解释仅供参考；工程结论以确定性工具与人签为准" in peek_vcard_text,
+        peek_vcard_text[-120:],
+    )
+    check(
+        "⑥R-D+W1 签发卡仍在场（核验卡不挤压签发动作区）",
+        sc_shell.locator(".peek-review-card").count() == 1
+        and sc_shell.locator(".peek-approve").is_visible(),
+        "",
+    )
     page.locator(".peek-approve").click()
     page.get_by_role("button", name="确认批准放行").click()
     deadline = time.time() + 15
