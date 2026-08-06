@@ -24,6 +24,10 @@ const taskApiSource = readFileSync(
   new URL("../src/api/tasks.js", import.meta.url),
   "utf8",
 );
+const statusCenterSource = readFileSync(
+  new URL("../src/components/StatusCenter.vue", import.meta.url),
+  "utf8",
+);
 
 test("最新用户轮次立即撤销旧方案动作，历史路由依据不再常驻展开", () => {
   const plan = { decision: "orchestrate", agents: [{ agent_id: "a" }] };
@@ -818,4 +822,49 @@ test("失败回流血缘由系统写入恢复方案根任务，并在成功后�
   assert.match(taskApiSource, /retry_of:\s*it\.retryOf\s*\|\|\s*null/);
   assert.match(guideSource, /正在处理失败任务 · 审计血缘会自动保留/);
   assert.match(guideSource, /if \(activeRetryOf\.value && conv\.status !== "active"\)/);
+});
+
+test("R-D+W1（map46 #56）：peek 签发入口同页挂 VerificationCard，batchSummary 传 null", () => {
+  assert.match(
+    statusCenterSource,
+    /import VerificationCard from "\.\/VerificationCard\.vue";/,
+    "StatusCenter 必须 import VerificationCard（整卡复用进 peek，不是新规则）",
+  );
+  const mountIdx = statusCenterSource.indexOf("<VerificationCard");
+  const reviewCardIdx = statusCenterSource.indexOf('class="peek-block peek-review-card"');
+  assert.ok(mountIdx >= 0, "peek 视图内必须挂载 <VerificationCard>");
+  assert.ok(reviewCardIdx >= 0, "peek 内联签发卡锚点缺失");
+  assert.ok(
+    mountIdx < reviewCardIdx,
+    "VerificationCard 必须位于 .peek-review-card 之前（产物之后、签发之前=签发前最后一眼）",
+  );
+  assert.match(
+    statusCenterSource,
+    /<VerificationCard\s+class="peek-block"\s+:task="peekTask"\s+:events="peekEvents"\s+:batch-summary="null"\s*\/>/,
+    "peek 挂载必须 batchSummary 传 null（批量结果行按组件契约整行不渲染），零新派生逻辑",
+  );
+});
+
+test("R-D+W1 互审 F1（map46 #56）：VerificationCard 工具摘要 watch 键含 task.id——同状态换任务必重拉", () => {
+  const verificationCardSource = readFileSync(
+    new URL("../src/components/VerificationCard.vue", import.meta.url),
+    "utf8",
+  );
+  // peek 抽屉不关切换两个同状态任务时组件实例复用：watch 只盯 status 会把
+  // 上一任务的 mock 计数挂到新任务上。双键守卫 id+status 缺一不可。
+  assert.match(
+    verificationCardSource,
+    /watch\(\(\) => \[props\.task\?\.id, props\.task\?\.status\]/,
+    "工具摘要 watch 键必须同时含 task.id 与 task.status",
+  );
+  assert.match(
+    verificationCardSource,
+    /let lastFetchedTaskId = null;/,
+    "lastFetchedTaskId 守卫在场（与 lastFetchedStatus 成双）",
+  );
+  assert.match(
+    verificationCardSource,
+    /if \(id !== lastFetchedTaskId\) \{\s*\/\/ 换任务/,
+    "换任务必须先清旧计数再拉新（旧计数绝不挂在新任务上）",
+  );
 });

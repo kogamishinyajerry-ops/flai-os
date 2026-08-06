@@ -445,7 +445,9 @@ with sync_playwright() as p:
 
     # O5：依据 chip amber 未核 + 展开 EvidenceList 全链无绿。红而不崩：tamper
     # 卡死上游（如断依赖后任务永滞 created）时终审面整体缺失，逐条红到汇总。
-    chip = page.locator(".sa-evidence-chip")
+    # map#46 #56：方案卡可见面新增聚合依据行复用 sa-evidence-chip 类（R-B 提升件），
+    # 本组锚的是披露区内 per-member chip——作用域收进 details.route-disclosure 防双中。
+    chip = page.locator("details.route-disclosure .sa-evidence-chip")
     try:
         expect(chip).to_be_visible(timeout=10000)
         chip_present = True

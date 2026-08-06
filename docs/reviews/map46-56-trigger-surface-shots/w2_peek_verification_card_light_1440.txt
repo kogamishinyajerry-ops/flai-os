@@ -1,0 +1,21 @@
+w2 StatusCenter peek 签发面 VerificationCard（R-D+W1，map46 #56）
+peek 任务: id=task_3863b5aa4c5a58b688f4299b5c6d5ed4 (fault_history_agent, status=waiting_review)
+地板句逐字: 通识解释仅供参考；工程结论以确定性工具与人签为准
+DOM 序(.verify-card 在 .peek-review-card 之前): True
+同屏证据: {"verify_card_fully_visible": true, "review_card_fully_visible": true, "floor_line_visible": true, "verify_before_review": true}
+产物预览错误: []（task_runs 根配平后零 404）
+--- .verify-card 全文 ---
+核验三面
+工具
+无工具调用记录
+签发
+待人工签发
+通识解释仅供参考；工程结论以确定性工具与人签为准
+--- .peek-review-card 全文 ---
+签发
+批准即代表你作为工程师背书该产物——签发权在你，平台不代签。
+签发人：测试工程师（登录身份，不可代填）
+授权链：测试工程师 于 2026/8/6 11:10:48 创建本任务；除你此刻的批准外，平台没有任何自动放行路径。
+附意见 ›
+批准放行
+驳回
