@@ -41,9 +41,12 @@
   锁：e2e `map32_destination_acceptance_wave3.py` B1–B6、`batch_b_today_acceptance.py`，
   源码锚 `frontend/tests/trigger_surface_rules.test.mjs` R-A 组。
 - **R-B 工程语境方案卡上浮**：路由进工程通道 ⟹ 该段为工程语境，方案卡可见面
-  依据一行计数上浮；通识直答段零标注。锁：`plan_evidence_rollup.test.mjs`、
-  `ui_acceptance_cases.test.mjs` 方案卡依据行锚、e2e `batch_h_teams_acceptance.py`
-  O6e、`batch_g_squad_acceptance.py` O5（披露内 per-member chip 作用域锚）。
+  依据一行计数上浮；通识直答段零标注。聚合只计归属本卡开工时间窗的成员任务
+  （归属不定 fail-closed 不渲）；部分成员依据未可读时整行降级「依据结构待核」，
+  部分计数绝不冒充方案完整计数（互审 F2/F3，owner 2026-08-06 裁）。锁：
+  `plan_evidence_rollup.test.mjs`、`ui_acceptance_cases.test.mjs` 方案卡依据行锚、
+  e2e `batch_h_teams_acceptance.py` O6e、`batch_g_squad_acceptance.py` O5
+  （披露内 per-member chip 作用域锚）。
 - **R-C 语境判定白名单**：语境判定只用确定性信号——路由结论 / 附件入场 /
   任务存在性 / `evidence_policy.required` 命中；严禁 LLM 自报当语境证据。
 - **R-D 签发入口同页核验**：一切签发入口（含速览 peek）⟹ VerificationCard

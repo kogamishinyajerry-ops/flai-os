@@ -844,3 +844,27 @@ test("R-D+W1（map46 #56）：peek 签发入口同页挂 VerificationCard，batc
     "peek 挂载必须 batchSummary 传 null（批量结果行按组件契约整行不渲染），零新派生逻辑",
   );
 });
+
+test("R-D+W1 互审 F1（map46 #56）：VerificationCard 工具摘要 watch 键含 task.id——同状态换任务必重拉", () => {
+  const verificationCardSource = readFileSync(
+    new URL("../src/components/VerificationCard.vue", import.meta.url),
+    "utf8",
+  );
+  // peek 抽屉不关切换两个同状态任务时组件实例复用：watch 只盯 status 会把
+  // 上一任务的 mock 计数挂到新任务上。双键守卫 id+status 缺一不可。
+  assert.match(
+    verificationCardSource,
+    /watch\(\(\) => \[props\.task\?\.id, props\.task\?\.status\]/,
+    "工具摘要 watch 键必须同时含 task.id 与 task.status",
+  );
+  assert.match(
+    verificationCardSource,
+    /let lastFetchedTaskId = null;/,
+    "lastFetchedTaskId 守卫在场（与 lastFetchedStatus 成双）",
+  );
+  assert.match(
+    verificationCardSource,
+    /if \(id !== lastFetchedTaskId\) \{\s*\/\/ 换任务/,
+    "换任务必须先清旧计数再拉新（旧计数绝不挂在新任务上）",
+  );
+});

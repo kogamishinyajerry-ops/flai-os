@@ -187,15 +187,17 @@
                    不再只在 route-disclosure 披露内逐成员出现。句式与 per-member
                    chip 逐字同句，amber 同 has-unverified 口径，复用既有 chip
                    样式类不加新色；不受 latestPlanIdx 门控（历史方案卡也渲），
-                   聚合零占位不渲。静态展示行——逐成员点击展开仍在披露区。 -->
+                   聚合零占位不渲；归属不定（成员任务全落本卡时间窗外）fail-closed
+                   不渲，部分成员未可读时降级「依据结构待核」（互审 F2/F3）。
+                   静态展示行——逐成员点击展开仍在披露区。 -->
               <div
-                v-if="planEvidenceLine(m.recommendation)"
+                v-if="planEvidenceLine(m, idx)"
                 class="plan-evidence-line sa-evidence-chip"
                 :class="{
-                  'has-unverified': planEvidenceLine(m.recommendation).hasUnverified,
-                  'is-withheld': planEvidenceLine(m.recommendation).withheldOnly,
+                  'has-unverified': planEvidenceLine(m, idx).hasUnverified,
+                  'is-withheld': planEvidenceLine(m, idx).withheldOnly,
                 }"
-              >{{ planEvidenceLine(m.recommendation).text }}</div>
+              >{{ planEvidenceLine(m, idx).text }}</div>
 
               <!-- 批 0 切片 1（P0-1 状态来找人）：编队总览行提可见面——开工后成员
                    活状态不展开披露即在场；waiting_review 长出可见面 amber CTA 直开
@@ -678,7 +680,7 @@ import {
   taskEvidenceSummary,
   taskEvidenceWithheld,
 } from "../stores/taskEvidence";
-import { mergeEvidenceSummaries } from "../utils/evidenceTrace.js";
+import { decidePlanEvidenceLine } from "../utils/evidenceTrace.js";
 import { agentStatusLabel, MATURITY, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime, formatFileSize } from "../utils/format";
 import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
 import { useAgentNames } from "../stores/agentNames";
@@ -2814,32 +2816,44 @@ function evidenceSummaryOf(a) {
 //   正常计数句 / 「依据结构待核」/「依据清单〔按密级隐藏〕」；
 // 既有内容又有遮蔽项时沿用 W7 措辞后缀「·另有密级隐藏项」。
 // hasUnverified=amber 底纹口径同 per-member chip（invalid 或含未核）。
-function planEvidenceLine(plan) {
+// 互审 F2（owner 裁：时间窗归属+fail-closed）：成员任务只认落在本卡时间窗
+// [卡消息 createdAt, 其后首条带时间戳消息的 createdAt) 内的——开工 CTA 只在
+// 卡为末条消息时开放（latestPlanIdx），故窗内任务必属本卡；成员有任务却无一
+// 在窗内=归属不定（带外建任务/历史卡），整行 fail-closed 不渲，绝不拿会话级
+// latest-by-agent 近似冒充（roster 披露区 per-member chip 口径不动）。
+// 互审 F3（owner 裁：降级「依据结构待核」）：有成员依据可读但仍有人未可读
+// （在途/未开工）时，整行只显「依据结构待核」amber，部分计数不冒充完整计数。
+// 成员态判定与聚合裁决的诚实语义在 decidePlanEvidenceLine（纯函数，锚测试
+// 直接覆盖），本函数只做确定性信号取数。
+function planEvidenceLine(m, idx) {
+  const plan = m?.recommendation;
   if (!plan || !Array.isArray(plan.agents)) return null;
-  const merged = mergeEvidenceSummaries(
-    plan.agents.map((a) => {
-      const info = agentTaskInfo(a);
-      return {
-        summary: info ? taskEvidenceSummary(info.latest.id) : null,
-        withheld: info !== null && taskEvidenceWithheld(info.latest.id) === true,
-      };
-    }),
-  );
-  if (!merged) return null;
-  if (merged.invalid) {
-    return {
-      text: merged.withheld ? "依据结构待核·另有密级隐藏项" : "依据结构待核",
-      hasUnverified: true,
-      withheldOnly: false,
-    };
+  const startMs = Date.parse(m.createdAt);
+  if (!Number.isFinite(startMs)) return null; // 卡无时间戳=归属不定，fail-closed
+  let endMs = Infinity;
+  for (let j = idx + 1; j < messages.value.length; j += 1) {
+    const t = Date.parse(messages.value[j]?.createdAt);
+    if (Number.isFinite(t)) {
+      endMs = t;
+      break;
+    }
   }
-  if (merged.total === null) {
-    return { text: "依据清单〔按密级隐藏〕", hasUnverified: false, withheldOnly: true };
-  }
-  let text = `依据 ${merged.total} 条（${merged.verified} 已核验 · ${merged.unverified} 未核）`;
-  if (merged.level) text += ` · 置信度 ${merged.level}（模型自评）`;
-  if (merged.withheld) text += "·另有密级隐藏项";
-  return { text, hasUnverified: merged.unverified > 0, withheldOnly: false };
+  const memberStates = plan.agents.map((a) => {
+    const all = conversationTasks.value.filter((t) => t.agent_id === a?.agent_id);
+    const inWindow = all.filter((t) => {
+      const ms = Date.parse(t?.created_at);
+      return Number.isFinite(ms) && ms >= startMs && ms < endMs;
+    });
+    if (all.length > 0 && inWindow.length === 0) return { state: "attributionFailed" };
+    if (inWindow.length === 0) return { state: "noTask" };
+    const task = inWindow[0]; // 后端按 created_at DESC 返回，首条即窗内最新
+    const entry = taskEvidenceOf(task.id);
+    if (!entry) return { state: "pending" }; // 未终态不水合/水合在途
+    if (entry.withheld === true) return { state: "withheld" };
+    const summary = taskEvidenceSummary(task.id);
+    return summary ? { state: "data", summary } : { state: "empty" };
+  });
+  return decidePlanEvidenceLine(memberStates);
 }
 
 function refusalsOf(a) {

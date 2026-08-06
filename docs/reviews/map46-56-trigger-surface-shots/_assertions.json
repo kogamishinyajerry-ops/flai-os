@@ -17,7 +17,7 @@
   {
     "shot": "w1.scope",
     "ok": true,
-    "detail": "行在 .plan-card 作用域内且 closest('details.route-disclosure')=null（行在披露区之外）；开工后该卡 latestPlanIdx 退役、details.route-disclosure 不渲染（v-if 口径），故无折叠态可截——in_disclosure=false 为实质证明，disclosure_present=false 已在 .txt 如实留痕"
+    "detail": "行在 .plan-card 作用域内且 closest('details.route-disclosure')=null（行在披露区之外）；details.route-disclosure 门控=latestActionablePlanIndex（仅末条消息为 fresh 方案卡时命中），取证屏为造景后重新载入的会话，canonical 历史消息 fresh=false ⟹ latestPlanIdx=-1 ⟹ 披露区不渲染，故无折叠态可截（互审 F4 修正：非「开工后退役」因果）——in_disclosure=false 为实质证明，disclosure_present=false 已在 .txt 如实留痕"
   },
   {
     "shot": "w1.api_truth",

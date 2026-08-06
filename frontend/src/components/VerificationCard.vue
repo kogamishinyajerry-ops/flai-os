@@ -97,11 +97,14 @@ const visible = computed(() => VERIFY_STATUSES.includes(props.task?.status));
 // ── ①工具真实性：状态进入渲染窗（waiting_review/终态）各拉一次**计数投影**
 // （GET tool_runs/summary，Codex R0-P2：全量明细会把批量任务的 input/output
 // 轨迹整条搬给前端，本卡只要两个数）。waiting→completed 迁移后补拉一次（放行
-// 后 runner 可能补写收尾 run），同状态轮询绝不重复请求（lastFetchedStatus
-// 守卫）。与 WorkLog 展开态的懒加载明细互不依赖：那边要逐工具徽标（必须明细），
-// 这边只要汇总计数。 ──
+// 后 runner 可能补写收尾 run），同任务同状态轮询绝不重复请求
+// （lastFetchedTaskId+lastFetchedStatus 双键守卫）。watch 键含 task.id：peek
+// （R-D/W1，map46 #56）抽屉不关切换两个同状态任务时组件实例复用，缺 id 键会把
+// 上一任务的 mock 计数挂到新任务上（互审 F1）。与 WorkLog 展开态的懒加载明细
+// 互不依赖：那边要逐工具徽标（必须明细），这边只要汇总计数。 ──
 const toolSummary = ref(null); // null=未加载/加载中；{total, mock_count}=已加载
 const toolError = ref(false);
+let lastFetchedTaskId = null;
 let lastFetchedStatus = null;
 // 请求世代守卫（Codex R1-P2）：waiting→completed 迁移会在首请求在途时发起第二
 // 请求——只许「最新一次发起」落盘，迟到的旧响应（成功或失败）整包作废，否则
@@ -109,13 +112,19 @@ let lastFetchedStatus = null;
 // feedbackSeq 同 house pattern。
 let fetchSeq = 0;
 
-watch(() => props.task?.status, (s) => {
+watch(() => [props.task?.id, props.task?.status], ([id, s]) => {
   if (!VERIFY_STATUSES.includes(s)) return;
-  if (s === lastFetchedStatus) return;
+  if (id === lastFetchedTaskId && s === lastFetchedStatus) return;
+  if (id !== lastFetchedTaskId) {
+    // 换任务（peek 抽屉不关切同状态任务）：旧计数绝不挂在新任务上，先清再拉。
+    toolSummary.value = null;
+    toolError.value = false;
+  }
+  lastFetchedTaskId = id;
   lastFetchedStatus = s;
   toolError.value = false;
   const seq = ++fetchSeq;
-  getToolRunsSummary(props.task.id)
+  getToolRunsSummary(id)
     .then((sum) => {
       if (seq !== fetchSeq) return; // stale 响应作废
       // 形状校验：畸形响应=「不可用」而非 0 计数——0 是「无工具调用记录」的
@@ -123,6 +132,7 @@ watch(() => props.task?.status, (s) => {
       if (!sum || typeof sum.total !== "number" || typeof sum.mock_count !== "number") {
         toolError.value = true;
         toolSummary.value = null;
+        lastFetchedTaskId = null;
         lastFetchedStatus = null;
         return;
       }
@@ -134,6 +144,7 @@ watch(() => props.task?.status, (s) => {
       // 复位守卫：下次状态迁移可重试。
       toolError.value = true;
       toolSummary.value = null;
+      lastFetchedTaskId = null;
       lastFetchedStatus = null;
     });
 }, { immediate: true });

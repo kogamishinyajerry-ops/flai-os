@@ -94,6 +94,54 @@ export function mergeEvidenceSummaries(entries) {
   };
 }
 
+// map#46 #56 互审 F2/F3（owner 2026-08-06 裁）：方案卡依据行的成员态聚合裁决。
+// 入参 memberStates: [{ state, summary? }]，state 由消费面（GuidePage）用确定性
+// 信号判定：
+//   attributionFailed = 成员有任务但无一落在该卡开工时间窗内（归属不定）；
+//   noTask   = 成员零任务（未开工）；pending = 任务在窗内但未终态/水合在途；
+//   withheld = 依据按密级隐藏（已知的遮蔽态，不是未知）；
+//   empty    = 终态已水合、零 findings（零占位纪律，已知空）；
+//   data     = 终态已水合、有 findings 摘要（含 invalid 摘要）。
+// 裁决（诚实地板，全保守向）：
+//   - 任一 attributionFailed → null：归属不定 fail-closed 不渲行，绝不拿会话级
+//     latest-by-agent 近似冒充该卡依据（F2）；
+//   - 无任何 data/withheld → null：零占位（开工前/全员在途/全员空都不渲）；
+//   - 有 data/withheld 且仍有 pending/noTask 成员 → 「依据结构待核」amber：
+//     部分成员计数绝不冒充方案完整计数（F3 降级，不显示部分数字）；
+//   - 全员已知（data/withheld/empty）→ 正常聚合计数（empty 零占位不贡献），
+//     invalid 任一命中整体待核、遮蔽共存沿 W7 后缀「·另有密级隐藏项」。
+export function decidePlanEvidenceLine(memberStates) {
+  const list = Array.isArray(memberStates) ? memberStates : [];
+  if (list.length === 0) return null;
+  if (list.some((s) => s?.state === "attributionFailed")) return null;
+  const readable = list.some((s) => s?.state === "data" || s?.state === "withheld");
+  if (!readable) return null;
+  if (list.some((s) => s?.state === "pending" || s?.state === "noTask")) {
+    return { text: "依据结构待核", hasUnverified: true, withheldOnly: false };
+  }
+  const merged = mergeEvidenceSummaries(
+    list.map((s) => ({
+      summary: s?.state === "data" ? s.summary ?? null : null,
+      withheld: s?.state === "withheld",
+    })),
+  );
+  if (!merged) return null;
+  if (merged.invalid) {
+    return {
+      text: merged.withheld ? "依据结构待核·另有密级隐藏项" : "依据结构待核",
+      hasUnverified: true,
+      withheldOnly: false,
+    };
+  }
+  if (merged.total === null) {
+    return { text: "依据清单〔按密级隐藏〕", hasUnverified: false, withheldOnly: true };
+  }
+  let text = `依据 ${merged.total} 条（${merged.verified} 已核验 · ${merged.unverified} 未核）`;
+  if (merged.level) text += ` · 置信度 ${merged.level}（模型自评）`;
+  if (merged.withheld) text += "·另有密级隐藏项";
+  return { text, hasUnverified: merged.unverified > 0, withheldOnly: false };
+}
+
 function flattenEvidence(findings) {
   if (!Array.isArray(findings)) return { valid: false, rows: [] };
   const rows = [];

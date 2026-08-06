@@ -8,5 +8,7 @@ amber(has-unverified): True
 DOM 位置: {"in_plan_card": true, "in_disclosure": false, "disclosure_present": false, "disclosure_open": null, "summary_text": null}
 API 真值: {"down_status": "waiting_review", "up_status": "completed", "down_json_file": "fault_history.json", "findings_total": 2, "verified": 0, "unverified": 2, "confidence_worst": "低", "up_sensitive_files": ["evidence_report.json"], "expected_line": "依据 2 条（0 已核验 · 2 未核） · 置信度 低（模型自评）·另有密级隐藏项"}
 注: in_disclosure=false（closest('details.route-disclosure')=null）⇒ 行在披露区之外的可见面；
-开工后该卡 latestPlanIdx 退役，details.route-disclosure 不渲染（disclosure_present=false），
-故无折叠态可截——「行在披露外」以 DOM 归属证明为准，如实留痕。
+details.route-disclosure 门控=latestActionablePlanIndex，仅末条消息为 fresh 方案卡时命中；
+本屏为取证造景后重新载入的会话，canonical 历史消息 fresh=false ⇒ latestPlanIdx=-1 ⇒
+披露区不渲染（disclosure_present=false），故无折叠态可截（互审 F4 修正：非「开工后退役」
+因果）——「行在披露外」以 DOM 归属证明为准，如实留痕。

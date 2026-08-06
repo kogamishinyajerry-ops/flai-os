@@ -538,6 +538,10 @@ test("词表双口径：默认面迁移新词，route-disclosure 内工程词保
 });
 
 test("map#46 #56 方案卡依据行：披露外可见面、句式逐字、latestPlanIdx 不门控", () => {
+  const evidenceTraceSource = readFileSync(
+    new URL("../src/utils/evidenceTrace.js", import.meta.url),
+    "utf8",
+  );
   // ① 依据行在 route-disclosure 之外（可见面）：模板序必须先于披露 details，
   //    且不携带 latestPlanIdx 门控（历史方案卡也上浮）。
   const lineIdx = guideSource.indexOf('class="plan-evidence-line sa-evidence-chip"');
@@ -549,34 +553,44 @@ test("map#46 #56 方案卡依据行：披露外可见面、句式逐字、latest
   assert.ok(lineIdx < disclosureIdx, "依据行必须渲在 route-disclosure 披露区之外（可见面）");
   assert.match(
     guideSource,
-    /<div\n\s+v-if="planEvidenceLine\(m\.recommendation\)"\n\s+class="plan-evidence-line sa-evidence-chip"/,
+    /<div\n\s+v-if="planEvidenceLine\(m, idx\)"\n\s+class="plan-evidence-line sa-evidence-chip"/,
     "依据行渲染条件只能是聚合非 null，不得叠加 latestPlanIdx 等门控",
   );
   // ② 三态句式与 per-member chip 逐字同句（文案沿用现行句式，owner 裁决）；
-  //    计数+遮蔽共存时沿用 W7 措辞后缀。
-  assert.match(guideSource, /依据 \$\{merged\.total\} 条（\$\{merged\.verified\} 已核验 · \$\{merged\.unverified\} 未核）/);
-  assert.match(guideSource, / · 置信度 \$\{merged\.level\}（模型自评）/);
-  assert.match(guideSource, /"依据结构待核·另有密级隐藏项" : "依据结构待核"/);
-  assert.match(guideSource, /text: "依据清单〔按密级隐藏〕"/);
-  assert.match(guideSource, /text \+= "·另有密级隐藏项"/);
+  //    计数+遮蔽共存时沿用 W7 措辞后缀。文案组装在 decidePlanEvidenceLine。
+  assert.match(evidenceTraceSource, /依据 \$\{merged\.total\} 条（\$\{merged\.verified\} 已核验 · \$\{merged\.unverified\} 未核）/);
+  assert.match(evidenceTraceSource, / · 置信度 \$\{merged\.level\}（模型自评）/);
+  assert.match(evidenceTraceSource, /"依据结构待核·另有密级隐藏项" : "依据结构待核"/);
+  assert.match(evidenceTraceSource, /text: "依据清单〔按密级隐藏〕"/);
+  assert.match(evidenceTraceSource, /text \+= "·另有密级隐藏项"/);
   // ③ amber 口径同 per-member chip（has-unverified 既有类），零新色：
   //    聚合行只绑既有 chip 类，专属类仅做布局（归零缩进/静态光标）。
   assert.match(
     guideSource,
-    /'has-unverified': planEvidenceLine\(m\.recommendation\)\.hasUnverified/,
+    /'has-unverified': planEvidenceLine\(m, idx\)\.hasUnverified/,
   );
   assert.match(
     guideSource,
-    /'is-withheld': planEvidenceLine\(m\.recommendation\)\.withheldOnly/,
+    /'is-withheld': planEvidenceLine\(m, idx\)\.withheldOnly/,
   );
   assert.match(
     guideSource,
     /\.sa-evidence-chip\.plan-evidence-line \{\s*margin-left: 0;\s*cursor: default;\s*\}/,
   );
   // ④ 聚合信号源=确定性事实（任务存在性+产物依据+遮蔽标记），不新增分类器。
-  assert.match(guideSource, /mergeEvidenceSummaries\(\s*plan\.agents\.map/);
-  assert.match(guideSource, /taskEvidenceSummary\(info\.latest\.id\)/);
-  assert.match(guideSource, /taskEvidenceWithheld\(info\.latest\.id\) === true/);
+  assert.match(guideSource, /decidePlanEvidenceLine\(memberStates\)/);
+  assert.match(guideSource, /taskEvidenceOf\(task\.id\)/);
+  assert.match(guideSource, /taskEvidenceSummary\(task\.id\)/);
+  // ⑤ 互审 F2（owner 裁：时间窗归属+fail-closed）：成员任务只计本卡时间窗
+  //    [卡消息 createdAt, 其后首条带时间戳消息)内；归属不定整行不渲。
+  assert.match(guideSource, /Date\.parse\(m\.createdAt\)/);
+  assert.match(guideSource, /ms >= startMs && ms < endMs/);
+  assert.match(guideSource, /state: "attributionFailed"/);
+  assert.match(evidenceTraceSource, /s\?\.state === "attributionFailed"/);
+  // ⑥ 互审 F3（owner 裁：降级「依据结构待核」）：有可读成员且仍有 pending/noTask
+  //    成员时整行待核 amber，部分计数不冒充完整计数。
+  assert.match(evidenceTraceSource, /s\?\.state === "pending" \|\| s\?\.state === "noTask"/);
+  assert.match(evidenceTraceSource, /return \{ text: "依据结构待核", hasUnverified: true, withheldOnly: false \}/);
 });
 
 test("refuse 卡 kicker 用暂时接不住，重述引导直呼 FLAi", () => {
