@@ -1,0 +1,180 @@
+<!-- map #46 / 票 #61 设计预览稿（prototype，未施工、不接入生产路径）。
+     三案并排对照：形态 × 档位。档位切换作用于全页所有标识。
+     纪律：仅 clay + 中性暖阶；transform/opacity；reduced-motion=静态；零依赖。 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>动态涡轮标识 · 三案对照（票 #61 预览稿）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  :root {
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "STSong", serif;
+    --ink: #2b2622; --ink-soft: #6b6259; --ink-faint: #a39d90;
+    --paper-cream: #fbf9f3; --paper-canvas-b: #f1eee6; --paper-rail: #f7f4ec;
+    --hairline: #ece5db; --clay: #c15f3c; --clay-deep: #a54e2f;
+    --motion-med: .22s; --ease-out-soft: cubic-bezier(.25,.8,.35,1);
+  }
+  body { font-family: "PingFang SC", system-ui, sans-serif; background: #faf7f2; color: var(--ink); padding: 24px; }
+  h1 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .rule { font-size: 12px; color: var(--ink-soft); line-height: 1.7; margin-bottom: 14px; max-width: 720px; }
+  .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
+  .controls .lbl { font-size: 11.5px; color: var(--ink-faint); margin-right: 2px; }
+  .gear-btn { border: 1px solid var(--hairline); background: #fff; border-radius: 999px; padding: 5px 12px; font-size: 12px; color: var(--ink-soft); cursor: pointer; transition: border-color var(--motion-med) var(--ease-out-soft), color var(--motion-med) var(--ease-out-soft); }
+  .gear-btn.is-on { border-color: var(--clay); color: var(--clay-deep); font-weight: 600; }
+  .reduce-toggle { font-size: 12px; color: var(--ink-soft); display: inline-flex; gap: 5px; align-items: center; margin-left: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 14px; max-width: 900px; }
+  .card { background: #fff; border: 1px solid var(--hairline); border-radius: 12px; padding: 16px; }
+  .card h2 { font-size: 13px; margin-bottom: 2px; }
+  .card .tag { font-size: 10.5px; color: var(--ink-faint); margin-bottom: 12px; }
+  .stage { display: grid; place-items: center; min-height: 150px; }
+  .mark { display: block; }
+  .sizes { display: flex; align-items: flex-end; gap: 14px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--hairline-soft, #f0ece2); }
+  .sizes .cell { text-align: center; font-size: 10px; color: var(--ink-faint); }
+  .one-liner { font-size: 11px; color: var(--ink-soft); line-height: 1.6; margin-top: 10px; }
+  /* 方案丙尾迹：仅高速档浮现（opacity 过渡,transform/opacity 纪律内） */
+  .trail { opacity: 0; transition: opacity var(--motion-med) var(--ease-out-soft); }
+  body[data-gear="fast"] .trail { opacity: 1; }
+  body.sim-reduce .trail { opacity: 0; }
+  .note { font-size: 11.5px; color: var(--ink-faint); line-height: 1.7; margin-top: 16px; max-width: 720px; }
+  @media (prefers-reduced-motion: reduce) {
+    .gear-btn, .trail { transition: none; }
+  }
+</style>
+</head>
+<body data-gear="idle">
+  <h1>动态涡轮标识 · 三案对照（票 #61 设计预览稿，未施工）</h1>
+  <p class="rule">同一组档位信号驱动三种形态方案。点档位看动态差异：静止=完成一轮回答；
+  慢速=后台有任务在转；高速=本会话请求在途。换档带 ~0.4s 缓启/缓停（涡轮惯性感，WAAPI playbackRate 实现，零依赖）。</p>
+
+  <div class="controls">
+    <span class="lbl">档位</span>
+    <button class="gear-btn is-on" data-gear="idle">静止（无信号）</button>
+    <button class="gear-btn" data-gear="slow">慢速 8s/圈</button>
+    <button class="gear-btn" data-gear="fast">高速 1.4s/圈</button>
+    <label class="reduce-toggle"><input type="checkbox" id="simReduce"> 模拟 reduced-motion（=强制静态）</label>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>方案甲 · 原花提速</h2>
+      <div class="tag">flai-bloom.png 保留 + 三档转速｜零资产工作</div>
+      <div class="stage"><img class="mark mark-rotor" width="128" height="128" src="../../../frontend/src/assets/flai-bloom.png" alt=""></div>
+      <div class="sizes">
+        <div class="cell"><img class="mark mark-rotor" width="30" height="30" src="../../../frontend/src/assets/flai-bloom.png" alt=""><br>30 侧栏</div>
+        <div class="cell"><img class="mark mark-rotor" width="38" height="38" src="../../../frontend/src/assets/flai-bloom.png" alt=""><br>38 hero</div>
+        <div class="cell"><img class="mark mark-rotor" width="26" height="26" src="../../../frontend/src/assets/flai-bloom.png" alt=""><br>26 消息</div>
+      </div>
+      <p class="one-liner">辨识度=维持现状，强化仅靠动态本身；风险最低，体积不变（PNG 11.1 KB 仍在）。</p>
+    </div>
+
+    <div class="card">
+      <h2>方案乙 · 涡轮重绘（推荐候选）</h2>
+      <div class="tag">SVG 六叶涡轮 + 转轴轴孔｜PNG 退役反赚 ~10 KB</div>
+      <div class="stage"><svg class="mark mark-rotor" data-variant="tb" width="128" height="128" viewBox="0 0 256 256"></svg></div>
+      <div class="sizes">
+        <div class="cell"><svg class="mark mark-rotor" data-variant="tb" width="30" height="30" viewBox="0 0 256 256"></svg><br>30 侧栏</div>
+        <div class="cell"><svg class="mark mark-rotor" data-variant="tb" width="38" height="38" viewBox="0 0 256 256"></svg><br>38 hero</div>
+        <div class="cell"><svg class="mark mark-rotor" data-variant="tb" width="26" height="26" viewBox="0 0 256 256"></svg><br>26 消息</div>
+        <div class="cell"><svg class="mark" data-variant="tb" width="16" height="16" viewBox="0 0 256 256"></svg><br>16 favicon 参考</div>
+      </div>
+      <p class="one-liner">辨识度=轴孔毂读出「转轴」+ 任意尺寸锐利；favicon 可同源替换（静态）。</p>
+    </div>
+
+    <div class="card">
+      <h2>方案丙 · 涡轮 + 高速尾迹</h2>
+      <div class="tag">乙的形态 + 高速档双层残影｜三档形态差异最大</div>
+      <div class="stage"><svg class="mark mark-rotor" data-variant="tc" width="128" height="128" viewBox="0 0 256 256"></svg></div>
+      <div class="sizes">
+        <div class="cell"><svg class="mark mark-rotor" data-variant="tc" width="30" height="30" viewBox="0 0 256 256"></svg><br>30 侧栏</div>
+        <div class="cell"><svg class="mark mark-rotor" data-variant="tc" width="38" height="38" viewBox="0 0 256 256"></svg><br>38 hero</div>
+        <div class="cell"><svg class="mark mark-rotor" data-variant="tc" width="26" height="26" viewBox="0 0 256 256"></svg><br>26 消息</div>
+        <div class="cell"><svg class="mark" data-variant="tb" width="16" height="16" viewBox="0 0 256 256"></svg><br>16 favicon 参考</div>
+      </div>
+      <p class="one-liner">辨识度=高速时叶片拖尾（速度可视化）；尾迹只绑高速信号出现，reduced-motion 永不渲染。</p>
+    </div>
+  </div>
+
+  <p class="note">纪律对照：三案全 clay 单色（#c15f3c）+ 中性暖阶，信任色锁五槽零触碰；旋转=活性，
+  与「clay=正在发生」语义同源。动画只用 transform/opacity；reduced-motion（系统设置或上方模拟开关）一律静态。
+  静止档不做任何暗示活动的残动（诚实地板）。乙/丙 SVG 描稿为设计底稿（叶片 path ≈0.4 KB），定稿后施工票精修。</p>
+
+<script>
+// 叶片描稿（对数螺旋采样生成,≈0.4 KB；施工票精修定稿）
+const BLADE = "M148.0 128.0L153.9 130.7L159.4 134.7L164.3 139.8L168.4 146.0L171.6 153.2L173.6 161.2L174.4 169.8L173.9 178.9L171.8 188.4L168.3 197.9L163.3 207.2L156.7 216.3L148.6 224.7L139.0 232.4L128.0 239.0C113.4 239.0 142.6 186.0 128.0 186.0L133.6 181.5L138.3 176.6L142.1 171.5L145.1 166.4L147.2 161.3L148.6 156.3L149.2 151.6L149.3 147.2L148.9 143.2L148.2 139.6L147.1 136.5L145.9 133.8L144.7 131.6L143.7 129.6L143.0 128.0Z";
+const HUB_D = "M112 128a16 16 0 1 0 32 0 16 16 0 1 0-32 0Z M122 128a6 6 0 1 1 12 0 6 6 0 1 1-12 0Z";
+const NS = "http://www.w3.org/2000/svg";
+function makeBlades() {
+  const g = document.createElementNS(NS, "g");
+  for (let i = 0; i < 6; i++) {
+    const p = document.createElementNS(NS, "path");
+    p.setAttribute("d", BLADE);
+    p.setAttribute("fill", "#c15f3c");
+    if (i) p.setAttribute("transform", `rotate(${i * 60} 128 128)`);
+    g.appendChild(p);
+  }
+  return g;
+}
+function makeHub() {
+  const h = document.createElementNS(NS, "path");
+  h.setAttribute("d", HUB_D);
+  h.setAttribute("fill", "#c15f3c");
+  h.setAttribute("fill-rule", "evenodd");
+  return h;
+}
+// 每枚标识直接展开实 DOM（<use> 克隆不吃页内 CSS 类,残影会丢）
+document.querySelectorAll("svg[data-variant]").forEach((svg) => {
+  if (svg.dataset.variant === "tc") {
+    const trail = document.createElementNS(NS, "g");
+    trail.setAttribute("class", "trail");
+    const g1 = makeBlades(); g1.setAttribute("transform", "rotate(-20 128 128)"); g1.setAttribute("opacity", ".22");
+    const g2 = makeBlades(); g2.setAttribute("transform", "rotate(-40 128 128)"); g2.setAttribute("opacity", ".10");
+    trail.appendChild(g1); trail.appendChild(g2);
+    svg.appendChild(trail);
+  }
+  svg.appendChild(makeBlades());
+  svg.appendChild(makeHub());
+});
+
+// —— 档位驱动（WAAPI playbackRate：换档无相位跳变,自带缓启/缓停演示） ——
+const BASE_MS = 8000;                       // 慢速基准：8s/圈
+const RATES = { idle: 0, slow: 1, fast: BASE_MS / 1400 };  // 高速 1.4s/圈
+const rotors = [...document.querySelectorAll(".mark-rotor")].map((el) => {
+  const a = el.animate(
+    [{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }],
+    { duration: BASE_MS, iterations: Infinity }
+  );
+  a.playbackRate = 0;
+  return a;
+});
+let gear = "idle", forceReduce = false;
+const mq = matchMedia("(prefers-reduced-motion: reduce)");
+const reduced = () => mq.matches || forceReduce;
+function ramp(a, target, ms = 400) {
+  const from = a.playbackRate, t0 = performance.now(), token = (a._t = {});
+  (function step(t) {
+    if (a._t !== token) return;
+    const k = Math.min(1, (t - t0) / ms);
+    a.playbackRate = from + (target - from) * k;
+    if (k < 1) requestAnimationFrame(step);
+  })(t0);
+}
+function apply() {
+  const rate = reduced() ? 0 : RATES[gear];
+  rotors.forEach((a) => ramp(a, rate));
+  document.body.dataset.gear = reduced() ? "idle" : gear;
+  document.body.classList.toggle("sim-reduce", reduced());
+}
+document.querySelectorAll(".gear-btn").forEach((b) =>
+  b.addEventListener("click", () => {
+    gear = b.dataset.gear;
+    document.querySelectorAll(".gear-btn").forEach((x) => x.classList.toggle("is-on", x === b));
+    apply();
+  })
+);
+document.getElementById("simReduce").addEventListener("change", (e) => { forceReduce = e.target.checked; apply(); });
+mq.addEventListener("change", apply);
+apply();
+</script>
+</body>
+</html>
