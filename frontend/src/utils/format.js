@@ -27,6 +27,9 @@ export const statusTagType = (s) => TASK_STATUS[s]?.type ?? "info";
 // - completed = 中性墨（**不给绿**——绿仅真实 REAL 结果；当前跑 mock，给绿即假
 //   REAL。等真实性能盘接入产出可核结果再解锁绿）
 // - 其余（created/queued/cancelled）= 淡墨（待命/终止）
+// R-G 地板负规则（UI-PARADIGM.md「触发-浮现公理」节）：以上色锁语义属地板层
+// 五件（amber 未核/completed 恒中性在列），永不触发、不可被任何简洁/通用化
+// 模式关掉。
 const _TASK_WORK_STATES = new Set(["running", "validating", "parsing", "analyzing"]);
 // 同一份工作态集合对外导出（勿重复定义第二份，避免两处口径漂移）。
 export const TASK_WORK_STATES = _TASK_WORK_STATES;

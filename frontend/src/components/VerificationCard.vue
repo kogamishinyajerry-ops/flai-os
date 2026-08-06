@@ -5,7 +5,10 @@
        ——凑不出数据的行整行降级或不渲染，绝不推断。
        信任色锁审计：amber=仅未核（mock 披露/待签）· teal=仅人签 · 红=仅驳回/
        真失败计数 ·「均为真实执行」用中性墨**不给绿**——绿解锁是性能盘真结果
-       接入后的项目级决策，本组件不越权。 -->
+       接入后的项目级决策，本组件不越权。
+       R-D（UI-PARADIGM.md「触发-浮现公理」节）：一切签发入口（含速览 peek）⟹
+       本卡同页在场——签发前最后一眼必带核验三面。底部诚实地板句属 R-G 地板
+       负规则五件之一：常显、永不触发、不可被任何简洁/偏好开关关闭。 -->
   <div v-if="visible" class="verify-card">
     <h3 class="verify-title">
       <el-icon aria-hidden="true"><DocumentChecked /></el-icon>

@@ -30,6 +30,37 @@
    诚实地板全承袭，pill 数字绝不估算。
 7. **键盘与退出**：⌘K 检索直达一切；Esc 层层退出（速览→中心→关闭）。
 
+## 触发-浮现公理（map #46 · 票 #56 定稿，2026-08-06）
+
+> 七条祈使句立「面在哪」，本节立「面何时自己浮现」。逐条公理化，违反=废。
+
+- **R-A 待签全量上浮（第一规则）**：waiting_review ⟹ 可信面全量上浮并主动来找人。
+  现状已实现，追认为第一规则（设计公理化表述+锚）。实现锚：`StatusDock.vue`
+  「✍ 待你签发 N」pill + title 徽章（`utils/titleBadge.js`）+ waiting_review 迁移
+  回声 toast；`StatusCenter.vue` inbox 待签组置顶；`TodayPage.vue` 待签版块置顶。
+  锁：e2e `map32_destination_acceptance_wave3.py` B1–B6、`batch_b_today_acceptance.py`，
+  源码锚 `frontend/tests/trigger_surface_rules.test.mjs` R-A 组。
+- **R-B 工程语境方案卡上浮**：路由进工程通道 ⟹ 该段为工程语境，方案卡可见面
+  依据一行计数上浮；通识直答段零标注。锁：`plan_evidence_rollup.test.mjs`、
+  `ui_acceptance_cases.test.mjs` 方案卡依据行锚、e2e `batch_h_teams_acceptance.py`
+  O6e、`batch_g_squad_acceptance.py` O5（披露内 per-member chip 作用域锚）。
+- **R-C 语境判定白名单**：语境判定只用确定性信号——路由结论 / 附件入场 /
+  任务存在性 / `evidence_policy.required` 命中；严禁 LLM 自报当语境证据。
+- **R-D 签发入口同页核验**：一切签发入口（含速览 peek）⟹ VerificationCard
+  同页在场——签发前最后一眼必带核验三面与诚实地板句。锁：
+  `conversation_shell_contract.test.mjs` R-D 锚、e2e `m10_governance_acceptance.py`
+  peek 核验卡断言。
+- **R-E 密级面按需披露（维持现状）**：hover title 按需 + 命中声明/遮蔽行前置，
+  不升级为常驻噪音。
+- **R-F 治理事件语境隔离**：治理事件只在治理语境面露出（今日页「Agent 动态」 /
+  AgentPortal / GovernanceJourney / deploy gate），不进对话主径。
+- **R-G 地板负规则（永不触发·永不可关）**：地板层五件——mock=true 披露 /
+  未验证 amber / 人签面诚实地板 / completed 恒中性 / 密级门——永不触发
+  （不依赖任何触发-浮现机制，常显在前）、不可被任何「简洁模式」关掉；
+  任何通用性重构不得把地板层改成按需披露。锁：`trigger_surface_rules.test.mjs`
+  R-G 组+负规则组、e2e `m8_workbench_acceptance.py`、`map32` wave3 B4、
+  tamper `b7-gate-cut`/`b8-withheld-cut`。
+
 ## Phase 1（本批交付）
 
 | 件 | 文件 | 说明 |
@@ -148,3 +179,6 @@ Owner 判定 Phase 1 装饰层不改变骨架认知，拍板重构方向：**双
   不与 TaskDetail 的「批准放行」按钮产生选择器重影）；
 - 状态中心内签发走同一 `POST /tasks/{id}/review`（人具名，fail-closed 全承袭）；
 - 速览产物预览失败诚实显示错误行，绝不空白假装没有产物。
+- 触发-浮现负规则收口（R-G）：地板层五件（mock=true 披露 / 未验证 amber /
+  人签面诚实地板 / completed 恒中性 / 密级门）永不触发、不可被任何
+  简洁/通用化模式关掉——任何重构都不得把地板层改成按需披露。
