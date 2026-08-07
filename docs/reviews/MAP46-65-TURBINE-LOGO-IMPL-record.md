@@ -49,7 +49,18 @@
 - 工牌插画氛围位定性不动；favicon 换图不动 clay 语义。✓
 - 零新依赖：package.json 未动。✓
 
-## 六、遗留与边界
+## 六、互审处置（86gs 中转 codex exec，gpt-5.6，tokens 61,106；结论 request-changes 1 条）
+
+- **F1（P1，信任/诚实）**：task feed 末位释放后 `feedTasks` 共享快照未清，`brandBloomState`
+  在登出/身份失效后可能滞留 slow——违诚实地板（信号消失必须回落）。
+  **处置=修**：`stores/taskFeed.js` releaseTaskFeed 末位释放清 `feedTasks/feedLoaded/feedError`
+  三枚共享 ref（全部持有方此时已卸载/释放，无人再读；重新 acquire 经 watch immediate 重新水合）；
+  并按评审要求补回落断言——`m11_auth_acceptance.py` 新增 ③b/④b 判别对（直插 queued 行做
+  确定性信号源：信号在→brand 慢速；登出释放→回落静止）。tamper 实证：撤掉修复后 ④b 真红
+  （`settled=False anim=flai-bloom-spin`），修复在时 7/7 全绿。
+- 其余镜头（定稿符合性/降级/e2e/Vue 实现/资产/文档）评审均无 finding。
+
+## 七、遗留与边界
 
 - 审计栈 launcher 不起任务执行线程，开工任务停 queued——慢速演示信号=queued（定稿映射含 queued）；工作态（running 等）路径由同一谓词覆盖（TASK_WORK_STATES），e2e 已有同口径锚。
 - 流式高速的 live 定格受 stub burst 限制走 fixture；真实模型内网复验（M4 线）同型挂账。

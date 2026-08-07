@@ -1,7 +1,9 @@
 """M11-B1 真鉴权 UI 验收（ADR-0019 验收标准 7）。
 
 覆盖：①未登录首访=登录门+API 401 ②错密码诚实报错（后端 detail 原文上屏）
-③正确登录进入+身份上侧栏 ④登出回门+旧会话服务端已废 ⑤会话中途被吊销
+③正确登录进入+身份上侧栏 ③b queued 信号在时侧栏 brand 进慢速档（票 #65）
+④登出回门+旧会话服务端已废 ④b 登出后品牌标回落静止（票 #65 互审 F1：
+feed 末位释放清共享快照，旧信号不残留）⑤会话中途被吊销
 （服务端删行模拟过期/停用）→ 任意 API 401 → 门自动重亮（flai:unauthorized 链）。
 
 自包含：tmp 目录自起后端（绝不碰真实 data/）。运行（仓根）：
@@ -115,6 +117,31 @@ with sync_playwright() as p:
     check("③登录进入且身份上侧栏", "验收工程师" in sb_identity, sb_identity)
     page.screenshot(path=str(SHOTS / "3_logged_in.png"))
 
+    # ── ③b 票 #65 互审 F1 回归锚（信号面）：queued 任务在时侧栏 brand 必须进
+    # 慢速档。确定性信号源=直插 queued 任务行（不经 LLM），等 tasks channel
+    # 5s 轮询落地；与 ④b 构成「信号出现→慢速 / 信号消失→静止」的判别对。 ──
+    from datetime import datetime, timezone  # 局部引入，不扰文件头
+
+    conn = get_conn(WORK / "flai_os.db")
+    try:
+        _now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO tasks (id, agent_id, agent_version, name, status, created_by, created_at, updated_at, created_by_username)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("task_m11_slow_signal", "hello_agent", "0.1.0", "M11 慢速信号源（票 #65 F1）",
+             "queued", "验收工程师", _now, _now, E2E_USERNAME),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        page.wait_for_selector(".sb-brand .flai-bloom.is-slow", timeout=15000)
+        slow_seen = True
+    except Exception:
+        slow_seen = False
+    check("③b queued 信号在时侧栏 brand 进慢速档（票 #65 定稿 Q3=i）", slow_seen,
+          "未在 15s 内捕到 .sb-brand .flai-bloom.is-slow")
+
     # ── ④ 登出：确认框→回登录门；旧 cookie 服务端已废 ──
     cookies = {c["name"]: c["value"] for c in page.context.cookies()}
     old_token = cookies.get("flai_session", "")
@@ -125,6 +152,27 @@ with sync_playwright() as p:
     check("④登出回门 + 旧会话服务端已废（重放 401）",
           old_token != "" and replay.status_code == 401, f"replay={replay.status_code}")
     page.screenshot(path=str(SHOTS / "4_logged_out.png"))
+
+    # ── ④b 票 #65 互审 F1（回落面）：登出=feed 释放，品牌标必须回落静止——
+    # 旧快照不得残留驱动慢速档（诚实地板：信号消失必须回落）。无本票修复时
+    # ③b 的 queued 旧快照会让 is-slow 在登出后滞留，此断言 discriminating。 ──
+    try:
+        page.wait_for_function(
+            """() => {
+              const b = document.querySelector('.sb-brand .flai-bloom');
+              return b && !b.classList.contains('is-slow') && !b.classList.contains('is-fast');
+            }""",
+            timeout=5000,
+        )
+        brand_settled = True
+    except Exception:
+        brand_settled = False
+    brand_anim = page.eval_on_selector(
+        ".sb-brand .flai-bloom img", "el => getComputedStyle(el).animationName"
+    )
+    check("④b 登出后品牌标回落静止（票 #65 F1：feed 释放清快照）",
+          brand_settled is True and brand_anim == "none",
+          f"settled={brand_settled} anim={brand_anim}")
 
     # ── ⑤ 会话中途被吊销（服务端删行=停用/过期同路径）→ API 401 → 门自动重亮 ──
     page.get_by_placeholder("用户名").fill(E2E_USERNAME)
