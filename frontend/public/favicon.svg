@@ -1,11 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- 与侧栏 .brand-mark 同源：clay 渐变圆角方 + 白 F（信任色锁：clay 唯一强调色） -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 256 256">
+  <!-- 花瓣主标识 favicon（票 #65 定稿 Q5b）：以品牌主标识 assets/flai-bloom.png 出图
+       重绘——六逗号瓣 + 转轴毂，两阶 clay（瓣 #c66f55 / 毂 #a9513d，信任色锁：clay
+       唯一强调色），与侧栏 .brand-mark 自此真正同源。clay 语义不动。 -->
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#c15f3c"/>
-      <stop offset="1" stop-color="#a54e2f"/>
-    </linearGradient>
+    <path id="bloom-petal" d="M131.0 23.0C125.3 21.3 121.2 23.3 117.0 25.0C112.8 26.7 109.7 27.2 106.0 33.0C102.3 38.8 96.5 50.2 95.0 60.0C93.5 69.8 94.2 82.0 97.0 92.0C99.8 102.0 109.3 118.7 112.0 120.0C114.7 121.3 111.3 106.8 113.0 100.0C114.7 93.2 118.0 85.0 122.0 79.0C126.0 73.0 130.7 68.3 137.0 64.0C143.3 59.7 157.7 57.8 160.0 53.0C162.3 48.2 155.8 40.0 151.0 35.0C146.2 30.0 136.7 24.7 131.0 23.0Z"/>
   </defs>
-  <rect x="1" y="1" width="30" height="30" rx="9" fill="url(#g)"/>
-  <path d="M11.5 24V8.5H22v3.4h-6.7v3.2h5.9v3.3h-5.9V24z" fill="#fff"/>
+  <g fill="#c66f55">
+    <use xlink:href="#bloom-petal"/>
+    <use xlink:href="#bloom-petal" transform="rotate(60 127.6 127.6)"/>
+    <use xlink:href="#bloom-petal" transform="rotate(120 127.6 127.6)"/>
+    <use xlink:href="#bloom-petal" transform="rotate(180 127.6 127.6)"/>
+    <use xlink:href="#bloom-petal" transform="rotate(240 127.6 127.6)"/>
+    <use xlink:href="#bloom-petal" transform="rotate(300 127.6 127.6)"/>
+  </g>
+  <path d="M126.0 113.0C123.5 113.0 121.8 113.8 120.0 115.0C118.2 116.2 116.2 117.7 115.0 120.0C113.8 122.3 113.0 126.5 113.0 129.0C113.0 131.5 113.8 133.2 115.0 135.0C116.2 136.8 117.5 138.8 120.0 140.0C122.5 141.2 127.0 142.3 130.0 142.0C133.0 141.7 136.0 140.0 138.0 138.0C140.0 136.0 141.3 132.2 142.0 130.0C142.7 127.8 142.3 126.7 142.0 125.0C141.7 123.3 141.2 121.7 140.0 120.0C138.8 118.3 137.3 116.2 135.0 115.0C132.7 113.8 128.5 113.0 126.0 113.0Z" fill="#a9513d"/>
 </svg>

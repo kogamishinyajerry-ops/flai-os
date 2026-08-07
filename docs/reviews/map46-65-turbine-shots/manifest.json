@@ -1,0 +1,35 @@
+{
+  "票": "#65 动态涡轮标识施工截图 manifest（map #46 批 2，#61 定稿施工）",
+  "捕获环境": "体验栈=真实后端(stub 网关，链路真内容假)+Vite dev 5202；chromium Playwright 1.61.0；dsf=2",
+  "断言": {
+    "gate_bloom_anim": "none",
+    "gate_card_bloom_anim": "none",
+    "hero_anim": "none",
+    "sidebar_idle_anim": "none",
+    "pending_fast_anim": "flai-bloom-spin（scoped 后缀略）",
+    "pending_fast_duration": "1.4s",
+    "pending_fast_frames_differ": true,
+    "after_stream_marks_anim": [
+      "none"
+    ],
+    "reduced_fast_anim": "none",
+    "reduced_fast_frames_identical": true,
+    "sidebar_slow_anim": "flai-bloom-spin",
+    "sidebar_slow_duration": "8s",
+    "slow_frames_differ": true,
+    "reduced_slow_anim": "none",
+    "reduced_slow_frames_identical": true,
+    "lab_stream_fast_anim": "flai-bloom-spin",
+    "lab_stream_fast_duration": "1.4s",
+    "lab_stream_frames_differ": true,
+    "lab_reduced_stream_anim": "none",
+    "lab_reduced_stream_frames_identical": true
+  },
+  "诚实注记": [
+    "流式中高速帧对=ui-lab streaming-desktop fixture（钉死 streaming=true）：实测本 stub 栈内容在客户端 burst 落地、流式窗口亚秒级无法稳定定格；fixture 与线上同一代码路径（ui_lab_acceptance.py 同口径锚）。待首包/回落/侧栏慢速均为真实栈实测驱动。",
+    "侧栏慢速演示信号=开工后 queued 任务（定稿映射 i 含 queued）；本审计栈 launcher 不起执行线程，任务停 queued——恰好支撑慢速窗口，如实标注。",
+    "favicon 经 dev server 伺服渲染目检：16/32px 六瓣可读（favicon-render.png 含暗底对照）。",
+    "e2e 双锚（ui_lab is-generating 选择器、batch_d ⑤ 编译 CSS 断言）随本票原子同批更新——定稿未覆盖此抉择点，owner 2026-08-07 交互裁：原子同批更新（map #46 红线允许）。",
+    "reduced-motion 静态对照：高速/慢速两档在 reduce 下类仍在、animation:none!important 硬停、两帧字节一致。"
+  ]
+}

@@ -41,7 +41,7 @@
     只是不是这次 Task 2 规则的判别信号）。
   ④ 暗色 `--ink-faint` on `--surface-raised` WCAG≥4.5：页内用真实
     getComputedStyle 读两个 token 的 rgb() 值算相对亮度对比度（非硬编码色值）。
-  ⑤ reduced-motion 下生成中的六重对称品牌标不转：**已从 DOM 注入改为编译
+  ⑤ reduced-motion 下六重对称品牌标的动效档位不转：**已从 DOM 注入改为编译
     CSS bundle grep**（原版做法已判定 vacuous 假绿并废弃：动效定义在
     FlaiBloom.vue `<style scoped>` 内，编译后规则只匹配带该 scope 属性的元素；手工
     `document.createElement('span')` 出来的探针元素没有该属性，无论有没有
@@ -49,9 +49,10 @@
     恒为 CSS 默认值 `'none'`——删掉源码里的覆盖规则也不会让检查变红，是纯
     vacuous 断言）。现改为直接读 `frontend/dist/assets/*.css`，
     在 `@media (prefers-reduced-motion:reduce)` 块内做括号平衡提取，断言其中
-    含 `.flai-bloom.is-generating img{...animation:none...}`（兼容 scoped 属性）——
-    tamper-sensitive：删掉源码里的 override 再 build，bundle 里就没有，
-    真红。
+    慢速 `.flai-bloom.is-slow img` 与高速 `.flai-bloom.is-fast img` 两档
+    （票 #65 三档扩展，原单档 is-generating 已退役）均含 `animation:none!important`
+    硬停（兼容 scoped 属性）——tamper-sensitive：删掉源码里的 override 再
+    build，bundle 里就没有，真红。
   ⑥ 页标题字号全等：GuidePage 的 `.plan-goal-title` 是对话气泡内的目标标题
     （仅在推荐消息落地后才挂载、且字号 20/21px 是刻意的气泡层级而非页级
     token），排除在断言范围外并在此明示；改为对 5 个有稳定单一页标题元素的
@@ -255,15 +256,16 @@ check(
     f"命中={danger_hits}" if danger_hits else "扫描 frontend/src/**/*.{vue,js,css} 零命中",
 )
 
-# ── ⑤ reduced-motion 下生成中的六重对称品牌标不转：编译 CSS bundle grep（不依赖浏览器，
+# ── ⑤ reduced-motion 下品牌标动效档位不转：编译 CSS bundle grep（不依赖浏览器，
 # 与②同批先跑）。原 DOM 注入法已判定 vacuous 假绿并废弃——见文件头注释。
 # 编译产物的 scoped 规则形如
-# `.flai-bloom.is-generating img[data-v-xxxx]{...}`，minified 后
-# `@media (prefers-reduced-motion:reduce)` 是单行、多条规则挤在同一花括号
-# 深度里，不能用非贪婪正则截断，所以手工做括号平衡提取该 @media 块的完整
-# 内容（含嵌套规则），再在块内断言品牌标生成态含 `animation:none`。
+# `.flai-bloom.is-slow img[data-v-xxxx],.flai-bloom.is-fast img[data-v-xxxx]{...}`，
+# minified 后 `@media (prefers-reduced-motion:reduce)` 是单行、多条规则挤在同一
+# 花括号深度里，不能用非贪婪正则截断，所以手工做括号平衡提取该 @media 块的完整
+# 内容（含嵌套规则），再在块内逐规则断言：慢速 is-slow 与高速 is-fast 两档
+# （票 #65 三档扩展）都被 `animation:none!important` 硬停覆盖。
 compiled_css_files = sorted((DIST / "assets").glob("*.css"))
-bloom_motion_none_found = False
+bloom_gears_covered: set[str] = set()
 bloom_motion_evidence = ""
 if not compiled_css_files:
     bloom_motion_evidence = "未找到 frontend/dist/assets/*.css（先 npm run build）"
@@ -281,27 +283,26 @@ else:
                     depth -= 1
                 i += 1
             block = css_text[start : i - 1]
-            bloom_rule = re.search(
-                r"\.flai-bloom\.is-generating(?:\[[^\]]*\])?\s+"
-                r"img(?:\[[^\]]*\])?\s*\{[^}]*\}",
-                block,
-            )
-            if bloom_rule and re.search(r"animation\s*:\s*none", bloom_rule.group(0)):
-                bloom_motion_none_found = True
-                bloom_motion_evidence = f"{css_path.name} :: {bloom_rule.group(0)}"
-                break
-        if bloom_motion_none_found:
+            for rule_match in re.finditer(r"([^{}]+)\{([^{}]*)\}", block):
+                selectors, body = rule_match.group(1), rule_match.group(2)
+                if not re.search(r"animation\s*:\s*none\s*!important", body):
+                    continue
+                for gear in ("is-slow", "is-fast"):
+                    if re.search(rf"\.flai-bloom\.{gear}(?:\[[^\]]*\])?\s+img", selectors):
+                        bloom_gears_covered.add(gear)
+                        bloom_motion_evidence = f"{css_path.name} :: {rule_match.group(0)}"
+        if bloom_gears_covered == {"is-slow", "is-fast"}:
             break
     if not bloom_motion_evidence:
         bloom_motion_evidence = (
             f"扫描 {[p.name for p in compiled_css_files]} 未在 prefers-reduced-motion:reduce "
-            "块内命中 .flai-bloom.is-generating img{animation:none}"
+            "块内命中 .flai-bloom.is-slow/is-fast img{animation:none!important}"
         )
 check(
-    "⑤ 编译 CSS bundle 含 reduced-motion 下生成品牌标 animation:none"
+    "⑤ 编译 CSS bundle 含 reduced-motion 下品牌标慢速/高速双档 animation:none!important 硬停"
     "（原 DOM 注入因 Vue scoped data-v 不匹配已判定 vacuous，见文件头说明）",
-    bloom_motion_none_found,
-    bloom_motion_evidence,
+    bloom_gears_covered == {"is-slow", "is-fast"},
+    f"已覆盖档位={sorted(bloom_gears_covered)}；{bloom_motion_evidence}",
 )
 
 AFFECTED = [

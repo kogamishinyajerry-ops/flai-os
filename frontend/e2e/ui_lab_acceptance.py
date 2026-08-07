@@ -8,7 +8,7 @@
   ② 二十个固定镜头、精确 viewport 与桌面布局数值基线；
   ③ opaque-origin iframe + 只读边界阻止网络和主题偏好写入；
   ④ 自动路由摘要默认收敛，Agent/模型/工具依据按需披露；
-  ⑤ 流式快照使用真实 generating 标记，正文给固定 composer 留足空间；
+  ⑤ 流式快照使用真实 fast（高速档）标记，正文给固定 composer 留足空间；
   ⑥ 保存待核使用 amber，且发送、附件、Agent 共同锁定；
   ⑦ completed 单任务的对话轴资产候选与只读决定抽屉；
   ⑧ Asset Builder 单焦点九问、待审桌面/移动与 needs_revision 阻断；
@@ -462,10 +462,10 @@ try:
               const composer = document.querySelector('.composer-fixed');
               const page = document.querySelector('.guide-page');
               const mark = document.querySelector(
-                '.bubble-row.assistant .flai-bloom.is-generating'
+                '.bubble-row.assistant .flai-bloom.is-fast'
               );
               return {
-                hasGeneratingMark: Boolean(mark),
+                hasFastMark: Boolean(mark),
                 pagePaddingBottom: parseFloat(getComputedStyle(page).paddingBottom),
                 composerHeight: composer.getBoundingClientRect().height,
                 assistantStreaming: Boolean(
@@ -475,8 +475,8 @@ try:
             }"""
         )
         check(
-            "流式快照用 generating 标记且 composer 不遮正文",
-            streaming_metrics["hasGeneratingMark"] is True
+            "流式快照用高速档（fast）标记且 composer 不遮正文",
+            streaming_metrics["hasFastMark"] is True
             and streaming_metrics["assistantStreaming"] is True
             and streaming_metrics["pagePaddingBottom"]
             >= streaming_metrics["composerHeight"],
