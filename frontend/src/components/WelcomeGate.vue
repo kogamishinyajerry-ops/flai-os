@@ -5,12 +5,17 @@
     <div class="welcome-gate__brand fx-rise" aria-hidden="true">
       <div class="welcome-gate__brand-inner">
         <img class="welcome-gate__brand-art" :src="badgeArt" alt="" />
+        <!-- 静态花瓣标识（票 #65 定稿 Q5a）：登录门进主标识，恒静态——未登录无
+             任务信号，诚实地板不许装活；上方工牌插画氛围位保留、定性不动。 -->
+        <FlaiBloom class="welcome-gate__bloom" :size="40" />
         <p class="welcome-gate__tagline">平台提议，你拍板。</p>
         <p class="welcome-gate__tagline-sub">二所工程智能体运行底座——任务在这里拆解、执行、留痕。</p>
       </div>
     </div>
     <main class="welcome-gate__content fx-rise">
       <img class="welcome-gate__art" :src="badgeArt" alt="" />
+      <!-- 同 Q5a：窄屏品牌氛围面隐去时，登录卡内同样以静态花瓣标识领到标题。 -->
+      <FlaiBloom class="welcome-gate__bloom-card" :size="36" />
       <h1 id="welcome-gate-title" class="welcome-gate__title">欢迎来到 FLAi-OS</h1>
       <p class="welcome-gate__note">登录后开始工作——最终放行由你亲手确认。</p>
 
@@ -47,6 +52,7 @@
 <script setup>
 import { computed, ref } from "vue";
 import badgeArt from "../assets/welcome-badge.png";
+import FlaiBloom from "./artwork/FlaiBloom.vue";
 import { login } from "../stores/session";
 
 // ADR-0019 D8：真登录门。错误如实展示后端 detail（401 凭据错/429 节流），
@@ -115,6 +121,11 @@ async function submit() {
   margin: 0 0 var(--space-6);
 }
 
+/* 静态花瓣标识：恒 idle（无 state 绑定），不转——登录门无任务信号。 */
+.welcome-gate__bloom {
+  margin: 0 0 var(--space-4);
+}
+
 .welcome-gate__tagline {
   margin: 0 0 var(--space-3);
   color: var(--ink);
@@ -138,6 +149,10 @@ async function submit() {
   max-width: 50vw;
   height: auto;
   margin: 0 auto 24px;
+}
+
+.welcome-gate__bloom-card {
+  margin: 0 auto var(--space-3);
 }
 
 .welcome-gate__title {
@@ -230,6 +245,11 @@ async function submit() {
 
   /* 品牌氛围面已放大陈列同一插画，卡内小徽标隐去避免两处重复视觉锚点。 */
   .welcome-gate__art {
+    display: none;
+  }
+
+  /* 同理：花瓣标识已在品牌氛围面陈列，卡内这枚隐去，同屏不留第二锚点。 */
+  .welcome-gate__bloom-card {
     display: none;
   }
 }

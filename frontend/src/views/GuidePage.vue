@@ -74,7 +74,7 @@
         <template v-else>
           <FlaiBloom
             class="ai-mark"
-            :state="m.streaming ? 'generating' : 'idle'"
+            :state="m.streaming ? 'fast' : 'idle'"
             :size="26"
           />
           <div class="ai-body">
@@ -511,7 +511,7 @@
       <FeatureAssetMapDisclosure />
 
       <div v-if="sending && !hasStreamingAssistant" class="bubble-row assistant">
-        <FlaiBloom class="ai-mark" state="generating" :size="26" />
+        <FlaiBloom class="ai-mark" state="fast" :size="26" />
         <div class="ai-thinking">
           <div class="think-row">
             <!-- 真耗时（评审 N3）：≥3s 才显示，快回合不闪数字；tabular-nums 逐秒活跳不抖宽。 -->

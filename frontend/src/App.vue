@@ -13,7 +13,7 @@
       <!-- D-3 键盘可达：div@click 改真 button（Tab 可入、Enter/Space 原生触发）；
            class 与内容结构原样，UA 差异在下方 .sb-brand 样式归零。 -->
       <button type="button" class="sb-brand" @click="newConversation">
-        <FlaiBloom class="brand-mark" :size="30" />
+        <FlaiBloom class="brand-mark" :size="30" :state="brandBloomState" />
         <span class="brand-text">
           <span class="brand-name">FLAi-OS</span>
           <span class="brand-sub">二所工程智能体运行底座</span>
@@ -133,17 +133,18 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { listConversations } from "./api/conversations";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Menu, Plus, Search, Sunny, Moon } from "@element-plus/icons-vue";
-import { formatTime } from "./utils/format";
+import { formatTime, TASK_WORK_STATES } from "./utils/format";
 import { conversationTitle, conversationTitlesVersion } from "./utils/conversationTitles";
 import { currentUser, fetchMe, logout } from "./stores/session";
 import { themeMode, resolvedTheme, setThemeMode } from "./stores/theme";
 import { openQuickSwitcher } from "./stores/quickSwitcher";
 import { closeCenter } from "./stores/statusCenter";
+import { feedTasks, acquireTaskFeed, releaseTaskFeed } from "./stores/taskFeed";
 import QuickSwitcher from "./components/QuickSwitcher.vue";
 import WelcomeGate from "./components/WelcomeGate.vue";
 import StatusDock from "./components/StatusDock.vue";
@@ -243,6 +244,26 @@ function cycleTheme() {
   const next = THEME_ORDER[(THEME_ORDER.indexOf(themeMode.value) + 1) % THEME_ORDER.length];
   setThemeMode(next);
 }
+
+// 侧栏 brand 动态涡轮（票 #65 定稿 Q3=i/Q4=A）：全局两档——≥1 任务在工作态
+// （TASK_WORK_STATES）或 queued → 慢速；无信号 → 静止（零残动，信号消失随下轮
+// 轮询回落）。高速档只在会话内落点出现（GuidePage ai-mark），不进侧栏。
+// 数据走 taskFeed 共享轮询源（与 StatusDock 同一条 liveFeed tasks channel，
+// 零新链路）；挂链纪律同 StatusDock——登录门后不挂链，未登录不打 /api/tasks。
+const brandBloomState = computed(() => (
+  feedTasks.value.some((t) => TASK_WORK_STATES.has(t.status) || t.status === "queued")
+    ? "slow"
+    : "idle"
+));
+let brandFeedHeld = false;
+watch(identityReady, (ready) => {
+  const shouldHold = ready && !acceptanceMode;
+  if (shouldHold && !brandFeedHeld) { acquireTaskFeed(); brandFeedHeld = true; }
+  if (!shouldHold && brandFeedHeld) { releaseTaskFeed(); brandFeedHeld = false; }
+}, { immediate: true });
+onUnmounted(() => {
+  if (brandFeedHeld) { releaseTaskFeed(); brandFeedHeld = false; }
+});
 
 const route = useRoute();
 const router = useRouter();
