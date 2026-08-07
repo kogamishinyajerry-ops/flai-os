@@ -1,0 +1,188 @@
+<!-- map #46 / 票 #61 设计预览稿（prototype，未施工、不接入生产路径）。
+     方案丙：SVG 涡轮 + 高速尾迹——乙的形态，高速档叶片拖尾（速度可视化）。
+     纪律：仅 clay + 中性暖阶；transform/opacity；reduced-motion=静态；零依赖。 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方案丙 · 涡轮 + 高速尾迹（票 #61 预览稿）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  :root {
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "STSong", serif;
+    --ink: #2b2622; --ink-soft: #6b6259; --ink-faint: #a39d90;
+    --paper-cream: #fbf9f3; --paper-canvas-b: #f1eee6; --paper-rail: #f7f4ec;
+    --hairline: #ece5db; --clay: #c15f3c; --clay-deep: #a54e2f;
+    --motion-med: .22s; --ease-out-soft: cubic-bezier(.25,.8,.35,1);
+  }
+  body { font-family: "PingFang SC", system-ui, sans-serif; background: #faf7f2; color: var(--ink); padding: 24px; }
+  h1 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .rule { font-size: 12px; color: var(--ink-soft); line-height: 1.7; margin-bottom: 14px; max-width: 720px; }
+  .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
+  .controls .lbl { font-size: 11.5px; color: var(--ink-faint); }
+  .gear-btn { border: 1px solid var(--hairline); background: #fff; border-radius: 999px; padding: 5px 12px; font-size: 12px; color: var(--ink-soft); cursor: pointer; transition: border-color var(--motion-med) var(--ease-out-soft), color var(--motion-med) var(--ease-out-soft); }
+  .gear-btn.is-on { border-color: var(--clay); color: var(--clay-deep); font-weight: 600; }
+  .reduce-toggle { font-size: 12px; color: var(--ink-soft); display: inline-flex; gap: 5px; align-items: center; margin-left: 10px; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+  .card { background: #fff; border: 1px solid var(--hairline); border-radius: 12px; padding: 16px; }
+  .card h2 { font-size: 12.5px; margin-bottom: 8px; }
+  .card h2 .en { color: var(--ink-faint); font-weight: 400; font-size: 11px; }
+  .stage { display: grid; place-items: center; min-height: 150px; }
+  .mark { display: block; }
+  .sizes { display: flex; align-items: flex-end; gap: 14px; }
+  .sizes .cell { text-align: center; font-size: 10px; color: var(--ink-faint); }
+  .mock-sb { width: 240px; background: var(--paper-rail); border: 1px solid var(--hairline); border-radius: 12px; padding: 12px; }
+  .mock-brand { display: flex; gap: 8px; align-items: center; padding: 4px; }
+  .mock-brand .n { font-size: 13.5px; font-weight: 700; display: block; }
+  .mock-brand .s { font-size: 10px; color: var(--ink-faint); }
+  .mock-hero { flex: 1; min-width: 300px; background: #fff; border: 1px solid var(--hairline); border-radius: 12px; padding: 26px; text-align: center; }
+  .mock-hero .greet { font-family: var(--serif); font-size: 13px; color: var(--ink-soft); margin-top: 10px; }
+  .mock-hero .title { font-family: var(--serif); font-size: 24px; font-weight: 600; margin: 4px 0 6px; }
+  .mock-hero .promise { font-size: 11.5px; color: var(--ink-faint); }
+  /* 尾迹：仅高速档浮现；reduced-motion（真实或模拟）永不渲染 */
+  .trail { opacity: 0; transition: opacity var(--motion-med) var(--ease-out-soft); }
+  body[data-gear="fast"] .trail { opacity: 1; }
+  .compare { display: flex; gap: 20px; }
+  .compare .cell { text-align: center; font-size: 10.5px; color: var(--ink-faint); }
+  .note { font-size: 11.5px; color: var(--ink-faint); line-height: 1.7; max-width: 720px; }
+  .note b { color: var(--ink-soft); }
+  /* 静态兜底双通道：JS reduced() 停转 + CSS !important 硬停（互审 F2） */
+  @media (prefers-reduced-motion: reduce) {
+    .gear-btn, .trail { transition: none; }
+    .trail { opacity: 0 !important; }
+    .mark-rotor { transform: none !important; }
+  }
+</style>
+</head>
+<body data-gear="idle">
+  <h1>方案丙 · 涡轮 + 高速尾迹（票 #61 设计预览稿，未施工）</h1>
+  <p class="rule">方案乙的形态 + 高速档两层滞后残影（-20°/-40°，opacity .22/.10）——速度不只靠转速读出，
+  形态本身在长「运动模糊」。尾迹只在高速信号在时浮现（诚实地板：无信号无残影），reduced-motion 永不渲染。</p>
+
+  <div class="controls">
+    <span class="lbl">档位</span>
+    <button class="gear-btn is-on" data-gear="idle">静止（无信号）</button>
+    <button class="gear-btn" data-gear="slow">慢速 8s/圈</button>
+    <button class="gear-btn" data-gear="fast">高速 1.4s/圈（尾迹浮现）</button>
+    <label class="reduce-toggle"><input type="checkbox" id="simReduce"> 模拟 reduced-motion</label>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h2>形态细节 <span class="en">128px · 点「高速」看尾迹</span></h2>
+      <div class="stage"><svg class="mark mark-rotor" data-variant="tc" width="128" height="128" viewBox="0 0 256 256"></svg></div>
+    </div>
+    <div class="card">
+      <h2>生产尺寸 <span class="en">侧栏 30 / hero 38 / 消息 26</span></h2>
+      <div class="stage">
+        <div class="sizes">
+          <div class="cell"><svg class="mark mark-rotor" data-variant="tc" width="30" height="30" viewBox="0 0 256 256"></svg><br>30</div>
+          <div class="cell"><svg class="mark mark-rotor" data-variant="tc" width="38" height="38" viewBox="0 0 256 256"></svg><br>38</div>
+          <div class="cell"><svg class="mark mark-rotor" data-variant="tc" width="26" height="26" viewBox="0 0 256 256"></svg><br>26</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>reduced-motion 对照</h2>
+      <div class="stage">
+        <div class="compare">
+          <div class="cell"><svg class="mark mark-rotor" data-variant="tc" width="72" height="72" viewBox="0 0 256 256"></svg><br>正常（随档位）</div>
+          <div class="cell"><svg class="mark" data-variant="tb" width="72" height="72" viewBox="0 0 256 256"></svg><br>降级（静态无尾迹）</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="mock-sb">
+      <div class="mock-brand">
+        <svg class="mark mark-rotor" data-variant="tc" width="30" height="30" viewBox="0 0 256 256"></svg>
+        <span><span class="n">FLAi-OS</span><span class="s">二所工程智能体运行底座</span></span>
+      </div>
+    </div>
+    <div class="mock-hero">
+      <svg class="mark mark-rotor" data-variant="tc" width="38" height="38" viewBox="0 0 256 256"></svg>
+      <p class="greet">晚上好</p>
+      <div class="title">说说你要做的事</div>
+      <p class="promise">输入文字或上传附件，系统会在后台安排所需能力。</p>
+    </div>
+  </div>
+
+  <p class="note"><b>辨识度强化</b>：三案中最强——高速档「叶片拖尾」是独占视觉记忆点，30px 小尺寸同样可读；
+  <b>体积账</b>：在乙的基础上 +2 组滞后叶片（≈0.2 KB）；<b>实现面</b>：尾迹=同组叶片的实 DOM 旋转拷贝（&lt;use&gt; 克隆不吃页内 CSS 类，生产模板须直写两组），
+  opacity 随档位类切换（transform/opacity 纪律内），reduced-motion 下 opacity:0 !important 兜底；
+  <b>风险</b>：残影在高转速下叠加视觉模糊，需 owner 目检确认「炫」与「稳」的平衡（慢速/静止档与乙完全一致）。 换档 ramp=瞬时 rAF（&lt;0.5s 自清理）；常驻旋转=WAAPI 合成层动画，非主线程 rAF。</p>
+
+<script>
+const BLADE = "M148.0 128.0L153.9 130.7L159.4 134.7L164.3 139.8L168.4 146.0L171.6 153.2L173.6 161.2L174.4 169.8L173.9 178.9L171.8 188.4L168.3 197.9L163.3 207.2L156.7 216.3L148.6 224.7L139.0 232.4L128.0 239.0C113.4 239.0 142.6 186.0 128.0 186.0L133.6 181.5L138.3 176.6L142.1 171.5L145.1 166.4L147.2 161.3L148.6 156.3L149.2 151.6L149.3 147.2L148.9 143.2L148.2 139.6L147.1 136.5L145.9 133.8L144.7 131.6L143.7 129.6L143.0 128.0Z";
+const HUB_D = "M112 128a16 16 0 1 0 32 0 16 16 0 1 0-32 0Z M122 128a6 6 0 1 1 12 0 6 6 0 1 1-12 0Z";
+const NS = "http://www.w3.org/2000/svg";
+function makeBlades() {
+  const g = document.createElementNS(NS, "g");
+  for (let i = 0; i < 6; i++) {
+    const p = document.createElementNS(NS, "path");
+    p.setAttribute("d", BLADE);
+    p.setAttribute("fill", "#c15f3c");
+    if (i) p.setAttribute("transform", `rotate(${i * 60} 128 128)`);
+    g.appendChild(p);
+  }
+  return g;
+}
+function makeHub() {
+  const h = document.createElementNS(NS, "path");
+  h.setAttribute("d", HUB_D);
+  h.setAttribute("fill", "#c15f3c");
+  h.setAttribute("fill-rule", "evenodd");
+  return h;
+}
+// 每枚标识直接展开实 DOM（<use> 克隆不吃页内 CSS 类,残影会丢）
+document.querySelectorAll("svg[data-variant]").forEach((svg) => {
+  if (svg.dataset.variant === "tc") {
+    const trail = document.createElementNS(NS, "g");
+    trail.setAttribute("class", "trail");
+    const g1 = makeBlades(); g1.setAttribute("transform", "rotate(-20 128 128)"); g1.setAttribute("opacity", ".22");
+    const g2 = makeBlades(); g2.setAttribute("transform", "rotate(-40 128 128)"); g2.setAttribute("opacity", ".10");
+    trail.appendChild(g1); trail.appendChild(g2);
+    svg.appendChild(trail);
+  }
+  svg.appendChild(makeBlades());
+  svg.appendChild(makeHub());
+});
+const BASE_MS = 8000;
+const RATES = { idle: 0, slow: 1, fast: BASE_MS / 1400 };
+const rotors = [...document.querySelectorAll(".mark-rotor")].map((el) => {
+  const a = el.animate([{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }],
+    { duration: BASE_MS, iterations: Infinity });
+  a.playbackRate = 0;
+  return a;
+});
+let gear = "idle", forceReduce = false;
+const mq = matchMedia("(prefers-reduced-motion: reduce)");
+const reduced = () => mq.matches || forceReduce;
+function ramp(a, target, ms = 400) {
+  const from = a.playbackRate, t0 = performance.now(), token = (a._t = {});
+  (function step(t) {
+    if (a._t !== token) return;
+    const k = Math.min(1, (t - t0) / ms);
+    a.playbackRate = from + (target - from) * k;
+    if (k < 1) requestAnimationFrame(step);
+  })(t0);
+}
+function apply() {
+  const rate = reduced() ? 0 : RATES[gear];
+  rotors.forEach((a) => ramp(a, rate));
+  document.body.dataset.gear = reduced() ? "idle" : gear;
+}
+document.querySelectorAll(".gear-btn").forEach((b) =>
+  b.addEventListener("click", () => {
+    gear = b.dataset.gear;
+    document.querySelectorAll(".gear-btn").forEach((x) => x.classList.toggle("is-on", x === b));
+    apply();
+  })
+);
+document.getElementById("simReduce").addEventListener("change", (e) => { forceReduce = e.target.checked; apply(); });
+mq.addEventListener("change", apply);
+apply();
+</script>
+</body>
+</html>
