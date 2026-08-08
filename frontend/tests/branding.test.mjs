@@ -20,6 +20,7 @@ const featureMapSource = read("../src/components/FeatureAssetMapDisclosure.vue")
 const indexHtml = read("../index.html");
 const uiLabAppSource = read("../src/ui-lab/UiLabApp.vue");
 const uiLabBoundarySource = read("../src/ui-lab/acceptanceBoundary.js");
+const lifePickerSource = read("../src/components/LifeScenarioPicker.vue");
 const backendConfig = read("../../backend/app/config.py");
 const backendMain = read("../../backend/app/main.py");
 
@@ -68,6 +69,13 @@ test("B1 ui-lab（DEV ONLY）命名面接 SSOT（互审 F1）", () => {
   assert.match(uiLabBoundarySource, /`\$\{PLATFORM_NAME\} UI 验收只读边界`/);
   assert.doesNotMatch(uiLabAppSource, /lab-kicker">FLAi-OS/);
   assert.doesNotMatch(uiLabBoundarySource, /"FLAi-OS UI 验收只读边界"/);
+});
+
+// PR #67 评审线程处置（codex-connector bot，P2）：LifeScenarioPicker 散文句内
+// 平台名同样接 SSOT——命名引用零字面残留（注释/文档字符串不算命名面）。
+test("B1 散文 mention 接 SSOT（PR #67 评审线程）", () => {
+  assert.match(lifePickerSource, /5 分钟看懂 \{\{ PLATFORM_NAME \}\} 本体论的入口/);
+  assert.doesNotMatch(lifePickerSource, /看懂 FLAi-OS 本体论/);
 });
 
 // ── B6（owner 裁：composer 对齐 hero 口径）——方案卡 :463 政策句逐字锁

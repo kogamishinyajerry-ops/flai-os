@@ -14,7 +14,7 @@
       <h1 class="life-picker__title">挑一段生活经历,走一遍建模闭环</h1>
       <p class="life-picker__hint">
         本体论不是玄学。把一段做饭、旅行、装修的真实经历讲清楚,系统会把它投影成
-        一份带钢印的待审候选——审核权在你手里。这是 5 分钟看懂 FLAi-OS 本体论的入口。
+        一份带钢印的待审候选——审核权在你手里。这是 5 分钟看懂 {{ PLATFORM_NAME }} 本体论的入口。
       </p>
     </header>
 
@@ -47,6 +47,7 @@
 
 <script setup>
 import FlaiBloom from "./artwork/FlaiBloom.vue";
+import { PLATFORM_NAME } from "../utils/branding";
 
 // 三个场景渐进设计(详见 docs/design/ONTOLOGY-DEMO-LIFE-SCENARIOS.md):
 // cooking ★☆☆ 单 Skill 完整闭环;travel ★★☆ 多 Skill 组合 = Workflow Revision;
