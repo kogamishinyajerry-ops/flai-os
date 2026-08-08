@@ -242,10 +242,20 @@ try:
         )
         page = context.new_page()
         api_requests: list[str] = []
+        lazy_component_requests: list[str] = []
         page.on(
             "request",
             lambda request: api_requests.append(request.url)
             if urlparse(request.url).path.startswith("/api/")
+            else None,
+        )
+        page.on(
+            "request",
+            lambda request: lazy_component_requests.append(
+                Path(urlparse(request.url).path).name
+            )
+            if Path(urlparse(request.url).path).name
+            in {"AssetCandidateCallout.vue", "FeatureAssetMapBody.vue"}
             else None,
         )
 
@@ -383,6 +393,11 @@ try:
             and landing_signature["humanBoundaryCount"] == 1
             and "系统会在后台安排所需能力" in landing_signature["promise"],
             str(landing_signature),
+        )
+        check(
+            "起手页未请求候选卡或折叠地图正文异步模块",
+            lazy_component_requests == [],
+            str(lazy_component_requests),
         )
         capture(frame, "landing-desktop.png")
 
@@ -672,6 +687,9 @@ try:
         capture(frame, "routing-mobile.png")
 
         map_api_before = len(api_requests)
+        map_body_requests_before = lazy_component_requests.count(
+            "FeatureAssetMapBody.vue"
+        )
         frame = select_case(
             page,
             "feature-asset-map-closed-desktop",
@@ -696,7 +714,10 @@ try:
                 "summary": map_closed["summary"],
             }
             and "只读披露" in map_closed["summary"]
-            and len(api_requests) == map_api_before,
+            and len(api_requests) == map_api_before
+            and lazy_component_requests.count("FeatureAssetMapBody.vue")
+            == map_body_requests_before
+            and lazy_component_requests.count("AssetCandidateCallout.vue") == 0,
             str(map_closed),
         )
         capture(frame, "feature-asset-map-closed-desktop.png")
@@ -707,6 +728,9 @@ try:
             "桌面 · 功能与资产地图已展开",
         )
         map_details = frame.locator(".feature-asset-map details")
+        map_body_requests_before_open = lazy_component_requests.count(
+            "FeatureAssetMapBody.vue"
+        )
         map_details.locator("summary").click()
         expect(map_details.locator(".map-metrics")).to_be_visible()
         map_ready = map_details.evaluate(
@@ -742,7 +766,10 @@ try:
             and "当前读取快照" in map_ready["boundary"]
             and "仅当前账号" in map_ready["boundary"]
             and "不执行 · 不注册 · 不晋级" in map_ready["boundary"]
-            and len(api_requests) == map_api_before,
+            and len(api_requests) == map_api_before
+            and lazy_component_requests.count("FeatureAssetMapBody.vue")
+            > map_body_requests_before_open
+            and lazy_component_requests.count("AssetCandidateCallout.vue") == 0,
             str(map_ready),
         )
         map_details.get_by_role("button", name="重新读取", exact=True).click()
@@ -834,6 +861,9 @@ try:
         capture_element(map_details, "feature-asset-map-ready-mobile.png")
 
         candidate_api_before = len(api_requests)
+        candidate_module_requests_before = lazy_component_requests.count(
+            "AssetCandidateCallout.vue"
+        )
         frame = select_case(
             page,
             "asset-candidate-desktop",
@@ -880,7 +910,9 @@ try:
                 "allInputs": 1,
                 "forbiddenControls": 0,
                 "openActions": 1,
-            },
+            }
+            and lazy_component_requests.count("AssetCandidateCallout.vue")
+            > candidate_module_requests_before,
             str(candidate_shell),
         )
         capture(frame, "asset-candidate-desktop.png")

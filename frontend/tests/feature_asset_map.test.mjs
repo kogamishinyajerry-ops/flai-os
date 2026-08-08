@@ -9,7 +9,7 @@ import {
 } from "../src/utils/featureAssetMap.js";
 
 const FEATURE_ASSET_MAP_COMPONENT = readFileSync(
-  new URL("../src/components/FeatureAssetMapDisclosure.vue", import.meta.url),
+  new URL("../src/components/FeatureAssetMapBody.vue", import.meta.url),
   "utf8",
 );
 

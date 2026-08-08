@@ -18,16 +18,17 @@ const appSource = read("../src/App.vue");
 const guideSource = read("../src/views/GuidePage.vue");
 const todaySource = read("../src/views/TodayPage.vue");
 const routerSource = read("../src/router/index.js");
+const featureMapDisclosureSource = read("../src/components/FeatureAssetMapDisclosure.vue");
+const featureMapBodySource = read("../src/components/FeatureAssetMapBody.vue");
 const indexHtml = read("../index.html");
 const bundleBudgetSource = read("../scripts/check-bundle-budget.mjs");
 const uiLabE2eSource = read("../e2e/ui_lab_acceptance.py");
 
-test("P1 方案依据、资产披露与 DeliveryCard 族走异步组件边界", () => {
+test("P1 条件组件只在父级需要时加载，地图只拆首次展开内容", () => {
   assert.match(guideSource, /import \{[^}]*defineAsyncComponent[^}]*\} from "vue"/);
   for (const componentName of [
     "EvidenceList",
     "AssetCandidateCallout",
-    "FeatureAssetMapDisclosure",
     "AssetBuilderDrawer",
   ]) {
     assert.match(
@@ -39,6 +40,21 @@ test("P1 方案依据、资产披露与 DeliveryCard 族走异步组件边界", 
       new RegExp(`import ${componentName} from`),
     );
   }
+  assert.match(
+    guideSource,
+    /import FeatureAssetMapDisclosure from "\.\.\/components\/FeatureAssetMapDisclosure\.vue"/,
+  );
+  assert.match(
+    guideSource,
+    /<AssetCandidateCallout\s+v-if="assetCandidatePhase !== 'idle'"/,
+  );
+  assert.match(
+    featureMapDisclosureSource,
+    /const FeatureAssetMapBody = defineAsyncComponent\(\(\) => import\("\.\/FeatureAssetMapBody\.vue"\)\)/,
+  );
+  assert.match(featureMapDisclosureSource, /<FeatureAssetMapBody\s+v-if="openedOnce"/);
+  assert.match(featureMapDisclosureSource, /openedOnce\.value = true/);
+  assert.match(featureMapBodySource, /onMounted\(loadMap\)/);
 
   assert.match(todaySource, /import \{[^}]*defineAsyncComponent[^}]*\} from "vue"/);
   assert.match(
@@ -74,6 +90,19 @@ test("P1 UI Lab 冷启动会重取异步组件 frame，不把 Vite 优化重载�
   );
   assert.match(uiLabE2eSource, /except PlaywrightError:/);
   assert.match(uiLabE2eSource, /ready_selector = "\.asset-builder-drawer"/);
+  assert.match(uiLabE2eSource, /lazy_component_requests: list\[str\] = \[\]/);
+  assert.match(
+    uiLabE2eSource,
+    /起手页未请求候选卡或折叠地图正文异步模块/,
+  );
+  assert.match(
+    uiLabE2eSource,
+    /lazy_component_requests\.count\("FeatureAssetMapBody\.vue"\)/,
+  );
+  assert.match(
+    uiLabE2eSource,
+    /lazy_component_requests\.count\("AssetCandidateCallout\.vue"\)/,
+  );
 });
 
 test("P5 生产路由与 hover/idle prefetch 复用同一组动态 import loader", () => {

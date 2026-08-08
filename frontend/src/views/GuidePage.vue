@@ -494,6 +494,7 @@
       <!-- 完成态才长出的单一资产候选锚点。它属于主对话轴，不进入成员卡、
            不形成常驻侧栏；审核面只读且只有按钮。 -->
       <AssetCandidateCallout
+        v-if="assetCandidatePhase !== 'idle'"
         :candidate="assetCandidate"
         :phase="assetCandidatePhase"
         :error="assetCandidateError"
@@ -685,6 +686,7 @@ import { agentStatusLabel, MATURITY, statusLabel, taskLampColor, TASK_WORK_STATE
 import { PLATFORM_NAME, ASSISTANT_NAME } from "../utils/branding";
 import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
 import { useAgentNames } from "../stores/agentNames";
+import FeatureAssetMapDisclosure from "../components/FeatureAssetMapDisclosure.vue";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
 import { resolvedTheme } from "../stores/theme";
@@ -725,11 +727,11 @@ import {
   verifyAssetCandidateIntegrity,
 } from "../utils/assetCandidates.js";
 
-// 方案依据/资产披露族不是首条纯文本对话的必需代码。保持模板与 DOM 契约不动，
-// 只把既有组件变成异步边界；AssetBuilderDrawer 仍只由 DEV fixture 的 v-if 触发。
+// 方案依据/候选审核不是首条纯文本对话的必需代码：父模板先用真实状态守门，
+// 再加载组件。地图的同步 disclosure 外壳常驻，首次展开内容由其内部异步加载；
+// AssetBuilderDrawer 仍只由 DEV fixture 的 v-if 触发。
 const EvidenceList = defineAsyncComponent(() => import("../components/EvidenceList.vue"));
 const AssetCandidateCallout = defineAsyncComponent(() => import("../components/AssetCandidateCallout.vue"));
-const FeatureAssetMapDisclosure = defineAsyncComponent(() => import("../components/FeatureAssetMapDisclosure.vue"));
 const AssetBuilderDrawer = defineAsyncComponent(() => import("../components/AssetBuilderDrawer.vue"));
 
 // UI 验收台通过独立 Vite 开发入口传入状态快照。正式应用永远忽略该 prop：
