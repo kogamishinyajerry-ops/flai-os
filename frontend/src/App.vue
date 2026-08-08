@@ -15,8 +15,9 @@
       <button type="button" class="sb-brand" @click="newConversation">
         <FlaiBloom class="brand-mark" :size="30" :state="brandBloomState" />
         <span class="brand-text">
-          <span class="brand-name">FLAi-OS</span>
-          <span class="brand-sub">二所工程智能体运行底座</span>
+          <!-- 命名走 branding.js SSOT（票 #62 B1）：平台名/副标全站同源。 -->
+          <span class="brand-name">{{ PLATFORM_NAME }}</span>
+          <span class="brand-sub">{{ PLATFORM_SUBTITLE }}</span>
         </span>
       </button>
 
@@ -139,6 +140,7 @@ import { listConversations } from "./api/conversations";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Menu, Plus, Search, Sunny, Moon } from "@element-plus/icons-vue";
 import { formatTime, TASK_WORK_STATES } from "./utils/format";
+import { PLATFORM_NAME, PLATFORM_SUBTITLE } from "./utils/branding";
 import { conversationTitle, conversationTitlesVersion } from "./utils/conversationTitles";
 import { currentUser, fetchMe, logout } from "./stores/session";
 import { themeMode, resolvedTheme, setThemeMode } from "./stores/theme";

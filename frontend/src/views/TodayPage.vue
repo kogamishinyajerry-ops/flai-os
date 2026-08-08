@@ -68,8 +68,10 @@
               <span class="today-card-name">{{ taskDisplayName(t, agentNames.map) }}</span>
               <!-- meta 时钟（3-lens 可用性镜头 P2）：同 Agent 多个缺名任务主名
                    相同，时钟是行级消歧锚（契约 §十二 Q1 承诺，与状态中心行同律）。 -->
-              <span class="today-card-sub">
-                {{ t.agent_id }} · {{ todayClock(t.created_at) }}<template v-if="elapsedText(t)"> · 运行 {{ elapsedText(t) }}</template>
+              <!-- 副行 Agent 名走 agentDisplayName SSOT（票 #62 B9）：人话名
+                   上主视觉，原 agent_id 收 title 悬浮（缺位诚实回落原 id）。 -->
+              <span class="today-card-sub" :title="t.agent_id">
+                {{ agentDisplayName(t.agent_id, agentNames.map) }} · {{ todayClock(t.created_at) }}<template v-if="elapsedText(t)"> · 运行 {{ elapsedText(t) }}</template>
               </span>
             </span>
           </div>
@@ -100,7 +102,7 @@
             </span>
             <span class="today-card-main">
               <span class="today-card-name">{{ taskDisplayName(t, agentNames.map) }}</span>
-              <span class="today-card-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }} · {{ todayClock(t.created_at) }}</span>
+              <span class="today-card-sub" :title="t.agent_id">{{ agentDisplayName(t.agent_id, agentNames.map) }} · {{ statusLabel(t.status) }} · {{ todayClock(t.created_at) }}</span>
             </span>
           </div>
         </div>
@@ -152,8 +154,8 @@
             <div v-for="p in recentPromotions" :key="p.id" class="today-promo-row">
               <el-icon class="today-promo-icon" aria-hidden="true"><Promotion /></el-icon>
               <span class="today-promo-copy">
-                <span class="today-promo-main">
-                  {{ p.agent_id }} 升级 {{ maturityLabel(p.from_maturity) }} → {{ maturityLabel(p.to_maturity) }}
+                <span class="today-promo-main" :title="p.agent_id">
+                  {{ agentDisplayName(p.agent_id, agentNames.map) }} 升级 {{ maturityLabel(p.from_maturity) }} → {{ maturityLabel(p.to_maturity) }}
                 </span>
                 <span class="today-promo-sub">{{ formatRelativeTime(p.created_at) }} · 签发人 {{ p.confirmed_by }}</span>
               </span>
@@ -169,9 +171,9 @@
         <template v-if="promotionsError || recentPromotions.length || topActiveAgents.length">
           <div class="today-subhead">今日最活跃 Agent</div>
           <div v-if="topActiveAgents.length" class="today-active-row">
-            <span v-for="a in topActiveAgents" :key="a.agent_id" class="today-active-chip">
+            <span v-for="a in topActiveAgents" :key="a.agent_id" class="today-active-chip" :title="a.agent_id">
               <el-icon aria-hidden="true"><User /></el-icon>
-              <span>{{ a.agent_id }} · {{ a.count }}</span>
+              <span>{{ agentDisplayName(a.agent_id, agentNames.map) }} · {{ a.count }}</span>
             </span>
           </div>
           <EmptyState v-else variant="data" tier="line" description="今天暂无任务" />
@@ -228,7 +230,7 @@ import {
 import { acquireChannel, onTransition } from "../stores/liveFeed";
 import { TERMINAL_STATUSES } from "../stores/liveFeedCore";
 import { getStatsOverview, listGlobalPromotions } from "../api/stats";
-import { statusLabel, taskLampColor, taskElapsedMs, formatDuration, formatRelativeTime, formatClockCompact, taskDisplayName, TASK_WORK_STATES, MATURITY } from "../utils/format";
+import { statusLabel, taskLampColor, taskElapsedMs, formatDuration, formatRelativeTime, formatClockCompact, taskDisplayName, agentDisplayName, TASK_WORK_STATES, MATURITY } from "../utils/format";
 import { isWaitingReview, isWorking, isDeliveredToday } from "../utils/taskGroups";
 import { useAgentNames } from "../stores/agentNames";
 import { useTodayKey } from "../composables/useTodayKey";

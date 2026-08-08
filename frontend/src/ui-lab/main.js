@@ -3,6 +3,7 @@ import "element-plus/es/components/message-box/style/css";
 
 import { installUiAcceptanceBoundary } from "./acceptanceBoundary.js";
 import { getUiAcceptanceCase } from "./uiAcceptanceCases.js";
+import { PLATFORM_NAME } from "../utils/branding.js";
 
 const params = new URLSearchParams(window.location.search);
 const embedded = params.get("embed") === "1";
@@ -20,7 +21,7 @@ function renderFatalError(error) {
   detail.className = "ui-lab-fatal__detail";
   panel.append(title, detail);
   root.replaceChildren(panel);
-  document.title = "验收已停止 · FLAi-OS UI 验收台";
+  document.title = `验收已停止 · ${PLATFORM_NAME} UI 验收台`;
 }
 
 async function mountEmbedded(acceptanceCase) {

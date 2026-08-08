@@ -1,6 +1,7 @@
 import { nextTick } from "vue";
 import { createRouter, createWebHistory } from "vue-router";
 import { setTitleBase } from "../utils/titleBadge";
+import { PLATFORM_NAME } from "../utils/branding";
 
 // 路由（任务书 §12.3 + 范式 Phase 2b 双 Surface）。组件懒加载保持首屏轻。
 // 2b 骨架手术：应用收敛为「对话（/）| 任务台（/tasks）」双 Surface——
@@ -51,7 +52,7 @@ router.afterEach((to, from, failure) => {
   // 也会触发，failure 非空即整体让位）。
   if (failure) return;
   // N5：经 titleBadge 合成（全应用唯一 title 写手），徽章计数不因路由切换丢失。
-  setTitleBase(to.meta.title ? `${to.meta.title} · FLAi-OS` : "FLAi-OS");
+  setTitleBase(to.meta.title ? `${to.meta.title} · ${PLATFORM_NAME}` : PLATFORM_NAME);
 
   // roving focus（批次六 B6-2，router 级——批五反采纳单点实现的正确形态）：
   // 页面真重挂时把焦点移交主区容器，键盘/读屏用户从新页内容起 Tab，不从

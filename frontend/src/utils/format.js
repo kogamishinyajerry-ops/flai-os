@@ -173,6 +173,21 @@ export const taskDisplayName = (task, agentNames) => {
   return task.id ? task.id.slice(0, 12) : "—";
 };
 
+// Agent 人话名 SSOT（票 #62 B9，map #46 批 2）：名册注册显示名优先，缺位
+// （名册未加载/拉取失败/查无此 agent）**诚实回落原 agent_id**——与
+// taskDisplayName 同套三级降级纪律，绝不编名字。适用面=「指 Agent 而非任务」
+// 的命名点：今日页/任务台任务行副行、晋升行动态、今日最活跃 chip。原
+// agent_id 由调用方收 title 悬浮（正范本=GuidePage agentTaxonomyTip 式：
+// 人话名上主视觉，机器 id 进披露）。own-property+字符串双闸同 taskDisplayName
+// （防原型键裸下标捞出函数当名字渲染）。
+export const agentDisplayName = (agentId, agentNames) => {
+  if (agentId && agentNames && Object.hasOwn(agentNames, agentId)) {
+    const registryName = agentNames[agentId];
+    if (typeof registryName === "string" && registryName) return registryName;
+  }
+  return agentId || "—";
+};
+
 // token 用量 → 千位压缩（disclosure-grammar §三「判断依据精确 · 量级感受
 // 压缩」——token 属量级感受轴，1 位小数、整值去尾零：12345→12.3k、12000→12k、
 // 3400000→3.4M；<1000 保持精确）。SSOT：TaskDetail rail / DeliveryCard 尾行 /

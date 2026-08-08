@@ -30,6 +30,12 @@ FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
 DB_PATH = Path(os.environ.get("FLAI_DB_PATH", str(DATA_DIR / "flai_os.db")))
 BACKEND_PORT = int(os.environ.get("FLAI_BACKEND_PORT", "8620"))
 
+# 平台名（票 #62 B1 双名制 SSOT 后端侧）：与 frontend/src/utils/branding.js
+# PLATFORM_NAME 同字面——跨语言无法共享模块，改动必须两侧同批（前端
+# branding.test.mjs 锚锁前端侧字面）。助手人格名「FLAi」仅会话人格面使用，
+# 后端产品面只用平台名。
+APP_NAME = "FLAi-OS"
+
 # P0-B3（导入准入门，docs/PRODUCTION-READINESS-PROGRAM.md）：模型网关 HTTP 超时可配，
 # 替换 gateway 原硬编码 60s。主入口对话/导引全走 reasoning profile，内网大模型长推理
 # p99 可能 >60s；硬编码 60 会令每人首条消息 503（最伤采纳信心的 day-one 崩溃）。默认

@@ -9,14 +9,18 @@
              任务信号，诚实地板不许装活；上方工牌插画氛围位保留、定性不动。 -->
         <FlaiBloom class="welcome-gate__bloom" :size="40" />
         <p class="welcome-gate__tagline">平台提议，你拍板。</p>
-        <p class="welcome-gate__tagline-sub">二所工程智能体运行底座——任务在这里拆解、执行、留痕。</p>
+        <p class="welcome-gate__tagline-sub">{{ PLATFORM_SUBTITLE }}——任务在这里拆解、执行、留痕。</p>
       </div>
     </div>
     <main class="welcome-gate__content fx-rise">
       <img class="welcome-gate__art" :src="badgeArt" alt="" />
       <!-- 同 Q5a：窄屏品牌氛围面隐去时，登录卡内同样以静态花瓣标识领到标题。 -->
       <FlaiBloom class="welcome-gate__bloom-card" :size="36" />
-      <h1 id="welcome-gate-title" class="welcome-gate__title">欢迎来到 FLAi-OS</h1>
+      <h1 id="welcome-gate-title" class="welcome-gate__title">欢迎来到 {{ PLATFORM_NAME }}</h1>
+      <!-- 窄屏副标（票 #62 B11）：<900px 品牌氛围面整隐，卡内补一行副标守住
+           品牌面；≥900px 副标已在左侧品牌氛围面陈列，卡内隐去（同 Q5a
+           版式纪律——同屏不留第二锚点）。 -->
+      <p class="welcome-gate__subtitle">{{ PLATFORM_SUBTITLE }}</p>
       <p class="welcome-gate__note">登录后开始工作——最终放行由你亲手确认。</p>
 
       <el-input
@@ -53,6 +57,7 @@
 import { computed, ref } from "vue";
 import badgeArt from "../assets/welcome-badge.png";
 import FlaiBloom from "./artwork/FlaiBloom.vue";
+import { PLATFORM_NAME, PLATFORM_SUBTITLE } from "../utils/branding";
 import { login } from "../stores/session";
 
 // ADR-0019 D8：真登录门。错误如实展示后端 detail（401 凭据错/429 节流），
@@ -164,6 +169,13 @@ async function submit() {
   line-height: 1.2;
 }
 
+.welcome-gate__subtitle {
+  margin: var(--space-2, 8px) 0 0;
+  color: var(--ink-faint);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .welcome-gate__note {
   margin: 12px 0 24px;
   color: var(--ink-soft);
@@ -250,6 +262,11 @@ async function submit() {
 
   /* 同理：花瓣标识已在品牌氛围面陈列，卡内这枚隐去，同屏不留第二锚点。 */
   .welcome-gate__bloom-card {
+    display: none;
+  }
+
+  /* 副标同律（票 #62 B11）：≥900px 由品牌氛围面 tagline-sub 陈列，卡内隐去。 */
+  .welcome-gate__subtitle {
     display: none;
   }
 }
