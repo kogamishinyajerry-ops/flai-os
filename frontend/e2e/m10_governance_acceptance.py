@@ -456,9 +456,13 @@ with sync_playwright() as p:
     # ── ⑨ eval 任务隔离：任务历史页不出现 eval:case 任务 ──
     page.goto(BASE + "/tasks", wait_until="networkidle")
     hist = page.locator("body").inner_text()
+    sub_titles = page.locator(".cl-sub").evaluate_all(
+        "els => els.map(e => e.getAttribute('title') || '')"
+    )
     # eval 任务名恒为 eval:case_NNN.json——它们缺席即隔离 witness；
     # 用户任务（governed_agent）必须在场作对照（防「页面全空也算隔离」的平凡绿）。
-    check("⑨任务历史默认视图不含 eval 任务", "eval:case" not in hist and "governed_agent" in hist, hist[:400])
+    # 票 #62 B9 锚随迁：副行不再裸显 agent_id（人话名上主视觉），id 收 .cl-sub title 悬浮。
+    check("⑨任务历史默认视图不含 eval 任务", "eval:case" not in hist and "governed_agent" in sub_titles, hist[:400])
     page.screenshot(path=str(SHOTS / "7_history_isolated.png"), full_page=True)
 
     # ── ⑩ 批次六 B6-1a：入队后首轮询失败→防重复入队闭环（B5 Codex R1 #5
