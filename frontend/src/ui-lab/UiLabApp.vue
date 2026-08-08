@@ -2,7 +2,7 @@
   <div class="lab-shell">
     <aside class="lab-nav">
       <div class="lab-brand">
-        <span class="lab-kicker">FLAi-OS / DEV ONLY</span>
+        <span class="lab-kicker">{{ PLATFORM_NAME }} / DEV ONLY</span>
         <h1>UI 验收台</h1>
         <p>真实组件、固定状态、精确 viewport。设计基线回到代码，不再维护 Figma 副本。</p>
       </div>
@@ -93,6 +93,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+import { PLATFORM_NAME } from "../utils/branding.js";
 import {
   UI_ACCEPTANCE_CASES,
   getUiAcceptanceCase,

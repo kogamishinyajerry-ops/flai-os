@@ -18,6 +18,8 @@ const routerSource = read("../src/router/index.js");
 const titleBadgeSource = read("../src/utils/titleBadge.js");
 const featureMapSource = read("../src/components/FeatureAssetMapDisclosure.vue");
 const indexHtml = read("../index.html");
+const uiLabAppSource = read("../src/ui-lab/UiLabApp.vue");
+const uiLabBoundarySource = read("../src/ui-lab/acceptanceBoundary.js");
 const backendConfig = read("../../backend/app/config.py");
 const backendMain = read("../../backend/app/main.py");
 
@@ -57,6 +59,15 @@ test("B1 静态 title 补「二所」且与 SSOT 同字面（无法 import，锚
 test("B1 后端 FastAPI title 走 config.APP_NAME，与前端 SSOT 同字面", () => {
   assert.match(backendConfig, /APP_NAME = "FLAi-OS"/);
   assert.match(backendMain, /title=f"\{config\.APP_NAME\} Backend"/);
+});
+
+// 互审 F1（gpt-5.6，P2）处置：ui-lab 验收台（DEV ONLY）命名面同样接 SSOT，
+// 不留字面漏网。
+test("B1 ui-lab（DEV ONLY）命名面接 SSOT（互审 F1）", () => {
+  assert.match(uiLabAppSource, /<span class="lab-kicker">\{\{ PLATFORM_NAME \}\} \/ DEV ONLY<\/span>/);
+  assert.match(uiLabBoundarySource, /`\$\{PLATFORM_NAME\} UI 验收只读边界`/);
+  assert.doesNotMatch(uiLabAppSource, /lab-kicker">FLAi-OS/);
+  assert.doesNotMatch(uiLabBoundarySource, /"FLAi-OS UI 验收只读边界"/);
 });
 
 // ── B6（owner 裁：composer 对齐 hero 口径）——方案卡 :463 政策句逐字锁
