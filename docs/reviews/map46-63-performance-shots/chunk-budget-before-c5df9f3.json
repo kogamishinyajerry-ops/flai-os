@@ -1,0 +1,434 @@
+{
+  "label": "before",
+  "commit": "c5df9f3c7d407f0b5237cce58ba03900a93dff86",
+  "entry": {
+    "key": "index.html",
+    "file": "assets/index-DQuN0uE7.js",
+    "jsGzip": 136490,
+    "cssGzip": 20674,
+    "js": [
+      {
+        "file": "assets/index-DQuN0uE7.js",
+        "bytes": 377450,
+        "gzip": 136490
+      }
+    ],
+    "css": [
+      {
+        "file": "assets/index-BA1E2thf.css",
+        "bytes": 123860,
+        "gzip": 20674
+      }
+    ]
+  },
+  "dynamicRouteCount": 8,
+  "asyncSubchunkCount": 0,
+  "routes": [
+    {
+      "key": "src/views/AgentPortal.vue",
+      "file": "assets/AgentPortal-3-nsAJdg.js",
+      "jsGzip": 158162,
+      "cssGzip": 30050,
+      "js": [
+        {
+          "file": "assets/AgentPortal-3-nsAJdg.js",
+          "bytes": 53909,
+          "gzip": 18665
+        },
+        {
+          "file": "assets/index-DQuN0uE7.js",
+          "bytes": 377450,
+          "gzip": 136490
+        },
+        {
+          "file": "assets/el-card-Ba1IFXsT.js",
+          "bytes": 1072,
+          "gzip": 537
+        },
+        {
+          "file": "assets/omit-NALYhGiT.js",
+          "bytes": 927,
+          "gzip": 569
+        },
+        {
+          "file": "assets/_baseClone-WflvB44T.js",
+          "bytes": 4678,
+          "gzip": 1901
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/AgentPortal-BRUcVdpv.css",
+          "bytes": 64629,
+          "gzip": 9052
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        },
+        {
+          "file": "assets/el-card-BAyktVMS.css",
+          "bytes": 924,
+          "gzip": 324
+        }
+      ]
+    },
+    {
+      "key": "src/views/FeedbackPage.vue",
+      "file": "assets/FeedbackPage-BqjDY_wt.js",
+      "jsGzip": 179790,
+      "cssGzip": 25283,
+      "js": [
+        {
+          "file": "assets/FeedbackPage-BqjDY_wt.js",
+          "bytes": 4773,
+          "gzip": 2155
+        },
+        {
+          "file": "assets/index-DQuN0uE7.js",
+          "bytes": 377450,
+          "gzip": 136490
+        },
+        {
+          "file": "assets/el-form-item-DenOsEoe.js",
+          "bytes": 27614,
+          "gzip": 9647
+        },
+        {
+          "file": "assets/_baseClone-WflvB44T.js",
+          "bytes": 4678,
+          "gzip": 1901
+        },
+        {
+          "file": "assets/feedback-DCkA_Vk0.js",
+          "bytes": 85570,
+          "gzip": 29028
+        },
+        {
+          "file": "assets/omit-NALYhGiT.js",
+          "bytes": 927,
+          "gzip": 569
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/FeedbackPage-B6zftfmY.css",
+          "bytes": 1123,
+          "gzip": 454
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        },
+        {
+          "file": "assets/el-form-item-D_relxjU.css",
+          "bytes": 5694,
+          "gzip": 977
+        },
+        {
+          "file": "assets/feedback-D5WLEHSu.css",
+          "bytes": 18048,
+          "gzip": 3178
+        }
+      ]
+    },
+    {
+      "key": "src/views/GuidePage.vue",
+      "file": "assets/GuidePage-BksX9BNm.js",
+      "jsGzip": 206266,
+      "cssGzip": 34228,
+      "js": [
+        {
+          "file": "assets/GuidePage-BksX9BNm.js",
+          "bytes": 155988,
+          "gzip": 49716
+        },
+        {
+          "file": "assets/index-DQuN0uE7.js",
+          "bytes": 377450,
+          "gzip": 136490
+        },
+        {
+          "file": "assets/el-form-item-DenOsEoe.js",
+          "bytes": 27614,
+          "gzip": 9647
+        },
+        {
+          "file": "assets/_baseClone-WflvB44T.js",
+          "bytes": 4678,
+          "gzip": 1901
+        },
+        {
+          "file": "assets/taskEvidence-CkO7BFb9.js",
+          "bytes": 6185,
+          "gzip": 2246
+        },
+        {
+          "file": "assets/EvidenceList-DTHS_uEN.js",
+          "bytes": 3881,
+          "gzip": 1834
+        },
+        {
+          "file": "assets/assetDrafts-DqtOfzIv.js",
+          "bytes": 11121,
+          "gzip": 4432
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/GuidePage-DjU8BHg_.css",
+          "bytes": 73668,
+          "gzip": 11684
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        },
+        {
+          "file": "assets/el-form-item-D_relxjU.css",
+          "bytes": 5694,
+          "gzip": 977
+        },
+        {
+          "file": "assets/EvidenceList-DAX8fO4_.css",
+          "bytes": 3453,
+          "gzip": 893
+        }
+      ]
+    },
+    {
+      "key": "src/views/LifeDemoPage.vue",
+      "file": "assets/LifeDemoPage-CMh50gkg.js",
+      "jsGzip": 146331,
+      "cssGzip": 22881,
+      "js": [
+        {
+          "file": "assets/LifeDemoPage-CMh50gkg.js",
+          "bytes": 12473,
+          "gzip": 5409
+        },
+        {
+          "file": "assets/index-DQuN0uE7.js",
+          "bytes": 377450,
+          "gzip": 136490
+        },
+        {
+          "file": "assets/assetDrafts-DqtOfzIv.js",
+          "bytes": 11121,
+          "gzip": 4432
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/LifeDemoPage-Dxi7D2ox.css",
+          "bytes": 10810,
+          "gzip": 2207
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        }
+      ]
+    },
+    {
+      "key": "src/views/MePage.vue",
+      "file": "assets/MePage-i-9Munkr.js",
+      "jsGzip": 139083,
+      "cssGzip": 21449,
+      "js": [
+        {
+          "file": "assets/MePage-i-9Munkr.js",
+          "bytes": 5657,
+          "gzip": 2593
+        },
+        {
+          "file": "assets/index-DQuN0uE7.js",
+          "bytes": 377450,
+          "gzip": 136490
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/MePage-C7ryloEC.css",
+          "bytes": 2614,
+          "gzip": 775
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        }
+      ]
+    },
+    {
+      "key": "src/views/TaskConsole.vue",
+      "file": "assets/TaskConsole-DJwkWAh_.js",
+      "jsGzip": 194924,
+      "cssGzip": 29471,
+      "js": [
+        {
+          "file": "assets/TaskConsole-DJwkWAh_.js",
+          "bytes": 34478,
+          "gzip": 12462
+        },
+        {
+          "file": "assets/index-DQuN0uE7.js",
+          "bytes": 377450,
+          "gzip": 136490
+        },
+        {
+          "file": "assets/taskGroups-Crjd9hXN.js",
+          "bytes": 292,
+          "gzip": 210
+        },
+        {
+          "file": "assets/el-form-item-DenOsEoe.js",
+          "bytes": 27614,
+          "gzip": 9647
+        },
+        {
+          "file": "assets/_baseClone-WflvB44T.js",
+          "bytes": 4678,
+          "gzip": 1901
+        },
+        {
+          "file": "assets/feedback-DCkA_Vk0.js",
+          "bytes": 85570,
+          "gzip": 29028
+        },
+        {
+          "file": "assets/omit-NALYhGiT.js",
+          "bytes": 927,
+          "gzip": 569
+        },
+        {
+          "file": "assets/el-card-Ba1IFXsT.js",
+          "bytes": 1072,
+          "gzip": 537
+        },
+        {
+          "file": "assets/EvidenceList-DTHS_uEN.js",
+          "bytes": 3881,
+          "gzip": 1834
+        },
+        {
+          "file": "assets/taskEvidence-CkO7BFb9.js",
+          "bytes": 6185,
+          "gzip": 2246
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/TaskConsole-C7X88iYo.css",
+          "bytes": 17622,
+          "gzip": 3425
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        },
+        {
+          "file": "assets/el-form-item-D_relxjU.css",
+          "bytes": 5694,
+          "gzip": 977
+        },
+        {
+          "file": "assets/feedback-D5WLEHSu.css",
+          "bytes": 18048,
+          "gzip": 3178
+        },
+        {
+          "file": "assets/el-card-BAyktVMS.css",
+          "bytes": 924,
+          "gzip": 324
+        },
+        {
+          "file": "assets/EvidenceList-DAX8fO4_.css",
+          "bytes": 3453,
+          "gzip": 893
+        }
+      ]
+    },
+    {
+      "key": "src/views/TodayPage.vue",
+      "file": "assets/TodayPage-DrZlukS3.js",
+      "jsGzip": 144178,
+      "cssGzip": 22301,
+      "js": [
+        {
+          "file": "assets/TodayPage-DrZlukS3.js",
+          "bytes": 14091,
+          "gzip": 5232
+        },
+        {
+          "file": "assets/index-DQuN0uE7.js",
+          "bytes": 377450,
+          "gzip": 136490
+        },
+        {
+          "file": "assets/taskGroups-Crjd9hXN.js",
+          "bytes": 292,
+          "gzip": 210
+        },
+        {
+          "file": "assets/taskEvidence-CkO7BFb9.js",
+          "bytes": 6185,
+          "gzip": 2246
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/TodayPage-Bd2XnTTb.css",
+          "bytes": 8091,
+          "gzip": 1627
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        }
+      ]
+    },
+    {
+      "key": "src/views/WorkbenchSession.vue",
+      "file": "assets/WorkbenchSession-Ca7RWpgA.js",
+      "jsGzip": 144427,
+      "cssGzip": 22517,
+      "js": [
+        {
+          "file": "assets/WorkbenchSession-Ca7RWpgA.js",
+          "bytes": 14749,
+          "gzip": 5691
+        },
+        {
+          "file": "assets/index-DQuN0uE7.js",
+          "bytes": 377450,
+          "gzip": 136490
+        },
+        {
+          "file": "assets/taskEvidence-CkO7BFb9.js",
+          "bytes": 6185,
+          "gzip": 2246
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/WorkbenchSession-BxhY3Kg-.css",
+          "bytes": 8034,
+          "gzip": 1843
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        }
+      ]
+    }
+  ],
+  "subchunks": []
+}

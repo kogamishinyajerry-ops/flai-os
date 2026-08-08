@@ -119,35 +119,63 @@ def wait_for_server() -> None:
     sys.exit("诚实失败：Vite 8 秒内未就绪")
 
 
-def embedded_frame(page, case_id: str):
+def embedded_frame(page, case_id: str, ready_selector: str = ".guide-page"):
     expect(page.locator("iframe")).to_have_attribute(
         "src",
         re.compile(rf"case={re.escape(case_id)}"),
     )
-    for _ in range(80):
-        handle = page.locator("iframe").element_handle()
-        frame = handle.content_frame() if handle else None
-        if (
-            frame
-            and "embed=1" in frame.url
-            and f"case={case_id}" in frame.url
-        ):
-            expect(frame.locator(".guide-page")).to_be_visible()
-            return frame
+    stable_frame = None
+    stable_ticks = 0
+    stable_ticks_required = 8 if ready_selector != ".guide-page" else 1
+    for _ in range(240):
+        try:
+            handle = page.locator("iframe").element_handle()
+            frame = handle.content_frame() if handle else None
+            if (
+                frame
+                and "embed=1" in frame.url
+                and f"case={case_id}" in frame.url
+                and frame.locator(ready_selector).is_visible()
+            ):
+                if frame == stable_frame:
+                    stable_ticks += 1
+                else:
+                    stable_frame = frame
+                    stable_ticks = 1
+                if stable_ticks >= stable_ticks_required:
+                    return frame
+            else:
+                stable_frame = None
+                stable_ticks = 0
+        except PlaywrightError:
+            # Cold Vite dependency optimization may replace the iframe once;
+            # reacquire the current frame instead of waiting on a detached one.
+            stable_frame = None
+            stable_ticks = 0
         page.wait_for_timeout(100)
-    raise AssertionError(f"找不到已挂载的验收 frame：{case_id}")
+    raise AssertionError(
+        f"找不到已挂载的验收 frame：{case_id}（锚点 {ready_selector}）"
+    )
 
 
 def select_case(page, case_id: str, label: str):
     page.locator(".case-button", has_text=label).click()
-    frame = embedded_frame(page, case_id)
-    if case_id in {
+    # These surfaces are deliberately split into async chunks.  Await the real
+    # acceptance anchor before returning, including a cold Vite transform/reload.
+    ready_selector = ".guide-page"
+    if case_id.startswith("feature-asset-map-"):
+        ready_selector = ".feature-asset-map"
+    elif case_id.startswith(("asset-candidate-", "asset-package-")):
+        ready_selector = ".asset-candidate-callout"
+    elif case_id in {
         "asset-intake-desktop",
         "asset-review-desktop",
         "asset-review-mobile",
         "asset-blocked-mobile",
     }:
-        expect(frame.locator(".asset-builder-drawer")).to_be_visible()
+        ready_selector = ".asset-builder-drawer"
+    frame = embedded_frame(page, case_id, ready_selector)
+    if ready_selector == ".asset-builder-drawer":
         page.wait_for_timeout(250)
     return frame
 

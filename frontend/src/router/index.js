@@ -2,6 +2,7 @@ import { nextTick } from "vue";
 import { createRouter, createWebHistory } from "vue-router";
 import { setTitleBase } from "../utils/titleBadge";
 import { PLATFORM_NAME } from "../utils/branding";
+import { routeLoaders } from "./routeLoaders.js";
 
 // 路由（任务书 §12.3 + 范式 Phase 2b 双 Surface）。组件懒加载保持首屏轻。
 // 2b 骨架手术：应用收敛为「对话（/）| 任务台（/tasks）」双 Surface——
@@ -9,24 +10,24 @@ import { PLATFORM_NAME } from "../utils/branding";
 // 重定向保深链不断；TaskDetail 降级为任务台中栏组件（/tasks/:taskId 仍达
 // 同一任务视图，旧深链全兼容）；Agent 门户退出一级导航，/portal 保留深链。
 const routes = [
-  { path: "/", name: "guide", component: () => import("../views/GuidePage.vue"), meta: { title: "对话" } },
-  { path: "/today", name: "today", component: () => import("../views/TodayPage.vue"), meta: { title: "今日" } },
-  { path: "/me", name: "me", component: () => import("../views/MePage.vue"), meta: { title: "我的贡献" } },
-  { path: "/portal", name: "portal", component: () => import("../views/AgentPortal.vue"), meta: { title: "Agent 门户" } },
+  { path: "/", name: "guide", component: routeLoaders.guide, meta: { title: "对话" } },
+  { path: "/today", name: "today", component: routeLoaders.today, meta: { title: "今日" } },
+  { path: "/me", name: "me", component: routeLoaders.me, meta: { title: "我的贡献" } },
+  { path: "/portal", name: "portal", component: routeLoaders.portal, meta: { title: "Agent 门户" } },
   { path: "/workbench", redirect: "/tasks" },
-  { path: "/workbench/:sessionId", name: "workbench-session", component: () => import("../views/WorkbenchSession.vue"), meta: { title: "协作会话" } },
+  { path: "/workbench/:sessionId", name: "workbench-session", component: routeLoaders.workbenchSession, meta: { title: "协作会话" } },
   // 历史创建页只保留为源码兼容面，不再是工程师可达 Surface。旧书签、旧通知
   // 或手工输入的 /tasks/new 一律丢弃 Agent/参数 query，回到唯一主对话入口。
   { path: "/tasks/new", redirect: () => ({ path: "/", query: {} }) },
   // 任务台（Codex 三栏）：/tasks=列表+空态；/tasks/:taskId=选中任务的叙事流
   // +输出/来源面板。两路由同组件，meta.pageKey 让 page-turn 过渡不因选中
   // 切换整页重挂（中栏 TaskDetail 靠 :key=taskId 自行重建）。
-  { path: "/tasks", name: "task-console", component: () => import("../views/TaskConsole.vue"), meta: { title: "任务台", pageKey: "console" } },
-  { path: "/tasks/:taskId", name: "task-detail", component: () => import("../views/TaskConsole.vue"), meta: { title: "任务详情", pageKey: "console" } },
-  { path: "/feedback", name: "feedback", component: () => import("../views/FeedbackPage.vue"), meta: { title: "反馈" } },
+  { path: "/tasks", name: "task-console", component: routeLoaders.taskConsole, meta: { title: "任务台", pageKey: "console" } },
+  { path: "/tasks/:taskId", name: "task-detail", component: routeLoaders.taskConsole, meta: { title: "任务详情", pageKey: "console" } },
+  { path: "/feedback", name: "feedback", component: routeLoaders.feedback, meta: { title: "反馈" } },
   // 本体论教学 demo(L1):独立于工程任务主线,不进主对话。
   // admin_only 的 life_guide_agent 走 quarantine 隔离区,不污染生产 Registry。
-  { path: "/demo", name: "life-demo", component: () => import("../views/LifeDemoPage.vue"), meta: { title: "本体论 demo" } },
+  { path: "/demo", name: "life-demo", component: routeLoaders.lifeDemo, meta: { title: "本体论 demo" } },
 ];
 
 // 重挂判据（B6-2）：与 App.vue 的 page-turn :key 同式（pageKey||path）——

@@ -1,0 +1,450 @@
+{
+  "label": "after",
+  "commit": "WORKTREE",
+  "entry": {
+    "key": "index.html",
+    "file": "assets/index-DmJjTlRI.js",
+    "jsGzip": 137922,
+    "cssGzip": 20674,
+    "js": [
+      {
+        "file": "assets/index-DmJjTlRI.js",
+        "bytes": 381444,
+        "gzip": 137922
+      }
+    ],
+    "css": [
+      {
+        "file": "assets/index-BA1E2thf.css",
+        "bytes": 123860,
+        "gzip": 20674
+      }
+    ]
+  },
+  "dynamicRouteCount": 8,
+  "asyncSubchunkCount": 5,
+  "routes": [
+    {
+      "key": "src/views/AgentPortal.vue",
+      "file": "assets/AgentPortal-D66lLCHm.js",
+      "jsGzip": 159598,
+      "cssGzip": 30050,
+      "js": [
+        {
+          "file": "assets/AgentPortal-D66lLCHm.js",
+          "bytes": 53909,
+          "gzip": 18667
+        },
+        {
+          "file": "assets/index-DmJjTlRI.js",
+          "bytes": 381444,
+          "gzip": 137922
+        },
+        {
+          "file": "assets/el-card-CxGzqDjc.js",
+          "bytes": 1072,
+          "gzip": 540
+        },
+        {
+          "file": "assets/omit-BhNxRDHG.js",
+          "bytes": 927,
+          "gzip": 569
+        },
+        {
+          "file": "assets/_baseClone-D6GsmdBN.js",
+          "bytes": 4678,
+          "gzip": 1900
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/AgentPortal-BRUcVdpv.css",
+          "bytes": 64629,
+          "gzip": 9052
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        },
+        {
+          "file": "assets/el-card-BAyktVMS.css",
+          "bytes": 924,
+          "gzip": 324
+        }
+      ]
+    },
+    {
+      "key": "src/views/FeedbackPage.vue",
+      "file": "assets/FeedbackPage-BzKMDFyb.js",
+      "jsGzip": 181313,
+      "cssGzip": 25283,
+      "js": [
+        {
+          "file": "assets/FeedbackPage-BzKMDFyb.js",
+          "bytes": 4805,
+          "gzip": 2174
+        },
+        {
+          "file": "assets/index-DmJjTlRI.js",
+          "bytes": 381444,
+          "gzip": 137922
+        },
+        {
+          "file": "assets/el-form-item-DroJ4FdP.js",
+          "bytes": 27563,
+          "gzip": 9608
+        },
+        {
+          "file": "assets/cloneDeep-BQZCufhb.js",
+          "bytes": 103,
+          "gzip": 118
+        },
+        {
+          "file": "assets/_baseClone-D6GsmdBN.js",
+          "bytes": 4678,
+          "gzip": 1900
+        },
+        {
+          "file": "assets/feedback-B1gtZNo2.js",
+          "bytes": 85570,
+          "gzip": 29022
+        },
+        {
+          "file": "assets/omit-BhNxRDHG.js",
+          "bytes": 927,
+          "gzip": 569
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/FeedbackPage-B6zftfmY.css",
+          "bytes": 1123,
+          "gzip": 454
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        },
+        {
+          "file": "assets/el-form-item-D_relxjU.css",
+          "bytes": 5694,
+          "gzip": 977
+        },
+        {
+          "file": "assets/feedback-D5WLEHSu.css",
+          "bytes": 18048,
+          "gzip": 3178
+        }
+      ]
+    },
+    {
+      "key": "src/views/GuidePage.vue",
+      "file": "assets/GuidePage-SLxYhbC4.js",
+      "jsGzip": 180009,
+      "cssGzip": 28070,
+      "js": [
+        {
+          "file": "assets/GuidePage-SLxYhbC4.js",
+          "bytes": 115937,
+          "gzip": 37825
+        },
+        {
+          "file": "assets/index-DmJjTlRI.js",
+          "bytes": 381444,
+          "gzip": 137922
+        },
+        {
+          "file": "assets/cloneDeep-BQZCufhb.js",
+          "bytes": 103,
+          "gzip": 118
+        },
+        {
+          "file": "assets/_baseClone-D6GsmdBN.js",
+          "bytes": 4678,
+          "gzip": 1900
+        },
+        {
+          "file": "assets/taskEvidence-1hqck9qq.js",
+          "bytes": 6185,
+          "gzip": 2244
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/GuidePage-C9ESjzU4.css",
+          "bytes": 44492,
+          "gzip": 7396
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        }
+      ]
+    },
+    {
+      "key": "src/views/LifeDemoPage.vue",
+      "file": "assets/LifeDemoPage-DzgulNao.js",
+      "jsGzip": 147764,
+      "cssGzip": 22881,
+      "js": [
+        {
+          "file": "assets/LifeDemoPage-DzgulNao.js",
+          "bytes": 12473,
+          "gzip": 5411
+        },
+        {
+          "file": "assets/index-DmJjTlRI.js",
+          "bytes": 381444,
+          "gzip": 137922
+        },
+        {
+          "file": "assets/assetDrafts-DIcSGnLQ.js",
+          "bytes": 11121,
+          "gzip": 4431
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/LifeDemoPage-Dxi7D2ox.css",
+          "bytes": 10810,
+          "gzip": 2207
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        }
+      ]
+    },
+    {
+      "key": "src/views/MePage.vue",
+      "file": "assets/MePage-Dcl0aS13.js",
+      "jsGzip": 140515,
+      "cssGzip": 21449,
+      "js": [
+        {
+          "file": "assets/MePage-Dcl0aS13.js",
+          "bytes": 5657,
+          "gzip": 2593
+        },
+        {
+          "file": "assets/index-DmJjTlRI.js",
+          "bytes": 381444,
+          "gzip": 137922
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/MePage-C7ryloEC.css",
+          "bytes": 2614,
+          "gzip": 775
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        }
+      ]
+    },
+    {
+      "key": "src/views/TaskConsole.vue",
+      "file": "assets/TaskConsole-D1Jq9xMW.js",
+      "jsGzip": 196509,
+      "cssGzip": 29471,
+      "js": [
+        {
+          "file": "assets/TaskConsole-D1Jq9xMW.js",
+          "bytes": 34510,
+          "gzip": 12473
+        },
+        {
+          "file": "assets/index-DmJjTlRI.js",
+          "bytes": 381444,
+          "gzip": 137922
+        },
+        {
+          "file": "assets/taskGroups-D-zNdcF0.js",
+          "bytes": 292,
+          "gzip": 211
+        },
+        {
+          "file": "assets/el-form-item-DroJ4FdP.js",
+          "bytes": 27563,
+          "gzip": 9608
+        },
+        {
+          "file": "assets/cloneDeep-BQZCufhb.js",
+          "bytes": 103,
+          "gzip": 118
+        },
+        {
+          "file": "assets/_baseClone-D6GsmdBN.js",
+          "bytes": 4678,
+          "gzip": 1900
+        },
+        {
+          "file": "assets/feedback-B1gtZNo2.js",
+          "bytes": 85570,
+          "gzip": 29022
+        },
+        {
+          "file": "assets/omit-BhNxRDHG.js",
+          "bytes": 927,
+          "gzip": 569
+        },
+        {
+          "file": "assets/el-card-CxGzqDjc.js",
+          "bytes": 1072,
+          "gzip": 540
+        },
+        {
+          "file": "assets/EvidenceList-CAghi6vP.js",
+          "bytes": 3994,
+          "gzip": 1902
+        },
+        {
+          "file": "assets/taskEvidence-1hqck9qq.js",
+          "bytes": 6185,
+          "gzip": 2244
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/TaskConsole-C7X88iYo.css",
+          "bytes": 17622,
+          "gzip": 3425
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        },
+        {
+          "file": "assets/el-form-item-D_relxjU.css",
+          "bytes": 5694,
+          "gzip": 977
+        },
+        {
+          "file": "assets/feedback-D5WLEHSu.css",
+          "bytes": 18048,
+          "gzip": 3178
+        },
+        {
+          "file": "assets/el-card-BAyktVMS.css",
+          "bytes": 924,
+          "gzip": 324
+        },
+        {
+          "file": "assets/EvidenceList-DAX8fO4_.css",
+          "bytes": 3453,
+          "gzip": 893
+        }
+      ]
+    },
+    {
+      "key": "src/views/TodayPage.vue",
+      "file": "assets/TodayPage-MDk1hluY.js",
+      "jsGzip": 142087,
+      "cssGzip": 22050,
+      "js": [
+        {
+          "file": "assets/TodayPage-MDk1hluY.js",
+          "bytes": 10635,
+          "gzip": 3954
+        },
+        {
+          "file": "assets/index-DmJjTlRI.js",
+          "bytes": 381444,
+          "gzip": 137922
+        },
+        {
+          "file": "assets/taskGroups-D-zNdcF0.js",
+          "bytes": 292,
+          "gzip": 211
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/TodayPage-X6nT3AUr.css",
+          "bytes": 6138,
+          "gzip": 1376
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        }
+      ]
+    },
+    {
+      "key": "src/views/WorkbenchSession.vue",
+      "file": "assets/WorkbenchSession-bkCNEzHD.js",
+      "jsGzip": 145858,
+      "cssGzip": 22517,
+      "js": [
+        {
+          "file": "assets/WorkbenchSession-bkCNEzHD.js",
+          "bytes": 14749,
+          "gzip": 5692
+        },
+        {
+          "file": "assets/index-DmJjTlRI.js",
+          "bytes": 381444,
+          "gzip": 137922
+        },
+        {
+          "file": "assets/taskEvidence-1hqck9qq.js",
+          "bytes": 6185,
+          "gzip": 2244
+        }
+      ],
+      "css": [
+        {
+          "file": "assets/WorkbenchSession-BxhY3Kg-.css",
+          "bytes": 8034,
+          "gzip": 1843
+        },
+        {
+          "file": "assets/index-BA1E2thf.css",
+          "bytes": 123860,
+          "gzip": 20674
+        }
+      ]
+    }
+  ],
+  "subchunks": [
+    {
+      "key": "_EvidenceList-CAghi6vP.js",
+      "file": "assets/EvidenceList-CAghi6vP.js",
+      "bytes": 3994,
+      "gzip": 1902
+    },
+    {
+      "key": "src/components/AssetBuilderDrawer.vue",
+      "file": "assets/AssetBuilderDrawer-C9O7v7v-.js",
+      "bytes": 14390,
+      "gzip": 5619
+    },
+    {
+      "key": "src/components/AssetCandidateCallout.vue",
+      "file": "assets/AssetCandidateCallout-BljLNJHI.js",
+      "bytes": 14619,
+      "gzip": 4894
+    },
+    {
+      "key": "src/components/DeliveryCard.vue",
+      "file": "assets/DeliveryCard-YNdXovjO.js",
+      "bytes": 3977,
+      "gzip": 1907
+    },
+    {
+      "key": "src/components/FeatureAssetMapDisclosure.vue",
+      "file": "assets/FeatureAssetMapDisclosure-DyHwn04V.js",
+      "bytes": 12875,
+      "gzip": 4510
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "stack": "copied audit_stack_launcher.py + real FastAPI auth + Vite dev",
+  "login": "tester authenticated through the product login form",
+  "boot_removed_after_mount": true,
+  "idle_today_request_count_before_click": 1,
+  "today_request_count_after_click": 1,
+  "hover_me_request_count": 1,
+  "url_unchanged_by_hover": true,
+  "final_url": "http://127.0.0.1:5202/today",
+  "page_errors": []
+}

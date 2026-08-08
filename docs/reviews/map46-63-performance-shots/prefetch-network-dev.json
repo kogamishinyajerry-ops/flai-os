@@ -1,0 +1,63 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "source": "Playwright resource timing against Vite dev server",
+  "product_idle_prefetch": {
+    "today_seen": true,
+    "view_module_requests": [
+      "http://127.0.0.1:5202/src/views/GuidePage.vue",
+      "http://127.0.0.1:5202/src/views/GuidePage.vue?vue&type=style&index=0&scoped=9c5da20f&lang.css",
+      "http://127.0.0.1:5202/src/views/GuidePage.vue?vue&type=style&index=1&lang.css",
+      "http://127.0.0.1:5202/src/views/TodayPage.vue",
+      "http://127.0.0.1:5202/src/views/TodayPage.vue?vue&type=style&index=0&scoped=72d47704&lang.css"
+    ],
+    "resource_timing": [
+      {
+        "name": "http://127.0.0.1:5202/src/views/GuidePage.vue",
+        "initiatorType": "script",
+        "startTime": 367.2,
+        "duration": 84.6,
+        "transferSize": 783868
+      },
+      {
+        "name": "http://127.0.0.1:5202/src/views/TodayPage.vue",
+        "initiatorType": "script",
+        "startTime": 375.2,
+        "duration": 103.5,
+        "transferSize": 135403
+      },
+      {
+        "name": "http://127.0.0.1:5202/src/views/GuidePage.vue?vue&type=style&index=0&scoped=9c5da20f&lang.css",
+        "initiatorType": "script",
+        "startTime": 455.7,
+        "duration": 36.1,
+        "transferSize": 46566
+      },
+      {
+        "name": "http://127.0.0.1:5202/src/views/GuidePage.vue?vue&type=style&index=1&lang.css",
+        "initiatorType": "script",
+        "startTime": 455.8,
+        "duration": 35.9,
+        "transferSize": 1488
+      },
+      {
+        "name": "http://127.0.0.1:5202/src/views/TodayPage.vue?vue&type=style&index=0&scoped=72d47704&lang.css",
+        "initiatorType": "script",
+        "startTime": 479.8,
+        "duration": 12.1,
+        "transferSize": 9242
+      }
+    ]
+  },
+  "ui_lab_fixture": {
+    "today_seen": false,
+    "me_seen": false,
+    "view_module_requests": [
+      "http://127.0.0.1:5202/src/views/GuidePage.vue",
+      "http://127.0.0.1:5202/src/views/GuidePage.vue?vue&type=style&index=0&scoped=9c5da20f&lang.css",
+      "http://127.0.0.1:5202/src/views/GuidePage.vue?vue&type=style&index=1&lang.css"
+    ]
+  }
+}

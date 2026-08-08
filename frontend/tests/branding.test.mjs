@@ -52,8 +52,10 @@ test("B1 命名散点全部接 SSOT，不再各写字面", () => {
   assert.match(featureMapSource, /<strong>\{\{ PLATFORM_NAME \}\} 功能与资产地图<\/strong>/);
 });
 
-test("B1 静态 title 补「二所」且与 SSOT 同字面（无法 import，锚锁同批纪律）", () => {
+test("B1 静态 title/boot skeleton 与 SSOT 同字面（无法 import，锚锁同批纪律）", () => {
   assert.match(indexHtml, /<title>FLAi-OS 二所工程智能体运行底座<\/title>/);
+  assert.match(indexHtml, /class="flai-boot__name">FLAi-OS<\/strong>/);
+  assert.match(indexHtml, /class="flai-boot__subtitle">二所工程智能体运行底座<\/span>/);
   assert.ok(indexHtml.includes(PLATFORM_NAME) && indexHtml.includes(PLATFORM_SUBTITLE));
 });
 

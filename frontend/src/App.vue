@@ -35,6 +35,8 @@
           :to="item.path"
           class="nav-link"
           :class="{ 'is-active': activeMenu === item.path }"
+          @mouseenter="warmVisibleRoute(item.path)"
+          @focus="warmVisibleRoute(item.path)"
         >{{ item.label }}</router-link>
       </nav>
 
@@ -58,7 +60,13 @@
       </div>
 
       <!-- 「我的贡献」深链（批C task7）：独立入口，不并进登出按钮语义。 -->
-      <router-link to="/me" class="sb-mine" :class="{ 'is-active': route.path === '/me' }">我的贡献</router-link>
+      <router-link
+        to="/me"
+        class="sb-mine"
+        :class="{ 'is-active': route.path === '/me' }"
+        @mouseenter="warmVisibleRoute('/me')"
+        @focus="warmVisibleRoute('/me')"
+      >我的贡献</router-link>
 
       <!-- 工作身份行：登录会话身份（服务端派生，前端只读）；点击退出登录。 -->
       <button class="sb-identity" :title="`以「${userName}」的身份登录——点击退出`" @click="changeIdentity">
@@ -147,6 +155,11 @@ import { themeMode, resolvedTheme, setThemeMode } from "./stores/theme";
 import { openQuickSwitcher } from "./stores/quickSwitcher";
 import { closeCenter } from "./stores/statusCenter";
 import { feedTasks, acquireTaskFeed, releaseTaskFeed } from "./stores/taskFeed";
+import {
+  prefetchRoute,
+  scheduleIdleRoutePrefetch,
+  shouldPrefetchRoutes,
+} from "./router/routeLoaders.js";
 import QuickSwitcher from "./components/QuickSwitcher.vue";
 import WelcomeGate from "./components/WelcomeGate.vue";
 import StatusDock from "./components/StatusDock.vue";
@@ -164,6 +177,25 @@ const props = defineProps({
 });
 const acceptanceFixture = import.meta.env.DEV ? props.acceptanceFixture : null;
 const acceptanceMode = Boolean(acceptanceFixture);
+
+// 高频页只做 speculative module import，不发 API、不改路由状态。UI Lab/DEV
+// fixture 必须在 import 发生前短路，避免验收只读边界被无关产品 chunk 串台。
+const routePrefetchEnabled = shouldPrefetchRoutes({
+  acceptanceMode,
+  isDev: import.meta.env.DEV,
+  pathname: window.location.pathname,
+});
+function warmVisibleRoute(path) {
+  if (!routePrefetchEnabled) return Promise.resolve(false);
+  return prefetchRoute(path).catch(() => false);
+}
+let cancelIdleRoutePrefetch = () => {};
+onMounted(() => {
+  cancelIdleRoutePrefetch = scheduleIdleRoutePrefetch(["/today"], {
+    enabled: routePrefetchEnabled,
+  });
+});
+onUnmounted(() => cancelIdleRoutePrefetch());
 
 // 登录态（ADR-0019 D8）：identityReady 控门，身份来自服务端会话。
 // sessionProbed 防「已登录用户刷新时登录门闪现」——探测完成前不渲染门。
