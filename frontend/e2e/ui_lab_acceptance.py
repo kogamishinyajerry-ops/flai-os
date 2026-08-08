@@ -119,35 +119,63 @@ def wait_for_server() -> None:
     sys.exit("诚实失败：Vite 8 秒内未就绪")
 
 
-def embedded_frame(page, case_id: str):
+def embedded_frame(page, case_id: str, ready_selector: str = ".guide-page"):
     expect(page.locator("iframe")).to_have_attribute(
         "src",
         re.compile(rf"case={re.escape(case_id)}"),
     )
-    for _ in range(80):
-        handle = page.locator("iframe").element_handle()
-        frame = handle.content_frame() if handle else None
-        if (
-            frame
-            and "embed=1" in frame.url
-            and f"case={case_id}" in frame.url
-        ):
-            expect(frame.locator(".guide-page")).to_be_visible()
-            return frame
+    stable_frame = None
+    stable_ticks = 0
+    stable_ticks_required = 8 if ready_selector != ".guide-page" else 1
+    for _ in range(240):
+        try:
+            handle = page.locator("iframe").element_handle()
+            frame = handle.content_frame() if handle else None
+            if (
+                frame
+                and "embed=1" in frame.url
+                and f"case={case_id}" in frame.url
+                and frame.locator(ready_selector).is_visible()
+            ):
+                if frame == stable_frame:
+                    stable_ticks += 1
+                else:
+                    stable_frame = frame
+                    stable_ticks = 1
+                if stable_ticks >= stable_ticks_required:
+                    return frame
+            else:
+                stable_frame = None
+                stable_ticks = 0
+        except PlaywrightError:
+            # Cold Vite dependency optimization may replace the iframe once;
+            # reacquire the current frame instead of waiting on a detached one.
+            stable_frame = None
+            stable_ticks = 0
         page.wait_for_timeout(100)
-    raise AssertionError(f"找不到已挂载的验收 frame：{case_id}")
+    raise AssertionError(
+        f"找不到已挂载的验收 frame：{case_id}（锚点 {ready_selector}）"
+    )
 
 
 def select_case(page, case_id: str, label: str):
     page.locator(".case-button", has_text=label).click()
-    frame = embedded_frame(page, case_id)
-    if case_id in {
+    # These surfaces are deliberately split into async chunks.  Await the real
+    # acceptance anchor before returning, including a cold Vite transform/reload.
+    ready_selector = ".guide-page"
+    if case_id.startswith("feature-asset-map-"):
+        ready_selector = ".feature-asset-map"
+    elif case_id.startswith(("asset-candidate-", "asset-package-")):
+        ready_selector = ".asset-candidate-callout"
+    elif case_id in {
         "asset-intake-desktop",
         "asset-review-desktop",
         "asset-review-mobile",
         "asset-blocked-mobile",
     }:
-        expect(frame.locator(".asset-builder-drawer")).to_be_visible()
+        ready_selector = ".asset-builder-drawer"
+    frame = embedded_frame(page, case_id, ready_selector)
+    if ready_selector == ".asset-builder-drawer":
         page.wait_for_timeout(250)
     return frame
 
@@ -214,10 +242,20 @@ try:
         )
         page = context.new_page()
         api_requests: list[str] = []
+        lazy_component_requests: list[str] = []
         page.on(
             "request",
             lambda request: api_requests.append(request.url)
             if urlparse(request.url).path.startswith("/api/")
+            else None,
+        )
+        page.on(
+            "request",
+            lambda request: lazy_component_requests.append(
+                Path(urlparse(request.url).path).name
+            )
+            if Path(urlparse(request.url).path).name
+            in {"AssetCandidateCallout.vue", "FeatureAssetMapBody.vue"}
             else None,
         )
 
@@ -355,6 +393,11 @@ try:
             and landing_signature["humanBoundaryCount"] == 1
             and "系统会在后台安排所需能力" in landing_signature["promise"],
             str(landing_signature),
+        )
+        check(
+            "起手页未请求候选卡或折叠地图正文异步模块",
+            lazy_component_requests == [],
+            str(lazy_component_requests),
         )
         capture(frame, "landing-desktop.png")
 
@@ -644,6 +687,9 @@ try:
         capture(frame, "routing-mobile.png")
 
         map_api_before = len(api_requests)
+        map_body_requests_before = lazy_component_requests.count(
+            "FeatureAssetMapBody.vue"
+        )
         frame = select_case(
             page,
             "feature-asset-map-closed-desktop",
@@ -668,7 +714,10 @@ try:
                 "summary": map_closed["summary"],
             }
             and "只读披露" in map_closed["summary"]
-            and len(api_requests) == map_api_before,
+            and len(api_requests) == map_api_before
+            and lazy_component_requests.count("FeatureAssetMapBody.vue")
+            == map_body_requests_before
+            and lazy_component_requests.count("AssetCandidateCallout.vue") == 0,
             str(map_closed),
         )
         capture(frame, "feature-asset-map-closed-desktop.png")
@@ -679,6 +728,9 @@ try:
             "桌面 · 功能与资产地图已展开",
         )
         map_details = frame.locator(".feature-asset-map details")
+        map_body_requests_before_open = lazy_component_requests.count(
+            "FeatureAssetMapBody.vue"
+        )
         map_details.locator("summary").click()
         expect(map_details.locator(".map-metrics")).to_be_visible()
         map_ready = map_details.evaluate(
@@ -714,7 +766,10 @@ try:
             and "当前读取快照" in map_ready["boundary"]
             and "仅当前账号" in map_ready["boundary"]
             and "不执行 · 不注册 · 不晋级" in map_ready["boundary"]
-            and len(api_requests) == map_api_before,
+            and len(api_requests) == map_api_before
+            and lazy_component_requests.count("FeatureAssetMapBody.vue")
+            > map_body_requests_before_open
+            and lazy_component_requests.count("AssetCandidateCallout.vue") == 0,
             str(map_ready),
         )
         map_details.get_by_role("button", name="重新读取", exact=True).click()
@@ -806,6 +861,9 @@ try:
         capture_element(map_details, "feature-asset-map-ready-mobile.png")
 
         candidate_api_before = len(api_requests)
+        candidate_module_requests_before = lazy_component_requests.count(
+            "AssetCandidateCallout.vue"
+        )
         frame = select_case(
             page,
             "asset-candidate-desktop",
@@ -852,7 +910,9 @@ try:
                 "allInputs": 1,
                 "forbiddenControls": 0,
                 "openActions": 1,
-            },
+            }
+            and lazy_component_requests.count("AssetCandidateCallout.vue")
+            > candidate_module_requests_before,
             str(candidate_shell),
         )
         capture(frame, "asset-candidate-desktop.png")

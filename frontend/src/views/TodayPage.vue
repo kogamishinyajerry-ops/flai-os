@@ -213,7 +213,7 @@
 // 数据源：liveFeed 'tasks' channel（批A 单源轮询，5s 自链，与 StatusCenter/
 // StatusDock/TaskConsole 同一份真值）。本页整页挂载期间持有一次 acquire，
 // 卸载即 release（channel 无其它订阅者时自停）。
-import { computed, onUnmounted, reactive, ref } from "vue";
+import { computed, defineAsyncComponent, onUnmounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import {
   Collection,
@@ -236,7 +236,9 @@ import { useAgentNames } from "../stores/agentNames";
 import { useTodayKey } from "../composables/useTodayKey";
 import EmptyState from "../components/EmptyState.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import DeliveryCard from "../components/DeliveryCard.vue";
+
+// 交付卡自带产物/依据/模型调用披露族；只在今日确有终态任务时加载。
+const DeliveryCard = defineAsyncComponent(() => import("../components/DeliveryCard.vue"));
 
 const router = useRouter();
 

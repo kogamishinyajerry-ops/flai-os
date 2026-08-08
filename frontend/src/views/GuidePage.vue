@@ -494,6 +494,7 @@
       <!-- 完成态才长出的单一资产候选锚点。它属于主对话轴，不进入成员卡、
            不形成常驻侧栏；审核面只读且只有按钮。 -->
       <AssetCandidateCallout
+        v-if="assetCandidatePhase !== 'idle'"
         :candidate="assetCandidate"
         :phase="assetCandidatePhase"
         :error="assetCandidateError"
@@ -653,7 +654,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted } from "vue";
+import { reactive, ref, computed, nextTick, watch, onMounted, onUnmounted, defineAsyncComponent } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { Paperclip } from "@element-plus/icons-vue";
@@ -685,8 +686,6 @@ import { agentStatusLabel, MATURITY, statusLabel, taskLampColor, TASK_WORK_STATE
 import { PLATFORM_NAME, ASSISTANT_NAME } from "../utils/branding";
 import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
 import { useAgentNames } from "../stores/agentNames";
-import EvidenceList from "../components/EvidenceList.vue";
-import AssetCandidateCallout from "../components/AssetCandidateCallout.vue";
 import FeatureAssetMapDisclosure from "../components/FeatureAssetMapDisclosure.vue";
 import { openTaskPeek } from "../stores/statusCenter";
 import { acquireChannel, pokeConversation } from "../stores/liveFeed";
@@ -705,7 +704,6 @@ import {
 } from "../utils/batchCreationJournal.js";
 import FlaiBloom from "../components/artwork/FlaiBloom.vue";
 import MarkdownLite from "../components/MarkdownLite.vue";
-import AssetBuilderDrawer from "../components/AssetBuilderDrawer.vue";
 import {
   agentExecutionReady,
   automaticTaskName,
@@ -728,6 +726,13 @@ import {
   normalizeSkillReuseRef,
   verifyAssetCandidateIntegrity,
 } from "../utils/assetCandidates.js";
+
+// 方案依据/候选审核不是首条纯文本对话的必需代码：父模板先用真实状态守门，
+// 再加载组件。地图的同步 disclosure 外壳常驻，首次展开内容由其内部异步加载；
+// AssetBuilderDrawer 仍只由 DEV fixture 的 v-if 触发。
+const EvidenceList = defineAsyncComponent(() => import("../components/EvidenceList.vue"));
+const AssetCandidateCallout = defineAsyncComponent(() => import("../components/AssetCandidateCallout.vue"));
+const AssetBuilderDrawer = defineAsyncComponent(() => import("../components/AssetBuilderDrawer.vue"));
 
 // UI 验收台通过独立 Vite 开发入口传入状态快照。正式应用永远忽略该 prop：
 // 它只控制可视状态，不模拟网络、不写会话、不产生“假流式”。

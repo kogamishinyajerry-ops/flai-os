@@ -8,8 +8,9 @@
  * - PLATFORM_SUBTITLE「二所工程智能体运行底座」= 平台副标（保留「二所」，owner 裁⑥）。
  *
  * 全站命名散点只许引本模块，不再各写字面。例外与边界（如实留痕）：
- * - 静态 HTML（frontend/index.html `<title>`）无法 import——其字面与本常量
- *   保持同字面，改动必须两侧同批（node 锚 branding.test.mjs 锁这条）。
+ * - 静态 HTML（frontend/index.html `<title>` 与 JS 前 boot skeleton）无法 import
+ *   ——其字面与本常量保持同字面，改动必须两侧同批（node 锚
+ *   branding.test.mjs 锁这条）。
  * - 后端 FastAPI title 走 backend/app/config.py APP_NAME（跨语言无法共享
  *   模块，字面相映同源，同批纪律同上）。
  * - ui-lab 验收台（DEV ONLY）另有独立 title 写入，同样引本模块。

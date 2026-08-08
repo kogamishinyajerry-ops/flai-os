@@ -1,0 +1,92 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "source": "Playwright resource timing against Vite dev server",
+  "product_idle_prefetch": {
+    "today_seen": true,
+    "view_module_requests": [
+      "http://127.0.0.1:5202/src/views/GuidePage.vue",
+      "http://127.0.0.1:5202/src/views/GuidePage.vue?vue&type=style&index=0&scoped=9c5da20f&lang.css",
+      "http://127.0.0.1:5202/src/views/GuidePage.vue?vue&type=style&index=1&lang.css",
+      "http://127.0.0.1:5202/src/views/TodayPage.vue",
+      "http://127.0.0.1:5202/src/views/TodayPage.vue?vue&type=style&index=0&scoped=72d47704&lang.css"
+    ],
+    "resource_timing": [
+      {
+        "name": "http://127.0.0.1:5202/src/views/GuidePage.vue",
+        "initiatorType": "script",
+        "startTime": 388.7,
+        "duration": 120.8,
+        "transferSize": 784312
+      },
+      {
+        "name": "http://127.0.0.1:5202/src/views/TodayPage.vue",
+        "initiatorType": "script",
+        "startTime": 397.7,
+        "duration": 106.8,
+        "transferSize": 135403
+      },
+      {
+        "name": "http://127.0.0.1:5202/src/views/TodayPage.vue?vue&type=style&index=0&scoped=72d47704&lang.css",
+        "initiatorType": "script",
+        "startTime": 505.6,
+        "duration": 4,
+        "transferSize": 9242
+      },
+      {
+        "name": "http://127.0.0.1:5202/src/views/GuidePage.vue?vue&type=style&index=1&lang.css",
+        "initiatorType": "script",
+        "startTime": 510.9,
+        "duration": 11.4,
+        "transferSize": 1488
+      },
+      {
+        "name": "http://127.0.0.1:5202/src/views/GuidePage.vue?vue&type=style&index=0&scoped=9c5da20f&lang.css",
+        "initiatorType": "script",
+        "startTime": 510.9,
+        "duration": 11.9,
+        "transferSize": 46566
+      }
+    ]
+  },
+  "ui_lab_fixture": {
+    "today_seen": false,
+    "me_seen": false,
+    "api_request_count": 0,
+    "view_module_requests": [
+      "http://127.0.0.1:5202/src/views/GuidePage.vue",
+      "http://127.0.0.1:5202/src/views/GuidePage.vue?vue&type=style&index=0&scoped=9c5da20f&lang.css",
+      "http://127.0.0.1:5202/src/views/GuidePage.vue?vue&type=style&index=1&lang.css"
+    ],
+    "lazy_component_module_requests": {
+      "initial_landing": {
+        "AssetCandidateCallout.vue": 0,
+        "FeatureAssetMapBody.vue": 0
+      },
+      "collapsed_map": {
+        "AssetCandidateCallout.vue": 0,
+        "FeatureAssetMapBody.vue": 0
+      },
+      "ready_map_before_open": {
+        "AssetCandidateCallout.vue": 0,
+        "FeatureAssetMapBody.vue": 0
+      },
+      "after_first_map_open": {
+        "AssetCandidateCallout.vue": 0,
+        "FeatureAssetMapBody.vue": 1
+      },
+      "after_candidate_case": {
+        "AssetCandidateCallout.vue": 1,
+        "FeatureAssetMapBody.vue": 1
+      }
+    },
+    "lazy_component_request_urls": [
+      "http://127.0.0.1:5202/src/components/AssetCandidateCallout.vue",
+      "http://127.0.0.1:5202/src/components/AssetCandidateCallout.vue?vue&type=style&index=0&scoped=bddd95db&lang.css",
+      "http://127.0.0.1:5202/src/components/FeatureAssetMapBody.vue",
+      "http://127.0.0.1:5202/src/components/FeatureAssetMapBody.vue?vue&type=style&index=0&scoped=1121661d&lang.css"
+    ]
+  }
+}

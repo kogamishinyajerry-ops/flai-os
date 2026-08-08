@@ -9,8 +9,8 @@ const MAX_SYNC_JS_GZIP_BYTES = 220 * 1024;
 const MAX_SYNC_CSS_GZIP_BYTES = 40 * 1024;
 const MAX_ROUTE_JS_GZIP_BYTES = 220 * 1024;
 const MAX_ROUTE_CSS_GZIP_BYTES = 40 * 1024;
-// `/tasks/new` 的表单路由已按 ADR-0033 退役并重定向到主对话，因此当前共有
-// 7 个真实懒加载页面。这个下限仍会咬住误把任一剩余页面并回同步入口的回归。
+// `/tasks/new` 的表单路由已按 ADR-0033 退役并重定向到主对话。当前 manifest
+// 有 8 个真实懒加载 view；既有下限 7 仍咬住误把页面并回同步入口的回归。
 const MIN_DYNAMIC_ENTRIES = 7;
 
 if (!fs.existsSync(MANIFEST_PATH)) {
@@ -69,12 +69,18 @@ const uniqueDynamicEntries = [...new Map(
     .filter(([, record]) => record.isDynamicEntry === true)
     .map(([key, record]) => [record.file, { key, record }])
 ).values()];
-const routeClosures = uniqueDynamicEntries.map(({ key, record }) => ({
+// defineAsyncComponent 也会标 isDynamicEntry；预算里的“动态路由 chunk ≥7”只
+// 统计 src/views，不能让异步子组件把退化的路由数顶成假绿。
+const uniqueDynamicRouteEntries = uniqueDynamicEntries.filter(({ key, record }) =>
+  (record.src || key).startsWith("src/views/")
+);
+const routeClosures = uniqueDynamicRouteEntries.map(({ key, record }) => ({
   key,
   file: record.file,
   ...closureBudget(record),
 }));
-const dynamicEntryCount = uniqueDynamicEntries.length;
+const dynamicEntryCount = uniqueDynamicRouteEntries.length;
+const asyncComponentEntryCount = uniqueDynamicEntries.length - dynamicEntryCount;
 const oversizedRouteClosures = routeClosures.filter((route) =>
   route.jsGzip > MAX_ROUTE_JS_GZIP_BYTES
   || route.cssGzip > MAX_ROUTE_CSS_GZIP_BYTES
@@ -108,6 +114,7 @@ const report = {
   syncJsGzip: entryClosure.jsGzip,
   syncCssGzip: entryClosure.cssGzip,
   dynamicEntryCount,
+  asyncComponentEntryCount,
   largestRouteClosure: [...routeClosures]
     .sort((a, b) => (b.jsGzip + b.cssGzip) - (a.jsGzip + a.cssGzip))[0],
 };
