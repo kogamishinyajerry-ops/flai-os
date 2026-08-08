@@ -596,7 +596,8 @@ test("map#46 #56 方案卡依据行：披露外可见面、句式逐字、latest
 test("refuse 卡 kicker 用暂时接不住，重述引导直呼 FLAi", () => {
   assert.match(guideSource, /<div class="plan-kicker refuse">暂时接不住<\/div>/);
   assert.match(guideSource, /这个需求，平台暂时接不住/);
-  assert.match(guideSource, /告诉 FLAi 你想怎么调整/);
+  // 人格名走 branding.js ASSISTANT_NAME SSOT（票 #62 B1）；常量字面锁见 branding.test.mjs。
+  assert.match(guideSource, /告诉 \{\{ ASSISTANT_NAME \}\} 你想怎么调整/);
 });
 
 test("全局快速切换只检索工程任务与会话，不把 Agent 暴露成工程师选项", () => {

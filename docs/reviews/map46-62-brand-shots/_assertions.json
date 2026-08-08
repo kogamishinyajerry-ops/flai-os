@@ -1,0 +1,24 @@
+{
+  "ticket": "#62 (map #46 批 2)",
+  "branch": "kimi/map46-62-brand-consistency",
+  "baseline": "origin/main @ 7c1deff",
+  "method": "双栈同脚本同数据前后对照：before=/tmp/flai-os-62-before(origin/main 独立 worktree), after=施工 worktree；后端=audit_stack_launcher 拷贝改指(8620, stub 网关链路真内容假), 前端=vite dev 5202；任务/晋升行数据=客户端 route fulfill 合成(launcher 不起任务执行线程, 真任务停 queued 排不进三档), 账户 tester 真登录。脚本 /tmp/flai-os-62-shots/shots.py(未入库, 一次性取证)。",
+  "shots": {
+    "g1_gate_wide_1440": "B11 版式纪律：≥900px 卡内无副标(副标由左品牌氛围面陈列), 前后应一致无漂移",
+    "g2_gate_narrow_760": "B11 主证据：<900px 卡内标题下 before 无副标 → after 一行「二所工程智能体运行底座」",
+    "s1_guide_hero_composer_sidebar": "B6 主证据：composer 政策句 before「…后台准备方案 · 开始与放行由你确认」→ after「…后台安排所需能力 · 开始与放行由你确认」, hero 句不动; B1 侧栏品牌名/副标字面无漂移(SSOT 重构等价)",
+    "t1_today_rows": "B9 主证据：今日页待签/进行中副行 before 裸 agent_id(fta_agent/cfd_solve_agent) → after 注册表人话名, 原 id 收 title 悬浮; 晋升行与最活跃 chip 同律",
+    "c1_console_rows": "B9：任务台待你签发/进行中/已落定三组副行同名收口; 有名任务主行=任务名、副行=Agent 人话名",
+    "c2_console_empty": "B7 主证据：任务台空态「还没有任务——先在主对话里说明目标，系统会自动安排」before 带句号 → after 不带"
+  },
+  "assertions": {
+    "B11_narrow_subtitle_present_after": "after g2 body 含「二所工程智能体运行底座」副标行(截图目测 ✓)",
+    "B11_wide_card_unchanged": "after g1 卡内零副标, 品牌氛围面 tagline-sub 逐字不变(截图目测 ✓)",
+    "B6_composer_aligned": "after s1 composer=「系统会在后台安排所需能力 · 开始与放行由你确认」(截图目测 ✓ + branding.test.mjs 锚)",
+    "B6_plan_card_untouched": "方案卡 :463 政策句逐字未动(m6③ 红线锚, m6_guide_acceptance.py 逐字断言全绿)",
+    "B9_subline_human_name": "after t1/c1 副行=注册表人话名, title=agent_id(截图目测 ✓ + m2 附加锚随迁后 12/12 绿)",
+    "B7_empty_state_no_period": "after c2 cl-zero 无句号(截图目测 ✓ + branding.test.mjs 锚)",
+    "B1_title_literal": "index.html 静态 title=「FLAi-OS 二所工程智能体运行底座」(branding.test.mjs 锚, 无法 import 故无运行时截图)",
+    "honesty_floor_untouched": "登录门「登录后开始工作——最终放行由你亲手确认。」/方案卡政策句/签发语境词逐字不动(craft_desktop ④诚实地板逐字宽窄双断言绿)"
+  }
+}

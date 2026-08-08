@@ -37,7 +37,9 @@
               <!-- 人话称呼（批次四 Q1）：taskDisplayName 三级诚实降级 SSOT；
                    meta 时钟=同名行消歧锚（3-lens 可用性镜头 P2）。 -->
               <span class="cl-name">{{ taskDisplayName(t, agentNames.map) }}</span>
-              <span class="cl-sub">{{ t.agent_id }} · 需要你签发 · {{ consoleClock(t.created_at) }}</span>
+              <!-- 副行 Agent 名走 agentDisplayName SSOT（票 #62 B9）：人话名
+                   上主视觉，原 agent_id 收 title 悬浮（缺位诚实回落原 id）。 -->
+              <span class="cl-sub" :title="t.agent_id">{{ agentDisplayName(t.agent_id, agentNames.map) }} · 需要你签发 · {{ consoleClock(t.created_at) }}</span>
             </span>
           </div>
         </template>
@@ -59,7 +61,7 @@
           <span class="cl-lamp" :class="{ 'is-pulsing': isWork(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
           <span class="cl-main">
             <span class="cl-name" :class="{ 'is-unread': unseen(t) }">{{ taskDisplayName(t, agentNames.map) }}</span>
-            <span class="cl-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }} · {{ consoleClock(t.finished_at || t.created_at) }}</span>
+            <span class="cl-sub" :title="t.agent_id">{{ agentDisplayName(t.agent_id, agentNames.map) }} · {{ statusLabel(t.status) }} · {{ consoleClock(t.finished_at || t.created_at) }}</span>
           </span>
           <span v-if="unseen(t)" class="cl-unseen-dot" title="完成后你还没看过"></span>
         </div>
@@ -81,11 +83,11 @@
           <span class="cl-lamp" :class="{ 'is-pulsing': isWork(t.status) }" :style="{ background: taskLampColor(t.status) }"></span>
           <span class="cl-main">
             <span class="cl-name" :class="{ 'is-unread': unseen(t) }">{{ taskDisplayName(t, agentNames.map) }}</span>
-            <span class="cl-sub">{{ t.agent_id }} · {{ statusLabel(t.status) }} · {{ consoleClock(t.finished_at || t.created_at) }}</span>
+            <span class="cl-sub" :title="t.agent_id">{{ agentDisplayName(t.agent_id, agentNames.map) }} · {{ statusLabel(t.status) }} · {{ consoleClock(t.finished_at || t.created_at) }}</span>
           </span>
           <span v-if="unseen(t)" class="cl-unseen-dot" title="完成后你还没看过"></span>
         </div>
-        <div v-if="feedLoaded && !feedTasks.length" class="cl-zero">还没有任务——先在主对话里说明目标，系统会自动安排。</div>
+        <div v-if="feedLoaded && !feedTasks.length" class="cl-zero">还没有任务——先在主对话里说明目标，系统会自动安排</div>
       </template>
 
       <div class="cl-foot-note">清单来自最近 100 条任务真实轮询——窗口外不虚报。</div>
@@ -118,7 +120,7 @@
 // 选中=路由（/tasks/:taskId），深链/刷新/回退天然可用。
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { statusLabel, taskLampColor, taskDisplayName, formatClockCompact, TASK_WORK_STATES } from "../utils/format";
+import { statusLabel, taskLampColor, taskDisplayName, agentDisplayName, formatClockCompact, TASK_WORK_STATES } from "../utils/format";
 import { isWaitingReview, isWorking } from "../utils/taskGroups";
 import { useAgentNames } from "../stores/agentNames";
 import { useTodayKey } from "../composables/useTodayKey";

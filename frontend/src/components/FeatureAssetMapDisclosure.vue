@@ -1,10 +1,10 @@
 <template>
-  <section class="feature-asset-map" aria-label="FLAi-OS 功能与资产地图">
+  <section class="feature-asset-map" :aria-label="`${PLATFORM_NAME} 功能与资产地图`">
     <details @toggle="handleToggle">
       <summary>
         <span class="map-mark" aria-hidden="true">⌘</span>
         <span class="map-heading">
-          <strong>FLAi-OS 功能与资产地图</strong>
+          <strong>{{ PLATFORM_NAME }} 功能与资产地图</strong>
           <small>按需查看平台能力与你的受治理资产</small>
         </span>
         <span v-if="phase === 'ready'" class="map-counts">
@@ -143,6 +143,7 @@
 
 <script setup>
 import { inject, ref } from "vue";
+import { PLATFORM_NAME } from "../utils/branding";
 
 import { getFeatureAssetMap } from "../api/featureAssetMap.js";
 import {

@@ -195,7 +195,13 @@ with sync_playwright() as p:
 
     # ── 附加：历史页 + 深链刷新（静态托管 SPA fallback）──
     page.goto(BASE + "/tasks", wait_until="networkidle")
-    hist_ok = "hello_agent" in page.locator("body").inner_text()
+    body = page.locator("body").inner_text()
+    sub_titles = page.locator(".cl-sub").evaluate_all(
+        "els => els.map(e => e.getAttribute('title') || '')"
+    )
+    # 票 #62 B9 锚随迁：任务台副行不再裸显 agent_id——人话名上主视觉
+    # （taskDisplayName/agentDisplayName SSOT），原 id 收 .cl-sub 的 title 悬浮。
+    hist_ok = "Hello Agent（平台闭环验证示例）" in body and "hello_agent" in sub_titles
     page.screenshot(path=str(SHOTS / "5_history.png"), full_page=True)
     page.goto(BASE + f"/tasks/{task_id}", wait_until="networkidle")
     deep_ok = "任务详情" in page.locator("body").inner_text()

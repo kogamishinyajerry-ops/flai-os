@@ -190,8 +190,9 @@ def main() -> int:
         check("C1 今日页待签组头「待你签发 · 1」",
               "待你签发" in today_head and "·1" in today_head.replace(" ", ""),
               f"head={today_head!r}")
+        # 票 #62 B9 锚随迁：副行不再裸显 agent_id（人话名上主视觉），id 收 .today-card-sub title。
         check("C1 今日页待签组 1 卡且为 fea 任务",
-              today_cards.count() == 1 and "fea_solve_agent" in today_cards.first.inner_text(),
+              today_cards.count() == 1 and "fea_solve_agent" in (today_cards.first.locator(".today-card-sub").get_attribute("title") or ""),
               f"cards={today_cards.count()}")
         if today_cards.count() == 1:
             today_card_name = today_cards.first.locator(".today-card-name").inner_text().strip()
@@ -203,9 +204,10 @@ def main() -> int:
         rail_waiting_items = page.locator(".cl-item", has_text="需要你签发")
         check("C1 任务台左栏组头「✍ 待你签发 · 1」",
               "待你签发" in rail_head and "1" in rail_head, f"head={rail_head!r}")
+        # 票 #62 B9 锚随迁：副行不再裸显 agent_id，id 收 .cl-sub title。
         check("C1 任务台待签组 1 行且为 fea 任务",
               rail_waiting_items.count() == 1
-              and "fea_solve_agent" in rail_waiting_items.first.inner_text(),
+              and "fea_solve_agent" in (rail_waiting_items.first.locator(".cl-sub").get_attribute("title") or ""),
               f"rows={rail_waiting_items.count()}")
         if rail_waiting_items.count() == 1 and today_card_name:
             rail_name = rail_waiting_items.first.locator(".cl-name").inner_text().strip()

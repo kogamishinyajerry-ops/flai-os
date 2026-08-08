@@ -1,4 +1,6 @@
-const BOUNDARY_NAME = "FLAi-OS UI 验收只读边界";
+import { PLATFORM_NAME } from "../utils/branding.js";
+
+const BOUNDARY_NAME = `${PLATFORM_NAME} UI 验收只读边界`;
 
 export class UiAcceptanceBoundaryError extends Error {
   constructor(channel) {

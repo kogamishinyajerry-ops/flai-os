@@ -283,7 +283,7 @@ def create_app(
             # 杜绝跨测试泄漏（测试 with TestClient 退出即清）；生产仅进程退出时触发。
             reset_logging()
 
-    app = FastAPI(title="FLAi-OS Backend", lifespan=lifespan)
+    app = FastAPI(title=f"{config.APP_NAME} Backend", lifespan=lifespan)
     app.state.login_throttle = LoginThrottle()  # 进程内节流（ADR-0019 D6），实例随 app
 
     # 中间件栈序（后 add 者在外层）：会话门先 add（内层），CORS 后 add（外层）——

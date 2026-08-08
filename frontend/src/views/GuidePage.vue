@@ -78,7 +78,7 @@
             :size="26"
           />
           <div class="ai-body">
-            <div class="ai-name">FLAi<span v-if="m.createdAt" class="bubble-time" :class="{ 'is-boundary': !!segStartOf(idx) }">{{ formatTime(m.createdAt) }}</span></div>
+            <div class="ai-name">{{ ASSISTANT_NAME }}<span v-if="m.createdAt" class="bubble-time" :class="{ 'is-boundary': !!segStartOf(idx) }">{{ formatTime(m.createdAt) }}</span></div>
             <!-- 助手正文走 MarkdownLite（W5）：列表/标题/引用成块渲染——桌面级
                  富文本；纯插值零 v-html，XSS 面不变。用户气泡仍纯文本忠实显示。 -->
             <MarkdownLite v-if="m.content" :text="m.content" class="ai-lead" />
@@ -137,7 +137,7 @@
                     <span class="reframe-adopt">采纳 →</span>
                   </div>
                 </div>
-                <p class="reframe-escape">或者直接在下方输入框，告诉 FLAi 你想怎么调整。</p>
+                <p class="reframe-escape">或者直接在下方输入框，告诉 {{ ASSISTANT_NAME }} 你想怎么调整。</p>
               </div>
               <!-- 需求登记引导（评审 N6）：拒接 ≠ 需求消失。反馈通道是任务级的、挂不上
                    无任务的需求，先给「复制摘要 → 找平台负责人登记」最短闭环；接件评估
@@ -518,7 +518,7 @@
             <!-- 分阶段真话（Codex R0 审 P2）：附件上传期显示「正在上传附件 X/Y」，
                  模型等待期才是「导引思考中」——300s 上传宽限下两者可能都以分钟计，
                  不许互相冒名。秒数计时随阶段重锚，只算当前阶段耗时。 -->
-            <span class="tlabel">{{ uploadPhase || "FLAi 正在响应…" }}<span v-if="!uploadPhase && thinkingSeconds >= 3" class="think-elapsed num-token">{{ thinkingSeconds }}s</span></span>
+            <span class="tlabel">{{ uploadPhase || `${ASSISTANT_NAME} 正在响应…` }}<span v-if="!uploadPhase && thinkingSeconds >= 3" class="think-elapsed num-token">{{ thinkingSeconds }}s</span></span>
           </div>
           <!-- 诚实预期管理（评审 N3）：内网大模型单轮可达一两分钟（B3 超时旋钮按内网
                p99 放宽后尤甚）——超 30s 给一行真话；绝不做假进度条（诚实地板）。 -->
@@ -616,7 +616,7 @@
         </div>
       </div>
       <div class="composer-hint">
-        <span class="composer-policy">{{ retryContextChecking ? "正在核对失败任务…" : batchCreationNeedsReconciliation ? "创建状态待核 · 本次开工核对前已锁定" : activeRetryOf ? "正在处理失败任务 · 审计血缘会自动保留" : "系统会在后台准备方案 · 开始与放行由你确认" }}</span>
+        <span class="composer-policy">{{ retryContextChecking ? "正在核对失败任务…" : batchCreationNeedsReconciliation ? "创建状态待核 · 本次开工核对前已锁定" : activeRetryOf ? "正在处理失败任务 · 审计血缘会自动保留" : "系统会在后台安排所需能力 · 开始与放行由你确认" }}</span>
         <span class="keys"><kbd>Enter</kbd> 发送<span class="sep">·</span><kbd>⇧ Enter</kbd> 换行<span class="sep">·</span>可带附件</span>
       </div>
       </div>
@@ -682,6 +682,7 @@ import {
 } from "../stores/taskEvidence";
 import { decidePlanEvidenceLine } from "../utils/evidenceTrace.js";
 import { agentStatusLabel, MATURITY, statusLabel, taskLampColor, TASK_WORK_STATES, taskElapsedMs, formatTime, formatFileSize } from "../utils/format";
+import { PLATFORM_NAME, ASSISTANT_NAME } from "../utils/branding";
 import { memberPhase, squadCounts, squadSegments } from "../utils/squad";
 import { useAgentNames } from "../stores/agentNames";
 import EvidenceList from "../components/EvidenceList.vue";
@@ -1097,7 +1098,7 @@ async function copyRefusedNeed(idx) {
     lines.push("导引建议的重述方向：");
     for (const r of rec.reframe) lines.push(`- ${r}`);
   }
-  lines.push("（来自 FLAi-OS 导引对话——请平台负责人评估排期）");
+  lines.push(`（来自 ${PLATFORM_NAME} 导引对话——请平台负责人评估排期）`);
   const ok = await copyText(lines.join("\n"));
   if (ok === true) ElMessage.info("需求摘要已复制——发给平台负责人登记，别让它溜走");
   else ElMessage.error("复制失败——请手动选取文字复制");

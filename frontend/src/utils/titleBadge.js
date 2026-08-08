@@ -4,7 +4,9 @@
 // 防止两处 document.title = ... 互相覆盖：路由切换丢徽章，或徽章更新丢页名。
 // 计数来源=状态坞的真实轮询计数（诚实地板），清零/卸载即还原纯页名。
 
-let base = "FLAi-OS";
+import { PLATFORM_NAME } from "./branding";
+
+let base = PLATFORM_NAME;
 let badgeCount = 0;
 
 function render() {
@@ -12,7 +14,7 @@ function render() {
 }
 
 export function setTitleBase(title) {
-  base = title || "FLAi-OS";
+  base = title || PLATFORM_NAME;
   render();
 }
 
