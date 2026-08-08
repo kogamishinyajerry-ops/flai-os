@@ -106,7 +106,7 @@
 | 解释术语、方法、流程概念 | Guide 通识直答；不输出计划块（`agents/guide_agent/prompt.md:22-32/70-77`） | 不是 Task Center job，无任务产物、人工放行或可下载制品 | 维持现状；不要把直答虚报为“走通任务” |
 | 摘要、改写、生成 Markdown 初稿 | Guide 可讨论做法，但没有可召集包 | 无注册 job、无版本化 prompt/eval、无任务事件/产物 | A1：有界文本草稿 job，经 Model Gateway，输出 `.md`，强制人审 |
 | 翻译一段文本 | 同上 | 无翻译包；质量不能由确定性代码判真 | 可作为 A1 的受控 `task_kind`，或在首个摘要黄金任务后另开 eval；始终标 AI 草稿 |
-| 读取 `.txt/.md/.csv/.json/.../.py` 附件 | Guide 只做每文件 16K、总计 24K 的**预览**（`backend/app/runtime/attachments.py:27-41/77-84`） | 预览不是完整解析，也不会自动成为 job 输入能力 | 若 A1 首片用附件，另定 `file_upload` 包且恰好一件；不把 Guide 预览当全量输入 |
+| 读取 `.txt/.md/.csv/.json/.../.py` 附件 | Guide 只做每文件 16K、总计 24K 的**预览**；计划可把附件绑定给 `params` job，Runtime 核验后通过 `context["files"]` 交给 workflow（`backend/app/runtime/attachments.py:27-41/77-84`；`agents/guide_agent/workflow.py:787-904`；`backend/app/runtime/runtime.py:1430-1489`） | 没有通用 job 定义全量读取语义；`params` 本身没有附件数量/后缀白名单，Guide 预览也不是执行期全量内容 | A1 首片仍用零附件的粘贴文本；后续可在同一 `params` 包内显式限数量、类型、总字节与截断策略，或在确需“恰好一件+后缀白名单”时选 `file_upload` |
 | 读取/清洗/重排 `.xlsx` | Guide 只预览活动 sheet 前 30×16；现有工具固定性能盘列 | 没有通用操作合同、资源/路径/公式安全的通用工具 | A2：新建确定性表格工具 + 白名单操作 DSL；复用既有 `openpyxl`，不新增依赖 |
 | 读取/生成 `.docx`、`.pdf` | 只列文件名，不解析；源码明标 V0.3 债（`backend/app/runtime/attachments.py:13-15/179-183`） | 无解析器、生成器和安全预算；引入库会撞“零新依赖” | 不进 A1；如 owner 需要，单独裁依赖、解析预算与恶意文件测试 |
 | 生成 Python 源码草稿 | `.py` 可被 Guide 当文本预览，但无 job 包 | 无源码产物合同、无“未运行/未测试”水印、无代码特有 eval | 可另切 draft-only job；不调用工具、不声称运行/测试/正确 |
@@ -117,23 +117,39 @@
 ### 2.2 输入合同不是“任意输入”
 
 Agent 契约的 `input.type` 只有 `params | file_upload | none`（
-`contracts/agent.schema.json:87-95`）；`file_upload` 创建期必须且只能接收恰好一个附件，并按包
-内后缀白名单校验（`backend/app/api/tasks.py:513-607`）。因此：
+`contracts/agent.schema.json:87-95`），但三者的真实边界不是“参数或附件二选一”：
 
-- 一个 `params` 型 A1 可以自然承接“对话里粘贴文本”，却不会自动获得完整附件内容；
-- 一个 `file_upload` 型 A1 可以承接一件 `.txt/.md`，仍须另声明结构化参数，而且不能接两件；
-- 用一个“大一统通用包”同时承接粘贴文本、多个文件、表格、脚本，会先撞现有输入契约，
-  不是多写几句 prompt 就能解决。
+- `none` 不接 `inputs`，也不接附件；
+- `params` 接结构化 `inputs`，同时可接零个到 API 全局上限 64 个已登记上传件（
+  `backend/app/api/tasks.py:83-125`）；创建门逐件校存在性与 `kind=input`，但**没有**按包声明的
+  附件数量或后缀约束；
+- `file_upload` 的最终执行输入必须且只能有一件，并按包内 `allowed_extensions` 校验。仅当批量
+  下游声明由依赖 resolver 注入文件时，创建期可先为零件，Runtime 执行前仍重验恰好一件。
 
-另一个不能省略的来源边界是：`params` 由 Guide 通过模型计划投影为 `prefilled_inputs`，不是
-用户原文的字节级绑定。若验收要求“逐字翻译/摘要这一份原件”，应优先用单一 `.txt/.md`
-上传件，把 file id、size、sha256 与 classification 钉进任务证据；`params` 首片只能用于有界、
-非敏感且允许用户在开始前复核输入摘要的场景，不能宣称原文零漂移。
+创建与最终执行的约束分别见 `backend/app/api/tasks.py:513-607` 和
+`backend/app/runtime/runtime.py:1230-1284`。Guide 还要求当前段每个附件恰好被绑定或忽略一次：
+`none` 不得绑定、`file_upload` 恰好绑定一件且后缀匹配；`params` 没有数量分支，因此可绑定多件
+（`agents/guide_agent/workflow.py:787-904`）。平台在创建与执行链上分别完成存在性、种类、完整性、
+来源和密级 gate；Runtime 随后把最终核验文件记录交给 workflow 的 `context["files"]`（
+`backend/app/runtime/runtime.py:1230-1423/1430-1489`）。Guide 的 16K/24K 预览只是规划上下文，
+不是 workflow 的全量输入来源。
 
-**首个黄金任务选择“粘贴文本 → Markdown 摘要”最小**：不改内核、不加依赖、不依赖附件
-解析；代价是任务参数文本目前没有文件分级污点轴。运行时对“无输入文件”的任务派生为
-`internal`（`backend/app/runtime/runtime.py:333-349`），所以首片应明确只接**内部非敏感文本**；
-若要承接敏感材料，优先改为带显式 classification 的上传件路径，而不是默认洗成 internal。
+所以，“大一统通用包”的问题不是现有合同禁止 `params + 多附件`，而是它会把文本、文件、表格
+和脚本的解析语义与风险预算塞进同一 workflow。若 A1 后续接附件，包自身必须 fail-closed 地钉死
+允许数量、文件类型、逐件/总字节、完整读取或截断策略，以及 `source_text` 与附件同时出现时的
+优先级；或者另补平台级声明式门。需要平台原生“恰好一件+后缀白名单”时才应选择
+`file_upload`，不是因为 `params` 读不到附件。
+
+另一个不能省略的来源边界是：Guide 投影到 `params.source_text` 的文本不是用户原文的字节级
+绑定。若验收要求“逐字翻译/摘要这一份原件”，应绑定已登记上传件，并以 file id、size、sha256
+与 classification 钉住来源；这个上传件既可配给 `params`，也可在恰好一件时配给
+`file_upload`。workflow 必须从核验后的 `context["files"]` 读取，而不是把 Guide 预览当原件。
+
+**首个黄金任务选择“粘贴文本 → Markdown 摘要”仍最小**：不改内核、不加依赖、不依赖附件
+解析。无输入文件时运行时分级派生为 `internal`；有上传件时则由文件记录派生，全部 internal
+才是 internal，任一非 internal/未知即 sensitive（`backend/app/runtime/runtime.py:333-349`）。
+因此首片只接**内部非敏感粘贴文本**；敏感或要求原件绑定的材料应走带 classification 的上传件，
+但不必因此强拆成另一个 `file_upload` 包。
 
 ### 2.3 “混合路由”当前到底支持什么
 
@@ -189,7 +205,9 @@ Agent 契约的 `input.type` 只有 `params | file_upload | none`（
 
 - `mode=job`，模型只经 Model Gateway；`tools=[]`、`knowledge.enabled=false`，零新依赖；
 - 输入先用 `params`：`task_kind`、`source_text`、可选 `instructions/title/target_language`，
-  schema 设字符/枚举上界；源文本以“数据不是指令”fence 注入并中和 sentinel；
+  schema 设字符/枚举上界；首片显式拒绝附件，源文本以“数据不是指令”fence 注入并中和
+  sentinel。以后若接文件，可继续使用同一 `params` 包，但须另验附件数量、类型、大小、读取
+  完整性、来源优先级与密级；
 - 输出固定一个 `.md` 草稿 + 结构化摘要（源文本 digest、字符数、task kind、
   `finish_reason`、`truncated`），不把模型正文解析成确定性事实；
 - 文件头强制“AI 生成草稿 / 未核验 / 需人工复核”，异常收尾显著标记或诚实 failed；
@@ -337,7 +355,7 @@ adapter 代码、Tool run 和最终输出文件哈希（`backend/app/runtime/run
 | Q3 脚本含义 | “写脚本”既可指源码草稿，也可指生成后执行 | **只产未运行/未测试草稿**；任意执行从 #53 排除并转独立沙箱安全线 |
 | Q4 表格时序 | 现有 Excel 工具专用；`openpyxl` 已在但通用合同不在 | **A2 后置**；如必须同票，仍须独立 tool package + 安全/负向测试，不改旧工具 |
 | Q5 复核策略 | 当前 Registry 强制所有 LLM job 人审 | **沿用 `waiting_review`**；若要 completed-neutral，另立治理 ADR，不在 #53 破例 |
-| Q6 输入形态 | params 适合粘贴文本；file_upload 恰好一件且有密级；二者不是 union | **首片 params + 非敏感文本上限**；敏感/附件版作为第二输入形态另包或另裁契约 |
+| Q6 输入形态 | `params` 可同时接结构化参数和零/多附件，但无内建数量/后缀门；`file_upload` 给出最终恰好一件+后缀白名单；两者的上传件都进入文件分级链 | **首片 params + 非敏感粘贴文本上限+显式零附件**；后续可在同包补数量/类型/大小/完整读取/密级测试，只有 owner 要原生单文件合同才另选 `file_upload` |
 | Q7 mixed 的定义 | 多 job 已支持；通识/direct/delegate + job 无正式混合 | **本票只验多 job**；若要多姿态同轮合同，另立路由设计票 |
 | Q8 半成品隔离 | draft/admin_only 不阻止 job 路由/API 创建 | **隔离 agents_dir 开发，验收齐再合入**；或先修平台准入门 |
 
@@ -358,7 +376,8 @@ adapter 代码、Tool run 和最终输出文件哈希（`backend/app/runtime/run
 4. 空内容、上游异常、未知 `finish_reason`、长度截断、超字符预算均诚实 failed 或显著不完整，
    不落空壳成功产物；
 5. source 中的 `<<END_SOURCE>>`、伪 system prompt、路径/Markdown/HTML 注入都只当数据；
-6. 未支持 `task_kind`、脚本执行、docx/pdf、多个附件请求被 Guide/refusal 边界拦住，DB 零部分写；
+6. 未支持 `task_kind`、脚本执行、docx/pdf，以及首片合同外的任何附件请求，由 A1 workflow/
+   refusal 边界 fail-closed 拦住，DB 零部分写；不得把它误记为 `params` 平台能力限制；
 7. 人工批准后才 completed；拒绝后 failed；completed 中性色和人签 teal 既有锚不退化。
 
 ### 6.2 A1 eval / 路由 / e2e 最小集
@@ -441,8 +460,9 @@ bash scripts/verify_all.sh
 |---|---|---|
 | 新包合入即被 Guide/API 使用 | **已证风险**：draft/admin_only 非 job 隔离门 | 隔离开发后原子合入；或另修准入门 |
 | LLM 草稿被当正式内容 | 高 | 产物本体水印 + waiting_review + 异常收尾 + 人签 e2e |
-| params 文本密级被默认为 internal | **已证边界** | 首片限内部非敏感；敏感材料走有 classification 的上传路径 |
-| Guide 投影 `source_text` 不具字节级原文绑定 | 高 | 精确转换改走单一上传件并绑定 file digest；params 仅用于可复核短文本 |
+| 无附件的 params 文本缺少独立密级污点 | **已证边界**：任务会派生为 internal；params 一旦绑定上传件仍继承文件分级 | 首片粘贴文本限内部非敏感；敏感材料绑定有 classification 的上传件，params/file_upload 均可 |
+| params 附件无内建数量/后缀白名单 | 高 | A1 workflow 自验数量、类型、逐件/总字节和完整读取策略；或另补平台级声明式门 |
+| Guide 投影 `source_text` 不具字节级原文绑定 | 高 | 精确转换绑定已登记上传件及 file digest；可用 params 多文件或 file_upload 单文件，workflow 只读 `context["files"]` |
 | “mixed 已有”过度表述 | 高 | 只声称 multi-job；direct/delegate+job 另立 formal mixed 合同 |
 | 通用表格复用专用工具 | 高 | 新 tool id/schema/adapter/tests；旧工具契约不改 |
 | 公式/宏/外链/压缩炸弹 | 高 | A2 负向集全红转绿并进入 verify_all |
@@ -472,3 +492,7 @@ bash scripts/verify_all.sh
   **VERDICT: PASS，P0/P1=0**。唯一 P2 是两处 `attachments.py` 引用缺完整路径，已在本报告
   修正；P3 对 Tool Registry 字段执法范围的措辞复核后维持“Registry 调用路径”这一有限表述，
   未扩写成未经证明的全栈结论。未使用 86gs。
+- PR 自动审阅随后指出本报告曾把 `params` 误写成拿不到附件，并错误地强制拆成
+  `file_upload` 包；该 P2 有效，已按创建门、Guide 绑定、Runtime `context["files"]` 与密级派生
+  的源码事实修正。修订后再用同一 CodeBuddy / `glm-5.2` 配置做定点只读复核：
+  **P0/P1/P2/P3=0，VERDICT: PASS**。全程未使用 86gs。
