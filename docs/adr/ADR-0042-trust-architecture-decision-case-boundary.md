@@ -1,16 +1,18 @@
 # ADR-0042：Trust Architecture——DecisionCase 理论与对象边界
 
-- 状态：Accepted（owner 于 2026-08-09 明确接受 exact review candidate `1d4dde9`；[决定记录](https://github.com/kogamishinyajerry-ops/flai-os/issues/72#issuecomment-5229627052)）
+- 状态：Proposed（owner 曾接受 exact candidate `1d4dde9`；当前 review-fix revision 已发生语义变更，待重新接受）
 - 日期：2026-08-09
 - 基线：`origin/main@a32b36e`
 - 关联：[宪法](../00_FLAi-OS_Constitution.md) · [ADR-0029](ADR-0029-knowledge-chunk-provenance-readback.md) · [ADR-0031](ADR-0031-agent-shell-read-only-ontology-projection.md) · [ADR-0034](ADR-0034-task-evidence-bound-asset-candidate-ledger.md) · [ADR-0037](ADR-0037-v1-owner-object-authorization.md) · [ADR-0039](ADR-0039-nemoclaw-openshell-sandbox-execution-spike.md) · [ADR-0041](ADR-0041-l2-object-link-interface-metadata-layer.md)
 - 研究依据：[Issue #70](https://github.com/kogamishinyajerry-ops/flai-os/issues/70) · [PR #71](https://github.com/kogamishinyajerry-ops/flai-os/pull/71) · [固定研究版本 `08e592a`](https://github.com/kogamishinyajerry-ops/flai-os/blob/08e592a131ca98e3463fac8e834a066c5f651afa/docs/research/FLAI-OS-TRUST-ARCHITECTURE-V1.md)
 - 性质：规范性架构边界；**不授权**数据库、公共 API、状态机、UI、Agent、Tool 或外部系统实施
 
-owner 已于 2026-08-09 接受 exact review candidate `1d4dde9`；本状态转移只记录该人类决定，
-相对候选版本不改变承重架构语义。`Accepted` 表示本文中的架构原则和对象语义已冻结；
-它不表示这些对象已在生产 Runtime 中实现，不表示 A1 已开工，也不表示平台满足任何法规
-或标准。本状态也不表示 PR 已合并，不替代仓库保护规则或另行作出的显式合并授权。
+owner 已于 2026-08-09 接受 exact candidate `1d4dde9`，但 [PR #74](https://github.com/kogamishinyajerry-ops/flai-os/pull/74)
+后续 review 要求纠正三处规范矛盾，当前 Revision 因而不再等同于被接受的候选版本。既有
+acceptance 与 merge authorization 均不得跨 digest 沿用；只有 owner 对当前 exact Git
+commit/blob 重新作出接受决定后，状态才可恢复为 `Accepted`。即使进入 `Accepted`，也不
+表示这些对象已在生产 Runtime 中实现，不表示 A1 已开工，不表示平台满足任何法规或标准，
+更不替代仓库保护规则或另行作出的显式合并授权。
 
 ## 1. 阅读约定
 
@@ -94,8 +96,13 @@ FLAi-OS 已经有任务、来源、执行摘要、人工审核和审计事件，
 AI 输出进入治理链时的逻辑根；人是唯一签发者。模型、规则和工具可以提出 Claim、
 证据关系、公开依据与候选动作，但不能生成有效 Human Authorization。
 
-该裁决不要求所有普通会话都变成工程表单。短暂、非承重的对话建议可以保持会话形态；
-一旦内容要被封存、发布、晋级知识或授权动作，就必须进入受版本约束的 DecisionCase。
+该裁决不要求所有普通会话都变成工程表单。短暂、非承重的对话建议可以保持会话形态，
+但每个作为完整结果向用户呈现的模型载荷，都必须对应一个服务端先持久化的 canonical
+conversation/message 或 delivery record；记录至少有服务端 ID、schema/version、content digest、
+模型归属以及 conversation/task lineage。流式 delta 只是该记录最终内容的传输投影，不能承载
+未进入 canonical record 的响应侧字段。若内容形成任务或交付，还必须产生绑定该 record ID 与
+content digest 的 Task Event，禁止用“已有一条消息/事件”代替对实际交付字节的追踪。一旦内容
+要被封存、发布、晋级知识或授权动作，就必须进入受版本约束的 DecisionCase。
 
 ## 4. DecisionCase 聚合边界
 
@@ -109,7 +116,7 @@ AI 输出进入治理链时的逻辑根；人是唯一签发者。模型、规�
 | --- | --- | --- | --- | --- |
 | `DecisionCase` | 服务端生成稳定 `case_id`；服务端派生 immutable owner/source lineage；无内容修订 | 长期逻辑身份、关联根、修订历史 | 追加 Revision；head 只是导航指针，不是权威 | 不证明存在有效结论或签发 |
 | `DecisionRevision` | `case_id + revision + schema_version + digest`；正文不可变 | 一次完整、可复核的判断案卷 | 任一承重内容变化都新增 `revision + 1` | 不证明正文正确或适用 |
-| `AuthorizationRecord` | 服务端生成 ID；绑定 exact revision/Policy/Authority/Action digest；insert-only | 记录认证人类对精确对象作出的 approve/reject | 撤销、过期、失效以新事件/记录表达，不改旧记录 | 不证明签发人胜任、独立或被组织授权 |
+| `AuthorizationRecord` | 服务端生成 ID；绑定 exact revision、`decision_kind` 与该类决定适用的 Policy/Authority/Action 或 dissent digest；insert-only | 记录认证人类对精确对象作出的 approve/reject/challenge | 撤销、过期、失效以新事件/记录表达，不改旧记录 | 不证明签发人胜任、独立或被组织授权 |
 | `ExecutionReceipt` | 绑定唯一 Ticket digest；insert-once | 记录实际调用、前后状态、副作用、偏差和 postcheck | 后续补偿产生新案卷/动作；旧 Receipt 永不删除 | 不证明动作符合原意或结果长期有效 |
 | `OutcomeObservation` | 服务端 ID + 观察时间 + 来源版本/digest；append-only | 记录执行后的真实效果、现场反馈和反例 | 新观察可矛盾、取代解释但不改写旧观察 | 不自动证明因果关系 |
 | `LearningCandidate` | 独立 candidate ID/revision/digest | 把经去敏和适用域说明的经验送入独立策展 | 只有独立人工策展可接受；撤回继续传播 | 不因任务获批而自动成为权威知识 |
@@ -259,12 +266,24 @@ postcheck 或未来密码学机制承担，不能让一个 SHA-256 代替全部�
 - 不能因历史准确率、模型自报置信度或“看过原文”自动晋级；
 - 只有认证人类对 exact `case_digest` 的显式动作才能离开待审状态。
 
-纯会话中的临时模型建议若不进入上述受治理载体，可以保持非持久建议形态，但必须仍被
-界定为 AI 输出，不能被 UI 暗示为已签发结论。
+纯会话中的临时模型建议若不进入上述受治理载体，只能保持为可追踪的 conversation/message
+记录，并继续明示为 AI 输出；canonical record 必须覆盖 UI 实际呈现的完整载荷，而形成任务或
+交付时的 Task Event 必须同时绑定其服务端 ID 与 content digest。不得以“临时”、响应 sidecar
+或流式传输为由跳过持久记录、Task Event 或审计边界，也不能被 UI 暗示为已签发结论。
+
+**[当前事实]** `ConversationService.post_message()` 当前只持久化 `assistant_message`，却把
+`generalization_draft` 作为“不落库、不进账本”的响应字段返回前端。
+[源码](../../backend/app/runtime/conversation.py#L761-L767) ·
+[返回端](../../backend/app/runtime/conversation.py#L888-L892)。该字段是现有响应侧追踪缺口，
+不能因“非承重”或“待审”获得宪法豁免，也不能被当作受治理交付、DecisionCase 输入、证据
+或可审核/签发对象。该现行违宪债务由 [#75](https://github.com/kogamishinyajerry-ops/flai-os/issues/75)
+独立追踪；在其关闭前，#73 及其他新功能不得在该旁路上继续叠加或消费它。只有先持久化其
+canonical payload 并完成上述 ID/digest 绑定后，受治理消费者才可使用。本 ADR 不授权在本票
+中修改该 Runtime，也不把“已登记债务”写成当前行为已经合规。
 
 ### 6.2 人签证明了什么
 
-**[架构决策]** 有效 AuthorizationRecord 至少绑定：
+**[架构决策]** 有效的 approve AuthorizationRecord 至少绑定：
 
 ```text
 decision_revision_digest
@@ -274,14 +293,42 @@ decision_revision_digest
 + server-derived signer/session/time
 ```
 
-它证明的是：一个通过认证且在提交时通过当前 Policy/Authority 检查的人，对一个精确
-Revision 作出了记录中的决定。它**不自动证明**此人完整阅读、正确理解、具有专业胜任力、
-保持独立、获得合法委托，或结论本身正确。
+它证明的是：一个通过认证且在提交时通过当前 protected approval Policy/Authority 检查的
+人，对一个精确 Revision 作出了 approve 决定。它**不自动证明**此人完整阅读、正确理解、
+具有专业胜任力、保持独立、获得合法委托，或结论本身正确。
+
+reject/challenge AuthorizationRecord 使用不同的证明域：它至少绑定 exact revision、
+`decision_kind`、当时的 Evidence/Policy/Authority 状态摘要、适用的
+`exact_owner_review_authority_digest` 以及服务端派生的 signer/session/time。A0/A1 的该摘要
+只能由服务端按 exact-owner 规则确定性派生，输入至少包括对象 owner、认证 actor/session、
+decision kind、source lineage、Policy 版本与服务端决定时间；不接受客户端自报 cohort、role
+或 delegation。记录异议只要求调用者通过该 exact-owner review/dissent authority，**不要求**
+其取得 protected action 的 Authority allow；该记录只证明异议动作发生，不产生 approve、
+allow、Ticket 或外部动作。共享 reviewer、组织角色、委托和任意 review cohort 一律留给 A3，
+A1 遇到这些输入必须 fail-closed。
 
 protected approve 只有在 Evidence/Policy/Authority 满足对应 action requirement 时才可
-成立；reject/challenge 在证据 missing、stale、tampered、conflicting、denied 或 Policy /
-Authority 为 deny/unknown 时仍应可记录。它们同样绑定 exact revision 和当时的决定摘要，
-但绝不产生 allow、Ticket 或外部动作。
+成立；当 DecisionRevision 的 canonical bytes 仍能重算出声明 digest 时，reject/challenge 在
+证据 missing、stale、tampered、conflicting、denied 或 Policy / Authority 为 deny/unknown
+时仍应可记录。它们绑定该有效 exact revision，并额外绑定服务端观察到的来源/证据健康状态
+摘要，但绝不产生 allow、Ticket 或外部动作。
+
+必须区分“来源/证据被标记 tampered”与“DecisionRevision 自身身份无法验证”：
+
+- 前者不改变可重算的 Revision 身份；可按上一段记录绑定 exact revision 的 reject/challenge；
+- 若 canonical bytes 不能重算出 expected revision digest，或 case/revision/digest 关联发生
+  mismatch，就不存在可供签发的有效 exact revision。服务端不得为这些观测创建
+  AuthorizationRecord，而只能追加完整性事件/异议观察，绑定 expected `case_id/revision/digest`、
+  observed digest（或 unreadable 标记）、失败码、actor/session 与服务端时间；该事件不是人签、
+  不产生任何权威，也不把 observed bytes 认证成 expected Revision。实现可复用既有事件底座，
+  本 ADR 不因此授权新表。
+
+**[架构决策]** A1 的 `release_internal_summary.v0` 确认属于 protected approve，即使它不
+产生外部副作用。missing、stale、来源/证据 tampered、conflicting、denied、partial 或
+wrong-authority 均阻断 A1 approve；若 Revision 身份仍有效，可记录 reject/challenge 或另建
+新 Revision；若是 DecisionRevision digest mismatch，则只能走上述完整性事件/异议观察，
+不得伪造 AuthorizationRecord。未来若要允许带冲突的风险接受，必须定义不同的
+`risk_acceptance` decision kind 与 Policy/Authority，不得借普通 approve 绕过本门。
 
 当前 V1 只能如实沿用 ADR-0037 的 exact-owner self-sign 边界。组织资格、委托、撤销、
 职责分离和利益冲突属于 A3；在 A3 前不得把“登录账号可签”改写成“组织已授权”。
@@ -320,8 +367,9 @@ exact Git commit/blob；引用可变 `main`、Issue 标题或裸 `ADR-0042` 不�
 
 - TaskContract、Claim、EvidenceSpan、公开依据与结构化不确定性是否能形成可用合同；
 - bounded source preview 与单一原文浮窗是否能帮助审阅人定位决定性证据；
-- exact revision review gate 能否机械拒绝 missing、stale、tampered、conflicting、denied、
-  partial、wrong-authority 与 digest drift；
+- exact revision protected review gate 能否机械拒绝 missing、stale、来源/证据 tampered、
+  conflicting、denied、partial、wrong-authority 与 digest drift 的 approve；身份仍有效时
+  保留 reject/challenge 或另建新 Revision，身份无法验证时只写完整性事件/异议观察；
 - 相比当前流程，误批、漏检、挑战率、审阅时间和主观负担是否改善；
 - 新对象是否被多个消费者真正复用，还是只有一条样板在承担抽象成本。
 
@@ -406,7 +454,8 @@ Neo4j、RDF 或通用知识图谱平台。
 4. restricted 来源能否保存 bounded quote；不能保存时采用何种运行时授权定位器？
 5. PDF/OCR、Office、Excel、图片和动态知识索引分别采用何种 selector 编码，才能实现
    已冻结的 SourceRevision 精确定位、高亮和 selected-text digest 语义？
-6. tampered/conflicting 阻断 approve 本身，还是只阻断 protected action？
+6. A1 之外，何种 Policy/Authority 才能定义独立的 `risk_acceptance` 来处置非决定性冲突；
+   该决定不得冒充普通 approve，也不得自动授权后续动作？
 7. 如何证明监督有效而不退化为员工监控或“打开过证据”的形式主义？
 8. 哪些动作真实可补偿；哪些不可逆动作必须长期由平台外人工执行？
 9. 何时才需要密码学签章、WORM 或外部时间戳？
@@ -417,8 +466,9 @@ Neo4j、RDF 或通用知识图谱平台。
 
 本 ADR 只完成 A0。后续必须逐票裁决：
 
-1. **A1 / #73**：只读证据闭环与对照实验；当前被 #72 原生阻塞；开工时必须在 Issue、
-   分支和 PR 中钉扎本 ADR 的 exact accepted commit/blob；
+1. **A1 / #73**：只读证据闭环与对照实验；当前同时被 #72 与 constitution debt #75 原生
+   阻塞；即使 #72 合入，#75 未关闭也不得开工；开工时必须在 Issue、分支和 PR 中钉扎本 ADR
+   的 exact accepted commit/blob；
 2. **A2**：签发摘要、challenge/dissent、失效与 supersession；
 3. **A3**：组织 Authority、资格、委托、撤销与职责分离；
 4. **A4**：低风险可逆 Action Ticket / Receipt；与任意代码沙箱严格分开；
@@ -438,8 +488,8 @@ Accepted 而自动获得实施授权。
 4. `UV_OFFLINE=1 bash scripts/verify_all.sh` 完整退出 0；
 5. 独立只读复核没有未处置 P0/P1；
 6. PR 关联 `Closes #72` 和 `Part of #46`，保持未合并等待 owner review；
-7. #73 继续被 #72 阻塞，在本票完成前不得实施；解除阻塞后也必须引用本 ADR 的 exact
-   accepted commit/blob，不能只引用可变路径或编号。
+7. #73 继续被 #72 与 #75 同时阻塞；任一未关闭都不得实施；全部解除后还必须引用本 ADR
+   的 exact accepted commit/blob，不能只引用可变路径或编号。
 
 ## 14. 最终不变量
 
