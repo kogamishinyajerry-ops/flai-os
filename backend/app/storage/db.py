@@ -9,9 +9,13 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 
 from .. import config
+
+_WAL_ENABLE_TIMEOUT_SECONDS = 5.0
+_WAL_ENABLE_RETRY_SECONDS = 0.01
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS agents (
@@ -443,6 +447,273 @@ _INDEX_DDL = (
     "ON skill_reuse_bindings(package_id, owner_username, created_at, id)",
 )
 
+
+# Issue #75: the canonical Generalization Draft Record is deliberately absent
+# from the lock-free `_DDL` script.  Parent tables are created first, then this
+# complete ledger contract is installed and audited under `BEGIN IMMEDIATE`.
+_GENERALIZATION_DRAFT_RECORD_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS generalization_draft_records (
+    id TEXT PRIMARY KEY
+       CHECK (
+         length(id) = 36
+         AND substr(id, 1, 4) = 'gdr_'
+         AND substr(id, 5) NOT GLOB '*[^0-9a-f]*'
+       ),
+    schema_version TEXT NOT NULL
+       CHECK (schema_version = 'generalization_draft_record.v1'),
+    payload_schema_version TEXT NOT NULL
+       CHECK (payload_schema_version = 'life_generalization.v1'),
+    state TEXT NOT NULL CHECK (state = 'model_draft'),
+    review_status TEXT NOT NULL CHECK (review_status = 'waiting_review'),
+
+    payload_json TEXT NOT NULL
+       CHECK (json_valid(payload_json) = 1 AND json_type(payload_json) = 'object'),
+    content_digest TEXT NOT NULL
+       CHECK (
+         length(content_digest) = 71
+         AND substr(content_digest, 1, 7) = 'sha256:'
+         AND substr(content_digest, 8) NOT GLOB '*[^0-9a-f]*'
+       ),
+    record_digest TEXT NOT NULL UNIQUE
+       CHECK (
+         length(record_digest) = 71
+         AND substr(record_digest, 1, 7) = 'sha256:'
+         AND substr(record_digest, 8) NOT GLOB '*[^0-9a-f]*'
+       ),
+
+    source_context_json TEXT NOT NULL
+       CHECK (
+         json_valid(source_context_json) = 1
+         AND json_type(source_context_json) = 'object'
+       ),
+    source_context_digest TEXT NOT NULL
+       CHECK (
+         length(source_context_digest) = 71
+         AND substr(source_context_digest, 1, 7) = 'sha256:'
+         AND substr(source_context_digest, 8) NOT GLOB '*[^0-9a-f]*'
+       ),
+
+    conversation_id TEXT NOT NULL REFERENCES conversations(id),
+    owner_username TEXT NOT NULL CHECK (length(trim(owner_username)) BETWEEN 1 AND 128),
+    source_user_message_id INTEGER NOT NULL UNIQUE
+       REFERENCES conversation_messages(id),
+    source_assistant_message_id INTEGER NOT NULL UNIQUE
+       REFERENCES conversation_messages(id),
+    source_task_id TEXT REFERENCES tasks(id)
+       CHECK (source_task_id IS NULL),
+
+    model_call_id INTEGER NOT NULL UNIQUE REFERENCES model_calls(id),
+    model_call_kind TEXT NOT NULL CHECK (model_call_kind = 'chat'),
+    model_profile TEXT NOT NULL CHECK (length(trim(model_profile)) > 0),
+    model_name TEXT NOT NULL CHECK (length(trim(model_name)) > 0),
+    model_agent_id TEXT NOT NULL CHECK (length(trim(model_agent_id)) > 0),
+    agent_version TEXT NOT NULL CHECK (length(trim(agent_version)) > 0),
+
+    created_at TEXT NOT NULL CHECK (length(trim(created_at)) > 0),
+    CHECK (source_user_message_id <> source_assistant_message_id)
+)
+""".strip()
+
+_GENERALIZATION_DRAFT_RECORD_NO_UPDATE_TRIGGER_DDL = """
+CREATE TRIGGER IF NOT EXISTS trg_generalization_draft_records_no_update
+BEFORE UPDATE ON generalization_draft_records
+BEGIN
+    SELECT RAISE(ABORT, 'generalization_draft_records rows are immutable');
+END
+""".strip()
+
+_GENERALIZATION_DRAFT_RECORD_NO_DELETE_TRIGGER_DDL = """
+CREATE TRIGGER IF NOT EXISTS trg_generalization_draft_records_no_delete
+BEFORE DELETE ON generalization_draft_records
+BEGIN
+    SELECT RAISE(ABORT, 'generalization_draft_records rows are immutable');
+END
+""".strip()
+
+_GENERALIZATION_DRAFT_RECORD_INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS "
+    "idx_generalization_draft_records_conversation_message "
+    "ON generalization_draft_records(conversation_id, source_assistant_message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_generalization_draft_records_source_task "
+    "ON generalization_draft_records(source_task_id)",
+)
+
+_GENERALIZATION_DRAFT_RECORD_COLUMN_CONTRACT = (
+    ("id", "TEXT", 0, None, 1),
+    ("schema_version", "TEXT", 1, None, 0),
+    ("payload_schema_version", "TEXT", 1, None, 0),
+    ("state", "TEXT", 1, None, 0),
+    ("review_status", "TEXT", 1, None, 0),
+    ("payload_json", "TEXT", 1, None, 0),
+    ("content_digest", "TEXT", 1, None, 0),
+    ("record_digest", "TEXT", 1, None, 0),
+    ("source_context_json", "TEXT", 1, None, 0),
+    ("source_context_digest", "TEXT", 1, None, 0),
+    ("conversation_id", "TEXT", 1, None, 0),
+    ("owner_username", "TEXT", 1, None, 0),
+    ("source_user_message_id", "INTEGER", 1, None, 0),
+    ("source_assistant_message_id", "INTEGER", 1, None, 0),
+    ("source_task_id", "TEXT", 0, None, 0),
+    ("model_call_id", "INTEGER", 1, None, 0),
+    ("model_call_kind", "TEXT", 1, None, 0),
+    ("model_profile", "TEXT", 1, None, 0),
+    ("model_name", "TEXT", 1, None, 0),
+    ("model_agent_id", "TEXT", 1, None, 0),
+    ("agent_version", "TEXT", 1, None, 0),
+    ("created_at", "TEXT", 1, None, 0),
+)
+
+
+class DatabaseSchemaIntegrityError(RuntimeError):
+    """An existing same-name SQLite object is weaker than the code contract."""
+
+
+def _normalized_schema_sql(sql: str) -> str:
+    """Ignore formatting only; every SQL token remains part of the audit."""
+    return " ".join(sql.split())
+
+
+def _stored_schema_sql(create_sql: str) -> str:
+    # SQLite omits the idempotency clause in sqlite_master.sql.
+    return create_sql.replace(" IF NOT EXISTS", "", 1)
+
+
+def _audit_generalization_draft_record_schema(conn: sqlite3.Connection) -> None:
+    columns = tuple(
+        (row["name"], row["type"], row["notnull"], row["dflt_value"], row["pk"])
+        for row in conn.execute(
+            "PRAGMA table_info(generalization_draft_records)"
+        ).fetchall()
+    )
+    if columns != _GENERALIZATION_DRAFT_RECORD_COLUMN_CONTRACT:
+        raise DatabaseSchemaIntegrityError(
+            "generalization_draft_records column contract mismatch"
+        )
+
+    foreign_keys = {
+        (
+            row["table"],
+            row["from"],
+            row["to"],
+            row["on_update"],
+            row["on_delete"],
+            row["match"],
+        )
+        for row in conn.execute(
+            "PRAGMA foreign_key_list(generalization_draft_records)"
+        ).fetchall()
+    }
+    expected_foreign_keys = {
+        ("conversations", "conversation_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+        (
+            "conversation_messages",
+            "source_user_message_id",
+            "id",
+            "NO ACTION",
+            "NO ACTION",
+            "NONE",
+        ),
+        (
+            "conversation_messages",
+            "source_assistant_message_id",
+            "id",
+            "NO ACTION",
+            "NO ACTION",
+            "NONE",
+        ),
+        ("tasks", "source_task_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+        ("model_calls", "model_call_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+    }
+    if foreign_keys != expected_foreign_keys:
+        raise DatabaseSchemaIntegrityError(
+            "generalization_draft_records foreign-key contract mismatch"
+        )
+
+    indexes = {
+        (row["name"], row["unique"], row["origin"], row["partial"])
+        for row in conn.execute(
+            "PRAGMA index_list(generalization_draft_records)"
+        ).fetchall()
+    }
+    expected_indexes = {
+        ("sqlite_autoindex_generalization_draft_records_1", 1, "pk", 0),
+        ("sqlite_autoindex_generalization_draft_records_2", 1, "u", 0),
+        ("sqlite_autoindex_generalization_draft_records_3", 1, "u", 0),
+        ("sqlite_autoindex_generalization_draft_records_4", 1, "u", 0),
+        ("sqlite_autoindex_generalization_draft_records_5", 1, "u", 0),
+        (
+            "idx_generalization_draft_records_conversation_message",
+            0,
+            "c",
+            0,
+        ),
+        ("idx_generalization_draft_records_source_task", 0, "c", 0),
+    }
+    if indexes != expected_indexes:
+        raise DatabaseSchemaIntegrityError(
+            "generalization_draft_records index contract mismatch"
+        )
+
+    expected_objects = {
+        "generalization_draft_records": (
+            "table",
+            "generalization_draft_records",
+            _GENERALIZATION_DRAFT_RECORD_TABLE_DDL,
+        ),
+        "trg_generalization_draft_records_no_update": (
+            "trigger",
+            "generalization_draft_records",
+            _GENERALIZATION_DRAFT_RECORD_NO_UPDATE_TRIGGER_DDL,
+        ),
+        "trg_generalization_draft_records_no_delete": (
+            "trigger",
+            "generalization_draft_records",
+            _GENERALIZATION_DRAFT_RECORD_NO_DELETE_TRIGGER_DDL,
+        ),
+        "idx_generalization_draft_records_conversation_message": (
+            "index",
+            "generalization_draft_records",
+            _GENERALIZATION_DRAFT_RECORD_INDEX_DDL[0],
+        ),
+        "idx_generalization_draft_records_source_task": (
+            "index",
+            "generalization_draft_records",
+            _GENERALIZATION_DRAFT_RECORD_INDEX_DDL[1],
+        ),
+    }
+    placeholders = ",".join("?" for _ in expected_objects)
+    rows = conn.execute(
+        f"SELECT type, name, tbl_name, sql FROM sqlite_master "
+        f"WHERE name IN ({placeholders})",
+        tuple(expected_objects),
+    ).fetchall()
+    if len(rows) != len(expected_objects):
+        raise DatabaseSchemaIntegrityError(
+            "generalization_draft_records required schema object missing"
+        )
+    for row in rows:
+        expected_type, expected_table, expected_sql = expected_objects[row["name"]]
+        actual_sql = row["sql"]
+        if (
+            row["type"] != expected_type
+            or row["tbl_name"] != expected_table
+            or not isinstance(actual_sql, str)
+            or _normalized_schema_sql(actual_sql)
+            != _normalized_schema_sql(_stored_schema_sql(expected_sql))
+        ):
+            raise DatabaseSchemaIntegrityError(
+                f"SQLite object {row['name']} does not match the exact contract"
+            )
+
+
+def _migrate_generalization_draft_record_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(_GENERALIZATION_DRAFT_RECORD_TABLE_DDL)
+    conn.execute(_GENERALIZATION_DRAFT_RECORD_NO_UPDATE_TRIGGER_DDL)
+    conn.execute(_GENERALIZATION_DRAFT_RECORD_NO_DELETE_TRIGGER_DDL)
+    for statement in _GENERALIZATION_DRAFT_RECORD_INDEX_DDL:
+        conn.execute(statement)
+    _audit_generalization_draft_record_schema(conn)
+
 _FILE_OWNER_IMMUTABILITY_TRIGGER = """
 CREATE TRIGGER IF NOT EXISTS trg_files_owner_username_immutable
 BEFORE UPDATE OF owner_username ON files
@@ -539,10 +810,23 @@ def get_conn(db_path: str | Path) -> sqlite3.Connection:
         _VALIDATED_DB_PATHS.add(key)
     conn = sqlite3.connect(str(db_path), isolation_level=None)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        deadline = time.monotonic() + _WAL_ENABLE_TIMEOUT_SECONDS
+        while True:
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                break
+            except sqlite3.OperationalError as exc:
+                remaining = deadline - time.monotonic()
+                if str(exc) != "database is locked" or remaining <= 0:
+                    raise
+                time.sleep(min(_WAL_ENABLE_RETRY_SECONDS, remaining))
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+    except Exception:
+        conn.close()
+        raise
 
 
 def init_db(db_path: str | Path) -> None:
@@ -699,6 +983,10 @@ def init_db(db_path: str | Path) -> None:
             # 会在建表脚本阶段直接失败。与迁移共用写锁，重复启动亦幂等。
             for statement in _INDEX_DDL:
                 conn.execute(statement)
+            # 迁移 #18 / Issue #75：response-only 的 life generalization draft
+            # 迁为不可变 canonical ledger。表不进上方 lock-free `_DDL`；必须在
+            # 这一写锁内依序完成 table → triggers → indexes → exact audit。
+            _migrate_generalization_draft_record_schema(conn)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

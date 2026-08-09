@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -1648,6 +1649,14 @@ def record_model_call(
     return _decode_model_call(row)
 
 
+def get_model_call(conn: sqlite3.Connection, model_call_id: int) -> dict[str, Any] | None:
+    """Cold-read one exact model receipt; never infer it from ordering or time."""
+    row = conn.execute(
+        "SELECT * FROM model_calls WHERE id = ?", (model_call_id,)
+    ).fetchone()
+    return _decode_model_call(row) if row is not None else None
+
+
 def list_model_calls(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT * FROM model_calls WHERE task_id = ? ORDER BY id ASC", (task_id,)
@@ -1870,7 +1879,8 @@ def _decode_conversation(row: sqlite3.Row) -> dict[str, Any]:
 
 def _decode_message(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
-    d.pop("id", None)  # 自增主键仅内部排序用，对外不暴露
+    # Issue #75: the immutable SQLite id is the public lineage axis.  It is an
+    # additive API field and must survive append/list reload projection.
     _decode_json(d, "recommendation_json", "recommendation", default=None)
     _decode_json(d, "file_ids", "file_ids", default=[])
     return d
@@ -2079,6 +2089,108 @@ def list_messages(conn: sqlite3.Connection, conversation_id: str) -> list[dict[s
         (conversation_id,),
     ).fetchall()
     return [_decode_message(r) for r in rows]
+
+
+def list_messages_through_id(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    *,
+    end_message_id: int,
+) -> list[dict[str, Any]]:
+    """Cold-read only the immutable source prefix ending at ``end_message_id``.
+
+    Later turns are outside an older draft's evidence boundary.  They must not
+    even be JSON-decoded here: a malformed later row cannot retroactively make
+    a valid frozen record unreadable.
+    """
+    rows = conn.execute(
+        "SELECT * FROM conversation_messages "
+        "WHERE conversation_id = ? AND id <= ? ORDER BY id ASC",
+        (conversation_id, end_message_id),
+    ).fetchall()
+    return [_decode_message(row) for row in rows]
+
+
+def get_conversation_message(
+    conn: sqlite3.Connection, message_id: int
+) -> dict[str, Any] | None:
+    """Cold-read one persisted message, retaining its immutable public id."""
+    row = conn.execute(
+        "SELECT * FROM conversation_messages WHERE id = ?", (message_id,)
+    ).fetchone()
+    return _decode_message(row) if row is not None else None
+
+
+def insert_generalization_draft_record(
+    conn: sqlite3.Connection, *, storage_record: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Insert one already-canonicalized draft record without inferring fields.
+
+    Canonicalization and cold verification belong to the runtime evidence
+    module.  This repository seam only binds the exact storage columns so API
+    and runtime callers never issue ad-hoc SQL.
+    """
+    columns = (
+        "id",
+        "schema_version",
+        "payload_schema_version",
+        "state",
+        "review_status",
+        "payload_json",
+        "content_digest",
+        "record_digest",
+        "source_context_json",
+        "source_context_digest",
+        "conversation_id",
+        "owner_username",
+        "source_user_message_id",
+        "source_assistant_message_id",
+        "source_task_id",
+        "model_call_id",
+        "model_call_kind",
+        "model_profile",
+        "model_name",
+        "model_agent_id",
+        "agent_version",
+        "created_at",
+    )
+    if set(storage_record) != set(columns):
+        raise ValueError("generalization draft storage record has wrong keys")
+    placeholders = ",".join("?" for _ in columns)
+    conn.execute(
+        f"INSERT INTO generalization_draft_records ({','.join(columns)}) "
+        f"VALUES ({placeholders})",
+        tuple(storage_record[column] for column in columns),
+    )
+    created = get_generalization_draft_record_storage(
+        conn, record_id=str(storage_record["id"])
+    )
+    if created is None:
+        raise RuntimeError("generalization draft record disappeared after INSERT")
+    return created
+
+
+def get_generalization_draft_record_storage(
+    conn: sqlite3.Connection, *, record_id: str
+) -> dict[str, Any] | None:
+    """Return raw canonical bytes and server-only bindings for cold verification."""
+    row = conn.execute(
+        "SELECT * FROM generalization_draft_records WHERE id = ?", (record_id,)
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def get_generalization_draft_record_storage_by_assistant_message(
+    conn: sqlite3.Connection,
+    *,
+    assistant_message_id: int,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM generalization_draft_records "
+        "WHERE source_assistant_message_id = ?",
+        (assistant_message_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def get_bounded_conversation_attachment_lineage(

@@ -11,7 +11,8 @@
 - 落回 assistant 回复与其可能携带的推荐（预填任务草案）快照。
 
 并发与一致性（ADR-0013，审计修复）：
-- 单轮落库是**一个 BEGIN IMMEDIATE 事务**（user+assistant+推荐快照原子提交）；
+- 单轮落库是**一个 BEGIN IMMEDIATE 事务**（user+assistant+推荐快照+
+  可选 canonical Generalization Draft Record 原子提交）；
 - **乐观并发检查**：workflow（含 LLM 调用，秒级）刻意放在事务外——绝不持锁等
   模型；提交前重查「会话仍 active 且消息数未变」，被并发轮抢先则整轮回滚抛
   ConversationConflictError（409 可重试），绝不把基于过期历史的回复写进历史。
@@ -42,6 +43,13 @@ from ..core.errors import (
 )
 from ..storage import repos
 from .attachments import render_attachment_blocks
+from .generalization_draft_record import (
+    GeneralizationDraftPayloadError,
+    GeneralizationDraftRecordIntegrityError,
+    create_generalization_draft_record,
+    project_conversation_message,
+    project_conversation_messages,
+)
 from .runtime import _load_workflow_module
 from .skill_reuse_application import skill_reuse_application_mode
 from .work_segments import (
@@ -67,7 +75,7 @@ _ROUND_PERSISTED_MESSAGES = 2
 _MAX_REVIEWED_SKILL_REVISION_BYTES = 32_000
 _MAX_REVIEWED_SKILL_MARKDOWN_BYTES = 32_000
 _MAX_REUSE_REF_BYTES = 16_000
-_MAX_DEFERRED_GUIDE_STREAM_BYTES = 256_000
+_MAX_DEFERRED_VISIBLE_STREAM_BYTES = 256_000
 _SKILL_REUSE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SKILL_PACKAGE_ID_RE = re.compile(r"^skill_package_[0-9a-f]{24}$")
 _SKILL_PACKAGE_SEMVER_RE = re.compile(
@@ -90,6 +98,51 @@ _SKILL_REUSE_REF_KEYS = frozenset(
         "match_basis_digest",
     }
 )
+_CHAT_RECEIPT_KEYS = frozenset(
+    {
+        "model_call_id",
+        "kind",
+        "status",
+        "task_id",
+        "conversation_id",
+        "agent_id",
+        "model_profile",
+        "model_name",
+    }
+)
+
+
+def _require_exact_life_draft_receipt(
+    raw: Any,
+    *,
+    conversation_id: str,
+    agent_id: str,
+    model_profile: str,
+) -> dict[str, Any]:
+    """Admit only the exact runtime-captured successful chat receipt."""
+
+    if not isinstance(raw, dict) or set(raw) != _CHAT_RECEIPT_KEYS:
+        raise GeneralizationDraftRecordIntegrityError(
+            "待审草稿的 model receipt 字段不符合严格契约"
+        )
+    model_call_id = raw.get("model_call_id")
+    model_name = raw.get("model_name")
+    if (
+        type(model_call_id) is not int
+        or model_call_id <= 0
+        or raw.get("kind") != "chat"
+        or raw.get("status") != "success"
+        or raw.get("task_id") is not None
+        or raw.get("conversation_id") != conversation_id
+        or raw.get("agent_id") != agent_id
+        or raw.get("model_profile") != model_profile
+        or not isinstance(model_name, str)
+        or not model_name
+    ):
+        raise GeneralizationDraftRecordIntegrityError(
+            "待审草稿未绑定本轮精确的成功 chat receipt"
+        )
+    return dict(raw)
 
 
 def _require_round_lineage_budget(
@@ -184,17 +237,31 @@ class _ConversationGatewayContext:
     会话无任务事件流，留痕落 model_calls 表（含 conversation_id）。
     """
 
-    def __init__(self, model_gateway: Any, conversation_id: str, agent_id: str) -> None:
+    def __init__(
+        self,
+        model_gateway: Any,
+        conversation_id: str,
+        agent_id: str,
+        receipt_sink: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         self._model_gateway = model_gateway
         self._conversation_id = conversation_id
         self._agent_id = agent_id
+        self._receipt_sink = receipt_sink
 
     # 归因键由 wrapper 钉死，workflow 不得经 kwargs 透传/覆写（与 job 侧
     # _ModelGatewayContext._sanitize 对称，兑现 task/conversation XOR，Codex R0 P1-5/R1）：
     # 尤其 task_id——会话模型调用只归因 conversation，若 workflow 塞 task_id 会造「同时带
-    # conversation_id + task_id」双归因行。此前 setdefault 只在缺省时注入，workflow 传入的
-    # task_id/覆写会漏过——改为**先剔除三归因键再权威注入**，杜绝任一方向的双归因。
-    _FORBIDDEN_ATTR_KWARGS = ("task_id", "conversation_id", "agent_id")
+    # conversation_id + task_id」双归因行。先剔除三个归因键与私有
+    # receipt sink，再由运行时权威注入，既杜绝双归因也防止 workflow 窃取 receipt。
+    _FORBIDDEN_ATTR_KWARGS = (
+        "task_id",
+        "conversation_id",
+        "agent_id",
+        # Runtime-only capability: workflow code must never observe, replace,
+        # or redirect the exact model-call receipt channel.
+        "_receipt_sink",
+    )
 
     def _ids(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         safe = {k: v for k, v in kwargs.items() if k not in self._FORBIDDEN_ATTR_KWARGS}
@@ -203,7 +270,18 @@ class _ConversationGatewayContext:
         return safe
 
     def chat(self, profile: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
-        return self._model_gateway.chat(profile, messages, **self._ids(kwargs))
+        safe = self._ids(kwargs)
+        if callable(self._receipt_sink):
+            safe["_receipt_sink"] = self._receipt_sink
+        result = self._model_gateway.chat(profile, messages, **safe)
+        if not isinstance(result, dict):
+            return result
+        # Defence in depth for gateways/stubs predating the sink-only
+        # contract: no receipt-shaped value is exposed to workflow code.
+        public = dict(result)
+        public.pop("_model_call_receipt", None)
+        public.pop("model_call_receipt", None)
+        return public
 
     def embed(self, profile: str, text: str, **kwargs: Any) -> dict[str, Any]:
         return self._model_gateway.embed(profile, text, **self._ids(kwargs))
@@ -212,16 +290,14 @@ class _ConversationGatewayContext:
         return self._model_gateway.vision(profile, image_path, prompt, **self._ids(kwargs))
 
 
-class _DeferredGuideVisibleStream:
-    """Hold every Guide-visible delta until kernel truth has been reconciled.
+class _DeferredVisibleStream:
+    """Hold every protected-agent delta until kernel truth has been committed.
 
-    The model stream is not a trustworthy source for whether a reviewed Skill
-    was matched, planned, bound, or applied.  We therefore retain a bounded
-    private copy only as evidence that the upstream really streamed, then emit
-    the final kernel-owned assistant text after plan validation and trusted-ref
-    attachment.  A failed round discards the buffer and exposes no partial
-    model claim.  Cancellation is still checked on every upstream chunk so the
-    existing disconnect-before-persistence guarantee remains intact.
+    Guide needs kernel reconciliation; life_guide additionally contains a
+    private ``<<DRAFT>>`` control block.  In both cases every upstream byte is
+    retained only in a bounded private buffer.  The caller emits the exact
+    committed assistant text after the message/record transaction succeeds.
+    A failed round discards the buffer and exposes no partial model claim.
     """
 
     def __init__(self, is_cancelled: Callable[[], bool] | None) -> None:
@@ -237,15 +313,15 @@ class _DeferredGuideVisibleStream:
         if self._is_cancelled is not None and self._is_cancelled():
             raise ConversationConflictError("流式客户端已断开，本轮不落库")
         if not isinstance(chunk, str):
-            raise ValueError("Guide 可见回复流只接受文本 chunk")
+            raise ValueError("受保护回复流只接受文本 chunk")
         if not chunk:
             return
         try:
             size_bytes = len(chunk.encode("utf-8"))
         except UnicodeError as exc:
-            raise ValueError("Guide 可见回复流包含非法 Unicode") from exc
-        if self._size_bytes + size_bytes > _MAX_DEFERRED_GUIDE_STREAM_BYTES:
-            raise ValueError("Guide 可见回复流超过内核缓冲上限，本轮不落库")
+            raise ValueError("受保护回复流包含非法 Unicode") from exc
+        if self._size_bytes + size_bytes > _MAX_DEFERRED_VISIBLE_STREAM_BYTES:
+            raise ValueError("受保护回复流超过内核缓冲上限，本轮不落库")
         self._chunks.append(chunk)
         self._size_bytes += size_bytes
 
@@ -288,6 +364,10 @@ class ConversationService:
         agent = self.agent_registry.get(agent_id)
         if agent is None:
             raise ConversationNotFoundError(f"agent 不存在：{agent_id}")
+        if agent.get("status") == "disabled":
+            raise NotInteractiveAgentError(
+                f"agent {agent_id} 已禁用，不能发起会话"
+            )
         if not is_interactive(agent):
             raise NotInteractiveAgentError(
                 f"agent {agent_id} 非 interactive 型，不能发起会话（请走 /api/tasks 一次性任务）"
@@ -317,7 +397,15 @@ class ConversationService:
             conv = repos.get_conversation(conn, conversation_id)
             if conv is None:
                 raise ConversationNotFoundError(f"会话不存在：{conversation_id}")
-            messages = repos.list_messages(conn, conversation_id)
+            owner_username = repos.get_conversation_owner_username(
+                conn, conversation_id
+            )
+            messages = project_conversation_messages(
+                conn,
+                messages=repos.list_messages(conn, conversation_id),
+                conversation_id=conversation_id,
+                owner_username=owner_username or "",
+            )
             # M7：给带附件的消息补元数据（文件名/大小），前端气泡直接可显——
             # 文件行已被清理的 id 如实给占位名，不隐藏「曾传过附件」的事实。
             all_ids = [fid for m in messages for fid in (m.get("file_ids") or [])]
@@ -434,6 +522,9 @@ class ConversationService:
                 raise ConversationClosedError(
                     f"会话已 {conv['status']}，不再接受新消息：{conversation_id}"
                 )
+            proven_owner_username = repos.get_conversation_owner_username(
+                conn, conversation_id
+            )
             if file_ids:
                 found = {f["id"] for f in repos.list_files_by_ids(conn, file_ids)}
                 missing = [fid for fid in file_ids if fid not in found]
@@ -483,6 +574,15 @@ class ConversationService:
             # 事务性单轮（Codex P2 / ADR-0013）：内存拼「历史 + 本轮 user」喂 workflow，
             # 成功后才进事务落库。baseline 计数供提交前乐观并发检查。
             persisted = repos.list_messages(conn, conversation_id)
+            # POST 不能绕过历史记录的冷读证据门：如果已存 assistant
+            # 记录存在但血缘/digest 已损坏，必须在任何新模型调用前失败，
+            # 不得把它伪装成 legacy null 后继续对话。
+            project_conversation_messages(
+                conn,
+                messages=persisted,
+                conversation_id=conversation_id,
+                owner_username=proven_owner_username or "",
+            )
             baseline_count = len(persisted)
             if baseline_count != budget_message_count:
                 raise ConversationConflictError(
@@ -587,9 +687,6 @@ class ConversationService:
             # 数据畸形或匹配器自身失败都不得拖垮主对话，更不得制造复用声明。
             # filename 只取上方 File Store 实查所得 roster；用户文本不能伪造附件名。
             trusted_skill_reuse: dict[str, Any] | None = None
-            proven_owner_username = repos.get_conversation_owner_username(
-                conn, conversation_id
-            )
             if (
                 agent_id == "guide_agent"
                 and isinstance(actor_username, str)
@@ -632,19 +729,21 @@ class ConversationService:
             # 保持完整，避免附件在多轮澄清后从 Guide 消失、却仍被前端开工闸门看见。
             history = _window(history)
             history = self._render_history_attachments(conn, history)
-            # Guide 的模型 delta 可能在计划校验、目标 Agent 对账和可信 Skill ref
-            # 附着之前自报“已复用”。整条 Guide 可见流（含自动转交前的 Guide lead）
-            # 先进入私有有界缓冲；只有本轮最终语义由内核收束后才可对外冲刷。
-            deferred_guide_stream = (
-                _DeferredGuideVisibleStream(is_cancelled)
-                if agent_id == "guide_agent" and callable(on_delta)
+            # Guide 要先完成内核语义收束；life_guide 的原始流还含
+            # <<DRAFT>> 控制块。两者的上游字节都先进服务端私有有界缓冲，
+            # 只有消息/记录原子 COMMIT 后才对外发送精确的 assistant 正文。
+            deferred_visible_stream = (
+                _DeferredVisibleStream(is_cancelled)
+                if agent_id in {"guide_agent", "life_guide_agent"}
+                and callable(on_delta)
                 else None
             )
             workflow_delta = (
-                deferred_guide_stream.feed
-                if deferred_guide_stream is not None
+                deferred_visible_stream.feed
+                if deferred_visible_stream is not None
                 else on_delta
             )
+            round_model_receipts: list[dict[str, Any]] = []
 
             with execution_registry, package_snapshot.materialized() as pkg_dir:
                 workflow = _load_workflow_module(agent_id, pkg_dir / "workflow.py")
@@ -700,7 +799,10 @@ class ConversationService:
                     target_context = {
                         "messages": history,
                         "model_gateway": _ConversationGatewayContext(
-                            self.model_gateway, conversation_id, target_agent_id
+                            self.model_gateway,
+                            conversation_id,
+                            target_agent_id,
+                            round_model_receipts.append,
                         ),
                         "agent_registry": execution_registry,
                         "agent_config": target_agent,
@@ -718,7 +820,10 @@ class ConversationService:
                 context = {
                     "messages": history,
                     "model_gateway": _ConversationGatewayContext(
-                        self.model_gateway, conversation_id, agent_id
+                        self.model_gateway,
+                        conversation_id,
+                        agent_id,
+                        round_model_receipts.append,
                     ),
                     "agent_registry": execution_registry,
                     "agent_config": agent,
@@ -758,13 +863,40 @@ class ConversationService:
             if not isinstance(assistant_message, str) or not assistant_message.strip():
                 raise ValueError("interactive workflow 未返回非空 assistant_message")
             recommendation = result.get("recommendation")  # 可能为 None
-            # generalization_draft：interactive workflow（如 life_guide_agent）可选
-            # 返回的 9 字段待审候选。ConversationService 只做响应级透传，绝不落库、
-            # 不进账本——候选不入库，审核与签发权始终在工程师手里（人审唯一签发）。
-            # 结构不是 dict 一律按 None 处理，绝不把未知结构透传给前端（fail-closed）。
+            # Workflow 只能提议九字段 payload；对外的记录身份、摘要和
+            # lineage 全由服务端在下方事务内生成。非 life agent 不允许提交
+            # 该字段；非 dict/null 结构也不能静默降级成“无草稿”。
             generalization_draft = result.get("generalization_draft")
-            if not isinstance(generalization_draft, dict):
-                generalization_draft = None
+            generalization_receipt: dict[str, Any] | None = None
+            draft_agent_version: str | None = None
+            if generalization_draft is not None:
+                if agent_id != "life_guide_agent":
+                    raise ValueError("仅 life_guide_agent 可提议 generalization_draft")
+                if not isinstance(generalization_draft, dict):
+                    raise GeneralizationDraftPayloadError(
+                        "generalization_draft 必须是严格九字段对象或 null"
+                    )
+                if len(round_model_receipts) != 1:
+                    raise GeneralizationDraftRecordIntegrityError(
+                        "待审草稿必须且只能绑定本轮一次精确的 chat receipt"
+                    )
+                expected_profile = (agent.get("model") or {}).get("profile")
+                if not isinstance(expected_profile, str) or not expected_profile:
+                    raise GeneralizationDraftRecordIntegrityError(
+                        "life_guide_agent 不可变包快照缺少 model.profile"
+                    )
+                generalization_receipt = _require_exact_life_draft_receipt(
+                    round_model_receipts[0],
+                    conversation_id=conversation_id,
+                    agent_id=agent_id,
+                    model_profile=expected_profile,
+                )
+                candidate_version = agent.get("version")
+                if not isinstance(candidate_version, str) or not candidate_version:
+                    raise GeneralizationDraftRecordIntegrityError(
+                        "life_guide_agent 不可变包快照缺少 version"
+                    )
+                draft_agent_version = candidate_version
             trusted_reuse_attached = False
             if agent_id == "guide_agent" and isinstance(recommendation, dict):
                 # Guide 的任何 model-authored ``skill_reuse`` 一律先剥离。只有下面
@@ -804,7 +936,8 @@ class ConversationService:
                     trusted_reuse_attached=trusted_reuse_attached,
                 )
 
-            # 成功：单事务原子落库（user + assistant + 会话级推荐快照），提交前
+            # 成功：单事务原子落库（user + assistant + 会话级推荐快照 +
+            # 可选 canonical draft record），提交前
             # 复查「仍 active 且历史未被并发轮改动」——检查失败整轮回滚，绝不把
             # 基于过期历史的回复交错写进历史（审计 P2：会话路径此前完全无序列化）。
             conn.execute("BEGIN IMMEDIATE")
@@ -813,6 +946,13 @@ class ConversationService:
                 if current is None or current["status"] != "active":
                     raise ConversationClosedError(
                         f"会话在本轮生成期间已结束（{None if current is None else current['status']}），本轮不落库"
+                    )
+                fresh_owner_username = repos.get_conversation_owner_username(
+                    conn, conversation_id
+                )
+                if fresh_owner_username != proven_owner_username:
+                    raise ConversationConflictError(
+                        "会话 owner 血缘在本轮生成期间变化，本轮不落库"
                     )
                 if repos.count_messages(conn, conversation_id) != baseline_count:
                     raise ConversationConflictError(
@@ -839,7 +979,19 @@ class ConversationService:
                     raise ConversationConflictError(
                         "会话在本轮生成期间工程工作段边界已变化，本轮不落库——请基于最新工作段重试"
                     )
-                repos.append_message(
+                if generalization_draft is not None:
+                    current_package = self.agent_registry.package_snapshot(agent_id)
+                    current_manifest = getattr(current_package, "manifest", None)
+                    current_version = (
+                        current_manifest.get("version")
+                        if isinstance(current_manifest, dict)
+                        else None
+                    )
+                    if current_version != draft_agent_version:
+                        raise ConversationConflictError(
+                            "life_guide_agent 包版本在本轮生成期间变化，本轮不落库——请基于当前版本重试"
+                        )
+                user_msg = repos.append_message(
                     conn,
                     conversation_id=conversation_id,
                     role="user",
@@ -852,6 +1004,53 @@ class ConversationService:
                     role="assistant",
                     content=assistant_message,
                     recommendation=recommendation,
+                )
+                if generalization_draft is not None:
+                    if generalization_receipt is None:
+                        raise GeneralizationDraftRecordIntegrityError(
+                            "待审草稿缺少已验证的精确 chat receipt"
+                        )
+                    if (
+                        not isinstance(actor_username, str)
+                        or not actor_username
+                        or actor_username != proven_owner_username
+                    ):
+                        raise GeneralizationDraftRecordIntegrityError(
+                            "待审草稿缺少与会话 owner 一致的记名调用者"
+                        )
+                    source_user_message_id = user_msg.get("id")
+                    source_assistant_message_id = msg.get("id")
+                    if (
+                        not isinstance(source_user_message_id, int)
+                        or not isinstance(source_assistant_message_id, int)
+                    ):
+                        raise GeneralizationDraftRecordIntegrityError(
+                            "持久消息缺少不可变整数 id，无法绑定草稿血缘"
+                        )
+                    if draft_agent_version is None:
+                        raise GeneralizationDraftRecordIntegrityError(
+                            "life_guide_agent 不可变包快照缺少 version"
+                        )
+                    create_generalization_draft_record(
+                        conn,
+                        payload=generalization_draft,
+                        conversation_id=conversation_id,
+                        owner_username=actor_username,
+                        source_user_message_id=source_user_message_id,
+                        source_assistant_message_id=source_assistant_message_id,
+                        model_call_receipt=generalization_receipt,
+                        agent_version=draft_agent_version,
+                    )
+                projection_owner = (
+                    proven_owner_username
+                    if isinstance(proven_owner_username, str)
+                    else ""
+                )
+                msg = project_conversation_message(
+                    conn,
+                    message=msg,
+                    conversation_id=conversation_id,
+                    owner_username=projection_owner,
                 )
                 _verify_committed_lineage_budget(conn, conversation_id)
                 # 会话级 recommendation 反映**最后一轮**结果（反方 P3-1：含推荐被
@@ -879,18 +1078,23 @@ class ConversationService:
                 conn.execute("ROLLBACK")
                 raise
 
-            if deferred_guide_stream is not None:
+            response = {
+                "message": msg,
+                "conversation": updated_conversation,
+            }
+            if deferred_visible_stream is not None:
                 # 必须等原子消息提交成功后才对外发送最终文本。否则工作段或并发
                 # 校验在 COMMIT 前失败时，用户仍会先看到一段并未持久成立的方案。
                 # 上游没有实际 delta（如非流 stub）时保持既有 start→done 形状。
-                deferred_guide_stream.flush_final(assistant_message, on_delta)
+                try:
+                    deferred_visible_stream.flush_final(assistant_message, on_delta)
+                except Exception:
+                    # COMMIT 已成功，回调/断连故障只能形成可由 GET
+                    # 解消的模糊交付；绝不得把已持久事实翻译成
+                    # persisted=false，也不得盲重试造成重复轮次。
+                    return response
 
-            return {
-                "message": msg,
-                "conversation": updated_conversation,
-                # 响应级透传（不落库）：前端凭此渲染待审候选草稿卡片。
-                "generalization_draft": generalization_draft,
-            }
+            return response
         finally:
             conn.close()
 

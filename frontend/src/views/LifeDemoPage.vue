@@ -2,30 +2,37 @@
   <!--
     本体论教学 demo 启动页(/demo)。
     路径 A:未选场景 → 渲染 LifeScenarioPicker,工程师三选一。
-    路径 B:已选场景 → 创建 life_guide_agent 会话,就地渲染对话流。
+    路径 B:有效 s 且无 c → 创建一次 life_guide_agent 会话并把 s/c 写回 URL。
+    路径 C:有效 s+c → 只冷读既有会话，支持刷新、后退和前进恢复。
 
     独立于主 GuidePage(工程任务入口),避免污染工程对话主线。
     demo 产出的 Skill Package 走 quarantine 隔离区,不进生产 Registry。
   -->
   <div class="life-demo">
     <!-- 顶栏:回到主对话 + 当前场景 -->
-    <div v-if="scenarioId" class="life-demo__bar">
+    <div v-if="currentScenario" class="life-demo__bar">
       <router-link to="/" class="life-demo__back">← 回主对话</router-link>
       <span class="life-demo__current">{{ currentScenario?.emoji }} {{ currentScenario?.title }}</span>
       <button type="button" class="life-demo__reset" @click="reset">换个场景</button>
     </div>
 
     <!-- 路径 A:场景选择 -->
-    <LifeScenarioPicker v-if="!conversation" @select="onSelect" />
+    <LifeScenarioPicker
+      v-if="!starting && !startError && !conversation"
+      @select="onSelect"
+    />
 
-    <!-- 路径 B:对话 -->
-    <section v-else class="life-demo__session">
-      <div v-if="starting" class="life-demo__hint">正在起会话...</div>
+    <!-- 路径 B/C:创建、恢复或对话 -->
+    <section v-if="starting || startError || conversation" class="life-demo__session">
+      <div v-if="starting" class="life-demo__hint">正在读取会话...</div>
       <div v-else-if="startError" class="life-demo__error">
-        <strong>起会话失败</strong> — {{ startError }}
-        <button type="button" @click="reset">重试</button>
+        <strong>会话不可用</strong> — {{ startError }}
+        <button v-if="route.query.c" type="button" @click="reloadCurrent">
+          重新读取
+        </button>
+        <button type="button" @click="reset">返回场景选择</button>
       </div>
-      <div v-else class="life-demo__thread">
+      <div v-else-if="conversation" class="life-demo__thread">
         <!-- 起手提示(对话还没开始) -->
         <div v-if="messages.length === 0" class="life-demo__opening">
           <p>
@@ -36,17 +43,25 @@
         </div>
 
         <!-- 消息流：文字气泡；助手回复若带待审候选，气泡下方渲染草稿卡片 -->
-        <template v-for="(m, idx) in messages" :key="idx">
+        <template v-for="m in messages" :key="m.id">
           <div :class="['life-demo__bubble', m.role]">
             <div class="life-demo__bubble-role">{{ m.role === "user" ? "我" : "主持人" }}</div>
             <div class="life-demo__bubble-text">{{ m.content }}</div>
           </div>
           <LifeDraftCard
-            v-if="m.role === 'assistant' && m.draft"
-            :draft="m.draft"
+            v-if="m.role === 'assistant' && m.draftRecord"
+            :key="m.draftRecord.id"
+            :record="m.draftRecord"
             :conversation-id="conversation.id"
             @revise="focusComposer"
           />
+          <p
+            v-else-if="m.role === 'assistant' && m.draftRecordInvalid"
+            class="life-demo__record-warning"
+            role="status"
+          >
+            这条回复关联的草稿记录未通过契约校验，已隐藏草稿卡片；回复正文仍按原文保留。
+          </p>
         </template>
 
         <!-- 输入框 -->
@@ -56,32 +71,54 @@
             v-model="draft"
             class="life-demo__textarea"
             :placeholder="composerPlaceholder"
-            :disabled="sending"
+            :disabled="sending || reconciliationRequired"
             rows="3"
             @keydown.enter.exact.prevent="send"
           ></textarea>
           <button
             type="button"
             class="life-demo__send"
-            :disabled="!draft.trim() || sending"
+            :disabled="!draft.trim() || sending || reconciliationRequired"
             @click="send"
           >
             {{ sending ? "发送中..." : "发送 ↵" }}
           </button>
         </div>
-        <p v-if="sendError" class="life-demo__error-inline">{{ sendError }}</p>
+        <div v-if="sendError" class="life-demo__error-inline">
+          {{ sendError }}
+          <button
+            v-if="reconciliationRequired"
+            type="button"
+            :disabled="sending"
+            @click="reloadCurrent"
+          >
+            刷新会话核对
+          </button>
+        </div>
       </div>
     </section>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import LifeScenarioPicker from "../components/LifeScenarioPicker.vue";
 import LifeDraftCard from "../components/LifeDraftCard.vue";
-import { createConversation, postMessage } from "../api/conversations";
-import { isLifeDraftShape } from "../utils/lifeDraft.js";
+import {
+  createConversation,
+  getConversation,
+  postMessage,
+} from "../api/conversations";
+import {
+  assertLifePostMatchesSnapshot,
+  isDefinitelyUncommittedLifePostError,
+  normalizeLifeConversationIdentity,
+  normalizeLifeConversationSnapshot,
+  normalizeLifePostResponse,
+  reconcileAmbiguousLifePostSnapshot,
+  resolveLifeDemoRoute,
+} from "../utils/lifeDraft.js";
 
 // demo 场景元信息(与 LifeScenarioPicker.vue 的 scenarios 对齐)
 const SCENARIOS = {
@@ -108,7 +145,7 @@ const SCENARIOS = {
 const route = useRoute();
 const router = useRouter();
 
-const scenarioId = ref(route.params.scenarioId || route.query.s || null);
+const scenarioId = ref(null);
 const conversation = ref(null);
 const starting = ref(false);
 const startError = ref("");
@@ -116,7 +153,10 @@ const messages = ref([]);
 const draft = ref("");
 const sending = ref(false);
 const sendError = ref("");
+const reconciliationRequired = ref(false);
+const pendingAmbiguousRound = ref(null);
 const composerEl = ref(null);
+let routeEpoch = 0;
 
 const currentScenario = computed(() =>
   scenarioId.value ? SCENARIOS[scenarioId.value] : null
@@ -129,50 +169,194 @@ const composerPlaceholder = computed(() =>
 );
 
 function reset() {
+  routeEpoch += 1;
   scenarioId.value = null;
   conversation.value = null;
   messages.value = [];
   draft.value = "";
   startError.value = "";
   sendError.value = "";
+  reconciliationRequired.value = false;
+  pendingAmbiguousRound.value = null;
+  starting.value = false;
   router.replace({ path: "/demo" });
 }
 
-async function onSelect(id) {
-  scenarioId.value = id;
-  starting.value = true;
+function errorText(err) {
+  return err?.detail || err?.message || String(err);
+}
+
+async function synchronizeRoute() {
+  const epoch = ++routeEpoch;
+  const intent = resolveLifeDemoRoute(route.query, Object.keys(SCENARIOS));
+  scenarioId.value = intent.scenarioId || null;
+  conversation.value = null;
+  messages.value = [];
   startError.value = "";
-  try {
-    conversation.value = await createConversation({ agentId: "life_guide_agent" });
-  } catch (err) {
-    startError.value = err.detail || String(err.message || err);
-  } finally {
+  sendError.value = "";
+  reconciliationRequired.value = false;
+  pendingAmbiguousRound.value = null;
+  sending.value = false;
+
+  if (intent.kind === "pick") {
     starting.value = false;
+    return;
+  }
+  if (intent.kind === "invalid") {
+    starting.value = false;
+    startError.value = intent.reason;
+    return;
+  }
+
+  starting.value = true;
+  try {
+    if (intent.kind === "load") {
+      const raw = await getConversation(intent.conversationId);
+      if (epoch !== routeEpoch) return;
+      const restored = normalizeLifeConversationSnapshot(raw, {
+        expectedConversationId: intent.conversationId,
+      });
+      if (epoch !== routeEpoch) return;
+      conversation.value = restored;
+      messages.value = restored.messages;
+      return;
+    }
+
+    if (intent.kind === "create") {
+      const rawCreated = await createConversation({ agentId: "life_guide_agent" });
+      if (epoch !== routeEpoch) return;
+      const created = normalizeLifeConversationIdentity(rawCreated);
+      await router.replace({
+        path: "/demo",
+        query: { s: intent.scenarioId, c: created.id },
+      });
+    }
+  } catch (err) {
+    if (epoch !== routeEpoch) return;
+    startError.value = errorText(err);
+  } finally {
+    if (epoch === routeEpoch) starting.value = false;
+  }
+}
+
+function onSelect(id) {
+  if (!Object.prototype.hasOwnProperty.call(SCENARIOS, id)) return;
+  router.replace({ path: "/demo", query: { s: id } });
+}
+
+async function reconcilePendingAmbiguousRound(epoch = routeEpoch) {
+  const pendingRound = pendingAmbiguousRound.value;
+  if (!pendingRound) return false;
+  try {
+    const rawRecovered = await getConversation(pendingRound.conversationId);
+    if (
+      epoch !== routeEpoch ||
+      pendingAmbiguousRound.value !== pendingRound
+    ) {
+      return false;
+    }
+    const recovered = normalizeLifeConversationSnapshot(rawRecovered, {
+      expectedConversationId: pendingRound.conversationId,
+    });
+    reconcileAmbiguousLifePostSnapshot(recovered, {
+      baselineMessages: pendingRound.baselineMessages,
+      submittedText: pendingRound.submittedText,
+    });
+    if (
+      epoch !== routeEpoch ||
+      pendingAmbiguousRound.value !== pendingRound
+    ) {
+      return false;
+    }
+    conversation.value = recovered;
+    messages.value = recovered.messages;
+    pendingAmbiguousRound.value = null;
+    reconciliationRequired.value = false;
+    sendError.value = "已通过会话冷读确认本轮只保存一次。";
+    return true;
+  } catch (recoveryError) {
+    if (
+      epoch !== routeEpoch ||
+      pendingAmbiguousRound.value !== pendingRound
+    ) {
+      return false;
+    }
+    reconciliationRequired.value = true;
+    sendError.value = `本轮可能已经保存，但无法按发送前基线完成唯一核对：${errorText(recoveryError)}。请刷新会话核对，不要盲目重发。`;
+    return false;
+  }
+}
+
+async function reloadCurrent() {
+  if (!pendingAmbiguousRound.value) {
+    void synchronizeRoute();
+    return;
+  }
+  if (sending.value) return;
+  const epoch = routeEpoch;
+  sending.value = true;
+  try {
+    await reconcilePendingAmbiguousRound(epoch);
+  } finally {
+    if (epoch === routeEpoch) sending.value = false;
   }
 }
 
 async function send() {
   const text = draft.value.trim();
-  if (!text || sending.value || !conversation.value) return;
+  if (
+    !text ||
+    sending.value ||
+    !conversation.value ||
+    pendingAmbiguousRound.value
+  ) {
+    return;
+  }
+  const epoch = routeEpoch;
+  const conversationId = conversation.value.id;
+  const baselineMessages = [...messages.value];
   sending.value = true;
   sendError.value = "";
-  messages.value.push({ role: "user", content: text });
+  reconciliationRequired.value = false;
   draft.value = "";
+  let postResponseReceived = false;
   try {
-    const res = await postMessage(conversation.value.id, text, []);
-    const reply = res?.message?.content || "(主持人无回复)";
-    // generalization_draft 是本轮 workflow 投影的待审候选（不落库，只在响应里）。
-    // fail-closed：形状不合规一律按无草稿处理，绝不渲染半份候选。
-    const rawDraft = res?.generalization_draft;
-    messages.value.push({
-      role: "assistant",
-      content: reply,
-      draft: isLifeDraftShape(rawDraft) ? rawDraft : null,
+    const rawPost = await postMessage(conversationId, text, []);
+    postResponseReceived = true;
+    const normalizedPost = normalizeLifePostResponse(rawPost, {
+      expectedConversationId: conversationId,
     });
+    const rawSnapshot = await getConversation(conversationId);
+    const restored = normalizeLifeConversationSnapshot(rawSnapshot, {
+      expectedConversationId: conversationId,
+    });
+    assertLifePostMatchesSnapshot(normalizedPost, restored);
+    if (epoch !== routeEpoch) return;
+    conversation.value = restored;
+    messages.value = restored.messages;
+    pendingAmbiguousRound.value = null;
   } catch (err) {
-    sendError.value = err.detail || String(err.message || err);
+    if (epoch !== routeEpoch) return;
+    if (
+      !postResponseReceived &&
+      isDefinitelyUncommittedLifePostError(err)
+    ) {
+      draft.value = text;
+      sendError.value = `请求已在持久化前被拒绝：${errorText(err)}`;
+      return;
+    }
+
+    // POST 一旦发出，网络 reject、超时、未知 4xx/5xx 都不能证明没有 COMMIT。
+    // 保留本轮基线直到精确冷读恢复；重复刷新也只能继续核对，不能重开 composer。
+    pendingAmbiguousRound.value = {
+      conversationId,
+      baselineMessages,
+      submittedText: text,
+    };
+    reconciliationRequired.value = true;
+    await reconcilePendingAmbiguousRound(epoch);
   } finally {
-    sending.value = false;
+    if (epoch === routeEpoch) sending.value = false;
   }
 }
 
@@ -180,12 +364,11 @@ function focusComposer() {
   composerEl.value?.focus();
 }
 
-onMounted(() => {
-  // 进入 /demo?s=cooking 直接预选(深链兼容)
-  if (route.query.s && SCENARIOS[route.query.s] && !scenarioId.value) {
-    onSelect(route.query.s);
-  }
-});
+watch(
+  () => [route.query.s, route.query.c],
+  () => void synchronizeRoute(),
+  { immediate: true },
+);
 </script>
 
 <style scoped>

@@ -165,6 +165,68 @@ def test_chat_success_via_mock_transport_records_success(tmp_path, monkeypatch) 
     assert calls[0]["model_name"] == "glm-mock"
 
 
+def test_chat_success_emits_exact_persisted_receipt_to_server_sink_once(
+    tmp_path, monkeypatch
+) -> None:
+    """The caller receives the exact successful INSERT identity, never a later lookup."""
+    monkeypatch.setenv("FLAI_LLM_BASE_URL", "https://fake-llm.internal")
+    monkeypatch.setenv("FLAI_LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("FLAI_LLM_MODEL_REASONING", "glm-mock")
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "可追溯回答"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(gateway_mod.httpx, "post", fake_post)
+    db_path, conn_factory = _make_conn_factory(tmp_path, "receipt-success.db")
+    conn = conn_factory()
+    try:
+        repos.create_conversation(
+            conn,
+            conversation_id="conv_receipt",
+            agent_id="life_guide_agent",
+            created_by="user_receipt",
+            created_by_username="receipt-owner",
+        )
+    finally:
+        conn.close()
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+    receipts: list[dict] = []
+
+    result = gateway.chat(
+        "reasoning",
+        [{"role": "user", "content": "请回答"}],
+        conversation_id="conv_receipt",
+        agent_id="life_guide_agent",
+        _receipt_sink=receipts.append,
+    )
+
+    assert result == {
+        "content": "可追溯回答",
+        "token_usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        "model_name": "glm-mock",
+        "finish_reason": "stop",
+    }
+    assert receipts == [
+        {
+            "model_call_id": 1,
+            "kind": "chat",
+            "status": "success",
+            "task_id": None,
+            "conversation_id": "conv_receipt",
+            "agent_id": "life_guide_agent",
+            "model_profile": "reasoning",
+            "model_name": "glm-mock",
+        }
+    ]
+
+
 def test_chat_on_delta_uses_upstream_stream_and_records_once(tmp_path, monkeypatch) -> None:
     """传入 on_delta 后必须向 OpenAI-compatible 上游发送 stream=true，并把真实
     SSE delta 即时交给调用方；完整 content 与 model_calls 仍只在正常收尾后确认。"""
@@ -302,6 +364,83 @@ def test_chat_upstream_500_raises_model_upstream_error_and_records_failed(tmp_pa
     assert len(calls) == 1
     assert calls[0]["status"] == "failed"
     assert "500" in calls[0]["error_message"]
+
+
+def test_chat_failure_records_failed_but_emits_no_success_receipt(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("FLAI_LLM_BASE_URL", "https://fake-llm.internal")
+    monkeypatch.setenv("FLAI_LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("FLAI_LLM_MODEL_REASONING", "glm-mock")
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(
+            500,
+            text="upstream failure",
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(gateway_mod.httpx, "post", fake_post)
+    db_path, conn_factory = _make_conn_factory(tmp_path, "receipt-failed.db")
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+    receipts: list[dict] = []
+
+    with pytest.raises(ModelUpstreamError, match="status=500"):
+        gateway.chat(
+            "reasoning",
+            [{"role": "user", "content": "失败调用"}],
+            task_id="task_receipt_failed",
+            agent_id="life_guide_agent",
+            _receipt_sink=receipts.append,
+        )
+
+    assert receipts == []
+    conn = db_mod.get_conn(db_path)
+    try:
+        calls = repos.list_model_calls(conn, "task_receipt_failed")
+    finally:
+        conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+
+
+def test_chat_receipt_sink_failure_withholds_result_but_keeps_success_audit(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("FLAI_LLM_BASE_URL", "https://fake-llm.internal")
+    monkeypatch.setenv("FLAI_LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("FLAI_LLM_MODEL_REASONING", "glm-mock")
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "成功调用"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    def broken_server_sink(receipt):
+        raise RuntimeError("server receipt capture failed")
+
+    monkeypatch.setattr(gateway_mod.httpx, "post", fake_post)
+    db_path, conn_factory = _make_conn_factory(tmp_path, "receipt-sink-failed.db")
+    gateway = ModelGateway(PROFILES_PATH, conn_factory=conn_factory)
+
+    with pytest.raises(RuntimeError, match="receipt capture failed"):
+        gateway.chat(
+            "reasoning",
+            [{"role": "user", "content": "请回答"}],
+            task_id="task_receipt_sink_failed",
+            agent_id="life_guide_agent",
+            _receipt_sink=broken_server_sink,
+        )
+
+    conn = db_mod.get_conn(db_path)
+    try:
+        calls = repos.list_model_calls(conn, "task_receipt_sink_failed")
+    finally:
+        conn.close()
+    assert len(calls) == 1
+    assert calls[0]["status"] == "success"
 
 
 def test_conn_factory_none_skips_db_write() -> None:

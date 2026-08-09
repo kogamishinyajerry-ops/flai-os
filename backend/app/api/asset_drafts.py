@@ -20,6 +20,11 @@ from ..ontology import (
     SkillPackageNotFoundError,
     SkillPackageUnavailableError,
 )
+from ..runtime.generalization_draft_record import (
+    GeneralizationDraftRecordIntegrityError,
+    GeneralizationDraftRecordNotFoundError,
+    load_verified_generalization_draft_record,
+)
 from ..storage import asset_candidates as candidate_store
 from . import object_authorization as oauth
 
@@ -62,6 +67,13 @@ class AssetDraftPreviewRequest(BaseModel):
 
     schema_version: Literal["asset_draft_preview_request.v1"]
     generalization: AssetGeneralizationRequest
+
+
+class GeneralizationDraftRecordPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["generalization_draft_record_preview_request.v1"]
+    expected_content_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
 class AssetCandidateDecisionRequest(BaseModel):
@@ -118,6 +130,74 @@ def preview_asset_draft(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except AssetDraftProjectionError as exc:
         raise HTTPException(status_code=503, detail="资产草稿投影不可用") from exc
+
+
+@router.post(
+    "/conversations/{conversation_id}/generalization-draft-records/"
+    "{record_id}/asset-draft-preview"
+)
+def preview_generalization_draft_record(
+    conversation_id: str,
+    record_id: str,
+    body: GeneralizationDraftRecordPreviewRequest,
+    request: Request,
+) -> dict[str, Any]:
+    conn = request.app.state.conn_factory()
+    try:
+        owner_username = oauth.authenticated_username(request)
+        oauth.require_owned_conversation(
+            conn,
+            conversation_id,
+            owner_username,
+        )
+        verified = load_verified_generalization_draft_record(
+            conn,
+            conversation_id=conversation_id,
+            record_id=record_id,
+            owner_username=owner_username,
+        )
+    except GeneralizationDraftRecordNotFoundError:
+        oauth.raise_resource_not_found()
+    except GeneralizationDraftRecordIntegrityError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="泛化草稿记录来源或证据不可用",
+        ) from exc
+    finally:
+        conn.close()
+
+    public_record = verified["public_record"]
+    if body.expected_content_digest != public_record["content_digest"]:
+        raise HTTPException(status_code=409, detail="泛化草稿记录内容摘要已变化")
+
+    try:
+        asset_draft = request.app.state.asset_draft_builder.preview(
+            conversation=verified["source_context"]["conversation"],
+            generalization=verified["payload"],
+        )
+    except (
+        AssetDraftSourceError,
+        AssetDraftInputError,
+        AssetDraftProjectionError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="泛化草稿记录来源或证据不可用",
+        ) from exc
+
+    return {
+        "schema_version": "generalization_draft_record_preview_response.v1",
+        "source_record": {
+            "id": public_record["id"],
+            "content_digest": public_record["content_digest"],
+            "record_digest": public_record["record_digest"],
+            "source_context_digest": public_record["source_context_digest"],
+        },
+        "asset_draft": asset_draft,
+    }
 
 
 def _candidate_error(exc: Exception) -> HTTPException:

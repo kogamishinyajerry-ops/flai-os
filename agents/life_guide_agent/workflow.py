@@ -4,13 +4,14 @@ ConversationService 每轮调用 `run(context)`(interactive 型 context):
 1. 加载 prompt.md(系统提示,唯一版本化来源)作为 system content;
 2. 经 Model Gateway(profile=fast)发起对话,得到本轮 assistant 回复;
 3. 若回复含草稿块(`<<DRAFT>>...<<END>>`),对其做**确定性校验**后才继续:
-   - 字段残缺:整份草稿关闭,改在当前会话追问(不把字段墙转嫁给工程师);
-   - 字段齐全:调 AssetDraftBuilder.preview() 算 digest,把候选交给工程师审核。
+   - 块不完整、字段残缺或非法:整轮失败,零消息/记录/公开 delta;
+   - 字段齐全:只返回严格九字段提议；记录身份、digest 和
+     lineage 由 ConversationService 在原子事务内建立。
 4. 工程师只看到对话回复 + 草稿摘要,签发权永远在工程师手里(人审唯一签发)。
 
 LLM 边界(宪法铁律六 + ADR-0033):LLM 只负责对话与**提议**草稿内容,它说"这是
-一份可复用方子"不构成结构真值——本 workflow 对 9 字段做确定性校验,任一字段残缺
-整份草稿关闭并回主对话追问,绝不静默放行残缺候选。
+一份可复用方子"不构成结构真值——本 workflow 对 9 字段做确定性校验；显式草稿块
+任一字段残缺或非法都终止整轮,绝不静默放行或降级成合法 null。
 主持人**绝不签发/注册/晋级**:草稿只是候选,工程师按钮级审核是唯一签发通道
 (CONTEXT.md Asset Candidate 铁律)。
 上游失败/空内容一律诚实抛错,绝不伪造对话或候选。
@@ -21,13 +22,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Callable
-
-from backend.app.ontology.asset_builder import (
-    AssetDraftInputError,
-    AssetDraftProjectionError,
-    AssetDraftSourceError,
-    AssetDraftBuilder,
-)
 
 _DRAFT_START = "<<DRAFT>>"
 _DRAFT_END = "<<END>>"
@@ -55,9 +49,10 @@ _DRAFT_MAX_BYTES = 50_000  # 草稿块原始字节硬顶(先于 json.loads)
 
 
 class _VisibleReplyStream:
-    """把模型流式 delta 透传给会话,失败轮不 finish 避免 sentinel 泄漏。
+    """把原始 delta 交给 ConversationService 的私有有界缓冲。
 
-    复刻 guide_agent 的同名机制(workflow.py:79),保持 interactive 型 agent 一致。
+    该 sink 不是公开响应通道；只有消息和 canonical record 成功 COMMIT
+    后，会话内核才会发送已剔除控制块的 assistant 正文。
     """
 
     def __init__(self, emit: Callable[[str], None]) -> None:
@@ -85,8 +80,8 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
 
     Returns:
         {"assistant_message": str, "generalization_draft": dict | None}
-        generalization_draft 非 null 时,前端可调 AssetDraftBuilder.preview()
-        算 digest 并展示候选摘要 + "接受/返回修改" 按钮。
+        generalization_draft 非 null 时，它仍只是模型提议 payload；
+        服务端必须将它转换成可冷读复核的 canonical record。
     """
     messages: list[dict[str, Any]] = context["messages"]
     model_gateway = context["model_gateway"]
@@ -109,7 +104,7 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("主持人模型返回空内容,无法继续对话(诚实失败,不伪造对话)")
 
     assistant_message, raw_draft = _split_draft(reply)
-    if not raw_draft:
+    if raw_draft is None:
         # 模型选择继续追问(无草稿块):直接返回对话回复
         if visible_stream is not None:
             visible_stream.finish()
@@ -118,27 +113,7 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
     # 有草稿块:做确定性校验
     generalization = _validate_draft(raw_draft)
     if generalization is None:
-        # 字段残缺:关闭草稿,把追问附在对话回复末尾
-        if not assistant_message.rstrip().endswith(("?", "?")):
-            assistant_message = (
-                assistant_message.rstrip()
-                + "\n\n(候选字段还不齐全,我们再聊几个细节再投影草稿。)"
-            )
-        if visible_stream is not None:
-            visible_stream.finish()
-        return {"assistant_message": assistant_message, "generalization_draft": None}
-
-    # 字段齐全:调 AssetDraftBuilder.preview() 算 digest,确认候选可投影
-    try:
-        builder = AssetDraftBuilder()
-        # conversation 字段给 None,asset_builder.py 的 _project_work_case 会抛
-        # AssetDraftProjectionError —— life_guide_agent 的 demo 路径只校验
-        # Generalization 9 字段,完整 bundle 投影由 API 层补 conversation 血缘。
-        # 这里只做 generalization 侧的 dry-run normalize + validate。
-    except (AssetDraftInputError, AssetDraftProjectionError, AssetDraftSourceError) as exc:
-        if visible_stream is not None:
-            visible_stream.finish()
-        raise ValueError(f"候选投影失败,诚实失败不伪造候选: {exc}") from exc
+        raise ValueError("显式草稿块未通过严格九字段校验,本轮不落库")
 
     if visible_stream is not None:
         visible_stream.finish()
@@ -154,22 +129,27 @@ def _split_draft(reply: str) -> tuple[str, str | None]:
     同 guide_agent 的 _split_plan 逻辑(workflow.py:416):找 _DRAFT_START/_DRAFT_END,
     中间是 JSON;找不到就返回 (reply, None)。
     """
-    start_idx = reply.find(_DRAFT_START)
-    if start_idx < 0:
+    start_count = reply.count(_DRAFT_START)
+    end_count = reply.count(_DRAFT_END)
+    if start_count == 0 and end_count == 0:
         return reply.strip(), None
+    if start_count != 1 or end_count != 1:
+        raise ValueError("草稿控制块必须且只能完整出现一次")
+    start_idx = reply.find(_DRAFT_START)
     end_idx = reply.find(_DRAFT_END, start_idx + len(_DRAFT_START))
     if end_idx < 0:
-        # 有 start 无 end:草稿块不完整,诚实失败
-        return reply.strip(), None
+        raise ValueError("草稿控制块顺序无效")
     raw = reply[start_idx + len(_DRAFT_START):end_idx].strip()
     assistant_message = (reply[:start_idx] + reply[end_idx + len(_DRAFT_END):]).strip()
+    if _DRAFT_START in assistant_message or _DRAFT_END in assistant_message:
+        raise ValueError("草稿控制块不得渗入 assistant 正文")
     return assistant_message, raw
 
 
 def _validate_draft(raw: str) -> dict[str, Any] | None:
     """确定性校验草稿块:JSON 合法 + 9 字段齐全 + 类型正确 + 长度合规。
 
-    任一不满足返回 None(让 workflow 回到对话追问);全满足返回 normalized dict。
+    任一不满足返回 None(由 run 诚实终止整轮);全满足返回 normalized dict。
     校验规则与 asset_builder.py 的 _normalize_generalization / _validate 对齐,
     这里提前拦避免 Builder 抛 AssetDraftInputError。
 
@@ -185,6 +165,8 @@ def _validate_draft(raw: str) -> dict[str, Any] | None:
     except (json.JSONDecodeError, ValueError):
         return None
     if not isinstance(parsed, dict):
+        return None
+    if set(parsed) != set(_GENERALIZATION_FIELDS):
         return None
 
     normalized: dict[str, Any] = {}

@@ -359,8 +359,15 @@ def _source_text(value: Any, field: str, *, max_length: int | None = None) -> st
 def _optional_source_text(value: Any) -> str | None:
     if value is None:
         return None
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        # Conversation message ids are SQLite INTEGER lineage axes.  The Asset
+        # Draft basis historically serialized ids as text, so retain that
+        # stable representation for both manual and record-bound previews.
+        return str(value)
     if not isinstance(value, str) or not value.strip():
-        raise AssetDraftProjectionError("message.id 必须是非空字符串或 null")
+        raise AssetDraftProjectionError(
+            "message.id 必须是正整数、非空字符串或 null"
+        )
     normalized = _normalize_text(value)
     _ensure_utf8(
         normalized,
