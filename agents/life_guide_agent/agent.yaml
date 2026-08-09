@@ -1,6 +1,6 @@
 id: life_guide_agent
 name: "生活场景建模主持人（本体论教学 demo）"
-version: 0.1.0
+version: 0.2.0
 status: draft
 maturity: L0
 category: reasoning_assist

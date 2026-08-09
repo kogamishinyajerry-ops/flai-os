@@ -166,6 +166,27 @@ def _publish_life_agent_status(app, tmp_path: Path, status: str) -> None:
     app.state.agent_registry.adopt(shadow)
 
 
+def _publish_life_agent_version(app, tmp_path: Path, version: str) -> None:
+    snapshot = app.state.agent_registry.package_snapshot("life_guide_agent")
+    assert snapshot is not None
+    shadow_root = tmp_path / f"life-guide-version-{version}-shadow"
+    shadow_root.mkdir()
+    with snapshot.materialized(parent=tmp_path) as frozen_dir:
+        package_dir = shadow_root / "life_guide_agent"
+        shutil.copytree(frozen_dir, package_dir)
+    yaml_path = package_dir / "agent.yaml"
+    manifest = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    manifest["version"] = version
+    yaml_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    shadow = AgentRegistry(shadow_root, app.state.agent_registry.schema_path)
+    shadow.scan()
+    assert shadow.errors == []
+    app.state.agent_registry.adopt(shadow)
+
+
 def _round_counts(app, conversation_id: str) -> dict[str, int]:
     conn = app.state.conn_factory()
     try:
@@ -424,6 +445,38 @@ def test_concurrent_life_rounds_have_one_record_winner_and_one_conflict(app_env)
     persisted = client.get(f"/api/conversations/{conv_id}").json()["messages"]
     assert [message["role"] for message in persisted] == ["user", "assistant"]
     assert persisted[-1]["generalization_draft_record"] is not None
+
+
+def test_life_draft_rejects_package_version_change_during_model_round(
+    app_env, tmp_path: Path
+) -> None:
+    client, app = app_env
+
+    class _VersionChangingStub(_CannedStub):
+        def chat(
+            self, profile: str, messages: list[dict[str, Any]], **kwargs: Any
+        ) -> dict[str, Any]:
+            result = super().chat(profile, messages, **kwargs)
+            _publish_life_agent_version(app, tmp_path, "9.9.9")
+            return result
+
+    app.state.conversation_service.model_gateway = _VersionChangingStub(
+        _REPLY_WITH_DRAFT, app.state.conn_factory
+    )
+    conv_id = _open_life_conversation(client)
+
+    response = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "请基于当前包版本生成草稿"},
+    )
+
+    assert response.status_code == 409, response.text
+    assert _round_counts(app, conv_id) == {
+        "messages": 0,
+        "records": 0,
+        "model_calls": 1,
+        "task_events": 0,
+    }
 
 
 def test_complete_draft_with_non_chat_receipt_fails_closed(app_env) -> None:

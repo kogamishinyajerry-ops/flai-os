@@ -557,15 +557,17 @@ def _build_source_context(
             "source user/assistant round lineage is invalid"
         )
     projected = [_project_source_message(message) for message in prefix]
-    return {
-        "schema_version": SOURCE_CONTEXT_SCHEMA_VERSION,
-        "conversation": {
-            "id": conversation_id,
-            "agent_id": agent_id,
-            "status": status,
-            "messages": projected,
-        },
-    }
+    return _stable_value(
+        {
+            "schema_version": SOURCE_CONTEXT_SCHEMA_VERSION,
+            "conversation": {
+                "id": conversation_id,
+                "agent_id": agent_id,
+                "status": status,
+                "messages": projected,
+            },
+        }
+    )
 
 
 def _record_digest_basis(

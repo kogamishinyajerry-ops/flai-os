@@ -171,8 +171,22 @@ for _ in range(60):
 else:
     sys.exit("诚实失败：Issue #75 E2E 后端 6 秒内未就绪")
 
+FOREIGN_USERNAME = "issue75_foreign_engineer"
+FOREIGN_PASSWORD = "issue75-foreign-pass"
+
 seed_user(WORK / "flai_os.db", "王工")
+seed_user(
+    WORK / "flai_os.db",
+    "李工",
+    username=FOREIGN_USERNAME,
+    password=FOREIGN_PASSWORD,
+)
 api = login_httpx(BASE)
+foreign_api = login_httpx(
+    BASE,
+    username=FOREIGN_USERNAME,
+    password=FOREIGN_PASSWORD,
+)
 app.state.conversation_service.model_gateway = _DeterministicLifeGateway(
     app.state.conn_factory
 )
@@ -207,6 +221,12 @@ created_pending = api.post(
 )
 assert created_pending.status_code == 200, created_pending.text
 conv_pending = created_pending.json()["id"]
+foreign_created = foreign_api.post(
+    BASE + "/api/conversations",
+    json={"agent_id": "life_guide_agent"},
+)
+assert foreign_created.status_code == 200, foreign_created.text
+foreign_conv = foreign_created.json()["id"]
 
 # Test-only read controls.  The normal path still calls the real service first;
 # delay proves the route epoch guard, mutation proves frontend fail-closed
@@ -349,6 +369,28 @@ try:
             )
         ).to_be_visible()
         check("missing c reset removes both s and c from the URL", True)
+
+        creates_before_foreign = len(browser_create_posts)
+        gets_before_foreign = len(browser_conversation_gets)
+        page.goto(
+            BASE + f"/demo?s=cooking&c={foreign_conv}",
+            wait_until="networkidle",
+        )
+        expect(page.locator(".life-demo__error")).to_contain_text(
+            "资源不存在或不可访问"
+        )
+        check(
+            "foreign c is an explicit owner-scoped GET-only error",
+            len(browser_create_posts) == creates_before_foreign
+            and len(browser_conversation_gets) - gets_before_foreign == 1,
+            (
+                f"create_delta={len(browser_create_posts) - creates_before_foreign} "
+                f"get_delta={len(browser_conversation_gets) - gets_before_foreign}"
+            ),
+        )
+        page.get_by_role("button", name="返回场景选择").click()
+        expect(page).to_have_url(BASE + "/demo")
+        check("foreign c reset removes both s and c from the URL", True)
 
         # 1. Exact c deep links are GET-only and survive a full reload.
         direct_url = BASE + f"/demo?s=cooking&c={conv_a}"
@@ -576,6 +618,8 @@ finally:
             # Playwright may already have closed its event loop while unwinding
             # an assertion; cleanup must not replace the original failure.
             pass
+    api.close()
+    foreign_api.close()
     server.should_exit = True
 
 failed = [name for name, ok, _ in results if not ok]

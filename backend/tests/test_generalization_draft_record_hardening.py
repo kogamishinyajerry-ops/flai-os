@@ -939,6 +939,52 @@ def test_cold_read_rejects_source_prefix_parent_drift(
         conn.close()
 
 
+def test_nfd_source_message_roundtrips_as_canonical_nfc(tmp_path) -> None:
+    db_path = tmp_path / "nfd-source-message.sqlite3"
+    init_db(db_path)
+    conn = get_conn(db_path)
+    try:
+        _create_conversation(conn, "conv_nfd_source")
+        user = repos.append_message(
+            conn,
+            conversation_id="conv_nfd_source",
+            role="user",
+            content="Cafe\u0301 source",
+        )
+        assistant = repos.append_message(
+            conn,
+            conversation_id="conv_nfd_source",
+            role="assistant",
+            content="Cafe\u0301 draft",
+        )
+        call = _record_call(conn, "conv_nfd_source")
+        conn.execute("BEGIN IMMEDIATE")
+        record = create_generalization_draft_record(
+            conn,
+            payload=_payload(),
+            conversation_id="conv_nfd_source",
+            owner_username="owner",
+            source_user_message_id=user["id"],
+            source_assistant_message_id=assistant["id"],
+            model_call_receipt=_receipt(call),
+            agent_version="1.0.0",
+        )
+        conn.execute("COMMIT")
+
+        verified = load_verified_generalization_draft_record(
+            conn,
+            conversation_id="conv_nfd_source",
+            record_id=record["id"],
+            owner_username="owner",
+        )
+    finally:
+        conn.close()
+
+    messages = verified["source_context"]["conversation"]["messages"]
+    assert messages[-2]["content"] == "Caf\u00e9 source"
+    assert messages[-1]["content"] == "Caf\u00e9 draft"
+
+
 def test_later_turns_do_not_change_frozen_source_context(tmp_path) -> None:
     db_path = tmp_path / "later-turn.sqlite3"
     conn, record, _parents = _create_record_fixture(db_path)

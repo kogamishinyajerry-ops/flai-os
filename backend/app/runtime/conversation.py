@@ -868,6 +868,7 @@ class ConversationService:
             # 该字段；非 dict/null 结构也不能静默降级成“无草稿”。
             generalization_draft = result.get("generalization_draft")
             generalization_receipt: dict[str, Any] | None = None
+            draft_agent_version: str | None = None
             if generalization_draft is not None:
                 if agent_id != "life_guide_agent":
                     raise ValueError("仅 life_guide_agent 可提议 generalization_draft")
@@ -890,6 +891,12 @@ class ConversationService:
                     agent_id=agent_id,
                     model_profile=expected_profile,
                 )
+                candidate_version = agent.get("version")
+                if not isinstance(candidate_version, str) or not candidate_version:
+                    raise GeneralizationDraftRecordIntegrityError(
+                        "life_guide_agent 不可变包快照缺少 version"
+                    )
+                draft_agent_version = candidate_version
             trusted_reuse_attached = False
             if agent_id == "guide_agent" and isinstance(recommendation, dict):
                 # Guide 的任何 model-authored ``skill_reuse`` 一律先剥离。只有下面
@@ -972,6 +979,18 @@ class ConversationService:
                     raise ConversationConflictError(
                         "会话在本轮生成期间工程工作段边界已变化，本轮不落库——请基于最新工作段重试"
                     )
+                if generalization_draft is not None:
+                    current_package = self.agent_registry.package_snapshot(agent_id)
+                    current_manifest = getattr(current_package, "manifest", None)
+                    current_version = (
+                        current_manifest.get("version")
+                        if isinstance(current_manifest, dict)
+                        else None
+                    )
+                    if current_version != draft_agent_version:
+                        raise ConversationConflictError(
+                            "life_guide_agent 包版本在本轮生成期间变化，本轮不落库——请基于当前版本重试"
+                        )
                 user_msg = repos.append_message(
                     conn,
                     conversation_id=conversation_id,
@@ -1008,8 +1027,7 @@ class ConversationService:
                         raise GeneralizationDraftRecordIntegrityError(
                             "持久消息缺少不可变整数 id，无法绑定草稿血缘"
                         )
-                    agent_version = agent.get("version")
-                    if not isinstance(agent_version, str) or not agent_version:
+                    if draft_agent_version is None:
                         raise GeneralizationDraftRecordIntegrityError(
                             "life_guide_agent 不可变包快照缺少 version"
                         )
@@ -1021,7 +1039,7 @@ class ConversationService:
                         source_user_message_id=source_user_message_id,
                         source_assistant_message_id=source_assistant_message_id,
                         model_call_receipt=generalization_receipt,
-                        agent_version=agent_version,
+                        agent_version=draft_agent_version,
                     )
                 projection_owner = (
                     proven_owner_username
