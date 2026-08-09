@@ -212,7 +212,14 @@ class _ModelGatewayContext:
     # conversation_id——job 模型调用只归因 task，透传它会在 model_calls 造「同时带
     # task_id + conversation_id」双归因行，经 GET /conversations/{id}/model_calls 旁路
     # 遮蔽门泄漏 sensitive summary。task_id/agent_id 同理（否则与显式实参重复致 TypeError）。
-    _FORBIDDEN_ATTR_KWARGS = ("task_id", "agent_id", "conversation_id")
+    _FORBIDDEN_ATTR_KWARGS = (
+        "task_id",
+        "agent_id",
+        "conversation_id",
+        # Issue #75: the exact persisted model-call receipt is a kernel-only
+        # capability.  Job workflows must not redirect the private sink.
+        "_receipt_sink",
+    )
 
     def _sanitize(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         return {k: v for k, v in kwargs.items() if k not in self._FORBIDDEN_ATTR_KWARGS}

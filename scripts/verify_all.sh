@@ -77,6 +77,7 @@ E2E_SCRIPTS=(
   "frontend/e2e/ui_lab_acceptance.py"
   "frontend/e2e/m2_acceptance.py"
   "frontend/e2e/m6_guide_acceptance.py"
+  "frontend/e2e/life_draft_traceability_acceptance.py"
   "frontend/e2e/m8_collab_chain_acceptance.py"
   "frontend/e2e/m8_guide_orchestrator_acceptance.py"
   "frontend/e2e/m8_workbench_acceptance.py"

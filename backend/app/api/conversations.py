@@ -1,7 +1,8 @@
 """导引会话接口（M6，ADR-0012）：interactive 型 Agent 的多轮对话入口。
 
 与一次性 tasks 端点正交——会话由 ConversationService 驱动（app.state.conversation_service）。
-红线：本层只负责开启会话、逐轮转发消息、返回 assistant 回复与推荐草案；**绝不**在
+红线：本层只负责开启会话、逐轮转发消息、返回 assistant 回复、推荐草案与
+服务端可冷读的待审 Generalization Draft Record；**绝不**在
 本层创建/签发下游任务。推荐草案（recommendation）由前端在同一对话轴展示；只有
 完整方案通过确定性校验后，人点击“按方案开工”才调用任务批量端点。
 
@@ -32,6 +33,9 @@ from ..core.errors import (
     NotInteractiveAgentError,
 )
 from ..storage import repos
+from ..runtime.generalization_draft_record import (
+    GeneralizationDraftRecordIntegrityError,
+)
 from . import classification_gate as cgate
 from . import object_authorization as oauth
 
@@ -159,6 +163,11 @@ def get_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
         return service.get(conversation_id)
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except GeneralizationDraftRecordIntegrityError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"会话待审草稿证据无法通过冷读复核：{exc}",
+        ) from exc
 
 
 @router.post("/conversations/{conversation_id}/messages")
@@ -198,6 +207,13 @@ def post_message(
             detail=f"模型网关未配置，导引不可用：{exc}。此为部署配置问题（非临时故障），"
             "请联系管理员设置 FLAI_LLM_* 环境变量后再试。",
         ) from exc
+    except GeneralizationDraftRecordIntegrityError as exc:
+        # receipt/lineage/canonical digest 任一不可复核都是服务端
+        # 证据不可用；原子事务已回滚，不得降级为 null 或 200。
+        raise HTTPException(
+            status_code=503,
+            detail=f"待审草稿证据无法建立或复核：{exc}",
+        ) from exc
     except (ModelUpstreamError, ValueError) as exc:
         # 临时上游失败或 workflow 诚实抛错：本轮零落库（事务性单轮），可幂等重试。
         raise HTTPException(
@@ -223,6 +239,10 @@ def _stream_error_event(
             f"模型网关未配置，导引不可用：{exc}。此为部署配置问题（非临时故障），"
             "请联系管理员设置 FLAI_LLM_* 环境变量后再试。"
         )
+        retryable = False
+    elif isinstance(exc, GeneralizationDraftRecordIntegrityError):
+        status = 503
+        detail = f"待审草稿证据无法建立或复核：{exc}"
         retryable = False
     elif isinstance(exc, (ModelUpstreamError, ValueError)):
         status = 502

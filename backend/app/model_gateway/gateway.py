@@ -115,7 +115,7 @@ class ModelGateway:
         error_message: str | None,
         token_usage: dict[str, Any] | None,
         conversation_id: str | None = None,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """无论成败都记一条 model_calls（docs/04 §7：存在调用未落 model_calls 即判违规）。
 
         conn_factory 为 None 时跳过落库（供库内自测使用）。connection 用后即关闭，
@@ -124,10 +124,10 @@ class ModelGateway:
         conversation_id）——两条运行时的模型调用都必须可归因（ADR-0013）。
         """
         if self.conn_factory is None:
-            return
+            return None
         conn = self.conn_factory()
         try:
-            repos.record_model_call(
+            return repos.record_model_call(
                 conn,
                 task_id=task_id,
                 conversation_id=conversation_id,
@@ -341,6 +341,7 @@ class ModelGateway:
         conversation_id: str | None = None,
         agent_id: str | None = None,
         on_delta: Callable[[str], None] | None = None,
+        _receipt_sink: Callable[[dict[str, Any]], None] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         model_name: str | None = None
@@ -394,13 +395,29 @@ class ModelGateway:
             )
             raise
 
-        self._record(
+        recorded_call = self._record(
             task_id=task_id, conversation_id=conversation_id, agent_id=agent_id,
             profile=profile, model_name=model_name,
             status="success", request_summary=request_summary,
             response_summary=_summarize(result["content"]), error_message=None,
             token_usage=result["token_usage"],
         )
+        if _receipt_sink is not None and recorded_call is not None:
+            # Server-owned capture is part of the caller's evidence boundary.  Do not
+            # swallow a sink failure or return an unbound model result.  The exact
+            # successful model_calls row intentionally remains as an honest audit.
+            _receipt_sink(
+                {
+                    "model_call_id": recorded_call["id"],
+                    "kind": "chat",
+                    "status": recorded_call["status"],
+                    "task_id": recorded_call["task_id"],
+                    "conversation_id": recorded_call["conversation_id"],
+                    "agent_id": recorded_call["agent_id"],
+                    "model_profile": recorded_call["model_profile"],
+                    "model_name": recorded_call["model_name"],
+                }
+            )
         return result
 
     def embed(

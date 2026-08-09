@@ -1,16 +1,27 @@
 <template>
   <!--
-    待审候选草稿卡片（life_guide_agent 教学 demo 专用）。
-    只读展示主持人投影出的 9 字段 Generalization，按钮级动作只有两个：
-      接受 → 调既有 asset-draft-preview 端点做确定性投影（算 digest），
-             不写库、不注册、不晋级（effects 四项全 False）；
-      返回修改 → 交回对话框，下一轮新草稿新 digest（内容寻址）。
+    持久化模型草稿卡片（life_guide_agent 教学 demo 专用）。
+    只读展示服务端 record 绑定的 9 字段 Generalization；预览按钮只提交
+    record id + expected content digest，不把 payload 重新交给客户端声明来源。
+    返回修改会开启下一轮，并产生新的不可变 record。
     本卡片不提供签发/批准——人审唯一签发（铁律 1）。
   -->
   <div class="life-draft-card" data-testid="life-draft-card">
     <div class="life-draft-card__head">
-      <span class="life-draft-card__kind">待审候选 · Asset Draft</span>
+      <span class="life-draft-card__kind">模型草稿 · Generalization</span>
       <span :class="['life-draft-card__stage', `is-${stage}`]">{{ stageLabel }}</span>
+    </div>
+
+    <div class="life-draft-card__record" data-testid="life-draft-record-binding">
+      <div>
+        <span>草稿记录 ID</span>
+        <code>{{ recordId }}</code>
+      </div>
+      <div>
+        <span>记录内容摘要</span>
+        <code>{{ recordContentDigest }}</code>
+      </div>
+      <p>状态：model_draft · waiting_review（等待人工复核）</p>
     </div>
 
     <dl class="life-draft-card__fields">
@@ -34,7 +45,7 @@
     <!-- 投影结果：digest 钢印 + 校验 + 审核门 + 副作用声明 -->
     <div v-if="summary" class="life-draft-card__seal" data-testid="life-draft-seal">
       <div class="life-draft-card__digest">
-        <span class="life-draft-card__digest-label">内容寻址钢印</span>
+        <span class="life-draft-card__digest-label">Asset Draft Bundle 摘要</span>
         <code class="life-draft-card__digest-value">{{ summary.digest }}</code>
       </div>
       <div class="life-draft-card__facts">
@@ -73,7 +84,7 @@
     </div>
 
     <div v-if="stage === 'error'" class="life-draft-card__error" role="alert">
-      投影失败：{{ errorText }}。草稿没有进任何地方，可以返回修改后重来。
+      预览失败：{{ errorText }}。持久草稿仍保留在这条会话消息中；可重试，或返回对话补充后形成新记录。
     </div>
 
     <div class="life-draft-card__actions">
@@ -83,9 +94,9 @@
         class="life-draft-card__accept"
         :disabled="stage === 'loading'"
         data-testid="life-draft-accept"
-        @click="accept"
+        @click="previewRecord"
       >
-        {{ stage === "loading" ? "正在算钢印..." : "接受，投影这份候选" }}
+        {{ stage === "loading" ? "正在生成预览..." : "生成待审资产预览" }}
       </button>
       <button
         type="button"
@@ -101,7 +112,7 @@
 
 <script setup>
 import { computed, ref } from "vue";
-import { previewConversationAssetDraft } from "../api/assetDrafts.js";
+import { previewGeneralizationDraftRecord } from "../api/assetDrafts.js";
 import {
   isLifeDraftShape,
   lifeDraftFieldEntries,
@@ -109,7 +120,7 @@ import {
 } from "../utils/lifeDraft.js";
 
 const props = defineProps({
-  draft: { type: Object, required: true },
+  record: { type: Object, required: true },
   conversationId: { type: String, required: true },
 });
 defineEmits(["revise"]);
@@ -119,28 +130,32 @@ const stage = ref("pending");
 const preview = ref(null);
 const errorText = ref("");
 
-const entries = computed(() => lifeDraftFieldEntries(props.draft));
-const summary = computed(() => summarizeLifeDraftPreview(preview.value));
+const entries = computed(() => lifeDraftFieldEntries(props.record.payload));
+const recordId = computed(() => props.record.id);
+const recordContentDigest = computed(() => props.record.content_digest);
+const summary = computed(() =>
+  summarizeLifeDraftPreview(preview.value?.asset_draft),
+);
 const stageLabel = computed(() => {
   if (stage.value === "loading") return "正在投影";
-  if (stage.value === "previewed") return "已投影 · 待审";
+  if (stage.value === "previewed") return "预览已生成 · 等待人工复核";
   if (stage.value === "error") return "投影失败";
-  return "待审候选";
+  return "已保存 · 等待人工复核";
 });
 
 function isBoundaryField(id) {
   return id === "human_decision_points" || id === "limitations";
 }
 
-async function accept() {
-  // fail-closed：形状不合规绝不发起投影
-  if (stage.value === "loading" || !isLifeDraftShape(props.draft)) return;
+async function previewRecord() {
+  // fail-closed：record payload 形状不合规绝不发起投影
+  if (stage.value === "loading" || !isLifeDraftShape(props.record.payload)) return;
   stage.value = "loading";
   errorText.value = "";
   try {
-    preview.value = await previewConversationAssetDraft(
+    preview.value = await previewGeneralizationDraftRecord(
       props.conversationId,
-      props.draft,
+      props.record,
     );
     stage.value = "previewed";
   } catch (err) {
@@ -195,6 +210,37 @@ async function accept() {
 .life-draft-card__stage.is-error {
   color: var(--trust-fail);
   border-color: var(--trust-fail);
+}
+
+.life-draft-card__record {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.life-draft-card__record > div {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.life-draft-card__record code {
+  min-width: 0;
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.life-draft-card__record p {
+  margin: 1px 0 0;
+  color: var(--trust-pending, var(--ink-soft));
 }
 
 .life-draft-card__fields {

@@ -12,7 +12,10 @@ import {
   seedAssetDraftGeneralization,
   serializeAssetDraftDownload,
 } from "../src/utils/assetDrafts.js";
-import { previewConversationAssetDraft } from "../src/api/assetDrafts.js";
+import {
+  previewConversationAssetDraft,
+  previewGeneralizationDraftRecord,
+} from "../src/api/assetDrafts.js";
 
 test("Asset Builder 把九项信息组织成单焦点线性问题流", () => {
   assert.deepEqual(
@@ -143,6 +146,43 @@ const READY_PREVIEW = {
   draft_digest: "sha256:4444444444444444444444444444444444444444444444444444444444444444",
 };
 
+const GENERALIZATION_RECORD = {
+  id: `gdr_${"a".repeat(32)}`,
+  schema_version: "generalization_draft_record.v1",
+  payload_schema_version: "life_generalization.v1",
+  state: "model_draft",
+  review_status: "waiting_review",
+  payload: {
+    title: "稳态计算输入边界核对",
+    trigger: "新算例进入求解前",
+    desired_outcome: "输出可审阅的缺口清单",
+    inputs: ["边界条件文件", "求解设置"],
+    outputs: ["缺口清单", "复核记录"],
+    steps: ["读取输入", "按检查表核对", "标记未知项"],
+    evidence_requirements: ["原始输入文件", "检查项定位"],
+    human_decision_points: ["工程师确认边界适用性"],
+    limitations: ["不执行求解", "不代替签发"],
+  },
+  content_digest: `sha256:${"5".repeat(64)}`,
+  record_digest: `sha256:${"6".repeat(64)}`,
+  source_context_digest: `sha256:${"7".repeat(64)}`,
+  model_attribution: {
+    model_call_id: 17,
+    kind: "chat",
+    agent_id: "life_guide_agent",
+    agent_version: "1.0.0",
+    profile: "default",
+    model_name: "stub-model",
+  },
+  lineage: {
+    conversation_id: "conv-asset-1",
+    user_message_id: 40,
+    assistant_message_id: 41,
+    task_id: null,
+  },
+  created_at: "2026-08-09T08:00:00+00:00",
+};
+
 test("前端预览成功路径只 POST v1 请求并校验当前会话来源", async (t) => {
   const nativeFetch = globalThis.fetch;
   t.after(() => {
@@ -177,6 +217,62 @@ test("前端预览成功路径只 POST v1 请求并校验当前会话来源", as
     JSON.parse(observed.init.body).schema_version,
     "asset_draft_preview_request.v1",
   );
+});
+
+test("持久草稿只走 record-bound preview，body 不回传 payload 且核对四项来源绑定", async (t) => {
+  const nativeFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = nativeFetch;
+  });
+  let observed = null;
+  const response = {
+    schema_version: "generalization_draft_record_preview_response.v1",
+    source_record: {
+      id: GENERALIZATION_RECORD.id,
+      content_digest: GENERALIZATION_RECORD.content_digest,
+      record_digest: GENERALIZATION_RECORD.record_digest,
+      source_context_digest: GENERALIZATION_RECORD.source_context_digest,
+    },
+    asset_draft: READY_PREVIEW,
+  };
+  globalThis.fetch = async (path, init) => {
+    observed = { path, init };
+    return { ok: true, status: 200, json: async () => response };
+  };
+
+  assert.deepEqual(
+    await previewGeneralizationDraftRecord("conv-asset-1", GENERALIZATION_RECORD),
+    response,
+  );
+  assert.equal(
+    observed.path,
+    `/api/conversations/conv-asset-1/generalization-draft-records/${GENERALIZATION_RECORD.id}/asset-draft-preview`,
+  );
+  assert.deepEqual(JSON.parse(observed.init.body), {
+    schema_version: "generalization_draft_record_preview_request.v1",
+    expected_content_digest: GENERALIZATION_RECORD.content_digest,
+  });
+
+  for (const [field, invalidValue] of [
+    ["id", `gdr_${"b".repeat(32)}`],
+    ["content_digest", `sha256:${"8".repeat(64)}`],
+    ["record_digest", `sha256:${"9".repeat(64)}`],
+    ["source_context_digest", `sha256:${"a".repeat(64)}`],
+  ]) {
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ...response,
+        source_record: { ...response.source_record, [field]: invalidValue },
+      }),
+    });
+    await assert.rejects(
+      () => previewGeneralizationDraftRecord("conv-asset-1", GENERALIZATION_RECORD),
+      /来源绑定/,
+      field,
+    );
+  }
 });
 
 test("前端预览失败保留后端 detail，供第九问原位恢复", async (t) => {

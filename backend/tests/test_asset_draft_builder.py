@@ -97,6 +97,30 @@ def test_preview_is_deterministic_and_only_ready_for_human_review() -> None:
     assert first["draft_digest"].startswith("sha256:")
 
 
+def test_preview_accepts_public_integer_message_ids_as_stable_decimal_lineage() -> None:
+    """Issue #75 exposes SQLite message ids as positive integers.
+
+    Asset Draft projection already models message ids as text, so the additive
+    public API field must normalize deterministically instead of breaking both
+    the manual preview and the record-bound preview paths.
+    """
+    integer_ids = _conversation()
+    integer_ids["messages"][0]["id"] = 41
+    integer_ids["messages"][1]["id"] = 42
+    decimal_ids = _conversation()
+    decimal_ids["messages"][0]["id"] = "41"
+    decimal_ids["messages"][1]["id"] = "42"
+
+    builder = AssetDraftBuilder()
+    assert builder.preview(
+        conversation=integer_ids,
+        generalization=_generalization(),
+    ) == builder.preview(
+        conversation=decimal_ids,
+        generalization=_generalization(),
+    )
+
+
 def test_incomplete_semantics_return_stable_blockers_without_fake_review_state() -> None:
     result = AssetDraftBuilder().preview(
         conversation=_conversation(),

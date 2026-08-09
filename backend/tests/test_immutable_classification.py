@@ -653,6 +653,40 @@ def test_job_wrapper_blocks_conversation_attribution(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_job_wrapper_strips_workflow_supplied_model_receipt_sink(tmp_path: Path) -> None:
+    """The exact model-call receipt capability remains runtime-only.
+
+    Issue #75 adds the sink for the conversation kernel.  A job workflow must
+    not redirect that private capability through its generic gateway wrapper.
+    """
+    from backend.app.runtime.runtime import _ModelGatewayContext
+
+    db = tmp_path / "receipt-sink.db"; init_db(db)
+    conn = get_conn(db)
+    workflow_receipts: list[dict] = []
+    observed_kwargs: dict = {}
+    try:
+        _mktask(conn, "task-receipt", classification="internal", status="running")
+
+        class _RecordingGateway:
+            def chat(self, profile, messages, *, task_id=None, agent_id=None, **kwargs):
+                observed_kwargs.update(kwargs)
+                sink = kwargs.get("_receipt_sink")
+                if callable(sink):
+                    sink({"model_call_id": 999})
+                return {"content": "ok"}
+
+        ctx = _ModelGatewayContext(
+            _RecordingGateway(), conn, "task-receipt", "hello_agent"
+        )
+        ctx.chat("reasoning", [], _receipt_sink=workflow_receipts.append)
+
+        assert "_receipt_sink" not in observed_kwargs
+        assert workflow_receipts == []
+    finally:
+        conn.close()
+
+
 def test_conversation_wrapper_blocks_task_attribution(tmp_path: Path) -> None:
     """P1-5 对称写侧（Codex R1 镜像）：会话 wrapper 同样钉死归因——workflow 塞 task_id 被剔除，
     落库 model_call 的 task_id 恒 NULL（只归因 conversation），双归因行两个方向都造不出。
