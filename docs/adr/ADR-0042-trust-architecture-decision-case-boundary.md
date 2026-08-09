@@ -1,16 +1,16 @@
 # ADR-0042：Trust Architecture——DecisionCase 理论与对象边界
 
-- 状态：Proposed（owner 于 2026-08-09 认可 #70 / PR #71 的研究方向；本 ADR exact revision 待 owner review）
+- 状态：Accepted（owner 于 2026-08-09 明确接受 exact review candidate `1d4dde9`；[决定记录](https://github.com/kogamishinyajerry-ops/flai-os/issues/72#issuecomment-5229627052)）
 - 日期：2026-08-09
 - 基线：`origin/main@a32b36e`
 - 关联：[宪法](../00_FLAi-OS_Constitution.md) · [ADR-0029](ADR-0029-knowledge-chunk-provenance-readback.md) · [ADR-0031](ADR-0031-agent-shell-read-only-ontology-projection.md) · [ADR-0034](ADR-0034-task-evidence-bound-asset-candidate-ledger.md) · [ADR-0037](ADR-0037-v1-owner-object-authorization.md) · [ADR-0039](ADR-0039-nemoclaw-openshell-sandbox-execution-spike.md) · [ADR-0041](ADR-0041-l2-object-link-interface-metadata-layer.md)
 - 研究依据：[Issue #70](https://github.com/kogamishinyajerry-ops/flai-os/issues/70) · [PR #71](https://github.com/kogamishinyajerry-ops/flai-os/pull/71) · [固定研究版本 `08e592a`](https://github.com/kogamishinyajerry-ops/flai-os/blob/08e592a131ca98e3463fac8e834a066c5f651afa/docs/research/FLAI-OS-TRUST-ARCHITECTURE-V1.md)
 - 性质：规范性架构边界；**不授权**数据库、公共 API、状态机、UI、Agent、Tool 或外部系统实施
 
-本 ADR 的研究方向已经获得 owner 认可，但当前 `Proposed` 状态表示 owner 尚未复核本文
-exact revision。只有 owner 对本文件的精确版本作出接受决定后，状态才可变为 `Accepted`。
-即使进入 `Accepted`，也不表示这些对象已在生产 Runtime 中实现，不表示 A1 已开工，
-也不表示平台满足任何法规或标准。
+owner 已于 2026-08-09 接受 exact review candidate `1d4dde9`；本状态转移只记录该人类决定，
+相对候选版本不改变承重架构语义。`Accepted` 表示本文中的架构原则和对象语义已冻结；
+它不表示这些对象已在生产 Runtime 中实现，不表示 A1 已开工，也不表示平台满足任何法规
+或标准。本状态也不表示 PR 已合并，不替代仓库保护规则或另行作出的显式合并授权。
 
 ## 1. 阅读约定
 
