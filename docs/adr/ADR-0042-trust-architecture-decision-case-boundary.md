@@ -1,18 +1,19 @@
 # ADR-0042：Trust Architecture——DecisionCase 理论与对象边界
 
-- 状态：Proposed（owner 曾接受 exact candidate `1d4dde9`；当前 review-fix revision 已发生语义变更，待重新接受）
+- 状态：Accepted（owner 于 2026-08-09 接受 exact candidate `4513089180cda7b1d2538ec1ef64821be87c0cf2`；本次只记录状态）
 - 日期：2026-08-09
 - 基线：`origin/main@a32b36e`
 - 关联：[宪法](../00_FLAi-OS_Constitution.md) · [ADR-0029](ADR-0029-knowledge-chunk-provenance-readback.md) · [ADR-0031](ADR-0031-agent-shell-read-only-ontology-projection.md) · [ADR-0034](ADR-0034-task-evidence-bound-asset-candidate-ledger.md) · [ADR-0037](ADR-0037-v1-owner-object-authorization.md) · [ADR-0039](ADR-0039-nemoclaw-openshell-sandbox-execution-spike.md) · [ADR-0041](ADR-0041-l2-object-link-interface-metadata-layer.md)
 - 研究依据：[Issue #70](https://github.com/kogamishinyajerry-ops/flai-os/issues/70) · [PR #71](https://github.com/kogamishinyajerry-ops/flai-os/pull/71) · [固定研究版本 `08e592a`](https://github.com/kogamishinyajerry-ops/flai-os/blob/08e592a131ca98e3463fac8e834a066c5f651afa/docs/research/FLAI-OS-TRUST-ARCHITECTURE-V1.md)
 - 性质：规范性架构边界；**不授权**数据库、公共 API、状态机、UI、Agent、Tool 或外部系统实施
 
-owner 已于 2026-08-09 接受 exact candidate `1d4dde9`，但 [PR #74](https://github.com/kogamishinyajerry-ops/flai-os/pull/74)
-后续 review 要求纠正三处规范矛盾，当前 Revision 因而不再等同于被接受的候选版本。既有
-acceptance 与 merge authorization 均不得跨 digest 沿用；只有 owner 对当前 exact Git
-commit/blob 重新作出接受决定后，状态才可恢复为 `Accepted`。即使进入 `Accepted`，也不
-表示这些对象已在生产 Runtime 中实现，不表示 A1 已开工，不表示平台满足任何法规或标准，
-更不替代仓库保护规则或另行作出的显式合并授权。
+owner 曾接受初始 candidate `1d4dde9`，但 [PR #74](https://github.com/kogamishinyajerry-ops/flai-os/pull/74)
+后续 review 要求纠正规范矛盾，既有 acceptance 与 merge authorization 因而没有跨 digest
+沿用。owner 已于 2026-08-09 重新接受修订后的 exact candidate
+`4513089180cda7b1d2538ec1ef64821be87c0cf2`；本次 status-only Revision 只记录该人类决定，
+不再改变承重语义。`Accepted` 不表示这些对象已在生产 Runtime 中实现，不表示 A1 已开工，
+不表示平台满足任何法规或标准，也不替代仓库保护规则或对最终 exact PR head 另行作出的
+显式合并授权。
 
 ## 1. 阅读约定
 
